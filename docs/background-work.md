@@ -232,8 +232,11 @@ the words here are the words surfaces show (§8).
   ingest coordinator (`ingestMu` + its flock), `C(h)` host h's capture lock,
   `X(c)` capture c's index lock, `B(d)` a backup destination's lock, `K(d)`
   the cloud job slot and destination row claim, `O` the broker's
-  `operationMu`, `Z` `.initialize.lock`, `M` the broker's main mutex. `r`
-  marks a read hold; everything else writes.
+  `operationMu`, `Z` `.initialize.lock`, `M` the broker's main mutex.
+  `D(source)`/`D(target)` name the drives of a broker operation's two
+  libraries. Every hold carries a machine-readable mode, `:w` (write) or
+  `:r` (read), e.g. `D:w W:w I:w`; anything in parentheses after the list
+  is a note for people, not part of the declaration.
 - **Affects**: freshness domain IDs from §5.
 - **Stop**: how a user stops it today (`index` = `/api/index/cancel`,
   `view` = `/api/library/refresh/stop`, `backup` = `/api/backup/cancel`,
@@ -252,18 +255,18 @@ the words here are the words surfaces show (§8).
 
 | Kind | Label · verb | Trigger | Proc | Holds | Affects | Stop | On stop or eject | Latency | Journal | Pri |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `index.changes.automatic` | Index changes · Indexing changes | schedule | svc | D W I | conv:\*, view | index | Stops between workspaces; the next index resumes it. | batch | >10 s | bg |
-| `index.changes.manual` | Index changes · Indexing changes | user | svc | D W I | conv:\*, view, an.\*, findings | index | Stops between workspaces; the next index resumes it. The chain after the sources ignores Stop and stops only on release. | batch | always | fg |
-| `capture.this-mac` | Capture this Mac · Capturing | user, onboarding | svc | D I C(this) | capt:this/\* | — (today) | Stops between files; the next capture resumes it, and what was captured stays valid. | record | always | fg |
-| `capture.cli` | Capture (Terminal) · Capturing | cli | cli (lease only; it never opens the catalog) | D C(this) | capt:this/\* | — | Pharos cannot stop it; the drive stays busy until it ends. | none (to Pharos) | never (lease only) | fg |
-| `index.captures` | Index captures · Indexing captures | user, onboarding, cli | svc, cli | D W I (service only) X(c) | conv:\*, view, an.\*, findings | index | Stops between records; the next index resumes it. Waits for a running capture (`blocked(capture-running)`). | batch | always | fg |
-| `library.update` | Capture & index · Capturing and indexing | user | svc | D W I | capt:this/\*, conv:\*, an.\*, findings, upgrade | index | As `index.captures`; the browser then starts `library.upgrade`. | batch | always | fg |
-| `library.rebuild` (variants `full`, `retained`) | Full recapture & reindex / Reindex from stored messages · Rebuilding | user, resume | svc | D W I | conv:\*, view, an.\*, findings | index | Stops between workspaces; resuming the repair continues it (`sync_recovery_jobs`). | batch | always | fg |
-| `index.verify` (variants `sample`, `all`) | Verify retained inputs · Verifying | user; `sample` is a step of index runs | svc | D r, W I | — | index | Stops between inputs. | record | always (`all`); step only (`sample`) | fg |
-| `index.sources.legacy` | Index sources (legacy API) · Indexing | user (API) | svc | D W I | conv:\* | — | Runs inside the request. Until phase 1 merges `s.life.ctx` into its context it is release-blocking: eject waits for it (verdict `busy`). | batch (after the merge) | always | fg |
-| `ingest.cli` (variants `ingest`, `repair-existing`) | Index (Terminal) · Indexing | cli | cli | D W (no `I` today) | conv:\* | — | Pharos cannot stop it. | none (to Pharos) | always | fg |
-| `host.add` | Add this Mac (Terminal) · Adding this Mac | cli | cli | D W | conv:\* | — | Pharos cannot stop it. | none (to Pharos) | always | fg |
-| `capture.history-backfill` (variants by subcommand) | Capture history backfill (Terminal) · Backfilling history | cli | cli | D C(h) | capt:h/\* | — | Pharos cannot stop it; its native-snapshot pause blocks ordinary capture of the chosen sources until released. | none (to Pharos) | always | fg |
+| `index.changes.automatic` | Index changes · Indexing changes | schedule | svc | D:w W:w I:w | conv:\*, view | index | Stops between workspaces; the next index resumes it. | batch | >10 s | bg |
+| `index.changes.manual` | Index changes · Indexing changes | user | svc | D:w W:w I:w | conv:\*, view, an.\*, findings | index | Stops between workspaces; the next index resumes it. The chain after the sources ignores Stop and stops only on release. | batch | always | fg |
+| `capture.this-mac` | Capture this Mac · Capturing | user, onboarding | svc | D:w I:w C(this):w | capt:this/\* | — (today) | Stops between files; the next capture resumes it, and what was captured stays valid. | record | always | fg |
+| `capture.cli` | Capture (Terminal) · Capturing | cli | cli (lease only; it never opens the catalog) | D:w C(this):w | capt:this/\* | — | Pharos cannot stop it; the drive stays busy until it ends. | none (to Pharos) | never (lease only) | fg |
+| `index.captures` | Index captures · Indexing captures | user, onboarding, cli | svc, cli | D:w W:w I:w X(c):w (`I` in the service only) | conv:\*, view, an.\*, findings | index | Stops between records; the next index resumes it. Waits for a running capture (`blocked(capture-running)`). | batch | always | fg |
+| `library.update` | Capture & index · Capturing and indexing | user | svc | D:w W:w I:w | capt:this/\*, conv:\*, an.\*, findings, upgrade | index | As `index.captures`; the browser then starts `library.upgrade`. | batch | always | fg |
+| `library.rebuild` (variants `full`, `retained`) | Full recapture & reindex / Reindex from stored messages · Rebuilding | user, resume | svc | D:w W:w I:w | conv:\*, view, an.\*, findings | index | Stops between workspaces; resuming the repair continues it (`sync_recovery_jobs`). | batch | always | fg |
+| `index.verify` (variants `sample`, `all`) | Verify retained inputs · Verifying | user; `sample` is a step of index runs | svc | D:w W:w I:w (reads retained inputs; writes `sync_verifications` and integrity issues) | — | index | Stops between inputs. | record | always (`all`); step only (`sample`) | fg |
+| `index.sources.legacy` | Index sources (legacy API) · Indexing | user (API) | svc | D:w W:w I:w | conv:\* | — | Runs inside the request. Until phase 1 merges `s.life.ctx` into its context it is release-blocking: eject waits for it (verdict `busy`). | batch (after the merge) | always | fg |
+| `ingest.cli` (variants `ingest`, `repair-existing`) | Index (Terminal) · Indexing | cli | cli | D:w W:w (no `I` today) | conv:\* | — | Pharos cannot stop it. | none (to Pharos) | always | fg |
+| `host.add` | Add this Mac (Terminal) · Adding this Mac | cli | cli | D:w W:w | conv:\* | — | Pharos cannot stop it. | none (to Pharos) | always | fg |
+| `capture.history-backfill` (variants by subcommand) | Capture history backfill (Terminal) · Backfilling history | cli | cli | D:w C(h):w | capt:h/\* | — | Pharos cannot stop it; its native-snapshot pause blocks ordinary capture of the chosen sources until released. | none (to Pharos) | always | fg |
 
 Notes:
 
@@ -288,14 +291,14 @@ Scheduled indexing never runs it; it marks `sync_deferred` instead (§5).
 
 | Kind | Label · verb | Trigger | Proc | Holds | Affects | Stop | On stop or eject | Latency | Journal | Pri |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `analysis.chain` | Update analyses · Updating analyses | chained | svc | D W | an.\*, findings | — | Stops on release only; it runs again after the next index. | batch | step of its parent | parent's |
-| `analysis.github` | Check GitHub for renamed repositories · Checking GitHub | chained | svc (+`gh`) | — (network) | an.identities | — | Stops on release only. | record | step | parent's |
-| `analysis.identities` | Link identities · Linking identities | chained | svc | D W | an.identities | — | Stops on release only. | batch | step | parent's |
-| `analysis.git` | Look up merges in Git · Looking up merges in Git | chained, startup (one-time backfill), after a legacy sync | svc (+`git`) | D W | an.git | — | Stops; it runs again after the next index. Each `git` call has a 5 s limit (Conductor's git has none). | batch | >5 s when not a stage | bg |
-| `analysis.tools` | Update the Tools rollup · Updating the Tools rollup | chained, read (a Query Table request), version | svc | D W | an.tools | — | Stops; it runs again on the next index or Tools request. | batch | >5 s when not a stage | bg; fg when read-started |
-| `analysis.authorship` | Classify your writing · Classifying your writing | chained, read (`/api/authorship`, usage summary, native menu usage poll) | svc | D W | an.authorship | — | Stops; it runs again after the next index. | batch | >5 s when not a stage | bg |
-| `analysis.findings` | Update findings · Updating findings | chained, user ("Refresh findings now"), read (`GET /api/findings` before the first build) | svc | D W | findings | — | Stops; it runs again after the next index. | batch | >5 s when not a stage; always for `user` | bg; fg for `user` |
-| `analysis.refresh` | Update analyses · Updating analyses | chained (after a legacy source sync: Git, then tools, then findings) | svc | D W | an.git, an.tools, findings | — | Stops; it runs again after the next index. | batch | >5 s | bg |
+| `analysis.chain` | Update analyses · Updating analyses | chained | svc | D:w W:w | an.\*, findings | — | Stops on release only; it runs again after the next index. | batch | step of its parent | parent's |
+| `analysis.github` | Check GitHub for renamed repositories · Checking GitHub | chained | svc (+`gh`) | — (network only) | an.identities | — | Stops on release only. | record | step | parent's |
+| `analysis.identities` | Link identities · Linking identities | chained | svc | D:w W:w | an.identities | — | Stops on release only. | batch | step | parent's |
+| `analysis.git` | Look up merges in Git · Looking up merges in Git | chained, startup (one-time backfill), after a legacy sync | svc (+`git`) | D:w W:w | an.git | — | Stops; it runs again after the next index. Each `git` call has a 5 s limit (Conductor's git has none). | batch | >5 s when not a stage | bg |
+| `analysis.tools` | Update the Tools rollup · Updating the Tools rollup | chained, read (a Query Table request), version | svc | D:w W:w | an.tools | — | Stops; it runs again on the next index or Tools request. | batch | >5 s when not a stage | bg; fg when read-started |
+| `analysis.authorship` | Classify your writing · Classifying your writing | chained, read (`/api/authorship`, usage summary, native menu usage poll) | svc | D:w W:w | an.authorship | — | Stops; it runs again after the next index. | batch | >5 s when not a stage | bg |
+| `analysis.findings` | Update findings · Updating findings | chained, user ("Refresh findings now"), read (`GET /api/findings` before the first build) | svc | D:w W:w | findings | — | Stops; it runs again after the next index. | batch | >5 s when not a stage; always for `user` | bg; fg for `user` |
+| `analysis.refresh` | Update analyses · Updating analyses | chained (after a legacy source sync: Git, then tools, then findings) | svc | D:w W:w | an.git, an.tools, findings | — | Stops; it runs again after the next index. | batch | >5 s | bg |
 
 Notes:
 
@@ -319,17 +322,17 @@ operation.
 
 | Kind | Label · verb | Trigger | Proc | Holds | Affects | Stop | On stop or eject | Latency | Journal | Pri |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `maintenance.library-view` | Index the Search view · Indexing the Search view | chained (dirty workspaces), version | svc | D W | view | view | Stops; the batch in progress is abandoned, and it carries on when Pharos next opens the library or on Resume. | record | >15 s (today's `libraryCatchUpShown`) | bg |
-| `maintenance.previews` | Fill in previews · Filling in previews | daemon pass | svc | D W | view | — | Stops; it carries on later. | record | never | bg |
-| `maintenance.parallelism` | Measure parallel work · Measuring parallel work | daemon pass | svc | D W | — | — | Stops; it carries on later. | record | never | bg |
-| `maintenance.cache-warm` | Warm page caches · Warming page caches | daemon pass | svc | D r | — | — | Stops. | record | never | bg |
-| `maintenance.search.substring` | Build substring search · Building substring search | version, chained | svc | D W | search.substring | — | Stops between batches; it carries on when Pharos next opens the library. | batch | >30 s | bg |
-| `maintenance.search.text` | Build text search · Building text search | version, chained | svc | D W | search.text | — | Stops between batches; it carries on later. | batch | >30 s | bg |
-| `maintenance.search.tools` | Build tool search · Building tool search | version, chained | svc | D W | search.tools | — | Stops between batches; it carries on later. | batch | >30 s | bg |
-| `maintenance.search.query` | Build Query Table text indexes · Building table search | version, chained | svc | D W | search.query | — | Stops between batches; it carries on later. | batch | >30 s | bg |
-| `maintenance.checkpoint` (variants `bound`, `after-run`, `close`) | Save the catalog · Saving the catalog | daemon pass (WAL over 64 MiB, every 10 s), chained, release | svc | D W | — | — | Not interruptible; short. | record | >1 s | bg |
-| `maintenance.metrics` | Update MCP metrics · Updating metrics | read (an MCP call, up to 100 dirty workspaces) | mcp, svc | D W | — | — | Ends with the call. | record | never | fg |
-| `drive.measure` | Check the drive · Checking the drive | read (`GET /api/health/drive`, 5 min cache) | svc (+`diskutil`) | D r, W (one `library_size_history` row) | — | — | Stops. | record | never | bg |
+| `maintenance.library-view` | Index the Search view · Indexing the Search view | chained (dirty workspaces), version | svc | D:w W:w | view | view | Stops; the batch in progress is abandoned, and it carries on when Pharos next opens the library or on Resume. | record | >15 s (today's `libraryCatchUpShown`) | bg |
+| `maintenance.previews` | Fill in previews · Filling in previews | daemon pass | svc | D:w W:w | view | — | Stops; it carries on later. | record | never | bg |
+| `maintenance.parallelism` | Measure parallel work · Measuring parallel work | daemon pass | svc | D:w W:w | — | — | Stops; it carries on later. | record | never | bg |
+| `maintenance.cache-warm` | Warm page caches · Warming page caches | daemon pass | svc | D:r | — | — | Stops. | record | never | bg |
+| `maintenance.search.substring` | Build substring search · Building substring search | version, chained | svc | D:w W:w | search.substring | — | Stops between batches; it carries on when Pharos next opens the library. | batch | >30 s | bg |
+| `maintenance.search.text` | Build text search · Building text search | version, chained | svc | D:w W:w | search.text | — | Stops between batches; it carries on later. | batch | >30 s | bg |
+| `maintenance.search.tools` | Build tool search · Building tool search | version, chained | svc | D:w W:w | search.tools | — | Stops between batches; it carries on later. | batch | >30 s | bg |
+| `maintenance.search.query` | Build Query Table text indexes · Building table search | version, chained | svc | D:w W:w | search.query | — | Stops between batches; it carries on later. | batch | >30 s | bg |
+| `maintenance.checkpoint` (variants `bound`, `after-run`, `close`) | Save the catalog · Saving the catalog | daemon pass (WAL over 64 MiB, every 10 s), chained, release | svc | D:w W:w | — | — | Not interruptible; short. | record | >1 s | bg |
+| `maintenance.metrics` | Update MCP metrics · Updating metrics | read (an MCP call, up to 100 dirty workspaces) | mcp, svc | D:w W:w | — | — | Ends with the call. | record | never | fg |
+| `drive.measure` | Check the drive · Checking the drive | read (`GET /api/health/drive`, 5 min cache) | svc (+`diskutil`) | D:w W:w (one `library_size_history` row) | — | — | Stops. | record | never | bg |
 
 **Very frequent tiny work.** WAL bounding checks every 10 s; almost every
 check does nothing. The check is the daemon. Only a check that runs a
@@ -343,9 +346,9 @@ unregistered-work test passes; they are D-family and hidden from surfaces.
 
 | Kind | Label · verb | Trigger | Proc | Holds | Affects | Stop | On stop or eject | Latency | Journal | Pri |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `catalog.initialize` | Prepare the catalog · Preparing the catalog | every writable catalog open (skipped when `meta.initialized_build` matches this executable) | svc, cli, mcp | D W Z | all derived domains | — | Cannot be stopped; the service has no API until it ends. A kill rolls back the step in progress, and the next open re-runs from the last committed `meta` key. | none | >2 s | fg |
-| `library.upgrade` | Upgrade the library · Upgrading the library | chained (after an index finds pending steps, or the browser after Capture & index), user (`POST /api/upgrade`), cli | svc, cli | D W | upgrade, an.tools | — | Stops after the unit in progress; starting the upgrade again resumes it. | record | always | fg |
-| `tools.ledger.build` | Build the Tools ledger · Building the Tools ledger | user (`POST /api/tools/backfill`), version, step of `library.upgrade` | svc, cli (`build-tools`) | D W | an.ledger, an.tools | — | Stops between conversations; building the ledger again resumes it. | record | always | fg |
+| `catalog.initialize` | Prepare the catalog · Preparing the catalog | every writable catalog open (skipped when `meta.initialized_build` matches this executable) | svc, cli, mcp | D:w W:w Z:w | all derived domains | — | Cannot be stopped; the service has no API until it ends. A kill rolls back the step in progress, and the next open re-runs from the last committed `meta` key. | none | >2 s | fg |
+| `library.upgrade` | Upgrade the library · Upgrading the library | chained (after an index finds pending steps, or the browser after Capture & index), user (`POST /api/upgrade`), cli | svc, cli | D:w W:w | upgrade, an.tools | — | Stops after the unit in progress; starting the upgrade again resumes it. | record | always | fg |
+| `tools.ledger.build` | Build the Tools ledger · Building the Tools ledger | user (`POST /api/tools/backfill`), version, step of `library.upgrade` | svc, cli (`build-tools`) | D:w W:w | an.ledger, an.tools | — | Stops between conversations; building the ledger again resumes it. | record | always | fg |
 
 Notes:
 
@@ -362,25 +365,25 @@ Notes:
 
 | Kind | Label · verb | Trigger | Proc | Holds | Affects | Stop | On stop or eject | Latency | Journal | Pri |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `backup.local` | Back up · Backing up | user, cli | svc, cli (lease only) | D (reads the library; writes its `backups.json`), B(d), C(\*) r | backup.local | backup (service only) | Stops; the next backup carries on from what was copied. Waits for each host's capture (`blocked(capture-running)`; today's phase "waiting for a capture to finish"). | record | always (service); never (CLI, lease only) | fg |
-| `cloud.connect` | Test a cloud backup destination · Testing the destination | user | svc (inside the request, merged with `s.life.ctx`) | D (staging), K | — | cloud | Stops the test; connect the destination again afterwards. | instant | always | fg |
-| `cloud.upload` (variants `sample`, `full`) | Upload a cloud backup · Uploading a cloud backup | user, schedule | svc | D (staging, snapshot read), K(d) | backup.cloud:d | cloud | Stops the upload and deletes its staged archive; the last completed cloud backup is unchanged. It starts again from the beginning when started again, or at the schedule's next time. | batch (snapshot), record (upload: the S3 abort and the final save have 2 s limits each, then the staging is removed) | always | fg (`user`), bg (`schedule`) |
-| `cloud.verify` | Verify a cloud backup · Verifying a cloud backup | user, cli (`cloud-backup verify`, required for password-protected backups) | svc, cli (catalog writer: journal and lease) | D (staging), K(d), W | backup.cloud:d | cloud (service only) | Stops and removes the partly recovered copy; run the verification again. | record | always | fg |
-| `cloud.restore` | Restore from the cloud (Terminal) · Restoring | cli (`cloud-restore`) | cli | target location | — | — | **Out of status scope.** It restores to a new location, often on a Mac with no library or Pharos configuration (`cloud_cli.go`), so there is no library whose status could show it. It takes no lease and writes no journal. | — | never | fg |
-| `library.transfer` (variants `copy`, `move`) | Copy library / Move library · Copying the library | user (Libraries page), cli (`library-transfer`) | brk, cli | O, both drives | (target) conv:\* | — | Not stoppable; eject of either drive must wait. | none | always (broker registry) | fg |
-| `library.recover` | Restore a backup · Restoring a backup | user, cli (`library-recover`) | brk, cli | O, target drive | (target) all | — | Not stoppable; eject must wait. | none | always (broker registry) | fg |
-| `library.deliver` | Deliver captured history · Delivering history | schedule (every 5 min while a pair is set), device (target attached) | brk | O, M (while stopping children), both drives | (target) conv:\* | — | Not stoppable; it stops both libraries' services first (§4.4). | none | always (broker registry) | bg |
-| `library.deliver.capture` | Capture into the pending library · Capturing pending history | stage of `library.deliver` | brk | source drive | — | — | As its parent. | none | step | bg |
-| `library.adopt` | Move this Mac's archive into a library · Moving the archive | onboarding, cli | cli, svc | both drives | all | — | Not stoppable. | none | always | fg |
-| `library.create` | Create a library · Creating the library | user | brk | target drive | — | — | Not stoppable; short. | none | >5 s (broker registry) | fg |
+| `backup.local` | Back up · Backing up | user, cli | svc, cli (lease only) | D:w B(d):w C(\*):r (reads the library; writes its `backups.json`) | backup.local | backup (service only) | Stops; the next backup carries on from what was copied. Waits for each host's capture (`blocked(capture-running)`; today's phase "waiting for a capture to finish"). | record | always (service); never (CLI, lease only) | fg |
+| `cloud.connect` | Test a cloud backup destination · Testing the destination | user | svc (inside the request, merged with `s.life.ctx`) | D:w K:w (a probe file in staging) | — | cloud | Stops the test; connect the destination again afterwards. | instant | always | fg |
+| `cloud.upload` (variants `sample`, `full`) | Upload a cloud backup · Uploading a cloud backup | user, schedule | svc | D:w K(d):w (staging; reads a catalog snapshot) | backup.cloud:d | cloud | Stops the upload and deletes its staged archive; the last completed cloud backup is unchanged. It starts again from the beginning when started again, or at the schedule's next time. | batch (snapshot), record (upload: the S3 abort and the final save have 2 s limits each, then the staging is removed) | always | fg (`user`), bg (`schedule`) |
+| `cloud.verify` | Verify a cloud backup · Verifying a cloud backup | user, cli (`cloud-backup verify`, required for password-protected backups) | svc, cli (catalog writer: journal and lease) | D:w K(d):w W:w (staging; saves the verification state) | backup.cloud:d | cloud (service only) | Stops and removes the partly recovered copy; run the verification again. | record | always | fg |
+| `cloud.restore` | Restore from the cloud (Terminal) · Restoring | cli (`cloud-restore`) | cli | — (a new location; out of scope) | — | — | **Out of status scope.** It restores to a new location, often on a Mac with no library or Pharos configuration (`cloud_cli.go`), so there is no library whose status could show it. It takes no lease and writes no journal. | — | never | fg |
+| `library.transfer` (variants `copy`, `move`) | Copy library / Move library · Copying the library | user (Libraries page), cli (`library-transfer`) | brk, cli | O:w D(source):w D(target):w | (target) conv:\* | — | Not stoppable; eject of either drive must wait. | none | always (broker registry) | fg |
+| `library.recover` | Restore a backup · Restoring a backup | user, cli (`library-recover`) | brk, cli | O:w D(target):w | (target) all | — | Not stoppable; eject must wait. | none | always (broker registry) | fg |
+| `library.deliver` | Deliver captured history · Delivering history | schedule (every 5 min while a pair is set), device (target attached) | brk | O:w M:w D(source):w D(target):w (`M` while stopping children) | (target) conv:\* | — | Not stoppable; it stops both libraries' services first (§4.4). | none | always (broker registry) | bg |
+| `library.deliver.capture` | Capture into the pending library · Capturing pending history | stage of `library.deliver` | brk | D(source):w | — | — | As its parent. | none | step | bg |
+| `library.adopt` | Move this Mac's archive into a library · Moving the archive | onboarding, cli | cli, svc | D(source):w D(target):w | all | — | Not stoppable. | none | always | fg |
+| `library.create` | Create a library · Creating the library | user | brk | D(target):w | — | — | Not stoppable; short. | none | >5 s (broker registry) | fg |
 
 ### 3.7 G. Process and device lifecycle
 
 | Kind | Label · verb | Trigger | Proc | Holds | Affects | Stop | On stop or eject | Latency | Journal | Pri |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `service.start` | Open the library · Opening the library | user (select), startup, respawn | brk | M (today, for up to 2 min), D | — | — | Not stoppable. The broker gives up after 2 min and SIGTERMs the child (§10, G2). | none | always (broker registry) | fg |
-| `library.release` | Release the library · Releasing the library | user (eject, quit, switch), device | svc, brk | D | — | — | Is the stop. Fails after 7 s with "Pharos is finishing a write". | — | always | fg |
-| `app.update` | Update Pharos · Updating Pharos | schedule, user (Sparkle) | app | update lock | — | — | Native; bridged to the header ring as today. | — | never (Sparkle keeps its own) | bg |
+| `service.start` | Open the library · Opening the library | user (select), startup, respawn | brk | M:w D:w (`M` today, for up to 2 min) | — | — | Not stoppable. The broker gives up after 2 min and SIGTERMs the child (§10, G2). | none | always (broker registry) | fg |
+| `library.release` | Release the library · Releasing the library | user (eject, quit, switch), device | svc, brk | D:w | — | — | Is the stop. Fails after 7 s with "Pharos is finishing a write". | — | always | fg |
+| `app.update` | Update Pharos · Updating Pharos | schedule, user (Sparkle) | app | update-lock:w (native) | — | — | Native; bridged to the header ring as today. | — | never (Sparkle keeps its own) | bg |
 
 Not kinds: the broker's 5 s maintain loop (a daemon whose respawns are
 `service.start` with trigger `respawn`), the native 5 s state watch, the
@@ -421,7 +424,7 @@ Mac:
 
 | Verdict | When | What eject does |
 |---|---|---|
-| `safe` | No running operation holds the drive for writing. Read-only holders (a `maintenance.cache-warm` pass, a `drive.measure` read) may run; eject stops them | Release stops any readers (each `on_eject` says how) and closes the catalog |
+| `safe` | No running operation holds the drive for writing. Read-only holders (a `maintenance.cache-warm` pass) may run; eject stops them | Release stops any readers (each `on_eject` says how) and closes the catalog |
 | `safe-in(eta)` | At least one operation holds the drive for writing, and every drive holder stops at a safe point within the release budget (7 s, `stopTimeout`): latency `instant` or `record`, a `SafePoint` estimate ≤ 7 s, or a `batch` holder with no estimate (assumed to stop in time; a release that times out refuses safely). `eta` is the largest estimate, or `null` when any is unknown | Release stops them at safe points and closes the catalog. With an `eta`: "Ejecting stops <label> within about N s". With `eta: null`, fixed wording: "Ejecting stops <label> after the current <unit>; if that takes more than 7 s, Pharos refuses and you can try again" |
 | `busy` | Some holder blocks release: a held lease of another process (CLI work), a broker operation, `catalog.initialize`, a `release-blocking` request-scoped operation (§2.3), or a holder whose `SafePoint` estimate exceeds the budget or whose latency is `step` or `none`; `eta` is its safe point or forecast when known | Eject is refused until it ends or reaches its safe point; the panel names it |
 | `unsafe` | Unknown or unregistered writer evidence: kind `unknown`; unregistered running work found by the registry's self-check; a held capture or index lock (today's flock probes) that no held lease and no operation in this service's registry names; a lease file that cannot be read or probed; the service unreachable while the drive is mounted | Eject is refused; the panel says what is unknown |
@@ -431,6 +434,11 @@ writer) is `safe-in`, never `safe`.
 
 Rules:
 
+- **What "holds the drive for writing" means.** An operation holds the
+  drive for writing when it declares a `D:w` hold **or any** `W:w` hold
+  (the catalog writer): the catalog is on the drive, so a catalog write is a
+  drive write, even when the kind's `D` hold is a read. Only an operation
+  whose every hold is `:r` is read-only.
 - **Err toward not safe.** When two rules apply, the worse verdict wins
   (`unsafe` > `busy` > `safe-in` > `safe`). A missing estimate never improves
   a verdict.
@@ -457,7 +465,9 @@ Rules:
 Until phase 2 switches surfaces, `libraryActivities` remains the answer the
 UI uses (`idle`, `safe_to_unplug`, `unplug`). Phase 0 added in-service cloud
 work to it. The parity invariant: the shadow verdict is never `safe` while
-`libraryActivities` lists a writer. The phase-1 parity test checks it.
+`libraryActivities` lists a writer. The phase-1 parity test checks it, and
+also asserts over the kinds table that no kind with a `W` hold, and no kind
+whose `D` hold is `:w`, is classified as read-only.
 
 ### 4.4 Broker operations and other libraries
 
@@ -569,9 +579,16 @@ operations; snapshots, the eject verdict and stop wiring read it. The
 journal is the durable record and the cross-process history, and it may
 lag by seconds.
 
-- **One writer per process.** A journal writer goroutine holds a map of
-  pending row images keyed by op ID. Handles only replace an entry; they
-  never block, never touch SQLite, and never fail.
+- **One writer per process.** A journal writer goroutine holds two kinds of
+  pending entry:
+  - **row images**, keyed by op ID, from this process's own operations.
+    Handles only replace an entry; they never block, never touch SQLite,
+    and never fail;
+  - **conditional reconciles**, keyed by op ID, from the reconcile pass
+    (§6.5): a target state, reason, outcome and `ended_at` for a row owned
+    by another instance, written as `UPDATE … WHERE id=? AND instance=?
+    AND ended_at IS NULL`. A reconcile never becomes a row image and never
+    overwrites a row its owner has ended.
 - **Never ahead of ingest.** Journal writes must not queue on the catalog
   writer gate (`acquireWriteGate`, `catalog_contention.go`) ahead of real
   work. The writer runs a round at most every 3 s: it tries the gate without
@@ -587,7 +604,8 @@ lag by seconds.
   ingest commits per workspace and frees the gate between commits. A row
   that has waited 30 s is still written only through the same non-blocking
   rule; nothing escalates to a blocking write.
-- **Coalescing.** Each round writes the latest image per op, so step
+- **Coalescing.** Each round writes the latest image per op (and each
+  pending conditional reconcile once), so step
   changes, blocks and progress between rounds collapse into one write.
 - **Drops.** A round that fails (`no such table`, read-only, drive gone) is
   dropped and counted in the snapshot's `journal.dropped`; the next round
@@ -638,8 +656,9 @@ Liveness of other processes is never inferred from pids or heartbeat rows.
   opens the catalog (`capture`, `backup`), so the service lists both
   directories.
 - **Contents:** JSON with `instance`, `pid`, `host_id`, `process`
-  (`cli:<command>`, `mcp`), `kinds`, `holds`, `started_at`, and `operation`
-  IDs when it journals.
+  (`cli:<command>`, `mcp`), `kinds`, `holds`, `started_at`, `operation`
+  IDs when it journals, and `outcomes` only when its final journal round
+  could not write (below).
 - **Creating a lease.** The process opens the path with `O_CREAT|O_RDWR`,
   takes `LOCK_EX` (blocking is fine: only a deleter holds it, briefly),
   then checks that the locked file is still the one at the path (`fstat`
@@ -653,7 +672,8 @@ Liveness of other processes is never inferred from pids or heartbeat rows.
   holding the lock, then closes it.
 - **Deleting a dead lease.** The deleter opens the path, takes
   `LOCK_EX|LOCK_NB`; if that fails the lease is live. If it succeeds, it
-  unlinks the path while holding the lock, then closes. A creator racing it
+  applies any recorded outcomes first (below), then unlinks the path while
+  holding the lock, then closes. A creator racing it
   either sees the inode mismatch and retries, or locks a file that is not
   unlinked afterwards.
 - **The flock is the liveness signal.** Pid reuse does not matter. Every
@@ -667,19 +687,28 @@ Liveness of other processes is never inferred from pids or heartbeat rows.
   journal row, and keeps it until its last row is written: at exit it runs a
   final journal round with a bounded budget (1 s, through the same
   non-blocking rule plus one blocking attempt within that budget), and only
-  then unlinks the lease (while holding its lock) and closes it. If the
-  final round could not write, its rows are reconciled as below, which is
-  the truth: the outcome was not recorded.
+  then unlinks the lease (while holding its lock) and closes it.
+- **When the final round cannot write.** The process writes its terminal
+  outcomes into its lease file in place (`ftruncate` + `pwrite`, `fsync`;
+  it still holds the lock): an `outcomes` map of op ID to state, reason,
+  error and `ended_at`. Then it releases the lock **without unlinking** the
+  file, and exits. The outcome survives in the unheld lease.
 - **Reconciling in the background.** A reconcile pass runs on its own timer
   (every 10 s), independent of the writer gate and of the journal writer's
-  rounds. It deletes dead leases (the protocol above). Then it reads the
-  open rows on this host whose `instance` is not the running service's,
-  and for each one probes **that row's own** lease (`<instance>.json`) at
-  that moment; missing or unheld means dead. For each dead one it queues a
-  conditional update, never a full row image: `UPDATE operation_journal SET
-  state='interrupted', reason='owner-exited', ended_at=?, updated_at=? WHERE
-  id=? AND instance=? AND ended_at IS NULL`, written through the
-  low-priority lane. A row its owner ended in the meantime is left alone.
+  rounds. For each unheld lease file (probed with `LOCK_EX|LOCK_NB`, which
+  it keeps while it works on that file) it first reads any `outcomes` and
+  queues each as a conditional reconcile (§6.2) with that recorded state;
+  once those have been written, it deletes the file (the protocol above).
+  Then it reads the open rows on this host whose `instance` is not the
+  running service's, and for each one probes **that row's own** lease
+  (`<instance>.json`) at that moment; missing or unheld means dead. A dead
+  row with an outcome in its unheld lease gets that outcome. Only a dead
+  row with **no recorded outcome** gets `interrupted` with reason
+  `owner-exited`. Every reconcile is a conditional update, never a full row
+  image: `UPDATE operation_journal SET state=?, reason=?, error=?,
+  ended_at=?, updated_at=? WHERE id=? AND instance=? AND ended_at IS NULL`,
+  written through the low-priority lane. A row its owner ended in the
+  meantime is left alone.
   This covers rows whose lease was deleted before their reconcile landed (a
   service killed in between, a dropped round) and rows from a previous
   service instance. Open children of a reconciled row follow with the same

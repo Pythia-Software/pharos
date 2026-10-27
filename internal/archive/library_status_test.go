@@ -67,11 +67,13 @@ func TestUnplugAdviceAlwaysSaysEject(t *testing.T) {
 	if idle["action"] != "eject" || idle["without_eject"] != "probably-fine" || !strings.Contains(idle["summary"].(string), "eject euclid before unplugging") {
 		t.Fatalf("idle: %#v", idle)
 	}
-	reading := unplugAdvice(drive, []libraryActivity{{Kind: "backup", Label: "Backing up"}})
-	if reading["action"] != "eject" || reading["without_eject"] != "unsafe" || !strings.Contains(reading["summary"].(string), "Backing up is reading the library") {
+	// No activity listed today is read-only (a backup writes backups.json);
+	// a read-only one, such as warming page caches, would get this advice.
+	reading := unplugAdvice(drive, []libraryActivity{{Kind: "maintenance", Label: "Warming page caches"}})
+	if reading["action"] != "eject" || reading["without_eject"] != "unsafe" || !strings.Contains(reading["summary"].(string), "Warming page caches is reading the library") {
 		t.Fatalf("reading: %#v", reading)
 	}
-	writing := unplugAdvice(drive, []libraryActivity{{Kind: "capture", Label: "Capturing Mac A", Writes: true}, {Kind: "backup", Label: "Backing up"}})
+	writing := unplugAdvice(drive, []libraryActivity{{Kind: "capture", Label: "Capturing Mac A", Writes: true}, {Kind: "maintenance", Label: "Warming page caches"}})
 	if writing["without_eject"] != "unsafe" || !strings.HasPrefix(writing["summary"].(string), "Capturing Mac A: writing to euclid now") || strings.Contains(writing["summary"].(string), "cannot stop") {
 		t.Fatalf("writing: %#v", writing)
 	}
