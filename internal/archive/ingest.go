@@ -627,10 +627,20 @@ func (c *Catalog) IngestExisting(adapter Adapter, progress ProgressFunc) IngestR
 			return fmt.Errorf("selective adapter emitted unrequested source id %q", record.SourceID)
 		}
 		retainedRecordIdentity(captureViewOf(adapter), &record, nil)
-		tx, beginErr := c.beginWrite(context.Background())
+		// Through the writer gate, so the journal's lane yields to it (§6.2);
+		// released at commit, before the writes below that take it again.
+		tx, finish, beginErr := c.beginTrackedWrite(context.Background(), "repair-existing")
 		if beginErr != nil {
 			return beginErr
 		}
+		released := false
+		done := func() {
+			if !released {
+				released = true
+				finish()
+			}
+		}
+		defer done()
 		conversations, messages, ingestErr := ingestCopy(tx, record, adapter.Capability() == "tl1-release", host.ID, config.Name, captureViewOf(adapter) != nil, repositoryOptions{c.RepositoryAliases, c.RepositorySeparate})
 		if errors.Is(ingestErr, errOlderCopy) {
 			tx.Rollback()
@@ -641,7 +651,9 @@ func (c *Catalog) IngestExisting(adapter Adapter, progress ProgressFunc) IngestR
 			tx.Rollback()
 			return ingestErr
 		}
-		if commitErr := tx.Commit(); commitErr != nil {
+		commitErr := tx.Commit()
+		done()
+		if commitErr != nil {
 			return commitErr
 		}
 		c.boundWAL(walSizeLimit)

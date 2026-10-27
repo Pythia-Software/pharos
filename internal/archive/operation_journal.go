@@ -23,9 +23,13 @@ import (
 // journalRoundInterval spaces the writer's rounds; tests shorten it.
 var journalRoundInterval = 3 * time.Second
 
-// journalBusyTimeout bounds how long a round waits for SQLite's lock held by
-// another process.
-var journalBusyTimeout = 50 * time.Millisecond
+// journalConnWait is how long a round waits for an idle pooled connection;
+// it holds nothing meanwhile.
+var journalConnWait = 5 * time.Millisecond
+
+// journalRoundRows caps the rows one round writes, so its transaction stays
+// tiny; the rest wait for the next round.
+var journalRoundRows = 64
 
 // Retention (§6.1): ended rows are kept for journalKeepDays and at most
 // journalKeepRows per host, whichever is fewer; children go with their root.
@@ -125,7 +129,8 @@ func (r *opRegistry) pendingImages() []journalImage {
 	views := []opView{}
 	ops := []*Op{}
 	for _, op := range r.ops {
-		if op.version != op.written && r.journalEligibleLocked(op) {
+		// A tentative pass is not published: it may yet be discarded.
+		if !op.tentative && op.version != op.written && r.journalEligibleLocked(op) {
 			views = append(views, op.viewLocked())
 			ops = append(ops, op)
 		}
@@ -256,7 +261,13 @@ func (j *journalWriter) round(ctx context.Context, wait time.Duration) error {
 	}
 	defer j.roundMu.Unlock()
 	images := j.reg.pendingImages()
+	if len(images) > journalRoundRows {
+		images = images[:journalRoundRows]
+	}
 	reconciles, prune := j.pendingReconciles()
+	if len(reconciles) > journalRoundRows {
+		reconciles = reconciles[:journalRoundRows]
+	}
 	if len(images) == 0 && len(reconciles) == 0 && !prune {
 		return nil
 	}
@@ -286,6 +297,25 @@ func (j *journalWriter) round(ctx context.Context, wait time.Duration) error {
 
 func (j *journalWriter) write(ctx context.Context, wait time.Duration, images []journalImage, reconciles []journalReconcile, prune bool) (err error) {
 	c := j.catalog
+	// The low-priority lane takes nothing it would have to wait for while
+	// holding the writer gate: a pooled connection first (only an idle one),
+	// then the gate without waiting, then SQLite's lock with no busy wait.
+	// The final flush (wait > 0) may wait, since nothing else writes then.
+	busy := time.Duration(0)
+	connWait := journalConnWait
+	if wait > 0 {
+		busy, connWait = wait, wait
+	}
+	connCtx, cancel := context.WithTimeout(ctx, connWait)
+	conn, err := c.DB.Conn(connCtx)
+	cancel()
+	if err != nil {
+		if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+			return errJournalBusy
+		}
+		return err
+	}
+	defer conn.Close()
 	var release func()
 	if wait == 0 {
 		var ok bool
@@ -305,20 +335,6 @@ func (j *journalWriter) write(ctx context.Context, wait time.Duration, images []
 		}
 	}
 	defer release()
-	busy := journalBusyTimeout
-	if wait > 0 {
-		busy = wait
-	}
-	connCtx, cancel := context.WithTimeout(ctx, busy)
-	conn, err := c.DB.Conn(connCtx)
-	cancel()
-	if err != nil {
-		if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
-			return errJournalBusy
-		}
-		return err
-	}
-	defer conn.Close()
 	if _, err := conn.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout=%d", busy.Milliseconds())); err != nil {
 		return err
 	}
@@ -441,7 +457,10 @@ func (j *journalWriter) droppedRounds() int64 {
 	if j == nil {
 		return 0
 	}
-	return j.dropped.Load()
+	j.reg.mu.Lock()
+	forgotten := j.reg.forgotten
+	j.reg.mu.Unlock()
+	return j.dropped.Load() + forgotten
 }
 
 // journalRow is a row read back from the journal.

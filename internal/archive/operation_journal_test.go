@@ -81,6 +81,41 @@ func TestJournalWritesStartsAndEndsAndCoalescesSteps(t *testing.T) {
 		t.Fatalf("%d rows; each operation has one", count)
 	}
 	slow.Finish(nil)
+
+	// A daemon pass past its threshold is not written while tentative, so
+	// one discarded later leaves no open row.
+	_, pass := reg.beginTentative(context.Background(), OperationSpec{Kind: "maintenance.search.query", Trigger: triggerVersion})
+	clock = clock.Add(time.Minute)
+	if err := journal.round(context.Background(), 0); err != nil {
+		t.Fatal(err)
+	}
+	pass.discard()
+	if _, ok := journalRows(t, catalog)["maintenance.search.query"]; ok {
+		t.Fatal("a tentative pass was journaled")
+	}
+}
+
+// While the journal cannot write, ended operations wait in memory for it,
+// up to a cap; past it the oldest are forgotten and counted as dropped.
+func TestUnwrittenOperationsAreCappedWhileTheJournalFails(t *testing.T) {
+	catalog, reg, journal := testJournal(t)
+	override(t, &maxUnwrittenOperations, 3)
+	reg.keepEnded = 0
+	if _, err := catalog.DB.Exec("DROP TABLE operation_journal"); err != nil {
+		t.Fatal(err)
+	}
+	for range 10 {
+		_, op := reg.begin(context.Background(), OperationSpec{Kind: "backup.local", Trigger: triggerUser})
+		op.Finish(nil)
+	}
+	_ = journal.round(context.Background(), 0)
+	reg.begin(context.Background(), OperationSpec{Kind: "backup.local", Trigger: triggerUser})
+	if views := reg.views(); len(views) > 4 {
+		t.Fatalf("%d operations kept; the cap is 3 ended plus the running one", len(views))
+	}
+	if dropped := journal.droppedRounds(); dropped < 7 {
+		t.Fatalf("dropped %d; forgotten operations count", dropped)
+	}
 }
 
 // A round that fails is dropped and counted, and never fails or blocks the
@@ -180,12 +215,20 @@ func TestJournalSkipsItsRoundForCatalogWriters(t *testing.T) {
 	if _, err := conn.ExecContext(context.Background(), "BEGIN IMMEDIATE"); err != nil {
 		t.Fatal(err)
 	}
+	// It does not wait for that lock (busy timeout 0), so it never holds the
+	// writer gate while another process writes, and gives it back at once.
+	journal.beforeRow = nil
 	started = time.Now()
 	if err := journal.round(context.Background(), 0); !errors.Is(err, errJournalBusy) {
 		t.Fatalf("round while another connection writes: %v", err)
 	}
-	if waited := time.Since(started); waited > time.Second {
+	if waited := time.Since(started); waited > 100*time.Millisecond {
 		t.Fatalf("the round waited %s for another process's lock", waited)
+	}
+	if release, ok := catalog.tryWriteGate(); !ok {
+		t.Fatal("a skipped round kept the writer gate")
+	} else {
+		release()
 	}
 	if _, err := conn.ExecContext(context.Background(), "ROLLBACK"); err != nil {
 		t.Fatal(err)

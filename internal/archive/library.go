@@ -319,11 +319,11 @@ func (c *Catalog) refreshPreviews(ctx context.Context, batch int) (int, error) {
 	if err != nil || len(rows) == 0 {
 		return 0, err
 	}
-	tx, err := c.beginWrite(ctx)
+	tx, finish, err := c.beginTrackedWrite(ctx, "library-previews")
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback(); finish() }()
 	for _, row := range rows {
 		id := row["workspace_id"]
 		if _, err := tx.ExecContext(ctx, `INSERT INTO workspace_previews(workspace_id,first_input_id,last_response_id) SELECT ?,?,?
