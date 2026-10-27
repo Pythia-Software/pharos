@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +15,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -418,6 +421,131 @@ func TestAskCancelAndDisable(t *testing.T) {
 		})
 	}
 }
+
+// A finished answer waits to be saved while the catalog writer is busy. That
+// must not lose it, make a reload report the request stopped, or hold up the
+// rest of Ask; a stop meanwhile replaces it.
+func TestAskSavesAnswerPastABusyCatalog(t *testing.T) {
+	busy := func(t *testing.T, s *Server) (release func()) {
+		held, done, written := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+		calls := 0
+		override(t, &askRunCLI, func(context.Context, askProvider, askSelection, string) ([]byte, error) {
+			if calls++; calls > 1 {
+				return askReply("home"), nil
+			}
+			go func() {
+				written <- s.Catalog.writeTransaction(context.Background(), "test-busy", func(*sql.Tx) error {
+					close(held)
+					<-done
+					return nil
+				})
+			}()
+			<-held
+			return askReply("home"), nil
+		})
+		return func() {
+			close(done)
+			if err := <-written; err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	read := func(t *testing.T, body []byte) askSession {
+		t.Helper()
+		var session askSession
+		if err := json.Unmarshal(body, &session); err != nil || len(session.Conversation) != 1 {
+			t.Fatalf("session: %s %v", body, err)
+		}
+		return session
+	}
+	reload := func(t *testing.T, s *Server) askSession {
+		t.Helper()
+		response := askCall(t, s, http.MethodGet, "session?id=chat-1", nil)
+		if response.Code != 200 {
+			t.Fatalf("reload: %d %s", response.Code, response.Body.String())
+		}
+		return read(t, response.Body.Bytes())
+	}
+	saved := func(t *testing.T, s *Server, status string) askSession {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			session, err := s.askSession(t.Context(), "chat-1")
+			if err == nil && session.Conversation[0].Status == status {
+				s.ask.mu.Lock()
+				defer s.ask.mu.Unlock()
+				if len(s.ask.active) != 0 || len(s.ask.saving) != 0 {
+					t.Fatalf("a saved chat is still held: %v %v", s.ask.active, s.ask.saving)
+				}
+				return session
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("the chat was never saved as %s: %+v %v", status, session, err)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	t.Run("save in progress", func(t *testing.T) {
+		s := askTestServer(t)
+		askEnable(t, s)
+		// The first save waits for the writer, so anything that waited for it
+		// in turn would stall this test.
+		override(t, &askSaveTimeout, time.Minute)
+		override(t, &askSaveRetry, 10*time.Millisecond)
+		release := busy(t, s)
+		sent := make(chan *httptest.ResponseRecorder, 1)
+		go func() { sent <- askCall(t, s, http.MethodPost, "send", askInput()) }()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			// Until send saves the question, the chat does not exist.
+			response := askCall(t, s, http.MethodGet, "session?id=chat-1", nil)
+			if response.Code == 200 && read(t, response.Body.Bytes()).Conversation[0].Status == "single" {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("a reload did not show the finished answer")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		askCall(t, s, http.MethodGet, "status", nil)
+		askOK(t, s, "session", map[string]any{"id": "chat-1", "draft": "Typed while saving"})
+		askOK(t, s, "cancel", map[string]any{"id": "chat-1"})
+		if session := reload(t, s); session.Conversation[0].Status != "canceled" || session.Draft != "Typed while saving" {
+			t.Fatalf("reload after a stop: %+v", session)
+		}
+		release()
+		if response := <-sent; response.Code != 200 {
+			t.Fatalf("send: %d %s", response.Code, response.Body.String())
+		}
+		if session := saved(t, s, "canceled"); session.Draft != "Typed while saving" || len(session.Conversation[0].Cards) != 0 {
+			t.Fatalf("saved after a stop: %+v", session)
+		}
+	})
+
+	t.Run("save retried", func(t *testing.T) {
+		s := askTestServer(t)
+		askEnable(t, s)
+		override(t, &askSaveTimeout, 50*time.Millisecond)
+		override(t, &askSaveRetry, 10*time.Millisecond)
+		release := busy(t, s)
+		if session := read(t, askOK(t, s, "send", askInput()).Body.Bytes()); session.Conversation[0].Status != "single" {
+			t.Fatalf("the response lost the answer: %+v", session)
+		}
+		if session := reload(t, s); session.Conversation[0].Status != "single" {
+			t.Fatalf("reload while saving: %+v", session)
+		}
+		next := askInput()
+		next["turnID"] = "turn-2"
+		if response := askCall(t, s, http.MethodPost, "send", next); response.Code == 200 {
+			t.Fatal("a question was added to a chat whose answer is not saved")
+		}
+		release()
+		saved(t, s, "single")
+		askOK(t, s, "send", next)
+	})
+}
+
 func TestAskModelCatalogs(t *testing.T) {
 	raw := json.RawMessage(`{"data":[{"model":"available-model","displayName":"Available Model","isDefault":true,"supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"}]}],"nextCursor":null}`)
 	models, err := askCodexModels(raw)
@@ -529,12 +657,13 @@ func TestAskInstalledCLI(t *testing.T) {
 		effort = "Low"
 	}
 	catalog, config := testCatalog(t)
-	config.Executable = filepath.Join(t.TempDir(), "pharos")
-	build := exec.CommandContext(ctx, "go", "build", "-o", config.Executable, "../../cmd/pharos")
+	executable := filepath.Join(t.TempDir(), "pharos")
+	build := exec.CommandContext(ctx, "go", "build", "-o", executable, "../../cmd/pharos")
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build MCP server: %v\n%s", err, output)
 	}
-	config.Port = 1 // MCP uses this test catalog directly, never a live service.
+	override(t, &askMCPExecutable, func() string { return executable })
+	config.Port = 1 // Nothing listens, so MCP uses this test catalog directly.
 	if err := os.WriteFile(config.Path, []byte(fmt.Sprintf("catalog_path = %q\narchive_root = %q\nstaging_root = %q\nport = 1\n", config.CatalogPath, config.ArchiveRoot, config.StagingRoot)), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -640,18 +769,31 @@ func TestAskCLIProcessCancellation(t *testing.T) {
 	}
 }
 
+// The CLI's MCP server answers from the service Ask runs in, never from the
+// library the installed app assigns MCP to for outside agents.
 func TestAskUsesLibraryMCP(t *testing.T) {
 	s := askTestServer(t)
 	askEnable(t, s)
-	command, args, err := mcpCommand(s.Config())
+	override(t, &askMCPExecutable, func() string { return "/test/pharos" })
+	config := s.Config()
+	configPath, err := filepath.Abs(config.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	calls := 0
+	calls, service := 0, ""
 	override(t, &askRunCLI, func(ctx context.Context, p askProvider, selection askSelection, prompt string) ([]byte, error) {
 		calls++
-		if p.mcp.Command != command || !reflect.DeepEqual(p.mcp.Args, args) {
-			t.Fatalf("MCP connection = %+v, want %s %v", p.mcp, command, args)
+		if p.mcp.Command != "/test/pharos" || len(p.mcp.Args) != 5 || !reflect.DeepEqual(p.mcp.Args[:4], []string{"--config", configPath, "mcp", "--service"}) {
+			t.Fatalf("MCP connection = %+v", p.mcp)
+		}
+		service = p.mcp.Args[4]
+		var endpoint applicationEndpoint
+		data, err := os.ReadFile(service)
+		if err == nil {
+			err = json.Unmarshal(data, &endpoint)
+		}
+		if err != nil || endpoint.URL != "http://"+net.JoinHostPort(config.Host, strconv.Itoa(config.Port)) || endpoint.Token != config.APIToken || endpoint.Catalog != config.CatalogPath {
+			t.Fatalf("service endpoint = %+v, %v", endpoint, err)
 		}
 		if !strings.Contains(prompt, "pharos MCP server connected") || !strings.Contains(prompt, "Page visits and private chat history remain available only through lookup") {
 			t.Fatal("missing MCP or private-history instructions")
@@ -661,6 +803,9 @@ func TestAskUsesLibraryMCP(t *testing.T) {
 	askOK(t, s, "send", askInput())
 	if calls != 1 {
 		t.Fatalf("CLI calls = %d", calls)
+	}
+	if _, err := os.Stat(service); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the service endpoint outlived the request: %v", err)
 	}
 	if err := s.Catalog.SetMCPEnabled(false); err != nil {
 		t.Fatal(err)

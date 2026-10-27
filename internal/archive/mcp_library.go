@@ -28,6 +28,7 @@ import (
 // answer and tool calls fail with a "not connected" error.
 type mcpServer struct {
 	configPath string // --config; "" resolves as LoadConfig does
+	service    string // --service; endpoint file of the service running Ask Pharos
 	identity   func(string) string
 	client     *http.Client
 	verified   string // library directory last checked against volume_id
@@ -47,10 +48,13 @@ func newMCPServer(configPath string) *mcpServer {
 }
 
 // RunMCP serves MCP over stdio for the library or install that configPath
-// names or, without one, that LoadConfig finds.
-func RunMCP(configPath string, input io.Reader, output io.Writer) error {
+// names or, without one, that LoadConfig finds. service, when set, names the
+// service to answer from (see dispatch).
+func RunMCP(configPath, service string, input io.Reader, output io.Writer) error {
 	quickHostDetection = true
-	return newMCPServer(configPath).run(input, output)
+	server := newMCPServer(configPath)
+	server.service = service
+	return server.run(input, output)
 }
 
 // mcpPendingEnv hands input read ahead but not yet answered to the process
@@ -110,13 +114,32 @@ func (m *mcpServer) dispatch(request map[string]any) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Ask Pharos answers from the library it runs in. The app's MCP assignment
+	// chooses the library for outside agents and may name another one.
+	if m.service != "" {
+		var endpoint applicationEndpoint
+		b, err := os.ReadFile(m.service)
+		if err == nil {
+			err = json.Unmarshal(b, &endpoint)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("the Pharos service that started Ask Pharos has finished; retry from Pharos")
+		}
+		if response, forwarded, err := m.forward(endpoint.URL, endpoint.Token, config.CatalogPath, request); forwarded {
+			return response, err
+		}
+		return m.direct(config, request)
+	}
 	if application := managedApplicationForConfig(runningExecutable(), config); application != "" {
 		if firstString(request["method"]) == "tools/list" {
 			return mcpResult(request, map[string]any{"tools": mcpTools}), nil
 		}
 		return applicationRPC(m.client, application, request)
 	}
-	if response, forwarded, err := m.forward(config, request); forwarded {
+	if config.Host != "127.0.0.1" && config.Host != "::1" && config.Host != "localhost" {
+		return m.direct(config, request)
+	}
+	if response, forwarded, err := m.forward("http://"+net.JoinHostPort(config.Host, strconv.Itoa(config.Port)), config.APIToken, config.CatalogPath, request); forwarded {
 		return response, err
 	}
 	return m.direct(config, request)
@@ -150,23 +173,20 @@ func libraryNotConnected(path string) error {
 // service with another catalog open on the same port declines it.
 const mcpCatalogHeader = "X-Pharos-Catalog"
 
-// forward sends request to the running service for config. It reports false
-// only when nothing ran there, so the caller may open the catalog itself.
-func (m *mcpServer) forward(config Config, request map[string]any) (map[string]any, bool, error) {
-	if config.Host != "127.0.0.1" && config.Host != "::1" && config.Host != "localhost" {
-		return nil, false, nil
-	}
+// forward sends request to the service at base for catalogPath. It reports
+// false only when nothing ran there, so the caller may open the catalog itself.
+func (m *mcpServer) forward(base, token, catalogPath string, request map[string]any) (map[string]any, bool, error) {
 	body, err := json.Marshal(request)
 	if err != nil {
 		return nil, true, err
 	}
-	post, err := http.NewRequest(http.MethodPost, "http://"+net.JoinHostPort(config.Host, strconv.Itoa(config.Port))+"/api/mcp/rpc", bytes.NewReader(body))
+	post, err := http.NewRequest(http.MethodPost, base+"/api/mcp/rpc", bytes.NewReader(body))
 	if err != nil {
 		return nil, false, nil
 	}
-	post.Header.Set("Authorization", "Bearer "+config.APIToken)
+	post.Header.Set("Authorization", "Bearer "+token)
 	post.Header.Set("Content-Type", "application/json")
-	post.Header.Set(mcpCatalogHeader, config.CatalogPath)
+	post.Header.Set(mcpCatalogHeader, catalogPath)
 	answer, err := m.client.Do(post)
 	if err != nil {
 		var dial *net.OpError
