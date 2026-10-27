@@ -1220,9 +1220,10 @@ func (c *Catalog) startAuthorshipInContext(generation string, parent context.Con
 			ctx = workCtx
 			if report, ok := parent.Value(workProgressKey{}).(func(activityWork)); ok {
 				ctx = withWorkProgress(ctx, func(w activityWork) { op.mirrorWork(w); report(w) })
+			} else {
+				ctx = withWorkProgress(ctx, op.mirrorWork)
 			}
-		}
-		if parent == nil {
+		} else {
 			ctx = withWorkProgress(ctx, op.mirrorWork)
 		}
 		err := c.RebuildAuthorship(ctx, generation)

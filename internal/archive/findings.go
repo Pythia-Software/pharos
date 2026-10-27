@@ -798,6 +798,10 @@ func (c *Catalog) RefreshFindings(ctx context.Context, force bool) error {
 	state.mu.Lock()
 	if state.running {
 		state.mu.Unlock()
+		// A second request is an honest no-op (§3.3 single flight).
+		if op := opFrom(ctx); op != nil && op.spec.Kind == "analysis.findings" {
+			op.Skip("already-running")
+		}
 		return nil
 	}
 	state.running, state.phase = true, "starting"

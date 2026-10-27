@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -129,14 +130,18 @@ func (t *backgroundTasks) gitProgress() *activityWork {
 // completed.
 func (s *Server) refreshGitInBackground(backfill bool) {
 	reason := "after the last index"
+	// The one-time backfill at startup is a Git lookup; after a legacy source
+	// sync it is the Git, tools and findings refresh (§3.3).
+	spec := OperationSpec{Kind: "analysis.refresh", Trigger: triggerChained}
 	if backfill {
 		reason = "first scan of this catalog"
+		spec = OperationSpec{Kind: "analysis.git", Variant: "backfill", Trigger: triggerStartup}
 	}
 	s.tasks.addGit(1, reason)
-	started := s.spawn(func(ctx context.Context) {
+	started := s.start(spec, func(ctx context.Context, op *Op) error {
 		defer s.tasks.addGit(-1, "")
 		_, since, _ := s.tasks.gitRunning()
-		meter := &runWorkMeter{server: s, runID: "git:" + since, kind: "git", model: "analysis-v1:git", publish: s.tasks.setGitWork}
+		meter := &runWorkMeter{server: s, runID: "git:" + since, kind: "git", model: "analysis-v1:git", publish: func(w activityWork) { s.tasks.setGitWork(w); op.mirrorWork(w) }}
 		defer func() { meter.release(ctx.Err() == nil) }()
 		ctx = withWorkProgress(ctx, meter.report)
 		meter.report(activityWork{Phase: "waiting for Git refresh"})
@@ -144,18 +149,20 @@ func (s *Server) refreshGitInBackground(backfill bool) {
 		if backfill {
 			refresh, name = s.Catalog.backfillMainIntegrations, "backfill"
 		}
-		if err := refresh(ctx); err != nil && ctx.Err() == nil {
-			fmt.Fprintf(os.Stderr, "Git integration %s: %v\n", name, err)
+		failure := refresh(ctx)
+		if failure != nil && ctx.Err() == nil {
+			fmt.Fprintf(os.Stderr, "Git integration %s: %v\n", name, failure)
 		}
 		meter.finish(ctx.Err() == nil)
 		if backfill {
-			return
+			return failure
 		}
 		meter.model = "analysis-v1:tools"
 		meter.report(activityWork{Phase: "refreshing tools"})
 		// Rebuild the Tools rollup now rather than on the next page view.
 		if err := s.Catalog.ensureToolRollup(ctx); err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Tool rollup: %v\n", err)
+			failure = errors.Join(failure, err)
 		}
 		meter.finish(ctx.Err() == nil)
 		meter.model = "analysis-v1:findings"
@@ -164,7 +171,9 @@ func (s *Server) refreshGitInBackground(backfill bool) {
 		// and between them only the findings being measured.
 		if err := s.Catalog.RefreshFindings(ctx, false); err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Findings: %v\n", err)
+			failure = errors.Join(failure, err)
 		}
+		return failure
 	})
 	if !started {
 		s.tasks.addGit(-1, "")
