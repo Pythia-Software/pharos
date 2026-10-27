@@ -87,6 +87,9 @@ type brokerOperations struct {
 	// unavailable counts, per library, the documents in a row that found it
 	// unreachable or not open (rule 8).
 	unavailable map[string]int
+	// resources samples the broker, each library's service and the
+	// Terminal commands writing them, for /api/app/status (§10).
+	resources *resourceSampler
 }
 
 func brokerOperationsPath(installation string) string {
@@ -96,7 +99,8 @@ func brokerOperationsPath(installation string) string {
 // newBrokerOperations loads the state file: operations an earlier broker
 // left running become interrupted.
 func newBrokerOperations(path string) *brokerOperations {
-	b := &brokerOperations{reg: newOpRegistry("broker"), path: path, client: &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{Proxy: nil}}}
+	b := &brokerOperations{reg: newOpRegistry("broker"), path: path, client: &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{Proxy: nil}},
+		resources: newResourceSampler()}
 	b.reg.wake = make(chan struct{}, 1)
 	// Ended operations stay listed (and in the state file) until newer ones
 	// push them out, not for the service's ten minutes.
@@ -419,6 +423,10 @@ func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool,
 	wait.Wait()
 	cutoff := time.Now().Add(-10 * time.Minute)
 	appLeases := probeLeases([]string{appLeaseDir()})
+	// The status document carries resources (§10); the operations document
+	// and the eject check do not.
+	withResources := withLibraries && !fresh && strings.HasPrefix(path, "/api/status")
+	sampled := []resourceProcess{{PID: os.Getpid(), Role: "broker"}}
 	entries := []map[string]any{}
 	for index, library := range libraries {
 		service := map[string]any{"state": "stopped", "pid": nil, "started_at": nil, "restarts_10m": 0}
@@ -473,9 +481,25 @@ func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool,
 		if snapshots[index] != nil {
 			snapshot = snapshots[index]
 		}
-		entries = append(entries, map[string]any{"id": library.ID, "name": library.Name, "selected": library.Selected,
+		entry := map[string]any{"id": library.ID, "name": library.Name, "selected": library.Selected,
 			"connected": library.Child != nil && failures[index] == nil, "service": service, "snapshot": snapshot,
-			"eject": verdict, "error": errorText})
+			"eject": verdict, "error": errorText}
+		if withResources {
+			// The broker reads the service itself, so a service too busy
+			// to answer is still measured, and the Terminal commands its
+			// snapshot names (or, without one, the leases read above).
+			processes := []resourceProcess{}
+			if library.Child != nil {
+				processes = append(processes, resourceProcess{PID: library.Child.PID, Role: "service", Library: library.ID, LibraryName: library.Name})
+			}
+			if snapshots[index] != nil {
+				processes = append(processes, snapshotProcesses(snapshots[index], library.ID, library.Name)...)
+			}
+			processes = append(processes, leaseProcesses(leases, library.ID, library.Name)...)
+			entry["resources"] = processes
+			sampled = append(sampled, processes...)
+		}
+		entries = append(entries, entry)
 	}
 	app := []map[string]any{}
 	for _, record := range records {
@@ -506,8 +530,37 @@ func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool,
 		entry["detail"] = "In another process (" + strings.Replace(probe.Info.Process, "cli:", "pharos ", 1) + ")"
 		app = append(app, entry)
 	}
-	return map[string]any{"version": 1, "revision": b.reg.currentRevision(), "generated_at": now(), "libraries": entries,
+	document := map[string]any{"version": 1, "revision": b.reg.currentRevision(), "generated_at": now(), "libraries": entries,
 		"app": map[string]any{"operations": app, "update": nil}, "attention": []any{}}
+	if withResources {
+		sampled = append(sampled, leaseProcesses(appLeases, "", "")...)
+		document["resources"] = b.libraryResources(entries, sampled)
+	}
+	return document
+}
+
+// libraryResources reads every process once and fills each library entry's
+// resources (its service and the Terminal commands writing it) from the
+// same readings; it returns the machine's total: the broker, every library's
+// processes and the app-level Terminal commands, each process counted once.
+func (b *brokerOperations) libraryResources(entries []map[string]any, processes []resourceProcess) *resourceSummary {
+	readings := b.resources.sample(processes)
+	byPID := map[int]resourceReading{}
+	for _, reading := range readings {
+		byPID[reading.PID] = reading
+	}
+	for _, entry := range entries {
+		asked, _ := entry["resources"].([]resourceProcess)
+		own := []resourceReading{}
+		for _, process := range asked {
+			if reading, ok := byPID[process.PID]; ok && !slices.ContainsFunc(own, func(r resourceReading) bool { return r.PID == process.PID }) {
+				own = append(own, reading)
+			}
+		}
+		name, _ := entry["name"].(string)
+		entry["resources"] = summarizeResources(defaultString(name, "This library"), own)
+	}
+	return summarizeResources("Pharos", readings)
 }
 
 // cleanDeadLeases deletes the unheld leases in dir: app-level commands (a

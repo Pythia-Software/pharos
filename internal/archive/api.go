@@ -90,6 +90,9 @@ type Server struct {
 	captureProbe captureProbe
 	// freshFiles caches the freshness ledger's file-derived inputs.
 	freshFiles freshnessFileCache
+	// resources samples this process and its library's other Pharos
+	// processes for the status snapshot (resources.go).
+	resources *resourceSampler
 }
 
 func NewServer(config Config, catalog *Catalog) *Server {
@@ -97,6 +100,7 @@ func NewServer(config Config, catalog *Catalog) *Server {
 	server.life.init()
 	server.ops = newOpRegistry("service")
 	server.ops.releasing = server.releasing
+	server.resources = newResourceSampler()
 	if catalog != nil {
 		server.ingestMu.path = catalog.Path
 		catalog.background = server.start

@@ -14,7 +14,7 @@ import (
 // GET /api/status is the status snapshot of this library
 // (docs/background-work.md §7.1): the drive and the eject verdict, the
 // top-level operation tree, the attention list, the freshness ledger
-// (phase 3), and a placeholder for resources (phase 4). GET /api/status/stream sends
+// (phase 3), and the CPU and memory of its Pharos processes (phase 4). GET /api/status/stream sends
 // the same document as server-sent events. Both run whatever the feature
 // flag says (§9); only the surfaces that render them are gated.
 //
@@ -55,8 +55,8 @@ func (s *Server) statusDocument(ctx context.Context, fresh bool) map[string]any 
 	freshness := s.freshness(ctx, views, fresh)
 	document["freshness"] = freshness
 	document["freshness_summary"] = summarizeFreshness(freshness)
-	// A stable key, filled by phase 4.
-	document["resources"] = nil
+	// CPU and memory of this library's Pharos processes on this Mac (§10).
+	document["resources"] = s.serviceResources()
 	document["features"] = map[string]any{"unified_activity": s.Catalog.unifiedActivity(ctx)}
 	return document
 }
@@ -64,7 +64,7 @@ func (s *Server) statusDocument(ctx context.Context, fresh bool) map[string]any 
 // statusTag identifies a document's content apart from when it was made:
 // equal tags mean nothing a surface shows has changed. Every generated_at,
 // nested ones included (each child snapshot in the broker's document has
-// its own), is left out.
+// its own), and every resource reading's sampled_at, is left out.
 func statusTag(document map[string]any) string {
 	data, _ := json.Marshal(document)
 	var content any
@@ -78,6 +78,7 @@ func withoutGeneratedAt(value any) any {
 	switch value := value.(type) {
 	case map[string]any:
 		delete(value, "generated_at")
+		delete(value, "sampled_at")
 		for key, item := range value {
 			value[key] = withoutGeneratedAt(item)
 		}
