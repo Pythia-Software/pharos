@@ -45,7 +45,7 @@ operation's life.
 type OperationSpec struct {
 	Kind     string   // a row of the kinds table (§3), e.g. "index.changes.manual"
 	Variant  string   // optional sub-kind the kind row allows, e.g. "sample" | "full"
-	Subject  string   // optional: source name, destination ID; broker operations: the library IDs they touch, comma-separated
+	Subject  string   // optional: source name, destination ID, a new library's name, a volume
 	Parent   OpID     // zero for a top-level operation (begin also takes the operation its context carries)
 	Trigger  string   // schedule | user | chained | startup | version | read | device | cli | respawn | onboarding | resume
 	Holds    []Hold   // what it holds while running (§4); defaults from the kind row
@@ -53,6 +53,7 @@ type OperationSpec struct {
 	Priority string   // foreground | background; defaults from the kind row (a child: its parent's)
 	Legacy   string   // ID of the record it shadows (SyncRun.ID, BackupRun.ID, cloud run ID…)
 	Queued   bool     // register as queued: it waits for its turn
+	Libraries []string // broker operations: the registered library IDs they touch
 }
 ```
 
@@ -382,6 +383,8 @@ ended, is registered.
 |---|---|---|---|---|---|---|---|---|---|---|
 | `catalog.initialize` | Prepare the catalog · Preparing the catalog | every writable catalog open (skipped when `meta.initialized_build` matches this executable) | svc, cli, mcp | D:w W:w Z:w | all derived domains | — | Cannot be stopped; the service has no API until it ends. A kill rolls back the step in progress, and the next open re-runs from the last committed `meta` key. | none | >2 s | fg |
 | `library.upgrade` | Upgrade the library · Upgrading the library | chained (after an index finds pending steps, or the browser after Capture & index), user (`POST /api/upgrade`), cli | svc, cli | D:w W:w | upgrade, an.tools | — | Stops after the unit in progress; starting the upgrade again resumes it. | record | always | fg |
+| `catalog.repair` (variants `refine-usage`, `repair-usage-attribution`) | Repair usage (Terminal) · Repairing usage | cli | cli | D:w W:w | an.tools, an.authorship | — | Pharos cannot stop it. | none (to Pharos) | always | fg |
+| `repositories.merge` | Merge repositories (Terminal) · Merging repositories | cli (`repositories --merge --apply`) | cli | D:w W:w | an.identities, an.git | — | Pharos cannot stop it. | none (to Pharos) | always | fg |
 | `tools.ledger.build` | Build the Tools ledger · Building the Tools ledger | user (`POST /api/tools/backfill`), version, step of `library.upgrade` | svc, cli (`build-tools`) | D:w W:w | an.ledger, an.tools | — | Stops between conversations; building the ledger again resumes it. | record | always | fg |
 
 Notes:
@@ -421,7 +424,7 @@ Notes:
 | Kind | Label · verb | Trigger | Proc | Holds | Affects | Stop | On stop or eject | Latency | Journal | Pri |
 |---|---|---|---|---|---|---|---|---|---|---|
 | `service.start` | Open the library · Opening the library | user (select), startup, respawn | brk | M:w D:w (`M` today, for up to 2 min) | — | — | Not stoppable. The broker gives up after 2 min and SIGTERMs the child (§10, G2). | none | always (broker registry) | fg |
-| `library.release` | Release the library · Releasing the library | user (eject, quit, switch), device | svc, brk | D:w | — | — | Is the stop. Fails after 7 s with "Pharos is finishing a write". | — | always | fg |
+| `library.release` | Release the library · Releasing the library | user (eject, quit, switch through the API), device (volume release), signal (SIGTERM/SIGINT), parent-exited, error | svc, brk | D:w | — | — | Is the stop. Fails after 7 s with "Pharos is finishing a write". | — | always | fg |
 | `app.update` | Update Pharos · Updating Pharos | schedule, user (Sparkle) | app | update-lock:w (native) | — | — | Native; bridged to the header ring as today. | — | never (Sparkle keeps its own) | bg |
 
 Not kinds: the broker's 5 s maintain loop (a daemon whose respawns are
@@ -445,6 +448,14 @@ the code keeps taking today's 13 locks, and the hold says which of them the
 operation takes. A test asserts that each kind that takes a lock today
 declares the matching hold.
 
+**Concrete lock holds.** A kind row's `C(...)`/`X(...)` holds are generic.
+An operation gains a concrete `capture:<hostID>` or `index:<host>/<source>`
+write hold only once it has actually taken that lock file
+(`Op.holdLock`, at `beginCapture`'s callers, `lockCaptureTarget` and
+`IndexCapture`), and loses it when it closes the file. A Terminal command
+resolves `C(this)` to this Mac's host ID in its lease, and rewrites its
+lease's holds as its operations take locks.
+
 ### 4.2 The verdict
 
 The eject verdict for a library is computed on the server from the
@@ -465,10 +476,21 @@ Mac:
 | `safe` | No running operation holds the drive for writing. Read-only holders (a `maintenance.cache-warm` pass) may run; eject stops them | Release stops any readers (each `on_eject` says how) and closes the catalog |
 | `safe-in(eta)` | At least one operation holds the drive for writing, and every drive holder stops at a safe point within the release budget (7 s, `stopTimeout`): latency `instant` or `record`, a `SafePoint` estimate ≤ 7 s, or a `batch` holder with no estimate (assumed to stop in time; a release that times out refuses safely). `eta` is the largest estimate, or `null` when any is unknown | Release stops them at safe points and closes the catalog. With an `eta`: "Ejecting stops <label> within about N s". With `eta: null`, fixed wording: "Ejecting stops <label> after the current <unit>; if that takes more than 7 s, Pharos refuses and you can try again" |
 | `busy` | Some holder blocks release: a held lease of another process (CLI work), a broker operation, `catalog.initialize`, a `release-blocking` request-scoped operation (§2.3), or a holder whose `SafePoint` estimate exceeds the budget or whose latency is `step` or `none`; `eta` is its safe point or forecast when known | Eject is refused until it ends or reaches its safe point; the panel names it |
-| `unsafe` | Unknown or unregistered writer evidence: kind `unknown`; unregistered running work found by the registry's self-check; a held capture or index lock (today's flock probes) that no held lease and no operation in this service's registry names (a write hold on the ingest coordinator, which the service takes those locks under, or on a capture or index; a backup's shared read does not count); a lease file that cannot be read or probed; the service unreachable while the drive is mounted | Eject is refused; the panel says what is unknown |
+| `unsafe` | Unknown or unregistered writer evidence: kind `unknown`; unregistered running work found by the registry's self-check; a held capture or index lock that no live lease and no operation in this service's registry names by an exact concrete write hold (§4.1; holding the ingest coordinator names nothing); a lease file or lease directory that cannot be read, listed or probed; the service unreachable while the drive is mounted | Eject is refused; the panel says what is unknown |
 
 So a Search view refresh alone (`maintenance.library-view`, a `record`
 writer) is `safe-in`, never `safe`.
+
+**No lock probes from read paths.** Writers take the capture and index
+locks with `LOCK_EX|LOCK_NB`, so even a brief shared probe can make a real
+capture or index fail. Capture and index locks are therefore probed only on
+the release and quit path (`ejectVerdictNow(ctx, true)`), where stopping
+work is the intent; a polled verdict (the snapshot, the broker's document)
+names locks only from holders' declarations and does not run the
+self-check's `captureActive` probe. Today's `captureActive` in
+`libraryActivities` and `/api/capture` is unchanged. Lease files may be
+probed from any read: a creator's `LOCK_EX` blocks briefly rather than
+failing.
 
 Defaults for a holder with no `SafePoint`: `instant` stops within 1 s,
 `record` within 2 s, `batch` has no estimate; a `queued` writer holds
@@ -638,14 +660,23 @@ lag by seconds.
     overwrites a row its owner has ended.
 - **Never ahead of ingest.** Journal writes must not queue on the catalog
   writer gate (`acquireWriteGate`, `catalog_contention.go`) ahead of real
-  work. The writer runs a round at most every 3 s: it tries the gate without
-  waiting (a non-blocking send on the gate channel); if the gate is taken,
-  or the process has a write transaction in flight, it skips the round and
-  keeps the pending images for the next one. When it has the gate it writes
-  every pending image in one short transaction (`BEGIN IMMEDIATE` with a
-  `busy_timeout` of at most 50 ms, so another process holding SQLite's lock
-  also makes it skip), then releases the gate. It never retries while
-  holding the gate.
+  work. The writer runs a round at most every 3 s and takes nothing it would
+  have to wait for while it holds the gate: first an idle pooled connection
+  (waiting at most 5 ms, holding nothing), then the gate without waiting (a
+  non-blocking send on the gate channel); if the gate is taken, or the
+  process has a write transaction in flight, it skips the round and keeps
+  the pending images. With the gate it writes at most 64 rows in one tiny
+  transaction (`BEGIN IMMEDIATE` with `busy_timeout` 0, so another process
+  holding SQLite's lock makes it skip at once), gives the gate back (rolls
+  back and skips) as soon as a tracked writer starts waiting for it, and
+  never retries while holding it.
+- **Ingest writers are gated.** Every write on the ingest path goes through
+  the tracked gate (`beginTrackedWrite`), including the part-state flush,
+  the preview fill and `repair-existing`'s per-record writes, so the journal
+  yields to them. **Residual:** a writer that bypasses the gate outside
+  ingest (a handful of small direct `DB.Exec` writes, such as recording a
+  source's state) can wait for one short journal commit, and a writer in
+  another process meets the journal like any other SQLite writer.
 - **Starts and ends can wait.** A start or end waits for the next round that
   gets the gate; under a long ingest that may be a few seconds, because
   ingest commits per workspace and frees the gate between commits. A row
@@ -770,18 +801,31 @@ Liveness of other processes is never inferred from pids or heartbeat rows.
 - **Display:** a lease's operations are listed with "in another process
   (pharos capture)", from the lease's kinds and, when present, the journal
   rows' steps. They are never stoppable from Pharos.
-- **Fallback:** today's flock probes (`captureActive`) stay. A capture or
-  index lock held with no live lease and no operation in this service's
-  registry naming it makes the verdict `unsafe` (an older build's CLI, or a
-  crash between taking the lock and writing the lease).
+- **Fallback:** on the release path, a capture or index lock held with no
+  live lease and no operation in this service's registry naming it exactly
+  makes the verdict `unsafe` (an older build's CLI, or a crash between
+  taking the lock and writing the lease).
+- **Fail closed.** A lease directory that exists but cannot be listed makes
+  the verdict `unsafe` (a missing one is empty). A writing command that
+  cannot take its lease does not run: it exits with an error saying nothing
+  was changed.
+- **App-level commands.** `library-transfer` takes a lease beside both
+  libraries' catalogs and in `pharosSupportDir()/.pharos-leases`;
+  `library-recover`, whose destination is new, only in the latter. Their
+  leases name the library configurations they write (`libraries`). The
+  broker lists live leases there as app operations, and makes each named
+  library `busy`; for a library with no running service it also reads that
+  library's own lease directories (never its capture or index locks).
 - `cloud-restore` to a new location is out of status scope (§3.6).
-- **Phase 1 coverage.** Leased today: `capture`, `backup`, the writing
+- **Phase 1 coverage.** Leased: `capture`, `backup`, the writing
   `sqlite-records` subcommands and `history-backfill` (under the capture
   root); `index`, `ingest`, `repair-existing`, `upgrade`, `build-tools`,
-  `add-this-mac` and `cloud-backup verify` (beside the catalog, with a
-  journal). Not yet leased: `library-transfer`, `library-recover`,
-  adoption and MCP servers. A command that cannot take its lease (a
-  read-only directory) runs as before, with an in-memory registry only.
+  `add-this-mac`, `cloud-backup verify`, `repositories --merge --apply`,
+  `refine-usage`, `repair-usage-attribution` and `findings --refresh`
+  (beside the catalog, with a journal); `library-transfer` and
+  `library-recover` (above). `TestEveryWritingCommandIsALeasedOperation`
+  classifies every command. Not yet leased: adoption (`init-library
+  --adopt`) and MCP servers.
 
 ### 6.6 The broker's registry
 
@@ -840,6 +884,9 @@ a server-sent-events stream of the same document.
   and kinds marked hidden (`drive.measure`, `maintenance.metrics`,
   `maintenance.origins`, `maintenance.mcp-history`, `ask.save`,
   `cloud.reconcile`, `maintenance.cache-warm`) are omitted but still count for the verdict.
+- A tentative daemon pass (§3.4) is not listed and not journaled; it
+  counts for the verdict only. The ETag covers the listed operations, the
+  verdict word and the journal rows, not the blockers.
 - `step.fraction` is present only when `unit` is real and `total` known.
   There is no overall percentage.
 - `time` reuses the forecast states of
@@ -867,7 +914,9 @@ idle; stop while the page is hidden.
 
 ### 7.2 Broker: every library
 
-`GET /api/app/operations` and `GET /api/app/operations/stream`:
+`GET /api/app/operations` and `GET /api/app/operations/stream`
+(`?libraries=0` returns only `app`, asking no library's service: the native
+menu's poll, which runs on its own schedule, apart from `/api/app/state`):
 
 ```json
 {
