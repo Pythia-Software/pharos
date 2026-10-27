@@ -17,8 +17,11 @@ The engine is `web/src/dashboard-analysis-model.ts`, with the trend's query
 and series in `web/src/dashboard-trend-model.ts`. Neither has a DOM; both are
 tested in node (`web/tests/unit/dashboards/`).
 
-A **catalog** describes one dashboard topic
-(`web/src/token-analysis-catalog.ts` for Tokens and Cost):
+A **catalog** describes one dashboard topic: Tokens and Cost
+(`web/src/token-analysis-catalog.ts`), Tools (`tools-analysis-catalog.ts`),
+Pharos MCP (`mcp-analysis-catalog.ts`), and Agent Time and Skills
+(`record-analysis-catalogs.ts`). See [The catalogs](#the-catalogs) for what
+each offers and why.
 
 - **Measures.** Each has a label and format, and a record-level aggregate:
   an `op` with a `field`, an `expression`, or a `ratio` of two parts.
@@ -34,12 +37,19 @@ A **catalog** describes one dashboard topic
 
   A mean is declared as a ratio of a sum and a count, never as `avg`:
   `catalogProblems` rejects an `avg` measure, because a mean of per-period
-  means would weight a quiet period like a busy one.
+  means would weight a quiet period like a busy one. A largest or smallest
+  value (`op: "max"`, such as Pharos MCP's largest output) is compared but
+  never drawn over time (`notTrended`): a window or running value of maxima
+  would average or add them. Over time disables it with that reason, and a
+  compare of it cannot switch to Over time.
 - **Breakdowns.** Each maps to one or more record fields (`fields`), such as
   `["provider", "model_family"]`, with an optional implied `where`. For the
   trend's series a breakdown may also fix an `order` (providers, agent
   kinds), label known `values` (`root` is "Root agent") and name a missing
-  value (`empty`, "No repository").
+  value (`empty`, "No repository"). A breakdown with an implied population
+  says so in its `note` ("Commands count shell commands only"), which the
+  view's note repeats. Values the schema cannot label take the catalog's
+  `labels` (Agent Time's activities), in the trend's series and in Compare.
 - **Component breakdowns** (optional, `components`). These split a measure
   into its additive parts, which are fields rather than groups of records:
   Tokens' "Token type" is uncached input, cache reads, cache writes, output
@@ -52,10 +62,43 @@ A **catalog** describes one dashboard topic
   if it is constant within one unit: a conversation's model is
   `root_model_family`, not `model_family`, and an agent session has no model
   breakdown because a session can switch models. Records are the implicit
-  default unit.
-- **Cycle fields** (optional). These are the calendar dimensions a cycle
-  folds; for usage, the ledger's `hour` and `day`. A catalog without them has
-  no cycle view.
+  default unit. A key may combine fields (`["conversation_id", "skill_path"]`):
+  one observation is then one pair, and a field of the key may be a
+  breakdown, since it is constant within the pair. The grouping keys are the
+  breakdown's fields followed by the key's other fields, so a card keyed by
+  `[tool_name, conversation_id]` reads the same rows.
+- **Cycle keys** (optional, `cycle`). For each of `hour` and `weekday`, the
+  field a cycle folds and how its keys name their slots (`CycleKey`):
+  - `recorded-date`: a date the recording Mac assigned in its own zone, such
+    as usage `day`. It folds as a date.
+  - `instant`: a UTC instant, such as usage `hour`, placed at the viewer's
+    local hour.
+  - `timestamp`: a datetime field grouped natively with `dateGrouping`, by
+    day in the viewer's zone or by UTC hour (`includeEmpty`, observed
+    range). Pharos MCP, Agent Time and Skills fold `called_at`, `started_at`
+    and `created_at` this way.
+
+  One function, `cycleFrame` in `weekday-cover.ts`, derives the zone a cycle
+  folds in, its complete range and each key's slot start, for `cycleResult`
+  and for the weekday cards' `weekdayMetric` alike. A catalog without cycle
+  keys offers the cycle view disabled with its reason; one without a cycle
+  disables that cycle.
+- **Record views** follow from the catalog. Without units, Scatter is
+  unavailable; without units or any measure with a per-record `value`,
+  Distribution is too (the Tools rollup: a daily summary is not an
+  observation). The View control disables them with the reason
+  (`viewUnavailable`), and a link asking for one opens Compare. Where records
+  carry values but some measure does not (Pharos MCP's call count), the
+  distribution's Metric control disables that measure.
+- **Samples** (optional, `samples`). What a records minimum counts when one
+  record is not one observation: an additive measure. Tools counts calls, so
+  "ten calls" is a group filter on summed calls over one grouped row per
+  group, not `minCount` on daily summaries.
+- **Executable bounds** (optional, `executable`). Translates the time bounds
+  into predicates the dataset executes, for every executed and supporting
+  query and every drill-down (`dashboardChartURL`'s `translate`). The Tools
+  rollup's `day` is text, so bounds become day equalities or patterns
+  (`toolDashboardWhere`); drawing keeps the bounds.
 - **Periods.** The calendar fields the trend groups by: `hour`, `day`,
   `week` and `month`. For usage, hours come from the hourly ledger and the
   others are recorded dates. Several hours or days sum hourly or daily
@@ -66,9 +109,13 @@ A **catalog** describes one dashboard topic
 - **Legacy mapping** (optional, `legacy`). A function that reads a link or
   saved state written in an older vocabulary into the catalog's terms, and
   leaves a current state unchanged. For Tokens, `percent` reads as tokens
-  shown as shares and `percent_cost` as cost shown as shares. 2b's older
-  shapes (Human Words' `scope`, Skills' and Agent Time's numeric metrics,
-  Carbon's `co2` and `tier`) map the same way.
+  shown as shares and `percent_cost` as cost shown as shares. Agent Time's
+  and Skills' numbered metrics (`0`, `1`) read as the measure at that
+  position. 2c's older shapes (Human Words' `scope`, Carbon's `co2` and
+  `tier`) will map the same way.
+- **Legacy selections** (`legacySlices`). Whether a link written before the
+  versioned format may hold a legend selection as a filter; see
+  [Selections and links](#selections-and-links).
 
 The **state** is one flat object stored in `analyze_chart` beside the trend's
 fields:
@@ -90,7 +137,8 @@ fields:
 | `share` | each trend series as a share of its bucket's total |
 | `completePeriods` | whole periods only |
 | `norm`, `normPeriods` | a reference line at the mean of the `normPeriods` (30) points before the latest |
-| `seriesLimit`, `selection` | series drawn before Other, and a legend selection the chart keeps itself |
+| `seriesLimit`, `selection` | series drawn before Other, and the legend selection: the breakdown's groups drawn (or hidden, when `excluded`) |
+| `v` | the link format, `2`; see [Selections and links](#selections-and-links) |
 
 A link without `view` is the trend, so existing bookmarks and
 `card-destinations.ts` presets keep working; an old `percent` or
@@ -158,30 +206,8 @@ can:
 - **Shares need groups.** With no breakdown there is nothing to divide, so a
   share becomes bars.
 - **A share is of every group the filters define.** A legend selection only
-  chooses which groups are drawn; it never changes the denominator.
-  - **What a selection is (2a).** As the old Token chart did, a slice-form
-    filter on a single-field breakdown's own field (`provider = codex`, or
-    an OR of such values, or their exclusion) is a legend selection. For a
-    combined breakdown, such as provider + model, the selection is the
-    trend's own `selection` in the state.
-  - **The trend** leaves the filter out of its query, ranks and draws the
-    selected series (never folded into Other), and divides by every series.
-  - **Compare's shares** (records and unit counts alike) leave the same
-    filter out of the share's query. `selectedShares` then draws the
-    selected groups as slices and every other group as Other, so a small
-    selected group stays visible. "View supporting query" keeps the
-    selection. Bars keep the filter: there a selection chooses the groups.
-  - **Units.** A selection is of a breakdown group, so it maps through the
-    unit's fields: `provider = codex` selects the conversations (or
-    delegated runs) whose top-level provider is codex, never a population
-    filter on record `provider`. The note says the selection is shown as the
-    top-level group, and the supporting query filters the grouped rows on
-    that field.
-  - **Beyond the group limit.** Compare returns the 1,000 largest groups. A
-    selected group outside them is already in Other; the note says how
-    many selected groups that is, rather than dropping them silently.
-  - A test checks that the trend and Compare give the same share under a
-    selection.
+  chooses which groups are drawn; it never changes the denominator. See
+  [Selections and links](#selections-and-links).
 - **No legacy link.** The analysis views do not link to the legacy page.
   That page has no analysis views, so it would show the grouped query under
   its default chart.
@@ -193,6 +219,59 @@ can:
   `trendUnavailable` disables Over time for it, the View control shows the
   reason, and `switchView` leaves the state unchanged. A breakdown carries
   across; a component breakdown becomes `none` in the other views.
+
+### Selections and links
+
+`where` (`analyze_filters`) is the population and nothing else. A legend
+selection is the state's own `selection`, for every breakdown, single-field
+or combined; a single-field selection's values are the field's values (`""`
+for a missing one), a combined one's are JSON arrays of them.
+
+- **Shares are of the population.** A filter on the breakdown's own field,
+  such as a card filtered to `provider = codex` and broken down by provider,
+  is a population: its shares are of codex alone. A selection never enters
+  the executed query.
+- **The trend** ranks and draws the selected series (never folded into
+  Other), divides shares by every series, and keeps every series in the key.
+- **Compare, Distribution and Scatter** (`selectGroups`). A share draws the
+  selected groups as slices and every other group as Other. Bars, boxes and
+  points draw only the selected groups; a scatter matches a point by its
+  breakdown keys. A selected group beyond the 1,000 returned groups is
+  counted in Other or not drawn, and the note says how many.
+- **Units.** A selection is of a breakdown group, so it maps through the
+  unit's fields: `provider = codex` selects the conversations (or delegated
+  runs) whose top-level provider is codex, never a population filter on
+  record `provider`. The note says so.
+- **Supporting queries** add a single-field selection as a filter on its
+  field (a group filter on the unit's field, for units), so they list what
+  is drawn. A combined selection has no single filter and is left out.
+- **Drill-downs** from a selected series or bucket open that group's records,
+  within the population.
+- **Clearing.** Changing the breakdown clears the selection. Views without a
+  legend say a selection is drawn and offer "Show every group".
+- A test checks that the trend and Compare give the same share under a
+  selection, and that a population filter on the breakdown's field is a
+  population.
+
+**Links.** `analyze_chart` carries `v: 2` (`analysisVersion`). The dashboard
+reads every link through `readAnalysisLink`:
+
+- With the marker, filters stay filters.
+- Without it, on a dashboard whose old chart wrote legend selections into the
+  filters (`legacySlices`: Tokens and Cost, Agent Time, Skills), a slice-form
+  filter on the current breakdown's single field (`provider = codex`, an OR of
+  such values, or their exclusion) becomes the selection and leaves `where`.
+  Tools and Pharos MCP had no legend, so their old filters were always
+  populations and stay so.
+- Either way the result is marked, and a migrated link is rewritten in place,
+  so it is never read twice.
+- Card destinations (`card-destinations.ts`) write versioned states, so a
+  card's own filter stays its population. The legacy Usage page keeps its
+  chart in preferences; its legend now writes the chart's selection, and a
+  filter in its table is a population.
+
+Human Words, Carbon and Parallelism still keep their own charts and
+selections until 2c.
 
 ### The trend
 
@@ -212,10 +291,9 @@ Any other non-additive measure is a level per bucket: rolling means only,
 no sum, cumulative or share.
 
 - **Breakdowns.** Any catalog breakdown, a component breakdown, or `none`:
-  the single total series cards need, drawn as columns like any one series. A single-field breakdown's legend
-  selection filters the dashboard, and the chart's query leaves that filter
-  out so the alternatives stay in the key. A multi-field breakdown, a
-  component breakdown and `none` keep the selection in the state.
+  the single total series cards need, drawn as columns like any one series.
+  The legend selection is the state's own for every breakdown
+  ([Selections and links](#selections-and-links)).
 - **Populations.** A measure's or breakdown's implied `where` joins the
   trend's query and its drill-downs, never the user's filters.
 - **Whole periods** (`completePeriods`). The range starts at the next local
@@ -238,8 +316,8 @@ no sum, cumulative or share.
   group count, hidden groups or a bucket error is an error beneath the chart,
   never idle periods, as in `buildCardTrend`. No results yet means loading,
   not an error.
-- **Supporting query.** It covers what is drawn: the dashboard's filters (a
-  legend selection included) and populations, with whole periods from the
+- **Supporting query.** It covers what is drawn: the dashboard's filters, a
+  single-field legend selection as a filter, and populations, with whole periods from the
   first drawn bucket (for custom multi-day or multi-hour buckets, the first
   whole bucket after the rounded start) to the end of the last whole period.
 - **Drill-downs** open the records behind a point: the dashboard's filters,
@@ -295,16 +373,22 @@ chart clause, and the supporting query that "View supporting query" opens.
   `model-choice-recipes.ts`, `api-cost-recipes.ts` and `cardCoverQuery`. A
   scatter puts the breakdown first because Query Table colors points by the
   first key. The supporting query is the executed grouped query itself.
-- **Cycle.** One clause grouped by the ledger's `hour` or `day`. `/metrics`
-  answers `hour` from its hourly ledger rows; `day` is the recorded day.
-  `cycleResult` folds the totals into 24 hours or 7 weekdays.
+- **Cycle.** One clause grouped by the catalog's cycle key. For usage that is
+  the ledger's `hour` or `day`: `/metrics` answers `hour` from its hourly
+  ledger rows, and `day` is the recorded day. A `timestamp` key adds a
+  `dateGrouping`: local days in the viewer's zone, or UTC hours.
+  `cycleResult` folds the totals into 24 hours or 7 weekdays, reading keys
+  through `cycleFrame`.
   - **Observations.** Every complete slot in the range is one. The same rule
     (`idleIsZero`) decides idle slots for the fold, the note and the weekday
     cards. Sums, counts and distinct counts of an idle slot are zero, and so
     is a sum whose only inputs were missing: an hour of unpriced usage adds no
     cost. A ratio of nothing has no value.
   - **Time zones.** Hour keys are UTC instants, placed at the viewer's local
-    hour.
+    hour; a timestamp's hours are grouped as UTC hours for the same reason.
+    A timestamp's days are local days in the viewer's zone, so every
+    complete local day in the range is one observation and the current day
+    is left out.
     - Day keys are dates the recording Mac assigned in its own time zone,
       which the dashboard does not know. A date's weekday is the same in
       every zone, so days fold as dates. The weekday cards follow the same
@@ -325,14 +409,18 @@ chart clause, and the supporting query that "View supporting query" opens.
   - **Missing keys.** A bucket without a key is an error, never an idle slot.
   - **The fold's code** (`cycleSamples`, `cycleBoxes`) lives beside the
     weekday cover in `weekday-cover.ts`, which now uses it too.
-  - **Supporting query.** The hour cycle's supporting query opens records,
-    because `/query-v3` cannot yet group usage by hour; see
+  - **Supporting query.** The usage hour cycle's supporting query opens
+    records, because `/query-v3` cannot yet group usage by hour; see
     [`handoffs/usage-v3-hour-grouping.md`](handoffs/usage-v3-hour-grouping.md).
+    A timestamp cycle's opens records too: a grouping stage cannot group a
+    timestamp by calendar date (Query Table request 6).
 - **Thresholds.** These use Query Table's native `minCount`, which the service
   advertises for both `/metrics` and `/query-v3`. It removes small groups
   before `groupLimit` and reports `hiddenGroups`, so small groups cannot crowd
   out eligible ones. At unit level, each grouped row is one unit, so the
-  threshold counts units.
+  threshold counts units. A catalog's `samples` measure (Tools' calls) is a
+  group filter over one grouped row per group instead; such a minimum does
+  not count the groups it hides (Query Table request 5).
 - **Drill-down.** A records bucket uses `inspectBucketQuery`. A unit bucket
   opens the grouped query restricted to that group (HAVING on its key). A cycle
   slot spans many dates and has no drill-down.
@@ -344,7 +432,8 @@ chart clause, and the supporting query that "View supporting query" opens.
 - record metrics go to `/metrics`, falling back to `/query-v3` when `/metrics`
   refuses the budget;
 - grouped queries go to `/query-v3` (`postQueryStateMetrics` in
-  `metric-request.ts`);
+  `metric-request.ts`), and so do clauses with a `dateGrouping` (a timestamp
+  cycle), which `/metrics` does not accept;
 - a shared snapshot evaluates its own rows. An `hour` filter first selects
   the daily rows holding a matching hour, for grouped queries as well as
   record metrics, as the service's `/query-v3` path does.
@@ -352,6 +441,68 @@ chart clause, and the supporting query that "View supporting query" opens.
 `web/src/dashboard-analysis.tsx` renders the control bar, Query Table UI's
 `MetricCard`, the supporting-query links and a note stating what one
 observation is.
+
+## The catalogs
+
+Each engine dashboard renders `CatalogDashboard` (`index.tsx`): Over time, or
+Compare, Distribution, Scatter and Cycle, with the dashboard's own panels
+around it. Its default view is the one it always opened on.
+
+| Dashboard | Dataset: one record is | Units | Record values | Cycle | Default |
+|---|---|---|---|---|---|
+| Tokens and Cost | `usage`: a session's usage of one model and effort on one recorded day | conversation, agent session, delegated run | every additive measure | usage `hour` (instant), `day` (recorded date) | Over time |
+| Tools | `tools`: one day's calls of one tool group (a rollup) | none | none | none | Compare |
+| Pharos MCP | `mcp_calls`: one request Pharos served | none | `output`, `bytes`, `time` | `called_at` (timestamp) | Compare |
+| Agent Time | `tool_calls`: one call | agent conversation; tool in a conversation | `time` (`duration_ms`), `result_tokens` | `started_at` (timestamp) | Over time |
+| Skills | `skill_usages`: one piece of skill evidence | conversation; skill path in a conversation | `body` (`content_bytes`) | `created_at` (timestamp) | Over time |
+
+- **Tools** (`tools-analysis-catalog.ts`). Calls, failed calls, failure
+  rate (`error_count` / `call_count`), truncation rate (`truncated_count` /
+  `call_count`), recorded tool time, mean timed call duration
+  (`total_duration_ms` / `timed_count`), context added and carried, by every
+  split the dashboard had plus MCP method. Command, program, command category,
+  MCP server and MCP method imply their populations. A rollup row is no
+  observation a person cares about, so there are no units or per-record
+  values: Distribution and Scatter are disabled with that reason, and a
+  minimum counts calls (`samples`). The rollup's text `day` makes it the one
+  catalog with `executable` bounds. Record-level analysis of individual calls
+  (phase 3) would be another catalog over `tool_calls`; this one declares its
+  dataset, so the seam is a second catalog, not a change to this one.
+  - **Trend ranking.** The old trend drew the six groups with the most calls
+    in the range and dropped the rest. Over time ranks by each measure's own
+    volume over the drawn periods: an additive amount by itself, a ratio by
+    its denominator, so failure and truncation rates still rank by calls and
+    mean time by timed calls. It draws `seriesLimit` (15) groups and folds
+    the rest into Other, which is drawn for additive measures and ratios, so
+    nothing is silently dropped. Time and context rank by themselves rather
+    than by calls.
+- **Pharos MCP** (`mcp-analysis-catalog.ts`). Calls, failures, failure
+  rate, estimated output, mean output (now the pooled ratio of the sum over
+  the count of `estimated_output_tokens`), largest output, response bytes,
+  truncated calls, request time and mean request duration, by tool, status
+  and requested source. A request is an observation, so output, bytes and
+  time distribute per request; there is no larger unit in this dataset.
+  Largest output is compared only (`notTrended`): its old cumulative running
+  maximum and rolling windows are not drawn. The empty-search rate is not
+  offered: it needs a ratio part counting only zero-result searches, which
+  ratio parts (a sum or count of a field) cannot state; see the unmatched
+  cards below.
+- **Agent Time** (`record-analysis-catalogs.ts`). Recorded tool time (shown
+  in hours, as before), tool calls, mean call duration (pooled over calls
+  with a duration), failed calls and result tokens, by the old splits plus
+  tool, operation, command, command + timing source and tool + result-size
+  source. An agent conversation is one recorded transcript (`conversation_id`;
+  delegated subagents are their own), split by what is constant within it.
+  A tool in a conversation (`[conversation_id, tool_name]`) is the
+  observation of the per-conversation failure cards. `AgentTimeSummary`
+  follows every view.
+- **Skills** (`record-analysis-catalogs.ts`). Evidence records, retained body
+  volume (`content_bytes` over its population of known positive sizes, which
+  replaces the old `IF` expression and keeps drill-downs exact), distinct
+  conversations reached and distinct file-load calls, by the old splits plus
+  skill + evidence type. Units are conversations and skill paths in a
+  conversation (`[conversation_id, skill_path]`, with the skill as its
+  breakdown), the observation of `skill-load-distribution`.
 
 ## Mapping a card to a dashboard state
 
@@ -406,6 +557,50 @@ The fixture serves one model family from two providers, and the tests
 compare full group keys. Its input includes cache writes, so a wrong
 cache-share denominator fails.
 
+`web/tests/unit/dashboards/record-dashboard-parity.test.mjs` does the same
+for the 2b dashboards over a small ledger of tool calls, the rollup derived
+from them, Pharos requests and skill evidence
+(`tests/unit/helpers/record-ledgers.mjs`). Each card opens its
+`card-destinations.ts` state:
+
+| Card | Dashboard state |
+|---|---|
+| `tool-failures`, `tool-call-share` | Tools, compare, share, failures or calls by tool |
+| `tool-failure-rates` | Tools, compare, failure rate by tool, minimum 10 calls (see below) |
+| `machine-call-trend` | Tools, trend, calls, 7-day mean, whole periods, norm (`buildCardTrend`) |
+| `mcp-response-size`, `pharos-mcp-durations` | Pharos MCP, distribution of bytes or request time by tool, minimum 3 |
+| `pharos-mcp-query-sources` | Pharos MCP, compare, calls by requested source |
+| `mcp-call-trend` | Pharos MCP, trend, calls by tool, 7-day rolling mean |
+| `machine-time` | Agent Time, trend, tool time by activity, 6 series (the cover's limit) |
+| `machine-activities` | Agent Time, compare, share, tool time by activity |
+| `large-outputs` | Agent Time, compare, share, result tokens by tool + result-size source |
+| `duration-distribution` | Agent Time, distribution, time by command + timing source, minimum 3 |
+| `output-distribution` | Agent Time, distribution, result tokens by tool + result-size source, minimum 3 |
+| `conversation-error-counts` | Agent Time, distribution, tool-in-conversation unit, calls by tool, minimum 3 |
+| `tool-calls-per-conversation`, `research-conversation-searches` | Agent Time, distribution, conversation unit, calls by repository, minimum 3 |
+| `machine-latency-trend` | Agent Time, trend, mean call duration, 7-day pooled, whole periods, norm (`buildCardTrend` over the rollup) |
+| `skill-evidence` | Skills, compare, conversations reached by skill |
+| `skill-body-sizes` | Skills, distribution, body by skill + evidence type, minimum 3 |
+| `skill-load-distribution` | Skills, distribution, skill-path unit, distinct load calls by skill, minimum 3 |
+
+A share's zero group has no slice: `tool-failures` keeps only failing calls,
+a filter the rollup cannot apply, so the dashboard's pie holds tools with no
+failures at 0%, which draw nothing.
+
+### Cards that cannot be matched yet
+
+| Card | Missing capability |
+|---|---|
+| `tool-failure-rates` | A second minimum: the card requires one failure as well as ten calls. The dashboard shows ten-call tools without failures at 0%; every tool the card shows has the card's rate. |
+| `archive-empty-search-rate` | A ratio part with its own condition (searches with `result_count = 0` over successful searches with a count). Ratio parts are a sum or count of a field; `SUM(IF(...))` parts would state it. |
+| `error-signatures`, `edit-failures`, `read-paths`, `repeated-reads`, `primary-domains`, `primary-urls`, `cross-repo-errors`, `error-reach`, `test-failures` | Record-level Tools fields and filters (phase 3); some of them are Agent Time states once its catalog gains those breakdowns. |
+| `model-conversation-reach` | A share of group incidences (phase 4). |
+| Human Words, Carbon and Parallelism cards | Their catalogs (2c). |
+
+`truncated-outputs`, `mcp-methods` and `machine-operations` now have the
+measure or breakdown they need (truncation rate, MCP method, operation) but
+no parity test yet; phase 4 maps and checks them with the rest.
+
 ## Limitations
 
 - The usage ledger is day-grained per session and model, so cycles use the
@@ -425,9 +620,16 @@ cache-share denominator fails.
   fixed margin.
 - `minCount` counts rows. A records compare view therefore cannot require
   "five distinct conversations per model"; use the conversation unit, where
-  each row is one conversation.
+  each row is one conversation. A minimum over a summed field (Tools' calls)
+  runs as a group filter and cannot report how many groups it hid.
+- A grouping stage cannot group a timestamp by calendar date, so a timestamp
+  cycle's supporting query opens records.
+- Tools' trend has days, weeks and months only: the rollup has no hours.
+  Pharos MCP, Agent Time and Skills group by their recorded `day`, `week` and
+  `month`; their hourly trends would need the trend's periods to take
+  timestamp keys too, which 2c's Human Words needs as well.
 
-The four Query Table limitations are requested in
+The Query Table limitations are requested in
 [`handoffs/query-table-dashboard-views.md`](handoffs/query-table-dashboard-views.md).
 
 ## Phases
@@ -441,7 +643,26 @@ The four Query Table limitations are requested in
      rolling sums as well as means, whole periods only, and a norm. Tokens
      and Cost and the legacy Usage page draw it; the bespoke Token chart is
      gone.
-   - **2b inherits** the trend: a new catalog declares its
+   - **2b (done).** Tools, Pharos MCP, Agent Time and Skills are catalogs
+     over their Query Table datasets ([The catalogs](#the-catalogs)), with
+     every view their data supports. Legend selections are in the view
+     state, with versioned links (`v: 2`) and a migration for older ones;
+     cycle keys may be recorded dates, instants or timestamps, read by one
+     `cycleFrame`; units may have compound keys; a catalog may count its
+     minimum in a measure and translate its bounds. The bespoke Tools and
+     MCP charts (`toolDashboardQuery`, `smoothedToolTrend`,
+     `cumulativeToolTrend`, the MCP equivalents and `mcp-dashboard-model.ts`)
+     and `RecordUsageDashboard` (`recordDashboards`) are gone, with the
+     metric-trend helpers only they used.
+   - **2c inherits** all of that. Human Words (its writing-series endpoint),
+     Carbon (derived components, below) and Parallelism (a ribbon timeline)
+     each need a catalog, `legacySlices` for their legends, a `legacy`
+     mapping for their older shapes (Human Words' `scope`, Carbon's `co2`
+     and `tier`), and `timestamp` cycle keys for their weekday cards, whose
+     `weekdayMetric` already reads keys through `cycleFrame`. Writing is
+     not a Query Table dataset today, so its catalog needs a runner beside
+     `runAnalysisQuery`.
+   - **What 2b inherited** from 2a: a new catalog declares its
      measures (additive, ratio or distinct), breakdowns with any `order`,
      `values` and `empty` labels, component breakdowns, `periods`, and a
      `legacy` mapping for its old link shapes, then renders `AnalysisTrend`
@@ -450,16 +671,10 @@ The four Query Table limitations are requested in
      Carbon needs the derived components below, a change to
      `AnalysisComponent` and to the component branch of `trendSeries`. What
      2b adds:
-     - Let each cycle entry declare how its keys work. A recorded date (usage
-       `day`) and an instant (usage `hour`) work today. A `dateGrouping` over
-       timestamps in the viewer's zone is needed for Human Words and
-       Parallelism, whose weekday cards use it. One function should then
-       derive the zone, the complete-day range and the key times for both
-       `cycleResult` and `weekdayMetric`, instead of each doing it. The
-       trend's `periods` need the same for datasets without calendar fields.
-     - Move the Tools and MCP views (compare and trend) onto the engine,
-       and the bespoke trends of `RecordUsageDashboard`, `WritingPanel` and
-       `CarbonImpact`. Carbon's trailing sum is `rollingOp: "sum"`.
+     - Cycle key kinds (done in 2b). The trend's `periods` still need
+       timestamp keys for datasets without calendar fields (2c).
+     - The bespoke trends of `WritingPanel` and `CarbonImpact` remain for
+       2c. Carbon's trailing sum is `rollingOp: "sum"`.
      - **Carbon's token types: derived components.** A component part today
        is a summed record field, but usage has only total
        `energy_wh`/`energy_kwh` and `co2e_g`/`co2e_kg`. Carbon computes its
@@ -477,21 +692,15 @@ The four Query Table limitations are requested in
          before smoothing, accumulating or taking shares, so the order of
          operations is unchanged, and Carbon's own calculation is its test
          oracle.
-     - **Legend selections in the view state.** Today a legend selection
-       on a single-field breakdown is stored as a slice filter in `where`,
-       which cannot be told apart from a real population filter on the same
-       field (a card filtered to `provider = codex` and broken down by
-       provider is read as a selection). Move every `StackedColumns`
-       dashboard's selection into its view state, leaving `where` for the
-       population only. This changes those dashboards' URLs, so it belongs
-       with 2b's migration; old links map through each catalog's `legacy`.
-       Phase 4 consequence: a card filtered on its own breakdown field must
-       map to a population filter, not a selection.
+     - **Legend selections in the view state** (done in 2b for every engine
+       dashboard; [Selections and links](#selections-and-links)). Phase 4
+       consequence: a card filtered on its own breakdown field maps to a
+       population filter, which versioned card links already do.
      - Each 2b catalog relies on `validAnalysisState` for the trend's
        period, counts, smoothing, display, scale, `seriesLimit` and
        `selection`, rather than a dashboard-specific validator.
-     - Add catalogs for Carbon, Human Words, Agent Time, Skills and
-       Parallelism.
+     - Add catalogs for Carbon, Human Words and Parallelism (Agent Time and
+       Skills are done).
 3. **Record-level Tools analysis.** Add `tool_calls` fields such as
    `error_signature`, `repo_path`, `host` and `url`, plus the card filters the
    `tools` rollup drops.
