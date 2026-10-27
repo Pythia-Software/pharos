@@ -351,8 +351,10 @@ func TestCloudScheduleCancellationChangesAndCopiedLibrary(t *testing.T) {
 		t.Fatal("explicit activation did not bind to the new library location")
 	}
 
-	// A release (before an eject) cancels a running upload within the
-	// release budget; the upload then records itself as cancelled.
+	// A release (before an eject) cancels a running upload's context within
+	// the release budget. The upload itself is replaced here; what
+	// uploadCloudRun does once cancelled (save it as cancelled, delete its
+	// staging) needs a real uploader and is not exercised by this test.
 	uploading, stopped := make(chan struct{}), make(chan error, 1)
 	override(t, &cloudPerformUpload, func(_ *Server, ctx context.Context, _ cloudDestination, run cloudRun) {
 		close(uploading)

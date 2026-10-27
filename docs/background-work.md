@@ -88,7 +88,7 @@ production logs and keeps the old state.
 queued   → running | skipped | failed | cancelled | interrupted
 running  → blocked | stopping | succeeded | failed | skipped | interrupted
 blocked  → running | stopping | failed | skipped | interrupted
-stopping → cancelled | succeeded | failed | interrupted
+stopping → cancelled | succeeded | failed | skipped | interrupted
 ```
 
 `start` and `begin` register an operation as `running`, or as `queued`
@@ -125,6 +125,7 @@ func (s *Server) start(spec OperationSpec, work func(ctx context.Context, op *Op
 // (an HTTP handler, a CLI command, a chain stage).
 func (s *Server) begin(ctx context.Context, spec OperationSpec) (context.Context, *Op)
 
+func (op *Op) Run()                            // queued → running; the first Step also implies it
 func (op *Op) Plan(steps ...StepPlan)          // declare the steps up front: "step N of M"
 func (op *Op) Step(name, unit string, total int64) // start the next step; total < 0 = unknown
 func (op *Op) Advance(n int64)                 // add to the step's done count
@@ -363,8 +364,8 @@ Notes:
 |---|---|---|---|---|---|---|---|---|---|---|
 | `backup.local` | Back up · Backing up | user, cli | svc, cli (lease only) | D r, B(d), C(\*) r | backup.local | backup (service only) | Stops; the next backup carries on from what was copied. Waits for each host's capture (`blocked(capture-running)`; today's phase "waiting for a capture to finish"). | record | always (service); never (CLI, lease only) | fg |
 | `cloud.connect` | Test a cloud backup destination · Testing the destination | user | svc (inside the request, merged with `s.life.ctx`) | D (staging), K | — | cloud | Stops the test; connect the destination again afterwards. | instant | always | fg |
-| `cloud.upload` (variants `sample`, `full`) | Upload a cloud backup · Uploading a cloud backup | user, schedule | svc | D (staging, snapshot read), K(d) | backup.cloud:d | cloud | Stops the upload and deletes its staged archive; the last completed cloud backup is unchanged. It starts again from the beginning when started again, or at the schedule's next time. | batch (snapshot), instant (upload) | always | fg (`user`), bg (`schedule`) |
-| `cloud.verify` | Verify a cloud backup · Verifying a cloud backup | user, cli (`cloud-backup verify`, required for password-protected backups) | svc, cli (lease only) | D (staging), K(d) | backup.cloud:d | cloud (service only) | Stops and removes the partly recovered copy; run the verification again. | record | always | fg |
+| `cloud.upload` (variants `sample`, `full`) | Upload a cloud backup · Uploading a cloud backup | user, schedule | svc | D (staging, snapshot read), K(d) | backup.cloud:d | cloud | Stops the upload and deletes its staged archive; the last completed cloud backup is unchanged. It starts again from the beginning when started again, or at the schedule's next time. | batch (snapshot), record (upload: the S3 abort and the final save have 2 s limits each, then the staging is removed) | always | fg (`user`), bg (`schedule`) |
+| `cloud.verify` | Verify a cloud backup · Verifying a cloud backup | user, cli (`cloud-backup verify`, required for password-protected backups) | svc, cli (catalog writer: journal and lease) | D (staging), K(d), W | backup.cloud:d | cloud (service only) | Stops and removes the partly recovered copy; run the verification again. | record | always | fg |
 | `cloud.restore` | Restore from the cloud (Terminal) · Restoring | cli (`cloud-restore`) | cli | target location | — | — | **Out of status scope.** It restores to a new location, often on a Mac with no library or Pharos configuration (`cloud_cli.go`), so there is no library whose status could show it. It takes no lease and writes no journal. | — | never | fg |
 | `library.transfer` (variants `copy`, `move`) | Copy library / Move library · Copying the library | user (Libraries page), cli (`library-transfer`) | brk, cli | O, both drives | (target) conv:\* | — | Not stoppable; eject of either drive must wait. | none | always (broker registry) | fg |
 | `library.recover` | Restore a backup · Restoring a backup | user, cli (`library-recover`) | brk, cli | O, target drive | (target) all | — | Not stoppable; eject must wait. | none | always (broker registry) | fg |
@@ -419,19 +420,28 @@ Mac:
 
 | Verdict | When | What eject does |
 |---|---|---|
-| `safe` | No holder, or every holder can be stopped by a release and reports a safe point within the release budget (7 s, `stopTimeout`): latency `instant` or `record`, or a `SafePoint` estimate ≤ 7 s | Release stops them (each `on_eject` says how) and closes the catalog |
-| `safe-in(eta)` | Every holder can be stopped by a release, but at least one safe point is further away than the budget, or is unknown: a `batch` or `step` holder with no `SafePoint` estimate. `eta` is the largest estimate, or `null` when any is unknown | A release now may time out and refuse, which is safe: nothing is lost. With an `eta`: "Safe to eject in about N"; with `eta: null`: "Ejecting stops <label> after the current <unit>; if that takes more than 7 s, Pharos refuses and you can try again" |
-| `busy` | A known holder cannot be stopped by this service: a held lease of another process (CLI work), a broker operation, `catalog.initialize`, a `release-blocking` request-scoped operation (§2.3); `eta` is its forecast when one is `estimating` | Eject is refused until it ends; the panel names it |
-| `unsafe` | Anything this Mac cannot account for: kind `unknown`; unregistered running work found by the registry's self-check; a held capture or index lock (today's flock probes) with no held lease naming it; a lease file that cannot be read or probed; the service unreachable while the drive is mounted | Eject is refused; the panel says what is unknown |
+| `safe` | No running operation holds the drive for writing. Read-only holders (a local backup) may run; eject stops them | Release stops any readers (each `on_eject` says how) and closes the catalog |
+| `safe-in(eta)` | At least one operation holds the drive for writing, and every drive holder stops at a safe point within the release budget (7 s, `stopTimeout`): latency `instant` or `record`, a `SafePoint` estimate ≤ 7 s, or a `batch` holder with no estimate (assumed to stop in time; a release that times out refuses safely). `eta` is the largest estimate, or `null` when any is unknown | Release stops them at safe points and closes the catalog. With an `eta`: "Ejecting stops <label> within about N s". With `eta: null`, fixed wording: "Ejecting stops <label> after the current <unit>; if that takes more than 7 s, Pharos refuses and you can try again" |
+| `busy` | Some holder blocks release: a held lease of another process (CLI work), a broker operation, `catalog.initialize`, a `release-blocking` request-scoped operation (§2.3), or a holder whose `SafePoint` estimate exceeds the budget or whose latency is `step` or `none`; `eta` is its safe point or forecast when known | Eject is refused until it ends or reaches its safe point; the panel names it |
+| `unsafe` | Unknown or unregistered writer evidence: kind `unknown`; unregistered running work found by the registry's self-check; a held capture or index lock (today's flock probes) that no held lease and no operation in this service's registry names; a lease file that cannot be read or probed; the service unreachable while the drive is mounted | Eject is refused; the panel says what is unknown |
+
+So a Search view refresh alone (`maintenance.library-view`, a `record`
+writer) is `safe-in`, never `safe`.
 
 Rules:
 
 - **Err toward not safe.** When two rules apply, the worse verdict wins
   (`unsafe` > `busy` > `safe-in` > `safe`). A missing estimate never improves
   a verdict.
-- **Read holds count.** A local backup only reads the library, but ejecting
-  stops it, so it is a holder like any other. `writes` (today's field) only
-  changes the wording of the unplug advice.
+- **Read holds still count as blockers.** A local backup only reads the
+  library, so it does not make the verdict worse than `safe`, but ejecting
+  stops it and the snapshot lists it with its `on_eject`.
+- **Known gap: older builds.** A `pharos index` or `ingest` from an older
+  build on this Mac takes no lease and holds no lock the service probes, so
+  it is invisible, as it is to `libraryActivities` today. Probing SQLite for
+  other writers would itself be a write attempt on a status read, so the
+  contract does not; the gap closes once every writing command takes a
+  lease.
 - **Unplug without eject** stays as today: `probably-fine` only when there
   is no holder at all; otherwise `unsafe`.
 - **The catalog is always open** while the service runs; that alone never
@@ -443,9 +453,8 @@ Rules:
 
 Until phase 2 switches surfaces, `libraryActivities` remains the answer the
 UI uses (`idle`, `safe_to_unplug`, `unplug`). Phase 0 added in-service cloud
-work to it. The shadow verdict must never be `safe` while
-`libraryActivities` is non-empty and contains a writer; the parity test in
-phase 1 checks this.
+work to it. The parity invariant: the shadow verdict is never `safe` while
+`libraryActivities` lists a writer. The phase-1 parity test checks it.
 
 ### 4.4 Broker operations and other libraries
 
@@ -471,7 +480,7 @@ not change. Every row has:
 
 | Domain | `as_of` from | Behind measured by | Reason codes | Caught up by |
 |---|---|---|---|---|
-| `conv:<source>` (this Mac's live sources) | max of `automatic_source_states.indexed_at`/`succeeded_at` and `source_states.last_success_at` for this host | `unknown` unless a run is discovering (its plan's changed units) | `never-indexed`, `source-error`, `capture-busy`, `needs-capture` (`pending_preservation`), `indexing`, `schedule-off`, `interrupted` | `index.changes.*`, `library.update`, `index.sources.legacy` |
+| `conv:<source>` (this Mac's live sources) | max of `automatic_source_states.indexed_at`/`succeeded_at` and `source_states.last_success_at` for this host | `unknown` unless a run is discovering (its plan's changed units) | `indexing`, `never-indexed`, `source-error`, `capture-busy`, `needs-capture` (`pending_preservation`), `schedule-off`, `interrupted` | `index.changes.*`, `library.update`, `index.sources.legacy` |
 | `capt:<host>/<source>` | capture manifest `last_run` | `needs_index` from `capturedHosts` | `not-indexed`, `indexing`, `capture-running` | `index.captures`, `library.update` |
 | `view` (Search view rows) | last time `workspace_library_dirty` was empty | `COUNT(*)` of `workspace_library_dirty` (capped at 100,000) | `refreshing`, `stopped` (`libraryRefreshStopped`), `version` (`workspace_library_version`) | `maintenance.library-view` |
 | `search.substring` | done flag `substring_index_ready` | `substringIndexProgress` done/total | `building`, `version` | `maintenance.search.substring` |
@@ -490,9 +499,9 @@ not change. Every row has:
 
 Rules:
 
-- `reason` is the **first** applicable code in each row's list order:
-  running work outranks history (`indexing` beats `source-error` only while
-  a run is on that source).
+- `reason` is the **first** applicable code in each row's list order. Lists
+  put running work first, so `indexing` (a run is on that source now) beats
+  `source-error` from an earlier attempt.
 - The three Go freshness rules disagree today: `Catalog.Freshness`
   (`catalog.go`) ignores incremental runs, MCP `archiveSourceStatus`
   (`mcp_audit.go`) includes them, and the menu's `indexed_at`
@@ -623,30 +632,53 @@ Liveness of other processes is never inferred from pids or heartbeat rows.
   that operation.
 - **Where:** `<catalog dir>/.pharos-leases/<instance>.json`, or
   `<capture root>/.pharos-leases/<instance>.json` for a command that never
-  opens the catalog (capture, backup, cloud verify from Terminal), so the
-  service lists both directories.
+  opens the catalog (`capture`, `backup`), so the service lists both
+  directories.
 - **Contents:** JSON with `instance`, `pid`, `host_id`, `process`
   (`cli:<command>`, `mcp`), `kinds`, `holds`, `started_at`, and `operation`
-  IDs when it journals. Written once, atomically, before the lock is taken;
-  updated only when its operations change.
-- **The flock is the liveness signal.** Pid reuse does not matter. The
-  service lists the lease files and probes each with `LOCK_SH|LOCK_NB` on
-  each snapshot read, cached about 2 s. A lease that is held is a live
-  holder (§4.2). A lease that is not held is dead: the service deletes the
-  file, and if journal rows exist for its instance it reconciles each open
-  one to `interrupted` with reason `owner-exited`. This runs while the
-  service is up, not only at its start.
+  IDs when it journals.
+- **Creating a lease.** The process opens the path with `O_CREAT|O_RDWR`,
+  takes `LOCK_EX` (blocking is fine: only a deleter holds it, briefly),
+  then checks that the locked file is still the one at the path (`fstat`
+  of the fd against `stat` of the path: same device and inode). If not (a
+  deleter unlinked it in between), it closes and starts again. Only then
+  does it write the contents in place (`ftruncate` + `pwrite`, `fsync`).
+  Updates are written the same way, in place. A lease is **never** replaced
+  by rename (`durableJSON`/`writeFileAtomic` must not be used for it): a
+  new inode at the path would be unlocked. The process keeps the fd open
+  and locked until its operations end, then unlinks the file while still
+  holding the lock, then closes it.
+- **Deleting a dead lease.** The deleter opens the path, takes
+  `LOCK_EX|LOCK_NB`; if that fails the lease is live. If it succeeds, it
+  unlinks the path while holding the lock, then closes. A creator racing it
+  either sees the inode mismatch and retries, or locks a file that is not
+  unlinked afterwards.
+- **The flock is the liveness signal.** Pid reuse does not matter. A
+  background pass (§6.2's journal-writer round, at most every 3 s) lists the
+  lease files and probes each with `LOCK_SH|LOCK_NB` (held = live), and
+  stores the result. Snapshot reads (`GET /api/operations`, the stream) only
+  read that cached result; a GET never deletes a file or writes a row.
+- **Reconciling in the background.** The same pass deletes dead leases (the
+  protocol above) and queues `interrupted` (reason `owner-exited`) images
+  through the low-priority lane for every open row on this host whose
+  `instance` is neither the running service's nor a live lease's. That also
+  covers rows whose lease was deleted before their reconcile landed (a
+  service killed in between, a dropped round), and rows from a previous
+  service instance. Their open children follow.
 - **Journaling:** commands that already open the catalog writable (`index`,
-  `ingest`, `repair-existing`, `upgrade`, `build-tools`, `add-this-mac`)
-  also journal their history, through the same low-priority writer.
-  Commands that do not (`capture`, `backup`, `cloud-backup verify`) use only
-  the lease; they must not start opening the catalog to report status.
+  `ingest`, `repair-existing`, `upgrade`, `build-tools`, `add-this-mac`, and
+  `cloud-backup verify`, which saves the verification state through
+  `openCatalog` in `cloud_cli.go`) also journal their history, through the
+  same low-priority writer, and keep their lease beside the catalog.
+  Commands that do not (`capture`, `backup`) use only the lease, under the
+  capture root; they must not start opening the catalog to report status.
 - **Display:** a lease's operations are listed with "in another process
   (pharos capture)", from the lease's kinds and, when present, the journal
   rows' steps. They are never stoppable from Pharos.
-- **Fallback:** today's flock probes (`captureActive`) stay. A capture lock
-  held with no lease naming it makes the verdict `unsafe` (an older build's
-  CLI, or a crash between taking the lock and writing the lease).
+- **Fallback:** today's flock probes (`captureActive`) stay. A capture or
+  index lock held with no live lease and no operation in this service's
+  registry naming it makes the verdict `unsafe` (an older build's CLI, or a
+  crash between taking the lock and writing the lease).
 - `cloud-restore` to a new location is out of status scope (§3.6).
 
 ### 6.6 The broker's registry
@@ -835,7 +867,8 @@ registry, the snapshot endpoints and streams, the freshness function, and
 resource sampling. A test compares the shadow snapshot with
 `libraryActivities` during runs: every activity has an operation; every
 operation that holds the drive and is in scope of `libraryActivities` has
-an activity; and the verdict is never `safe` while an activity writes.
+an activity; and the verdict is never `safe` while `libraryActivities`
+lists a writer (§4.3).
 
 **Dual-write, no retirement.** Existing endpoints, fields, pollers and the
 old drive panel keep working unchanged. Removing them is a later phase,
@@ -850,8 +883,9 @@ allowlist with a reason (request handling, subprocess pipes, timers).
 
 Phase 4 measures, and the snapshot reports, per process:
 
-- **CPU and memory** for the broker, each library service and CLI processes
-  found through open journal rows on this host. The broker samples
+- **CPU and memory** for the broker, each library service and the other
+  Pharos processes found through live leases (§6.5; their `pid`, read from
+  the lease file while its flock is held), whether or not they journal. The broker samples
   `proc_pid_rusage` (`RUSAGE_INFO_V4`) every 5 s: CPU is the delta of
   `ri_user_time + ri_system_time` over wall time (as % of one core);
   memory is `ri_phys_footprint`. No `ps` fork; the 1 s `ps` sampler in
