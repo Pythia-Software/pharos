@@ -244,13 +244,19 @@ func (s *Server) ejectInputs(ctx context.Context, fresh bool) (verdictInput, []o
 	own := s.ops.views()
 	foreign := s.foreignOperations(ctx, leases)
 	in := verdictInput{ops: own, leases: leases}
-	// Capture and index locks are probed only on the release and quit path,
-	// where stopping work is the intent: writers take them with LOCK_NB, so
-	// a probe from a polled read could make a capture or index fail.
+	// Every capture and index lock is probed only on the release and quit
+	// path, where stopping work is the intent: writers take them with
+	// LOCK_NB, so a probe from a polled read could make a capture or index
+	// fail. A polled verdict reuses only the probe of this Mac's capture
+	// lock that libraryActivities (and /api/library/status) runs anyway,
+	// captureActive: its "capture by another process" goes through the
+	// self-check below, unsafe unless a lease or operation took that lock.
+	in.fresh = fresh
 	if fresh {
-		in.locks = unnamedLocks(heldCaptureLocks(s.Config().CaptureRoot), own, leases)
+		held, failures := heldCaptureLocks(s.Config().CaptureRoot)
+		in.locks, in.scanErrors = unnamedLocks(held, own, leases), failures
 	}
-	in.unregistered = unregisteredActivities(s.libraryActivitiesProbing(fresh), own, leases)
+	in.unregistered = unregisteredActivities(s.libraryActivities(), own, leases)
 	// A lease listed through its journal rows is one holder, not two.
 	in.leases = slices.DeleteFunc(slices.Clone(leases), func(probe leaseProbe) bool {
 		return probe.Info != nil && slices.ContainsFunc(foreign, func(view opView) bool {
@@ -267,11 +273,17 @@ func (s *Server) ejectVerdictNow(ctx context.Context, fresh bool) ejectVerdict {
 	return computeEjectVerdict(in)
 }
 
-// operationsDocument builds the snapshot.
+// operationsDocument builds the polled snapshot.
 func (s *Server) operationsDocument(ctx context.Context) map[string]any {
+	return s.operationsDocumentChecked(ctx, false)
+}
+
+// operationsDocumentChecked builds the snapshot; fresh (?fresh=1, the
+// release path) runs the full lock check.
+func (s *Server) operationsDocumentChecked(ctx context.Context, fresh bool) map[string]any {
 	at := time.Now()
 	revision := s.ops.currentRevision()
-	in, views := s.ejectInputs(ctx, false)
+	in, views := s.ejectInputs(ctx, fresh)
 	verdict := computeEjectVerdict(in)
 	byID := map[OpID]opView{}
 	for _, view := range views {
@@ -312,14 +324,13 @@ func (s *Server) operationsDocument(ctx context.Context) map[string]any {
 // operationsETag changes whenever the document may: the registry's revision
 // and what the lease probes found.
 func operationsETag(document map[string]any) string {
-	eject, _ := document["eject"].(ejectVerdict)
-	data, _ := json.Marshal(map[string]any{"verdict": eject.Verdict, "operations": document["operations"], "recent": document["journal"]})
+	data, _ := json.Marshal(map[string]any{"eject": document["eject"], "operations": document["operations"], "recent": document["journal"]})
 	sum := sha256.Sum256(data)
 	return fmt.Sprintf("\"%v-%x\"", document["revision"], sum[:8])
 }
 
 func (s *Server) serveOperations(w http.ResponseWriter, r *http.Request) {
-	document := s.operationsDocument(r.Context())
+	document := s.operationsDocumentChecked(r.Context(), r.URL.Query().Get("fresh") == "1")
 	tag := operationsETag(document)
 	w.Header().Set("ETag", tag)
 	if r.Header.Get("If-None-Match") == tag {

@@ -162,3 +162,24 @@ func TestBrokerOperationsAnswerWithoutTheMainLock(t *testing.T) {
 	}
 	create.Finish(nil)
 }
+
+// The broker deletes dead leases of app-level commands (a crashed
+// transfer), which have no journal rows to reconcile, and leaves live ones.
+func TestBrokerCleansDeadAppLeases(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), leaseDirName)
+	live, err := acquireProcessLease(dir, leaseInfo{Instance: "live", HostID: currentHost().ID, Process: "cli:library-transfer", StartedAt: now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer live.release()
+	dead, err := acquireProcessLease(dir, leaseInfo{Instance: "dead", HostID: currentHost().ID, Process: "cli:library-recover", StartedAt: now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = dead.abandon(nil)
+	cleanDeadLeases(dir)
+	probes := probeLeases([]string{dir})
+	if len(probes) != 1 || !probes[0].Live || probes[0].Info.Instance != "live" {
+		t.Fatalf("after cleaning: %+v", probes)
+	}
+}

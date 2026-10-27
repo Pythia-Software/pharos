@@ -393,10 +393,11 @@ Notes:
 - **Initialize and the journal.** The journal table is created by
   Initialize's schema step, so `catalog.initialize` writes its row (start
   and end together) after that step; a kill before it leaves no row. In
-  phase 1 Initialize is timed while it runs and registered, already
-  finished, when a registry attaches (the service, or a Terminal command's
-  journal), so its row appears in that process's first round if it took
-  more than 2 s. The broker separately records `service.start` (G), which
+  the service, Initialize runs before the registry exists: it is timed and
+  registered, already finished, when the registry attaches, and journaled
+  if it took more than 2 s. A Terminal command takes its lease first and
+  records Initialize as a live child of its operation (§6.5), so the
+  service sees it while it runs. The broker separately records `service.start` (G), which
   covers the wait.
 - **Upgrade steps.** `library.upgrade` plans the pending steps of
   `UpgradeSteps` (seven today, then the Tools rollup), so the journal
@@ -452,9 +453,13 @@ declares the matching hold.
 An operation gains a concrete `capture:<hostID>` or `index:<host>/<source>`
 write hold only once it has actually taken that lock file
 (`Op.holdLock`, at `beginCapture`'s callers, `lockCaptureTarget` and
-`IndexCapture`), and loses it when it closes the file. A Terminal command
-resolves `C(this)` to this Mac's host ID in its lease, and rewrites its
-lease's holds as its operations take locks.
+`IndexCapture`), and loses it when it releases the lock: every such lock is
+closed through `releaseLockFile`, which drops the hold, bumps the
+operation's version (journal and snapshot) and rewrites the lease. Concrete
+locks are kept apart from declared holds: an operation's view carries them
+as `Locks`, a lease as `locks`, and only they name a held lock. A lease's
+declared holds resolve `C(this)` to this Mac's host ID but never name a
+lock.
 
 ### 4.2 The verdict
 
@@ -481,16 +486,22 @@ Mac:
 So a Search view refresh alone (`maintenance.library-view`, a `record`
 writer) is `safe-in`, never `safe`.
 
-**No lock probes from read paths.** Writers take the capture and index
-locks with `LOCK_EX|LOCK_NB`, so even a brief shared probe can make a real
-capture or index fail. Capture and index locks are therefore probed only on
-the release and quit path (`ejectVerdictNow(ctx, true)`), where stopping
-work is the intent; a polled verdict (the snapshot, the broker's document)
-names locks only from holders' declarations and does not run the
-self-check's `captureActive` probe. Today's `captureActive` in
-`libraryActivities` and `/api/capture` is unchanged. Lease files may be
-probed from any read: a creator's `LOCK_EX` blocks briefly rather than
-failing.
+**Polled and fresh verdicts.** Writers take the capture and index locks
+with `LOCK_EX|LOCK_NB`, so even a brief shared probe can make a real capture
+or index fail. Every capture and index lock is therefore probed only by a
+**fresh** verdict (`GET /api/operations?fresh=1`, `ejectVerdictNow(ctx,
+true)`): the release and quit path, where stopping work is the intent. Any
+read error in that scan (the capture root, a host directory, a lock file)
+is an `unsafe` blocker; a missing root is empty. A **polled** verdict (the
+default snapshot, the broker's document) probes no index lock; it reuses
+only today's `captureActive` probe of this Mac's capture lock, which
+`libraryActivities` (and every `/api/library/status` read) already runs,
+through the self-check. The verdict carries `checked: "fresh" | "polled"`;
+a polled verdict that would be `safe` says "Nothing Pharos can see is
+writing to the library. Pharos checks everything again when you eject."
+Phase 2's Eject button requests a fresh verdict before it acts. Lease files
+may be probed from any read: a creator's `LOCK_EX` blocks briefly rather
+than failing.
 
 Defaults for a holder with no `SafePoint`: `instant` stops within 1 s,
 `record` within 2 s, `batch` has no estimate; a `queued` writer holds
@@ -675,8 +686,17 @@ lag by seconds.
   the preview fill and `repair-existing`'s per-record writes, so the journal
   yields to them. **Residual:** a writer that bypasses the gate outside
   ingest (a handful of small direct `DB.Exec` writes, such as recording a
-  source's state) can wait for one short journal commit, and a writer in
-  another process meets the journal like any other SQLite writer.
+  source's state), or a gated writer that arrives after the last yield
+  check, can wait for one short journal commit; a writer in another process
+  meets the journal like any other SQLite writer. A round has a 250 ms
+  deadline. Measured on an internal SSD (`TestJournalGateHoldIsShort`, 20
+  rows per round, 200 rounds): the gate is held p50 0.6 ms / p95 0.7 ms
+  with the tests' durability, and p50 5.2 ms / p95 6.2 ms (max 9.2 ms) with
+  the service's (`fullfsync`); an external drive's fsync will be slower.
+- **No starvation.** After 10 rounds in a row that skipped (a writer keeps
+  the gate saturated), a round queues for the gate in its normal FIFO order
+  (waiting at most 2 s), writes only starts and ends (rows never written,
+  and ended operations; at most 64), does not yield, and releases.
 - **Starts and ends can wait.** A start or end waits for the next round that
   gets the gate; under a long ingest that may be a few seconds, because
   ingest commits per workspace and frees the gate between commits. A row
@@ -761,11 +781,17 @@ Liveness of other processes is never inferred from pids or heartbeat rows.
   probes the capture lock today. Probing writes nothing. A burst of reads
   may share one probe result for at most 1 s; the release path always
   probes afresh. A GET never deletes a file or writes a row.
-- **Lease lifetime.** A process takes its lease before it queues its first
-  journal row, and keeps it until its last row is written: at exit it runs a
-  final journal round with a bounded budget (1 s, through the same
-  non-blocking rule plus one blocking attempt within that budget), and only
-  then unlinks the lease (while holding its lock) and closes it.
+- **Lease lifetime.** A process takes its lease before it opens the
+  catalog (so its Initialize, recorded as a live child of its operation, is
+  seen) and keeps it until its last write: at exit it runs a final journal
+  round with a bounded budget (1 s, through the same non-blocking rule plus
+  one blocking attempt within that budget), closes the catalog (its
+  checkpoint included), and only then unlinks the lease (while holding its
+  lock) and closes it. A command that cannot take its lease has opened
+  nothing. Read commands that open the catalog (`search`, `health`,
+  `pricing`, `findings` without `--refresh`, `upgrade --status`…) take a
+  lease for the open, Initialize and close (`runLeasedCatalogCommand`),
+  since `OpenCatalog` and `Close` may write.
 - **When the final round cannot write.** The process writes its terminal
   outcomes into its lease file in place (`ftruncate` + `pwrite`, `fsync`;
   it still holds the lock): an `outcomes` map of op ID to state, reason,
@@ -773,10 +799,12 @@ Liveness of other processes is never inferred from pids or heartbeat rows.
   file, and exits. The outcome survives in the unheld lease.
 - **Reconciling in the background.** A reconcile pass runs on its own timer
   (every 10 s), independent of the writer gate and of the journal writer's
-  rounds. For each unheld lease file (probed with `LOCK_EX|LOCK_NB`, which
-  it keeps while it works on that file) it first reads any `outcomes` and
-  queues each as a conditional reconcile (§6.2) with that recorded state;
-  once those have been written, it deletes the file (the protocol above).
+  rounds. For each unheld lease file it takes `LOCK_EX|LOCK_NB` only long
+  enough to read any `outcomes` (so a verdict probe meanwhile does not take
+  it for live), queues each as a conditional reconcile (§6.2) with that
+  recorded state, and once those have been written claims it again and
+  deletes it (the protocol above). The broker deletes dead leases in the
+  app lease directory, which have no journal rows, every 10 s.
   Then it reads the open rows on this host whose `instance` is not the
   running service's, and for each one probes **that row's own** lease
   (`<instance>.json`) at that moment; missing or unheld means dead. A dead
@@ -886,7 +914,7 @@ a server-sent-events stream of the same document.
   `cloud.reconcile`, `maintenance.cache-warm`) are omitted but still count for the verdict.
 - A tentative daemon pass (§3.4) is not listed and not journaled; it
   counts for the verdict only. The ETag covers the listed operations, the
-  verdict word and the journal rows, not the blockers.
+  whole `eject` document and the journal rows.
 - `step.fraction` is present only when `unit` is real and `total` known.
   There is no overall percentage.
 - `time` reuses the forecast states of

@@ -270,7 +270,7 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 				original := view.original(unit.Reader.Config().Path)
 				rel, err := filepath.Rel(view.dir, unit.Reader.Config().Path)
 				if err != nil {
-					lock.Close()
+					releaseLockFile(lock)
 					result.Detail = err.Error()
 					return
 				}
@@ -283,7 +283,7 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 				manifest = &selected
 			}
 			input, err := freezeManifestInput(ctx, captureTarget{Host: view.host, Source: manifest.Source.Name, Dir: view.dir}, SourceConfig{}, len(manifest.Snapshots) == 0 && manifest.RetainedInputCapture, manifest)
-			lock.Close()
+			releaseLockFile(lock)
 			if err != nil {
 				result.Detail = err.Error()
 				return

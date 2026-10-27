@@ -192,20 +192,46 @@ func lockResource(path string) string {
 }
 
 // holdLock records that the operation has taken the lock open in file: a
-// write hold on its resource for as long as the file stays open, so the
-// verdict can tell this lock from one an unknown process holds.
+// concrete write hold on its resource until releaseLockFile closes it, so
+// the verdict can tell this lock from one an unknown process holds.
 func (op *Op) holdLock(file *os.File) {
 	if file == nil || !op.lock() {
 		return
 	}
-	if resource := lockResource(file.Name()); resource != "" {
+	resource := lockResource(file.Name())
+	if resource != "" {
 		op.locks = append(slices.DeleteFunc(op.locks, func(held fileHold) bool { return !fileOpen(held.file) }),
 			fileHold{hold: Hold{Resource: resource, Mode: "write"}, file: file})
+		lockHolders.Store(file, op)
 	}
 	op.unlock(false)
-	if op.reg.holdsChanged != nil {
+	if resource != "" && op.reg.holdsChanged != nil {
 		op.reg.holdsChanged()
 	}
+}
+
+// lockHolders maps an open lock file to the operation holding it.
+var lockHolders sync.Map
+
+// releaseLockFile closes a capture or index lock file and drops the
+// concrete hold it gave its operation: a new version for the journal and the
+// snapshot, and the command's lease rewritten without it.
+func releaseLockFile(file *os.File) error {
+	if file == nil {
+		return nil
+	}
+	err := file.Close()
+	if value, ok := lockHolders.LoadAndDelete(file); ok {
+		op := value.(*Op)
+		if op.lock() {
+			op.locks = slices.DeleteFunc(op.locks, func(held fileHold) bool { return held.file == file })
+			op.unlock(false)
+			if op.reg.holdsChanged != nil {
+				op.reg.holdsChanged()
+			}
+		}
+	}
+	return err
 }
 
 // heldLocksLocked are the concrete holds of the lock files still open.
@@ -952,14 +978,13 @@ type opView struct {
 	// Tentative is an unpublished daemon pass: the verdict counts it, the
 	// snapshot does not list it.
 	Tentative bool
+	// Locks are the concrete capture and index locks it has taken (§4.1),
+	// apart from the kind's declared holds.
+	Locks []Hold
 }
 
 func (op *Op) viewLocked() opView {
-	spec := op.spec
-	if held := op.heldLocksLocked(); len(held) > 0 {
-		spec.Holds = append(slices.Clone(spec.Holds), held...)
-	}
-	view := opView{ID: op.id, Root: op.root.id, Spec: spec, Kind: op.kind, Process: op.reg.process, Instance: op.reg.instance, State: op.state,
+	view := opView{ID: op.id, Root: op.root.id, Spec: op.spec, Locks: op.heldLocksLocked(), Kind: op.kind, Process: op.reg.process, Instance: op.reg.instance, State: op.state,
 		Reason: op.reason, Detail: op.detail, Error: op.errText, Started: op.started, Updated: op.updated, Ended: op.ended, Plan: slices.Clone(op.plan),
 		Step: op.step, SafePoint: op.safePoint, SafePointSet: op.safePointKnown, Wrote: op.wrote, UserStop: op.userStop,
 		DuringRelease: op.duringRelease, Forecast: op.forecast, Version: op.version, Tentative: op.tentative}

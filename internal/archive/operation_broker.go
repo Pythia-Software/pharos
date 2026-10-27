@@ -192,6 +192,7 @@ func (b *brokerOperations) run(ctx context.Context) {
 				}
 			}
 		case <-ticker.C:
+			cleanDeadLeases(appLeaseDir())
 			if !dirty {
 				continue
 			}
@@ -287,7 +288,7 @@ func brokerLibraryVerdict(own *ejectVerdict, records []brokerOperationRecord, li
 	if len(extra.Blockers) == 0 {
 		return *own
 	}
-	merged := ejectVerdict{Verdict: own.Verdict, Blockers: append(slices.Clone(extra.Blockers), own.Blockers...)}
+	merged := ejectVerdict{Verdict: own.Verdict, Checked: own.Checked, Blockers: append(slices.Clone(extra.Blockers), own.Blockers...)}
 	for _, blocker := range merged.Blockers {
 		if verdictRank[blocker.Verdict] > verdictRank[merged.Verdict] {
 			merged.Verdict = blocker.Verdict
@@ -434,4 +435,22 @@ func (b *brokerOperations) document(ctx context.Context, withLibraries bool) map
 	}
 	return map[string]any{"version": 1, "revision": b.reg.currentRevision(), "generated_at": now(), "libraries": entries,
 		"app": map[string]any{"operations": app, "update": nil}, "attention": []any{}}
+}
+
+// cleanDeadLeases deletes the unheld leases in dir: app-level commands (a
+// crashed transfer or recovery) have no journal rows to reconcile, so their
+// dead leases go at once, under the deletion protocol (§6.5).
+func cleanDeadLeases(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		if _, done, ok := claimDeadLease(filepath.Join(dir, entry.Name())); ok {
+			done(true)
+		}
+	}
 }

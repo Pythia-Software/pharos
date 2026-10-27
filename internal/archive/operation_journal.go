@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,6 +23,16 @@ import (
 
 // journalRoundInterval spaces the writer's rounds; tests shorten it.
 var journalRoundInterval = 3 * time.Second
+
+// journalRoundDeadline bounds a round once it holds the gate.
+var journalRoundDeadline = 250 * time.Millisecond
+
+// journalStarveRounds is how many rounds in a row may skip before one
+// queues for the gate; journalPriorityWait bounds that queueing.
+var (
+	journalStarveRounds = 10
+	journalPriorityWait = 2 * time.Second
+)
 
 // journalConnWait is how long a round waits for an idle pooled connection;
 // it holds nothing meanwhile.
@@ -51,6 +62,8 @@ type journalImage struct {
 	stepKnown                                                                   bool
 	started, updated, ended                                                     string
 	detail                                                                      string
+	// first is a row never written yet (a start).
+	first bool
 }
 
 // journalReconcile is a conditional update of a row another instance owns
@@ -73,6 +86,9 @@ type journalWriter struct {
 	prune      bool
 	dropped    atomic.Int64
 	skipped    atomic.Int64
+	starved    atomic.Int64
+	holdsMu    sync.Mutex
+	holds      []time.Duration // the gate's hold time per round, the last 1000
 	loggedAt   time.Time
 	// beforeRow runs before each row is written; tests use it to start a
 	// competing writer mid-round.
@@ -128,17 +144,21 @@ func (r *opRegistry) pendingImages() []journalImage {
 	r.mu.Lock()
 	views := []opView{}
 	ops := []*Op{}
+	firsts := []bool{}
 	for _, op := range r.ops {
 		// A tentative pass is not published: it may yet be discarded.
 		if !op.tentative && op.version != op.written && r.journalEligibleLocked(op) {
 			views = append(views, op.viewLocked())
 			ops = append(ops, op)
+			firsts = append(firsts, op.writtenEver)
 		}
 	}
 	r.mu.Unlock()
 	images := make([]journalImage, 0, len(views))
 	for index, view := range views {
-		images = append(images, imageOf(ops[index], view))
+		image := imageOf(ops[index], view)
+		image.first = !firsts[index]
+		images = append(images, image)
 	}
 	return images
 }
@@ -155,6 +175,9 @@ func imageOf(op *Op, view opView) journalImage {
 	image.stepName, image.stepUnit = view.Step.Name, view.Step.Unit
 	image.stepDone, image.stepTotal, image.stepKnown = view.Step.Done, view.Step.Total, view.Step.Total >= 0
 	detail := map[string]any{"holds": view.Spec.Holds, "affects": view.Spec.Affects, "priority": view.Spec.Priority}
+	if len(view.Locks) > 0 {
+		detail["locks"] = view.Locks
+	}
 	if len(view.Plan) > 0 {
 		detail["plan"] = view.Plan
 	}
@@ -260,7 +283,25 @@ func (j *journalWriter) round(ctx context.Context, wait time.Duration) error {
 		j.roundMu.Lock()
 	}
 	defer j.roundMu.Unlock()
+	// After journalStarveRounds skipped rounds in a row (a writer keeps the
+	// gate saturated), a round queues for the gate in its normal FIFO order
+	// and writes only starts and ends.
+	priority := wait == 0 && j.starved.Load() >= int64(journalStarveRounds)
+	// A round has a deadline, which bounds how long it can hold the gate
+	// (a priority round may first queue for it).
+	if wait == 0 {
+		deadline := journalRoundDeadline
+		if priority {
+			deadline += journalPriorityWait
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, deadline)
+		defer cancel()
+	}
 	images := j.reg.pendingImages()
+	if priority {
+		images = slices.DeleteFunc(images, func(image journalImage) bool { return !image.first && !opTerminal(image.state) })
+	}
 	if len(images) > journalRoundRows {
 		images = images[:journalRoundRows]
 	}
@@ -271,13 +312,15 @@ func (j *journalWriter) round(ctx context.Context, wait time.Duration) error {
 	if len(images) == 0 && len(reconciles) == 0 && !prune {
 		return nil
 	}
-	err := j.write(ctx, wait, images, reconciles, prune)
+	err := j.write(ctx, wait, priority, images, reconciles, prune)
 	switch {
 	case err == nil:
 		j.reg.markWritten(images)
 		j.clearReconciles(reconciles, prune)
+		j.starved.Store(0)
 	case errors.Is(err, errJournalBusy):
 		j.skipped.Add(1)
+		j.starved.Add(1)
 	default:
 		// Dropped: the images stay pending, so the next round writes the
 		// latest of them.
@@ -295,7 +338,7 @@ func (j *journalWriter) round(ctx context.Context, wait time.Duration) error {
 	return err
 }
 
-func (j *journalWriter) write(ctx context.Context, wait time.Duration, images []journalImage, reconciles []journalReconcile, prune bool) (err error) {
+func (j *journalWriter) write(ctx context.Context, wait time.Duration, priority bool, images []journalImage, reconciles []journalReconcile, prune bool) (err error) {
 	c := j.catalog
 	// The low-priority lane takes nothing it would have to wait for while
 	// holding the writer gate: a pooled connection first (only an idle one),
@@ -317,7 +360,7 @@ func (j *journalWriter) write(ctx context.Context, wait time.Duration, images []
 	}
 	defer conn.Close()
 	var release func()
-	if wait == 0 {
+	if wait == 0 && !priority {
 		var ok bool
 		if release, ok = c.tryWriteGate(); !ok {
 			return errJournalBusy
@@ -327,14 +370,18 @@ func (j *journalWriter) write(ctx context.Context, wait time.Duration, images []
 			return errJournalBusy
 		}
 	} else {
-		gateCtx, cancel := context.WithTimeout(ctx, wait)
+		gateCtx, cancel := context.WithTimeout(ctx, max(wait, journalPriorityWait))
 		release, err = c.acquireWriteGate(gateCtx)
 		cancel()
 		if err != nil {
 			return errJournalBusy
 		}
 	}
-	defer release()
+	held := time.Now()
+	defer func() {
+		release()
+		j.recordHold(time.Since(held))
+	}()
 	if _, err := conn.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout=%d", busy.Milliseconds())); err != nil {
 		return err
 	}
@@ -351,7 +398,7 @@ func (j *journalWriter) write(ctx context.Context, wait time.Duration, images []
 			_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
 		}
 	}()
-	yield := func() bool { return wait == 0 && c.writersWaiting() }
+	yield := func() bool { return wait == 0 && !priority && c.writersWaiting() }
 	host := currentHost().ID
 	pid := os.Getpid()
 	for _, image := range images {
@@ -533,4 +580,22 @@ func (c *Catalog) openJournal(ctx context.Context, exceptInstance string) ([]jou
 		return nil, err
 	}
 	return scanJournalRows(rows)
+}
+
+func (j *journalWriter) recordHold(held time.Duration) {
+	j.holdsMu.Lock()
+	defer j.holdsMu.Unlock()
+	j.holds = append(j.holds, held)
+	if len(j.holds) > 1000 {
+		j.holds = j.holds[len(j.holds)-1000:]
+	}
+}
+
+// gateHolds returns the recorded gate hold times, sorted.
+func (j *journalWriter) gateHolds() []time.Duration {
+	j.holdsMu.Lock()
+	defer j.holdsMu.Unlock()
+	holds := slices.Clone(j.holds)
+	slices.Sort(holds)
+	return holds
 }

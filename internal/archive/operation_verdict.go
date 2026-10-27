@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -34,6 +35,9 @@ type ejectVerdict struct {
 	ETASeconds *float64       `json:"eta_seconds"`
 	Summary    string         `json:"summary"`
 	Blockers   []ejectBlocker `json:"blockers"`
+	// Checked is fresh for the release path's full check (every capture
+	// and index lock probed) and polled otherwise (§4.2).
+	Checked string `json:"checked"`
 }
 
 // ejectBlocker is one holder of the drive, with what ejecting does to it.
@@ -66,6 +70,11 @@ type verdictInput struct {
 	// unreachable is the reason the library's service cannot be asked, when
 	// it cannot.
 	unreachable string
+	// scanErrors are what the fresh lock scan could not read.
+	scanErrors []string
+	// fresh is the release path's full check; a polled verdict saw only
+	// what a read may probe.
+	fresh bool
 }
 
 // releaseBudget is the release's budget: a holder that cannot stop within
@@ -164,6 +173,10 @@ func computeEjectVerdict(in verdictInput) ejectVerdict {
 	for _, label := range in.unregistered {
 		blockers = append(blockers, ejectBlocker{Label: label, Verdict: verdictUnsafe, OnEject: "This work is not registered as an operation, so Pharos cannot say when it stops."})
 	}
+	for _, failure := range in.scanErrors {
+		blockers = append(blockers, ejectBlocker{Label: "A capture Pharos could not check", Verdict: verdictUnsafe,
+			OnEject: "Pharos could not read a capture or its lock (" + failure + "), so it cannot tell whether something is writing it."})
+	}
 	if in.unreachable != "" {
 		blockers = append(blockers, ejectBlocker{Label: "The library's service", Verdict: verdictUnsafe, OnEject: in.unreachable})
 	}
@@ -185,6 +198,10 @@ func computeEjectVerdict(in verdictInput) ejectVerdict {
 	}
 	if result.Verdict == verdictSafeIn && !unknown {
 		result.ETASeconds = eta
+	}
+	result.Checked = "polled"
+	if in.fresh {
+		result.Checked = "fresh"
 	}
 	result.Summary = verdictSummary(result)
 	return result
@@ -247,8 +264,16 @@ func verdictSummary(v ejectVerdict) string {
 		}
 		return fmt.Sprintf("Ejecting stops %s after the current %s; if that takes more than %d s, Pharos refuses and you can try again.", labels, unit, int(releaseBudget.Seconds()))
 	}
+	checked := ""
+	if v.Checked != "fresh" {
+		// A polled verdict did not probe every capture and index lock.
+		checked = " Pharos checks everything again when you eject."
+	}
 	if readers := blockerLabels(v.Blockers, verdictSafe); readers != "" {
-		return "Safe to eject: ejecting stops " + lowerFirst(readers) + "."
+		return "Safe to eject: ejecting stops " + lowerFirst(readers) + "." + checked
+	}
+	if checked != "" {
+		return "Nothing Pharos can see is writing to the library." + checked
 	}
 	return "Safe to eject: nothing is writing to the library."
 }
@@ -269,39 +294,67 @@ func lowerFirst(text string) string {
 	return strings.ToLower(text[:1]) + text[1:]
 }
 
-// heldCaptureLocks probes the capture lock of every host under root and the
-// index lock of every capture, as captureActive does (a shared lock that
-// cannot be taken is held exclusively by someone).
-func heldCaptureLocks(root string) []heldLock {
-	held := []heldLock{}
-	hosts, err := os.ReadDir(root)
-	if err != nil {
-		return held
+// probeLockFile reports whether another holder has path's lock
+// exclusively (a shared, non-blocking lock cannot be taken), as captureActive
+// does. A missing file is not held; any other failure is an error.
+func probeLockFile(path string) (bool, error) {
+	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
 	}
-	probe := func(path string) bool {
-		file, err := os.Open(path)
-		if err != nil {
-			return false
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+	switch err := syscall.Flock(int(file.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); {
+	case err == nil:
+		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		return false, nil
+	case errors.Is(err, syscall.EWOULDBLOCK):
+		return true, nil
+	default:
+		return false, err
+	}
+}
+
+// heldCaptureLocks probes the capture lock of every host under root and the
+// index lock of every capture: the fresh check of the release path only.
+// Any read error (the root, a host directory, a lock file) is returned, for
+// an unsafe blocker: the scan cannot vouch for what it could not read.
+func heldCaptureLocks(root string) ([]heldLock, []string) {
+	held, failures := []heldLock{}, []string{}
+	hosts, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return held, failures
+	}
+	if err != nil {
+		return held, append(failures, err.Error())
+	}
+	probe := func(kind, path string) {
+		if locked, err := probeLockFile(path); err != nil {
+			failures = append(failures, err.Error())
+		} else if locked {
+			held = append(held, heldLock{Kind: kind, Path: path})
 		}
-		defer file.Close()
-		return syscall.Flock(int(file.Fd()), syscall.LOCK_SH|syscall.LOCK_NB) != nil
 	}
 	for _, host := range hosts {
 		if !host.IsDir() || !validCaptureName(host.Name()) {
 			continue
 		}
 		dir := filepath.Join(root, host.Name())
-		if path := filepath.Join(dir, captureLockName); probe(path) {
-			held = append(held, heldLock{Kind: "capture", Path: path})
+		probe("capture", filepath.Join(dir, captureLockName))
+		sources, err := os.ReadDir(dir)
+		if err != nil {
+			failures = append(failures, err.Error())
+			continue
 		}
-		sources, _ := os.ReadDir(dir)
 		for _, source := range sources {
-			if path := filepath.Join(dir, source.Name(), indexLockName); source.IsDir() && probe(path) {
-				held = append(held, heldLock{Kind: "index", Path: path})
+			if source.IsDir() {
+				probe("index", filepath.Join(dir, source.Name(), indexLockName))
 			}
 		}
 	}
-	return held
+	return held, failures
 }
 
 // unnamedLocks keeps the held locks that no running operation of this
@@ -327,6 +380,7 @@ func lockNamed(resource string, ops []opView, leases []leaseProbe) bool {
 	names := func(holds []Hold) bool {
 		return slices.ContainsFunc(holds, func(hold Hold) bool { return hold.Mode == "write" && hold.Resource == resource })
 	}
-	return slices.ContainsFunc(ops, func(view opView) bool { return !opTerminal(view.State) && names(view.Spec.Holds) }) ||
-		slices.ContainsFunc(leases, func(probe leaseProbe) bool { return probe.Live && probe.Info != nil && names(probe.Info.Holds) })
+	// Only locks actually taken name a lock, never declared holds.
+	return slices.ContainsFunc(ops, func(view opView) bool { return !opTerminal(view.State) && names(view.Locks) }) ||
+		slices.ContainsFunc(leases, func(probe leaseProbe) bool { return probe.Live && probe.Info != nil && names(probe.Info.Locks) })
 }

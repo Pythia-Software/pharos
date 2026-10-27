@@ -192,7 +192,7 @@ func (c *sourceCapture) pinReader(refs []recordObject) (func(), error) {
 			lease.Close()
 			lock, err := lockCaptureTarget(context.Background(), c.dir)
 			if err == nil {
-				defer lock.Close()
+				defer releaseLockFile(lock)
 				err = releasePreservationOwner(c.dir, owner)
 			}
 			if err == nil {

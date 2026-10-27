@@ -55,18 +55,11 @@ func (s *Server) reconcileOperations(ctx context.Context) bool {
 	}
 	dirs := leaseDirs(s.Config())
 	host := currentHost().ID
-	type claimed struct {
-		instance string
-		info     *leaseInfo
-		done     func(remove bool)
-	}
-	claims := []claimed{}
+	// Dead leases are claimed only long enough to read them, so a verdict
+	// probe meanwhile does not take them for live; they are claimed again to
+	// be deleted once their outcomes are written.
+	deadPaths := []string{}
 	dead := map[string]*leaseInfo{}
-	defer func() {
-		for _, claim := range claims {
-			claim.done(false)
-		}
-	}()
 	// Unheld lease files: their recorded outcomes first.
 	for _, dir := range dirs {
 		entries, err := os.ReadDir(dir)
@@ -81,12 +74,12 @@ func (s *Server) reconcileOperations(ctx context.Context) bool {
 			if !ok {
 				continue
 			}
+			done(false)
 			if info != nil && info.HostID != host {
-				done(false) // another Mac's: never touched here
-				continue
+				continue // another Mac's: never touched here
 			}
 			instance := strings.TrimSuffix(entry.Name(), ".json")
-			claims = append(claims, claimed{instance: instance, info: info, done: done})
+			deadPaths = append(deadPaths, filepath.Join(dir, entry.Name()))
 			dead[instance] = info
 			if info == nil {
 				continue // unreadable and unheld: nothing to apply
@@ -124,10 +117,11 @@ func (s *Server) reconcileOperations(ctx context.Context) bool {
 	if written {
 		// The outcomes are in the journal: delete the dead leases, unlinked
 		// while their lock is held.
-		for _, claim := range claims {
-			claim.done(true)
+		for _, path := range deadPaths {
+			if _, done, ok := claimDeadLease(path); ok {
+				done(true)
+			}
 		}
-		claims = nil
 	}
 	return written
 }

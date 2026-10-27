@@ -294,7 +294,7 @@ func (c *Catalog) IndexCapture(ctx context.Context, target captureTarget, progre
 	if err != nil {
 		return fail(err)
 	}
-	defer lock.Close()
+	defer releaseLockFile(lock)
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		return fail(fmt.Errorf("%s is already being indexed: %w", target.label(), err))
 	}
@@ -361,7 +361,7 @@ func (c *Catalog) IndexCapture(ctx context.Context, target captureTarget, progre
 		return fail(err)
 	}
 	input, err := leaseCaptureForIndex(ctx, target)
-	captureLock.Close()
+	releaseLockFile(captureLock)
 	if err != nil {
 		return fail(err)
 	}

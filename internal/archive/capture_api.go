@@ -14,11 +14,17 @@ import (
 )
 
 func runCaptureCLI(config Config, names []string) error {
+	return runCaptureCLIContext(context.Background(), config, names)
+}
+
+// runCaptureCLIContext is runCaptureCLI with ctx, which carries the
+// command's operation: the capture lock it takes is named in its lease.
+func runCaptureCLIContext(ctx context.Context, config Config, names []string) error {
 	sources, err := captureSources(config, names)
 	if err != nil {
 		return err
 	}
-	summary, err := Capture(context.Background(), config, sources, func(result CaptureSourceResult) {
+	summary, err := Capture(ctx, config, sources, func(result CaptureSourceResult) {
 		if result.State != "running" {
 			fmt.Fprintf(os.Stderr, "%s: %s; %d files (%d bytes) and %d snapshots (%d bytes) captured, %d errors\n", result.Name, result.State,
 				result.FilesCopied, result.BytesCopied, result.SnapshotsTaken, result.SnapshotBytes, len(result.Errors))

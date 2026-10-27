@@ -361,6 +361,19 @@ func TestReconcileEndsRowsWhoseOwnerIsGone(t *testing.T) {
 	if err := dead.abandon(map[string]leaseOutcome{"recorded": {State: opFailed, Error: "disk full", EndedAt: now()}}); err != nil {
 		t.Fatal(err)
 	}
+	// A pass whose round cannot write (the gate is busy) keeps the dead
+	// lease, and does not leave it claimed: a probe still sees it dead.
+	gate, err := catalog.acquireWriteGate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.reconcileOperations(context.Background()) {
+		t.Fatal("a pass wrote with the gate taken")
+	}
+	gate()
+	if probe := probeLease(filepath.Join(dirs[0], "dead-cli.json")); probe.Live || probe.Info == nil {
+		t.Fatalf("the dead lease after a pass that could not write: %+v", probe)
+	}
 	if !server.reconcileOperations(context.Background()) {
 		t.Fatal("the reconcile pass did not write")
 	}
@@ -392,5 +405,102 @@ func TestReconcileEndsRowsWhoseOwnerIsGone(t *testing.T) {
 	var state string
 	if err := catalog.DB.QueryRow("SELECT state FROM operation_journal WHERE id='previous'").Scan(&state); err != nil || state != opInterrupted {
 		t.Fatalf("an ended row was overwritten: %q %v", state, err)
+	}
+}
+
+// A writer that keeps the gate saturated cannot starve the journal: after
+// journalStarveRounds skipped rounds one queues for the gate in its normal
+// order and writes the starts and ends only.
+func TestJournalIsNotStarvedByASaturatedGate(t *testing.T) {
+	catalog, reg, journal := testJournal(t)
+	override(t, &journalStarveRounds, 3)
+	_, running := reg.begin(context.Background(), OperationSpec{Kind: "backup.local", Trigger: triggerUser})
+	if err := journal.round(context.Background(), 0); err != nil {
+		t.Fatal(err)
+	}
+	running.Step("Copy captures", "byte", 100) // a progress change only
+	_, started := reg.begin(context.Background(), OperationSpec{Kind: "library.upgrade", Trigger: triggerUser})
+	_, ended := reg.begin(context.Background(), OperationSpec{Kind: "tools.ledger.build", Trigger: triggerUser})
+	ended.Finish(nil)
+	// Two writers hand the gate to each other, so it is never free.
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	saturated := make(chan struct{})
+	for range 2 {
+		go func() {
+			for ctx.Err() == nil {
+				release, err := catalog.acquireWriteGate(ctx)
+				if err != nil {
+					return
+				}
+				select {
+				case <-saturated:
+				default:
+					close(saturated)
+				}
+				time.Sleep(2 * time.Millisecond)
+				release()
+			}
+		}()
+	}
+	<-saturated
+	for range journalStarveRounds {
+		if err := journal.round(context.Background(), 0); !errors.Is(err, errJournalBusy) {
+			t.Fatalf("a round with the gate saturated: %v", err)
+		}
+	}
+	if err := journal.round(context.Background(), 0); err != nil {
+		t.Fatalf("the starved round: %v", err)
+	}
+	stop()
+	rows := journalRows(t, catalog)
+	if rows["library.upgrade"].State != opRunning || rows["tools.ledger.build"].State != opSucceeded {
+		t.Fatalf("starts and ends after starvation: %+v", rows)
+	}
+	if rows["backup.local"].StepName != "" {
+		t.Fatalf("a starved round wrote a progress change: %+v", rows["backup.local"])
+	}
+	started.Finish(nil)
+}
+
+// How long a round holds the writer gate on this Mac's disk: logged for the
+// report and the contract, and bounded by the round's deadline.
+func TestJournalGateHoldIsShort(t *testing.T) {
+	t.Run("test durability", func(t *testing.T) { measureJournalGateHold(t) })
+	t.Run("service durability", func(t *testing.T) {
+		useDurableCatalog(t) // the service's fsync settings
+		measureJournalGateHold(t)
+	})
+}
+
+func measureJournalGateHold(t *testing.T) {
+	catalog, config := testCatalog(t)
+	catalog.Close()
+	catalog = reopenCatalog(t, config.CatalogPath)
+	t.Cleanup(func() { catalog.Close() })
+	reg := newOpRegistry("service")
+	journal := newJournalWriter(catalog, reg)
+	ops := []*Op{}
+	for range 20 {
+		_, op := reg.begin(context.Background(), OperationSpec{Kind: "index.captures", Trigger: triggerUser})
+		op.Step("Index captured inputs", "conversation", 1000)
+		ops = append(ops, op)
+	}
+	for round := range 200 {
+		for _, op := range ops {
+			op.Advance(1)
+		}
+		if err := journal.round(context.Background(), 0); err != nil {
+			t.Fatalf("round %d: %v", round, err)
+		}
+	}
+	holds := journal.gateHolds()
+	p50, p95, worst := holds[len(holds)/2], holds[len(holds)*95/100], holds[len(holds)-1]
+	t.Logf("gate held per round (%d rounds, 20 rows each): p50 %s, p95 %s, max %s", len(holds), p50, p95, worst)
+	if p95 > journalRoundDeadline {
+		t.Fatalf("p95 %s exceeds the round deadline %s", p95, journalRoundDeadline)
+	}
+	for _, op := range ops {
+		op.Finish(nil)
 	}
 }

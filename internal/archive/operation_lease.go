@@ -24,12 +24,14 @@ const leaseDirName = ".pharos-leases"
 
 // leaseInfo is a lease file's contents.
 type leaseInfo struct {
-	Instance   string   `json:"instance"`
-	PID        int      `json:"pid"`
-	HostID     string   `json:"host_id"`
-	Process    string   `json:"process"`
-	Kinds      []string `json:"kinds"`
-	Holds      []Hold   `json:"holds"`
+	Instance string   `json:"instance"`
+	PID      int      `json:"pid"`
+	HostID   string   `json:"host_id"`
+	Process  string   `json:"process"`
+	Kinds    []string `json:"kinds"`
+	Holds    []Hold   `json:"holds"`
+	// Locks are the capture and index locks its operations hold now.
+	Locks      []Hold   `json:"locks,omitempty"`
 	StartedAt  string   `json:"started_at"`
 	Operations []string `json:"operations,omitempty"`
 	// Libraries are the configurations of libraries an app-level command

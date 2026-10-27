@@ -35,12 +35,14 @@ func TestEjectVerdictErrsTowardNotSafe(t *testing.T) {
 		}
 		return fmt.Sprint(*v.ETASeconds)
 	}
-	live := leaseProbe{Path: "/x/a.json", Live: true, Info: &leaseInfo{Instance: "a", Process: "cli:capture", Kinds: []string{"capture.cli"}, Holds: resolveHolds(parseHolds("D:w C(this):w"))}}
+	live := leaseProbe{Path: "/x/a.json", Live: true, Info: &leaseInfo{Instance: "a", Process: "cli:capture", Kinds: []string{"capture.cli"}, Holds: resolveHolds(parseHolds("D:w C(this):w")),
+		Locks: []Hold{{Resource: "capture:" + currentHost().ID, Mode: "write"}}}}
 	for _, test := range []struct {
 		name, verdict, eta, summary string
 		in                          verdictInput
 	}{
-		{"nothing", verdictSafe, "null", "nothing is writing", verdictInput{}},
+		{"nothing, polled", verdictSafe, "null", "checks everything again when you eject", verdictInput{}},
+		{"nothing, fresh", verdictSafe, "null", "Safe to eject: nothing is writing", verdictInput{fresh: true}},
 		{"a reader", verdictSafe, "null", "ejecting stops warm page caches", verdictInput{ops: []opView{runningView("maintenance.cache-warm", nil)}}},
 		{"a record writer", verdictSafeIn, "2", "within about 2 s", verdictInput{ops: []opView{runningView("maintenance.library-view", nil)}}},
 		{"a batch writer without an estimate", verdictSafeIn, "null", "after the current workspace", verdictInput{ops: []opView{
@@ -75,7 +77,7 @@ func TestEjectVerdictErrsTowardNotSafe(t *testing.T) {
 		t.Fatalf("an index that took no lock named %d of 2: %+v", 2-len(left), left)
 	}
 	indexing := runningView("index.captures", func(view *opView) {
-		view.Spec.Holds = append(view.Spec.Holds, Hold{Resource: "index:" + host + "/claude", Mode: "write"})
+		view.Locks = []Hold{{Resource: "index:" + host + "/claude", Mode: "write"}}
 	})
 	if left := unnamedLocks(locks, []opView{indexing}, nil); len(left) != 1 || left[0].Kind != "capture" {
 		t.Fatalf("an index holding one source's lock: %+v", left)
@@ -103,13 +105,73 @@ func TestOperationHoldsTheLocksItTook(t *testing.T) {
 	}
 	op.holdLock(file)
 	if !lockNamed("index:host-a/claude", []opView{op.view()}, nil) {
-		t.Fatalf("holds while the lock is open: %+v", op.view().Spec.Holds)
+		t.Fatalf("holds while the lock is open: %+v", op.view().Locks)
 	}
-	file.Close()
-	if lockNamed("index:host-a/claude", []opView{op.view()}, nil) {
-		t.Fatal("still holds the lock after closing it")
+	before := op.view().Version
+	if err := releaseLockFile(file); err != nil {
+		t.Fatal(err)
+	}
+	if view := op.view(); lockNamed("index:host-a/claude", []opView{view}, nil) || view.Version == before {
+		t.Fatalf("after releasing the lock: %+v (version %d → %d)", view.Locks, before, view.Version)
 	}
 	op.Finish(nil)
+
+	// A Terminal command's lease lists the locks it holds, apart from its
+	// declared holds, and drops one when it is released.
+	ops, err := beginCLIOperationsIn([]string{filepath.Join(t.TempDir(), leaseDirName)}, nil, nil, "index", "index.captures")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ops.close()
+	_, index := ops.begin(context.Background(), OperationSpec{Kind: "index.captures", Trigger: triggerCLI})
+	file, err = os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := func() *leaseInfo { return probeLease(ops.leases[0].path).Info }
+	index.holdLock(file)
+	if info := lease(); len(info.Locks) != 1 || info.Locks[0].Resource != "index:host-a/claude" || len(info.Holds) == 0 {
+		t.Fatalf("lease while indexing: %+v", info)
+	}
+	releaseLockFile(file)
+	if info := lease(); len(info.Locks) != 0 || len(info.Holds) == 0 {
+		t.Fatalf("lease after releasing: %+v", info)
+	}
+	index.Finish(nil)
+}
+
+// The release path's lock scan cannot vouch for what it could not read: an
+// unreadable capture root, host directory or lock file is unsafe.
+func TestFreshLockScanTreatsReadErrorsAsUnsafe(t *testing.T) {
+	root := t.TempDir()
+	host := filepath.Join(root, "host-a")
+	source := filepath.Join(host, "claude")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lock := filepath.Join(host, captureLockName)
+	if err := os.WriteFile(lock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if held, failures := heldCaptureLocks(root); len(held) != 0 || len(failures) != 0 {
+		t.Fatalf("a readable, unlocked capture: %v %v", held, failures)
+	}
+	if held, failures := heldCaptureLocks(filepath.Join(root, "missing")); len(held) != 0 || len(failures) != 0 {
+		t.Fatalf("a missing capture root: %v %v", held, failures)
+	}
+	for _, path := range []string{lock, host, root} {
+		if err := os.Chmod(path, 0); err != nil {
+			t.Fatal(err)
+		}
+		_, failures := heldCaptureLocks(root)
+		os.Chmod(path, 0o700)
+		if len(failures) == 0 {
+			t.Fatalf("an unreadable %s was taken for unlocked", path)
+		}
+		if verdict := computeEjectVerdict(verdictInput{scanErrors: failures, fresh: true}); verdict.Verdict != verdictUnsafe || verdict.Checked != "fresh" {
+			t.Fatalf("verdict with an unreadable %s: %+v", path, verdict)
+		}
+	}
 }
 
 // Parity of holds (§4.3): no kind that writes the catalog or the drive can
@@ -269,7 +331,7 @@ func TestShadowOperationsCoverLibraryActivities(t *testing.T) {
 			t.Fatal(err)
 		}
 		lease, err := acquireProcessLease(leaseDirs(config)[1], leaseInfo{Instance: "terminal-capture", HostID: "host-a", Process: "cli:capture",
-			Kinds: []string{"capture.cli"}, Holds: []Hold{{Resource: "drive", Mode: "write"}, {Resource: "capture:host-a", Mode: "write"}}, StartedAt: now()})
+			Kinds: []string{"capture.cli"}, Holds: resolveHolds(parseHolds("D:w C(this):w")), Locks: []Hold{{Resource: "capture:host-a", Mode: "write"}}, StartedAt: now()})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -338,8 +400,14 @@ func TestOperationsSnapshotAndStop(t *testing.T) {
 	if entry["label"] != "Back up" || entry["state_label"] != "Backing up" || entry["stoppable"] != true || step["name"] != "copying captures" || step["fraction"] != 0.25 {
 		t.Fatalf("backup entry: %#v", entry)
 	}
-	if document.Eject.Verdict != verdictSafeIn || len(document.Eject.Blockers) != 2 {
+	if document.Eject.Verdict != verdictSafeIn || len(document.Eject.Blockers) != 2 || document.Eject.Checked != "polled" {
 		t.Fatalf("verdict: %+v", document.Eject)
+	}
+	var fresh struct {
+		Eject ejectVerdict `json:"eject"`
+	}
+	if err := json.Unmarshal(serveTest(server, http.MethodGet, "/api/operations?fresh=1").Body.Bytes(), &fresh); err != nil || fresh.Eject.Checked != "fresh" {
+		t.Fatalf("a fresh verdict: %+v %v", fresh.Eject, err)
 	}
 	request := httptest.NewRequest(http.MethodGet, "/api/operations", nil)
 	request.Header.Set("Authorization", "Bearer test-token")

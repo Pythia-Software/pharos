@@ -183,7 +183,7 @@ func (j *historyJob) protect(ctx context.Context) error {
 			return e
 		}
 		e = func() error {
-			defer lock.Close()
+			defer releaseLockFile(lock)
 			target := captureTarget{Host: source.Host, Source: source.Source.Name, Dir: dir}
 			c, e := sourceCaptureForTarget(ctx, target)
 			if e != nil {
@@ -590,7 +590,7 @@ func (j *historyJob) exportUnit(ctx context.Context, u historyUnit) (historyRece
 	if e != nil {
 		return r, 0, e
 	}
-	defer lock.Close()
+	defer releaseLockFile(lock)
 	c, e := sourceCaptureForTarget(ctx, captureTarget{Host: source.Host, Source: source.Source.Name, Dir: dir})
 	if e != nil {
 		return r, 0, e
@@ -740,7 +740,7 @@ func (j *historyJob) releaseClosed(ctx context.Context, u historyUnit, r history
 	if e != nil {
 		return e
 	}
-	defer lock.Close()
+	defer releaseLockFile(lock)
 	p, e := loadPreservationPins(dir)
 	if e != nil {
 		return e
@@ -903,7 +903,7 @@ func (j *historyJob) finishPauses(ctx context.Context, allowUnresolved bool) err
 			return e
 		}
 		e = func() error {
-			defer lock.Close()
+			defer releaseLockFile(lock)
 			p, e := loadPreservationPins(dir)
 			if e != nil {
 				return e
