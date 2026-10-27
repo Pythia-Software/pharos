@@ -368,22 +368,24 @@ test('Cloud backup wizard focuses the calculator after Reset and returns to Expl
   assert.ok(await explore.evaluate(input=>input===document.activeElement));
 });
 
-for (const mode of ['drive', 'activity']) test(`Activity ${mode} refresh preserves scrolling, focus and animation phase`, {skip}, async t => {
+// The drive panel, opened from the header chip, is where running work is
+// shown. Maintenance folds into the index's card, so the later tasks here are
+// backups, which keep cards of their own.
+test('Drive panel refresh preserves scrolling, focus and animation phase', {skip}, async t => {
   const main = {id: 'refreshing-index', kind: 'sync', label: 'Capture & index', stoppable: true,
     started_at: new Date(Date.now() - 120_000).toISOString(),
     work: {phase: 'Discovering inputs', source: 'Codex', done: 0, total: 0},
     forecast: {state: 'partial', remaining_steps: 4, predicted_steps: 3, basis: 'Learning the remaining analyses'}};
-  let activities = [main, ...Array.from({length: 5}, (_, index) => ({id: `task-${index}`, kind: 'maintenance', label: `Background task ${index}`}))];
+  let activities = [main, ...Array.from({length: 5}, (_, index) => ({id: `task-${index}`, kind: 'backup', label: `Background task ${index}`}))];
   let stopped = 0;
   const {page, settled, shot} = await open(t, {url: '/library', ready: '#queryTableLibrary .qt-row', viewport: {width: 390, height: 550}, api: {
     'GET /api/library/status': () => ({...defaultApi['GET /api/library/status'], idle: false, activities}),
     'POST /api/library/refresh/stop': () => {stopped++; return {stopped: true};},
   }});
   await page.emulateMedia({reducedMotion: 'no-preference'});
-  if (mode === 'drive') await activateHeaderTool(page, 'pharosDrive');
-  else await page.evaluate(() => window.pharosLibrary.toggleActivityPanel());
+  await activateHeaderTool(page, 'pharosDrive');
   await settled();
-  const panel = page.getByRole('dialog', {name: mode === 'drive' ? 'Library drive' : 'Running activity', exact: true});
+  const panel = page.getByRole('dialog', {name: 'Library drive', exact: true});
   const summary = panel.locator('summary').first();
   await summary.click();
   await summary.focus();
