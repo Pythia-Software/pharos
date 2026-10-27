@@ -638,6 +638,43 @@ func TestMCPForwardingDeclinesOtherServices(t *testing.T) {
 	}
 }
 
+// Ask Pharos names the service it runs in. Its dynamic port and token are not
+// those in library.toml, and the app's MCP assignment does not apply.
+func TestMCPAnswersFromTheNamedService(t *testing.T) {
+	config := testLibrary(t, filepath.Join(t.TempDir(), "Pharos"))
+	catalog := reopenCatalog(t, config.CatalogPath)
+	defer catalog.Close()
+	serviceConfig := config
+	serviceConfig.APIToken = "dynamic-token"
+	service := testServer(t, serviceConfig, catalog)
+	var forwarded atomic.Int32
+	listener := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/mcp/rpc" {
+			forwarded.Add(1)
+		}
+		service.ServeHTTP(w, r)
+	}))
+	defer listener.Close()
+	endpoint := filepath.Join(t.TempDir(), "service.json")
+	if err := os.WriteFile(endpoint, []byte(jsonText(applicationEndpoint{URL: listener.URL, Token: "dynamic-token", Catalog: config.CatalogPath})), 0600); err != nil {
+		t.Fatal(err)
+	}
+	server := newMCPServer(config.Path)
+	server.identity = testIdentity
+	server.service = endpoint
+	call := startMCP(t, server)
+	search := map[string]any{"name": "search_work", "arguments": map[string]any{"query": "parser"}}
+	if text, isError := toolText(t, call("tools/call", search)); isError || !strings.Contains(text, "Parser maintenance") || forwarded.Load() != 1 {
+		t.Fatalf("call through the named service: %v %s, forwarded %d", isError, text, forwarded.Load())
+	}
+	if err := os.Remove(endpoint); err != nil {
+		t.Fatal(err)
+	}
+	if text, isError := toolText(t, call("tools/call", search)); !isError || !strings.Contains(text, "has finished") {
+		t.Fatalf("call after the request ended: %v %s", isError, text)
+	}
+}
+
 func TestOpenCatalogForQuerySkipsInitialize(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	ingestMCPFixture(t, catalog)
