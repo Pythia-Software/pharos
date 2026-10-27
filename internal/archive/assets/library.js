@@ -4,7 +4,7 @@
 // handler, which releases the library, stops agents' MCP servers running from
 // the drive, quits, and ejects the drive. Settings → Sources shows
 // captures from other Macs alongside this Mac's sources; Settings →
-// Health gains the drive's checks and backups.
+// Health gains the drive's checks; Backups holds backup checks and controls.
 (() => {
   'use strict';
   const CSS = `
@@ -1270,10 +1270,10 @@
     }
   }
 
-  // ---- Settings → Health: the drive's checks and backups
+  // ---- Settings → Health and Backups
   const CHECK_TITLES = {encryption: 'Encryption', spotlight: 'Spotlight', filesystem: 'File system', location: 'Location', free_space: 'Free space', volume_pin: 'Volume pin', backup: 'Backup'};
   const STATUS_DOT = {ok: '', info: 'idle', unknown: 'idle', warning: 'warn', problem: 'bad'};
-  let backupDraft = null, backupError = null, backupBusy = false, driveHealthExpanded = true, driveHealthInitialized = false;
+  let backupDraft = null, backupError = null, backupBusy = false, driveHealthExpanded = true;
 
   async function loadDriveHealth() {
     const [drive, backup] = await Promise.all([call('/api/health/drive'), call('/api/backup')]);
@@ -1284,16 +1284,20 @@
   function renderDriveHealth(drive, backup) {
     window.pharosCloudBackup?.seedLibrary?.(drive.sizes?.library_bytes, drive.cloud_growth);
     const backupPage = document.getElementById('backupSettingsLocal');
-    if (backupPage && document.activeElement?.id !== 'pharosBackupDestinationPage') backupPage.replaceChildren(backupPanel(backup, drive.volume?.name || 'Library drive', 'Page'));
-    const cards = document.getElementById('healthCards');
     // Leave the form alone while someone is typing a destination.
-    if (!cards || document.activeElement?.id === 'pharosBackupDestination') return;
-    if (!driveHealthInitialized && drive.status !== 'checking') {
-      const attention = (drive.checks || []).filter(check => check.status === 'warning' || check.status === 'problem');
-      if (attention.some(check => check.id !== 'backup')) driveHealthExpanded = true;
-      else if (attention.some(check => check.id === 'backup')) driveHealthExpanded = false;
-      driveHealthInitialized = true;
+    if (backupPage && document.activeElement?.id !== 'pharosBackupDestinationPage') {
+      const backupChecks = (drive.checks || []).filter(check => check.id === 'backup');
+      backupPage.replaceChildren();
+      if (backupChecks.length) {
+        const list = node('div', 'pharos-checks');
+        list.append(...backupChecks.map(driveCheckItem));
+        backupPage.append(list);
+      }
+      backupPage.append(backupPanel(backup, drive.volume?.name || 'Library drive'));
     }
+    const cards = document.getElementById('healthCards');
+    if (!cards) return;
+    const checks = (drive.checks || []).filter(check => check.id !== 'backup');
     let section = document.getElementById('pharosDriveHealth');
     if (!section) {
       section = node('section', 'pharos-section');
@@ -1314,7 +1318,7 @@
     intro.append(node('p', 'muted', facts.join(' · ') || drive.path || ''));
     const controls = node('div', 'pharos-health-actions');
     const attention = node('div', 'pharos-health-attention');
-    const attentionChecks = (drive.checks || []).filter(check => check.status === 'warning' || check.status === 'problem');
+    const attentionChecks = checks.filter(check => check.status === 'warning' || check.status === 'problem');
     if (attentionChecks.length) {
       attention.append(node('span', 'pharos-health-attention-label', 'Needs Attention:'));
       for (const check of attentionChecks) {
@@ -1340,27 +1344,28 @@
     const list = node('div', 'pharos-checks');
     list.id = 'pharosDriveChecks';
     if (drive.status === 'checking') list.append(node('p', 'pharos-sub', 'Checking the drive (diskutil, Spotlight status, the library’s size)…'));
-    for (const check of drive.checks || []) {
-      const item = node('div', 'pharos-check');
-      item.dataset.check = check.id;
-      item.append(node('span', 'pharos-dot ' + (STATUS_DOT[check.status] ?? 'idle')));
-      const titleLine = node('div', 'pharos-check-title', CHECK_TITLES[check.id] || check.id);
-      if (check.status !== 'ok') titleLine.append(node('span', check.status === 'problem' ? 'pharos-error' : check.status === 'warning' ? 'pharos-warn' : 'pharos-sub', ` · ${check.status}`));
-      item.append(titleLine, node('div', 'pharos-sub', check.summary));
-      if (check.recommendation) item.append(node('div', '', check.recommendation));
-      if (check.action) item.append(node('div', 'pharos-sub', check.action));
-      if (check.command) { const line = codeLine(check.command); item.append(line); }
-      list.append(item);
-    }
-    details.append(list, backupPanel(backup, name));
+    list.append(...checks.map(driveCheckItem));
+    details.append(list);
     section.append(details);
   }
 
-  function backupPanel(backup, driveLabel, suffix = '') {
+  function driveCheckItem(check) {
+    const item = node('div', 'pharos-check');
+    item.dataset.check = check.id;
+    item.append(node('span', 'pharos-dot ' + (STATUS_DOT[check.status] ?? 'idle')));
+    const titleLine = node('div', 'pharos-check-title', CHECK_TITLES[check.id] || check.id);
+    if (check.status !== 'ok') titleLine.append(node('span', check.status === 'problem' ? 'pharos-error' : check.status === 'warning' ? 'pharos-warn' : 'pharos-sub', ` · ${check.status}`));
+    item.append(titleLine, node('div', 'pharos-sub', check.summary));
+    if (check.recommendation) item.append(node('div', '', check.recommendation));
+    if (check.action) item.append(node('div', 'pharos-sub', check.action));
+    if (check.command) { const line = codeLine(check.command); item.append(line); }
+    return item;
+  }
+
+  function backupPanel(backup, driveLabel) {
     const box = node('div', 'pharos-backup');
-    box.id = 'pharosBackup' + suffix;
-    box.append(node('h3', '', suffix ? 'Back up to another drive' : 'Backups'));
-    if (!suffix) { const link = node('a', '', 'Plan cloud backups →'); link.href = '/settings/backups'; box.append(link); }
+    box.id = 'pharosBackupPage';
+    box.append(node('h3', '', 'Back up to another drive'));
     const last = backup.last_success;
     if (last) {
       const line = node('p', '');
@@ -1387,7 +1392,7 @@
       if (problems.childElementCount) box.append(problems);
     }
     const form = node('form'), label = node('label', '', 'Back up to'), input = node('input'), go = node('button', 'pharos-button primary', 'Back up now');
-    label.htmlFor = input.id = 'pharosBackupDestination' + suffix;
+    label.htmlFor = input.id = 'pharosBackupDestinationPage';
     input.value = backupDraft ?? backup.suggested_destination ?? '';
     input.placeholder = '/Volumes/Other Drive/Pharos Backup';
     input.spellcheck = false;
@@ -1414,7 +1419,7 @@
     box.append(form);
     if (backupError) {
       const error = node('p', 'pharos-error', backupError);
-      error.id = 'pharosBackupError' + suffix;
+      error.id = 'pharosBackupErrorPage';
       error.setAttribute('role', 'alert');
       box.append(error);
     }
