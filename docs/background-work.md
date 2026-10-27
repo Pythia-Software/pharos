@@ -1397,7 +1397,7 @@ Phase 4 measures, and the snapshots report, per process (`resources.go`):
 - **What.** CPU is the delta of own plus exited children's user and system
   time over the wall time between two readings, as % of one core (`null`
   until a second reading); memory is `ri_phys_footprint` (Activity
-  Monitor's figure). A figure never exceeds `NumCPU × 100`. A reading is
+  Monitor's figure). A figure, and a total, never exceeds `NumCPU × 100`. A reading is
   a new baseline, with `cpu_percent: null`, when its PID was reused
   (another `ri_proc_start_abstime`), when the previous reading is more
   than 10 s old (no page was open: an average over the gap is not the
@@ -1476,11 +1476,16 @@ loops that do their IO on their own goroutine:
   of the caller's operation and so in its class: a manual index, a capture
   or a release keeps the default tier; a caller with no operation (a
   close, a repair) is foreground; only `keepWALSmall`'s ticker runs it as
-  a background root;
+  a background root. Only its passive pass (the bulk copy, which takes no
+  writer lock) follows the class; the truncating pass, which holds
+  writers off, always runs at the default tier;
 - the broker's delivery (`library.deliver`): its pending capture and its
   move. The broker has no catalog, so its `lowerIO` is the flag the
   selected library's service reports (`features.unified_activity`), read
   from every status document and asked for again before each delivery.
+  The value belongs to the selected library: another selection clears it,
+  and a selected library whose service cannot confirm it (none running,
+  or no answer) is off.
 
 Work run inline inside a background body inherits its utility thread,
 whatever its own class: a Tools rollup that `analysis.refresh` rebuilds

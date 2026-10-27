@@ -220,6 +220,10 @@ func summarizeResources(subject string, readings []resourceReading) *resourceSum
 			summary.Basis = "mixed"
 		}
 	}
+	if cpu != nil {
+		// A total, like each figure, never exceeds every core (§10).
+		*cpu = min(*cpu, 100*float64(resourceCores()))
+	}
 	summary.CPUPercent, summary.MemoryBytes, summary.SampledAt = roundedPercent(cpu), roundedBytes(memory), formatTime(at)
 	summary.Label = subject + " is using " + loadWords(cpu, memory)
 	if summary.Approximate {

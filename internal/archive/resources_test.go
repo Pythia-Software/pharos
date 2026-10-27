@@ -142,6 +142,12 @@ func TestResourceSamplerComputesLoadFromDeltas(t *testing.T) {
 		t.Fatalf("the reading after a gap: %+v", fresh)
 	}
 
+	// A total never exceeds every core either.
+	capped := summarizeResources("Pharos", []resourceReading{{PID: 1, Basis: resourceBasisKernel, cpu: new(300.0)}, {PID: 2, Basis: resourceBasisKernel, cpu: new(300.0)}})
+	if *capped.CPUPercent != 400 {
+		t.Fatalf("the total is clamped to every core: %v", *capped.CPUPercent)
+	}
+
 	if summarizeResources("Pharos", nil) != nil {
 		t.Fatal("nothing readable keeps the Load row out")
 	}

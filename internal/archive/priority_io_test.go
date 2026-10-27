@@ -21,10 +21,13 @@ func TestBackgroundIOFollowsTheFlag(t *testing.T) {
 	server := testServer(t, config, catalog)
 	var mu sync.Mutex
 	wrapped := []string{}
+	var inside atomic.Bool
 	override(t, &utilityIO, func(op *Op, fn func()) {
 		mu.Lock()
 		wrapped = append(wrapped, op.spec.Kind)
 		mu.Unlock()
+		inside.Store(true)
+		defer inside.Store(false)
 		fn()
 	})
 	run := func(spec OperationSpec) {
@@ -117,12 +120,19 @@ func TestBackgroundIOFollowsTheFlag(t *testing.T) {
 	}) {
 		t.Fatal("the index's checkpoint is not its foreground child")
 	}
+	// The ticker's checkpoint: only its passive pass runs at utility; the
+	// truncating pass, which holds writers off, runs at the default tier.
+	truncated, truncatedInside := 0, false
+	override(t, &checkpointTruncating, func() { truncated++; truncatedInside = truncatedInside || inside.Load() })
 	catalog.boundWALAt(context.Background(), -1, priorityBackground)
 	mu.Lock()
 	if !slices.Equal(wrapped, []string{"maintenance.checkpoint"}) {
 		t.Fatalf("the ticker's checkpoint: %v", wrapped)
 	}
 	mu.Unlock()
+	if truncated != 1 || truncatedInside {
+		t.Fatalf("the truncating pass ran %d times, at utility: %v", truncated, truncatedInside)
+	}
 }
 
 // The broker has no catalog: its operations' IO follows the flag the
@@ -156,5 +166,35 @@ func TestBrokerIOFollowsTheSelectedLibrarysFlag(t *testing.T) {
 	deliver.RunIO(func() {})
 	if wrapped.Load() != 1 {
 		t.Fatal("the status document did not carry the flag back")
+	}
+
+	// The flag is the selected library's: another selection starts off,
+	// and a selected library whose service cannot confirm it is off.
+	on.Store(true)
+	broker.refreshFlag(context.Background())
+	broker.publish([]brokerLibrary{{ID: "lib-a", Name: "Euclid", Child: &applicationEndpoint{URL: service.URL, Token: "t"}, ChildStarted: time.Now()},
+		{ID: "lib-b", Name: "Archive", Selected: true}})
+	deliver.RunIO(func() {})
+	if wrapped.Load() != 1 {
+		t.Fatal("another library's flag outlived the selection change")
+	}
+	broker.refreshFlag(context.Background())
+	deliver.RunIO(func() {})
+	if wrapped.Load() != 1 {
+		t.Fatal("a selected library with no service to ask is not off")
+	}
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "busy", http.StatusServiceUnavailable) }))
+	defer failing.Close()
+	broker.publish([]brokerLibrary{{ID: "lib-a", Name: "Euclid", Selected: true, Child: &applicationEndpoint{URL: service.URL, Token: "t"}, ChildStarted: time.Now()}})
+	broker.refreshFlag(context.Background())
+	deliver.RunIO(func() {})
+	if wrapped.Load() != 2 {
+		t.Fatal("selected again, its flag is read again")
+	}
+	broker.publish([]brokerLibrary{{ID: "lib-a", Name: "Euclid", Selected: true, Child: &applicationEndpoint{URL: failing.URL, Token: "t"}, ChildStarted: time.Now()}})
+	broker.refreshFlag(context.Background())
+	deliver.RunIO(func() {})
+	if wrapped.Load() != 2 {
+		t.Fatal("a failed refresh kept the last value")
 	}
 }
