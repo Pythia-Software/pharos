@@ -2,12 +2,12 @@ package archive
 
 import (
 	"context"
-	"sync"
 	"encoding/json"
 	"errors"
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
