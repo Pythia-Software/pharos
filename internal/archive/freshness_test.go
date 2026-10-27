@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -543,5 +544,20 @@ func TestFreshnessDivergesFromTheOlderRules(t *testing.T) {
 				t.Errorf("ledger: want %s, got %+v", test.ledger, row)
 			}
 		})
+	}
+}
+
+// Every reason code the ledger uses is one the contract's §5 lists.
+func TestFreshnessReasonsAreTheContracts(t *testing.T) {
+	data, err := os.ReadFile("../../docs/background-work.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	section := text[strings.Index(text, "## 5. Freshness domains"):strings.Index(text, "## 6. Journal")]
+	for code := range freshnessReasons {
+		if !strings.Contains(section, "`"+code+"`") {
+			t.Errorf("reason %s is not in the contract's §5", code)
+		}
 	}
 }
