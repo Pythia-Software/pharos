@@ -1371,39 +1371,59 @@ Phase 4 measures, and the snapshots report, per process (`resources.go`):
   each library's service by the PID it started (so a service too busy to
   answer is still measured), the Terminal commands each service's snapshot
   names (or, without a service, the library's leases), and the app-level
-  commands' leases. The native app (Swift) is not measured.
+  commands' leases. The broker's own figure leaves out its exited
+  children's time: they are the services it reads itself, and a service
+  reaped after hours would otherwise count its whole life again. The
+  native app (Swift) is not measured.
 - **How.** `proc_pid_rusage(pid, RUSAGE_INFO_V4)`, made as the `proc_info`
   system call (336, `PROC_INFO_CALL_PIDRUSAGE`) with `syscall.Syscall6`,
   as `capture_iopolicy_darwin.go` makes `iopolicysys`: the package has no
   cgo, and `macos/build-app.sh` builds with whatever `go env CGO_ENABLED`
-  says, so the release build must not need it. Times are Mach units,
-  converted with `hw.tbfrequency`. No `ps` fork. Off macOS a process reads
+  says, so the release build must not need it. Times are Mach units. The
+  rate is measured once against this process's own `getrusage` (snapped
+  to 1 GHz or 24 MHz within 5 %), not taken from `hw.tbfrequency`, which a
+  process under Rosetta may be told differently; until the process has
+  used 20 ms of CPU, `hw.tbfrequency` stands in. No `ps` fork. Off macOS a process reads
   only itself (getrusage and the Go runtime's memory), with `basis`
   `self-reported` and `approximate: true`.
 - **When.** Only when a snapshot is computed, and at most once per process
-  per 1.5 s (`resourceSampleInterval`): nothing is sampled while no page
-  is open, and with any number open each process is read at most every
-  1.5 s (in practice every 2 s, the stream's recheck). The sampler is not
-  a loop and starts no goroutine. Measured cost: about 20 µs of CPU for a
+  per 1.5 s (`resourceSampleInterval`): Pharos measures only while someone
+  is looking. Nothing is sampled while no page is open, and with any
+  number open each process is read at most every 1.5 s (in practice every
+  2 s, the stream's recheck). This replaces the fixed 2–5 s loop first
+  planned; the sampler starts no goroutine. Measured cost: about 20 µs of CPU for a
   sample of ten processes and its summary, 0.0013 % of one core
   (`TestResourceSamplingIsCheap`).
 - **What.** CPU is the delta of own plus exited children's user and system
   time over the wall time between two readings, as % of one core (`null`
   until a second reading); memory is `ri_phys_footprint` (Activity
-  Monitor's figure). A reused PID (another `ri_proc_start_abstime`) starts
-  again. For a stable ETag, `cpu_percent` is a whole number, `memory_bytes`
-  two significant figures, and `sampled_at` is left out of the tag.
+  Monitor's figure). A figure never exceeds `NumCPU × 100`. A reading is
+  a new baseline, with `cpu_percent: null`, when its PID was reused
+  (another `ri_proc_start_abstime`), when the previous reading is more
+  than 10 s old (no page was open: an average over the gap is not the
+  current load), and when its children's time grew by more than the
+  interval × cores (a long child reaped). A total's `cpu_percent` is
+  `null` (memory only) while any of its processes has none. `cpu_percent`
+  is a whole number and `memory_bytes` two significant figures.
+- **Change detection.** `resources` objects are left out of the snapshot's
+  tag (`statusTag`), so a document whose only change is its load keeps its
+  ETag: a poll gets 304 and sees new resources only with another change. A
+  stream carries the latest resources in every event, and sends a
+  resources-only update at most every 5 s (`statusResourcesRefresh`)
+  while a client listens.
 - **Subprocesses** (`git`, `gh`, `diskutil`, CLIs) count only when they
   exit and are reaped, in the child time of the process that ran them: a
-  long `git` call shows as one spike at its end.
+  short call shows in the interval it ended, and one that ran longer than
+  the interval could account for starts a new baseline instead.
 - **Per-operation** attribution inside a process (pprof labels, already
   used by findings detectors) is not built; questions about load need only
   per-machine and per-library answers.
 - **Index runs' telemetry** (`incremental_metrics.go`) reads its RSS from
   the same call's `ri_resident_size`, the figure `ps -o rss` reports, so
-  history stays comparable; `ps` remains the fallback. This is not behind
-  the flag: it changes no behaviour and drops one fork per second of a
-  run.
+  RSS history stays comparable; `ps` remains the fallback. Recorded CPU
+  shifts a little lower: it includes `RUSAGE_CHILDREN`, which counted the
+  once-a-second `ps` forks. This is not behind the flag: it changes no
+  behaviour and drops one fork per second of a run.
 
 Shape, in `/api/status` (`resources`, `null` when nothing could be read)
 and in `/api/app/status` (the machine's total as `resources`, and each
@@ -1430,34 +1450,52 @@ processes' `text` in its tooltip.
 
 The class is applied in one place, the handle: `Op.RunIO(fn)` runs fn
 under utility when the operation's priority is `background` and the
-registry's `lowerIO` (the flag, through `Catalog.unifiedActivity`) says so;
-otherwise it runs fn unchanged. The policy is per thread and goroutines fn
-starts do not inherit it, so it wraps the loops that do their IO on their
-own goroutine:
+registry's `lowerIO` says so; otherwise it runs fn unchanged. `lowerIO`
+reads the flag from memory only (`Catalog.unifiedActivityNow`): saving
+preferences sets it, every read of the flag refreshes it, and the
+service's `watchFeatureFlags` daemon reads it every 5 s, so work never
+waits on a reader connection for it. The thread returns to Go's pool only
+once its policy is restored; if restoring fails, the goroutine keeps the
+thread locked and Go ends it rather than reuse it at utility. The policy
+is per thread and goroutines fn starts do not inherit it, so it wraps the
+loops that do their IO on their own goroutine:
 
 - every operation started with `start`, `launch` or `startBackground`: the
-  whole body (`runOperation`), so the Git backfill and refresh, findings
-  and authorship rebuilds from reads, the upgrade count, `drive.measure`,
-  and the writes requests hand to the background
-  (`maintenance.mcp-history`, `cloud.reconcile`, `ask.save`);
+  whole body (`runOperation`), so the Git backfill and refresh, the
+  upgrade count, `drive.measure`, and the writes requests hand to the
+  background (`maintenance.mcp-history`, `cloud.reconcile`, `ask.save`);
 - the automatic index (`index.changes.automatic`): each source's discovery
   walk, each source's ingest, the Search view projection and the audit;
-- each background stage of the analysis chain (Git, tools, authorship,
-  findings, and the stages that take the chain's class);
+- each stage of the analysis chain, which takes its run's class (a child
+  with no priority of its own inherits its parent's): foreground under a
+  manual index, background under `analysis.refresh`;
 - each batch of a daemon pass (search index builds, the Search view,
   previews, parallelism, cache warming, the origins publication, the cloud
   schedule tick's `cloud.reconcile`), not the pauses between them;
-- the WAL bound's checkpoint (`maintenance.checkpoint`).
+- the WAL bound's checkpoint (`maintenance.checkpoint`), begun as a child
+  of the caller's operation and so in its class: a manual index, a capture
+  or a release keeps the default tier; a caller with no operation (a
+  close, a repair) is foreground; only `keepWALSmall`'s ticker runs it as
+  a background root;
+- the broker's delivery (`library.deliver`): its pending capture and its
+  move. The broker has no catalog, so its `lowerIO` is the flag the
+  selected library's service reports (`features.unified_activity`), read
+  from every status document and asked for again before each delivery.
+
+Work run inline inside a background body inherits its utility thread,
+whatever its own class: a Tools rollup that `analysis.refresh` rebuilds
+while a Tools read waits runs at utility.
 
 Not covered: work an operation hands to other goroutines (capture's hashing
-pipeline, a backup's WAL poller), and the broker's operations
-(`library.deliver`), whose registry has no catalog to read the flag from.
+pipeline, a backup's WAL poller), and Terminal commands, whose registries
+have no `lowerIO`.
 The three copy paths that ran at utility before (capture copies, local
 backups, adoption) keep doing so with the flag on or off: they are not
 moved to the default tier even where their kind is foreground. A
-read-started rebuild that a user is waiting on is registered foreground
-(`analysis.tools` from a read, `analysis.findings` from Refresh findings)
-and keeps the default tier. A background body holding the catalog writer
+read-started rebuild that a request or page waits on is registered
+foreground and keeps the default tier: `analysis.tools` from a read,
+`analysis.findings` from Refresh findings and from `GET /api/findings`
+before findings exist, and `analysis.authorship` from a page. A background body holding the catalog writer
 at utility can make a foreground writer wait a little longer; the utility
 tier, unlike background, is not throttled hard.
 
