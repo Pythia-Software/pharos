@@ -134,6 +134,8 @@ var operationKinds = []operationKind{
 		OnEject: "Not interruptible; short.", Latency: "record", Journal: journalLonger(time.Second), Priority: priorityBackground},
 	{Kind: "maintenance.metrics", Label: "Update MCP metrics", Verb: "Updating metrics", Holds: "D:w W:w", Affects: "—",
 		OnEject: "Ends with the call.", Latency: "record", Journal: journalNever, Priority: priorityForeground, Hidden: true},
+	{Kind: "maintenance.origins", Label: "Publish conversation origins", Verb: "Publishing conversation origins", Holds: "D:w W:w", Affects: "—",
+		OnEject: "Stops; it publishes them on its next pass.", Latency: "batch", Journal: journalNever, Priority: priorityBackground, Hidden: true},
 	{Kind: "maintenance.mcp-history", Label: "Store MCP call history", Verb: "Storing MCP call history", Holds: "D:w W:w", Affects: "—",
 		OnEject: "Stops; closing the catalog stores what is still queued.", Latency: "record", Journal: journalNever, Priority: priorityBackground, Hidden: true},
 	{Kind: "ask.save", Label: "Save an Ask Pharos answer", Verb: "Saving an Ask Pharos answer", Holds: "D:w W:w", Affects: "—",

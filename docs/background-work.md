@@ -334,6 +334,7 @@ operation.
 | `maintenance.search.query` | Build Query Table text indexes · Building table search | version, chained | svc | D:w W:w | search.query | — | Stops between batches; it carries on later. | batch | >30 s | bg |
 | `maintenance.checkpoint` (variants `bound`, `after-run`, `close`) | Save the catalog · Saving the catalog | daemon pass (WAL over 64 MiB, every 10 s), chained, release | svc | D:w W:w | — | — | Not interruptible; short. | record | >1 s | bg |
 | `maintenance.metrics` | Update MCP metrics · Updating metrics | read (an MCP call, up to 100 dirty workspaces) | mcp, svc | D:w W:w | — | — | Ends with the call. | record | never | fg |
+| `maintenance.origins` | Publish conversation origins · Publishing conversation origins | daemon pass (`maintainLibrary`: every pass while no ingest runs, at most once a minute during one); the end of each ingest and the Tools rollup publish them as part of their own operation | svc | D:w W:w | — | — | Stops; it publishes them on its next pass. | batch | never | bg |
 | `maintenance.mcp-history` | Store MCP call history · Storing MCP call history | read (an MCP call through the service queues its record; one background writer stores the queue, so no request waits for the writer) | svc | D:w W:w | — | — | Stops; closing the catalog stores what is still queued. | record | never | bg |
 | `ask.save` | Save an Ask Pharos answer · Saving an Ask Pharos answer | user (a finished Ask turn whose save missed its deadline is retried in the background for up to 5 min) | svc | D:w W:w | — | — | Stops retrying; an answer not yet saved is lost, as when the service stops. | record | never | bg |
 | `drive.measure` | Check the drive · Checking the drive | read (`GET /api/health/drive`, 5 min cache) | svc (+`diskutil`) | D:w W:w (one `library_size_history` row) | — | — | Stops. | record | never | bg |
@@ -343,11 +344,14 @@ check does nothing. The check is the daemon. Only a check that runs a
 checkpoint starts `maintenance.checkpoint`, which is registered (so eject
 sees it) but journaled only past 1 s. The same pattern applies to every
 `>T` row: register always, journal only past T or when `op.Wrote()` was
-called. `drive.measure`, `maintenance.metrics`, `maintenance.mcp-history`
-and `ask.save` are listed only so the unregistered-work test passes and
-eject sees them; they are D-family and hidden from surfaces. Ask Pharos
-stays out of scope (§1): only the background save of a finished answer,
-which writes the catalog after its request has ended, is registered.
+called. `drive.measure`, `maintenance.metrics`, `maintenance.origins`,
+`maintenance.mcp-history` and `ask.save` are listed only so the
+unregistered-work test passes and eject sees them; they are D-family and
+hidden from surfaces. Requests never write: the writes they used to make
+(origins, MCP history) are these background operations, and no request
+waits for one. Ask Pharos stays out of scope (§1): only the background
+save of a finished answer, which writes the catalog after its request has
+ended, is registered.
 
 ### 3.5 E. Transitions
 
@@ -791,7 +795,8 @@ a server-sent-events stream of the same document.
   terminal, plus those that ended in the last 10 minutes, newest first.
   `children` holds running children; `children_count` all of them. Daemons
   and kinds marked hidden (`drive.measure`, `maintenance.metrics`,
-  `maintenance.mcp-history`, `ask.save`, `maintenance.cache-warm`) are omitted but still count for the verdict.
+  `maintenance.origins`, `maintenance.mcp-history`, `ask.save`,
+  `maintenance.cache-warm`) are omitted but still count for the verdict.
 - `step.fraction` is present only when `unit` is real and `total` known.
   There is no overall percentage.
 - `time` reuses the forecast states of

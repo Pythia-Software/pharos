@@ -444,11 +444,38 @@ var originsRunInterval = runCacheHold
 // conversation origins, which requests only read, including while an ingest
 // pauses the rest of the loop: a long ingest otherwise leaves the conversations
 // it adds without channel or machine until it ends.
+//
+// Each stretch of real work is an operation (§3.4): the Search view's catch-up
+// lasts from the first pass that refreshes a workspace to the first that finds
+// none; filling previews and measuring parallelism likewise. A publication
+// that stores origins is one too. A pass that does nothing is forgotten.
 func (c *Catalog) maintainLibrary(ctx context.Context) {
+	var view, previews, parallelism *daemonPass
+	settle := func(pass **daemonPass, more bool, err error) {
+		if *pass != nil && (!more || err != nil) {
+			(*pass).end(err)
+			*pass = nil
+		}
+	}
+	begin := func(pass **daemonPass, kind string) {
+		if *pass == nil {
+			*pass = c.beginPass(ctx, kind, triggerChained)
+		}
+	}
+	defer func() { settle(&view, false, nil); settle(&previews, false, nil); settle(&parallelism, false, nil) }()
 	var originsAt time.Time
 	for {
 		if !c.libraryRefreshStopped() && (c.ingestRuns.Load() == 0 || time.Since(originsAt) >= originsRunInterval) {
-			if err := c.ensureOrigins(ctx); err != nil && ctx.Err() == nil {
+			origins := c.beginPass(ctx, "maintenance.origins", triggerChained)
+			published, err := c.publishOrigins(ctx)
+			if published {
+				origins.worked(1)
+			}
+			if ctx.Err() != nil {
+				err = nil
+			}
+			origins.end(err)
+			if err != nil {
 				fmt.Fprintf(os.Stderr, "Conversation origins: %v\n", err)
 			}
 			originsAt = time.Now()
@@ -465,8 +492,11 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 		if !running {
 			continue
 		}
+		begin(&view, "maintenance.library-view")
 		count, err := c.RefreshLibrary(pass, 10)
 		c.noteLibraryRefresh(count, err)
+		view.worked(count)
+		settle(&view, count > 0, err)
 		wait := time.Duration(0)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -478,18 +508,29 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 			}
 		} else if count == 0 {
 			// Idle: fill in previews, then keep the page caches warm.
-			if filled, err := c.refreshPreviews(pass, 25); err != nil || filled == 0 {
+			begin(&previews, "maintenance.previews")
+			filled, err := c.refreshPreviews(pass, 25)
+			previews.worked(filled)
+			settle(&previews, filled > 0, err)
+			if err != nil || filled == 0 {
 				if err != nil && pass.Err() == nil {
 					fmt.Fprintf(os.Stderr, "Library previews: %v\n", err)
 				}
 				// Then store changed conversations' parallelism timing, so a
 				// page computes only what changed since (all, after an upgrade).
-				if derived, err := c.refreshParallelism(pass, parallelismBatch, false); err != nil || derived == 0 {
+				begin(&parallelism, "maintenance.parallelism")
+				derived, err := c.refreshParallelism(pass, parallelismBatch, false)
+				parallelism.worked(derived)
+				settle(&parallelism, derived > 0, err)
+				if err != nil || derived == 0 {
 					if err != nil && pass.Err() == nil {
 						fmt.Fprintf(os.Stderr, "Parallelism activity: %v\n", err)
 					}
 					wait = 2 * time.Second
+					// Warming only reads; its operation is never published.
+					warm := c.beginPass(ctx, "maintenance.cache-warm", triggerChained)
 					c.warmCaches(ctx)
+					warm.end(nil)
 				}
 			}
 		}
