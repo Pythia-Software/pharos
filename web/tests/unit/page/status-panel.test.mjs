@@ -103,6 +103,23 @@ test("freshness and load rows stay out while the snapshot says null", () => {
   assert.ok(filled.load);
 });
 
+test("the load row is the server's line, each process's line in its tooltip; in the app, every Pharos process's", () => {
+  const library = { label: "Library line", cpu_percent: 12, memory_bytes: 340e6, processes: [{ pid: 1, text: "Service line" }, { pid: 2, text: "Terminal line" }] };
+  const own = model(view({ resources: library }));
+  assert.deepEqual(own.load, { text: "Library line", tooltip: "Service line\nTerminal line" });
+  // The broker's total, when the store has one, wins over the library's.
+  const app = model(view({ resources: library }, { resources: { label: "Machine line", processes: [] } }));
+  assert.deepEqual(app.load, { text: "Machine line", tooltip: "" });
+  // A service without a line: numbers only, made here.
+  assert.equal(model(view({ resources: { cpu_percent: 45.4, memory_bytes: 1.2e9 } })).load.text, "45% of one core · 1.2 GB");
+  assert.equal(model(view({ resources: {} })).load, null);
+});
+
+test("Show all's headings are the snapshot's words", () => {
+  assert.deepEqual(model(view({ headings: { work: "Work words", data: "Data words" } })).headings, { work: "Work words", data: "Data words" });
+  assert.deepEqual(model(view()).headings, { work: "", data: "" });
+});
+
 const at = Date.parse("2026-10-27T12:00:00Z");
 const minutesAgo = minutes => new Date(at - minutes * 60000).toISOString();
 const ledger = {

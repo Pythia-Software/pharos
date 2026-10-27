@@ -57,6 +57,8 @@ func (s *Server) statusDocument(ctx context.Context, fresh bool) map[string]any 
 	document["freshness_summary"] = summarizeFreshness(freshness)
 	// CPU and memory of this library's Pharos processes on this Mac (§10).
 	document["resources"] = s.serviceResources()
+	// The words over Show all's two parts: the operations, and the domains.
+	document["headings"] = map[string]any{"work": "Work", "data": "Data"}
 	document["features"] = map[string]any{"unified_activity": s.Catalog.unifiedActivity(ctx)}
 	return document
 }

@@ -71,6 +71,9 @@ func TestStatusSnapshotComposesVerdictOperationsAndPlaceholders(t *testing.T) {
 	if again["cpu_percent"] == nil {
 		t.Fatalf("a second reading gives CPU: %#v", again)
 	}
+	if headings, _ := idle.raw["headings"].(map[string]any); headings["work"] != "Work" || headings["data"] != "Data" {
+		t.Fatalf("Show all's headings are the server's: %#v", idle.raw["headings"])
+	}
 	if rows, ok := idle.raw["freshness"].([]any); !ok || len(rows) == 0 {
 		t.Fatalf("freshness lists the ledger's domains (§5): %#v", idle.raw["freshness"])
 	}

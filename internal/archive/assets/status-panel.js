@@ -7,8 +7,8 @@
 //
 // The panel answers, in this order: is it safe to eject; is the data
 // current (the freshness ledger's summary groups; omitted while the
-// snapshot has none); is Pharos busy on this Mac (phase 4; omitted while
-// null); what is running, one line per top-level operation; then "Show all"
+// snapshot has none); is Pharos busy on this Mac (the Load row; omitted
+// while null); what is running, one line per top-level operation; then "Show all"
 // for the operation tree and each data domain, the other libraries, and
 // what needs attention. Every sentence comes from the server; this file
 // formats numbers and durations only. Explanations are in tooltips.
@@ -33,6 +33,10 @@
 .pharos-status-tree ul{padding-left:16px}
 .pharos-status-tree li{margin:3px 0;overflow-wrap:anywhere}
 .pharos-status-domains{margin-top:10px;border-top:1px solid var(--line,#ddd);padding-top:8px}
+.pharos-status-heading{margin-top:8px;color:var(--muted,#666);font-size:11px;letter-spacing:.04em;text-transform:uppercase}
+.pharos-status-heading+.pharos-status-tree{margin-top:2px}
+.pharos-status-heading.data{margin-top:10px;border-top:1px solid var(--line,#ddd);padding-top:8px}
+.pharos-status-heading.data+.pharos-status-domains{margin-top:2px;border-top:0;padding-top:0}
 .pharos-status-data{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;line-clamp:1;overflow:hidden;overflow-wrap:normal}
 @media (max-width:600px){.pharos-status-data{-webkit-line-clamp:2;line-clamp:2}}
 .pharos-status-panel details>summary{cursor:pointer}
@@ -196,9 +200,10 @@
       where: [LOCATIONS[drive.location] || (drive.ejectable ? 'Drive' : ''), library.library?.path].filter(Boolean).join(' · '),
       verdict: {verdict: eject.verdict || 'unsafe', text, dot: VERDICT_DOT[eject.verdict] ?? 'bad', checked: eject.checked || null,
         tooltip: [eject.summary !== text ? eject.summary : '', ...(eject.blockers || []).map(blocker => [blocker.label, blocker.on_eject].filter(Boolean).join(': '))].filter(Boolean).join('\n')},
-      // A null keeps the row out (phase 4 fills load).
+      // A null keeps the row out.
       freshness: dataModel(library),
-      load: library.resources ?? null,
+      load: loadModel(view.resources ?? library.resources),
+      headings: {work: library.headings?.work || '', data: library.headings?.data || ''},
       others: (view.others || []).map(other => {
         const first = (other.operations || []).find(running);
         return {id: other.id, name: other.name || 'Library',
@@ -208,6 +213,17 @@
         stopping: requested, title: stoppable.map(operation => operation.label).join(', ')} : stopping ? {targets: [], stopping: true, title: ''} : null,
       eject: drive.ejectable && nativeEject ? ejectModel(ejectState, drive) : null,
     };
+  }
+
+  // The Load row (docs/background-work.md §10): the server's line ("Pharos
+  // is using ~45% of one core · 1.2 GB"; in the app, every Pharos process on
+  // this Mac), each process's line in the tooltip. Numbers alone for a
+  // service that sends no line.
+  function loadModel(resources) {
+    if (!resources || typeof resources !== 'object') return null;
+    const text = resources.label || [Number.isFinite(resources.cpu_percent) ? `${Math.round(resources.cpu_percent)}% of one core` : '', Number.isFinite(resources.memory_bytes) ? size(resources.memory_bytes) : ''].filter(Boolean).join(' · ');
+    if (!text) return null;
+    return {text, tooltip: (Array.isArray(resources.processes) ? resources.processes : []).map(process => process.text).filter(Boolean).join('\n')};
   }
 
   function attentionModel(item) {
@@ -452,7 +468,11 @@
       data.title = model.freshness.line.map(group => [group.label, group.text].filter(Boolean).join(' ') + (group.tooltip ? `\n${group.tooltip}` : '')).join('\n\n');
       row('data', 'Data', data);
     }
-    if (model.load) row('load', 'Load', node('span', '', loadText(model.load)));
+    if (model.load) {
+      const load = node('span', '', model.load.text);
+      if (model.load.tooltip) load.title = model.load.tooltip;
+      row('load', 'Load', load);
+    }
     appendWork(content, rows, model);
     if (model.others.length) {
       const others = node('dl', 'pharos-status-rows');
@@ -504,8 +524,12 @@
     const summary = node('summary', 'pharos-status-more');
     summary.append(node('span', '', model.moreCount ? `+ ${model.moreCount} more` : ''), node('span', '', 'Show all'));
     details.append(summary);
+    // A quiet heading over each part, in the server's words.
+    const heading = (key, text) => { if (text) { const h = node('div', `pharos-status-heading ${key}`, text); h.dataset.key = `heading:${key}`; details.append(h); } };
+    if (model.tree.length || model.finished) heading('work', model.headings?.work);
     if (model.tree.length) details.append(treeList(model.tree));
     if (model.finished) details.append(node('div', 'pharos-sub pharos-status-finished', `${model.finished} finished`));
+    if (domains.length) heading('data', model.headings?.data);
     if (domains.length) details.append(dataList(domains));
     content.append(details);
   }
@@ -524,7 +548,6 @@
     }
     return list;
   }
-  const loadText = value => [Number.isFinite(value?.cpu_percent) ? `${Math.round(value.cpu_percent)}% of one core` : '', Number.isFinite(value?.memory_bytes) ? size(value.memory_bytes) : ''].filter(Boolean).join(' · ');
 
   function treeList(items) {
     const list = node('ul', 'pharos-status-tree');
