@@ -3,10 +3,16 @@ import { tokenAnalysisCatalog } from "./token-analysis-catalog";
 import { toolsAnalysisCatalog } from "./tools-analysis-catalog";
 import { mcpAnalysisCatalog } from "./mcp-analysis-catalog";
 import { agentTimeAnalysisCatalog, skillsAnalysisCatalog } from "./record-analysis-catalogs";
+import { humanAnalysisCatalog } from "./human-analysis-catalog";
+import { carbonCatalogShape } from "./carbon-analysis-catalog";
+import { parallelismCatalogShape } from "./parallelism-analysis-catalog";
 
-// The engine dashboards, by Analyze topic.
+// The engine dashboards, by Analyze topic. Carbon and Parallelism build
+// their catalogs with the user's settings; these are their shapes, for
+// reading and comparing links.
 export const analysisCatalogs: Partial<Record<string, AnalysisCatalog>> = {
   tokens: tokenAnalysisCatalog, tools: toolsAnalysisCatalog, mcp: mcpAnalysisCatalog, time: agentTimeAnalysisCatalog, skills: skillsAnalysisCatalog,
+  human: humanAnalysisCatalog, carbon: carbonCatalogShape, parallelism: parallelismCatalogShape,
 };
 
 // A dashboard chart as it draws, whatever version or vocabulary wrote it, so

@@ -302,7 +302,7 @@ test("collected cards compare dashboard charts as drawn: defaults filled, keys s
   const selected = values => key("tokens", { metric: "tokens", split: "provider", selection: { values, excluded: false } });
   assert.notEqual(selected(["codex"]), selected(["claude"]));
   assert.equal(key("tokens", { metric: "tokens", split: "provider", selection: { excluded: false, values: ["codex"] } }), selected(["codex"]));
-  assert.equal(normalizedDashboardChart("human", '{"b":1,"a":2}'), '{"b":1,"a":2}', "other dashboards compare as written");
+  assert.equal(normalizedDashboardChart("retired", '{"b":1,"a":2}'), '{"b":1,"a":2}', "other dashboards compare as written");
 });
 
 // ----- 2c engine items -------------------------------------------------------

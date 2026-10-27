@@ -32,7 +32,7 @@ export const usageDatasetTopics: Record<UsageDataset, UsageTopic> = {
   tools: "tools", tool_calls: "tools", mcp_calls: "mcp", skill_usages: "skills", parallelism: "parallelism",
 };
 export const usageTopicDatasets: Record<UsageTopic, UsageDataset> = {
-  tokens: "usage", human: "writing", time: "tool_calls", parallelism: "parallelism", tools: "tools", mcp: "mcp_calls", skills: "skill_usages", carbon: "usage",
+  tokens: "usage", human: "writing_messages", time: "tool_calls", parallelism: "parallelism", tools: "tools", mcp: "mcp_calls", skills: "skill_usages", carbon: "usage",
 };
 
 // Fields that hold a dashboard's dates, by dataset: its range, and the day
@@ -74,7 +74,7 @@ export function usageDashboardReturn(current: URLSearchParams) {
   };
   let query: QueryState | undefined;
   try { query = decodeQueryStrict(current.get(`q_${state.dataset}`) ?? "") ?? undefined; } catch { /* Explicitly reset an unavailable query. */ }
-  const compatible = dataset === state.dataset && state.topic !== "parallelism" && Boolean(query);
+  const compatible = dataset === state.dataset && Boolean(query);
   const params = new URLSearchParams(current);
   const returned = compatible ? returnedWhere(current, (query!.grouping?.source ?? query!).where, state.dataset) : { where: [], dates: false };
   params.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where: returned.where }));

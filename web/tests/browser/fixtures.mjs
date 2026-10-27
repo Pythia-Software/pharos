@@ -24,6 +24,10 @@ const day = 86400000, iso = offset => new Date(now - offset).toISOString();
 const longTitle = "Investigate why the incremental indexer re-reads every capture after a laptop sleeps through a scheduled sync window";
 const datasets = Object.fromEntries(Object.entries(schemas).map(([name, schema]) => [name, population(schema, { now, count: 48 }).map((row, index) => index % 5 ? row
   : { ...row, title: longTitle, repository_name: "pythia-software/an-unusually-long-repository-name-for-layout", location: "/Users/someone/conductor/workspaces/pharos/a-deeply-nested-worktree-directory/internal/archive" })]));
+// Parallelism records are built with the saved counting and gap settings.
+for (const row of datasets.parallelism) Object.assign(row, { counting: "workspace", gap_minutes: 60 });
+// The service assigns every usage record a carbon factor tier.
+datasets.usage.forEach((row, index) => { row.carbon_tier = ["small", "medium", "large"][index % 3]; });
 // Usage trends consume the calendar keys of their source records.
 for (const row of [...datasets.tools, ...datasets.mcp_calls]) {
   const monday = new Date(`${row.day}T00:00:00Z`);

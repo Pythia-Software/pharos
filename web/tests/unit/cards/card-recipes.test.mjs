@@ -137,7 +137,7 @@ test("dashboard card windows and retained cover queries stay aligned after colle
 });
 
 test("all card dashboards restore rolling range presets instead of custom timestamps", () => {
-  const fieldsFor = (topic) => topic === "human" ? writingTime : topic === "tools" ? { first: "day", last: "day" }
+  const fieldsFor = (topic) => topic === "human" ? { first: "sent_at", last: "sent_at" } : topic === "tools" ? { first: "day", last: "day" }
     : topic === "skills" ? { first: "created_at", last: "created_at" } : topic === "time" ? { first: "started_at", last: "started_at" }
     : topic === "mcp" ? { first: "called_at", last: "called_at" } : usageTime;
   for (const recipe of queryRecipes.filter(recipe => recipe.destination && recipe.destination.topic !== "parallelism")) {

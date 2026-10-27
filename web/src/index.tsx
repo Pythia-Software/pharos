@@ -22,7 +22,8 @@ import { readRecordKeywordSearch, recordKeywordParameter, recordKeywordRequest }
 import { SearchResultsDisplay } from "./search-results-view";
 import { queryForSearchResultsView, searchResultsView, type SearchResultsView } from "./search-results-view-model";
 import { newKeywordSearch, readTextSearch, textFindParameters, searchSentence, withheldBatch, type TextSearchDraft } from "./text-search-model";
-import { CarbonImpact } from "./carbon-impact";
+import { CarbonImpact, useLegacyCarbonFilters } from "./carbon-impact";
+import { carbonCatalogShape } from "./carbon-analysis-catalog";
 import { usageSummaryURL } from "./usage-summary-links";
 import { readConcurrencySettings } from "./concurrency-settings";
 import { pushMachineLocation, useMachineQueryNavigation } from "./machine-location";
@@ -96,6 +97,8 @@ import { DashboardAnalysis } from "./dashboard-analysis";
 import { AnalysisTrend, type AmountFormat } from "./dashboard-trend";
 import { normalizeAnalysis, readAnalysisLink, switchView, validAnalysisState, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { tokenAnalysisCatalog } from "./token-analysis-catalog";
+import { humanAnalysisCatalog, humanWhere, writingGroups } from "./human-analysis-catalog";
+import { parallelismAnalysisCatalog } from "./parallelism-analysis-catalog";
 import type { LocalRows } from "./analysis-request";
 
 type Row = Record<string, any>;
@@ -1158,15 +1161,6 @@ function AgentTimeSummary({ where, selected = false }: { where: WhereTerm[]; sel
   </div>;
 }
 
-// Writing categories as the page reports them. Each group lists the
-// message_authorship categories it combines (see docs/human-authorship.md).
-const writingGroups = [
-  { key: "typed", label: "Typed", description: "Written or dictated by you", categories: ["typed"], color: "var(--sea)" },
-  { key: "pasted", label: "Likely pasted", description: "Code, logs, tables, agent-style formatting, or sent faster than typing", categories: ["pasted"], color: "var(--heat-1)" },
-  { key: "copied", label: "Copied or re-sent", description: "Matches agent output from the previous 48 hours, or anything you sent before", categories: ["quoted", "resent"], color: "var(--gold)" },
-  { key: "prompts", label: "Templates and attachments", description: "Repeated one-click prompts, slash commands, attachment references", categories: ["template", "attachment"], color: "var(--heat-2)" },
-  { key: "machine", label: "Harness and automation", description: "Harness instructions and prompts sent by scripts or other agents", categories: ["harness", "automated"], color: "var(--muted)" },
-];
 type WritingCounts = Record<string, number | string | null>;
 type WritingSeries = { works: number; daily: WritingCounts[]; hourly?: WritingCounts[]; totals: WritingCounts };
 type AuthorshipStatus = { built_at: string | null; running: boolean; stale: boolean; error: string | null };
@@ -1234,14 +1228,13 @@ function useWritingSeries(body: object | null, reload: number) {
 const defaultWritingChart = { period: "day" as ChartPeriod, scope: "typed" as "typed" | "all", split: "kind" as WritingSplit, hours: 6, days: 3, rollingPeriods: 0, scale: defaultChartScale, display: "interval" as ChartDisplay };
 type WritingChartView = typeof defaultWritingChart & ChartPresentation;
 const validWritingChart = (value: WritingChartView) => Object.hasOwn(chartPeriods, value.period) && validPeriodCount(value.hours) && validPeriodCount(value.days) && ["typed", "all"].includes(value.scope) && writingSplits.some(([option]) => option === value.split) && validRollingPeriods(value.rollingPeriods) && validChartScale(value.scale) && validChartDisplay(value.display) && validChartPresentation(value);
-function WritingPanel({ where, onFilter, status, reload, dashboard = false, viewOverride, onViewChange }: { where: WhereTerm[]; onFilter: FilterChange; status: AuthorshipStatus | null; reload: number; dashboard?: boolean; viewOverride?: WritingChartView; onViewChange?: (next: Partial<WritingChartView>) => void }) {
+// The legacy Human Words page's chart, over the series endpoint: its table
+// lists works (the writing dataset), whose filters the chart follows. The
+// Human Words dashboard reads messages through the analysis engine.
+function WritingPanel({ where, onFilter, status, reload }: { where: WhereTerm[]; onFilter: FilterChange; status: AuthorshipStatus | null; reload: number }) {
   const originRevision = useOriginMetadata();
-  const [savedView, setView] = useState<WritingChartView>(() => readStored(writingViewKey, { ...defaultWritingChart, period: "week" as ChartPeriod }, validWritingChart));
-  const view = viewOverride ?? savedView;
-  const update = (next: Partial<typeof view>) => {
-    if (onViewChange) { onViewChange(next); return; }
-    setView(previous => { const merged = { ...previous, ...next }; store(writingViewKey, merged); return merged; });
-  };
+  const [view, setView] = useState<WritingChartView>(() => readStored(writingViewKey, { ...defaultWritingChart, period: "week" as ChartPeriod }, validWritingChart));
+  const update = (next: Partial<typeof view>) => setView(previous => { const merged = { ...previous, ...next }; store(writingViewKey, merged); return merged; });
   const kinds = view.selection ?? { values: [], excluded: false };
   const seriesLimit = view.seriesLimit ?? 15;
   const periodCount = chartPeriodCount(view);
@@ -1297,12 +1290,11 @@ function WritingPanel({ where, onFilter, status, reload, dashboard = false, view
   const recentTyped = recent.reduce((sum, day) => sum + (Number(day.typed_words) || 0), 0), recentMessages = recent.reduce((sum, day) => sum + (Number(day.typed_messages) || 0), 0);
   const building = status !== null && !status.built_at;
   const card = (label: string, value: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>;
-  const amount = (value: string) => building ? "Building…" : data.loading ? "Loading…" : data.error ? "Unavailable" : value;
   const unit = periodLabel(view.period, periodCount);
   const allChars = writingGroups.reduce((sum, group) => sum + groupTotal(totals, group, "chars"), 0);
   return <section className="writing-panel" aria-label="Human Words">
     {data.error ? <div className="query-table-error">{data.error}</div> : null}
-    {!dashboard ? <div className="mcp-metrics usage-cards">
+    <div className="mcp-metrics usage-cards">
       {building ? card("Words you wrote", "Building…", "Classifying every retained user message") : <>
         {card("Words you wrote", compactNumber(typed), `Up to ${compactNumber(typed + pasted)} including text that only looks pasted${totals.first_day ? ` · since ${totals.first_day}` : ""}`)}
         {card("Last 30 days", compactNumber(recentTyped), `${recentMessages.toLocaleString()} messages with typed text`)}
@@ -1310,7 +1302,7 @@ function WritingPanel({ where, onFilter, status, reload, dashboard = false, view
         {card("Words per message", typedMessages ? Math.round(typed / typedMessages).toLocaleString() : "—", "average typed words, where any were typed")}
         {card("Novels", (typed / 90000).toFixed(1), "at 90,000 words each")}
       </>}
-    </div> : null}
+    </div>
     <StackedColumns title={`${cumulative ? "Cumulative " : ""}${view.scope === "typed" ? "Typed words" : "Words of user input"}${cumulative ? "" : ` per ${unit}`}${split ? ` by ${writingSplits.find(([value]) => value === split)?.[1].toLowerCase()}` : ""}`}
       controls={<>
         <ChartSelect label="Metric" value={view.scope} options={[["typed", "Typed words"], ["all", "All user input"]]} onChange={scope => update({ scope })} />
@@ -1328,15 +1320,6 @@ function WritingPanel({ where, onFilter, status, reload, dashboard = false, view
       seriesHref={(range, item) => dashboardChartURL({ dataset: "writing", where: range.rolling ? requestedWhere : where, time: writingTime, range, series: item, split,
         fields: split ? [view.scope === "typed" ? "typed_words" : "user_words"] : writingGroups.find(group => group.key === item.key)?.categories.map(category => `${category}_words`),
         current: new URLSearchParams(location.search) })} />
-    {dashboard ? <>
-      <div className="mcp-metrics dashboard-stats" aria-label="Human Words summary" aria-busy={data.loading}>
-        {card("Words you wrote", amount(compactNumber(typed)), "typed or dictated in the selected period")}
-        {card("Messages with your writing", amount(typedMessages.toLocaleString()), `of ${(Number(totals.messages) || 0).toLocaleString()} classified user turns`)}
-        {card("Words per message", amount(typedMessages ? Math.round(typed / typedMessages).toLocaleString() : "—"), "average over messages containing your writing")}
-        {card("Works with input", amount((series?.works ?? 0).toLocaleString()), "matching works with classified input in this period")}
-      </div>
-      {status ? <p className="usage-dashboard-note" role="status">{status.error ? `Classification update failed: ${status.error}` : status.running ? "Updating text classifications…" : status.stale ? "Text classifications need an update." : status.built_at ? `Text classified ${new Date(status.built_at).toLocaleString()}` : "Waiting for text classification."}</p> : null}
-    </> : null}
     <div className="writing-mix">
       <h3>Where user-turn text came from</h3>
       <p className="muted">All classified user-turn text in the selected dates and conversation filters. Shares use characters.</p>
@@ -1473,21 +1456,53 @@ function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
   if (topic === "parallelism") return <ParallelismUsageDashboard />;
   if (topic === "tools") return <ToolsUsageDashboard />;
   if (topic === "mcp") return <MCPUsageDashboard />;
-  if (topic === "carbon") return <CarbonImpact queryLinks={({ where, view }) => <>
-    <UsageDashboardLinks schema={schemas.usage} dataset="usage" query={{ ...EMPTY_QUERY, where, aggregations: [sum(view.metric === "energy" ? "energy_wh" : "co2e_g", [isHourly(view.period) ? "hour" : view.period === "days" ? "day" : view.period, ...(view.split === "type" ? [] : [view.split === "tier" ? "carbon_tier" : view.split])], view.metric === "energy" ? "Estimated Wh" : "Estimated CO₂e (g)")] }} currentURL="/analyze?analyze_view=carbon" />
-    <p className="usage-dashboard-note">Grouped rows show total estimates with your current Carbon assumptions. Token-type components are combined; the chart keeps their breakdown.</p>
-  </>} />;
+  if (topic === "carbon") return <CatalogDashboard catalog={carbonCatalogShape} dataset="usage" name="carbon" defaults={{ metric: "co2", split: "type", period: "day" }} currentURL="/analyze?analyze_view=carbon"
+    frame={(views, where, onFilter) => <CarbonImpact where={where} onFilter={onFilter} chart={(catalog, format) => views(catalog, carbonAmount(format))} />} />;
   if (topic === "time") return <AgentTimeDashboard />;
   return <SkillsDashboard />;
 }
 
+// CO₂e and electricity in the Carbon page's units; other amounts compactly.
+const carbonAmount = (format: (value: number, metric: string) => string): AmountFormat => (value, measure) => measure.unit === "g CO₂e" ? format(value, "co2") : measure.unit === "Wh" ? format(value, "energy") : compactNumber(value);
+
+// The legacy Carbon Impact page: the same chart over its own saved filters
+// and chart preference, without the dashboard's views or links.
+const carbonChartKey = "pharos-carbon-chart";
+function LegacyCarbon() {
+  const [where, onFilter] = useLegacyCarbonFilters();
+  const [chart, setChart] = useState<AnalysisState>(() => readStored(carbonChartKey, { metric: "co2", split: "type", period: "week" } as AnalysisState, view => validAnalysisState(carbonCatalogShape, { ...view, view: "trend" })));
+  const update = (next: Partial<AnalysisState>) => setChart(previous => { const merged = { ...previous, ...next }; store(carbonChartKey, merged); return merged; });
+  return <CarbonImpact where={where} onFilter={onFilter} chart={(catalog, format) => <AnalysisTrend catalog={catalog} schema={schemas.usage} dataset="usage" state={chart} where={where} onChange={update} onFilter={onFilter} format={carbonAmount(format)} links={false} />} />;
+}
+
+// The service builds parallelism records with the saved counting and gap
+// settings, so the engine's views follow them: each save rebuilds the
+// catalog, whose population names them. A link may open the ribbon with
+// other settings it has not saved; the note says so.
+function useSavedParallelism() {
+  const read = () => { const { counting, gap } = readConcurrencySettings(); return { counting, gap }; };
+  const [settings, setSettings] = useState(read);
+  useEffect(() => {
+    const saved = (event: Event) => { if (Object.hasOwn((event as CustomEvent<{ set?: object }>).detail?.set ?? {}, "pharos-concurrency-v1")) setSettings(read()); };
+    window.addEventListener("pharos:preferences-saved", saved);
+    return () => window.removeEventListener("pharos:preferences-saved", saved);
+  }, []);
+  return settings;
+}
+
 function ParallelismUsageDashboard() {
   const [selection, setSelection] = useState<ConcurrencySelection | null>(null);
-  return <>
-    <ConcurrencyPanel routeParameter="analyze_parallelism" onSelection={setSelection} />
-    {selection ? <UsageDashboardLinks schema={schemas.parallelism} dataset="parallelism" query={parallelismSelectionQuery(selection)} currentURL="/analyze?analyze_view=tokens&machine_view=parallelism" /> : null}
-    <p className="usage-dashboard-note">The query view contains the hourly occupancy records touching the selected range, with the same repository, counting, gap, and ribbon selection. Those records describe threaded activity; model-only timing remains in the chart.</p>
-  </>;
+  const saved = useSavedParallelism();
+  const catalog = useMemo(() => parallelismAnalysisCatalog(saved), [saved.counting, saved.gap]);
+  const ribbon = selection?.settings, differs = ribbon && (ribbon.counting !== saved.counting || ribbon.gap !== saved.gap);
+  return <CatalogDashboard catalog={catalog} dataset="parallelism" name="parallelism" defaults={{ metric: "agent_hours", split: "level_band", period: "day" }} currentURL="/analyze?analyze_view=tokens&machine_view=parallelism"
+    before={<>
+      <ConcurrencyPanel routeParameter="analyze_parallelism" onSelection={setSelection} />
+      {selection ? <UsageDashboardLinks schema={schemas.parallelism} dataset="parallelism" query={parallelismSelectionQuery(selection)} currentURL="/analyze?analyze_view=tokens&machine_view=parallelism" /> : null}
+      <p className="usage-dashboard-note">The query view contains the hourly occupancy records touching the selected range, with the same repository, counting, gap, and ribbon selection. Those records describe threaded activity; model-only timing remains in the chart.</p>
+      <h3 className="usage-dashboard-heading">Parallel activity over time</h3>
+      {differs ? <p className="usage-dashboard-note" role="status">The ribbon uses this link’s counting and gap; the views below use your saved settings, with which the service builds its records. Change a setting in the ribbon to save it.</p> : null}
+    </>} />;
 }
 
 // Over time and the analysis views share the dashboard's filters and range;
@@ -1515,21 +1530,41 @@ function TokenUsageDashboard() {
   </AnalysisTrend>;
 }
 
+// Human Words reads messages (writing_messages) through the engine. Text
+// classification runs in the background; each finished build reruns the
+// dashboard's queries, and the note says where it stands.
 function HumanUsageDashboard() {
-  const state = useUsageDashboardState<WritingChartView>(defaultWritingChart, validWritingChart, writingTime);
   const [reload, setReload] = useState(0);
-  useEffect(() => {
-    const refresh = () => setReload(value => value + 1);
-    window.addEventListener("pharos:usage-refresh", refresh);
-    return () => window.removeEventListener("pharos:usage-refresh", refresh);
-  }, []);
-  const status = useAuthorshipStatus(() => window.dispatchEvent(new Event("pharos:usage-refresh")));
-  if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
+  const status = useAuthorshipStatus(() => { setReload(value => value + 1); window.dispatchEvent(new Event("pharos:usage-refresh")); });
+  return <CatalogDashboard catalog={humanAnalysisCatalog} dataset="writing_messages" name="human" defaults={{ metric: "typed", split: "none", period: "day" }} readWhere={humanWhere}
+    summary={where => <HumanWordsSummary where={where} status={status} />}
+    panels={(where, onFilter) => <>
+      <p className="usage-dashboard-note">Typed and dictated words are distinguished from pastes, copied agent output, templates, attachments, harness instructions and automated prompts. Select a column, bar or box to open its messages; each message is highlighted by where its text came from.</p>
+      <MessageMix where={where} reload={reload} onFilter={onFilter} />
+    </>} />;
+}
+
+// The dashboard's population, whatever the chart draws.
+const humanSummaryMetrics: AggregationClause[] = [
+  { id: "typed", op: "sum", field: "typed_words", groupBy: [] },
+  { id: "typed_messages", op: "sum", expression: "SUM(IF([typed_words]>0,1,0))", groupBy: [] },
+  { id: "messages", op: "count", groupBy: [] },
+  { id: "works", op: "count_distinct", field: "work_id", groupBy: [] },
+];
+function HumanWordsSummary({ where, status }: { where: WhereTerm[]; status: AuthorshipStatus | null }) {
+  const result = useMetrics("writing_messages", where, humanSummaryMetrics);
+  const value = (id: string) => Number(result.metrics.find(metric => metric.id === id)?.buckets[0]?.value) || 0;
+  const typed = value("typed"), typedMessages = value("typed_messages");
+  const building = status !== null && !status.built_at;
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{building ? "Building…" : result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
   return <>
-    <WritingPanel dashboard where={state.where} onFilter={state.onFilter} status={status} reload={reload} viewOverride={state.view} onViewChange={state.update} />
-    <UsageDashboardLinks schema={schemas.writing} dataset="writing" query={{ ...EMPTY_QUERY, where: state.where, aggregations: [sum(state.view.scope === "typed" ? "typed_words" : "user_words", [state.view.split === "kind" ? "repository_name" : state.view.split], state.view.scope === "typed" ? "Typed words per conversation group" : "User input per conversation group")] }} currentURL="/analyze?analyze_view=writing" />
-    <p className="usage-dashboard-note">Series links open contributing workspaces, whose totals cover their whole conversations. Follow a workspace’s Messages link for its individual messages. The graph restricts writing to the selected dates.</p>
-    <p className="usage-dashboard-note">Typed and dictated words are distinguished from pastes, harness instructions, and other supplied text.</p>
+    <div className="mcp-metrics dashboard-stats" aria-label="Human Words summary" aria-busy={result.loading}>
+      {card("Words you wrote", compactNumber(typed), "typed or dictated in the selected period")}
+      {card("Messages with your writing", typedMessages.toLocaleString(), `of ${value("messages").toLocaleString()} classified user messages`)}
+      {card("Words per message", typedMessages ? Math.round(typed / typedMessages).toLocaleString() : "—", "average over messages containing your writing")}
+      {card("Works with input", value("works").toLocaleString(), "works with classified messages in this period")}
+    </div>
+    {status ? <p className="usage-dashboard-note" role="status">{status.error ? `Classification update failed: ${status.error}` : status.running ? "Updating text classifications…" : status.stale ? "Text classifications need an update." : status.built_at ? `Text classified ${new Date(status.built_at).toLocaleString()}` : "Waiting for text classification."}</p> : null}
   </>;
 }
 
@@ -1540,20 +1575,35 @@ const durationText = (ms: number) => Math.abs(ms) >= 3_600_000 ? `${(ms / 3_600_
 // Durations in hours where the measure says so (Agent Time's recorded time),
 // otherwise as a duration; counts compactly.
 const catalogAmount: AmountFormat = (value, measure) => measure.format.kind === "duration" ? measure.unit === "hours" ? compactNumber(value / 3_600_000) : durationText(value) : measure.unit === "USD" ? formatUSD(value) : compactNumber(value);
-function CatalogDashboard({ catalog, dataset, name, defaults, currentURL, legacyInAnalysis = false, before, after, summary }: {
+// readWhere reads filters an older link wrote in another dataset's fields
+// (Human Words' works); it returns where itself when nothing changes.
+// panels follow the chart and share the dashboard's filters. frame places
+// the views inside a dashboard's own page (Carbon's filters and estimate),
+// drawing them with the catalog it builds from the user's settings; catalog
+// then only reads links.
+type CatalogViews = (catalog: AnalysisCatalog, format?: AmountFormat) => React.ReactNode;
+function CatalogDashboard({ catalog, dataset, name, defaults, currentURL, legacyInAnalysis = false, before, after, summary, panels, readWhere, format = catalogAmount, frame }: {
   catalog: AnalysisCatalog; dataset: UsageDataset; name: string; defaults: AnalysisState; currentURL?: string; legacyInAnalysis?: boolean;
   before?: React.ReactNode; after?: React.ReactNode; summary?: (where: WhereTerm[], selected: boolean) => React.ReactNode;
+  panels?: (where: WhereTerm[], onFilter: FilterChange) => React.ReactNode; readWhere?: (where: WhereTerm[]) => WhereTerm[]; format?: AmountFormat;
+  frame?: (views: CatalogViews, where: WhereTerm[], onFilter: FilterChange) => React.ReactNode;
 }) {
-  const state = useUsageDashboardState<AnalysisState>(defaults, view => validAnalysisState(catalog, view), catalog.time, (view, where) => readAnalysisLink(catalog, view, where));
+  const state = useUsageDashboardState<AnalysisState>(defaults, view => validAnalysisState(catalog, view), catalog.time, (view, where) => readAnalysisLink(catalog, view, readWhere ? readWhere(where) : where));
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
-  const choose = (next: AnalysisView) => state.update(switchView(catalog, state.view, next));
   const schema = schemas[dataset];
+  const views: CatalogViews = (drawn, amount = format) => {
+    const choose = (next: AnalysisView) => state.update(switchView(drawn, state.view, next));
+    return <>
+      {(state.view.view ?? "trend") !== "trend"
+        ? <DashboardAnalysis catalog={drawn} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter} legacyURL={legacyInAnalysis ? currentURL : undefined}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</DashboardAnalysis>
+        : <AnalysisTrend catalog={drawn} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter} format={amount} currentURL={currentURL}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</AnalysisTrend>}
+      <DashboardRefresh />
+      {panels?.(state.where, state.onFilter)}
+    </>;
+  };
   return <section className={`usage-catalog-dashboard usage-${name}-dashboard`}>
     {before}
-    {(state.view.view ?? "trend") !== "trend"
-      ? <DashboardAnalysis catalog={catalog} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter} legacyURL={legacyInAnalysis ? currentURL : undefined}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</DashboardAnalysis>
-      : <AnalysisTrend catalog={catalog} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter} format={catalogAmount} currentURL={currentURL}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</AnalysisTrend>}
-    <DashboardRefresh />
+    {frame ? frame(views, state.where, state.onFilter) : views(catalog)}
     {after}
   </section>;
 }
@@ -1644,7 +1694,7 @@ function LegacyUsagePage() {
     {view === "conversations" ? <QuerySurface dataset="conversation_activity" /> : view === "tokens" ? shared ? <TokenUsage /> : <MachineActivity tokens={(where, applied, onTimeRangeChange) => <TokenUsage scopeWhere={where} appliedScope={applied} onTimeRangeChange={onTimeRangeChange} />} calls={props => <div className="machine-call-surface"><QuerySurface dataset="tool_calls" namespace="machine_calls" {...props}
       controls={(api, builder) => <div id="machineRawCalls" className="machine-raw-calls"><div className="machine-panel-heading"><div><h3>Raw calls backing this selection</h3><p className="muted">{api.total?.toLocaleString() ?? "…"} matching calls · Full invocations, timings, statuses, and source conversations. Filters here also update the charts and analytics.</p></div></div>{builder}</div>}
       trailing={row => <span className="machine-inline-actions"><button type="button" className="mcp-detail-button" onClick={() => setSelectedCall({ id: String(row.id) })}>Details</button>{row.workspace_id ? <a href={`/work/${encodeURIComponent(row.workspace_id)}?conversation=${encodeURIComponent(row.conversation_id ?? "")}`}>Conversation ↗</a> : null}</span>} /></div>}
-      parallelism={() => <div className="machine-call-surface"><QuerySurface dataset="parallelism" controls={(api, builder) => <div className="machine-raw-calls"><div className="machine-panel-heading"><div><h3>Parallel activity records</h3><p className="muted">{api.total?.toLocaleString() ?? "…"} hour-by-agent records · Estimated from transcript timestamps with your Parallelism counting and gap settings. Group, filter and chart them like any table.</p></div></div>{builder}</div>} /></div>} /> : view === "writing" ? <WritingUsage onStatus={setStatus} /> : <CarbonImpact />}
+      parallelism={() => <div className="machine-call-surface"><QuerySurface dataset="parallelism" controls={(api, builder) => <div className="machine-raw-calls"><div className="machine-panel-heading"><div><h3>Parallel activity records</h3><p className="muted">{api.total?.toLocaleString() ?? "…"} hour-by-agent records · Estimated from transcript timestamps with your Parallelism counting and gap settings. Group, filter and chart them like any table.</p></div></div>{builder}</div>} /></div>} /> : view === "writing" ? <WritingUsage onStatus={setStatus} /> : <LegacyCarbon />}
     {selectedCall ? <ToolCallDialog id={selectedCall.id} onClose={() => setSelectedCall(null)} /> : null}
   </div></UsageChartColorsProvider>;
 }
