@@ -3,7 +3,9 @@ package archive
 import (
 	"context"
 	"fmt"
+	"maps"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -33,7 +35,7 @@ var searchMessagesTool = map[string]any{
 
 var archiveStatusTool = map[string]any{
 	"name":        "get_archive_status",
-	"description": "Inspect archive freshness and coverage without starting capture or indexing. Lists known catalog sources across hosts with capture, index and successful sync times, errors, pending counts and stale reasons. Summary status and stale_sources refer to this host; other-host totals are separate. Page items with next_offset. Unknown capture times or coverage are not proof of completeness.",
+	"description": "Inspect archive freshness and coverage without starting capture or indexing. Lists known catalog sources across hosts with capture, index and successful sync times, errors, pending counts and stale reasons. Summary status and stale_sources refer to this host; other-host totals are separate. Page items with next_offset. Unknown capture times or coverage are not proof of completeness. domains is the freshness of each data domain on this Mac (conversations per source, captures, the Search view, search indexes, library-wide analyses, findings, the upgrade, backups): state current, behind or unknown, why (reason, e.g. indexing now or deferred by scheduled indexing), and catching_up, the running operation that will bring it current; running lists those operations. unknown means Pharos cannot tell, not that the data is stale.",
 	"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 		"source":            map[string]any{"type": "string", "description": "Exact source name."},
 		"host_id":           map[string]any{"type": "string"},
@@ -384,8 +386,65 @@ func (c *Catalog) archiveStatus(args map[string]any) (map[string]any, error) {
 	result["items"] = items[offset:min(total, offset+limit)]
 	result["total"], result["offset"], result["next_offset"] = total, offset, nil
 	result["capture_times_available"] = root != ""
-	if err := fitAuditPage(result, mcpBudget(args, 1800), offset, total); err != nil {
-		return nil, err
+	return fitArchiveStatus(c, result, mcpBudget(args, 1800), offset, total)
+}
+
+// fitArchiveStatus adds the freshness ledger (docs/background-work.md §5)
+// to the page: domains, each with its state, reason and the operation
+// catching it up, and running, the open operations affecting them. The
+// older fields are unchanged. When the budget cannot hold every domain, the
+// current ones are left out first, then the ledger; the page itself is
+// fitted as before.
+func fitArchiveStatus(c *Catalog, result map[string]any, budget, offset, total int) (map[string]any, error) {
+	rows, ops := c.mcpFreshness(context.Background())
+	domains, behind := []map[string]any{}, []map[string]any{}
+	for _, row := range rows {
+		domain := map[string]any{"domain": row.Domain, "state": row.Behind.State}
+		for key, value := range map[string]*string{"as_of": row.AsOf, "unit": row.Behind.Unit, "catching_up": row.CatchingUp, "next": row.Next} {
+			if value != nil {
+				domain[key] = *value
+			}
+		}
+		if row.Behind.Count != nil {
+			domain["count"] = *row.Behind.Count
+		}
+		if row.Reason != nil {
+			domain["reason"], domain["reason_text"] = row.Reason.Code, row.Reason.Text
+		}
+		domains = append(domains, domain)
+		if row.Behind.State != freshCurrent {
+			behind = append(behind, domain)
+		}
 	}
-	return result, nil
+	running := []map[string]any{}
+	for _, op := range ops {
+		affected := []string{}
+		for _, row := range rows {
+			if slices.ContainsFunc(op.Affects, func(pattern string) bool { return affectsDomain(pattern, op.Subject, currentHost().ID, row.Domain) }) {
+				affected = append(affected, row.Domain)
+			}
+		}
+		if len(affected) > 0 {
+			running = append(running, map[string]any{"id": op.ID, "kind": op.Kind, "label": op.Label, "state": op.State, "started_at": formatTime(op.Started), "domains": affected})
+		}
+	}
+	items := result["items"].([]map[string]any)
+	var lastErr error
+	for _, attempt := range []func(map[string]any){
+		func(page map[string]any) { page["domains"], page["running"] = domains, running },
+		func(page map[string]any) {
+			page["domains"], page["running"], page["domains_partial"] = behind, running, true
+		},
+		func(page map[string]any) {
+			page["domains_omitted"] = "increase max_output_tokens to see the freshness domains"
+		},
+	} {
+		page := maps.Clone(result)
+		page["items"] = slices.Clone(items)
+		attempt(page)
+		if lastErr = fitAuditPage(page, budget, offset, total); lastErr == nil {
+			return page, nil
+		}
+	}
+	return nil, lastErr
 }

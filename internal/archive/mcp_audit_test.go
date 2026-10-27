@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -448,6 +449,47 @@ func TestMCPArchiveStatusEmptyAndCurrent(t *testing.T) {
 	result = auditCall(t, catalog, "get_archive_status", map[string]any{"stale_only": true})
 	if result["status"] != "current" || integer(result["total"]) != 0 {
 		t.Fatalf("current sources not recognized: %#v", result)
+	}
+}
+
+// get_archive_status adds the freshness ledger: every domain with its state
+// and reason, and the operations open in the journal that affect them, so an
+// agent can tell "behind because indexing runs now" from "behind because it
+// is broken". A row of a process that has exited is not running work. A
+// budget too small for the ledger leaves it out rather than failing.
+func TestMCPArchiveStatusListsDomainsAndRunningWork(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	host := currentHost().ID
+	execTx(t, catalog.DB,
+		"INSERT INTO source_states(host_id,source_name,kind,capability,coverage,last_attempt_at,last_success_at,updated_at) VALUES("+sqlQuote(host)+",'codex','codex','read','complete',"+sqlQuote(now())+","+sqlQuote(now())+","+sqlQuote(now())+")",
+		"INSERT INTO sync_deferred(name,generation,completed_generation,changed_at) VALUES('findings',3,1,"+sqlQuote(now())+")",
+		fmt.Sprintf(`INSERT INTO operation_journal(id,root_id,kind,trigger,host_id,process,pid,instance,state,started_at,updated_at,detail_json)
+			VALUES('op-live','op-live','index.changes.manual','user',%s,'service',%d,'svc','running',%s,%s,'{}')`, sqlQuote(host), os.Getpid(), sqlQuote(now()), sqlQuote(now())),
+		fmt.Sprintf(`INSERT INTO operation_journal(id,root_id,kind,trigger,host_id,process,pid,instance,state,started_at,updated_at,detail_json)
+			VALUES('op-dead','op-dead','analysis.authorship','read',%s,'service',%d,'gone','running',%s,%s,'{}')`, sqlQuote(host), 1<<22-1, sqlQuote(now()), sqlQuote(now())))
+	result := auditCall(t, catalog, "get_archive_status", map[string]any{"max_output_tokens": 4000})
+	if result["status"] != "current" || integer(result["total"]) != 1 {
+		t.Fatalf("the older fields are unchanged: %#v", result)
+	}
+	domains := map[string]map[string]any{}
+	for _, domain := range result["domains"].([]map[string]any) {
+		domains[firstString(domain["domain"])] = domain
+	}
+	// Indexed a minute ago, scheduled indexing off: unknown, and the open
+	// index is catching it up.
+	if codex := domains["conv:codex"]; codex["state"] != freshUnknown || codex["reason"] != "indexing" || codex["catching_up"] != "op-live" || codex["as_of"] == nil {
+		t.Fatalf("conv:codex: %#v", codex)
+	}
+	if findings := domains["findings"]; findings["state"] != freshBehind || findings["reason"] != "running" || findings["catching_up"] != "op-live" {
+		t.Fatalf("findings are behind and the open manual index catches them up: %#v", findings)
+	}
+	running := result["running"].([]map[string]any)
+	if len(running) != 1 || running[0]["id"] != "op-live" || !slices.Contains(running[0]["domains"].([]string), "findings") {
+		t.Fatalf("running lists the live operation and the domains it affects, not the dead one: %#v", running)
+	}
+	small := auditCall(t, catalog, "get_archive_status", map[string]any{"max_output_tokens": 450})
+	if small["domains"] != nil && small["domains_partial"] != true {
+		t.Fatalf("a small budget keeps the page and sheds the ledger: %#v", small)
 	}
 }
 
