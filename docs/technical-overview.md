@@ -25,7 +25,7 @@ inheritance contract. Unknown placement remains visible in totals.
 - No source is reclaimed. TL1 reclamation is mothballed and excluded from the default build.
 - The archive never calls `rm -rf`, `git worktree remove`, `git worktree prune`, or `git gc`. TL1 owns the worker handshake, lock/lease, atomic recheck, and exact-resource removal.
 - Preservation must fit the 100,000,000-byte logical cap, reside on the pinned volume, and pass a complete hash/reopen check before acknowledgement.
-- Heavy work is deferred unless CPU, memory, and authoritative TL1/agent activity signals all say the machine is truly idle. Unknown owner activity means “not idle.”
+- Nothing gates background work on the machine being idle. Index changes runs on its interval, maintenance runs whenever it has work, and only capture copies, local backups and adoption run at low (utility) disk priority. The machine's load average is recorded only as a forecasting feature.
 
 ## Quick start
 
