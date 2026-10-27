@@ -81,7 +81,9 @@ func (j *cloudJobs) job() *cloudJob {
 // stages files under staging_root, which is on the library's drive, so an
 // eject stops it. Its kind is backup, which every client already renders.
 func cloudActivity(job *cloudJob) libraryActivity {
-	activity := libraryActivity{ID: "cloud:" + job.id, Kind: "backup", StartedAt: job.startedAt, Writes: true}
+	// The operation is part of the ID: a verification follows its upload
+	// with the same run ID, and must not inherit the upload's estimate.
+	activity := libraryActivity{ID: "cloud:" + job.operation + ":" + job.id, Kind: "backup", StartedAt: job.startedAt, Writes: true}
 	switch job.operation {
 	case "connect":
 		activity.Label = "Testing a cloud backup destination"
@@ -282,32 +284,20 @@ func (s *Server) postCloud(w http.ResponseWriter, r *http.Request, body map[stri
 				return
 			}
 		}
+		// The test runs inside this request, which a release waits for, so
+		// the service's lifetime cancels it too: an eject stops the test
+		// instead of waiting up to 3 minutes for it.
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
-		defer cancel()
+		stopOnRelease := context.AfterFunc(s.life.ctx, cancel)
+		defer func() { stopOnRelease(); cancel() }()
 		if err = s.cloud.begin("connect", "connect", "", cancel); err != nil {
 			writeError(w, err, 409)
 			return
 		}
 		defer s.cloud.end()
-		uploader, err := newCloudUploader(ctx, d)
-		if err == nil {
-			dir, e := cloudWorkDir(s.Config(), "cloud-connect-")
-			if e != nil {
-				err = e
-			} else {
-				defer os.RemoveAll(dir)
-				probe := make([]byte, 32)
-				_, err = rand.Read(probe)
-				if err == nil {
-					err = os.WriteFile(filepath.Join(dir, "probe"), probe, 0600)
-				}
-				if err == nil {
-					_, err = uploader.upload(ctx, p.Object+".roundtrip-test", filepath.Join(dir, "probe"), func(int64) {})
-				}
-				if err == nil {
-					err = uploader.checkRestricted(ctx, p.Object+".roundtrip-test")
-				}
-			}
+		err = cloudConnectProbe(ctx, s.Config(), d, p.Object+".roundtrip-test")
+		if err == nil && ctx.Err() != nil {
+			err = ctx.Err()
 		}
 		if err != nil {
 			writeError(w, err, 400)
@@ -429,6 +419,32 @@ func (s *Server) postCloud(w http.ResponseWriter, r *http.Request, body map[stri
 		writeError(w, errors.New("unknown cloud operation"), 404)
 	}
 }
+
+// cloudConnectProbe uploads a small file to the destination's test object
+// and checks the credential cannot read it back; tests replace it.
+var cloudConnectProbe = func(ctx context.Context, config Config, d cloudDestination, object string) error {
+	uploader, err := newCloudUploader(ctx, d)
+	if err != nil {
+		return err
+	}
+	dir, err := cloudWorkDir(config, "cloud-connect-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	probe := make([]byte, 32)
+	if _, err = rand.Read(probe); err != nil {
+		return err
+	}
+	if err = os.WriteFile(filepath.Join(dir, "probe"), probe, 0600); err != nil {
+		return err
+	}
+	if _, err = uploader.upload(ctx, object, filepath.Join(dir, "probe"), func(int64) {}); err != nil {
+		return err
+	}
+	return uploader.checkRestricted(ctx, object)
+}
+
 func (s *Server) uploadCloudRun(ctx context.Context, d cloudDestination, run cloudRun) {
 	var result error
 	var manifest *cloudManifest

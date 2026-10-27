@@ -253,10 +253,10 @@ func TestLibraryStatusListsEverythingHoldingTheLibrary(t *testing.T) {
 		server.cloud.report("run-1", "Uploading archive", 512, 2048)
 		status = expect("backup")
 		activity := status["activities"].([]any)[0].(map[string]any)
-		if status["writing"] != true || activity["label"] != job.label || activity["writes"] != true || activity["on_eject"] == "" || activity["id"] != "cloud:run-1" {
+		if status["writing"] != true || activity["label"] != job.label || activity["writes"] != true || activity["on_eject"] == "" || activity["id"] != "cloud:"+job.operation+":run-1" {
 			t.Fatalf("cloud %s: %#v", job.operation, status)
 		}
-		if job.operation == "upload" && activity["detail"] != "Uploading archive · 512 B of 2.0 KB" {
+		if work, _ := activity["work"].(map[string]any); job.operation == "upload" && (work["done"] != float64(512) || work["total"] != float64(2048) || work["unit"] != "byte") {
 			t.Fatalf("cloud upload progress: %#v", activity)
 		}
 		server.cloud.end()
@@ -292,6 +292,39 @@ func TestLibraryStatusListsEverythingHoldingTheLibrary(t *testing.T) {
 	expect()
 	if catalog.libraryCatchingUp() {
 		t.Fatal("still catching up once nothing is dirty")
+	}
+
+	// A cloud connection test runs inside its request, which a release
+	// waits for; the release cancels the test instead of timing out.
+	setup := t.TempDir()
+	plan := cloudConfig{Provider: "gcp", Region: "us-central1", Name: "Test destination", Bucket: "pharos-test-bucket", Object: "pharos/library.tar.zst", Identity: "pharos-uploader", Project: "pharos-example", StorageClass: "STANDARD"}
+	draft, _ := json.Marshal(plan)
+	writeSourceFile(t, filepath.Join(setup, "destination-draft.json"), string(draft))
+	writeSourceFile(t, filepath.Join(setup, "upload-credential.json"), `{"fixture":"upload-only"}`)
+	probing := make(chan struct{})
+	override(t, &cloudConnectProbe, func(ctx context.Context, _ Config, _ cloudDestination, _ string) error {
+		close(probing)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	body, _ := json.Marshal(map[string]any{"setup_directory": setup, "expected": plan})
+	connect := httptest.NewRequest(http.MethodPost, "/api/cloud-backup/import", strings.NewReader(string(body)))
+	connect.Header.Set("Authorization", "Bearer test-token")
+	connected := httptest.NewRecorder()
+	served := make(chan struct{})
+	go func() { server.ServeHTTP(connected, connect); close(served) }()
+	select {
+	case <-probing:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the connection test did not start: %d %s", connected.Code, connected.Body.String())
+	}
+	expect("backup")
+	if err := server.stop(stopTimeout); err != nil {
+		t.Fatalf("a release waited for the connection test: %v", err)
+	}
+	<-served
+	if connected.Code < 400 {
+		t.Fatalf("a connection test stopped by a release reported success: %d %s", connected.Code, connected.Body.String())
 	}
 }
 

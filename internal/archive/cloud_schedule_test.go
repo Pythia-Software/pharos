@@ -133,7 +133,7 @@ func TestCloudScheduledBackupsCatchUpOnceAndAllowManualBackups(t *testing.T) {
 		t.Fatal("scheduled run lost its trigger or original due date")
 	}
 	// The running upload is listed, so the drive is not reported idle.
-	if activities := server.libraryActivities(); !slices.ContainsFunc(activities, func(a libraryActivity) bool { return a.ID == "cloud:"+run.ID && a.Writes }) {
+	if activities := server.libraryActivities(); !slices.ContainsFunc(activities, func(a libraryActivity) bool { return a.ID == "cloud:upload:"+run.ID && a.Writes }) {
 		t.Fatalf("a scheduled upload is not a library activity: %+v", activities)
 	}
 	if err := server.cloudScheduleTick(ctx, finishedAt); err != nil {
@@ -349,6 +349,29 @@ func TestCloudScheduleCancellationChangesAndCopiedLibrary(t *testing.T) {
 	}
 	if onlyCloudSchedule(t, c).CatalogPath != canonical(c.Path) {
 		t.Fatal("explicit activation did not bind to the new library location")
+	}
+
+	// A release (before an eject) cancels a running upload within the
+	// release budget; the upload then records itself as cancelled.
+	uploading, stopped := make(chan struct{}), make(chan error, 1)
+	override(t, &cloudPerformUpload, func(_ *Server, ctx context.Context, _ cloudDestination, run cloudRun) {
+		close(uploading)
+		<-ctx.Done()
+		stopped <- ctx.Err()
+	})
+	run, err := server.startCloudRun(ctx, d.ID, "sample", "manual", at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-uploading
+	if !slices.ContainsFunc(server.libraryActivities(), func(a libraryActivity) bool { return a.ID == "cloud:upload:"+run.ID }) {
+		t.Fatal("a running upload is not a library activity")
+	}
+	if err := server.stop(stopTimeout); err != nil {
+		t.Fatalf("a release waited for the upload: %v", err)
+	}
+	if err := <-stopped; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the upload's context after a release: %v", err)
 	}
 }
 
