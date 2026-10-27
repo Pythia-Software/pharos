@@ -76,8 +76,7 @@ export function weekdayMetric(clause: AggregationClause, result: AggregationResu
   const samples = Number.isFinite(from) ? cycleSamples("weekday", from, to, zone, start => {
     const bucket = daily.get(start);
     observations += bucket?.count ?? 0;
-    // An idle-day ratio is null. SUM and COUNT supply real zero-day totals.
-    return bucket?.value ?? (!bucket?.count && !clause.expression && ["sum", "count"].includes(clause.op) ? 0 : null);
+    return bucket?.value ?? (idleIsZero(clause) ? 0 : null);
   }) : weekdays.map(() => [] as number[]);
   const { result: folded, days } = cycleBoxes("weekday", samples, result.id);
   const metric: AggregationClause = { id: clause.id, op: "count", groupBy: ["weekday"], label: clause.label, distribution: { kind: "box", input: "[daily_value]", whiskers: "tukey" }, display: { kind: "box", maxGroups: 7, xLabel: unit } };
@@ -85,6 +84,10 @@ export function weekdayMetric(clause: AggregationClause, result: AggregationResu
 }
 
 export type CalendarCycle = "weekday" | "hour";
+// Counts and sums of an idle day or hour are zero, as is a sum whose only
+// inputs were missing (unpriced cost adds nothing). A ratio or average of
+// nothing has no value.
+export const idleIsZero = (clause: Pick<AggregationClause, "op" | "expression">) => !clause.expression && ["sum", "count", "count_distinct"].includes(clause.op);
 export const hoursOfDay = Array.from({ length: 24 }, (_, hour) => `${String(hour).padStart(2, "0")}:00`);
 const maxCycleSlots = { weekday: 10000, hour: 24 * 800 };
 

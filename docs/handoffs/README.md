@@ -15,6 +15,7 @@ tests.
 | Handoff | Problem |
 |---|---|
 | [machine-time-all-time-cpu.md](machine-time-all-time-cpu.md) | Machine Time's all-time view may take twice the CPU the legacy route did; confirm or fix |
+| [usage-v3-hour-grouping.md](usage-v3-hour-grouping.md) | `/query-v3` groups usage by `hour` over daily records, where it is null; only `/metrics` reads the hourly ledger |
 | [query-table-schema-reload.md](query-table-schema-reload.md) | Every staged Query Table request makes its connection re-parse the whole catalog schema twice, adding about 6 ms of CPU |
 
 ## Upstream Query Table
@@ -30,6 +31,10 @@ criteria, and can be sent directly to the Query Table team.
 hour-of-day and weekday grouping, so dashboard cycle views can fold natively
 and drill into a slot. Pharos folds daily and hourly totals in the browser
 until then.
+
+[`query-table-multi-key-colors.md`](query-table-multi-key-colors.md) asks
+for marks colored by their whole group key, so a share of provider + model
+groups does not repeat colors.
 
 The [manual-interventions audit and upstream handoff](query-table-manual-interventions.md)
 records the previous patches and source snapshots, the 0.9.3 response, and the

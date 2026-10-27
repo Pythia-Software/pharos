@@ -20,13 +20,16 @@ A **catalog** describes one dashboard topic
 (`web/src/token-analysis-catalog.ts` for Tokens and Cost):
 
 - **Measures.** Each has a label and format, and a record-level aggregate:
-  an `op` with a `field`, or an `expression` for ratios such as
-  `SUM([cache_read_input_tokens])/NULLIF(SUM([input_tokens]),0)`. Each also has:
+  an `op` with a `field`, an `expression`, or a `ratio` of two summed fields.
+  A ratio such as `["cache_read_input_tokens", "input_tokens"]` means
+  `SUM(numerator)/NULLIF(SUM(denominator),0)`. Each also has:
   - an optional per-record `value`, which makes the measure eligible for
     record distributions;
   - an `additive` flag, which decides whether groups may be shown as shares;
-  - an optional implied population (`where`), such as fully priced usage.
-- **Breakdowns.** Each maps to a record field, with an optional implied `where`.
+  - an optional implied population (`where`), such as fully priced usage,
+    with a `base` measure: the same aggregate without that population.
+- **Breakdowns.** Each maps to one or more record fields (`fields`), such as
+  `["provider", "model_family"]`, with an optional implied `where`.
 - **Units.** Each has a grouping `key` and a required `where`, such as
   `root_conversation_id is not empty`. Each unit also lists the breakdowns it
   supports and the field each maps to at unit level. A breakdown is listed only
@@ -34,8 +37,9 @@ A **catalog** describes one dashboard topic
   `root_model_family`, not `model_family`, and an agent session has no model
   breakdown because a session can switch models. Records are the implicit
   default unit.
-- **Cycle fields.** These are the calendar dimensions a cycle folds; for usage,
-  the ledger's `hour` and `day`.
+- **Cycle fields** (optional). These are the calendar dimensions a cycle
+  folds; for usage, the ledger's `hour` and `day`. A catalog without them has
+  no cycle view.
 - **Trend mapping.** This records how the dashboard's existing trend names its
   metrics and splits, so a view switch can carry them across.
 
@@ -53,7 +57,6 @@ fields:
 | `minSamples` | hide groups with fewer observations |
 | `scale`, `scaleY` | `linear` or `logarithmic` |
 | `cycle` | `hour` or `weekday` |
-| `seriesLimit` | groups drawn |
 
 A link without `view` is the trend, unchanged, so existing bookmarks and
 `card-destinations.ts` presets keep working. `validAnalysisState` checks
@@ -65,7 +68,43 @@ cannot use to the nearest one it can:
 - a scatter needs an entity unit and two different measures;
 - a record distribution needs a per-record value, so a ratio moves to the
   first unit;
+- a unit Total is offered only for additive measures and ratios (see below),
+  so distinct counts fall back to the mean;
 - a cycle profiles records, with no breakdown.
+
+### Rules every catalog inherits
+
+- **Reserved ids.** `records` (the implicit unit) and `none` (no breakdown)
+  are reserved. `catalogProblems` reports a unit or breakdown with either id,
+  and its test runs over every catalog.
+- **Implied filters and units.** A breakdown with an implied `where` is never
+  offered for units. The filter would remove records from inside each unit,
+  changing every unit's own value rather than only choosing which units
+  appear. `catalogProblems` rejects such a mapping. A measure's implied
+  population, by contrast, does apply to the units: it defines what the
+  measure counts, as with fully priced cost.
+- **Combining units.**
+  - Total adds up an additive measure.
+  - For a ratio, Total pools the parts. It sums the numerator and the
+    denominator over the group's units and divides, so it equals the ratio
+    over the group's records.
+  - A distinct count has no honest unit total, because one entity can sit in
+    several units, so Total is disabled.
+  - Mean weights every unit equally, and the note says so for non-additive
+    measures.
+- **Thresholds count plotted observations.** A record distribution leaves
+  out records without the measure's value before grouping. A unit
+  distribution drops units without a value as a group filter. `minCount` then
+  counts what is drawn.
+  - Share displays take no threshold: a share's denominator is every group.
+    Groups beyond `groupLimit` still count in the denominator through Query
+    Table's exact Other.
+- **Groups drawn.** Bars and boxes show 12 groups and pies 8. The trend's
+  `seriesLimit` belongs to the trend alone.
+- **Leaving for the trend.** The trend's state cannot hold a measure's
+  population. Switching a fully priced cost view to Over time therefore maps
+  the metric to its `base` (cost). `trendPopulation` returns
+  `price_status = priced`, which the dashboard adds to its filters.
 
 ### Queries
 
@@ -81,13 +120,24 @@ chart clause, and the supporting query that "View supporting query" opens.
   `model-choice-recipes.ts`, `api-cost-recipes.ts` and `cardCoverQuery`. A
   scatter puts the breakdown first because Query Table colors points by the
   first key. The supporting query is the executed grouped query itself.
-- **Cycle.** One clause grouped by the ledger's `hour` or `day`. The service
-  answers `hour` from its hourly ledger rows, and `day` is the recorded local
-  day. `cycleResult` folds the totals into 24 local hours or 7 weekdays. Every
-  complete slot in the range is an observation; idle slots count as zero for
-  additive measures, while an idle ratio has no value. The fold
-  (`cycleSamples`, `cycleBoxes`) lives beside the weekday cover in
-  `weekday-cover.ts`, which now uses it too.
+- **Cycle.** One clause grouped by the ledger's `hour` or `day`. `/metrics`
+  answers `hour` from its hourly ledger rows; `day` is the recorded day.
+  `cycleResult` folds the totals into 24 hours or 7 weekdays.
+  - **Observations.** Every complete slot in the range is one. The same rule
+    (`idleIsZero`) decides idle slots for the fold, the note and the weekday
+    cards. Sums, counts and distinct counts of an idle slot are zero, and so
+    is a sum whose only inputs were missing: an hour of unpriced usage adds no
+    cost. A ratio of nothing has no value.
+  - **Time zones.** Hour keys are UTC instants, placed at the viewer's local
+    hour. Day keys are dates the recording Mac assigned in its own time zone,
+    and a date's weekday does not depend on the viewer, so days fold as dates.
+    Only the range bounds use the viewer's zone. The note says which applies.
+  - **Missing keys.** A bucket without a key is an error, never an idle slot.
+  - **The fold's code** (`cycleSamples`, `cycleBoxes`) lives beside the
+    weekday cover in `weekday-cover.ts`, which now uses it too.
+  - **Supporting query.** The hour cycle's supporting query opens records,
+    because `/query-v3` cannot yet group usage by hour; see
+    [`handoffs/usage-v3-hour-grouping.md`](handoffs/usage-v3-hour-grouping.md).
 - **Thresholds.** These use Query Table's native `minCount`, which the service
   advertises for both `/metrics` and `/query-v3`. It removes small groups
   before `groupLimit` and reports `hiddenGroups`, so small groups cannot crowd
@@ -138,13 +188,14 @@ Table's in-process evaluation, and the numbers must match:
 
 | Card | Dashboard state |
 |---|---|
-| `model-cost-share` | compare, share, cost by model, priced filters |
-| `cache-efficiency` | compare, `cache_read_share` by model |
-| `model-session-costs` | distribution, conversation unit, cost by model, `minSamples: 5` |
-| `session-token-cost` | scatter, conversation unit, tokens × cost |
+| `model-cost-share` | compare, share, cost by provider + model, priced filters |
+| `cache-efficiency` | compare, `cache_read_share` by provider + model |
+| `model-session-costs` | distribution, conversation unit, cost by provider + model, `minSamples: 5` |
+| `session-token-cost` | scatter, conversation unit, tokens × cost, colored by provider + model |
 
-Cards keyed by provider and model compare with a dashboard split by model,
-because each model family belongs to one provider.
+The fixture serves one model family from two providers, and the tests
+compare full group keys. Its input includes cache writes, so a wrong
+cache-share denominator fails.
 
 ## Limitations
 
@@ -152,14 +203,20 @@ because each model family belongs to one provider.
   ledger's hourly rows and recorded days rather than calendar grouping on
   `first_usage_at`. Calendar grouping would place a whole day's usage at its
   first hour.
+- `/query-v3` groups usage by `hour` over daily records, so the hour cycle's
+  supporting query opens records, and a `/query-v3` fallback for the hour
+  clause fails visibly ([handoff](handoffs/usage-v3-hour-grouping.md)).
 - Hours step on UTC hour boundaries and take the local hour of their start.
   In zones offset by a fraction of an hour, each slot starts mid-hour locally.
 - Query Table has no hour-of-day or weekday grouping, so cycle slots are
   folded in the browser and cannot be drilled into. See
   [`handoffs/query-table-calendar-cycles.md`](handoffs/query-table-calendar-cycles.md).
-- `minCount` counts rows. A records view therefore cannot require "five
-  distinct conversations per model"; use the conversation unit, where each
-  row is one conversation.
+- Query Table colors chart marks by the first group key only, so a share of
+  "Provider + model" draws same-provider slices in one color; see
+  [`handoffs/query-table-multi-key-colors.md`](handoffs/query-table-multi-key-colors.md).
+- `minCount` counts rows. A records compare view therefore cannot require
+  "five distinct conversations per model"; use the conversation unit, where
+  each row is one conversation.
 
 ## Phases
 

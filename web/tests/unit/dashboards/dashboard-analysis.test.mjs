@@ -1,14 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { core, schemas } from "../helpers/recipes.mjs";
-import { now, usageRows } from "../helpers/usage-ledger.mjs";
-import { analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, cycleResult, normalizeAnalysis, switchView, validAnalysisState } from "../../../src/dashboard-analysis-model";
+import { now, usageLedger } from "../helpers/usage-ledger.mjs";
+import { analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, availableViews, catalogProblems, cycleResult, normalizeAnalysis, switchView, trendPopulation, validAnalysisState } from "../../../src/dashboard-analysis-model";
 import { tokenAnalysisCatalog as catalog } from "../../../src/token-analysis-catalog";
 import { runAnalysisQuery } from "../../../src/analysis-request";
 import { answerQuery } from "../../support/query-server.mjs";
 import { cycleSamples, hoursOfDay, weekdays } from "../../../src/weekday-cover";
 
-const rows = usageRows(), schema = schemas.usage;
+const { rows, hourly } = usageLedger(), schema = schemas.usage;
 const trend = { metric: "percent_cost", split: "type", period: "day", hours: 6, days: 3, rollingPeriods: 7, scale: "half", display: "interval" };
 const evaluate = query => core.evaluateMetrics(rows, query, schema, { now }).metrics[0];
 
@@ -64,7 +64,7 @@ test("unit views group records into one row per unit before comparing", () => {
   assert.equal(median.supporting, median.query, "the supporting query is the executed query");
   const conversations = new Set(rows.map(row => row.root_conversation_id));
   const count = evaluate(analysisQuery(catalog, { view: "compare", unit: "conversation", metric: "tokens", split: "model_family", reduce: "count" }, []).query);
-  assert.deepEqual(Object.fromEntries(count.buckets.map(bucket => [bucket.keys[0], bucket.value])), { opus: 6, sonnet: 4, "gpt-5": 2 });
+  assert.deepEqual(Object.fromEntries(count.buckets.map(bucket => [bucket.keys[0], bucket.value])), { opus: 8, sonnet: 4, "gpt-5": 2 });
   const runs = evaluate(analysisQuery(catalog, { view: "compare", unit: "delegated_run", metric: "tokens", split: "none", reduce: "count" }, []).query);
   assert.equal(runs.buckets[0].value, new Set(rows.filter(row => row.delegated_run_depth > 0).map(row => row.delegated_session_id)).size);
   const total = evaluate(analysisQuery(catalog, { view: "compare", unit: "conversation", metric: "tokens", split: "none" }, []).query);
@@ -85,9 +85,9 @@ test("a bucket opens its records, or its units' grouped rows", () => {
   const units = analysisQuery(catalog, { view: "distribution", unit: "conversation", metric: "cost", split: "model_family" }, []);
   const group = analysisInspectQuery(units, { keys: ["opus"], value: 1, count: 6 }, units.clause, schema, "distribution");
   assert.deepEqual(group.grouping.keys, units.query.grouping.keys);
-  assert.deepEqual(group.where, [{ field: "root_model_family", op: "=", value: "opus" }]);
+  assert.deepEqual(group.where, [{ field: "analysis_value", op: "is_not_null", value: "" }, { field: "root_model_family", op: "=", value: "opus" }], "the plotted conversations of that group");
   assert.equal(group.aggregations?.length ?? 0, 0);
-  assert.equal(core.applyQuery(rows, group, schema, { now }).total, 6, "six Opus conversations");
+  assert.equal(core.applyQuery(rows, group, schema, { now }).total, 8, "eight Opus conversations, from both providers");
   assert.equal(analysisInspectQuery(units, { keys: ["Monday"], value: 1, count: 1 }, units.clause, schema, "cycle"), null);
 });
 
@@ -123,8 +123,9 @@ test("a weekday cycle folds the ledger's local days, as the weekday cards do", (
 test("a cycle query reads the ledger's hourly or daily totals", () => {
   const hours = analysisQuery(catalog, { view: "cycle", cycle: "hour", metric: "tokens", split: "model_family" }, []);
   assert.deepEqual([hours.clause.groupBy, hours.clause.groupLimit], [["hour"], 10000]);
-  assert.deepEqual(hours.supporting.grouping.keys, ["hour"]);
-  assert.equal(analysisQuery(catalog, { view: "cycle", cycle: "weekday", metric: "tokens", split: "none" }, []).clause.groupBy[0], "day");
+  assert.equal(hours.supporting.grouping, undefined, "grouped usage queries read daily records, which have no hour");
+  const days = analysisQuery(catalog, { view: "cycle", cycle: "weekday", metric: "tokens", split: "none" }, []);
+  assert.deepEqual([days.clause.groupBy, days.supporting.grouping.keys], [["day"], ["day"]]);
 });
 
 test("notes say what one observation is", () => {
@@ -155,4 +156,88 @@ test("analysis queries run on /metrics, grouped ones on /query-v3, shared snapsh
   assert.deepEqual(local.buckets, grouped.buckets);
   assert.deepEqual((await runAnalysisQuery("usage", schema, records.query, { local: { rows, hourly: [] } }))[0].buckets, served.buckets);
   assert.equal(requests.length, 3, "shared snapshots make no requests");
+});
+
+test("the catalog reserves records and none, and keeps implied filters off unit breakdowns", () => {
+  assert.deepEqual(catalogProblems(catalog), []);
+  const broken = { ...catalog, units: { ...catalog.units, records: catalog.units.conversation }, breakdowns: { ...catalog.breakdowns, none: { label: "None", fields: ["provider"] }, provider: { ...catalog.breakdowns.provider, where: [{ field: "provider", op: "is_not_null", value: "" }] } } };
+  const problems = catalogProblems(broken).join("\n");
+  assert.match(problems, /may not be named records/);
+  assert.match(problems, /may not be named none/);
+  assert.match(problems, /conversation offers provider, whose implied filter/);
+  const noCycle = { ...catalog, cycle: undefined };
+  assert.ok(!availableViews(noCycle).some(([view]) => view === "cycle"));
+  assert.equal(validAnalysisState(noCycle, { view: "cycle", metric: "tokens", split: "none" }), false);
+  assert.equal(normalizeAnalysis(noCycle, { view: "cycle", metric: "tokens", split: "none" }).view, "compare");
+});
+
+test("units pool a ratio's parts for a total, and never add distinct counts", () => {
+  const state = { view: "compare", unit: "conversation", metric: "cache_read_share", split: "model_family" };
+  assert.equal(normalizeAnalysis(catalog, state).reduce, "total");
+  const pooled = evaluate(analysisQuery(catalog, state, []).query);
+  const records = evaluate(analysisQuery(catalog, { view: "compare", metric: "cache_read_share", split: "none" }, [{ field: "root_model_family", op: "=", value: "opus" }]).query);
+  assert.equal(pooled.buckets.find(bucket => bucket.keys[0] === "opus").value, records.buckets[0].value, "the ratio of summed parts over the group's records");
+  assert.ok(pooled.buckets.every(bucket => bucket.value > 0 && bucket.value < 1));
+  assert.match(analysisNote(catalog, state), /pool the conversations/);
+  const mean = normalizeAnalysis(catalog, { ...state, reduce: "mean" });
+  assert.match(analysisNote(catalog, mean), /weighted equally/);
+  assert.equal(normalizeAnalysis(catalog, { ...state, metric: "agent_sessions" }).reduce, "mean", "distinct counts have no unit total");
+  assert.equal(normalizeAnalysis(catalog, { ...state, metric: "tokens" }).reduce, "total");
+});
+
+test("a fully priced cost view returns to the cost trend and keeps its population", () => {
+  const priced = { ...trend, view: "compare", metric: "priced_cost", split: "provider", compareAs: "share" };
+  assert.deepEqual([switchView(catalog, priced, "trend").metric, switchView(catalog, priced, "trend").split], ["percent_cost", "provider"]);
+  assert.deepEqual(trendPopulation(catalog, priced, "trend"), [{ field: "price_status", op: "=", value: "priced" }]);
+  assert.deepEqual(trendPopulation(catalog, priced, "distribution"), []);
+  assert.deepEqual(trendPopulation(catalog, { ...priced, metric: "cost" }, "trend"), []);
+});
+
+test("minimums count plotted observations, and shares ignore them", () => {
+  const sparse = [10, null, null, 5, 6, 7].map((cost, index) => ({ ...rows[0], id: `sparse-${index}`, provider: index < 3 ? "claude" : "codex", cost_usd: cost }));
+  const run = state => core.evaluateMetrics(sparse, analysisQuery(catalog, state, []).query, schema, { now }).metrics[0];
+  const box = run({ view: "distribution", metric: "cost", split: "provider", minSamples: 3 });
+  assert.deepEqual([box.buckets.map(bucket => bucket.keys[0]), box.hiddenGroups], [["codex"], 1], "two missing costs do not count toward three");
+  const units = sparse.map((row, index) => ({ ...row, root_conversation_id: `c-${index}`, root_provider: row.provider }));
+  const perUnit = core.evaluateMetrics(units, analysisQuery(catalog, { view: "distribution", unit: "conversation", metric: "cost", split: "provider", minSamples: 3 }, []).query, schema, { now }).metrics[0];
+  assert.deepEqual([perUnit.buckets.map(bucket => bucket.keys[0]), perUnit.hiddenGroups], [["codex"], 1], "conversations without cost are not plotted or counted");
+  const share = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider", compareAs: "share", minSamples: 5 }, []);
+  assert.equal(share.clause.minCount, undefined, "a share's denominator keeps every group");
+  assert.doesNotMatch(analysisNote(catalog, { view: "compare", metric: "tokens", split: "provider", compareAs: "share", minSamples: 5 }), /hidden/);
+});
+
+test("an hour cycle runs on the hourly ledger and places every hour", async () => {
+  const analysis = analysisQuery(catalog, { view: "cycle", cycle: "hour", metric: "tokens", split: "none", reduce: "total" }, []);
+  const [result] = await runAnalysisQuery("usage", schema, analysis.query, { local: { rows, hourly } });
+  assert.ok(result.buckets.every(bucket => /T\d\d:00:00Z$/.test(bucket.keys[0])), "hourly keys, not daily records");
+  const folded = cycleResult(catalog, { view: "cycle", cycle: "hour", metric: "tokens", split: "none", reduce: "total" }, result, { from: now - 10 * 86400000, to: now }, "UTC");
+  const total = rows.reduce((n, row) => n + row.total_tokens, 0);
+  assert.equal(folded.result.buckets.reduce((n, bucket) => n + bucket.value, 0), total);
+  const expected = Array(24).fill(0);
+  for (const row of hourly) expected[new Date(row.hour).getUTCHours()] += row.total_tokens;
+  assert.deepEqual(folded.result.buckets.map(bucket => bucket.value), expected);
+  // Daily records have no hour; a null key must fail rather than read as idle.
+  assert.throws(() => cycleResult(catalog, { view: "cycle", cycle: "hour", metric: "tokens", split: "none" }, { id: "analysis", buckets: [{ keys: [null], value: total, count: rows.length }] }, { from: now - 86400000, to: now }, "UTC"), /no hour/);
+});
+
+test("idle and unpriced slots count as zero for sums and distinct counts, not ratios", () => {
+  const from = Date.parse("2026-10-12T00:00:00Z"), to = Date.parse("2026-10-12T03:00:00Z");
+  const result = { id: "analysis", buckets: [{ keys: ["2026-10-12T00:00:00Z"], value: 2, count: 2 }, { keys: ["2026-10-12T01:00:00Z"], value: null, count: 1 }] };
+  const fold = metric => cycleResult(catalog, { view: "cycle", cycle: "hour", metric, split: "none", reduce: "total" }, result, { from, to }, "UTC").result.buckets.slice(0, 3).map(bucket => bucket.value);
+  assert.deepEqual(fold("conversations"), [2, 0, 0]);
+  assert.deepEqual(fold("cost"), [2, 0, 0], "an hour of only unpriced usage adds no cost");
+  assert.deepEqual(fold("cache_read_share"), [2, null, null]);
+  assert.match(analysisNote(catalog, { view: "cycle", cycle: "hour", metric: "conversations", split: "none" }), /idle hours included as zero/);
+  assert.match(analysisNote(catalog, { view: "cycle", cycle: "hour", metric: "output_share", split: "none" }), /which have no value/);
+});
+
+test("weekdays fold the recorded dates, whatever the viewer's time zone", () => {
+  const result = { id: "analysis", buckets: [{ keys: ["2026-10-05"], value: 7, count: 1 }] };
+  for (const zone of ["Pacific/Kiritimati", "Pacific/Pago_Pago", "UTC"]) {
+    const from = core.metricDateTime("2026-10-05", zone), to = core.metricDateTime("2026-10-12", zone);
+    const box = cycleResult(catalog, { view: "cycle", cycle: "weekday", metric: "tokens", split: "none" }, result, { from, to }, zone);
+    assert.equal(box.result.buckets[0].distribution.summary.max, 7, `${zone}: 2026-10-05 is a Monday`);
+    assert.equal(box.slots, 7, zone);
+  }
+  assert.match(analysisNote(catalog, { view: "cycle", cycle: "weekday", metric: "tokens", split: "none" }), /dates the recording Mac assigned in its own time zone/);
 });
