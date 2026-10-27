@@ -76,7 +76,7 @@ var operationKinds = []operationKind{
 		OnEject: "Stops between files; the next capture resumes it, and what was captured stays valid.", Latency: "record", Journal: journalAlways, Priority: priorityForeground},
 	{Kind: "capture.cli", Label: "Capture (Terminal)", Verb: "Capturing", Holds: "D:w C(this):w", Affects: "capt:this/*",
 		OnEject: "Pharos cannot stop it; the drive stays busy until it ends.", Latency: "none", Journal: journalNever, Priority: priorityForeground},
-	{Kind: "index.captures", Label: "Index captures", Verb: "Indexing captures", Holds: "D:w W:w I:w X(c):w", Affects: "conv:*, view, an.*, findings", Stop: "index",
+	{Kind: "index.captures", Label: "Index captures", Verb: "Indexing captures", Holds: "D:w W:w I:w X(c):w", Affects: "capt:*, conv:*, view, an.*, findings", Stop: "index",
 		OnEject: "Stops between records; the next index resumes it. Waits for a running capture (blocked(capture-running)).", Latency: "batch", Journal: journalAlways, Priority: priorityForeground},
 	{Kind: "library.update", Label: "Capture & index", Verb: "Capturing and indexing", Holds: "D:w W:w I:w", Affects: "capt:this/*, conv:*, an.*, findings, upgrade", Stop: "index",
 		OnEject: "As index.captures; the browser then starts library.upgrade.", Latency: "batch", Journal: journalAlways, Priority: priorityForeground},
@@ -144,7 +144,7 @@ var operationKinds = []operationKind{
 	// E. Transitions.
 	{Kind: "catalog.initialize", Label: "Prepare the catalog", Verb: "Preparing the catalog", Holds: "D:w W:w Z:w", Affects: "all derived domains",
 		OnEject: "Cannot be stopped; the service has no API until it ends. A kill rolls back the step in progress, and the next open re-runs from the last committed meta key.", Latency: "none", Journal: journalLonger(2 * time.Second), Priority: priorityForeground},
-	{Kind: "library.upgrade", Label: "Upgrade the library", Verb: "Upgrading the library", Holds: "D:w W:w", Affects: "upgrade, an.tools",
+	{Kind: "library.upgrade", Label: "Upgrade the library", Verb: "Upgrading the library", Holds: "D:w W:w", Affects: "upgrade, an.tools, an.ledger",
 		OnEject: "Stops after the unit in progress; starting the upgrade again resumes it.", Latency: "record", Journal: journalAlways, Priority: priorityForeground},
 	{Kind: "catalog.repair", Label: "Repair usage (Terminal)", Verb: "Repairing usage", Holds: "D:w W:w", Affects: "an.tools, an.authorship",
 		OnEject: "Pharos cannot stop it.", Latency: "none", Journal: journalAlways, Priority: priorityForeground},

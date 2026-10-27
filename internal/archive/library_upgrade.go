@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 )
@@ -44,6 +45,10 @@ type upgradeState struct {
 	// github is the last answer of githubAvailability, and when it was asked.
 	github   string
 	githubAt time.Time
+	// lastSteps is UpgradeSteps' latest answer, and when it was computed:
+	// the freshness ledger reads it instead of counting again (§5).
+	lastSteps   []upgradeStep
+	lastStepsAt time.Time
 }
 
 type upgradeMergeGroup struct {
@@ -149,6 +154,7 @@ func (c *Catalog) UpgradeSteps(ctx context.Context) ([]upgradeStep, error) {
 	for index := range steps {
 		steps[index].Seconds = state.seconds[steps[index].ID]
 	}
+	state.lastSteps, state.lastStepsAt = slices.Clone(steps), time.Now()
 	return steps, nil
 }
 
@@ -296,6 +302,16 @@ func (c *Catalog) RunUpgrade(ctx context.Context, progress func(step string, don
 		state.running, state.step = false, ""
 		if err != nil && ctx.Err() == nil {
 			state.lastError = err.Error()
+		}
+		// What the ledger remembers of the steps: none pending after a
+		// complete upgrade, unknown after one that did not finish.
+		if err == nil && !state.lastStepsAt.IsZero() {
+			for index := range state.lastSteps {
+				state.lastSteps[index].Pending = 0
+			}
+			state.lastStepsAt = time.Now()
+		} else if err != nil {
+			state.lastSteps, state.lastStepsAt = nil, time.Time{}
 		}
 		state.mu.Unlock()
 		return err

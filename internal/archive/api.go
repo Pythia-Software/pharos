@@ -88,6 +88,8 @@ type Server struct {
 	// captureProbe caches the status path's capture-lock probe for polled
 	// operation snapshots.
 	captureProbe captureProbe
+	// freshFiles caches the freshness ledger's file-derived inputs.
+	freshFiles freshnessFileCache
 }
 
 func NewServer(config Config, catalog *Catalog) *Server {
