@@ -91,7 +91,7 @@ import { toolSummaryCallFilters, toolMetricPresentation, defaultToolDashboard, v
 import { readDashboardQuery, inspectDashboardBucket, recordDashboardMetric, recordDashboards, parallelismSelectionQuery, toolDashboardWhere, type RecordDashboardTopic } from "./usage-dashboard-model";
 import { dashboardChartURL } from "./dashboard-chart-links";
 import { AnalysisViewControl, DashboardAnalysis } from "./dashboard-analysis";
-import { switchView, trendPopulation, unique, validAnalysisState, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { switchView, validAnalysisState, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { tokenAnalysisCatalog } from "./token-analysis-catalog";
 import type { LocalRows } from "./analysis-request";
 
@@ -1569,17 +1569,12 @@ const validTokenDashboard = (view: TokenDashboardView) => validTokenChartFields(
 function TokenUsageDashboard() {
   const state = useUsageDashboardState<TokenDashboardView>({ ...defaultTokenChart, period: "day" as ChartPeriod }, validTokenDashboard, usageTime);
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
-  // A measure's implied population (fully priced cost) becomes a filter the trend keeps.
-  const choose = (next: AnalysisView) => {
-    const kept = trendPopulation(tokenAnalysisCatalog, state.view, next);
-    if (kept.length) state.onFilter(current => unique([...current, ...kept]));
-    state.update(switchView(tokenAnalysisCatalog, state.view, next));
-  };
+  const choose = (next: AnalysisView) => state.update(switchView(tokenAnalysisCatalog, state.view, next));
   if ((state.view.view ?? "trend") !== "trend") return <DashboardAnalysis catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={state.view} where={state.where}
     onChange={state.update} onView={choose} onFilter={state.onFilter} local={tokenSharedRows} currentURL="/analyze?analyze_view=tokens&machine_view=tokens" />;
   const trend = state.view as TokenChartView;
   return <>
-    <TokenChart where={state.where} onFilter={state.onFilter} view={trend} onChange={state.update} viewControl={<AnalysisViewControl catalog={tokenAnalysisCatalog} value="trend" onChange={choose} />} />
+    <TokenChart where={state.where} onFilter={state.onFilter} view={trend} onChange={state.update} viewControl={<AnalysisViewControl catalog={tokenAnalysisCatalog} state={state.view} onChange={choose} />} />
     <TokenSummary where={state.where} />
     <UsageDashboardLinks schema={schemas.usage} dataset="usage" query={{ ...EMPTY_QUERY, where: state.where, aggregations: tokenChartMetrics(trend).map(clause => ({ ...clause, label: clause.label === "chart" ? costMetric(trend) ? "API cost (USD)" : "Tokens" : clause.label })) }} currentURL="/analyze?analyze_view=tokens&machine_view=tokens" />
     <p className="usage-dashboard-note">Click a column or point to pin its key, then follow a series to its contributing usage records. Drag across two or more periods to filter dates. Select legend entries to compare or exclude series. Cumulative links include activity from the range start; rolling-average links include the averaging window. Grouped rows expose the underlying interval amounts before percentages, smoothing, accumulation, or folded series. API cost is the list-price equivalent; subscriptions and long-context premiums are excluded. ≈ marks assumed prices.</p>

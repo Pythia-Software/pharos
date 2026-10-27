@@ -89,7 +89,10 @@ export type CalendarCycle = "weekday" | "hour";
 // nothing has no value.
 export const idleIsZero = (clause: Pick<AggregationClause, "op" | "expression">) => !clause.expression && ["sum", "count", "count_distinct"].includes(clause.op);
 export const hoursOfDay = Array.from({ length: 24 }, (_, hour) => `${String(hour).padStart(2, "0")}:00`);
-const maxCycleSlots = { weekday: 10000, hour: 24 * 800 };
+// An hour profile reads one group per active hour, so its range fits the
+// query's group limit: every hour of 400 days is 9,600 groups.
+export const cycleGroups = 10000;
+const maxCycleSlots = { weekday: 10000, hour: 24 * 400 };
 
 // Visit every complete calendar slot in [from, to) once, so idle days or
 // hours count as observations. Days are local calendar days in zone. Hours
@@ -106,7 +109,7 @@ export function cycleSamples(cycle: CalendarCycle, from: number, to: number, zon
   let start = floor(from), visited = 0;
   if (start < from) start = next(start);
   for (; next(start) <= to; start = next(start)) {
-    if (++visited > maxCycleSlots[cycle]) throw new Error(cycle === "weekday" ? "Choose a shorter range for weekday distributions (at most 10,000 days)." : "Choose a shorter range for hour-of-day profiles (at most 800 days).");
+    if (++visited > maxCycleSlots[cycle]) throw new Error(cycle === "weekday" ? "Choose a shorter range for weekday distributions (at most 10,000 days)." : "Choose a shorter range for hour-of-day profiles (at most 400 days).");
     const amount = value(start);
     if (typeof amount === "number" && Number.isFinite(amount)) samples[slot(start)].push(amount);
   }

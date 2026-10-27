@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import type { AggregationClause, AggregationResultEntry, FieldDef, FieldSchema, QueryState, WhereTerm } from "@pythia-software/query-table-core";
 import { MetricCard, defaultRenderers } from "@pythia-software/query-table-ui";
-import { analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, availableViews, cycleResult, noSplit, normalizeAnalysis, records, reductionLabel, sampleThresholds, shareable, splitValid, unitTotal, type AnalysisCatalog, type AnalysisReduce, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, cycleTotal, noSplit, normalizeAnalysis, records, reductionLabel, sampleThresholds, shareable, splitValid, unitTotal, type AnalysisCatalog, type AnalysisReduce, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { runAnalysisQuery, type LocalRows } from "./analysis-request";
 import { ChartSelect, RangeControl, timeBounds, withTimeRange, type FilterChange } from "./usage-chart";
 import { UsageDashboardLinks } from "./usage-workspace";
@@ -32,8 +32,9 @@ export function useAnalysisResult(dataset: string, schema: FieldSchema<any>, que
   return { results: state.key === key ? state.results : [], loading: state.key !== key || state.loading, error: state.key === key ? state.error : "" };
 }
 
-export function AnalysisViewControl({ catalog, value, onChange }: { catalog: AnalysisCatalog; value: AnalysisView; onChange: (view: AnalysisView) => void }) {
-  return <ChartSelect label="View" value={value} options={availableViews(catalog)} title="Over time, or one value per group across the range" onChange={onChange} />;
+export function AnalysisViewControl({ catalog, state, onChange }: { catalog: AnalysisCatalog; state: AnalysisState; onChange: (view: AnalysisView) => void }) {
+  const options = viewOptions(catalog, state), blocked = options.find(([view, , reason]) => view === "trend" && reason)?.[2];
+  return <ChartSelect label="View" value={state.view ?? "trend"} options={options} note={blocked} title="Over time, or one value per group across the range" onChange={onChange} />;
 }
 
 // The folded cycle's slots are not dataset fields; name them for the chart.
@@ -77,13 +78,13 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
     ...Object.entries(catalog.units).map(([id, item]): [string, string] => [id, item.plural])];
   const minimum = sampleThresholds.includes(view.minSamples) ? sampleThresholds : [...sampleThresholds, view.minSamples].sort((a, b) => a - b);
   const controls = <div className="usage-tools-controls usage-analysis-controls">
-    <AnalysisViewControl catalog={catalog} value={view.view} onChange={onView} />
+    <AnalysisViewControl catalog={catalog} state={view} onChange={onView} />
     {grouped ? <ChartSelect label="Count each" value={view.unit} options={unitOptions} title="What one observation is" onChange={next => set({ unit: next })} /> : null}
     <ChartSelect label={view.view === "scatter" ? "X metric" : "Metric"} value={view.metric} options={Object.entries(catalog.measures).map(([id, item]) => [id, item.label])} onChange={metric => set({ metric })} />
     {view.view === "scatter" ? <ChartSelect label="Y metric" value={view.metricY} options={Object.entries(catalog.measures).map(([id, item]): [string, string, string?] => [id, item.label, id === view.metric ? "Choose a different measure from X" : undefined])} onChange={metricY => set({ metricY })} /> : null}
     {grouped ? <ChartSelect label={view.view === "scatter" ? "Color by" : "Breakdown"} value={view.split} options={[[noSplit, "None"], ...Object.entries(catalog.breakdowns).map(([id, item]): [string, string, string?] => [id, item.label, splitValid(catalog, view.unit, id) ? undefined : `Not constant within one ${unit?.label.toLowerCase()}`])]} onChange={split => set({ split })} /> : null}
     {view.view === "compare" && unit ? <ChartSelect label="Combine" value={view.reduce} options={analysisReductions.map(([id]): [AnalysisReduce, string, string?] => [id, reductionLabel(id, catalog.measures[view.metric], unit), id === "total" && !unitTotal(catalog.measures[view.metric]) ? `${catalog.measures[view.metric].label} does not add up across ${subjects}` : undefined])} title={`How each group's ${subjects} combine`} onChange={reduce => set({ reduce })} /> : null}
-    {view.view === "cycle" ? <ChartSelect label="Summarize" value={view.reduce} options={[["median", "Distribution"], ["mean", "Mean"], ["total", "Total"]]} title="Each bar summarizes every complete day or hour that falls on it" onChange={reduce => set({ reduce })} /> : null}
+    {view.view === "cycle" ? <ChartSelect label="Summarize" value={view.reduce} options={[["median", "Distribution"], ["mean", catalog.measures[view.metric].additive ? "Mean" : "Unweighted mean"], ["total", "Total", cycleTotal(catalog.measures[view.metric]) ? undefined : `${catalog.measures[view.metric].label} does not add up across ${view.cycle === "hour" ? "hours" : "days"}`]]} title="Each bar summarizes every complete day or hour that falls on it" onChange={reduce => set({ reduce })} /> : null}
     {view.view === "compare" ? <ChartSelect label="Show as" value={view.compareAs} options={[["bars", "Bars"], ["share", "Share of total", shareable(catalog, { ...view, compareAs: "share" }) ? undefined : "Only additive totals and counts form shares"]]} onChange={compareAs => set({ compareAs })} /> : null}
     {(view.view === "distribution" || view.view === "compare" && view.compareAs !== "share") && view.split !== noSplit ? <ChartSelect label="Minimum" value={String(view.minSamples)} options={minimum.map(value => [String(value), value ? `${value.toLocaleString()} ${subjects}` : "No minimum"])} title={`Hide groups with fewer ${subjects}`} onChange={value => set({ minSamples: Number(value) })} /> : null}
     {view.view === "cycle" ? <ChartSelect label="Cycle" value={view.cycle} options={[["hour", "Hour of day"], ["weekday", "Day of week"]]} onChange={cycle => set({ cycle })} /> : null}

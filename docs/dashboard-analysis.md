@@ -26,8 +26,7 @@ A **catalog** describes one dashboard topic
   - an optional per-record `value`, which makes the measure eligible for
     record distributions;
   - an `additive` flag, which decides whether groups may be shown as shares;
-  - an optional implied population (`where`), such as fully priced usage,
-    with a `base` measure: the same aggregate without that population.
+  - an optional implied population (`where`), such as fully priced usage.
 - **Breakdowns.** Each maps to one or more record fields (`fields`), such as
   `["provider", "model_family"]`, with an optional implied `where`.
 - **Units.** Each has a grouping `key` and a required `where`, such as
@@ -92,19 +91,36 @@ cannot use to the nearest one it can:
     several units, so Total is disabled.
   - Mean weights every unit equally, and the note says so for non-additive
     measures.
-- **Thresholds count plotted observations.** A record distribution leaves
-  out records without the measure's value before grouping. A unit
-  distribution drops units without a value as a group filter. `minCount` then
-  counts what is drawn.
+- **Combining cycle slots.** A cycle's Total adds up every day or hour on a
+  bar, so it is offered only for additive measures. A ratio of 60% on two
+  Mondays is not 120%, and a conversation active on two Mondays is not two
+  conversations. Other measures default to the distribution. Their Mean is
+  labelled "Unweighted mean": each day or hour counts once, not by tokens.
+- **Thresholds count plotted observations.**
+  - A record distribution leaves out records without the measure's value
+    before grouping.
+  - A unit distribution, and a unit compare using total, mean, median or
+    largest, drop units without a value as a group filter.
+  - A count of units counts every unit.
+  - `minCount` then counts what is drawn.
   - Share displays take no threshold: a share's denominator is every group.
     Groups beyond `groupLimit` still count in the denominator through Query
     Table's exact Other.
 - **Groups drawn.** Bars and boxes show 12 groups and pies 8. The trend's
   `seriesLimit` belongs to the trend alone.
-- **Leaving for the trend.** The trend's state cannot hold a measure's
-  population. Switching a fully priced cost view to Over time therefore maps
-  the metric to its `base` (cost). `trendPopulation` returns
-  `price_status = priced`, which the dashboard adds to its filters.
+- **Leaving for the trend.** The trend is not catalog-driven yet (phase 2).
+  It draws only the measures its metrics map to: tokens and API cost, as
+  amounts or shares. It draws them over the dashboard's filters alone.
+  - Mapping is pure and reversible, inside `switchView`: cost shown as shares
+    becomes "% API Cost", and back.
+  - For any other measure, `trendUnavailable` gives the reason. This covers
+    ratios, input, output, reach counts, and fully priced cost, whose
+    population the trend cannot hold. The View control disables Over time
+    and shows that reason. `switchView` leaves the state unchanged. Nothing
+    substitutes a measure or edits the user's filters.
+  - A breakdown the trend lacks (`none`, Provider + model, Price status)
+    becomes the trend's default breakdown. The Breakdown control shows the
+    change.
 
 ### Queries
 
@@ -129,9 +145,18 @@ chart clause, and the supporting query that "View supporting query" opens.
     is a sum whose only inputs were missing: an hour of unpriced usage adds no
     cost. A ratio of nothing has no value.
   - **Time zones.** Hour keys are UTC instants, placed at the viewer's local
-    hour. Day keys are dates the recording Mac assigned in its own time zone,
-    and a date's weekday does not depend on the viewer, so days fold as dates.
-    Only the range bounds use the viewer's zone. The note says which applies.
+    hour.
+    - Day keys are dates the recording Mac assigned in its own time zone,
+      which the dashboard does not know. A date's weekday is the same in
+      every zone, so days fold as dates. The weekday cards follow the same
+      rule: their keys are dates in their query's zone.
+    - The range filter selects whole daily records by timestamp, so every
+      returned date is folded, even one just before the viewer's first date.
+      Idle dates pad to the viewer's range.
+    - Dates from the viewer's current day on are left out as incomplete.
+    - The note says which rule applies.
+  - **Range.** An hour profile allows 400 days: every hour of them fits the
+    query's 10,000-group limit.
   - **Missing keys.** A bucket without a key is an error, never an idle slot.
   - **The fold's code** (`cycleSamples`, `cycleBoxes`) lives beside the
     weekday cover in `weekday-cover.ts`, which now uses it too.
@@ -224,6 +249,9 @@ cache-share denominator fails.
    adding compare, distribution, scatter and cycle views beside the existing
    trend.
 2. **Trend options and more dashboards.**
+   - Make Over time catalog-driven, so it draws every measure and population
+     the other views do. Fully priced cost, ratios, input, output and reach
+     counts then gain Over time.
    - Add trend options: a total line, rolling sum as well as mean, complete
      days only, and a norm line.
    - Move the Tools and MCP compare views onto the engine.
@@ -234,5 +262,10 @@ cache-share denominator fails.
    `tools` rollup drops.
 4. **Card routing.**
    - Map every card to a dashboard state.
+   - Add a share of group incidences. `model-conversation-reach` divides
+     each provider/model's distinct conversations by the sum of those group
+     counts, so a conversation using two models counts twice. The engine can
+     show the counts, but disallows shares of distinct counts. This card needs
+     an explicitly named "share of pairings" display with that denominator.
    - Add an all-cards parity test.
    - Remove `CardAnalysis`, the stopgap that re-renders a card's own chart.
