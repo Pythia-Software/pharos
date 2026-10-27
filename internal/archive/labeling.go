@@ -2,11 +2,13 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -22,7 +24,7 @@ func (l *stringList) String() string         { return strings.Join(*l, ",") }
 func (l *stringList) Set(value string) error { *l = append(*l, value); return nil }
 
 const labelingUsage = `usage:
-  pharos [--config PATH] labeling prepare --dir DIR [--catalog PATH] [--fresh-days 14] [--limit-conversations N] [--conversation ID ...] [--splits-from OLD_DIR] [--snapshot-copy] [--replace] [--dry-run]
+  pharos [--config PATH] labeling prepare --dir DIR [--catalog PATH] [--fresh-days 14] [--limit-conversations N] [--conversation ID ...] [--splits-from OLD_DIR] (--snapshot-copy | --live) [--replace] [--dry-run]
   pharos labeling plan --dir DIR --route claude|codex --model M --effort E [--items-per-request 4] [--max-request-chars N] [--concurrency 3] [--cohort C ...] [--split S ...] [--limit-items N]
   pharos labeling status --dir DIR`
 
@@ -61,12 +63,32 @@ func runLabelingPrepare(configPath string, args []string, stdout, stderr io.Writ
 	replace := flags.Bool("replace", false, "replace a dataset already in DIR")
 	splitsFrom := flags.String("splits-from", "", "keep the splits an earlier dataset gave its conversations")
 	dryRun := flags.Bool("dry-run", false, "print the manifest counts without writing anything")
-	snapshotCopy := flags.Bool("snapshot-copy", false, "the catalog is a static copy (a backup): read it immutably, without its WAL or shared memory")
+	snapshotCopy := flags.Bool("snapshot-copy", false, "--catalog names a static copy (a backup): read it immutably")
+	live := flags.Bool("live", false, "read a live catalog; its read transaction holds back Pharos's checkpoints while preparation runs")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || (*dir == "" && !*dryRun) || *freshDays < 0 || *limit < 0 {
 		return errors.New(labelingUsage)
 	}
 	if *limit > 0 && len(conversations) > 0 {
 		return errors.New("use --limit-conversations or --conversation, not both")
+	}
+	switch {
+	case *snapshotCopy && *live:
+		return errors.New("use --snapshot-copy or --live, not both")
+	case !*snapshotCopy && !*live:
+		return errors.New("prepare from a backup copy of the catalog: --catalog PATH --snapshot-copy (Pharos's backup makes one). " +
+			"Reading the live catalog holds a read transaction that blocks Pharos's checkpoints for the whole preparation; if you must, pass --live")
+	case *snapshotCopy && *catalogPath == "":
+		return errors.New("--snapshot-copy needs --catalog naming the copy")
+	case *snapshotCopy:
+		// Immutable reads of a file another process writes return garbage:
+		// a copy must not be the library's own catalog.
+		if config, err := LoadConfig(configPath); err == nil {
+			copied, errCopy := os.Stat(expandPath(*catalogPath))
+			configured, errConfigured := os.Stat(config.CatalogPath)
+			if errCopy == nil && errConfigured == nil && os.SameFile(copied, configured) {
+				return fmt.Errorf("%s is the configured library's live catalog, not a copy; use --live, or prepare from a backup", *catalogPath)
+			}
+		}
 	}
 	if *catalogPath == "" {
 		config, err := LoadConfig(configPath)
@@ -93,7 +115,7 @@ func runLabelingPrepare(configPath string, args []string, stdout, stderr io.Writ
 	}
 	*catalogPath, _ = filepath.Abs(expandPath(*catalogPath))
 	opts := labelingPrepareOptions{Dir: *dir, CatalogPath: *catalogPath, FreshDays: *freshDays, Limit: *limit, Conversations: conversations,
-		DryRun: *dryRun, SnapshotCopy: *snapshotCopy, Progress: stderr}
+		DryRun: *dryRun, SnapshotCopy: *snapshotCopy, Live: *live, Progress: stderr}
 	if *splitsFrom != "" {
 		opts.SplitsFrom, _ = filepath.Abs(expandPath(*splitsFrom))
 	}
@@ -179,6 +201,13 @@ func prepareLabelingDataset(ctx context.Context, opts labelingPrepareOptions, re
 	if len(others) > 0 {
 		return nil, fmt.Errorf("%s holds files a dataset does not (%s); move them or choose another directory", opts.Dir, strings.Join(others, ", "))
 	}
+	if replace {
+		if runs, err := labelingRunRows(filepath.Join(opts.Dir, labelingDatasetFile)); err != nil {
+			return nil, err
+		} else if runs > 0 {
+			return nil, fmt.Errorf("%s holds %d labeling job, request or attempt records; replacing it would lose paid results. Prepare into a new directory", opts.Dir, runs)
+		}
+	}
 	// Earlier splits are read before a replacement removes their dataset.
 	if opts.SplitsFrom != "" {
 		if opts.splits, err = loadLabelingSplits(opts.SplitsFrom); err != nil {
@@ -210,6 +239,37 @@ func prepareLabelingDataset(ctx context.Context, opts labelingPrepareOptions, re
 		return nil, err
 	}
 	return manifest, os.Remove(marker)
+}
+
+// labelingRunTables hold a labeling run's paid work (phase 2).
+var labelingRunTables = []string{"jobs", "requests", "attempts", "annotations", "usage"}
+
+// labelingRunRows counts the rows of a dataset's run tables, if any.
+func labelingRunRows(path string) (int, error) {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String()+"?mode=ro")
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+	total := 0
+	for _, table := range labelingRunTables {
+		var exists int
+		if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&exists); err != nil {
+			return 0, err
+		}
+		if exists == 0 {
+			continue
+		}
+		var rows int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM "` + table + `"`).Scan(&rows); err != nil {
+			return 0, err
+		}
+		total += rows
+	}
+	return total, nil
 }
 
 // labelingStatus summarizes a dataset directory.

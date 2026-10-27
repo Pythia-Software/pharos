@@ -47,8 +47,9 @@ type labelingPrepareOptions struct {
 	FreshDays, Limit int
 	Conversations    []string
 	DryRun           bool
-	// SnapshotCopy reads a static copy (a backup) immutably.
-	SnapshotCopy bool
+	// SnapshotCopy reads a static copy (a backup) immutably; Live reads a
+	// live catalog in one read transaction. One of them is required.
+	SnapshotCopy, Live bool
 	// SplitsFrom is an earlier dataset whose split assignments are kept;
 	// splits holds them, loaded before a replacement removes that dataset.
 	SplitsFrom string
@@ -80,6 +81,9 @@ type labelingUnit struct {
 	chunks, markers                                                             []labelingChunk
 	// droppedChunks counts chunks holding only markers, which become no item.
 	droppedChunks int
+	// hashes and long describe each item's target text (see labelingUnitStat).
+	hashes []string
+	long   []bool
 }
 
 // labelingConversation is what preparation keeps of each conversation.
@@ -92,7 +96,20 @@ type labelingConversation struct {
 type labelingUnitStat struct {
 	conversation, cohort, provider, depth, length string
 	items                                         int
+	// hashes are the items' normalized target-text hashes; long reports
+	// whether each text has at least labelingDuplicateChars characters.
+	hashes []string
+	long   []bool
 }
+
+// labelingDuplicateChars is the shortest normalized target text whose exact
+// repetition links families: shorter texts ("ok", "continue") recur by
+// chance, so their cross-split repeats are flagged instead.
+const labelingDuplicateChars = 40
+
+// labelingDuplicateLinkMax is the most conversations one identical text may
+// link into a family; a text in more is boilerplate.
+var labelingDuplicateLinkMax = 5
 
 // labelingPass holds the snapshot's shared inputs and the counts as
 // conversations are read.
@@ -100,6 +117,12 @@ type labelingPass struct {
 	tx             *sql.Tx
 	writer         *labelingWriter
 	reasoningStore bool
+	// targetCache holds resolved target bytes of re-sent sources.
+	targetCache map[string][]bool
+	// automated marks conversations with a user message from automation.
+	automated map[string]bool
+	// frequent holds long target texts too common to link families.
+	frequent       map[string]bool
 	conversations  map[string]*labelingConversation
 	representative map[string]string
 	lineage        *usageConversationAttribution
@@ -113,7 +136,7 @@ type labelingPass struct {
 	children map[string]*labelingChild
 	checks   []labelingDuplicateCheck
 	// parents caches a forked conversation's parent messages by role and text.
-	parents map[string]map[string]labelingParentMessage
+	parents map[string][]labelingParentMessage
 	// units counts cohort, provider, depth, length: units, items, characters.
 	units      map[[4]string]*[3]int
 	exclusions map[[2]string]int
@@ -135,7 +158,27 @@ type labelingChild struct {
 	firstID, lastID string
 }
 
-type labelingParentMessage struct{ id, createdAt string }
+type labelingParentMessage struct{ id, key string }
+
+// itemTargetHash hashes an item's target text, without markers,
+// lowercased with whitespace collapsed, and reports whether that text has at
+// least labelingDuplicateChars characters.
+func itemTargetHash(visible string, chunk labelingChunk, markers []labelingChunk) (string, bool) {
+	var target strings.Builder
+	at := chunk.Start
+	for _, marker := range markers {
+		if marker.End <= at || marker.Start >= chunk.End {
+			continue
+		}
+		target.WriteString(visible[at:max(at, marker.Start)])
+		target.WriteByte(' ')
+		at = min(chunk.End, marker.End)
+	}
+	target.WriteString(visible[at:chunk.End])
+	normalized := strings.ToLower(normalizeSpace(target.String()))
+	sum := sha256.Sum256([]byte(normalized))
+	return hex.EncodeToString(sum[:16]), utf8.RuneCountInString(normalized) >= labelingDuplicateChars
+}
 
 // normalizeSpace collapses whitespace runs to one space.
 func normalizeSpace(text string) string { return strings.Join(strings.Fields(text), " ") }
@@ -273,6 +316,9 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 		started = opts.Now()
 	}
 	progress := labelingProgress(opts.Progress, time.Now())
+	if opts.SnapshotCopy == opts.Live {
+		return nil, errors.New("prepare reads either a snapshot copy or, explicitly, a live catalog")
+	}
 	db, tx, access, err := openLabelingSnapshot(ctx, opts.CatalogPath, opts.SnapshotCopy)
 	if err != nil {
 		return nil, fmt.Errorf("open catalog read-only: %w", err)
@@ -312,8 +358,8 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 	snapshot["build"] = labelingBuild()
 
 	progress("reading works, identity links and lineage")
-	p := &labelingPass{tx: tx, reasoningStore: present["reasoning_extraction_state"], conversations: map[string]*labelingConversation{}, mainSession: map[string]string{}, sessionKind: map[string]string{},
-		childOwners: map[string]bool{}, current: map[string]bool{}, children: map[string]*labelingChild{}, parents: map[string]map[string]labelingParentMessage{},
+	p := &labelingPass{tx: tx, reasoningStore: present["reasoning_extraction_state"], targetCache: map[string][]bool{}, automated: map[string]bool{}, frequent: map[string]bool{}, conversations: map[string]*labelingConversation{}, mainSession: map[string]string{}, sessionKind: map[string]string{},
+		childOwners: map[string]bool{}, current: map[string]bool{}, children: map[string]*labelingChild{}, parents: map[string][]labelingParentMessage{},
 		units:      map[[4]string]*[3]int{},
 		exclusions: map[[2]string]int{}, counters: map[string]int{}, firstAt: map[string]string{}}
 	workspaces, err := queryMapsContext(ctx, tx, `SELECT w.id,w.source_kind,w.activity_at FROM workspaces w`)
@@ -397,10 +443,6 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 	if err != nil {
 		return nil, fmt.Errorf("authorship inputs: %w", err)
 	}
-	results, err := classifyInputsFrom(workCtx, tx, inputs)
-	if err != nil {
-		return nil, fmt.Errorf("authorship classification: %w", err)
-	}
 	// Lineage uses the launches derived on this snapshot, not the stored
 	// ledger, which may predate the newest headless runs.
 	derived := make([]map[string]any, 0, len(launches))
@@ -410,9 +452,26 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 	if p.lineage, err = usageConversationRootsWith(tx, kept, derived); err != nil {
 		return nil, err
 	}
+	// A conversation with a parent is a sub-agent to authorship, but a
+	// continuation (a Codex filename fork) is the root's own execution: its
+	// new messages are the person's. Here only, in memory.
+	for index := range inputs {
+		id := inputs[index].ConversationID
+		if inputs[index].SubAgent && p.lineage.roots[id] != nil && p.lineage.runs[id] == "" {
+			inputs[index].SubAgent = false
+			p.counters["continuation_messages"]++
+		}
+	}
+	results, err := classifyInputsFrom(workCtx, tx, inputs)
+	if err != nil {
+		return nil, fmt.Errorf("authorship classification: %w", err)
+	}
 	p.authorship = make(map[string]*authorResult, len(results))
 	for index := range results {
 		p.authorship[results[index].Input.ID] = &results[index]
+		if spans := results[index].Spans; len(spans) > 0 && spans[0].Category == spanAutomated {
+			p.automated[results[index].Input.ConversationID] = true
+		}
 	}
 	want := generations["tool_ledger_generation"] + ":" + generations["authorship_inputs_generation"] + "/" + authorshipVersion
 
@@ -459,6 +518,13 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 			for _, record := range records {
 				p.rememberChildText(child, record)
 			}
+		}
+	}
+	// An immutable read is only sound if the copy did not change under it.
+	if opts.SnapshotCopy {
+		info, err := os.Stat(opts.CatalogPath)
+		if err != nil || info.Size() != access["bytes"] || formatTime(info.ModTime().Truncate(time.Millisecond)) != access["modified_at"] {
+			return nil, fmt.Errorf("%s changed while it was read, so it is not a static copy; nothing was published", opts.CatalogPath)
 		}
 	}
 	snapshot["ended_at"] = now()
@@ -511,7 +577,33 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 	}
 	manifest := p.manifest(opts, snapshot, selection, scope, families, duplicates)
 	splits := manifest["splits"].(map[string]any)
-	splits["inherited_from"], splits["inheritance"] = nilIfEmpty(opts.SplitsFrom), inheritance
+	splits["inherited_from"], splits["assignment"] = nilIfEmpty(opts.SplitsFrom), inheritance
+	// Short identical texts are not linked; those landing in more than one
+	// split are flagged so evaluation can drop them.
+	splitsOf := map[string]map[string]bool{}
+	for _, stat := range p.stats {
+		for index, hash := range stat.hashes {
+			if !stat.long[index] || p.frequent[hash] {
+				if splitsOf[hash] == nil {
+					splitsOf[hash] = map[string]bool{}
+				}
+				splitsOf[hash][families[stat.conversation].split] = true
+			}
+		}
+	}
+	crossSplit := map[string]bool{}
+	crossItems := 0
+	for _, stat := range p.stats {
+		for index, hash := range stat.hashes {
+			if (!stat.long[index] || p.frequent[hash]) && len(splitsOf[hash]) > 1 {
+				crossSplit[hash] = true
+				crossItems++
+			}
+		}
+	}
+	splits["cross_split_duplicates"] = map[string]any{"texts": len(crossSplit), "items": crossItems, "min_linked_chars": labelingDuplicateChars,
+		"max_linked_conversations": labelingDuplicateLinkMax,
+		"note":                     "identical target texts that do not link families (shorter than min_linked_chars, or in more than max_linked_conversations conversations) and land in more than one split; their items are marked cross_split_duplicate for evaluation to drop"}
 	manifest["coverage"] = coverage
 	manifest["reasoning"] = map[string]any{
 		"extraction_version": reasoningExtractionVersion, "pending_conversations": p.counters["reasoning_pending_conversations"],
@@ -525,7 +617,7 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 		"question_form_actions": p.counters["actions_flattened_message"],
 	}
 	if p.writer != nil {
-		if err := p.writer.finish(families, manifest); err != nil {
+		if err := p.writer.finish(families, crossSplit, manifest); err != nil {
 			return nil, err
 		}
 		p.writer = nil
@@ -613,26 +705,40 @@ func (p *labelingPass) conversation(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	inherited, err := p.inheritedHistory(ctx, info, records)
+	inherited, prefix, err := p.inheritedHistory(ctx, info, records)
 	if err != nil {
 		return err
 	}
-	// context-v1: the previous request unit's visible text (a person's or an
-	// agent's) and the previous selected agent reply, even an excluded one.
-	var priorUser, priorAssistant string
-	var priorUserRef, priorAssistantRef map[string]any
+	// context-v1, per agent session (the main session, or each embedded
+	// sub-agent session): the previous request unit's visible text (a
+	// person's or an agent's) and the previous selected agent reply, even an
+	// excluded one.
+	type prior struct {
+		user, assistant       string
+		userRef, assistantRef map[string]any
+	}
+	priors := map[string]*prior{}
 	calls := map[string]string{} // call ID: the delegation message that made it
-	for _, record := range records {
+	for position, record := range records {
 		if record.kind == "delegation" && record.callID != "" {
 			calls[record.callID] = record.id
 		}
 		if record.createdAt != "" && (p.firstAt[id] == "" || record.createdAt < p.firstAt[id]) {
 			p.firstAt[id] = record.createdAt
 		}
+		session := ""
+		if p.sessionKind[record.session] == "subagent" {
+			session = record.session
+		}
+		state := priors[session]
+		if state == nil {
+			state = &prior{}
+			priors[session] = state
+		}
 		var unit *labelingUnit
 		reason, detail, duplicate := "", "", ""
-		if parent := inherited[record.id]; parent != "" {
-			reason, detail, duplicate = "inherited_history", "copied from the parent conversation before the fork", parent
+		if position < prefix {
+			reason, detail, duplicate = "inherited_history", "copied from the parent conversation before the fork", inherited[record.id]
 		} else {
 			p.rememberChildText(id, record)
 			if unit, reason, detail, err = p.record(id, record, answers, calls); err != nil {
@@ -651,20 +757,20 @@ func (p *labelingPass) conversation(ctx context.Context, id string) error {
 				}
 			}
 			if reply {
-				priorAssistant, priorAssistantRef = record.text.String, map[string]any{"message": record.id}
-				if !utf8.ValidString(priorAssistant) {
-					priorAssistant, priorAssistantRef = "", nil
+				state.assistant, state.assistantRef = record.text.String, map[string]any{"message": record.id}
+				if !utf8.ValidString(state.assistant) {
+					state.assistant, state.assistantRef = "", nil
 				}
 			}
 			continue
 		}
-		unit.context, unit.contextPrompt, unit.contextExcerpt = labelingContext(priorUser, priorAssistant)
+		unit.context, unit.contextPrompt, unit.contextExcerpt = labelingContext(state.user, state.assistant)
 		unit.contextRefs = map[string]any{}
-		if priorUser != "" {
-			unit.contextRefs["prior_user"] = priorUserRef
+		if state.user != "" {
+			unit.contextRefs["prior_user"] = state.userRef
 		}
-		if priorAssistant != "" {
-			unit.contextRefs["prior_assistant"] = priorAssistantRef
+		if state.assistant != "" {
+			unit.contextRefs["prior_assistant"] = state.assistantRef
 		}
 		p.addUnit(unit)
 		if p.writer != nil {
@@ -673,53 +779,52 @@ func (p *labelingPass) conversation(ctx context.Context, id string) error {
 			}
 		}
 		if unit.cohort == "human" || unit.cohort == "agent_in_user_role" {
-			priorUser, priorUserRef = unit.visible, map[string]any{"unit": unit.id, "message": record.id}
+			state.user, state.userRef = unit.visible, map[string]any{"unit": unit.id, "message": record.id}
 		}
 		if reply {
-			priorAssistant, priorAssistantRef = record.text.String, map[string]any{"message": record.id}
+			state.assistant, state.assistantRef = record.text.String, map[string]any{"message": record.id}
 		}
 	}
 	return nil
 }
 
 // inheritedHistory finds the records a forked conversation copied from its
-// parent: the leading run of text records that repeat (same role, same text)
-// a parent message from before the fork. It maps them to the parent message.
-// The first text record that is not a copy ends the run.
-func (p *labelingPass) inheritedHistory(ctx context.Context, info *labelingConversation, records []labelingRecord) (map[string]string, error) {
+// parent. It walks the child's text records alongside the parent's selected
+// text records, in order, while each repeats the next parent record (same
+// role, same text), and stops at the first difference. It returns the parent
+// message each copy repeats, and the number of leading records (text or not)
+// that belong to the copied prefix.
+func (p *labelingPass) inheritedHistory(ctx context.Context, info *labelingConversation, records []labelingRecord) (map[string]string, int, error) {
 	inherited := map[string]string{}
 	if info.parent == "" || p.conversations[info.parent] == nil {
-		return inherited, nil
+		return inherited, 0, nil
 	}
-	index := p.parents[info.parent]
-	if index == nil {
+	history, cached := p.parents[info.parent]
+	if !cached {
 		parentRecords, err := readLabelingRecords(ctx, p.tx, info.parent)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
-		index = map[string]labelingParentMessage{}
 		for _, record := range parentRecords {
-			if !record.selected || !record.text.Valid || strings.TrimSpace(record.text.String) == "" {
-				continue
-			}
-			key := record.role + "\x00" + textKey(record.text.String)
-			if _, seen := index[key]; !seen {
-				index[key] = labelingParentMessage{record.id, record.createdAt}
+			if record.selected && record.text.Valid && strings.TrimSpace(record.text.String) != "" {
+				history = append(history, labelingParentMessage{record.id, record.role + "\x00" + textKey(record.text.String)})
 			}
 		}
-		p.parents[info.parent] = index
+		p.parents[info.parent] = history
 	}
-	for _, record := range records {
+	next, prefix := 0, 0
+	for position, record := range records {
 		if !record.text.Valid || strings.TrimSpace(record.text.String) == "" {
 			continue
 		}
-		match, ok := index[record.role+"\x00"+textKey(record.text.String)]
-		if !ok || info.started != "" && match.createdAt != "" && match.createdAt > info.started {
+		if next >= len(history) || history[next].key != record.role+"\x00"+textKey(record.text.String) {
 			break
 		}
-		inherited[record.id] = match.id
+		inherited[record.id] = history[next].id
+		next++
+		prefix = position + 1
 	}
-	return inherited, nil
+	return inherited, prefix, nil
 }
 
 // labelingAnswer is a structured answer to a question an agent asked: a
@@ -727,7 +832,7 @@ func (p *labelingPass) inheritedHistory(ctx context.Context, info *labelingConve
 type labelingAnswer struct {
 	kind, status, source, question, option, text, actor string
 	titleStart, titleEnd, start, end                    int
-	questionConversation, questionMessage               string
+	questionConversation, questionMessage, questionCall string
 }
 
 // toolResultAnswers reads the answers to question tools whose results this
@@ -735,7 +840,7 @@ type labelingAnswer struct {
 // maps to nil: a counted coverage gap.
 func (p *labelingPass) toolResultAnswers(ctx context.Context, conversation string) (map[string][]labelingAnswer, error) {
 	answers := map[string][]labelingAnswer{}
-	calls, err := queryMapsContext(ctx, p.tx, `SELECT t.tool_name,t.result_message_id,COALESCE(t.call_message_id,'') call_message_id,
+	calls, err := queryMapsContext(ctx, p.tx, `SELECT t.tool_name,t.result_message_id,COALESCE(t.call_message_id,'') call_message_id,COALESCE(t.call_id,t.id) call_id,
 		COALESCE(c.text,'') call_text,COALESCE(r.text,'') result_text FROM tool_calls t
 		LEFT JOIN messages c ON c.id=t.call_message_id LEFT JOIN messages r ON r.id=t.result_message_id
 		WHERE t.conversation_id=? AND t.result_message_id IS NOT NULL AND (t.tool_name LIKE '%question%' OR t.tool_name LIKE '%user_input%')`, conversation)
@@ -747,6 +852,16 @@ func (p *labelingPass) toolResultAnswers(ctx context.Context, conversation strin
 		case "request_user_input", "request_user_input_async", "askuserquestion", "ask_question":
 			result := firstString(call["result_message_id"])
 			parsed := parseQuestionAnswers(asString(call["call_text"]), asString(call["result_text"]))
+			// Only an interactive session's answer to a question asked in it
+			// is credited to a person; automated, headless and delegated runs
+			// have no person to answer.
+			interactive := !p.automated[conversation] && p.lineage.roots[conversation] != nil && p.lineage.runs[conversation] == ""
+			for index := range parsed {
+				parsed[index].questionCall = firstString(call["call_id"])
+				if !interactive {
+					parsed[index].actor, parsed[index].status = "unknown", "tool_result_answer_unverified"
+				}
+			}
 			if len(parsed) == 0 {
 				p.counters["unparsed_answer_shape:"+questionAnswerShape(asString(call["call_text"]), asString(call["result_text"]))]++
 			}
@@ -1031,18 +1146,16 @@ func matchDelegation(check labelingDuplicateCheck, child *labelingChild) (string
 func (p *labelingPass) record(conversation string, record labelingRecord, answers map[string][]labelingAnswer, calls map[string]string) (*labelingUnit, string, string, error) {
 	text := record.text.String
 	candidate := labelingCandidate(record)
-	if parsed, asked := answers[record.id]; asked {
-		if len(parsed) == 0 {
-			return nil, "human_answer_in_tool_result", "a person's answer that reached the agent only as a tool result, not parsed", nil
-		}
+	switch parsed, asked := answers[record.id]; {
+	case !record.selected:
+		return nil, "unselected_branch", "", nil
+	case asked && len(parsed) == 0:
+		return nil, "human_answer_in_tool_result", "a person's answer that reached the agent only as a tool result, not parsed", nil
+	case asked:
 		if err := p.actions(record.id, conversation, parsed); err != nil {
 			return nil, "", "", err
 		}
-		return nil, "tool_result_answer", "answers recorded as actions", nil
-	}
-	switch {
-	case !record.selected:
-		return nil, "unselected_branch", "", nil
+		return nil, parsed[0].status, "answers recorded as actions", nil
 	case record.kind == "metadata" && strings.HasPrefix(text, `{"reason":`):
 		if value, ok := parseReaderJSON(text); ok && firstString(mapValue(value)["type"]) == "reasoning_unavailable" {
 			return nil, "reasoning_unavailable", "", nil
@@ -1091,7 +1204,7 @@ func (p *labelingPass) record(conversation string, record labelingRecord, answer
 			rendered = agentUserPieces(text)
 		} else {
 			unit.cohort, unit.actor = "human", "human"
-			rendered = humanPieces(text, result.Spans)
+			rendered = humanPieces(text, result.Spans, p.reusePieces)
 		}
 		flattened := []labelingAnswer{}
 		for _, answer := range result.Answers {
@@ -1148,6 +1261,10 @@ func (p *labelingPass) record(conversation string, record labelingRecord, answer
 	if len(unit.chunks) > 1 {
 		unit.length = "long"
 	}
+	for _, chunk := range unit.chunks {
+		hash, long := itemTargetHash(unit.visible, chunk, unit.markers)
+		unit.hashes, unit.long = append(unit.hashes, hash), append(unit.long, long)
+	}
 	return unit, "", "", nil
 }
 
@@ -1155,6 +1272,7 @@ func (p *labelingPass) record(conversation string, record labelingRecord, answer
 func (p *labelingPass) actions(message, conversation string, answers []labelingAnswer) error {
 	for position, answer := range answers {
 		p.counters["actions_"+answer.source]++
+		p.counters["action_status:"+answer.status]++
 		if p.writer != nil {
 			if err := p.writer.action(message, conversation, position, answer); err != nil {
 				return err
@@ -1220,7 +1338,7 @@ func (p *labelingPass) addUnit(unit *labelingUnit) {
 	p.units[key][0]++
 	p.units[key][1] += len(unit.chunks)
 	p.units[key][2] += utf8.RuneCountInString(unit.visible)
-	p.stats = append(p.stats, labelingUnitStat{unit.conversation, unit.cohort, unit.provider, depth, unit.length, len(unit.chunks)})
+	p.stats = append(p.stats, labelingUnitStat{unit.conversation, unit.cohort, unit.provider, depth, unit.length, len(unit.chunks), unit.hashes, unit.long})
 }
 
 // labelingFamily is the family (splits-v1) a conversation belongs to.
@@ -1281,6 +1399,46 @@ func labelingFamilies(ids []string, p *labelingPass, sessions []map[string]any, 
 			}
 		}
 	}
+	// Identical target texts of some length are one example wherever they
+	// were sent (a repeated prompt, a template): their conversations are one
+	// family. Family sizes before these links are reported.
+	unitsBy := func() (int, int) {
+		sizes := map[string]int{}
+		for _, stat := range p.stats {
+			sizes[find(stat.conversation)]++
+		}
+		largest := 0
+		for _, size := range sizes {
+			largest = max(largest, size)
+		}
+		return len(sizes), largest
+	}
+	stats := map[string]int{}
+	stats["families_before_duplicate_links"], stats["largest_units_before_duplicate_links"] = unitsBy()
+	// A text repeated in many conversations is boilerplate (a canned prompt,
+	// a stock reply); linking through it chained half the library into one
+	// family, so such texts are flagged as cross-split duplicates instead.
+	holders := map[string][]string{}
+	for _, stat := range p.stats {
+		for index, hash := range stat.hashes {
+			if stat.long[index] && !slices.Contains(holders[hash], stat.conversation) && len(holders[hash]) <= labelingDuplicateLinkMax {
+				holders[hash] = append(holders[hash], stat.conversation)
+			}
+		}
+	}
+	for hash, conversations := range holders {
+		if len(conversations) > labelingDuplicateLinkMax {
+			p.frequent[hash] = true
+			stats["frequent_texts"]++
+			continue
+		}
+		for _, conversation := range conversations[1:] {
+			union(conversations[0], conversation)
+		}
+		if len(conversations) > 1 {
+			stats["linked_texts"]++
+		}
+	}
 	smallest, first, old := map[string]string{}, map[string]string{}, map[string]map[string]bool{}
 	oldBy := map[string]string{} // family root: split of its smallest previously assigned member
 	sorted := slices.Clone(ids)
@@ -1305,7 +1463,6 @@ func labelingFamilies(ids []string, p *labelingPass, sessions []map[string]any, 
 			old[root][split] = true
 		}
 	}
-	stats := map[string]int{}
 	families := map[string]labelingFamily{}
 	for _, id := range ids {
 		root := find(id)
@@ -1318,7 +1475,10 @@ func labelingFamilies(ids []string, p *labelingPass, sessions []map[string]any, 
 				stats["joined_old_family"]++
 			}
 			if len(old[root]) > 1 {
-				stats["conflicting_conversations"]++
+				// Linked work an earlier dataset split apart can belong to no
+				// split without leaking: it is kept out of training and evaluation.
+				family.split = "quarantine"
+				stats["quarantined_conversations"]++
 			}
 		}
 		families[id] = family
@@ -1465,10 +1625,90 @@ func (p *labelingPass) manifest(opts labelingPrepareOptions, snapshot, selection
 			"note": "delegation units that repeat a child's message (equal or containing, whitespace-normalized) are kept with duplicate_of set; inherited history is excluded"},
 		"invalid_utf8": p.exclusionTotal("invalid_utf8"),
 		"actions": map[string]any{"question_forms": p.counters["actions_flattened_message"], "tool_results": p.counters["actions_tool_result"],
+			"by_status":             p.prefixed("action_status:"),
 			"unparsed_tool_results": p.exclusionTotal("human_answer_in_tool_result"), "unparsed_shapes": p.prefixed("unparsed_answer_shape:")},
 		"redacted_secrets":          p.counters["redacted_secrets"],
 		"unrecognized_harness_tags": p.counters["unrecognized_harness_tags"],
 		"marker_only_chunks":        p.counters["marker_only_chunks"],
 		"splits":                    map[string]any{"families": len(familyIDs), "family_sizes": familyStats, "coverage": coverage},
 	}
+}
+
+// reusePieces resolves a re-sent piece against its source message (see
+// labelingReuse): the matched text is found in the source, and only the
+// bytes that were target there, resolved the same way, stay target.
+func (p *labelingPass) reusePieces(text string, piece labelingPiece) []labelingPiece {
+	return p.reuseFrom(text, piece, map[string]bool{})
+}
+
+func (p *labelingPass) reuseFrom(text string, piece labelingPiece, visiting map[string]bool) []labelingPiece {
+	source := p.authorship[piece.SourceMessage]
+	if source == nil {
+		return nil
+	}
+	value := text[piece.Start:piece.End]
+	core := strings.TrimSpace(value)
+	at := strings.Index(source.Input.Text, core)
+	targets := p.sourceTargets(piece.SourceMessage, visiting)
+	if core == "" || at < 0 || targets == nil {
+		return nil
+	}
+	offset := piece.Start + strings.Index(value, core)
+	parts := []labelingPiece{}
+	add := func(start, end int, target bool) {
+		part := piece
+		part.Start, part.End = start, end
+		if !target {
+			part.Role, part.Status = pieceContext, "reused_unverified"
+		}
+		if last := len(parts) - 1; last >= 0 && parts[last].Status == part.Status {
+			parts[last].End = end
+			return
+		}
+		parts = append(parts, part)
+	}
+	if offset > piece.Start {
+		add(piece.Start, offset, true) // leading whitespace
+	}
+	for k := 0; k < len(core); {
+		end := k
+		for end < len(core) && targets[at+end] == targets[at+k] {
+			end++
+		}
+		add(offset+k, offset+end, targets[at+k])
+		k = end
+	}
+	if tail := offset + len(core); tail < piece.End {
+		add(tail, piece.End, parts[len(parts)-1].Role == pieceTarget)
+	}
+	return parts
+}
+
+// sourceTargets marks, byte by byte, which text of a user message is target
+// under human-pieces-v1, resolving its own re-sent pieces in turn. It returns
+// nil for a message without classification, an automated one, or a cycle.
+func (p *labelingPass) sourceTargets(id string, visiting map[string]bool) []bool {
+	if mask, ok := p.targetCache[id]; ok {
+		return mask
+	}
+	result := p.authorship[id]
+	if result == nil || visiting[id] || len(result.Spans) == 0 || result.Spans[0].Category == spanAutomated {
+		return nil
+	}
+	visiting[id] = true
+	defer delete(visiting, id)
+	text := result.Input.Text
+	pieces, _, _ := cleanPieces(text, resolveReuse(text, mergeFeedbackJSON(text, result.Spans), func(text string, piece labelingPiece) []labelingPiece {
+		return p.reuseFrom(text, piece, visiting)
+	}))
+	mask := make([]bool, len(text))
+	for _, piece := range pieces {
+		if piece.Role == pieceTarget {
+			for index := piece.Start; index < piece.End; index++ {
+				mask[index] = true
+			}
+		}
+	}
+	p.targetCache[id] = mask
+	return mask
 }

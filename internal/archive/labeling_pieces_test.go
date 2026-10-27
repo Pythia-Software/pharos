@@ -70,7 +70,9 @@ func TestHumanPiecesSeparateTheirMaterial(t *testing.T) {
 	cases := []struct {
 		name, text, visible string
 		prepare             func(*classifier)
-		check               func(t *testing.T, text string, unit humanUnit)
+		// verified treats re-sent text as the person's, as its source was.
+		verified bool
+		check    func(t *testing.T, text string, unit humanUnit)
 	}{{
 		name:    "mixed harness, typed and pasted code",
 		text:    "<system-reminder>\nKeep answers short.\n</system-reminder>\nWhy does this fail?\n```go\nfunc main() { panic(\"boom\") }\n```\nIt panics on start.",
@@ -95,6 +97,7 @@ func TestHumanPiecesSeparateTheirMaterial(t *testing.T) {
 		prepare: func(c *classifier) {
 			classifyOne(c, "earlier-chat", "Please rerun the migration against staging and compare the row counts with production afterwards", 0)
 		},
+		verified: true,
 		check: func(t *testing.T, text string, unit humanUnit) {
 			if piece := pieceWithStatus(unit, "reused_own_message"); piece.Role != pieceTarget || piece.SourceConversation != "earlier-chat" {
 				t.Fatalf("re-sent = %+v", unit.Pieces)
@@ -141,6 +144,17 @@ func TestHumanPiecesSeparateTheirMaterial(t *testing.T) {
 			}
 		},
 	}, {
+		name:    "re-sent text whose source is unknown",
+		text:    "Please rerun the migration against staging and compare the row counts with production afterwards\n\nand hurry",
+		visible: "⟦re-sent text of unverified origin, context only, 96 chars: \"Please rerun the migration against staging and compare the row counts with production afterwards\"⟧\n\nand hurry",
+		prepare: func(c *classifier) {
+			classifyOne(c, "earlier-chat", "Please rerun the migration against staging and compare the row counts with production afterwards", 0)
+		},
+	}, {
+		name:    "an attachment and a question mark",
+		text:    "@⟦screenshot.png⟧(.context%2Fattachments%2Fab%2Fscreenshot.png) ?",
+		visible: "⟦attachment reference, context only, 63 chars: \"@[screenshot.png](.context%2Fattachments%2Fab%2Fscreenshot.png)\"⟧ ?",
+	}, {
 		name: "deliberate short replies", text: "+1", visible: "+1",
 	}, {
 		name: "a lone question mark", text: "?", visible: "?",
@@ -154,7 +168,11 @@ func TestHumanPiecesSeparateTheirMaterial(t *testing.T) {
 				tc.prepare(c)
 			}
 			spans := classifyOne(c, "chat", tc.text, 30)
-			unit := humanPieces(tc.text, spans)
+			var reuse labelingReuse
+			if tc.verified {
+				reuse = func(_ string, piece labelingPiece) []labelingPiece { return []labelingPiece{piece} }
+			}
+			unit := humanPieces(tc.text, spans, reuse)
 			if unit.Exclude != "" || unit.Visible != tc.visible {
 				t.Fatalf("visible = %q (excluded %q), want %q; spans %+v", unit.Visible, unit.Exclude, tc.visible, spans)
 			}
@@ -171,11 +189,11 @@ func TestHumanPiecesExcludeResidueAndEmptyTargets(t *testing.T) {
 	c := newClassifier(nil)
 	c.agentText.add(authorAt(0), textOrigin{"agent-chat", "agent-reply"}, shingles(wordTokens(reply)))
 	text := reply + "\n\n?"
-	if unit := humanPieces(text, classifyOne(c, "chat", text, 10)); unit.Exclude != "residual_punctuation" {
+	if unit := humanPieces(text, classifyOne(c, "chat", text, 10), nil); unit.Exclude != "residual_punctuation" {
 		t.Fatalf("punctuation left after a quote = %+v", unit)
 	}
 	pasted := "```\nlog line one\nlog line two\n```"
-	if unit := humanPieces(pasted, classifyOne(c, "other", pasted, 20)); unit.Exclude != "no_target_text" {
+	if unit := humanPieces(pasted, classifyOne(c, "other", pasted, 20), nil); unit.Exclude != "no_target_text" {
 		t.Fatalf("a wholly pasted message = %+v", unit)
 	}
 }
@@ -200,7 +218,7 @@ func TestQuestionFormAnswersAreActions(t *testing.T) {
 	if again := classifyOne(c, "chat", "Which mode?\nText", 6); len(again) == 0 || len(c.answers) != 1 || c.answers[0].Origin.message != "asked-again" || c.answers[0].Option != "Text" {
 		t.Fatalf("answers to a repeated question = %+v", c.answers)
 	}
-	unit := humanPieces(text, spans)
+	unit := humanPieces(text, spans, nil)
 	if !strings.HasSuffix(unit.Visible, "Also check mobile") || strings.Contains(unit.Visible, "Records") {
 		t.Fatalf("visible = %q", unit.Visible)
 	}

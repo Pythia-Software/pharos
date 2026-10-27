@@ -65,6 +65,9 @@ type humanUnit struct {
 	Pieces  []labelingPiece
 	Visible string
 	Markers []labelingChunk
+	// Copied reports a marker for copied material (quoted, pasted, or reused
+	// without verified human origin), which can leave punctuation behind.
+	Copied  bool
 	Exclude string
 	// Secrets counts redacted secret ranges; Unrecognized, leading blocks of
 	// harness tags authorship does not know.
@@ -219,6 +222,8 @@ func markerLabel(piece labelingPiece) string {
 		return "likely pasted text"
 	case spanAttachment:
 		return "attachment reference"
+	case spanResent:
+		return "re-sent text of unverified origin"
 	case "secret":
 		return "redacted secret"
 	case spanHarness:
@@ -255,15 +260,48 @@ func markerExcerpt(text string, limit int) string {
 // or symbol is kept when that is the whole message (a "?" or "+1" sent on
 // purpose) and excluded as residual punctuation when material around it was
 // excluded.
-func humanPieces(text string, spans []authorSpan) humanUnit {
-	pieces, tags, secrets := cleanPieces(text, mergeFeedbackJSON(text, spans))
+func humanPieces(text string, spans []authorSpan, reuse labelingReuse) humanUnit {
+	pieces, tags, secrets := cleanPieces(text, resolveReuse(text, mergeFeedbackJSON(text, spans), reuse))
 	unit := renderPieces(text, pieces)
 	unit.Secrets, unit.Unrecognized = secrets, tags
-	if unit.Exclude == "" && !meaningfulText(targetText(text, unit.Pieces)) && len(unit.Markers) > 0 {
+	if unit.Exclude == "" && !meaningfulText(targetText(text, unit.Pieces)) && unit.Copied {
 		unit.Exclude = "residual_punctuation"
 	}
 	return unit
 }
+
+// labelingReuse resolves a re-sent piece against its source message: it
+// returns the piece split into what was target in the source (kept as
+// reused_own_message) and the rest (context, reused_unverified). Nil, or a
+// source it cannot verify, leaves the whole piece unverified.
+type labelingReuse func(text string, piece labelingPiece) []labelingPiece
+
+// resolveReuse applies reuse to every re-sent piece. Reuse inherits the
+// source's attribution: re-sending a pasted log or old agent output does not
+// make it the person's words.
+func resolveReuse(text string, pieces []labelingPiece, reuse labelingReuse) []labelingPiece {
+	result := make([]labelingPiece, 0, len(pieces))
+	for _, piece := range pieces {
+		if piece.Status != "reused_own_message" {
+			result = append(result, piece)
+			continue
+		}
+		var parts []labelingPiece
+		if reuse != nil {
+			parts = reuse(text, piece)
+		}
+		if parts == nil {
+			piece.Role, piece.Status = pieceContext, "reused_unverified"
+			parts = []labelingPiece{piece}
+		}
+		result = append(result, parts...)
+	}
+	return result
+}
+
+// copiedStatuses are the context statuses whose markers mean copied
+// material, after which leftover punctuation is residue.
+var copiedStatuses = map[string]bool{"quoted": true, "likely_pasted": true, "reused_unverified": true}
 
 // renderPieces builds the visible text: target pieces in order, exactly as
 // stored (or decoded, for a transformed piece), and one marker for each run of
@@ -273,6 +311,7 @@ func renderPieces(text string, pieces []labelingPiece) humanUnit {
 	var visible strings.Builder
 	markers := []labelingChunk{}
 	budget, targets := labelingExcerptBudget, 0
+	copied := false
 	run := []int{}
 	flush := func(leading, final bool) {
 		defer func() { run = run[:0] }()
@@ -312,6 +351,7 @@ func renderPieces(text string, pieces []labelingPiece) humanUnit {
 				shown.WriteString(text[pieces[index].Start:pieces[index].End])
 			}
 			start := visible.Len()
+			copied = copied || copiedStatuses[first.Status]
 			limit := min(labelingExcerptChars, budget)
 			if first.Role == pieceContext && limit >= 40 {
 				value := markerExcerpt(shown.String(), limit)
@@ -346,7 +386,7 @@ func renderPieces(text string, pieces []labelingPiece) humanUnit {
 		return humanUnit{Pieces: pieces, Exclude: "no_target_text"}
 	}
 	flush(false, true)
-	unit := humanUnit{Pieces: pieces, Visible: visible.String(), Markers: markers}
+	unit := humanUnit{Pieces: pieces, Visible: visible.String(), Markers: markers, Copied: copied}
 	trimLabelingEdges(text, &unit)
 	return unit
 }

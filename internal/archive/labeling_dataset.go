@@ -32,7 +32,9 @@ CREATE TABLE pieces(
   source_conversation_id TEXT, source_message_id TEXT, PRIMARY KEY(unit_id, position)) WITHOUT ROWID;
 CREATE TABLE items(
   id TEXT PRIMARY KEY, unit_id TEXT NOT NULL, chunk_index INTEGER NOT NULL, chunk_count INTEGER NOT NULL,
-  visible_start INTEGER NOT NULL, visible_end INTEGER NOT NULL, text TEXT NOT NULL, chars INTEGER NOT NULL, source_ranges TEXT NOT NULL);
+  visible_start INTEGER NOT NULL, visible_end INTEGER NOT NULL, text TEXT NOT NULL, chars INTEGER NOT NULL, source_ranges TEXT NOT NULL,
+  target_hash TEXT NOT NULL, cross_split_duplicate INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX items_hash_idx ON items(target_hash);
 CREATE INDEX items_unit_idx ON items(unit_id);
 CREATE TABLE sentences(
   unit_id TEXT NOT NULL, position INTEGER NOT NULL, piece_position INTEGER NOT NULL, start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL,
@@ -40,7 +42,7 @@ CREATE TABLE sentences(
 CREATE TABLE actions(
   message_id TEXT NOT NULL, position INTEGER NOT NULL, conversation_id TEXT NOT NULL, actor TEXT NOT NULL, kind TEXT NOT NULL,
   status TEXT NOT NULL, source TEXT NOT NULL, question TEXT NOT NULL, option TEXT, answer_text TEXT, title_start INTEGER, title_end INTEGER,
-  answer_start INTEGER, answer_end INTEGER, question_conversation_id TEXT, question_message_id TEXT,
+  answer_start INTEGER, answer_end INTEGER, question_conversation_id TEXT, question_message_id TEXT, question_call_id TEXT,
   PRIMARY KEY(message_id, position));
 CREATE TABLE exclusions(message_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, cohort TEXT NOT NULL, reason TEXT NOT NULL, detail TEXT, duplicate_of TEXT);
 CREATE TABLE families(conversation_id TEXT PRIMARY KEY, family_id TEXT NOT NULL, split TEXT NOT NULL, first_at TEXT);
@@ -140,9 +142,9 @@ func (w *labelingWriter) unit(unit *labelingUnit) error {
 	for index, chunk := range unit.chunks {
 		ranges, _ := json.Marshal(chunkSourceRanges(unit.pieces, chunk))
 		text := unit.visible[chunk.Start:chunk.End]
-		if err := w.exec(`INSERT INTO items(id,unit_id,chunk_index,chunk_count,visible_start,visible_end,text,chars,source_ranges) VALUES(?,?,?,?,?,?,?,?,?)`,
+		if err := w.exec(`INSERT INTO items(id,unit_id,chunk_index,chunk_count,visible_start,visible_end,text,chars,source_ranges,target_hash) VALUES(?,?,?,?,?,?,?,?,?,?)`,
 			labelingID("i_", labelingUnitsVersion, labelingChunkVersion, unit.messageID, fmt.Sprint(index)), unit.id, index, len(unit.chunks),
-			chunk.Start, chunk.End, text, utf8.RuneCountInString(text), string(ranges)); err != nil {
+			chunk.Start, chunk.End, text, utf8.RuneCountInString(text), string(ranges), unit.hashes[index]); err != nil {
 			return err
 		}
 	}
@@ -191,9 +193,9 @@ func (w *labelingWriter) action(message, conversation string, position int, answ
 		return value
 	}
 	return w.exec(`INSERT INTO actions(message_id,position,conversation_id,actor,kind,status,source,question,option,answer_text,title_start,title_end,answer_start,answer_end,
-		question_conversation_id,question_message_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, message, position, conversation, answer.actor, answer.kind,
+		question_conversation_id,question_message_id,question_call_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, message, position, conversation, answer.actor, answer.kind,
 		answer.status, answer.source, answer.question, nilIfEmpty(answer.option), nilIfEmpty(answer.text), rangeValue(answer.titleStart), rangeValue(answer.titleEnd),
-		rangeValue(answer.start), rangeValue(answer.end), nilIfEmpty(answer.questionConversation), nilIfEmpty(answer.questionMessage))
+		rangeValue(answer.start), rangeValue(answer.end), nilIfEmpty(answer.questionConversation), nilIfEmpty(answer.questionMessage), nilIfEmpty(answer.questionCall))
 }
 
 func (w *labelingWriter) duplicate(message, of, relation string) error {
@@ -201,7 +203,12 @@ func (w *labelingWriter) duplicate(message, of, relation string) error {
 }
 
 // finish records families and splits, stores the manifest, and commits.
-func (w *labelingWriter) finish(families map[string]labelingFamily, manifest map[string]any) error {
+func (w *labelingWriter) finish(families map[string]labelingFamily, crossSplit map[string]bool, manifest map[string]any) error {
+	for hash := range crossSplit {
+		if err := w.exec(`UPDATE items SET cross_split_duplicate=1 WHERE target_hash=?`, hash); err != nil {
+			return err
+		}
+	}
 	for conversation, family := range families {
 		if err := w.exec(`INSERT INTO families(conversation_id,family_id,split,first_at) VALUES(?,?,?,?)`, conversation, family.id, family.split, nilIfEmpty(family.first)); err != nil {
 			return err

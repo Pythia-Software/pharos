@@ -99,6 +99,7 @@ type labelingPlanOptions struct {
 	ItemsPerRequest, MaxRequestChars int
 	Concurrency, LimitItems          int
 	Cohorts, Splits                  []string
+	IncludeDuplicates                bool
 	OverheadTokens, OutputPerItem    float64
 	SecondsPerRequest, CharsPerToken float64
 	TokensPerMinute                  float64
@@ -116,6 +117,7 @@ func runLabelingPlan(args []string, stdout io.Writer) error {
 	flags.IntVar(&opts.MaxRequestChars, "max-request-chars", 12000, "characters of item text and context per request; a larger item goes alone")
 	flags.IntVar(&opts.Concurrency, "concurrency", 3, "concurrent requests")
 	flags.IntVar(&opts.LimitItems, "limit-items", 0, "plan only the first N selected items")
+	flags.BoolVar(&opts.IncludeDuplicates, "include-duplicates", false, "also plan delegation units that repeat a child's message")
 	var cohorts, splits stringList
 	flags.Var(&cohorts, "cohort", "plan only this cohort (repeatable)")
 	flags.Var(&splits, "split", "plan only this split (repeatable)")
@@ -166,19 +168,25 @@ func planLabeling(ctx context.Context, opts labelingPlanOptions) (map[string]any
 		return nil, err
 	}
 	defer db.Close()
-	rows, err := db.QueryContext(ctx, `SELECT i.id,u.cohort,COALESCE(u.split,''),i.chars,u.context_prompt FROM items i JOIN units u ON u.id=i.unit_id ORDER BY i.id`)
+	rows, err := db.QueryContext(ctx, `SELECT i.id,u.cohort,COALESCE(u.split,''),i.chars,u.context_prompt,u.duplicate_of IS NOT NULL FROM items i JOIN units u ON u.id=i.unit_id ORDER BY i.id`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	items := []labelingPlanItem{}
+	duplicates := 0
 	for rows.Next() {
 		var item labelingPlanItem
 		var context string
-		if err := rows.Scan(&item.id, &item.cohort, &item.split, &item.chars, &context); err != nil {
+		var duplicate bool
+		if err := rows.Scan(&item.id, &item.cohort, &item.split, &item.chars, &context, &duplicate); err != nil {
 			return nil, err
 		}
 		if len(opts.Cohorts) > 0 && !slices.Contains(opts.Cohorts, item.cohort) || len(opts.Splits) > 0 && !slices.Contains(opts.Splits, item.split) {
+			continue
+		}
+		if duplicate && !opts.IncludeDuplicates {
+			duplicates++
 			continue
 		}
 		item.chars += utf8.RuneCountInString(context)
@@ -241,7 +249,8 @@ func planLabeling(ctx context.Context, opts labelingPlanOptions) (map[string]any
 	if opts.Effort != "high" {
 		assumptions = append(assumptions, fmt.Sprintf("Effort %s was not calibrated; the measurements are at effort high.", opts.Effort))
 	}
-	selection := map[string]any{"cohorts": opts.Cohorts, "splits": opts.Splits, "limit_items": opts.LimitItems}
+	selection := map[string]any{"cohorts": opts.Cohorts, "splits": opts.Splits, "limit_items": opts.LimitItems,
+		"include_duplicates": opts.IncludeDuplicates, "duplicate_items_skipped": duplicates}
 	return map[string]any{
 		"dataset": opts.Dir, "route": opts.Route, "model": opts.Model, "effort": opts.Effort, "selection": selection,
 		"items": len(items), "item_chars": chars, "requests": len(requests), "items_per_request": opts.ItemsPerRequest,

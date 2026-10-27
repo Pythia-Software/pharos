@@ -43,7 +43,7 @@ var labelingTables = []struct {
 		{"parent_id", "NULL"}, {"model", "NULL"}, {"effort", "NULL"}, {"delegation_message_id", "NULL"}, {"child_conversation_id", "NULL"}},
 		"no agent sessions: delegation depth falls back to stored depth and delegation duplicates are not found"},
 	{"agent_session_messages", []labelingColumn{{"agent_session_id", "NULL"}, {"message_id", "NULL"}}, "no embedded agent session ownership"},
-	{"tool_calls", []labelingColumn{{"id", "NULL"}, {"conversation_id", "NULL"}, {"call_message_id", "NULL"}, {"result_message_id", "NULL"},
+	{"tool_calls", []labelingColumn{{"id", "NULL"}, {"call_id", "NULL"}, {"conversation_id", "NULL"}, {"call_message_id", "NULL"}, {"result_message_id", "NULL"},
 		{"tool_name", "NULL"}, {"tool_category", "NULL"}, {"command", "NULL"}, {"backgrounded", "0"}, {"started_at", "NULL"}, {"ended_at", "NULL"}},
 		"no tool ledger: headless-run launches and question-tool answers are not read"},
 	{"tool_commands", []labelingColumn{{"tool_call_id", "NULL"}, {"program", "NULL"}, {"subcommand", "NULL"}, {"command", "NULL"}},
