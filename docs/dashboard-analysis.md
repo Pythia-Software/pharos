@@ -106,6 +106,11 @@ cannot use to the nearest one it can:
   - Share displays take no threshold: a share's denominator is every group.
     Groups beyond `groupLimit` still count in the denominator through Query
     Table's exact Other.
+- **Shares need groups.** With no breakdown there is nothing to divide, so a
+  share becomes bars.
+- **No legacy link.** The analysis views do not link to the legacy page.
+  That page has no analysis views, so it would show the grouped query under
+  its default chart.
 - **Groups drawn.** Bars and boxes show 12 groups and pies 8. The trend's
   `seriesLimit` belongs to the trend alone.
 - **Leaving for the trend.** The trend is not catalog-driven yet (phase 2).
@@ -113,6 +118,9 @@ cannot use to the nearest one it can:
   amounts or shares. It draws them over the dashboard's filters alone.
   - Mapping is pure and reversible, inside `switchView`: cost shown as shares
     becomes "% API Cost", and back.
+  - A unit compare maps only when it adds up records (Total). A count, mean,
+    median or largest of units is another quantity, so the trend is
+    unavailable for it too.
   - For any other measure, `trendUnavailable` gives the reason. This covers
     ratios, input, output, reach counts, and fully priced cost, whose
     population the trend cannot hold. The View control disables Over time
@@ -150,10 +158,16 @@ chart clause, and the supporting query that "View supporting query" opens.
       which the dashboard does not know. A date's weekday is the same in
       every zone, so days fold as dates. The weekday cards follow the same
       rule: their keys are dates in their query's zone.
-    - The range filter selects whole daily records by timestamp, so every
-      returned date is folded, even one just before the viewer's first date.
-      Idle dates pad to the viewer's range.
-    - Dates from the viewer's current day on are left out as incomplete.
+    - Only complete dates count, by the rule `weekdayMetric` uses for the
+      cards; a test runs both folds on the same daily totals.
+      - The weekday query's range starts at the viewer's next local midnight
+        (`completeDays`). A preset such as "Last 30 days" opened mid-afternoon
+        would otherwise return the first date with only part of its records.
+      - Dates from the viewer's current day on are left out as incomplete.
+      - Idle dates pad out the viewer's range.
+    - When the recording Mac's zone differs from the viewer's, a date just
+      before the first one can still be returned, holding part of a day. It
+      is left out of the fold and reported beneath the chart.
     - The note says which rule applies.
   - **Range.** An hour profile allows 400 days: every hour of them fits the
     query's 10,000-group limit.
@@ -180,7 +194,9 @@ chart clause, and the supporting query that "View supporting query" opens.
   refuses the budget;
 - grouped queries go to `/query-v3` (`postQueryStateMetrics` in
   `metric-request.ts`);
-- a shared snapshot evaluates its own rows.
+- a shared snapshot evaluates its own rows. An `hour` filter first selects
+  the daily rows holding a matching hour, for grouped queries as well as
+  record metrics, as the service's `/query-v3` path does.
 
 `web/src/dashboard-analysis.tsx` renders the control bar, Query Table UI's
 `MetricCard`, the supporting-query links and a note stating what one
@@ -249,6 +265,12 @@ cache-share denominator fails.
    adding compare, distribution, scatter and cycle views beside the existing
    trend.
 2. **Trend options and more dashboards.**
+   - Let each cycle entry declare how its keys work. A recorded date (usage
+     `day`) and an instant (usage `hour`) work today. A `dateGrouping` over
+     timestamps in the viewer's zone is needed for Human Words and
+     Parallelism, whose weekday cards use it. One function should then
+     derive the zone, the complete-day range and the key times for both
+     `cycleResult` and `weekdayMetric`, instead of each doing it.
    - Make Over time catalog-driven, so it draws every measure and population
      the other views do. Fully priced cost, ratios, input, output and reach
      counts then gain Over time.

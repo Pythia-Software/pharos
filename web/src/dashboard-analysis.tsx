@@ -45,13 +45,15 @@ const axis = (value?: string) => value === "logarithmic" ? "logarithmic" : "line
 // Compare, distribution, scatter and cycle views over one catalog. Each view
 // shows only the controls it uses; changes are normalized so the saved state
 // always describes the chart on screen.
-export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, dataset, state, where, onChange, onView, onFilter, local, currentURL }: {
+export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, dataset, state, where, onChange, onView, onFilter, local }: {
   catalog: AnalysisCatalog; schema: FieldSchema<any>; dataset: UsageDataset; state: T; where: WhereTerm[];
-  onChange: (next: Partial<T>) => void; onView: (view: AnalysisView) => void; onFilter: FilterChange; local?: LocalRows; currentURL?: string;
+  onChange: (next: Partial<T>) => void; onView: (view: AnalysisView) => void; onFilter: FilterChange; local?: LocalRows;
 }) {
   const originRevision = useOriginMetadata();
   const view = normalizeAnalysis(catalog, state);
-  const analysis = useMemo(() => analysisQuery(catalog, view, where), [catalog, JSON.stringify(view), JSON.stringify(where)]);
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  // Rounding a relative start to midnight is stable within a day.
+  const analysis = useMemo(() => analysisQuery(catalog, view, where, { zone }), [catalog, JSON.stringify(view), JSON.stringify(where), zone, new Date().toDateString()]);
   const result = useAnalysisResult(dataset, schema, analysis.query, local);
   const bounds = timeBounds(where, catalog.time);
   const set = (change: Partial<AnalysisState>) => onChange(normalizeAnalysis(catalog, { ...state, ...change }) as Partial<T>);
@@ -61,10 +63,10 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
   let clause: AggregationClause = analysis.clause, entry: AggregationResultEntry | undefined = result.results[0], error = result.error, slots = "";
   if (view.view === "cycle" && entry) {
     try {
-      const now = Date.now(), zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+      const now = Date.now();
       const folded = cycleResult(catalog, view, entry, { from: bounds.from?.getTime(), to: Math.min(bounds.to?.getTime() ?? now, now) }, zone);
       clause = folded.clause; entry = folded.result;
-      slots = `${folded.slots.toLocaleString()} complete ${view.cycle === "hour" ? "hours" : "days"} in ${zone}.`;
+      slots = `${folded.slots.toLocaleString()} complete ${view.cycle === "hour" ? "hours" : "days"} in ${zone}.${folded.earlier ? ` ${folded.earlier.toLocaleString()} earlier recorded ${folded.earlier === 1 ? "date was" : "dates were"} left out: recorded in another time zone, ${folded.earlier === 1 ? "it holds" : "they hold"} only part of a day in your range.` : ""}`;
     } catch (failure) { error = failure instanceof Error ? failure.message : String(failure); entry = undefined; }
   }
   const presentation = useMemo(() => toolMetricPresentation(entry, clause.groupBy), [entry, originRevision, clause]);
@@ -103,7 +105,8 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
           if (query) window.pharosNavigate?.(usageWorkspaceURL({ mode: "query", dataset, query: orderedUsageQuery(dataset, query) }, new URLSearchParams(location.search)));
         }} />}
     {hidden || slots ? <p className="usage-dashboard-note" role="status">{[hidden, slots].filter(Boolean).join(" ")}</p> : null}
-    <UsageDashboardLinks schema={schema} dataset={dataset} query={analysis.supporting} currentURL={currentURL} />
+    {/* No legacy link: that page has no analysis views, and would show this query's table under its default chart. */}
+    <UsageDashboardLinks schema={schema} dataset={dataset} query={analysis.supporting} />
     <p className="usage-dashboard-note">{analysisNote(catalog, view)}{view.view === "cycle" ? "" : ` Select a ${view.view === "scatter" ? "point" : "bar or box"} to open its ${unit ? subjects : "records"}.`}</p>
   </section>;
 }

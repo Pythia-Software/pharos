@@ -1,12 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { core, schemas } from "../helpers/recipes.mjs";
+import { core, schemas, recipeById, instantiateRecipe, cardCoverQuery } from "../helpers/recipes.mjs";
 import { now, usageLedger } from "../helpers/usage-ledger.mjs";
 import { analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, availableViews, catalogProblems, cycleResult, normalizeAnalysis, switchView, trendUnavailable, validAnalysisState, viewOptions } from "../../../src/dashboard-analysis-model";
 import { tokenAnalysisCatalog as catalog } from "../../../src/token-analysis-catalog";
 import { runAnalysisQuery } from "../../../src/analysis-request";
 import { answerQuery } from "../../support/query-server.mjs";
-import { cycleSamples, hoursOfDay, weekdays } from "../../../src/weekday-cover";
+import { cycleSamples, hoursOfDay, weekdayMetric, weekdays } from "../../../src/weekday-cover";
 
 const { rows, hourly } = usageLedger(), schema = schemas.usage;
 const trend = { metric: "percent_cost", split: "type", period: "day", hours: 6, days: 3, rollingPeriods: 7, scale: "half", display: "interval" };
@@ -29,9 +29,12 @@ test("field validation rejects unknown measures, units and thresholds but not co
 });
 
 test("switching views keeps what both views share and coerces the rest", () => {
-  const share = switchView(catalog, trend, "compare");
-  assert.deepEqual([share.metric, share.compareAs, share.split, share.rollingPeriods], ["cost", "share", "none", 7], "percent cost becomes a cost share; token type is no breakdown");
-  assert.deepEqual([switchView(catalog, share, "trend").metric, switchView(catalog, share, "trend").split], ["percent_cost", "model_family"]);
+  const share = switchView(catalog, { ...trend, split: "provider" }, "compare");
+  assert.deepEqual([share.metric, share.compareAs, share.split, share.rollingPeriods], ["cost", "share", "provider", 7], "percent cost becomes a cost share");
+  assert.deepEqual([switchView(catalog, share, "trend").metric, switchView(catalog, share, "trend").split], ["percent_cost", "provider"]);
+  const typed = switchView(catalog, trend, "compare");
+  assert.deepEqual([typed.metric, typed.compareAs, typed.split], ["cost", "bars", "none"], "token type is no breakdown, and one group has no shares");
+  assert.deepEqual([switchView(catalog, typed, "trend").metric, switchView(catalog, typed, "trend").split], ["cost", "model_family"]);
   const ratio = switchView(catalog, { ...share, metric: "cache_read_share", split: "provider" }, "compare");
   assert.equal(ratio.compareAs, "bars", "a ratio cannot be shown as shares");
   const scatter = switchView(catalog, { view: "compare", metric: "cost", split: "model_effort" }, "scatter");
@@ -109,17 +112,23 @@ test("a cycle folds hourly totals into local hours, idle hours included", () => 
   assert.throws(() => cycleResult(catalog, { view: "cycle", metric: "tokens", split: "none" }, { ...result, coverage: "partial" }, { from, to }, "UTC"), /Complete totals/);
 });
 
-test("a weekday cycle folds the ledger's local days, as the weekday cards do", () => {
-  const result = { id: "analysis", buckets: [{ keys: ["2026-10-05"], value: 7, count: 1 }, { keys: ["2026-10-12"], value: 3, count: 1 }] };
-  const zone = "America/Los_Angeles", from = core.metricDateTime("2026-10-05", zone), to = core.metricDateTime("2026-10-19", zone);
-  const box = cycleResult(catalog, { view: "cycle", cycle: "weekday", metric: "tokens", split: "none" }, result, { from, to }, zone);
-  assert.deepEqual(box.result.buckets.map(bucket => bucket.keys[0]), weekdays);
-  assert.deepEqual([box.result.buckets[0].distribution.summary.n, box.result.buckets[0].distribution.summary.median], [2, 5]);
-  assert.equal(box.slots, 14);
-  // The shared fold also serves weekday covers; hours step on UTC boundaries.
-  assert.deepEqual(cycleSamples("hour", Date.parse("2026-10-12T09:30:00Z"), Date.parse("2026-10-12T12:00:00Z"), "UTC", () => 1).flat().length, 2, "partial first hour left out");
+test("a weekday cycle folds days exactly as the weekday cards' weekdayMetric does", () => {
+  const recipe = recipeById("human-words-weekday"), zone = "America/Los_Angeles";
+  // A partial first day (from noon), quiet days, and two days with words.
+  const from = Date.parse("2026-10-05T19:00:00Z"), to = core.metricDateTime("2026-10-19", zone), at = to;
+  const messages = [["a", "2026-10-05T20:00:00Z", 11], ["b", "2026-10-06T17:00:00Z", 4], ["c", "2026-10-13T17:00:00Z", 6], ["d", "2026-10-14T03:00:00Z", 5]].map(([id, sent_at, typed_words]) => ({ id, sent_at, typed_words }));
+  const source = cardCoverQuery(instantiateRecipe(recipe, 30, new Date(at)).query, recipe).query;
+  const query = { ...source, where: [{ field: "typed_words", op: ">", value: "0" }, { field: "sent_at", op: ">=", value: new Date(from).toISOString() }, { field: "sent_at", op: "<", value: new Date(to).toISOString() }],
+    aggregations: source.aggregations.map(metric => ({ ...metric, dateGrouping: { ...metric.dateGrouping, timeZone: zone } })) };
+  const daily = core.evaluateMetrics(messages, query, schemas.writing_messages, { now: at }).metrics[0];
+  const card = weekdayMetric(query.aggregations[0], daily, query, at, "words");
+  // The dashboard folds the same daily totals, keyed by date.
+  const dated = { ...daily, buckets: daily.buckets.map(bucket => ({ ...bucket, keys: [new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(core.metricDateTime(String(bucket.keys[0]), zone))] })) };
+  const dashboard = cycleResult(catalog, { view: "cycle", cycle: "weekday", metric: "tokens", split: "none" }, dated, { from, to }, zone);
+  assert.deepEqual(dashboard.result.buckets.map(bucket => [bucket.keys[0], bucket.distribution.summary]), card.result.buckets.map(bucket => [bucket.keys[0], bucket.distribution.summary]));
+  assert.equal(dashboard.slots, card.days, "the same set of complete dates: the partial first Monday is out of both");
+  assert.equal(dashboard.earlier, 1);
 });
-
 test("a cycle query reads the ledger's hourly or daily totals", () => {
   const hours = analysisQuery(catalog, { view: "cycle", cycle: "hour", metric: "tokens", split: "model_family" }, []);
   assert.deepEqual([hours.clause.groupBy, hours.clause.groupLimit], [["hour"], 10000]);
@@ -197,6 +206,16 @@ test("Over time is offered only for what the trend draws, and the mapping is rev
   assert.equal(trendUnavailable(catalog, share), undefined);
   const there = switchView(catalog, share, "trend"), back = switchView(catalog, there, "compare");
   assert.deepEqual([there.metric, there.split, back.metric, back.compareAs, back.split], ["percent_cost", "provider", "cost", "share", "provider"]);
+  // Unit counts, means, medians and maxima are not record totals.
+  for (const reduce of ["count", "mean", "median", "max"]) {
+    const units = { ...share, unit: "conversation", reduce };
+    assert.match(trendUnavailable(catalog, units), /record totals/, reduce);
+    assert.deepEqual(switchView(catalog, units, "trend").view, "compare", reduce);
+  }
+  assert.equal(switchView(catalog, { ...share, unit: "conversation", reduce: "total" }, "trend").metric, "percent_cost", "a unit total adds up the same records");
+  // A share needs groups to divide.
+  assert.equal(normalizeAnalysis(catalog, { ...share, split: "none" }).compareAs, "bars");
+  assert.equal(switchView(catalog, { ...trend, metric: "percent", split: "type" }, "compare").compareAs, "bars", "token type is no breakdown, so no share");
   // The trend's absolute metric returns as bars, whatever display came before.
   assert.equal(switchView(catalog, { ...there, metric: "cost" }, "compare").compareAs, "bars");
 });
@@ -271,17 +290,38 @@ test("a unit compare's minimum counts units with a value", () => {
   assert.deepEqual(count.buckets.map(bucket => [bucket.keys[0], bucket.value]), [["claude", 4], ["codex", 3]], "a count of conversations counts them all");
 });
 
-test("a weekday cycle folds every returned date, even one before the viewer's first date", () => {
+test("a weekday cycle counts complete days: the query starts at a local midnight", () => {
+  const zone = "America/Denver", at = Date.parse("2026-10-16T20:00:00Z"); // 14:00 in Denver
+  const preset = [{ field: "last_usage_at", op: ">=", value: "-30d" }, { field: "first_usage_at", op: "<", value: "+0s" }];
+  const days = analysisQuery(catalog, { view: "cycle", cycle: "weekday", metric: "tokens", split: "none" }, preset, { zone, now: at });
+  assert.deepEqual(days.query.where[0], { field: "last_usage_at", op: ">=", value: new Date(core.metricDateTime("2026-09-17", zone)).toISOString() }, "the date of now − 30d holds part of a day; start the next midnight");
+  assert.deepEqual(days.query.where[1], preset[1]);
+  assert.deepEqual(analysisQuery(catalog, { view: "cycle", cycle: "hour", metric: "tokens", split: "none" }, preset, { zone, now: at }).query.where, preset, "hours keep the exact start");
+  assert.deepEqual(analysisQuery(catalog, { view: "compare", metric: "tokens", split: "none" }, preset, { zone, now: at }).query.where, preset);
+  const midnight = [{ field: "last_usage_at", op: ">=", value: new Date(core.metricDateTime("2026-10-01", zone)).toISOString() }];
+  assert.deepEqual(analysisQuery(catalog, { view: "cycle", cycle: "weekday", metric: "tokens", split: "none" }, midnight, { zone, now: at }).query.where, midnight, "a midnight start is already whole");
+});
+
+test("a date from another time zone before the first date is reported, never counted as whole", () => {
   // Recorded in Denver late on Sunday 4 October; selected by a Tokyo viewer from Monday 5 October.
   const result = { id: "analysis", buckets: [{ keys: ["2026-10-04"], value: 9, count: 1 }, { keys: ["2026-10-05"], value: 7, count: 1 }] };
   const zone = "Asia/Tokyo", from = core.metricDateTime("2026-10-05", zone), to = core.metricDateTime("2026-10-12", zone);
   const box = cycleResult(catalog, { view: "cycle", cycle: "weekday", metric: "tokens", split: "none", reduce: "total" }, result, { from, to }, zone);
-  assert.equal(box.result.buckets[6].value, 9, "Sunday's usage is kept");
-  assert.equal(box.result.buckets.reduce((n, bucket) => n + bucket.value, 0), 16);
-  // Weekday cards key days in the zone of their query; a date's weekday is the
-  // same in every zone, so the cards and the dashboard share one rule.
-  for (const zone of ["Pacific/Kiritimati", "Pacific/Pago_Pago"]) {
-    const day = core.metricDateTime("2026-10-05", zone);
-    assert.equal(cycleSamples("weekday", day, day + 86400000 * 1.5, zone, () => 1)[0].length, 1, zone);
-  }
+  assert.deepEqual([box.result.buckets[6].value, box.result.buckets[0].value, box.slots, box.earlier], [0, 7, 7, 1]);
+  assert.match(analysisNote(catalog, { view: "cycle", cycle: "weekday", metric: "tokens", split: "none" }), /left out and reported/);
+});
+test("a shared snapshot filtered to an hour groups the days holding that hour, as the service does", async () => {
+  const hour = hourly[0].hour, where = [{ field: "hour", op: "=", value: hour }];
+  const units = analysisQuery(catalog, { view: "compare", unit: "conversation", metric: "tokens", split: "model_family" }, where);
+  const [grouped] = await runAnalysisQuery("usage", schema, units.query, { local: { rows, hourly } });
+  const ids = new Set(hourly.filter(row => row.hour === hour).map(row => row.id.split("|").slice(0, 4).join("|")));
+  const days = rows.filter(row => ids.has(row.id));
+  assert.ok(days.length > 0 && days.length < rows.length);
+  const expected = {};
+  for (const row of days) expected[row.root_model_family] = (expected[row.root_model_family] ?? 0) + row.total_tokens;
+  assert.deepEqual(Object.fromEntries(grouped.buckets.map(bucket => [bucket.keys[0], bucket.value])), expected);
+  // The record path selects the same days.
+  const records = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "none" }, where);
+  const [total] = await runAnalysisQuery("usage", schema, records.query, { local: { rows, hourly } });
+  assert.equal(total.buckets[0].value, Object.values(expected).reduce((n, value) => n + value, 0));
 });

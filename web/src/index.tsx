@@ -1571,7 +1571,7 @@ function TokenUsageDashboard() {
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
   const choose = (next: AnalysisView) => state.update(switchView(tokenAnalysisCatalog, state.view, next));
   if ((state.view.view ?? "trend") !== "trend") return <DashboardAnalysis catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={state.view} where={state.where}
-    onChange={state.update} onView={choose} onFilter={state.onFilter} local={tokenSharedRows} currentURL="/analyze?analyze_view=tokens&machine_view=tokens" />;
+    onChange={state.update} onView={choose} onFilter={state.onFilter} local={tokenSharedRows} />;
   const trend = state.view as TokenChartView;
   return <>
     <TokenChart where={state.where} onFilter={state.onFilter} view={trend} onChange={state.update} viewControl={<AnalysisViewControl catalog={tokenAnalysisCatalog} state={state.view} onChange={choose} />} />

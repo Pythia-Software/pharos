@@ -1,6 +1,6 @@
 import { evaluateMetrics, type AggregationResultEntry, type FieldSchema, type QueryState } from "@pythia-software/query-table-core";
 import { MetricRequestError, postMetrics, postQueryStateMetrics, postQueryV3Metrics } from "./metric-request";
-import { applyUsageAggregations } from "./usage-aggregations";
+import { applyUsageAggregations, usageRowsForWhere } from "./usage-aggregations";
 
 type Row = Record<string, any>;
 // A shared snapshot carries its rows; usage also carries its hourly ledger.
@@ -14,7 +14,8 @@ export async function runAnalysisQuery(dataset: string, schema: FieldSchema<any>
   const clauses = query.aggregations ?? [];
   if (!clauses.length) return [];
   if (local) {
-    const result = !query.grouping && dataset === "usage" ? applyUsageAggregations(local.rows, local.hourly ?? [], { where: query.where, aggregations: clauses }, schema) : evaluateMetrics(local.rows, query, schema);
+    const result = !query.grouping && dataset === "usage" ? applyUsageAggregations(local.rows, local.hourly ?? [], { where: query.where, aggregations: clauses }, schema)
+      : query.grouping && dataset === "usage" ? groupedUsage(local, query, schema) : evaluateMetrics(local.rows, query, schema);
     const failed = result.metrics.find(metric => metric.error);
     if (failed) throw new MetricRequestError(failed.error!);
     return result.metrics;
@@ -25,4 +26,14 @@ export async function runAnalysisQuery(dataset: string, schema: FieldSchema<any>
     if (failure instanceof MetricRequestError && failure.resourceLimit) return await postQueryV3Metrics(dataset, schema, query.where, clauses, signal) as AggregationResultEntry[];
     throw failure;
   }
+}
+
+// A grouping stage reads daily usage rows, which carry no hour. As the service
+// does, a source filter on hour first selects the days holding a matching
+// hour, and the stage then reads those days unfiltered.
+function groupedUsage(local: LocalRows, query: QueryState, schema: FieldSchema<any>) {
+  const source = query.grouping!.source;
+  const selected = usageRowsForWhere(local.rows, local.hourly ?? [], source.where, schema);
+  if (!selected.filtersHours) return evaluateMetrics(local.rows, query, schema);
+  return evaluateMetrics(selected.days, { ...query, grouping: { ...query.grouping!, source: { ...source, where: [] } } }, schema);
 }

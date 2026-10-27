@@ -1,4 +1,4 @@
-import { EMPTY_QUERY, inspectBucketQuery, metricDateFloor, metricDateTime, type AggOp, type AggregationBucket, type AggregationClause, type AggregationResultEntry, type FieldSchema, type MetricDisplay, type MetricValueFormat, type QueryState, type SummaryColumn, type WhereTerm } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, coerceValue, inspectBucketQuery, metricDateFloor, metricDateNext, metricDateTime, type AggOp, type AggregationBucket, type AggregationClause, type AggregationResultEntry, type FieldSchema, type MetricDisplay, type MetricValueFormat, type QueryState, type SummaryColumn, type WhereTerm } from "@pythia-software/query-table-core";
 import type { ChartScale } from "./chart-scale";
 import { cycleBoxes, cycleGroups, cycleSamples, hoursOfDay, idleIsZero, weekdays, type CalendarCycle } from "./weekday-cover";
 
@@ -72,9 +72,15 @@ export const availableViews = (catalog: AnalysisCatalog) => analysisViews.filter
 export function trendUnavailable(catalog: AnalysisCatalog, state: AnalysisState): string | undefined {
   if ((state.view ?? "trend") === "trend") return;
   const measure = catalog.measures[state.metric];
+  const drawn = [...new Set(Object.values(catalog.trend.metrics).map(item => catalog.measures[item.measure].label))].join(" and ");
   if (!Object.values(catalog.trend.metrics).some(item => item.measure === state.metric)) {
-    const drawn = [...new Set(Object.values(catalog.trend.metrics).map(item => catalog.measures[item.measure].label))].join(" and ");
     return measure?.where ? `Over time cannot yet keep the ${measure.label.toLowerCase()} population; it draws ${drawn} over your filters.` : `Over time draws ${drawn} only.`;
+  }
+  // The trend adds up records. A count, mean, median or largest of units is
+  // another quantity, which the trend would silently replace.
+  const resolved = normalizeAnalysis(catalog, state);
+  if (resolved.view === "compare" && resolved.unit !== records && resolved.reduce !== "total") {
+    return `Over time draws record totals of ${drawn}, not the ${reductionLabel(resolved.reduce, measure, catalog.units[resolved.unit]).toLowerCase()}.`;
   }
 }
 // Each view's option, disabled with its reason where this state cannot move.
@@ -110,7 +116,7 @@ export function validAnalysisState(catalog: AnalysisCatalog, state: AnalysisStat
     && (state.cycle === undefined || oneOf(state.cycle, ["weekday", "hour"]));
 }
 
-export const shareable = (catalog: AnalysisCatalog, state: ResolvedAnalysis) => state.view === "compare"
+export const shareable = (catalog: AnalysisCatalog, state: ResolvedAnalysis) => state.view === "compare" && state.split !== noSplit
   && (state.unit !== records && state.reduce === "count" || catalog.measures[state.metric].additive && state.reduce === "total");
 export const splitValid = (catalog: AnalysisCatalog, unit: string, split: string) => split === noSplit || has(catalog.breakdowns, split) && (unit === records || has(catalog.units[unit].breakdowns, split));
 // Units add up an additive measure, and pool a ratio's parts. Distinct counts
@@ -200,9 +206,23 @@ export type AnalysisQuery = {
 // per unit (and its constant breakdown), as card recipes do, then compares,
 // distributes or pairs those rows. A threshold is native minCount: it removes
 // small groups before groupLimit, so they never crowd out eligible ones.
-export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, where: WhereTerm[]): AnalysisQuery {
+// A weekday cycle counts complete days only. Its range starts at the next
+// local midnight, so the first date's records are whole days, not the part
+// of a day after a preset's start time.
+export function completeDays(where: WhereTerm[], time: AnalysisCatalog["time"], zone: string, now: number): WhereTerm[] {
+  return where.map(term => {
+    if (!("field" in term) || term.negated || ![">=", ">"].includes(term.op) || ![time.first, time.last].includes(term.field)) return term;
+    const at = Number(coerceValue("datetime", term.value, now));
+    if (!Number.isFinite(at)) return term;
+    const day = metricDateFloor(at, "day", zone), start = day < at || day === at && term.op === ">" ? metricDateNext(day, "day", zone) : day;
+    return { ...term, op: ">=" as const, value: new Date(start).toISOString() };
+  });
+}
+
+export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, inputWhere: WhereTerm[], { zone = "UTC", now = Date.now() }: { zone?: string; now?: number } = {}): AnalysisQuery {
   const state = normalizeAnalysis(catalog, input);
   if (state.view === "trend") throw new Error("The trend view has its own chart.");
+  const where = state.view === "cycle" && state.cycle === "weekday" ? completeDays(inputWhere, catalog.time, zone, now) : inputWhere;
   const measure = catalog.measures[state.metric], measureY = catalog.measures[state.metricY];
   const breakdown = state.split === noSplit ? undefined : catalog.breakdowns[state.split];
   const unit = state.unit === records ? undefined : catalog.units[state.unit];
@@ -288,10 +308,11 @@ export function analysisInspectQuery(analysis: AnalysisQuery, bucket: Aggregatio
 // Hour keys are instants, placed at the viewer's local hour. Day keys are
 // calendar dates the recording Mac assigned in its own zone, which the
 // dashboard does not know; a date's weekday does not depend on the viewer, so
-// days fold as dates. The range filter selects whole daily records by
-// timestamp, so every returned date is folded, however its zone differs from
-// the viewer's. Idle dates pad to the viewer's range, and dates from the
-// viewer's current day on are left out as incomplete.
+// days fold as dates. Only complete dates in the viewer's range count, as in
+// weekdayMetric: the query starts at a local midnight (completeDays), and
+// dates from the viewer's current day on are incomplete. A recording Mac in
+// another zone can still return a date before the first one; it is left out
+// and reported, never counted as a complete day.
 export function cycleResult(catalog: AnalysisCatalog, input: AnalysisState, result: AggregationResultEntry, bounds: { from?: number; to: number }, zone: string) {
   const state = normalizeAnalysis(catalog, input), measure = catalog.measures[state.metric];
   if (result.error || result.coverage === "partial" || result.hiddenGroups || (result.groupCount ?? 0) > result.buckets.length || result.buckets.some(bucket => bucket.error)) {
@@ -303,7 +324,8 @@ export function cycleResult(catalog: AnalysisCatalog, input: AnalysisState, resu
   // A missing key would silently become an idle slot.
   if ([...values.keys()].some(key => !Number.isFinite(key))) throw new Error(`Some totals have no ${hour ? "hour" : "day"}, so they cannot be placed in the cycle.`);
   const date = (instant: number) => { const day = metricDateFloor(instant, "day", zone); return metricDateTime(new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(day), "UTC") + (instant > day ? 86_400_000 : 0); };
-  const from = bounds.from === undefined ? Math.min(...values.keys()) : hour ? bounds.from : Math.min(date(bounds.from), ...values.keys());
+  const from = bounds.from === undefined ? Math.min(...values.keys()) : hour ? bounds.from : date(bounds.from);
+  const earlier = hour ? [] : result.buckets.filter(bucket => time(bucket.keys[0]) < from);
   const to = hour ? bounds.to : metricDateTime(new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(bounds.to), "UTC");
   const zero = idleIsZero(aggregate(measure)) ? 0 : null;
   let observations = 0;
@@ -319,10 +341,10 @@ export function cycleResult(catalog: AnalysisCatalog, input: AnalysisState, resu
     const total = state.reduce === "total";
     const buckets = samples.map((values, index) => ({ keys: [boxes.result.buckets[index].keys[0]], count: values.length, value: values.length ? values.reduce((sum, value) => sum + value, 0) / (total ? 1 : values.length) : null }));
     const clause: AggregationClause = { id: result.id, op: "sum", groupBy: [field], label: total ? `Total ${measure.label.toLowerCase()}` : `${measure.additive ? "Mean" : "Unweighted mean"} ${measure.label.toLowerCase()} per ${per}`, display: { kind: "bar-vertical", maxGroups: samples.length, xLabel: slot, yLabel: measure.label, yScale: log(state.scale), format: measure.format, legendPosition: "none" } };
-    return { clause, result: { ...boxes.result, buckets }, slots: boxes.days, observations };
+    return { clause, result: { ...boxes.result, buckets }, slots: boxes.days, observations, earlier: earlier.length };
   }
   const clause: AggregationClause = { id: result.id, op: "count", groupBy: [field], label: `${measure.label} per ${per}`, distribution: { kind: "box", input: "[slot_value]", whiskers: "tukey" }, display: { kind: "box", maxGroups: samples.length, xLabel: `${measure.label} / ${per}`, xScale: log(state.scale), format: measure.format } };
-  return { clause, result: boxes.result, slots: boxes.days, observations };
+  return { clause, result: boxes.result, slots: boxes.days, observations, earlier: earlier.length };
 }
 
 // What one observation is, in the dashboard notes' plain style.
@@ -333,7 +355,7 @@ export function analysisNote(catalog: AnalysisCatalog, input: AnalysisState): st
   const parts = [measure.note];
   if (state.view === "cycle") parts.push(state.cycle === "hour"
     ? `One observation is one complete clock hour in the range, placed at its hour in your time zone, idle hours included${idleIsZero(aggregate(measure)) ? " as zero" : ", which have no value"}. Partial first and last hours are left out. An hour bar spans many dates, so it has no single drill-down; hourly totals cannot yet open as a grouped query, so the link opens the records.`
-    : `One observation is one complete recorded day in the range, idle days included${idleIsZero(aggregate(measure)) ? " as zero" : ", which have no value"}. Days are the dates the recording Mac assigned in its own time zone; when it differs from yours, a day at the start of the range can fall just outside your dates and is still counted. The current day is left out. Select the grouped query for the daily totals; a weekday bar spans many dates, so it has no single drill-down.`);
+    : `One observation is one complete recorded day in the range, idle days included${idleIsZero(aggregate(measure)) ? " as zero" : ", which have no value"}. Days are the dates the recording Mac assigned in its own time zone. The range starts at your next local midnight; the current day is left out. When the recording Mac's time zone differs from yours, a date just before your first date can be returned with part of its usage; it is left out and reported. Select the grouped query for the daily totals; a weekday bar spans many dates, so it has no single drill-down.`);
   else if (unit) parts.push(`${unit.note} One observation is one ${unit.label.toLowerCase()}: its ${measure.label.toLowerCase()} over all its matching records in the range.`);
   else parts.push(`One observation is one ${catalog.records.label.toLowerCase()}. ${catalog.records.note}`);
   if (state.view === "compare" && unit) parts.push(state.reduce === "count" ? `Bars count ${subject} in each group.`
