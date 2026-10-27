@@ -837,11 +837,15 @@ func (c *Catalog) RefreshFindings(ctx context.Context, force bool) error {
 
 // refreshFindingsInBackground runs RefreshFindings on the catalog's
 // background executor.
+// It is started by GET /api/findings before findings exist, a read that
+// starts a write (§1).
 func (c *Catalog) refreshFindingsInBackground(force bool) {
-	c.runBackground(func(ctx context.Context) {
-		if err := c.RefreshFindings(ctx, force); err != nil && ctx.Err() == nil {
+	c.startBackground(OperationSpec{Kind: "analysis.findings", Trigger: triggerRead}, func(ctx context.Context, op *Op) error {
+		err := c.RefreshFindings(withWorkProgress(ctx, op.mirrorWork), force)
+		if err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Findings: %v\n", err)
 		}
+		return err
 	})
 }
 

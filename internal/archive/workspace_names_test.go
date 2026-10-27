@@ -146,7 +146,7 @@ func TestWorkspaceNamesCacheFirstHumanWordsAcrossSyncAndReopen(t *testing.T) {
 	}
 	// Library reads never start or repeat the authorship classifier.
 	runs := 0
-	c.background = func(func(context.Context)) bool { runs++; return false }
+	c.background = func(OperationSpec, func(context.Context, *Op) error) bool { runs++; return false }
 	for range 3 {
 		if _, err := c.libraryRows(t.Context(), "w.id=?", []any{id}, libraryFields{"title": true}); err != nil {
 			t.Fatal(err)

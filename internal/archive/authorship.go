@@ -1208,7 +1208,7 @@ func (c *Catalog) startAuthorshipInContext(generation string, parent context.Con
 		return
 	}
 	state.running = true
-	rebuild := func(ctx context.Context) {
+	rebuild := func(ctx context.Context, op *Op) error {
 		if parent != nil {
 			workCtx, cancel := context.WithCancel(ctx)
 			stop := context.AfterFunc(parent, cancel)
@@ -1219,8 +1219,11 @@ func (c *Catalog) startAuthorshipInContext(generation string, parent context.Con
 			}
 			ctx = workCtx
 			if report, ok := parent.Value(workProgressKey{}).(func(activityWork)); ok {
-				ctx = withWorkProgress(ctx, report)
+				ctx = withWorkProgress(ctx, func(w activityWork) { op.mirrorWork(w); report(w) })
 			}
+		}
+		if parent == nil {
+			ctx = withWorkProgress(ctx, op.mirrorWork)
 		}
 		err := c.RebuildAuthorship(ctx, generation)
 		state.mu.Lock()
@@ -1233,8 +1236,16 @@ func (c *Catalog) startAuthorshipInContext(generation string, parent context.Con
 		if err == nil && ctx.Err() == nil {
 			c.refreshAuthorshipInContext(parent)
 		}
+		return err
 	}
-	if !c.runBackground(rebuild) {
+	// From a page (or the usage summary) the rebuild is a read-started write
+	// (§1); from an index's analysis chain it is a child of that stage.
+	spec := OperationSpec{Kind: "analysis.authorship", Trigger: triggerRead}
+	if parent != nil {
+		spec.Trigger = triggerChained
+		spec.Parent = opFrom(parent).ID()
+	}
+	if !c.startBackground(spec, rebuild) {
 		state.running = false // the service is stopping
 	}
 }

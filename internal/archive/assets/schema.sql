@@ -1496,3 +1496,34 @@ CREATE TABLE IF NOT EXISTS source_input_states (
 
 CREATE INDEX IF NOT EXISTS conversation_sightings_host_source
  ON conversation_sightings(host_id,source_name,conversation_id,origin);
+
+-- The operation journal (docs/background-work.md §6): one row per structural
+-- operation this or another Pharos process on a Mac ran against the library,
+-- written best-effort through a low-priority lane. It is a record, not
+-- history: library transfers never copy it. Additive, so older builds ignore it.
+CREATE TABLE IF NOT EXISTS operation_journal (
+ id TEXT PRIMARY KEY,
+ parent_id TEXT,
+ root_id TEXT NOT NULL,
+ kind TEXT NOT NULL,
+ variant TEXT NOT NULL DEFAULT '',
+ subject TEXT NOT NULL DEFAULT '',
+ trigger TEXT NOT NULL,
+ host_id TEXT NOT NULL,
+ process TEXT NOT NULL,
+ pid INTEGER NOT NULL,
+ instance TEXT NOT NULL,
+ state TEXT NOT NULL,
+ reason TEXT,
+ error TEXT,
+ step_index INTEGER, step_count INTEGER, step_name TEXT, step_unit TEXT,
+ step_done REAL, step_total REAL,
+ started_at TEXT NOT NULL,
+ updated_at TEXT NOT NULL,
+ ended_at TEXT,
+ legacy_ref TEXT,
+ detail_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS operation_journal_open ON operation_journal(host_id) WHERE ended_at IS NULL;
+CREATE INDEX IF NOT EXISTS operation_journal_recent ON operation_journal(host_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS operation_journal_root ON operation_journal(root_id);

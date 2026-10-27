@@ -388,8 +388,8 @@ func TestAuthorshipUpgradeAddsWordColumns(t *testing.T) {
 func TestAuthorshipRebuildsAfterIndex(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	started := []func(context.Context){}
-	catalog.background = func(work func(context.Context)) bool {
-		started = append(started, work)
+	catalog.background = func(_ OperationSpec, work func(context.Context, *Op) error) bool {
+		started = append(started, func(ctx context.Context) { _ = work(ctx, nil) })
 		return true
 	}
 	check := func(step string, want int, running bool) {
@@ -452,8 +452,8 @@ func TestAuthorshipManualRefreshHonorsRunCancellation(t *testing.T) {
 				}
 			}
 			var rebuilds []func(context.Context)
-			catalog.background = func(work func(context.Context)) bool {
-				rebuilds = append(rebuilds, work)
+			catalog.background = func(_ OperationSpec, work func(context.Context, *Op) error) bool {
+				rebuilds = append(rebuilds, func(ctx context.Context) { _ = work(ctx, nil) })
 				return true
 			}
 			ctx, cancel := context.WithCancel(t.Context())

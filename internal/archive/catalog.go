@@ -51,24 +51,18 @@ type Catalog struct {
 	writers    catalogWriteTracker
 	now        func() time.Time
 	// background runs the catalog's own background work (the authorship
-	// rebuild). The service sets it to its spawn, so a release cancels the
-	// work and waits for it before closing the catalog; nil runs a goroutine,
-	// counted in unowned so that whoever closes the catalog can wait for it.
-	background        func(work func(context.Context)) bool
+	// rebuild) as an operation. The service sets it to its start, so a
+	// release cancels the work and waits for it before closing the catalog;
+	// nil runs a goroutine, counted in unowned so that whoever closes the
+	// catalog can wait for it.
+	background func(spec OperationSpec, work func(context.Context, *Op) error) bool
+	// ops is the registry Catalog-level work registers with (the service's,
+	// or a CLI command's); nil registers nothing.
+	ops               *opRegistry
 	unowned           sync.WaitGroup
 	projectionBatches atomic.Int32
 	// ingestRuns counts this process's running ingests (see cacheVersion).
 	ingestRuns atomic.Int32
-}
-
-// runBackground starts work with background, or in a goroutine when it is
-// nil, and reports false if the service is stopping.
-func (c *Catalog) runBackground(work func(context.Context)) bool {
-	if c.background == nil {
-		c.unowned.Go(func() { work(context.Background()) })
-		return true
-	}
-	return c.background(work)
 }
 
 func OpenCatalog(path string) (*Catalog, error) {

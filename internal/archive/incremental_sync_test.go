@@ -31,7 +31,7 @@ func TestScheduledSyncDefersAnalysesAndManualSyncRefreshesGitHub(t *testing.T) {
 	}
 	background := catalog.background
 	started := 0
-	catalog.background = func(func(context.Context)) bool { started++; return false }
+	catalog.background = func(OperationSpec, func(context.Context, *Op) error) bool { started++; return false }
 	if !server.runAutomatic(server.life.ctx, syncSettings{Interval: 60}) {
 		t.Fatal("scheduled sync not admitted")
 	}
@@ -116,7 +116,7 @@ func TestSyncCheckStartsManualRun(t *testing.T) {
 
 func TestManualSyncFailedAnalysisRetainsDirtyGeneration(t *testing.T) {
 	server := automaticTestServer(t, stableCodexSource(t, 1))
-	server.Catalog.background = func(func(context.Context)) bool { return false }
+	server.Catalog.background = func(OperationSpec, func(context.Context, *Op) error) bool { return false }
 	if !server.runManualSync(server.life.ctx, syncSettings{Interval: 60}) {
 		t.Fatal("manual sync not admitted")
 	}

@@ -185,10 +185,14 @@ func (c *Catalog) RecordMCPCall(name string, args map[string]any, status, errorT
 	schedule := c.background != nil && !history.scheduled
 	history.scheduled = history.scheduled || schedule
 	history.mu.Unlock()
-	if schedule && !c.background(func(ctx context.Context) {
-		if err := c.flushMCPHistory(ctx); err != nil && ctx.Err() == nil {
+	// Storing the queue is a write a read starts (§1), so it is an operation;
+	// it is hidden and never journaled.
+	if schedule && !c.background(OperationSpec{Kind: "maintenance.mcp-history", Trigger: triggerRead}, func(ctx context.Context, _ *Op) error {
+		err := c.flushMCPHistory(ctx)
+		if err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "MCP history: %v\n", err)
 		}
+		return err
 	}) {
 		// The service is stopping; closing the catalog stores the queue.
 		history.mu.Lock()

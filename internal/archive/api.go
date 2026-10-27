@@ -20,7 +20,9 @@ import (
 )
 
 type SyncRun struct {
-	operation        *operationForecast
+	operation *operationForecast
+	// op is the registry's operation shadowing this run (operations_legacy.go).
+	op               *Op
 	ID               string   `json:"id"`
 	Kind             string   `json:"kind"`
 	State            string   `json:"state"`
@@ -75,14 +77,24 @@ type Server struct {
 	// Leave catalog connections available for rows/previews while metadata scans run.
 	queryMetadata chan struct{}
 	ask           askState
+	// ops is the operation registry (operations.go); journal writes it to
+	// the catalog, and leases watches other Pharos processes' leases.
+	ops     *opRegistry
+	journal *journalWriter
+	leases  leaseWatch
 }
 
 func NewServer(config Config, catalog *Catalog) *Server {
 	server := &Server{Catalog: catalog, config: config, runs: []*SyncRun{}, queryMetadata: make(chan struct{}, 1)}
 	server.life.init()
+	server.ops = newOpRegistry("service")
+	server.ops.releasing = server.releasing
 	if catalog != nil {
 		server.ingestMu.path = catalog.Path
-		catalog.background = server.spawn
+		catalog.background = server.start
+		catalog.ops = server.ops
+		server.journal = newJournalWriter(catalog, server.ops)
+		server.leases.dirs = func() []string { return leaseDirs(server.Config()) }
 		catalog.RepositoryAliases = config.RepositoryAliases
 		catalog.RepositorySeparate = config.RepositorySeparate
 		catalog.setCaptureRoot(config.CaptureRoot)
@@ -130,14 +142,15 @@ func (s *Server) Serve() error {
 	fmt.Printf("Pharos: http://%s:%d/\n", display, config.Port)
 	// Requests are cancelled when the service stops.
 	server := &http.Server{Handler: s, ReadHeaderTimeout: 5 * time.Second, BaseContext: func(net.Listener) context.Context { return s.life.ctx }}
-	s.spawn(s.Catalog.maintainLibrary)
-	s.spawn(s.Catalog.maintainSubstringIndex)
-	s.spawn(s.Catalog.maintainTextSearch)
-	s.spawn(s.Catalog.maintainToolSearch)
-	s.spawn(s.Catalog.maintainQueryTextIndexes)
-	s.spawn(func(ctx context.Context) { s.Catalog.keepWALSmall(ctx, 10*time.Second, walSizeLimit) })
-	s.spawn(s.automaticLoop)
-	s.spawn(s.cloudScheduleLoop)
+	s.startJournal()
+	s.daemon("maintainLibrary", s.Catalog.maintainLibrary)
+	s.daemon("maintainSubstringIndex", s.Catalog.maintainSubstringIndex)
+	s.daemon("maintainTextSearch", s.Catalog.maintainTextSearch)
+	s.daemon("maintainToolSearch", s.Catalog.maintainToolSearch)
+	s.daemon("maintainQueryTextIndexes", s.Catalog.maintainQueryTextIndexes)
+	s.daemon("keepWALSmall", func(ctx context.Context) { s.Catalog.keepWALSmall(ctx, 10*time.Second, walSizeLimit) })
+	s.daemon("automaticLoop", s.automaticLoop)
+	s.daemon("cloudScheduleLoop", s.cloudScheduleLoop)
 	s.refreshGitInBackground(true)
 	return s.serveUntilStopped(server, listener)
 }
@@ -1032,6 +1045,7 @@ func (s *Server) updateRun(id string, update func(*SyncRun)) {
 			}
 			run.operation.observe(run.Work, time.Now())
 			run.UpdatedAt = now()
+			run.op.mirrorRun(run)
 			return
 		}
 	}

@@ -498,16 +498,20 @@ func (c *Catalog) refreshToolRollup() {
 	if state.refreshing {
 		return
 	}
-	refresh := func(ctx context.Context) {
-		if err := c.ensureToolRollup(ctx); err != nil && ctx.Err() == nil {
+	refresh := func(ctx context.Context, op *Op) error {
+		err := c.ensureToolRollup(withWorkProgress(ctx, op.mirrorWork))
+		if err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Tool rollup: %v\n", err)
 		}
 		state.mu.Lock()
 		state.refreshing = false
 		state.mu.Unlock()
+		return err
 	}
 	state.refreshing = true
-	if !c.runBackground(refresh) {
+	// A page asked for the rollup and reads the old one meanwhile: a
+	// read-started write (§1), foreground because someone is looking.
+	if !c.startBackground(OperationSpec{Kind: "analysis.tools", Trigger: triggerRead, Priority: priorityForeground}, refresh) {
 		state.refreshing = false // the service is stopping
 	}
 }

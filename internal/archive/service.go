@@ -40,6 +40,8 @@ type lifecycle struct {
 	once     sync.Once
 	closed   chan struct{} // closed once the catalog is
 	closeErr error
+	// release is the library.release operation of the stop in progress.
+	release *Op
 
 	// listening runs once Serve has bound its port.
 	listening func()
@@ -134,12 +136,17 @@ func (s *Server) beginStop() {
 // stop that times out carries on; a later call waits for it again.
 func (s *Server) stop(timeout time.Duration) error {
 	s.life.once.Do(func() {
+		started := time.Now()
+		_, s.life.release = s.begin(context.Background(), OperationSpec{Kind: "library.release", Trigger: triggerUser})
 		s.beginStop()
 		go func() {
 			defer s.exitOnFault()
 			debug.SetPanicOnFault(true)
 			s.life.requests.Wait()
 			s.life.workers.Wait()
+			// The journal's final round, before the catalog closes (§6.2).
+			s.life.release.Finish(nil)
+			_ = s.journal.flush(flushBudget(started, timeout, time.Now()))
 			s.life.closeErr = s.Catalog.Close()
 			s.life.mu.Lock()
 			released := s.life.released
