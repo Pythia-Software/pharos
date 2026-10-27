@@ -384,3 +384,65 @@ func TestBrokerStatusDocument(t *testing.T) {
 		t.Fatalf("%d %s", response.Code, response.Body.String())
 	}
 }
+
+// The app's reverse proxy passes a library's event stream through as it is
+// written, not when it ends.
+func TestBrokerProxyStreamsTheStatusStream(t *testing.T) {
+	a, _ := lifecycleLibraries(t)
+	app, err := newApplicationManager(t.Context(), filepath.Join(t.TempDir(), "Pharos.app"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := app.registry.register(a, "Euclid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.registry.Selected = id
+	release := make(chan struct{})
+	defer close(release)
+	child := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/status/stream" {
+			http.Error(w, "no", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: snapshot\ndata: {\"revision\":1}\n\n"))
+		w.(http.Flusher).Flush()
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer child.Close()
+	app.children[id] = &applicationChild{done: make(chan struct{}), endpoint: applicationEndpoint{URL: child.URL}}
+	broker := httptest.NewServer(app)
+	defer broker.Close()
+	request, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, broker.URL+"/api/status/stream", nil)
+	request.Header.Set("Authorization", "Bearer "+app.token)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	lines := make(chan string, 4)
+	go func() {
+		reader := bufio.NewReader(response.Body)
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				return
+			}
+			lines <- line
+		}
+	}()
+	for {
+		select {
+		case line := <-lines:
+			if strings.HasPrefix(line, "data: ") {
+				return
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the proxied stream held back its first event")
+		}
+	}
+}
