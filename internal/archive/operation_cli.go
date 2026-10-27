@@ -7,6 +7,8 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -68,6 +70,7 @@ func beginCLIOperationsIn(dirs, libraries []string, catalog *Catalog, command st
 		}
 		ops.leases = append(ops.leases, lease)
 	}
+	cliLeasesHeld.Add(1)
 	// The locks it takes are named in the lease as it takes them.
 	reg.holdsChanged = ops.refreshLeaseHolds
 	if catalog != nil {
@@ -96,21 +99,21 @@ func resolveHolds(holds []Hold) []Hold {
 	return resolved
 }
 
-// refreshLeaseHolds writes the declared holds and the locks the command's
-// running operations hold now into its lease.
+// refreshLeaseHolds writes the locks the command's running operations hold
+// now into its lease, apart from its declared holds.
 func (o *cliOperations) refreshLeaseHolds() {
-	holds := slices.Clone(o.declared)
+	locks := []Hold{}
 	for _, view := range o.reg.views() {
 		if opTerminal(view.State) {
 			continue
 		}
-		for _, hold := range view.Spec.Holds {
-			if !slices.Contains(holds, hold) {
-				holds = append(holds, hold)
+		for _, hold := range view.Locks {
+			if !slices.Contains(locks, hold) {
+				locks = append(locks, hold)
 			}
 		}
 	}
-	o.updateLeases(func(info *leaseInfo) { info.Holds = holds })
+	o.updateLeases(func(info *leaseInfo) { info.Locks = locks })
 }
 
 func (o *cliOperations) updateLeases(change func(*leaseInfo)) {
@@ -123,6 +126,7 @@ func (o *cliOperations) releaseLeases() {
 	for _, lease := range o.leases {
 		lease.release()
 	}
+	cliLeasesHeld.Add(-1)
 }
 
 // begin registers the command's operation and names it in the lease.
@@ -137,15 +141,23 @@ func (o *cliOperations) begin(ctx context.Context, spec OperationSpec) (context.
 // close writes the last journal rows and ends the lease: unlinked when they
 // were written; otherwise their outcomes are recorded in the lease, which is
 // left unheld for the service's reconcile pass.
-func (o *cliOperations) close() {
+func (o *cliOperations) close() { o.closeWith(nil) }
+
+// closeWith is close, running closeCatalog after the last journal round and
+// before the lease ends.
+func (o *cliOperations) closeWith(closeCatalog func()) {
 	if o == nil {
 		return
+	}
+	if closeCatalog == nil {
+		closeCatalog = func() {}
 	}
 	if o.stop != nil {
 		o.stop()
 		<-o.done
 	}
 	if o.journal == nil {
+		closeCatalog()
 		o.releaseLeases()
 		return
 	}
@@ -158,7 +170,9 @@ func (o *cliOperations) close() {
 			err = o.journal.round(ctx, left)
 		}
 	}
-	if err == nil && !o.journal.pending() {
+	written := err == nil && !o.journal.pending()
+	closeCatalog()
+	if written {
 		o.releaseLeases()
 		return
 	}
@@ -171,12 +185,17 @@ func (o *cliOperations) close() {
 	for _, lease := range o.leases {
 		_ = lease.abandon(outcomes)
 	}
+	cliLeasesHeld.Add(-1)
 }
 
 // runCLIOperation runs work as command's operation spec, with a lease and,
 // given a writable catalog, a journal.
-func runCLIOperation(config Config, catalog *Catalog, command string, spec OperationSpec, work func(ctx context.Context, op *Op) error) error {
-	ops, err := beginCLIOperations(config, catalog, command, spec.Kind)
+//
+// It is for commands that never open the catalog (lease under the capture
+// root); one that does runs through runLeasedCatalogCommand, so its lease
+// covers the open and the close too.
+func runCLIOperation(config Config, command string, spec OperationSpec, work func(ctx context.Context, op *Op) error) error {
+	ops, err := beginCLIOperations(config, nil, command, spec.Kind)
 	if err != nil {
 		return err
 	}
@@ -211,4 +230,107 @@ func (ops *cliOperations) run(spec OperationSpec, work func(ctx context.Context,
 		op.Finish(err)
 	}()
 	return err
+}
+
+// runLeasedCatalogCommand runs a command that opens the catalog: it takes
+// the lease beside the catalog first, opens it with Initialize recorded as a
+// live child operation, runs work as spec's operation (a read command, with
+// no kind, runs as the catalog's open itself), and releases the lease only
+// after the catalog has closed, its checkpoint included. A command that
+// cannot take its lease opens nothing.
+func runLeasedCatalogCommand(config Config, command string, spec OperationSpec, work func(ctx context.Context, op *Op, catalog *Catalog) error) error {
+	return runLeasedCatalog(config, command, spec, OpenCatalog, work)
+}
+
+// runLeasedCatalog is runLeasedCatalogCommand with the catalog's open (a
+// command that must not run Initialize opens it without).
+func runLeasedCatalog(config Config, command string, spec OperationSpec, open func(string) (*Catalog, error), work func(ctx context.Context, op *Op, catalog *Catalog) error) (err error) {
+	read := spec.Kind == ""
+	if read {
+		spec = OperationSpec{Kind: "catalog.initialize"}
+	}
+	if spec.Trigger == "" {
+		spec.Trigger = triggerCLI
+	}
+	ops, err := beginCLIOperationsIn([]string{leaseDirs(config)[0]}, nil, nil, command, spec.Kind, "catalog.initialize")
+	if err != nil {
+		return err
+	}
+	ctx, op := ops.begin(context.Background(), spec)
+	initialize := op
+	if !read {
+		_, initialize = op.Child(OperationSpec{Kind: "catalog.initialize", Trigger: triggerCLI})
+	}
+	catalog, err := open(config.CatalogPath)
+	if !read || err != nil {
+		initialize.Finish(err)
+	}
+	if err != nil {
+		op.Finish(err)
+		ops.close()
+		return err
+	}
+	ops.attach(catalog)
+	defer func() {
+		ops.closeCatalog(catalog)
+	}()
+	func() {
+		defer func() {
+			if value := recover(); value != nil {
+				op.finishPanic(value)
+				panic(value)
+			}
+		}()
+		err = work(ctx, op, catalog)
+		op.Finish(err)
+	}()
+	return err
+}
+
+// attach starts journaling into catalog, once it is open.
+func (o *cliOperations) attach(catalog *Catalog) {
+	catalog.ops = o.reg
+	if o.journal = newJournalWriter(catalog, o.reg); o.journal == nil {
+		return
+	}
+	ids := []string{}
+	for _, view := range o.reg.views() {
+		ids = append(ids, string(view.ID))
+	}
+	o.updateLeases(func(info *leaseInfo) { info.Operations = append(info.Operations, ids...) })
+	ctx, cancel := context.WithCancel(context.Background())
+	o.stop, o.done = cancel, make(chan struct{})
+	go func() {
+		defer close(o.done)
+		o.journal.run(ctx)
+	}()
+}
+
+// closeCatalog writes the last journal rows, closes the catalog (and its
+// checkpoint) while the lease is still held, then ends the lease.
+func (o *cliOperations) closeCatalog(catalog *Catalog) {
+	o.closeWith(func() { _ = catalog.Close() })
+}
+
+// cliLeasesHeld counts the commands of this process holding their leases.
+var cliLeasesHeld atomic.Int32
+
+// strictCLILeases makes a catalog write, Initialize, checkpoint or close
+// without a held lease a recorded violation. Tests of Terminal commands set
+// it; a service never does.
+var (
+	strictCLILeases   = false
+	cliLeaseViolation struct {
+		sync.Mutex
+		seen []string
+	}
+)
+
+func cliWriteCheck(what string) {
+	if !strictCLILeases || cliLeasesHeld.Load() > 0 {
+		return
+	}
+	cliLeaseViolation.Lock()
+	cliLeaseViolation.seen = append(cliLeaseViolation.seen, what)
+	cliLeaseViolation.Unlock()
 }

@@ -19,14 +19,11 @@ func runCloudCLI(config Config, args []string) error {
 	if _, err := os.Stat(config.CatalogPath); err != nil {
 		return errors.New("the library catalog is unavailable")
 	}
-	catalog, err := openCatalog(config.CatalogPath, func(*Catalog) error { return nil })
-	if err != nil {
-		return err
-	}
-	defer catalog.Close()
 	// It saves the verification state, so it is a catalog writer: a lease
-	// beside the catalog, and a journal row (§6.5).
-	return runCLIOperation(config, catalog, "cloud-backup", OperationSpec{Kind: "cloud.verify", Legacy: args[1]}, func(context.Context, *Op) error {
+	// beside the catalog, taken before it opens it, and a journal row (§6.5).
+	// It opens the catalog without Initialize, as before.
+	open := func(path string) (*Catalog, error) { return openCatalog(path, func(*Catalog) error { return nil }) }
+	return runLeasedCatalog(config, "cloud-backup", OperationSpec{Kind: "cloud.verify", Legacy: args[1]}, open, func(_ context.Context, _ *Op, catalog *Catalog) error {
 		return verifyCloudCLI(config, catalog, args)
 	})
 }

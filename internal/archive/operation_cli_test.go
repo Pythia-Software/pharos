@@ -21,15 +21,15 @@ var cliCommandCoverage = map[string]string{
 	"init-library":  "creates the library it writes, so nothing can be watching it; --adopt is a known gap (§6.5)",
 	"serve":         "the library service, which runs the registry",
 	"cloud-restore": "restores to a new location, out of status scope (§3.6)",
-	"pricing":       "reads and prints the price tables",
-	"search":        "a read",
-	"tl1":           "a read",
-	"health":        "a read",
-	"doctor":        "a read",
+	"pricing":       "a read; leased for its open, Initialize and close (runLeasedCatalogCommand)",
+	"search":        "a read; leased for its open, Initialize and close",
+	"tl1":           "a read; leased for its open, Initialize and close",
+	"health":        "a read; leased for its open, Initialize and close",
+	"doctor":        "reads the configuration and sources; never opens the catalog",
 	"dev-ui":        "talks to the running service; never opens the catalog",
-	"mcp":           "an MCP stdio server: reads (§3.4 metrics are in memory only)",
-	"probe":         "a read",
-	"volume-id":     "a read",
+	"mcp":           "an MCP stdio server: query-only opens (§3.4 metrics are in memory only); not yet leased",
+	"probe":         "a read; leased for its open, Initialize and close",
+	"volume-id":     "a read of the volume; never opens the catalog",
 }
 
 // Every writing Terminal command takes a lease and registers its
@@ -61,10 +61,51 @@ func TestEveryWritingCommandIsALeasedOperation(t *testing.T) {
 		case !ok:
 			t.Errorf("%s is not classified in cliCommandCoverage", command)
 		case reason == "":
-			pattern := regexp.MustCompile(`runCLIOperation(In)?\([^\n]*"` + regexp.QuoteMeta(command) + `"`)
-			if !pattern.MatchString(sources) {
+			pattern := regexp.MustCompile(`run(CLIOperation(In)?|LeasedCatalog(Command)?)\([^\n]*"` + regexp.QuoteMeta(command) + `"`)
+			writing := cliCatalogOperation(command, []string{"--refresh"}).Kind != ""
+			if !pattern.MatchString(sources) && !writing {
 				t.Errorf("%s writes but does not run as a leased operation", command)
 			}
+		}
+	}
+}
+
+// In a Terminal command, every catalog write, Initialize, checkpoint and
+// close happens while the command holds its lease: a writing command, and a
+// read command, which still opens (and may initialize) and closes the
+// catalog.
+func TestTerminalCommandsTouchTheCatalogOnlyUnderTheirLease(t *testing.T) {
+	config, err := InitLibrary(filepath.Join(t.TempDir(), "Library"), func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	violations := func() []string {
+		cliLeaseViolation.Lock()
+		defer cliLeaseViolation.Unlock()
+		seen := cliLeaseViolation.seen
+		cliLeaseViolation.seen = nil
+		return seen
+	}
+	override(t, &strictCLILeases, true)
+	violations()
+	// The hook sees an unleased open.
+	catalog, err := OpenCatalog(config.CatalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog.Close()
+	if seen := violations(); len(seen) == 0 {
+		t.Fatal("an unleased open and close went unnoticed")
+	}
+	for _, args := range [][]string{{"ingest"}, {"upgrade", "--status"}, {"health"}, {"refine-usage"}} {
+		if err := Run(append([]string{"--config", config.Path}, args...)); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		if seen := violations(); len(seen) > 0 {
+			t.Errorf("%v touched the catalog without its lease: %v", args, seen)
+		}
+		if probes := probeLeases(leaseDirs(config)); len(probes) != 0 {
+			t.Errorf("%v left leases: %+v", args, probes)
 		}
 	}
 }

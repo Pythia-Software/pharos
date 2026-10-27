@@ -153,6 +153,7 @@ func (c *Catalog) initializeLocked(wait bool) error {
 	}
 	// Timed for the journal: the table it would go in is created by this
 	// very step, so the registry records it once one is attached (§3.5).
+	cliWriteCheck("initialize")
 	started := time.Now()
 	err = c.Initialize()
 	c.initialized = &initializeRecord{started: started, ended: time.Now(), err: err}

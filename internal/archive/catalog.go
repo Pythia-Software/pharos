@@ -129,6 +129,7 @@ func filepathDir(path string) string {
 }
 
 func (c *Catalog) Close() error {
+	cliWriteCheck("close")
 	c.closeMCPHistory()
 	c.library.mu.Lock()
 	c.library.close()

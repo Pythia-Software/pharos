@@ -39,13 +39,8 @@ func runAddThisMacCLI(config Config, args []string, in io.Reader, out io.Writer)
 	drive := volumeName(library)
 	fmt.Fprintf(out, "Adding %s to the Pharos library at %s.\n\n", host.Label, library)
 
-	catalog, err := OpenCatalog(config.CatalogPath)
-	if err != nil {
-		return err
-	}
-	defer catalog.Close()
-	catalog.setCaptureRoot(config.CaptureRoot)
-	return runCLIOperation(config, catalog, "add-this-mac", OperationSpec{Kind: "host.add"}, func(context.Context, *Op) error {
+	return runLeasedCatalogCommand(config, "add-this-mac", OperationSpec{Kind: "host.add"}, func(_ context.Context, _ *Op, catalog *Catalog) error {
+		catalog.setCaptureRoot(config.CaptureRoot)
 		return addThisMac(ctx, config, catalog, host, library, drive, *yes, *captureOnly, in, out)
 	})
 }

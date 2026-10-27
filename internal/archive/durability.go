@@ -109,6 +109,7 @@ var errCheckpointBusy = errors.New("catalog checkpoint incomplete: the WAL is st
 // second if a reader of an older snapshot or another writer is still active.
 // Readers are never blocked.
 func (c *Catalog) Checkpoint() error {
+	cliWriteCheck("checkpoint")
 	// Don't wait indefinitely for a pooled connection either, e.g. in Close
 	// while long queries still hold every connection.
 	acquire, cancel := context.WithTimeout(context.Background(), time.Duration(checkpointWaitMS)*time.Millisecond)

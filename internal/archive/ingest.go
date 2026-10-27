@@ -533,6 +533,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 // commits constantly during a sync) fails its first write at once instead of
 // waiting out busy_timeout.
 func (c *Catalog) beginWrite(ctx context.Context) (*sql.Tx, error) {
+	cliWriteCheck("write")
 	tx, err := c.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err

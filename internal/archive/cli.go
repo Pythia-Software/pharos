@@ -158,7 +158,7 @@ func Run(arguments []string) error {
 		if len(args) > 0 && args[0] == "status" {
 			return runHistoryCLI(config, args)
 		}
-		return runCLIOperation(config, nil, "history-backfill", OperationSpec{Kind: "capture.history-backfill", Variant: firstOf(args)},
+		return runCLIOperation(config, "history-backfill", OperationSpec{Kind: "capture.history-backfill", Variant: firstOf(args)},
 			func(context.Context, *Op) error { return runHistoryCLI(config, args) })
 	}
 	if err := config.checkLibrary(volumeIdentity); err != nil {
@@ -181,18 +181,18 @@ func Run(arguments []string) error {
 		if subcommand := firstOf(args); subcommand == "status" || subcommand == "verify" {
 			return runSQLiteRecordsCLI(config, args)
 		}
-		return runCLIOperation(config, nil, "sqlite-records", OperationSpec{Kind: "capture.cli", Variant: "sqlite-records"},
+		return runCLIOperation(config, "sqlite-records", OperationSpec{Kind: "capture.cli", Variant: "sqlite-records"},
 			func(context.Context, *Op) error { return runSQLiteRecordsCLI(config, args) })
 	}
 	if command == "capture" {
-		return runCLIOperation(config, nil, "capture", OperationSpec{Kind: "capture.cli"},
-			func(context.Context, *Op) error { return runCaptureCLI(config, args) })
+		return runCLIOperation(config, "capture", OperationSpec{Kind: "capture.cli"},
+			func(ctx context.Context, _ *Op) error { return runCaptureCLIContext(ctx, config, args) })
 	}
 	if command == "cloud-backup" {
 		return runCloudCLI(config, args)
 	}
 	if command == "backup" {
-		return runCLIOperation(config, nil, "backup", OperationSpec{Kind: "backup.local"},
+		return runCLIOperation(config, "backup", OperationSpec{Kind: "backup.local"},
 			func(context.Context, *Op) error { return runBackupCLI(config, args) })
 	}
 	// A preview reads the catalog without writing, so it can run beside a
@@ -220,12 +220,7 @@ func Run(arguments []string) error {
 			printRepositoryMergePlan(os.Stdout, planRepositoryMerges(items, config.RepositoryAliases, config.RepositorySeparate...))
 			return nil
 		}
-		catalog, err := OpenCatalog(config.CatalogPath)
-		if err != nil {
-			return err
-		}
-		defer catalog.Close()
-		return runCLIOperation(config, catalog, "repositories", OperationSpec{Kind: "repositories.merge"}, func(context.Context, *Op) error {
+		return runLeasedCatalogCommand(config, "repositories", OperationSpec{Kind: "repositories.merge"}, func(_ context.Context, _ *Op, catalog *Catalog) error {
 			return applyRepositoryMergesCLI(config, catalog)
 		})
 	}
@@ -235,16 +230,15 @@ func Run(arguments []string) error {
 	if err := config.EnsureDirs(); err != nil {
 		return err
 	}
-	catalog, err := OpenCatalog(config.CatalogPath)
-	if err != nil {
-		return err
-	}
-	defer catalog.Close()
-	catalog.RepositoryAliases = config.RepositoryAliases
-	catalog.RepositorySeparate = config.RepositorySeparate
-	catalog.setCaptureRoot(config.CaptureRoot)
-	switch command {
-	case "serve":
+	if command == "serve" {
+		catalog, err := OpenCatalog(config.CatalogPath)
+		if err != nil {
+			return err
+		}
+		defer catalog.Close()
+		catalog.RepositoryAliases = config.RepositoryAliases
+		catalog.RepositorySeparate = config.RepositorySeparate
+		catalog.setCaptureRoot(config.CaptureRoot)
 		openBrowser := false
 		for _, arg := range args {
 			if arg == "--open" {
@@ -264,20 +258,22 @@ func Run(arguments []string) error {
 		// (see releasedMarkerName) ends.
 		server.life.listening = func() { _ = os.Remove(releasedMarker(config.CatalogPath)) }
 		return server.Serve()
-	case "ingest":
-		return runCLIOperation(config, catalog, "ingest", OperationSpec{Kind: "ingest.cli", Variant: "ingest"}, func(ctx context.Context, op *Op) error {
+	}
+	// Every other command opens the catalog under a lease (§6.5): taken
+	// before the open, so its Initialize is seen, and released after the
+	// close, so its checkpoint is too.
+	return runLeasedCatalogCommand(config, command, cliCatalogOperation(command, args), func(ctx context.Context, op *Op, catalog *Catalog) error {
+		catalog.RepositoryAliases = config.RepositoryAliases
+		catalog.RepositorySeparate = config.RepositorySeparate
+		catalog.setCaptureRoot(config.CaptureRoot)
+		switch command {
+		case "ingest":
 			return runIngestCLI(ctx, config, catalog, op)
-		})
-	case "repair-existing":
-		return runCLIOperation(config, catalog, "repair-existing", OperationSpec{Kind: "ingest.cli", Variant: "repair-existing"}, func(ctx context.Context, op *Op) error {
+		case "repair-existing":
 			return runRepairExistingCLI(config, catalog, args)
-		})
-	case "build-tools":
-		return runCLIOperation(config, catalog, "build-tools", OperationSpec{Kind: "tools.ledger.build"}, func(ctx context.Context, op *Op) error {
+		case "build-tools":
 			return runBuildToolsCLI(ctx, catalog, op)
-		})
-	case "refine-usage":
-		return runCLIOperation(config, catalog, "refine-usage", OperationSpec{Kind: "catalog.repair", Variant: "refine-usage"}, func(ctx context.Context, op *Op) error {
+		case "refine-usage":
 			refined, err := catalog.RefineUsageTimeline(func(done, total int) {
 				op.progress("Refine usage", "", "conversation", float64(done), float64(total), total > 0)
 				if done%100 == 0 || done == total {
@@ -288,9 +284,7 @@ func Run(arguments []string) error {
 				return fmt.Errorf("refine usage after %d conversations: %w", refined, err)
 			}
 			return printJSON(map[string]any{"conversations_refined": refined})
-		})
-	case "repair-usage-attribution":
-		return runCLIOperation(config, catalog, "repair-usage-attribution", OperationSpec{Kind: "catalog.repair", Variant: "repair-usage-attribution"}, func(ctx context.Context, op *Op) error {
+		case "repair-usage-attribution":
 			repaired, err := catalog.RepairUsageAttribution(ctx, func(done, total int) {
 				op.progress("Repair usage attribution", "", "workspace", float64(done), float64(total), total > 0)
 				if done%100 == 0 || done == total {
@@ -301,45 +295,60 @@ func Run(arguments []string) error {
 				return fmt.Errorf("repair usage attribution after %d workspaces: %w", repaired, err)
 			}
 			return printJSON(map[string]any{"workspaces_repaired": repaired})
-		})
-	case "upgrade":
-		if slices.Contains(args, "--status") || slices.Contains(args, "--preview") {
-			return runUpgradeCLI(catalog, args) // reads
-		}
-		return runCLIOperation(config, catalog, "upgrade", OperationSpec{Kind: "library.upgrade"}, func(ctx context.Context, op *Op) error {
+		case "upgrade":
 			return runUpgradeCLIContext(ctx, catalog, args)
-		})
-	case "pricing":
-		return runPricingCLI(catalog, args)
-	case "search":
-		return runSearchCLI(catalog, args)
-	case "tl1":
-		return runTL1CLI(catalog, args)
-	case "findings":
-		if !slices.Contains(args, "--refresh") {
+		case "pricing":
+			return runPricingCLI(catalog, args)
+		case "search":
+			return runSearchCLI(catalog, args)
+		case "tl1":
+			return runTL1CLI(catalog, args)
+		case "findings":
 			return runFindingsCLI(catalog, args)
-		}
-		return runCLIOperation(config, catalog, "findings", OperationSpec{Kind: "analysis.findings"}, func(context.Context, *Op) error {
-			return runFindingsCLI(catalog, args)
-		})
-	case "health":
-		value := catalog.Health()
-		value["storage"] = storage(config)
-		value["drive"] = driveReport(config, collectDrive(context.Background(), config))
-		return printJSON(value)
-	case "probe":
-		return runProbeCLI(config, catalog, args)
-	case "index":
-		return runCLIOperation(config, catalog, "index", OperationSpec{Kind: "index.captures"}, func(ctx context.Context, op *Op) error {
+		case "health":
+			value := catalog.Health()
+			value["storage"] = storage(config)
+			value["drive"] = driveReport(config, collectDrive(ctx, config))
+			return printJSON(value)
+		case "probe":
+			return runProbeCLI(config, catalog, args)
+		case "index":
 			return runIndexCLIContext(ctx, config, catalog, args)
-		})
-	case "upcoming", "protect", "preserve", "reclaim", "reconcile", "tick", "worker":
-		return fmt.Errorf("%s is part of mothballed TL1 reclamation; see docs/reclamation/README.md", command)
-	case "enrich-github":
-		return fmt.Errorf("%s is not enabled in the Go service", command)
-	default:
-		return usageError()
+		case "upcoming", "protect", "preserve", "reclaim", "reconcile", "tick", "worker":
+			return fmt.Errorf("%s is part of mothballed TL1 reclamation; see docs/reclamation/README.md", command)
+		case "enrich-github":
+			return fmt.Errorf("%s is not enabled in the Go service", command)
+		default:
+			return usageError()
+		}
+	})
+}
+
+// cliCatalogOperation is the operation a catalog command runs as; a read
+// command runs none of its own (its lease covers the open, Initialize and
+// close).
+func cliCatalogOperation(command string, args []string) OperationSpec {
+	switch command {
+	case "ingest":
+		return OperationSpec{Kind: "ingest.cli", Variant: "ingest"}
+	case "repair-existing":
+		return OperationSpec{Kind: "ingest.cli", Variant: "repair-existing"}
+	case "build-tools":
+		return OperationSpec{Kind: "tools.ledger.build"}
+	case "refine-usage", "repair-usage-attribution":
+		return OperationSpec{Kind: "catalog.repair", Variant: command}
+	case "upgrade":
+		if !slices.Contains(args, "--status") && !slices.Contains(args, "--preview") {
+			return OperationSpec{Kind: "library.upgrade"}
+		}
+	case "findings":
+		if slices.Contains(args, "--refresh") {
+			return OperationSpec{Kind: "analysis.findings"}
+		}
+	case "index":
+		return OperationSpec{Kind: "index.captures"}
 	}
+	return OperationSpec{}
 }
 
 // runIngestCLI: pharos ingest, every enabled source in place.

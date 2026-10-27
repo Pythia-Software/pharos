@@ -99,10 +99,19 @@ func TestLeasesFailClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	ran := false
-	err := runCLIOperation(Config{CatalogPath: filepath.Join(root, "catalog.sqlite3"), CaptureRoot: root}, nil, "capture", OperationSpec{Kind: "capture.cli"},
-		func(context.Context, *Op) error { ran = true; return nil })
+	config := Config{CatalogPath: filepath.Join(root, "catalog.sqlite3"), CaptureRoot: root}
+	err := runCLIOperation(config, "capture", OperationSpec{Kind: "capture.cli"}, func(context.Context, *Op) error { ran = true; return nil })
 	if err == nil || ran || !strings.Contains(err.Error(), "nothing was changed") {
 		t.Fatalf("a command without its lease: ran=%v err=%v", ran, err)
+	}
+	// A catalog command takes its lease before it opens the catalog: without
+	// one, nothing is opened, so nothing was changed is true.
+	err = runLeasedCatalogCommand(config, "ingest", OperationSpec{Kind: "ingest.cli"}, func(context.Context, *Op, *Catalog) error { ran = true; return nil })
+	if err == nil || ran {
+		t.Fatalf("a catalog command without its lease: ran=%v err=%v", ran, err)
+	}
+	if _, err := os.Stat(config.CatalogPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the catalog was opened (and initialized) without a lease: %v", err)
 	}
 }
 
@@ -115,13 +124,9 @@ func TestLeaseHelperProcess(t *testing.T) {
 		t.Skip("helper process")
 	}
 	journalRoundInterval = 20 * time.Millisecond
-	catalog, err := OpenCatalog(path)
-	if err != nil {
-		t.Fatal(err)
-	}
 	config := Config{CatalogPath: path, CaptureRoot: filepath.Join(filepath.Dir(path), "captures")}
 	proceed := os.Getenv("PHAROS_TEST_LEASE_PROCEED")
-	err = runCLIOperation(config, catalog, "index", OperationSpec{Kind: "index.captures"}, func(ctx context.Context, op *Op) error {
+	err := runLeasedCatalogCommand(config, "index", OperationSpec{Kind: "index.captures"}, func(ctx context.Context, op *Op, _ *Catalog) error {
 		op.Step("Index captured inputs", "conversation", 10)
 		op.Advance(3)
 		for {
@@ -131,7 +136,6 @@ func TestLeaseHelperProcess(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	})
-	catalog.Close()
 	if err == nil {
 		os.Exit(1)
 	}
