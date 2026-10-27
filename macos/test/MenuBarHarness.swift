@@ -149,6 +149,11 @@ final class MenuFixture: URLProtocol {
         let releasedUsageRequests = MenuFixture.usageRequests
         controller.invalidateUsage()
         precondition(MenuFixture.usageRequests == releasedUsageRequests, "Released library fetched usage")
+        // With no library connected the menu is idle, not checking forever.
+        let neutralDot = Mirror(reflecting: controller).children.first { $0.label == "dot" }!.value as! MenuBarDot
+        precondition(menu.items.contains { $0.title == "Pharos · No library connected" }, "No library must not read as Working")
+        precondition(neutralDot.color == .systemGray)
+        precondition(menu.items.first { $0.title == "Index changes now" }?.isEnabled != true, "No library to index")
         MenuFixture.humanWords = 3240
         service.hasConnectedLibrary = true
         service.libraryConnection = "library-a:4:true"

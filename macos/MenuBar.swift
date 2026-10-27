@@ -378,13 +378,20 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         var problem = actionError ?? service.error ?? service.setupError ?? statusError ?? nonempty(snapshot["error"])
         if let disconnected = service.disconnected, disconnected.state != .finishing { problem = disconnected.note ?? "Library unavailable: \(disconnected.volume)" }
         if service.setupNeeded && !service.settingUp { problem = problem ?? "Set up Pharos to connect a library." }
-        let busy = service.ejecting || service.settingUp || service.disconnected?.state == .finishing || service.url == nil || !activities.isEmpty || indexing || snapshot["library"] == nil
+        // The managed app with no connected library has nothing to poll, so
+        // its snapshot stays empty: that is idle, not a check in progress.
+        let noLibrary = service.url != nil && !service.hasConnectedLibrary && !service.ejecting && !service.settingUp && service.disconnected?.state != .finishing
+        let busy = service.ejecting || service.settingUp || service.disconnected?.state == .finishing || service.url == nil || !activities.isEmpty || indexing || (snapshot["library"] == nil && !noLibrary)
         let title: String
         let detail: String
         if let problem {
             title = "Pharos · Needs attention"
             detail = String(problem.split(separator: "\n").first ?? "Unknown error")
             dot.color = .systemRed
+        } else if noLibrary {
+            title = "Pharos · No library connected"
+            detail = ""
+            dot.color = .systemGray
         } else if busy {
             title = "Pharos · Working"
             if service.ejecting || service.disconnected?.state == .finishing { detail = "Releasing the library for eject…" }
@@ -436,7 +443,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         setRowTitle("eject", "Eject \(drive["name"] as? String ?? "library")…")
         rows["eject"]?.isEnabled = ejectable && !service.ejecting && service.url != nil
         rows["finder"]?.isEnabled = libraryDirectory != nil
-        rows["index"]?.isEnabled = service.url != nil && !service.ejecting && !indexing && !activities.contains { ["sync", "index", "capture", "capture-other", "maintenance"].contains($0["kind"] as? String ?? "") }
+        rows["index"]?.isEnabled = service.url != nil && service.hasConnectedLibrary && !service.ejecting && !indexing && !activities.contains { ["sync", "index", "capture", "capture-other", "maintenance"].contains($0["kind"] as? String ?? "") }
         for key in ["words", "tokens", "carbon", "cost", "backup", "space"] { rows[key]?.isEnabled = service.url != nil }
         layoutMenuText()
         menu.update()
