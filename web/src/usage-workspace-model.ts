@@ -103,7 +103,7 @@ export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?
   if (!change.query && current.get("card_id") && cardDataset && Object.hasOwn(usageDatasets, cardDataset) && current.has(`q_${cardDataset}`) && next.topic === previous.topic && (mode === "dashboards" || next.dataset === cardDataset)) {
     params.set("card_query", cardDataset); params.set(`q_${cardDataset}`, current.get(`q_${cardDataset}`)!);
     if (current.get("window_dataset") === cardDataset) for (const [key, value] of current) if (key.startsWith("window_")) params.set(key, value);
-  } else params.delete("card_id");
+  } else for (const key of [...params.keys()]) if (key.startsWith("card_")) params.delete(key);
   return `/analyze?${params}`;
 }
 

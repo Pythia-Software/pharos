@@ -38,7 +38,7 @@ test("every active card preserves customized covers and metadata-only dashboard 
         for (const edit of edits) {
           const result = await compare(edited, 7, values, { edit });
           cases++;
-          if (result.preview || result.loading || result.failures.length) failures.push({ id: recipe.id, cover: choice.value, kind, edit, ...result });
+          if (result.preview || result.analysis || result.loading || result.failures.length) failures.push({ id: recipe.id, cover: choice.value, kind, edit, ...result });
         }
       }
     }

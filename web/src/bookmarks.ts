@@ -28,10 +28,18 @@ export function migrateSavedQueries() {
     const spec = queryFromURL(item.url, item.query);
     if (spec?.window && spec.window.mode !== "relative" && rollingQueryMatches(spec.query, spec.window)) {
       const url = updateQueryWindowURL(item.url, spec.window.days, item.query);
-      changed = true; return { ...item, url, query: queryFromURL(url)?.query };
+      changed = true; item = { ...item, url, query: queryFromURL(url)?.query };
     }
     try {
       const url = new URL(item.url, location.origin);
+      if (url.origin === location.origin && url.searchParams.has("card_id")) {
+        if (item.cover) url.searchParams.set("card_cover", JSON.stringify(item.cover));
+        if (item.coverMetricId) url.searchParams.set("card_metric", item.coverMetricId);
+        url.searchParams.set("card_title", item.title);
+        if (item.description !== undefined) url.searchParams.set("card_description", item.description);
+        const address = `${url.pathname}${url.search}${url.hash}`;
+        if (address !== item.url) { changed = true; return { ...item, url: address }; }
+      }
       if (url.origin === location.origin && url.pathname === "/" && (url.searchParams.has("q_library") || url.searchParams.has("search"))) {
         changed = true; return { ...item, url: `/library${url.search}` };
       }
@@ -124,6 +132,16 @@ export function updateBookmark(id: string, title: string, description: string, d
     updated.url = updateQueryWindowURL(updated.url, days, updated.query ?? current.query);
     updated.query = queryFromURL(updated.url, updated.query ?? current.query)?.query;
     if (current.templateId) updated.templateId = `${current.templateId.split(":")[0]}:${days ?? "all"}`;
+  }
+  const address = new URL(updated.url, location.origin);
+  if (address.searchParams.has("card_id")) {
+    address.searchParams.set("card_title", updated.title);
+    address.searchParams.set("card_description", updated.description);
+    if (updated.cover) address.searchParams.set("card_cover", JSON.stringify(updated.cover));
+    else address.searchParams.delete("card_cover");
+    if (updated.coverMetricId) address.searchParams.set("card_metric", updated.coverMetricId);
+    else address.searchParams.delete("card_metric");
+    updated.url = `${address.pathname}${address.search}${address.hash}`;
   }
   writeBookmarks(items.map(item => item.id === id ? updated : item));
   return updated;

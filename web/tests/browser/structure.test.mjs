@@ -648,10 +648,10 @@ for (const dashboard of [
   { name: "Tools", topic: "tools", card: "tool-failure-rates", dataset: "tool_calls", field: "started_at", first: "day", last: "day", graph: ".usage-tools-dashboard > .qt-metric", chart: { period: "day", metric: "calls", split: "tool_name", view: "compare" } },
   { name: "Pharos MCP", topic: "mcp", card: "mcp-response-size", dataset: "mcp_calls", field: "called_at", first: "called_at", last: "called_at", graph: ".usage-mcp-dashboard > .qt-metric", chart: { period: "day", metric: "calls", split: "tool_name", view: "compare" } },
   { name: "Carbon Impact", topic: "carbon", card: "carbon-trend", dataset: "usage", field: "first_usage_at", first: "first_usage_at", last: "first_usage_at", summary: "Filtered carbon estimate", chart: { period: "day", metric: "co2", split: "type" } },
-]) for (const width of [1504, 390, 320]) test(`${dashboard.name} card exploration and inline ranges fit at ${width}px`, { skip }, async t => {
+]) for (const width of [1504, 390, 320]) test(`${dashboard.name} dashboard and inline ranges fit at ${width}px`, { skip }, async t => {
   const where = [{ field: dashboard.last, op: ">=", value: "-7d" }, { field: dashboard.first, op: "<", value: "+0s" }];
   const sourceWhere = where.map(term => ({ ...term, field: dashboard.field }));
-  const params = new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: dashboard.topic, card_id: dashboard.card, card_query: dashboard.dataset,
+  const params = new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: dashboard.topic,
     [`q_${dashboard.dataset}`]: encodeQuery({ ...EMPTY_QUERY, where: sourceWhere }), window_mode: "relative", window_days: "7", window_field: dashboard.field, window_dataset: dashboard.dataset,
     analyze_filters: encodeQuery({ ...EMPTY_QUERY, where }), analyze_chart: JSON.stringify(dashboard.chart) });
   const app = await open(t, { url: `/analyze?${params}`, viewport: { width, height: 933 }, ready: dashboard.graph ?? ".usage-dashboard .usage-chart" });
@@ -684,9 +684,9 @@ for (const dashboard of [
   }
 });
 
-for (const width of [1504, 390, 320]) test(`Parallelism card exploration and inline ranges fit at ${width}px`, { skip }, async t => {
+for (const width of [1504, 390, 320]) test(`Parallelism dashboard and inline ranges fit at ${width}px`, { skip }, async t => {
   const where = [{ field: 'started_at', op: '>=', value: '-7d' }, { field: 'started_at', op: '<', value: '+0s' }];
-  const params = new URLSearchParams({ analyze_mode: 'dashboards', analyze_topic: 'parallelism', card_id: 'parallel-days', card_query: 'parallelism',
+  const params = new URLSearchParams({ analyze_mode: 'dashboards', analyze_topic: 'parallelism',
     q_parallelism: encodeQuery({ ...EMPTY_QUERY, where }), window_mode: 'relative', window_days: '7', window_field: 'started_at', window_dataset: 'parallelism',
     analyze_parallelism: JSON.stringify({ range: '7d' }) });
   const app = await open(t, { url: `/analyze?${params}`, viewport: { width, height: 933 }, concurrency: true, ready: '.usage-dashboard .concurrency-chart svg' });
@@ -852,3 +852,28 @@ test("Card Library restores saved covers while fresh queries are pending", { ski
   await app.page.getByRole("status", { name: "Refreshing preview", exact: true }).first().waitFor({ state: "hidden" });
   assert.deepEqual(app.problems(), []);
 });
+
+const cardDestinations = JSON.parse(readFileSync(new URL('../../../internal/archive/assets/ask-destinations.json', import.meta.url), 'utf8'));
+
+// Card analyses use their own source grain and shared cover renderer. The
+// model/unit suite owns mathematical parity; the browser checks accessibility
+// of navigation and that every chart family fits the available viewport.
+for (const id of ['human-words', 'cost-repos', 'machine-time', 'skill-evidence', 'tool-failure-rates', 'mcp-response-size', 'carbon-trend', 'parallel-days', 'machine-latency-trend', 'session-input-output', 'human-message-lengths', 'writing-hours']) {
+  for (const width of [1504, 390, 320]) test(`Expanded card ${id} fits at ${width}px`, { skip }, async t => {
+    const item = cardDestinations.find(card => card.id === id);
+    const app = await open(t, { url: item.href, viewport: { width, height: 933 }, ready: '.card-analysis' });
+    const { page } = app;
+    await app.settled();
+    assert.equal(await page.getByRole('alert').count(), 0, 'the matching analysis is available');
+    assert.deepEqual(await layoutProblems(page), []);
+    const details = page.getByRole('link', { name: 'View supporting query', exact: true });
+    await details.waitFor();
+    await app.shot(`expanded-${id}`);
+    await details.click();
+    await page.locator('.usage-workspace-table').waitFor();
+    await page.getByRole('link', { name: 'Back to dashboard', exact: true }).click();
+    await page.getByRole('region', { name: 'Card analysis', exact: true }).waitFor();
+    await app.settled();
+    assert.deepEqual(await layoutProblems(page), []);
+  });
+}

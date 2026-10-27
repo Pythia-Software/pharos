@@ -18,6 +18,35 @@ export function QueryChip({ title, description, active, onClick }: { title: stri
 
 // Daily covers chart durations in hours (see previewOf) and carbon in kilograms.
 const columnUnit = (field = "") => field.includes("cost") ? "USD" : field.includes("words") ? "words" : field === "duration_ms" || field.endsWith("_hours") ? "h" : field === "co2e_kg" ? "kg" : field === "call_count" ? "calls" : "tokens";
+// Shared by the small cover and its expanded analysis. Presentation never
+// recomputes a metric or substitutes another population on navigation.
+export function CardVisualization({ preview }: { preview: QueryPreview }) {
+  const presentation = compactMetricPresentation(preview);
+  const coverMetric = preview.metrics?.find(metric => metric.clause.id === preview.coverMetricId)?.clause;
+  const ranked = presentation?.ranked || Boolean(!presentation && (preview.insights || preview.ranking || preview.groupSummary));
+  const summary = ranked || preview.study ? undefined : presentation ? presentation.summary : preview.summary;
+  const headlineMetric = presentation ? presentation.headlineMetric : ranked ? undefined : preview.headlineMetric;
+  const max = Math.max(1, ...preview.ranking?.map(item => item.value) ?? []);
+  return <>
+    {headlineMetric ? <span className="query-headline-metric">
+      <span className="query-result-summary is-headline query-stat-line"><strong className="query-headline-value">{headlineMetric.value}</strong>{headlineMetric.unit ? <> <span className="query-headline-unit">{headlineMetric.unit}</span></> : null}
+      {headlineMetric.label ? <span className="query-headline-label">{headlineMetric.label}</span> : null}</span>
+    </span> : null}
+    {preview.study ? <HumanStudyCover study={preview.study} /> : preview.buckets && preview.series ? <CompactColumns buckets={preview.buckets} series={preview.series} {...preview.timeline} showLegend={coverMetric?.display?.legendPosition ? coverMetric.display.legendPosition !== "none" : undefined} xLabel={coverMetric?.display?.xLabel ?? "Day"} yLabel={coverMetric?.display?.yLabel} unit={columnUnit(coverMetric?.field)} />
+      : preview.metrics ? <CompactMetric preview={preview} />
+      : preview.insights ? <span className="query-findings">
+      <span className="query-finding-heading">{preview.headline}</span>
+      {preview.insights.map((item, i) => <span className="query-finding" key={i} data-chart-tooltip={`${item.label}\n${item.value}${item.context ? `\n${item.context}` : ""}`} title="">
+        <span className="query-finding-label">{item.label}</span><strong>{item.value}</strong>
+        {item.context ? <small>{item.context}</small> : null}
+      </span>)}
+    </span>
+      : preview.ranking ? <span className="query-ranking">{preview.ranking.map((item, i) => <span className="query-rank" key={i} data-chart-tooltip={`${item.label}\n${item.value.toLocaleString()}`} title=""><span className="query-rank-label">{item.label}</span><span className="query-rank-track"><i style={{ width: `${Math.max(2, item.value / max * 100)}%`, background: item.color }} /></span></span>)}</span>
+      : <span className="query-excerpt">{preview.excerpt}</span>}
+    {summary && !headlineMetric ? <span className="query-result-summary">{summary}</span> : null}
+  </>;
+}
+
 export function QueryCard({ id, title, description, actionLabel, url, windowLabel, category, preview, loadingSpec, error, discovery, xray, lean = 0, onOpen, onReveal, onKeep, onEdit, onRemove, onMove, onReload, onDragStart, onDragEnd, onDrop, before }: {
   id: string; title: string; description: string; actionLabel?: string; url: string; windowLabel: string; category: QueryCategory;
   preview?: QueryPreview; error?: string; discovery?: boolean; xray?: boolean; lean?: number; before?: boolean;
@@ -26,7 +55,6 @@ export function QueryCard({ id, title, description, actionLabel, url, windowLabe
   onDragStart?: (event: React.DragEvent) => void; onDragEnd?: () => void; onDrop?: (event: React.DragEvent) => void;
 }) {
   const card = useRef<HTMLElement>(null);
-  const max = Math.max(1, ...preview?.ranking?.map(item => item.value) ?? []);
   const style = queryCategories[category];
   const presentation = preview && compactMetricPresentation(preview);
   const coverMetric = preview?.metrics?.find(metric => metric.clause.id === preview.coverMetricId)?.clause;
@@ -60,22 +88,7 @@ export function QueryCard({ id, title, description, actionLabel, url, windowLabe
             requestAnimationFrame(() => card.current?.querySelector<HTMLAnchorElement>(".query-card-open")?.focus({ preventScroll: true }));
           }}><Icon name="refresh" />Reload preview</button> : null}
         </span> : preview?.state === "ready" ? <>
-          {headlineMetric ? <span className="query-headline-metric">
-            <span className="query-result-summary is-headline query-stat-line"><strong className="query-headline-value">{headlineMetric.value}</strong>{headlineMetric.unit ? <> <span className="query-headline-unit">{headlineMetric.unit}</span></> : null}
-            {headlineMetric.label ? <span className="query-headline-label">{headlineMetric.label}</span> : null}</span>
-          </span> : null}
-          {preview.study ? <HumanStudyCover study={preview.study} /> : preview.buckets && preview.series ? <CompactColumns buckets={preview.buckets} series={preview.series} {...preview.timeline} showLegend={coverMetric?.display?.legendPosition ? coverMetric.display.legendPosition !== "none" : undefined} xLabel={coverMetric?.display?.xLabel ?? "Day"} yLabel={coverMetric?.display?.yLabel} unit={columnUnit(coverMetric?.field)} />
-            : preview.metrics ? <CompactMetric preview={preview} />
-            : preview.insights ? <span className="query-findings">
-            <span className="query-finding-heading">{preview.headline}</span>
-            {preview.insights.map((item, i) => <span className="query-finding" key={i} data-chart-tooltip={`${item.label}\n${item.value}${item.context ? `\n${item.context}` : ""}`} title="">
-              <span className="query-finding-label">{item.label}</span><strong>{item.value}</strong>
-              {item.context ? <small>{item.context}</small> : null}
-            </span>)}
-          </span>
-            : preview.ranking ? <span className="query-ranking">{preview.ranking.map((item, i) => <span className="query-rank" key={i} data-chart-tooltip={`${item.label}\n${item.value.toLocaleString()}`} title=""><span className="query-rank-label">{item.label}</span><span className="query-rank-track"><i style={{ width: `${Math.max(2, item.value / max * 100)}%`, background: item.color }} /></span></span>)}</span>
-            : <span className="query-excerpt">{preview.excerpt}</span>}
-          {summary && !headlineMetric ? <span className="query-result-summary">{summary}</span> : null}
+          <CardVisualization preview={preview} />
         </> : preview ? <span className="query-preview-status">{preview.emptyLabel ?? "No recent matches"}</span> : <CardLoading spec={loadingSpec} />}
       </span></ChartTooltip>;
   const caption = <span className="query-caption"><span className="query-title">{title}</span><span className="query-description">{description}</span>

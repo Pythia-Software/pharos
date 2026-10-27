@@ -62,7 +62,7 @@ import { readRollingWindow, resolveRollingQuery, rollingQueryMatches } from "./q
 import { mainIntegration, pullRequestLabel, pullRequestURL, pullRequests } from "./pull-requests";
 import { optionLabels } from "./option-labels";
 import { preferences } from "./preferences";
-import { chartBucketsWithHistory, foldSeries, plottedBucketKey, rollingMetricTrend, validChartDisplay, validRollingPeriods, type ChartDisplay } from "./chart-series";
+import { chartBucketsWithHistory, foldSeries, plottedBucketKey, validChartDisplay, validRollingPeriods, type ChartDisplay } from "./chart-series";
 import { isSliceTerm, readSlice, updateSlice, withSlice, validChartPresentation, type ChartPresentation, type LegendAction, type SliceSelection } from "./chart-selection";
 import { UsageChartColorsProvider, useUsageChartPalette, useUsageTableRenderers } from "./usage-chart-colors";
 import libraryDocument from "../../schemas/library.schema.json";
@@ -84,10 +84,10 @@ import { AuthoredMessages, CategoryPill, MessageMix, authoredRenderers } from ".
 import { ConcurrencyModal, ConcurrencyPanel, concurrencyPrototypeEnabled, type ConcurrencySelection } from "./concurrency";
 import { openConcurrencyModal, startConcurrencySummary } from "./concurrency-store";
 import { currentUsageAnalyses, isUsageWorkspace, readUsageWorkspace, usageDatasets, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
-import { defaultMCPDashboard, validMCPDashboard, cumulativeMCPTrend, mcpDashboardMeasures, mcpDashboardBreakdowns, mcpDashboardQuery, mcpTrendRanking, withMCPTrendGroups, mcpTrendGroups } from "./mcp-dashboard-model";
+import { defaultMCPDashboard, validMCPDashboard, cumulativeMCPTrend, smoothedMCPTrend, mcpDashboardMeasures, mcpDashboardBreakdowns, mcpDashboardQuery, mcpTrendRanking, withMCPTrendGroups, mcpTrendGroups } from "./mcp-dashboard-model";
 import { UsageWorkspace, UsageDashboardLinks, UsageWorkspaceLink } from "./usage-workspace";
 import { UsageQueryIdeas } from "./usage-query-ideas";
-import { toolSummaryCallFilters, toolMetricPresentation, defaultToolDashboard, validToolDashboard, cumulativeToolTrend, toolDashboardMeasures, toolDashboardBreakdowns, toolDashboardQuery, toolTrendRanking, withToolTrendGroups, toolTrendGroups } from "./tools-dashboard-model";
+import { toolSummaryCallFilters, toolMetricPresentation, defaultToolDashboard, validToolDashboard, cumulativeToolTrend, smoothedToolTrend, toolDashboardMeasures, toolDashboardBreakdowns, toolDashboardQuery, toolTrendRanking, withToolTrendGroups, toolTrendGroups } from "./tools-dashboard-model";
 import { readDashboardQuery, inspectDashboardBucket, recordDashboardMetric, recordDashboards, parallelismSelectionQuery, toolDashboardWhere, type RecordDashboardTopic } from "./usage-dashboard-model";
 import { dashboardChartURL } from "./dashboard-chart-links";
 
@@ -1633,7 +1633,7 @@ function UsagePage() {
   useLocationRevision();
   if (shared || location.pathname !== "/analyze" || !isUsageWorkspace()) return <LegacyUsagePage />;
   return <UsageChartColorsProvider>
-    <UsageWorkspace renderDashboard={topic => <GuidedUsageDashboard topic={topic} />} renderTable={dataset => <AnalyzeQueryTable key={dataset} dataset={dataset} />} />
+    <UsageWorkspace schemas={schemas} renderDashboard={topic => <GuidedUsageDashboard topic={topic} />} renderTable={dataset => <AnalyzeQueryTable key={dataset} dataset={dataset} />} />
   </UsageChartColorsProvider>;
 }
 
@@ -1715,10 +1715,10 @@ function MCPUsageDashboard() {
   const pending = view.view === "trend" && ranking.loading;
   const query = view.view === "trend" ? withMCPTrendGroups(baseQuery, view.split, (ranking.metrics[0]?.buckets ?? []).map(bucket => bucket.keys[0] === null ? null : String(bucket.keys[0]))) : baseQuery;
   const clause = query.aggregations![0];
-  const result = useMetrics("mcp_calls", smoothingWhere(query.where, { first: "called_at", last: "called_at" }, view.period, view.view === "trend" && !cumulative ? view.rollingPeriods ?? 0 : 0), state.error || pending || ranking.error ? [] : cumulative ? query.aggregations! : [clause], true);
+  const result = useMetrics("mcp_calls", smoothingWhere(query.where, { first: "called_at", last: "called_at" }, view.period, view.view === "trend" && !cumulative ? view.rollingPeriods ?? 0 : 0), state.error || pending || ranking.error ? [] : cumulative || view.view === "trend" && (view.rollingPeriods ?? 0) > 1 ? query.aggregations! : [clause], true);
   const bounds = timeBounds(state.where, { first: "called_at", last: "called_at" });
   const metric = useMemo(() => cumulative ? cumulativeMCPTrend(view, result.metrics,
-    ...chartSpan(bounds, earliestKey(result.metrics[0]?.buckets.map(bucket => bucket.keys[0]) ?? []))) : view.view === "trend" ? rollingMetricTrend(result.metrics[0], view.period, view.rollingPeriods ?? 0,
+    ...chartSpan(bounds, earliestKey(result.metrics[0]?.buckets.map(bucket => bucket.keys[0]) ?? []))) : view.view === "trend" ? smoothedMCPTrend(view, result.metrics,
     ...chartSpan(bounds, earliestKey(result.metrics[0]?.buckets.map(bucket => bucket.keys[0]) ?? [])), timeBounds(requestedWhere, { first: "called_at", last: "called_at" }).from ?? earliestKey(result.metrics[0]?.buckets.map(bucket => bucket.keys[0]) ?? [])) : result.metrics[0], [result.metrics, view.view, view.period, view.rollingPeriods, bounds.from?.getTime(), bounds.to?.getTime(), cumulative, view.metric]);
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
   return <section className="usage-mcp-dashboard">
@@ -1731,7 +1731,7 @@ function MCPUsageDashboard() {
       <RollingControl value={view.rollingPeriods ?? 0} display={cumulative ? "cumulative" : "interval"} period={view.period} disabled={view.view !== "trend"} note={view.view !== "trend" ? "Choose Per interval to smooth time buckets." : undefined} onChange={rollingPeriods => state.update({ rollingPeriods })} />
     </div>
     <div className="usage-mcp-measure-note"><p className="usage-dashboard-note">{mcpDashboardMeasures[view.metric].note}{view.view === "trend" ? ` Up to ${mcpTrendGroups} busiest groups by call volume in this range.` : ""}{view.split === "query_source" ? " This is the caller's explicit archive-source filter; unscoped requests have no recorded source." : ""}</p><button type="button" onClick={() => window.dispatchEvent(new Event("pharos:usage-refresh"))}>Refresh</button></div>
-    {view.view === "trend" && !cumulative && (view.rollingPeriods ?? 0) > 1 ? <p className="usage-dashboard-note">{view.rollingPeriods}-{view.period} trailing average of interval values; empty intervals count as zero. Points and query links open the original interval records and measures.</p> : null}
+    {view.view === "trend" && !cumulative && (view.rollingPeriods ?? 0) > 1 ? <p className="usage-dashboard-note">{view.rollingPeriods}-{view.period} trailing window. Rates and means pool their underlying totals and counts; windows without samples remain gaps. Points and query links open the original interval records and measures.</p> : null}
     {cumulative ? <p className="usage-dashboard-note">Values run from the selected range start. Rates and averages use running totals and counts. Largest output is the largest response so far. Select a point to open all contributing records through that interval. Grouped queries show the original interval measures.</p> : null}
     {result.error || ranking.error ? <p className="query-table-error" role="alert">{result.error || ranking.error}</p> : <MetricCard clause={cumulative ? { ...clause, label: `Cumulative ${clause.label}`, display: { ...clause.display, kind: "line" as const, yLabel: `Cumulative ${clause.label}` } } : clause} result={metric as AggregationResultEntry | undefined} fields={schemas.mcp_calls.fields} loading={result.loading || pending} renderers={defaultRenderers} onInspect={bucket => {
       const records = inspectDashboardBucket(query, bucket, clause, schemas.mcp_calls, cumulative);
@@ -1825,10 +1825,10 @@ function ToolsUsageDashboard() {
   const query = view.view === "trend" ? withToolTrendGroups(baseQuery, view.split, (ranking.metrics[0]?.buckets ?? []).map(bucket => bucket.keys[0] === null ? null : String(bucket.keys[0]))) : baseQuery;
   const chartQuery = view.view === "trend" ? withToolTrendGroups(chartBaseQuery, view.split, (ranking.metrics[0]?.buckets ?? []).map(bucket => bucket.keys[0] === null ? null : String(bucket.keys[0]))) : chartBaseQuery;
   const clause = query.aggregations![0];
-  const result = useMetrics("tools", chartQuery.where, error || pending || ranking.error ? [] : cumulative ? query.aggregations! : [clause], true);
+  const result = useMetrics("tools", chartQuery.where, error || pending || ranking.error ? [] : cumulative || view.view === "trend" && (view.rollingPeriods ?? 0) > 1 ? query.aggregations! : [clause], true);
   const bounds = timeBounds(state.where, { first: "day", last: "day" });
   const metric = useMemo(() => cumulative ? cumulativeToolTrend(view, result.metrics,
-    ...chartSpan(bounds, earliestKey(result.metrics[0]?.buckets.map(bucket => bucket.keys[0]) ?? []))) : view.view === "trend" ? rollingMetricTrend(result.metrics[0], view.period, view.rollingPeriods ?? 0,
+    ...chartSpan(bounds, earliestKey(result.metrics[0]?.buckets.map(bucket => bucket.keys[0]) ?? []))) : view.view === "trend" ? smoothedToolTrend(view, result.metrics,
     ...chartSpan(bounds, earliestKey(result.metrics[0]?.buckets.map(bucket => bucket.keys[0]) ?? [])), timeBounds(requestedWhere, { first: "day", last: "day" }).from ?? earliestKey(result.metrics[0]?.buckets.map(bucket => bucket.keys[0]) ?? [])) : result.metrics[0], [result.metrics, originRevision, view.view, view.period, view.rollingPeriods, bounds.from?.getTime(), bounds.to?.getTime(), cumulative, view.metric]);
   const presentation = useMemo(() => toolMetricPresentation(metric, clause.groupBy ?? []), [metric, originRevision, view.split, view.view]);
   const measure = toolDashboardMeasures[view.metric];
@@ -1844,7 +1844,7 @@ function ToolsUsageDashboard() {
       <RollingControl value={view.rollingPeriods ?? 0} display={cumulative ? "cumulative" : "interval"} period={view.period} disabled={view.view !== "trend"} note={view.view !== "trend" ? "Choose Per interval to smooth time buckets." : undefined} onChange={rollingPeriods => state.update({ rollingPeriods })} />
     </div>
     <p className="usage-dashboard-note">{toolDashboardBreakdowns[view.split].note}{view.view === "trend" ? ` · Up to ${toolTrendGroups} busiest groups by call volume in this range` : ""} · {measure.note}</p>
-    {view.view === "trend" && !cumulative && (view.rollingPeriods ?? 0) > 1 ? <p className="usage-dashboard-note">{view.rollingPeriods}-{view.period} trailing average of interval values; empty intervals count as zero. Points and query links open the original interval records and measures.</p> : null}
+    {view.view === "trend" && !cumulative && (view.rollingPeriods ?? 0) > 1 ? <p className="usage-dashboard-note">{view.rollingPeriods}-{view.period} trailing window. Rates and means pool their underlying totals and counts; windows without samples remain gaps. Points and query links open the original interval records and measures.</p> : null}
     {cumulative ? <p className="usage-dashboard-note">Values run from the selected range start. Rates and averages use running totals and counts. Select a point to open all contributing records through that interval. Grouped queries show the original interval measures.</p> : null}
     {result.error || ranking.error ? <p className="query-table-error" role="alert">{result.error || ranking.error}</p> : <MetricCard clause={cumulative ? { ...clause, label: `Cumulative ${clause.label}`, display: { ...clause.display, kind: "line" as const, yLabel: `Cumulative ${clause.label}` } } : clause} result={presentation.metric as AggregationResultEntry | undefined} fields={schemas.tools.fields} loading={result.loading || pending} renderers={defaultRenderers} onInspect={bucket => {
       const records = inspectDashboardBucket(query, presentation.sourceBucket(bucket) as typeof bucket, clause, schemas.tools, cumulative);

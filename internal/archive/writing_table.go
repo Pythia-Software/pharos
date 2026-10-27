@@ -78,49 +78,8 @@ func (c *Catalog) computeWritingDataByPeriod(ctx context.Context, hourly bool) (
 	if err != nil {
 		return writingTable{}, err
 	}
-	period := "day"
-	if hourly {
-		period = "strftime('%Y-%m-%dT%H:00:00Z',sent_at)"
-	}
-	sums := []string{"workspace_id", period + " AS day", "COUNT(*) messages", "SUM(typed_words>0) typed_messages", "MAX(typed_words) longest_typed", "MIN(sent_at) first_sent", "MAX(sent_at) last_sent"}
-	for _, column := range authorshipColumns() {
-		sums = append(sums, "SUM("+column+") "+column)
-	}
-	result, err := c.reader().QueryContext(ctx, "SELECT "+strings.Join(sums, ",")+" FROM message_authorship GROUP BY workspace_id,"+period)
+	daily, members, err := c.writingPeriods(ctx, parents, hourly, time.Time{}, time.Time{})
 	if err != nil {
-		return writingTable{}, err
-	}
-	defer result.Close()
-	columns := authorshipColumns()
-	daily := map[string]map[string]*writingDay{}
-	members := map[string][]string{}
-	for result.Next() {
-		var workspace string
-		entry := newWritingDay("")
-		values := make([]int64, len(columns))
-		targets := []any{&workspace, &entry.day, &entry.messages, &entry.typedMessages, &entry.longestTyped, &entry.firstSent, &entry.lastSent}
-		for index := range values {
-			targets = append(targets, &values[index])
-		}
-		if err := result.Scan(targets...); err != nil {
-			return writingTable{}, err
-		}
-		for index, column := range columns {
-			entry.counts[column] = values[index]
-		}
-		root := rootWorkspace(workspace, parents)
-		if daily[root] == nil {
-			daily[root] = map[string]*writingDay{}
-		}
-		if !slices.Contains(members[root], workspace) {
-			members[root] = append(members[root], workspace)
-		}
-		if daily[root][entry.day] == nil {
-			daily[root][entry.day] = newWritingDay(entry.day)
-		}
-		daily[root][entry.day].add(entry)
-	}
-	if err := result.Err(); err != nil {
 		return writingTable{}, err
 	}
 	works, err := queryMapsContext(ctx, c.reader(), `SELECT w.id,w.title,w.source_kind,r.display_name repository_name,
@@ -167,6 +126,72 @@ func (c *Catalog) computeWritingDataByPeriod(ctx context.Context, hourly bool) (
 		return writingTable{}, err
 	}
 	return writingTable{rows, daily}, nil
+}
+
+// Apply exact message bounds before reducing into local days or UTC hours.
+// The lifetime workspace rows still own workspace/cohort filters and folding.
+func (c *Catalog) writingPeriods(ctx context.Context, parents map[string]string, hourly bool, start, end time.Time) (map[string]map[string]*writingDay, map[string][]string, error) {
+	period := "day"
+	if hourly {
+		period = "strftime('%Y-%m-%dT%H:00:00Z',sent_at)"
+	}
+	sums := []string{"workspace_id", period + " AS day", "COUNT(*) messages", "SUM(typed_words>0) typed_messages", "MAX(typed_words) longest_typed", "MIN(sent_at) first_sent", "MAX(sent_at) last_sent"}
+	for _, column := range authorshipColumns() {
+		sums = append(sums, "SUM("+column+") "+column)
+	}
+	predicate := ""
+	var arguments []any
+	if !start.IsZero() {
+		predicate = " WHERE sent_at>=?"
+		arguments = append(arguments, formatTime(start))
+	}
+	if !end.IsZero() {
+		if predicate == "" {
+			predicate = " WHERE "
+		} else {
+			predicate += " AND "
+		}
+		predicate += "sent_at<?"
+		arguments = append(arguments, formatTime(end))
+	}
+	result, err := c.reader().QueryContext(ctx, "SELECT "+strings.Join(sums, ",")+" FROM message_authorship"+predicate+" GROUP BY workspace_id,"+period, arguments...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer result.Close()
+	columns := authorshipColumns()
+	daily := map[string]map[string]*writingDay{}
+	members := map[string][]string{}
+	for result.Next() {
+		var workspace string
+		entry := newWritingDay("")
+		values := make([]int64, len(columns))
+		targets := []any{&workspace, &entry.day, &entry.messages, &entry.typedMessages, &entry.longestTyped, &entry.firstSent, &entry.lastSent}
+		for index := range values {
+			targets = append(targets, &values[index])
+		}
+		if err := result.Scan(targets...); err != nil {
+			return nil, nil, err
+		}
+		for index, column := range columns {
+			entry.counts[column] = values[index]
+		}
+		root := rootWorkspace(workspace, parents)
+		if daily[root] == nil {
+			daily[root] = map[string]*writingDay{}
+		}
+		if !slices.Contains(members[root], workspace) {
+			members[root] = append(members[root], workspace)
+		}
+		if daily[root][entry.day] == nil {
+			daily[root][entry.day] = newWritingDay(entry.day)
+		}
+		daily[root][entry.day].add(entry)
+	}
+	if err := result.Err(); err != nil {
+		return nil, nil, err
+	}
+	return daily, members, nil
 }
 
 func writingRow(work map[string]any, total *writingDay, spent *workspaceUsageTotal, subagents, launched int) map[string]any {
@@ -272,15 +297,6 @@ func (c *Catalog) writingSeries(ctx context.Context, request writingSeriesReques
 	if err != nil {
 		return nil, err
 	}
-	if request.Hourly {
-		table, hourlyErr := cachedValue(ctx, c, "writing-hourly:"+c.clock().Format("2006-01-02"), func(ctx context.Context) (writingTable, error) {
-			return c.computeWritingDataByPeriod(ctx, true)
-		})
-		if hourlyErr != nil {
-			return nil, hourlyErr
-		}
-		daily = table.daily
-	}
 	var start, end time.Time
 	for _, bound := range []struct {
 		raw    string
@@ -295,6 +311,24 @@ func (c *Catalog) writingSeries(ctx context.Context, request writingSeriesReques
 			return nil, fmt.Errorf("invalid writing series timestamp %q", raw)
 		}
 		*target = parsed
+	}
+	if !start.IsZero() || !end.IsZero() {
+		parents, _, parentErr := foldedParents(ctx, c.reader())
+		if parentErr != nil {
+			return nil, parentErr
+		}
+		daily, _, err = c.writingPeriods(ctx, parents, request.Hourly, start, end)
+		if err != nil {
+			return nil, err
+		}
+	} else if request.Hourly {
+		table, hourlyErr := cachedValue(ctx, c, "writing-hourly:"+c.clock().Format("2006-01-02"), func(ctx context.Context) (writingTable, error) {
+			return c.computeWritingDataByPeriod(ctx, true)
+		})
+		if hourlyErr != nil {
+			return nil, hourlyErr
+		}
+		daily = table.daily
 	}
 	matched, err := querytable.Filter(rows, request.Where, schema)
 	if err != nil {

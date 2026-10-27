@@ -1,6 +1,6 @@
 import { EMPTY_QUERY, type AggregationClause, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { withSlice, type SliceValue } from "./chart-selection";
-import { cumulativeMetricTrend, validChartDisplay, validRollingPeriods, type ChartDisplay, type CumulativeMetric } from "./chart-series";
+import { cumulativeMetricTrend, rollingMetricTrend, rollingRatioMetricTrend, validChartDisplay, validRollingPeriods, type ChartDisplay, type CumulativeMetric } from "./chart-series";
 import type { MetricResult } from "./metric-request";
 import { isOriginDimension, originLabel } from "./origin-dimensions";
 
@@ -107,4 +107,11 @@ export function cumulativeToolTrend(view: ToolDashboardView, metrics: MetricResu
   const calculation: CumulativeMetric = view.metric === "failure_rate" ? { op: "ratio", numerator: "tools_failures", denominator: "tools_calls" }
     : view.metric === "mean_time" ? { op: "ratio", numerator: "tools_time", denominator: "tools_timed" } : { op: "sum" };
   return cumulativeMetricTrend(metrics, view.period, start, end, calculation);
+}
+
+export function smoothedToolTrend(view: ToolDashboardView, metrics: MetricResult[], start: Date, end: Date, historyStart?: Date): MetricResult | undefined {
+  const ratio = view.metric === "failure_rate" ? { numerator: "tools_failures", denominator: "tools_calls" }
+    : view.metric === "mean_time" ? { numerator: "tools_time", denominator: "tools_timed" } : undefined;
+  return ratio ? rollingRatioMetricTrend(metrics, ratio, view.period, view.rollingPeriods ?? 0, start, end, historyStart)
+    : rollingMetricTrend(metrics[0], view.period, view.rollingPeriods ?? 0, start, end, historyStart);
 }

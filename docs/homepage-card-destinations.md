@@ -1,137 +1,161 @@
-# Home card exploration audit
+# Card analysis destinations
 
-October 2026: all 104 analysis cards now enter through an Analyze dashboard. The remaining four cards open Findings or TL1, where their dedicated workflows live. The catalog has 108 active definitions; 52 retired definitions remain resolvable.
+All 119 active cards preserve their analysis on navigation. The 115 analysis
+cards open an expanded chart with the same source query, preview executor and
+visualization as Home; the three Findings cards and TL1 revisits retain their
+native query routes. The 52 retired definitions remain resolvable.
 
-## Exploration flow
+## Navigation contract
 
-**Card → relevant dashboard → details, records or searches.** The card is a starting point for exploration. Its dashboard gives context and useful controls; it does not need to reproduce the card’s exact grouped query. A visible “Your starting point” section names the card and provides **View card details**.
+**Card → matching expanded analysis → supporting query.** A related dashboard
+is a separate, explicitly broader exploration; its projected filters and generic
+chart defaults never replace the card's analysis.
 
-- Every analysis recipe gets a dashboard destination, including distributions, thresholded rates, lineage comparisons and authorship studies. Editing a cover keeps that entry point.
-- Encode useful initial measures, breakdowns, smoothing, scale and display. Topic defaults cover future cards; individual recipes choose more specific defaults where useful.
-- Keep the original query, including HAVING, raw observations, lineage and source predicates, in `q_*`. `card_query` identifies its source dataset and `card_id` identifies the starting question. Details open that query; Back to dashboard returns to the overview with its filters and settings.
-- Across different grains, project only dates and compatible categorical cohorts. Human message dates select overlapping conversations for Human Words. Per-call dates select Tools summary days. Message contents, repository paths and per-call numeric predicates remain in the exact details. Mixed OR filters are carried whole or omitted whole.
-- The dashboard’s own grouped-query, record and search links follow the current chart selection. They do not get overwritten by the original card query.
-- Durable collection retains the complete exploration URL and the immutable source query. Window edits update both the overview context and source query. Specialized saved covers still preview the original calculation.
-- Charts resolve native relative dates for range controls and smoothing history. Smoothed, logarithmic and cumulative covers keep their presentation options. Parallel activity supports every collected-card window through 365 days. Cards inherit saved counting and turn-gap preferences so chart drilldowns match the hourly record dataset.
-
-## New questions
-
-- **Smoothed token volume:** provider workloads with a seven-day rolling mean.
-- **Token volume across scales:** repository workloads on a logarithmic scale.
-- **Accumulating API equivalent:** fully priced provider API cost accumulated from the range start.
-- **Pharos request activity:** smoothed server requests by tool, with the retained-log coverage caveat.
+- `card_query` and `q_*` identify the exact source query. Source WHERE, staged
+  observation reductions, grouped HAVING, root lineage, distributions and
+  paired axes remain intact. Durable snapshot tokens resolve before execution;
+  unavailable queries show an error rather than a fresh template's population.
+- `card_cover` retains the chosen metric, kind, series/sample limits, Other,
+  legend, scale, smoothing and cumulative/percentage settings. Saved metric
+  edits update this presentation. Existing collected covers migrate in place.
+- `card_id` selects the original specialized study when applicable. Trailing
+  totals, pooled ratios, complete-day endpoints, historical comparison spans,
+  local-hour and weekday studies use the same loaders on both surfaces.
+- Window edits change the exact source predicates while keeping the cover.
+  The expanded parallelism charts use those source bounds, not the ribbon's
+  separate calendar-day preset. Counting and gap preferences keep the same
+  record execution path as Home.
+- **View supporting query** opens the original Query Table with source and
+  grouped filters intact. Its interval/source rows are the supporting evidence;
+  the chart's smoothed or specialized values remain in the expanded analysis.
+  Back to dashboard restores that analysis and cover.
+- Generic Tools/MCP rolling rates and means pool numerator and denominator
+  instead of averaging daily ratios. Writing series filter exact message
+  timestamps before grouping into either days or hours.
 
 ## Every active card
 
-| Card ID | Entry point | Exploration view | Details retain |
-| --- | --- | --- | --- |
-| `tool-failures` | Analyze → tools dashboard | failures by `tool_name`; group comparison. | Original grouping, measures, filters and supporting records. |
-| `error-signatures` | Analyze → tools dashboard | failures by `tool_name`; group comparison. | Eligibility thresholds, denominators and supporting evidence. |
-| `edit-failures` | Analyze → tools dashboard | failures by `repository_name`; group comparison. | Original grouping, measures, filters and supporting records. |
-| `test-failures` | Analyze → tools dashboard | failures by `command_name`; group comparison. | Original grouping, measures, filters and supporting records. |
-| `large-outputs` | Analyze → tools dashboard | context added by `tool_name`; group comparison. | Original grouping, measures, filters and supporting records. |
-| `truncated-outputs` | Analyze → tools dashboard | calls by `tool_name`; group comparison. | Eligibility thresholds, denominators and supporting evidence. |
-| `read-paths` | Analyze → tools dashboard | calls by `tool_name`; group comparison. | Original grouping, measures, filters and supporting records. |
-| `primary-domains` | Analyze → tools dashboard | calls by `tool_name`; group comparison. | Original grouping, measures, filters and supporting records. |
-| `mcp-methods` | Analyze → tools dashboard | calls by `mcp_server`; group comparison. | Original grouping, measures, filters and supporting records. |
-| `skill-evidence` | Analyze → skills dashboard | evidence records by `skill_name`; daily overview. | Evidence types, conversation reach and repeated-load cohorts. |
-| `human-words` | Analyze → human dashboard | typed by `kind`; daily overview. | Message sent time and authorship filters. |
-| `explaining-repos` | Analyze → human dashboard | typed by `repository_name`; daily overview. | Message sent time and authorship filters. |
-| `usage-models` | Analyze → tokens dashboard | tokens by `model_family`; daily overview. | Original grouping, measures, filters and supporting records. |
-| `usage-repos` | Analyze → tokens dashboard | tokens by `repository_name`; daily overview. | Original grouping, measures, filters and supporting records. |
-| `cost-repos` | Analyze → tokens dashboard | cost by `repository_name`; daily overview. | Original grouping, measures, filters and supporting records. |
-| `tool-failure-rates` | Analyze → tools dashboard | failure rate by `tool_name`; group comparison. | Eligibility thresholds, denominators and supporting evidence. |
-| `duration-distribution` | Analyze → tools dashboard | mean time by `command_name`; group comparison. | Observation distributions, sample thresholds and individual records. |
-| `output-distribution` | Analyze → tools dashboard | context added by `tool_name`; group comparison. | Observation distributions, sample thresholds and individual records. |
-| `error-reach` | Analyze → tools dashboard | failures by `tool_name`; group comparison. | Eligibility thresholds, denominators and supporting evidence. |
-| `cross-repo-errors` | Analyze → tools dashboard | failures by `repository_name`; group comparison. | Original grouping, measures, filters and supporting records. |
-| `skill-reach` | Analyze → skills dashboard | evidence records by `skill_name`; daily overview. | Eligibility thresholds, denominators and supporting evidence. |
-| `repeated-reads` | Analyze → tools dashboard | calls by `tool_name`; group comparison. | Eligibility thresholds, denominators and supporting evidence. |
-| `human-word-mix` | Analyze → human dashboard | typed by `kind`; daily overview. | Eligibility thresholds, denominators and supporting evidence. |
-| `usage-work` | Analyze → tokens dashboard | tokens by `repository_name`; daily overview. | Per-task/run lineage, cohort identity and totals. |
-| `cache-efficiency` | Analyze → tokens dashboard | tokens by `type`; daily overview. | Original grouping, measures, filters and supporting records. |
-| `effort-cost` | Analyze → tokens dashboard | cost by `model_effort`; daily overview. | Per-task/run lineage, cohort identity and totals. |
-| `delegation-depth` | Analyze → tokens dashboard | tokens by `session_kind`; daily overview. | Per-task/run lineage, cohort identity and totals. |
-| `price-coverage` | Analyze → tokens dashboard | tokens by `provider`; daily overview. | Original grouping, measures, filters and supporting records. |
-| `mcp-response-size` | Analyze → mcp dashboard | bytes by `tool_name`; group comparison. | Observation distributions, sample thresholds and individual records. |
-| `human-example-phrases` | Analyze → human dashboard | all by `kind`; daily overview. | Message authorship, source text and the study calculation. |
-| `tl1-revisits` | TL1 runs | Dedicated workflow. | Project and candidate identity. |
-| `primary-urls` | Analyze → tools dashboard | calls by `tool_name`; group comparison. | Eligibility thresholds, denominators and supporting evidence. |
-| `writing-hours` | Analyze → human dashboard | typed by `kind`; daily overview. | Message authorship, source text and the study calculation. |
-| `human-word-total` | Analyze → human dashboard | typed by `kind`; daily overview. | Message authorship, source text and the study calculation. |
-| `human-words-per-message` | Analyze → human dashboard | typed by `kind`; daily overview. | Message authorship, source text and the study calculation. |
-| `human-words-per-conversation` | Analyze → human dashboard | typed by `kind`; daily overview. | Message authorship, source text and the study calculation. |
-| `human-words-per-work` | Analyze → human dashboard | typed by `kind`; daily overview. | Message authorship, source text and the study calculation. |
-| `human-repo-conversation-depth` | Analyze → human dashboard | typed by `repository_name`; daily overview. | Message sent time and authorship filters. |
-| `human-message-lengths` | Analyze → human dashboard | typed by `kind`; daily overview. | Message authorship, source text and the study calculation. |
-| `human-specific-feedback` | Analyze → human dashboard | typed by `kind`; daily overview. | Message authorship, source text and the study calculation. |
-| `human-messages-per-day` | Analyze → human dashboard | typed by `kind`; daily overview. | Trailing-window calculation and its denominators. |
-| `human-conversations-per-day` | Analyze → human dashboard | typed by `kind`; daily overview. | Trailing-window calculation and its denominators. |
-| `model-token-share-trend` | Analyze → tokens dashboard | percent by `model_family`; 7-day smoothing. | Original grouping, measures, filters and supporting records. |
-| `model-cost-share-trend` | Analyze → tokens dashboard | percent cost by `model_family`; 7-day smoothing. | Original grouping, measures, filters and supporting records. |
-| `model-session-costs` | Analyze → tokens dashboard | cost by `model_family`; daily overview. | Observation distributions, sample thresholds and individual records. |
-| `largest-subagent-weight` | Analyze → tokens dashboard | tokens by `model_family`; daily overview. | Per-task/run lineage, cohort identity and totals. |
-| `session-human-output` | Analyze → human dashboard | all by `providers`; daily overview. | Paired measurements, cohort identity and logarithmic axes. |
-| `session-delegation-count` | Analyze → tokens dashboard | tokens by `model_family`; daily overview. | Observation distributions, sample thresholds and individual records. |
-| `model-agent-roles` | Analyze → tokens dashboard | tokens by `model_family`; daily overview. | Original grouping, measures, filters and supporting records. |
-| `effort-cost-share` | Analyze → tokens dashboard | cost by `effort`; daily overview. | Original grouping, measures, filters and supporting records. |
-| `session-token-cost` | Analyze → tokens dashboard | cost by `model_family`; daily overview. | Paired measurements, cohort identity and logarithmic axes. |
-| `session-input-output` | Analyze → tokens dashboard | tokens by `model_family`; daily overview. | Paired measurements, cohort identity and logarithmic axes. |
-| `model-token-share` | Analyze → tokens dashboard | percent by `model_family`; daily overview. | Original grouping, measures, filters and supporting records. |
-| `model-conversation-reach` | Analyze → tokens dashboard | tokens by `model_family`; daily overview. | Original grouping, measures, filters and supporting records. |
-| `repository-model-use` | Analyze → tokens dashboard | tokens by `model_family`; daily overview. | Original grouping, measures, filters and supporting records. |
-| `model-cost-share` | Analyze → tokens dashboard | percent cost by `model_family`; daily overview. | Original grouping, measures, filters and supporting records. |
-| `cache-repositories` | Analyze → tokens dashboard | tokens by `type`; daily overview. | Original grouping, measures, filters and supporting records. |
-| `repository-failure-rates` | Analyze → tools dashboard | failure rate by `repository_name`; group comparison. | Eligibility thresholds, denominators and supporting evidence. |
-| `conversation-error-counts` | Analyze → tools dashboard | failures by `tool_name`; group comparison. | Observation distributions, sample thresholds and individual records. |
-| `tool-call-share` | Analyze → tools dashboard | calls by `tool_name`; group comparison. | Original grouping, measures, filters and supporting records. |
-| `tool-calls-per-conversation` | Analyze → tools dashboard | calls by `tool_name`; group comparison. | Observation distributions, sample thresholds and individual records. |
-| `pharos-mcp-sources` | Analyze → tools dashboard | calls by `source_kind`; group comparison. | Original grouping, measures, filters and supporting records. |
-| `pharos-mcp-query-sources` | Analyze → mcp dashboard | calls by `query_source`; group comparison. | Original grouping, measures, filters and supporting records. |
-| `pharos-mcp-durations` | Analyze → mcp dashboard | mean time by `tool_name`; group comparison. | Observation distributions, sample thresholds and individual records. |
-| `skill-body-sizes` | Analyze → skills dashboard | retained body volume by `skill_name`; daily overview. | Observation distributions, sample thresholds and individual records. |
-| `skill-load-distribution` | Analyze → skills dashboard | evidence records by `skill_name`; daily overview. | Observation distributions, sample thresholds and individual records. |
-| `research-conversation-searches` | Analyze → tools dashboard | calls by `tool_name`; group comparison. | Observation distributions, sample thresholds and individual records. |
-| `archive-empty-search-rate` | Analyze → mcp dashboard | calls by `status`; group comparison. | Eligibility thresholds, denominators and supporting evidence. |
-| `provider-cost-share` | Analyze → tokens dashboard | percent cost by `provider`; 7-day smoothing. | Original grouping, measures, filters and supporting records. |
-| `api-cost-total` | Analyze → tokens dashboard | cost by `repository_name`; daily overview. | Original grouping, measures, filters and supporting records. |
-| `repository-cost-share` | Analyze → tokens dashboard | percent cost by `repository_name`; daily overview. | Original grouping, measures, filters and supporting records. |
-| `window-work-cost` | Analyze → tokens dashboard | cost by `repository_name`; daily overview. | Per-task/run lineage, cohort identity and totals. |
-| `work-cost-distribution` | Analyze → tokens dashboard | cost by `repository_name`; daily overview. | Observation distributions, sample thresholds and individual records. |
-| `work-volume-cost` | Analyze → tokens dashboard | cost by `repository_name`; daily overview. | Paired measurements, cohort identity and logarithmic axes. |
-| `run-effort-token-ranges` | Analyze → tokens dashboard | tokens by `effort`; daily overview. | Observation distributions, sample thresholds and individual records. |
-| `repository-token-share` | Analyze → tokens dashboard | percent by `repository_name`; daily overview. | Original grouping, measures, filters and supporting records. |
-| `task-token-ranges` | Analyze → tokens dashboard | tokens by `repository_name`; daily overview. | Observation distributions, sample thresholds and individual records. |
-| `task-output-ranges` | Analyze → tokens dashboard | tokens by `repository_name`; daily overview. | Observation distributions, sample thresholds and individual records. |
-| `repository-output-share` | Analyze → tokens dashboard | tokens by `type`; daily overview. | Original grouping, measures, filters and supporting records. |
-| `task-effort-token-ranges` | Analyze → tokens dashboard | tokens by `effort`; daily overview. | Observation distributions, sample thresholds and individual records. |
-| `task-model-token-ranges` | Analyze → tokens dashboard | tokens by `repository_name`; daily overview. | Observation distributions, sample thresholds and individual records. |
-| `task-model-effort-token-ranges` | Analyze → tokens dashboard | tokens by `model_effort`; daily overview. | Observation distributions, sample thresholds and individual records. |
-| `repository-delegated-share` | Analyze → tokens dashboard | tokens by `session_kind`; daily overview. | Per-task/run lineage, cohort identity and totals. |
-| `delegating-task-share` | Analyze → tokens dashboard | tokens by `session_kind`; daily overview. | Per-task/run lineage, cohort identity and totals. |
-| `delegated-run-token-ranges` | Analyze → tokens dashboard | tokens by `session_kind`; daily overview. | Observation distributions, sample thresholds and individual records. |
-| `machine-time` | Analyze → time dashboard | recorded time by `activity`; daily overview. | Original grouping, measures, filters and supporting records. |
-| `machine-activities` | Analyze → time dashboard | recorded time by `activity`; daily overview. | Original grouping, measures, filters and supporting records. |
-| `machine-operations` | Analyze → time dashboard | recorded time by `activity`; daily overview. | Original grouping, measures, filters and supporting records. |
-| `machine-call-trend` | Analyze → tools dashboard | calls by `tool_category`; 7-day smoothing. | Trailing-window calculation and its denominators. |
-| `machine-latency-trend` | Analyze → tools dashboard | mean time by `tool_category`; 7-day smoothing. | Trailing-window calculation and its denominators. |
-| `parallel-days` | Analyze → parallelism dashboard | Captured activity; saved counting and turn gap, explicit lookback. | Hourly occupancy, saved counting and gap assumptions. |
-| `parallel-trend` | Analyze → parallelism dashboard | Captured activity; saved counting and turn gap, explicit lookback. | Hourly occupancy, saved counting and gap assumptions. |
-| `parallel-hours` | Analyze → parallelism dashboard | Captured activity; saved counting and turn gap, explicit lookback. | Hourly occupancy, saved counting and gap assumptions. |
-| `parallel-repositories` | Analyze → parallelism dashboard | Captured activity; saved counting and turn gap, explicit lookback. | Hourly occupancy, saved counting and gap assumptions. |
-| `carbon-trend` | Analyze → carbon dashboard | co2 by `type`; daily overview. | Recorded ledger estimates; the dashboard explores current Carbon assumptions. |
-| `carbon-tiers` | Analyze → carbon dashboard | co2 by `tier`; daily overview. | Recorded ledger estimates; the dashboard explores current Carbon assumptions. |
-| `carbon-repositories` | Analyze → carbon dashboard | co2 by `repository_name`; daily overview. | Recorded ledger estimates; the dashboard explores current Carbon assumptions. |
-| `carbon-models` | Analyze → carbon dashboard | co2 by `type`; daily overview. | Recorded ledger estimates; the dashboard explores current Carbon assumptions. |
-| `carbon-providers` | Analyze → carbon dashboard | co2 by `provider`; daily overview. | Recorded ledger estimates; the dashboard explores current Carbon assumptions. |
-| `carbon-effort` | Analyze → carbon dashboard | co2 by `type`; daily overview. | Recorded ledger estimates; the dashboard explores current Carbon assumptions. |
-| `findings-open` | Findings | Dedicated workflow. | Actionable findings and measured savings. |
-| `findings-fixes` | Findings | Dedicated workflow. | Actionable findings and measured savings. |
-| `findings-results` | Findings | Dedicated workflow. | Actionable findings and measured savings. |
-| `models-needing-prices` | Analyze → tokens dashboard | tokens by `model_family`; daily overview. | Original grouping, measures, filters and supporting records. |
-| `token-volume-trend` | Analyze → tokens dashboard | tokens by `provider`; 7-day smoothing. | Original grouping, measures, filters and supporting records. |
-| `token-volume-log` | Analyze → tokens dashboard | tokens by `repository_name`; daily overview; logarithmic scale. | Original grouping, measures, filters and supporting records. |
-| `cumulative-api-cost` | Analyze → tokens dashboard | cost by `provider`; cumulative. | Original grouping, measures, filters and supporting records. |
-| `mcp-call-trend` | Analyze → mcp dashboard | calls by `tool_name`; 7-day smoothing. | Original grouping, measures, filters and supporting records. |
+The matching analysis uses the card's source dataset and saved calculation;
+there is no categorical or date projection on its primary navigation path.
 
-[homepage-query-cards.json](homepage-query-cards.json) is the executable recipe snapshot. Tests compile every source query and cover, exercise dashboard context at every supported card window, and verify the details/back path preserves query tokens, thresholds and chart settings.
+| Card ID | Primary analysis source | Entry point |
+| --- | --- | --- |
+| `tool-failures` | `tool_calls` | Expanded matching analysis |
+| `error-signatures` | `tool_calls` | Expanded matching analysis |
+| `edit-failures` | `tool_calls` | Expanded matching analysis |
+| `test-failures` | `tool_calls` | Expanded matching analysis |
+| `large-outputs` | `tool_calls` | Expanded matching analysis |
+| `truncated-outputs` | `tool_calls` | Expanded matching analysis |
+| `read-paths` | `tool_calls` | Expanded matching analysis |
+| `primary-domains` | `tool_calls` | Expanded matching analysis |
+| `mcp-methods` | `tool_calls` | Expanded matching analysis |
+| `skill-evidence` | `skill_usages` | Expanded matching analysis |
+| `human-words` | `writing_messages` | Expanded matching analysis |
+| `explaining-repos` | `writing_messages` | Expanded matching analysis |
+| `usage-models` | `usage` | Expanded matching analysis |
+| `usage-repos` | `usage` | Expanded matching analysis |
+| `cost-repos` | `usage` | Expanded matching analysis |
+| `tool-failure-rates` | `tool_calls` | Expanded matching analysis |
+| `duration-distribution` | `tool_calls` | Expanded matching analysis |
+| `output-distribution` | `tool_calls` | Expanded matching analysis |
+| `error-reach` | `tool_calls` | Expanded matching analysis |
+| `cross-repo-errors` | `tool_calls` | Expanded matching analysis |
+| `skill-reach` | `skill_usages` | Expanded matching analysis |
+| `repeated-reads` | `tool_calls` | Expanded matching analysis |
+| `human-word-mix` | `writing_messages` | Expanded matching analysis |
+| `usage-work` | `usage` | Expanded matching analysis |
+| `cache-efficiency` | `usage` | Expanded matching analysis |
+| `effort-cost` | `usage` | Expanded matching analysis |
+| `delegation-depth` | `usage` | Expanded matching analysis |
+| `price-coverage` | `usage` | Expanded matching analysis |
+| `mcp-response-size` | `mcp_calls` | Expanded matching analysis |
+| `human-example-phrases` | `writing_messages` | Expanded matching analysis |
+| `tl1-revisits` | `tl1_attempts` | Native query |
+| `primary-urls` | `tool_calls` | Expanded matching analysis |
+| `writing-hours` | `writing_messages` | Expanded matching analysis |
+| `human-word-total` | `writing_messages` | Expanded matching analysis |
+| `human-repository-words-trend` | `writing_messages` | Expanded matching analysis |
+| `human-words-per-message` | `writing_messages` | Expanded matching analysis |
+| `human-words-per-conversation` | `writing_messages` | Expanded matching analysis |
+| `human-words-per-work` | `writing_messages` | Expanded matching analysis |
+| `human-repo-conversation-depth` | `writing_messages` | Expanded matching analysis |
+| `human-message-lengths` | `writing_messages` | Expanded matching analysis |
+| `human-specific-feedback` | `writing_messages` | Expanded matching analysis |
+| `human-messages-per-day` | `writing_messages` | Expanded matching analysis |
+| `human-conversations-per-day` | `writing_messages` | Expanded matching analysis |
+| `model-token-share-trend` | `usage` | Expanded matching analysis |
+| `model-cost-share-trend` | `usage` | Expanded matching analysis |
+| `model-session-costs` | `usage` | Expanded matching analysis |
+| `largest-subagent-weight` | `usage` | Expanded matching analysis |
+| `session-human-output` | `conversation_activity` | Expanded matching analysis |
+| `session-delegation-count` | `usage` | Expanded matching analysis |
+| `model-agent-roles` | `usage` | Expanded matching analysis |
+| `effort-cost-share` | `usage` | Expanded matching analysis |
+| `session-token-cost` | `usage` | Expanded matching analysis |
+| `session-input-output` | `usage` | Expanded matching analysis |
+| `model-token-share` | `usage` | Expanded matching analysis |
+| `model-conversation-reach` | `usage` | Expanded matching analysis |
+| `repository-model-use` | `usage` | Expanded matching analysis |
+| `model-cost-share` | `usage` | Expanded matching analysis |
+| `cache-repositories` | `usage` | Expanded matching analysis |
+| `repository-failure-rates` | `tool_calls` | Expanded matching analysis |
+| `conversation-error-counts` | `tool_calls` | Expanded matching analysis |
+| `tool-call-share` | `tool_calls` | Expanded matching analysis |
+| `tool-calls-per-conversation` | `tool_calls` | Expanded matching analysis |
+| `pharos-mcp-sources` | `tool_calls` | Expanded matching analysis |
+| `pharos-mcp-query-sources` | `mcp_calls` | Expanded matching analysis |
+| `pharos-mcp-durations` | `mcp_calls` | Expanded matching analysis |
+| `skill-body-sizes` | `skill_usages` | Expanded matching analysis |
+| `skill-load-distribution` | `skill_usages` | Expanded matching analysis |
+| `research-conversation-searches` | `tool_calls` | Expanded matching analysis |
+| `archive-empty-search-rate` | `mcp_calls` | Expanded matching analysis |
+| `provider-cost-share` | `usage` | Expanded matching analysis |
+| `api-cost-total` | `usage` | Expanded matching analysis |
+| `repository-cost-share` | `usage` | Expanded matching analysis |
+| `window-work-cost` | `usage` | Expanded matching analysis |
+| `work-cost-distribution` | `usage` | Expanded matching analysis |
+| `work-volume-cost` | `usage` | Expanded matching analysis |
+| `origin-tokens-channel` | `usage` | Expanded matching analysis |
+| `origin-cost-channel` | `usage` | Expanded matching analysis |
+| `origin-tokens-machine_id` | `usage` | Expanded matching analysis |
+| `origin-cost-machine_id` | `usage` | Expanded matching analysis |
+| `origin-tokens-execution_machine_id` | `usage` | Expanded matching analysis |
+| `origin-cost-execution_machine_id` | `usage` | Expanded matching analysis |
+| `run-effort-token-ranges` | `usage` | Expanded matching analysis |
+| `repository-token-share` | `usage` | Expanded matching analysis |
+| `task-token-ranges` | `usage` | Expanded matching analysis |
+| `task-output-ranges` | `usage` | Expanded matching analysis |
+| `repository-output-share` | `usage` | Expanded matching analysis |
+| `task-effort-token-ranges` | `usage` | Expanded matching analysis |
+| `task-model-token-ranges` | `usage` | Expanded matching analysis |
+| `task-model-effort-token-ranges` | `usage` | Expanded matching analysis |
+| `repository-delegated-share` | `usage` | Expanded matching analysis |
+| `delegating-task-share` | `usage` | Expanded matching analysis |
+| `delegated-run-token-ranges` | `usage` | Expanded matching analysis |
+| `machine-time` | `tool_calls` | Expanded matching analysis |
+| `machine-activities` | `tool_calls` | Expanded matching analysis |
+| `machine-operations` | `tool_calls` | Expanded matching analysis |
+| `machine-call-trend` | `tool_calls` | Expanded matching analysis |
+| `machine-latency-trend` | `tool_calls` | Expanded matching analysis |
+| `parallel-days` | `parallelism` | Expanded matching analysis |
+| `parallel-trend` | `parallelism` | Expanded matching analysis |
+| `parallel-hours` | `parallelism` | Expanded matching analysis |
+| `parallel-repositories` | `parallelism` | Expanded matching analysis |
+| `carbon-trend` | `usage` | Expanded matching analysis |
+| `carbon-tiers` | `usage` | Expanded matching analysis |
+| `carbon-repositories` | `usage` | Expanded matching analysis |
+| `carbon-models` | `usage` | Expanded matching analysis |
+| `carbon-providers` | `usage` | Expanded matching analysis |
+| `carbon-effort` | `usage` | Expanded matching analysis |
+| `findings-open` | `findings` | Native query |
+| `findings-fixes` | `findings` | Native query |
+| `findings-results` | `findings` | Native query |
+| `models-needing-prices` | `usage` | Expanded matching analysis |
+| `token-volume-trend` | `usage` | Expanded matching analysis |
+| `token-volume-log` | `usage` | Expanded matching analysis |
+| `cumulative-api-cost` | `usage` | Expanded matching analysis |
+| `mcp-call-trend` | `mcp_calls` | Expanded matching analysis |
+| `human-words-weekday` | `writing_messages` | Expanded matching analysis |
+| `human-messages-weekday` | `writing_messages` | Expanded matching analysis |
+| `parallel-active-weekday` | `parallelism` | Expanded matching analysis |
+| `parallel-weekday` | `parallelism` | Expanded matching analysis |
