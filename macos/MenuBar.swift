@@ -393,7 +393,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 var parts = [activity["label"] as? String ?? "Working"]
                 if let progress = activity["progress"] as? Double { parts.append("stage \(Int(progress * 100))%") }
                 if let completion = Self.date(activity["estimated_completion_at"]), completion > Date() {
-                    parts.append("about \(max(1, Int(ceil(completion.timeIntervalSinceNow / 60)))) min for this stage")
+                    // A whole-operation forecast covers the run; otherwise the estimate is the stage's.
+                    let minutes = max(1, Int(ceil(completion.timeIntervalSinceNow / 60)))
+                    parts.append(activity["estimated_completion_scope"] as? String == "operation" ? "about \(minutes) min left" : "about \(minutes) min for this stage")
                 }
                 detail = parts.joined(separator: " · ")
             } else { detail = indexing ? "Starting indexing…" : "Checking the library…" }

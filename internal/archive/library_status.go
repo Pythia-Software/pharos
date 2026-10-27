@@ -37,11 +37,15 @@ type libraryActivity struct {
 	Detail string `json:"detail,omitempty"`
 	// Progress is the measured fraction of Work's current stage, not of the
 	// whole operation. nil means no trustworthy denominator is available.
-	Progress              *float64          `json:"progress"`
-	StartedAt             string            `json:"started_at,omitempty"`
-	EstimatedCompletionAt string            `json:"estimated_completion_at,omitempty"`
-	Work                  *activityWork     `json:"work,omitempty"`
-	Estimate              *activityEstimate `json:"estimate,omitempty"`
+	Progress              *float64 `json:"progress"`
+	StartedAt             string   `json:"started_at,omitempty"`
+	EstimatedCompletionAt string   `json:"estimated_completion_at,omitempty"`
+	// EstimatedCompletionScope says what EstimatedCompletionAt is the end of:
+	// "operation" for the whole-operation forecast, "stage" for the midpoint
+	// of the current stage's range. Empty when there is no estimate.
+	EstimatedCompletionScope string            `json:"estimated_completion_scope,omitempty"`
+	Work                     *activityWork     `json:"work,omitempty"`
+	Estimate                 *activityEstimate `json:"estimate,omitempty"`
 	// Writes is true for work that writes to the library's drive; a backup
 	// only reads it.
 	Writes bool `json:"writes"`

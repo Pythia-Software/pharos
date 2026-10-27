@@ -36,6 +36,7 @@ final class ArchiveWKWebView: WKWebView {}
 final class MenuFixture: URLProtocol {
     static var activity = false
     static var activityLabel = "Indexing captures"
+    static var activityExtra: [String: Any] = [:]
     static var ejectable = true
     static var failure = ""
     static var indexRequested = false
@@ -86,7 +87,7 @@ final class MenuFixture: URLProtocol {
             }
             value = ["settings": MenuBarPreferences.defaults.merging(["cost": true, "backup": true, "space": true, "index": true, "eject": true]) { _, new in new },
                 "error": Self.failure, "indexed_at": "2026-10-13T10:40:00Z", "backup_at": "2026-10-13T07:40:00Z",
-                "library": ["library_dir": "/Volumes/Archive SSD/Pharos", "activities": Self.activity ? [["kind": "index", "label": Self.activityLabel, "progress": 0.42]] : [], "drive": ["ejectable": Self.ejectable, "name": "Archive SSD"]],
+                "library": ["library_dir": "/Volumes/Archive SSD/Pharos", "activities": Self.activity ? [["kind": "index", "label": Self.activityLabel, "progress": 0.42].merging(Self.activityExtra) { _, extra in extra }] : [], "drive": ["ejectable": Self.ejectable, "name": "Archive SSD"]],
                 "storage": ["sizes": ["library_bytes": 12400000000], "free_bytes": 286000000000]]
         }
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
@@ -106,10 +107,10 @@ final class MenuFixture: URLProtocol {
 }
 
 @main struct MenuBarHarness {
-    static func pump(_ predicate: () -> Bool) {
+    static func pump(_ predicate: () -> Bool, line: UInt = #line) {
         let end = Date().addingTimeInterval(5)
         while !predicate() && Date() < end { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
-        precondition(predicate(), "Timed out waiting for native menu")
+        precondition(predicate(), "Timed out waiting for native menu (line \(line))")
     }
     static func menu(_ controller: MenuBarController) -> NSMenu {
         let item = Mirror(reflecting: controller).children.first { $0.label == "item" }!.value as! NSStatusItem
@@ -180,6 +181,15 @@ final class MenuFixture: URLProtocol {
         precondition(detail.title.contains("\n"), "Long status must wrap")
         precondition(detail.title.replacingOccurrences(of: "\n", with: " ") == busyLabel + " · stage 42%", "Wrapping must retain the complete status")
         precondition(menu.size.width <= baselineWidth + 2, "Status must not widen the menu")
+        // A whole-operation forecast reads as time left, not the stage's.
+        MenuFixture.activityLabel = "Capture & index"
+        MenuFixture.activityExtra = ["estimated_completion_at": ISO8601DateFormatter().string(from: Date().addingTimeInterval(150)), "estimated_completion_scope": "operation"]
+        controller.refresh()
+        pump { menu.items.contains { $0.title.replacingOccurrences(of: "\n", with: " ").hasPrefix("Capture & index · stage 42% · about") && $0.title.replacingOccurrences(of: "\n", with: " ").hasSuffix(" min left") } }
+        MenuFixture.activityExtra["estimated_completion_scope"] = "stage"
+        controller.refresh()
+        pump { menu.items.contains { $0.title.replacingOccurrences(of: "\n", with: " ").hasPrefix("Capture & index · stage 42% · about") && $0.title.replacingOccurrences(of: "\n", with: " ").hasSuffix(" min for this stage") } }
+        MenuFixture.activityExtra = [:]
         let font = NSFont.menuFont(ofSize: 13)
         for text in [String(repeating: "conversation/", count: 20), "👩🏽‍💻 日本語の会話を読み込み、ライブラリのインデックスを更新しています。"] {
             let wrapped = MenuBarController.wrappedMenuTitle(text, width: 160, font: font)

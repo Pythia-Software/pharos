@@ -263,7 +263,7 @@ func (s *Server) estimateActivities(activities []libraryActivity, at time.Time) 
 	for i := range activities {
 		a := &activities[i]
 		a.Forecast = a.operation.estimate(at, a.Stopping)
-		a.EstimatedCompletionAt = ""
+		a.EstimatedCompletionAt, a.EstimatedCompletionScope = "", ""
 		a.Estimate = &activityEstimate{State: "unknown", Basis: "This stage does not report a measurable total"}
 		if a.Work != nil {
 			work := *a.Work
@@ -311,6 +311,7 @@ func (s *Server) estimateActivities(activities []libraryActivity, at time.Time) 
 		if a.Forecast != nil {
 			if a.Forecast.Point > 0 {
 				a.EstimatedCompletionAt = formatTime(at.Add(time.Duration(a.Forecast.Point * float64(time.Second))))
+				a.EstimatedCompletionScope = "operation"
 			}
 			continue
 		}
@@ -318,6 +319,7 @@ func (s *Server) estimateActivities(activities []libraryActivity, at time.Time) 
 		if a.Estimate.State == "estimating" {
 			seconds := (a.Estimate.LowSeconds + a.Estimate.HighSeconds) / 2
 			a.EstimatedCompletionAt = formatTime(at.Add(time.Duration(seconds * float64(time.Second))))
+			a.EstimatedCompletionScope = "stage"
 		}
 	}
 	for key := range s.estimator.observations {
