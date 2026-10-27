@@ -136,6 +136,26 @@ func TestWritingRowsFoldSubagentWorkAndFollowFilters(t *testing.T) {
 	if len(windowed["hourly"].([]map[string]any)) != 1 || integer(windowed["totals"].(map[string]any)["automated_words"]) != 0 {
 		t.Fatalf("exclusive hourly range: %#v", windowed)
 	}
+	// Exact bounds restrict messages before reducing either daily or hourly
+	// totals. A partial hour must not pull in an earlier folded message.
+	for _, hourly := range []bool{false, true} {
+		request := writingSeriesRequest{Hourly: hourly, Split: "source_kind", Start: "2026-09-02T12:30:00.000Z", End: "2026-09-02T13:10:00.000Z"}
+		empty, err := catalog.writingSeries(context.Background(), request, schema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if empty["works"] != 0 || integer(empty["totals"].(map[string]any)["messages"]) != 0 {
+			t.Fatalf("partial boundary admitted outside messages: %#v", empty)
+		}
+		request.End = "2026-09-02T13:10:00.001Z"
+		child, err := catalog.writingSeries(context.Background(), request, schema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if child["works"] != 1 || integer(child["totals"].(map[string]any)["messages"]) != 1 || integer(child["totals"].(map[string]any)["typed_words"]) != 0 || integer(child["totals"].(map[string]any)["automated_words"]) != 6 {
+			t.Fatalf("exact boundary lost folded child: %#v", child)
+		}
+	}
 	if _, err := catalog.writingSeries(context.Background(), writingSeriesRequest{Split: "title"}, schema); err == nil {
 		t.Fatal("split by title was accepted")
 	}

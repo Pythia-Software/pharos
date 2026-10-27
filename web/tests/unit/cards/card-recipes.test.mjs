@@ -13,9 +13,11 @@ import { concurrencySettingsKey, readConcurrencySettings, resolveConcurrencyRang
 import { cardDashboardWhere, cardDetailsURL } from "../../../src/card-exploration";
 import { usageWorkspaceURL } from "../../../src/usage-workspace-model";
 import { timeBounds, usageTime, writingTime } from "../../../src/usage-chart";
+import { cardAnalysisJob, relatedCardDashboardURL, resolveCardAnalysisJob } from "../../../src/card-analysis-model";
 const clock = new Date(2026, 9, 13, 12);
 
-test("origin cards explore the metric and breakdown promised by their covers", () => {
+test("origin cards explore the metric and breakdown promised by their covers", t => {
+  bookmarkFixture(t, []);
   for (const field of ["channel", "machine_id", "execution_machine_id"]) for (const metric of ["tokens", "cost"]) {
     const recipe = queryRecipes.find(recipe => recipe.id === `origin-${metric}-${field}`);
     assert.ok(recipe);
@@ -23,7 +25,98 @@ test("origin cards explore the metric and breakdown promised by their covers", (
     const chart = JSON.parse(params.get("analyze_chart"));
     assert.equal(chart.split, field);
     assert.equal(chart.metric, metric);
+    const job = cardAnalysisJob(instantiateRecipe(recipe, 30, clock).url, schemas.usage);
+    assert.deepEqual(job.options.cover, defaultCardCover(recipe));
+    assert.deepEqual(job.query.grouping.keys, [field]);
   }
+});
+
+test("every expanded card executes the original population, calculation and presentation across windows", t => {
+  bookmarkFixture(t, []);
+  for (const recipe of queryRecipes.filter(recipe => !recipe.retired && recipe.destination)) {
+    for (const days of [1, 7, 30, 90, 180, 365, null]) {
+      const item = instantiateRecipe(recipe, days, clock);
+      const job = cardAnalysisJob(item.url, schemas[recipe.dataset]);
+      assert.equal(job.dataset, recipe.dataset, recipe.id);
+      assert.deepEqual(job.query, core.normalizeQueryState(item.query), recipe.id);
+      assert.deepEqual(job.options.cover, defaultCardCover(recipe), recipe.id);
+      assert.deepEqual(job.options.window, item.window, recipe.id);
+      assert.deepEqual(job.options.recipe.trend, recipe.trend, recipe.id);
+      assert.deepEqual(job.options.recipe.weekday, recipe.weekday, recipe.id);
+      assert.equal(job.options.recipe.humanStudy, recipe.humanStudy, recipe.id);
+      const shown = cardCoverQuery(job.query, job.options.recipe, job.options.cover);
+      const original = cardCoverQuery(core.normalizeQueryState(item.query), recipe, defaultCardCover(recipe));
+      assert.deepEqual(shown, original, recipe.id);
+    }
+  }
+});
+
+test("expanded cards preserve custom cadence, series folding and collected metric edits", t => {
+  bookmarkFixture(t, []);
+  const recipe = queryRecipes.find(recipe => recipe.id === "token-volume-trend");
+  const cover = { ...recipe.cover, maxGroups: 3, showOther: false, timeline: { rollingPeriods: 14, display: "cumulative", scale: "logarithmic" } };
+  const item = instantiateRecipe({ ...recipe, cover }, 90, clock);
+  const job = cardAnalysisJob(item.url, schemas.usage);
+  assert.deepEqual(job.options.cover, cover);
+  const all = cardAnalysisJob(updateQueryWindowURL(item.url, null), schemas.usage);
+  assert.equal(all.options.window, undefined);
+  assert.deepEqual((all.query.grouping?.source ?? all.query).where, recipe.where);
+  assert.deepEqual(all.options.cover, cover);
+  const related = new URL(relatedCardDashboardURL(new URL(item.url, location.origin).searchParams), location.origin);
+  assert.equal(related.searchParams.has("card_id"), false);
+  assert.equal(related.searchParams.has("card_cover"), false);
+  assert.equal(related.searchParams.has("q_usage"), false);
+});
+
+test("All time analysis copy follows the query window instead of the related dashboard lookback", t => {
+  bookmarkFixture(t, []);
+  for (const days of [1, 7, 30, 90, 180, 365]) {
+    const recipe = queryRecipes.find(recipe => recipe.id === "human-words");
+    const item = instantiateRecipe(recipe, days, clock);
+    const job = cardAnalysisJob(updateQueryWindowURL(item.url, null), schemas[recipe.dataset]);
+    assert.equal(job.options.window, undefined);
+    assert.equal(job.options.recipe.window, undefined);
+    assert.equal(job.options.recipe.title, "All-time writing");
+    assert.equal(job.options.recipe.description, "Human-written words sent across all time, grouped by the day they were sent.");
+    assert.equal(queryHasTimeFilter(job.query, recipe.field), false);
+    const restored = cardAnalysisJob(updateQueryWindowURL(job.options.url, days), schemas[recipe.dataset]);
+    assert.equal(restored.options.recipe.title, item.title);
+    assert.equal(restored.options.recipe.description, item.description);
+    const kept = new URL(item.url, location.origin);
+    kept.searchParams.set("card_title", item.title);
+    kept.searchParams.set("card_description", item.description);
+    const keptAll = cardAnalysisJob(updateQueryWindowURL(kept.href, null), schemas[recipe.dataset]);
+    assert.equal(keptAll.options.recipe.title, job.options.recipe.title, "saved default headings follow the range too");
+    assert.equal(keptAll.options.recipe.description, job.options.recipe.description);
+  }
+  const trend = queryRecipes.find(recipe => recipe.id === "token-volume-trend");
+  const all = cardAnalysisJob(updateQueryWindowURL(instantiateRecipe(trend, 180, clock).url, null), schemas.usage);
+  assert.equal(all.options.recipe.description, "Daily tokens by provider across all time, averaged over seven calendar days including idle days.");
+  const volume = queryRecipes.find(recipe => recipe.id === "human-word-total");
+  assert.equal(cardAnalysisJob(updateQueryWindowURL(instantiateRecipe(volume, 7, clock).url, null), schemas[volume.dataset]).options.recipe.title, "All-time writing volume over time");
+  const cumulative = queryRecipes.find(recipe => recipe.id === "cumulative-api-cost");
+  assert.equal(cardAnalysisJob(updateQueryWindowURL(instantiateRecipe(cumulative, 365, clock).url, null), schemas.usage).options.recipe.description, "API-equivalent cost accumulated from the start of recorded history, split by provider; fully priced facts only.");
+  const custom = instantiateRecipe({ ...trend, title: "My workload", description: "Keep my wording." }, 7, clock);
+  const customAll = cardAnalysisJob(updateQueryWindowURL(custom.url, null), schemas.usage);
+  assert.equal(customAll.options.recipe.title, custom.title);
+  assert.equal(customAll.options.recipe.description, custom.description);
+});
+
+test("expanded cards resolve durable source queries and fail instead of substituting a template", async t => {
+  bookmarkFixture(t, []);
+  const item = instantiateRecipe(queryRecipes.find(recipe => recipe.id === "tool-failure-rates"), 7, clock);
+  const query = core.normalizeQueryState(item.query);
+  const params = new URL(item.url, location.origin);
+  params.searchParams.set("q_tool_calls", "@aaaaaaaaaaaaaaaaaaaaaa");
+  const fetch = global.fetch;
+  t.after(() => { global.fetch = fetch; });
+  global.fetch = async () => Response.json({ version: 1, code: "aaaaaaaaaaaaaaaaaaaaaa", token: core.encodeQuery(query), createdAt: 0 });
+  const restored = await resolveCardAnalysisJob(params.href, schemas.tool_calls);
+  assert.deepEqual(restored.query, query);
+  assert.deepEqual(restored.query.where, query.where, "group thresholds remain HAVING");
+  global.fetch = async () => new Response("Unavailable", { status: 404 });
+  const missing = new URL(params); missing.searchParams.set("q_tool_calls", "@bbbbbbbbbbbbbbbbbbbbbb");
+  await assert.rejects(resolveCardAnalysisJob(missing.href, schemas.tool_calls));
 });
 
 test("dashboard card windows and retained cover queries stay aligned after collection edits", t => {
@@ -114,6 +207,9 @@ test("changing a collected cover preserves the dashboard and the matching detail
   const restored = queryFromURL(updated.url);
   assert.equal(restored.window.days, 30);
   assert.deepEqual(restored.query.grouping.source.where, item.query.grouping.source.where);
+  const job = cardAnalysisJob(updated.url, schemas.usage);
+  assert.equal(job.options.cover.metricId, "card_total_tokens");
+  assert.equal(job.options.coverMetricId, "card_total_tokens");
 });
 
 test("dashboard context projects shared cohorts without treating per-record evidence as summary filters", () => {
@@ -329,13 +425,21 @@ test("rolling bookmark migration preserves IDs and fixed ranges while replacing 
   const query = resolveRollingQuery(suggestion.query, calendar, clock);
   const legacy = { id: "legacy", savedQueryId: "saved-id", title: "Rolling", url: queryURL(recipe.dataset, query, calendar) };
   const fixed = { id: "fixed", title: "Fixed", url: queryURL(recipe.dataset, query) };
-  values.set("pharos-bookmarks-v1", [legacy, fixed]);
+  const cover = { ...defaultCardCover(recipe), maxGroups: 3, showOther: false, timeline: { rollingPeriods: 14 } };
+  const address = new URL(suggestion.url, location.origin);
+  address.searchParams.delete("card_cover");
+  const collected = { id: "old-card", title: "Kept title", description: "Kept description", url: address.pathname + address.search, query: suggestion.query, cover };
+  values.set("pharos-bookmarks-v1", [legacy, fixed, collected]);
   migrateSavedQueries();
   const saved = values.get("pharos-bookmarks-v1");
   assert.equal(saved[0].savedQueryId, "saved-id");
   assert.equal(saved[0].id, "legacy");
   assert.deepEqual(queryFromURL(saved[0].url).query.grouping.source.where.filter(term => term.field === recipe.field).map(term => term.value), ["-7d", "+0s"]);
   assert.equal(saved[1].url, fixed.url);
+  const expanded = cardAnalysisJob(saved[2].url, schemas[recipe.dataset]);
+  assert.deepEqual(expanded.options.cover, cover, "existing collection settings migrate into the destination");
+  assert.equal(expanded.options.recipe.title, collected.title);
+  assert.equal(expanded.options.recipe.description, collected.description);
 });
 
 test("bookmark migration preserves separately named saves of the same query and their default IDs", t => {
