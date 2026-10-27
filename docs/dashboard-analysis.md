@@ -250,17 +250,17 @@ cache-share denominator fails.
 - Hours step on UTC hour boundaries and take the local hour of their start.
   In zones offset by a fraction of an hour, each slot starts mid-hour locally.
 - Query Table has no hour-of-day or weekday grouping, so cycle slots are
-  folded in the browser and cannot be drilled into. See
-  [`handoffs/query-table-calendar-cycles.md`](handoffs/query-table-calendar-cycles.md).
+  folded in the browser and cannot be drilled into.
 - Query Table colors chart marks by the first group key only, so a share of
-  "Provider + model" draws same-provider slices in one color; see
-  [`handoffs/query-table-multi-key-colors.md`](handoffs/query-table-multi-key-colors.md).
+  "Provider + model" draws same-provider slices in one color.
 - Query Table's box and horizontal-bar charts clip long group labels at a
-  fixed margin; see
-  [`handoffs/query-table-chart-label-margin.md`](handoffs/query-table-chart-label-margin.md).
+  fixed margin.
 - `minCount` counts rows. A records compare view therefore cannot require
   "five distinct conversations per model"; use the conversation unit, where
   each row is one conversation.
+
+The four Query Table limitations are requested in
+[`handoffs/query-table-dashboard-views.md`](handoffs/query-table-dashboard-views.md).
 
 ## Phases
 
