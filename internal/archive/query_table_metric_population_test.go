@@ -28,6 +28,7 @@ func metricTotal(t *testing.T, metric qt.SQLiteMetricV2) float64 {
 func TestQueryMetricPopulationsHTTP(t *testing.T) {
 	catalog, config := testCatalog(t)
 	seedToolCalls(t, catalog, 300)
+	publishProjections(t, catalog)
 	server := testServer(t, config, catalog)
 	call := func(method, path string, body any) *httptest.ResponseRecorder {
 		encoded, _ := json.Marshal(body)

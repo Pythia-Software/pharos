@@ -159,6 +159,7 @@ func (c *Catalog) initializeLocked(wait bool) error {
 // checkpointed. SQLite still checkpoints when the last connection of any
 // process closes, which leaves nothing to replay if the drive is then pulled.
 func (c *Catalog) closeQuery() error {
+	c.closeMCPHistory()
 	if c.reads != nil {
 		_ = c.reads.Close()
 	}

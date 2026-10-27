@@ -618,6 +618,9 @@ func TestMCPAuditToolsExposedAndLogged(t *testing.T) {
 	if _, failed := toolTextOf(response); failed {
 		t.Fatalf("audit tool failed through MCP: %#v", response)
 	}
+	if err := catalog.flushMCPHistory(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	var summary string
 	if err := catalog.DB.QueryRow("SELECT arguments_json FROM mcp_calls WHERE tool_name='search_messages'").Scan(&summary); err != nil {
 		t.Fatal(err)

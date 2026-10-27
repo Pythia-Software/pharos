@@ -96,9 +96,9 @@ overviews report `unavailable` with
 value to retry.
 
 The initial numeric projection is backfilled in bounded batches by Library
-maintenance. A query refreshes up to 100 dirty workspaces within its context;
-remaining workspaces are explicitly pending. Tool counts are pending until the
-current tool ledger is built. Coverage counts distinguish pending, unavailable,
+maintenance. A query computes up to 100 dirty workspaces from its own snapshot,
+without storing them; remaining workspaces are explicitly pending. Tool counts
+are pending until the current tool ledger is built. Coverage counts distinguish pending, unavailable,
 partial, assumed, and complete evidence. A complete metric over retained records
 does not imply the entire original conversation was archived.
 
@@ -128,8 +128,10 @@ automatically. Set `retain_snapshot: true` in a metadata query to capture values
 for later reuse even when the result fits in one response; this returns
 `snapshot_id` and its creation and expiry times.
 
-Snapshots preserve numeric values, membership, and ordering across ingestion,
-price updates, and MCP processes. They expire after five minutes. A new rows or
+Snapshots preserve numeric values, membership, and ordering across ingestion
+and price updates. They live in the memory of the process that answered, the
+Pharos service or the agent's MCP process, so a cursor fails as expired once the
+service starts or stops. They expire after five minutes. A new rows or
 aggregate request can reuse `snapshot_id` with the same population, scope,
 quality, and order, using only captured fields. Requested membership follow-ups
 reuse the captured relation. Other fields or changed populations require a new
@@ -145,7 +147,7 @@ available until expiry, including after the final page, and can be released earl
 ```
 
 Snapshots store local derived metadata, not transcripts. Expired snapshots are
-removed when new snapshots are created. No SQLite read transaction remains open
+freed whenever a snapshot is created, read, or released. No SQLite read transaction remains open
 between MCP calls. Metadata-only queries without text report exact retrieval
 populations; metrics may still have pending/partial evidence. Text searches
 apply eligibility before the 25,000 recent-match and top-500 lexical cuts, and

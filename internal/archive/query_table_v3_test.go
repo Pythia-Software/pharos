@@ -31,6 +31,7 @@ func TestQueryV3LargeSourceHavingMetricsAndPaging(t *testing.T) {
 	sourceRows := queryV3MaxRows + 31
 	catalog, config := testCatalog(t)
 	seedToolCalls(t, catalog, sourceRows)
+	publishProjections(t, catalog)
 	server := testServer(t, config, catalog)
 	q := groupRequest("tool_name", qt.SummaryColumn{ID: "calls", Op: "count"}, qt.SummaryColumn{ID: "time", Op: "sum", Field: "duration_ms"})
 	q.Result.Where = []qt.WhereTerm{{Field: "calls", Op: ">", Value: "1"}}
@@ -191,6 +192,7 @@ func TestQueryV3ComputedSourceAndRepresentative(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	publishProjections(t, catalog)
 	server := testServer(t, config, catalog)
 	q := groupRequest("tool_name", qt.SummaryColumn{ID: "time", Op: "sum", Field: "@computed/double-duration"},
 		qt.SummaryColumn{ID: "example", Op: "row", Field: "id"}, qt.SummaryColumn{ID: "example_duration", Op: "row", Field: "duration_ms"})
@@ -338,6 +340,7 @@ func TestQueryV3RecordKeywordsUseIndividualRecordsBeforeGrouping(t *testing.T) {
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
+	publishProjections(t, c)
 	s := testServer(t, config, c)
 	schema, _ := sqliteQuerySchema("tool_calls")
 	params := func(spec recordSearchSpec) url.Values {

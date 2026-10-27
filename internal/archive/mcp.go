@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"time"
 )
 
@@ -132,9 +131,7 @@ func handleMCPContext(ctx context.Context, catalog *Catalog, request map[string]
 		if isError {
 			errorText = text
 		}
-		if logErr := catalog.RecordMCPCall(name, arguments, status, errorText, time.Since(started), len(text), mcpResultCount(value), truncated); logErr != nil {
-			fmt.Fprintf(os.Stderr, "MCP history: %v\n", logErr)
-		}
+		catalog.RecordMCPCall(name, arguments, status, errorText, time.Since(started), len(text), mcpResultCount(value), truncated)
 		return mcpResult(request, map[string]any{"content": []map[string]any{{"type": "text", "text": text}}, "isError": isError})
 	}
 	return map[string]any{"jsonrpc": "2.0", "id": request["id"], "error": map[string]any{"code": -32601, "message": "method not found"}}

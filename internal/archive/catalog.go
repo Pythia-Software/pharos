@@ -45,10 +45,11 @@ type Catalog struct {
 	// authorship tracks the human-authorship rebuild.
 	authorship authorshipState
 	// findings tracks the findings pass (see findings.go).
-	findings findingsState
-	wal      walBound
-	writers  catalogWriteTracker
-	now      func() time.Time
+	findings   findingsState
+	mcpHistory mcpHistory
+	wal        walBound
+	writers    catalogWriteTracker
+	now        func() time.Time
 	// background runs the catalog's own background work (the authorship
 	// rebuild). The service sets it to its spawn, so a release cancels the
 	// work and waits for it before closing the catalog; nil runs a goroutine,
@@ -132,6 +133,7 @@ func filepathDir(path string) string {
 }
 
 func (c *Catalog) Close() error {
+	c.closeMCPHistory()
 	c.library.mu.Lock()
 	c.library.close()
 	c.library.mu.Unlock()
@@ -930,9 +932,6 @@ func (c *Catalog) searchRows(options SearchOptions, fields libraryFields) ([]map
 
 func (c *Catalog) computeSearchRows(options SearchOptions, fields libraryFields) ([]map[string]any, error) {
 	ctx := options.context()
-	if err := c.ensureOrigins(ctx); err != nil {
-		return nil, err
-	}
 	where := []string{}
 	args := []any{}
 	for _, f := range []struct{ field, value string }{{"channel", options.Channel}, {"machine_id", options.MachineID}, {"execution_machine_id", options.ExecutionMachineID}} {

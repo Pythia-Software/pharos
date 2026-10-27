@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -281,7 +280,7 @@ func (c *Catalog) publishParallelism(ctx context.Context, batch []parallelismDer
 
 // refreshParallelism stores up to limit dirty conversations' activity, in
 // short read snapshots and write transactions, and reports how many. Unless
-// asked to wait, it leaves the work to a page already doing it.
+// asked to wait, it leaves the work to a caller already doing it.
 func (c *Catalog) refreshParallelism(ctx context.Context, limit int, wait bool) (int, error) {
 	if wait {
 		c.parallelismMu.Lock()
@@ -311,18 +310,8 @@ func (c *Catalog) refreshParallelism(ctx context.Context, limit int, wait bool) 
 
 // parallelismActivities returns every conversation's activity in the period:
 // stored spans for clean conversations and fresh ones for dirty conversations.
-// It first stores what was dirty when it began; maintenance usually has.
+// Storing the dirty ones is left to maintainLibrary.
 func (c *Catalog) parallelismActivities(ctx context.Context, cutoff string) (map[string]parallelismActivity, error) {
-	var pending int
-	if err := c.reader().QueryRowContext(ctx, "SELECT COUNT(*) FROM parallelism_dirty").Scan(&pending); err != nil {
-		return nil, err
-	}
-	if pending > 0 {
-		if _, err := c.refreshParallelism(ctx, pending, true); err != nil && ctx.Err() == nil {
-			// A read-only or busy catalog still gets correct rows below.
-			fmt.Fprintf(os.Stderr, "Parallelism activity: %v\n", err)
-		}
-	}
 	tx, err := c.reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err

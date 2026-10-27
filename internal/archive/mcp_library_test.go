@@ -100,13 +100,17 @@ func ingestMCPFixture(t *testing.T, catalog *Catalog) {
 	}
 }
 
-// startMCP runs server over stdio pipes, as one long-lived MCP process.
+// startMCP runs server over stdio pipes, as one long-lived MCP process. A call
+// returns once the process has finished with the answer (see afterAnswer), as
+// it has before an agent's next call.
 func startMCP(t *testing.T, server *mcpServer) func(method string, params map[string]any) map[string]any {
 	t.Helper()
 	input, requests := io.Pipe()
 	responses, output := io.Pipe()
 	done := make(chan error, 1)
-	go func() { done <- serveMCP(input, output, server.handle, server.afterAnswer); output.Close() }()
+	answered := make(chan struct{}, 1)
+	after := func(pending []byte) { server.afterAnswer(pending); answered <- struct{}{} }
+	go func() { done <- serveMCP(input, output, server.handle, after); output.Close() }()
 	t.Cleanup(func() {
 		requests.Close()
 		if err := <-done; err != nil {
@@ -126,6 +130,7 @@ func startMCP(t *testing.T, server *mcpServer) func(method string, params map[st
 		if err != nil {
 			t.Fatal(err)
 		}
+		<-answered
 		var response map[string]any
 		if err := json.Unmarshal(line, &response); err != nil {
 			t.Fatalf("%v: %s", err, line)
@@ -589,6 +594,9 @@ func TestMCPForwardingMatchesDirect(t *testing.T) {
 	through := run()
 	if int(forwarded.Load()) != calls+1 {
 		t.Fatalf("forwarded %d requests, want %d", forwarded.Load(), calls+1)
+	}
+	if err := catalog.flushMCPHistory(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 	if count := mcpCallCount(t, config.CatalogPath); count != 2*calls {
 		t.Fatalf("forwarded calls recorded %d in total, want %d", count, 2*calls)

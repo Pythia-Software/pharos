@@ -347,9 +347,6 @@ func compileTextPattern(node *textQuery, caseSensitive bool) (*regexp.Regexp, in
 // original text verifier sees at most min(1 MiB, MaxBytes) per message;
 // oversized records are counted and make the final count a lower bound.
 func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (result textSearchResult, err error) {
-	if err := c.ensureOrigins(parent); err != nil {
-		return result, err
-	}
 	if c.queryOnly && (o.Channel != "" || o.MachineID != "" || o.ExecutionMachineID != "") {
 		origins, err := c.conversationOrigins(parent)
 		if err != nil {

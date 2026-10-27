@@ -126,6 +126,22 @@ The Library UI sends its text, file, and URL searches to the Library query table
 
 The workspace page loads a workspace in pieces, since one long session with many sub-agents can retain hundreds of megabytes. `/api/work/{id}` returns the workspace without messages, plus what the page used to derive from all of them: each conversation's message count and first prompt, pull request links found in any message, and the files its tool calls touched. `/api/work/{id}/conversations/{id}` returns one conversation for the reader. Its long tool outputs and event bodies are shortened past 2 KB, with JSON keeping its structure so error flags, exit codes, and token usage survive, and are marked `text_clipped`/`raw_clipped`. `/api/messages/{id}` returns a message's original when the reader opens it. Finding text across a workspace's conversations runs on the service (`/find`). In the reader, a turn initially renders 50 events and adds pages of 150 as it scrolls; event details are built when opened.
 
+Requests never wait for the catalog writer, which a sync holds for seconds at
+a time. They read through a read-only connection pool and never write:
+
+- Conversation origins are published at the end of each ingest and by the
+  Library maintenance loop, at most once a minute while a sync runs, so pages
+  can show channel and machine up to a minute behind during a sync.
+- Dirty parallelism timings and MCP metric projections are computed in the
+  request's snapshot without being stored; maintenance stores them.
+- The tool rollup rebuilds in the background. Until the first rollup in a new
+  layout exists, tool pages report that it is rebuilding.
+- MCP call history is queued in memory and stored by a background writer, and
+  on close. `query_statistics` snapshots live in the answering process's memory.
+
+`TestRequestReadsDoNotWaitForTheCatalogWriter` holds the writer, as a sync
+does, and checks page reads, query datasets and MCP tools against it.
+
 The HTTP service binds only to loopback and requires either a bearer token or its HttpOnly UI cookie. Core endpoints are:
 
 ```text
@@ -237,7 +253,7 @@ Settings → MCP controls a shared enabled flag in the local catalog. Turning it
 hides tools from new listings and rejects calls from already-connected clients;
 it does not alter another client's configuration. Tool-call history retains the
 latest 5,000 calls with an allowlisted, shortened argument summary and response
-metrics, never response bodies. Analyze → Pharos MCP provides guided charts;
+metrics, never response bodies. A call is recorded after it is answered. Analyze → Pharos MCP provides guided charts;
 Analyze → Query → MCP calls provides filtering, grouping, metrics, and call details. Output token counts are estimates from bytes.
 
 ## Sharing conversations
