@@ -166,6 +166,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var usageTask: URLSessionDataTask?
     private var usageUpdated = Date.distantPast
     private var connectedURL: URL?
+    private var libraryConnection: String?
     private var generation = 0
     private var timer: Timer?
     private var observation: AnyCancellable?
@@ -280,21 +281,25 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     func refresh() {
         guard let service else { return }
-        if connectedURL != service.url {
+        if connectedURL != service.url || libraryConnection != service.libraryConnection {
             generation += 1
             connectedURL = service.url
+            libraryConnection = service.libraryConnection
+            indexing = false
+            preferencesChangedAt = .distantPast
             statusTask?.cancel(); statusTask = nil
             usageTask?.cancel(); usageTask = nil
             snapshot = [:]; usage = nil; usageUpdated = .distantPast
             statusError = nil; usageError = nil; actionError = nil
         }
         update()
-        guard statusTask == nil, let request = service.localRequest("/api/menu-bar/status") else { return }
+        guard service.hasConnectedLibrary, statusTask == nil, let request = service.localRequest("/api/menu-bar/status") else { return }
         let origin = service.url
+        let connection = service.libraryConnection
         let generation = self.generation
         let actionErrorVersion = self.actionErrorVersion
         statusTask = fetch(request) { [weak self] result in
-            guard let self, self.generation == generation, self.service?.url == origin else { return }
+            guard let self, self.generation == generation, self.service?.url == origin, self.service?.libraryConnection == connection else { return }
             self.statusTask = nil
             switch result {
             case .success(let value):
@@ -311,13 +316,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     private func refreshUsage() {
-        guard preferences["enabled"], ["words", "tokens", "carbon", "cost"].contains(where: { preferences[$0] }),
+        guard service?.hasConnectedLibrary == true, preferences["enabled"], ["words", "tokens", "carbon", "cost"].contains(where: { preferences[$0] }),
               usageTask == nil, Date().timeIntervalSince(usageUpdated) >= 60,
               let request = service?.localRequest("/api/menu-bar/usage") else { return }
         let origin = service?.url
+        let connection = service?.libraryConnection
         let generation = self.generation
         usageTask = fetch(request) { [weak self] result in
-            guard let self, self.generation == generation, self.service?.url == origin else { return }
+            guard let self, self.generation == generation, self.service?.url == origin, self.service?.libraryConnection == connection else { return }
             self.usageTask = nil
             self.usageUpdated = Date()
             switch result {
@@ -536,8 +542,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func indexNow() {
         guard let request = service?.localRequest("/api/sync/check", method: "POST"), !indexing else { return }
         indexing = true; actionError = nil; update()
+        let generation = self.generation
+        let connection = service?.libraryConnection
         _ = fetch(request) { [weak self] result in
-            guard let self else { return }
+            guard let self, self.generation == generation, self.service?.libraryConnection == connection else { return }
             self.indexing = false
             if case .failure(let error) = result { self.actionError = error.localizedDescription }
             self.refresh()

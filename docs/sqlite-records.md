@@ -7,6 +7,16 @@ backups. No historical library migration runs at startup or as a test.
 
 ## Rollout
 
+Managed-library builds write catalog schema 21 and capture manifest version 5.
+These retain the schema-20 / manifest-4 preservation contract and also prevent
+older writers from bypassing pending-library retention and delivery checkpoints.
+Verified pending filesystem captures also retain a host-local `observed_ns`
+witness, advancing when changed bytes are copied, so a same-mtime rewrite can
+be delivered. Original `mtime_ns` and historical hashes remain intact. SQLite
+keeps its original database/WAL authority and rejects conflicting equal versions.
+Opening or restoring a library does not start historical backfill or enable
+`retained_input_capture` / `sqlite_record_capture`; both remain explicit opt-ins.
+
 Explicit **Capture** exports the captured SQLite databases into durable row
 records. Existing JSONL files and native snapshot readers remain supported.
 Conductor indexing also salvages sessions from durable row history after their
@@ -37,7 +47,7 @@ or a native `indexed.json` marker as proof of complete preservation.
 All authoritative files are below the source's existing `CaptureRoot` directory:
 
 ```text
-<host>/<source>/manifest.json                  # capture manifest version 4
+<host>/<source>/manifest.json                  # capture manifest version 5
 <host>/<source>/preservation-pins.json         # pins version 1
 <host>/<source>/records/v1/
   objects/<sha256>.gz                         # immutable objects

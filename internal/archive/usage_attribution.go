@@ -94,7 +94,10 @@ func applyClaudeGroupUsage(tx *sql.Tx, workspaceID string, conversations []Conve
 			if err := replaceAgentSessionsWithCostState(tx, workspaceID, rootID, root, true); err != nil {
 				return err
 			}
-			sessionID := stableID("agent-session", rootID, "main")
+			var sessionID string
+			if err := tx.QueryRow("SELECT id FROM agent_sessions WHERE conversation_id=? AND native_id='main'", rootID).Scan(&sessionID); err != nil {
+				return err
+			}
 			for model, counts := range remainders {
 				if err := insertSessionRemainder(tx, sessionID, usageHour(root.StartedAt), model, counts); err != nil {
 					return err

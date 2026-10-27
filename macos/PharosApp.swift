@@ -98,6 +98,11 @@ final class ArchiveService: ObservableObject {
     }
 
     @Published var url: URL?
+    // The broker keeps one URL while the selected library can change.
+    @Published private(set) var libraryConnection: String?
+    private var managedLibraryConnected = false
+    private var managedSelectedLibrary = ""
+    var hasConnectedLibrary: Bool { !managedApplication || managedLibraryConnected }
     @Published var error: String?
     @Published var status = "Starting local archive…"
     @Published var disconnected: Disconnection?
@@ -122,12 +127,16 @@ final class ArchiveService: ObservableObject {
     private var terminationObserver: NSObjectProtocol?
     private var shuttingDown = false
     private var updateLock: AppUpdateLock?
+    private(set) var managedApplication = false
+    private var managedPortable = false
+    private var managedLibraryMonitors: [String: LibraryVolumeMonitor] = [:]
+    private var managedLibraryStateTask: URLSessionDataTask?
     private let releaseService: (URL, String) -> ServiceClient.Release
     var deferUpdate: (@escaping (Error?) -> Void) -> Void = { $0(nil) }
     var resumeUpdates: () -> Void = {}
     private(set) var menuBar: MenuBarController!
 
-    init(plan: LaunchPlan = LaunchPlan.resolve(bundle: Bundle.main.bundleURL),
+    init(plan: LaunchPlan? = nil,
          releaseService: @escaping (URL, String) -> ServiceClient.Release = { ServiceClient.release($0, token: $1) }) {
         self.releaseService = releaseService
         defer { menuBar = MenuBarController(service: self) }
@@ -140,6 +149,11 @@ final class ArchiveService: ObservableObject {
             try AppUpdateLock.current().recover(version: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "")
         } catch {
             self.error = error.localizedDescription
+            return
+        }
+        guard let plan else {
+            managedApplication = true
+            startApplication()
             return
         }
         switch plan {
@@ -160,6 +174,115 @@ final class ArchiveService: ObservableObject {
         }
     }
 
+    /// The app owns a broker; every library service receives an allocated
+    /// loopback listener. Neither app placement nor a historical port chooses
+    /// which catalog a window or an integration reaches.
+    private func startApplication() {
+        let bundle = Bundle.main.bundleURL
+        let cli = bundle.appendingPathComponent("Contents/MacOS/pharos")
+        let runtime = FileManager.default.temporaryDirectory.appendingPathComponent("pharos-app-\(UUID().uuidString).json")
+        let task = Process()
+        task.executableURL = cli
+        task.arguments = ["app", "--application", bundle.path, "--endpoint", runtime.path]
+        let oldConfig: URL
+        switch LaunchPlan.resolve(bundle: bundle) {
+        case .library(let directory): oldConfig = directory.appendingPathComponent("library.toml")
+        case .user: oldConfig = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Pharos/archive.toml")
+        }
+        if FileManager.default.fileExists(atPath: oldConfig.path) {
+            task.arguments?.append(contentsOf: ["--initial-config", oldConfig.path])
+        }
+        var environment = ProcessInfo.processInfo.environment
+        environment["PHAROS_PARENT_PID"] = String(getpid())
+        task.environment = environment
+        let log = ServiceLog()
+        task.standardError = log.pipe
+        serviceLog = log
+        task.terminationHandler = { [weak self] process in
+            try? FileManager.default.removeItem(at: runtime)
+            DispatchQueue.main.async {
+                guard let self, self.process === process, !self.shuttingDown else { return }
+                self.process = nil
+                self.url = nil
+                self.error = "Pharos stopped. \(log.text())"
+            }
+        }
+        process = task
+        lock.withLock { service = task }
+        do {
+            try task.run()
+            awaitApplicationEndpoint(runtime, task: task, deadline: Date().addingTimeInterval(120))
+            watchManagedLibraries()
+        } catch { self.error = "Could not start Pharos: \(error.localizedDescription)" }
+        if let appVolume = LibraryVolume(containing: bundle), let watcher = LibraryVolumeMonitor(volumeUUID: appVolume.uuid) {
+            managedPortable = true
+            watcher.approveUnmount = { .dissent("Pharos is running from this drive. Use Eject in Pharos, or quit Pharos before ejecting it.") }
+            watcher.onUnmount = { DispatchQueue.main.async { NSApplication.shared.terminate(nil) } }
+            monitor = watcher
+            watcher.start()
+        }
+    }
+
+    private func awaitApplicationEndpoint(_ file: URL, task: Process, deadline: Date) {
+        guard !shuttingDown, task.isRunning else { return }
+        if let data = try? Data(contentsOf: file),
+           let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let pid = value["pid"] as? Int, pid == Int(task.processIdentifier),
+           let address = value["url"] as? String, let token = value["token"] as? String,
+           var components = URLComponents(string: address) {
+            components.queryItems = [URLQueryItem(name: "token", value: token)]
+            if let target = components.url {
+                lock.withLock { endpoint = (target, token) }
+                waitForService(target, token: token)
+                return
+            }
+        }
+        guard Date() < deadline else { error = "Pharos did not become ready within 2 minutes."; task.terminate(); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.awaitApplicationEndpoint(file, task: task, deadline: deadline) }
+    }
+
+    /// Finder can release a data SSD while an app in Applications stays open.
+    /// Only libraries on that volume are closed; local pending capture remains
+    /// configured. The app's own volume still requires quitting the app.
+    private func watchManagedLibraries() {
+        guard managedApplication, !shuttingDown else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in self?.watchManagedLibraries() }
+        guard managedLibraryStateTask == nil, let request = localRequest("/api/app/state"), let broker = lock.withLock({ endpoint }) else { return }
+        managedLibraryStateTask = URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+            let state = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.managedLibraryStateTask = nil
+                guard !self.shuttingDown, self.lock.withLock({ self.endpoint?.url == broker.url }),
+                      let state, let libraries = state["libraries"] as? [[String: Any]] else { return }
+                let selected = state["selected"] as? String ?? ""
+                let generation = (state["generation"] as? NSNumber)?.stringValue ?? "0"
+                let connected = libraries.contains { $0["id"] as? String == selected && $0["connected"] as? Bool == true }
+                self.managedLibraryConnected = connected
+                self.managedSelectedLibrary = selected
+                let connection = "\(selected):\(generation):\(connected)"
+                if self.libraryConnection != connection { self.libraryConnection = connection }
+                let applicationVolume = LibraryVolume(containing: Bundle.main.bundleURL)?.uuid
+                for library in libraries {
+                    guard let path = library["config"] as? String,
+                          let volume = LibraryVolume(containing: URL(fileURLWithPath: path).deletingLastPathComponent()),
+                          volume.uuid != applicationVolume, self.managedLibraryMonitors[volume.uuid] == nil,
+                          let watcher = LibraryVolumeMonitor(volumeUUID: volume.uuid) else { continue }
+                    watcher.approveUnmount = {
+                        let body = try? JSONSerialization.data(withJSONObject: ["volume": "uuid:" + volume.uuid])
+                        switch ServiceClient.release(broker.url, token: broker.token, path: "/api/app/release-volume", body: body) {
+                        case .released, .notRunning: return .approve
+                        case .stopping(let reason), .failed(let reason): return .dissent("Pharos could not release this library yet: \(reason)")
+                        }
+                    }
+                    self.managedLibraryMonitors[volume.uuid] = watcher
+                    watcher.start()
+                }
+            }
+        }
+        managedLibraryStateTask?.resume()
+    }
+
     var installationFolder: URL { Bundle.main.bundleURL.deletingLastPathComponent() }
 
     /// Native menu requests use the same authenticated loopback service as
@@ -170,6 +293,9 @@ final class ArchiveService: ObservableObject {
         var request = URLRequest(url: target, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
         request.httpMethod = method
         request.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+        if managedApplication && !path.hasPrefix("/api/app/") && !managedSelectedLibrary.isEmpty {
+            request.setValue(managedSelectedLibrary, forHTTPHeaderField: "X-Pharos-Library")
+        }
         if method == "POST" { request.httpBody = Data("{}".utf8); request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         return request
     }
@@ -337,6 +463,10 @@ final class ArchiveService: ObservableObject {
     }
 
     private func ejectAfterDeferringUpdate(reply: @escaping (String?) -> Void) {
+        if managedApplication {
+            ejectManagedLibrary(reply: reply)
+            return
+        }
         guard let volume else {
             resumeUpdates()
             reply("This library is not on a drive that Pharos can eject.")
@@ -374,6 +504,76 @@ final class ArchiveService: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Resolve the current broker selection for each action; app placement
+    /// and the previously displayed library cannot select the volume to eject.
+    private func ejectManagedLibrary(reply: @escaping (String?) -> Void) {
+        flushWebSession { [weak self] error in
+            if let error { self?.resumeUpdates(); reply(error.localizedDescription); return }
+            self?.ejectManagedLibraryAfterSessionSave(reply: reply)
+        }
+    }
+
+    private func ejectManagedLibraryAfterSessionSave(reply: @escaping (String?) -> Void) {
+        guard !ejecting else { reply("Pharos is already ejecting a drive."); return }
+        guard let request = localRequest("/api/app/state"), let broker = lock.withLock({ endpoint }) else {
+            resumeUpdates()
+            reply("Pharos is not ready to release its library yet.")
+            return
+        }
+        ejecting = true
+        let app = Bundle.main.bundleURL
+        let child = process
+        let fail: (String) -> Void = { [weak self] reason in
+            DispatchQueue.main.async {
+                self?.ejecting = false
+                self?.resumeUpdates()
+                reply(reason)
+            }
+        }
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            guard let self else { return fail("Pharos is closing.") }
+            do {
+                if let error { throw error }
+                guard (response as? HTTPURLResponse)?.statusCode == 200, let data else {
+                    throw ManagedLibraryEject.Failure("Could not read the connected library. Try again once Pharos is ready.")
+                }
+                let volume = try ManagedLibraryEject.volume(in: data, application: app)
+                switch ManagedLibraryEject.release(volume, service: broker.url, token: broker.token) {
+                case .released: break
+                case .notRunning: throw ManagedLibraryEject.Failure("Pharos stopped before confirming that its library was released.")
+                case .stopping: throw ManagedLibraryEject.Failure(ReleaseState.finishingMessage)
+                case .failed(let reason): throw ManagedLibraryEject.Failure("Could not release the library: \(reason)")
+                }
+                if LibraryVolume(containing: app)?.uuid == volume.uuid {
+                    // The broker can also own libraries on other disks. Ask
+                    // it to close those safely rather than killing its tree.
+                    if let child, child.isRunning {
+                        child.terminate()
+                        let deadline = Date().addingTimeInterval(10)
+                        while child.isRunning {
+                            guard Date() < deadline else {
+                                throw ManagedLibraryEject.Failure("Pharos is still closing. Try ejecting again in a moment.")
+                            }
+                            Thread.sleep(forTimeInterval: 0.05)
+                        }
+                    }
+                    DriveProcesses.stopMCP(runningFrom: app)
+                    try VolumeEject.afterExit(of: getpid(), mount: volume.mount, name: volume.name)
+                    DispatchQueue.main.async { reply(nil); NSApp.terminate(nil) }
+                } else {
+                    // The app remains available with its local libraries.
+                    try NSWorkspace.shared.unmountAndEjectDevice(at: volume.mount)
+                    DispatchQueue.main.async {
+                        self.ejecting = false
+                        self.resumeUpdates()
+                        self.url = broker.url
+                        reply(nil)
+                    }
+                }
+            } catch { fail(error.localizedDescription) }
+        }.resume()
     }
 
     /// Shows a release in progress or done, unless the drive is already gone.
@@ -554,6 +754,33 @@ final class ArchiveService: ObservableObject {
     /// Stop only this app's service, wait for catalog closure, and (for an
     /// update) exclude every bundled CLI until the new app has launched.
     func prepareToTerminate(installing: Bool, timeout: TimeInterval = 10, completion: @escaping (Error?) -> Void) {
+        flushWebSession { [weak self] error in
+            if let error { completion(error); return }
+            self?.prepareAfterSessionSave(installing: installing, timeout: timeout, completion: completion)
+        }
+    }
+
+    // WebKit's store remains temporary. Await the small library-backed session
+    // writes before closing the service that saves them, including for updates.
+    private func flushWebSession(completion: @escaping (Error?) -> Void) {
+        guard managedApplication, let webView = menuBar?.webView else { completion(nil); return }
+        var finished = false
+        let finish: (Error?) -> Void = { error in
+            guard !finished else { return }
+            finished = true
+            completion(error)
+        }
+        let failure = UpdateFailure(message: "Could not save the current UI session. Keep Pharos open and retry before quitting or ejecting.")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { finish(failure) }
+        webView.callAsyncJavaScript("await window.pharosSession?.flush(); await window.pharosPrefs?.flush?.(); return true;", arguments: [:], in: nil, in: .page) { result in
+            switch result {
+            case .success: finish(nil)
+            case .failure: finish(failure)
+            }
+        }
+    }
+
+    private func prepareAfterSessionSave(installing: Bool, timeout: TimeInterval, completion: @escaping (Error?) -> Void) {
         shuttingDown = true
         let child = process
         let endpoint = lock.withLock { self.endpoint }
@@ -567,6 +794,7 @@ final class ArchiveService: ObservableObject {
                 try lease?.begin(version: version)
                 let stopService = {
                     if let child, child.isRunning {
+                        if self?.managedApplication == true { child.terminate(); return }
                         if let endpoint {
                             switch releaseService(endpoint.url, endpoint.token) {
                             case .released: break
@@ -593,7 +821,7 @@ final class ArchiveService: ObservableObject {
                     // SIGTERM asks the owned service to close safely; Go may
                     // finish that work independently after the wrapper exits.
                     if child?.isRunning == true { child?.terminate() }
-                    if self?.library != nil { DriveProcesses.stopMCP(runningFrom: app) }
+                    if self?.library != nil || self?.managedPortable == true { DriveProcesses.stopMCP(runningFrom: app) }
                 }
                 lease?.allowTermination(installing: installing)
                 DispatchQueue.main.async { completion(nil) }
@@ -633,8 +861,10 @@ final class ArchiveService: ObservableObject {
 
     func stop() {
         monitor?.stop()
+        managedLibraryMonitors.values.forEach { $0.stop() }
+        managedLibraryMonitors.removeAll()
         stopService()
-        if library != nil {
+        if library != nil || managedPortable {
             DriveProcesses.stopMCP(runningFrom: Bundle.main.bundleURL)
         }
     }
@@ -833,6 +1063,11 @@ struct ArchiveWebView: NSViewRepresentable {
                 return
             }
             if message.name == ArchiveWebView.libraryHandler {
+                guard message.frameInfo.isMainFrame, let page = message.frameInfo.request.url,
+                      page.scheme == origin.scheme, page.host == origin.host, page.port == origin.port else {
+                    replyHandler(nil, "Library actions must come from the Pharos window.")
+                    return
+                }
                 library(message.body, replyHandler: replyHandler)
                 return
             }
@@ -850,6 +1085,16 @@ struct ArchiveWebView: NSViewRepresentable {
         }
 
         private func library(_ body: Any, replyHandler: @escaping (Any?, String?) -> Void) {
+            if let object = body as? [String: Any], object["action"] as? String == "chooseFolder" {
+                let picker = NSOpenPanel()
+                picker.canChooseDirectories = true
+                picker.canChooseFiles = false
+                picker.allowsMultipleSelection = false
+                picker.canCreateDirectories = true
+                picker.message = "Choose a Pharos library or a parent folder for a new library."
+                picker.begin { response in replyHandler(response == .OK ? picker.url?.path : nil, nil) }
+                return
+            }
             guard (body as? [String: Any])?["action"] as? String == "eject" else {
                 replyHandler(nil, "Unknown library action.")
                 return
@@ -966,6 +1211,7 @@ struct ArchiveWebView: NSViewRepresentable {
         context.coordinator.service = service
         context.coordinator.updates = updates
         let configuration = WKWebViewConfiguration()
+        if service.managedApplication { configuration.websiteDataStore = .nonPersistent() }
         configuration.userContentController.addScriptMessageHandler(
             context.coordinator,
             contentWorld: .page,

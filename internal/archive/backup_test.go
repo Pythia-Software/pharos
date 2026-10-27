@@ -150,8 +150,8 @@ func TestBackupCopiesTheLibraryIncrementally(t *testing.T) {
 	})
 	config, dest := backupFixture(t)
 	first := runBackup(t, config, dest, false)
-	// library.toml, 2 captures + manifest + host.json-less host dir, hosts/host-a.toml, preserved/x.json.
-	if first.FilesCopied != 6 || !first.CatalogCopied || first.FilesUnchanged != 0 {
+	// Config and descriptor, 2 captures and manifest, host settings, preserved evidence.
+	if first.FilesCopied != 7 || !first.CatalogCopied || first.FilesUnchanged != 0 {
 		t.Fatalf("first backup: %+v", first)
 	}
 	source := filepath.Join(config.CaptureRoot, "host-a", "claude", "files", "p", "b.jsonl")
@@ -166,7 +166,7 @@ func TestBackupCopiesTheLibraryIncrementally(t *testing.T) {
 			t.Errorf("%s was backed up", skipped)
 		}
 	}
-	for _, kept := range []string{"library.toml", "hosts/host-a.toml", "preserved/package/x.json", "captures/host-a/claude/manifest.json"} {
+	for _, kept := range []string{"library.toml", libraryDescriptorName, "hosts/host-a.toml", "preserved/package/x.json", "captures/host-a/claude/manifest.json"} {
 		if _, err := os.Stat(filepath.Join(dest, kept)); err != nil {
 			t.Errorf("%s missing from the backup: %v", kept, err)
 		}

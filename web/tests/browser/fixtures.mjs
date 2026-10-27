@@ -13,6 +13,11 @@ const repo = fileURLToPath(new URL("../../..", import.meta.url));
 const schemas = Object.fromEntries(readdirSync(join(repo, "schemas")).filter(file => file.endsWith(".schema.json"))
   .map(file => [file.replace(".schema.json", ""), core.loadSchema(JSON.parse(readFileSync(join(repo, "schemas", file), "utf8")))]));
 const now = Date.now();
+export const sourceSetupCandidates = [
+  {name:'claude',kind:'claude',path:'/Users/test/.claude/projects',display_path:'~/.claude/projects',count:24,unit:'session',bytes:2400000,status:'found',acceptable:true,recommended:true},
+  {name:'claude-work',kind:'claude',path:'/Users/test/.claude-work/projects',display_path:'~/.claude-work/projects',count:8,unit:'session',bytes:800000,status:'found',acceptable:true,recommended:true},
+  {name:'codex',kind:'codex',path:'/Users/test/.codex',display_path:'~/.codex',count:16,unit:'session',bytes:1700000,status:'found',acceptable:true,recommended:true},
+];
 const day = 86400000, iso = offset => new Date(now - offset).toISOString();
 
 // Long values are where layouts break, so some rows carry them.
@@ -196,6 +201,7 @@ export const cloudScheduledStatus={
 };
 
 export const defaultApi = {
+  "GET /api/app/state": {application:"/Applications/Pharos.app",selected:"local",mcp:"external",busy:false,libraries:[{id:"local",name:"Pending history",available:true,config:"/Users/test/Library/Application Support/Pharos/Libraries/Pending/library.toml"},{id:"external",name:"My archive",available:false,config:"/Volumes/Archive/Pharos/library.toml"}]},
   "GET /api/cloud-backup": {destinations:[],runs:[],schedules:[],active_run_id:"",setup_root:"/tmp/pharos/cloud-setup"},
   "POST /api/cloud-backup/schedule": {saved:true},
   "GET /api/ask/status": { settings: { enabled: false, showInvitation: true, selection: null }, providers: [] },
@@ -225,6 +231,8 @@ export const defaultApi = {
   "GET /api/activity": { active: 0, runs: [] },
   "GET /api/library/status": { idle: true, portable: true, library_dir: "/Volumes/Pharos SSD/Pharos", drive: { name: "Pharos SSD", mounted: true, ejectable: true }, activities: [] },
   "GET /api/probe/status": { library: true, needs_onboarding: false, host: { id: "test-mac", label: "This Mac" } },
+  "GET /api/probe/tools": {tools:[{kind:'claude',path:'~/.claude',found_by:'data folder'}]},
+  "POST /api/probe": ({body})=>({candidates:sourceSetupCandidates.filter(candidate=>body.kinds.includes(candidate.kind)),checked:[]}),
   "GET /api/upgrade": { running: false, needed: false, steps: [], repository_renames: {} },
   "GET /api/pricing": { unpriced_models: [], priced_tokens: 1000, unpriced_tokens: 0, confirmed_changes: 0, proposed_changes: 0 },
   "GET /api/usage/concurrency-prototype": () => ({ ...defaultApi["GET /api/usage/parallelism"], timezone: "UTC" }),

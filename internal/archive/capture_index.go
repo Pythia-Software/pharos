@@ -676,6 +676,46 @@ func capturedPathFor(captureRoot, host, source, original string) (string, error)
 	if !validCaptureName(host) || !validCaptureName(source) {
 		return "", fmt.Errorf("invalid host or source name")
 	}
+	if path, err := capturedPathIn(captureRoot, host, source, original); err == nil {
+		return path, nil
+	}
+	// Transfer evidence is immutable and outside normal capture retention. Only
+	// published, verified inventories may supply evidence, including a previous
+	// import carried through another library.
+	var found string
+	var latest string
+	_ = filepath.WalkDir(filepath.Join(captureRoot, ".imports"), func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !entry.IsDir() {
+			return nil
+		}
+		if strings.HasPrefix(entry.Name(), ".stage-") {
+			return filepath.SkipDir
+		}
+		r, e := readTransferReceipt(filepath.Join(path, "transfer.json"))
+		if e != nil || (r.State != "verified" && r.State != "complete") {
+			return nil
+		}
+		root := filepath.Join(path, "captures")
+		candidate, e := capturedPathIn(root, host, source, original)
+		if e != nil {
+			return nil
+		}
+		manifest, e := loadCaptureManifest(filepath.Join(root, host, source))
+		if e == nil && (found == "" || manifest.LastDataAt > latest) {
+			found, latest = candidate, manifest.LastDataAt
+		}
+		return nil
+	})
+	if found != "" {
+		return found, nil
+	}
+	return "", fmt.Errorf("%s was not captured from %s/%s", original, host, source)
+}
+
+func capturedPathIn(captureRoot, host, source, original string) (string, error) {
 	dir := filepath.Join(captureRoot, host, source)
 	manifest, err := loadCaptureManifest(dir)
 	if err != nil {
@@ -683,7 +723,13 @@ func capturedPathFor(captureRoot, host, source, original string) (string, error)
 	}
 	for _, file := range manifest.Files {
 		if file.Path == original {
-			return filepath.Join(dir, filepath.FromSlash(file.Captured)), nil
+			if !filepath.IsLocal(file.Captured) {
+				return "", fmt.Errorf("unsafe captured path")
+			}
+			path := filepath.Join(dir, filepath.FromSlash(file.Captured))
+			if _, err := os.Stat(path); err == nil {
+				return path, nil
+			}
 		}
 	}
 	if captured, ok := newCaptureView(Host{ID: host}, dir, manifest).captured(original); ok {

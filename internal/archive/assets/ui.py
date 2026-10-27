@@ -308,6 +308,7 @@ APP_HTML = r'''<!doctype html>
     @media(max-width:500px){.health{grid-template-columns:1fr}.header-icons{flex:0 1 auto;min-width:0;flex-wrap:wrap;row-gap:6px}.navigator.open{flex-wrap:wrap}.navigator-uri{order:-1;flex-basis:100%}.navigator .navigator-error{order:1;flex-basis:100%}}
   </style>
   <script src="/assets/preferences.js"></script>
+  <script src="/assets/managed-storage.js"></script>
   <script>window.pharosPrefs=(function(){
     // Preferences and saved views live in the library (internal/archive/preferences.go), so they follow it between Macs. A page with no library behind it (a shared file) keeps them in the web view's own storage instead.
     const source=window.pharosPreferenceValues,values=source&&typeof source==='object'?{...source}:null;
@@ -609,6 +610,7 @@ async function copyFeedbackText(text){
 function clearFeedback(){if(!feedbackAnnotations.length)return;for(const item of feedbackAnnotations)window.uiFeedback?.removeScreenshot(item.id);feedbackAnnotations=[];saveFeedback();feedbackToast('Feedback cleared')}
 async function copyFeedback(){if(!feedbackAnnotations.length||feedbackCopying)return;const count=feedbackAnnotations.length,clearAfterCopy=$('#feedbackClearOnCopy').checked;feedbackCopying=true;updateFeedbackCopyButtons();try{await copyFeedbackText(feedbackMarkdown());if(clearAfterCopy){for(const item of feedbackAnnotations)window.uiFeedback?.removeScreenshot(item.id);feedbackAnnotations=[];saveFeedback()}feedbackToast(`Copied ${count} annotation${count===1?'':'s'}${clearAfterCopy?' and cleared':''}`)}catch{feedbackToast('Could not copy feedback. Check clipboard access and try again.')}finally{feedbackCopying=false;updateFeedbackCopyButtons()}}
 function feedbackToast(message){const toast=$('#feedbackToast');$('#feedbackToastMessage').textContent=message;toast.classList.add('visible');restoreFeedbackLayout();clearTimeout(feedbackToastTimer);feedbackToastTimer=setTimeout(()=>toast.classList.remove('visible'),1800)}
+addEventListener('pharos:session-save-error',()=>feedbackToast('Could not save the UI session. Keep Pharos open and retry before quitting.'));
 makeFeedbackDraggable($('.feedback-toolbar'),$('.feedback-toolbar-controls'),'toolbar');
 makeFeedbackDraggable($('.feedback-composer'),$('.feedback-composer-heading'),'composer');
 makeFeedbackDraggable($('#feedbackToast'),$('#feedbackToast'),'toast');

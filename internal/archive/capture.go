@@ -38,7 +38,7 @@ import (
 // interrupted run (error, kill, unplug) leaves the previous state valid and the
 // next run resumes from the last manifest checkpoint.
 const (
-	captureManifestVersion = 4
+	captureManifestVersion = 5
 	captureManifestName    = "manifest.json"
 	captureHostName        = "host.json"
 	captureFilesDir        = "files"
@@ -46,12 +46,12 @@ const (
 	captureTempSuffix      = ".pharos-tmp"
 	captureLockName        = ".capture.lock"
 	captureStampLayout     = "20060102T150405.000000000Z"
-	// captureFreeMargin stays free on the capture volume so a capture never
-	// fills the drive the catalog lives on.
-	captureFreeMargin = int64(1 << 30)
 )
 
 var (
+	// captureFreeMargin stays free on the capture volume so a capture never
+	// fills the drive the catalog lives on.
+	captureFreeMargin = int64(1 << 30)
 	// captureCheckpointInterval bounds the work a killed run loses.
 	captureCheckpointInterval = 5 * time.Second
 	// captureFault injects failures in tests; a returned error acts like the
@@ -63,6 +63,7 @@ var (
 )
 
 type captureManifest struct {
+	DeliveredFingerprint string                          `json:"source_fingerprint,omitempty"`
 	RetainedInputCapture bool                            `json:"retained_input_capture,omitempty"`
 	SQLiteRecordCapture  bool                            `json:"sqlite_record_capture,omitempty"`
 	LatestRecords        bool                            `json:"latest_records,omitempty"`
@@ -98,12 +99,15 @@ func (m *captureManifest) acceptsSource(host Host, source SourceConfig) bool {
 // source's mtime, so size+mtime identify it on both sides; captured_at changes
 // whenever it is captured again.
 type capturedFile struct {
-	RecoveryID   string            `json:"recovery_id,omitempty"`
-	Path         string            `json:"path"`
-	Captured     string            `json:"captured"`
-	Size         int64             `json:"size"`
-	MTime        string            `json:"mtime"`
-	MTimeNS      int64             `json:"mtime_ns"`
+	RecoveryID string `json:"recovery_id,omitempty"`
+	Path       string `json:"path"`
+	Captured   string `json:"captured"`
+	Size       int64  `json:"size"`
+	MTime      string `json:"mtime"`
+	MTimeNS    int64  `json:"mtime_ns"`
+	// Verified pending-file observations order rewrites even when an upstream
+	// tool preserves size and mtime. Native metadata remains unchanged below.
+	ObservedNS   int64             `json:"observed_ns,omitempty"`
 	SHA256       string            `json:"sha256"`
 	CapturedAt   string            `json:"captured_at"`
 	MissingSince string            `json:"missing_since,omitempty"`
@@ -116,6 +120,7 @@ type capturedVersion struct {
 	Captured     string `json:"captured"`
 	Size         int64  `json:"size"`
 	MTimeNS      int64  `json:"mtime_ns,omitempty"`
+	ObservedNS   int64  `json:"observed_ns,omitempty"`
 	SHA256       string `json:"sha256,omitempty"`
 	CapturedAt   string `json:"captured_at"`
 	SupersededAt string `json:"superseded_at"`
@@ -279,11 +284,15 @@ func Capture(ctx context.Context, config Config, sources []SourceConfig, progres
 }
 
 type captureSession struct {
-	recoveryID  string
-	hostDir     string
-	host        Host
-	generations int
-	lock        *os.File
+	// Pending evidence is retained until verified delivery, including indexed
+	// snapshots whose original source may subsequently prune or rewrite history.
+	preserveUnindexed bool
+	deliveryTarget    string
+	recoveryID        string
+	hostDir           string
+	host              Host
+	generations       int
+	lock              *os.File
 	// buffers bound a copy's memory; they circulate between the copy and
 	// its hasher.
 	buffers chan []byte
@@ -292,6 +301,11 @@ type captureSession struct {
 // beginCapture takes the per-host capture lock, which also keeps a CLI run and
 // the service from capturing at once.
 func beginCapture(config Config) (*captureSession, error) {
+	if d, err := readLibraryDescriptor(config); err == nil {
+		config.PendingCapture = config.PendingCapture || d.RetainPendingEvidence
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
 	root := config.CaptureRoot
 	if root == "" {
 		return nil, errors.New("capture_root is not configured")
@@ -323,7 +337,7 @@ func beginCapture(config Config) (*captureSession, error) {
 		}
 		return nil, err
 	}
-	session := &captureSession{recoveryID: config.CaptureRecoveryID, hostDir: hostDir, host: host, generations: max(config.CaptureGenerations, 0), lock: lock, buffers: make(chan []byte, 4)}
+	session := &captureSession{deliveryTarget: config.DeliveryTargetInstance, preserveUnindexed: config.PendingCapture, recoveryID: config.CaptureRecoveryID, hostDir: hostDir, host: host, generations: max(config.CaptureGenerations, 0), lock: lock, buffers: make(chan []byte, 4)}
 	for range cap(session.buffers) {
 		session.buffers <- make([]byte, 1<<20)
 	}
@@ -401,6 +415,8 @@ type sourceCapture struct {
 	result                   CaptureSourceResult
 	progress                 func(CaptureSourceResult)
 	checkpoint               time.Time
+	// Pending captures verify source bytes before declaring them delivered.
+	verifyDelivery bool
 	// prune lists superseded snapshot generations to delete once a committed
 	// manifest no longer names them.
 	prune []string
@@ -416,7 +432,8 @@ func (s *captureSession) source(ctx context.Context, source SourceConfig, progre
 // The private plan controls acquisition, never bypasses durable publication.
 func (s *captureSession) sourcePlanned(ctx context.Context, source SourceConfig, progress func(CaptureSourceResult), selected *capturePlan) CaptureSourceResult {
 	c := &sourceCapture{session: s, ctx: ctx, source: source, progress: progress, checkpoint: time.Now(),
-		result: CaptureSourceResult{Name: source.Name, Kind: source.Kind, State: "running", captureRunRecord: captureRunRecord{StartedAt: now(), Errors: []captureError{}}}}
+		result:         CaptureSourceResult{Name: source.Name, Kind: source.Kind, State: "running", captureRunRecord: captureRunRecord{StartedAt: now(), Errors: []captureError{}}},
+		verifyDelivery: s.preserveUnindexed || s.deliveryTarget != ""}
 	if !validCaptureName(source.Name) {
 		return c.finish(fmt.Errorf("source name %q cannot name a capture directory", source.Name))
 	}
@@ -456,6 +473,21 @@ func (s *captureSession) sourcePlanned(ctx context.Context, source SourceConfig,
 		// than deleted, so nothing is marked missing and nothing is written.
 		return c.finish(err)
 	}
+	var delivered struct {
+		Fingerprint string `json:"fingerprint"`
+		Target      string `json:"destination_instance"`
+	}
+	if b, e := os.ReadFile(filepath.Join(c.dir, ".delivered.json")); e == nil && json.Unmarshal(b, &delivered) == nil && c.session.recoveryID == "" && delivered.Fingerprint != "" && (c.session.deliveryTarget == "" || c.session.deliveryTarget == delivered.Target) {
+		c.verifyDelivery = true
+		fingerprint, err := captureDeliveryFingerprint(ctx, source, plan, nil)
+		if err != nil {
+			return c.finish(err)
+		}
+		if delivered.Fingerprint == fingerprint {
+			c.result.Phase = "Already delivered; source is unchanged"
+			return c.finish(nil)
+		}
+	}
 	if err := os.MkdirAll(c.dir, 0o700); err != nil {
 		return c.finish(toDestination(err))
 	}
@@ -492,6 +524,15 @@ func (s *captureSession) sourcePlanned(ctx context.Context, source SourceConfig,
 		c.fail("", err)
 	}
 	c.phase("saving capture manifest")
+	c.manifest.DeliveredFingerprint = ""
+	if len(c.result.Errors) == 0 {
+		fingerprint, fingerprintErr := captureDeliveryFingerprint(ctx, source, plan, c)
+		if fingerprintErr != nil {
+			c.fail("", fingerprintErr)
+		} else {
+			c.manifest.DeliveredFingerprint = fingerprint
+		}
+	}
 	err = c.commit(true)
 	if err == nil {
 		c.removePruned(true)
@@ -712,8 +753,18 @@ func (c *sourceCapture) captureFiles(items []captureItem, present map[string]boo
 		if previous != nil {
 			previous.MissingSince = ""
 			if previous.Path == item.path && (c.session.recoveryID == "" || previous.RecoveryID == c.session.recoveryID) && previous.Size == info.Size() && previous.MTimeNS == info.ModTime().UnixNano() && c.intact(previous.Captured, previous.Size, previous.MTimeNS) {
-				c.result.FilesUnchanged++
-				continue
+				unchanged := true
+				if c.verifyDelivery {
+					digest, err := captureDeliveryDigest(c.ctx, item.path)
+					if err != nil {
+						return err
+					}
+					unchanged = digest == previous.SHA256
+				}
+				if unchanged {
+					c.result.FilesUnchanged++
+					continue
+				}
 			}
 		}
 		jobs = append(jobs, job{item, previous})
@@ -862,12 +913,19 @@ func (c *sourceCapture) copyOnce(item captureItem, previous *capturedFile) (*cap
 	}
 	entry := &capturedFile{Path: item.path, Captured: rel, Size: size, MTime: mtime.UTC().Format(time.RFC3339Nano), MTimeNS: mtime.UnixNano(),
 		SHA256: digest.sum(), CapturedAt: now(), RecoveryID: c.session.recoveryID}
+	if previous != nil {
+		entry.ObservedNS = previous.ObservedNS
+	}
+	if c.verifyDelivery && (previous == nil || previous.SHA256 != entry.SHA256) {
+		observed, _ := parseTime(entry.CapturedAt)
+		entry.ObservedNS = max(entry.MTimeNS, entry.ObservedNS+1, observed.UnixNano())
+	}
 	var version *capturedVersion
 	if previous != nil {
 		entry.Previous = previous.Previous
 	}
 	if rewritten {
-		kept, err := c.preserve(capturedVersion{Captured: previous.Captured, Size: previous.Size, MTimeNS: previous.MTimeNS, SHA256: previous.SHA256, CapturedAt: previous.CapturedAt}, true)
+		kept, err := c.preserve(capturedVersion{Captured: previous.Captured, Size: previous.Size, MTimeNS: previous.MTimeNS, ObservedNS: previous.ObservedNS, SHA256: previous.SHA256, CapturedAt: previous.CapturedAt}, true)
 		if err != nil {
 			os.Remove(temporary)
 			return nil, nil, err

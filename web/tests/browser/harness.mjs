@@ -22,6 +22,15 @@ const assetRoot = join(repo, "internal", "archive", "assets");
 const source = readFileSync(join(assetRoot, "ui.py"), "utf8");
 export const html = source.slice(source.indexOf("r'''") + 4, source.lastIndexOf("'''"));
 
+// Match applicationHTML(): the idle standard shell and the library dialog.
+// Library scripts must not execute before a library has been connected.
+function applicationHTML() {
+  return html.replace(/<script\b[^>]*>.*?<\/script>/gs, "")
+    .replace("<body>", "<body data-application-setup>")
+    .replace('<div id="homePage"></div>', `<div id="homePage">${asset("application-home.html")}</div>`)
+    .replace("</body>", `${asset("application.html")}</body>`);
+}
+
 // Every file under assets/, by path, read once per process.
 const types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".md": "text/markdown; charset=utf-8" };
 const assetCache = new Map();
@@ -82,6 +91,7 @@ function serve(routes, state, record) {
     }
     if (!path.startsWith("/api/")) {
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+      if (path === "/app") return response.end(applicationHTML());
       return response.end(state.concurrency ? html.replace("<html", "<html data-concurrency-prototype") : html);
     }
     const chunks = [];

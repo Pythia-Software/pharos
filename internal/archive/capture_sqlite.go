@@ -146,7 +146,7 @@ func (c *sourceCapture) snapshot(item captureItem, rel string, state sqliteSourc
 	snapshot := &capturedSnapshot{RecoveryID: c.session.recoveryID, Path: item.path, Captured: rel, Size: info.Size(), CapturedMTimeNS: info.ModTime().UnixNano(), CapturedAt: now(), Method: "sqlite-backup", Source: state}
 	if previous != nil {
 		snapshot.Generations = slices.Clone(previous.Generations)
-		if c.session.generations > 0 || c.source.Options["sqlite_record_capture"] == true {
+		if c.session.generations > 0 || c.session.preserveUnindexed || c.source.Options["sqlite_record_capture"] == true {
 			source := previous.Source
 			version := capturedVersion{Captured: previous.Captured, Size: previous.Size, CapturedAt: previous.CapturedAt, Source: &source}
 			intact := c.intact(previous.Captured, previous.Size, previous.CapturedMTimeNS)
@@ -174,7 +174,7 @@ func (c *sourceCapture) snapshot(item captureItem, rel string, state sqliteSourc
 // An indexed marker is never a preservation receipt. Unique evidence is not
 // evicted to make room; the acquisition space/capacity gate stops the writer.
 func (c *sourceCapture) retain(sourcePath string, generations []capturedVersion) []capturedVersion {
-	if c.session.recoveryID != "" {
+	if c.session.recoveryID != "" || c.session.preserveUnindexed {
 		return generations
 	}
 	kept := make([]capturedVersion, 0, len(generations))

@@ -190,7 +190,9 @@ func (c *Catalog) Close() error {
 // 20: raw SQLite evidence authority, retained input acquisition state and
 // deferred historical relationships. Older writers cannot maintain the
 // preservation contract of these rows.
-const catalogSchemaVersion = 20
+// 21: library delivery checkpoints. Older writers ignore moved inventories
+// and can recreate history explicitly moved out of a source library.
+const catalogSchemaVersion = 21
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.

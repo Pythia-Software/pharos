@@ -6,6 +6,12 @@ The primary implementation is Go 1.26 with SQLite FTS, a local concept index, an
 
 The command-line executable is `pharos`, and a per-user installation keeps its configuration in `~/Library/Application Support/Pharos`.
 
+The native app uses an application broker to open named libraries independently
+of its own location. Each library service has an allocated loopback endpoint and
+private runtime credential. The broker owns the primary connection, explicit MCP
+assignment and verified library transfers. See [Libraries and application setup](library-management.md)
+and the [implementation design](onboarding-and-library-design.md).
+
 Channel and Machine attribute work to its initiating conversation and device,
 including delegated usage. Execution machine records each session's placement
 separately. These dimensions are available across query tables, charts, cards,

@@ -1,0 +1,392 @@
+<!-- Composed into the standard ui.py shell by applicationHTML(). -->
+<style>
+body[data-application-setup] > header,body[data-application-setup] > main{user-select:none}
+body[data-application-setup] #navigator{display:none}
+.application-setup{position:fixed;inset:0;margin:auto;width:min(1040px,calc(100% - 48px));height:min(720px,calc(100dvh - 64px));max-width:none;max-height:calc(100dvh - 64px);padding:0;overflow:hidden;border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--ink);box-shadow:0 24px 90px #0006;font:var(--fs-base)/1.55 var(--sans)}
+.application-setup[open]{display:flex;flex-direction:column}
+.application-setup::backdrop{background:color-mix(in srgb,var(--bg) 52%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+.application-top{display:flex;align-items:center;gap:10px;padding:18px 32px;border-bottom:1px solid var(--line);flex:none}
+.application-top strong{flex:1;font:600 var(--fs-lg)/1.4 var(--sans);color:var(--ink)}
+.application-body{display:flex;flex-direction:column;flex:1;padding:32px 40px;overflow-y:auto;min-height:0;scrollbar-gutter:stable}
+.application-setup h1{font:400 40px/1.12 var(--serif);letter-spacing:-.6px;margin:10px 0 16px}
+.application-setup h2{font:600 25px/1.2 var(--serif);margin:0 0 16px}
+.application-setup h3{font:600 var(--fs-lg)/1.3 var(--serif);margin:0 0 12px}
+.application-setup p{margin:10px 0 18px;max-width:70ch}
+.application-setup small,.application-setup .muted{color:var(--muted)}
+.application-setup .eyebrow{font-size:var(--fs-xs);text-transform:uppercase;letter-spacing:.13em;color:var(--gold);font-weight:600}
+.application-setup .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr));gap:14px}
+.application-setup .card,.application-setup details{padding:18px;border:1px solid var(--line);border-radius:7px;background:var(--bg);margin:18px 0}
+.application-setup .grid .card{margin:0}
+.application-setup #setup{padding:0;border:0;background:transparent;margin:0}
+.application-setup button,.application-setup .button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;padding:7px 14px;border:1px solid var(--line);border-radius:5px;font:600 var(--fs-sm)/1.4 var(--sans);text-decoration:none;background:var(--panel);color:var(--ink);cursor:pointer}
+.application-setup button.primary,.application-setup .button:not(.secondary),.application-setup button[type=submit]{background:var(--accent);border-color:var(--accent);color:var(--panel)}
+.application-setup button:hover:not(:disabled){border-color:var(--accent)}
+.application-setup button:disabled{opacity:.55;cursor:wait}
+.application-setup a{color:var(--accent)}
+.application-setup label{display:block;font-size:var(--fs-sm);font-weight:600;margin:18px 0 6px}
+.application-setup input,.application-setup select{display:block;box-sizing:border-box;width:100%;min-width:0;min-height:38px;border:1px solid var(--line);border-radius:5px;background:var(--bg);color:var(--ink);padding:8px 11px;font:inherit}
+.application-setup select{appearance:auto}
+.application-setup input[type=checkbox]{display:inline;width:auto}
+.application-setup code{font-size:var(--fs-xs);overflow-wrap:anywhere;white-space:pre-wrap}
+.application-setup .row{display:flex;align-items:center;flex-wrap:wrap;justify-content:flex-end;gap:10px;margin-top:18px}
+.application-setup .row>*{min-width:0}
+.application-setup .path{font-size:var(--fs-xs);overflow-wrap:anywhere}
+.application-setup .tag{display:inline-block;background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:2px 9px;font-size:var(--fs-xs);color:var(--muted)}
+.application-setup .error{color:var(--bad)}
+.application-setup #notice{white-space:pre-wrap;overflow-wrap:anywhere;font-size:var(--fs-sm)}
+.application-setup #notice:empty{display:none}
+.application-setup summary{cursor:pointer;font-weight:600}
+.application-setup .storage-diagram{max-width:330px;margin:20px auto;text-align:center}
+.application-setup .storage-diagram>svg{display:block;width:100%;height:auto}
+.application-setup .storage-diagram figcaption{font-size:var(--fs-sm);color:var(--muted);margin:0 auto;max-width:45ch}
+.application-setup .steps{font-size:var(--fs-xs);color:var(--muted);margin-bottom:18px}
+.application-setup #choose-folder{margin-top:10px}
+.application-setup .setup-svg-defs{position:absolute;width:0;height:0;overflow:hidden}
+.application-setup .setup-header-mark{width:20px;height:28px;flex:none}
+.application-setup .intro-screen{display:flex;flex-direction:column;flex:1}
+.application-setup .setup-story{display:grid;grid-template-columns:minmax(0,.95fr) minmax(0,1.05fr);gap:40px;align-items:center;flex:1}
+.application-setup .setup-copy{min-width:0}
+.application-setup .setup-art{display:block;width:100%;height:auto;max-height:390px}
+.application-setup #welcome .setup-story{position:relative;isolation:isolate}
+.application-setup #welcome .setup-art,.application-setup #welcome .setup-copy{position:relative;z-index:1}
+.application-setup #welcome .setup-art{transform:translateY(var(--welcome-art-offset,0px))}
+.application-setup .welcome-beams{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none;z-index:0}
+.application-setup .welcome-beams path{fill:var(--gold);opacity:.12}
+.application-setup .welcome-heading{display:flow-root;margin-bottom:var(--welcome-heading-gap,18px)}
+.application-setup .welcome-heading h1{margin:10px 0 0}
+.application-setup .setup-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:12px;margin-top:28px;padding-top:22px;border-top:1px solid var(--line);flex:none}
+.application-setup .setup-actions button{min-width:100px;min-height:40px}
+.application-setup .intro-features{display:grid;gap:18px;margin:24px 0}
+.application-setup .intro-feature{display:grid;grid-template-columns:40px minmax(0,1fr);align-items:start;gap:14px}
+.application-setup .intro-feature>svg{width:36px;height:36px;color:var(--gold)}
+.application-setup .intro-features h3{margin:0 0 4px;font:600 var(--fs-base)/1.4 var(--sans)}
+.application-setup .intro-features p{margin:0;color:var(--muted);font-size:var(--fs-sm)}
+.application-setup.introduction #application-intro,.application-setup.introduction #library-actions,.application-setup.introduction #libraries,.application-setup.introduction #library-tools{display:none}
+.application-setup .header-icon{min-height:30px;width:30px;padding:0}
+.application-setup [hidden]{display:none!important}
+.application-setup :focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.application-setup h1:focus,.application-setup h2:focus,.application-setup #next:focus{outline:none}
+.application-setup.flow-open #application-intro,.application-setup.flow-open #library-actions,.application-setup.flow-open #libraries,.application-setup.flow-open #library-tools{display:none}
+.application-setup.library-ready #application-intro,.application-setup.library-ready #library-actions,.application-setup.library-ready #libraries{display:none}
+@media(max-width:760px){body[data-application-setup] .header-icons{display:none}body[data-application-setup] .bar{flex-wrap:wrap;row-gap:8px}body[data-application-setup] .tabs{margin-left:auto}}
+@media(max-width:760px){.application-setup .setup-story{grid-template-columns:1fr;gap:16px;flex:none}.application-setup .setup-art{max-height:200px;width:min(100%,280px);margin:0 auto}.application-setup .setup-storage-art{max-height:300px}.application-setup .setup-actions{margin-top:24px}.application-setup h1{font-size:32px}.application-body{padding:24px}.application-setup #library-actions{gap:8px}}
+@media(max-width:480px){.application-setup{width:calc(100% - 24px);max-height:calc(100dvh - 24px)}.application-top{padding:12px 16px}.application-body{padding:20px}.application-setup h1{font-size:27px}}
+
+.application-setup.flow-open .application-body{overflow:hidden}
+.application-setup #setup:not([hidden]){display:flex;flex-direction:column;flex:1;min-height:0}
+.application-setup #library-form{display:flex;flex-direction:column;flex:1;min-height:0}
+.application-setup .wizard-panel{flex:1;min-height:0;overflow-y:auto;scrollbar-gutter:stable;padding:4px 4px 8px}
+.application-setup .wizard-lead{color:var(--muted);font-size:var(--fs-lg);margin:0 0 22px}
+.application-setup .wizard-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;border:0;padding:0;margin:18px 0 0;min-width:0}
+.application-setup .wizard-choice{display:flex;flex-direction:column;position:relative;min-width:0;margin:0;padding:22px;border:1px solid var(--line);border-radius:9px;background:var(--bg);font-weight:400;cursor:pointer}
+.application-setup .wizard-choice:has(input:checked){border-color:var(--gold);background:color-mix(in srgb,var(--gold) 7%,var(--bg));box-shadow:inset 0 0 0 1px var(--gold)}
+.application-setup .wizard-choice:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:3px}
+.application-setup .wizard-choice input[type=radio]{position:absolute;top:18px;right:18px;display:block;width:18px;height:18px;min-height:0;margin:0;padding:0;accent-color:var(--accent)}
+.application-setup .wizard-choice>svg{display:block;width:100%;height:110px;margin:0 0 12px;color:var(--gold)}
+.application-setup .wizard-choice strong{font:600 19px/1.3 var(--serif);margin-bottom:8px}
+.application-setup .wizard-choice .choice-description{color:var(--muted);font-size:var(--fs-sm);max-width:38ch}
+.application-setup .wizard-choice .recommendation{display:block;color:var(--gold);font-size:var(--fs-xs);font-weight:600;margin-top:10px}
+.application-setup .wizard-note{font-size:var(--fs-sm);color:var(--muted);margin:18px 0 0;max-width:75ch}
+.application-setup .wizard-alternate{margin:20px 0 0;padding:0;border:0;background:none;font-size:var(--fs-sm)}
+.application-setup .wizard-alternate summary{color:var(--muted)}
+.application-setup .wizard-fields{width:100%;box-sizing:border-box}
+.application-setup .wizard-fields input{font-size:var(--fs-lg)}
+.application-setup .library-proposal{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr);gap:36px;align-items:center;min-height:100%}
+.application-setup .library-proposal-art{min-width:0;text-align:center}
+.application-setup .library-proposal-art svg{display:block;width:100%;height:auto;max-height:220px;color:var(--gold)}
+.application-setup .library-proposal-art figcaption{color:var(--muted);font-size:var(--fs-sm);margin-top:14px}
+.application-setup .library-proposal-copy{min-width:0}
+.application-setup .library-proposal-copy .wizard-lead{font-size:var(--fs-base);margin:0 0 24px}
+.application-setup .library-detail{padding:18px 0;border-top:1px solid var(--line)}
+.application-setup .library-detail-header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:8px}
+.application-setup .library-detail-header label{margin:0;color:var(--muted);font-size:var(--fs-sm);font-weight:400}
+.application-setup .library-detail-header button{min-height:28px;padding:2px 8px;background:transparent;font-size:var(--fs-xs)}
+.application-setup .library-detail-value{font-size:var(--fs-lg);overflow-wrap:anywhere}
+.application-setup .library-detail-value .path{display:block;color:var(--muted);font-size:var(--fs-xs);margin-top:5px}
+.application-setup .library-proposal .wizard-note{margin:12px 0 0;font-size:var(--fs-xs)}
+@media(max-width:760px){.application-setup .library-proposal{grid-template-columns:1fr;gap:18px;align-content:start}.application-setup .library-proposal-art{margin:0}.application-setup .library-proposal-art svg{max-height:115px}.application-setup .library-proposal-art figcaption{display:none}.application-setup .library-proposal-copy .wizard-lead{margin-bottom:18px}.application-setup .library-detail{padding:14px 0}}
+.application-setup .wizard-review{display:grid;grid-template-columns:minmax(90px,auto) minmax(0,1fr);gap:16px 24px;margin:28px 0}
+.application-setup .wizard-review dt{color:var(--muted);font-size:var(--fs-sm)}
+.application-setup .wizard-review dd{margin:0;overflow-wrap:anywhere}
+.application-setup .wizard-review .path{font-size:var(--fs-base)}
+.application-setup .wizard-progress{margin:0 auto 0 0;white-space:nowrap}
+.application-setup .wizard-footer{margin-top:auto;padding-top:20px}
+.application-setup.library-ready #library-tools{display:none}
+@media(max-width:480px){.application-setup .wizard-footer{gap:8px}.application-setup .wizard-footer button{min-width:0;padding:7px 10px}}
+@media(max-width:600px){.application-setup .wizard-options{grid-template-columns:1fr;gap:12px}.application-setup .wizard-choice{display:grid;grid-template-columns:76px minmax(0,1fr);gap:4px 12px;padding:16px 12px}.application-setup .wizard-choice>svg{grid-row:1 / span 3;grid-column:1;width:76px;height:70px;margin:0;align-self:center}.application-setup .wizard-choice strong{grid-column:2;font-size:17px;margin:0;padding-right:18px}.application-setup .wizard-choice .choice-description,.application-setup .wizard-choice .recommendation{grid-column:2}.application-setup .wizard-choice .recommendation{margin-top:4px;font-size:10px}.application-setup .wizard-choice input[type=radio]{top:12px;right:12px}.application-setup .wizard-lead{font-size:14px;margin-bottom:16px}.application-setup .wizard-review{grid-template-columns:1fr;gap:4px}.application-setup .wizard-review dd{margin-bottom:12px}}
+</style>
+<dialog id="application-setup" class="application-setup introduction" aria-labelledby="welcome-title" data-feedback-label="Setup guide">
+<svg class="setup-svg-defs" aria-hidden="true" focusable="false"><defs>
+<symbol id="setup-lighthouse" viewBox="0 0 80 180"><path d="M14 166H66L56 60H24Z" fill="#eadcbc"/><path d="M21 95H59L61 116H19Z" fill="#c59a50"/><path d="M25 60H55L53 49H27Z" fill="#eadcbc"/><path d="M19 58H61M26 48H54" stroke="#c59a50" stroke-width="5" stroke-linecap="round"/><rect x="29" y="29" width="22" height="19" rx="2" fill="#c59a50"/><rect x="33" y="33" width="14" height="11" rx="1" fill="#fff3bc"/><path d="M25 29L40 18L55 29Z" fill="#eadcbc"/><path d="M40 18V10" stroke="#c59a50" stroke-width="3"/><circle cx="40" cy="8" r="3" fill="#c59a50"/><path d="M34 166V151A6 6 0 0 1 46 151V166" fill="#203f31"/><path d="M37 74V82M37 126V134" stroke="#203f31" stroke-width="5"/><path d="M9 169H71" stroke="#c59a50" stroke-width="5" stroke-linecap="round"/></symbol>
+<symbol id="setup-chat" viewBox="0 0 40 40"><path d="M8 7H32A3 3 0 0 1 35 10V26A3 3 0 0 1 32 29H18L10 35V29H8A3 3 0 0 1 5 26V10A3 3 0 0 1 8 7Z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 14H28M12 21H23" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+<symbol id="setup-search" viewBox="0 0 40 40"><circle cx="17" cy="17" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M24 24L34 34M12 14H22M12 19H19" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+<symbol id="setup-chart" viewBox="0 0 40 40"><path d="M6 6V33H35M13 26V20M21 26V13M29 26V8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+<symbol id="setup-context" viewBox="0 0 40 40"><rect x="3" y="12" width="12" height="17" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="26" y="5" width="11" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="26" y="24" width="11" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M15 20H20V11H26M20 20V30H26" fill="none" stroke="currentColor" stroke-width="1.6"/></symbol>
+
+
+<!-- A plain folder consistently represents the library, wherever it is stored. -->
+<symbol id="setup-library-folder" viewBox="0 0 80 68"><path d="M6 23V17A5 5 0 0 1 11 12H29L37 21H69A5 5 0 0 1 74 26V56A5 5 0 0 1 69 61H11A5 5 0 0 1 6 56ZM6 27H74" fill="var(--panel)" stroke="var(--gold)" stroke-width="2.4" stroke-linejoin="round"/></symbol>
+<symbol id="setup-computer" viewBox="0 0 240 155"><rect x="18" y="6" width="204" height="126" rx="7" fill="var(--bg)" stroke="var(--gold)" stroke-width="2"/><rect x="28" y="16" width="184" height="104" rx="2" fill="var(--panel)" stroke="var(--line)"/><path d="M18 132L3 146Q1 151 8 151H232Q239 151 237 146L222 132Z" fill="var(--bg)" stroke="var(--gold)" stroke-width="2" stroke-linejoin="round"/><path d="M98 140H142" stroke="var(--gold)" stroke-width="2" stroke-linecap="round"/></symbol>
+<symbol id="setup-library-storage" viewBox="0 0 440 410">
+<use href="#setup-computer" x="110" y="0" width="220" height="142"/><use href="#setup-library-folder" x="190" y="29" width="60" height="51"/>
+<text x="220" y="103" text-anchor="middle" fill="var(--ink)" font-family="var(--sans)" font-size="13">Library</text><text x="220" y="165" text-anchor="middle" fill="var(--ink)" font-family="var(--sans)" font-size="16" font-weight="600">On this Mac</text>
+<path d="M142 194H181M259 194H298" stroke="var(--line)" stroke-width="1.5"/><text x="220" y="205" text-anchor="middle" fill="var(--gold)" font-family="var(--sans)" font-size="32" font-weight="600">OR</text>
+<use href="#setup-computer" x="25" y="226" width="220" height="142"/><text x="135" y="284" text-anchor="middle" fill="var(--muted)" font-family="var(--sans)" font-size="14">Pharos</text><path d="M94 299H176M107 310H163" stroke="var(--line)" stroke-width="2" stroke-linecap="round"/>
+<path d="M229 317H261Q278 317 278 301H312" fill="none" stroke="var(--gold)" stroke-width="3" stroke-linecap="round"/>
+<path d="M312 268L324 260H425L413 268Z" fill="var(--line)" stroke="var(--gold)" stroke-width="1.5" stroke-linejoin="round"/><path d="M413 268L425 260V326L413 334Z" fill="var(--bg)" stroke="var(--gold)" stroke-width="1.5" stroke-linejoin="round"/>
+<rect x="312" y="268" width="101" height="66" rx="2" fill="var(--bg)" stroke="var(--gold)" stroke-width="2"/><use href="#setup-library-folder" x="344" y="274" width="38" height="32"/><text x="363" y="324" text-anchor="middle" fill="var(--muted)" font-family="var(--sans)" font-size="10" font-weight="600" letter-spacing="1">SSD</text>
+<rect x="308" y="295" width="5" height="12" rx="1" fill="var(--panel)" stroke="var(--gold)" stroke-width="1.5"/><circle cx="403" cy="324" r="2" fill="var(--gold)"/>
+<text x="220" y="393" text-anchor="middle" fill="var(--ink)" font-family="var(--sans)" font-size="16" font-weight="600">On an attached SSD</text>
+</symbol>
+<symbol id="setup-one-mac" viewBox="0 0 360 210"><use href="#setup-computer" x="60" y="18" width="240" height="155"/></symbol>
+<symbol id="setup-many-macs" viewBox="0 0 360 210"><use href="#setup-computer" x="6" y="19" width="180" height="116"/><use href="#setup-computer" x="172" y="78" width="180" height="116"/></symbol>
+<symbol id="setup-storage-mac" viewBox="0 0 360 210"><use href="#setup-computer" x="60" y="18" width="240" height="155"/><use href="#setup-library-folder" x="148" y="51" width="64" height="54"/></symbol>
+<symbol id="setup-storage-ssd" viewBox="0 0 360 210"><use href="#setup-computer" x="4" y="32" width="208" height="134"/><path d="M196 111H218Q230 111 230 100H252" fill="none" stroke="var(--gold)" stroke-width="2.5"/><path d="M252 72L264 64H351L339 72Z" fill="var(--line)" stroke="var(--gold)" stroke-width="1.5"/><path d="M339 72L351 64V131L339 139Z" fill="var(--bg)" stroke="var(--gold)" stroke-width="1.5"/><rect x="252" y="72" width="87" height="67" rx="2" fill="var(--bg)" stroke="var(--gold)" stroke-width="2"/><use href="#setup-library-folder" x="274" y="80" width="44" height="37"/><rect x="248" y="94" width="5" height="12" rx="1" fill="var(--panel)" stroke="var(--gold)" stroke-width="1.5"/><text x="295" y="130" text-anchor="middle" fill="var(--muted)" font-family="var(--sans)" font-size="9" letter-spacing="1">SSD</text></symbol>
+</defs></svg>
+<div class="application-top"><svg class="setup-header-mark" viewBox="0 0 80 180" aria-hidden="true"><use href="#setup-lighthouse"/></svg><strong>Setup guide</strong><button class="header-icon" id="application-theme" type="button" aria-label="Use light theme" title="Change color theme"><svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#ph-icon-theme-system"/></svg></button><button class="header-icon" id="application-close" type="button" aria-label="Back to library" title="Back to library" hidden><svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#ph-icon-close"/></svg></button></div>
+<div class="application-body">
+
+<section id="welcome" class="intro-screen"><div class="setup-story">
+<svg class="welcome-beams" aria-hidden="true" focusable="false"><path id="welcome-beam-left"/><path id="welcome-beam-right"/></svg>
+<svg class="setup-art" viewBox="0 0 440 390" aria-hidden="true" focusable="false">
+<circle cx="208" cy="172" r="145" fill="var(--gold)" opacity=".05"/><circle cx="208" cy="172" r="145" fill="none" stroke="var(--gold)" opacity=".16"/><circle cx="208" cy="172" r="120" fill="none" stroke="var(--gold)" opacity=".09"/>
+<g fill="none" stroke="var(--sea)" stroke-width="1.5" opacity=".3"><path d="M22 300Q52 288 82 300T142 300T202 300T262 300T322 300T382 300T442 300M4 322Q34 310 64 322T124 322T184 322T244 322T304 322T364 322T424 322M44 344Q74 332 104 344T164 344T224 344T284 344T344 344T404 344"/></g>
+<path d="M72 293L106 270L130 276L152 261L198 270L228 293Z" fill="var(--line)"/><use href="#setup-lighthouse" x="113" y="80" width="104" height="218"/>
+<circle id="welcome-light-origin" cx="165" cy="126.6" r="1" fill="#fff3bc"/>
+<path d="M240 260C365 300 412 240 365 210" fill="none" stroke="var(--gold)" stroke-width="1.5" stroke-dasharray="3 6" opacity=".6"/>
+<g transform="translate(294 152) rotate(7 55 42)"><rect width="110" height="84" rx="9" fill="var(--bg)" stroke="var(--gold)" stroke-opacity=".55"/><use href="#setup-chat" x="12" y="10" width="38" height="38" color="var(--gold)"/><path d="M18 59H90M18 68H70" stroke="var(--muted)" stroke-opacity=".5" stroke-width="2" stroke-linecap="round"/></g>
+<g transform="translate(31 57) rotate(-8 42 30)"><rect width="84" height="60" rx="7" fill="var(--bg)" stroke="var(--line)"/><path d="M16 18H67M16 28H58M16 38H43" stroke="var(--gold)" stroke-opacity=".5" stroke-width="2" stroke-linecap="round"/></g>
+<g stroke="var(--gold)" stroke-width="1.5" opacity=".7"><path d="M271 54V64M266 59H276M370 279V289M365 284H375"/><path d="M71 211L75 217L71 223L67 217Z" fill="none"/></g>
+</svg>
+<div class="setup-copy"><div class="welcome-heading"><div class="eyebrow">Getting Started</div><h1 id="welcome-title" tabindex="-1">Welcome to Pharos.</h1></div><p>Your past conversations with AI are the key to unlocking potential - for you, and your AI collaborator.</p><p class="muted">Pharos is built by and for people who want to use AI effectively and thoughtfully. We built it for the power-users who want to squeeze all of the value out of their quota, and the beginners excited to learn how to work with this new tool.</p></div></div><div class="setup-actions"><button class="primary" id="meet-pharos" type="button">Continue</button></div></section>
+<section id="about-pharos" class="intro-screen" hidden><div class="setup-story">
+<svg class="setup-art" viewBox="0 0 440 390" aria-hidden="true" focusable="false">
+<circle cx="215" cy="192" r="145" fill="var(--gold)" opacity=".05"/>
+<rect x="50" y="81" width="320" height="207" rx="12" fill="var(--bg)" stroke="var(--gold)" stroke-width="2"/><rect x="64" y="96" width="292" height="178" rx="4" fill="var(--panel)" stroke="var(--line)"/>
+<use href="#setup-chat" x="166" y="123" width="88" height="88" color="var(--gold)"/><path d="M130 231H290M151 246H269" stroke="var(--line)" stroke-width="2" stroke-linecap="round"/>
+<path d="M50 288L24 310Q22 316 33 316H388Q399 316 396 310L370 288Z" fill="var(--bg)" stroke="var(--gold)" stroke-width="2" stroke-linejoin="round"/><path d="M179 300H241" stroke="var(--gold)" stroke-width="2" stroke-linecap="round"/>
+<circle cx="314" cy="260" r="39" fill="var(--panel)" stroke="var(--gold)" stroke-width="3"/><path d="M343 290L378 326" stroke="var(--gold)" stroke-width="8" stroke-linecap="round"/><use href="#setup-search" x="292" y="238" width="44" height="44" color="var(--gold)"/>
+</svg>
+<div class="setup-copy"><div class="eyebrow">What is Pharos?</div><h1 id="about-title" tabindex="-1">A home for your work with AI.</h1><p>Pharos brings your coding agent conversations together, so you can find past work and learn from the way you use AI.</p><div class="intro-features"><div class="intro-feature"><svg aria-hidden="true"><use href="#setup-search"/></svg><div><h3>Find your way back</h3><p>Search across conversations, revisit an idea, and bookmark work you want to keep close.</p></div></div><div class="intro-feature"><svg aria-hidden="true"><use href="#setup-chart"/></svg><div><h3>See the bigger picture</h3><p>Explore your usage and patterns, and find opportunities to make your agents more effective.</p></div></div><div class="intro-feature"><svg aria-hidden="true"><use href="#setup-context"/></svg><div><h3>Bring context to your next conversation</h3><p>When you enable MCP, your agents can find useful context in your past work.</p></div></div></div><p class="muted">You choose which conversations Pharos can read. Next, we’ll tailor setup to the way you work.</p></div></div><div class="setup-actions"><button class="secondary" id="back-to-welcome" type="button">Back</button><button class="primary" id="start-setup" type="button">Continue</button></div></section>
+<div id="application-intro" class="setup-story">
+<svg class="setup-art setup-storage-art" viewBox="0 0 440 410" aria-hidden="true" focusable="false"><use href="#setup-library-storage"/></svg>
+<div class="setup-copy"><div class="eyebrow">Your library</div><h1 id="heading" tabindex="-1">Let’s set up your library.</h1><p>A library is a folder of files on your Mac or an attached drive. It holds your conversations, saved views, bookmarks and dashboards. Create a new one, open an existing one, or restore a backup.</p></div></div>
+<p id="notice" role="status" aria-live="polite"></p><div id="job" class="card" hidden></div>
+<section id="libraries" hidden><h2>Your libraries</h2><div id="library-list" class="grid"></div></section>
+<div class="setup-actions" id="library-actions"><button class="secondary" data-flow="recover">Restore a backup</button><button class="secondary" data-flow="open">Open a library</button><button class="primary" data-flow="create">Create a library</button></div>
+<section id="setup" hidden>
+<h1 id="flow-title" tabindex="-1">Where do you work with AI?</h1>
+<form id="library-form" novalidate>
+<section class="wizard-panel" id="wizard-machines">
+<p class="wizard-lead">We’ll tailor setup to the Macs you use.</p>
+<fieldset class="wizard-options" aria-label="Where you work"><label class="wizard-choice"><input type="radio" name="machines" value="one" checked><svg viewBox="0 0 360 210" aria-hidden="true"><use href="#setup-one-mac"/></svg><strong>Just this Mac</strong><span class="choice-description">I do my AI work on one Mac.</span></label><label class="wizard-choice"><input type="radio" name="machines" value="many"><svg viewBox="0 0 360 210" aria-hidden="true"><use href="#setup-many-macs"/></svg><strong>Several Macs</strong><span class="choice-description">I switch between Macs and want to bring my history with me.</span></label></fieldset>
+<details class="wizard-alternate"><summary>Already use Pharos?</summary><div class="row"><button class="secondary" type="button" data-flow="recover">Restore a backup</button><button class="secondary" type="button" data-flow="open">Open existing history</button></div></details>
+</section>
+<section class="wizard-panel" id="wizard-storage" hidden>
+<p class="wizard-lead">A library is a folder of your conversations and saved views. Choose where to keep it.</p>
+<fieldset class="wizard-options" aria-label="Library storage"><label class="wizard-choice"><input type="radio" name="storage" value="mac" checked><svg viewBox="0 0 360 210" aria-hidden="true"><use href="#setup-storage-mac"/></svg><strong>On this Mac</strong><span class="choice-description">Your history is available whenever you use this Mac.</span><span class="recommendation" id="recommend-mac">Recommended for one Mac</span></label><label class="wizard-choice"><input type="radio" name="storage" value="ssd"><svg viewBox="0 0 360 210" aria-hidden="true"><use href="#setup-storage-ssd"/></svg><strong>On an external SSD</strong><span class="choice-description">Plug in the drive to use your history. Take it with you between Macs.</span><span class="recommendation" id="recommend-ssd" hidden>Recommended for several Macs</span></label></fieldset>
+<p class="wizard-note" id="storage-note"></p>
+</section>
+<section class="wizard-panel wizard-fields" id="wizard-details" hidden>
+<div class="library-proposal">
+<figure class="library-proposal-art"><svg viewBox="0 0 360 210" role="img" aria-label="Your library folder on this Mac" id="details-art"><use href="#setup-storage-mac"/></svg><figcaption id="details-art-caption">Your history, at home on this Mac.</figcaption></figure>
+<div class="library-proposal-copy">
+<p class="wizard-lead" id="details-explanation"></p>
+<div class="library-detail"><div class="library-detail-header"><label for="name">Name</label><button type="button" id="edit-name" aria-label="Edit library name" aria-controls="name" aria-expanded="false">Edit</button></div><div class="library-detail-value" id="name-value">My Library</div><input id="name" value="My Library" maxlength="160" autocomplete="off" hidden></div>
+<div class="library-detail"><div class="library-detail-header"><label for="path">Location</label><button type="button" id="edit-path" aria-label="Edit library location" aria-controls="path-editor" aria-expanded="false">Edit</button></div><div class="library-detail-value" id="location-value"><span id="location-label">On this Mac</span><span class="path" id="location-path"></span></div><div id="path-editor" hidden><input id="path" autocomplete="off" spellcheck="false" aria-describedby="path-note"><button type="button" class="secondary" id="choose-folder">Choose folder…</button><p class="wizard-note" id="path-note"></p></div></div>
+<p class="wizard-note" id="details-note">Pharos will create a folder with this name. You’ll choose what to add next.</p>
+</div></div>
+</section>
+<section class="wizard-panel" id="wizard-review" hidden>
+<p class="wizard-lead">Check your choices before Pharos creates any files.</p><dl class="wizard-review"><dt>Your Macs</dt><dd id="review-machines"></dd><dt>Storage</dt><dd id="review-storage"></dd><dt>Library name</dt><dd id="review-name"></dd><dt>Library folder</dt><dd class="path" id="review-folder"></dd></dl><p class="wizard-note" id="review-note"></p>
+</section>
+<section class="wizard-panel wizard-fields" id="wizard-open" hidden><p class="wizard-lead">Choose the folder containing your existing library.</p><label for="existing-path">Library folder</label><input id="existing-path" autocomplete="off" spellcheck="false" placeholder="/Volumes/My SSD/My Library"><button class="secondary" type="button" data-pick="existing-path">Choose folder…</button><p class="wizard-note">The folder contains library.toml. A copied or incompatible library needs recovery before it can be opened.</p></section>
+<section class="wizard-panel wizard-fields" id="wizard-backup" hidden><p class="wizard-lead">Choose a completed backup or a self-contained copy of a library.</p><label for="backup">Backup folder</label><input id="backup" autocomplete="off" spellcheck="false"><button class="secondary" type="button" data-pick="backup">Choose folder…</button><details><summary>Restoring a cloud backup</summary><p>First download and verify its recovery folder using Cloud Backups or pharos cloud-restore. Then choose that folder here.</p></details></section>
+<section class="wizard-panel wizard-fields" id="wizard-recover-target" hidden><p class="wizard-lead">Restore into a new folder. Your backup stays intact.</p><label for="recover-path">New library folder</label><input id="recover-path" autocomplete="off" spellcheck="false" placeholder="/Volumes/My SSD/Recovered Library"><button class="secondary" type="button" data-pick="recover-path">Choose parent folder…</button><p class="wizard-note">Choose a folder that does not exist yet. Pharos verifies the restored history before registering the library.</p></section>
+<section class="wizard-panel" id="wizard-recover-review" hidden><p class="wizard-lead">Pharos will create and verify a separate restored library.</p><dl class="wizard-review"><dt>Backup</dt><dd class="path" id="review-backup"></dd><dt>Restore to</dt><dd class="path" id="review-recover-path"></dd></dl><p class="wizard-note">Capture and automatic delivery start paused, so you can inspect the restored history first.</p></section>
+<div class="setup-actions wizard-footer"><span class="steps wizard-progress" id="steps"></span><button id="cancel" type="button" class="secondary">Back</button><button id="submit" type="submit">Continue</button></div>
+</form></section>
+<section class="card" id="next" tabindex="-1" hidden><h2 id="ready-title">Your library is ready</h2><p>Next, Pharos will find tools in common locations on this Mac. Review the detected tools and their source folders before approving capture.</p><div class="setup-actions"><a class="button secondary" href="/library">Browse library</a><button class="primary" id="configure-sources" type="button">Continue</button></div></section>
+<div id="library-tools" hidden><details id="mcp"><summary>MCP settings · this application on this Mac</summary><p id="mcp-explanation">The first library becomes this installation’s MCP library once. Browsing another library does not change that assignment. An agent receives a helpful unavailable error until you reconnect to the assigned library or explicitly change it here.</p><form id="mcp-form"><label for="mcp-library">Library attached to MCP</label><select id="mcp-library"></select><div class="row"><button>Save MCP assignment</button></div></form><p class="muted">Enable MCP and register your agent client from the assigned library’s MCP settings.</p><a href="/settings/mcp">Open library MCP settings</a></details>
+<details><summary>Move or copy history between libraries</summary><p>History and its retained evidence are verified at the destination. The destination keeps its own saved preferences. A move empties delivered history from the source, including its offline search index. A backup is not required.</p><form id="transfer-form"><label for="from">From</label><select id="from"></select><label for="to">To</label><select id="to"></select><label for="mode">After verification</label><select id="mode"><option value="copy">Keep the source · copy history</option><option value="move">Empty the source · move history</option></select><p class="muted">Both libraries pause while this operation runs. Large libraries need room for verified transfer staging.</p><div class="row"><button>Start verified transfer</button></div></form></details>
+<details><summary>Capture locally, transfer later</summary><p>Choose a local pending library and an archive. Pharos captures the pending library’s approved sources while open, then moves its history to the archive when available. After delivery, the pending library is empty. The archive’s browsing selection and MCP assignment stay independent.</p><form id="delivery-form"><label for="pending">Local pending library</label><select id="pending"></select><label for="archive">Destination archive</label><select id="archive"></select><p>Configure source access in the pending library first. Its own source choices are used; source permissions are never copied from another library.</p><div class="row"><button type="button" class="secondary" id="disable-delivery">Pause delivery</button><button>Enable automatic delivery</button></div></form></details>
+<details><summary>Where the application lives</summary><p>Run Pharos from Applications for access whenever this Mac is on. Or keep Pharos.app on an SSD and launch that copy on each Mac; you do not need to install it on every Mac. To move the app, quit it and drag Pharos.app in Finder, then reopen it.</p><p>If the app is on an unplugged SSD, nothing captures or runs. No local history or history cache is kept by that portable app. Small update, window and integration registration settings may remain on this Mac.</p><p id="application-path" class="path"></p><p>Local capture while your archive is away requires an app and a pending library on this Mac. An SSD library alone cannot capture while unplugged.</p></details>
+
+</div>
+</div></dialog>
+<script id="setup-wizard-model">
+function createPharosSetupWizard() {
+  const order=['machines','storage','details','review'];
+  return {
+    step:'machines', machines:'one', storage:'mac', name:'My Library', parent:'',
+    setMachines(value) {
+      if(!['one','many'].includes(value))throw Error('Choose how many Macs you use.');
+      if(this.machines!==value){this.machines=value;this.storage=value==='many'?'ssd':'mac';this.parent=''}
+    },
+    setStorage(value) {
+      if(!['mac','ssd'].includes(value))throw Error('Choose where to store your library.');
+      if(this.storage!==value){this.storage=value;this.parent=''}
+    },
+    validate() {
+      const name=this.name.trim(), parent=this.parent.trim();
+      if(!name||name==='.'||name==='..'||/[\\/\0]/.test(name)||new TextEncoder().encode(name).length>160)return {field:'name',message:'Enter a library name without slashes; shorten it if needed.'};
+      if(this.storage==='ssd'&&!parent)return {field:'path',message:'Connect your SSD and choose a parent folder on it.'};
+      if(parent&&!parent.startsWith('/')&&!parent.startsWith('~/'))return {field:'path',message:'Choose an absolute folder path, or one starting with ~/.'};
+      return null;
+    },
+    folder(defaultParent='Standard Pharos Libraries folder') {
+      if(this.storage==='ssd'&&!this.parent.trim())return '';
+      const parent=(this.parent.trim()||defaultParent).replace(/\/+$/,'');
+      return parent+'/'+this.name.trim();
+    },
+    next() {
+      if(this.step==='details'){const error=this.validate();if(error)return error}
+      this.step=order[Math.min(order.indexOf(this.step)+1,order.length-1)];return null;
+    },
+    back() {const index=order.indexOf(this.step);if(index===0)return false;this.step=order[index-1];return true},
+    payload() {
+      if(this.step!=='review')throw Error('Review your setup before creating a library.');
+      const error=this.validate();if(error)throw Error(error.message);
+      return {name:this.name.trim(),path:this.parent.trim()?this.folder():'',location:this.storage};
+    },
+  };
+}
+</script>
+<script src="/assets/onboarding.js"></script>
+<script>
+
+(()=>{'use strict';let state={},flow='create',renderSignature='',introStep='welcome',wizard=createPharosSetupWizard(),flowOrigin='about',recoverStep=0;const $=id=>document.getElementById(id);const notice=(message,error=false)=>{$('notice').textContent=message;$('notice').classList.toggle('error',error)};const call=async(path,body)=>{const r=await fetch('/api/app/'+path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await r.json();if(!r.ok)throw Error(data.error||r.statusText);return data};
+const dialog=$('application-setup');
+// Keep the opposing cones on one optical axis. Measure the title so its
+// light reaches both lines, and leave the paragraphs below the beam's edge.
+const welcomeStory=$('welcome').querySelector('.setup-story'),welcomeArt=$('welcome').querySelector('.setup-art'),welcomeHeading=$('welcome').querySelector('.welcome-heading');
+function layoutWelcomeBeams(){
+  if($('welcome').hidden||!welcomeStory.clientWidth)return;
+  const stacked=window.matchMedia('(max-width:760px)').matches;
+  const story=welcomeStory.getBoundingClientRect(),heading=welcomeHeading.getBoundingClientRect(),body=document.querySelector('.application-body').getBoundingClientRect();
+  const point=new DOMPoint(165,126.6).matrixTransform(welcomeArt.getScreenCTM());
+  const x=point.x-story.left,left=body.left-story.left,right=body.right-story.left;
+  const aperture=5,spread=stacked ? .08 : Math.max(0,(heading.height/2+8-aperture)/Math.max(1,heading.left-point.x));
+  const gap=stacked?18:Math.ceil(aperture+spread*(right-x)-heading.height/2+20);
+  const gapValue=gap+'px';if(welcomeHeading.style.getPropertyValue('--welcome-heading-gap')!==gapValue){welcomeHeading.style.setProperty('--welcome-heading-gap',gapValue);requestAnimationFrame(layoutWelcomeBeams);return}
+  const oldOffset=parseFloat(welcomeArt.style.getPropertyValue('--welcome-art-offset'))||0;
+  const offset=stacked?0:oldOffset+heading.top+heading.height/2-point.y;
+  welcomeArt.style.setProperty('--welcome-art-offset',offset+'px');
+  const y=stacked?point.y-story.top:heading.top+heading.height/2-story.top;
+  for(const [id,edge,direction]of [['welcome-beam-left',left,-1],['welcome-beam-right',right,1]]){
+    const height=aperture+spread*Math.abs(edge-x),start=x+direction*7;
+    $(id).setAttribute('d',`M${start} ${y-aperture}L${edge} ${y-height}V${y+height}L${start} ${y+aperture}Z`);
+  }
+}
+let welcomeFrame=0;const scheduleWelcomeBeams=()=>{cancelAnimationFrame(welcomeFrame);welcomeFrame=requestAnimationFrame(layoutWelcomeBeams)};
+const welcomeResize=new ResizeObserver(scheduleWelcomeBeams);for(const el of [welcomeStory,welcomeArt,welcomeHeading])welcomeResize.observe(el);
+document.fonts.ready.then(scheduleWelcomeBeams);window.addEventListener('resize',scheduleWelcomeBeams);
+function showIntroduction(step,focus=true){introStep=step;$('welcome').hidden=step!=='welcome';$('about-pharos').hidden=step!=='about';dialog.classList.toggle('introduction',step!=='setup');const title={welcome:'welcome-title',about:'about-title',setup:'heading'}[step];dialog.setAttribute('aria-labelledby',title);document.querySelector('.application-body').scrollTop=0;if(focus)$(title).focus()}
+$('meet-pharos').onclick=()=>showIntroduction('about');$('start-setup').onclick=()=>startFlow('create');$('back-to-welcome').onclick=()=>showIntroduction('welcome');
+const setFlowOpen=open=>{if(open)dialog.classList.remove('library-ready');dialog.classList.toggle('flow-open',open);dialog.setAttribute('aria-labelledby',open?'flow-title':'heading')};
+const returnToLibrary=()=>{location.href='/library'};
+$('application-close').onclick=returnToLibrary;
+$('application-theme').onclick=()=>{const dark=document.documentElement.dataset.theme==='dark';document.documentElement.dataset.theme=dark?'light':'dark';$('application-theme').setAttribute('aria-label',dark?'Use dark theme':'Use light theme')};
+function leaveSetup(event){event.preventDefault();if(dialog.classList.contains('source-setup-open')){window.pharosOnboarding.back();return}if(!$('setup').hidden){if(!$('cancel').disabled)$('cancel').click()}else if(introStep==='about')showIntroduction('welcome');else if(state.libraries?.some(l=>l.id===state.selected&&l.connected))returnToLibrary();else if(introStep==='setup'&&!state.libraries?.length&&$('next').hidden)showIntroduction('about')}
+dialog.addEventListener('cancel',leaveSetup);
+dialog.addEventListener('keydown',event=>{if(event.key==='Escape'){if(document.querySelector('#feedbackComposer.open')||document.body.classList.contains('feedback-targeting')){event.preventDefault();return}leaveSetup(event);return}if(event.key!=='Tab')return;const controls=[...dialog.querySelectorAll('button,a[href],input,select,textarea,summary,[tabindex]')].filter(el=>el.tabIndex>=0&&!el.disabled&&el.getClientRects().length&&!el.closest('[inert]'));const at=controls.indexOf(document.activeElement);if(!controls.length)return;if(event.shiftKey&&at<=0){event.preventDefault();controls.at(-1).focus()}else if(!event.shiftKey&&at===controls.length-1){event.preventDefault();controls[0].focus()}});
+for(const el of [document.querySelector('body > header'),document.querySelector('body > main')])el.inert=true;
+document.documentElement.dataset.theme='dark';
+dialog.showModal();$('welcome-title').focus();
+function options(id,selected){const select=$(id);select.replaceChildren();for(const l of state.libraries||[]){const o=document.createElement('option');o.value=l.id;o.textContent=l.name+(l.available?'':' · unavailable');select.append(o)}select.value=selected||select.options[0]?.value||''}
+async function refresh(){state=await call('state');$('job').hidden=!state.job;if(state.job){$('job').textContent=state.job.phase;$('job').classList.toggle('error',state.job.state==='failed'||state.job.state==='paused')};const signature=JSON.stringify({...state,job:null});if(signature===renderSignature)return;renderSignature=signature;if((state.libraries.length||state.job)&&introStep!=='setup')showIntroduction('setup');$('libraries').hidden=!state.libraries.length;$('library-tools').hidden=!state.libraries.length;$('application-close').hidden=!state.libraries.some(l=>l.id===state.selected&&l.connected);$('heading').textContent=state.libraries.length?'Choose a library.':'Let’s set up your library.';const list=$('library-list');list.replaceChildren();for(const l of state.libraries){const c=document.createElement('article');c.className='card';const title=document.createElement('h3');title.textContent=l.name;const tag=document.createElement('span');tag.className='tag';tag.textContent=l.connected?'Connected':l.available?'Available':'Disconnected';const p=document.createElement('p');p.className='path';p.textContent=l.config;const actions=document.createElement('div');actions.className='row';const connect=document.createElement('button');connect.className='secondary';connect.textContent=l.id===state.selected?'Browse library':'Connect';connect.disabled=!l.available||state.busy;connect.onclick=()=>act(async()=>{await call('connect',{id:l.id});location.href='/library'});actions.append(connect);if(l.id===state.selected){const release=document.createElement('button');release.className='secondary';release.textContent='Release library';release.onclick=()=>act(async()=>{await call('disconnect',{id:l.id});notice('Library released. You can eject its drive in Finder. Quit Pharos first if the app is on that drive.');await refresh()});actions.append(release)}c.append(title,tag,p,actions);if(l.error){const error=document.createElement('p');error.className='error path';error.textContent=l.error;c.append(error)}if(l.recovery_point){const recovery=document.createElement('p');recovery.className='muted';recovery.textContent='Recovered from '+l.recovery_point+' · capture paused';c.append(recovery)}if(l.id===state.mcp){const m=document.createElement('p');m.className='muted';m.textContent='MCP is assigned here'+(state.selected!==l.id?' · unavailable while connected elsewhere':'');c.append(m)}list.append(c)}
+options('mcp-library',state.mcp);options('from',state.selected);options('to',state.libraries.find(l=>l.id!==state.selected)?.id);options('pending',state.delivery_source);options('archive',state.delivery_target||state.libraries[1]?.id);$('application-path').textContent='This app: '+state.application;if(!$('setup').hidden&&flow==='create')updateWizardChoices();$('job').hidden=!state.job;if(state.job){$('job').textContent=state.job.phase;$('job').classList.toggle('error',state.job.state==='failed'||state.job.state==='paused')};$('mcp-form').hidden=!state.libraries.length}
+async function act(fn){try{await fn()}catch(e){notice(e.message,true)}}
+$('configure-sources').onclick=()=>act(()=>window.pharosOnboarding.open({library:state.selected}));
+function defaultParent(){return state.local_library_parent||'Standard Pharos Libraries folder'}
+function updateLibraryProposal(){
+  wizard.name=$('name').value;wizard.parent=$('path').value;
+  const parent=wizard.parent.trim()||(wizard.storage==='mac'?defaultParent():'');
+  $('name-value').textContent=wizard.name.trim()||'Choose a name';
+  $('location-label').textContent=wizard.storage==='ssd'?'On your external SSD':wizard.parent.trim()?'Chosen folder':'On this Mac';
+  $('location-path').textContent=parent||'Choose a folder on the drive to continue.';
+  $('details-note').textContent=wizard.storage==='ssd'&&!parent?'Connect your SSD, then press Edit to choose its folder.':`Pharos will create a new “${wizard.name.trim()||'My Library'}” folder here. You’ll choose what to add next.`;
+}
+function editLibraryDetail(field,editing,focus=true){
+  $(field==='name'?'name':'path-editor').hidden=!editing;$(field==='name'?'name-value':'location-value').hidden=editing;
+  const button=$('edit-'+field),label=field==='name'?'name':'location';
+  button.textContent=editing?'Done':'Edit';button.setAttribute('aria-expanded',String(editing));button.setAttribute('aria-label',(editing?'Done editing':'Edit')+' library '+label);
+  if(editing&&field==='path'&&!$('path').value&&wizard.storage==='mac'&&state.local_library_parent)$('path').value=state.local_library_parent;
+  if(focus){if(editing){$(field).focus();$(field).select()}else button.focus()}
+  updateLibraryProposal();
+}
+for(const field of ['name','path'])$('edit-'+field).onclick=()=>editLibraryDetail(field,$('edit-'+field).getAttribute('aria-expanded')!=='true');
+function updateWizardChoices(){
+  for(const radio of document.querySelectorAll('input[name=machines]'))radio.checked=radio.value===wizard.machines;
+  for(const radio of document.querySelectorAll('input[name=storage]'))radio.checked=radio.value===wizard.storage;
+  $('recommend-mac').hidden=wizard.machines!=='one';$('recommend-ssd').hidden=wizard.machines!=='many';
+  $('storage-note').textContent=wizard.storage==='ssd'?'The drive must be plugged in to browse your history. Close or release the library before unplugging. Each Mac approves its own sources.':wizard.machines==='many'?'This history will live on this Mac. Other Macs will have their own history; you can transfer it between libraries later.':'Your library stays available on this Mac. You can move it to another drive later.';
+  $('details-explanation').textContent='Your conversations, bookmarks and saved views will live together in one folder. Here’s a starting point; you can change either detail.';
+  $('details-art').querySelector('use').setAttribute('href',wizard.storage==='ssd'?'#setup-storage-ssd':'#setup-storage-mac');
+  $('details-art').setAttribute('aria-label',wizard.storage==='ssd'?'Your library folder on an SSD connected to your Mac':'Your library folder on this Mac');
+  $('details-art-caption').textContent=wizard.storage==='ssd'?'Your history, ready to take with you.':'Your history, at home on this Mac.';
+  $('path').placeholder=wizard.storage==='ssd'?'/Volumes/My SSD':(state.local_library_parent||'Standard Pharos Libraries folder');
+  $('path-note').textContent='Choose the folder that will hold your new library.';
+  $('review-machines').textContent=wizard.machines==='many'?'Several Macs':'Just this Mac';$('review-storage').textContent=wizard.storage==='ssd'?'External SSD':'On this Mac';$('review-name').textContent=wizard.name.trim();$('review-folder').textContent=wizard.folder(defaultParent());
+  $('review-note').textContent=wizard.storage==='ssd'?'Keep the SSD connected while Pharos creates the library. You’ll choose source access next.':'You’ll choose source access next. No conversations are captured until you approve them.';
+  if(wizard.step==='details')updateLibraryProposal();
+}
+function renderWizard(focus=true){
+  const titles={machines:'Where do you work with AI?',storage:'Where should your history live?',details:'Your library.',review:'Review your setup.'};
+  const stages=['machines','storage','details','review'];const stage=flow==='create'?wizard.step:flow==='open'?'open':['backup','recover-target','recover-review'][recoverStep];
+  for(const panel of document.querySelectorAll('#library-form > .wizard-panel')){panel.hidden=panel.id!=='wizard-'+stage;if(!panel.hidden)panel.scrollTop=0}
+  $('flow-title').textContent=flow==='create'?titles[stage]:flow==='open'?'Open your library.':['Choose your backup.','Choose where to restore.','Review your restoration.'][recoverStep];
+  $('steps').textContent=flow==='create'?`Step ${stages.indexOf(stage)+1} of 4`:flow==='open'?'Step 1 of 1':`Step ${recoverStep+1} of 3`;
+  $('submit').textContent=flow==='create'?(stage==='review'?'Create library':'Continue'):flow==='open'?'Open library':recoverStep===2?'Restore and verify':'Continue';
+  if(flow==='create'){$('name').value=wizard.name;$('path').value=wizard.parent;updateWizardChoices();editLibraryDetail('name',false,false);editLibraryDetail('path',false,false)}
+  $('review-backup').textContent=$('backup').value.trim();$('review-recover-path').textContent=$('recover-path').value.trim();
+  dialog.setAttribute('aria-labelledby','flow-title');document.querySelector('.application-body').scrollTop=0;if(focus)$('flow-title').focus();
+}
+function startFlow(nextFlow,trigger){
+  flowOrigin=trigger?.closest('#setup')?'machines':state.libraries?.length?'chooser':'about';
+  flow=nextFlow;recoverStep=0;if(flow==='create'){if(trigger?.closest('#library-actions'))wizard=createPharosSetupWizard();else wizard.step='machines'}
+  showIntroduction('setup',false);setFlowOpen(true);$('next').hidden=true;$('setup').hidden=false;notice('');renderWizard();
+}
+for(const b of document.querySelectorAll('[data-flow]'))b.onclick=()=>startFlow(b.dataset.flow,b);
+for(const radio of document.querySelectorAll('input[name=machines]'))radio.onchange=()=>{wizard.setMachines(radio.value);updateWizardChoices()};
+for(const radio of document.querySelectorAll('input[name=storage]'))radio.onchange=()=>{wizard.setStorage(radio.value);updateWizardChoices()};
+$('name').oninput=$('path').oninput=()=>{updateLibraryProposal();notice('')};
+$('cancel').onclick=()=>{
+  notice('');if(flow==='create'){if(wizard.step==='details')updateLibraryProposal();if(wizard.back()){renderWizard();return}}else if(flow==='recover'&&recoverStep>0){recoverStep--;renderWizard();return}
+  if(flowOrigin==='machines'){flow='create';flowOrigin='about';wizard.step='machines';renderWizard();return}
+  $('setup').hidden=true;setFlowOpen(false);if(flowOrigin==='chooser'){showIntroduction('setup');document.querySelector(`[data-flow="${flow}"]`).focus()}else showIntroduction('about');
+};
+async function pickFolder(id,button){
+  const controls=[...$('library-form').querySelectorAll('button')].map(el=>[el,el.disabled]);
+  for(const [el]of controls)el.disabled=true;
+  notice('');
+  try{
+    const native=window.webkit?.messageHandlers?.pharosLibrary;
+    const path=native?await native.postMessage({action:'chooseFolder'}):(await call('choose-folder',{})).path;
+    if(path){$(id).value=path+(id==='recover-path'?'/Recovered Library':'');if(id==='path')updateLibraryProposal()}
+  }finally{for(const [el,disabled]of controls)el.disabled=disabled;button.focus()}
+}
+$('choose-folder').onclick=()=>act(()=>pickFolder('path',$('choose-folder')));for(const b of document.querySelectorAll('[data-pick]'))b.onclick=()=>act(()=>pickFolder(b.dataset.pick,b));
+function invalid(field,message){notice(message,true);if(flow==='create'&&wizard.step==='details'&&['name','path'].includes(field))editLibraryDetail(field,true);$(field).focus()}
+$('library-form').onsubmit=e=>{e.preventDefault();notice('');
+  if(flow==='create'){
+    if(wizard.step==='details')updateLibraryProposal();
+    if(wizard.step!=='review'){const error=wizard.next();if(error)invalid(error.field,error.message);else renderWizard();return}
+  }else if(flow==='open'){
+    if(!$('existing-path').value.trim()){invalid('existing-path','Choose an existing library folder.');return}
+  }else{
+    if(recoverStep===0){if(!$('backup').value.trim()){invalid('backup','Choose a completed backup folder.');return}recoverStep=1;renderWizard();return}
+    if(recoverStep===1){if(!$('recover-path').value.trim()){invalid('recover-path','Choose a new folder for the restored library.');return}recoverStep=2;renderWizard();return}
+  }
+  act(async()=>{$('submit').disabled=true;$('cancel').disabled=true;try{
+    const body=flow==='create'?wizard.payload():flow==='open'?{path:$('existing-path').value.trim()}:{path:$('recover-path').value.trim(),backup:$('backup').value.trim()};
+    await call(flow,body);$('setup').hidden=true;setFlowOpen(false);$('next').hidden=flow==='recover';dialog.classList.toggle('library-ready',flow!=='recover');
+    if(flow!=='recover'){dialog.setAttribute('aria-labelledby','ready-title');$('next').focus()}
+    notice(flow==='recover'?'Restoration is running. Your restored library will appear after verification.':'');await refresh();
+  }finally{$('submit').disabled=false;$('cancel').disabled=false}});
+};
+$('mcp-form').onsubmit=e=>{e.preventDefault();act(async()=>{await call('mcp-library',{id:$('mcp-library').value});notice('MCP assignment saved for this application on this Mac.');await refresh()})};$('transfer-form').onsubmit=e=>{e.preventDefault();act(async()=>{await call('transfer',{source:$('from').value,target:$('to').value,move:$('mode').value==='move'});notice('Transfer started. Source cleanup follows destination verification.');await refresh()})};$('delivery-form').onsubmit=e=>{e.preventDefault();act(async()=>{await call('delivery',{source:$('pending').value,target:$('archive').value});notice('Automatic delivery enabled while this application is open.');await refresh()})};$('disable-delivery').onclick=()=>act(async()=>{await call('delivery',{source:'',target:''});notice('Automatic delivery paused.');await refresh()});
+act(refresh);setInterval(()=>{if(!document.hidden)act(refresh)},5000);
+})();
+
+</script>

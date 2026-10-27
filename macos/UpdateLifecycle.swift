@@ -145,6 +145,7 @@ enum UpdateProcesses {
     static func prepare(app: URL, servicePID: Int32?, stopService: () throws -> Void,
                         processes: @escaping () -> [(pid: pid_t, path: String)] = runningExecutables,
                         arguments: (pid_t) -> [String]? = processArguments,
+                        parentPID: (pid_t) -> pid_t? = processParentPID,
                         signal: (pid_t) -> Void = { _ = kill($0, SIGTERM) },
                         wait: (@escaping () -> Bool) -> Bool = { condition in
                             let deadline = Date().addingTimeInterval(10)
@@ -160,7 +161,11 @@ enum UpdateProcesses {
         var mcp: [pid_t] = []
         for process in candidates {
             if process.pid == servicePID { continue }
-            guard process.path == cli, let argv = arguments(process.pid), DriveProcesses.command(in: argv) == "mcp" else {
+            if process.path == cli, let argv = arguments(process.pid), DriveProcesses.command(in: argv) == "serve",
+               let servicePID, parentPID(process.pid) == servicePID,
+               let flag = argv.firstIndex(of: "--application"), flag + 1 < argv.count,
+               canonicalPath(URL(fileURLWithPath: argv[flag + 1])) == canonicalPath(app) { continue }
+            guard process.path == cli, let argv = arguments(process.pid), ["mcp", "mcp-app"].contains(DriveProcesses.command(in: argv) ?? "") else {
                 throw UpdateFailure(message: "Another Pharos command or app is running from this copy (PID \(process.pid)). Let it finish before installing the update.")
             }
             mcp.append(process.pid)

@@ -107,9 +107,31 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 		calls[index].RepoPath, repo, calls[index].PathScope = resolveRepoPath(calls[index].FilePath, cwd, roots)
 		calls[index].PathRepository, calls[index].PathRepositoryID = repo.Repository, repo.ID
 	}
+	// Stored identities may predate the current stable-ID scheme or have been
+	// mapped while importing another library. Derived references must use those
+	// identities rather than inventing a second set of sessions/messages.
+	sessions, err := queryMaps(tx, "SELECT id,native_id FROM agent_sessions WHERE conversation_id=?", conversationID)
+	if err != nil {
+		return err
+	}
+	sessionIDs := map[string]string{}
+	for _, row := range sessions {
+		sessionIDs[firstString(row["native_id"])] = firstString(row["id"])
+	}
+	messages, err := queryMaps(tx, "SELECT id,native_id FROM messages WHERE conversation_id=?", conversationID)
+	if err != nil {
+		return err
+	}
+	messageIDs := map[string]string{}
+	for _, row := range messages {
+		messageIDs[firstString(row["native_id"])] = firstString(row["id"])
+	}
 	sessionID := func(stream string) any {
 		if stream == "" {
 			stream = "main"
+		}
+		if id := sessionIDs[stream]; id != "" {
+			return id
 		}
 		return stableID("agent-session", conversationID, stream)
 	}
@@ -122,6 +144,9 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 	messageID := func(nativeID string) any {
 		if nativeID == "" {
 			return nil
+		}
+		if id := messageIDs[nativeID]; id != "" {
+			return id
 		}
 		return stableID("message", conversationID, nativeID)
 	}

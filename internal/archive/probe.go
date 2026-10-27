@@ -160,6 +160,84 @@ type probeRun struct {
 // probeShellEnv reads variables from the login shell; tests replace it.
 var probeShellEnv = cachedLoginShellEnv
 
+var probeApplicationDirs = func(home string) []string {
+	return []string{"/Applications", filepath.Join(home, "Applications")}
+}
+
+type ProbeTool struct {
+	Kind    string `json:"kind"`
+	Path    string `json:"path"`
+	FoundBy string `json:"found_by"`
+}
+
+// Presence detection only checks directory/file metadata at known locations.
+// It does not walk transcripts, open databases, run tools, or start a shell.
+func probeTools(home string, config Config) []ProbeTool {
+	found := map[string]ProbeTool{}
+	check := func(kind, path, reason string) {
+		if _, exists := found[kind]; exists {
+			return
+		}
+		resolved, err := resolveUnprotected(home, path)
+		if err != nil {
+			return
+		}
+		if info, err := os.Stat(resolved); err == nil && (info.IsDir() || reason == "configured source" && info.Mode().IsRegular()) {
+			found[kind] = ProbeTool{kind, tildeWithin(home, path), reason}
+		}
+	}
+	for kind, paths := range map[string][]string{
+		"claude": {".claude", ".config/claude"}, "codex": {".codex"},
+		"conductor": {"Library/Application Support/com.conductor.app"}, "tl1": {".tl1"},
+		"antigravity": {".gemini/antigravity", ".gemini/antigravity-cli", ".gemini/antigravity-ide"},
+	} {
+		for _, path := range paths {
+			check(kind, filepath.Join(home, filepath.FromSlash(path)), "data folder")
+		}
+	}
+	// Alternate profiles need only a bounded listing of names, never a walk.
+	for _, root := range []struct{ dir, prefix, kind string }{{home, ".claude", "claude"}, {filepath.Join(home, ".gemini"), "antigravity", "antigravity"}} {
+		if _, exists := found[root.kind]; exists {
+			continue
+		}
+		resolved, err := resolveUnprotected(home, root.dir)
+		if err != nil {
+			continue
+		}
+		dir, err := os.Open(resolved)
+		if err != nil {
+			continue
+		}
+		entries, _ := dir.ReadDir(512)
+		dir.Close()
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), root.prefix) && (entry.IsDir() || entry.Type()&fs.ModeSymlink != 0) {
+				check(root.kind, filepath.Join(root.dir, entry.Name()), "profile folder")
+			}
+		}
+	}
+	for _, root := range probeApplicationDirs(home) {
+		for kind, bundle := range map[string]string{"claude": "Claude Code.app", "codex": "Codex.app", "conductor": "Conductor.app", "tl1": "TL1.app", "antigravity": "Antigravity.app"} {
+			check(kind, filepath.Join(root, bundle), "application")
+		}
+	}
+	for name, kind := range map[string]string{"CLAUDE_CONFIG_DIR": "claude", "CODEX_HOME": "codex"} {
+		if path := os.Getenv(name); path != "" {
+			check(kind, resolvePath(home, path), name)
+		}
+	}
+	for _, source := range config.Sources {
+		check(source.Kind, source.Path, "configured source")
+	}
+	tools := []ProbeTool{}
+	for _, kind := range []string{"claude", "codex", "conductor", "tl1", "antigravity"} {
+		if tool, exists := found[kind]; exists {
+			tools = append(tools, tool)
+		}
+	}
+	return tools
+}
+
 // probeTempDirs are where ephemeral TL1 installations live; tests replace it.
 var probeTempDirs = func() []string {
 	temporary := filepath.Clean(os.TempDir())
@@ -171,6 +249,10 @@ var probeTempDirs = func() []string {
 }
 
 func probeStatus(home string, config Config, catalog *Catalog) ProbeStatus {
+	return probeStatusForKinds(home, config, catalog, nil)
+}
+
+func probeStatusForKinds(home string, config Config, catalog *Catalog, kinds map[string]bool) ProbeStatus {
 	host := currentHost()
 	status := ProbeStatus{Library: config.Library, Host: host, HostFile: hostConfigPath(config)}
 	if status.HostFile != "" {
@@ -186,7 +268,7 @@ func probeStatus(home string, config Config, catalog *Catalog) ProbeStatus {
 			status.SharedSources++
 		}
 	}
-	if status.HostFileExists {
+	if status.HostFileExists && (kinds == nil || kinds["antigravity"]) {
 		for _, dir := range antigravityDirs(home) {
 			resolved, err := resolveUnprotected(home, dir)
 			if err == nil && configuredSource(config, home, "antigravity", resolved) == nil {
@@ -208,8 +290,14 @@ func ProbeSources(config Config, catalog *Catalog) ProbeReport {
 }
 
 func probeSources(home string, config Config, catalog *Catalog) ProbeReport {
+	return probeSelectedSources(home, config, catalog, nil, nil)
+}
+
+// A nil kinds map preserves the CLI's full probe. A non-nil map, including an
+// empty one, limits all discovery and environment reads to explicit choices.
+func probeSelectedSources(home string, config Config, catalog *Catalog, kinds map[string]bool, locations []ProbeLocation) ProbeReport {
 	started := time.Now()
-	report := ProbeReport{ProbeStatus: probeStatus(home, config, catalog), Home: home, Environment: []ProbeVariable{},
+	report := ProbeReport{ProbeStatus: probeStatusForKinds(home, config, catalog, kinds), Home: home, Environment: []ProbeVariable{},
 		Candidates: []ProbeCandidate{}, Checked: []ProbeLocation{}, TimingsMS: map[string]int64{}}
 	run := &probeRun{home: home, config: config, report: &report, seen: map[string]*ProbeCandidate{}, deadline: started.Add(probeWalkBudget)}
 	type shellResult struct {
@@ -219,11 +307,24 @@ func probeSources(home string, config Config, catalog *Catalog) ProbeReport {
 	// The login shell takes about half a second to start; read it while the
 	// default locations are walked.
 	shell := make(chan shellResult, 1)
+	envNames := []string{}
+	for _, name := range probeEnvNames {
+		if kinds == nil || (name == "CLAUDE_CONFIG_DIR" && kinds["claude"]) || (name == "CODEX_HOME" && kinds["codex"]) {
+			envNames = append(envNames, name)
+		}
+	}
 	go func() {
-		values, err := probeShellEnv(probeEnvNames)
+		if len(envNames) == 0 {
+			shell <- shellResult{}
+			return
+		}
+		values, err := probeShellEnv(envNames)
 		shell <- shellResult{values, err}
 	}()
 	timed := func(name string, probe func()) {
+		if kinds != nil && name != "overlap" && !kinds[name] {
+			return
+		}
 		begin := time.Now()
 		probe()
 		report.TimingsMS[name] += time.Since(begin).Milliseconds()
@@ -260,7 +361,7 @@ func probeSources(home string, config Config, catalog *Catalog) ProbeReport {
 		}
 	})
 	environment := func(values map[string]string, from string) {
-		for _, name := range probeEnvNames {
+		for _, name := range envNames {
 			value := values[name]
 			if value == "" {
 				continue
@@ -276,7 +377,7 @@ func probeSources(home string, config Config, catalog *Catalog) ProbeReport {
 		}
 	}
 	process := map[string]string{}
-	for _, name := range probeEnvNames {
+	for _, name := range envNames {
 		process[name] = os.Getenv(name)
 	}
 	environment(process, "service environment")
@@ -292,6 +393,27 @@ func probeSources(home string, config Config, catalog *Catalog) ProbeReport {
 		report.ShellEnv = "read"
 		environment(result.values, "login shell")
 	}
+	for _, location := range locations {
+		path := resolvePath(home, location.Path)
+		const foundBy = "chosen folder"
+		switch location.Kind {
+		case "claude":
+			if filepath.Base(path) == "projects" {
+				path = filepath.Dir(path)
+			}
+			run.claude(path, foundBy, false)
+		case "codex":
+			run.codex(path, foundBy)
+		case "antigravity":
+			run.antigravity(path, foundBy)
+		case "conductor":
+			run.conductor(path, foundBy)
+		case "tl1":
+			if !run.tl1(filepath.Join(path, tl1RegistryFile), foundBy) {
+				run.tl1(filepath.Join(path, tl1LegacyRegistryFile), foundBy)
+			}
+		}
+	}
 	run.name()
 	timed("overlap", func() { run.overlap(catalog) })
 	for _, candidate := range run.candidates {
@@ -299,8 +421,10 @@ func probeSources(home string, config Config, catalog *Catalog) ProbeReport {
 		candidate.Recommended = candidate.Acceptable && candidate.Status == "found" && candidate.Configured == nil
 		report.Candidates = append(report.Candidates, *candidate)
 	}
-	report.Candidates = append(report.Candidates, ProbeCandidate{Name: "chatgpt", Kind: "chatgpt", Status: "manual",
-		Detail: "ChatGPT keeps conversations in the cloud, so there is nothing to find on this Mac. Export them (ChatGPT → Settings → Data controls → Export data), unzip the archive, and add a [[sources]] block with kind = \"chatgpt\" whose path is the folder holding conversations.json. Inside the library a relative path works on every Mac."})
+	if kinds == nil {
+		report.Candidates = append(report.Candidates, ProbeCandidate{Name: "chatgpt", Kind: "chatgpt", Status: "manual",
+			Detail: "ChatGPT keeps conversations in the cloud, so there is nothing to find on this Mac. Export them (ChatGPT → Settings → Data controls → Export data), unzip the archive, and add a [[sources]] block with kind = \"chatgpt\" whose path is the folder holding conversations.json. Inside the library a relative path works on every Mac."})
+	}
 	report.ElapsedMS = time.Since(started).Milliseconds()
 	return report
 }

@@ -35,6 +35,12 @@ func (c *Catalog) acceptUnchangedEvidence(ctx context.Context, adapter Adapter, 
 	if err != nil {
 		return false, err
 	}
+	// A verified move keeps parser checkpoints while removing the workspace.
+	// The ordinary writer must reapply delivery suppression before associating
+	// new evidence; there is no workspace here for copy_evidence to reference.
+	if workspace == "" {
+		return false, nil
+	}
 	authority, err := resolveAuthority(tx, record, workspace, host)
 	if err != nil {
 		return false, err

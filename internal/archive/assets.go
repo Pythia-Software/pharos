@@ -3,6 +3,7 @@ package archive
 import (
 	"embed"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/gbdubs/pharos/schemas"
@@ -24,6 +25,20 @@ func schemaSQL() string {
 func appHTML() string {
 	value, _ := assets.ReadFile("assets/ui.py")
 	return uiHTML(value)
+}
+
+var shellScripts = regexp.MustCompile(`(?s)<script\b[^>]*>.*?</script>`)
+
+// Library setup uses the app's real chrome and styles before a library exists.
+// Its background is intentionally idle: none of the library scripts may query
+// a catalog, start source discovery or load another library's preferences.
+func applicationHTML() string {
+	shell := shellScripts.ReplaceAllString(appHTML(), "")
+	shell = strings.Replace(shell, "<body>", `<body data-application-setup>`, 1)
+	backdrop, _ := assets.ReadFile("assets/application-home.html")
+	shell = strings.Replace(shell, `<div id="homePage"></div>`, `<div id="homePage">`+string(backdrop)+`</div>`, 1)
+	setup, _ := assets.ReadFile("assets/application.html")
+	return strings.Replace(shell, "</body>", string(setup)+"</body>", 1)
 }
 
 // uiHTML extracts the page from ui.py, which wraps it in a Python string.

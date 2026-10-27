@@ -288,7 +288,7 @@ func runSQLiteRecordsCLI(config Config, args []string) error {
 		}
 		if version == nil {
 			for _, file := range c.files {
-				v := capturedVersion{Captured: file.Captured, Size: file.Size, CapturedAt: file.CapturedAt, MTimeNS: file.MTimeNS, SHA256: file.SHA256}
+				v := capturedVersion{Captured: file.Captured, Size: file.Size, CapturedAt: file.CapturedAt, MTimeNS: file.MTimeNS, ObservedNS: file.ObservedNS, SHA256: file.SHA256}
 				if v.Captured == args[4] {
 					version = &v
 				}

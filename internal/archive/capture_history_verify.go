@@ -215,8 +215,8 @@ func (j *historyJob) replayNative(ctx context.Context, c *Catalog, receipts map[
 				return e
 			}
 			for _, f := range m.Files {
-				stamps[u.ID] = max(stamps[u.ID], f.MTimeNS)
-				key := fmt.Sprintf("%s:%d", f.Path, f.MTimeNS)
+				stamps[u.ID] = max(stamps[u.ID], f.MTimeNS, f.ObservedNS)
+				key := fmt.Sprintf("%s:%d", f.Path, max(f.MTimeNS, f.ObservedNS))
 				if previous, ok := seenFiles[key]; ok && previous != f.SHA256 {
 					conflicts[key] = true
 				}
@@ -252,7 +252,7 @@ func (j *historyJob) replayNative(ctx context.Context, c *Catalog, receipts map[
 				return e
 			}
 			for _, f := range m.Files {
-				if conflicts[fmt.Sprintf("%s:%d", f.Path, f.MTimeNS)] {
+				if conflicts[fmt.Sprintf("%s:%d", f.Path, max(f.MTimeNS, f.ObservedNS))] {
 					ambiguous = true
 				}
 				if f.Size > historyEntityBytes {

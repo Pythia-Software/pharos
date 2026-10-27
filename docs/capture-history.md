@@ -28,8 +28,9 @@ The two preservation products are deliberately separate:
 ## Operator workflow
 
 First stop older Pharos writers on every machine that can write this library.
-Capture manifests now use **version 4**; earlier manifests remain readable, but
-older writers must refuse version 4. Keep the library available at its checked
+Capture manifests now use **version 5**; earlier manifests remain readable, but
+older writers must refuse version 5. Version 4 introduced backfill protection;
+version 5 also protects pending-library retention and delivery checkpoints. Keep the library available at its checked
 volume. Quiesce catalog indexing while planning and taking the rollback backup:
 a changed catalog or changed selected bytes invalidates preparation. Native
 snapshot acquisition for selected sources is paused durably during the job.

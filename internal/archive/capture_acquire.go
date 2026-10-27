@@ -450,6 +450,9 @@ func retainedRecordIdentity(view *captureView, record *WorkspaceRecord, parts []
 	for _, f := range view.manifest.Files {
 		if selected[f.Path] {
 			values = append(values, f.Path, f.SHA256)
+			if f.ObservedNS > record.Observed {
+				observe(record, f.ObservedNS)
+			}
 		}
 	}
 	// For exports without per-part discovery the complete immutable inventory

@@ -23,6 +23,9 @@ func captureTestConfig(t *testing.T, sources ...SourceConfig) Config {
 	t.Helper()
 	root := t.TempDir()
 	config := defaultConfig(filepath.Join(root, "archive.toml"))
+	config.CatalogPath = filepath.Join(root, "catalog.sqlite3")
+	config.ArchiveRoot = filepath.Join(root, "preserved")
+	config.StagingRoot = filepath.Join(root, "staging")
 	config.CaptureRoot = filepath.Join(root, "captures")
 	config.Sources = sources
 	return config
@@ -156,6 +159,16 @@ func TestCaptureCopiesWhatAdaptersReadIncrementally(t *testing.T) {
 		t.Fatal("first capture did not record when data arrived")
 	}
 
+	// Ordinary incremental capture must remain a metadata-only operation for
+	// unchanged transcripts, while still retaining proof for a later manual move.
+	ordinaryReads := 0
+	override(t, &captureFault, func(stage, rel string) error {
+		if stage == "delivery-read" {
+			ordinaryReads++
+			return errors.New("ordinary capture attempted a delivery transcript read")
+		}
+		return nil
+	})
 	second := runCapture(t, config)
 	if codexResult := captureResult(t, second, "codex"); !second.OK || codexResult.FilesCopied != 0 || codexResult.FilesUnchanged != 3 || captureResult(t, second, "claude").FilesUnchanged != 2 {
 		t.Fatalf("no-op capture copied: %#v", second)
@@ -190,6 +203,49 @@ func TestCaptureCopiesWhatAdaptersReadIncrementally(t *testing.T) {
 		if manifest.Source.Path != moved || manifest.Source.Account != account || file.Path != filepath.Join(moved, "-proj", "s1.jsonl") {
 			t.Fatalf("capture retained stale source configuration: %+v %+v", manifest.Source, file)
 		}
+	}
+
+	if ordinaryReads != 0 {
+		t.Fatal("ordinary incremental capture read transcript bytes for delivery proof", ordinaryReads)
+	}
+
+	// A source with delivered evidence must still read its current bytes before
+	// suppressing recapture, even when automatic delivery is no longer enabled.
+	manifest = readCaptureManifest(t, config, "claude")
+	if manifest.DeliveredFingerprint == "" {
+		t.Fatal("ordinary capture lost the proof needed by a future manual move")
+	}
+	if err := durableJSON(capturedPath(config, "claude", ".delivered.json"), map[string]string{"fingerprint": manifest.DeliveredFingerprint, "destination_instance": "archive"}); err != nil {
+		t.Fatal(err)
+	}
+	reads := 0
+	captureFault = func(stage, rel string) error {
+		if stage == "delivery-read" {
+			reads++
+		}
+		return nil
+	}
+	summary, err := Capture(context.Background(), config, config.Sources[:1], nil)
+	if err != nil || !summary.OK || reads == 0 || summary.Sources[0].FilesSeen != 0 {
+		t.Fatal("delivered source was not verified and suppressed", summary, reads, err)
+	}
+
+	// Cancel after hashing starts, before the rest of the source is read.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reads = 0
+	captureFault = func(stage, rel string) error {
+		if stage == "delivery-read" {
+			reads++
+			if reads == 2 {
+				cancel()
+			}
+		}
+		return nil
+	}
+	summary, err = Capture(ctx, config, config.Sources[:1], nil)
+	if err != nil || summary.OK || !strings.Contains(jsonText(summary), context.Canceled.Error()) {
+		t.Fatal("delivery hashing ignored cancellation", summary, err)
 	}
 }
 
@@ -542,6 +598,29 @@ func TestCaptureRetainsSnapshotGenerations(t *testing.T) {
 	if entries, err := os.ReadDir(capturedPath(config, "conductor", captureHistoryDir)); err == nil && len(entries) > 0 {
 		t.Fatalf("history kept %d entries with no generations configured", len(entries))
 	}
+	nativeConfig := config
+	// A pending library must keep every unindexed generation, even when its
+	// ordinary retention is zero and indexing has never completed once.
+	// Protection survives a fresh config load and ordinary capture, without
+	// relying on the application worker's runtime-only PendingCapture flag.
+	pending := testLibrary(t, filepath.Join(t.TempDir(), "pending"))
+	if err := protectPendingEvidence(pending); err != nil {
+		t.Fatal(err)
+	}
+	config = pending
+	config.Sources = []SourceConfig{{Name: "conductor", Kind: "conductor", Path: conductor, Enabled: true}}
+	config.CaptureGenerations = 0
+	runCapture(t, config)
+	for _, id := range []string{"pending-1", "pending-2", "pending-3"} {
+		execSQL(t, db, "DELETE FROM sessions", "INSERT INTO sessions VALUES('"+id+"')")
+		runCapture(t, config)
+	}
+	snapshot = readCaptureManifest(t, config, "conductor").Snapshots[0]
+	if len(snapshot.Generations) != 3 || sessionsIn(snapshot.Generations[2].Captured) != "generation-2,generation-3,generation-4" {
+		t.Fatal("pending retention lost history before its first index", snapshot)
+	}
+
+	config = nativeConfig
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -554,7 +633,7 @@ func TestCaptureRetainsSnapshotGenerations(t *testing.T) {
 		t.Fatalf("native capture after configuration edit: %+v", run)
 	}
 	manifest := readCaptureManifest(t, config, "conductor")
-	if manifest.Source.Account != "changed-account" || manifest.Snapshots[0].Path != filepath.Join(moved, "conductor.db") || sessionsIn(manifest.Snapshots[0].Captured) != "generation-2,generation-3,generation-4" {
+	if manifest.Source.Account != "changed-account" || manifest.Snapshots[0].Path != filepath.Join(moved, "conductor.db") || sessionsIn(manifest.Snapshots[0].Captured) != "pending-3" {
 		t.Fatalf("native snapshot kept stale configuration: %+v", manifest)
 	}
 }

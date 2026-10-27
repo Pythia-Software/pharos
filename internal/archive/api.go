@@ -93,12 +93,34 @@ func (s *Server) Config() Config { s.configMu.RLock(); defer s.configMu.RUnlock(
 
 func (s *Server) Serve() error {
 	config := s.Config()
+	use, err := fileLease(libraryUseLock(config), false)
+	if err != nil {
+		return err
+	}
+	defer use.Close()
+	owner, err := fileLease(filepath.Join(filepath.Dir(canonical(config.CatalogPath)), ".pharos-service.lock"), true)
+	if err != nil {
+		return err
+	}
+	defer owner.Close()
 	if config.Host != "127.0.0.1" && config.Host != "::1" && config.Host != "localhost" {
 		return fmt.Errorf("the archive API may bind only to a loopback address")
 	}
 	listener, err := net.Listen("tcp", net.JoinHostPort(config.Host, strconv.Itoa(config.Port)))
 	if err != nil {
 		return err
+	}
+	defer listener.Close()
+	config.Port = listener.Addr().(*net.TCPAddr).Port
+	s.configMu.Lock()
+	s.config.Port = config.Port
+	s.configMu.Unlock()
+	if config.RuntimeEndpoint != "" {
+		ep := applicationEndpoint{URL: "http://" + listener.Addr().String(), Token: config.APIToken, PID: os.Getpid(), Lifetime: randomToken(), Catalog: config.CatalogPath}
+		if err := durableJSON(config.RuntimeEndpoint, ep); err != nil {
+			return err
+		}
+		defer os.Remove(config.RuntimeEndpoint)
 	}
 	s.life.onListen()
 	display := config.Host
@@ -232,21 +254,22 @@ func isUIPage(path string) bool {
 
 // uiAssets maps each static asset URL the UI loads to its file under assets/.
 var uiAssets = map[string]struct{ name, contentType string }{
-	"/assets/query-tables.js":  {"query-tables.js", "text/javascript; charset=utf-8"},
-	"/assets/query-tables.css": {"query-tables.css", "text/css; charset=utf-8"},
-	"/assets/onboarding.js":    {"onboarding.js", "text/javascript; charset=utf-8"},
-	"/assets/upgrade.js":       {"upgrade.js", "text/javascript; charset=utf-8"},
-	"/assets/library.js":       {"library.js", "text/javascript; charset=utf-8"},
-	"/assets/cloud-backup.js":  {"cloud-backup.js", "text/javascript; charset=utf-8"},
-	"/assets/sync.js":          {"sync.js", "text/javascript; charset=utf-8"},
-	"/assets/carbon.js":        {"carbon.js", "text/javascript; charset=utf-8"},
-	"/assets/menu-bar.js":      {"menu-bar.js", "text/javascript; charset=utf-8"},
-	"/assets/header.js":        {"header.js", "text/javascript; charset=utf-8"},
-	"/assets/ask-pharos.html":  {"ask-pharos.html", "text/html; charset=utf-8"},
-	"/assets/ask-pharos.css":   {"ask-pharos.css", "text/css; charset=utf-8"},
-	"/assets/ask-model.js":     {"ask-model.js", "text/javascript; charset=utf-8"},
-	"/assets/ask-pharos.js":    {"ask-pharos.js", "text/javascript; charset=utf-8"},
-	"/assets/reader-model.js":  {"reader-model.js", "text/javascript; charset=utf-8"},
+	"/assets/query-tables.js":    {"query-tables.js", "text/javascript; charset=utf-8"},
+	"/assets/query-tables.css":   {"query-tables.css", "text/css; charset=utf-8"},
+	"/assets/onboarding.js":      {"onboarding.js", "text/javascript; charset=utf-8"},
+	"/assets/upgrade.js":         {"upgrade.js", "text/javascript; charset=utf-8"},
+	"/assets/library.js":         {"library.js", "text/javascript; charset=utf-8"},
+	"/assets/cloud-backup.js":    {"cloud-backup.js", "text/javascript; charset=utf-8"},
+	"/assets/sync.js":            {"sync.js", "text/javascript; charset=utf-8"},
+	"/assets/carbon.js":          {"carbon.js", "text/javascript; charset=utf-8"},
+	"/assets/menu-bar.js":        {"menu-bar.js", "text/javascript; charset=utf-8"},
+	"/assets/header.js":          {"header.js", "text/javascript; charset=utf-8"},
+	"/assets/ask-pharos.html":    {"ask-pharos.html", "text/html; charset=utf-8"},
+	"/assets/ask-pharos.css":     {"ask-pharos.css", "text/css; charset=utf-8"},
+	"/assets/ask-model.js":       {"ask-model.js", "text/javascript; charset=utf-8"},
+	"/assets/ask-pharos.js":      {"ask-pharos.js", "text/javascript; charset=utf-8"},
+	"/assets/reader-model.js":    {"reader-model.js", "text/javascript; charset=utf-8"},
+	"/assets/managed-storage.js": {"managed-storage.js", "text/javascript; charset=utf-8"},
 }
 
 func (s *Server) get(w http.ResponseWriter, r *http.Request) {
@@ -261,9 +284,16 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeEmbeddedAsset(w, asset.name, asset.contentType)
 	case path == "/api/probe":
 		writeJSON(w, ProbeSources(s.Config(), s.Catalog), http.StatusOK)
+	case path == "/api/probe/tools":
+		home, _ := os.UserHomeDir()
+		writeJSON(w, map[string]any{"tools": probeTools(home, s.Config())}, http.StatusOK)
 	case path == "/api/probe/status":
 		home, _ := os.UserHomeDir()
-		writeJSON(w, probeStatus(home, s.Config(), s.Catalog), http.StatusOK)
+		if r.URL.Query().Get("discovery") == "none" {
+			writeJSON(w, probeStatusForKinds(home, s.Config(), s.Catalog, map[string]bool{}), http.StatusOK)
+		} else {
+			writeJSON(w, probeStatus(home, s.Config(), s.Catalog), http.StatusOK)
+		}
 	case strings.HasPrefix(path, "/api/query/"):
 		dataset, operation, ok := queryTableRoute(path)
 		if !ok {
@@ -658,6 +688,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"enabled": enabled}, http.StatusOK)
 	case path == "/api/probe/accept":
 		s.acceptProbe(w, body)
+	case path == "/api/probe":
+		s.probeSelected(w, body)
 	case path == "/api/sources/sync":
 		config := s.Config()
 		sources := []SourceConfig{}

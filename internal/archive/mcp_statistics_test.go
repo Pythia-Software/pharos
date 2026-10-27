@@ -82,6 +82,15 @@ func TestStatisticsOwnAndWorkspaceScope(t *testing.T) {
 	if strings.Contains(jsonText(result), "STATS_PREVIEW_SENTINEL") {
 		t.Fatal("metadata hydrated previews")
 	}
+	execTx(t, c.DB, `PRAGMA defer_foreign_keys=ON`,
+		`UPDATE agent_session_usage SET agent_session_id='legacy-main' WHERE agent_session_id IN (SELECT id FROM agent_sessions WHERE conversation_id='c1' AND native_id='main')`,
+		`UPDATE agent_session_messages SET agent_session_id='legacy-main' WHERE agent_session_id IN (SELECT id FROM agent_sessions WHERE conversation_id='c1' AND native_id='main')`,
+		`UPDATE tool_calls SET agent_session_id='legacy-main' WHERE conversation_id='c1' AND agent_session_id IN (SELECT id FROM agent_sessions WHERE conversation_id='c1' AND native_id='main')`,
+		`UPDATE agent_sessions SET id='legacy-main' WHERE conversation_id='c1' AND native_id='main'`)
+	items = statisticsItems(statisticsCall(t, c, "query_statistics", args))
+	if items[0]["tool_call_count"] != float64(2) || items[0]["tool_error_count"] != float64(1) {
+		t.Fatal("stored main-session identity lost own tool counts", items)
+	}
 	args["metric_scope"] = "workspace"
 	result = statisticsCall(t, c, "query_statistics", args)
 	items = statisticsItems(result)

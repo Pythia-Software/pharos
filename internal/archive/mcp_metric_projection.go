@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const metricProjectionVersion = "metrics-v1"
+const metricProjectionVersion = "metrics-v2-stored-sessions"
 
 // Projections are invalidated by authoritative table writes, never by MCP audit
 // writes. Publication takes the writer lock before reading, so concurrent ingest
@@ -136,7 +136,6 @@ func (c *Catalog) projectWorkspaceMetrics(ctx context.Context, tx *sql.Tx, book 
 	for _, conv := range conversations {
 		cid := firstString(conv["id"])
 		own := absentMetrics("unavailable")
-		mainID := stableID("agent-session", cid, "main")
 		countRows, err := queryMapsContext(ctx, tx, `SELECT
 		COUNT(CASE WHEN m.role='user' AND m.kind='message' THEN 1 END) turns,
 		COUNT(CASE WHEN m.kind='metadata' AND (m.text LIKE '%"subtype":"compact_boundary"%' OR m.text LIKE '%"compaction_trigger":"%') THEN 1 END) compactions,
@@ -156,10 +155,11 @@ func (c *Catalog) projectWorkspaceMetrics(ctx context.Context, tx *sql.Tx, book 
 		} else {
 			workspace["compaction_count"] = statMetricValue{Value: workspace["compaction_count"].Value, Status: "partial"}
 		}
-		calls, err := queryMapsContext(ctx, tx, `SELECT COUNT(*) calls,COUNT(CASE WHEN status='error' THEN 1 END) errors,
-		COUNT(CASE WHEN agent_session_id=? OR agent_session_id IS NULL THEN 1 END) own_calls,
-		COUNT(CASE WHEN status='error' AND (agent_session_id=? OR agent_session_id IS NULL) THEN 1 END) own_errors
-		FROM tool_calls WHERE conversation_id=?`, mainID, mainID, cid)
+		calls, err := queryMapsContext(ctx, tx, `SELECT COUNT(*) calls,COUNT(CASE WHEN t.status='error' THEN 1 END) errors,
+		COUNT(CASE WHEN a.native_id='main' OR t.agent_session_id IS NULL THEN 1 END) own_calls,
+		COUNT(CASE WHEN t.status='error' AND (a.native_id='main' OR t.agent_session_id IS NULL) THEN 1 END) own_errors
+		FROM tool_calls t LEFT JOIN agent_sessions a ON a.id=t.agent_session_id AND a.conversation_id=t.conversation_id
+		WHERE t.conversation_id=?`, cid)
 		if err != nil {
 			return err
 		}
@@ -382,12 +382,15 @@ func metricFallback(ctx context.Context, tx *sql.Tx, workspace, cid string, valu
 	return nil
 }
 
+// A conversation can move between workspaces. Its new workspace may publish
+// before the old workspace clears its projection, so replace that same entity.
 func storeMetricProjection(ctx context.Context, tx *sql.Tx, entity, id, workspace string, values map[string]statMetricValue) error {
 	data, err := json.Marshal(values)
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO mcp_metric_projection(entity,entity_id,workspace_id,metrics_json,total_tokens,cost_usd,tool_error_count) VALUES(?,?,?,?,?,?,?)`, entity, id, workspace, string(data), values["total_tokens"].effective("complete"), values["cost_usd"].effective("complete"), values["tool_error_count"].effective("complete"))
+	_, err = tx.ExecContext(ctx, `INSERT INTO mcp_metric_projection(entity,entity_id,workspace_id,metrics_json,total_tokens,cost_usd,tool_error_count) VALUES(?,?,?,?,?,?,?)
+ ON CONFLICT(entity,entity_id) DO UPDATE SET workspace_id=excluded.workspace_id,metrics_json=excluded.metrics_json,total_tokens=excluded.total_tokens,cost_usd=excluded.cost_usd,tool_error_count=excluded.tool_error_count`, entity, id, workspace, string(data), values["total_tokens"].effective("complete"), values["cost_usd"].effective("complete"), values["tool_error_count"].effective("complete"))
 	return err
 }
 
