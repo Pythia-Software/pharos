@@ -244,7 +244,8 @@ func (s *Server) libraryActivities() []libraryActivity { return s.libraryActivit
 
 // libraryActivitiesProbing is libraryActivities; without probeLocks it skips
 // the capture lock probe (captureActive), so a shadow read never takes a lock
-// a capture might be about to take.
+// a capture might be about to take: it reuses the last probe's result if one
+// is under captureProbeReuse old, and otherwise leaves it out.
 func (s *Server) libraryActivitiesProbing(probeLocks bool) []libraryActivity {
 	activities := []libraryActivity{}
 	s.runsMu.RLock()
@@ -337,7 +338,7 @@ func (s *Server) libraryActivitiesProbing(probeLocks bool) []libraryActivity {
 			Work: work, StartedAt: run.StartedAt, Writes: true,
 			OnEject: "Stops between files; the next capture resumes it, and what was captured stays valid."})
 	}
-	if !serviceCapture && probeLocks && s.captureActive() {
+	if !serviceCapture && s.otherCaptureActive(probeLocks) {
 		activities = append(activities, libraryActivity{Kind: "capture-other", Label: "Capture by another process",
 			Detail: "Another process on this Mac, such as pharos capture, is capturing into the library.", Writes: true,
 			OnEject: "Pharos cannot stop it: wait for it to finish, or stop it, before ejecting; until then it keeps the drive busy."})
@@ -480,4 +481,32 @@ func (s *Server) libraryStatus() map[string]any {
 		"unplug":          unplugAdvice(drive, activities),
 		"library_refresh": refresh,
 	}
+}
+
+// captureProbeReuse is how long a polled read may reuse the last probe of
+// this Mac's capture lock.
+var captureProbeReuse = 5 * time.Second
+
+// captureProbe is the last result of captureActive's lock probe, taken on
+// the status path.
+type captureProbe struct {
+	mu   sync.Mutex
+	at   time.Time
+	held bool
+}
+
+// otherCaptureActive reports a capture by another process holding this
+// Mac's capture lock: probed now (captureActive) when probe, else the last
+// probe's result if it is recent, else false.
+func (s *Server) otherCaptureActive(probe bool) bool {
+	if probe {
+		held := s.captureActive()
+		s.captureProbe.mu.Lock()
+		s.captureProbe.at, s.captureProbe.held = time.Now(), held
+		s.captureProbe.mu.Unlock()
+		return held
+	}
+	s.captureProbe.mu.Lock()
+	defer s.captureProbe.mu.Unlock()
+	return s.captureProbe.held && time.Since(s.captureProbe.at) < captureProbeReuse
 }

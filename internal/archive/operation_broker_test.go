@@ -20,8 +20,10 @@ func TestBrokerOperationsPersistAndEndAfterARestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "operations.json")
 	broker := newBrokerOperations(path)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	broker.start(ctx)
+	stopped := broker.start(ctx)
+	// The loop writes its last state when it stops; wait for it before the
+	// test's directory is removed.
+	defer func() { cancel(); <-stopped }()
 	transfer := broker.begin(OperationSpec{Kind: "library.transfer", Variant: "move"}, "lib-a", "lib-b")
 	transfer.Step("Copying conversations", "", -1)
 	read := func() []brokerOperationRecord {

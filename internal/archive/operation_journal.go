@@ -90,6 +90,9 @@ type journalWriter struct {
 	holdsMu    sync.Mutex
 	holds      []time.Duration // the gate's hold time per round, the last 1000
 	loggedAt   time.Time
+	// onTick runs on each tick of the writer's loop (a Terminal command
+	// flushes its lease's released locks).
+	onTick func()
 	// beforeRow runs before each row is written; tests use it to start a
 	// competing writer mid-round.
 	beforeRow func()
@@ -283,25 +286,14 @@ func (j *journalWriter) round(ctx context.Context, wait time.Duration) error {
 		j.roundMu.Lock()
 	}
 	defer j.roundMu.Unlock()
-	// After journalStarveRounds skipped rounds in a row (a writer keeps the
-	// gate saturated), a round queues for the gate in its normal FIFO order
-	// and writes only starts and ends.
-	priority := wait == 0 && j.starved.Load() >= int64(journalStarveRounds)
-	// A round has a deadline, which bounds how long it can hold the gate
-	// (a priority round may first queue for it).
+	// A round has a deadline, which bounds how long it can hold the gate.
 	if wait == 0 {
-		deadline := journalRoundDeadline
-		if priority {
-			deadline += journalPriorityWait
-		}
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, deadline)
+		ctx, cancel = context.WithTimeout(ctx, journalRoundDeadline)
 		defer cancel()
 	}
-	images := j.reg.pendingImages()
-	if priority {
-		images = slices.DeleteFunc(images, func(image journalImage) bool { return !image.first && !opTerminal(image.state) })
-	}
+	all := j.reg.pendingImages()
+	images := all
 	if len(images) > journalRoundRows {
 		images = images[:journalRoundRows]
 	}
@@ -310,9 +302,32 @@ func (j *journalWriter) round(ctx context.Context, wait time.Duration) error {
 		reconciles = reconciles[:journalRoundRows]
 	}
 	if len(images) == 0 && len(reconciles) == 0 && !prune {
+		j.starved.Store(0) // nothing waits, so nothing is starved
 		return nil
 	}
-	err := j.write(ctx, wait, priority, images, reconciles, prune)
+	err := j.write(ctx, wait, false, images, reconciles, prune)
+	// After journalStarveRounds normal attempts in a row skipped (a writer
+	// keeps the gate saturated), the same round queues for the gate in its
+	// normal FIFO order and writes only starts and ends: no progress, no
+	// reconciles, never the prune.
+	if errors.Is(err, errJournalBusy) && wait == 0 && j.starved.Load()+1 >= int64(journalStarveRounds) {
+		starts := slices.DeleteFunc(slices.Clone(all), func(image journalImage) bool { return !image.first && !opTerminal(image.state) })
+		if len(starts) > journalRoundRows {
+			starts = starts[:journalRoundRows]
+		}
+		if len(starts) > 0 {
+			priorityCtx, cancel := context.WithTimeout(context.Background(), journalPriorityWait+journalRoundDeadline)
+			err = j.write(priorityCtx, 0, true, starts, nil, false)
+			cancel()
+			if err == nil {
+				// The rest still waits, so the count stays: the next round
+				// tries the normal way first, and queues again only if that
+				// skips.
+				j.reg.markWritten(starts)
+				return nil
+			}
+		}
+	}
 	switch {
 	case err == nil:
 		j.reg.markWritten(images)
@@ -484,6 +499,9 @@ func (j *journalWriter) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		}
+		if j.onTick != nil {
+			j.onTick()
 		}
 		_ = j.round(ctx, 0)
 	}

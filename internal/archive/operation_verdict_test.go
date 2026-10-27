@@ -431,3 +431,82 @@ func TestOperationsSnapshotAndStop(t *testing.T) {
 		t.Fatalf("stopping an unknown operation: %d", refused.Code)
 	}
 }
+
+// A polled snapshot takes no lock: it knows of another process's capture
+// only from a recent status-path probe, and only while that is recent.
+func TestPolledVerdictReusesOnlyARecentStatusProbe(t *testing.T) {
+	useHost(t, "host-a")
+	catalog, config := testCatalog(t)
+	server := testServer(t, config, catalog)
+	session, err := beginCapture(config) // another process's capture, no lease
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	polled := func() ejectVerdict {
+		var document struct {
+			Eject ejectVerdict `json:"eject"`
+		}
+		if err := json.Unmarshal(serveTest(server, http.MethodGet, "/api/operations").Body.Bytes(), &document); err != nil {
+			t.Fatal(err)
+		}
+		return document.Eject
+	}
+	if verdict := polled(); verdict.Verdict == verdictUnsafe || verdict.Checked != "polled" {
+		t.Fatalf("with no status probe yet, a polled verdict probed: %+v", verdict)
+	}
+	serveTest(server, http.MethodGet, "/api/library/status")
+	if verdict := polled(); verdict.Verdict != verdictUnsafe {
+		t.Fatalf("a recent status probe saw the capture, the polled verdict did not: %+v", verdict)
+	}
+	override(t, &captureProbeReuse, 0)
+	if verdict := polled(); verdict.Verdict == verdictUnsafe {
+		t.Fatalf("an old status probe was reused: %+v", verdict)
+	}
+	if verdict := server.ejectVerdictNow(context.Background(), true); verdict.Verdict != verdictUnsafe || verdict.Checked != "fresh" {
+		t.Fatalf("the fresh check: %+v", verdict)
+	}
+}
+
+// A Terminal command with a journal rewrites its lease at once when it takes
+// a lock, but coalesces releases onto the journal's tick, and skips a
+// rewrite that would not change the lease.
+func TestLeaseLockRewritesAreCoalesced(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	ops, err := beginCLIOperationsIn([]string{filepath.Join(t.TempDir(), leaseDirName)}, nil, nil, "index", "index.captures")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ops.journal = newJournalWriter(catalog, ops.reg) // attached, without its loop
+	ops.journal.onTick = ops.flushLeaseLocks
+	defer ops.close()
+	_, index := ops.begin(context.Background(), OperationSpec{Kind: "index.captures", Trigger: triggerCLI})
+	defer index.Finish(nil)
+	path := filepath.Join(t.TempDir(), "host-a", "claude", indexLockName)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	locks := func() []Hold { return probeLease(ops.leases[0].path).Info.Locks }
+	before := ops.leaseWrites.Load()
+	for range 5 {
+		file, err := os.Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		index.holdLock(file)
+		if got := locks(); len(got) != 1 {
+			t.Fatalf("while held: %+v", got)
+		}
+		releaseLockFile(file)
+	}
+	if writes := ops.leaseWrites.Load() - before; writes != 1 {
+		t.Fatalf("five short locks of the same file rewrote the lease %d times; once, when first taken", writes)
+	}
+	if got := locks(); len(got) != 1 {
+		t.Fatalf("a release was written before the tick: %+v", got)
+	}
+	ops.journal.onTick()
+	if got := locks(); len(got) != 0 {
+		t.Fatalf("after the tick: %+v", got)
+	}
+}

@@ -83,6 +83,9 @@ type Server struct {
 	ops     *opRegistry
 	journal *journalWriter
 	leases  leaseWatch
+	// captureProbe caches the status path's capture-lock probe for polled
+	// operation snapshots.
+	captureProbe captureProbe
 }
 
 func NewServer(config Config, catalog *Catalog) *Server {

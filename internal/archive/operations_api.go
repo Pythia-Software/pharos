@@ -247,16 +247,16 @@ func (s *Server) ejectInputs(ctx context.Context, fresh bool) (verdictInput, []o
 	// Every capture and index lock is probed only on the release and quit
 	// path, where stopping work is the intent: writers take them with
 	// LOCK_NB, so a probe from a polled read could make a capture or index
-	// fail. A polled verdict reuses only the probe of this Mac's capture
-	// lock that libraryActivities (and /api/library/status) runs anyway,
-	// captureActive: its "capture by another process" goes through the
-	// self-check below, unsafe unless a lease or operation took that lock.
+	// fail. A polled verdict probes nothing: it reuses the last result of
+	// the capture-lock probe /api/library/status runs anyway (captureActive),
+	// if it is under 5 s old; its "capture by another process" goes through
+	// the self-check below, unsafe unless a lease or operation took that lock.
 	in.fresh = fresh
 	if fresh {
 		held, failures := heldCaptureLocks(s.Config().CaptureRoot)
 		in.locks, in.scanErrors = unnamedLocks(held, own, leases), failures
 	}
-	in.unregistered = unregisteredActivities(s.libraryActivities(), own, leases)
+	in.unregistered = unregisteredActivities(s.libraryActivitiesProbing(fresh), own, leases)
 	// A lease listed through its journal rows is one holder, not two.
 	in.leases = slices.DeleteFunc(slices.Clone(leases), func(probe leaseProbe) bool {
 		return probe.Info != nil && slices.ContainsFunc(foreign, func(view opView) bool {

@@ -454,8 +454,12 @@ An operation gains a concrete `capture:<hostID>` or `index:<host>/<source>`
 write hold only once it has actually taken that lock file
 (`Op.holdLock`, at `beginCapture`'s callers, `lockCaptureTarget` and
 `IndexCapture`), and loses it when it releases the lock: every such lock is
-closed through `releaseLockFile`, which drops the hold, bumps the
-operation's version (journal and snapshot) and rewrites the lease. Concrete
+closed through `releaseLockFile`, which drops the hold and bumps the
+operation's version (journal and snapshot). A Terminal command rewrites its
+lease when it takes a lock, before writing under it; a release is written
+on the journal writer's next tick (at once for a command without a
+journal), and a rewrite that would not change the lease's locks is
+skipped. Concrete
 locks are kept apart from declared holds: an operation's view carries them
 as `Locks`, a lease as `locks`, and only they name a held lock. A lease's
 declared holds resolve `C(this)` to this Mac's host ID but never name a
@@ -493,10 +497,11 @@ or index fail. Every capture and index lock is therefore probed only by a
 true)`): the release and quit path, where stopping work is the intent. Any
 read error in that scan (the capture root, a host directory, a lock file)
 is an `unsafe` blocker; a missing root is empty. A **polled** verdict (the
-default snapshot, the broker's document) probes no index lock; it reuses
-only today's `captureActive` probe of this Mac's capture lock, which
-`libraryActivities` (and every `/api/library/status` read) already runs,
-through the self-check. The verdict carries `checked: "fresh" | "polled"`;
+default snapshot, the broker's document) takes no lock at all: it reuses
+the most recent result of today's `captureActive` probe of this Mac's
+capture lock, taken by the `/api/library/status` path, if that result is
+under 5 s old, through the self-check; with no recent result it does not
+know about such a capture. The verdict carries `checked: "fresh" | "polled"`;
 a polled verdict that would be `safe` says "Nothing Pharos can see is
 writing to the library. Pharos checks everything again when you eject."
 Phase 2's Eject button requests a fresh verdict before it acts. Lease files
@@ -693,10 +698,13 @@ lag by seconds.
   rows per round, 200 rounds): the gate is held p50 0.6 ms / p95 0.7 ms
   with the tests' durability, and p50 5.2 ms / p95 6.2 ms (max 9.2 ms) with
   the service's (`fullfsync`); an external drive's fsync will be slower.
-- **No starvation.** After 10 rounds in a row that skipped (a writer keeps
-  the gate saturated), a round queues for the gate in its normal FIFO order
-  (waiting at most 2 s), writes only starts and ends (rows never written,
-  and ended operations; at most 64), does not yield, and releases.
+- **No starvation.** Every round first tries the normal, non-blocking way.
+  Only when that skips, and the 9 rounds before it skipped too (a writer
+  keeps the gate saturated), does the same round queue for the gate in its
+  normal FIFO order (waiting at most 2 s) and write only starts and ends
+  (rows never written, and ended operations; at most 64): no progress, no
+  reconciles, never the prune; it does not yield, and releases. The count
+  resets on a normal round that writes, or when nothing is pending.
 - **Starts and ends can wait.** A start or end waits for the next round that
   gets the gate; under a long ingest that may be a few seconds, because
   ingest commits per workspace and frees the gate between commits. A row

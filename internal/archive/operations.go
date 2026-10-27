@@ -206,7 +206,7 @@ func (op *Op) holdLock(file *os.File) {
 	}
 	op.unlock(false)
 	if resource != "" && op.reg.holdsChanged != nil {
-		op.reg.holdsChanged()
+		op.reg.holdsChanged(true)
 	}
 }
 
@@ -227,7 +227,7 @@ func releaseLockFile(file *os.File) error {
 			op.locks = slices.DeleteFunc(op.locks, func(held fileHold) bool { return held.file == file })
 			op.unlock(false)
 			if op.reg.holdsChanged != nil {
-				op.reg.holdsChanged()
+				op.reg.holdsChanged(false)
 			}
 		}
 	}
@@ -310,9 +310,9 @@ type opRegistry struct {
 	loggedAt  time.Time
 	// keepEnded is how long an ended top-level operation stays listed.
 	keepEnded time.Duration
-	// holdsChanged runs after an operation takes a lock (a Terminal command
-	// rewrites its lease's holds).
-	holdsChanged func()
+	// holdsChanged runs after an operation takes (acquired) or releases a
+	// lock: a Terminal command rewrites its lease's locks.
+	holdsChanged func(acquired bool)
 	// journaled is true when a journal writer drains this registry; without
 	// one, ended operations need not wait to be written before they are
 	// forgotten.

@@ -304,9 +304,15 @@ func brokerLibraryVerdict(own *ejectVerdict, records []brokerOperationRecord, li
 	return merged
 }
 
-// start runs the persistence loop until ctx ends.
-func (b *brokerOperations) start(ctx context.Context) {
-	go b.run(ctx)
+// start runs the persistence loop until ctx ends; the channel closes once
+// it has written its last state.
+func (b *brokerOperations) start(ctx context.Context) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		b.run(ctx)
+	}()
+	return done
 }
 
 // fetchServiceOperations asks a library's service for its snapshot.

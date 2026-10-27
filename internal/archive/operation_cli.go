@@ -31,6 +31,13 @@ type cliOperations struct {
 	done    chan struct{}
 	// declared are the kinds' holds, with this Mac resolved.
 	declared []Hold
+	// leaseLocks are the locks the lease last listed; leaseStale is set by a
+	// release not yet written.
+	leaseMu    sync.Mutex
+	leaseLocks []Hold
+	leaseStale atomic.Bool
+	// leaseWrites counts lease rewrites, for tests.
+	leaseWrites atomic.Int64
 }
 
 // cliFinalBudget bounds the final journal round at exit.
@@ -72,7 +79,7 @@ func beginCLIOperationsIn(dirs, libraries []string, catalog *Catalog, command st
 	}
 	cliLeasesHeld.Add(1)
 	// The locks it takes are named in the lease as it takes them.
-	reg.holdsChanged = ops.refreshLeaseHolds
+	reg.holdsChanged = ops.locksChanged
 	if catalog != nil {
 		catalog.ops = reg
 		if ops.journal = newJournalWriter(catalog, reg); ops.journal != nil {
@@ -99,8 +106,29 @@ func resolveHolds(holds []Hold) []Hold {
 	return resolved
 }
 
+// locksChanged rewrites the lease at once when a lock is taken, so the
+// service sees it before the command writes under it. A release only marks
+// the lease stale: the journal's next tick (or the command's end) rewrites
+// it, so a loop of short locks costs one lease write per lock, not two. A
+// command without a journal rewrites at once either way.
+func (o *cliOperations) locksChanged(acquired bool) {
+	if acquired || o.journal == nil {
+		o.refreshLeaseHolds()
+		return
+	}
+	o.leaseStale.Store(true)
+}
+
+// flushLeaseLocks rewrites the lease if a release left it stale.
+func (o *cliOperations) flushLeaseLocks() {
+	if o.leaseStale.Swap(false) {
+		o.refreshLeaseHolds()
+	}
+}
+
 // refreshLeaseHolds writes the locks the command's running operations hold
-// now into its lease, apart from its declared holds.
+// now into its lease, apart from its declared holds, unless they are what
+// the lease already says.
 func (o *cliOperations) refreshLeaseHolds() {
 	locks := []Hold{}
 	for _, view := range o.reg.views() {
@@ -113,10 +141,17 @@ func (o *cliOperations) refreshLeaseHolds() {
 			}
 		}
 	}
+	o.leaseMu.Lock()
+	defer o.leaseMu.Unlock()
+	if slices.Equal(locks, o.leaseLocks) {
+		return
+	}
+	o.leaseLocks = locks
 	o.updateLeases(func(info *leaseInfo) { info.Locks = locks })
 }
 
 func (o *cliOperations) updateLeases(change func(*leaseInfo)) {
+	o.leaseWrites.Add(1)
 	for _, lease := range o.leases {
 		_ = lease.update(change)
 	}
@@ -293,6 +328,7 @@ func (o *cliOperations) attach(catalog *Catalog) {
 	if o.journal = newJournalWriter(catalog, o.reg); o.journal == nil {
 		return
 	}
+	o.journal.onTick = o.flushLeaseLocks
 	ids := []string{}
 	for _, view := range o.reg.views() {
 		ids = append(ids, string(view.ID))

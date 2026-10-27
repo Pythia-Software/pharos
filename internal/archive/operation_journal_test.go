@@ -444,13 +444,17 @@ func TestJournalIsNotStarvedByASaturatedGate(t *testing.T) {
 		}()
 	}
 	<-saturated
-	for range journalStarveRounds {
+	journal.requestPrune()
+	for range journalStarveRounds - 1 {
 		if err := journal.round(context.Background(), 0); !errors.Is(err, errJournalBusy) {
 			t.Fatalf("a round with the gate saturated: %v", err)
 		}
 	}
 	if err := journal.round(context.Background(), 0); err != nil {
 		t.Fatalf("the starved round: %v", err)
+	}
+	if _, prune := journal.pendingReconciles(); !prune {
+		t.Fatal("a priority round pruned")
 	}
 	stop()
 	rows := journalRows(t, catalog)
@@ -459,6 +463,24 @@ func TestJournalIsNotStarvedByASaturatedGate(t *testing.T) {
 	}
 	if rows["backup.local"].StepName != "" {
 		t.Fatalf("a starved round wrote a progress change: %+v", rows["backup.local"])
+	}
+	// Once the gate is free again, the next round is a normal one: the
+	// progress-only change lands, the prune runs, and nothing is starved.
+	waitUntil(t, 5*time.Second, "the saturating writers to stop", func() bool {
+		release, ok := catalog.tryWriteGate()
+		if ok {
+			release()
+		}
+		return ok
+	})
+	if err := journal.round(context.Background(), 0); err != nil {
+		t.Fatalf("the first round after saturation: %v", err)
+	}
+	if row := journalRows(t, catalog)["backup.local"]; row.StepName != "Copy captures" {
+		t.Fatalf("progress after saturation: %+v", row)
+	}
+	if _, prune := journal.pendingReconciles(); prune || journal.starved.Load() != 0 {
+		t.Fatalf("after saturation: prune pending %v, starved %d", prune, journal.starved.Load())
 	}
 	started.Finish(nil)
 }
