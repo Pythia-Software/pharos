@@ -40,6 +40,9 @@ var toolRollupDataset = func() sqlDataset {
 		"tool_cost_usd", "price_status"} {
 		columns[name] = "d." + name
 	}
+	for _, field := range originDimensions {
+		columns[field] = "d." + field
+	}
 	columns["mcp_method"] = mcpMethodSQL("d.")
 	columns["model_effort"] = "model_effort(d.model,d.effort)"
 	// These identities depend only on dimensions retained by the daily summary.
@@ -53,7 +56,7 @@ var toolRollupDataset = func() sqlDataset {
 // toolCallDataset serves one row per tool call, excluding mirrored work.
 var toolCallDataset = sqlDataset{
 	from: `FROM tool_calls t JOIN workspaces w ON w.id=t.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id
-		LEFT JOIN agent_sessions a ON a.id=t.agent_session_id`,
+		LEFT JOIN agent_sessions a ON a.id=t.agent_session_id LEFT JOIN conversation_origins o ON o.conversation_id=COALESCE(a.child_conversation_id,t.conversation_id)`,
 	base:      "t.workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)",
 	countFrom: "FROM tool_calls t", countAlias: "t",
 	buckets:    map[string]string{"day": "t.started_at", "week": "t.started_at", "month": "t.started_at"},
@@ -61,6 +64,7 @@ var toolCallDataset = sqlDataset{
 	cube:       toolCallCube,
 	lookups:    map[string]bool{"id": true, "conversation_id": true, "workspace_id": true, "operation_key": true, "activity": true},
 	optionalJoins: map[string]string{
+		"o": " LEFT JOIN conversation_origins o ON o.conversation_id=COALESCE(a.child_conversation_id,t.conversation_id)",
 		"w": " JOIN workspaces w ON w.id=t.workspace_id",
 		"r": " LEFT JOIN repositories r ON r.id=w.repository_id",
 		"a": "LEFT JOIN agent_sessions a ON a.id=t.agent_session_id",
@@ -77,6 +81,22 @@ var toolCallDataset = sqlDataset{
 	},
 	timeCoveringFields: map[string]bool{"id": true, "workspace_id": true, "provider": true, "duration_ms": true, "started_at": true, "day": true, "week": true, "month": true, "call_count": true},
 	columns: map[string]string{
+		"channel":                  "o.channel",
+		"machine_id":               "o.machine_id",
+		"machine":                  "o.machine",
+		"machine_kind":             "o.machine_kind",
+		"execution_machine_id":     "o.execution_machine_id",
+		"execution_machine":        "o.execution_machine",
+		"execution_machine_kind":   "o.execution_machine_kind",
+		"channel_status":           "o.channel_status",
+		"machine_status":           "o.machine_status",
+		"execution_machine_status": "o.execution_machine_status",
+		"origin_conversation_id":   "o.origin_conversation_id",
+		"origin_evidence":          "o.origin_evidence",
+		"channels":                 "COALESCE(o.channel,'Unknown')",
+		"machines":                 "COALESCE(o.machine_id,'Unknown')",
+		"execution_machines":       "COALESCE(o.execution_machine_id,'Unknown')",
+
 		"id": "t.id", "call_id": "t.call_id", "sequence": "t.sequence",
 		"call_message_id": "t.call_message_id", "result_message_id": "t.result_message_id",
 		"target":     "COALESCE(NULLIF(t.command,''),NULLIF(t.file_path,''),NULLIF(t.search_query,''),t.url)",

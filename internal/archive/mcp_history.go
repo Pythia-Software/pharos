@@ -75,7 +75,7 @@ func (c *Catalog) SetMCPEnabled(enabled bool) error {
 }
 
 var mcpLoggedArguments = []string{
-	"query", "repository", "source", "provider", "file", "pr", "from", "to",
+	"query", "repository", "source", "provider", "channel", "machine_id", "execution_machine_id", "file", "pr", "from", "to",
 	"limit", "offset", "max_output_tokens", "conversation_id", "workspace_id",
 	"message_id", "around_message_id", "text_offset", "change_set_id", "task", "name",
 	"match_mode", "roles", "kinds", "host_id", "stale_only",
@@ -250,6 +250,9 @@ func mcpCommandLine(config Config) (string, error) {
 // For a library it is the pharos in the Pharos.app beside library.toml, which
 // finds that library by itself and keeps its path when the app is updated.
 func mcpCommand(config Config) (string, []string, error) {
+	if config.Application != "" {
+		return runningExecutable(), []string{"mcp-app", "--application", config.Application}, nil
+	}
 	configPath, err := filepath.Abs(config.Path)
 	if err != nil {
 		return "", nil, err

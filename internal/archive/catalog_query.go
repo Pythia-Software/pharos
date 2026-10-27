@@ -97,7 +97,7 @@ func OpenCatalogForQuery(path string) (*Catalog, error) {
 	}
 	db.SetMaxOpenConns(4)
 	db.SetMaxIdleConns(4)
-	catalog := &Catalog{Path: path, DB: db}
+	catalog := &Catalog{Path: path, DB: db, queryOnly: true}
 	current, err := catalog.initializedByThisBuild()
 	if err == nil && !current {
 		err = catalog.initializeLocked(false)

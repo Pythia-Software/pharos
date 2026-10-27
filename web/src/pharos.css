@@ -206,11 +206,12 @@ button.usage-legend-item:hover { border-color: var(--line); color: var(--ink); }
 .usage-legend-item.dimmed:hover { opacity: 1; }
 .usage-legend-x { margin-left: 6px; color: var(--muted); font-weight: 400; }
 .usage-chart-hint { margin-left: auto; padding-left: 12px; font-size: var(--fs-2xs); }
-.usage-chart-bars.pickable { touch-action: none; user-select: none; -webkit-user-select: none; }
-.usage-chart-bars.pickable > span { cursor: crosshair; }
-.usage-chart-bars > span.picked > i { filter: brightness(1.15); }
-.usage-chart-pick { position: absolute; top: 0; bottom: 0; z-index: 2; pointer-events: none; border: 1px solid var(--accent); border-radius: 3px; background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.usage-chart-pick span { position: absolute; bottom: calc(100% + 3px); left: 50%; transform: translateX(-50%); padding: 1px 6px; border-radius: 4px; background: var(--ink); color: var(--panel); font-size: var(--fs-2xs); white-space: nowrap; }
+.usage-chart-bars.pickable { touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+.usage-chart-bars.pickable > button { cursor: pointer; }
+.usage-chart-bars > button.picked > i { filter: brightness(1.15); }
+.usage-chart-bars > button.picked::after, .usage-chart-bars > button.inspected::after { content: ""; position: absolute; inset: 0 min(1px, 5%); border-bottom: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); pointer-events: none; }
+.usage-chart-bars.picking > button:not(.picked) > i { opacity: .35; }
+.usage-chart-pick-status { margin: 6px 0 0 46px; color: var(--ink); font-size: var(--fs-sm); }
 .usage-swatch { display: inline-block; width: 10px; height: 10px; margin-right: 7px; border-radius: 3px; vertical-align: -1px; }
 .usage-facet-value { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; vertical-align: middle; }
 .usage-facet-badge { flex: none; width: 9px; height: 9px; border-radius: 3px; }
@@ -229,11 +230,13 @@ button.usage-legend-item:hover { border-color: var(--line); color: var(--ink); }
 .usage-chart-break span { position: absolute; top: 50%; right: calc(100% + 10px); transform: translateY(-50%); color: var(--ink); font-size: var(--fs-2xs); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .usage-chart-bars { position: relative; display: flex; align-items: flex-end; gap: 0; height: 100%; transition: opacity .15s; }
 .usage-chart-bars.loading { opacity: .55; }
-.usage-chart-bars > span { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column-reverse; gap: 0; cursor: default; outline-offset: 2px; }
-.usage-chart-bars > span > i { display: block; width: 100%; flex: none; box-shadow: inset 0 1px 0 var(--panel); }
-.usage-chart-bars > span:hover > i, .usage-chart-bars > span:focus > i, .usage-chart-bars > span.active > i { filter: brightness(1.15); }
+.usage-chart-bars > button { position: relative; border: 0; border-radius: 0; padding: 0; margin: 0; background: none; color: inherit; font: inherit; width: 0; flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column-reverse; gap: 0; cursor: default; outline-offset: 2px; }
+.usage-chart-bars > button > i { display: block; width: 100%; flex: none; box-shadow: inset 0 1px 0 var(--panel); }
+.usage-chart-bars > button:hover > i, .usage-chart-bars > button:focus > i, .usage-chart-bars > button.active > i { filter: brightness(1.15); }
 .usage-chart-axis { display: flex; justify-content: space-between; margin: 4px 0 0 46px; color: var(--muted); font-size: var(--fs-sm); }
-.usage-chart-tip { position: absolute; z-index: 3; min-width: 180px; max-width: 320px; pointer-events: none; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font-size: var(--fs-sm); box-shadow: 0 4px 14px #0002; }
+.usage-chart-tip { position: absolute; z-index: 3; box-sizing: border-box; min-width: min(180px, 100%); max-width: min(320px, 100%); pointer-events: none; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font-size: var(--fs-sm); box-shadow: 0 4px 14px #0002; }
+.usage-chart-tip.pinned { pointer-events: auto; }
+.usage-chart-tip a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 .usage-chart-tip ul { margin: 0; padding: 0; list-style: none; }
 .usage-chart-tip-head { margin-bottom: 5px; font-weight: 650; }
 .usage-chart-tip-row { display: flex; align-items: baseline; gap: 6px; padding: 1px 0; }
@@ -495,7 +498,7 @@ dialog.mcp-dialog::backdrop { background: #1118; }
   .usage-chart-controls > :is(.usage-period-control, .usage-smoothing-control):has(input) { grid-column: 1 / -1; }
 }
 .usage-chart-lines { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
-.usage-chart-bars:has(> .usage-chart-lines) > span { position: relative; }
+.usage-chart-bars:has(> .usage-chart-lines) > button { position: relative; }
 .usage-chart-line-focus { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .usage-chart-line-focus::before { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; border-left: 1px dashed var(--muted); }
 /* Position markers in chart coordinates, but size them independently of the

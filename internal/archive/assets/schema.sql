@@ -7,6 +7,29 @@ CREATE TABLE IF NOT EXISTS meta (
   value TEXT NOT NULL
 );
 
+-- Small delivery proof, never an offline transcript cache. It prevents a
+-- changed source container from rehydrating unchanged delivered conversations.
+CREATE TABLE IF NOT EXISTS library_delivery_checkpoints (
+ provider TEXT NOT NULL, account TEXT NOT NULL, native_id TEXT NOT NULL,
+ digest TEXT NOT NULL, workspace_id TEXT NOT NULL, destination_instance TEXT NOT NULL, delivery_id TEXT NOT NULL,
+ PRIMARY KEY(provider,account,native_id)
+);
+CREATE TABLE IF NOT EXISTS library_workspace_delivery_checkpoints (
+ source_kind TEXT NOT NULL, source_account TEXT NOT NULL, source_id TEXT NOT NULL,
+ digest TEXT NOT NULL, destination_instance TEXT NOT NULL, delivery_id TEXT NOT NULL,
+ PRIMARY KEY(source_kind,source_account,source_id)
+);
+-- Normalized workspace inputs excluding conversations. A metadata-only revision
+-- can be delivered independently of already delivered transcript content.
+CREATE TABLE IF NOT EXISTS workspace_delivery_inputs (
+ workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+ fingerprint TEXT NOT NULL, writer_host_id TEXT NOT NULL, version INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS conversation_parent_refs (
+ provider TEXT NOT NULL, account TEXT NOT NULL, native_id TEXT NOT NULL,
+ parent_native_id TEXT NOT NULL, PRIMARY KEY(provider,account,native_id)
+);
+
 -- Daily logical library sizes for a rolling, linear cloud-backup forecast.
 CREATE TABLE IF NOT EXISTS library_size_history (
   day TEXT PRIMARY KEY,
@@ -1431,3 +1454,45 @@ CREATE TABLE IF NOT EXISTS ask_native_sessions (
   host_id TEXT NOT NULL,
   PRIMARY KEY(provider, native_id)
 );
+
+-- Raw evidence authority is separate from origin, which remains byte-identical
+-- to native sightings. Updated in the same transaction as copy_versions.
+CREATE TABLE IF NOT EXISTS copy_evidence (
+ host_id TEXT NOT NULL,
+ workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+ conversation_id TEXT NOT NULL DEFAULT '',
+ origin TEXT NOT NULL DEFAULT '',
+ version INTEGER NOT NULL,
+ identity TEXT NOT NULL,
+ revision TEXT NOT NULL,
+ PRIMARY KEY(host_id,workspace_id,conversation_id,origin)
+);
+
+CREATE TABLE IF NOT EXISTS source_evidence (
+ host_id TEXT NOT NULL,
+ source_kind TEXT NOT NULL,
+ source_account TEXT NOT NULL,
+ entity TEXT NOT NULL,
+ version INTEGER NOT NULL,
+ identity TEXT NOT NULL,
+ revision TEXT NOT NULL,
+ PRIMARY KEY(host_id,source_kind,source_account,entity)
+);
+
+-- Source acquisition and parsing are separate phases. Exact accepted copy
+-- identities remain in copy_evidence; these are operational summaries only.
+CREATE TABLE IF NOT EXISTS source_input_states (
+ host_id TEXT NOT NULL,
+ source_name TEXT NOT NULL,
+ preservation_mode TEXT NOT NULL,
+ acquired_revision TEXT,
+ acquired_at TEXT,
+ indexed_revision TEXT,
+ indexed_at TEXT,
+ pending INTEGER NOT NULL DEFAULT 1,
+ error TEXT,
+ PRIMARY KEY(host_id,source_name)
+);
+
+CREATE INDEX IF NOT EXISTS conversation_sightings_host_source
+ ON conversation_sightings(host_id,source_name,conversation_id,origin);

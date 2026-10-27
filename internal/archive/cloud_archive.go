@@ -66,6 +66,7 @@ type cloudFile struct {
 	Path   string `json:"path"`
 	Size   int64  `json:"size"`
 	SHA256 string `json:"sha256"`
+	Link   string `json:"link,omitempty"`
 }
 type cloudManifest struct {
 	Version     int         `json:"version"`
@@ -221,6 +222,7 @@ func buildCloudArchive(ctx context.Context, d cloudDestination, r *cloudRun, con
 	}
 	defer compressed.Close()
 	tw := tar.NewWriter(compressed)
+	links := map[backupLinkKey]cloudFile{}
 	err = filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -255,6 +257,15 @@ func buildCloudArchive(ctx context.Context, d cloudDestination, r *cloudRun, con
 		if rel == cloudManifestName {
 			return errors.New("reserved manifest name appears in snapshot")
 		}
+		key, keyed := linkKey(info)
+		if previous, ok := links[key]; keyed && ok {
+			if err = tw.WriteHeader(&tar.Header{Name: rel, Mode: 0600, ModTime: info.ModTime(), Typeflag: tar.TypeLink, Linkname: previous.Path}); err != nil {
+				return err
+			}
+			m.Version = 2
+			m.Files = append(m.Files, cloudFile{Path: rel, Size: previous.Size, SHA256: previous.SHA256, Link: previous.Path})
+			return nil
+		}
 		header := &tar.Header{Name: rel, Mode: 0600, Size: info.Size(), ModTime: info.ModTime(), Typeflag: tar.TypeReg}
 		if err = tw.WriteHeader(header); err != nil {
 			return err
@@ -273,6 +284,9 @@ func buildCloudArchive(ctx context.Context, d cloudDestination, r *cloudRun, con
 			return errors.New("snapshot changed while archiving")
 		}
 		m.Files = append(m.Files, cloudFile{Path: rel, Size: count, SHA256: hex.EncodeToString(hash.Sum(nil))})
+		if keyed {
+			links[key] = m.Files[len(m.Files)-1]
+		}
 		r.FileBytes += count
 		r.Files++
 		if r.Files%128 == 0 {
@@ -457,7 +471,9 @@ func extractCloudArchive(ctx context.Context, config Config, payload io.Reader, 
 				return "", errors.New("invalid or duplicate recorded file path")
 			}
 			original[file.Path] = file
-			total += file.Size
+			if file.Link == "" {
+				total += file.Size
+			}
 		}
 		if err = ensureFree(directory, total+(128<<20)); err != nil {
 			return "", err
@@ -477,10 +493,13 @@ func extractCloudArchive(ctx context.Context, config Config, payload io.Reader, 
 		if e != nil {
 			return "", fmt.Errorf("archive decompression failed: %w", e)
 		}
-		if header.Typeflag != tar.TypeReg || !safeCloudPath(header.Name) || actual[header.Name].Path != "" || header.Size < 0 || header.Size > 5*(1<<40) || embedded != nil {
+		if (header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeLink) || !safeCloudPath(header.Name) || actual[header.Name].Path != "" || header.Size < 0 || header.Size > 5*(1<<40) || embedded != nil {
 			return "", errors.New("archive has unsafe paths, links, duplicate entries or files after its manifest")
 		}
 		if header.Name == cloudManifestName {
+			if header.Typeflag != tar.TypeReg {
+				return "", errors.New("archive manifest must be a regular file")
+			}
 			if header.Size > 64<<20 {
 				return "", errors.New("archive manifest is too large")
 			}
@@ -496,6 +515,44 @@ func extractCloudArchive(ctx context.Context, config Config, payload io.Reader, 
 		}
 		if len(actual) >= 200000 {
 			return "", errors.New("archive exceeds the supported 200,000-file restore limit")
+		}
+		if header.Typeflag == tar.TypeLink {
+			previous, ok := actual[header.Linkname]
+			if !safeCloudPath(header.Linkname) || !ok || previous.Link != "" || header.Size != 0 {
+				return "", errors.New("archive link must name an earlier regular file")
+			}
+			entry := cloudFile{Path: header.Name, Size: previous.Size, SHA256: previous.SHA256, Link: header.Linkname}
+			if expected != nil && entry != original[header.Name] {
+				return "", errors.New("archive link differs from recorded snapshot")
+			}
+			if err = root.MkdirAll(filepath.Dir(header.Name), 0700); err != nil {
+				return "", err
+			}
+			if err = root.Link(header.Linkname, header.Name); err != nil {
+				if err = ensureFree(directory, previous.Size+(128<<20)); err != nil {
+					return "", err
+				}
+				in, e := root.Open(header.Linkname)
+				if e != nil {
+					return "", e
+				}
+				out, e := root.OpenFile(header.Name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+				if e != nil {
+					in.Close()
+					return "", e
+				}
+				_, e = cloudCopy(ctx, out, in)
+				in.Close()
+				closeErr := out.Close()
+				if e != nil {
+					return "", e
+				}
+				if closeErr != nil {
+					return "", closeErr
+				}
+			}
+			actual[header.Name] = entry
+			continue
 		}
 		if expected != nil {
 			entry, ok := original[header.Name]
@@ -532,7 +589,7 @@ func extractCloudArchive(ctx context.Context, config Config, payload io.Reader, 
 	if n, e := cloudCopy(ctx, io.Discard, decoded); e != nil || n != 0 {
 		return "", errors.New("archive has unauthenticated or unexpected trailing content")
 	}
-	if embedded == nil || embedded.Version != 1 || (embedded.Kind != "sample" && embedded.Kind != "full") || len(actual) != len(embedded.Files) {
+	if embedded == nil || (embedded.Version != 1 && embedded.Version != 2) || (embedded.Kind != "sample" && embedded.Kind != "full") || len(actual) != len(embedded.Files) {
 		return "", errors.New("archive is missing files or its manifest")
 	}
 	if expected != nil && !reflect.DeepEqual(*embedded, *expected) {
@@ -540,6 +597,9 @@ func extractCloudArchive(ctx context.Context, config Config, payload io.Reader, 
 	}
 	seen := map[string]bool{}
 	for _, entry := range embedded.Files {
+		if entry.Link != "" && embedded.Version < 2 {
+			return "", errors.New("archive link requires manifest version 2")
+		}
 		if !safeCloudPath(entry.Path) || seen[entry.Path] || entry != actual[entry.Path] {
 			return "", errors.New("recovered files do not match the embedded manifest")
 		}

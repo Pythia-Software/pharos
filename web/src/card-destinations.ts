@@ -7,6 +7,7 @@ import type { MCPDashboardView } from "./mcp-dashboard-model";
 import type { ToolDashboardView } from "./tools-dashboard-model";
 import { cardDashboardWhere } from "./card-exploration";
 import { concurrencyWindowRange, defaultConcurrencySettings } from "./concurrency-settings";
+import { defaultCardCover } from "./card-cover";
 
 type DailyChart = { period: "day"; rollingPeriods: number; display: "interval"; scale: "linear"; seriesLimit: number };
 export type CardDashboard =
@@ -30,6 +31,10 @@ const tools = (metric: ToolDashboardView["metric"], split: ToolDashboardView["sp
   topic: "tools", chart: { metric, split, view: "compare", period: "day", rollingPeriods: 0, display: "interval", ...extra },
 });
 const dashboards: Record<string, CardDashboard> = {
+  ...Object.fromEntries((["channel", "machine_id", "execution_machine_id"] as const).flatMap(field => [
+    [`origin-tokens-${field}`, tokens("tokens", field)],
+    [`origin-cost-${field}`, tokens("cost", field)],
+  ])),
   "usage-models": tokens("tokens", "model_family"),
   "usage-repos": tokens("tokens", "repository_name"),
   "cost-repos": tokens("cost", "repository_name"),
@@ -111,5 +116,9 @@ export function cardDestination(recipe: QueryRecipe, query: QueryState, window?:
   }
   parsed.searchParams.set("card_query", recipe.dataset);
   parsed.searchParams.set("card_id", recipe.id);
+  const cover = defaultCardCover(recipe);
+  if (cover) parsed.searchParams.set("card_cover", JSON.stringify(cover));
+  parsed.searchParams.set("card_title", recipe.title);
+  parsed.searchParams.set("card_description", recipe.description);
   return parsed.pathname + parsed.search;
 }

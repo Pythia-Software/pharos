@@ -64,6 +64,9 @@ func antigravityDataDir(dir string) bool {
 func (a *antigravityAdapter) transcripts() (map[string]string, error) {
 	brain := filepath.Join(a.config.Path, "brain")
 	entries, err := os.ReadDir(brain)
+	if errors.Is(err, os.ErrNotExist) {
+		return map[string]string{}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -353,18 +356,24 @@ func (a *antigravityAdapter) runLogsFor(ids map[string]bool) ([]string, error) {
 // databases lists the SQLite databases the adapter reads: the summaries, and
 // each conversation's requests.
 func (a *antigravityAdapter) databases() ([]string, error) {
-	transcripts, err := a.transcripts()
-	if err != nil {
+	// Inventory DB-only conversations too: a deleted transcript must not hide
+	// the source's original protobuf request and step evidence.
+	candidates := []string{filepath.Join(a.config.Path, antigravitySummaries)}
+	entries, err := os.ReadDir(filepath.Join(a.config.Path, "conversations"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	candidates := []string{filepath.Join(a.config.Path, antigravitySummaries)}
-	for id := range transcripts {
-		candidates = append(candidates, a.requestsDatabase(id))
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(strings.ToLower(entry.Name()), ".db") {
+			candidates = append(candidates, filepath.Join(a.config.Path, "conversations", entry.Name()))
+		}
 	}
 	databases := []string{}
 	for _, path := range candidates {
 		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
 			databases = append(databases, path)
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
 		}
 	}
 	sort.Strings(databases[min(1, len(databases)):])

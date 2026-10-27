@@ -65,6 +65,25 @@ func (r *searchHookRows) Next(values []driver.Value) error {
 
 var searchHookID atomic.Uint64
 
+func TestTextSearchOriginCursorSurvivesBookkeeping(t *testing.T) {
+	c := textFixture(t)
+	if _, err := c.DB.Exec(`UPDATE conversations SET harness='codex/codex_desktop'`); err != nil {
+		t.Fatal(err)
+	}
+	o := TextSearchOptions{Query: "cache", Channel: "desktop", Limit: 1}
+	first, err := c.SearchText(t.Context(), o)
+	if err != nil || first.NextCursor == "" {
+		t.Fatalf("first origin-filtered page: %+v, %v", first, err)
+	}
+	if _, err := c.DB.Exec(`UPDATE workspaces SET indexed_at='later'`); err != nil {
+		t.Fatal(err)
+	}
+	o.Cursor = first.NextCursor
+	if _, err := c.SearchText(t.Context(), o); err != nil {
+		t.Fatalf("bookkeeping expired an origin-filtered cursor: %v", err)
+	}
+}
+
 func hookTextSearch(t *testing.T, c *Catalog, query, next func(context.Context) error) {
 	t.Helper()
 	hookSearchReads(t, c, &searchHookDriver{query: query, next: next})

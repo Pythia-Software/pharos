@@ -14,3 +14,5 @@ go.work.sum
 web/.test-build/
 internal/archive/assets/query-tables.js
 internal/archive/assets/query-tables.css
+internal/uifeedback/assets/inbox.js
+internal/uifeedback/assets/inbox.css

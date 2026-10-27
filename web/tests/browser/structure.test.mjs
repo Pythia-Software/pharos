@@ -15,6 +15,19 @@ import { defaultApi, cloudScheduledStatus, rootConversation, workID } from "./fi
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 const work = `/work/${workID}`;
+async function publishAppUpdate(page, state) {
+  await page.evaluate(state => {
+    window.pharosUpdateFixture = state;
+    window.webkit = {messageHandlers: {pharosUpdates: {postMessage: async ({action}) => {
+      if (action === 'install') {
+        window.pharosUpdateFixture = {...window.pharosUpdateFixture, phase: 'downloading'};
+        dispatchEvent(new CustomEvent('pharos:app-update', {detail: window.pharosUpdateFixture}));
+      }
+      return window.pharosUpdateFixture;
+    }}}};
+    dispatchEvent(new CustomEvent('pharos:app-update', {detail: state}));
+  }, state);
+}
 const exploreGroupedSearch = `/library?${new URLSearchParams({ q_library: encodeQuery(withGroupingKeys({ ...EMPTY_QUERY, select: [{ field: "repository_name" }], where: [{ field: "repository_name", op: "=", value: "repo-1" }] }, ["repository_name"])), search: "cache", text_plain: "1" })}`;
 const analyzeFilteredQuery = { ...EMPTY_QUERY, select: [{ field: "tool_name" }, { field: "duration_ms" }], where: [{ field: "tool_name", op: "=", value: "Bash" }] };
 const analyzeGroupedQuery = { ...withGroupingKeys(analyzeFilteredQuery, ["tool_name"]), where: [{ field: "tool_name", op: "!=", value: "Read" }] };
@@ -36,6 +49,61 @@ const askAPI = {
 };
 const askClarificationSession={...askSession,conversation:[{...askSession.conversation[0],status:'clarification',cards:[],reply:'',clarification:{question:'By “use”, do you mean model tokens, API cost equivalent, or something else?',options:['Model tokens','API cost equivalent']}}]};
 const ROUTES = [
+  ...['overview','open','create'].map(kind=>({name:'Library settings '+kind,url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:{id:'local',name:'Pending history with a long library name',config:'/Users/test/Libraries/Pending/library.toml'},...(kind==='overview'?{}:{open:page=>page.locator(kind==='open'?'#library-settings-open':'#library-settings-new').click(),shown:'#library-settings-'+kind+'-form:not([hidden])'})})),
+  {name:"Application first launch",url:"/app",ready:"#application-setup[open]",api:{"GET /api/app/state":{application:"/Applications/Pharos.app",selected:"",mcp:"",busy:false,libraries:[]}}},
+  ...["about","machines","storage","details","review"].map(step=>({name:`Application introduction ${step}`,url:"/app",ready:"#application-setup[open]",api:{"GET /api/app/state":{application:"/Applications/Pharos.app",selected:"",mcp:"",busy:false,libraries:[]}},open:async page=>{
+    await page.locator('#meet-pharos').click();
+    if(step==='about')return;
+    await page.locator('#start-setup').click();
+    if(step==='machines')return;
+    await page.locator('#submit').click();
+    if(step==='storage')return;
+    await page.locator('#submit').click();
+    if(step==='review')await page.locator('#submit').click();
+  },shown:step==='about'?'#about-pharos:not([hidden])':`#wizard-${step}:not([hidden])`})),
+  {name:"Application library chooser",url:"/app",ready:"#library-list .card",check:async page=>{
+    const widths=await page.locator('#application-intro').evaluate(intro=>({
+      available:intro.getBoundingClientRect().width,
+      copy:intro.querySelector('.setup-copy').getBoundingClientRect().width,
+    }));
+    assert.ok(widths.copy>widths.available*.8,'the library introduction leaves an unused artwork column');
+  }},
+  ...['tools','other','none','locations','custom','review','empty'].map(step=>({name:`Application sources ${step}`,url:'/app',ready:'#application-setup[open]',api:{
+    'GET /api/app/state':{application:'/Applications/Pharos.app',selected:'',mcp:'',busy:false,libraries:[]},
+    'POST /api/app/create':{saved:true},
+    ...(step==='none'?{'GET /api/probe/tools':{tools:[]}}:{}),
+  },open:async page=>{
+    await page.locator('#meet-pharos').click();await page.locator('#start-setup').click();
+    for(let i=0;i<4;i++)await page.locator('#submit').click();
+    await page.locator('#configure-sources').click();
+    const guide=page.locator('#pharosOnboarding');
+    await guide.locator('.pharos-other-tools>summary').waitFor();
+    if(['tools','none'].includes(step))return;
+    if(step==='other'){await guide.locator('.pharos-other-tools>summary').click();return}
+    if(step==='empty'){await guide.getByRole('checkbox',{name:/Claude Code/}).uncheck();await guide.locator('.pharos-other-tools>summary').click()}
+    await guide.getByRole('checkbox',{name:step==='empty'?/Antigravity/:/Claude Code/}).check();
+    await guide.getByRole('button',{name:'Continue',exact:true}).click();
+    await guide.getByRole('button',{name:'Back',exact:true}).waitFor();
+    if(step==='custom')await guide.locator('.pharos-custom-source summary').click();
+    if(step==='review')await guide.getByRole('button',{name:'Continue',exact:true}).click();
+  },shown:'#pharosOnboarding'})),
+  {name:'Source settings guide',url:'/settings/sources',ready:'#pharosFindSources',open:page=>page.locator('#pharosFindSources').click(),shown:'#pharosOnboarding'},
+  ...["create","open","recover"].map(flow=>({name:`Application library ${flow}`,url:"/app",ready:"#library-list .card",open:page=>page.locator(`#library-actions [data-flow="${flow}"]`).click(),shown:"#setup:not([hidden])"})),
+  ...["storage","details","review"].map(step=>({name:`Application SSD ${step}`,url:"/app",ready:"#application-setup[open]",api:{"GET /api/app/state":{application:"/Applications/Pharos.app",selected:"",mcp:"",busy:false,libraries:[]}},open:async page=>{
+    await page.locator('#meet-pharos').click();await page.locator('#start-setup').click();
+    await page.locator('input[name=machines][value=many]').check();await page.locator('#submit').click();
+    if(step==='storage')return;
+    await page.locator('#submit').click();
+    if(step==='review'){await page.getByRole('button',{name:'Edit library location',exact:true}).click();await page.locator('#path').fill('/Volumes/My SSD');await page.locator('#submit').click()}
+  },shown:`#wizard-${step}:not([hidden])`})),
+  ...[1,2].map(step=>({name:`Application restoration step ${step+1}`,url:"/app",ready:"#library-list .card",open:async page=>{
+    await page.locator('#library-actions [data-flow=recover]').click();await page.locator('#backup').fill('/Backups/Library');await page.locator('#submit').click();
+    if(step===2){await page.locator('#recover-path').fill('/Libraries/Restored');await page.locator('#submit').click()}
+  },shown:step===1?'#wizard-recover-target:not([hidden])':'#wizard-recover-review:not([hidden])'})),
+  ...[["Search", "/library"], ["Analyze", "/analyze"], ["Optimize", "/findings"]].flatMap(([name, url]) => [["unconfigured", false, false], ["idle", true, false], ["syncing", true, true]].map(([state, sources, busy]) => ({
+    name: `${name} empty library ${state}`, url, ready: ".view.active .library-empty-card",
+    api: { "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], library_empty: true, has_sources: sources, busy, sources: sources ? [{ name: "codex" }] : [], available_sources: [] } },
+  }))),
   ...["dark","light"].flatMap(theme => [
   {name:"Ask Pharos removed CLI",url:"/",ready:"#pharos-ask .home-search-trigger",api:{"GET /api/ask/status":{settings:{enabled:true,showInvitation:true,selection:askSelection},providers:[]}}},
   {name:"Ask Pharos opted out",url:"/",ready:"#pharos-ask .home-search-trigger",api:{"GET /api/ask/status":{settings:{enabled:false,showInvitation:false},providers:askProviders}}},
@@ -121,6 +189,15 @@ const ROUTES = [
   { name: "Carbon Impact", url: "/analyze?analyze_view=carbon", ready: "#carbonSummary" },
   { name: "Analyze conversations", url: "/analyze?analyze_view=conversations", ready: "#queryTableUsage .qt-row" },
   { name: "Analyze workspace dashboards", url: "/analyze", ready: ".usage-dashboard .usage-chart" },
+  ...['tokens', 'human', 'skills', 'time', 'carbon'].map(topic => ({
+    name: `Dashboard pinned key ${topic}`, url: `/analyze?analyze_topic=${topic}`, ready: '.usage-chart-bars:not(.loading) > button',
+    open: async page => {
+      const chart = page.locator('.usage-dashboard .usage-chart').first();
+      await chart.locator('.usage-chart-bars > button').filter({ has: page.locator('i') }).first().focus();
+      await page.keyboard.press('Enter');
+      await chart.getByRole('group', { name: /^Details for / }).getByRole('link').first().waitFor();
+    }, shown: '.usage-chart-tip.pinned',
+  })),
   { name: "Analyze relative query previews", url: `/analyze?${new URLSearchParams({ analyze_topic: "tokens", analyze_filters: encodeQuery({ ...EMPTY_QUERY, where: [{ field: "first_usage_at", op: ">=", value: "-30d" }, { field: "first_usage_at", op: "<", value: "+0s" }, { field: "provider", op: "=", value: "codex" }] }) })}`, ready: ".usage-query-destinations" },
   { name: "Analyze workspace cumulative", url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify({ display: "cumulative", period: "days", days: 3, split: "model_family", metric: "percent_cost" }))}`, ready: ".usage-dashboard .usage-chart-lines" },
   { name: "Analyze cumulative human", url: `/analyze?analyze_topic=human&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20}))}`, ready: ".usage-dashboard .usage-chart-lines" },
@@ -229,11 +306,13 @@ const ROUTES = [
   { name: "Capture & index empty", url: "/settings/sync", ready: "#syncHistoryTables .qt-empty", api: { "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [], source_states: [] } } },
   { name: "Legacy Findings settings", url: "/settings/optimization", ready: ".findings-settings .findings-panel" },
   { name: "Header settings", url: "/settings/header", ready: "#headerActive .header-tool" },
-  { name: "App preferences", url: "/settings/preferences", ready: "#optionalBehaviors .optional-behavior" },
-  { name: "Mac menu syncing", url: "/settings/preferences", ready: "#menuBarActive .menu-bar-detail", api: {
+  { name: "App preferences", url: "/settings/preferences", ready: "#showMacMenuBar" },
+  { name: "Mac menu disabled", url: "/settings/preferences", ready: "#showMacMenuBar", preferences: { 'pharos-menu-bar': { enabled: false } } },
+  { name: "Mac menu expanded", url: "/settings/preferences", ready: "#showMacMenuBar", open: page => page.getByRole('button', { name: 'Expand', exact: true }).click(), shown: '#menuBarActive button' },
+  { name: "Mac menu syncing", url: "/settings/preferences", ready: "#showMacMenuBar", open: page => page.getByRole('button', { name: 'Expand', exact: true }).click(), shown: '#menuBarActive .menu-bar-detail', api: {
     'GET /api/menu-bar/status': {...defaultApi['GET /api/menu-bar/status'], library: {activities: [{label: 'Manual sync: evaluating findings while checking every captured conversation and its retained tool results', progress: .22, estimated_completion_at: new Date(Date.now() + 60000).toISOString()}]}},
   } },
-  { name: "Mac menu with all items", url: "/settings/preferences", ready: "#menuBarActive button", preferences: { 'pharos-menu-bar': { cost: true, backup: true, space: true, index: true, eject: true, search: true, analyze: true, optimize: true, capture: true, health: true, sources: true, finder: true } } },
+  { name: "Mac menu with all items", url: "/settings/preferences", ready: "#showMacMenuBar", open: page => page.getByRole('button', { name: 'Expand', exact: true }).click(), shown: '#menuBarActive button', preferences: { 'pharos-menu-bar': { cost: true, backup: true, space: true, index: true, eject: true, search: true, analyze: true, optimize: true, capture: true, health: true, sources: true, finder: true } } },
   { name: "Workspace overview", url: work, ready: ".delegation-table tbody tr" },
   { name: "Workspace parallel activity", url: `${work}?explorer=parallel`, ready: ".delegation-parallel" },
   { name: "Long transcript", url: `${work}/conversation/${rootConversation}`, ready: ".conversation-panel .turn" },
@@ -361,6 +440,11 @@ test('header fit responds to tool choices and label changes without resizing', {
   await settled();
   const more = page.getByRole('button', { name: 'More tools', exact: true });
   assert.equal(await more.isVisible(), false, 'a smaller tool selection fits');
+  await publishAppUpdate(page, {version: '12.123.456-beta.123', phase: 'available'});
+  await more.waitFor();
+  assert.deepEqual(await layoutProblems(page), [], 'the release action reflows the measured combo without resizing');
+  await publishAppUpdate(page, {});
+  await more.waitFor({state: 'hidden'});
   const name = page.locator('#headerLibrary .pharos-drive-name');
   const original = await name.textContent();
   await name.evaluate(element => { element.textContent = 'A library with a much longer drive label'; });
@@ -381,6 +465,49 @@ test('header fit responds to tool choices and label changes without resizing', {
   await tab.evaluate((button, label) => { button.textContent = label; }, label);
   await navigation.waitFor();
   await settled();
+});
+
+for (const width of [1440, 1024, 390, 320]) test(`Pharos release action fits through download and relaunch @ ${width}`, {skip}, async t => {
+  const {page, settled, shot} = await open(t, {
+    url: '/library', viewport: {width, height: width < 500 ? 844 : 900}, ready: '#queryTableLibrary .qt-row',
+    api: {'GET /api/library/status': {...defaultApi['GET /api/library/status'],
+      drive: {...defaultApi['GET /api/library/status'].drive, ejectable: true, name: 'My portable Pharos library with a long drive name'}}},
+  });
+  const more = page.getByRole('button', {name: 'More tools', exact: true});
+  const reveal = async () => {
+    await settled();
+    if (!await page.locator('#pharosAppUpdate').isVisible()) await more.click();
+    await page.locator('#pharosAppUpdate').waitFor();
+    assert.deepEqual(await layoutProblems(page), []);
+  };
+  await shot('current');
+  await publishAppUpdate(page, {version: '0.8.0', phase: 'available'});
+  await reveal();
+  const updateWidth = (await page.locator('#pharosAppUpdate').boundingBox()).width;
+  await page.locator('#pharosAppUpdate').hover();
+  await shot('release-available');
+  await page.locator('#pharosAppUpdate').click();
+  await reveal();
+  await shot('download-started');
+  for (const state of [
+    {version: '0.8.0', phase: 'downloading', progress: 42},
+    {version: '0.8.0', phase: 'preparing'},
+    {version: '0.8.0', phase: 'installing'},
+    {version: '12.123.456-beta.123', phase: 'available'},
+  ]) {
+    await publishAppUpdate(page, state);
+    await reveal();
+    assert.equal((await page.locator('#pharosAppUpdate').boundingBox()).width, updateWidth, 'progress and long version tooltips keep the same icon width');
+    await page.locator('#pharosAppUpdate').hover();
+    await shot(state.phase === 'available' ? 'long-version' : state.phase);
+  }
+  // Availability can change while the overflow popup is closed. It must
+  // still use the new measured width when tools return to the header.
+  if (await page.locator('#headerOverflow').evaluate(el => el.matches(':popover-open'))) await page.keyboard.press('Escape');
+  await publishAppUpdate(page, {});
+  await page.setViewportSize({width: 1440, height: 900});
+  await settled();
+  assert.deepEqual(await layoutProblems(page), []);
 });
 
 test("macOS window controls stay clear of the lighthouse when resizing", { skip }, async t => {
@@ -528,10 +655,10 @@ for (const dashboard of [
   { name: "Tools", topic: "tools", card: "tool-failure-rates", dataset: "tool_calls", field: "started_at", first: "day", last: "day", graph: ".usage-tools-dashboard > .qt-metric", chart: { period: "day", metric: "calls", split: "tool_name", view: "compare" } },
   { name: "Pharos MCP", topic: "mcp", card: "mcp-response-size", dataset: "mcp_calls", field: "called_at", first: "called_at", last: "called_at", graph: ".usage-mcp-dashboard > .qt-metric", chart: { period: "day", metric: "calls", split: "tool_name", view: "compare" } },
   { name: "Carbon Impact", topic: "carbon", card: "carbon-trend", dataset: "usage", field: "first_usage_at", first: "first_usage_at", last: "first_usage_at", summary: "Filtered carbon estimate", chart: { period: "day", metric: "co2", split: "type" } },
-]) for (const width of [1504, 390, 320]) test(`${dashboard.name} card exploration and inline ranges fit at ${width}px`, { skip }, async t => {
+]) for (const width of [1504, 390, 320]) test(`${dashboard.name} dashboard and inline ranges fit at ${width}px`, { skip }, async t => {
   const where = [{ field: dashboard.last, op: ">=", value: "-7d" }, { field: dashboard.first, op: "<", value: "+0s" }];
   const sourceWhere = where.map(term => ({ ...term, field: dashboard.field }));
-  const params = new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: dashboard.topic, card_id: dashboard.card, card_query: dashboard.dataset,
+  const params = new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: dashboard.topic,
     [`q_${dashboard.dataset}`]: encodeQuery({ ...EMPTY_QUERY, where: sourceWhere }), window_mode: "relative", window_days: "7", window_field: dashboard.field, window_dataset: dashboard.dataset,
     analyze_filters: encodeQuery({ ...EMPTY_QUERY, where }), analyze_chart: JSON.stringify(dashboard.chart) });
   const app = await open(t, { url: `/analyze?${params}`, viewport: { width, height: 933 }, ready: dashboard.graph ?? ".usage-dashboard .usage-chart" });
@@ -564,9 +691,9 @@ for (const dashboard of [
   }
 });
 
-for (const width of [1504, 390, 320]) test(`Parallelism card exploration and inline ranges fit at ${width}px`, { skip }, async t => {
+for (const width of [1504, 390, 320]) test(`Parallelism dashboard and inline ranges fit at ${width}px`, { skip }, async t => {
   const where = [{ field: 'started_at', op: '>=', value: '-7d' }, { field: 'started_at', op: '<', value: '+0s' }];
-  const params = new URLSearchParams({ analyze_mode: 'dashboards', analyze_topic: 'parallelism', card_id: 'parallel-days', card_query: 'parallelism',
+  const params = new URLSearchParams({ analyze_mode: 'dashboards', analyze_topic: 'parallelism',
     q_parallelism: encodeQuery({ ...EMPTY_QUERY, where }), window_mode: 'relative', window_days: '7', window_field: 'started_at', window_dataset: 'parallelism',
     analyze_parallelism: JSON.stringify({ range: '7d' }) });
   const app = await open(t, { url: `/analyze?${params}`, viewport: { width, height: 933 }, concurrency: true, ready: '.usage-dashboard .concurrency-chart svg' });
@@ -632,7 +759,7 @@ describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY
     for (const viewport of WIDTHS) {
       const name = `${route.name} @ ${viewport.width}`;
       test(name, { skip }, async t => {
-        const app = await open(t, { url: route.url, viewport, ready: route.ready, preferences: route.preferences, concurrency: route.concurrency, api: route.api });
+        const app = await open(t, { url: route.url, viewport, ready: route.ready, preferences: route.preferences, concurrency: route.concurrency, managedLibrary: route.managedLibrary, api: route.api });
         if (route.open) {
           await route.open(app.page);
           await app.page.locator(route.shown).first().waitFor();
@@ -644,6 +771,7 @@ describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY
             return wrap && wrap.scrollWidth <= wrap.clientWidth + 1;
           });
         }
+        if (route.check) await route.check(app.page);
         await app.shot("top");
         const problems = await layoutProblems(app.page);
         if (!route.open) {
@@ -732,3 +860,28 @@ test("Card Library restores saved covers while fresh queries are pending", { ski
   await app.page.getByRole("status", { name: "Refreshing preview", exact: true }).first().waitFor({ state: "hidden" });
   assert.deepEqual(app.problems(), []);
 });
+
+const cardDestinations = JSON.parse(readFileSync(new URL('../../../internal/archive/assets/ask-destinations.json', import.meta.url), 'utf8'));
+
+// Card analyses use their own source grain and shared cover renderer. The
+// model/unit suite owns mathematical parity; the browser checks accessibility
+// of navigation and that every chart family fits the available viewport.
+for (const id of ['human-words', 'cost-repos', 'machine-time', 'skill-evidence', 'tool-failure-rates', 'mcp-response-size', 'carbon-trend', 'parallel-days', 'machine-latency-trend', 'session-input-output', 'human-message-lengths', 'writing-hours']) {
+  for (const width of [1504, 390, 320]) test(`Expanded card ${id} fits at ${width}px`, { skip }, async t => {
+    const item = cardDestinations.find(card => card.id === id);
+    const app = await open(t, { url: item.href, viewport: { width, height: 933 }, ready: '.card-analysis' });
+    const { page } = app;
+    await app.settled();
+    assert.equal(await page.getByRole('alert').count(), 0, 'the matching analysis is available');
+    assert.deepEqual(await layoutProblems(page), []);
+    const details = page.getByRole('link', { name: 'View supporting query', exact: true });
+    await details.waitFor();
+    await app.shot(`expanded-${id}`);
+    await details.click();
+    await page.locator('.usage-workspace-table').waitFor();
+    await page.getByRole('link', { name: 'Back to dashboard', exact: true }).click();
+    await page.getByRole('region', { name: 'Card analysis', exact: true }).waitFor();
+    await app.settled();
+    assert.deepEqual(await layoutProblems(page), []);
+  });
+}

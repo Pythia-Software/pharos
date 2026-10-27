@@ -7,23 +7,26 @@ import (
 	"strings"
 	"testing"
 
+	qt "github.com/Pythia-Software/query-table/backends/go"
 	"github.com/gbdubs/pharos/internal/querytable"
 )
 
 func TestWritingMessagesFilterBySpanAndSplitText(t *testing.T) {
-	catalog, _ := testCatalog(t)
+	catalog, config := testCatalog(t)
 	if err := catalog.Initialize(); err != nil {
 		t.Fatal(err)
 	}
 	pasted := "Why does this fail?\n```\npanic: runtime error: index out of range\n```\nPlease fix it."
 	for _, record := range []WorkspaceRecord{
 		{SourceID: "parser", SourceKind: "claude", Account: "local", Title: "Parser", Conversations: []ConversationRecord{{
-			NativeID: "parser", Provider: "claude", Account: "local", Coverage: "complete", Messages: []MessageRecord{
+			Initiation: &InitiationRecord{Channel: "desktop", Machine: &MachineRecord{"laptop", "Laptop", "device"}, ExecutionMachine: &MachineRecord{"laptop", "Laptop", "device"}},
+			NativeID:   "parser", Provider: "claude", Account: "local", Coverage: "complete", Messages: []MessageRecord{
 				{NativeID: "p1", Role: "user", Kind: "message", Text: "Fix the parser for nested tables", CreatedAt: "2026-09-01T12:00:00.000Z", Selected: true},
 				{NativeID: "p2", Role: "user", Kind: "message", Text: pasted, CreatedAt: "2026-09-08T12:00:00.000Z", Selected: true},
 			}}}},
 		{SourceID: "review-child", SourceKind: "codex", Account: "local", Title: "Review helper", Conversations: []ConversationRecord{{
-			NativeID: "child", Provider: "codex", Account: "local", Coverage: "complete", Messages: []MessageRecord{
+			Initiation: &InitiationRecord{ExecutionMachine: &MachineRecord{"remote", "Remote worker", "cloud"}},
+			NativeID:   "child", Provider: "codex", Account: "local", Coverage: "complete", Messages: []MessageRecord{
 				{NativeID: "c1", Role: "user", Kind: "message", Text: "Check every fixture file for regressions", CreatedAt: "2026-09-02T12:10:00.000Z", Selected: true},
 			}}}},
 	} {
@@ -45,6 +48,9 @@ func TestWritingMessagesFilterBySpanAndSplitText(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := catalog.RebuildAuthorship(context.Background(), "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.ensureOrigins(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	document, err := querySchemaDocument("writing_messages")
@@ -85,7 +91,7 @@ func TestWritingMessagesFilterBySpanAndSplitText(t *testing.T) {
 	}
 
 	code := query(querytable.WhereTerm{Field: "rules", Op: "includes", Value: "Code block"})
-	if len(code) != 1 || code[0]["text"] != pasted || integer(code[0]["typed_words"]) != 7 || integer(code[0]["pasted_words"]) != 9 {
+	if len(code) != 1 || code[0]["text"] != pasted || integer(code[0]["typed_words"]) != 7 || integer(code[0]["pasted_words"]) != 7 {
 		t.Fatalf("code = %#v", code)
 	}
 	if categories := code[0]["categories"].([]string); !slices.Equal(categories, []string{spanTyped, spanPasted}) && !slices.Equal(categories, []string{spanPasted, spanTyped}) {
@@ -106,6 +112,35 @@ func TestWritingMessagesFilterBySpanAndSplitText(t *testing.T) {
 	}
 	if byWork := query(querytable.WhereTerm{Field: "work_id", Op: "=", Value: firstString(all[0]["work_id"])}); len(byWork) != 3 {
 		t.Fatalf("work filter kept %d rows", len(byWork))
+	}
+	server := testServer(t, config, catalog)
+	for _, sample := range []struct {
+		field, value string
+		count        int
+	}{{"channel", "desktop", 3}, {"channels", "desktop", 3}, {"machines", "laptop", 3}, {"execution_machines", "remote", 1}, {"execution_machine_id", "remote", 1}} {
+		result, err := writingMessageDataset.Rows(context.Background(), catalog.DB, querytable.Query{
+			Select: []string{"id", sample.field}, Where: []querytable.WhereTerm{{Field: sample.field, Op: "=", Value: sample.value}}, Limit: 10,
+		}, schema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Total != sample.count || len(result.Rows) != sample.count {
+			t.Fatalf("%s=%s lost known message matches: %#v", sample.field, sample.value, result)
+		}
+		for _, row := range result.Rows {
+			if row[sample.field] != sample.value {
+				t.Fatalf("message %s attribution: %#v", sample.field, row)
+			}
+		}
+		grouped := groupRequest(sample.field, qt.SummaryColumn{ID: "messages", Op: "count"})
+		grouped.Source.Where = []qt.WhereTerm{{Field: sample.field, Op: "=", Value: sample.value}}
+		groups, _, err := server.executeQueryV3(t.Context(), "writing_messages", nil, PharosWritingMessagesSchema(), grouped)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(groups.Rows) != 1 || groups.Rows[0][sample.field] != sample.value || integer(groups.Rows[0]["messages"]) != int64(sample.count) {
+			t.Fatalf("message %s grouping lost known membership: %#v", sample.field, groups)
+		}
 	}
 }
 

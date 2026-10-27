@@ -22,6 +22,15 @@ const assetRoot = join(repo, "internal", "archive", "assets");
 const source = readFileSync(join(assetRoot, "ui.py"), "utf8");
 export const html = source.slice(source.indexOf("r'''") + 4, source.lastIndexOf("'''"));
 
+// Match applicationHTML(): the idle standard shell and the library dialog.
+// Library scripts must not execute before a library has been connected.
+function applicationHTML() {
+  return html.replace(/<script\b[^>]*>.*?<\/script>/gs, "")
+    .replace("<body>", "<body data-application-setup>")
+    .replace('<div id="homePage"></div>', `<div id="homePage">${asset("application-home.html")}</div>`)
+    .replace("</body>", `${asset("application.html")}</body>`);
+}
+
 // Every file under assets/, by path, read once per process.
 const types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".md": "text/markdown; charset=utf-8" };
 const assetCache = new Map();
@@ -82,7 +91,15 @@ function serve(routes, state, record) {
     }
     if (!path.startsWith("/api/")) {
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
-      return response.end(state.concurrency ? html.replace("<html", "<html data-concurrency-prototype") : html);
+      if (path === "/app") return response.end(applicationHTML());
+      let page = state.concurrency ? html.replace("<html", "<html data-concurrency-prototype") : html;
+      if (state.managedLibrary) {
+        page = page.replace('<head>', '<head><script>window.pharosManagedLibrary='+JSON.stringify(state.managedLibrary).replace(/</g, '\\u003c')+';</script>')
+          .replace('<div id="settingsContent" class="settings-content">', '<div id="settingsContent" class="settings-content">'+asset('managed-library.html'))
+          .replace('</head>', '<link rel="stylesheet" href="/assets/managed-library.css"></head>')
+          .replace('</body>', '<script src="/assets/managed-library.js"></script></body>');
+      }
+      return response.end(page);
     }
     const chunks = [];
     // The context can close mid-request when the test ends; drop that request.
@@ -122,8 +139,8 @@ let shotCount = 0;
 // Returns the page, `settled`, `shot(name)` (a screenshot, only when
 // PHAROS_UI_SCREENSHOTS is set), `problems()` (what will fail the test when
 // it ends) and the API `calls` made so far.
-export async function open(t, { url = "/", viewport = { width: 1440, height: 900 }, api = {}, preferences = {}, concurrency = false, ready } = {}) {
-  const state = { concurrency, preferences: { "pharos-theme": "dark", ...preferences }, unexpected: [], stubErrors: [] };
+export async function open(t, { url = "/", viewport = { width: 1440, height: 900 }, api = {}, preferences = {}, concurrency = false, managedLibrary = null, ready } = {}) {
+  const state = { concurrency, managedLibrary, preferences: { "pharos-theme": "dark", ...preferences }, unexpected: [], stubErrors: [] };
   const errors = [], failed = [], calls = [], inflight = new Set();
   let wake = () => {};
   const routes = [...routeTable(api), ...routeTable(defaultApi)];

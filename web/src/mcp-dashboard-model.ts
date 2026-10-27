@@ -1,6 +1,6 @@
 import { EMPTY_QUERY, type AggregationClause, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { withSlice, type SliceValue } from "./chart-selection";
-import { cumulativeMetricTrend, validChartDisplay, validRollingPeriods, type ChartDisplay, type CumulativeMetric } from "./chart-series";
+import { cumulativeMetricTrend, rollingMetricTrend, rollingRatioMetricTrend, validChartDisplay, validRollingPeriods, type ChartDisplay, type CumulativeMetric } from "./chart-series";
 import type { MetricResult } from "./metric-request";
 
 // These are requests served by Pharos, distinct from external MCP tools
@@ -45,7 +45,7 @@ export function mcpDashboardQuery(view: MCPDashboardView, where: WhereTerm[]): Q
   };
   const supporting: AggregationClause[] = view.metric === "calls" ? [] : [{ id: "mcp_calls", op: "sum", field: "call_count", groupBy, label: "Calls" }];
   if (view.metric === "failure_rate") supporting.push({ id: "mcp_failures", op: "sum", field: "error_count", groupBy, label: "Failed calls" });
-  if (view.view === "trend" && view.display === "cumulative" && (view.metric === "mean_time" || view.metric === "mean_output")) {
+  if (view.view === "trend" && (view.display === "cumulative" || (view.rollingPeriods ?? 0) > 1) && (view.metric === "mean_time" || view.metric === "mean_output")) {
     const field = view.metric === "mean_time" ? "duration_ms" : "estimated_output_tokens";
     supporting.push({ id: "mcp_total", op: "sum", field, groupBy, label: view.metric === "mean_time" ? "Total request time" : "Estimated output tokens" });
     supporting.push({ id: "mcp_samples", op: "count", field, groupBy, label: "Requests with a recorded value" });
@@ -67,4 +67,11 @@ export function cumulativeMCPTrend(view: MCPDashboardView, metrics: MetricResult
     : view.metric === "mean_time" || view.metric === "mean_output" ? { op: "ratio", numerator: "mcp_total", denominator: "mcp_samples" }
     : { op: view.metric === "largest_output" ? "max" : "sum" };
   return cumulativeMetricTrend(metrics, view.period, start, end, calculation);
+}
+
+export function smoothedMCPTrend(view: MCPDashboardView, metrics: MetricResult[], start: Date, end: Date, historyStart?: Date): MetricResult | undefined {
+  const ratio = view.metric === "failure_rate" ? { numerator: "mcp_failures", denominator: "mcp_calls" }
+    : view.metric === "mean_time" || view.metric === "mean_output" ? { numerator: "mcp_total", denominator: "mcp_samples" } : undefined;
+  return ratio ? rollingRatioMetricTrend(metrics, ratio, view.period, view.rollingPeriods ?? 0, start, end, historyStart)
+    : rollingMetricTrend(metrics[0], view.period, view.rollingPeriods ?? 0, start, end, historyStart);
 }

@@ -121,6 +121,44 @@ func refuses(_ work: () throws -> Void, _ message: String) {
         URLProtocol.registerClass(StartupResponse.self)
         defer { URLProtocol.unregisterClass(StartupResponse.self) }
 
+        // The header shares Sparkle's reply, then carries the user's install
+        // choice through download readiness without a second confirmation.
+        let headerDriver = UpdateUserDriver(hostBundle: .main, delegate: nil)
+        var nativeReply: ((SPUUserUpdateChoice) -> Void)?
+        var downloadChoices: [SPUUserUpdateChoice] = []
+        headerDriver.offerUpdate(version: "0.8.0", installing: false, reply: { downloadChoices.append($0) }, present: { nativeReply = $0 })
+        expect(headerDriver.headerState.version == "0.8.0" && headerDriver.headerState.phase == "available", "an installable release is offered in the header")
+        expect(headerDriver.installFromHeader(), "the header starts the verified download")
+        expect(!headerDriver.installFromHeader(), "a second click cannot start a second download")
+        nativeReply?(.install)
+        expect(downloadChoices == [.install], "native and header controls share a single-use reply")
+        var preparation: ((Error?) -> Void)?
+        var installChoices: [SPUUserUpdateChoice] = []
+        headerDriver.prepareInstallation = { preparation = $0 }
+        headerDriver.showReady(toInstallAndRelaunch: { installChoices.append($0) })
+        expect(preparation != nil && installChoices.isEmpty, "one-click installation waits for Pharos's process handoff")
+        preparation?(nil)
+        expect(installChoices == [.install], "readiness continues to install and relaunch after one click")
+        headerDriver.dismissUpdateInstallation()
+        expect(headerDriver.headerState.version.isEmpty && !headerDriver.installFromHeader(), "session completion removes the action")
+        for deferred in [false, true] {
+            headerDriver.deferring = false
+            headerDriver.offerUpdate(version: "0.9.0", installing: true, reply: { installChoices.append($0) }, present: { nativeReply = $0 })
+            headerDriver.deferring = deferred
+            if deferred {
+                expect(!headerDriver.installFromHeader(), "eject prevents a header installation")
+                headerDriver.cancellation?()
+            } else {
+                expect(headerDriver.installFromHeader(), "a staged release also installs from the header")
+                preparation?(UpdateFailure(message: "test writer still running"))
+            }
+            expect(installChoices.last == .skip && headerDriver.headerState.version.isEmpty, "failed preparation or eject safely cancels the action")
+        }
+        headerDriver.deferring = false
+        headerDriver.offerUpdate(version: "", installing: false, reply: { _ in }, present: { nativeReply = $0 })
+        expect(!headerDriver.installFromHeader(), "information-only releases cannot start an install")
+        nativeReply?(.dismiss)
+
         // Exercise the actual update controller: dismissing a staged update
         // preserves install-on-quit, while Skip cancels without an error callback.
         let updates = UpdateNotice()
@@ -354,6 +392,13 @@ func refuses(_ work: () throws -> Void, _ message: String) {
             processes.removeAll { $0.pid == pid }
         }, wait: { $0() })
         expect(stopped && processes.map(\.pid) == [903], "service and own MCP stop; another installation stays running")
+        processes = [(901, cli), (902, cli), (905, cli)]
+        try UpdateProcesses.prepare(app: app, servicePID: 901, stopService: {
+            processes.removeAll { [901, 902].contains($0.pid) }
+        }, processes: { processes }, arguments: { pid in
+            pid == 902 ? ["pharos", "serve", "--dynamic", "--application", app.path] : ["pharos", "mcp-app", "--application", app.path]
+        }, parentPID: { $0 == 902 ? 901 : nil }, signal: { pid in processes.removeAll { $0.pid == pid } }, wait: { $0() })
+        expect(processes.isEmpty, "update waits for broker-owned library services and managed MCP")
         processes = [(904, cli)]
         stopped = false
         refuses({ try UpdateProcesses.prepare(app: app, servicePID: nil, stopService: { stopped = true },

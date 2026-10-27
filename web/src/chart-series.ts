@@ -156,6 +156,23 @@ export function rollingMetricTrend(result: MetricResult | undefined, period: Cha
   return { ...result, buckets: smoothed, ...(result.groupCount === result.buckets.length ? { groupCount: smoothed.length } : {}) };
 }
 
+// Rates and means pool observations over the window. Averaging daily ratios
+// would give one call the same weight as a busy day and turn idle days into
+// zero-duration calls. The common averaging divisor cancels in this ratio.
+export function rollingRatioMetricTrend(metrics: MetricResult[], calculation: { numerator: string; denominator: string }, period: ChartPeriod, periods: number, start: Date, end: Date, historyStart?: Date): MetricResult | undefined {
+  const result = metrics[0];
+  if (!result || result.error || periods < 2) return result;
+  const numerator = metrics.find(metric => metric.id === calculation.numerator);
+  const denominator = metrics.find(metric => metric.id === calculation.denominator);
+  if (!numerator || !denominator) return { ...result, error: "Rolling rates require the underlying totals and counts." };
+  if (numerator.error || denominator.error) return { ...result, error: numerator.error || denominator.error };
+  const amounts = rollingMetricTrend(numerator, period, periods, start, end, historyStart)!;
+  const divisors = new Map(rollingMetricTrend(denominator, period, periods, start, end, historyStart)!.buckets.map(bucket => [JSON.stringify(bucket.keys), Number(bucket.value)]));
+  return { ...result, buckets: amounts.buckets.map(bucket => ({ ...bucket,
+    value: (divisors.get(JSON.stringify(bucket.keys)) ?? 0) > 0 ? Number(bucket.value) / divisors.get(JSON.stringify(bucket.keys))! : null,
+  })), groupCount: amounts.groupCount };
+}
+
 // Normalize after smoothing the amounts, so high-volume days carry their
 // actual weight. Include folded/hidden values in the denominator as well.
 export function shareBuckets(buckets: ChartBucket[]): ChartBucket[] {

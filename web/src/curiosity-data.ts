@@ -100,8 +100,19 @@ const baseRecipes: QueryRecipe[] = [
 ];
 export const queryRecipes = baseRecipes.map(enrichCardRecipe).map(refineHumanRecipe).map(applyHumanCardCopy).map(refineModelChoiceRecipe).map(refineContextCachingRecipe).map(refineErrorPatternRecipe).map(refineToolFlowRecipe).map(refineSkillsInstructionsRecipe).map(refineResearchRecipe).map(refineApiCostRecipe).map(refineTokenUsageRecipe).map(refineDelegationRecipe).map(refineSteeringRecipe).map(recipe => recipe.humanStudy ? { ...recipe, days: [7] } : recipe).map(refineCardDestination);
 
-export function instantiateRecipe(recipe: QueryRecipe, days: number, clock = new Date()): QuerySuggestion {
-  const window: RollingWindow | undefined = recipe.period ? undefined : { days, field: recipe.field, mode: "relative" };
+export function describeRecipeText(text: string, days: number | null): string {
+  return days === null ? text
+    .replaceAll("{lastDays} of", "All-time").replaceAll("{lastDays}", "All time").replaceAll("{period}", "All-time")
+    .replaceAll("the start of the last {days} days", "the start of recorded history")
+    .replace(/(?:over each trailing|over trailing) \{days\}(?:-day period| days)/g, "across all time")
+    .replace(/(?:in|during|over) the last \{days\} days/g, "across all time")
+    .replaceAll("of the last {days} days", "across all time")
+    .replaceAll("{days}-day", "all-time").replaceAll("{days} days", "all time").replaceAll("{days}", "all")
+    : text.replaceAll("{days}", String(days)).replaceAll("{period}", days === 7 ? "Weekly" : days === 1 ? "Daily" : `${days}-day`).replaceAll("{lastDays}", days === 7 ? "Last seven days" : days === 1 ? "Last 24 hours" : `Last ${days} days`);
+}
+
+export function instantiateRecipe(recipe: QueryRecipe, days: number | null, clock = new Date()): QuerySuggestion {
+  const window: RollingWindow | undefined = recipe.period || days === null ? undefined : { days, field: recipe.field, mode: "relative" };
   const measures = recipe.calendarTimezone === "local" ? recipe.measures.map(metric => metric.dateGrouping ? { ...metric, dateGrouping: { ...metric.dateGrouping, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC" } } : metric) : recipe.measures;
   const source = { ...EMPTY_QUERY, where: recipe.where ?? [], aggregations: measures };
   const view = recipe.exploration;
@@ -114,8 +125,7 @@ export function instantiateRecipe(recipe: QueryRecipe, days: number, clock = new
     where: view.having ?? [], orderBy: [{ field: view.valueField, dir: "desc", nulls: "last" }, ...(view.tieBreakField ? [{ field: view.tieBreakField, dir: "desc" as const }] : []), ...keys.map(field => ({ field, dir: "asc" as const }))],
     aggregations: view.coverMetric && !coverMetric ? [view.coverMetric] : [],
   } : source, window, clock);
-  const describe = (text: string) => text.replaceAll("{days}", String(days)).replaceAll("{period}", days === 7 ? "Weekly" : days === 1 ? "Daily" : `${days}-day`).replaceAll("{lastDays}", days === 7 ? "Last seven days" : days === 1 ? "Last 24 hours" : `Last ${days} days`);
-  return { ...recipe, title: describe(recipe.title), description: describe(recipe.description), measures, window, query, url: cardDestination(recipe, query, window), instanceId: `${recipe.id}:${recipe.period ?? days}` };
+  return { ...recipe, title: describeRecipeText(recipe.title, days), description: describeRecipeText(recipe.description, days), measures, window, query, url: cardDestination(recipe, query, window), instanceId: `${recipe.id}:${recipe.period ?? days ?? "all"}` };
 }
 
 export function shuffled<T>(items: T[]): T[] {

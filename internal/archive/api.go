@@ -58,7 +58,7 @@ type Server struct {
 	Catalog  *Catalog
 	config   Config
 	configMu sync.RWMutex
-	ingestMu sync.Mutex
+	ingestMu ingestCoordinator
 	// ingestStop stops the run holding ingestMu.
 	ingestStop ingestStopper
 	runsMu     sync.RWMutex
@@ -81,6 +81,7 @@ func NewServer(config Config, catalog *Catalog) *Server {
 	server := &Server{Catalog: catalog, config: config, runs: []*SyncRun{}, queryMetadata: make(chan struct{}, 1)}
 	server.life.init()
 	if catalog != nil {
+		server.ingestMu.path = catalog.Path
 		catalog.background = server.spawn
 		catalog.RepositoryAliases = config.RepositoryAliases
 		catalog.RepositorySeparate = config.RepositorySeparate
@@ -92,12 +93,34 @@ func (s *Server) Config() Config { s.configMu.RLock(); defer s.configMu.RUnlock(
 
 func (s *Server) Serve() error {
 	config := s.Config()
+	use, err := fileLease(libraryUseLock(config), false)
+	if err != nil {
+		return err
+	}
+	defer use.Close()
+	owner, err := fileLease(filepath.Join(filepath.Dir(canonical(config.CatalogPath)), ".pharos-service.lock"), true)
+	if err != nil {
+		return err
+	}
+	defer owner.Close()
 	if config.Host != "127.0.0.1" && config.Host != "::1" && config.Host != "localhost" {
 		return fmt.Errorf("the archive API may bind only to a loopback address")
 	}
 	listener, err := net.Listen("tcp", net.JoinHostPort(config.Host, strconv.Itoa(config.Port)))
 	if err != nil {
 		return err
+	}
+	defer listener.Close()
+	config.Port = listener.Addr().(*net.TCPAddr).Port
+	s.configMu.Lock()
+	s.config.Port = config.Port
+	s.configMu.Unlock()
+	if config.RuntimeEndpoint != "" {
+		ep := applicationEndpoint{URL: "http://" + listener.Addr().String(), Token: config.APIToken, PID: os.Getpid(), Lifetime: randomToken(), Catalog: config.CatalogPath}
+		if err := durableJSON(config.RuntimeEndpoint, ep); err != nil {
+			return err
+		}
+		defer os.Remove(config.RuntimeEndpoint)
 	}
 	s.life.onListen()
 	display := config.Host
@@ -161,6 +184,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.askHTTP(w, r)
 		return
 	}
+	if strings.HasPrefix(r.URL.Path, "/api/feedback/") {
+		s.feedbackHTTP(w, r)
+		return
+	}
 	if r.URL.Path == "/api/query-object-references" {
 		s.queryObjectReferences(w, r)
 		return
@@ -219,7 +246,7 @@ func (s *Server) authorized(r *http.Request) bool {
 // of which serves the single-page UI.
 func isUIPage(path string) bool {
 	switch path {
-	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/preferences", "/settings/ask", "/sources", "/activity", "/analyze", "/tools", "/tl1", "/tl1/configurations", "/tl1/followups", "/tl1/quality", "/tl1/runs", "/health", "/mcp", "/findings":
+	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/preferences", "/settings/ask", "/sources", "/activity", "/analyze", "/tools", "/tl1", "/tl1/configurations", "/tl1/followups", "/tl1/quality", "/tl1/runs", "/health", "/mcp", "/findings":
 		return true
 	}
 	return strings.HasPrefix(path, "/work/")
@@ -227,21 +254,24 @@ func isUIPage(path string) bool {
 
 // uiAssets maps each static asset URL the UI loads to its file under assets/.
 var uiAssets = map[string]struct{ name, contentType string }{
-	"/assets/query-tables.js":  {"query-tables.js", "text/javascript; charset=utf-8"},
-	"/assets/query-tables.css": {"query-tables.css", "text/css; charset=utf-8"},
-	"/assets/onboarding.js":    {"onboarding.js", "text/javascript; charset=utf-8"},
-	"/assets/upgrade.js":       {"upgrade.js", "text/javascript; charset=utf-8"},
-	"/assets/library.js":       {"library.js", "text/javascript; charset=utf-8"},
-	"/assets/cloud-backup.js":  {"cloud-backup.js", "text/javascript; charset=utf-8"},
-	"/assets/sync.js":          {"sync.js", "text/javascript; charset=utf-8"},
-	"/assets/carbon.js":        {"carbon.js", "text/javascript; charset=utf-8"},
-	"/assets/menu-bar.js":      {"menu-bar.js", "text/javascript; charset=utf-8"},
-	"/assets/header.js":        {"header.js", "text/javascript; charset=utf-8"},
-	"/assets/ask-pharos.html":  {"ask-pharos.html", "text/html; charset=utf-8"},
-	"/assets/ask-pharos.css":   {"ask-pharos.css", "text/css; charset=utf-8"},
-	"/assets/ask-model.js":     {"ask-model.js", "text/javascript; charset=utf-8"},
-	"/assets/ask-pharos.js":    {"ask-pharos.js", "text/javascript; charset=utf-8"},
-	"/assets/reader-model.js":  {"reader-model.js", "text/javascript; charset=utf-8"},
+	"/assets/query-tables.js":     {"query-tables.js", "text/javascript; charset=utf-8"},
+	"/assets/query-tables.css":    {"query-tables.css", "text/css; charset=utf-8"},
+	"/assets/onboarding.js":       {"onboarding.js", "text/javascript; charset=utf-8"},
+	"/assets/upgrade.js":          {"upgrade.js", "text/javascript; charset=utf-8"},
+	"/assets/library.js":          {"library.js", "text/javascript; charset=utf-8"},
+	"/assets/cloud-backup.js":     {"cloud-backup.js", "text/javascript; charset=utf-8"},
+	"/assets/sync.js":             {"sync.js", "text/javascript; charset=utf-8"},
+	"/assets/carbon.js":           {"carbon.js", "text/javascript; charset=utf-8"},
+	"/assets/menu-bar.js":         {"menu-bar.js", "text/javascript; charset=utf-8"},
+	"/assets/header.js":           {"header.js", "text/javascript; charset=utf-8"},
+	"/assets/ask-pharos.html":     {"ask-pharos.html", "text/html; charset=utf-8"},
+	"/assets/ask-pharos.css":      {"ask-pharos.css", "text/css; charset=utf-8"},
+	"/assets/ask-model.js":        {"ask-model.js", "text/javascript; charset=utf-8"},
+	"/assets/ask-pharos.js":       {"ask-pharos.js", "text/javascript; charset=utf-8"},
+	"/assets/reader-model.js":     {"reader-model.js", "text/javascript; charset=utf-8"},
+	"/assets/managed-storage.js":  {"managed-storage.js", "text/javascript; charset=utf-8"},
+	"/assets/managed-library.js":  {"managed-library.js", "text/javascript; charset=utf-8"},
+	"/assets/managed-library.css": {"managed-library.css", "text/css; charset=utf-8"},
 }
 
 func (s *Server) get(w http.ResponseWriter, r *http.Request) {
@@ -256,9 +286,16 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeEmbeddedAsset(w, asset.name, asset.contentType)
 	case path == "/api/probe":
 		writeJSON(w, ProbeSources(s.Config(), s.Catalog), http.StatusOK)
+	case path == "/api/probe/tools":
+		home, _ := os.UserHomeDir()
+		writeJSON(w, map[string]any{"tools": probeTools(home, s.Config())}, http.StatusOK)
 	case path == "/api/probe/status":
 		home, _ := os.UserHomeDir()
-		writeJSON(w, probeStatus(home, s.Config(), s.Catalog), http.StatusOK)
+		if r.URL.Query().Get("discovery") == "none" {
+			writeJSON(w, probeStatusForKinds(home, s.Config(), s.Catalog, map[string]bool{}), http.StatusOK)
+		} else {
+			writeJSON(w, probeStatus(home, s.Config(), s.Catalog), http.StatusOK)
+		}
 	case strings.HasPrefix(path, "/api/query/"):
 		dataset, operation, ok := queryTableRoute(path)
 		if !ok {
@@ -428,6 +465,18 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeResult(w, value, err)
 	case path == "/api/pricing":
 		writeJSON(w, s.Catalog.pricingStatus(), 200)
+	case path == "/api/origins":
+		if err := s.Catalog.ensureOrigins(r.Context()); err != nil {
+			writeError(w, err, 500)
+			return
+		}
+		rows, err := queryMapsContext(r.Context(), s.Catalog.reader(), "SELECT id,label,kind FROM machines ORDER BY label,id")
+		if err != nil {
+			writeError(w, err, 500)
+			return
+		}
+		rows = append(rows, map[string]any{"id": "environment:web", "label": "Web (device unknown)", "kind": "web"})
+		writeJSON(w, map[string]any{"machines": rows}, 200)
 	case path == "/api/usage/history":
 		value, err := s.Catalog.UsageHistory(r.Context())
 		writeResult(w, value, err)
@@ -641,6 +690,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"enabled": enabled}, http.StatusOK)
 	case path == "/api/probe/accept":
 		s.acceptProbe(w, body)
+	case path == "/api/probe":
+		s.probeSelected(w, body)
 	case path == "/api/sources/sync":
 		config := s.Config()
 		sources := []SourceConfig{}
@@ -686,7 +737,7 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 }
 
 func searchOptions(query url.Values) (SearchOptions, error) {
-	options := SearchOptions{Query: query.Get("q"), Repository: query.Get("repository"), Source: query.Get("source"), File: query.Get("file"), Owner: query.Get("owner"), Provider: query.Get("provider"), Model: query.Get("model"), Effort: query.Get("effort"), From: query.Get("from"), To: query.Get("to"), Flavor: query.Get("flavor"), Version: query.Get("version"), Outcome: query.Get("outcome"), Error: query.Get("error"), Metric: query.Get("metric"), ChangedOnly: query.Get("changed") == "1", Substring: query.Get("substring") == "1", Limit: 50}
+	options := SearchOptions{Query: query.Get("q"), Repository: query.Get("repository"), Source: query.Get("source"), File: query.Get("file"), Owner: query.Get("owner"), Provider: query.Get("provider"), Channel: query.Get("channel"), MachineID: query.Get("machine_id"), ExecutionMachineID: query.Get("execution_machine_id"), Model: query.Get("model"), Effort: query.Get("effort"), From: query.Get("from"), To: query.Get("to"), Flavor: query.Get("flavor"), Version: query.Get("version"), Outcome: query.Get("outcome"), Error: query.Get("error"), Metric: query.Get("metric"), ChangedOnly: query.Get("changed") == "1", Substring: query.Get("substring") == "1", Limit: 50}
 	if query.Get("limit") != "" {
 		value, err := strconv.Atoi(query.Get("limit"))
 		if err != nil {
@@ -817,6 +868,8 @@ func (s *Server) sourceInventory() (map[string]any, error) {
 			stale = value
 		}
 		item := map[string]any{"name": source.Name, "kind": source.Kind, "account": source.Account, "path": nilIfEmpty(source.Path), "path_status": pathStatus, "enabled": source.Enabled, "capability": capability, "coverage": coverage, "last_attempt_at": state["last_attempt_at"], "last_success_at": state["last_success_at"], "pending_count": integer(state["pending_count"]), "error": state["error"], "stale": stale, "host_id": host.ID, "host_label": host.Label}
+		item["preservation_mode"] = preservationMode(source)
+		item["preservation"] = s.Catalog.inputPreservationStatus(context.Background(), host.ID, source.Name)
 		items = append(items, item)
 		if source.Enabled {
 			enabled++

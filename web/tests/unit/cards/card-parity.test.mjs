@@ -17,7 +17,7 @@ for (const empty of [false, true]) test(`all card definitions retain preview res
   for (const recipe of queryRecipes) for (const days of windows) {
     const result = await compare(recipe, days, values);
     cases++; if (result.state === "ready") ready++;
-    if (result.preview || result.loading || result.failures.length) failures.push({ id: recipe.id, days, ...result });
+    if (result.preview || result.analysis || result.loading || result.failures.length) failures.push({ id: recipe.id, days, ...result });
   }
   t.diagnostic(`${queryRecipes.length} definitions × ${windows.length} window(s): ${cases} comparisons; ${ready} populated previews, ${cases - ready} empty previews`);
   assert.deepEqual(failures, []);

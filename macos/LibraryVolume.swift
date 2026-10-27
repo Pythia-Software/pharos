@@ -135,13 +135,16 @@ enum ServiceClient {
 
     /// Blocks until the service answers. The service gives up after 7 s,
     /// inside DiskArbitration's ~10 s wait for an eject approval.
-    static func release(_ service: URL, token: String, timeout: TimeInterval = 8.5) -> Release {
+    static func release(_ service: URL, token: String, timeout: TimeInterval = 8.5,
+                        path: String = "/api/release", body: Data? = nil) -> Release {
         var components = URLComponents(url: service, resolvingAgainstBaseURL: false)
-        components?.path = "/api/release"
+        components?.path = path
         components?.query = nil
         guard let url = components?.url else { return .failed("invalid service URL \(service)") }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
         request.httpMethod = "POST"
+        request.httpBody = body
+        if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         let session = URLSession(configuration: .ephemeral)
         defer { session.finishTasksAndInvalidate() }
@@ -212,6 +215,35 @@ enum ReleaseState: Equatable {
         // release or SIGTERM, so a clean exit also covers a release whose
         // answer was lost.
         return self != .none || status == 0 ? .released : .failed
+    }
+}
+
+/// The broker owns library services even when the app is installed elsewhere.
+/// Both native eject controls release the selected library's entire volume.
+enum ManagedLibraryEject {
+    struct Failure: LocalizedError {
+        let errorDescription: String?
+        init(_ message: String) { errorDescription = message }
+    }
+
+    static func volume(in data: Data, application: URL? = nil) throws -> LibraryVolume {
+        struct State: Decodable {
+            struct Library: Decodable { let id: String; let config: String }
+            let selected: String
+            let libraries: [Library]
+        }
+        let state = try JSONDecoder().decode(State.self, from: data)
+        if let library = state.libraries.first(where: { $0.id == state.selected }),
+           let volume = LibraryVolume(containing: URL(fileURLWithPath: library.config).deletingLastPathComponent()) {
+            return volume
+        }
+        if let application, let volume = LibraryVolume(containing: application) { return volume }
+        throw Failure("The selected library and this application are not on a drive that Pharos can eject.")
+    }
+
+    static func release(_ volume: LibraryVolume, service: URL, token: String) -> ServiceClient.Release {
+        let body = try? JSONSerialization.data(withJSONObject: ["volume": "uuid:" + volume.uuid])
+        return ServiceClient.release(service, token: token, path: "/api/app/release-volume", body: body)
     }
 }
 

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { applyQuery, loadSchema, EMPTY_QUERY } from "@pythia-software/query-table-core";
 import toolCalls from "../../../../schemas/tool_calls.schema.json";
-import { machineWindow, machineDay, machineWhere, activityFor, timeFacts, totalTime, groupTime, relativeChange, noRepository, operationKey, operationName, activityPresentation, timeValue, factsFromCalls, previousTimeWhere, timeAggregationWhere, machineDrilldownWhere, selectedMachineRepository } from "../../../src/machine-activity-data";
+import { machineScopeFromParams, machineWindow, machineDay, machineWhere, activityFor, timeFacts, totalTime, groupTime, relativeChange, noRepository, operationKey, operationName, activityPresentation, timeValue, factsFromCalls, previousTimeWhere, timeAggregationWhere, machineDrilldownWhere, selectedMachineRepository } from "../../../src/machine-activity-data";
 import { exampleTimeFacts, exampleConcurrency, exampleTimeCalls } from "../helpers/machine-activity-fixtures";
 process.env.TZ = "America/Denver";
 const scope = { days: 7, repository: "repo-a", provider: "codex", model: "example-model" };
@@ -161,4 +161,17 @@ test("repeated missing-repository segments replace their filters and preserve mi
   assert.deepEqual(matchingRepositories(where), ["2", "3"]);
   assert.equal(where.filter(term => "any" in term).length, 2, "One repository OR plus the unrelated mixed-field OR");
   assert.ok(where.includes(mixed));
+});
+
+
+test("explicit legacy machine links reset origin filters from previous visits", () => {
+  const saved = { days: 30, repository: "old", provider: "codex", model: "old-model", channel: "desktop", machine_id: "laptop", execution_machine_id: "worker" };
+  const plain = machineScopeFromParams(new URLSearchParams(), saved);
+  assert.equal(plain.channel, "desktop");
+  for (const query of ["activity_days=7&activity_repo=repo-a", "q_usage=saved-query", "activity_channel=cli"]) {
+    const scoped = machineScopeFromParams(new URLSearchParams(query), saved);
+    assert.equal(scoped.machine_id, "");
+    assert.equal(scoped.execution_machine_id, "");
+    assert.equal(scoped.channel, query.includes("activity_channel") ? "cli" : "");
+  }
 });

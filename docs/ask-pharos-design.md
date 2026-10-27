@@ -179,11 +179,35 @@ inherited MCP configuration; Antigravity uses a dedicated navigation agent,
 plan mode and its terminal sandbox. No adapter uses permission-bypass flags.
 Provider login remains the CLI's responsibility; Pharos accepts no API keys.
 
+Every inference launch explicitly connects the read-only Pharos MCP server for
+the current library using the same executable and configuration as Settings →
+MCP, including portable libraries. Codex requires that server to initialize;
+Claude loads only that server and preapproves its tools; Antigravity configures
+it as `pharos-ask` in the disposable workspace and enables `call_mcp_tool`.
+The distinct name avoids reusing a global `pharos` connection to another library.
+Connection settings are scoped to the disposable invocation and do not edit the
+user's CLI configuration or pass the Pharos API token to the agent. MCP must be
+enabled in Pharos before the agent starts. Model discovery does not need this
+connection.
+
+Antigravity has no per-invocation permission allowlist. Its effective policy
+must allow `mcp(pharos-ask/*)`, without conflicting ask/deny rules or strict mode.
+Pharos combines `permissions` from `~/.gemini/antigravity-cli/settings.json`
+with `userSettings.globalPermissionGrants` from `~/.gemini/config/config.json`.
+Matching deny and ask rules take precedence over allow rules from either file.
+Pharos checks that policy before sending private context and points to
+Antigravity's `/permissions` command for a missing grant. It never broadens the
+user's global permissions automatically.
+
 The agent receives a navigation catalog built with the existing card URL
 builders, recent conversation context, local time, and a private lookup protocol
 on stdin/stdout. It can request up to two bounded lookups of work, page visits,
 or earlier chats. Pharos services them inside that request. There is no public
 MCP tool, shared connector token, or separate listener for private history.
+The agent can additionally use Pharos MCP tools to inspect archived work,
+conversations, findings, and statistics, and is instructed to report connection
+failures instead of inventing evidence. Private visits and history stay on the
+lookup protocol.
 Returned destination IDs must resolve to known catalog or lookup results;
 model-authored URLs are never accepted. This first build selects existing views
 and their default query windows; it does not generate arbitrary Query Table SQL.

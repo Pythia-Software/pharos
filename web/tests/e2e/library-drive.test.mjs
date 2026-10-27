@@ -135,10 +135,15 @@ describe("library drive, end to end", { skip }, () => {
 
   it("onboards a new Mac: add sources, capture, then index", { timeout: 300000 }, async t => {
     const page = await openPage(t, { onboarding: true });
-    const dialog = page.locator("#pharosOnboarding [role=dialog]");
+    const dialog = page.locator("#pharosOnboarding");
     await dialog.waitFor();
-    await dialog.getByText("~/.claude/projects").waitFor();
-    await dialog.getByRole("button", { name: /^Add \d+ sources?$/ }).click();
+    await dialog.getByRole('group',{name:'Detected tools',exact:true}).waitFor();
+    await dialog.getByRole('checkbox',{name:/Claude Code/}).check();
+    await dialog.getByRole('checkbox',{name:/Codex/}).check();
+    await dialog.getByRole('button',{name:'Continue',exact:true}).click();
+    await dialog.getByText("~/.claude/projects",{exact:true}).waitFor();
+    await dialog.getByRole('button',{name:'Continue',exact:true}).click();
+    await dialog.getByRole("button", { name: 'Add and capture',exact:true }).click();
     await dialog.getByRole("button", { name: "Index now" }).waitFor({ timeout: 60000 });
     await shoot(page, "onboarding-captured");
     await dialog.getByRole("button", { name: "Index now" }).click();

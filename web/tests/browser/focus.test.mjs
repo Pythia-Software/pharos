@@ -3,9 +3,305 @@
 // stay below the header; the annotation toolbar stays on screen.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { defaultApi, workID } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery } from "@pythia-software/query-table-core";
+
+test('Library setup keeps focus in its modal and returns to the choice after cancelling a flow', {skip}, async t => {
+  let folderSelections=0;
+  const {page, calls, shot} = await open(t, {url:'/app',ready:'#application-setup[open]',api:{
+    'GET /api/app/state': {application:'/Applications/Pharos.app',selected:'',mcp:'',busy:false,libraries:[]},
+    'POST /api/app/create': {saved:true},
+    'POST /api/app/choose-folder': ()=>({path:folderSelections++===0?'/Volumes/Test SSD':''}),
+  }});
+  const dialog=page.locator('#application-setup');
+  assert.ok(await dialog.evaluate(element=>element.contains(document.activeElement)));
+  await page.locator('.brand').evaluate(element=>element.focus());
+  assert.ok(await dialog.evaluate(element=>element.contains(document.activeElement)), 'background took focus during setup');
+  for(let i=0;i<8;i++){
+    await page.keyboard.press('Tab');
+    assert.ok(await dialog.evaluate(element=>element.contains(document.activeElement)), 'Tab escaped the modal');
+  }
+  await shot('welcome');
+  await page.locator('#meet-pharos').click();
+  assert.ok(await page.locator('#about-title').evaluate(element=>element===document.activeElement));
+  await shot('about-pharos');
+  await page.locator('#back-to-welcome').click();
+  assert.ok(await page.locator('#welcome-title').evaluate(element=>element===document.activeElement));
+  await page.locator('#meet-pharos').click();
+  await page.locator('#start-setup').click();
+  assert.ok(await page.locator('#flow-title').evaluate(element=>element===document.activeElement));
+  await shot('machines');
+  await page.locator('.wizard-alternate summary').focus();
+  await page.keyboard.press('Shift+Tab');
+  assert.ok(await page.evaluate(()=>document.activeElement.matches('input[name=machines]')), 'reverse Tab skipped the machine choices');
+  await page.locator('input[name=machines][value=many]').check();
+  await page.locator('#submit').click();
+  assert.ok(await page.locator('#flow-title').evaluate(element=>element===document.activeElement));
+  await shot('storage');
+  await page.locator('#submit').click();
+  assert.ok(await page.locator('#name').isHidden());
+  assert.ok(await page.locator('#path').isHidden());
+  await page.locator('#submit').click();
+  assert.ok(await page.locator('#path').evaluate(element=>element===document.activeElement), 'missing SSD folder was not focused');
+  await page.getByRole('button',{name:'Edit library name',exact:true}).click();
+  assert.ok(await page.locator('#name').evaluate(element=>element===document.activeElement), 'editing the library name did not focus its input');
+  await page.locator('#name').fill('Research');
+  await page.getByRole('button',{name:'Done editing library name',exact:true}).click();
+  assert.ok(await page.locator('#name').isHidden());
+  await page.locator('#choose-folder').click();
+  await page.waitForFunction(()=>document.querySelector('#path').value==='/Volumes/Test SSD'&&!document.querySelector('#choose-folder').disabled);
+  assert.ok(await page.locator('#choose-folder').evaluate(element=>element===document.activeElement), 'folder selection lost keyboard focus');
+  await page.locator('#choose-folder').click();
+  await page.waitForFunction(()=>!document.querySelector('#choose-folder').disabled);
+  assert.equal(await page.locator('#path').inputValue(),'/Volumes/Test SSD', 'cancelling cleared the selected folder');
+  await shot('details');
+  await page.locator('#submit').click();
+  assert.ok(await page.locator('#flow-title').evaluate(element=>element===document.activeElement));
+  await shot('review');
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#name').inputValue(),'Research');
+  assert.ok(await page.locator('#name').isHidden(), 'returning from review exposed the editor');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  assert.ok(await page.locator('#about-title').evaluate(element=>element===document.activeElement));
+  await page.locator('#start-setup').click();
+  await page.locator('.wizard-alternate summary').click();
+  await page.locator('#wizard-machines [data-flow=open]').click();
+  await page.locator('#submit').click();
+  assert.ok(await page.locator('#existing-path').evaluate(element=>element===document.activeElement));
+  await page.keyboard.press('Escape');
+  assert.ok(await page.locator('#flow-title').evaluate(element=>element===document.activeElement));
+  await page.locator('#wizard-machines [data-flow=recover]').click();
+  await page.locator('#submit').click();
+  assert.ok(await page.locator('#backup').evaluate(element=>element===document.activeElement));
+  await page.locator('#backup').fill('/Backups/My Library');
+  await page.locator('#submit').click();
+  await page.locator('#submit').click();
+  assert.ok(await page.locator('#recover-path').evaluate(element=>element===document.activeElement));
+  await page.locator('#recover-path').fill('/Libraries/Restored');
+  await page.locator('#submit').click();
+  await shot('restore-review');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  assert.ok(await dialog.isVisible(), 'initial setup dismissed before choosing a library');
+  assert.ok(calls.every(call=>['/api/app/state','/api/app/choose-folder'].includes(call.path)), 'setup wrote data before final review');
+  await page.locator('#application-theme').click();
+  await shot('machines-light');
+  await page.locator('#submit').click();
+  await page.locator('#submit').click();
+  await page.locator('#submit').click();
+  await page.locator('#submit').click();
+  await page.locator('#next').waitFor({state:'visible'});
+  assert.ok(await page.locator('#next').evaluate(element=>element===document.activeElement), 'completion did not focus source approval');
+  await shot('ready');
+});
+
+const settingsLocal={id:'local',name:'Pending history',config:'/Libraries/Pending/library.toml',available:true,connected:true};
+const settingsArchive={id:'archive',name:'My archive',config:'/Volumes/Archive/library.toml',available:true};
+const settingsState={selected:settingsLocal.id,mcp:settingsLocal.id,busy:false,libraries:[settingsLocal,settingsArchive],local_library_parent:'/Users/test/Libraries'};
+
+test('Library settings opens inline forms and returns focus when cancelled', {skip}, async t => {
+  const {page,shot}=await open(t,{url:'/settings',ready:'#healthCards .panel',managedLibrary:settingsLocal,api:{
+    'GET /api/app/state':settingsState,
+    'POST /api/app/choose-folder':{path:'/Volumes/Research SSD'},
+  }});
+  await page.getByRole('link',{name:'Libraries',exact:true}).click();
+  await page.locator('#library-settings-current h3').waitFor();
+  await shot('libraries');
+  for(const kind of ['open','create']){
+    const button=page.locator(kind==='open'?'#library-settings-open':'#library-settings-new');
+    await button.click();
+    const input=page.locator(kind==='open'?'#library-settings-existing':'#library-settings-name');
+    assert.ok(await input.evaluate(el=>el===document.activeElement));
+    const form=page.locator('#library-settings-'+kind+'-form');
+    if(kind==='create'){
+      await page.locator('#library-settings-storage').selectOption('ssd');
+      await form.getByRole('button',{name:'Choose folder…',exact:true}).click();
+      await page.waitForFunction(()=>document.querySelector('#library-settings-parent').value==='/Volumes/Research SSD'&&document.activeElement?.dataset.libraryPick==='library-settings-parent');
+      assert.ok(await form.getByRole('button',{name:'Choose folder…',exact:true}).evaluate(el=>el===document.activeElement));
+    }
+    await shot(kind);
+    await form.getByRole('button',{name:'Cancel',exact:true}).click();
+    assert.ok(await button.evaluate(el=>el===document.activeElement));
+  }
+});
+
+test('Library settings keeps transfer, delivery, restore and release reachable while connected', {skip}, async t => {
+  const {page,shot}=await open(t,{url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:settingsLocal,api:{
+    'GET /api/app/state':settingsState,
+  }});
+  const operations=page.getByRole('link',{name:'Transfer, delivery, restore and release →',exact:true});
+  await operations.scrollIntoViewIfNeeded();await shot('operations-link');
+  await operations.click();
+  await page.locator('#library-list .card').first().waitFor();
+  await page.getByText('Move or copy history between libraries',{exact:true}).click();
+  await page.getByRole('button',{name:'Start verified transfer',exact:true}).waitFor();
+  await page.getByText('Capture locally, transfer later',{exact:true}).click();
+  await page.getByRole('button',{name:'Enable automatic delivery',exact:true}).waitFor();
+  const release=page.getByRole('button',{name:'Release library',exact:true});
+  await release.focus();
+  assert.ok(await release.evaluate(el=>el===document.activeElement));
+  await shot('operations');
+  await page.getByRole('button',{name:'Restore a backup',exact:true}).click();
+  await page.locator('#backup').waitFor();
+  assert.ok(await page.locator('#flow-title').evaluate(el=>el===document.activeElement));
+});
+
+test('Library settings switches within Settings and opens the selected library', {skip}, async t => {
+  const {page,calls}=await open(t,{url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:settingsLocal,api:{
+    'GET /api/app/state':({state})=>({...settingsState,selected:state.managedLibrary.id}),
+    'POST /api/app/connect':({body,state})=>{assert.equal(body.id,settingsArchive.id);state.managedLibrary=settingsArchive;return {saved:true}},
+  }});
+  await page.getByRole('button',{name:'Switch to My archive',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#library-settings-current h3')?.textContent==='My archive');
+  assert.equal(new URL(page.url()).pathname,'/settings/libraries');
+  assert.deepEqual(calls.filter(call=>call.path==='/api/app/connect').map(call=>call.body),[{id:settingsArchive.id}]);
+});
+
+test('Library settings creates and opens libraries from its inline forms', {skip}, async t => {
+  for(const kind of ['create','open'])await t.test(kind,async t=>{
+    const {page,calls}=await open(t,{url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:settingsLocal,api:{
+      'GET /api/app/state':settingsState,
+      ['POST /api/app/'+kind]:({state})=>{state.managedLibrary=settingsArchive;return {saved:true}},
+    }});
+    await page.locator(kind==='open'?'#library-settings-open':'#library-settings-new').click();
+    if(kind==='open')await page.locator('#library-settings-existing').fill('/Volumes/Archive/library.toml');
+    else {await page.locator('#library-settings-name').fill('Research');await page.locator('#library-settings-parent').fill('/Volumes/Archive')}
+    const saved=page.waitForResponse(response=>response.url().endsWith('/api/app/'+kind)&&response.request().method()==='POST');
+    await page.locator('#library-settings-'+kind+'-form button[type=submit]').click();
+    await saved;
+    await page.waitForFunction(()=>window.pharosManagedLibrary?.id==='archive');
+    assert.equal(new URL(page.url()).pathname,kind==='open'?'/settings/libraries':'/settings/sources');
+    assert.deepEqual(calls.find(call=>call.path==='/api/app/'+kind).body,kind==='open'?{path:'/Volumes/Archive/library.toml'}:{name:'Research',path:'/Volumes/Archive/Research',location:'mac'});
+  });
+});
+
+test('Library proposal allows default setup and deliberate inline overrides', {skip}, async t => {
+  const parent='/Users/test/Library/Application Support/Pharos/Libraries';
+  const {page,calls}=await open(t,{url:'/app',ready:'#application-setup[open]',api:{
+    'GET /api/app/state':{application:'/Applications/Pharos.app',selected:'',mcp:'',busy:false,libraries:[],local_library_parent:parent},
+    'POST /api/app/create':{saved:true},
+  }});
+  await page.locator('#meet-pharos').click();await page.locator('#start-setup').click();
+  await page.locator('#submit').click();await page.locator('#submit').click();
+  assert.ok(await page.locator('#name').isHidden());assert.ok(await page.locator('#path').isHidden());
+  assert.ok((await page.locator('#location-path').textContent()).includes(parent));
+  await page.locator('#submit').click();
+  assert.ok((await page.locator('#review-folder').textContent()).startsWith(parent+'/'));
+  await page.locator('#cancel').click();
+  await page.getByRole('button',{name:'Edit library location',exact:true}).click();
+  assert.equal(await page.locator('#path').inputValue(),parent);
+  assert.ok(await page.locator('#path').evaluate(element=>element===document.activeElement));
+  await page.locator('#path').fill('/Users/test/Research');
+  await page.getByRole('button',{name:'Done editing library location',exact:true}).click();
+  await page.getByRole('button',{name:'Edit library name',exact:true}).click();
+  await page.locator('#name').fill('');await page.locator('#submit').click();
+  assert.ok(await page.locator('#name').evaluate(element=>element===document.activeElement));
+  await page.locator('#name').fill('Research');
+  await page.locator('#submit').click();await page.locator('#cancel').click();
+  assert.ok(await page.locator('#name').isHidden());assert.ok(await page.locator('#path').isHidden());
+  await page.locator('#submit').click();
+  assert.ok(!calls.some(call=>call.path==='/api/app/create'), 'editing the proposal created a library');
+  await page.locator('#submit').click();await page.locator('#next').waitFor({state:'visible'});
+  assert.deepEqual(calls.find(call=>call.path==='/api/app/create').body,{name:'Research',path:'/Users/test/Research/Research',location:'mac'});
+});
+
+test('Source setup keeps tool choices and focus while reviewing folders before approval', {skip}, async t => {
+  const {page,calls,shot}=await open(t,{url:'/app',ready:'#application-setup[open]',api:{
+    'GET /api/app/state':{application:'/Applications/Pharos.app',selected:'source-review-library',mcp:'',busy:false,libraries:[]},
+    'POST /api/app/create':{saved:true},
+    'POST /api/probe/accept':{added:['claude'],enabled:[],declined:['claude-work'],skipped:[]},
+    'POST /api/capture':{run:{id:'capture-test',state:'complete',sources:['claude'],bytes_copied:2400000,results:[]}},
+    'POST /api/index':{run:{id:'index-test',state:'complete',sources:['claude'],conversations:24,messages:100,results:[]}},
+  }});
+  const libraryScopes=[];
+  page.on('request',request=>{if(/^\/api\/(probe|capture|index)/.test(new URL(request.url()).pathname))libraryScopes.push(request.headers()['x-pharos-library'])});
+  await page.locator('#meet-pharos').click();await page.locator('#start-setup').click();
+  for(let step=0;step<4;step++)await page.locator('#submit').click();
+  await page.locator('#configure-sources').click();
+  const guide=page.locator('#pharosOnboarding');
+  await guide.getByRole('group',{name:'Detected tools',exact:true}).waitFor();
+  assert.ok(await guide.locator('h2').evaluate(element=>element===document.activeElement));
+  assert.ok(await guide.getByRole('checkbox',{name:/Claude Code/}).isChecked());
+  assert.ok(!await guide.getByRole('checkbox',{name:/Codex/}).isVisible());
+  assert.ok(!calls.some(call=>call.path==='/api/probe'),'presence detection parsed source history');
+  await shot('source-tools');
+  await guide.getByText('Other tools',{exact:true}).click();
+  await guide.getByRole('checkbox',{name:/Codex/}).check();
+  await guide.getByRole('checkbox',{name:/Codex/}).uncheck();
+  await guide.getByRole('checkbox',{name:/Claude Code/}).check();
+  await guide.getByRole('button',{name:'Continue',exact:true}).click();
+  await guide.locator('.pharos-candidate').first().waitFor();
+  assert.ok(await guide.locator('h2').evaluate(element=>element===document.activeElement));
+  await guide.getByRole('checkbox',{name:/claude-work\/projects/}).uncheck();
+  await shot('source-locations');
+  await guide.getByRole('button',{name:'Continue',exact:true}).click();
+  assert.ok(await guide.locator('h2').evaluate(element=>element===document.activeElement));
+  await shot('source-review');
+  await page.keyboard.press('Escape');
+  assert.ok(await guide.getByRole('button',{name:'Continue',exact:true}).isVisible());
+  await guide.getByRole('button',{name:'Back',exact:true}).click();
+  assert.ok(await guide.getByRole('checkbox',{name:/Claude Code/}).isChecked());
+  await guide.getByRole('button',{name:'Continue',exact:true}).click();
+  assert.ok(!await guide.getByRole('checkbox',{name:/claude-work\/projects/}).isChecked());
+  await guide.getByRole('button',{name:'Continue',exact:true}).click();
+  assert.ok(!calls.some(call=>['/api/probe/accept','/api/capture','/api/index'].includes(call.path)),'history was read or capture approved before final consent');
+  await guide.getByRole('button',{name:'Add and capture',exact:true}).click();
+  await guide.getByRole('button',{name:'Index now',exact:true}).waitFor();
+  await guide.getByRole('button',{name:'Index now',exact:true}).click();
+  await guide.getByRole('button',{name:'Done',exact:true}).waitFor();
+  assert.ok(await guide.getByRole('button',{name:'Done',exact:true}).evaluate(element=>element===document.activeElement));
+  assert.deepEqual(calls.find(call=>call.path==='/api/probe/accept').body,{kinds:['claude'],locations:[],accept:['claude'],decline:['claude-work'],names:{}});
+  assert.ok(libraryScopes.length>0&&libraryScopes.every(scope=>scope==='source-review-library'),'source setup requests lost their library binding');
+});
+
+for (const topic of ['tokens', 'human', 'skills', 'time', 'carbon']) for (const display of ['interval', 'cumulative']) test(`Dashboard ${topic} ${display} inspection focuses its links and dismisses on Escape or outside click`, { skip }, async t => {
+  const { page, settled, shot } = await open(t, { url: `/analyze?${new URLSearchParams({ analyze_topic: topic, analyze_chart: JSON.stringify({ display }) })}`, ready: '.usage-chart-bars:not(.loading) > button' });
+  const chart = page.locator('.usage-dashboard .usage-chart').first();
+  const bar = display === 'cumulative' ? chart.locator('.usage-chart-bars > button').last() : chart.locator('.usage-chart-bars > button').filter({ has: page.locator('i') }).first();
+  await bar.focus();
+  await page.keyboard.press('Enter');
+  const details = chart.getByRole('group', { name: /^Details for / });
+  await details.getByRole('link').first().waitFor();
+  await shot('pinned-key');
+  assert.ok(await details.evaluate(element => element.contains(document.activeElement)), 'keyboard inspection focuses a reachable detail link');
+  await page.keyboard.press('Escape');
+  await details.waitFor({ state: 'hidden' });
+  assert.ok(await bar.evaluate(element => element === document.activeElement), 'Escape returns focus to the inspected period');
+  await bar.click();
+  await details.waitFor();
+  await chart.locator('h3').click();
+  await details.waitFor({ state: 'hidden' });
+  await settled();
+});
+
+test('Dashboard chart pointer capture snaps to columns and treats a drag back to its anchor as inspection', { skip }, async t => {
+  const { page, settled } = await open(t, { url: '/analyze?analyze_topic=tokens', ready: '.usage-chart-bars:not(.loading) > button' });
+  const chart = page.locator('.usage-dashboard .usage-chart').first();
+  const bars = chart.locator('.usage-chart-bars > button');
+  const before = page.url();
+  const start = await bars.nth(1).boundingBox(), end = await bars.nth(4).boundingBox();
+  await page.mouse.move(start.x + start.width / 2, start.y + 30);
+  await page.mouse.down();
+  await page.mouse.move(end.x + end.width / 2, end.y + 30);
+  await chart.getByRole('status').filter({ hasText: /4 periods.*Release to filter/ }).waitFor();
+  await page.mouse.move(start.x + start.width / 2, start.y + 30);
+  await chart.getByRole('status').filter({ hasText: /1 period.*Release to inspect/ }).waitFor();
+  await page.mouse.up();
+  await chart.getByRole('group', { name: /^Details for / }).waitFor();
+  assert.equal(page.url(), before, 'one-period inspection leaves date filters alone');
+  await chart.locator('h3').click();
+  await page.mouse.move(end.x + end.width / 2, end.y + 30);
+  await page.mouse.down();
+  await page.mouse.move(start.x + start.width / 2, start.y + 30);
+  await page.mouse.up();
+  await page.waitForFunction(previous => location.href !== previous, before);
+  await settled();
+});
 
 test('Cloud backup setup focuses invalid fields and retains storage-class keyboard focus', {skip}, async t => {
   const {page} = await open(t, {url:'/settings/backups',ready:'#cloud-explore'});
@@ -343,7 +639,7 @@ for (const viewport of [{ width: 2133, height: 1075 }, { width: 1440, height: 90
     await sidebar.waitFor();
     await press(sidebar.getByRole('link', { name: /^Human words$/i }));
     await page.locator('.usage-dashboard .writing-panel .usage-chart').waitFor();
-    await page.waitForFunction(() => document.activeElement?.tagName === 'H1');
+    await page.waitForFunction(() => document.activeElement?.tagName === 'MAIN');
     assert.equal(await sidebar.getByRole('link', { name: /^Human words$/i }).getAttribute('aria-current'), 'page');
   });
 }
@@ -416,7 +712,7 @@ for (const route of [
   await target.waitFor();
   await press(target);
   await page.locator(route.destination).first().waitFor();
-  await page.waitForFunction(() => document.activeElement?.tagName === "H1");
+  await page.waitForFunction(() => document.activeElement?.tagName === "MAIN");
   assert.equal(await menu.isVisible(), false);
   await page.goBack();
   await page.locator(route.ready).first().waitFor();
@@ -433,11 +729,17 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 640 }
     await press(dialog.getByRole('button', { name: 'Settings', exact: true }));
     await press(dialog.getByRole('link', { name: 'Sources', exact: true }));
     await page.locator('#sourceGrid .source-card').first().waitFor();
-    await page.waitForFunction(() => document.activeElement?.tagName === 'H1');
+    await page.waitForFunction(() => document.activeElement?.tagName === 'MAIN');
     assert.equal(new URL(page.url()).pathname, '/settings/sources');
     await page.goBack();
     await page.locator('.usage-dashboard .usage-chart').waitFor();
     assert.equal(await opener.getAttribute('aria-expanded'), 'false');
+    await press(opener);
+    await press(dialog.getByRole('button', { name: 'All pages', exact: true }));
+    await press(dialog.getByRole('link', { name: 'Home', exact: true }));
+    await page.locator('.home-intro h1').waitFor();
+    await page.waitForFunction(() => document.activeElement?.tagName === 'MAIN');
+    assert.equal(await page.locator('.home-intro h1').evaluate(element => { element.focus(); return document.activeElement === element; }), false, 'navigation keeps the welcome text unfocusable');
   });
 }
 
@@ -499,16 +801,22 @@ for (const width of [1440, 390]) test(`Optimize pages move keyboard focus to the
     if (phone) await press(page.locator('#appNavigationToggle'));
     await press(navigation.getByRole('link', { name, exact: true }));
     await page.locator(ready).first().waitFor();
-    await page.waitForFunction(() => document.activeElement?.tagName === 'H1');
+    await page.waitForFunction(() => document.activeElement?.tagName === 'MAIN');
     if (phone) assert.equal(await menu.isVisible(), false);
   }
   await choose('Settings', '.findings-settings .findings-panel');
   await choose('Table', '.findings-table .qt-row');
+  // Settings bypasses the empty-library state without remounting the page,
+  // so the retained findings table survives the round trip.
+  const table = await page.locator('.findings-table').elementHandle();
+  await choose('Settings', '.findings-settings .findings-panel');
+  await choose('Table', '.findings-table .qt-row');
+  assert.ok(await table.evaluate(element => element.isConnected), 'Findings Settings keeps the findings table mounted');
   await choose('Dashboard', '.findings-card');
   if (phone) await press(page.locator('#appNavigationToggle'));
   await press(navigation.getByRole('link', { name: 'Configurations', exact: true }));
   await page.locator('#tl1-matrix').waitFor();
-  await page.waitForFunction(() => document.activeElement?.tagName === 'H1');
+  await page.waitForFunction(() => document.activeElement?.tagName === 'MAIN');
   await settled();
   await shot('optimize-tl1');
   await page.goBack();
@@ -595,23 +903,79 @@ test('header editing keeps keyboard focus on the handle being changed', { skip }
   await page.waitForFunction(element => document.activeElement === element, await settings.elementHandle());
 });
 
-test("All Cards opens a page with focus on its heading and browser history returns Home", { skip }, async t => {
+for (const [url, ready] of [
+  ["/cards", ".card-library-entry .query-card"],
+  ["/library", "#queryTableLibrary .qt-row"],
+  ["/analyze", ".usage-dashboard .usage-chart"],
+  ["/findings", ".findings-card"],
+  ["/settings", "#healthCards .panel:not([aria-busy])"],
+  ["/settings/sources", "#sourceGrid .source-card"],
+  ["/settings/preferences", "#optionalBehaviors"],
+  ["/tl1", ".tl1-tiles"],
+  [`/work/${workID}`, ".work-heading h1"],
+  [`/work/${workID}/conversation/conv-root`, ".conversation-panel .turn"],
+]) test(`Opening ${url} leaves focus alone and its title is ordinary text`, { skip }, async t => {
+  const { page } = await open(t, { url, ready });
+  assert.ok(await page.evaluate(() => document.activeElement === document.body), "loading a page should not choose a focused element");
+  for (const title of await page.locator(".view.active h1:visible").all()) {
+    assert.equal(await title.evaluate(element => { element.focus(); return document.activeElement === element; }), false, "page titles should not accept focus");
+    await title.click();
+    assert.equal(await title.evaluate(element => document.activeElement === element), false, "clicking a title should leave it unfocused");
+  }
+});
+
+for (const [drawer, toggle, close] of [
+  ["History", "historyToggle", "historyClose"],
+  ["Bookmarks", "bookmarksToggle", "bookmarksClose"],
+]) for (const width of [1440, 390]) test(`${drawer} close restores reachable focus at ${width}px`, { skip }, async t => {
+  const { page } = await open(t, { url: "/library", viewport: { width, height: 900 }, ready: "#queryTableLibrary .qt-row", preferences: { "pharos-header-tools-v1": ["navigator", "settings"] } });
+  await activateHeaderTool(page, "navigatorToggle");
+  await press(page.locator(`#${toggle}`));
+  await press(page.locator(`#${close}`));
+  const target = await page.evaluate(id => {
+    const opener = document.getElementById(id);
+    const anchor = window.headerToolAnchor?.(opener) ?? opener;
+    return anchor === document.activeElement && !!anchor.getClientRects().length;
+  }, toggle);
+  assert.ok(target, "closing the drawer returns focus to its visible opener");
+  await press(page.locator(`#${toggle}`));
+  const other = page.locator("#navigatorURI");
+  await other.focus();
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator(`#${close}`).isVisible(), false);
+  assert.ok(await other.evaluate(element => element === document.activeElement), "dismissing a drawer should preserve focus chosen outside it");
+});
+
+for (const url of ["/", "/home"]) test(`Home at ${url} leaves initial focus to the user`, { skip }, async t => {
+  const { page } = await open(t, { url, ready: ".home-belt-row .query-card" });
+  assert.ok(await page.evaluate(() => document.activeElement === document.body), "opening Home should not focus a page element");
+  const welcome = page.locator(".home-intro h1");
+  assert.equal(await welcome.evaluate(element => { element.focus(); return document.activeElement === element; }), false, "the welcome text should not accept programmatic focus");
+  await welcome.click();
+  assert.equal(await welcome.evaluate(element => document.activeElement === element), false, "clicking the welcome text should not focus it");
+  await press(page.getByRole("button", { name: "Search past work", exact: true }));
+  await page.waitForFunction(() => document.activeElement?.matches(".home-search-content textarea, .home-search-content input"));
+});
+
+test("All Cards moves focus to its content and browser history returns Home", { skip }, async t => {
   const { page, settled, shot } = await open(t, { ready: ".home-belt-row .query-card", preferences: { "pharos-home-card-library-v1": { shown: true } } });
   await press(page.getByRole("button", { name: "All Cards", exact: true }));
   const heading = page.getByRole("heading", { name: "Card Library", exact: true });
   await heading.waitFor();
-  await page.waitForFunction(element => document.activeElement === element, await heading.elementHandle());
+  await page.waitForFunction(() => document.activeElement?.tagName === "MAIN");
   await settled();
   await shot("card-library");
   await page.goBack();
   const welcome = page.locator(".home-intro h1");
   await welcome.waitFor();
-  await page.waitForFunction(element => document.activeElement === element, await welcome.elementHandle());
+  await settled();
+  assert.equal(await welcome.evaluate(element => { element.focus(); return document.activeElement === element; }), false, "browser history leaves the welcome text unfocusable");
   await page.goForward();
   await heading.waitFor();
   await press(page.getByRole("link", { name: "Back to Home", exact: true }));
   await welcome.waitFor();
-  await page.waitForFunction(element => document.activeElement === element, await welcome.elementHandle());
+  await settled();
+  assert.equal(await welcome.evaluate(element => { element.focus(); return document.activeElement === element; }), false, "returning Home leaves the welcome text unfocusable");
 });
 
 test("the card template editor takes focus, keeps it and returns it on Escape", { skip }, async t => {
@@ -638,6 +1002,31 @@ test("the delegation session sheet on a phone takes focus, keeps it and returns 
   const sheet = page.locator('[role="dialog"][aria-label="Workspace sessions"]');
   await sheet.waitFor();
   await holdsFocus(page, sheet, show);
+});
+
+for (const moveFocus of [false, true]) test(`conversation navigation ${moveFocus ? "preserves a newer focus choice" : "focuses the requested reader"}`, { skip }, async t => {
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
+  const { page, settled } = await open(t, { url: `/work/${workID}/conversation/conv-root`, ready: ".conversation-panel .turn", api: {
+    "GET /api/work/:id/conversations/:conversation": async call => {
+      if (call.params.conversation === "conv-child") await pending;
+      return defaultApi["GET /api/work/:id/conversations/:conversation"](call);
+    },
+  } });
+  const loading = page.waitForRequest(request => new URL(request.url()).pathname.endsWith("/conversations/conv-child"));
+  await page.evaluate(url => window.pharosNavigate(url), `/work/${workID}/conversation/conv-child`);
+  await loading;
+  const control = page.locator("#settingsToggle");
+  if (moveFocus) { await control.focus(); assert.ok(await control.evaluate(element => element === document.activeElement)); }
+  release();
+  await page.getByRole("article", { name: "User message", exact: true }).getByText("Review the change (conv-child)", { exact: true }).waitFor();
+  await settled();
+  const target = moveFocus ? control : page.locator(".conversation-panel");
+  await page.waitForFunction(element => document.activeElement === element, await target.elementHandle());
+  await press(page.locator(".workspace-reader-workspace"));
+  await page.waitForFunction(() => document.activeElement?.tagName === "MAIN");
+  assert.equal(await page.locator(".work-heading h1").evaluate(element => { element.focus(); return element === document.activeElement; }), false, "returning to the overview leaves its title unfocusable");
 });
 
 for (const merged of [false, true]) test(`transcript rails follow layout changes in ${merged ? "merged" : "split"} workspaces`, { skip }, async t => {
@@ -766,6 +1155,40 @@ test("the expanded feedback panel stays inside a 360px viewport", { skip }, asyn
   assert.equal(box, true, `expanded toolbar at [${box}] in 360×420`);
 });
 
+test("feedback review keeps focus, fits a phone, and returns focus to its opener", { skip }, async t => {
+  const { page, shot } = await open(t, { url: "/settings", ready: "#healthCards .panel" });
+  await activateHeaderTool(page, "feedbackSubmitToggle");
+  const dialog = page.getByRole("dialog", { name: "Send feedback", exact: true });
+  await dialog.waitFor();
+  await page.waitForFunction(() => document.querySelector(".uifeedback-dialog")?.contains(document.activeElement));
+  await page.setViewportSize({ width: 360, height: 640 });
+  assert.equal(await onScreen(dialog), true);
+  await shot("feedback-review");
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "hidden" });
+  assert.equal(await page.evaluate(() => headerToolAnchor(document.getElementById("feedbackSubmitToggle")) === document.activeElement), true);
+});
+
+test("annotated element screenshots render and the reviewed report sends without leaving the page", { skip }, async t => {
+  const page = await annotate(t);
+  await page.locator("#feedbackNote").fill("Make this heading clearer");
+  await page.locator("#feedbackIncludeURL").check();
+  await page.getByRole("button", { name: "Take a screenshot of this element", exact: true }).click();
+  await page.waitForFunction(() => {
+    const img = document.getElementById("feedbackScreenshotPreview");
+    return !img.hidden && img.complete && img.naturalWidth > 0;
+  });
+  if (process.env.PHAROS_UI_SCREENSHOTS) { mkdirSync(process.env.PHAROS_UI_SCREENSHOTS, { recursive: true }); await page.locator("#feedbackScreenshotPreview").screenshot({ path: `${process.env.PHAROS_UI_SCREENSHOTS}/feedback-element-capture.png` }); }
+  await page.locator("#feedbackAdd").click();
+  await page.locator("#feedbackSend").click();
+  const dialog = page.getByRole("dialog", { name: "Send feedback", exact: true });
+  await dialog.waitFor();
+  await page.waitForFunction(() => document.querySelector(".uifeedback-dialog img")?.naturalWidth > 0);
+  await dialog.getByRole("button", { name: "Send feedback", exact: true }).click();
+  await page.getByRole("dialog", { name: "Feedback sent", exact: true }).waitFor();
+  assert.equal(new URL(page.url()).pathname, "/settings");
+});
+
 test('Analyze record keyword editor keeps focus through apply, edit and cancel', { skip }, async t => {
   const { page, settled, shot } = await open(t, { url:'/analyze?analyze_mode=query&analyze_data=tool_calls',ready:'.usage-workspace-table .qt-qb' });
   const opener=page.getByRole('button',{name:/^Add keyword filter for /});
@@ -837,7 +1260,30 @@ test('Capture & index query editor retains focus and edits across live refreshes
 });
 
 test('Mac menu editing preserves focus when adding, moving, and removing items', { skip }, async t => {
-  const { page, shot } = await open(t, { url: '/settings/preferences', ready: '#menuBarActive button' });
+  const { page, shot } = await open(t, { url: '/settings/preferences', ready: '#showMacMenuBar', preferences: { 'pharos-menu-bar': { enabled: false } } });
+  const disclosure = page.locator('#menuBarExpand');
+  const visibility = page.getByRole('switch', { name: 'macOS menu bar', exact: true });
+  const options = page.locator('#menuBarOptions');
+  assert.equal(await visibility.getAttribute('aria-checked'), 'false');
+  assert.equal(await disclosure.isVisible(), false, 'the off state only shows the visibility toggle');
+  await shot('off');
+  await press(visibility);
+  await disclosure.waitFor();
+  assert.ok(await visibility.evaluate(element => document.activeElement === element), 'enabling the menu keeps focus on its toggle');
+  assert.equal(await disclosure.getAttribute('aria-expanded'), 'false', 'enabled menu settings start collapsed');
+  assert.equal(await options.isVisible(), false);
+  await shot('collapsed');
+  await press(disclosure);
+  await options.waitFor();
+  assert.ok(await disclosure.evaluate(element => document.activeElement === element), 'opening the card keeps keyboard focus on the disclosure');
+  await shot('expanded');
+  await press(disclosure, 'Space');
+  await options.waitFor({ state: 'hidden' });
+  assert.equal(await visibility.getAttribute('aria-checked'), 'true', 'collapsing the editor keeps the menu enabled');
+  await page.keyboard.press('Tab');
+  assert.ok(await options.evaluate(element => !element.contains(document.activeElement)), 'Tab skips collapsed menu controls');
+  await press(disclosure);
+  await options.waitFor();
   const add = page.getByRole('button', { name: 'Add Estimated API cost', exact: true });
   const handle = page.getByRole('button', { name: 'Arrange Estimated API cost', exact: true });
   const focused = async locator => page.waitForFunction(element => document.activeElement === element, await locator.elementHandle());
@@ -871,6 +1317,13 @@ test('Mac menu editing preserves focus when adding, moving, and removing items',
   await page.keyboard.press('Delete');
   await focused(addSeparator);
   assert.equal(await separators.count(), before);
+  await press(visibility);
+  await options.waitFor({ state: 'hidden' });
+  assert.equal(await disclosure.isVisible(), false, 'disabling the menu hides its editor control');
+  assert.ok(await visibility.evaluate(element => document.activeElement === element), 'disabling the menu keeps its toggle reachable');
+  await press(visibility);
+  await disclosure.waitFor();
+  assert.equal(await disclosure.getAttribute('aria-expanded'), 'false', 'reenabling the menu starts collapsed');
 });
 
 for (const width of [390, 320]) test(`Capture & index tables retain horizontal scrolling through status refreshes @ ${width}`, { skip }, async t => {
@@ -971,6 +1424,31 @@ for (const theme of ['dark','light']) for (const width of [1440,390,320]) test(`
   assert.ok(await page.getByRole('textbox',{name:'Ask a question',exact:true}).evaluate(element=>element===document.activeElement)||await page.getByRole('button',{name:'Latest reply',exact:true}).evaluate(element=>element===document.activeElement),'keyboard focus can leave the scrollable conversation');
 });
 
+for (const moveFocus of [false, true]) test(`opening a saved chat ${moveFocus ? "preserves a newer focus choice" : "focuses its composer"}`, { skip }, async t => {
+  const selection = { provider: 'Codex', model: 'test-model', effort: 'Low' };
+  const session = { id: 'focus-chat', createdAt: Date.now(), updatedAt: Date.now(), selection, draft: '', conversation: [{ id: 'prior-turn', prompt: 'A prior question', cli: 'Codex', model: 'test-model', modelLabel: 'Test Model', effort: 'Low', status: 'multiple', message: '', elapsedMs: 1000, reply: 'A saved reply', cards: [] }] };
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
+  const { page, settled } = await open(t, { ready: '#pharos-ask .pharos-ai:not([hidden])', api: {
+    'GET /api/ask/status': { settings: { enabled: true, showInvitation: true, selection }, providers: [{ id: 'Codex' }] },
+    'GET /api/ask/models': { id: 'Codex', models: [{ id: 'test-model', label: 'Test Model', efforts: ['Default', 'Low'], default: true }] },
+    'GET /api/ask/sessions': { sessions: [session] },
+    'GET /api/ask/session': async () => { await pending; return session; },
+  } });
+  await press(page.getByRole('button', { name: 'History', exact: true }));
+  const loading = page.waitForRequest(request => new URL(request.url()).pathname === '/api/ask/session');
+  await press(page.getByRole('link', { name: 'Open chat: A prior question', exact: true }));
+  await loading;
+  const control = page.locator('#settingsToggle');
+  if (moveFocus) { await control.focus(); assert.ok(await control.evaluate(element => element === document.activeElement)); }
+  release();
+  await page.getByRole('status').filter({ hasText: 'A saved reply' }).waitFor();
+  await settled();
+  const target = moveFocus ? control : page.getByRole('textbox', { name: 'Ask a question', exact: true });
+  await page.waitForFunction(element => document.activeElement === element, await target.elementHandle());
+});
+
 test('Ask Pharos chat links survive reload, new tabs and browser Back/Forward', {skip}, async t => {
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   const saved={id:'saved-chat',createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:'saved-turn',prompt:'A prior question',cli:'Codex',model:'test-model',modelLabel:'Test Model',effort:'Low',status:'multiple',message:'',elapsedMs:1000,reply:'An earlier reply',cards:[]}]};
@@ -1014,6 +1492,7 @@ test('Ask Pharos chat links survive reload, new tabs and browser Back/Forward', 
   await page.reload();await settled();
   await page.waitForFunction(()=>document.querySelector('#pharos-question')?.value==='Keep this question');
   assert.equal(await question.inputValue(),'Keep this question');
+  assert.ok(await page.evaluate(() => document.activeElement === document.body), 'restoring a chat should leave initial focus alone');
   const choose=async(kind,value,expected)=>{
     const persisted=page.waitForResponse(response=>response.url().includes('/api/ask/session')&&response.request().method()==='POST'&&Object.entries(expected).every(([key,value])=>response.request().postDataJSON().selection[key]===value));
     await page.locator('.pharos-model-trigger').click();

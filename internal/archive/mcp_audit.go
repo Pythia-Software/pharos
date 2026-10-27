@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"sort"
@@ -13,12 +14,13 @@ var searchMessagesTool = map[string]any{
 	"name":        "search_messages",
 	"description": "Audit indexed message text across conversations with lexical-only search. Quoted phrases are exact token sequences; match_mode phrase treats the entire query as a phrase. Filters apply before pagination, with no candidate cutoff or semantic matches. Returns timestamps and evidence handles. Page using next_offset until null; archive coverage may still be incomplete.",
 	"inputSchema": map[string]any{"type": "object", "required": []string{"query"}, "properties": map[string]any{
-		"query":             map[string]any{"type": "string", "minLength": 1},
-		"match_mode":        map[string]any{"type": "string", "enum": []string{"terms", "phrase"}, "default": "terms"},
-		"repository":        map[string]any{"type": "string", "description": "A repository name or remote from list_repositories, not a worktree name."},
-		"conversation_id":   map[string]any{"type": "string"},
-		"source":            map[string]any{"type": "string"},
-		"provider":          map[string]any{"type": "string"},
+		"query":           map[string]any{"type": "string", "minLength": 1},
+		"match_mode":      map[string]any{"type": "string", "enum": []string{"terms", "phrase"}, "default": "terms"},
+		"repository":      map[string]any{"type": "string", "description": "A repository name or remote from list_repositories, not a worktree name."},
+		"conversation_id": map[string]any{"type": "string"},
+		"source":          map[string]any{"type": "string"},
+		"provider":        map[string]any{"type": "string"},
+		"channel":         map[string]any{"type": "string"}, "machine_id": map[string]any{"type": "string"}, "execution_machine_id": map[string]any{"type": "string"},
 		"roles":             messageListSchema("Exact message roles, such as user, assistant, tool, or system."),
 		"kinds":             messageListSchema("Exact message kinds. Defaults to all indexed kinds, including raw metadata and tool output."),
 		"from":              map[string]any{"type": "string", "description": "Inclusive message timestamp or UTC date; messages without timestamps are excluded."},
@@ -182,6 +184,9 @@ func fitAuditPage(result map[string]any, budget, offset, total int) error {
 }
 
 func (c *Catalog) searchMessages(args map[string]any) (map[string]any, error) {
+	if err := c.ensureOrigins(context.Background()); err != nil {
+		return nil, err
+	}
 	parsed, err := auditMessageQuery(args)
 	if err != nil {
 		return nil, err
@@ -194,6 +199,7 @@ func (c *Catalog) searchMessages(args map[string]any) (map[string]any, error) {
 	values = append([]any{parsed}, values...)
 	for _, filter := range []struct{ key, column string }{
 		{"conversation_id", "m.conversation_id"}, {"source", "w.source_kind"}, {"provider", "c.provider"},
+		{"channel", "(SELECT channel FROM conversation_origins oo WHERE oo.conversation_id=c.id)"}, {"machine_id", "(SELECT machine_id FROM conversation_origins oo WHERE oo.conversation_id=c.id)"}, {"execution_machine_id", "(SELECT execution_machine_id FROM conversation_origins oo WHERE oo.conversation_id=c.id)"},
 	} {
 		if value := firstString(args[filter.key]); value != "" {
 			clauses = append(clauses, filter.column+"=?")
@@ -228,13 +234,18 @@ func (c *Catalog) searchMessages(args map[string]any) (map[string]any, error) {
 		return nil, err
 	}
 	defer transaction.Rollback()
+	prefix, originArgs, err := c.originReadSource(context.Background(), transaction)
+	if err != nil {
+		return nil, err
+	}
+	values = append(originArgs, values...)
 	var total int
-	if err := transaction.QueryRow("SELECT COUNT(*)"+base, values...).Scan(&total); err != nil {
+	if err := transaction.QueryRow(prefix+"SELECT COUNT(*)"+base, values...).Scan(&total); err != nil {
 		return nil, err
 	}
 	offset := min(total, max(0, int(integer(args["offset"]))))
 	limit := clamp(int(integer(valueOr(args["limit"], 20))), 1, 100)
-	items, err := queryMaps(transaction, `SELECT m.id message_id,m.conversation_id,c.workspace_id,
+	items, err := queryMaps(transaction, prefix+`SELECT m.id message_id,m.conversation_id,c.workspace_id,
 		m.role,m.kind,m.created_at,m.source_order,m.evidence_locator,c.coverage,
 		substr(w.title,1,101) title,substr(r.display_name,1,101) repository,c.provider,w.source_kind source,
 		snippet(messages_fts,1,'','',' … ',28) snippet`+base+`
@@ -364,6 +375,7 @@ func (c *Catalog) archiveStatus(args map[string]any) (map[string]any, error) {
 		if root != "" {
 			row["last_capture_at"] = nilIfEmpty(lastCaptureAt(root, firstString(row["host_id"]), firstString(row["source"])))
 		}
+		row["preservation"] = c.inputPreservationStatus(context.Background(), firstString(row["host_id"]), firstString(row["source"]))
 		items = append(items, row)
 	}
 	sort.SliceStable(items, func(left, right int) bool {

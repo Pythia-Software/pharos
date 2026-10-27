@@ -174,8 +174,18 @@ func (s *Server) captureStatus() map[string]any {
 	if len(runs) > 0 {
 		latest = runs[0]
 	}
+	recordCoverage := map[string]any{}
+	config := s.Config()
+	for _, source := range config.Sources {
+		if !validCaptureName(source.Name) {
+			continue
+		}
+		if m, e := loadCaptureManifest(filepath.Join(config.CaptureRoot, currentHost().ID, source.Name)); e == nil && len(m.RecordCoverage) > 0 {
+			recordCoverage[source.Name] = sqliteCoverageForStatus(m)
+		}
+	}
 	return map[string]any{"active": capturing, "sync_active": syncing, "safe_to_unplug": len(s.libraryActivities()) == 0,
-		"capture_root": s.Config().CaptureRoot, "host": currentHost(), "run": latest, "runs": runs}
+		"capture_root": s.Config().CaptureRoot, "host": currentHost(), "run": latest, "runs": runs, "sqlite_record_coverage": recordCoverage}
 }
 
 // startCapture begins a capture in the background and returns at once;

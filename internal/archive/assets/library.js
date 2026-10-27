@@ -4,12 +4,27 @@
 // handler, which releases the library, stops agents' MCP servers running from
 // the drive, quits, and ejects the drive. Settings → Sources shows
 // captures from other Macs alongside this Mac's sources; Settings →
-// Health gains the drive's checks and backups.
+// Health gains the drive's checks; Backups holds backup checks and controls.
 (() => {
   'use strict';
   const CSS = `
 .pharos-library-controls{min-width:0;font-size:var(--fs-md,13px)}
 .combo-button>.pharos-drive{gap:7px;min-width:0;max-width:190px;font-weight:400;line-height:1}
+.combo-button>.pharos-app-update{flex:none;color:var(--combo-accent);background:color-mix(in srgb,var(--combo-accent) 14%,var(--combo-bg))}
+.pharos-app-update[aria-disabled=true]{cursor:progress}
+.pharos-app-update[data-phase=available]::after{content:'';position:absolute;top:5px;right:5px;width:5px;height:5px;border-radius:50%;background:currentColor;box-shadow:0 0 0 2px var(--combo-bg)}
+.pharos-update-ring{position:absolute;inset:3px;width:calc(100% - 6px);height:calc(100% - 6px);fill:none;stroke:currentColor;stroke-width:1.8;pointer-events:none}
+.pharos-update-ring[hidden]{display:none}
+.pharos-update-track{opacity:.2}
+.pharos-update-arc{stroke-linecap:round}
+.combo-button>.pharos-app-update[aria-busy=true] svg.app-icon{width:14px;height:14px;animation:none}
+.pharos-app-update.is-indeterminate .pharos-update-ring{animation:header-spin 1.2s linear infinite}
+@media(prefers-reduced-motion:reduce){.pharos-app-update.is-indeterminate .pharos-update-ring{animation:none}}
+.pharos-library-controls>.combo-icon{flex:none}
+.header-overflow-row:has(.pharos-app-update){flex-wrap:wrap}
+.header-overflow-row:has(.pharos-app-update)>:last-child{min-width:0;max-width:100%}
+.header-overflow-row .pharos-library-controls{max-width:100%}
+.header-overflow-row .pharos-drive-name{min-width:0}
 .pharos-drive-name{flex:0 1 auto;min-width:2.5em;font-weight:650;overflow:hidden;text-overflow:ellipsis}
 .pharos-dot{flex:none;display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--sea,#315845)}
 .pharos-drive .pharos-dot{background:#8cc6a0}
@@ -456,6 +471,7 @@
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshStatus(); });
 
   let controls = null, chip = null, headerSync = null, headerCaptureIndexRunning = false, panel = null, panelMode = 'drive', ejectState = null;
+  let appUpdate = null, appUpdateButton = null, appUpdateRequest = false;
   let driveSpace = null, driveSpaceRequest = null, driveSpaceError = false;
   // The drive chip and Index changes share one combo button (ui.py's
   // .combo-button) in the configurable library slot. Stop, and the full
@@ -506,6 +522,87 @@
     drive.after(headerSync);
     return headerSync;
   }
+
+  // Sparkle supplies only verified, installable releases through the native
+  // bridge. Source builds and ordinary browser sessions have no update action.
+  const nativeUpdates = () => window.webkit?.messageHandlers?.pharosUpdates;
+  function appUpdatePresentation(state) {
+    if (!state?.version || !['available', 'downloading', 'preparing', 'installing'].includes(state.phase)) return null;
+    const busy = state.phase !== 'available';
+    const progress = state.phase === 'downloading' && Number.isFinite(state.progress) ? Math.max(0, Math.min(100, Math.floor(state.progress))) : null;
+    return {busy, phase: state.phase, progress,
+      icon: state.phase === 'preparing' ? 'package' : state.phase === 'installing' ? 'restart' : 'download',
+      title: state.phase === 'available' ? `Download and update Pharos to ${state.version}; Pharos will restart`
+        : state.phase === 'downloading' ? `Downloading Pharos ${state.version}${progress == null ? '' : ` (${progress}%)`}. Pharos will restart when ready.`
+          : state.phase === 'preparing' ? `Verifying and preparing Pharos ${state.version}. Pharos will restart when ready.`
+            : `Installing Pharos ${state.version} and restarting…`};
+  }
+  const updateGlyphs = {
+    download: 'M12 3v11m-4-4 4 4 4-4M5 16v4h14v-4',
+    package: 'm3 7 9-4 9 4v10l-9 4-9-4ZM3 7l9 4 9-4M12 11v10M7.5 5l9 4',
+    restart: 'M20 9a8 8 0 1 0 0 6M20 3v6h-6',
+  };
+  const updateSVG = (tag, attributes) => {
+    const element = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, value);
+    return element;
+  };
+  function renderAppUpdate() {
+    const view = nativeUpdates() && appUpdatePresentation(appUpdate);
+    if (!view) { appUpdateButton?.remove(); appUpdateButton = null; return; }
+    if (!ensureHeaderAction()) return;
+    if (!appUpdateButton) {
+      appUpdateButton = node('button', 'combo-icon pharos-app-update');
+      appUpdateButton.id = 'pharosAppUpdate';
+      appUpdateButton.type = 'button';
+      const glyph = updateSVG('svg', {class: 'app-icon', viewBox: '0 0 24 24', 'aria-hidden': 'true'});
+      glyph.append(updateSVG('path', {}));
+      const ring = updateSVG('svg', {class: 'pharos-update-ring', viewBox: '0 0 32 32', 'aria-hidden': 'true'});
+      for (const kind of ['track', 'arc']) ring.append(updateSVG('circle', {
+        class: `pharos-update-${kind}`, cx: '16', cy: '16', r: '13', pathLength: '100', transform: 'rotate(-90 16 16)',
+      }));
+      appUpdateButton.append(glyph, ring);
+      appUpdateButton.onclick = async () => {
+        if (appUpdateRequest || appUpdatePresentation(appUpdate)?.busy) return;
+        appUpdateRequest = true;
+        renderAppUpdate();
+        try {
+          // Native status events own state after this starts: an older reply
+          // must not overwrite download progress that arrived in the meantime.
+          await nativeUpdates().postMessage({action: 'install'});
+        } catch (error) { toast(error.message || 'Could not start the Pharos update.'); }
+        finally { appUpdateRequest = false; await refreshAppUpdate(); }
+      };
+      headerSync.before(appUpdateButton);
+    }
+    appUpdateButton.querySelector('path').setAttribute('d', updateGlyphs[view.icon]);
+    appUpdateButton.dataset.phase = view.phase;
+    const busy = view.busy || appUpdateRequest;
+    appUpdateButton.classList.toggle('is-indeterminate', busy && view.progress == null);
+    const ring = appUpdateButton.querySelector('.pharos-update-ring');
+    ring.toggleAttribute('hidden', !busy);
+    ring.querySelector('.pharos-update-arc').setAttribute('stroke-dasharray', `${view.progress ?? 28} 100`);
+    appUpdateButton.title = view.title;
+    appUpdateButton.setAttribute('aria-label', view.title);
+    appUpdateButton.setAttribute('aria-busy', String(busy));
+    // Keep progress focusable and hoverable, while guarding the action above.
+    appUpdateButton.setAttribute('aria-disabled', String(busy));
+  }
+  let appUpdateRevision = 0;
+  async function refreshAppUpdate() {
+    if (!nativeUpdates()) return;
+    const revision = appUpdateRevision;
+    try {
+      const state = await nativeUpdates().postMessage({action: 'status'});
+      if (revision === appUpdateRevision) { appUpdate = state; renderAppUpdate(); }
+    } catch { /* Native update dialogs report update failures. */ }
+  }
+  window.addEventListener('pharos:app-update', event => {
+    appUpdateRevision++;
+    appUpdate = event.detail;
+    renderAppUpdate();
+  });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshAppUpdate(); });
 
   // Index changes is busy while the live drive activity has a capture or
   // index, an incremental run is running (sync.js), this page awaits a
@@ -642,6 +739,7 @@
     const target = ensureChip();
     if (!target) return;
     renderHeaderAction();
+    renderAppUpdate();
     const dot = node('span', 'pharos-dot'), name = node('span', 'pharos-drive-name');
     let state;
     if (!status) {
@@ -1172,10 +1270,10 @@
     }
   }
 
-  // ---- Settings → Health: the drive's checks and backups
+  // ---- Settings → Health and Backups
   const CHECK_TITLES = {encryption: 'Encryption', spotlight: 'Spotlight', filesystem: 'File system', location: 'Location', free_space: 'Free space', volume_pin: 'Volume pin', backup: 'Backup'};
   const STATUS_DOT = {ok: '', info: 'idle', unknown: 'idle', warning: 'warn', problem: 'bad'};
-  let backupDraft = null, backupError = null, backupBusy = false, driveHealthExpanded = true, driveHealthInitialized = false;
+  let backupDraft = null, backupError = null, backupBusy = false, driveHealthExpanded = true;
 
   async function loadDriveHealth() {
     const [drive, backup] = await Promise.all([call('/api/health/drive'), call('/api/backup')]);
@@ -1186,16 +1284,20 @@
   function renderDriveHealth(drive, backup) {
     window.pharosCloudBackup?.seedLibrary?.(drive.sizes?.library_bytes, drive.cloud_growth);
     const backupPage = document.getElementById('backupSettingsLocal');
-    if (backupPage && document.activeElement?.id !== 'pharosBackupDestinationPage') backupPage.replaceChildren(backupPanel(backup, drive.volume?.name || 'Library drive', 'Page'));
-    const cards = document.getElementById('healthCards');
     // Leave the form alone while someone is typing a destination.
-    if (!cards || document.activeElement?.id === 'pharosBackupDestination') return;
-    if (!driveHealthInitialized && drive.status !== 'checking') {
-      const attention = (drive.checks || []).filter(check => check.status === 'warning' || check.status === 'problem');
-      if (attention.some(check => check.id !== 'backup')) driveHealthExpanded = true;
-      else if (attention.some(check => check.id === 'backup')) driveHealthExpanded = false;
-      driveHealthInitialized = true;
+    if (backupPage && document.activeElement?.id !== 'pharosBackupDestinationPage') {
+      const backupChecks = (drive.checks || []).filter(check => check.id === 'backup');
+      backupPage.replaceChildren();
+      if (backupChecks.length) {
+        const list = node('div', 'pharos-checks');
+        list.append(...backupChecks.map(driveCheckItem));
+        backupPage.append(list);
+      }
+      backupPage.append(backupPanel(backup, drive.volume?.name || 'Library drive'));
     }
+    const cards = document.getElementById('healthCards');
+    if (!cards) return;
+    const checks = (drive.checks || []).filter(check => check.id !== 'backup');
     let section = document.getElementById('pharosDriveHealth');
     if (!section) {
       section = node('section', 'pharos-section');
@@ -1216,7 +1318,7 @@
     intro.append(node('p', 'muted', facts.join(' · ') || drive.path || ''));
     const controls = node('div', 'pharos-health-actions');
     const attention = node('div', 'pharos-health-attention');
-    const attentionChecks = (drive.checks || []).filter(check => check.status === 'warning' || check.status === 'problem');
+    const attentionChecks = checks.filter(check => check.status === 'warning' || check.status === 'problem');
     if (attentionChecks.length) {
       attention.append(node('span', 'pharos-health-attention-label', 'Needs Attention:'));
       for (const check of attentionChecks) {
@@ -1242,27 +1344,28 @@
     const list = node('div', 'pharos-checks');
     list.id = 'pharosDriveChecks';
     if (drive.status === 'checking') list.append(node('p', 'pharos-sub', 'Checking the drive (diskutil, Spotlight status, the library’s size)…'));
-    for (const check of drive.checks || []) {
-      const item = node('div', 'pharos-check');
-      item.dataset.check = check.id;
-      item.append(node('span', 'pharos-dot ' + (STATUS_DOT[check.status] ?? 'idle')));
-      const titleLine = node('div', 'pharos-check-title', CHECK_TITLES[check.id] || check.id);
-      if (check.status !== 'ok') titleLine.append(node('span', check.status === 'problem' ? 'pharos-error' : check.status === 'warning' ? 'pharos-warn' : 'pharos-sub', ` · ${check.status}`));
-      item.append(titleLine, node('div', 'pharos-sub', check.summary));
-      if (check.recommendation) item.append(node('div', '', check.recommendation));
-      if (check.action) item.append(node('div', 'pharos-sub', check.action));
-      if (check.command) { const line = codeLine(check.command); item.append(line); }
-      list.append(item);
-    }
-    details.append(list, backupPanel(backup, name));
+    list.append(...checks.map(driveCheckItem));
+    details.append(list);
     section.append(details);
   }
 
-  function backupPanel(backup, driveLabel, suffix = '') {
+  function driveCheckItem(check) {
+    const item = node('div', 'pharos-check');
+    item.dataset.check = check.id;
+    item.append(node('span', 'pharos-dot ' + (STATUS_DOT[check.status] ?? 'idle')));
+    const titleLine = node('div', 'pharos-check-title', CHECK_TITLES[check.id] || check.id);
+    if (check.status !== 'ok') titleLine.append(node('span', check.status === 'problem' ? 'pharos-error' : check.status === 'warning' ? 'pharos-warn' : 'pharos-sub', ` · ${check.status}`));
+    item.append(titleLine, node('div', 'pharos-sub', check.summary));
+    if (check.recommendation) item.append(node('div', '', check.recommendation));
+    if (check.action) item.append(node('div', 'pharos-sub', check.action));
+    if (check.command) { const line = codeLine(check.command); item.append(line); }
+    return item;
+  }
+
+  function backupPanel(backup, driveLabel) {
     const box = node('div', 'pharos-backup');
-    box.id = 'pharosBackup' + suffix;
-    box.append(node('h3', '', suffix ? 'Back up to another drive' : 'Backups'));
-    if (!suffix) { const link = node('a', '', 'Plan cloud backups →'); link.href = '/settings/backups'; box.append(link); }
+    box.id = 'pharosBackupPage';
+    box.append(node('h3', '', 'Back up to another drive'));
     const last = backup.last_success;
     if (last) {
       const line = node('p', '');
@@ -1289,7 +1392,7 @@
       if (problems.childElementCount) box.append(problems);
     }
     const form = node('form'), label = node('label', '', 'Back up to'), input = node('input'), go = node('button', 'pharos-button primary', 'Back up now');
-    label.htmlFor = input.id = 'pharosBackupDestination' + suffix;
+    label.htmlFor = input.id = 'pharosBackupDestinationPage';
     input.value = backupDraft ?? backup.suggested_destination ?? '';
     input.placeholder = '/Volumes/Other Drive/Pharos Backup';
     input.spellcheck = false;
@@ -1316,7 +1419,7 @@
     box.append(form);
     if (backupError) {
       const error = node('p', 'pharos-error', backupError);
-      error.id = 'pharosBackupError' + suffix;
+      error.id = 'pharosBackupErrorPage';
       error.setAttribute('role', 'alert');
       box.append(error);
     }
@@ -1362,10 +1465,11 @@
 
   window.pharosLibrary = {closePanel, refresh: refreshStatus, status: () => status, runs, refreshSettings, refreshSyncControls: renderSyncControls, renderAlerts: () => { renderChip(); renderPanel(); }, onStatus: listener => listeners.add(listener), toggleActivityPanel: () => (panel && panelMode === 'activity' ? closePanel() : openPanel('activity')),
     // Pure helpers, for web/tests/unit/page/library.test.mjs.
-    libraryUpdate, overviewActivities, activityTiming, activityProgress, activityOverallProgress, activityPresentation, estimateRate, workCount, headerBusy, captureIndexDisabled, stopTargets};
+    libraryUpdate, overviewActivities, activityTiming, activityProgress, activityOverallProgress, activityPresentation, estimateRate, workCount, headerBusy, captureIndexDisabled, stopTargets, appUpdatePresentation};
   const sheet = node('style');
   sheet.textContent = CSS;
   document.head.append(sheet);
   watchSettings();
+  refreshAppUpdate();
   refreshStatus();
 })();

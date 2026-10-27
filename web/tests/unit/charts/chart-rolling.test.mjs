@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chartBucketsWithHistory, cumulativeBuckets, cumulativeMetricTrend, plottedBucketKey, rollingAverageBuckets, rollingMetricTrend, shareBuckets, validChartDisplay, validRollingPeriods } from '../../../src/chart-series';
+import { chartBucketsWithHistory, cumulativeBuckets, cumulativeMetricTrend, plottedBucketKey, rollingAverageBuckets, rollingMetricTrend, rollingRatioMetricTrend, shareBuckets, validChartDisplay, validRollingPeriods } from '../../../src/chart-series';
+import { smoothedToolTrend, toolDashboardQuery } from '../../../src/tools-dashboard-model';
+import { smoothedMCPTrend, mcpDashboardQuery } from '../../../src/mcp-dashboard-model';
+import { core, schemas } from '../helpers/recipes.mjs';
 import { shiftPeriod } from '../../../src/chart-period';
 import { smoothingWhere, timeBounds, usageTime, withTimeRange } from '../../../src/usage-chart';
 const bucketsOf = values => values.map((values, index) => ({ key: `2026-10-${String(index + 1).padStart(2, '0')}`, date: new Date(2026, 9, index + 1), values }));
@@ -223,4 +226,29 @@ test('native cumulative trends carry totals, weighted ratios, and maxima through
   assert.match(cumulativeMetricTrend([primary],'day',new Date(2026,9,1),new Date(2026,9,4),{op:'ratio',numerator:'amount',denominator:'samples'}).error,/underlying/);
   assert.equal(cumulativeMetricTrend([],'day',new Date(),new Date()),undefined);
   assert.deepEqual([primary,numerator,denominator],before);
+});
+
+test('rolling Tools and MCP means pool timed observations and keep empty windows as gaps', () => {
+  const rows = [
+    { day: '2026-10-01', tool_name: 'shell', call_count: 1, timed_count: 1, duration_ms: 100000, total_duration_ms: 100000 },
+    ...Array.from({ length: 99 }, () => ({ day: '2026-10-02', tool_name: 'shell', call_count: 1, timed_count: 1, duration_ms: 1000, total_duration_ms: 1000 })),
+  ];
+  for (const [dataset, query, smooth] of [['tools', toolDashboardQuery, smoothedToolTrend], ['mcp_calls', mcpDashboardQuery, smoothedMCPTrend]]) {
+    const view = { metric: 'mean_time', split: 'tool_name', view: 'trend', period: 'day', rollingPeriods: 7 };
+    const requested = query(view, []);
+    const metrics = core.evaluateMetrics(rows, requested, schemas[dataset]).metrics;
+    assert.ok(metrics.length >= 3, 'the chart requests numerators and denominators');
+    const result = smooth(view, metrics, new Date(2026, 9, 7), new Date(2026, 9, 10), new Date(2026, 9, 1));
+    assert.ok(Math.abs(result.buckets[0].value - 1990) < 1e-8, dataset);
+    assert.equal(result.buckets[1].value, 1000, dataset);
+    assert.equal(result.buckets[2].value, null, dataset);
+  }
+  const keys = ['2026-10-01', null];
+  const primary = { id: 'rate', buckets: [{ keys, value: 1, count: 1 }] };
+  const numerator = { id: 'n', buckets: [{ keys, value: 1, count: 1 }] };
+  const denominator = { id: 'd', buckets: [{ keys, value: 0, count: 1 }] };
+  const ratio = { numerator: 'n', denominator: 'd' };
+  const start = new Date(2026, 9, 1), end = new Date(2026, 9, 2);
+  assert.ok(rollingRatioMetricTrend([primary, numerator, denominator], ratio, 'day', 7, start, end).buckets.every(bucket => bucket.value === null));
+  assert.match(rollingRatioMetricTrend([primary], ratio, 'day', 7, start, end).error, /underlying/);
 });

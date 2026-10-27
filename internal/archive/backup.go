@@ -260,6 +260,13 @@ func planBackup(config Config) (backupPlan, error) {
 		return plan, err
 	}
 	plan.files = append(plan.files, file)
+	if _, err := os.Stat(descriptorPath(config)); err == nil {
+		descriptor := backupItem{Name: "library_identity", Source: descriptorPath(config)}
+		if err = place(&descriptor, libraryDescriptorName, libraryDescriptorName); err != nil {
+			return plan, err
+		}
+		plan.files = append(plan.files, descriptor)
+	}
 	for _, tree := range []backupItem{{Name: "captures", Source: config.CaptureRoot}, {Name: "preserved", Source: config.ArchiveRoot}, {Name: "hosts", Source: filepath.Join(root, hostsDirName)}} {
 		if tree.Source == "" || tree.Name == "hosts" && !config.Library {
 			continue
@@ -455,6 +462,17 @@ type backupJob struct {
 	// match) that the item being backed up accounts for; prune keeps them.
 	keep     map[fileKey]bool
 	symlinks int
+	links    map[backupLinkKey]string
+}
+
+type backupLinkKey struct {
+	fileKey
+	size, mtime int64
+}
+
+func linkKey(info fs.FileInfo) (backupLinkKey, bool) {
+	key, ok := keyOf(info)
+	return backupLinkKey{key, info.Size(), info.ModTime().UnixNano()}, ok
 }
 
 type fileKey struct{ device, inode uint64 }
@@ -976,6 +994,9 @@ func (j *backupJob) tree(source, destination string) (int, error) {
 			}
 			return nil
 		}
+		if path != source && entry.IsDir() && skipBackupName(entry.Name()) {
+			return fs.SkipDir
+		}
 		rel, _ := filepath.Rel(source, path)
 		switch {
 		case entry.Type()&fs.ModeSymlink != 0:
@@ -1002,6 +1023,7 @@ func (j *backupJob) copyAll(files []string, root, destination string) (int, erro
 	}
 	jobs := []copyJob{}
 	planned := int64(0)
+	plannedLinks := map[backupLinkKey]bool{}
 	listed := 0
 	for _, file := range files {
 		info, err := os.Stat(file)
@@ -1020,12 +1042,26 @@ func (j *backupJob) copyAll(files []string, root, destination string) (int, erro
 		j.run.FilesTotal++
 		j.run.BytesTotal += info.Size()
 		if current(target, info.Size(), info.ModTime().UnixNano()) {
+			if j.links == nil {
+				j.links = map[backupLinkKey]string{}
+			}
+			if key, ok := linkKey(info); ok && j.links[key] == "" {
+				j.links[key] = target
+			}
 			j.run.FilesUnchanged++
 			j.keepPath(target)
 			continue
 		}
 		jobs = append(jobs, copyJob{file, target, info})
-		planned += info.Size()
+		key, ok := linkKey(info)
+		if !ok || !plannedLinks[key] {
+			planned += info.Size()
+		} else {
+			planned += 4096
+		}
+		if ok {
+			plannedLinks[key] = true
+		}
 	}
 	if err := ensureFree(nearestExisting(destination), planned); err != nil {
 		return listed, err
@@ -1096,6 +1132,30 @@ func (j *backupJob) copyConfig(source, target string) error {
 var errBackupSourceShrank = errors.New("file shrank while it was being copied")
 
 func (j *backupJob) copyFile(source, target string, info fs.FileInfo) error {
+	if j.links == nil {
+		j.links = map[backupLinkKey]string{}
+	}
+	key, keyed := linkKey(info)
+	if keyed {
+		if previous := j.links[key]; previous != "" && previous != target {
+			if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
+				return toBackupDestination(err)
+			}
+			temporary := target + backupTempSuffix
+			_ = os.Remove(temporary)
+			if err := os.Link(previous, temporary); err == nil {
+				if err = os.Rename(temporary, target); err != nil {
+					_ = os.Remove(temporary)
+					return toBackupDestination(err)
+				}
+				return nil
+			}
+			// Linkless destinations still get a complete streamed copy.
+		}
+	}
+	if err := ensureFree(nearestExisting(target), info.Size()); err != nil {
+		return toBackupDestination(err)
+	}
 	in, err := os.Open(source)
 	if err != nil {
 		return err
@@ -1149,6 +1209,9 @@ func (j *backupJob) copyFile(source, target string, info fs.FileInfo) error {
 	if err := os.Rename(temporary, target); err != nil {
 		os.Remove(temporary)
 		return toBackupDestination(err)
+	}
+	if keyed {
+		j.links[key] = target
 	}
 	return nil
 }

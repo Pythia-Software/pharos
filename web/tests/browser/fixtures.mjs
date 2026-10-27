@@ -13,6 +13,11 @@ const repo = fileURLToPath(new URL("../../..", import.meta.url));
 const schemas = Object.fromEntries(readdirSync(join(repo, "schemas")).filter(file => file.endsWith(".schema.json"))
   .map(file => [file.replace(".schema.json", ""), core.loadSchema(JSON.parse(readFileSync(join(repo, "schemas", file), "utf8")))]));
 const now = Date.now();
+export const sourceSetupCandidates = [
+  {name:'claude',kind:'claude',path:'/Users/test/.claude/projects',display_path:'~/.claude/projects',count:24,unit:'session',bytes:2400000,status:'found',acceptable:true,recommended:true},
+  {name:'claude-work',kind:'claude',path:'/Users/test/.claude-work/projects',display_path:'~/.claude-work/projects',count:8,unit:'session',bytes:800000,status:'found',acceptable:true,recommended:true},
+  {name:'codex',kind:'codex',path:'/Users/test/.codex',display_path:'~/.codex',count:16,unit:'session',bytes:1700000,status:'found',acceptable:true,recommended:true},
+];
 const day = 86400000, iso = offset => new Date(now - offset).toISOString();
 
 // Long values are where layouts break, so some rows carry them.
@@ -166,8 +171,8 @@ const syncHistory = Array.from({ length: 6 }, (_, index) => ({ run_id: `run-${in
 syncHistory[0].phases[0].work = [{ phase: "read", unit: "group", done: 2, total: 2, total_known: true, seconds: 4, features: { conversations: 8, messages: 130, bytes: 4096, bytes_basis: "message_text", since_last_index_seconds: 300, load_one_minute: 1.2 } }];
 syncHistory[0].forecasts = [{ reason: "launch", elapsed_seconds: 0, estimate: { point_seconds: 20, low_seconds: 10, high_seconds: 30, predicted_steps: 3, remaining_steps: 3 }, actual_remaining_seconds: 22.1 }];
 const syncSettings = { enabled: true, interval_seconds: 300, sources: [], next_at: new Date(now + 180000).toISOString() };
-const syncStatus = { settings: syncSettings, busy: false, available_sources: [{ name: "codex" }, { name: "claude" }], sources: [{ name: "codex" }, { name: "claude" }], history: syncHistory,
-  source_states: [{ source_name: "codex", attempted_at: syncHistory[0].finished_at, succeeded_at: syncHistory[0].finished_at, pending_preservation: true, last_capture_at: iso(3 * 3600000) }, { source_name: "claude", attempted_at: syncHistory[0].finished_at, succeeded_at: syncHistory[0].finished_at, last_capture_at: iso(3600000) }],
+const syncStatus = { settings: syncSettings, busy: false, library_empty: false, has_sources: true, available_sources: [{ name: "codex", preservation_mode: "filesystem-retained-sqlite-gated" }, { name: "claude" }], sources: [{ name: "codex" }, { name: "claude" }], history: syncHistory,
+  source_states: [{ source_name: "codex", attempted_at: syncHistory[0].finished_at, succeeded_at: syncHistory[0].finished_at, preservation: {status:"legacy-gaps",legacy_preservation_gaps:2,pending_newer_inputs:true}, pending_preservation: true, last_capture_at: iso(3 * 3600000) }, { source_name: "claude", attempted_at: syncHistory[0].finished_at, succeeded_at: syncHistory[0].finished_at, last_capture_at: iso(3600000) }],
   statistics: { changes: { samples: 10, elapsed_seconds: { median: 22.1, p95: 61.8 }, cpu_seconds: { median: 8.7, p95: 11 }, rss_observed_peak_bytes: { last: 129 * 1048576 }, estimated_cpu_duty_percent_one_core: 2.9 } },
   forecast_accuracy: { 'automatic-sync': { launch: { attempts: 6, predicted: 5, evaluated: 4, covered: 3, median_absolute_error_seconds: 2.1, median_relative_error: 0.1, median_interval_width_seconds: 20 } } },
   forecast_runs: [{ run_id: 'capture-forecast', model: 'capture-index', finished_at: syncHistory[0].finished_at, state: 'complete', forecasts: syncHistory[0].forecasts }],
@@ -196,6 +201,7 @@ export const cloudScheduledStatus={
 };
 
 export const defaultApi = {
+  "GET /api/app/state": {application:"/Applications/Pharos.app",selected:"local",mcp:"external",busy:false,libraries:[{id:"local",name:"Pending history",available:true,config:"/Users/test/Library/Application Support/Pharos/Libraries/Pending/library.toml"},{id:"external",name:"My archive",available:false,config:"/Volumes/Archive/Pharos/library.toml"}]},
   "GET /api/cloud-backup": {destinations:[],runs:[],schedules:[],active_run_id:"",setup_root:"/tmp/pharos/cloud-setup"},
   "POST /api/cloud-backup/schedule": {saved:true},
   "GET /api/ask/status": { settings: { enabled: false, showInvitation: true, selection: null }, providers: [] },
@@ -225,6 +231,8 @@ export const defaultApi = {
   "GET /api/activity": { active: 0, runs: [] },
   "GET /api/library/status": { idle: true, portable: true, library_dir: "/Volumes/Pharos SSD/Pharos", drive: { name: "Pharos SSD", mounted: true, ejectable: true }, activities: [] },
   "GET /api/probe/status": { library: true, needs_onboarding: false, host: { id: "test-mac", label: "This Mac" } },
+  "GET /api/probe/tools": {tools:[{kind:'claude',path:'~/.claude',found_by:'data folder'}]},
+  "POST /api/probe": ({body})=>({candidates:sourceSetupCandidates.filter(candidate=>body.kinds.includes(candidate.kind)),checked:[]}),
   "GET /api/upgrade": { running: false, needed: false, steps: [], repository_renames: {} },
   "GET /api/pricing": { unpriced_models: [], priced_tokens: 1000, unpriced_tokens: 0, confirmed_changes: 0, proposed_changes: 0 },
   "GET /api/usage/concurrency-prototype": () => ({ ...defaultApi["GET /api/usage/parallelism"], timezone: "UTC" }),
@@ -240,6 +248,7 @@ export const defaultApi = {
     })),
     coverage: { conversations: 2, mirrors_removed: 0, unexplained_waits_excluded: 0, timing: "Captured timing", catalog: "Test catalog" },
   },
+  "GET /api/origins": { machines: [{ id: "machine-fixture", label: "Test Mac", kind: "device" }] },
   "GET /api/usage/history": { oldest_conversation_at: iso(180 * day) },
   "GET /api/usage/summary": { generated_at: iso(0), windows: ["1h", "6h", "24h", "7d", "30d", "all"].map((key, index) => ({ key, human_words: 100 * (index + 1), tokens: 1000 * (index + 1), cost_usd: index + 1, co2e_g: { central: 10 * (index + 1) } })), carbon_factors: carbonFactors },
   "GET /api/search/text/options": { providers: ["codex", "claude"], sources: ["conductor"] },
@@ -250,6 +259,8 @@ export const defaultApi = {
   "GET /api/menu-bar/usage": { human_words: 3240, tokens: 1200000, cost_usd: 8.42, co2e_g: 18.25 },
 
   // Settings.
+  "GET /api/feedback/diagnostics": { service: "Recent service diagnostics" },
+  "POST /api/feedback/submit": ({ body }) => ({ id: body.id, received: true }),
   "GET /api/health/counts": { workspaces: 1964, conversations: 2400, messages: 311120 },
   "GET /api/health/storage": { volume_name: "Pharos SSD", index_bytes: 2_000_000_000, internal_free_bytes: 100_000_000_000, free_bytes: 400_000_000_000, staging_bytes: 0, staging_cap_bytes: 1, path: "/Volumes/Pharos SSD/Pharos", status: "available" },
   "GET /api/health/pricing": { priced_tokens: 90, assumed_tokens: 0, partial_tokens: 0, unpriced_tokens: 10, total_tokens: 2_500_000_000, cost_usd: 1234.5, recent_tokens: 400_000_000, recent_cost_usd: 300, confirmed_changes: 3, proposed_changes: 0, unpriced_models: [] },

@@ -22,9 +22,10 @@ import (
 // Host is one Mac and OS user. The library travels between hosts, so source
 // paths and sync state are recorded per host while identities are not.
 type Host struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
-	User  string `json:"user"`
+	ID        string `json:"id"`
+	MachineID string `json:"machine_id,omitempty"`
+	Label     string `json:"label"`
+	User      string `json:"user"`
 	// Fallback marks an ID derived from the hostname, because neither ioreg
 	// nor an earlier run could name this Mac's hardware. Such an ID is not
 	// this Mac's lasting identity, so nothing is recorded under it (see
@@ -86,7 +87,7 @@ func detectHost(support string, platform func(waits []time.Duration) (string, er
 	}
 	hardware, err := platform(waits)
 	if err == nil {
-		host := Host{ID: stableID("host", hardware, name), Label: label, User: name}
+		host := Host{ID: stableID("host", hardware, name), MachineID: stableID("machine", hardware), Label: label, User: name}
 		recordHost(path, hostRecord{HardwareUUID: hardware, User: name, ID: host.ID})
 		return host
 	}
@@ -96,7 +97,7 @@ func detectHost(support string, platform func(waits []time.Duration) (string, er
 	// back to it: on the new Mac ioreg names the new hardware and rewrites it.
 	if recorded {
 		fmt.Fprintf(os.Stderr, "Pharos: %v; using this Mac's host ID recorded in %s\n", err, path)
-		return Host{ID: record.ID, Label: label, User: name}
+		return Host{ID: record.ID, MachineID: stableID("machine", record.HardwareUUID), Label: label, User: name}
 	}
 	fmt.Fprintf(os.Stderr, "Pharos: %v; identifying this Mac by its hostname %q for now\n", err, hostname)
 	return Host{ID: stableID("host", "hostname:"+hostname, name), Label: label, User: name, Fallback: true}
@@ -147,6 +148,14 @@ func commandOutput(name string, args ...string) string {
 // (default now): for another Mac's capture, when it was captured.
 func (c *Catalog) registerHost(host Host, seen string) error {
 	seen = defaultString(seen, now())
+	if host.MachineID != "" {
+		if _, err := c.DB.Exec(`INSERT INTO machines VALUES(?,?,'device') ON CONFLICT(id) DO UPDATE SET label=excluded.label WHERE machines.label<>excluded.label`, host.MachineID, host.Label); err != nil {
+			return err
+		}
+		if _, err := c.DB.Exec(`INSERT INTO host_machines VALUES(?,?) ON CONFLICT(host_id) DO UPDATE SET machine_id=excluded.machine_id WHERE host_machines.machine_id<>excluded.machine_id`, host.ID, host.MachineID); err != nil {
+			return err
+		}
+	}
 	_, err := c.DB.Exec(`INSERT INTO hosts(id,label,user_name,first_seen_at,last_seen_at) VALUES(?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET label=excluded.label,user_name=COALESCE(excluded.user_name,hosts.user_name),
 		last_seen_at=MAX(excluded.last_seen_at,hosts.last_seen_at)`,

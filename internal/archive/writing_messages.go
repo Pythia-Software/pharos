@@ -17,6 +17,23 @@ import (
 // counts toward, as in the per-conversation writing table.
 var writingMessageDataset = func() sqlDataset {
 	columns := map[string]string{
+		"channel":                  "o.channel",
+		"machine_id":               "o.machine_id",
+		"machine":                  "o.machine",
+		"machine_kind":             "o.machine_kind",
+		"execution_machine_id":     "o.execution_machine_id",
+		"execution_machine":        "o.execution_machine",
+		"execution_machine_kind":   "o.execution_machine_kind",
+		"channel_status":           "o.channel_status",
+		"machine_status":           "o.machine_status",
+		"execution_machine_status": "o.execution_machine_status",
+		"origin_conversation_id":   "o.origin_conversation_id",
+		"origin_evidence":          "o.origin_evidence",
+		// A message has one origin; its membership combinations are singletons.
+		"channels":           "COALESCE(o.channel,'Unknown')",
+		"machines":           "COALESCE(o.machine_id,'Unknown')",
+		"execution_machines": "COALESCE(o.execution_machine_id,'Unknown')",
+
 		"id": "ma.message_id", "conversation_id": "ma.conversation_id", "workspace_id": "ma.workspace_id",
 		"work_id": "COALESCE(ma.work_id,ma.workspace_id)",
 		"title":   "w.title", "repository_name": "r.display_name", "source_kind": "w.source_kind",
@@ -39,12 +56,13 @@ var writingMessageDataset = func() sqlDataset {
 	}
 	return sqlDataset{
 		from: `FROM message_authorship ma JOIN messages m ON m.id=ma.message_id JOIN conversations c ON c.id=ma.conversation_id
-			LEFT JOIN workspaces w ON w.id=COALESCE(ma.work_id,ma.workspace_id) LEFT JOIN repositories r ON r.id=w.repository_id`,
+			LEFT JOIN workspaces w ON w.id=COALESCE(ma.work_id,ma.workspace_id) LEFT JOIN repositories r ON r.id=w.repository_id LEFT JOIN conversation_origins o ON o.conversation_id=ma.conversation_id`,
 		countFrom: "FROM message_authorship ma", countAlias: "ma",
 		lookups:    map[string]bool{"id": true, "conversation_id": true, "workspace_id": true, "work_id": true, "day": true},
 		columns:    columns,
 		timestamps: map[string]string{"sent_at": "ma.sent_at"},
 		optionalJoins: map[string]string{
+			"o": " LEFT JOIN conversation_origins o ON o.conversation_id=ma.conversation_id",
 			"m": "JOIN messages m ON m.id=ma.message_id",
 			"c": " JOIN conversations c ON c.id=ma.conversation_id",
 			"w": "LEFT JOIN workspaces w ON w.id=COALESCE(ma.work_id,ma.workspace_id)",

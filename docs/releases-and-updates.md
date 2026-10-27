@@ -1,5 +1,9 @@
 # Releases and app updates
 
+For the release introducing managed libraries, include the
+[library management upgrade notes](onboarding-and-library-upgrade-notes.md),
+especially the requirement to keep Pharos running for managed MCP access.
+
 ## Publish a release from a Mac
 
 Pharos releases are built locally. GitHub Actions is not involved. A release
@@ -134,6 +138,18 @@ verification, installation and relaunch UI. The same signed, notarized DMG is
 used for first installs and updates. No browser or Finder replacement is
 required after installing the first Sparkle-enabled release. v0.7.1 and older
 still need one final manual replacement to obtain the updater.
+
+When Sparkle offers an installable release, the library header shows
+an update icon between drive status and Refresh. One click downloads,
+verifies, installs and relaunches Pharos, after the same safe process handoff
+as the native updater. A dot marks an available update, a ring shows download
+progress, a package marks preparation, and a restart arrow marks installation.
+Hover text includes the version, current stage and download percentage.
+The icon stays the same width across states; the header measures the full
+combo again as the icon appears or disappears and moves it
+into **More tools** when space is limited. macOS may still request authorization
+if the installed app requires it. The action is available in the native app;
+browser sessions and local builds do not offer production updates.
 
 **Automatically Check for Updates** uses Sparkle's daily schedule. An explicit
 choice from the old **Check for Updates on Launch** setting is migrated once;
@@ -460,6 +476,23 @@ and library. A native build/signature check or lease harness alone is not this
 full signed installation test.
 
 ## Upgrading an existing library
+
+This build upgrades catalogs to schema 21 and writes capture manifest version 5,
+combining durable preservation with managed-library delivery safeguards. Earlier
+builds refuse these versions. Take and verify a backup of
+both the catalog and captures before upgrading: rollback requires restoring
+the pre-upgrade catalog and capture tree together, not just replacing the app.
+New automatic retained-input options remain off unless explicitly configured.
+SQLite row export during Capture requires `sqlite_record_capture = true`.
+
+Cloud archives containing shared retained inodes use manifest version 2 and
+hard-link entries. This build reads versions 1 and 2; earlier builds cannot
+restore version 2. Keep the pre-upgrade backup for rollback. Local backup copies
+and cloud restores on filesystems without hard links use ordinary files.
+
+Before release, validate an upgrade and rollback against a separately reviewed
+copy of a real library, including disk budget and destination. Fixture tests do
+not substitute for that rollout validation; no production backfill is implied.
 
 A new version can derive more from the transcripts a library already holds.
 When it opens a catalog indexed by an older version, Pharos includes the

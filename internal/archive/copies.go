@@ -197,18 +197,26 @@ func rederiveWorkspace(tx *sql.Tx, workspaceID string, merged map[string]bool) e
 }
 
 func rederiveWorkspaceMode(tx *sql.Tx, workspaceID string, merged map[string]bool, force bool) error {
-	rows, err := queryMaps(tx, "SELECT id,provider,model,effort,started_at,ended_at,agent_depth FROM conversations WHERE workspace_id=? ORDER BY started_at,id", workspaceID)
+	rows, err := queryMaps(tx, "SELECT id,native_id,parent_id,provider,model,effort,started_at,ended_at,agent_depth FROM conversations WHERE workspace_id=? ORDER BY started_at,id", workspaceID)
 	if err != nil {
 		return err
 	}
 	union := WorkspaceRecord{}
+	nativeIDs := map[string]string{}
+	for _, row := range rows {
+		nativeIDs[firstString(row["id"])] = firstString(row["native_id"])
+	}
+	ids := []string{}
+	authority := []conversationAuthority{}
 	for _, row := range rows {
 		id := firstString(row["id"])
+		ids = append(ids, id)
+		authority = append(authority, conversationAuthority{})
 		messages, err := storedMessages(context.Background(), tx, id)
 		if err != nil {
 			return err
 		}
-		conversation := ConversationRecord{Provider: firstString(row["provider"]), Model: firstString(row["model"]), Effort: firstString(row["effort"]), StartedAt: firstString(row["started_at"]),
+		conversation := ConversationRecord{NativeID: firstString(row["native_id"]), ParentNativeID: nativeIDs[firstString(row["parent_id"])], Provider: firstString(row["provider"]), Model: firstString(row["model"]), Effort: firstString(row["effort"]), StartedAt: firstString(row["started_at"]),
 			EndedAt: firstString(row["ended_at"]), AgentDepth: int(integer(row["agent_depth"])), Messages: messages}
 		union.Conversations = append(union.Conversations, conversation)
 		if !merged[id] || force {
@@ -222,10 +230,22 @@ func rederiveWorkspaceMode(tx *sql.Tx, workspaceID string, merged map[string]boo
 			if err := replaceAgentSessions(tx, workspaceID, id, conversation); err != nil {
 				return err
 			}
+			authority[len(authority)-1].writer = true
 		}
 		// The ledger is derived from the stored messages, which now include
 		// the ones the merge added.
 		if err := replaceToolLedger(tx, workspaceID, id, conversation); err != nil {
+			return err
+		}
+	}
+	if len(merged) > 0 {
+		// Rebuilding a divergent root resets its usage and delegation state.
+		// Reconcile it against the complete stored group, preserving accepted
+		// session totals for roots that did not require reconstruction.
+		if err := applyClaudeGroupUsage(tx, workspaceID, union.Conversations, ids, authority); err != nil {
+			return err
+		}
+		if err := linkClaudeGroupDelegations(tx, union.Conversations, ids); err != nil {
 			return err
 		}
 	}

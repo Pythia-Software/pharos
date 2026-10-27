@@ -20,7 +20,8 @@ func (c *Catalog) backfillHarnessVersions() error {
 
 func (c *Catalog) backfillHarnessVersionsContext(ctx context.Context) error {
 	var cursor int64
-	capturedPaths := map[string]map[string]string{}
+	capturedPaths := newHarnessInputs()
+	defer capturedPaths.Close()
 	if err := c.DB.QueryRowContext(ctx, `SELECT CAST(value AS INTEGER) FROM meta WHERE key='harness_version_backfill'`).Scan(&cursor); err != nil && err != sql.ErrNoRows {
 		return err
 	}
@@ -67,7 +68,14 @@ func (c *Catalog) backfillHarnessVersionsContext(ctx context.Context) error {
 					}
 				}
 			case "codex":
-				value.harness, value.first, value.last = codexHarnessFromFileContext(ctx, c.harnessSourcePath(firstString(row["origin"]), firstString(row["origin_host_id"]), capturedPaths))
+				path, err := c.harnessSourcePath(ctx, firstString(row["origin"]), firstString(row["origin_host_id"]), "codex", capturedPaths)
+				if err != nil {
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					continue
+				}
+				value.harness, value.first, value.last = codexHarnessFromFileContext(ctx, path)
 			case "conductor":
 				value.harness = "conductor"
 			case "chatgpt":
@@ -81,7 +89,8 @@ func (c *Catalog) backfillHarnessVersionsContext(ctx context.Context) error {
 			}
 			prepared = append(prepared, value)
 		}
-		last := prepared[len(prepared)-1].rowid
+		capturedPaths.Close()
+		last := integer(rows[len(rows)-1]["rowid"])
 		if err := c.writeTransaction(ctx, "harness-backfill", func(tx *sql.Tx) error {
 			for _, value := range prepared {
 				if _, err := tx.ExecContext(ctx, `UPDATE conversations SET harness=CASE WHEN harness IS NULL OR harness IN ('claude-code','codex') THEN COALESCE(?,harness) ELSE harness END,harness_version_first=COALESCE(harness_version_first,?),
@@ -104,45 +113,102 @@ type harnessBackfillRow struct {
 	rowid                          int64
 }
 
-func (c *Catalog) harnessSourcePath(origin, host string, cache map[string]map[string]string) string {
-	if host == currentHost().ID {
-		if _, err := os.Stat(origin); err == nil {
-			return origin
-		}
+// One lookup pass caches each host's manifest inventory and owns its temporary
+// readers until the caller finishes parsing. A bad source never fails indexing.
+type harnessInputs struct {
+	paths       map[string]map[string]string
+	inventories map[string]map[string]harnessCapture
+	failures    map[string]error
+	leases      []func()
+}
+type harnessCapture struct {
+	dir    string
+	host   Host
+	source captureSourceInfo
+	file   *capturedFile
+}
+
+func newHarnessInputs() *harnessInputs {
+	return &harnessInputs{paths: map[string]map[string]string{}, inventories: map[string]map[string]harnessCapture{}, failures: map[string]error{}}
+}
+func (inputs *harnessInputs) Close() {
+	for _, close := range inputs.leases {
+		close()
 	}
-	if host == "" || origin == "" || strings.HasPrefix(origin, "sqlite:") {
-		return ""
+	inputs.leases = nil
+	inputs.paths = map[string]map[string]string{}
+}
+
+func (c *Catalog) harnessSourcePath(ctx context.Context, origin, host, provider string, cache *harnessInputs) (string, error) {
+	if c.evidenceOnly || host == "" || origin == "" || strings.HasPrefix(origin, "sqlite:") {
+		return "", nil
 	}
-	paths, ok := cache[host]
-	if !ok {
-		paths = map[string]string{}
+	if path, ok := cache.paths[host][origin]; ok {
+		return path, nil
+	}
+	if cache.paths[host] == nil {
+		cache.paths[host] = map[string]string{}
+	}
+	if cache.inventories[host] == nil {
+		cache.inventories[host] = map[string]harnessCapture{}
 		root := filepath.Join(c.captureRootPath(), host)
 		sources, err := os.ReadDir(root)
-		if err == nil {
-			for _, source := range sources {
-				if !source.IsDir() {
-					continue
-				}
-				dir := filepath.Join(root, source.Name())
-				manifest, err := loadCaptureManifest(dir)
-				if err != nil {
-					continue
-				}
-				for _, file := range manifest.Files {
-					if file != nil {
-						paths[file.Path] = filepath.Join(dir, filepath.FromSlash(file.Captured))
-					}
+		if err != nil && !os.IsNotExist(err) {
+			cache.failures[host] = err
+		}
+		for _, source := range sources {
+			if !source.IsDir() || !validCaptureName(source.Name()) {
+				continue
+			}
+			dir := filepath.Join(root, source.Name())
+			lock, err := lockCaptureTarget(ctx, dir)
+			if err != nil {
+				cache.failures[host] = err
+				continue
+			}
+			manifest, err := loadCaptureManifest(dir)
+			lock.Close()
+			if err != nil {
+				cache.failures[host] = err
+				continue
+			}
+			for _, file := range manifest.Files {
+				if file != nil {
+					cache.inventories[host][file.Path] = harnessCapture{dir, manifest.Host, manifest.Source, file}
 				}
 			}
 		}
-		cache[host] = paths
 	}
-	if path := paths[origin]; path != "" {
-		if _, err := os.Stat(path); err == nil {
-			return path
+	if retained, ok := cache.inventories[host][origin]; ok {
+		lock, err := lockCaptureTarget(ctx, retained.dir)
+		if err != nil {
+			return "", err
+		}
+		only := &captureManifest{Version: captureManifestVersion, Host: retained.host, Source: captureSourceInfo{Name: retained.source.Name, Kind: provider, Path: origin, Account: retained.source.Account}, Files: []*capturedFile{retained.file}, PathMap: []capturePathMapping{{Original: origin, Captured: retained.file.Captured}}}
+		input, err := freezeManifestInput(ctx, captureTarget{Host: retained.host, Source: retained.source.Name, Dir: retained.dir}, SourceConfig{}, false, only)
+		lock.Close()
+		if err == nil {
+			cache.leases = append(cache.leases, input.Close)
+			cache.paths[host][origin] = input.Adapter.Config().Path
+			return cache.paths[host][origin], nil
+		}
+		cache.failures[host] = err
+	}
+	if host == currentHost().ID {
+		if _, err := os.Stat(origin); err == nil {
+			// Best-effort metadata enrichment may read local inputs, but must
+			// not silently create persistent captures during sync or upgrade.
+			cache.paths[host][origin] = origin
+			return origin, nil
+		} else if !os.IsNotExist(err) {
+			return "", err
 		}
 	}
-	return ""
+	if err := cache.failures[host]; err != nil {
+		return "", err
+	}
+	cache.paths[host][origin] = ""
+	return "", nil
 }
 
 func codexHarnessFromFile(path string) (string, string, string) {

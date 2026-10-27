@@ -1,3 +1,4 @@
+import { isOriginDimension, originLabel, loadOriginMetadata } from "./origin-dimensions";
 import { apiCostTrendQuery, apiCostTrendFacts, buildApiCostTrend, usesApiCostTrend, type CostTimeBucket } from "./api-cost-trend";
 import { formatMetricOutput } from "@pythia-software/query-table-ui";
 import { metricPopulationError, parseRelativeDuration, createGroupingModel, sourceExecutionSchema, toQueryRequestV3, validateQueryResultV3, validateComputedColumn, toMetricQuery, toServerQueryV2, type QueryCapabilitiesV3, type QueryResultV3, type ComputedColumn, type AggregationClause, type AggregationResult, type AggregationResultEntry, type ComputedExecution, type FieldSchema, type MetricCapabilities, type MetricQuery, type QueryState } from "@pythia-software/query-table-core";
@@ -98,6 +99,7 @@ function filterScatterSamples(result: AggregationResultEntry, minimum?: number):
 
 const colorScopes = new Set(["provider", "effort", "model_family", "model_effort"]);
 function keyLabel(schema: FieldSchema, field: string): ((key: unknown) => string) | undefined {
+  if (isOriginDimension(field)) return key => originLabel(field,key);
   if (field === "activity") return key => activityPresentation(String(key ?? "")).label;
   const values = schema.fields.find(item => item.name === field)?.filter?.values;
   if (colorScopes.has(field) || values?.source !== "static" || !values.options.some(option => typeof option === "object" && option.label !== option.value)) return;
@@ -323,6 +325,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
 // canonical revisions; an aborted caller never lends its signal to another run.
 export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string, preview?: QueryPreview, error?: unknown) => void, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return;
+  if (jobs.some(job => [...(job.query.grouping?.keys ?? []), ...(job.query.aggregations ?? []).flatMap(metric => metric.groupBy), ...(job.options?.recipe?.exploration?.keys ?? [])].some(field => field === "machine_id" || field === "execution_machine_id"))) await loadOriginMetadata();
   const contexts = new Map<QueryDataset, Promise<Context>>();
   function context(job: PreviewJob) {
     let pending = contexts.get(job.dataset);
