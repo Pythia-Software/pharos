@@ -333,7 +333,7 @@ operation.
 | `maintenance.search.tools` | Build tool search · Building tool search | version, chained | svc | D:w W:w | search.tools | — | Stops between batches; it carries on later. | batch | >30 s | bg |
 | `maintenance.search.query` | Build Query Table text indexes · Building table search | version, chained | svc | D:w W:w | search.query | — | Stops between batches; it carries on later. | batch | >30 s | bg |
 | `maintenance.checkpoint` (variants `bound`, `after-run`, `close`) | Save the catalog · Saving the catalog | daemon pass (WAL over 64 MiB, every 10 s), chained, release | svc | D:w W:w | — | — | Not interruptible; short. | record | >1 s | bg |
-| `maintenance.metrics` | Update MCP metrics · Updating metrics | read (an MCP call, up to 100 dirty workspaces) | mcp, svc | D:w W:w | — | — | Ends with the call. | record | never | fg |
+| `maintenance.metrics` | Update MCP metrics · Updating metrics | none: requests never write, so a `query_statistics` call computes dirty workspaces' metrics in its read snapshot and `maintenance.library-view` stores them; the kind stays so that journal rows naming it still render | mcp, svc | D:w W:w | — | — | Ends with the call. | record | never | fg |
 | `maintenance.origins` | Publish conversation origins · Publishing conversation origins | daemon pass (`maintainLibrary`: every pass while no ingest runs, at most once a minute during one); the end of each ingest and the Tools rollup publish them as part of their own operation | svc | D:w W:w | — | — | Stops; it publishes them on its next pass. | batch | never | bg |
 | `maintenance.mcp-history` | Store MCP call history · Storing MCP call history | read (an MCP call through the service queues its record; one background writer stores the queue, so no request waits for the writer) | svc | D:w W:w | — | — | Stops; closing the catalog stores what is still queued. | record | never | bg |
 | `ask.save` | Save an Ask Pharos answer · Saving an Ask Pharos answer | user (a finished Ask turn whose save missed its deadline is retried in the background for up to 5 min) | svc | D:w W:w | — | — | Stops retrying; an answer not yet saved is lost, as when the service stops. | record | never | bg |
@@ -401,8 +401,7 @@ Not kinds: the broker's 5 s maintain loop (a daemon whose respawns are
 `service.start` with trigger `respawn`), the native 5 s state watch, the
 service's watchdogs (parent gone, drive gone, SIGBUS), DiskArbitration
 monitors, the quit gate (a consumer of the eject verdict), MCP stdio servers
-themselves (only their `catalog.initialize` and `maintenance.metrics`), and
-service log capture.
+themselves (only their `catalog.initialize`), and service log capture.
 
 ## 4. Holds and the eject verdict
 
@@ -660,7 +659,7 @@ Liveness of other processes is never inferred from pids or heartbeat rows.
   (`capture`, `index`, `ingest`, `repair-existing`, `backup`,
   `cloud-backup verify`, `history-backfill`, `upgrade`, `build-tools`,
   `library-transfer`, `library-recover`, `add-this-mac`, adoption, and MCP
-  servers while they run `catalog.initialize` or `maintenance.metrics`)
+  servers while they run `catalog.initialize`)
   holds an exclusive `flock` on its own lease file for as long as it runs
   that operation.
 - **Where:** `<catalog dir>/.pharos-leases/<instance>.json`, or

@@ -95,6 +95,7 @@ func NewServer(config Config, catalog *Catalog) *Server {
 		catalog.background = server.start
 		catalog.ops = server.ops
 		server.journal = newJournalWriter(catalog, server.ops)
+		catalog.recordInitialize(server.ops, triggerStartup)
 		server.leases.dirs = func() []string { return leaseDirs(server.Config()) }
 		catalog.RepositoryAliases = config.RepositoryAliases
 		catalog.RepositorySeparate = config.RepositorySeparate

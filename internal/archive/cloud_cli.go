@@ -24,6 +24,14 @@ func runCloudCLI(config Config, args []string) error {
 		return err
 	}
 	defer catalog.Close()
+	// It saves the verification state, so it is a catalog writer: a lease
+	// beside the catalog, and a journal row (§6.5).
+	return runCLIOperation(config, catalog, "cloud-backup", OperationSpec{Kind: "cloud.verify", Legacy: args[1]}, func(context.Context, *Op) error {
+		return verifyCloudCLI(config, catalog, args)
+	})
+}
+
+func verifyCloudCLI(config Config, catalog *Catalog, args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	run, err := catalog.cloudRun(ctx, args[1])

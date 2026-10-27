@@ -151,7 +151,28 @@ func (c *Catalog) initializeLocked(wait bool) error {
 			return err
 		}
 	}
-	return c.Initialize()
+	// Timed for the journal: the table it would go in is created by this
+	// very step, so the registry records it once one is attached (§3.5).
+	started := time.Now()
+	err = c.Initialize()
+	c.initialized = &initializeRecord{started: started, ended: time.Now(), err: err}
+	return err
+}
+
+// initializeRecord is when the catalog's last Initialize ran and how it
+// ended.
+type initializeRecord struct {
+	started, ended time.Time
+	err            error
+}
+
+// recordInitialize registers the catalog's Initialize, already finished, in
+// reg: start and end together.
+func (c *Catalog) recordInitialize(reg *opRegistry, trigger string) {
+	if c == nil || c.initialized == nil || reg == nil {
+		return
+	}
+	reg.recordFinished(OperationSpec{Kind: "catalog.initialize", Trigger: trigger}, c.initialized.started, c.initialized.ended, c.initialized.err)
 }
 
 // closeQuery closes without Close's truncating checkpoint, which takes the

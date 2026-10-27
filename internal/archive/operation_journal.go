@@ -38,15 +38,15 @@ var errJournalBusy = errors.New("operation journal: the catalog writer is busy")
 
 // journalImage is one row as the journal stores it.
 type journalImage struct {
-	op      *Op
-	version uint64
+	op                                                                          *Op
+	version                                                                     uint64
 	id, parent, root, kind, variant, subject, trigger, process, instance, state string
-	reason, err, stepName, stepUnit, legacy                                    string
-	stepIndex, stepCount                                                       int
-	stepDone, stepTotal                                                        float64
-	stepKnown                                                                  bool
-	started, updated, ended                                                    string
-	detail                                                                     string
+	reason, err, stepName, stepUnit, legacy                                     string
+	stepIndex, stepCount                                                        int
+	stepDone, stepTotal                                                         float64
+	stepKnown                                                                   bool
+	started, updated, ended                                                     string
+	detail                                                                      string
 }
 
 // journalReconcile is a conditional update of a row another instance owns

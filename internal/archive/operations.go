@@ -374,6 +374,25 @@ func (r *opRegistry) register(ctx context.Context, spec OperationSpec, tentative
 	return op.ctx, op
 }
 
+// recordFinished registers an operation that already ran, from started to
+// ended, and ended with err: the catalog's Initialize, which runs before any
+// registry exists.
+func (r *opRegistry) recordFinished(spec OperationSpec, started, ended time.Time, err error) *Op {
+	_, op := r.begin(context.Background(), spec)
+	if op == nil {
+		return nil
+	}
+	r.mu.Lock()
+	op.started = started
+	r.mu.Unlock()
+	op.Finish(err)
+	r.mu.Lock()
+	op.ended = ended
+	r.changedLocked(op, false)
+	r.mu.Unlock()
+	return op
+}
+
 // discard forgets a tentative operation that did nothing. One that was
 // published since is finished as succeeded instead.
 func (op *Op) discard() {

@@ -155,7 +155,11 @@ func Run(arguments []string) error {
 			return err
 		}
 		defer use.Close()
-		return runHistoryCLI(config, args)
+		if len(args) > 0 && args[0] == "status" {
+			return runHistoryCLI(config, args)
+		}
+		return runCLIOperation(config, nil, "history-backfill", OperationSpec{Kind: "capture.history-backfill", Variant: firstOf(args)},
+			func(context.Context, *Op) error { return runHistoryCLI(config, args) })
 	}
 	if err := config.checkLibrary(volumeIdentity); err != nil {
 		return err
@@ -172,17 +176,24 @@ func Run(arguments []string) error {
 	}
 	// Capturing and backing up only copy files; they never open the catalog
 	// for writing.
+	// Each holds a lease under the capture root while it writes (§6.5).
 	if command == "sqlite-records" {
-		return runSQLiteRecordsCLI(config, args)
+		if subcommand := firstOf(args); subcommand == "status" || subcommand == "verify" {
+			return runSQLiteRecordsCLI(config, args)
+		}
+		return runCLIOperation(config, nil, "sqlite-records", OperationSpec{Kind: "capture.cli", Variant: "sqlite-records"},
+			func(context.Context, *Op) error { return runSQLiteRecordsCLI(config, args) })
 	}
 	if command == "capture" {
-		return runCaptureCLI(config, args)
+		return runCLIOperation(config, nil, "capture", OperationSpec{Kind: "capture.cli"},
+			func(context.Context, *Op) error { return runCaptureCLI(config, args) })
 	}
 	if command == "cloud-backup" {
 		return runCloudCLI(config, args)
 	}
 	if command == "backup" {
-		return runBackupCLI(config, args)
+		return runCLIOperation(config, nil, "backup", OperationSpec{Kind: "backup.local"},
+			func(context.Context, *Op) error { return runBackupCLI(config, args) })
 	}
 	// A preview reads the catalog without writing, so it can run beside a
 	// service that is indexing.
@@ -268,75 +279,17 @@ func Run(arguments []string) error {
 		server.life.listening = func() { _ = os.Remove(releasedMarker(config.CatalogPath)) }
 		return server.Serve()
 	case "ingest":
-		results := []IngestResult{}
-		for _, source := range config.Sources {
-			if !source.Enabled {
-				continue
-			}
-			adapter, err := MakeAdapter(source)
-			if err != nil {
-				return err
-			}
-			results = append(results, catalog.Ingest(adapter, nil))
-		}
-		links, err := catalog.ReconcileIdentities()
-		if err != nil {
-			return err
-		}
-		if err := catalog.refreshMainIntegrations(context.Background()); err != nil {
-			return err
-		}
-		if err := catalog.refreshAllLibrary(context.Background()); err != nil {
-			return err
-		}
-		return printJSON(map[string]any{"sources": results, "identity_links_added": links})
-	case "repair-existing":
-		if len(args) != 1 {
-			return fmt.Errorf("usage: pharos repair-existing SOURCE")
-		}
-		var source *SourceConfig
-		for index := range config.Sources {
-			if config.Sources[index].Name == args[0] {
-				source = &config.Sources[index]
-				break
-			}
-		}
-		if source == nil {
-			return fmt.Errorf("unknown source: %s", args[0])
-		}
-		adapter, err := MakeAdapter(*source)
-		if err != nil {
-			return err
-		}
-		result := catalog.IngestExisting(adapter, nil)
-		links, linkErr := catalog.ReconcileIdentities()
-		if linkErr != nil {
-			return linkErr
-		}
-		if result.Error != nil {
-			return fmt.Errorf("repair failed: %v", result.Error)
-		}
-		if err := catalog.refreshAllLibrary(context.Background()); err != nil {
-			return err
-		}
-		return printJSON(map[string]any{"source": result, "identity_links_added": links})
-	case "build-tools":
-		built, err := catalog.BackfillToolLedger(context.Background(), func(done, total int) {
-			if done%500 == 0 || done == total {
-				fmt.Fprintf(os.Stderr, "built tool ledger for %d/%d conversations\n", done, total)
-			}
+		return runCLIOperation(config, catalog, "ingest", OperationSpec{Kind: "ingest.cli", Variant: "ingest"}, func(ctx context.Context, op *Op) error {
+			return runIngestCLI(ctx, config, catalog, op)
 		})
-		if err != nil {
-			return fmt.Errorf("build tool ledger after %d conversations: %w", built, err)
-		}
-		if err := catalog.ensureToolRollup(context.Background()); err != nil {
-			return err
-		}
-		status, err := catalog.ToolLedgerStatus(context.Background())
-		if err != nil {
-			return err
-		}
-		return printJSON(map[string]any{"conversations_built": built, "status": status})
+	case "repair-existing":
+		return runCLIOperation(config, catalog, "repair-existing", OperationSpec{Kind: "ingest.cli", Variant: "repair-existing"}, func(ctx context.Context, op *Op) error {
+			return runRepairExistingCLI(config, catalog, args)
+		})
+	case "build-tools":
+		return runCLIOperation(config, catalog, "build-tools", OperationSpec{Kind: "tools.ledger.build"}, func(ctx context.Context, op *Op) error {
+			return runBuildToolsCLI(ctx, catalog, op)
+		})
 	case "refine-usage":
 		refined, err := catalog.RefineUsageTimeline(func(done, total int) {
 			if done%100 == 0 || done == total {
@@ -358,7 +311,12 @@ func Run(arguments []string) error {
 		}
 		return printJSON(map[string]any{"workspaces_repaired": repaired})
 	case "upgrade":
-		return runUpgradeCLI(catalog, args)
+		if slices.Contains(args, "--status") || slices.Contains(args, "--preview") {
+			return runUpgradeCLI(catalog, args) // reads
+		}
+		return runCLIOperation(config, catalog, "upgrade", OperationSpec{Kind: "library.upgrade"}, func(ctx context.Context, op *Op) error {
+			return runUpgradeCLIContext(ctx, catalog, args)
+		})
 	case "pricing":
 		return runPricingCLI(catalog, args)
 	case "search":
@@ -375,7 +333,9 @@ func Run(arguments []string) error {
 	case "probe":
 		return runProbeCLI(config, catalog, args)
 	case "index":
-		return runIndexCLI(config, catalog, args)
+		return runCLIOperation(config, catalog, "index", OperationSpec{Kind: "index.captures"}, func(ctx context.Context, op *Op) error {
+			return runIndexCLIContext(ctx, config, catalog, args)
+		})
 	case "upcoming", "protect", "preserve", "reclaim", "reconcile", "tick", "worker":
 		return fmt.Errorf("%s is part of mothballed TL1 reclamation; see docs/reclamation/README.md", command)
 	case "enrich-github":
@@ -383,6 +343,96 @@ func Run(arguments []string) error {
 	default:
 		return usageError()
 	}
+}
+
+// runIngestCLI: pharos ingest, every enabled source in place.
+func runIngestCLI(ctx context.Context, config Config, catalog *Catalog, op *Op) error {
+	results := []IngestResult{}
+	for _, source := range config.Sources {
+		if !source.Enabled {
+			continue
+		}
+		adapter, err := MakeAdapter(source)
+		if err != nil {
+			return err
+		}
+		op.Step(source.Name, "", -1)
+		results = append(results, catalog.Ingest(adapter, nil))
+	}
+	op.Step("Link identities and refresh the Search view", "", -1)
+	links, err := catalog.ReconcileIdentities()
+	if err != nil {
+		return err
+	}
+	if err := catalog.refreshMainIntegrations(ctx); err != nil {
+		return err
+	}
+	if err := catalog.refreshAllLibrary(ctx); err != nil {
+		return err
+	}
+	return printJSON(map[string]any{"sources": results, "identity_links_added": links})
+}
+
+// runRepairExistingCLI: pharos repair-existing SOURCE.
+func runRepairExistingCLI(config Config, catalog *Catalog, args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: pharos repair-existing SOURCE")
+	}
+	var source *SourceConfig
+	for index := range config.Sources {
+		if config.Sources[index].Name == args[0] {
+			source = &config.Sources[index]
+			break
+		}
+	}
+	if source == nil {
+		return fmt.Errorf("unknown source: %s", args[0])
+	}
+	adapter, err := MakeAdapter(*source)
+	if err != nil {
+		return err
+	}
+	result := catalog.IngestExisting(adapter, nil)
+	links, linkErr := catalog.ReconcileIdentities()
+	if linkErr != nil {
+		return linkErr
+	}
+	if result.Error != nil {
+		return fmt.Errorf("repair failed: %v", result.Error)
+	}
+	if err := catalog.refreshAllLibrary(context.Background()); err != nil {
+		return err
+	}
+	return printJSON(map[string]any{"source": result, "identity_links_added": links})
+}
+
+// runBuildToolsCLI: pharos build-tools.
+func runBuildToolsCLI(ctx context.Context, catalog *Catalog, op *Op) error {
+	built, err := catalog.BackfillToolLedger(ctx, func(done, total int) {
+		op.progress("Build the Tools ledger", "", "conversation", float64(done), float64(total), total > 0)
+		if done%500 == 0 || done == total {
+			fmt.Fprintf(os.Stderr, "built tool ledger for %d/%d conversations\n", done, total)
+		}
+	})
+	if err != nil {
+		return fmt.Errorf("build tool ledger after %d conversations: %w", built, err)
+	}
+	if err := catalog.ensureToolRollup(ctx); err != nil {
+		return err
+	}
+	status, err := catalog.ToolLedgerStatus(ctx)
+	if err != nil {
+		return err
+	}
+	return printJSON(map[string]any{"conversations_built": built, "status": status})
+}
+
+// firstOf is args' first element, or "".
+func firstOf(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	return args[0]
 }
 
 func usageError() error {
@@ -505,6 +555,10 @@ func runPricingCLI(catalog *Catalog, args []string) error {
 // tool, which repositories were renamed or moved; --github is accepted and
 // ignored so scripts written for 0.4.1 keep working.
 func runUpgradeCLI(catalog *Catalog, args []string) error {
+	return runUpgradeCLIContext(context.Background(), catalog, args)
+}
+
+func runUpgradeCLIContext(ctx context.Context, catalog *Catalog, args []string) error {
 	mode := "run"
 	for _, arg := range args {
 		switch arg {
@@ -515,7 +569,6 @@ func runUpgradeCLI(catalog *Catalog, args []string) error {
 			return fmt.Errorf("usage: pharos upgrade [--status|--preview]")
 		}
 	}
-	ctx := context.Background()
 	switch mode {
 	case "--status":
 		value, err := catalog.UpgradeStatus(ctx)

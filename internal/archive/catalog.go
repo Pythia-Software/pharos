@@ -56,6 +56,8 @@ type Catalog struct {
 	// nil runs a goroutine, counted in unowned so that whoever closes the
 	// catalog can wait for it.
 	background func(spec OperationSpec, work func(context.Context, *Op) error) bool
+	// initialized records this open's Initialize, for the journal.
+	initialized *initializeRecord
 	// ops is the registry Catalog-level work registers with (the service's,
 	// or a CLI command's); nil registers nothing.
 	ops               *opRegistry

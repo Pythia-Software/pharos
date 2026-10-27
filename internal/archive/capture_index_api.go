@@ -74,6 +74,10 @@ func (s *Server) stopIngest() bool {
 
 // runIndexCLI: pharos index [--host ID | --all-hosts] [SOURCE ...]
 func runIndexCLI(config Config, catalog *Catalog, args []string) error {
+	return runIndexCLIContext(context.Background(), config, catalog, args)
+}
+
+func runIndexCLIContext(ctx context.Context, config Config, catalog *Catalog, args []string) error {
 	flags := flag.NewFlagSet("index", flag.ContinueOnError)
 	host := flags.String("host", "", "index this host's captures (default: this Mac's)")
 	all := flags.Bool("all-hosts", false, "index every captured host")
@@ -91,7 +95,7 @@ func runIndexCLI(config Config, catalog *Catalog, args []string) error {
 	if err != nil {
 		return err
 	}
-	results, links, err := catalog.indexCaptureTargets(context.Background(), targets, func(target captureTarget, result IngestResult, elapsed time.Duration) {
+	results, links, err := catalog.indexCaptureTargets(ctx, targets, func(target captureTarget, result IngestResult, elapsed time.Duration) {
 		fmt.Fprintf(os.Stderr, "%s: %d workspaces written, %d parts parsed, %d unchanged in %.1fs; error: %v\n", target.label(),
 			result.Workspaces, result.Parsed, result.Unchanged, elapsed.Seconds(), result.Error)
 	})
