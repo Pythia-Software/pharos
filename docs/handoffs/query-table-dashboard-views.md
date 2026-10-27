@@ -24,7 +24,7 @@ nearest honest behaviour, states the limitation in the UI, and asks here.
 All four Pharos npm packages and the Go module pin **0.9.5**, unmodified.
 
 The requests are in priority order. Each one can ship on its own. Requests 5
-and 6 came from moving the Tools, Pharos MCP, Agent Time and Skills dashboards
+to 7 came from moving the Tools, Pharos MCP, Agent Time and Skills dashboards
 onto the analysis model.
 
 ---
@@ -217,6 +217,28 @@ interval with the interval's start as its key, in the given zone.
   same totals as the equivalent `dateGrouping` clause.
 - Group filters, ordering and drill-down (`inspectBucketQuery` on a grouped
   row) select exactly that interval's records.
+
+---
+
+## 7. Disjunctions of conjunctions in `where` (lower priority)
+
+**Problem.** `where` is an AND of terms, each a clause or an OR of clauses.
+A legend selection of combined groups, such as the provider + model pairs
+(claude, opus) and (codex, gpt-5), is an OR of ANDs. Pharos expands it into
+the equivalent AND of ORs, one OR per choice of a field from each pair, which
+grows as fields^pairs. Past 64 terms Pharos stops filtering and draws the
+selected groups from the groups returned, so one beyond the group limit is
+missing.
+
+**Request.** Allow a term that is an OR of conjunctions:
+`{ any: [{ all: [clause, clause] }, { all: [clause, clause] }] }`, on
+`/metrics`, `/query-v3` (source and group filters) and in-process.
+
+**Acceptance.**
+- Ten included (provider, model) pairs filter in one term, and the result
+  equals the union of the ten pairs' records.
+- A group filter on grouped rows accepts the same term.
+- `decodeQueryStrict` round-trips it.
 
 ---
 

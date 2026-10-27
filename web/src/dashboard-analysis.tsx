@@ -89,6 +89,7 @@ const selectionNote = (group: string, unit: AnalysisUnit | undefined, selection:
   (selection.share ? `Your ${group} legend selection is drawn as slices and every other group as Other; shares are of every group in your filters.`
     : `Only your ${group} legend selection is drawn; your filters are unchanged.`)
   + (selection.mapped && unit ? ` Each ${unit.label.toLowerCase()} is counted in its top-level ${group} group, so the selection is shown as the top-level ${group}.` : "")
+  + (selection.late ? ` So many combined groups cannot filter the query, so they are drawn from the ${unit ? unit.plural.toLowerCase() : "groups"} it returns; one beyond its limit is not drawn.` : "")
   + (missing ? ` ${missing.toLocaleString()} selected ${missing === 1 ? "group is" : "groups are"} not among the largest groups returned; any ${missing === 1 ? "value it has is" : "values they have are"} ${selection.share ? "counted in Other" : "not drawn"}.` : "");
 
 // The folded cycle's slots are not dataset fields; name them for the chart.
@@ -99,9 +100,9 @@ const axis = (value?: string) => value === "logarithmic" ? "logarithmic" : "line
 // Compare, distribution, scatter and cycle views over one catalog. Each view
 // shows only the controls it uses; changes are normalized so the saved state
 // always describes the chart on screen.
-export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, dataset, state, where, onChange, onView, onFilter, local, children }: {
+export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, dataset, state, where, onChange, onView, onFilter, local, legacyURL, children }: {
   catalog: AnalysisCatalog; schema: FieldSchema<any>; dataset: UsageDataset; state: T; where: WhereTerm[];
-  onChange: (next: Partial<T>) => void; onView: (view: AnalysisView) => void; onFilter: FilterChange; local?: LocalRows; children?: React.ReactNode;
+  onChange: (next: Partial<T>) => void; onView: (view: AnalysisView) => void; onFilter: FilterChange; local?: LocalRows; legacyURL?: string; children?: React.ReactNode;
 }) {
   const originRevision = useOriginMetadata();
   const view = normalizeAnalysis(catalog, state);
@@ -145,8 +146,10 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
     {hidden || slots || analysis.selection ? <p className="usage-dashboard-note" role="status">{[hidden, slots, analysis.selection ? selectionNote(catalog.breakdowns[view.split].label.toLowerCase(), unit, analysis.selection, selected?.missing) : ""].filter(Boolean).join(" ")}
       {analysis.selection ? <> <button type="button" className="usage-preset-clear" onClick={() => set({ selection: { values: [], excluded: false } })}>Show every group</button></> : null}</p> : null}
     {children}
-    {/* No legacy link: that page has no analysis views, and would show this query's table under its default chart. */}
-    <UsageDashboardLinks schema={schema} dataset={dataset} query={analysis.supporting} />
+    {/* A legacy link only where that page still has something of its own
+        (Tools' failure kinds); otherwise it would show this query's table
+        under its default chart. */}
+    <UsageDashboardLinks schema={schema} dataset={dataset} query={analysis.supporting} currentURL={legacyURL} />
     <p className="usage-dashboard-note">{analysisNote(catalog, view)}{view.view === "cycle" ? "" : ` Select a ${view.view === "scatter" ? "point" : "bar or box"} to open its ${unit ? subjects : "records"}.`}</p>
   </section>;
 }

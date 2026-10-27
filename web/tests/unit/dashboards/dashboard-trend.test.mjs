@@ -2,9 +2,9 @@
 // queries and the series builder, over the usage ledger.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { core, queryRecipes, schemas } from "../helpers/recipes.mjs";
+import { capabilities, core, execution, queryRecipes, schemas } from "../helpers/recipes.mjs";
 import { now, usageLedger } from "../helpers/usage-ledger.mjs";
-import { analysisLimits, analysisQuery, catalogProblems, changeState, selectGroups, normalizeAnalysis, readAnalysisLink, analysisVersion, switchView, trendAdjustments, trendLimits, validAnalysisState } from "../../../src/dashboard-analysis-model";
+import { analysisLimits, analysisQuery, selectionWhere, catalogProblems, changeState, selectGroups, normalizeAnalysis, readAnalysisLink, analysisVersion, switchView, trendAdjustments, trendLimits, validAnalysisState } from "../../../src/dashboard-analysis-model";
 import { trendNote, trendQuery, trendSeries, trendTitle } from "../../../src/dashboard-trend-model";
 import { tokenAnalysisCatalog as catalog } from "../../../src/token-analysis-catalog";
 import { tokenTypes } from "../../../src/token-chart-request";
@@ -437,8 +437,25 @@ test("View supporting query, then Back to dashboard, returns the dashboard's own
   }
 });
 
-test("a card's link without a version keeps its filters as the population", () => {
-  const filter = { field: "provider", op: "=", value: "codex" };
-  const card = readAnalysisLink(catalog, { metric: "tokens", split: "provider" }, [...range, filter], { card: true });
-  assert.deepEqual([card.where, card.state.selection, card.state.v], [[...range, filter], undefined, analysisVersion]);
+
+test("a combined selection filters the executed query where a filter can state it", t => {
+  const prior = analysisLimits.points;
+  analysisLimits.points = 3;
+  t.after(() => { analysisLimits.points = prior; });
+  const pairs = [["codex", "gpt-5"], ["claude", "sonnet"]].map(pair => JSON.stringify(pair));
+  const state = { view: "scatter", unit: "conversation", metric: "tokens", metricY: "cost", split: "provider_model", selection: { values: pairs, excluded: false } };
+  const scatter = analysisQuery(catalog, state, range, { now });
+  assert.deepEqual(core.toQueryRequestV3(scatter.query, schema, capabilities, execution, { now, rows: false }).diagnostics, [], "an OR across two fields is a valid filter");
+  const drawn = selectGroups(core.evaluateMetrics(rows, scatter.query, schema, { now }).metrics[0], scatter.selection);
+  const roots = rows.filter(row => pairs.includes(JSON.stringify([row.root_provider, row.root_model_family])));
+  assert.deepEqual(new Set(drawn.buckets.map(bucket => bucket.keys.at(-1))).size, Math.min(3, new Set(roots.map(row => row.root_conversation_id)).size));
+  assert.ok(drawn.buckets.every(bucket => pairs.includes(JSON.stringify(bucket.keys.slice(0, 2)))), "only the selected pairs, never codex sonnet or claude gpt-5");
+  // Excluding pairs is one OR per pair, missing values included.
+  const kept = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider_model", selection: { values: pairs, excluded: true } }, range, { now });
+  const totals = core.evaluateMetrics(rows, kept.query, schema, { now }).metrics[0].buckets.map(bucket => JSON.stringify(bucket.keys));
+  assert.ok(totals.length > 0 && totals.every(key => !pairs.includes(key)));
+  // Too many included pairs to expand: drawn after the query, as before.
+  const many = Array.from({ length: 7 }, (_, index) => JSON.stringify(["claude", `model-${index}`]));
+  assert.equal(selectionWhere(["provider", "model_family"], { values: many, excluded: false }), undefined);
+  assert.ok(!analysisQuery(catalog, { ...state, selection: { values: many, excluded: false } }, range, { now }).query.where.some(term => term.any));
 });

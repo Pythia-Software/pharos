@@ -4,7 +4,11 @@
 // timestamp cycles and compound unit keys).
 import test from "node:test";
 import assert from "node:assert/strict";
-import { capabilities, core, execution, fullMatrix, schemas } from "../helpers/recipes.mjs";
+import { capabilities, core, execution, fullMatrix, instantiateRecipe, queryRecipes, schemas } from "../helpers/recipes.mjs";
+import { relatedCardDashboardURL } from "../../../src/card-analysis-model";
+import { usageDashboardReturn, usageWorkspaceURL } from "../../../src/usage-workspace-model";
+import { dashboardQueryLinks } from "../../../src/dashboard-query-links";
+import { normalizedDashboardChart } from "../../../src/analysis-catalogs";
 import { now, toolCalls, toolsRollup, mcpCalls, skillUsages } from "../helpers/record-ledgers.mjs";
 import { analysisInspectQuery, analysisNote, analysisQuery, analysisViews, catalogProblems, cycleResult, normalizeAnalysis, readAnalysisLink, switchView, trendAdjustments, trendUnavailable, validAnalysisState, viewOptions, analysisVersion } from "../../../src/dashboard-analysis-model";
 import { trendQuery, trendSeries } from "../../../src/dashboard-trend-model";
@@ -246,4 +250,57 @@ test("a Tools minimum opens a bar's daily summaries, and says it cannot count wh
 test("a scatter says when one measure's population narrows the other", () => {
   assert.match(analysisNote(skills, { view: "scatter", unit: "conversation", metric: "records", metricY: "body", split: "none" }), /Evidence records counts only retained body volume's records here/);
   assert.doesNotMatch(analysisNote(skills, { view: "scatter", unit: "conversation", metric: "records", metricY: "conversations", split: "none" }), /counts only/);
+});
+
+// No Tokens card filters its own breakdown's field (effort-cost filters
+// priced usage with a conversation, by model + effort); the Skills cards do.
+test("an unversioned saved card link opens its related dashboard with the card's filters as the population", () => {
+  for (const [id, catalog, old] of [["skill-evidence", skills, { period: "day", rollingPeriods: 0, display: "interval", scale: "linear", seriesLimit: 15, metric: 0, split: "skill_name" }], ["skill-reach", skills, undefined]]) {
+    const recipe = queryRecipes.find(item => item.id === id), url = new URL(instantiateRecipe(recipe, 7, new Date(now)).url, "http://localhost");
+    // As saved before charts carried v: 2.
+    const chart = old ?? (({ v: _, ...rest }) => rest)(JSON.parse(url.searchParams.get("analyze_chart")));
+    url.searchParams.set("analyze_chart", JSON.stringify(chart));
+    const filters = core.decodeQueryStrict(url.searchParams.get("analyze_filters")).where;
+    const field = catalog.breakdowns[normalizeAnalysis(catalog, chart).split].fields[0];
+    assert.ok(filters.some(term => term.field === field), `${id}: the card filters its breakdown's own field`);
+    const related = new URL(relatedCardDashboardURL(url.searchParams), "http://localhost").searchParams;
+    assert.equal(related.has("card_query"), false);
+    const read = readAnalysisLink(catalog, JSON.parse(related.get("analyze_chart")), core.decodeQueryStrict(related.get("analyze_filters")).where);
+    assert.deepEqual([read.where, read.state.selection], [filters, undefined], `${id}: the card's filters stay its population`);
+    // Leaving the card for a query view marks it current too.
+    const query = new URL(usageWorkspaceURL({ mode: "query", dataset: catalog.dataset === "usage" ? "usage" : catalog.dataset }, url.searchParams), "http://localhost").searchParams;
+    if (query.has("analyze_chart") && !query.has("card_query")) assert.equal(JSON.parse(query.get("analyze_chart")).v, analysisVersion, id);
+  }
+});
+
+test("Back to dashboard from a Tools query: an edited date predicate becomes the range, never intersected with the old one", () => {
+  const where = month(tools), filters = core.encodeQuery({ ...core.EMPTY_QUERY, where });
+  const dashboard = new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: "tools", analyze_data: "tools", analyze_chart: JSON.stringify({ v: analysisVersion, view: "compare", metric: "calls", split: "tool_name" }), analyze_filters: filters });
+  const supporting = analysisQuery(tools, { view: "compare", metric: "calls", split: "tool_name" }, where, { now }).supporting;
+  const opened = new URL(dashboardQueryLinks("tools", supporting, schemas.tools, dashboard)[0].href, "http://localhost").searchParams;
+  const back = params => { const result = usageDashboardReturn(params); return { label: result.label, where: core.decodeQueryStrict(new URL(result.href, "http://localhost").searchParams.get("analyze_filters")).where }; };
+  assert.deepEqual(back(opened), { label: "Back to dashboard", where });
+  const query = core.decodeQueryStrict(opened.get("q_tools")), source = query.grouping.source;
+  const edit = terms => { const next = new URLSearchParams(opened); next.set("q_tools", core.encodeQuery({ ...query, grouping: { ...query.grouping, source: { ...source, where: terms } } })); return back(next); };
+  // Deleting the translated days: no range at all, said in the link.
+  const dayless = edit(source.where.filter(term => (term.field ?? term.any?.[0]?.field) !== "day"));
+  assert.deepEqual([dayless.label, dayless.where.filter(term => (term.field ?? term.any?.[0]?.field) === "day")], ["Back to dashboard (dates from this query)", []]);
+  // Choosing one earlier day: that day is the range.
+  const earlier = { field: "day", op: "=", value: "2026-08-01" };
+  assert.deepEqual(edit([...source.where.filter(term => (term.field ?? term.any?.[0]?.field) !== "day"), earlier]).where.filter(term => term.field === "day"), [earlier]);
+  // Another edit keeps the dashboard's range.
+  const other = { field: "provider", op: "=", value: "codex" };
+  assert.deepEqual(edit([...source.where, other]), { label: "Back to dashboard", where: [...where, other] });
+});
+
+test("collected cards compare dashboard charts as drawn: defaults filled, keys sorted at every depth", () => {
+  const key = (topic, chart) => normalizedDashboardChart(topic, JSON.stringify(chart));
+  // An old Skills card chart, and the versioned one for the same view.
+  assert.equal(key("skills", { period: "day", rollingPeriods: 0, display: "interval", scale: "linear", seriesLimit: 15, metric: 0, split: "skill_name" }), key("skills", { v: analysisVersion, view: "trend", metric: "records", split: "skill_name", period: "day" }));
+  assert.equal(key("tokens", { metric: "tokens", split: "provider", selection: { values: [], excluded: false } }), key("tokens", { split: "provider", metric: "tokens" }));
+  // A selection is part of the view, compared in full.
+  const selected = values => key("tokens", { metric: "tokens", split: "provider", selection: { values, excluded: false } });
+  assert.notEqual(selected(["codex"]), selected(["claude"]));
+  assert.equal(key("tokens", { metric: "tokens", split: "provider", selection: { excluded: false, values: ["codex"] } }), selected(["codex"]));
+  assert.equal(normalizedDashboardChart("human", '{"b":1,"a":2}'), '{"b":1,"a":2}', "other dashboards compare as written");
 });

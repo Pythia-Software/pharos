@@ -4,7 +4,7 @@ import { cardSourceDataset } from "./card-exploration";
 import { defaultCardCover, type CardCover } from "./card-cover";
 import { queryFromURL, readRollingWindow, rollingWindowDays } from "./query-links";
 import type { PreviewJob } from "./query-previews";
-import { usageWorkspaceURL } from "./usage-workspace-model";
+import { stampCardChart, usageWorkspaceURL } from "./usage-workspace-model";
 
 // The card's source query and presentation are the analysis contract. Dashboard
 // projections remain useful related context, but cannot replace this population,
@@ -45,6 +45,7 @@ export async function resolveCardAnalysisJob(url: string, schema: FieldSchema, s
 
 export function relatedCardDashboardURL(params: URLSearchParams): string {
   const related = new URLSearchParams(params);
+  stampCardChart(related);
   for (const key of [...related.keys()]) if (key.startsWith("card_")) related.delete(key);
   return usageWorkspaceURL({ mode: "dashboards" }, related);
 }

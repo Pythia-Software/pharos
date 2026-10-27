@@ -237,19 +237,22 @@ for a missing one), a combined one's are JSON arrays of them.
   query and draws the selected groups as slices and every other group as
   Other (`selectGroups`); a selected group beyond the 1,000 returned groups
   is counted in Other, and the note says how many. Outside shares there is no
-  denominator to protect, so a single-field selection filters the executed
-  query: a record filter on the breakdown's field, or for units a group
-  filter on the unit's field. No group or point limit can then crowd a
+  denominator to protect, so the selection filters the executed query: a
+  record filter on the breakdown's fields, or for units a group filter on the
+  unit's fields (`selectionWhere`). No group or point limit can then crowd a
   selected group out (a scatter draws its 2,000 largest points among the
-  selected groups). A combined selection has no single filter, so bars,
-  boxes and points of a combined breakdown still select after the query.
+  selected groups). A combined selection is an OR of each group's
+  equalities; the where format is an AND of ORs, so an excluded selection is
+  one OR per group, and an included one expands into one OR per choice of a
+  field from each group. Past 64 such terms it is drawn from the groups the
+  query returns instead, and the note says one beyond the limit is not drawn
+  (Query Table request 7).
 - **Units.** A selection is of a breakdown group, so it maps through the
   unit's fields: `provider = codex` selects the conversations (or delegated
   runs) whose top-level provider is codex, never a population filter on
   record `provider`. The note says so.
-- **Supporting queries** add a single-field selection as a filter on its
-  field (a group filter on the unit's field, for units), so they list what
-  is drawn. A combined selection has no single filter and is left out.
+- **Supporting queries** add the selection as the same filter, so they list
+  what is drawn (unless it is too large to state, as above).
 - **Drill-downs** from a selected series or bucket open that group's records,
   within the population.
 - **Clearing.** Changing the breakdown clears the selection. Views without a
@@ -268,8 +271,11 @@ reads every link through `readAnalysisLink`:
   such values, or their exclusion) becomes the selection and leaves `where`.
   Tools and Pharos MCP had no legend, so their old filters were always
   populations and stay so.
-- A card's link (one with `card_query`) never held a legend selection, so
-  its filters stay the population even without the marker.
+- A card's link never held a legend selection. Where a link stops being a
+  card link (`relatedCardDashboardURL`, or `usageWorkspaceURL` dropping the
+  `card_*` parameters), an engine dashboard's unversioned chart is marked
+  current (`stampCardChart`), so a card saved before the marker opens its
+  related dashboard with its filters as the population.
 - Either way the result is marked. A migrated link is rewritten when the
   dashboard opens it; one restored by a route change is written whole with
   the dashboard's next change, never by a route event that may belong to
@@ -279,10 +285,16 @@ reads every link through `readAnalysisLink`:
   filters, less what the user removed from the opened query, plus what they
   added. What the link itself added (a selection, a measure's population,
   translated days) never becomes a dashboard filter, so a codex selection
-  shown as shares comes back as the same selection.
+  shown as shares comes back as the same selection. Dates are compared as a
+  whole, because the opened query may state the range differently (Tools'
+  whole days, a trend's rounded periods): if the user changed any date
+  predicate, the dashboard's own range is dropped and the query's dates
+  become the range, and the link says "dates from this query". The two are
+  never intersected.
 - Collected cards compare their dashboard charts as drawn
-  (`normalizedDashboardChart`), so re-collecting a card saved before the
-  marker finds the saved one.
+  (`normalizedDashboardChart`: normalized, defaults filled, keys sorted at
+  every depth), so re-collecting a card saved before the marker finds the
+  saved one, and charts that differ only in their selection do not match.
 - Card destinations (`card-destinations.ts`) write versioned states, so a
   card's own filter stays its population. The legacy Usage page keeps its
   chart in preferences; its legend now writes the chart's selection, and a
@@ -483,7 +495,9 @@ around it. Its default view is the one it always opened on.
   observation a person cares about, so there are no units or per-record
   values: Distribution and Scatter are disabled with that reason, and a
   minimum counts calls (`samples`); a bar opens the group's daily summaries,
-  and the note says the minimum cannot count the groups it hides. The
+  and the note says the minimum cannot count the groups it hides. Its
+  Compare view keeps the legacy-view link, since that page still shows
+  failure kinds. The
   rollup's text `day` makes it the one catalog with `executable` bounds.
   - **Whole days.** The rollup records whole local days, so a range snaps to
     whole days: one starting mid-day counts that whole day, and the note
@@ -522,7 +536,9 @@ around it. Its default view is the one it always opened on.
   delegated subagents are their own), split by what is constant within it.
   A tool in a conversation (`[conversation_id, tool_name]`) is the
   observation of the per-conversation failure cards. `AgentTimeSummary`
-  follows every view. Activities read as Agent Time names them; two that
+  follows every view and covers the population: with a legend selection it
+  says it counts all activities in range, not only the selection.
+  Activities read as Agent Time names them; two that
   share a name (`command:Edit` and `tool:Edit`) also show their value, stay
   separate groups and series keyed by the raw value, and open their own
   records.
@@ -537,8 +553,9 @@ around it. Its default view is the one it always opened on.
   another measure counts that measure over the same evidence, and its note
   says so.
 
-Every engine dashboard has a Refresh action, which reruns its queries (Pharos
-MCP's own requests arrive while it is open).
+Every engine dashboard, Tokens and Cost included, has a Refresh action,
+which reruns its queries (Pharos MCP's own requests arrive while it is open).
+A shared snapshot has none.
 
 ## Mapping a card to a dashboard state
 

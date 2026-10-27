@@ -1,4 +1,5 @@
 import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
+import { analysisVersion } from "./dashboard-analysis-model";
 
 // Analyze owns guided dashboards and the full query surfaces. Explicit older
 // analysis URLs remain available while their specialized controls migrate.
@@ -34,19 +35,35 @@ export const usageTopicDatasets: Record<UsageTopic, UsageDataset> = {
   tokens: "usage", human: "writing", time: "tool_calls", parallelism: "parallelism", tools: "tools", mcp: "mcp_calls", skills: "skill_usages", carbon: "usage",
 };
 
+// Fields that hold a dashboard's dates, by dataset: its range, and the day
+// predicates a link may translate it into (the tools rollup's text day).
+const timeFields: Record<UsageDataset, string[]> = {
+  usage: ["first_usage_at", "last_usage_at", "day", "hour", "week", "month"], conversation_activity: ["event_at"],
+  writing: ["first_message_at", "last_message_at"], writing_messages: ["sent_at", "day", "week", "month"], tools: ["day", "week", "month"], tool_calls: ["started_at", "ended_at", "day", "week", "month"],
+  mcp_calls: ["called_at", "day", "week", "month"], skill_usages: ["created_at", "day", "week", "month"], parallelism: ["started_at", "day", "hour_of_day", "week", "month"],
+};
+const termFields = (term: WhereTerm): string[] => "any" in term ? term.any.map(clause => clause.field) : [term.field];
+
 // The dashboard's own filters, with the user's edits to the query a dashboard
 // link opened. A link adds its own terms (a legend selection, a measure's
 // population, the dataset's day predicates); those are not the dashboard's
 // filters. So the way back keeps the dashboard's filters, less the opened
-// terms the user removed, plus the terms the user added. Without a record of
-// the opened query (older links), the query's own filters are the filters.
-function returnedWhere(current: URLSearchParams, edited: WhereTerm[]): WhereTerm[] {
+// terms the user removed, plus the terms the user added. Dates are compared
+// as a whole: the opened query may state the range differently (whole days,
+// rounded periods), so if the user changed any date predicate, the dashboard's
+// own range is dropped and the edited query's dates become the range
+// (dates: true), never intersected with the old one. Without a record of the
+// opened query (older links), the query's own filters are the filters.
+function returnedWhere(current: URLSearchParams, edited: WhereTerm[], dataset: UsageDataset): { where: WhereTerm[]; dates: boolean } {
   let opened: QueryState | null = null, dashboard: QueryState | null = null;
-  try { opened = decodeQueryStrict(current.get("analyze_opened") ?? ""); dashboard = decodeQueryStrict(current.get("analyze_filters") ?? ""); } catch { return edited; }
-  if (!opened || !dashboard) return edited;
-  const key = (term: WhereTerm) => JSON.stringify(term);
+  try { opened = decodeQueryStrict(current.get("analyze_opened") ?? ""); dashboard = decodeQueryStrict(current.get("analyze_filters") ?? ""); } catch { return { where: edited, dates: false }; }
+  if (!opened || !dashboard) return { where: edited, dates: false };
+  const key = (term: WhereTerm) => JSON.stringify(term), dated = (term: WhereTerm) => termFields(term).some(field => timeFields[dataset].includes(field));
   const before = new Set(opened.where.map(key)), after = new Set(edited.map(key));
-  return [...dashboard.where.filter(term => !before.has(key(term)) || after.has(key(term))), ...edited.filter(term => !before.has(key(term)))];
+  const dates = JSON.stringify(opened.where.filter(dated).map(key).sort()) !== JSON.stringify(edited.filter(dated).map(key).sort());
+  const kept = dashboard.where.filter(term => (!before.has(key(term)) || after.has(key(term))) && !(dates && dated(term)));
+  const added = edited.filter(term => !before.has(key(term)) || dates && dated(term));
+  return { where: [...kept, ...added.filter(term => !kept.some(other => key(other) === key(term)))], dates };
 }
 
 export function usageDashboardReturn(current: URLSearchParams) {
@@ -59,10 +76,11 @@ export function usageDashboardReturn(current: URLSearchParams) {
   try { query = decodeQueryStrict(current.get(`q_${state.dataset}`) ?? "") ?? undefined; } catch { /* Explicitly reset an unavailable query. */ }
   const compatible = dataset === state.dataset && state.topic !== "parallelism" && Boolean(query);
   const params = new URLSearchParams(current);
-  params.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where: compatible ? returnedWhere(current, (query!.grouping?.source ?? query!).where) : [] }));
+  const returned = compatible ? returnedWhere(current, (query!.grouping?.source ?? query!).where, state.dataset) : { where: [], dates: false };
+  params.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where: returned.where }));
   return {
     href: usageWorkspaceURL({ mode: "dashboards", dataset, search: false }, params),
-    label: !compatible ? "Back to dashboard (resets query filters)" : keywords ? "Back to dashboard (resets keyword filters)" : query!.grouping && query!.where.length ? "Back to dashboard (resets group filters)" : "Back to dashboard",
+    label: !compatible ? "Back to dashboard (resets query filters)" : keywords ? "Back to dashboard (resets keyword filters)" : query!.grouping && query!.where.length ? "Back to dashboard (resets group filters)" : returned.dates ? "Back to dashboard (dates from this query)" : "Back to dashboard",
     resetsFilters: !compatible || keywords || Boolean(query?.grouping && query.where.length),
   };
 }
@@ -113,17 +131,35 @@ export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?
   if (mode === "dashboards" || next.dataset !== previous.dataset) params.delete("analyze_opened");
   if (mode !== "dashboards") {
     const query = change.query;
-    if (query) params.set(`q_${next.dataset}`, encodeQuery({ ...query, fitToScreen: true }));
-    if (query && current.has("analyze_filters")) params.set("analyze_opened", encodeQuery({ ...EMPTY_QUERY, where: (query.grouping?.source ?? query).where }));
-    else if (next.dataset === previous.dataset && current.has(`q_${next.dataset}`)) params.set(`q_${next.dataset}`, current.get(`q_${next.dataset}`)!);
+    if (query) {
+      params.set(`q_${next.dataset}`, encodeQuery({ ...query, fitToScreen: true }));
+      if (current.has("analyze_filters")) params.set("analyze_opened", encodeQuery({ ...EMPTY_QUERY, where: (query.grouping?.source ?? query).where }));
+    } else if (next.dataset === previous.dataset && current.has(`q_${next.dataset}`)) params.set(`q_${next.dataset}`, current.get(`q_${next.dataset}`)!);
     if (current.get("window_dataset") === next.dataset) for (const [key, value] of current) if (key.startsWith("window_")) params.set(key, value);
   }
   const cardDataset = current.get("card_query");
   if (!change.query && current.get("card_id") && cardDataset && Object.hasOwn(usageDatasets, cardDataset) && current.has(`q_${cardDataset}`) && next.topic === previous.topic && (mode === "dashboards" || next.dataset === cardDataset)) {
     params.set("card_query", cardDataset); params.set(`q_${cardDataset}`, current.get(`q_${cardDataset}`)!);
     if (current.get("window_dataset") === cardDataset) for (const [key, value] of current) if (key.startsWith("window_")) params.set(key, value);
-  } else for (const key of [...params.keys()]) if (key.startsWith("card_")) params.delete(key);
+  } else {
+    if (params.has("card_query")) stampCardChart(params);
+    for (const key of [...params.keys()]) if (key.startsWith("card_")) params.delete(key);
+  }
   return `/analyze?${params}`;
+}
+
+// Dashboards on the analysis engine read an unversioned analyze_chart as one
+// whose legend may have written its selection into the filters
+// (readAnalysisLink). A card's filters are always its population, so where a
+// link stops being a card link its chart is marked current, and its filters
+// stay the population.
+const analysisTopics = new Set<string>(["tokens", "tools", "mcp", "time", "skills"]);
+export function stampCardChart(params: URLSearchParams) {
+  if (!analysisTopics.has(params.get("analyze_topic") ?? "") || !params.has("analyze_chart")) return;
+  try {
+    const chart = JSON.parse(params.get("analyze_chart")!);
+    if (chart && typeof chart === "object" && !Array.isArray(chart) && chart.v === undefined) params.set("analyze_chart", JSON.stringify({ ...chart, v: analysisVersion }));
+  } catch { /* An invalid chart stays as it is and reports itself. */ }
 }
 
 // Search explicitly opens source records. A grouped result's HAVING predicate

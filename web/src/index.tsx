@@ -1138,7 +1138,9 @@ function TokenSummary({ where }: { where: WhereTerm[] }) {
   </div>;
 }
 
-function AgentTimeSummary({ where }: { where: WhereTerm[] }) {
+// The summary is of the dashboard's population: a legend selection only
+// chooses what the chart draws, and the summary says so.
+function AgentTimeSummary({ where, selected = false }: { where: WhereTerm[]; selected?: boolean }) {
   const result = useMetrics("tool_calls", where, [
     { id: "duration", op: "sum", field: "duration_ms", groupBy: [] },
     { id: "calls", op: "count", groupBy: [] },
@@ -1149,7 +1151,7 @@ function AgentTimeSummary({ where }: { where: WhereTerm[] }) {
   const time = (ms: number) => ms >= 3600000 ? `${(ms / 3600000).toLocaleString(undefined, { maximumFractionDigits: 1 })} h` : ms >= 60000 ? `${(ms / 60000).toLocaleString(undefined, { maximumFractionDigits: 1 })} min` : `${(ms / 1000).toLocaleString(undefined, { maximumFractionDigits: 1 })} s`;
   const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
   return <div className="mcp-metrics dashboard-stats" aria-label="Agent Time summary" aria-busy={result.loading}>
-    {card("Total recorded tool time", timed ? time(duration) : "—", "selected period · concurrent calls can overlap")}
+    {card("Total recorded tool time", timed ? time(duration) : "—", `all activities in range${selected ? ", not only the legend selection" : ""} · concurrent calls can overlap`)}
     {card("Call volume", calls.toLocaleString(), "all matching calls, including those without timing")}
     {card("Time per timed run", timed ? time(duration / timed) : "—", `${timed.toLocaleString()} calls with a recorded duration`)}
     {card("Timing coverage", calls ? `${(100 * timed / calls).toLocaleString(undefined, { maximumFractionDigits: 1 })}%` : "—", `${(calls - timed).toLocaleString()} calls without timing`)}
@@ -1494,15 +1496,22 @@ type TokenTrendView = Omit<TokenChartView, "metric" | "split"> & AnalysisState;
 const tokenSharedRows: LocalRows | undefined = shared ? { rows: shared.datasets.usage ?? [], hourly: shared.datasets.usage_hourly ?? [] } : undefined;
 const validTokenDashboard = (view: TokenTrendView) => validAnalysisState(tokenAnalysisCatalog, view);
 
+// New records arrive while a dashboard is open (Pharos MCP's own requests,
+// new usage); Refresh reruns its queries.
+function DashboardRefresh() {
+  return <p className="usage-dashboard-note usage-dashboard-refresh"><button type="button" onClick={() => window.dispatchEvent(new Event("pharos:usage-refresh"))}>Refresh</button></p>;
+}
+
 function TokenUsageDashboard() {
-  const state = useUsageDashboardState<TokenTrendView>({ ...defaultTokenChart, period: "day" as ChartPeriod }, validTokenDashboard, usageTime, (view, where) => readAnalysisLink(tokenAnalysisCatalog, view, where, { card: new URLSearchParams(location.search).has("card_query") }));
+  const state = useUsageDashboardState<TokenTrendView>({ ...defaultTokenChart, period: "day" as ChartPeriod }, validTokenDashboard, usageTime, (view, where) => readAnalysisLink(tokenAnalysisCatalog, view, where));
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
   const choose = (next: AnalysisView) => state.update(switchView(tokenAnalysisCatalog, state.view, next));
-  if ((state.view.view ?? "trend") !== "trend") return <DashboardAnalysis catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={state.view} where={state.where}
-    onChange={state.update} onView={choose} onFilter={state.onFilter} local={tokenSharedRows} />;
+  if ((state.view.view ?? "trend") !== "trend") return <><DashboardAnalysis catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={state.view} where={state.where}
+    onChange={state.update} onView={choose} onFilter={state.onFilter} local={tokenSharedRows} />{tokenSharedRows ? null : <DashboardRefresh />}</>;
   return <AnalysisTrend catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter}
     local={tokenSharedRows} format={tokenAmount} tick={tokenTick} currentURL="/analyze?analyze_view=tokens&machine_view=tokens">
     <TokenSummary where={state.where} />
+    {tokenSharedRows ? null : <DashboardRefresh />}
   </AnalysisTrend>;
 }
 
@@ -1531,21 +1540,20 @@ const durationText = (ms: number) => Math.abs(ms) >= 3_600_000 ? `${(ms / 3_600_
 // Durations in hours where the measure says so (Agent Time's recorded time),
 // otherwise as a duration; counts compactly.
 const catalogAmount: AmountFormat = (value, measure) => measure.format.kind === "duration" ? measure.unit === "hours" ? compactNumber(value / 3_600_000) : durationText(value) : measure.unit === "USD" ? formatUSD(value) : compactNumber(value);
-function CatalogDashboard({ catalog, dataset, name, defaults, currentURL, before, after, summary }: {
-  catalog: AnalysisCatalog; dataset: UsageDataset; name: string; defaults: AnalysisState; currentURL?: string;
-  before?: React.ReactNode; after?: React.ReactNode; summary?: (where: WhereTerm[]) => React.ReactNode;
+function CatalogDashboard({ catalog, dataset, name, defaults, currentURL, legacyInAnalysis = false, before, after, summary }: {
+  catalog: AnalysisCatalog; dataset: UsageDataset; name: string; defaults: AnalysisState; currentURL?: string; legacyInAnalysis?: boolean;
+  before?: React.ReactNode; after?: React.ReactNode; summary?: (where: WhereTerm[], selected: boolean) => React.ReactNode;
 }) {
-  const state = useUsageDashboardState<AnalysisState>(defaults, view => validAnalysisState(catalog, view), catalog.time, (view, where) => readAnalysisLink(catalog, view, where, { card: new URLSearchParams(location.search).has("card_query") }));
+  const state = useUsageDashboardState<AnalysisState>(defaults, view => validAnalysisState(catalog, view), catalog.time, (view, where) => readAnalysisLink(catalog, view, where));
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
   const choose = (next: AnalysisView) => state.update(switchView(catalog, state.view, next));
   const schema = schemas[dataset];
   return <section className={`usage-catalog-dashboard usage-${name}-dashboard`}>
     {before}
     {(state.view.view ?? "trend") !== "trend"
-      ? <DashboardAnalysis catalog={catalog} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter}>{summary?.(state.where)}</DashboardAnalysis>
-      : <AnalysisTrend catalog={catalog} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter} format={catalogAmount} currentURL={currentURL}>{summary?.(state.where)}</AnalysisTrend>}
-    {/* New records arrive while the dashboard is open (Pharos MCP's own requests). */}
-    <p className="usage-dashboard-note usage-dashboard-refresh"><button type="button" onClick={() => window.dispatchEvent(new Event("pharos:usage-refresh"))}>Refresh</button></p>
+      ? <DashboardAnalysis catalog={catalog} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter} legacyURL={legacyInAnalysis ? currentURL : undefined}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</DashboardAnalysis>
+      : <AnalysisTrend catalog={catalog} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter} format={catalogAmount} currentURL={currentURL}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</AnalysisTrend>}
+    <DashboardRefresh />
     {after}
   </section>;
 }
@@ -1557,13 +1565,13 @@ function MCPUsageDashboard() {
 // The Tools dashboard reads the daily rollup; its compare view opened by
 // default, as before.
 function ToolsUsageDashboard() {
-  return <CatalogDashboard catalog={toolsAnalysisCatalog} dataset="tools" name="tools" defaults={{ metric: "calls", split: "tool_category", view: "compare" }} currentURL="/tools?tools_view=summary" before={<ToolLedgerBanner />}
+  return <CatalogDashboard catalog={toolsAnalysisCatalog} dataset="tools" name="tools" defaults={{ metric: "calls", split: "tool_category", view: "compare" }} currentURL="/tools?tools_view=summary" legacyInAnalysis before={<ToolLedgerBanner />}
     after={<p className="usage-dashboard-note">Select a bar or point to inspect its daily summaries, then follow a summary’s Calls link to individual calls and source conversations. The legacy view includes failure kinds and the existing command and context presets.</p>} />;
 }
 
 function AgentTimeDashboard() {
   return <CatalogDashboard catalog={agentTimeAnalysisCatalog} dataset="tool_calls" name="time" defaults={{ metric: "time", split: "activity", period: "day" }} currentURL={currentUsageAnalyses.find(item => item.topic === "time")!.url}
-    summary={where => <AgentTimeSummary where={where} />} />;
+    summary={(where, selected) => <AgentTimeSummary where={where} selected={selected} />} />;
 }
 
 function SkillsDashboard() {

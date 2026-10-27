@@ -1,4 +1,4 @@
-import { EMPTY_QUERY, coerceValue, inspectBucketQuery, metricDateFloor, metricDateNext, metricDateTime, type AggOp, type AggregationBucket, type AggregationClause, type AggregationResultEntry, type FieldSchema, type MetricDisplay, type MetricValueFormat, type QueryState, type SummaryColumn, type WhereTerm } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, coerceValue, type WhereClause, inspectBucketQuery, metricDateFloor, metricDateNext, metricDateTime, type AggOp, type AggregationBucket, type AggregationClause, type AggregationResultEntry, type FieldSchema, type MetricDisplay, type MetricValueFormat, type QueryState, type SummaryColumn, type WhereTerm } from "@pythia-software/query-table-core";
 import { validChartScale, type ChartScale } from "./chart-scale";
 import { chartPeriods, validPeriodCount, type ChartPeriod } from "./chart-period";
 import { validChartDisplay, validRollingPeriods, type ChartDisplay } from "./chart-series";
@@ -243,12 +243,12 @@ export const canonicalState = <T extends AnalysisState>(catalog: AnalysisCatalog
 // filter on the breakdown's single field: that filter becomes the state's
 // selection, and the rest of where stays the population. Either way the
 // result is marked, so it is read the same way again.
-// A card's link (card: true, from card_query) never held a legend
-// selection: cards always wrote their filters as the population.
-export function readAnalysisLink<T extends AnalysisState>(catalog: AnalysisCatalog, state: T, where: WhereTerm[], { card = false }: { card?: boolean } = {}): { state: T; where: WhereTerm[] } {
+// A card's link is marked current where it stops being a card link
+// (stampCardChart), since cards always wrote their filters as the population.
+export function readAnalysisLink<T extends AnalysisState>(catalog: AnalysisCatalog, state: T, where: WhereTerm[]): { state: T; where: WhereTerm[] } {
   if (state.v === analysisVersion) return { state, where };
   const fields = catalog.breakdowns[canonicalState(catalog, state).split]?.fields ?? [], field = fields[0];
-  if (card || !catalog.legacySlices || fields.length !== 1 || !where.some(term => isSliceTerm(term, field))) return { state: { ...state, v: analysisVersion }, where };
+  if (!catalog.legacySlices || fields.length !== 1 || !where.some(term => isSliceTerm(term, field))) return { state: { ...state, v: analysisVersion }, where };
   const slice = readSlice(where, field);
   return { state: { ...state, v: analysisVersion, selection: { values: slice.values.map(value => value ?? ""), excluded: slice.excluded } }, where: where.filter(term => !isSliceTerm(term, field)) };
 }
@@ -418,7 +418,9 @@ export type AnalysisQuery = {
   // (provider = codex selects the conversations whose top-level provider is
   // codex); mapped names the unit field when it differs. The supporting query
   // keeps a single-field selection. fields counts the breakdown's keys.
-  selection?: { values: string[]; excluded: boolean; mapped?: string; fields: number; share: boolean };
+  // late: a selection outside shares that no filter can state, so it is
+  // drawn from the groups the query returned.
+  selection?: { values: string[]; excluded: boolean; mapped?: string; fields: number; share: boolean; late?: boolean };
 };
 
 // The executed query for a non-trend view. Records compare and distribute
@@ -449,7 +451,7 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
   const recordFields = state.split === noSplit || state.view === "cycle" ? [] : catalog.breakdowns[state.split].fields;
   const groupFields = state.unit === records ? recordFields : catalog.units[state.unit]?.breakdowns[state.split] ?? [];
   const chosen = recordFields.length ? state.selection : undefined;
-  const selection = chosen?.values.length ? { values: chosen.values, excluded: chosen.excluded, fields: recordFields.length, share: shares, ...groupFields[0] !== recordFields[0] ? { mapped: groupFields[0] } : {} } : undefined;
+  const selection: AnalysisQuery["selection"] = chosen?.values.length ? { values: chosen.values, excluded: chosen.excluded, fields: recordFields.length, share: shares, ...groupFields[0] !== recordFields[0] ? { mapped: groupFields[0] } : {} } : undefined;
   const where = state.view === "cycle" && state.cycle === "weekday" ? completeStart(inputWhere, catalog.time, zone, now) : inputWhere;
   const run = (terms: WhereTerm[]) => catalog.executable ? catalog.executable(terms, now) : terms;
   const measure = catalog.measures[state.metric], measureY = catalog.measures[state.metricY];
@@ -459,12 +461,13 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
   const sourceWhere = unique([...where, ...implied]);
   // The supporting query lists the selected groups where one filter can: a
   // record filter on the breakdown's field, or a group filter on the unit's.
-  const chosenGroups = (field: string): WhereTerm[] => selection && groupFields.length === 1 ? withSlice([], field, { values: selection.values.map(value => value || null), excluded: selection.excluded }) : [];
-  const supportingWhere = unit ? sourceWhere : [...sourceWhere, ...chosenGroups(recordFields[0])];
+  const chosenGroups = (fields: string[]): WhereTerm[] => selection && groupFields.length ? selectionWhere(fields, selection) ?? [] : [];
+  const supportingWhere = unit ? sourceWhere : [...sourceWhere, ...chosenGroups(recordFields)];
   // Outside shares there is no denominator to protect, so a single-field
   // selection filters the executed query: no group or point limit can crowd
   // a selected group out. A share keeps every group and selects afterwards.
-  const filtered = Boolean(selection && !shares && groupFields.length === 1);
+  const filtered = Boolean(selection && !shares && selectionWhere(groupFields, selection));
+  if (selection && !shares && !filtered) selection.late = true;
   // A threshold counts what is plotted: a distribution drops missing values
   // before grouping (records) or as a group filter (units).
   const minCount = thresholded(state) ? { minCount: state.minSamples } : {};
@@ -494,9 +497,9 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
     const keys = breakdown!.fields, samples = catalog.measures[catalog.samples];
     const columns = [summary("analysis_value", measure), summary("analysis_samples", samples), ...ratioParts(measure)];
     const clause: AggregationClause = { id: "analysis", op: "sum", field: "analysis_value", groupBy: keys, groupLimit: analysisLimits.groups, sort: [{ key: "value", dir: "desc" }], label: valueLabel, display: compareDisplay(true) };
-    const query: QueryState = { ...groupedRecords(run(sourceWhere), keys, columns, [{ field: "analysis_samples", op: ">=", value: String(state.minSamples) }, ...filtered ? chosenGroups(keys[0]) : []], "analysis_value"), aggregations: [clause] };
+    const query: QueryState = { ...groupedRecords(run(sourceWhere), keys, columns, [{ field: "analysis_samples", op: ">=", value: String(state.minSamples) }, ...filtered ? chosenGroups(keys) : []], "analysis_value"), aggregations: [clause] };
     const { aggregations: _, ...supporting } = query;
-    return { query, clause, grouped: true, recordsGrouped: true, selection, supporting: { ...supporting, where: [...supporting.where, ...filtered ? [] : chosenGroups(keys[0])] } };
+    return { query, clause, grouped: true, recordsGrouped: true, selection, supporting: { ...supporting, where: [...supporting.where, ...filtered ? [] : chosenGroups(keys)] } };
   }
 
   if (!unit) {
@@ -535,11 +538,31 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
   // count of units counts every unit.
   const having: WhereTerm[] = state.view === "distribution" || state.view === "compare" && state.reduce !== "count" ? [{ field: "analysis_value", op: "is_not_null", value: "" }] : [];
   const query: QueryState = { ...EMPTY_QUERY, grouping: { source: { ...EMPTY_QUERY, where: run(sourceWhere) }, keys, summaries, representative: null },
-    select: [...keys, ...summaries.map(column => column.id)].map(field => ({ field })), where: [...having, ...filtered ? chosenGroups(groupFields[0]) : []], orderBy: [{ field: "analysis_value", dir: "desc", nulls: "last" }, ...keys.map(field => ({ field, dir: "asc" as const }))], aggregations: [clause] };
+    select: [...keys, ...summaries.map(column => column.id)].map(field => ({ field })), where: [...having, ...filtered ? chosenGroups(groupFields) : []], orderBy: [{ field: "analysis_value", dir: "desc", nulls: "last" }, ...keys.map(field => ({ field, dir: "asc" as const }))], aggregations: [clause] };
   // The supporting query lists the selected groups' units: a group filter
   // on the unit's own field, never a record filter on another one.
-  const groups = filtered ? [] : chosenGroups(groupFields[0]);
+  const groups = filtered ? [] : chosenGroups(groupFields);
   return { query, clause, grouped: true, selection, supporting: groups.length ? { ...query, where: [...query.where, ...groups] } : query };
+}
+
+// A legend selection as a filter on its group fields, in the where format
+// (an AND of terms, each a clause or an OR of clauses). One field is a slice.
+// Combined groups exclude as one OR per group (field != value, or missing);
+// included, the OR of each group's equalities expands into one OR per choice
+// of a field from every group, which stays small only for a few groups:
+// beyond selectionTerms the selection has no filter (undefined) and is drawn
+// after the query instead (Query Table request 7).
+export const selectionTerms = 64;
+export function selectionWhere(fields: string[], selection: { values: string[]; excluded: boolean }): WhereTerm[] | undefined {
+  if (!selection.values.length) return [];
+  if (fields.length === 1) return withSlice([], fields[0], { values: selection.values.map(value => value || null), excluded: selection.excluded });
+  const groups = selection.values.map(value => (JSON.parse(value) as unknown[]).map((key, index) => ({ field: fields[index], key: key === null || key === undefined || key === "" ? null : String(key) })));
+  const equal = ({ field, key }: { field: string; key: string | null }): WhereClause => key === null ? { field, op: "is_null", value: "" } : { field, op: "=", value: key };
+  if (selection.excluded) return groups.map(group => ({ any: group.flatMap(({ field, key }): WhereClause[] => key === null ? [{ field, op: "is_not_null", value: "" }] : [{ field, op: "!=", value: key }, { field, op: "is_null", value: "" }]) }));
+  if (fields.length ** groups.length > selectionTerms) return undefined;
+  let choices: WhereClause[][] = [[]];
+  for (const group of groups) choices = choices.flatMap(choice => group.map(part => [...choice, equal(part)]));
+  return choices.map(choice => choice.length === 1 ? choice[0] : { any: choice });
 }
 
 // A result drawn under a legend selection: the selected groups (or all but

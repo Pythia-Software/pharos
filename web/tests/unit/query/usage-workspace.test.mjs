@@ -631,3 +631,15 @@ test('Analyze record keywords remain scoped to their dataset and dashboard retur
   assert.match(back.label,/keyword filters/);
   assert.equal(new URL(back.href,'http://localhost').searchParams.has('record_usage'),false);
 });
+
+test("a query link on the same dataset opens the query it names, with or without dashboard filters", () => {
+  const saved = { ...EMPTY_QUERY, where: [{ field: "provider", op: "=", value: "claude" }] }, requested = { ...EMPTY_QUERY, where: [{ field: "provider", op: "=", value: "codex" }] };
+  for (const filters of [false, true]) {
+    const current = new URLSearchParams({ analyze_mode: "query", analyze_data: "usage", analyze_topic: "tokens", q_usage: encodeQuery(saved), ...filters ? { analyze_filters: encodeQuery(EMPTY_QUERY) } : {} });
+    const opened = new URL(usageWorkspaceURL({ mode: "query", dataset: "usage", query: requested }, current), "http://localhost").searchParams;
+    assert.deepEqual(decodeQueryStrict(opened.get("q_usage")).where, requested.where, `analyze_filters: ${filters}`);
+    assert.equal(opened.has("analyze_opened"), filters);
+  }
+  const kept = new URL(usageWorkspaceURL({ mode: "query" }, new URLSearchParams({ analyze_mode: "query", analyze_data: "usage", q_usage: encodeQuery(saved) })), "http://localhost").searchParams;
+  assert.deepEqual(decodeQueryStrict(kept.get("q_usage")).where, saved.where, "without a query, the current one stays");
+});
