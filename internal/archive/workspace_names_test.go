@@ -206,3 +206,58 @@ func TestAuthoredWorkspaceTitleBoundsUnicodeWithoutPastedText(t *testing.T) {
 		t.Fatalf("bounded title = %q", title)
 	}
 }
+
+// A bounded lookup finds an edge whether the given workspace is on the left
+// or the right of a native-alias link, the same edges the full scan finds,
+// and one edge however many links or sides found it.
+func TestWorkspaceNameEdgesFromEitherSide(t *testing.T) {
+	c, _ := testCatalog(t)
+	native := ingestNamingRecord(t, c, namingRecord("codex", "native", "Codex native", "Fix login"))
+	task := namingRecord("tl1", "task", "Improve authentication", "", "codex:native")
+	second := task.Conversations[0]
+	second.NativeID = "tl1:task-2"
+	task.Conversations = append(task.Conversations, second)
+	taskID := ingestNamingRecord(t, c, task)
+	ingestNamingRecord(t, c, namingRecord("codex", "unrelated", "Unrelated", "Other work"))
+	if n := countRows(t, c, "SELECT COUNT(*) FROM conversation_identity_links WHERE relationship='native-alias'"); n < 2 {
+		t.Fatalf("fixture has %d native-alias links, want one per task conversation", n)
+	}
+	edges := func(ids []string) []workspaceNameEdge {
+		t.Helper()
+		var found []workspaceNameEdge
+		if err := c.writeTransaction(t.Context(), "edges", func(tx *sql.Tx) error {
+			var err error
+			found, err = workspaceNameEdges(tx, ids)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return found
+	}
+	all := edges(nil)
+	// Links run both ways here (their direction follows conversation IDs), so
+	// each workspace is on the left of one edge and the right of the other.
+	if len(all) != 2 || all[0].left != all[1].right || all[0].right != all[1].left {
+		t.Fatalf("full scan edges = %v, want one each way", all)
+	}
+	sides := map[string]bool{all[0].left: true, all[0].right: true}
+	if !sides[native] || !sides[taskID] {
+		t.Fatalf("edges %v do not join %s and %s", all, native, taskID)
+	}
+	for _, ids := range [][]string{{native}, {taskID}, {native, taskID}} {
+		got := edges(ids)
+		seen := map[workspaceNameEdge]int{}
+		for _, edge := range got {
+			seen[edge]++
+		}
+		if len(got) != len(all) || seen[all[0]] != 1 || seen[all[1]] != 1 {
+			t.Fatalf("edges from %v = %v, want %v once each", ids, got, all)
+		}
+	}
+	if got := edges([]string{stableID("workspace", "codex", "local", "unrelated")}); len(got) != 0 {
+		t.Fatalf("unlinked workspace has edges %v", got)
+	}
+	if got := edges([]string{}); len(got) != 0 {
+		t.Fatalf("no workspaces has edges %v", got)
+	}
+}
