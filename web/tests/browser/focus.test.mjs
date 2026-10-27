@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
-import { defaultApi, workID } from "./fixtures.mjs";
+import { defaultApi, workID, eventStream, busyStatus } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery } from "@pythia-software/query-table-core";
 
 test('Library setup keeps focus in its modal and returns to the choice after cancelling a flow', {skip}, async t => {
@@ -478,6 +478,52 @@ async function holdsFocus(page, surface, opener) {
   await surface.waitFor({ state: "hidden" });
   await page.waitForFunction(element => document.activeElement === element, await opener.elementHandle());
 }
+
+// The unified activity panel (flag on) takes focus from the chip, keeps it
+// while open, gives it back on Escape, and keeps focus and its disclosure
+// across a pushed snapshot. Stop reaches every stoppable operation through
+// its declared stop; Eject acts only on a fresh verdict.
+test("Unified activity panel holds focus across refreshes, stops each operation and ejects only on a fresh verdict", { skip }, async t => {
+  let fresh = { verdict: "busy", summary: "Busy", blockers: [{ label: "L", on_eject: "O" }], checked: "fresh" };
+  const app = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-unified-activity-v1": true }, api: {
+    "GET /api/status/stream": eventStream(busyStatus),
+    "GET /api/status": ({ query }) => query.get("fresh") === "1" ? { ...busyStatus, eject: fresh } : busyStatus,
+  } });
+  const { page, settled, calls, push } = app;
+  await page.evaluate(() => { window.ejects = 0; window.webkit = { messageHandlers: { pharosLibrary: { postMessage: async () => { window.ejects++; } } } }; });
+  const chip = page.locator("#pharosDrive");
+  await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library?.revision === 2);
+  await press(chip);
+  const panel = page.getByRole("dialog", { name: "Library drive", exact: true });
+  await panel.waitFor();
+  await holdsFocus(page, panel, chip);
+  assert.equal(await page.locator("#pharosDrivePanel").count(), 0, "the old drive panel stays closed while the flag is on");
+
+  await press(chip);
+  await panel.waitFor();
+  await panel.locator("summary").click();
+  const stop = panel.getByRole("button", { name: "Stop", exact: true });
+  await stop.focus();
+  push("/api/status/stream", { ...busyStatus, revision: 3, operations: busyStatus.operations.map(operation => operation.id === "op-index" ? { ...operation, step: { ...operation.step, done: 900e6, fraction: 0.45 } } : operation) });
+  await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library?.revision === 3);
+  assert.ok(await stop.evaluate(element => document.activeElement === element), "a refresh moved focus");
+  assert.ok(await panel.locator("details").first().evaluate(element => element.open), "a refresh closed Show all");
+  await app.shot("refreshed");
+
+  // A busy fresh verdict refuses; a safe one ejects.
+  await panel.getByRole("button", { name: /^Eject/ }).click();
+  await panel.getByRole("button", { name: "Check again", exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => window.ejects), 0, "ejected on a busy verdict");
+  assert.ok(calls.some(call => call.path === "/api/status" && call.query.get("fresh") === "1"));
+  fresh = { verdict: "safe", summary: "Safe", blockers: [], checked: "fresh" };
+  await panel.getByRole("button", { name: "Check again", exact: true }).click();
+  await page.waitForFunction(() => window.ejects === 1);
+
+  await stop.click();
+  await settled();
+  const stopped = calls.filter(call => call.method === "POST" && call.path === "/api/operations/stop").map(call => call.body.id).sort();
+  assert.deepEqual(stopped, ["op-backup", "op-index", "op-view"]);
+});
 
 for (const width of [1440, 390, 320]) test(`Data guide takes focus, keeps controls reachable and returns focus @ ${width}`, { skip }, async t => {
   const app = await open(t, { url: "/analyze?analyze_mode=query&analyze_data=tool_calls&analyze_topic=tools", viewport: { width, height: 900 }, ready: ".usage-workspace-table .qt-row" });

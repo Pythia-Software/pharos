@@ -383,6 +383,10 @@
     return line;
   };
   const nativeLibrary = () => window.webkit?.messageHandlers?.pharosLibrary;
+  // With the unified activity preference on, status-panel.js renders the
+  // chip, its panel and the header's Index changes state from the status
+  // store; this file then leaves them alone (one renderer, #92 and #137).
+  const unified = () => window.pharosStatusStore?.enabled() === true;
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   // ---- library status (header chip and panel)
@@ -499,7 +503,7 @@
     chip.type = 'button';
     chip.setAttribute('aria-haspopup', 'dialog');
     chip.setAttribute('aria-expanded', 'false');
-    chip.onclick = () => (panel ? closePanel() : openPanel());
+    chip.onclick = () => (unified() ? window.pharosStatusPanel?.toggle() : panel ? closePanel() : openPanel());
     group.prepend(chip);
     return chip;
   }
@@ -632,6 +636,10 @@
 
   function renderHeaderAction() {
     const actions = [ensureHeaderAction(), document.getElementById('headerSyncOnly')];
+    if (unified()) {
+      actions.length = 0;
+      window.pharosStatusPanel?.renderHeader();
+    }
     const state = {activities: status?.activities, incremental: window.pharosSync?.isBusy(),
       local: headerCaptureIndexRunning || hostsBusy, upgrading: upgradeStatus?.running,
       sourcesEnabled: hostsData?.sources.enabled, upgradeNeeded: upgradeStatus?.needed, releasing: ejectState?.phase === 'ejecting'};
@@ -743,6 +751,7 @@
     if (!target) return;
     renderHeaderAction();
     renderAppUpdate();
+    if (unified()) return;
     const dot = node('span', 'pharos-dot'), name = node('span', 'pharos-drive-name');
     let state;
     if (!status) {
@@ -791,6 +800,7 @@
   }
 
   function openPanel() {
+    if (unified()) return window.pharosStatusPanel?.open();
     if (!ensureChip()) return;
     if (panel) closePanel();
     panel = node('section', 'pharos-drive-panel');
@@ -819,7 +829,7 @@
   window.addEventListener('resize', placePanel);
 
   function renderPanel() {
-    if (!panel) return;
+    if (!panel || unified()) return;
     expandedActivities.clear();
     for (const details of panel.querySelectorAll('details[data-activity][open]')) expandedActivities.add(details.dataset.activity);
     const content = node('div');
@@ -1467,7 +1477,13 @@
   const syncOnly = document.getElementById('headerSyncOnly');
   if (syncOnly) syncOnly.onclick = syncNow;
 
-  window.pharosLibrary = {closePanel, refresh: refreshStatus, status: () => status, runs, refreshSettings, refreshSyncControls: renderSyncControls, renderAlerts: () => { renderChip(); renderPanel(); }, onStatus: listener => listeners.add(listener),
+  window.addEventListener('pharos:unified-activity', () => { if (unified()) closePanel(); });
+
+  window.pharosLibrary = {closePanel, refresh: refreshStatus,
+    // For status-panel.js: the chip and Index changes it renders while the
+    // unified activity preference is on, the in-place renderer, and whether
+    // this page is starting a capture or index.
+    ensureChip, updateLiveChildren, localBusy: () => Boolean(headerCaptureIndexRunning || hostsBusy), status: () => status, runs, refreshSettings, refreshSyncControls: renderSyncControls, renderAlerts: () => { renderChip(); renderPanel(); }, onStatus: listener => listeners.add(listener),
     // Pure helpers, for web/tests/unit/page/library.test.mjs.
     libraryUpdate, overviewActivities, indexFailed, activityTiming, activityProgress, activityOverallProgress, activityPresentation, estimateRate, workCount, headerBusy, captureIndexDisabled, stopTargets, appUpdatePresentation};
   const sheet = node('style');

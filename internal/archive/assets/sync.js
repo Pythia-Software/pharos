@@ -178,6 +178,13 @@
     const active = runningRun(activity);
     const wasActive = Boolean(activeRun);
     activeRun = active || null;
+    // With the unified activity preference on, status-panel.js owns the
+    // header's Index changes state.
+    if (window.pharosStatusStore?.enabled() === true) {
+      if (wasActive && !active) window.pharosLibrary?.refresh?.();
+      window.pharosLibrary?.refreshSyncControls?.();
+      return;
+    }
     // A running sync is stopped from the drive panel, not the header.
     if (active) {
       action.disabled = true;

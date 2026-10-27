@@ -338,7 +338,9 @@ APP_HTML = r'''<!doctype html>
   <script>(function(){const fallback=document.getElementById('pharosShareData')?'system':'dark',theme=pharosPrefs.get('pharos-theme',fallback);if(theme==='light'||theme==='dark')document.documentElement.dataset.theme=theme})()</script>
   <script src="/assets/onboarding.js" defer></script>
   <script src="/assets/upgrade.js" defer></script>
+  <script src="/assets/status-store.js" defer></script>
   <script src="/assets/library.js" defer></script>
+  <script src="/assets/status-panel.js" defer></script>
   <script src="/assets/cloud-backup.js" defer></script>
   <script src="/assets/sync.js" defer></script>
   <script src="/assets/carbon.js" defer></script>
@@ -391,6 +393,7 @@ APP_HTML = r'''<!doctype html>
       <div class="optional-behavior"><div><h3 id="lighthouseSpinOnClickTitle">Lighthouse spins on click</h3><p id="lighthouseSpinOnClickDescription" class="muted">Turn the lighthouse beam once around when you click the door of the lighthouse in the menu bar.</p></div><button id="lighthouseSpinOnClick" class="toggle" type="button" role="switch" aria-labelledby="lighthouseSpinOnClickTitle" aria-describedby="lighthouseSpinOnClickDescription" aria-checked="false"></button></div>
       <div class="optional-behavior"><div><h3 id="lighthouseLoadingIndicatorTitle">Lighthouse loading indicator</h3><p id="lighthouseLoadingIndicatorDescription" class="muted">Turn the lighthouse beam while sources are indexed and while pages load. The drive badge pulses while the library is busy either way.</p></div><button id="lighthouseLoadingIndicator" class="toggle" type="button" role="switch" aria-labelledby="lighthouseLoadingIndicatorTitle" aria-describedby="lighthouseLoadingIndicatorDescription" aria-checked="false"></button></div>
       <div class="optional-behavior"><div><h3 id="usageSummaryLinksTitle">Clickable Analyze summary stats</h3><p id="usageSummaryLinksDescription" class="muted">Click a value in the header’s Analyze summary to open its analysis filtered to that column’s duration: 1h, 6h, 24h, 7d, 30d, or All time.</p></div><button id="usageSummaryLinks" class="toggle" type="button" role="switch" aria-labelledby="usageSummaryLinksTitle" aria-describedby="usageSummaryLinksDescription" aria-checked="false"></button></div>
+      <div class="optional-behavior"><div><h3 id="unifiedActivityTitle">Unified activity panel (preview)</h3><p id="unifiedActivityDescription" class="muted">Replaces the drive panel’s status with one view of what is running, whether the drive is safe to eject and what needs attention; you can turn it off at any time.</p></div><button id="unifiedActivity" class="toggle" type="button" role="switch" aria-labelledby="unifiedActivityTitle" aria-describedby="unifiedActivityDescription" aria-checked="false"></button></div>
     </section></div>
   </section>
   <section id="analyze" class="view" data-feedback-label="Analyze view"><div id="queryTableUsage"></div></section>
@@ -1519,6 +1522,11 @@ let usageSummaryAuto=pharosPrefs.get(USAGE_SUMMARY_AUTO_KEY,false)===true;
 const usageSummaryControls=comboButton([{id:'usageSummaryRefresh',icon:'refresh',ariaLabel:'Refresh usage summary',onClick:()=>void loadUsageSummary()},{id:'usageSummaryAuto',label:'Auto',title:`Auto update every ${USAGE_SUMMARY_AUTO_MS/1000} seconds`,pressed:usageSummaryAuto,onClick:()=>setUsageSummaryAuto(!usageSummaryAuto)}],{label:'Usage summary updates',className:'usage-summary-controls'});
 setUsageSummaryLinks(usageSummaryLinks,false);
 $('#usageSummaryLinks').onclick=()=>setUsageSummaryLinks(!usageSummaryLinks);
+// The unified activity panel (docs/background-work.md §9): status-store.js and status-panel.js take over the drive chip and panel while it is on. Saved at once, so the native menu sees it on its next poll.
+const UNIFIED_ACTIVITY_KEY='pharos-unified-activity-v1';
+function setUnifiedActivity(on,save=true){const toggle=$('#unifiedActivity');toggle.classList.toggle('on',on);toggle.setAttribute('aria-checked',String(on));if(!save)return;pharosPrefs.set(UNIFIED_ACTIVITY_KEY,on);pharosPrefs.flush?.();dispatchEvent(new CustomEvent('pharos:unified-activity',{detail:{on}}))}
+setUnifiedActivity(pharosPrefs.get(UNIFIED_ACTIVITY_KEY,false)===true,false);
+$('#unifiedActivity').onclick=()=>setUnifiedActivity(pharosPrefs.get(UNIFIED_ACTIVITY_KEY,false)!==true);
 // Three significant figures with a unit: 22.3B, $128k, 5.
 function sigFigs(value,prefix=''){if(value==null||!Number.isFinite(Number(value)))return'—';const units=['','k','M','B','T'];let amount=Number(Number(value).toPrecision(3)),power=0;while(Math.abs(amount)>=1000&&power<units.length-1){amount=Number((amount/1000).toPrecision(3));power++}return prefix+String(amount)+units[power]}
 function carbonSummaryValue(bucket){const factors=usageSummaryData?.carbon_factors;if(!factors)return null;const stored=pharosPrefs.get('pharos-carbon-v1',{}),saved=stored&&typeof stored==='object'?stored:{},scenario=['low','central','high'].includes(saved.scenario)?saved.scenario:'central',pueScenario=['low','central','high'].includes(saved.pueScenario)?saved.pueScenario:'central',inputScale=saved.inputSensitivity==='third'?5/3:1,grid=factors.grids.find(item=>item.key===saved.grid),gridValue=saved.grid==='custom'?Math.max(0,Number(saved.customGrid)||0):(grid||factors.grids.find(item=>item.key===factors.default_grid))?.g_co2e_per_kwh||0;let wh=0;for(const [tierKey,counts] of Object.entries(bucket.carbon_tokens||{})){const tier=factors.tiers.find(item=>item.key===tierKey);if(!tier)continue;for(const [category,count] of Object.entries(counts)){const ratio=category==='output'?1:(factors.ratios[category]?.[scenario]??1)*inputScale;wh+=Number(count||0)/1e6*(tier.output_wh_per_mtok?.[scenario]||0)*ratio}}const grams=wh*(factors.pue?.[pueScenario]||1)*gridValue/1000;const amount=grams>=1e6?`${sigFigs(grams/1e6)} t`:grams>=1e3?`${sigFigs(grams/1e3)} kg`:`${sigFigs(grams)} g`;return{amount,grams}}
