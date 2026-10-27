@@ -348,6 +348,7 @@ operation.
 | `maintenance.search.text` | Build text search · Building text search | version, chained | svc | D:w W:w | search.text | — | Stops between batches; it carries on later. | batch | >30 s | bg |
 | `maintenance.search.tools` | Build tool search · Building tool search | version, chained | svc | D:w W:w | search.tools | — | Stops between batches; it carries on later. | batch | >30 s | bg |
 | `maintenance.search.query` | Build Query Table text indexes · Building table search | version, chained | svc | D:w W:w | search.query | — | Stops between batches; it carries on later. | batch | >30 s | bg |
+| `maintenance.upgrade-count` | Count upgrade steps · Counting upgrade steps | version (once the service serves, when the stored count is not this build's) | svc | D:w W:w | upgrade, an.ledger | — | Stops; it counts again the next time Pharos opens the library. | batch | >5 s | bg |
 | `maintenance.checkpoint` (variants `bound`, `after-run`, `close`) | Save the catalog · Saving the catalog | daemon pass (WAL over 64 MiB, every 10 s), chained, release | svc | D:w W:w | — | — | Not interruptible; short. | record | >1 s | bg |
 | `maintenance.origins` | Publish conversation origins · Publishing conversation origins | daemon pass (`maintainLibrary`: every pass while no ingest runs, at most once a minute during one); the end of each ingest and the Tools rollup publish them as part of their own operation | svc | D:w W:w | — | — | Stops; it publishes them on its next pass. | batch | never | bg |
 | `maintenance.mcp-history` | Store MCP call history · Storing MCP call history | read (an MCP call through the service queues its record; one background writer stores the queue, so no request waits for the writer; a direct MCP call stores its own record when it closes the catalog, after its answer is out) | svc, mcp | D:w W:w | — | — | Stops; closing the catalog stores what is still queued. | record | never | bg |
@@ -628,7 +629,10 @@ and an honest reason. The evidence per domain:
   indexing, history verification, the Git backfill), snapshots the record
   generation *before* the stage, and records that value on success: a write
   during the stage leaves the domain `behind / changed`, never falsely
-  current;
+  current. The record is written in the journal's low-priority lane: an
+  idle connection, the writer gate without waiting, no busy timeout, one
+  attempt; when the writer is busy it is skipped (logged once), which
+  leaves the domain behind or unknown, the honest direction;
 - findings: today's full pass, and `meta['findings_inputs_generation']`
   (`tool_ledger_generation:authorship_inputs_generation`, read before the
   pass and written with its other meta) equals the current value, and
@@ -638,10 +642,13 @@ and an honest reason. The evidence per domain:
   (`{build, started_at, steps}`) was counted by the build that last
   initialized the catalog (`meta.initialized_build`). This build's ingest
   cannot create upgrade work; only a write by another build can, and that
-  build's open changes `initialized_build`. It is counted again at the end
-  of the analysis chain, after an upgrade completes and on every
-  Initialize, and an answer is never replaced by one whose count started
-  earlier. Every process (the MCP one too) reads the same row;
+  build's open changes `initialized_build`. It is counted at the end of the
+  analysis chain, after an upgrade completes, and once the service is
+  serving, in the background as `maintenance.upgrade-count` (§3.4), only
+  when the stored count is not this build's (`buildDigest()`); Initialize
+  never counts. Until a count lands the ledger says `unknown / not-counted`.
+  An answer is never replaced by one whose count started earlier. Every
+  process (the MCP one too) reads the same row;
 - backups: a verified (cloud) or complete (local) backup within an enabled
   schedule. Without a schedule, the newest backup is reported `unknown`
   (`no-schedule`) with its `as_of`; local backups have no schedule.
@@ -703,7 +710,8 @@ Rules:
   root and backup history, and read again sooner (not more than once per
   2 s) when an operation affecting `capt:*` or `backup.local` starts or
   ends. The files are read outside the cache's mutex, by one reader at a
-  time; every other reader takes the last completed value at once. The
+  time (its flag cleared however the read ends); every other reader takes
+  the last completed value at once. The
   release path's fresh check (`?fresh=1`) never reads or waits: it takes
   the cache for the same configuration, or reports those domains
   `unknown`. The upgrade's count is the stored row above. Measured: about

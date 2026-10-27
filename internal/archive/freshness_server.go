@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"slices"
 	"sort"
@@ -144,11 +145,39 @@ func (s *Server) freshnessFiles(config Config, views []opView, cachedOnly bool) 
 	if last != nil {
 		previous = last.captures
 	}
+	// Cleared however the read ends, so a panic cannot freeze the cache.
+	defer func() {
+		cache.mu.Lock()
+		cache.reading = false
+		cache.mu.Unlock()
+	}()
 	files := readFreshnessFiles(s.Catalog, config.CaptureRoot, &config, previous)
 	cache.mu.Lock()
-	cache.files, cache.key, cache.source, cache.reading = files, key, source, false
+	cache.files, cache.key, cache.source = files, key, source
 	cache.mu.Unlock()
 	return files
+}
+
+// countUpgradeInBackground counts the upgrade's steps for the freshness
+// ledger (§5) once the service is serving, as a registered operation,
+// unless the stored count is already this build's. Until it lands the
+// ledger says unknown / not-counted.
+func (s *Server) countUpgradeInBackground() {
+	if !s.upgradeCountStale(s.life.ctx) {
+		return
+	}
+	s.start(OperationSpec{Kind: "maintenance.upgrade-count", Trigger: triggerVersion}, func(ctx context.Context, _ *Op) error {
+		s.Catalog.storeUpgradeCount(ctx)
+		return nil
+	})
+}
+
+// upgradeCountStale reports whether the stored count is missing or another
+// build's.
+func (s *Server) upgradeCountStale(ctx context.Context) bool {
+	stored, _ := s.Catalog.metaValue(ctx, upgradeCountKey)
+	var count upgradeCount
+	return stored == "" || json.Unmarshal([]byte(stored), &count) != nil || count.Build != buildDigest()
 }
 
 // readFreshnessFiles reads backups.json (when config is known) and the

@@ -161,6 +161,7 @@ func (s *Server) Serve() error {
 	s.daemon("automaticLoop", s.automaticLoop)
 	s.daemon("cloudScheduleLoop", s.cloudScheduleLoop)
 	s.refreshGitInBackground(true)
+	s.countUpgradeInBackground()
 	return s.serveUntilStopped(server, listener)
 }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

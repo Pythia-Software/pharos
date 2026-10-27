@@ -2,8 +2,10 @@ package archive
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
 	"slices"
 	"sort"
 	"strings"
@@ -1158,10 +1160,51 @@ func (c *Catalog) completeStage(ctx context.Context, stage string, work func() e
 		return err
 	}
 	if known && ctx.Err() == nil {
-		_ = c.writeTransaction(ctx, "freshness evidence "+stage, func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(ctx, "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", "analysis_inputs:"+stage, before)
-			return err
-		})
+		if err := c.writeMetaIfIdle(ctx, "analysis_inputs:"+stage, before); err != nil {
+			if _, logged := evidenceSkipLogged.LoadOrStore(c.Path+"\x00"+stage, true); !logged {
+				fmt.Fprintf(os.Stderr, "Freshness: skipped recording %s's evidence: %v\n", stage, err)
+			}
+		}
+	}
+	return nil
+}
+
+// evidenceSkipLogged remembers which skipped evidence writes were logged.
+var evidenceSkipLogged sync.Map
+
+// writeMetaIfIdle writes one meta row in the journal's low-priority lane
+// (§6.2): only an idle pooled connection, the writer gate without waiting,
+// and SQLite's lock with no busy wait, in one attempt. It returns
+// errJournalBusy instead of waiting for any of them. A skipped evidence
+// write leaves its domain behind or unknown, the honest direction.
+func (c *Catalog) writeMetaIfIdle(ctx context.Context, key, value string) error {
+	connCtx, cancel := context.WithTimeout(ctx, journalConnWait)
+	conn, err := c.DB.Conn(connCtx)
+	cancel()
+	if err != nil {
+		if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+			return errJournalBusy
+		}
+		return err
+	}
+	defer conn.Close()
+	release, ok := c.tryWriteGate()
+	if !ok {
+		return errJournalBusy
+	}
+	defer release()
+	if c.writerActive() {
+		return errJournalBusy
+	}
+	if _, err := conn.ExecContext(ctx, "PRAGMA busy_timeout=0"); err != nil {
+		return err
+	}
+	defer conn.ExecContext(context.Background(), fmt.Sprintf("PRAGMA busy_timeout=%d", busyTimeoutMS))
+	if _, err := conn.ExecContext(ctx, "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value); err != nil {
+		if catalogBusy(err) {
+			return errJournalBusy
+		}
+		return err
 	}
 	return nil
 }

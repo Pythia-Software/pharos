@@ -271,7 +271,7 @@ func TestFreshnessDomains(t *testing.T) {
 			in: freshnessInput{ops: []freshnessOp{runningOp("op-find", "analysis.findings", "")}}, state: freshBehind, reason: "running", catching: "op-find"},
 
 		{name: "upgrade unknown before anything counted it", domain: "upgrade", seed: []string{"DELETE FROM meta WHERE key='upgrade_count'"}, state: freshUnknown, reason: "not-counted"},
-		{name: "upgrade counted when the catalog was opened", domain: "upgrade", state: freshCurrent},
+		{name: "upgrade unknown until the background count lands", domain: "upgrade", state: freshUnknown, reason: "not-counted"},
 		{name: "upgrade counted again", domain: "upgrade", setup: func(f *freshnessFixture) { f.catalog.storeUpgradeCount(context.Background()) }, state: freshCurrent},
 		{name: "upgrade available and running", domain: "upgrade", setup: counted("", upgradeStep{ID: "tools", Pending: 12}, upgradeStep{ID: "usage", Pending: 1}, upgradeStep{ID: "harness"}), in: freshnessInput{ops: []freshnessOp{runningOp("op-up", "library.upgrade", "")}}, state: freshBehind, reason: "running", catching: "op-up", count: 2, countKnown: true, unit: "step"},
 
@@ -776,4 +776,57 @@ func TestUpgradeCountKeepsTheNewerAnswer(t *testing.T) {
 	expectRow(t, f.ledger(freshnessInput{}), "upgrade", freshCurrent, "", "")
 	f.exec(setMetaSQL(initializedBuildKey, "a-newer-build"))
 	expectRow(t, f.ledger(freshnessInput{}), "upgrade", freshUnknown, "not-counted", "")
+}
+
+// Initialize no longer counts the upgrade's steps: the service counts them
+// in the background once it serves, as a registered operation, and only
+// when the stored count is not this build's.
+func TestUpgradeCountRunsInTheBackgroundOnce(t *testing.T) {
+	catalog, config := freshCatalog(t)
+	if stored, _ := catalog.metaValue(context.Background(), upgradeCountKey); stored != "" {
+		t.Fatalf("Initialize counted the upgrade's steps: %s", stored)
+	}
+	server := testServer(t, config, catalog)
+	server.countUpgradeInBackground()
+	if !waitFor(time.Minute, func() {
+		for server.upgradeCountStale(context.Background()) {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}) {
+		t.Fatal("the background count did not land")
+	}
+	kinds := func() int {
+		n := 0
+		for _, view := range server.ops.views() {
+			if view.Spec.Kind == "maintenance.upgrade-count" {
+				n++
+			}
+		}
+		return n
+	}
+	if kinds() != 1 {
+		t.Fatalf("the count ran as %d registered operations", kinds())
+	}
+	server.countUpgradeInBackground()
+	if kinds() != 1 {
+		t.Fatal("a count was started although this build's is stored")
+	}
+}
+
+// An evidence write never waits: with the catalog writer busy it is skipped
+// at once, and the domain stays behind rather than current.
+func TestStageEvidenceSkipsABusyWriter(t *testing.T) {
+	f := newFreshnessFixture(t)
+	f.exec(setMetaSQL("authorship_inputs_generation", "4"))
+	release, err := f.catalog.acquireWriteGate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	err = f.catalog.completeStage(context.Background(), "git", func() error { return nil })
+	release()
+	if err != nil || time.Since(started) > time.Second {
+		t.Fatalf("the stage waited for its evidence write: %v after %v", err, time.Since(started))
+	}
+	expectRow(t, f.ledger(freshnessInput{}), "an.git", freshBehind, "changed", "")
 }
