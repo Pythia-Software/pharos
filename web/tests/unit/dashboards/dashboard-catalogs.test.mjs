@@ -296,7 +296,9 @@ test("Back to dashboard from a Tools query: an edited date predicate becomes the
 test("collected cards compare dashboard charts as drawn: defaults filled, keys sorted at every depth", () => {
   const key = (topic, chart) => normalizedDashboardChart(topic, JSON.stringify(chart));
   // An old Skills card chart, and the versioned one for the same view.
-  assert.equal(key("skills", { period: "day", rollingPeriods: 0, display: "interval", scale: "linear", seriesLimit: 15, metric: 0, split: "skill_name" }), key("skills", { v: analysisVersion, view: "trend", metric: "records", split: "skill_name", period: "day" }));
+  assert.equal(key("skills", { period: "day", rollingPeriods: 0, display: "interval", scale: "linear", seriesLimit: 15, metric: 0, split: "skill_name" }), key("skills", { v: analysisVersion, view: "trend", metric: "records", split: "skill_name", period: "day", scale: "linear" }));
+  // A trend without a scale draws the linear + log split, another chart.
+  assert.notEqual(key("skills", { v: analysisVersion, view: "trend", metric: "records", split: "skill_name", period: "day" }), key("skills", { v: analysisVersion, view: "trend", metric: "records", split: "skill_name", period: "day", scale: "linear" }));
   assert.equal(key("tokens", { metric: "tokens", split: "provider", selection: { values: [], excluded: false } }), key("tokens", { split: "provider", metric: "tokens" }));
   // A selection is part of the view, compared in full.
   const selected = values => key("tokens", { metric: "tokens", split: "provider", selection: { values, excluded: false } });

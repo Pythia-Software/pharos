@@ -22,7 +22,9 @@ const tokens = (metric: TokenChartView["metric"], split: TokenChartView["split"]
   topic: "tokens", chart: { ...daily, v: analysisVersion, metric, split, hours: 6, days: 3, selection: { values: [], excluded: false }, ...extra },
 });
 const engine = (topic: "mcp" | "tools" | "time" | "skills" | "human" | "carbon" | "parallelism", view: AnalysisState["view"]) => (metric: string, split: string, extra: Partial<AnalysisState> = {}): CardDashboard => ({
-  topic, chart: { v: analysisVersion, view, metric, split, period: "day", ...extra },
+  // Card charts were linear before the engine; their states say so, since
+  // a trend without a scale draws the linear + log split.
+  topic, chart: { v: analysisVersion, view, metric, split, period: "day", scale: "linear", ...extra },
 });
 const mcp = engine("mcp", "compare"), time = engine("time", "trend"), skills = engine("skills", "trend"), human = engine("human", "trend"), carbon = engine("carbon", "compare"), parallel = engine("parallelism", "trend");
 // A card's trailing window with whole days and a norm (buildCardTrend).

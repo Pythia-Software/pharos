@@ -1,5 +1,5 @@
 import { EMPTY_QUERY, coerceValue, type WhereClause, inspectBucketQuery, metricDateFloor, metricDateNext, metricDateTime, type AggOp, type AggregationBucket, type AggregationClause, type AggregationResultEntry, type FieldSchema, type MetricDisplay, type MetricValueFormat, type QueryState, type SummaryColumn, type WhereTerm } from "@pythia-software/query-table-core";
-import { validChartScale, type ChartScale } from "./chart-scale";
+import { defaultChartScale, validChartScale, type ChartScale } from "./chart-scale";
 import { chartPeriods, validPeriodCount, type ChartPeriod } from "./chart-period";
 import { validChartDisplay, validRollingPeriods, type ChartDisplay } from "./chart-series";
 import { isSliceTerm, readSlice, validChartPresentation, withSlice, type SliceSelection } from "./chart-selection";
@@ -364,6 +364,9 @@ function normalizeTrend<T extends AnalysisState>(catalog: AnalysisCatalog, next:
   if (!trendSplit(catalog, next.split)) next.split = catalog.trend.split;
   if (catalog.components?.[next.split] && !catalog.components[next.split].measures.includes(next.metric)) next.split = catalog.components[next.split].fallback;
   next.share = next.share === true; next.completePeriods = next.completePeriods === true; next.norm = next.norm === true;
+  // The trend's scale, resolved once for the control and the chart: a state
+  // without one draws the old trend charts' default, the linear + log split.
+  if (!validChartScale(next.scale)) next.scale = defaultChartScale;
   if (!oneOf(next.rollingOp, ["mean", "sum"])) next.rollingOp = "mean";
   let limits = trendLimits(catalog, next);
   if (next.share && limits.share) next.share = false;

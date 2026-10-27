@@ -495,3 +495,19 @@ test("a derived component computes each period's parts from its input totals, be
   assert.ok(window.buckets.some(bucket => bucket.values.codex > 0 && bucket.values.codex < 1));
   assert.match(trendNote(derived, state), /Weighted splits each day's tokens into its parts/);
 });
+
+test("a trend without a scale resolves it once, for the Scale control and the chart alike", async () => {
+  const { defaultChartScale } = await import("../../../src/chart-scale");
+  const { humanAnalysisCatalog } = await import("../../../src/human-analysis-catalog");
+  const { carbonCatalogShape } = await import("../../../src/carbon-analysis-catalog");
+  for (const target of [catalog, humanAnalysisCatalog, carbonCatalogShape]) {
+    // AnalysisControls shows, and AnalysisTrend draws, the normalized state's scale.
+    const drawn = normalizeAnalysis(target, { metric: target.trend.metric, split: target.trend.split });
+    assert.equal(drawn.scale, defaultChartScale, `${target.dataset}: an absent scale is the old trend charts' linear + log split`);
+    assert.equal(normalizeAnalysis(target, { metric: target.trend.metric, split: "none", scale: "linear" }).scale, "linear", "a chosen scale is kept");
+  }
+  // An older link without a scale keeps the split axis it always drew.
+  assert.equal(normalizeAnalysis(catalog, { metric: "percent", split: "provider", period: "day" }).scale, defaultChartScale);
+  // Other views keep their own axis default (linear).
+  assert.equal(normalizeAnalysis(catalog, { view: "compare", metric: "tokens", split: "provider" }).scale, undefined);
+});
