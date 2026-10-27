@@ -128,6 +128,19 @@ test("pharos-mcp-query-sources: calls by requested source, unscoped requests inc
   assert.ok(Object.keys(byKeys(dashboard.buckets)).includes("[null]"));
 });
 
+test("archive-empty-search-rate: zero-result shares of successful searches by tool, ten-search minimum, through a conditional ratio part", () => {
+  const { card, dashboard, state, analysis } = pair("archive-empty-search-rate", { days: 30 });
+  assert.deepEqual([state.view, state.metric, state.split, state.minSamples], ["compare", "empty_rate", "tool_name", 10]);
+  assert.equal(analysis.clause.minCount, 10, "the minimum counts the searches the rate pools");
+  sameGroups("archive-empty-search-rate", card, dashboard);
+  assert.ok(dashboard.buckets.some(bucket => bucket.value > 0 && bucket.value < 1));
+  // A tighter minimum hides the same tools on both.
+  const where = cardDashboardWhere("mcp_calls", "mcp_calls", instantiateRecipe(recipeById("archive-empty-search-rate"), 30, new Date(now)).query.where);
+  const strict = core.evaluateMetrics(rows.mcp_calls, analysisQuery(mcpAnalysisCatalog, { ...state, minSamples: 25 }, where, { now }).query, schemas.mcp_calls, { now }).metrics[0];
+  const counts = Object.fromEntries(card.buckets.map(bucket => [bucket.keys[0], rows.mcp_calls.filter(row => row.tool_name === bucket.keys[0] && row.status === "ok" && row.result_count >= 0 && Date.parse(row.called_at) >= now - 30 * 86400000).length]));
+  assert.deepEqual(strict.buckets.map(bucket => bucket.keys[0]).sort(), Object.keys(counts).filter(key => counts[key] >= 25).sort());
+});
+
 // ----- Agent Time: one record per call ----------------------------------------
 
 test("machine-activities: shares of recorded tool time by activity", () => {

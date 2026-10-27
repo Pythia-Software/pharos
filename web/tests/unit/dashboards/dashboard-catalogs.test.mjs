@@ -11,7 +11,7 @@ import { dashboardQueryLinks } from "../../../src/dashboard-query-links";
 import { normalizedDashboardChart } from "../../../src/analysis-catalogs";
 import { now, toolCalls, toolsRollup, mcpCalls, skillUsages } from "../helpers/record-ledgers.mjs";
 import { analysisInspectQuery, analysisNote, analysisQuery, analysisViews, catalogProblems, cycleResult, normalizeAnalysis, readAnalysisLink, switchView, trendAdjustments, trendUnavailable, validAnalysisState, viewOptions, analysisVersion } from "../../../src/dashboard-analysis-model";
-import { trendQuery, trendSeries } from "../../../src/dashboard-trend-model";
+import { trendNote, trendQuery, trendSeries } from "../../../src/dashboard-trend-model";
 import { tokenAnalysisCatalog } from "../../../src/token-analysis-catalog";
 import { toolsAnalysisCatalog as tools } from "../../../src/tools-analysis-catalog";
 import { mcpAnalysisCatalog as mcp } from "../../../src/mcp-analysis-catalog";
@@ -303,4 +303,85 @@ test("collected cards compare dashboard charts as drawn: defaults filled, keys s
   assert.notEqual(selected(["codex"]), selected(["claude"]));
   assert.equal(key("tokens", { metric: "tokens", split: "provider", selection: { excluded: false, values: ["codex"] } }), selected(["codex"]));
   assert.equal(normalizedDashboardChart("human", '{"b":1,"a":2}'), '{"b":1,"a":2}', "other dashboards compare as written");
+});
+
+// ----- 2c engine items -------------------------------------------------------
+
+const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+test("one day boundary: Over time places timestamps in the viewer's periods, as the cycle does, and offers hours", () => {
+  // Days another Mac recorded in its own zone: the trend no longer reads them.
+  const moved = rows.mcp_calls.map(row => ({ ...row, day: "2001-01-01", week: "2001-01-01", month: "2001-01" }));
+  const where = month(mcp), state = { metric: "calls", split: "none" };
+  const query = trendQuery(mcp, state, where, { now, zone: localZone });
+  assert.deepEqual(query.query.aggregations[0].dateGrouping, { field: "called_at", interval: "day", timeZone: localZone, includeEmpty: false, range: "query" });
+  const built = trendSeries(mcp, state, query, core.evaluateMetrics(moved, query.query, schemas.mcp_calls, { now }).metrics, { now });
+  const local = date => { const at = new Date(date); return `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`; };
+  const expected = {};
+  for (const row of moved) if (Date.parse(row.called_at) >= Date.parse(where[0].value)) expected[local(row.called_at)] = (expected[local(row.called_at)] ?? 0) + 1;
+  assert.deepEqual(Object.fromEntries(built.buckets.filter(bucket => bucket.values.total).map(bucket => [bucket.key, bucket.values.total])), expected);
+  // The weekday cycle's days are the same days.
+  const cycle = analysisQuery(mcp, { view: "cycle", cycle: "weekday", metric: "calls", split: "none" }, where, { now, zone: localZone });
+  for (const bucket of core.evaluateMetrics(moved, cycle.query, schemas.mcp_calls, { now }).metrics[0].buckets) if (bucket.value) assert.equal(bucket.value, expected[local(bucket.keys[0])], String(bucket.keys[0]));
+  // Hours: every catalog with a timestamp offers them, as UTC clock hours.
+  for (const catalog of [mcp, time, skills]) {
+    assert.equal(trendAdjustments(catalog, { metric: catalog.trend.metric, split: "none", period: "hour" }).length, 0, catalog.dataset);
+    const hours = trendQuery(catalog, { metric: catalog.trend.metric, split: "none", period: "hour" }, where.map(term => ({ ...term, field: catalog.time.first })), { now, zone: localZone });
+    assert.equal(hours.query.aggregations[0].dateGrouping.timeZone, "UTC");
+    const drawn = trendSeries(catalog, { metric: catalog.trend.metric, split: "none", period: "hour" }, hours, run(catalog, hours.query), { now });
+    assert.equal(drawn.error, undefined);
+    assert.ok(drawn.buckets.length > 24 * 29 && drawn.buckets.some(bucket => bucket.values.total), catalog.dataset);
+  }
+  assert.match(trendNote(mcp, state), /days in your time zone, as in the hour and weekday cycle/);
+  // A grouping stage cannot group a timestamp by calendar period, so the
+  // supporting query opens the records drawn.
+  assert.equal(query.supporting.aggregations, undefined);
+  // Usage keeps its recorded days.
+  assert.equal(tokenAnalysisCatalog.timestamp, undefined);
+  assert.equal(trendQuery(tokenAnalysisCatalog, { metric: "tokens", split: "none" }, [], { now }).query.aggregations[0].dateGrouping, undefined);
+});
+
+test("a ratio part may state a condition: the empty-search rate pools zero-result searches per period and group", () => {
+  const where = month(mcp), state = { metric: "empty_rate", split: "tool_name", rollingPeriods: 7 };
+  const population = rows.mcp_calls.filter(row => row.status === "ok" && row.result_count >= 0);
+  // Compare: each tool's pooled rate.
+  const compare = analysisQuery(mcp, { ...state, view: "compare" }, where, { now }), result = run(mcp, compare.query)[0];
+  const rate = calls => calls.filter(row => row.result_count === 0).length / calls.length;
+  for (const bucket of result.buckets) assert.equal(bucket.value, rate(population.filter(row => row.tool_name === bucket.keys[0] && Date.parse(row.called_at) >= Date.parse(where[0].value))), String(bucket.keys[0]));
+  assert.ok(result.buckets.some(bucket => bucket.value > 0 && bucket.value < 1));
+  // Over time: each window pools its parts, never averaging daily rates.
+  const query = trendQuery(mcp, { ...state, split: "none" }, where, { now });
+  assert.equal(query.query.aggregations[0].expression, "SUM(IF([result_count]=0,1,0))");
+  const built = trendSeries(mcp, { ...state, split: "none" }, query, run(mcp, query.query), { now });
+  const last = built.buckets.at(-1), end = last.date.getTime() + 86400000, start = new Date(last.date); start.setDate(start.getDate() - 6);
+  assert.equal(last.values.total, rate(population.filter(row => Date.parse(row.called_at) >= start.getTime() && Date.parse(row.called_at) < end)));
+  assert.match(trendNote(mcp, { ...state, split: "none" }), /requests with no results divided by successful requests with a recorded result count/);
+  assert.deepEqual(catalogProblems({ ...mcp, measures: { ...mcp.measures, bad: { ...mcp.measures.empty_rate, ratio: [{ op: "sum", expression: "1" }, "call_count"] } } }), ["bad has an expression part without a label."]);
+});
+
+test("a catalog's request: its parameters reach every request, and its population joins every query but never the dashboard's filters", async t => {
+  const population = [{ field: "status", op: "=", value: "ok" }];
+  const catalog = { ...mcp, request: { params: { carbon_settings: '{"grid":"custom"}' }, where: population, note: "Built under your settings." } };
+  const where = month(catalog);
+  const compare = analysisQuery(catalog, { view: "compare", metric: "calls", split: "tool_name" }, where, { now });
+  const trend = trendQuery(catalog, { metric: "calls", split: "tool_name" }, where, { now });
+  for (const query of [compare.query, compare.supporting, trend.query, trend.supporting]) assert.ok((query.grouping?.source ?? query).where.some(term => term.field === "status"), JSON.stringify(query.where));
+  assert.ok(trend.records.some(term => term.field === "status"), "drill-downs open the same population");
+  assert.match(analysisNote(catalog, { view: "compare", metric: "calls", split: "tool_name" }), /Built under your settings/);
+  assert.match(trendNote(catalog, { metric: "calls", split: "tool_name" }), /Built under your settings/);
+  // Back to dashboard leaves the population out of the dashboard's filters.
+  const dashboard = new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: "mcp", analyze_data: "mcp_calls", analyze_filters: core.encodeQuery({ ...core.EMPTY_QUERY, where }) });
+  const opened = new URL(dashboardQueryLinks("mcp_calls", compare.supporting, schemas.mcp_calls, dashboard)[0].href, "http://localhost").searchParams;
+  assert.deepEqual(core.decodeQueryStrict(new URL(usageDashboardReturn(opened).href, "http://localhost").searchParams.get("analyze_filters")).where, where);
+  // Parameters ride on /metrics and /query-v3 alike.
+  const prior = global.fetch, requests = [];
+  global.fetch = async (url, init = {}) => {
+    const path = String(url), body = init.body ? JSON.parse(init.body) : undefined;
+    requests.push(path);
+    return Response.json(answerQuery(path.split("?")[0].split("/").at(-1), body, rows.mcp_calls, schemas.mcp_calls, { now }));
+  };
+  t.after(() => { global.fetch = prior; });
+  await runAnalysisQuery("mcp_calls", schemas.mcp_calls, compare.query, { params: catalog.request.params });
+  await runAnalysisQuery("mcp_calls", schemas.mcp_calls, trend.query, { params: catalog.request.params });
+  const encoded = new URLSearchParams(catalog.request.params).toString();
+  assert.deepEqual(requests, [`/api/query/mcp_calls/metrics?${encoded}`, "/api/query/mcp_calls/capabilities", `/api/query/mcp_calls/query-v3?${encoded}`]);
 });

@@ -459,3 +459,39 @@ test("a combined selection filters the executed query where a filter can state i
   assert.equal(selectionWhere(["provider", "model_family"], { values: many, excluded: false }), undefined);
   assert.ok(!analysisQuery(catalog, { ...state, selection: { values: many, excluded: false } }, range, { now }).query.where.some(term => term.any));
 });
+
+test("a derived component computes each period's parts from its input totals, before smoothing and shares", () => {
+  // Parts derived from per-provider token totals and a parameter, as Carbon
+  // derives token types from per-tier totals and the user's factors.
+  const factor = 2.5, derive = (totals, metric) => {
+    assert.equal(metric, "tokens");
+    const sum = (field, keep = () => true) => totals.filter(entry => keep(entry.keys[0])).reduce((total, entry) => total + (entry.values[field] ?? 0), 0);
+    return { codex: factor * sum("input_tokens", provider => provider === "codex"), rest: sum("input_tokens", provider => provider !== "codex") + sum("output_tokens") };
+  };
+  const derived = { ...catalog, components: { ...catalog.components, weighted: { label: "Weighted", measures: ["tokens"], fallback: "provider",
+    parts: [{ key: "codex", label: "Codex input", color: "red", fields: ["input_tokens"] }, { key: "rest", label: "Everything else", color: "blue", fields: ["input_tokens", "output_tokens"] }],
+    derived: { inputs: { fields: ["input_tokens", "output_tokens"], groupBy: ["provider"] }, derive } } } };
+  assert.deepEqual(catalogProblems(derived), []);
+  const state = { ...base, metric: "tokens", split: "weighted" };
+  const query = trendQuery(derived, state, range, { now });
+  assert.deepEqual(query.query.aggregations.map(clause => [clause.id, clause.groupBy]), [["trend:input:input_tokens", ["day", "provider"]], ["trend:input:output_tokens", ["day", "provider"]]]);
+  const built = trendSeries(derived, state, query, core.evaluateMetrics(rows, query.query, schema, { now }).metrics, { now });
+  const daily = {};
+  for (const row of rows) {
+    const day = (daily[localDay(new Date(`${row.day}T00:00:00`))] ??= { codex: 0, rest: 0 });
+    if (row.provider === "codex") day.codex += factor * row.input_tokens; else day.rest += row.input_tokens;
+    day.rest += row.output_tokens;
+  }
+  assert.deepEqual(built.series.map(item => item.key), ["codex", "rest"]);
+  assert.deepEqual(Object.fromEntries(built.buckets.filter(bucket => bucket.values.rest).map(bucket => [bucket.key, bucket.values])), daily);
+  // Smoothing and shares follow the derived values.
+  const shares = { ...state, rollingPeriods: 3, share: true }, sharesQuery = trendQuery(derived, shares, range, { now });
+  const window = trendSeries(derived, shares, sharesQuery, core.evaluateMetrics(rows, sharesQuery.query, schema, { now }).metrics, { now });
+  for (const point of window.buckets) {
+    const days = [0, 1, 2].map(offset => { const date = new Date(point.date); date.setDate(date.getDate() - offset); return daily[localDay(date)] ?? { codex: 0, rest: 0 }; });
+    const sums = days.reduce((total, day) => ({ codex: total.codex + day.codex, rest: total.rest + day.rest }), { codex: 0, rest: 0 });
+    if (sums.codex + sums.rest) assert.ok(Math.abs(point.values.codex - sums.codex / (sums.codex + sums.rest)) < 1e-9, `${point.key}: the share is of the smoothed derived parts`);
+  }
+  assert.ok(window.buckets.some(bucket => bucket.values.codex > 0 && bucket.values.codex < 1));
+  assert.match(trendNote(derived, state), /Weighted splits each day's tokens into its parts/);
+});

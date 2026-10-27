@@ -1,5 +1,5 @@
 import { evaluateMetrics, type AggregationResultEntry, type FieldSchema, type QueryState } from "@pythia-software/query-table-core";
-import { MetricRequestError, postMetrics, postQueryStateMetrics, postQueryV3Metrics } from "./metric-request";
+import { MetricRequestError, postMetrics, postQueryStateMetrics, postQueryV3Metrics, type RequestParams } from "./metric-request";
 import { applyUsageAggregations, usageRowsForWhere } from "./usage-aggregations";
 
 type Row = Record<string, any>;
@@ -10,7 +10,9 @@ export type LocalRows = { rows: Row[]; hourly?: Row[] };
 // /metrics, falling back to /query-v3 when /metrics refuses their budget; a
 // grouping stage and calendar grouping need /query-v3. A shared snapshot evaluates its own rows,
 // keeping usage's hourly metrics on its hourly rows as the service does.
-export async function runAnalysisQuery(dataset: string, schema: FieldSchema<any>, query: QueryState, { signal, local }: { signal?: AbortSignal; local?: LocalRows } = {}): Promise<AggregationResultEntry[]> {
+// params are the catalog's request parameters (AnalysisRequest), sent with
+// every request; a snapshot's rows already hold what they describe.
+export async function runAnalysisQuery(dataset: string, schema: FieldSchema<any>, query: QueryState, { signal, local, params }: { signal?: AbortSignal; local?: LocalRows; params?: RequestParams } = {}): Promise<AggregationResultEntry[]> {
   const clauses = query.aggregations ?? [];
   if (!clauses.length) return [];
   if (local) {
@@ -20,12 +22,13 @@ export async function runAnalysisQuery(dataset: string, schema: FieldSchema<any>
     if (failed) throw new MetricRequestError(failed.error!);
     return result.metrics;
   }
-  if (query.grouping) return await postQueryStateMetrics(dataset, schema, query, signal) as AggregationResultEntry[];
-  // Calendar grouping of a timestamp (a cycle's dates) runs on /query-v3.
-  if (clauses.some(clause => clause.dateGrouping)) return await postQueryV3Metrics(dataset, schema, query.where, clauses, signal) as AggregationResultEntry[];
-  try { return await postMetrics(dataset, schema, query.where, clauses, signal) as AggregationResultEntry[]; }
+  if (query.grouping) return await postQueryStateMetrics(dataset, schema, query, signal, params) as AggregationResultEntry[];
+  // Calendar grouping of a timestamp (a cycle's dates, a trend's periods)
+  // runs on /query-v3.
+  if (clauses.some(clause => clause.dateGrouping)) return await postQueryV3Metrics(dataset, schema, query.where, clauses, signal, params) as AggregationResultEntry[];
+  try { return await postMetrics(dataset, schema, query.where, clauses, signal, params) as AggregationResultEntry[]; }
   catch (failure) {
-    if (failure instanceof MetricRequestError && failure.resourceLimit) return await postQueryV3Metrics(dataset, schema, query.where, clauses, signal) as AggregationResultEntry[];
+    if (failure instanceof MetricRequestError && failure.resourceLimit) return await postQueryV3Metrics(dataset, schema, query.where, clauses, signal, params) as AggregationResultEntry[];
     throw failure;
   }
 }

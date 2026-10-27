@@ -4,7 +4,7 @@ import { chartSpan, smoothingWhere, timeBounds, widenStart, withEnd, withStart }
 import { otherSeriesColor } from "./chart-colors";
 import { chartBucketsWithHistory, cumulativeBuckets, foldSeries, rollingBuckets, shareBuckets, type ChartBucket, type ChartSeries } from "./chart-series";
 import { withSlice } from "./chart-selection";
-import { aggregate, completeStart, periodField, measureExpression, noSplit, normalizeAnalysis, ratioPart, rollingSumUnit, trendKind, unique, type AnalysisCatalog, type AnalysisState, type ResolvedAnalysis } from "./dashboard-analysis-model";
+import { aggregate, completeStart, partClause, partLabel, periodField, measureExpression, noSplit, normalizeAnalysis, rollingSumUnit, trendKind, unique, type AnalysisCatalog, type AnalysisState, type DerivedTotals, type ResolvedAnalysis } from "./dashboard-analysis-model";
 
 // Over time, driven by a catalog: any measure, over its own population, by
 // any breakdown, a component breakdown or none. The query asks for interval
@@ -40,7 +40,11 @@ export type TrendQuery = {
 export function trendQuery(catalog: AnalysisCatalog, input: AnalysisState, where: WhereTerm[], { now = Date.now(), zone = localZone() }: { now?: number; zone?: string } = {}): TrendQuery {
   const state = normalizeAnalysis(catalog, { ...input, view: "trend" }), measure = catalog.measures[state.metric];
   const breakdown = catalog.breakdowns[state.split], components = catalog.components?.[state.split];
-  const count = trendPeriodCount(state), field = catalog.periods[periodField(state.period)]!, cumulative = state.display === "cumulative";
+  const count = trendPeriodCount(state), field = catalog.timestamp ?? catalog.periods[periodField(state.period)]!, cumulative = state.display === "cumulative";
+  // A timestamp is placed in the viewer's calendar periods; hours are UTC
+  // hours, as in the cycle, which the chart places at the viewer's hour.
+  const interval = periodField(state.period);
+  const dateGrouping = catalog.timestamp ? { dateGrouping: { field, interval, timeZone: interval === "hour" ? "UTC" : zone, includeEmpty: false, range: "query" as const } } : {};
   const slice = breakdown?.fields.length === 1 ? breakdown.fields[0] : undefined;
   const range = state.completePeriods ? completeStart(where, catalog.time, zone, now, periodField(state.period)) : where;
   const run = (terms: WhereTerm[]) => catalog.executable ? catalog.executable(terms, now) : terms;
@@ -55,12 +59,14 @@ export function trendQuery(catalog: AnalysisCatalog, input: AnalysisState, where
     normFrom = shiftPeriod(normTo, state.period, -state.normPeriods, count);
   }
   const requested = smoothingWhere(normFrom ? widenStart(range, catalog.time, normFrom, now) : range, catalog.time, state.period, cumulative ? 0 : state.rollingPeriods, count, now);
-  const population = unique([...measure.where ?? [], ...breakdown?.where ?? []]);
+  const population = unique([...catalog.request?.where ?? [], ...measure.where ?? [], ...breakdown?.where ?? []]);
   const groupBy = [field, ...breakdown?.fields ?? []];
-  const clauses: AggregationClause[] = components ? components.parts.map(part => ({ id: `trend:${part.key}`, op: "sum", field: part.field, groupBy: [field], label: part.label }))
-    : measure.ratio ? [{ id: "trend", ...ratioPart(measure.ratio[0]), groupBy, label: `${measure.label}: numerator` }, { id: "trend:denominator", ...ratioPart(measure.ratio[1]), groupBy, label: `${measure.label}: denominator` }]
-    : [{ id: "trend", ...aggregate(measure), groupBy, label: measure.label }];
-  const supporting = measure.ratio ? [{ id: "trend:ratio", op: "sum" as const, expression: measureExpression(measure), groupBy, label: measure.label }, ...clauses] : clauses;
+  const derived = components?.derived;
+  const clauses: AggregationClause[] = (derived ? derived.inputs.fields.map(input => ({ id: `trend:input:${input}`, op: "sum" as const, field: input, groupBy: [field, ...derived.inputs.groupBy], label: input }))
+    : components ? components.parts.map(part => ({ id: `trend:${part.key}`, op: "sum" as const, field: part.field, groupBy: [field], label: part.label }))
+    : measure.ratio ? [{ id: "trend", ...partClause(measure.ratio[0]), groupBy, label: `${measure.label}: numerator` }, { id: "trend:denominator", ...partClause(measure.ratio[1]), groupBy, label: `${measure.label}: denominator` }]
+    : [{ id: "trend", ...aggregate(measure), groupBy, label: measure.label }]).map(clause => ({ ...clause, ...dateGrouping }));
+  const supporting = measure.ratio ? [{ id: "trend:ratio", op: "sum" as const, expression: measureExpression(measure), groupBy, label: measure.label, ...dateGrouping }, ...clauses] : clauses;
   // The supporting query covers what is drawn: with whole periods, from the
   // rounded start to the end of the last whole period, and a single-field
   // breakdown's legend selection as a filter on its field.
@@ -76,7 +82,10 @@ export function trendQuery(catalog: AnalysisCatalog, input: AnalysisState, where
   }
   return {
     query: { ...EMPTY_QUERY, where: run(unique([...requested, ...population])), aggregations: clauses },
-    supporting: { ...EMPTY_QUERY, where: run(unique([...shown, ...population])), aggregations: supporting },
+    // A grouping stage cannot group a timestamp by calendar period (Query
+    // Table request 6), so a timestamp trend's supporting query opens the
+    // records it draws, as a timestamp cycle's does.
+    supporting: { ...EMPTY_QUERY, where: run(unique([...shown, ...population])), ...catalog.timestamp ? {} : { aggregations: supporting } },
     range, requested, population, slice, normFrom, normTo,
     records: unique([...population, ...trendKind(measure) === "count" && measure.field ? [{ field: measure.field, op: "is_not_null" as const, value: "" }, { field: measure.field, op: "!=" as const, value: "" }] : []]),
   };
@@ -147,7 +156,22 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
   const picked = chosen.values;
 
   let series: ChartSeries[];
-  if (components) {
+  if (components?.derived) {
+    // Each period's input totals, by the inputs' own grouping, become that
+    // period's parts before any smoothing, accumulation or share.
+    const { inputs, derive } = components.derived, totals = new Map<string, Map<string, DerivedTotals[number]>>();
+    for (const input of inputs.fields) for (const bucket of result(`trend:input:${input}`)) {
+      const key = plotted(bucket.keys[0]), group = JSON.stringify(bucket.keys.slice(1));
+      const period = totals.get(key) ?? new Map(); totals.set(key, period);
+      const entry = period.get(group) ?? { keys: bucket.keys.slice(1), values: {} }; period.set(group, entry);
+      entry.values[input] = (entry.values[input] ?? 0) + (Number(bucket.value) || 0);
+    }
+    for (const bucket of amounts) {
+      const period = totals.get(bucket.key);
+      if (period) for (const [part, value] of Object.entries(derive([...period.values()], state.metric))) bucket.values[part] = (bucket.values[part] ?? 0) + value;
+    }
+    series = components.parts.filter(part => !part.optional || amounts.some(bucket => bucket.values[part.key])).map(part => ({ key: part.key, label: part.label, color: part.color, value: part.key }));
+  } else if (components) {
     const targets = byKey(amounts);
     for (const part of components.parts) for (const [key, , value] of rows(`trend:${part.key}`)) {
       const target = targets.get(key);
@@ -254,7 +278,9 @@ export function trendNote(catalog: AnalysisCatalog, input: AnalysisState): strin
   if (catalog.components?.[state.split]) parts.push(`${catalog.components[state.split].label} splits each ${unit}'s ${measure.label.toLowerCase()} into its parts.`);
   if (catalog.breakdowns[state.split]?.note) parts.push(catalog.breakdowns[state.split].note!);
   if (catalog.rangeNote) parts.push(catalog.rangeNote);
-  const part = (index: 0 | 1) => { const { op, field } = ratioPart(measure.ratio![index]); return `${op === "sum" ? "summed" : "the count of"} ${field.replaceAll("_", " ")}`; };
+  if (catalog.request?.note) parts.push(catalog.request.note);
+  if (catalog.timestamp) parts.push(`Periods are ${periodField(state.period) === "hour" ? "clock hours, placed at your local hour" : `${periodLabel(state.period, 1)}s in your time zone`}, as in the hour and weekday cycle.`);
+  const part = (index: 0 | 1) => partLabel(measure.ratio![index]);
   if (kind === "ratio") parts.push(`Each point pools its records: ${part(0)} divided by ${part(1)}, never an average of ratios.`);
   if (kind === "count") parts.push(`Distinct ${measure.unit} are counted in each ${unit}.${state.split === noSplit ? "" : ` One active in several groups counts in each, so groups do not add up, and Other is not drawn.`}`);
   if (state.display === "cumulative") parts.push(kind === "ratio" ? "Each point pools everything from the range start." : "Each point is the running total from the range start.");

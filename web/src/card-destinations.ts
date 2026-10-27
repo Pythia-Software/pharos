@@ -46,7 +46,7 @@ const dashboards: Record<string, CardDashboard> = {
   "mcp-response-size": mcp("bytes", "tool_name", { view: "distribution", minSamples: 3, scale: "logarithmic" }),
   "pharos-mcp-query-sources": mcp("calls", "query_source"),
   "pharos-mcp-durations": mcp("time", "tool_name", { view: "distribution", minSamples: 3, scale: "logarithmic" }),
-  "archive-empty-search-rate": mcp("calls", "status"),
+  "archive-empty-search-rate": mcp("empty_rate", "tool_name", { minSamples: 10 }),
   "tool-failures": tools("failures", "tool_name", { compareAs: "share" }),
   "tool-call-share": tools("calls", "tool_name", { compareAs: "share" }),
   "tool-failure-rates": tools("failure_rate", "tool_name", { minSamples: 10 }),
