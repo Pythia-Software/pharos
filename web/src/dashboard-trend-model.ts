@@ -1,9 +1,9 @@
 import { EMPTY_QUERY, type AggregationClause, type AggregationResultEntry, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
-import { earliestKey, isHourly, nextPeriod, parseDay, periodBuckets, periodKey, periodLabel, periodStart, shiftPeriod, type ChartPeriod } from "./chart-period";
-import { chartSpan, smoothingWhere, timeBounds, widenStart } from "./chart-range";
+import { earliestKey, nextPeriod, parseDay, periodBuckets, periodKey, periodLabel, periodStart, shiftPeriod } from "./chart-period";
+import { chartSpan, smoothingWhere, timeBounds, widenStart, withEnd } from "./chart-range";
 import { chartBucketsWithHistory, cumulativeBuckets, foldSeries, rollingBuckets, shareBuckets, type ChartBucket, type ChartSeries } from "./chart-series";
 import { isSliceTerm, readSlice } from "./chart-selection";
-import { aggregate, completeStart, measureExpression, noSplit, normalizeAnalysis, ratioPart, rollingSumUnit, trendKind, unique, type AnalysisCatalog, type AnalysisState, type ResolvedAnalysis, type TrendPeriodField } from "./dashboard-analysis-model";
+import { aggregate, completeStart, periodField, measureExpression, noSplit, normalizeAnalysis, ratioPart, rollingSumUnit, trendKind, unique, type AnalysisCatalog, type AnalysisState, type ResolvedAnalysis } from "./dashboard-analysis-model";
 
 // Over time, driven by a catalog: any measure, over its own population, by
 // any breakdown, a component breakdown or none. The query asks for interval
@@ -11,7 +11,6 @@ import { aggregate, completeStart, measureExpression, noSplit, normalizeAnalysis
 // pools, shares and folds them in that order, so the renderer only draws.
 
 export const trendPeriodCount = (state: Pick<ResolvedAnalysis, "period" | "hours" | "days">) => state.period === "hours" ? state.hours : state.period === "days" ? state.days : 1;
-const periodField = (period: ChartPeriod): TrendPeriodField => isHourly(period) ? "hour" : period === "days" ? "day" : period;
 const localZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
 export type TrendQuery = {
@@ -40,7 +39,7 @@ export type TrendQuery = {
 export function trendQuery(catalog: AnalysisCatalog, input: AnalysisState, where: WhereTerm[], { now = Date.now(), zone = localZone() }: { now?: number; zone?: string } = {}): TrendQuery {
   const state = normalizeAnalysis(catalog, { ...input, view: "trend" }), measure = catalog.measures[state.metric];
   const breakdown = catalog.breakdowns[state.split], components = catalog.components?.[state.split];
-  const count = trendPeriodCount(state), field = catalog.periods[periodField(state.period)], cumulative = state.display === "cumulative";
+  const count = trendPeriodCount(state), field = catalog.periods[periodField(state.period)]!, cumulative = state.display === "cumulative";
   const slice = breakdown?.fields.length === 1 ? breakdown.fields[0] : undefined;
   const chartWhere = slice ? where.filter(term => !isSliceTerm(term, slice)) : where;
   const range = state.completePeriods ? completeStart(chartWhere, catalog.time, zone, now, periodField(state.period)) : chartWhere;
@@ -61,9 +60,17 @@ export function trendQuery(catalog: AnalysisCatalog, input: AnalysisState, where
     : measure.ratio ? [{ id: "trend", ...ratioPart(measure.ratio[0]), groupBy, label: `${measure.label}: numerator` }, { id: "trend:denominator", ...ratioPart(measure.ratio[1]), groupBy, label: `${measure.label}: denominator` }]
     : [{ id: "trend", ...aggregate(measure), groupBy, label: measure.label }];
   const supporting = measure.ratio ? [{ id: "trend:ratio", op: "sum" as const, expression: measureExpression(measure), groupBy, label: measure.label }, ...clauses] : clauses;
+  // The supporting query covers what is drawn: with whole periods, from the
+  // rounded start to the end of the last whole period. It keeps the user's
+  // filters, a legend selection included.
+  let shown = where;
+  if (state.completePeriods) {
+    const bounds = timeBounds(range, catalog.time, now), end = periodStart(new Date(Math.min(bounds.to?.getTime() ?? now, now)), state.period, count);
+    shown = withEnd(completeStart(where, catalog.time, zone, now, periodField(state.period)), catalog.time, end);
+  }
   return {
     query: { ...EMPTY_QUERY, where: unique([...requested, ...population]), aggregations: clauses },
-    supporting: { ...EMPTY_QUERY, where: unique([...where, ...population]), aggregations: supporting },
+    supporting: { ...EMPTY_QUERY, where: unique([...shown, ...population]), aggregations: supporting },
     range, requested, population, slice, normFrom, normTo,
     records: unique([...population, ...trendKind(measure) === "count" && measure.field ? [{ field: measure.field, op: "is_not_null" as const, value: "" }, { field: measure.field, op: "!=" as const, value: "" }] : []]),
   };
@@ -96,6 +103,8 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
   const breakdown = catalog.breakdowns[state.split], components = catalog.components?.[state.split];
   const count = trendPeriodCount(state), cumulative = state.display === "cumulative", grid = { period: state.period, count };
   const additive = kind === "additive", empty: TrendSeries = { series: [], buckets: [], selected: [], excluded: false, lines: false, additive };
+  // No results yet: the query is loading, which is not an error.
+  if (!results.length) return empty;
   // A missing, partial or truncated clause would read as idle periods.
   for (const clause of trend.query.aggregations ?? []) {
     const found = results.find(item => item.id === clause.id);
@@ -147,15 +156,26 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
   } else {
     // A ratio's groups rank by their denominator, the volume behind them;
     // its numerators then follow the same series.
-    const weights = kind === "ratio" ? rows("trend:denominator") : rows("trend");
-    series = foldSeries(weights, byKey(kind === "ratio" ? denominators : amounts), seriesLabel, breakdown.order, picked, state.seriesLimit, breakdown.fields.length === 1 ? breakdown.fields[0] : state.split);
-    if (kind === "ratio") {
-      const shown = new Set(series.flatMap(item => item.value === undefined ? [] : [item.value])), targets = byKey(amounts);
-      for (const [key, text, value] of rows("trend")) {
+    // Series are ranked by the drawn periods only; smoothing and norm
+    // history then follow the same series, so turning the norm on or
+    // widening a window never changes which groups are shown.
+    const weights = kind === "ratio" ? rows("trend:denominator") : rows("trend"), weighted = kind === "ratio" ? denominators : amounts;
+    const drawnKeys = new Set(weighted.filter(bucket => !bucket.history).map(bucket => bucket.key));
+    series = foldSeries(weights.filter(([key]) => drawnKeys.has(key)), byKey(weighted), seriesLabel, breakdown.order, picked, state.seriesLimit, breakdown.fields.length === 1 ? breakdown.fields[0] : state.split);
+    const shown = new Set(series.flatMap(item => item.value === undefined ? [] : [item.value]));
+    const assign = (entries: Rows, buckets: ChartBucket[]) => {
+      const targets = byKey(buckets);
+      for (const [key, text, value] of entries) {
         const target = targets.get(key), item = shown.has(text) ? `s:${text}` : "other";
-        if (target) target.values[item] = (target.values[item] ?? 0) + value;
+        if (!target) continue;
+        target.values[item] = (target.values[item] ?? 0) + value;
+        if (item !== "other" || value <= 0) continue;
+        const parts = ((target.parts ??= {}).other ??= []), part = parts.find(([name]) => name === seriesLabel(text));
+        if (part) part[1] += value; else parts.push([seriesLabel(text), value]);
       }
-    }
+    };
+    assign(weights.filter(([key]) => !drawnKeys.has(key)), weighted);
+    if (kind === "ratio") assign(rows("trend"), amounts);
     if (kind === "count" || kind === "level") {
       // Distinct counts of several groups do not add up, so Other has no
       // honest value; it stays in the key only to show more groups.

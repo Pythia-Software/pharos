@@ -1099,7 +1099,7 @@ function PresetRow({ label, presets, query, chart, onApply, clear }: { label: st
 }
 
 function TokenUsage({ scopeWhere, appliedScope, onTimeRangeChange }: { scopeWhere?: WhereTerm[]; appliedScope?: React.MutableRefObject<WhereTerm[]>; onTimeRangeChange?: () => void } = {}) {
-  const [chart, setChart] = useState<TokenTrendView>(() => readStored(tokenChartKey, defaultTokenChart as TokenTrendView, view => validTokenChartFields(view) && validAnalysisState(tokenAnalysisCatalog, { ...view, view: "trend" })));
+  const [chart, setChart] = useState<TokenTrendView>(() => readStored(tokenChartKey, defaultTokenChart as TokenTrendView, view => validAnalysisState(tokenAnalysisCatalog, { ...view, view: "trend" })));
   const update = (next: Partial<TokenTrendView>) => setChart(previous => { const merged = { ...previous, ...next }; store(tokenChartKey, merged); return merged; });
   return <QuerySurface dataset="usage" scopeWhere={scopeWhere} appliedScope={appliedScope} header={api => {
     const where = toAggregationQuery({ ...api.query, aggregations: [] }, schemas.usage).where;
@@ -1479,8 +1479,7 @@ function ParallelismUsageDashboard() {
 // their fields sit side by side in one analyze_chart object.
 type TokenTrendView = Omit<TokenChartView, "metric" | "split"> & AnalysisState;
 const tokenSharedRows: LocalRows | undefined = shared ? { rows: shared.datasets.usage ?? [], hourly: shared.datasets.usage_hourly ?? [] } : undefined;
-const validTokenChartFields = (view: Omit<TokenChartView, "metric" | "split">) => Object.hasOwn(chartPeriods, view.period) && validPeriodCount(view.hours) && validPeriodCount(view.days) && validRollingPeriods(view.rollingPeriods) && validChartScale(view.scale) && validChartDisplay(view.display) && validChartPresentation(view);
-const validTokenDashboard = (view: TokenTrendView) => validTokenChartFields(view) && validAnalysisState(tokenAnalysisCatalog, view);
+const validTokenDashboard = (view: TokenTrendView) => validAnalysisState(tokenAnalysisCatalog, view);
 
 function TokenUsageDashboard() {
   const state = useUsageDashboardState<TokenTrendView>({ ...defaultTokenChart, period: "day" as ChartPeriod }, validTokenDashboard, usageTime);

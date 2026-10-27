@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import type { AggregationClause, AggregationResultEntry, FieldDef, FieldSchema, QueryState, WhereTerm } from "@pythia-software/query-table-core";
 import { MetricCard, defaultRenderers } from "@pythia-software/query-table-ui";
-import { changeState, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, cycleTotal, noSplit, normalizeAnalysis, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, type AnalysisCatalog, type AnalysisReduce, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
+import { changeState, selectedShares, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, cycleTotal, noSplit, normalizeAnalysis, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, type AnalysisCatalog, type AnalysisReduce, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
 import { runAnalysisQuery, type LocalRows } from "./analysis-request";
 import { ChartSelect, DisplayControl, PeriodControl, RangeControl, RollingControl, ScaleControl, presetPeriod, timeBounds, withTimeRange, type ChartRange, type FilterChange, type TimeBounds } from "./usage-chart";
 import { trendPeriodCount } from "./dashboard-trend-model";
@@ -74,12 +74,12 @@ export function AnalysisControls({ catalog, view, set, onView, bounds, onRange }
       : !(view.view === "compare" && view.compareAs === "share") ? <ChartSelect label={view.view === "scatter" ? "X scale" : "Scale"} value={axis(view.scale)} options={scales} onChange={scale => set({ scale })} /> : null}
     {view.view === "scatter" ? <ChartSelect label="Y scale" value={axis(view.scaleY)} options={scales} onChange={scaleY => set({ scaleY })} /> : null}
     <RangeControl bounds={bounds} onPresetChange={trend ? (range, oldest) => set(presetPeriod(range, oldest)) : undefined} onChange={onRange} />
-    {trend ? <PeriodControl view={view} disabled={limits.multiple ? { hours: limits.multiple, days: limits.multiple } : undefined} onChange={set} /> : null}
+    {trend ? <PeriodControl view={view} disabled={Object.fromEntries((["hour", "hours", "day", "days", "week", "month"] as const).map(period => [period, limits.period(period) ?? (period === "hours" || period === "days" ? limits.multiple : undefined)]))} onChange={set} /> : null}
     {trend ? <RollingControl value={view.rollingPeriods} display={view.display} period={view.period} count={count} onChange={rollingPeriods => set({ rollingPeriods })}
       note={view.rollingOp === "sum" ? "Trailing total · includes preceding history" : limits.rollingSum && measure.ratio ? "Pooled over the window · includes preceding history" : undefined} /> : null}
     {trend && view.rollingPeriods > 1 && view.display !== "cumulative" ? <ChartSelect label="Window" value={view.rollingOp} options={[["mean", measure.ratio ? "Pooled" : "Average"], ["sum", "Total", limits.rollingSum]]} title="Each point's trailing window: its average per period, or its total" onChange={rollingOp => set({ rollingOp })} /> : null}
     {trend ? <ChartSelect label="Periods" value={view.completePeriods ? "complete" : "all"} options={[["all", "Include partial"], ["complete", "Whole periods only"]]} title="Whole periods leave out the current period and a partial first one" onChange={value => set({ completePeriods: value === "complete" })} /> : null}
-    {trend ? <ChartSelect label="Norm" value={view.norm ? "on" : "off"} options={[["off", "Off"], ["on", "Mean of earlier points", limits.norm]]} title="A reference line at the mean of every point before the latest" onChange={value => set({ norm: value === "on" })} /> : null}
+    {trend ? <ChartSelect label="Norm" value={view.norm ? "on" : "off"} options={[["off", "Off"], ["on", "Mean of earlier points", limits.norm]]} title={`A reference line at the mean of the ${view.normPeriods} periods before the latest point, whatever the range`} onChange={value => set({ norm: value === "on" })} /> : null}
   </>;
   // The trend's chart lays out its own control row.
   return trend ? content : <div className="usage-tools-controls usage-analysis-controls">{content}</div>;
@@ -109,7 +109,7 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
   const unit = view.unit === records ? undefined : catalog.units[view.unit];
   const subjects = (unit?.plural ?? catalog.records.plural).toLowerCase();
 
-  let clause: AggregationClause = analysis.clause, entry: AggregationResultEntry | undefined = result.results[0], error = result.error, slots = "";
+  let clause: AggregationClause = analysis.clause, entry: AggregationResultEntry | undefined = result.results[0] && selectedShares(result.results[0], analysis.selection), error = result.error, slots = "";
   if (view.view === "cycle" && entry) {
     try {
       const now = Date.now();
@@ -135,7 +135,7 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
           const query = analysisInspectQuery(analysis, presentation.sourceBucket(bucket) as typeof bucket, analysis.clause, schema, view.view);
           if (query) window.pharosNavigate?.(usageWorkspaceURL({ mode: "query", dataset, query: orderedUsageQuery(dataset, query) }, new URLSearchParams(location.search)));
         }} />}
-    {hidden || slots || analysis.selection ? <p className="usage-dashboard-note" role="status">{[hidden, slots, analysis.selection ? `Shares are of every ${catalog.breakdowns[view.split].label.toLowerCase()} in your other filters; your ${catalog.breakdowns[view.split].label.toLowerCase()} selection does not change them.` : ""].filter(Boolean).join(" ")}</p> : null}
+    {hidden || slots || analysis.selection ? <p className="usage-dashboard-note" role="status">{[hidden, slots, analysis.selection ? `Your ${catalog.breakdowns[view.split].label.toLowerCase()} selection is drawn as slices and every other group as Other; shares are of every group in your other filters.` : ""].filter(Boolean).join(" ")}</p> : null}
     {/* No legacy link: that page has no analysis views, and would show this query's table under its default chart. */}
     <UsageDashboardLinks schema={schema} dataset={dataset} query={analysis.supporting} />
     <p className="usage-dashboard-note">{analysisNote(catalog, view)}{view.view === "cycle" ? "" : ` Select a ${view.view === "scatter" ? "point" : "bar or box"} to open its ${unit ? subjects : "records"}.`}</p>

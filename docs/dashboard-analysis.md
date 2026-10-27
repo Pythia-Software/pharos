@@ -31,6 +31,10 @@ A **catalog** describes one dashboard topic
     record distributions;
   - an `additive` flag, which decides whether groups may be shown as shares;
   - an optional implied population (`where`), such as fully priced usage.
+
+  A mean is declared as a ratio of a sum and a count, never as `avg`:
+  `catalogProblems` rejects an `avg` measure, because a mean of per-period
+  means would weight a quiet period like a busy one.
 - **Breakdowns.** Each maps to one or more record fields (`fields`), such as
   `["provider", "model_family"]`, with an optional implied `where`. For the
   trend's series a breakdown may also fix an `order` (providers, agent
@@ -55,7 +59,9 @@ A **catalog** describes one dashboard topic
 - **Periods.** The calendar fields the trend groups by: `hour`, `day`,
   `week` and `month`. For usage, hours come from the hourly ledger and the
   others are recorded dates. Several hours or days sum hourly or daily
-  totals in the browser.
+  totals in the browser. A dataset may leave a period out (a `day` field is
+  required); the Time bucket control then disables it with a reason, and a
+  link asking for it draws days.
 - **Trend defaults.** The trend's default measure and breakdown.
 - **Legacy mapping** (optional, `legacy`). A function that reads a link or
   saved state written in an older vocabulary into the catalog's terms, and
@@ -152,12 +158,21 @@ can:
 - **Shares need groups.** With no breakdown there is nothing to divide, so a
   share becomes bars.
 - **A share is of every group the filters define.** A legend selection only
-  hides series; it never changes the denominator. In the trend, a selection
-  on a single-field breakdown is a filter on that field, which the trend's
-  query leaves out. In Compare, the same filter is left out of a records
-  share's query, so the pie shows every group and says that the selection
-  does not change the shares; bars keep the filter. The two views therefore
-  agree on the same filters, and a test checks it.
+  chooses which groups are drawn; it never changes the denominator.
+  - **What a selection is (2a).** As the old Token chart did, a slice-form
+    filter on a single-field breakdown's own field (`provider = codex`, or
+    an OR of such values, or their exclusion) is a legend selection. For a
+    combined breakdown, such as provider + model, the selection is the
+    trend's own `selection` in the state.
+  - **The trend** leaves the filter out of its query, ranks and draws the
+    selected series (never folded into Other), and divides by every series.
+  - **Compare's shares** (records and unit counts alike) leave the same
+    filter out of the share's query. `selectedShares` then draws the
+    selected groups as slices and every other group as Other, so a small
+    selected group stays visible. "View supporting query" keeps the filter.
+    Bars keep the filter: there a selection chooses the groups.
+  - A test checks that the trend and Compare give the same share under a
+    selection.
 - **No legacy link.** The analysis views do not link to the legacy page.
   That page has no analysis views, so it would show the grouped query under
   its default chart.
@@ -212,7 +227,11 @@ no sum, cumulative or share.
   and the note says what it averages.
 - **Complete results only.** A clause with partial coverage, a truncated
   group count, hidden groups or a bucket error is an error beneath the chart,
-  never idle periods, as in `buildCardTrend`.
+  never idle periods, as in `buildCardTrend`. No results yet means loading,
+  not an error.
+- **Supporting query.** It covers what is drawn: the dashboard's filters (a
+  legend selection included) and populations, with whole periods from the
+  rounded start to the end of the last whole period.
 - **Drill-downs** open the records behind a point: the dashboard's filters,
   the measure's and breakdown's populations, the series and the point's
   window, and for a distinct count only records holding a value
@@ -231,7 +250,9 @@ no sum, cumulative or share.
   reads the hourly ledger, as before.
 - **Series.** `trendSeries` lays out the calendar grid, folds groups into the
   top `seriesLimit` plus Other (`foldSeries`, ranking a ratio's groups by
-  their denominator), smooths or accumulates, then divides a ratio's pooled
+  their denominator). Only the drawn periods rank groups; smoothing and norm
+  history then follow the chosen series, so turning the norm on never
+  changes which groups are shown. It then smooths or accumulates, then divides a ratio's pooled
   parts or takes shares, drops history and partial periods, and computes
   the norm over the drawn series.
 - **Rendering.** `StackedColumns` keeps its interactions: legend selection,
@@ -422,13 +443,36 @@ The four Query Table limitations are requested in
      - Move the Tools and MCP views (compare and trend) onto the engine,
        and the bespoke trends of `RecordUsageDashboard`, `WritingPanel` and
        `CarbonImpact`. Carbon's trailing sum is `rollingOp: "sum"`.
-     - **Open question: Carbon's token types.** A component part is a summed
-       record field, but usage has only total `energy_wh`/`energy_kwh` and
-       `co2e_g`/`co2e_kg`; the per-type split is computed in the browser from
-       the user's carbon factors (`carbon-impact.tsx`). Carbon's type split
-       therefore needs a component part that is an expression (or a computed
-       field) over the token fields and the factors, or per-type fields in
-       the ledger.
+     - **Carbon's token types: derived components.** A component part today
+       is a summed record field, but usage has only total
+       `energy_wh`/`energy_kwh` and `co2e_g`/`co2e_kg`. Carbon computes its
+       per-type split in the browser from token counts and the user's
+       factors (`carbon-impact.tsx`, `calculator.estimate`). The plan for
+       2b is a derived component:
+       - `inputs`: the summed fields (and any extra grouping, such as
+         `carbon_tier`) the trend queries per period;
+       - `derive(totals, params)`: a pure function from one period's input
+         totals to that period's part values, where `params` are
+         catalog-supplied parameters such as the current carbon factors (the
+         catalog is built with them, so a change of factors is a new
+         catalog);
+       - the series builder applies `derive` to each period's totals
+         before smoothing, accumulating or taking shares, so the order of
+         operations is unchanged, and Carbon's own calculation is its test
+         oracle.
+     - **Legend selections in the view state.** Today a legend selection
+       on a single-field breakdown is stored as a slice filter in `where`,
+       which cannot be told apart from a real population filter on the same
+       field (a card filtered to `provider = codex` and broken down by
+       provider is read as a selection). Move every `StackedColumns`
+       dashboard's selection into its view state, leaving `where` for the
+       population only. This changes those dashboards' URLs, so it belongs
+       with 2b's migration; old links map through each catalog's `legacy`.
+       Phase 4 consequence: a card filtered on its own breakdown field must
+       map to a population filter, not a selection.
+     - Each 2b catalog relies on `validAnalysisState` for the trend's
+       period, counts, smoothing, display, scale, `seriesLimit` and
+       `selection`, rather than a dashboard-specific validator.
      - Add catalogs for Carbon, Human Words, Agent Time, Skills and
        Parallelism.
 3. **Record-level Tools analysis.** Add `tool_calls` fields such as

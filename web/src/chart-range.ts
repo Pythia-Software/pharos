@@ -116,6 +116,11 @@ export function widenStart(where: WhereTerm[], fields: TimeFields, start: Date |
   return [...where.filter(term => !lower(term)), ...(start ? [{ field: field && "field" in field ? field.field : fields.last, op: ">=" as const, value: localStamp(start) }] : [])];
 }
 
+// End the range at end (exclusive), replacing any upper bound.
+export function withEnd(where: WhereTerm[], fields: TimeFields, end: Date): WhereTerm[] {
+  return [...where.filter(term => !(isTimeTerm(term, fields) && ["<", "<="].includes(term.op))), { field: fields.first, op: "<", value: localStamp(end) }];
+}
+
 // chartSpan is the first and last day a chart shows: the time filter's range,
 // else from the earliest data to today.
 export function chartSpan(bounds: TimeBounds, earliest?: Date, now = Date.now()): [Date, Date] {

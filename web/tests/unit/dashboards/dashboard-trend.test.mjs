@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { core, queryRecipes, schemas } from "../helpers/recipes.mjs";
 import { now, usageLedger } from "../helpers/usage-ledger.mjs";
-import { analysisQuery, catalogProblems, changeState, normalizeAnalysis, switchView, trendAdjustments, trendLimits, validAnalysisState } from "../../../src/dashboard-analysis-model";
+import { analysisQuery, catalogProblems, changeState, selectedShares, normalizeAnalysis, switchView, trendAdjustments, trendLimits, validAnalysisState } from "../../../src/dashboard-analysis-model";
 import { trendNote, trendQuery, trendSeries, trendTitle } from "../../../src/dashboard-trend-model";
 import { tokenAnalysisCatalog as catalog } from "../../../src/token-analysis-catalog";
 import { tokenTypes } from "../../../src/token-chart-request";
@@ -55,6 +55,14 @@ test("components, aliases and defaults are checked with the catalog", () => {
   assert.equal(validAnalysisState(catalog, { ...base, metric: "tokens", split: "tool_name" }), false);
   assert.equal(validAnalysisState(catalog, { ...base, metric: "tokens", split: "type", rollingOp: "median" }), false);
   assert.equal(validAnalysisState(catalog, { ...base, metric: "tokens", split: "type", norm: "yes" }), false);
+  for (const bad of [{ period: "fortnight" }, { hours: 0 }, { days: 1.5 }, { rollingPeriods: -1 }, { display: "stacked" }, { scale: "cubic" }, { seriesLimit: 0 }, { selection: { values: [1], excluded: false } }]) {
+    assert.equal(validAnalysisState(catalog, { ...base, metric: "tokens", split: "none", ...bad }), false, JSON.stringify(bad));
+  }
+  assert.deepEqual(catalogProblems({ ...catalog, measures: { ...catalog.measures, mean: { ...catalog.measures.tokens, op: "avg", additive: false } } }), ["mean is a mean; declare it as a ratio of a sum and a count so periods and windows pool."]);
+  // A dataset without an hour field: hours are offered disabled and a link to them draws days.
+  const daily = { ...catalog, periods: { day: "day", week: "week", month: "month" } };
+  assert.equal(normalizeAnalysis(daily, { ...base, metric: "tokens", split: "none", period: "hour" }).period, "day");
+  assert.match(trendAdjustments(daily, { ...base, metric: "tokens", split: "none", period: "hours" }).join(" "), /no hour to group by; each bucket is one day/);
 });
 
 test("options a measure cannot use move to the nearest one, and say why", () => {
@@ -155,16 +163,27 @@ test("whole periods drop the current day and a partial first period, also from r
   assert.notEqual(whole.buckets.at(-1).key, today);
   assert.equal(whole.buckets.length, all.buckets.length - 2, "the partial first day and today are left out");
   assert.match(trendNote(catalog, { ...base, metric: "tokens", split: "none", completePeriods: true }), /whole local days.*current day is left out/);
-  // Three-day buckets from a mid-day start: the first bucket begins before the
-  // rounded start, so its records are left out of the running total too.
-  const where = [{ field: "last_usage_at", op: ">=", value: new Date(now - 5 * 86400000).toISOString() }];
-  const state = { ...base, metric: "tokens", split: "none", period: "days", days: 3, display: "cumulative", completePeriods: true };
-  const { built } = draw(state, { where });
+  // Three-day buckets from a mid-day start. Independently of the chart: the
+  // range starts at the next local midnight; three-day buckets are aligned to
+  // calendar day numbers; the first whole one starts on or after that
+  // midnight, and the last whole one ends by now.
+  const from = new Date(now - 5 * 86400000), where = [{ field: "last_usage_at", op: ">=", value: from.toISOString() }];
+  const midnight = new Date(from); midnight.setHours(24, 0, 0, 0);
+  const dayNumber = date => Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86400000;
+  const first = new Date(midnight); while (dayNumber(first) % 3) first.setDate(first.getDate() + 1);
+  const expected = [];
+  for (let start = new Date(first); ; start.setDate(start.getDate() + 3)) { const end = new Date(start); end.setDate(end.getDate() + 3); if (end.getTime() > now) break; expected.push(localDay(start)); }
+  const end = new Date(first); end.setDate(end.getDate() + 3 * expected.length);
+  const { built } = draw({ ...base, metric: "tokens", split: "none", period: "days", days: 3, display: "cumulative", completePeriods: true }, { where });
+  assert.deepEqual(built.buckets.map(bucket => bucket.key), expected);
   const local = key => { const [y, m, d] = key.split("-").map(Number); return new Date(y, m - 1, d); };
-  const first = built.buckets[0].date, last = new Date(built.buckets.at(-1).date); last.setDate(last.getDate() + 3);
-  const kept = rows.filter(row => local(row.day) >= first && local(row.day) < last && Date.parse(row.last_usage_at) >= now - 5 * 86400000);
-  assert.ok(rows.some(row => local(row.day) < first && Date.parse(row.last_usage_at) >= now - 5 * 86400000), "the fixture has records in the partial first period");
-  assert.equal(built.buckets.at(-1).values.total, kept.reduce((sum, row) => sum + row.total_tokens, 0));
+  assert.ok(rows.some(row => local(row.day) >= midnight && local(row.day) < first), "the fixture has records in the partial first period");
+  assert.equal(built.buckets.at(-1).values.total, rows.filter(row => local(row.day) >= first && local(row.day) < end).reduce((sum, row) => sum + row.total_tokens, 0));
+  // What "View supporting query" opens is what is drawn.
+  const supporting = trendQuery(catalog, { ...base, metric: "tokens", split: "none", period: "days", days: 3, completePeriods: true }, where, { now }).supporting.where;
+  assert.equal(new Date(supporting.find(term => term.op === ">=").value).getTime(), midnight.getTime());
+  const current = new Date(now); current.setHours(0, 0, 0, 0); while (dayNumber(current) % 3) current.setDate(current.getDate() - 1);
+  assert.equal(new Date(supporting.find(term => term.op === "<").value).getTime(), current.getTime(), "it ends where the current partial bucket begins");
 });
 
 test("results that may be incomplete are an error, never idle periods", () => {
@@ -226,19 +245,54 @@ test("a change applies to the state as asked for: old names never override it, a
   assert.deepEqual(["share", "rollingOp", "norm", "rollingPeriods"].map(key => returned[key]), [true, "sum", true, 7]);
 });
 
-test("a share is of every group in the filters; a selection never changes it, in the trend or in Compare", () => {
-  const where = [...range, { field: "provider", op: "=", value: "codex" }];
-  const trend = draw({ ...base, metric: "tokens", split: "provider", share: true, display: "cumulative" }, { where }).built;
+test("a share is of every group in the filters; a legend selection only chooses what is drawn, in the trend and in Compare", () => {
+  // The smallest provider, selected in the legend.
+  const totals = new Map();
+  for (const row of rows) totals.set(row.provider, (totals.get(row.provider) ?? 0) + row.total_tokens);
+  const smallest = [...totals].sort((a, b) => a[1] - b[1])[0][0], all = [...totals.values()].reduce((a, b) => a + b, 0);
+  const where = [...range, { field: "provider", op: "=", value: smallest }];
+  const trend = draw({ ...base, metric: "tokens", split: "provider", share: true, display: "cumulative", seriesLimit: 1 }, { where }).built;
+  assert.ok(trend.series.some(item => item.value === smallest), "a selected group is never folded into Other");
+  assert.deepEqual(trend.selected, [`s:${smallest}`]);
+  assert.ok(Math.abs(trend.buckets.at(-1).values[`s:${smallest}`] - totals.get(smallest) / all) < 1e-12);
   const compare = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider", compareAs: "share" }, where, { now });
-  assert.equal(compare.selection, "provider");
-  assert.ok(!compare.query.where.some(term => term.field === "provider"), "the selection is left out of the share's query");
-  const groups = core.evaluateMetrics(rows, compare.query, schema, { now }).metrics[0].buckets;
-  const codex = groups.find(bucket => bucket.keys[0] === "codex").value / groups.reduce((sum, bucket) => sum + bucket.value, 0);
-  assert.ok(codex > 0 && codex < 1);
-  assert.ok(Math.abs(trend.buckets.at(-1).values["s:codex"] - codex) < 1e-12, "the trend's share over the range is Compare's share");
-  assert.deepEqual(trend.selected, ["s:codex"], "the trend draws only the selection");
-  // Bars keep the filter: a selection there chooses the groups.
+  assert.deepEqual(compare.selection, { values: [smallest], excluded: false });
+  assert.ok(!compare.query.where.some(term => term.field === "provider"), "the denominator is every provider");
+  assert.ok(compare.supporting.grouping.source.where.some(term => term.field === "provider"), "the supporting query keeps the user's filter");
+  const pie = selectedShares(core.evaluateMetrics(rows, compare.query, schema, { now }).metrics[0], compare.selection);
+  assert.deepEqual(pie.buckets.map(bucket => bucket.keys[0]), [smallest], "the selected group is drawn");
+  assert.equal(pie.other.value, all - totals.get(smallest), "every other provider is Other");
+  assert.ok(Math.abs(pie.buckets[0].value / (pie.buckets[0].value + pie.other.value) - trend.buckets.at(-1).values[`s:${smallest}`]) < 1e-12, "the trend and Compare agree");
+  // An excluded group: every other group is drawn, the excluded one is Other.
+  const excluded = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider", compareAs: "share" }, [...range, { field: "provider", op: "!=", value: smallest }], { now });
+  assert.deepEqual(excluded.selection, { values: [smallest], excluded: true });
+  assert.equal(selectedShares(core.evaluateMetrics(rows, excluded.query, schema, { now }).metrics[0], excluded.selection).other.value, totals.get(smallest));
+  // Combined groups keep the trend's own selection; so do unit counts.
+  const pair = JSON.stringify(["claude", "opus"]);
+  const multi = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider_model", compareAs: "share", selection: { values: [pair], excluded: false } }, range, { now });
+  assert.deepEqual(selectedShares(core.evaluateMetrics(rows, multi.query, schema, { now }).metrics[0], multi.selection).buckets.map(bucket => JSON.stringify(bucket.keys)), [pair]);
+  const sessions = analysisQuery(catalog, { view: "compare", unit: "agent_session", reduce: "count", metric: "tokens", split: "provider", compareAs: "share" }, where, { now });
+  assert.deepEqual(sessions.selection, { values: [smallest], excluded: false });
+  assert.ok(!sessions.query.grouping.source.where.some(term => term.field === "provider") && sessions.supporting.grouping.source.where.some(term => term.field === "provider"));
+  const counted = selectedShares(core.evaluateMetrics(rows, sessions.query, schema, { now }).metrics[0], sessions.selection);
+  assert.equal(counted.buckets[0].value + counted.other.value, new Set(rows.map(row => row.agent_session_id)).size, "unit shares are of every session");
+  // Bars keep the filter: there a selection chooses the groups.
   assert.ok(analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider" }, where, { now }).query.where.some(term => term.field === "provider"));
+});
+
+test("while results load there is no error", () => {
+  const state = { ...base, metric: "cache_read_share", split: "provider" }, query = trendQuery(catalog, state, range, { now });
+  const loading = trendSeries(catalog, state, query, [], { where: range, now });
+  assert.deepEqual([loading.error, loading.series.length, loading.buckets.length], [undefined, 0, 0]);
+});
+
+test("the drawn periods alone choose the series; history only follows them", () => {
+  // Repository repo-9 is busy three weeks ago and idle in the last week.
+  const old = new Date(now - 20 * 86400000), busy = { ...rows[0], id: "busy", repository_name: "repo-9", day: localDay(old), first_usage_at: old.toISOString(), last_usage_at: old.toISOString(), total_tokens: 1e9 };
+  const week = [{ field: "last_usage_at", op: ">=", value: "-7d" }, { field: "first_usage_at", op: "<", value: "+0s" }];
+  const series = norm => draw({ ...base, metric: "tokens", split: "repository_name", seriesLimit: 1, rollingPeriods: 3, norm }, { where: week, data: [...rows, busy] }).built.series.map(item => item.value ?? item.key);
+  assert.deepEqual(series(true), series(false));
+  assert.ok(!series(true).includes("repo-9"));
 });
 
 test("hourly trends read the hourly ledger; several hours add theirs", async () => {
