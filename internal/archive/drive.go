@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -204,6 +205,24 @@ type librarySizes struct {
 	CapturesBytes  int64 `json:"captures_bytes"`
 	PreservedBytes int64 `json:"preserved_bytes"`
 	LibraryBytes   int64 `json:"library_bytes"`
+
+	// The parts behind those totals, for the Settings storage breakdown.
+	// CatalogBytes includes CatalogLogBytes (-wal and -shm); sidecars beside
+	// the catalog and the library folder's other files are in no total above.
+	CatalogLogBytes     int64         `json:"-"`
+	CatalogSidecarBytes int64         `json:"-"`
+	OtherBytes          int64         `json:"-"`
+	Captures            []captureSize `json:"-"`
+}
+
+// captureSize is what one host's capture of one source holds on the drive.
+// Source is empty for the host's own files, such as host.json.
+type captureSize struct {
+	Host, Source string
+	// Latest is files/, the current copy of the source; History is history/,
+	// the versions it superseded; Other is the rest: its manifest, index
+	// markers and what readers' temporary copies hold beyond those.
+	Latest, History, Other int64
 }
 
 func measureLibrary(ctx context.Context, config Config, device uint64) librarySizes {
@@ -213,17 +232,141 @@ func measureLibrary(ctx context.Context, config Config, device uint64) librarySi
 		for _, suffix := range []string{"", "-wal", "-shm"} {
 			if info, err := os.Stat(config.CatalogPath + suffix); err == nil {
 				sizes.CatalogBytes += info.Size()
+				if suffix != "" {
+					sizes.CatalogLogBytes += info.Size()
+				}
+			}
+		}
+		sidecars, _ := filepath.Glob(config.CatalogPath + ".*")
+		for _, sidecar := range sidecars {
+			if info, err := os.Lstat(sidecar); err == nil && info.Mode().IsRegular() {
+				sizes.CatalogSidecarBytes += info.Size()
 			}
 		}
 	}
 	if on(config.CaptureRoot) {
-		sizes.CapturesBytes = treeSizeContext(ctx, config.CaptureRoot)
+		sizes.Captures = measureCaptures(ctx, config.CaptureRoot)
+		for _, capture := range sizes.Captures {
+			sizes.CapturesBytes += capture.Latest + capture.History + capture.Other
+		}
 	}
 	if on(config.ArchiveRoot) {
 		sizes.PreservedBytes = treeSizeContext(ctx, config.ArchiveRoot)
 	}
+	if config.Library && on(config.Path) {
+		sizes.OtherBytes = libraryOtherBytes(ctx, config)
+	}
 	sizes.LibraryBytes = sizes.CatalogBytes + sizes.CapturesBytes + sizes.PreservedBytes
 	return sizes
+}
+
+// measureCaptures sizes the capture root per host and source, following the
+// layout described in capture.go. Each file counts once: readers' temporary
+// directories (.reader-*) hard-link the captures they read, so they are walked
+// last and add only what files/ and history/ do not already hold.
+func measureCaptures(ctx context.Context, root string) []captureSize {
+	index := map[[2]string]*captureSize{}
+	seen := map[[2]uint64]bool{}
+	var hidden []string
+	walk := func(start string) {
+		_ = filepath.WalkDir(start, func(path string, entry fs.DirEntry, err error) error {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if err != nil {
+				return nil
+			}
+			rel, err := filepath.Rel(root, path)
+			if err != nil {
+				return nil
+			}
+			parts := strings.Split(filepath.ToSlash(rel), "/")
+			if entry.IsDir() {
+				if path != start && len(parts) == 3 && strings.HasPrefix(parts[2], ".") {
+					hidden = append(hidden, path)
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !entry.Type().IsRegular() {
+				return nil
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return nil
+			}
+			if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+				inode := [2]uint64{uint64(stat.Dev), uint64(stat.Ino)}
+				if seen[inode] {
+					return nil
+				}
+				seen[inode] = true
+			}
+			key := [2]string{parts[0], ""}
+			if len(parts) == 1 {
+				key[0] = ""
+			} else if len(parts) > 2 {
+				key[1] = parts[1]
+			}
+			size := index[key]
+			if size == nil {
+				size = &captureSize{Host: key[0], Source: key[1]}
+				index[key] = size
+			}
+			switch {
+			case len(parts) > 3 && parts[2] == captureFilesDir:
+				size.Latest += info.Size()
+			case len(parts) > 3 && parts[2] == captureHistoryDir:
+				size.History += info.Size()
+			default:
+				size.Other += info.Size()
+			}
+			return nil
+		})
+	}
+	walk(root)
+	for _, dir := range hidden {
+		walk(dir)
+	}
+	sizes := make([]captureSize, 0, len(index))
+	for _, size := range index {
+		sizes = append(sizes, *size)
+	}
+	sort.Slice(sizes, func(i, j int) bool {
+		return sizes[i].Host < sizes[j].Host || sizes[i].Host == sizes[j].Host && sizes[i].Source < sizes[j].Source
+	})
+	return sizes
+}
+
+// libraryOtherBytes is what the library folder holds besides the catalog,
+// captures and preserved packages: the app, settings, staging and backups'
+// records.
+func libraryOtherBytes(ctx context.Context, config Config) int64 {
+	skip := map[string]bool{filepath.Clean(config.CaptureRoot): true, filepath.Clean(config.ArchiveRoot): true}
+	catalog := filepath.Clean(config.CatalogPath)
+	var total int64
+	_ = filepath.WalkDir(filepath.Dir(config.Path), func(path string, entry fs.DirEntry, err error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err != nil {
+			return nil
+		}
+		if entry.IsDir() {
+			if skip[filepath.Clean(path)] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if path == catalog || strings.HasPrefix(path, catalog+"-") || strings.HasPrefix(path, catalog+".") || !entry.Type().IsRegular() {
+			return nil
+		}
+		if info, err := entry.Info(); err == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
 }
 
 func treeSizeContext(ctx context.Context, root string) int64 {
