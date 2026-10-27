@@ -80,6 +80,9 @@
     // generation changes whenever the feed is opened, closed or paused, so a
     // poll that was in flight then is dropped when it returns.
     let source = null, timer = null, running = false, tag = null, pollingSince = 0, generation = 0;
+    // streamed counts the stream's accepted events, so a refresh that was in
+    // flight when a newer event arrived does not overwrite it.
+    let streamed = 0;
 
     const notify = () => { for (const listener of [...listeners]) { try { listener(state); } catch (error) { console.error(error); } } };
     const set = changes => { state = {...state, ...changes}; notify(); };
@@ -105,6 +108,7 @@
         // The event's id is the document's ETag: a later poll must compare
         // with what the stream last showed, not what an earlier poll did.
         tag = event.lastEventId || null;
+        streamed++;
         try { accept(JSON.parse(event.data)); } catch (error) { set({error}); }
       });
       // A stream that fails, whatever the reason, becomes polling: the
@@ -183,12 +187,13 @@
     async function refresh() {
       if (!running) return;
       if (!source) return poll();
-      const mine = generation;
+      const mine = generation, seen = streamed;
+      const current = () => running && mine === generation && source && seen === streamed;
       try {
         const response = await get(paths.poll, {});
-        if (!running || mine !== generation || !source || !response.ok) return;
+        if (!current() || !response.ok) return;
         const document = await response.json();
-        if (running && mine === generation && source) accept(document);
+        if (current()) accept(document);
       } catch { /* the stream carries on */ }
     }
     return {

@@ -186,6 +186,22 @@ test("a refresh with the stream open is one fetch that schedules nothing", async
   store.stop();
 });
 
+test("a refresh answer older than a stream event that arrived meanwhile is dropped", async () => {
+  const { createStore } = loadClassicScript("status-store.js").window.pharosStatusStore;
+  let release;
+  const fake = fakeBrowser();
+  const browser = { ...fake.browser, fetch: url => { fake.requests.push({ url }); return new Promise(resolve => { release = () => resolve({ status: 200, ok: true, headers: { get: () => null }, json: async () => ({ revision: 1, state: "running" }) }); }); } };
+  const store = createStore(browser);
+  store.start();
+  const refreshing = store.refresh();
+  // The stream says the operation ended before the refresh answers.
+  for (const listener of fake.sources[0].listeners.snapshot) listener({ data: JSON.stringify({ revision: 2, state: "ended" }), lastEventId: '"b"' });
+  release();
+  await refreshing;
+  assert.equal(store.current().view.library.revision, 2, "an older refresh answer replaced a newer stream event");
+  store.stop();
+});
+
 test("a poll in flight while the page is hidden and shown again is dropped: one feed, never two", async () => {
   const { createStore } = loadClassicScript("status-store.js").window.pharosStatusStore;
   let release;

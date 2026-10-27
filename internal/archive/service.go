@@ -144,6 +144,7 @@ func (s *Server) stopFor(trigger string, timeout time.Duration) error {
 	s.life.once.Do(func() {
 		started := time.Now()
 		_, s.life.release = s.begin(context.Background(), OperationSpec{Kind: "library.release", Trigger: trigger})
+		s.ops.stopping(trigger)
 		s.beginStop()
 		go func() {
 			defer s.exitOnFault()

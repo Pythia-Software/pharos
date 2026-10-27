@@ -62,6 +62,8 @@ type brokerLibrary struct {
 	// commands writing it take their leases.
 	Config    string
 	LeaseDirs []string
+	// Canonical is Config resolved (canonical), once, when it is published.
+	Canonical string
 }
 
 // brokerFreshTimeout bounds the eject check's request to the selected
@@ -235,6 +237,14 @@ func (m *applicationManager) publishLocked() {
 	libraries := make([]brokerLibrary, 0, len(m.registry.Libraries))
 	for _, l := range m.registry.Libraries {
 		library := brokerLibrary{ID: l.ID, Name: l.Name, Selected: l.ID == m.registry.Selected, Config: l.resolve()}
+		if resolved, ok := m.canonicalCache[library.Config]; ok {
+			library.Canonical = resolved
+		} else {
+			library.Canonical = canonical(library.Config)
+			if m.canonicalCache != nil {
+				m.canonicalCache[library.Config] = library.Canonical
+			}
+		}
 		if dirs, ok := m.leaseDirCache[library.Config]; ok {
 			library.LeaseDirs = dirs
 		} else if config, err := LoadConfig(library.Config); err == nil {
@@ -383,6 +393,9 @@ func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool,
 	b.mu.Lock()
 	libraries := slices.Clone(b.libraries)
 	b.mu.Unlock()
+	// Every registered library, before the filters below, for naming the
+	// libraries a lease touches.
+	registered := slices.Clone(libraries)
 	if !withLibraries {
 		libraries = nil
 	}
@@ -451,7 +464,7 @@ func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool,
 			leases = probeLeases(library.LeaseDirs)
 		}
 		for _, probe := range appLeases {
-			if probe.Info != nil && slices.ContainsFunc(probe.Info.Libraries, func(path string) bool { return canonical(path) == canonical(library.Config) }) {
+			if probe.Info != nil && slices.ContainsFunc(probe.Info.Libraries, func(path string) bool { return sameConfig(path, library) }) {
 				leases = append(leases, probe)
 			}
 		}
@@ -480,16 +493,15 @@ func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool,
 		entry := brokerOperationEntry(brokerOperationRecord{ID: "lease:" + probe.Info.Instance, Kind: kind, Trigger: triggerCLI, State: opRunning, StartedAt: probe.Info.StartedAt})
 		// A lease names libraries by configuration; surfaces group by the
 		// registered IDs.
+		// No lock is held: canonical reads the filesystem.
 		ids := []string{}
-		b.mu.Lock()
 		for _, path := range probe.Info.Libraries {
-			for _, library := range b.libraries {
-				if canonical(path) == canonical(library.Config) && !slices.Contains(ids, library.ID) {
+			for _, library := range registered {
+				if sameConfig(path, library) && !slices.Contains(ids, library.ID) {
 					ids = append(ids, library.ID)
 				}
 			}
 		}
-		b.mu.Unlock()
 		entry["process"], entry["libraries"], entry["library_configs"] = probe.Info.Process, ids, probe.Info.Libraries
 		entry["detail"] = "In another process (" + strings.Replace(probe.Info.Process, "cli:", "pharos ", 1) + ")"
 		app = append(app, entry)
@@ -514,4 +526,17 @@ func cleanDeadLeases(dir string) {
 			done(true)
 		}
 	}
+}
+
+// sameConfig reports whether a lease's library path is library's
+// configuration, using the canonical path stored when it was published.
+func sameConfig(path string, library brokerLibrary) bool {
+	if path == library.Config {
+		return true
+	}
+	resolved := library.Canonical
+	if resolved == "" {
+		resolved = canonical(library.Config) // published without one (tests)
+	}
+	return canonical(path) == resolved
 }

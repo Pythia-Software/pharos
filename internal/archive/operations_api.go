@@ -41,6 +41,7 @@ var operationReasons = map[string]string{
 	"stopping":            "Pharos was stopping",
 	"owner-exited":        "The process running it exited",
 	"released":            "Pharos released the library",
+	"service-stopped":     "Pharos stopped unexpectedly",
 	"panic":               "It stopped on an internal error",
 }
 

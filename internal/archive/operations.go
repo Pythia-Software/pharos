@@ -291,12 +291,15 @@ func opFrom(ctx context.Context) *Op {
 
 // opRegistry holds one process's operations.
 type opRegistry struct {
-	mu       sync.Mutex
-	process  string // service | cli:<command> | broker | mcp
-	instance string // random per process lifetime
-	ops      map[OpID]*Op
-	revision uint64
-	subs     map[chan struct{}]struct{}
+	mu sync.Mutex
+	// stopTrigger is what stopped the process's service (stopFor's
+	// trigger), for the reason of the work it interrupts.
+	stopTrigger string
+	process     string // service | cli:<command> | broker | mcp
+	instance    string // random per process lifetime
+	ops         map[OpID]*Op
+	revision    uint64
+	subs        map[chan struct{}]struct{}
 	// wake is signalled on every change, for the journal writer or the
 	// broker's store; nil when nothing persists this registry.
 	wake chan struct{}
@@ -847,11 +850,19 @@ func (op *Op) Finish(err error) {
 	default:
 		state, text = opFailed, err.Error()
 	}
-	// An interruption because the service stopped (a release before an
-	// eject, a quit, a switch) says so: it is the user's doing, unlike a
-	// crash (owner-exited), and attention rule 4 leaves it out.
+	// An interruption because the service stopped says why. An intended
+	// release, quit or switch (trigger user or signal) is the user's
+	// doing, and attention rule 4 leaves it out; a stop the user did not
+	// ask for (the app exited, the listener failed) is service-stopped,
+	// which rule 4 reports, as it does a crash (owner-exited).
 	if state == opInterrupted && reason == "" && op.ctx != nil && op.ctx.Err() != nil {
-		reason = "released"
+		switch op.reg.stopTrigger {
+		case triggerUser, triggerSignal:
+			reason = "released"
+		case "":
+		default:
+			reason = "service-stopped"
+		}
 	}
 	op.finishLocked(state, reason, text)
 }
@@ -1041,4 +1052,15 @@ func (op *Op) State() string {
 	op.reg.mu.Lock()
 	defer op.reg.mu.Unlock()
 	return op.state
+}
+
+// stopping records what is stopping the service, before its context is
+// cancelled.
+func (r *opRegistry) stopping(trigger string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.stopTrigger = trigger
+	r.mu.Unlock()
 }

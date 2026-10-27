@@ -281,11 +281,29 @@ func TestAttentionListsWhatTheUserCanActOn(t *testing.T) {
 	if image := imageOf(run, run.view()); !strings.Contains(image.detail, `"sources":["codex"]`) {
 		t.Fatalf("the journal row's detail lacks the run's sources: %s", image.detail)
 	}
+	restarted.ops.stopping(triggerUser)
 	cancelRun()
 	run.Finish(ctx.Err())
 	if view := run.view(); view.State != opInterrupted || view.Reason != "released" {
 		t.Fatalf("an index a release stopped: %s (%s)", view.State, view.Reason)
 	}
+	// A stop nobody asked for (the app exited, the listener failed) is not
+	// the user's doing: its interruption is reported after a restart.
+	for _, trigger := range []string{triggerParentExited, triggerError} {
+		restarted.ops.stopping(trigger)
+		ctx, cancel := context.WithCancel(context.Background())
+		_, cut := restarted.begin(ctx, OperationSpec{Kind: "index.changes.manual", Trigger: triggerUser})
+		cancel()
+		cut.Finish(ctx.Err())
+		if view := cut.view(); view.Reason != "service-stopped" {
+			t.Fatalf("an index stopped by %s ended with reason %q", trigger, view.Reason)
+		}
+	}
+	execTx(t, catalog.DB, `UPDATE operation_journal SET reason='service-stopped' WHERE id='op-crashed'`)
+	if item := firstItem(restarted.attention(context.Background()), "index-interrupted"); item == nil {
+		t.Fatal("an index the app's exit interrupted is forgotten on restart")
+	}
+	restarted.ops.stopping("")
 	restarted.runsMu.Lock()
 	restarted.runs = []*SyncRun{{ID: "r9", Kind: "manual-sync", State: "complete", CompletedAt: "2026-10-27T11:00:00Z"}}
 	restarted.runsMu.Unlock()
@@ -390,6 +408,29 @@ func TestStatusHubSharesOneComputation(t *testing.T) {
 		t.Fatalf("a reader past its deadline waited %s", time.Since(started))
 	}
 	close(slow)
+	// Documents are never published less than statusCoalesce apart, counted
+	// from the publish before (server times, not when a client hears).
+	// Computations of uneven length (40 ms, then none) would bring two
+	// publishes closer than the window if it counted from the start.
+	published := []time.Time{}
+	for index := range 6 {
+		revision.Add(1)
+		uneven := func() map[string]any {
+			if index%2 == 0 {
+				time.Sleep(40 * time.Millisecond)
+			}
+			return compute()
+		}
+		hub.frame(context.Background(), statusRead{maxAge: time.Minute, revision: revision.Load, compute: uneven})
+		hub.mu.Lock()
+		published = append(published, hub.published)
+		hub.mu.Unlock()
+	}
+	for index := 1; index < len(published); index++ {
+		if gap := published[index].Sub(published[index-1]); gap < statusCoalesce {
+			t.Fatalf("two documents published %s apart, inside the %s window", gap, statusCoalesce)
+		}
+	}
 }
 
 // The stream sends the document on connect and again when an operation

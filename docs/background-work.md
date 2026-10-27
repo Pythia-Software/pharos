@@ -1071,8 +1071,10 @@ process's runs (the newer wins), so a restart or crash keeps the warning.
 The journal row applies the same filters: rule 3 only for a failure whose
 recorded sources (`detail_json.sources`) include an enabled one, or that
 has none recorded; rule 4 not for an interruption with reason `released`
-(the service stopped: a release before an eject, a quit, a switch), which
-is the user's doing, unlike `owner-exited` (a crash).
+(the service was released on purpose: a release before an eject, a quit, a
+switch; `library.release` trigger `user` or `signal`), which is the user's
+doing. It still reports `owner-exited` (a crash) and `service-stopped` (the
+service stopped unasked: its parent app exited, its listener failed).
 Rule 8
 is split: the broker adds "<library> is not answering" (its service did not
 answer) and "<library> is not open" (selected, no service, not starting),
@@ -1132,7 +1134,8 @@ coordinator), `catalog-busy` (the writer, with retries), `destination-busy`,
 `waiting-for-drive`, `waiting-for-network`. Skipped: `already-running`,
 `nothing-to-do`, `disabled`, `capture-busy`, `deferred-to-<kind>`,
 `stopping`. Interrupted: `owner-exited` (its process died), `released`
-(the service stopped under it: a release, an eject, a quit). Each code has
+(an intended release, eject, quit or switch), `service-stopped` (the
+service stopped unasked: parent exited, listener error). Each code has
 one server-side sentence.
 
 ## 9. Feature flag and rollout
