@@ -25,7 +25,10 @@ func newFreshnessFixture(t *testing.T) *freshnessFixture {
 	catalog, config := testCatalog(t)
 	config.Sources = []SourceConfig{{Name: "claude", Kind: "claude", Enabled: true}}
 	f := &freshnessFixture{t: t, catalog: catalog, config: config}
-	f.exec(f.builtToday()...)
+	// One conversation, so the derived domains have inputs (an empty library
+	// has nothing to process: see TestFreshnessOfAnEmptyLibrary).
+	f.exec(append([]string{`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','claude','local','w','Work','2026-10-27')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c','w','claude','local','c')`}, f.builtToday()...)...)
 	return f
 }
 
@@ -272,7 +275,7 @@ func TestFreshnessDomains(t *testing.T) {
 
 		{name: "upgrade unknown before anything counted it", domain: "upgrade", seed: []string{"DELETE FROM meta WHERE key='upgrade_count'"}, state: freshUnknown, reason: "not-counted"},
 		{name: "upgrade unknown until the background count lands", domain: "upgrade", state: freshUnknown, reason: "not-counted"},
-		{name: "upgrade counted again", domain: "upgrade", setup: func(f *freshnessFixture) { f.catalog.storeUpgradeCount(context.Background()) }, state: freshCurrent},
+		{name: "upgrade counted again", domain: "upgrade", seed: []string{"DELETE FROM conversations"}, setup: func(f *freshnessFixture) { f.catalog.storeUpgradeCount(context.Background()) }, state: freshCurrent},
 		{name: "upgrade available and running", domain: "upgrade", setup: counted("", upgradeStep{ID: "tools", Pending: 12}, upgradeStep{ID: "usage", Pending: 1}, upgradeStep{ID: "harness"}), in: freshnessInput{ops: []freshnessOp{runningOp("op-up", "library.upgrade", "")}}, state: freshBehind, reason: "running", catching: "op-up", count: 2, countKnown: true, unit: "step"},
 
 		{name: "local backup unknown without the history", domain: "backup.local", state: freshUnknown},
@@ -425,7 +428,9 @@ func TestFreshnessAfterAutomaticIndexLeavesAnalysesBehind(t *testing.T) {
 	// (The test's server journals nothing, so the earlier failure is taken
 	// back as the chain's own success would supersede it.)
 	f.exec("DELETE FROM operation_journal WHERE id='j-git'",
-		"DELETE FROM meta WHERE key IN ('analysis_inputs:identities','analysis_inputs:git','findings_inputs_generation')", setMetaSQL("authorship_inputs_generation", "4"))
+		"DELETE FROM meta WHERE key IN ('analysis_inputs:identities','analysis_inputs:git','findings_inputs_generation')", setMetaSQL("authorship_inputs_generation", "4"),
+		// The fixture's rollup is only its meta: the chain builds it for real.
+		"DELETE FROM meta WHERE key='tool_rollup_generation'")
 	if err := server.finishDeferredSync(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -549,6 +554,46 @@ func TestFreshnessSummary(t *testing.T) {
 		row("backup.local", "backups", freshUnknown, func(r *freshnessRow) { r.Reason = &freshnessReason{Code: "no-schedule", Text: "words"} })))
 	if g := summaryGroup(t, quiet, "findings"); !quiet.AllCurrent || g.Shown || !g.Muted || g.Short != "updates tomorrow" {
 		t.Fatalf("scheduled findings are muted and all is current: %+v %+v", quiet, g)
+	}
+
+	// A reason whose words already say what catches it up is not followed
+	// by the same words again.
+	noRecord := summarizeFreshness([]freshnessRow{row("an.git", "analyses", freshUnknown, func(r *freshnessRow) {
+		r.Reason, r.Next = &freshnessReason{Code: "no-record", Text: reasonText("an.git", "analyses", "no-record")}, text(nextManualIndex)
+	})})
+	if g := summaryGroup(t, noRecord, "analyses"); strings.Count(g.Tooltip, nextManualIndex) != 1 {
+		t.Fatalf("the tooltip repeats itself: %q", g.Tooltip)
+	}
+}
+
+// A library with no conversations has nothing to process: every derived
+// domain is current, saying so, and with no sources the Data row reads
+// "All current", whatever was never built or recorded.
+func TestFreshnessOfAnEmptyLibrary(t *testing.T) {
+	catalog, config := testCatalog(t)
+	server := testServer(t, config, catalog)
+	execTx(t, catalog.DB, "DELETE FROM meta WHERE key IN ('upgrade_count','analysis_inputs:identities','analysis_inputs:git','findings_generation','tool_rollup_generation','authorship_generation')",
+		"INSERT INTO sync_deferred(name,generation,completed_generation,changed_at) VALUES('findings',3,1,"+sqlQuote(now())+")")
+	rows := server.freshness(context.Background(), server.ops.views(), false)
+	for _, row := range rows {
+		if row.Group == "backups" {
+			continue
+		}
+		if row.Behind.State != freshCurrent {
+			t.Errorf("%s on an empty library: %+v", row.Domain, row)
+		}
+	}
+	byDomain := map[string]freshnessRow{}
+	for _, row := range rows {
+		byDomain[row.Domain] = row
+	}
+	for _, domain := range []string{"an.identities", "an.git", "an.tools", "an.authorship", "an.ledger", "findings", "upgrade"} {
+		if row := byDomain[domain]; row.Reason == nil || row.Reason.Code != "empty" || row.Reason.Text == "" {
+			t.Errorf("%s does not say there is nothing to do: %+v", domain, row)
+		}
+	}
+	if summary := summarizeFreshness(rows); !summary.AllCurrent || summary.Text != "All current" {
+		t.Fatalf("an empty library's Data row: %+v", summary)
 	}
 }
 
@@ -765,6 +810,7 @@ func TestFreshnessReasonsAreTheContracts(t *testing.T) {
 // earlier, and a change of the initializing build invalidates it.
 func TestUpgradeCountKeepsTheNewerAnswer(t *testing.T) {
 	f := newFreshnessFixture(t)
+	f.exec("DELETE FROM conversations") // a count of nothing pending
 	later, _ := json.Marshal(upgradeCount{StartedAt: "2999-01-01T00:00:00Z", Steps: []upgradeStep{{ID: "later"}}})
 	f.exec(setMetaSQL(upgradeCountKey, string(later)))
 	f.catalog.storeUpgradeCount(context.Background())
@@ -775,7 +821,8 @@ func TestUpgradeCountKeepsTheNewerAnswer(t *testing.T) {
 	f.catalog.storeUpgradeCount(context.Background())
 	expectRow(t, f.ledger(freshnessInput{}), "upgrade", freshCurrent, "", "")
 	f.exec(setMetaSQL(initializedBuildKey, "a-newer-build"))
-	expectRow(t, f.ledger(freshnessInput{}), "upgrade", freshUnknown, "not-counted", "")
+	// Not counted for this build, but with no conversations nothing waits.
+	expectRow(t, f.ledger(freshnessInput{}), "upgrade", freshCurrent, "empty", "")
 }
 
 // Initialize no longer counts the upgrade's steps: the service counts them

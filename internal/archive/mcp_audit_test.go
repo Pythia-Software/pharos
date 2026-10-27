@@ -461,6 +461,9 @@ func TestMCPArchiveStatusListsDomainsAndRunningWork(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	host := currentHost().ID
 	execTx(t, catalog.DB,
+		// One conversation: findings have inputs to be behind on.
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','codex','local','w','Work','2026-10-27')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c','w','codex','local','c')`,
 		"INSERT INTO source_states(host_id,source_name,kind,capability,coverage,last_attempt_at,last_success_at,updated_at) VALUES("+sqlQuote(host)+",'codex','codex','read','complete',"+sqlQuote(now())+","+sqlQuote(now())+","+sqlQuote(now())+")",
 		"INSERT INTO sync_deferred(name,generation,completed_generation,changed_at) VALUES('findings',3,1,"+sqlQuote(now())+")",
 		fmt.Sprintf(`INSERT INTO operation_journal(id,root_id,kind,trigger,host_id,process,pid,instance,state,started_at,updated_at,detail_json)

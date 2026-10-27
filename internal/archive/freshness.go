@@ -108,6 +108,7 @@ var freshnessReasons = map[string]string{
 	"no-schedule":          "Has no schedule, so Pharos cannot say it is current",
 	"not-counted":          "Not counted by this version of Pharos yet",
 	"unreadable":           "The capture folder cannot be read",
+	"empty":                "Nothing to analyze yet",
 }
 
 // freshnessReasonOverrides word a code for one kind of domain (the part of
@@ -120,6 +121,8 @@ var freshnessReasonOverrides = map[string]string{
 	"backup.local never": "No local backup yet",
 	"findings changed":   "New data since today's full pass",
 	"findings no-record": "Today's full pass ran on an older version of Pharos",
+	"search empty":       "Nothing to index yet",
+	"upgrade empty":      "Nothing to upgrade yet",
 }
 
 // reasonText is a code's words for domain, in group.
@@ -234,7 +237,7 @@ func (c *Catalog) freshness(ctx context.Context, in freshnessInput) []freshnessR
 	if in.host == "" {
 		in.host = currentHost().ID
 	}
-	l := ledger{in: in}
+	l := ledger{in: in, empty: c.freshnessEmpty(ctx)}
 	meta, metaErr := c.freshnessMeta(ctx)
 	deferred, deferredErr := c.freshnessDeferred(ctx)
 	ends := c.latestAnalysisEnds(ctx, in.host)
@@ -256,6 +259,25 @@ type ledger struct {
 	// scheduledIndexing is whether this Mac indexes on a schedule, which
 	// defers findings instead of running their daily pass.
 	scheduledIndexing bool
+	// empty is a library with no conversations: the derived domains have no
+	// inputs, so nothing is waiting, which is evidence they are current.
+	empty bool
+}
+
+// freshnessEmpty reports a library with no conversations; false when it
+// cannot tell.
+func (c *Catalog) freshnessEmpty(ctx context.Context) bool {
+	var empty bool
+	return c.reader().QueryRowContext(ctx, "SELECT NOT EXISTS(SELECT 1 FROM conversations)").Scan(&empty) == nil && empty
+}
+
+// nothingToDo makes entry current because its domain has no inputs.
+func (l *ledger) nothingToDo(entry *domainEntry) bool {
+	if !l.empty {
+		return false
+	}
+	entry.state, entry.reason, entry.count, entry.countKnown = freshCurrent, "empty", 0, false
+	return true
 }
 
 // domainEntry is one row before the running operation is applied.
@@ -295,7 +317,7 @@ func (l *ledger) add(entry domainEntry) {
 			}
 			reason = code
 		}
-	} else {
+	} else if reason != "empty" {
 		reason = ""
 	}
 	if reason != "" {
@@ -586,6 +608,7 @@ func (l *ledger) search(ctx context.Context, c *Catalog, meta map[string]string,
 			entry.state = freshUnknown
 		case ready:
 			entry.state = freshCurrent
+		case l.nothingToDo(&entry):
 		default:
 			entry.state, entry.reason = freshBehind, "version"
 		}
@@ -677,6 +700,7 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 		case deferredErr != nil || metaErr != nil:
 			entry.state = freshUnknown
 		case !isDeferred && recorded == recordGeneration(meta):
+		case l.nothingToDo(&entry):
 		case chainFailure(&entry, ends, changedAt):
 		case isDeferred:
 			deferral(&entry)
@@ -703,6 +727,7 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 	case metaErr != nil || deferredErr != nil || dirtyErr != nil:
 		tools.state = freshUnknown
 	case !stale && !isDeferred:
+	case l.nothingToDo(&tools):
 	case chainFailure(&tools, ends, changedAt):
 	case isDeferred:
 		deferral(&tools)
@@ -726,6 +751,7 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 	case metaErr != nil || deferredErr != nil:
 		authorship.state = freshUnknown
 	case meta["authorship_generation"] == want && !isDeferred:
+	case l.nothingToDo(&authorship):
 	case chainFailure(&authorship, ends, changedAt):
 	case isDeferred:
 		deferral(&authorship)
@@ -752,6 +778,9 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 		if pending > 0 {
 			ledgerEntry.state, ledgerEntry.reason = freshBehind, "version"
 		}
+	} else if metaErr == nil {
+		// Not counted yet: with no conversations there is nothing to count.
+		l.nothingToDo(&ledgerEntry)
 	}
 	l.add(ledgerEntry)
 }
@@ -795,6 +824,7 @@ func (l *ledger) findings(c *Catalog, meta map[string]string, metaErr error, def
 	case metaErr != nil || deferredErr != nil:
 		entry.state = freshUnknown
 	case today && !isDeferred && meta["findings_inputs_generation"] == libraryInputs(meta):
+	case l.nothingToDo(&entry):
 	case chainFailure(&entry, ends, conditionalText(isDeferred, row.changedAt)):
 	case meta["findings_generation"] == "":
 		entry.state, entry.reason = freshBehind, "never-built"
@@ -832,6 +862,10 @@ func (l *ledger) upgrade(c *Catalog, meta map[string]string, metaErr error) {
 	entry := domainEntry{domain: "upgrade", group: "upgrade", label: "Library upgrade", unit: "step", next: nextUpgrade}
 	steps, ok := l.countedSteps(meta, metaErr, &entry)
 	if !ok {
+		// Not counted yet: with no conversations there is nothing to upgrade.
+		if metaErr == nil {
+			l.nothingToDo(&entry)
+		}
 		l.add(entry)
 		return
 	}
@@ -1076,7 +1110,7 @@ func summarizeFreshness(rows []freshnessRow) freshnessSummary {
 			if row.Next != nil {
 				line += "; " + *row.Next
 			}
-			tooltip = append(tooltip, line)
+			tooltip = append(tooltip, dedupeParts(line))
 			if row.CatchingUp == nil {
 				allCaught = false
 			}
@@ -1145,6 +1179,18 @@ func summarizeFreshness(rows []freshnessRow) freshnessSummary {
 		summary.CheckedAt = nil
 	}
 	return summary
+}
+
+// dedupeParts drops a "; "-separated part a tooltip line already has: a
+// reason's words may already say what catches the domain up.
+func dedupeParts(line string) string {
+	parts := []string{}
+	for _, part := range strings.Split(line, "; ") {
+		if !slices.Contains(parts, part) {
+			parts = append(parts, part)
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 // completeStage runs one analysis stage that reads conversations (identity

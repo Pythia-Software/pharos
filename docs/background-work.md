@@ -653,6 +653,18 @@ and an honest reason. The evidence per domain:
   schedule. Without a schedule, the newest backup is reported `unknown`
   (`no-schedule`) with its `as_of`; local backups have no schedule.
 
+**Nothing to process is evidence.** A library with no conversations gives
+the derived domains (the search indexes, the analyses, the tool ledger,
+findings and the upgrade) no inputs, so nothing waits: each is `current`
+with reason `empty` ("Nothing to analyze yet", "Nothing to index yet",
+"Nothing to upgrade yet"), the one reason a current row carries. A query
+that fails still makes a domain `unknown`, and for the tool ledger and the
+upgrade a stored count wins. An empty library with no sources reads "All
+current".
+
+Tooltip lines drop a part they already have: a reason whose words say what
+catches the domain up is not followed by the same `next` again.
+
 Catalogs from before phase 3 have no `analysis_inputs:*` or
 `findings_inputs_generation` rows: those domains are `unknown`
 (`no-record`, "Not checked since this version of Pharos; updates with the
