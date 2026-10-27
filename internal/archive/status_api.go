@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -30,6 +31,11 @@ var statusCoalesce = 500 * time.Millisecond
 // leases, the attention list and the verdict's lock evidence change without
 // one.
 var statusRecheck = 2 * time.Second
+
+// statusResourcesRefresh is how often a stream sends a document whose only
+// change is its resources: every event carries the latest, and while
+// nothing else changes the Load row is at most this old.
+var statusResourcesRefresh = 5 * time.Second
 
 // statusKeepalive is the interval of a stream's comment line.
 var statusKeepalive = 15 * time.Second
@@ -66,7 +72,9 @@ func (s *Server) statusDocument(ctx context.Context, fresh bool) map[string]any 
 // statusTag identifies a document's content apart from when it was made:
 // equal tags mean nothing a surface shows has changed. Every generated_at,
 // nested ones included (each child snapshot in the broker's document has
-// its own), and every resource reading's sampled_at, is left out.
+// its own), and every resources object (§10), is left out: CPU and memory
+// change with every reading, and would make an idle library's stream send
+// every recheck. Streams send them apart (statusResourcesRefresh).
 func statusTag(document map[string]any) string {
 	data, _ := json.Marshal(document)
 	var content any
@@ -80,7 +88,7 @@ func withoutGeneratedAt(value any) any {
 	switch value := value.(type) {
 	case map[string]any:
 		delete(value, "generated_at")
-		delete(value, "sampled_at")
+		delete(value, "resources")
 		for key, item := range value {
 			value[key] = withoutGeneratedAt(item)
 		}
@@ -296,16 +304,18 @@ func streamStatus(w http.ResponseWriter, r *http.Request, changes <-chan struct{
 	header.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	ctx := r.Context()
-	sent := ""
+	sent, sentData, sentAt := "", []byte(nil), time.Time{}
 	send := func() bool {
 		frame := next(ctx)
 		if ctx.Err() != nil {
 			return false
 		}
-		if frame.tag == sent {
+		// Unchanged content: sent again only for newer resources, and not
+		// more often than statusResourcesRefresh.
+		if frame.tag == sent && (bytes.Equal(frame.data, sentData) || time.Since(sentAt) < statusResourcesRefresh) {
 			return true
 		}
-		sent = frame.tag
+		sent, sentData, sentAt = frame.tag, frame.data, time.Now()
 		if _, err := fmt.Fprintf(w, "event: snapshot\nid: %s\ndata: %s\n\n", frame.tag, frame.data); err != nil {
 			return false
 		}

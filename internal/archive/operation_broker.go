@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -90,6 +91,11 @@ type brokerOperations struct {
 	// resources samples the broker, each library's service and the
 	// Terminal commands writing them, for /api/app/status (§10).
 	resources *resourceSampler
+	// unified is the unified activity flag as the selected library's
+	// service last reported it (features.unified_activity), which decides
+	// whether broker operations lower their IO (§10). The broker has no
+	// catalog of its own to read it from.
+	unified atomic.Bool
 }
 
 func brokerOperationsPath(installation string) string {
@@ -102,6 +108,7 @@ func newBrokerOperations(path string) *brokerOperations {
 	b := &brokerOperations{reg: newOpRegistry("broker"), path: path, client: &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{Proxy: nil}},
 		resources: newResourceSampler()}
 	b.reg.wake = make(chan struct{}, 1)
+	b.reg.lowerIO = b.unified.Load
 	// Ended operations stay listed (and in the state file) until newer ones
 	// push them out, not for the service's ten minutes.
 	b.reg.keepEnded = 30 * 24 * time.Hour
@@ -357,6 +364,35 @@ func (b *brokerOperations) start(ctx context.Context) <-chan struct{} {
 	return done
 }
 
+// noteFlag records the flag a selected library's status snapshot carries.
+func (b *brokerOperations) noteFlag(snapshot map[string]any) {
+	if features, ok := snapshot["features"].(map[string]any); ok {
+		if on, ok := features["unified_activity"].(bool); ok {
+			b.unified.Store(on)
+		}
+	}
+}
+
+// refreshFlag asks the selected library's service for its status snapshot
+// (its shared document, cheap) and records the flag, before broker work
+// whose IO it decides: a delivery stops the services it would ask later.
+// Without an answer the last value stands.
+func (b *brokerOperations) refreshFlag(ctx context.Context) {
+	if b == nil || ctx == nil {
+		return
+	}
+	b.mu.Lock()
+	libraries := slices.Clone(b.libraries)
+	b.mu.Unlock()
+	for _, library := range libraries {
+		if library.Selected && library.Child != nil {
+			if snapshot, err := b.fetchServiceOperations(ctx, b.client, *library.Child, "/api/status"); err == nil {
+				b.noteFlag(snapshot)
+			}
+		}
+	}
+}
+
 // fetchServiceOperations asks a library's service for its snapshot at path
 // (/api/operations, or /api/status for the status document).
 func (b *brokerOperations) fetchServiceOperations(ctx context.Context, client *http.Client, endpoint applicationEndpoint, path string) (map[string]any, error) {
@@ -426,7 +462,7 @@ func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool,
 	// The status document carries resources (§10); the operations document
 	// and the eject check do not.
 	withResources := withLibraries && !fresh && strings.HasPrefix(path, "/api/status")
-	sampled := []resourceProcess{{PID: os.Getpid(), Role: "broker"}}
+	sampled := []resourceProcess{{PID: os.Getpid(), Role: "broker", OwnOnly: true}}
 	entries := []map[string]any{}
 	for index, library := range libraries {
 		service := map[string]any{"state": "stopped", "pid": nil, "started_at": nil, "restarts_10m": 0}
@@ -480,6 +516,9 @@ func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool,
 		var snapshot any
 		if snapshots[index] != nil {
 			snapshot = snapshots[index]
+		}
+		if library.Selected {
+			b.noteFlag(snapshots[index])
 		}
 		entry := map[string]any{"id": library.ID, "name": library.Name, "selected": library.Selected,
 			"connected": library.Child != nil && failures[index] == nil, "service": service, "snapshot": snapshot,

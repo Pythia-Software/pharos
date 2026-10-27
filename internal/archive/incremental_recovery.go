@@ -557,7 +557,7 @@ func (c *Catalog) repairRetained(ctx context.Context, job string, names []string
 		}); err != nil {
 			return err
 		}
-		c.boundWAL(walSizeLimit)
+		c.boundWAL(ctx, walSizeLimit)
 		if progress != nil {
 			progress(index+1, len(workspaces))
 		}

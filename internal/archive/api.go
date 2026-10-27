@@ -106,7 +106,8 @@ func NewServer(config Config, catalog *Catalog) *Server {
 		catalog.background = server.start
 		catalog.ops = server.ops
 		// Background work's IO follows the flag (§10); off, it is as before.
-		server.ops.lowerIO = func() bool { return catalog.unifiedActivity(context.Background()) }
+		// From memory only: work never waits on a reader for the flag.
+		server.ops.lowerIO = catalog.unifiedActivityNow
 		server.journal = newJournalWriter(catalog, server.ops)
 		catalog.recordInitialize(server.ops, triggerStartup)
 		server.leases.dirs = func() []string { return leaseDirs(server.Config()) }
@@ -166,6 +167,7 @@ func (s *Server) Serve() error {
 	s.daemon("keepWALSmall", func(ctx context.Context) { s.Catalog.keepWALSmall(ctx, 10*time.Second, walSizeLimit) })
 	s.daemon("automaticLoop", s.automaticLoop)
 	s.daemon("cloudScheduleLoop", s.cloudScheduleLoop)
+	s.daemon("watchFeatureFlags", s.Catalog.watchFeatureFlags)
 	s.refreshGitInBackground(true)
 	s.countUpgradeInBackground()
 	return s.serveUntilStopped(server, listener)

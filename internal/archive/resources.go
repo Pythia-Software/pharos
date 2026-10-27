@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -31,8 +32,16 @@ import (
 var resourceSampleInterval = 1500 * time.Millisecond
 
 // resourceForget is how long a process not asked about keeps its last
-// reading, so a snapshot that skipped it can still compute a delta.
+// reading before it is dropped.
 var resourceForget = 5 * time.Minute
+
+// resourceStaleGap is the longest gap between two readings that gives a
+// CPU figure: after a longer one (no page was open), the reading is a new
+// baseline and CPU is null until the next.
+var resourceStaleGap = 10 * time.Second
+
+// resourceCores bounds a CPU figure: no process uses more than every core.
+var resourceCores = runtime.NumCPU
 
 // processUsage is one reading of a process.
 type processUsage struct {
@@ -53,6 +62,10 @@ type resourceProcess struct {
 	Role string
 	// Library is the registered library a broker reading belongs to.
 	Library, LibraryName string
+	// OwnOnly leaves out the time of exited children: the broker's children
+	// are the services it reads itself, and a service that exits after
+	// hours would otherwise count its whole life again as one interval.
+	OwnOnly bool
 }
 
 type resourceSampler struct {
@@ -137,10 +150,25 @@ func (r *resourceSampler) sample(processes []resourceProcess) []resourceReading 
 				track = &resourceTrack{at: now, err: err}
 			case track == nil || track.err != nil || track.usage.Started != usage.Started:
 				track = &resourceTrack{at: now, usage: usage}
+			case now.Sub(track.at) > resourceStaleGap:
+				// An average over a long gap is not the current load.
+				track = &resourceTrack{at: now, usage: usage}
 			default:
 				elapsed := now.Sub(track.at).Seconds()
-				used := usage.CPUSeconds + usage.ChildCPUSeconds - track.usage.CPUSeconds - track.usage.ChildCPUSeconds
-				percent := max(0, 100*used/elapsed)
+				cores := float64(resourceCores())
+				own := usage.CPUSeconds - track.usage.CPUSeconds
+				children := usage.ChildCPUSeconds - track.usage.ChildCPUSeconds
+				if process.OwnOnly {
+					children = 0
+				}
+				if children > elapsed*cores {
+					// A child that ran longer than this interval could
+					// (a reaped service, a long agent call): its time is
+					// not this interval's load. Start again from here.
+					track = &resourceTrack{at: now, usage: usage}
+					break
+				}
+				percent := min(max(0, 100*(own+children)/elapsed), 100*cores)
 				track = &resourceTrack{at: now, usage: usage, percent: &percent}
 			}
 			r.byPID[process.PID] = track
@@ -170,12 +198,16 @@ func summarizeResources(subject string, readings []resourceReading) *resourceSum
 		return nil
 	}
 	summary := &resourceSummary{Processes: readings, Basis: readings[0].Basis}
-	var cpu *float64
+	// CPU is totalled only when every process has a figure: a total that
+	// silently left out one just starting would read low. Memory always is.
+	cpu := new(0.0)
 	var memory uint64
 	var at time.Time
 	for _, reading := range readings {
-		if reading.cpu != nil {
-			cpu = new(float64(cpuOrZero(cpu) + *reading.cpu))
+		if reading.cpu == nil {
+			cpu = nil
+		} else if cpu != nil {
+			*cpu += *reading.cpu
 		}
 		memory += reading.memory
 		if reading.at.After(at) {
@@ -198,13 +230,6 @@ func summarizeResources(subject string, readings []resourceReading) *resourceSum
 
 // resourceBasisKernel is the basis of a kernel reading of any process.
 const resourceBasisKernel = "proc_pid_rusage"
-
-func cpuOrZero(value *float64) float64 {
-	if value == nil {
-		return 0
-	}
-	return *value
-}
 
 // loadWords is "~45% of one core · 1.2 GB", "under 1% of one core · 340 MB",
 // or the memory alone before a second reading gives CPU.

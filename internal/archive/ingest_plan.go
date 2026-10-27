@@ -179,7 +179,7 @@ func (c *Catalog) prepareSourcePlan(ctx context.Context, adapter Adapter) (*sour
 	plan.reader = adapter
 	plan.sqliteAcquisition, _ = ctx.Value(sqliteAcquisitionKey{}).(*sqliteAcquisitionBoundary)
 	partial := adapter.(partialAdapter)
-	tracker, err := c.newPartTracker(sourceHost(adapter).ID, adapter.Config().Name, partial, captureViewOf(adapter))
+	tracker, err := c.newPartTracker(ctx, sourceHost(adapter).ID, adapter.Config().Name, partial, captureViewOf(adapter))
 	if err != nil {
 		return nil, err
 	}

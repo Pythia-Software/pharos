@@ -1240,9 +1240,11 @@ func (c *Catalog) startAuthorshipInContext(generation string, parent context.Con
 		return err
 	}
 	// From a page (or the usage summary) the rebuild is a read-started write
-	// (§1); from an index's analysis chain it is a child of that stage.
-	spec := OperationSpec{Kind: "analysis.authorship", Trigger: triggerRead}
+	// (§1) that the page waits for, so foreground (§10); from an index's
+	// analysis chain it is a child of that stage, in its class.
+	spec := OperationSpec{Kind: "analysis.authorship", Trigger: triggerRead, Priority: priorityForeground}
 	if parent != nil {
+		spec.Priority = ""
 		spec.Trigger = triggerChained
 		spec.Parent = opFrom(parent).ID()
 	}

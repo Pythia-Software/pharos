@@ -54,16 +54,19 @@ type partTracker struct {
 	pending  []sourcePart
 	writer   string
 	terminal map[string]bool
+	// ctx carries the operation the parts are recorded for, whose priority
+	// class the WAL checkpoint after a flush follows.
+	ctx context.Context
 }
 
-func (c *Catalog) newPartTracker(host, source string, adapter partialAdapter, view *captureView) (*partTracker, error) {
+func (c *Catalog) newPartTracker(ctx context.Context, host, source string, adapter partialAdapter, view *captureView) (*partTracker, error) {
 	// Parsed without the host's Git checkouts, so the host's own sync must
 	// parse it again to fill in what only its checkouts know.
 	extractor, err := c.effectiveIndexVersion(host, source, adapter)
 	if err != nil {
 		return nil, err
 	}
-	tracker := &partTracker{host: host, source: source, extractor: extractor, capture: view != nil, states: map[string]partState{}, terminal: map[string]bool{}}
+	tracker := &partTracker{host: host, source: source, extractor: extractor, capture: view != nil, states: map[string]partState{}, terminal: map[string]bool{}, ctx: ctx}
 	if view != nil {
 		rows, err := queryMaps(c.DB, "SELECT item,size,version,signal FROM source_terminal_states WHERE host_id=? AND source_name=? AND extractor=?", host, source, extractor)
 		if err != nil {
@@ -176,6 +179,6 @@ func (t *partTracker) flush(c *Catalog) error {
 	if err != nil {
 		return err
 	}
-	c.boundWAL(walSizeLimit)
+	c.boundWAL(t.ctx, walSizeLimit)
 	return nil
 }

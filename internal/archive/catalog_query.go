@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -218,7 +219,7 @@ func (c *Catalog) closeQuery() error {
 		_ = c.reads.Close()
 	}
 	if !c.readOnly {
-		c.boundWAL(walSizeLimit)
+		c.boundWAL(context.Background(), walSizeLimit)
 	}
 	c.library.mu.Lock()
 	c.library.close()

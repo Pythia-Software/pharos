@@ -85,6 +85,15 @@ func TestResourceSamplerComputesLoadFromDeltas(t *testing.T) {
 		t.Fatalf("a nearly idle process: %q", second[1].Text)
 	}
 
+	// While one process has no figure yet, the total has none either:
+	// memory only, never a CPU total that silently leaves one out.
+	clock = clock.Add(2 * time.Second)
+	source.set(30, processUsage{CPUSeconds: 1, Footprint: 10e6, Started: 3})
+	mixed := sampler.sample(processes[:3])
+	if total := summarizeResources("Pharos", mixed); len(mixed) != 3 || total.CPUPercent != nil || total.Label != "Pharos is using 1.3 GB" {
+		t.Fatalf("a total with a process still measuring: %+v", total)
+	}
+
 	// PID 20 exits and its number is reused: no delta across processes.
 	clock = clock.Add(2 * time.Second)
 	source.set(20, processUsage{CPUSeconds: 0.1, Footprint: 5e6, Started: 99})
@@ -97,6 +106,42 @@ func TestResourceSamplerComputesLoadFromDeltas(t *testing.T) {
 	if _, ok := sampler.byPID[10]; ok {
 		t.Fatal("a process nobody asks about is kept forever")
 	}
+	// Children: a reaped child that ran longer than the interval could (a
+	// service that ran for hours, a long agent call) starts a new baseline;
+	// a figure never exceeds every core; and the broker leaves out its
+	// children, the services it reads itself.
+	override(t, &resourceCores, func() int { return 4 })
+	source.set(40, processUsage{CPUSeconds: 10, ChildCPUSeconds: 0, Started: 4, Footprint: 1e6})
+	source.set(41, processUsage{CPUSeconds: 10, Started: 5, Footprint: 1e6})
+	source.set(42, processUsage{CPUSeconds: 10, Started: 6, Footprint: 1e6})
+	children := []resourceProcess{{PID: 40, Role: "service"}, {PID: 41, Role: "service"}, {PID: 42, Role: "broker", OwnOnly: true}}
+	sampler.sample(children)
+	clock = clock.Add(2 * time.Second)
+	source.set(40, processUsage{CPUSeconds: 10.2, ChildCPUSeconds: 2400, Started: 4, Footprint: 1e6})
+	source.set(41, processUsage{CPUSeconds: 30, Started: 5, Footprint: 1e6})
+	source.set(42, processUsage{CPUSeconds: 10.1, ChildCPUSeconds: 2400, Started: 6, Footprint: 1e6})
+	jumped := sampler.sample(children)
+	if jumped[0].CPUPercent != nil || *jumped[1].CPUPercent != 400 || *jumped[2].CPUPercent != 5 {
+		t.Fatalf("child jump, clamp and own-only: %v %v %v", jumped[0].cpu, jumped[1].cpu, jumped[2].cpu)
+	}
+	clock = clock.Add(2 * time.Second)
+	source.set(40, processUsage{CPUSeconds: 10.4, ChildCPUSeconds: 2400.2, Started: 4, Footprint: 1e6})
+	if after := sampler.sample(children[:1]); after[0].CPUPercent == nil || *after[0].CPUPercent != 20 {
+		t.Fatalf("after the jump, the next interval counts again: %+v", after)
+	}
+	// A gap longer than resourceStaleGap (no page open) is a new baseline,
+	// not an average shown as the current load.
+	clock = clock.Add(resourceStaleGap + time.Second)
+	source.set(40, processUsage{CPUSeconds: 20, ChildCPUSeconds: 2400.2, Started: 4, Footprint: 1e6})
+	if stale := sampler.sample(children[:1]); stale[0].CPUPercent != nil {
+		t.Fatalf("an average over a long gap: %+v", stale)
+	}
+	clock = clock.Add(2 * time.Second)
+	source.set(40, processUsage{CPUSeconds: 20.1, ChildCPUSeconds: 2400.2, Started: 4, Footprint: 1e6})
+	if fresh := sampler.sample(children[:1]); fresh[0].CPUPercent == nil || *fresh[0].CPUPercent != 5 {
+		t.Fatalf("the reading after a gap: %+v", fresh)
+	}
+
 	if summarizeResources("Pharos", nil) != nil {
 		t.Fatal("nothing readable keeps the Load row out")
 	}
@@ -136,7 +181,7 @@ func TestProcessUsageMatchesTheKernel(t *testing.T) {
 	if other, err := processUsageOf(child.Process.Pid); err != nil || other.Footprint == 0 {
 		t.Fatalf("another of this user's processes: %+v %v", other, err)
 	}
-	if _, err := processUsageOf(1); err == nil {
+	if _, err := processUsageOf(1); err == nil && os.Geteuid() != 0 {
 		t.Fatal("launchd's usage should not be readable by this user")
 	}
 	kernel, ps := processRSS(), processRSSFromPS()

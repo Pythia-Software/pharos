@@ -602,7 +602,7 @@ func (c *Catalog) sourceChanges(ctx context.Context, source SourceConfig) source
 			err = errors.New("this source has no bounded change discovery")
 		} else {
 			var tracker *partTracker
-			tracker, err = c.newPartTracker(currentHost().ID, source.Name, partial, nil)
+			tracker, err = c.newPartTracker(ctx, currentHost().ID, source.Name, partial, nil)
 			if err == nil {
 				err = partial.discoverParts(func(parts []sourcePart) bool {
 					report.Units++

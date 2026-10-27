@@ -901,3 +901,40 @@ func TestBrokerStatusCarriesResources(t *testing.T) {
 		t.Fatal("the eject check carries no resources")
 	}
 }
+
+// Resources are left out of change detection (§10): a document whose only
+// change is its CPU or memory keeps its tag, so polls get 304 and an idle
+// stream stays quiet; a stream still sends the latest resources, at most
+// once per statusResourcesRefresh.
+func TestStatusResourcesDoNotChangeTheTag(t *testing.T) {
+	document := func(cpu float64) map[string]any {
+		return map[string]any{"eject": map[string]any{"verdict": "safe"}, "resources": map[string]any{"cpu_percent": cpu, "sampled_at": now()},
+			"libraries": []any{map[string]any{"resources": map[string]any{"cpu_percent": cpu}}}}
+	}
+	if statusTag(document(1)) != statusTag(document(40)) {
+		t.Fatal("resources changed the tag")
+	}
+	if statusTag(document(1)) == statusTag(map[string]any{"eject": map[string]any{"verdict": "busy"}}) {
+		t.Fatal("content no longer changes the tag")
+	}
+	stream := func(refresh time.Duration) int {
+		t.Helper()
+		override(t, &statusResourcesRefresh, refresh)
+		ctx, cancel := context.WithTimeout(context.Background(), 450*time.Millisecond)
+		defer cancel()
+		request := httptest.NewRequest(http.MethodGet, "/api/status/stream", nil).WithContext(ctx)
+		recorder := httptest.NewRecorder()
+		var computed atomic.Int64
+		streamStatus(recorder, request, nil, 10*time.Millisecond, func(context.Context) statusFrame {
+			data, _ := json.Marshal(document(float64(computed.Add(1))))
+			return statusFrame{tag: statusTag(document(0)), data: data}
+		})
+		return strings.Count(recorder.Body.String(), "event: snapshot")
+	}
+	if sent := stream(time.Hour); sent != 1 {
+		t.Fatalf("an unchanged document with new resources was sent %d times inside the refresh", sent)
+	}
+	if sent := stream(150 * time.Millisecond); sent < 2 || sent > 4 {
+		t.Fatalf("resources-only refreshes over 450 ms at 150 ms: %d events", sent)
+	}
+}

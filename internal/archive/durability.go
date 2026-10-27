@@ -152,7 +152,19 @@ type walBound struct {
 // log grows by everything a sync writes: reads slow down searching it, and an
 // unclean exit leaves all of it to replay on the next open. Syncs call this
 // between transactions, where the writer does not contend for its own lock.
-func (c *Catalog) boundWAL(limit int64) {
+//
+// The checkpoint's operation is a child of the operation ctx carries, so its
+// priority class (§10) is its caller's: a manual index, a capture or a
+// release waits for it and keeps the default IO tier. A caller with no
+// operation is waiting for it too (a close, a repair), so it is foreground;
+// only keepWALSmall's own ticker runs it as a background root.
+func (c *Catalog) boundWAL(ctx context.Context, limit int64) {
+	c.boundWALAt(ctx, limit, priorityForeground)
+}
+
+// boundWALAt is boundWAL; priority is the class of a checkpoint whose ctx
+// carries no operation.
+func (c *Catalog) boundWALAt(ctx context.Context, limit int64, priority string) {
 	if info, err := os.Stat(c.Path + "-wal"); err != nil || info.Size() <= limit {
 		return
 	}
@@ -164,7 +176,18 @@ func (c *Catalog) boundWAL(limit int64) {
 		return
 	}
 	// Only a check that runs a checkpoint is an operation (§3.4).
-	_, op := c.beginOp(context.Background(), OperationSpec{Kind: "maintenance.checkpoint", Variant: "bound", Trigger: triggerSchedule})
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	spec := OperationSpec{Kind: "maintenance.checkpoint", Variant: "bound", Trigger: triggerSchedule}
+	if opFrom(ctx) == nil {
+		spec.Priority = priority
+	} else {
+		spec.Trigger = triggerChained
+	}
+	// Not cancelled with its caller: a checkpoint is short and not
+	// interruptible.
+	_, op := c.beginOp(context.WithoutCancel(ctx), spec)
 	var err error
 	op.RunIO(func() { err = c.Checkpoint() })
 	if err != nil {
@@ -186,7 +209,7 @@ func (c *Catalog) keepWALSmall(ctx context.Context, every time.Duration, limit i
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			c.boundWAL(limit)
+			c.boundWALAt(context.Background(), limit, priorityBackground)
 		}
 	}
 }

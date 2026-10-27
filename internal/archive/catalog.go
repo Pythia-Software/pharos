@@ -709,7 +709,7 @@ func (c *Catalog) RefineUsageTimeline(progress func(done, total int)) (int, erro
 		if err := c.rebuildAgentSessions(row); err != nil {
 			return index, err
 		}
-		c.boundWAL(walSizeLimit)
+		c.boundWAL(context.Background(), walSizeLimit)
 		if progress != nil {
 			progress(index+1, len(conversations))
 		}

@@ -3,16 +3,19 @@ package archive
 import (
 	"context"
 	"net/http"
-	"runtime"
+	"net/http/httptest"
+	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // Priority classes (§10): with the flag on, a background operation's body
 // runs under the utility IO policy and a foreground one's does not; with the
-// flag off nothing is wrapped. The policy function is injected; the last
-// case checks the real one sets the thread's policy, without measuring IO.
+// flag off nothing is wrapped. The policy function is injected;
+// TestUtilityIOPolicyIsRestored checks the real one, without measuring IO.
 func TestBackgroundIOFollowsTheFlag(t *testing.T) {
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
@@ -70,25 +73,88 @@ func TestBackgroundIOFollowsTheFlag(t *testing.T) {
 		t.Fatalf("wrapped %v, want the background ones %v", got, want)
 	}
 
-	if runtime.GOOS != "darwin" {
-		return
+	// The work path reads the flag from memory only. A change another
+	// process makes in the catalog reaches it with the next read (the
+	// watchFeatureFlags daemon's, every featureFlagTTL), not before.
+	override(t, &featureFlagTTL, 0)
+	if _, err := catalog.DB.Exec("UPDATE ui_preferences SET value='false' WHERE key=?", unifiedActivityFlag); err != nil {
+		t.Fatal(err)
 	}
-	override(t, &utilityIO, func(_ *Op, fn func()) { withCaptureIOPolicy(fn) })
-	policy := func(spec OperationSpec) int32 {
-		t.Helper()
-		_, op := server.begin(context.Background(), spec)
-		defer op.Finish(nil)
-		var during int32
-		var err error
-		runtime.LockOSThread()
-		defer runtime.UnlockOSThread()
-		op.RunIO(func() { during, err = currentIOPolicy() })
-		if err != nil {
-			t.Fatal(err)
-		}
-		return during
+	if !catalog.unifiedActivityNow() {
+		t.Fatal("the work path read the catalog for the flag")
 	}
-	if background, foreground := policy(OperationSpec{Kind: "analysis.git", Trigger: triggerChained}), policy(OperationSpec{Kind: "backup.local", Trigger: triggerUser}); background != ioPolicyUtility || foreground == ioPolicyUtility {
-		t.Fatalf("thread policy: background %d, foreground %d", background, foreground)
+	catalog.unifiedActivity(context.Background())
+	if catalog.unifiedActivityNow() {
+		t.Fatal("a read of the flag did not refresh the work path's copy")
+	}
+	if _, err := catalog.DB.Exec("UPDATE ui_preferences SET value='true' WHERE key=?", unifiedActivityFlag); err != nil {
+		t.Fatal(err)
+	}
+	catalog.unifiedActivity(context.Background())
+
+	// The WAL bound's checkpoint takes its caller's class: inside a manual
+	// index (foreground) it keeps the default tier, as it does for a caller
+	// with no operation (a close); only keepWALSmall's ticker runs it as
+	// background.
+	mu.Lock()
+	wrapped = wrapped[:0]
+	mu.Unlock()
+	indexCtx, index := server.begin(context.Background(), OperationSpec{Kind: "index.changes.manual", Trigger: triggerUser})
+	// A limit of -1 crosses it whatever the WAL's size; a busy checkpoint
+	// delays the next, and these are not about retries.
+	catalog.boundWAL(indexCtx, -1)
+	catalog.wal.retryAt = time.Time{}
+	catalog.boundWAL(context.Background(), -1)
+	catalog.wal.retryAt = time.Time{}
+	index.Finish(nil)
+	mu.Lock()
+	if len(wrapped) != 0 {
+		t.Fatalf("a foreground caller's checkpoint ran at utility: %v", wrapped)
+	}
+	mu.Unlock()
+	if !slices.ContainsFunc(server.ops.views(), func(view opView) bool {
+		return view.Spec.Kind == "maintenance.checkpoint" && view.Parent == index.ID() && view.Spec.Priority == priorityForeground
+	}) {
+		t.Fatal("the index's checkpoint is not its foreground child")
+	}
+	catalog.boundWALAt(context.Background(), -1, priorityBackground)
+	mu.Lock()
+	if !slices.Equal(wrapped, []string{"maintenance.checkpoint"}) {
+		t.Fatalf("the ticker's checkpoint: %v", wrapped)
+	}
+	mu.Unlock()
+}
+
+// The broker has no catalog: its operations' IO follows the flag the
+// selected library's service reports, read before a delivery and with every
+// status document.
+func TestBrokerIOFollowsTheSelectedLibrarysFlag(t *testing.T) {
+	var wrapped atomic.Int32
+	override(t, &utilityIO, func(_ *Op, fn func()) { wrapped.Add(1); fn() })
+	on := atomic.Bool{}
+	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"version": 1, "operations": []any{}, "eject": computeEjectVerdict(verdictInput{}), "features": map[string]any{"unified_activity": on.Load()}}, http.StatusOK)
+	}))
+	defer service.Close()
+	broker := newBrokerOperations(filepath.Join(t.TempDir(), "operations.json"))
+	broker.publish([]brokerLibrary{{ID: "lib-a", Name: "Euclid", Selected: true, Child: &applicationEndpoint{URL: service.URL, Token: "t"}, ChildStarted: time.Now()}})
+	deliver := broker.begin(OperationSpec{Kind: "library.deliver", Trigger: triggerSchedule}, "lib-a", "lib-b")
+	defer deliver.Finish(nil)
+	broker.refreshFlag(context.Background())
+	deliver.RunIO(func() {})
+	if wrapped.Load() != 0 {
+		t.Fatal("with the flag off, a delivery's IO is as before")
+	}
+	on.Store(true)
+	broker.refreshFlag(context.Background())
+	deliver.RunIO(func() {})
+	if wrapped.Load() != 1 {
+		t.Fatal("with the flag on, a delivery's IO runs at utility")
+	}
+	on.Store(false)
+	broker.statusDocument(context.Background())
+	deliver.RunIO(func() {})
+	if wrapped.Load() != 1 {
+		t.Fatal("the status document did not carry the flag back")
 	}
 }
