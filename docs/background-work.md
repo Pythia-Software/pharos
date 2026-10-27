@@ -351,7 +351,7 @@ operation.
 | `maintenance.checkpoint` (variants `bound`, `after-run`, `close`) | Save the catalog · Saving the catalog | daemon pass (WAL over 64 MiB, every 10 s), chained, release | svc | D:w W:w | — | — | Not interruptible; short. | record | >1 s | bg |
 | `maintenance.metrics` | Update MCP metrics · Updating metrics | none: requests never write, so a `query_statistics` call computes dirty workspaces' metrics in its read snapshot and `maintenance.library-view` stores them; the kind stays so that journal rows naming it still render | mcp, svc | D:w W:w | — | — | Ends with the call. | record | never | fg |
 | `maintenance.origins` | Publish conversation origins · Publishing conversation origins | daemon pass (`maintainLibrary`: every pass while no ingest runs, at most once a minute during one); the end of each ingest and the Tools rollup publish them as part of their own operation | svc | D:w W:w | — | — | Stops; it publishes them on its next pass. | batch | never | bg |
-| `maintenance.mcp-history` | Store MCP call history · Storing MCP call history | read (an MCP call through the service queues its record; one background writer stores the queue, so no request waits for the writer) | svc | D:w W:w | — | — | Stops; closing the catalog stores what is still queued. | record | never | bg |
+| `maintenance.mcp-history` | Store MCP call history · Storing MCP call history | read (an MCP call through the service queues its record; one background writer stores the queue, so no request waits for the writer; a direct MCP call stores its own record when it closes the catalog, after its answer is out) | svc, mcp | D:w W:w | — | — | Stops; closing the catalog stores what is still queued. | record | never | bg |
 | `ask.save` | Save an Ask Pharos answer · Saving an Ask Pharos answer | user (a finished Ask turn whose save missed its deadline is retried in the background for up to 5 min) | svc | D:w W:w | — | — | Stops retrying; an answer not yet saved is lost, as when the service stops. | record | never | bg |
 | `drive.measure` | Check the drive · Checking the drive | read (`GET /api/health/drive`, 5 min cache) | svc (+`diskutil`) | D:w W:w (one `library_size_history` row) | — | — | Stops. | record | never | bg |
 
@@ -432,7 +432,8 @@ Not kinds: the broker's 5 s maintain loop (a daemon whose respawns are
 `service.start` with trigger `respawn`), the native 5 s state watch, the
 service's watchdogs (parent gone, drive gone, SIGBUS), DiskArbitration
 monitors, the quit gate (a consumer of the eject verdict), MCP stdio servers
-themselves (only their `catalog.initialize`), and service log capture.
+themselves (only the calls they answer directly, §6.5), and service log
+capture.
 
 ## 4. Holds and the eject verdict
 
@@ -754,7 +755,7 @@ Liveness of other processes is never inferred from pids or heartbeat rows.
   (`capture`, `index`, `ingest`, `repair-existing`, `backup`,
   `cloud-backup verify`, `history-backfill`, `upgrade`, `build-tools`,
   `library-transfer`, `library-recover`, `add-this-mac`, adoption, and MCP
-  servers while they run `catalog.initialize`)
+  servers for each call they answer directly)
   holds an exclusive `flock` on its own lease file for as long as it runs
   that operation.
 - **Where:** `<catalog dir>/.pharos-leases/<instance>.json`, or
@@ -799,7 +800,14 @@ Liveness of other processes is never inferred from pids or heartbeat rows.
   nothing. Read commands that open the catalog (`search`, `health`,
   `pricing`, `findings` without `--refresh`, `upgrade --status`…) take a
   lease for the open, Initialize and close (`runLeasedCatalogCommand`),
-  since `OpenCatalog` and `Close` may write.
+  since `OpenCatalog` and `Close` may write. An MCP server that answers a
+  call itself (no service answering) leases it the same way, as
+  `maintenance.mcp-history` with `catalog.initialize` declared: from before
+  it opens the catalog until it has closed it, after the answer is out,
+  which stores the call's history and may checkpoint. It waits at most 1 s
+  for this Mac's host ID; a lease written without one still counts for the
+  verdict (only a process on this Mac can hold its flock) but is not
+  listed. A call that cannot take its lease opens nothing.
 - **When the final round cannot write.** The process writes its terminal
   outcomes into its lease file in place (`ftruncate` + `pwrite`, `fsync`;
   it still holds the lock): an `outcomes` map of op ID to state, reason,

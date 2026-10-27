@@ -35,6 +35,7 @@ var unregisteredWorkAllowed = map[string]allowedWork{
 	"backup.go:boundWAL":                          {1, "a WAL poller inside a backup, which is the operation"},
 	"cli.go:Run":                                  {1, "opens the browser for serve --open"},
 	"drive.go:cachedVolumeIdentity":               {1, "subprocess: a diskutil lookup for a status read; writes nothing"},
+	"mcp_library.go:beginMCPCallLease":            {1, "a bounded wait for this Mac's host ID (ioreg) before a direct MCP call's lease; writes nothing"},
 	"feedback.go:CaptureFeedbackServiceLogs":      {1, "service log capture (§3.7), not an operation"},
 	"probe.go:probeSelectedSources":               {1, "subprocess: a login-shell environment probe; writes nothing"},
 	"adopt.go:runAdoptCLI":                        {1, "signal handling for a Terminal command"},

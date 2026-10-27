@@ -975,3 +975,31 @@ func TestMCPStatusRunsTheLibrarysOwnApp(t *testing.T) {
 		t.Fatalf("command line %q %v", line, err)
 	}
 }
+
+// A direct call (no service answering) holds an operation lease from before
+// it opens the catalog until after it closes: its Initialize, its queued
+// history and the close's checkpoint all write the library (§6.5).
+func TestDirectMCPCallHoldsAnOperationLease(t *testing.T) {
+	config := testLibrary(t, filepath.Join(t.TempDir(), "Pharos"))
+	server := newMCPServer(config.Path)
+	server.identity = testIdentity
+	verdict := func() ejectVerdict {
+		return computeEjectVerdict(verdictInput{fresh: true, leases: probeLeases(leaseDirs(config))})
+	}
+	response := server.handle(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": map[string]any{"name": "search_work", "arguments": map[string]any{}}})
+	if text, isError := toolTextOf(response); isError {
+		t.Fatal(text)
+	}
+	// Answered, with the history not yet stored and the catalog still open.
+	if v := verdict(); v.Verdict != verdictBusy || len(v.Blockers) != 1 || v.Blockers[0].Kind != "maintenance.mcp-history" {
+		t.Fatalf("a direct call's open catalog does not keep the drive busy: %+v", v)
+	}
+	server.afterAnswer(nil)
+	if v := verdict(); v.Verdict != verdictSafe {
+		t.Fatalf("the lease outlived the call: %+v", v)
+	}
+	if count := mcpCalls(t, reopenCatalog(t, config.CatalogPath)); count != 1 {
+		t.Fatalf("stored %d calls", count)
+	}
+}

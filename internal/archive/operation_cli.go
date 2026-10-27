@@ -59,6 +59,11 @@ func beginCLIOperations(config Config, catalog *Catalog, command string, kinds .
 // beginCLIOperationsIn takes command's lease in each of dirs, naming the
 // library configurations it touches.
 func beginCLIOperationsIn(dirs, libraries []string, catalog *Catalog, command string, kinds ...string) (*cliOperations, error) {
+	return beginCLIOperationsAs(currentHost().ID, dirs, libraries, catalog, command, kinds...)
+}
+
+// beginCLIOperationsAs is beginCLIOperationsIn naming host in the lease.
+func beginCLIOperationsAs(host string, dirs, libraries []string, catalog *Catalog, command string, kinds ...string) (*cliOperations, error) {
 	reg := newOpRegistry("cli:" + command)
 	ops := &cliOperations{reg: reg}
 	for _, kind := range kinds {
@@ -67,7 +72,7 @@ func beginCLIOperationsIn(dirs, libraries []string, catalog *Catalog, command st
 		}
 	}
 	for _, dir := range dirs {
-		lease, err := acquireProcessLease(dir, leaseInfo{Instance: reg.instance, PID: os.Getpid(), HostID: currentHost().ID, Process: reg.process,
+		lease, err := acquireProcessLease(dir, leaseInfo{Instance: reg.instance, PID: os.Getpid(), HostID: host, Process: reg.process,
 			Kinds: kinds, Holds: ops.declared, Libraries: libraries, StartedAt: now()})
 		if err != nil {
 			for _, taken := range ops.leases {
