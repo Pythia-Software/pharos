@@ -325,7 +325,9 @@ window.initPharosAsk = function(root) {
     const view={element,get};turnViews.set(turn.id,view);thread.append(element);
     get('.pharos-stop').addEventListener('click',()=>stop());
     get('.pharos-retry').addEventListener('click',()=>startRequest(turn));
+    get('.pharos-retry-model').addEventListener('click',retryWithDifferentModel);
     get('.pharos-recovery-search').addEventListener('click',useRegular);
+    get('.pharos-recovery-clear').addEventListener('click',()=>clearChat());
     element.querySelectorAll('.pharos-destination').forEach(link=>link.addEventListener('click',event=>{
       event.preventDefault();stop();window.pharosNavigate?.(link.getAttribute('href'));
     }));
@@ -709,13 +711,20 @@ window.initPharosAsk = function(root) {
   });
 
   function useRegular() {stop();closePicker();closeHistory(); regularOverride = true;render(); find('.home-search-trigger')?.focus();}
+  function retryWithDifferentModel() {
+    const draft=askRetryDraft({turns,draft:question.value});
+    clearChat();question.value=draft;autoFit();saveChat();render();openPicker();
+  }
   find('.pharos-search-mode').addEventListener('click', useRegular);
   find('.pharos-ai-mode').addEventListener('click', () => {regularOverride = false; stop(); render(); find('#pharos-question').focus();});
-  pickerTrigger.addEventListener('click',() => {
-    if(turns.length)return;
-    if (!picker.hidden) {closePicker();return;}
+  function openPicker() {
+    if(pickerTrigger.disabled)return;
     closeHistory();
     picker.hidden = false;ai.classList.add('pharos-picker-open');pickerTrigger.setAttribute('aria-expanded','true');showPickerPage(null);
+  }
+  pickerTrigger.addEventListener('click',() => {
+    if (!picker.hidden) {closePicker();return;}
+    openPicker();
   });
   find('.pharos-save-default').addEventListener('click',async()=>{try{await api('settings',{selection:copySelection(choices)});defaultSelection=copySelection(choices);render();window.dispatchEvent(new CustomEvent('pharos:ask-config',{detail:root}));}catch(error){report(error);}});
   product.querySelectorAll('[data-picker]').forEach(button => button.addEventListener('click',() => showPickerPage(button.dataset.picker)));

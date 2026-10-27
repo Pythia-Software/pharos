@@ -1424,6 +1424,75 @@ for (const theme of ['dark','light']) for (const width of [1440,390,320]) test(`
   assert.ok(await page.getByRole('textbox',{name:'Ask a question',exact:true}).evaluate(element=>element===document.activeElement)||await page.getByRole('button',{name:'Latest reply',exact:true}).evaluate(element=>element===document.activeElement),'keyboard focus can leave the scrollable conversation');
 });
 
+for(const [status,width,theme,longTranscript] of [['error',1440,'dark'],['error',390,'light'],['error',320,'dark'],['canceled',390,'dark'],['error',1440,'light',true]]) test(`Ask Pharos retry with another model focuses the picker (${status}, ${theme}${longTranscript?', long transcript':''}) @ ${width}`,{skip},async t=>{
+  const selection={provider:'Codex',model:'test-model',effort:'Low'};
+  const turn={id:'first-turn',prompt:'Which commands keep failing?',cli:'Codex',model:'test-model',modelLabel:'Test Model',effort:'Low',status:'clarification',reply:'',clarification:{question:'Which project?',options:['Pharos','All projects']},cards:[],elapsedMs:1000};
+  const original={id:'failed-chat',createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'Keep the time range to this week.',conversation:[turn,{...turn,id:'failed-turn',prompt:'Pharos',status,clarification:null,reply:status==='error'?'The agent returned an empty response; try again':'Request canceled.'}]};
+  if(longTranscript)original.conversation.splice(0,1,{...turn,id:'older-turn',prompt:'Older question',status:'multiple',clarification:null,reply:'A'.repeat(8000)},{...turn,status:'multiple',clarification:null,reply:'B'.repeat(8000)});
+  const sessions=new Map([[original.id,original]]);
+  const {page,settled,shot,calls}=await open(t,{url:'/?ask_chat=failed-chat',viewport:{width,height:900},preferences:{'pharos-theme':theme},ready:'.pharos-recovery:not([hidden])',api:{
+    'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
+    'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true},{id:'second-model',label:'Second Model',efforts:['Default','Low']}]},
+    'GET /api/ask/session':({query})=>sessions.get(query.get('id')),
+    'GET /api/ask/sessions':()=>({sessions:[...sessions.values()]}),
+    'POST /api/ask/session':({body})=>{
+      assert.ok(Buffer.byteLength(body.draft||'','utf8')<=12000,'saved drafts must satisfy the server byte limit');
+      const session={...(sessions.get(body.id)||{id:body.id,createdAt:Date.now(),updatedAt:Date.now(),conversation:[]}),draft:body.draft,selection:body.selection};
+      sessions.set(body.id,session);return session;
+    },
+    'POST /api/ask/send':({body})=>{
+      assert.ok(Buffer.byteLength(body.prompt,'utf8')<=12000,'sent questions must satisfy the server byte limit');
+      const session={...sessions.get(body.id),draft:'',conversation:[{...turn,id:body.turnID,prompt:body.prompt,status:'multiple',clarification:null,reply:'Your retry completed.'}]};
+      sessions.set(body.id,session);return session;
+    },
+  }});
+  await shot('failed-chat');
+  const question=page.getByRole('textbox',{name:'Ask a question',exact:true});
+  const clear=page.locator('.pharos-recovery').getByRole('button',{name:'Clear',exact:true});
+  await clear.focus();await page.keyboard.press('Enter');
+  assert.ok(await question.evaluate(element=>element===document.activeElement),'clearing a failure returns focus to the composer');
+  assert.equal(await question.inputValue(),'');
+  assert.ok(await page.getByRole('log',{name:'Conversation',exact:true}).isHidden(),'clearing hides the prior conversation');
+  assert.ok(await page.locator('.pharos-model-trigger').isEnabled(),'a cleared chat allows choosing another model');
+  assert.equal(new URL(page.url()).searchParams.get('ask_chat'),null);
+  await shot('cleared-chat');
+  await page.goBack();await clear.waitFor();await settled();
+  assert.equal(await question.inputValue(),original.draft,'the failed chat remains available with its prior draft');
+  const retry=page.getByRole('button',{name:'Try Again with a different model',exact:true});
+  await retry.focus();await page.keyboard.press('Enter');
+  const picker=page.getByRole('dialog',{name:'Model selection',exact:true});
+  assert.ok(await picker.evaluate(element=>element.contains(document.activeElement)),'retry moves keyboard focus into the model picker');
+  const prior=longTranscript?'[Earlier conversation omitted or shortened to fit.]\n\nYou:\nWhich commands keep failing?\n\nPharos:\n'+'B'.repeat(8000):'You:\nWhich commands keep failing?\n\nPharos:\nWhich project?\n\n- Pharos\n\n- All projects';
+  const expected=prior+'\n\nYou:\nPharos\n\nPharos ('+status+'):\n'+original.conversation.at(-1).reply+'\n\nYou (unsent draft):\nKeep the time range to this week.';
+  assert.equal(await question.inputValue(),expected);
+  const newID=new URL(page.url()).searchParams.get('ask_chat');
+  assert.ok(newID&&newID!==original.id,'retry has its own draft chat');
+  assert.equal(calls.filter(call=>call.path==='/api/ask/send').length,0,'opening the picker must not send a request');
+  const fits=element=>{const box=element.getBoundingClientRect();return box.left>=0&&box.right<=innerWidth&&box.top>=0&&box.bottom<=innerHeight;};
+  assert.ok(await picker.evaluate(fits),'the picker stays on screen');
+  assert.ok(await question.evaluate(fits),'restored messages remain reachable');
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'recovery actions must wrap on narrow screens');
+  await shot('restored-draft-and-picker');
+  const saved=page.waitForResponse(response=>response.url().includes('/api/ask/session')&&response.request().method()==='POST'&&response.request().postDataJSON().selection.model==='second-model');
+  await picker.getByRole('button',{name:/^Model /}).click();
+  await picker.getByRole('button',{name:'Second Model',exact:true}).click();
+  await page.keyboard.press('Escape');await saved;await settled();
+  assert.ok(await page.locator('.pharos-model-trigger').evaluate(element=>element===document.activeElement),'Escape returns focus to the model control');
+  assert.deepEqual(sessions.get(newID).selection,{...selection,model:'second-model'});
+  assert.equal(sessions.get(newID).draft,expected);
+  assert.deepEqual(sessions.get(original.id).conversation,original.conversation,'the prior chat remains in history');
+  await page.reload();await settled();
+  await page.waitForFunction(text=>document.querySelector('#pharos-question')?.value===text,expected);
+  assert.ok(await page.getByRole('button',{name:'Send question',exact:true}).isEnabled());
+  if(longTranscript){
+    await page.getByRole('button',{name:'Send question',exact:true}).click();
+    await page.getByRole('status').filter({hasText:'Your retry completed.'}).waitFor();
+    await settled();
+    assert.equal(sessions.get(newID).conversation[0].prompt,expected,'the restored transcript can be sent after reload');
+    await shot('sent-trimmed-transcript');
+  }
+});
+
 for (const moveFocus of [false, true]) test(`opening a saved chat ${moveFocus ? "preserves a newer focus choice" : "focuses its composer"}`, { skip }, async t => {
   const selection = { provider: 'Codex', model: 'test-model', effort: 'Low' };
   const session = { id: 'focus-chat', createdAt: Date.now(), updatedAt: Date.now(), selection, draft: '', conversation: [{ id: 'prior-turn', prompt: 'A prior question', cli: 'Codex', model: 'test-model', modelLabel: 'Test Model', effort: 'Low', status: 'multiple', message: '', elapsedMs: 1000, reply: 'A saved reply', cards: [] }] };

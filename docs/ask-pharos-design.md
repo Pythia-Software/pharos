@@ -145,6 +145,19 @@ conversation, using a reset icon and the short tooltip “Clear chat and start f
 Disable and grey out Send when the draft is empty or contains only whitespace,
 and while a request is running.
 
+For a failed or canceled question, offer “Try Again with a different model”
+alongside retry, ordinary search, and Clear. Clear uses the same fresh-chat behavior
+as the composer’s Clear button. Retrying with a different model starts a fresh chat
+with the full conversation in the composer: user messages, Pharos replies,
+clarification questions and choices,
+and result links, followed by any unsent composer draft. Label speakers and failed
+or canceled replies. Open the model picker so the user can choose a CLI, model, or
+effort before sending. Fit the restored text within the server’s 12,000-byte UTF-8
+prompt and draft limit, including speaker labels and omission notices. Prioritize
+the unsent draft and the latest complete turns, shorten an oversized latest turn
+or draft without splitting Unicode code points, and label omitted or shortened
+content in the composer. Keep the original chat in History.
+
 ## Design review behavior
 
 The prototype provides the History and Clear flows with browser-local storage.
