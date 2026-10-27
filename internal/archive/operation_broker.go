@@ -79,6 +79,9 @@ func brokerOperationsPath(installation string) string {
 func newBrokerOperations(path string) *brokerOperations {
 	b := &brokerOperations{reg: newOpRegistry("broker"), path: path, client: &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{Proxy: nil}}}
 	b.reg.wake = make(chan struct{}, 1)
+	// Ended operations stay listed (and in the state file) until newer ones
+	// push them out, not for the service's ten minutes.
+	b.reg.keepEnded = 30 * 24 * time.Hour
 	var stored struct {
 		Operations []brokerOperationRecord `json:"operations"`
 	}
