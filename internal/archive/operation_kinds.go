@@ -93,7 +93,7 @@ var operationKinds = []operationKind{
 	{Kind: "host.add", Label: "Add this Mac (Terminal)", Verb: "Adding this Mac", Holds: "D:w W:w", Affects: "conv:*",
 		OnEject: "Pharos cannot stop it.", Latency: "none", Journal: journalAlways, Priority: priorityForeground},
 	{Kind: "capture.history-backfill", Label: "Capture history backfill (Terminal)", Verb: "Backfilling history", Holds: "D:w C(h):w", Affects: "capt:h/*",
-		OnEject: "Pharos cannot stop it; its native-snapshot pause blocks ordinary capture of the chosen sources until released.", Latency: "none", Journal: journalAlways, Priority: priorityForeground},
+		OnEject: "Pharos cannot stop it; its native-snapshot pause blocks ordinary capture of the chosen sources until released.", Latency: "none", Journal: journalNever, Priority: priorityForeground},
 
 	// B. The analysis chain, and the reads that start it.
 	{Kind: "analysis.chain", Label: "Update analyses", Verb: "Updating analyses", Holds: "D:w W:w", Affects: "an.*, findings",
