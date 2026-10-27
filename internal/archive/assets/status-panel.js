@@ -223,7 +223,6 @@
     target.title = model.title;
     target.setAttribute('aria-label', `Library drive: ${model.title}`);
     target.setAttribute('aria-expanded', String(Boolean(panel)));
-    target.onclick = toggle;
   }
 
   function renderHeader() {

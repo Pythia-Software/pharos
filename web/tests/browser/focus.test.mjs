@@ -525,6 +525,35 @@ test("Unified activity panel holds focus across refreshes, stops each operation 
   assert.deepEqual(stopped, ["op-backup", "op-index", "op-view"]);
 });
 
+// With the flag off (the default) the old drive panel runs and nothing reads
+// the status snapshot. The Settings switch takes over the chip at once, and
+// turning it off gives it back.
+test("Unified activity switch: off leaves the old drive panel alone; on and off again switch the chip's panel", { skip }, async t => {
+  const { page, settled, calls } = await open(t, { url: "/settings/preferences", ready: "#unifiedActivity" });
+  const chip = page.locator("#pharosDrive");
+  const statusCalls = () => calls.filter(call => call.path.startsWith("/api/status") || call.path.startsWith("/api/app/status")).length;
+  await chip.click();
+  await page.locator("#pharosDrivePanel").waitFor();
+  await chip.click();
+  await settled();
+  assert.equal(statusCalls(), 0, "the flag is off, yet the page read the status snapshot");
+  assert.equal(await page.locator("#pharosStatusPanel").count(), 0);
+
+  await page.locator("#unifiedActivity").click();
+  await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library);
+  assert.ok(calls.some(call => call.method === "POST" && call.path === "/api/preferences" && call.body?.set?.["pharos-unified-activity-v1"] === true));
+  await chip.click();
+  await page.locator("#pharosStatusPanel").waitFor();
+  assert.equal(await page.locator("#pharosDrivePanel").count(), 0);
+  await page.keyboard.press("Escape");
+
+  await page.locator("#unifiedActivity").click();
+  await settled();
+  await chip.click();
+  await page.locator("#pharosDrivePanel").waitFor();
+  assert.equal(await page.locator("#pharosStatusPanel").count(), 0);
+});
+
 for (const width of [1440, 390, 320]) test(`Data guide takes focus, keeps controls reachable and returns focus @ ${width}`, { skip }, async t => {
   const app = await open(t, { url: "/analyze?analyze_mode=query&analyze_data=tool_calls&analyze_topic=tools", viewport: { width, height: 900 }, ready: ".usage-workspace-table .qt-row" });
   const { page } = app;
