@@ -362,7 +362,7 @@ Notes:
 
 | Kind | Label · verb | Trigger | Proc | Holds | Affects | Stop | On stop or eject | Latency | Journal | Pri |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `backup.local` | Back up · Backing up | user, cli | svc, cli (lease only) | D r, B(d), C(\*) r | backup.local | backup (service only) | Stops; the next backup carries on from what was copied. Waits for each host's capture (`blocked(capture-running)`; today's phase "waiting for a capture to finish"). | record | always (service); never (CLI, lease only) | fg |
+| `backup.local` | Back up · Backing up | user, cli | svc, cli (lease only) | D (reads the library; writes its `backups.json`), B(d), C(\*) r | backup.local | backup (service only) | Stops; the next backup carries on from what was copied. Waits for each host's capture (`blocked(capture-running)`; today's phase "waiting for a capture to finish"). | record | always (service); never (CLI, lease only) | fg |
 | `cloud.connect` | Test a cloud backup destination · Testing the destination | user | svc (inside the request, merged with `s.life.ctx`) | D (staging), K | — | cloud | Stops the test; connect the destination again afterwards. | instant | always | fg |
 | `cloud.upload` (variants `sample`, `full`) | Upload a cloud backup · Uploading a cloud backup | user, schedule | svc | D (staging, snapshot read), K(d) | backup.cloud:d | cloud | Stops the upload and deletes its staged archive; the last completed cloud backup is unchanged. It starts again from the beginning when started again, or at the schedule's next time. | batch (snapshot), record (upload: the S3 abort and the final save have 2 s limits each, then the staging is removed) | always | fg (`user`), bg (`schedule`) |
 | `cloud.verify` | Verify a cloud backup · Verifying a cloud backup | user, cli (`cloud-backup verify`, required for password-protected backups) | svc, cli (catalog writer: journal and lease) | D (staging), K(d), W | backup.cloud:d | cloud (service only) | Stops and removes the partly recovered copy; run the verification again. | record | always | fg |
@@ -413,14 +413,15 @@ Mac:
 1. **this service's registry**, for its own operations. The registry is
    authoritative for live state in its own process; the verdict never reads
    this process's journal rows, which may lag by seconds (§6.2);
-2. **process leases** of other Pharos processes on this Mac (§6.5): a held
-   lease is a live holder with the kinds and holds it declares; journal rows
-   only add history and progress to it;
+2. **process leases** of other Pharos processes on this Mac (§6.5), listed
+   and probed synchronously on each verdict read: a held lease is a live
+   holder with the kinds and holds it declares; journal rows only add
+   history and progress to it;
 3. the broker's registry entries that touch the library.
 
 | Verdict | When | What eject does |
 |---|---|---|
-| `safe` | No running operation holds the drive for writing. Read-only holders (a local backup) may run; eject stops them | Release stops any readers (each `on_eject` says how) and closes the catalog |
+| `safe` | No running operation holds the drive for writing. Read-only holders (a `maintenance.cache-warm` pass, a `drive.measure` read) may run; eject stops them | Release stops any readers (each `on_eject` says how) and closes the catalog |
 | `safe-in(eta)` | At least one operation holds the drive for writing, and every drive holder stops at a safe point within the release budget (7 s, `stopTimeout`): latency `instant` or `record`, a `SafePoint` estimate ≤ 7 s, or a `batch` holder with no estimate (assumed to stop in time; a release that times out refuses safely). `eta` is the largest estimate, or `null` when any is unknown | Release stops them at safe points and closes the catalog. With an `eta`: "Ejecting stops <label> within about N s". With `eta: null`, fixed wording: "Ejecting stops <label> after the current <unit>; if that takes more than 7 s, Pharos refuses and you can try again" |
 | `busy` | Some holder blocks release: a held lease of another process (CLI work), a broker operation, `catalog.initialize`, a `release-blocking` request-scoped operation (§2.3), or a holder whose `SafePoint` estimate exceeds the budget or whose latency is `step` or `none`; `eta` is its safe point or forecast when known | Eject is refused until it ends or reaches its safe point; the panel names it |
 | `unsafe` | Unknown or unregistered writer evidence: kind `unknown`; unregistered running work found by the registry's self-check; a held capture or index lock (today's flock probes) that no held lease and no operation in this service's registry names; a lease file that cannot be read or probed; the service unreachable while the drive is mounted | Eject is refused; the panel says what is unknown |
@@ -433,9 +434,11 @@ Rules:
 - **Err toward not safe.** When two rules apply, the worse verdict wins
   (`unsafe` > `busy` > `safe-in` > `safe`). A missing estimate never improves
   a verdict.
-- **Read holds still count as blockers.** A local backup only reads the
-  library, so it does not make the verdict worse than `safe`, but ejecting
-  stops it and the snapshot lists it with its `on_eject`.
+- **Read holds still count as blockers.** A read-only holder does not make
+  the verdict worse than `safe`, but ejecting stops it and the snapshot
+  lists it with its `on_eject`. A local backup is not read-only: it writes
+  the library's `backups.json` (its id on the first backup and each
+  finished backup, `backup.go`), so it holds the drive for writing.
 - **Known gap: older builds.** A `pharos index` or `ingest` from an older
   build on this Mac takes no lease and holds no lock the service probes, so
   it is invisible, as it is to `libraryActivities` today. Probing SQLite for
@@ -653,18 +656,34 @@ Liveness of other processes is never inferred from pids or heartbeat rows.
   unlinks the path while holding the lock, then closes. A creator racing it
   either sees the inode mismatch and retries, or locks a file that is not
   unlinked afterwards.
-- **The flock is the liveness signal.** Pid reuse does not matter. A
-  background pass (§6.2's journal-writer round, at most every 3 s) lists the
-  lease files and probes each with `LOCK_SH|LOCK_NB` (held = live), and
-  stores the result. Snapshot reads (`GET /api/operations`, the stream) only
-  read that cached result; a GET never deletes a file or writes a row.
-- **Reconciling in the background.** The same pass deletes dead leases (the
-  protocol above) and queues `interrupted` (reason `owner-exited`) images
-  through the low-priority lane for every open row on this host whose
-  `instance` is neither the running service's nor a live lease's. That also
-  covers rows whose lease was deleted before their reconcile landed (a
-  service killed in between, a dropped round), and rows from a previous
-  service instance. Their open children follow.
+- **The flock is the liveness signal.** Pid reuse does not matter. Every
+  verdict read (the snapshot, the stream, the release and quit-gate paths)
+  lists the lease directories and probes each file synchronously: a
+  read-only `open` plus `LOCK_SH|LOCK_NB` (held = live), as `captureActive`
+  probes the capture lock today. Probing writes nothing. A burst of reads
+  may share one probe result for at most 1 s; the release path always
+  probes afresh. A GET never deletes a file or writes a row.
+- **Lease lifetime.** A process takes its lease before it queues its first
+  journal row, and keeps it until its last row is written: at exit it runs a
+  final journal round with a bounded budget (1 s, through the same
+  non-blocking rule plus one blocking attempt within that budget), and only
+  then unlinks the lease (while holding its lock) and closes it. If the
+  final round could not write, its rows are reconciled as below, which is
+  the truth: the outcome was not recorded.
+- **Reconciling in the background.** A reconcile pass runs on its own timer
+  (every 10 s), independent of the writer gate and of the journal writer's
+  rounds. It deletes dead leases (the protocol above). Then it reads the
+  open rows on this host whose `instance` is not the running service's,
+  and for each one probes **that row's own** lease (`<instance>.json`) at
+  that moment; missing or unheld means dead. For each dead one it queues a
+  conditional update, never a full row image: `UPDATE operation_journal SET
+  state='interrupted', reason='owner-exited', ended_at=?, updated_at=? WHERE
+  id=? AND instance=? AND ended_at IS NULL`, written through the
+  low-priority lane. A row its owner ended in the meantime is left alone.
+  This covers rows whose lease was deleted before their reconcile landed (a
+  service killed in between, a dropped round) and rows from a previous
+  service instance. Open children of a reconciled row follow with the same
+  conditional update.
 - **Journaling:** commands that already open the catalog writable (`index`,
   `ingest`, `repair-existing`, `upgrade`, `build-tools`, `add-this-mac`, and
   `cloud-backup verify`, which saves the verification state through
