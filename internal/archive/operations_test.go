@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 )
@@ -208,5 +209,61 @@ func TestServerStartRegistersBeforeWorkAndRefusesWhileStopping(t *testing.T) {
 	}
 	if len(server.ops.views()) != 1 {
 		t.Fatal("a refused start registered an operation")
+	}
+}
+
+// The origins publication is a pass like the others: forgotten when the
+// projection is current, an operation when it stores origins.
+func TestOriginsPassIsAnOperationOnlyWhenItPublishes(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	publishOrigins(t, catalog)
+	catalog.ops = newOpRegistry("service")
+	catalog.originsPass(context.Background())
+	if views := catalog.ops.views(); len(views) != 0 {
+		t.Fatalf("a pass over current origins left operations: %+v", views)
+	}
+	execTx(t, catalog.DB, "UPDATE origin_state SET revision=revision+1")
+	catalog.originsPass(context.Background())
+	if views := catalog.ops.views(); len(views) != 1 || views[0].Spec.Kind != "maintenance.origins" || views[0].State != opSucceeded {
+		t.Fatalf("a pass that published: %+v", views)
+	}
+}
+
+// The hidden writes requests and the schedule hand to the background are
+// listed nowhere, but each keeps the drive from being safe while it runs.
+func TestHiddenBackgroundWritesCountForTheVerdict(t *testing.T) {
+	catalog, config := testCatalog(t)
+	server := testServer(t, config, catalog)
+	for _, kind := range []string{"maintenance.origins", "maintenance.mcp-history", "ask.save", "cloud.reconcile"} {
+		_, op := server.ops.begin(context.Background(), OperationSpec{Kind: kind, Trigger: triggerRead})
+		verdict := server.ejectVerdictNow(context.Background(), false)
+		if verdict.Verdict == verdictSafe || !slices.ContainsFunc(verdict.Blockers, func(b ejectBlocker) bool { return b.Kind == kind }) {
+			t.Errorf("a running %s does not count for the verdict: %+v", kind, verdict)
+		}
+		op.Finish(nil)
+	}
+}
+
+// The schedule tick's reconcile is a cloud.reconcile pass, forgotten when it
+// stored nothing.
+func TestCloudReconcilePassIsForgottenWhenNothingChanged(t *testing.T) {
+	catalog, config := testCatalog(t)
+	server := testServer(t, config, catalog)
+	if err := server.settleCloudRuns(context.Background(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for _, view := range server.ops.views() {
+		if view.Spec.Kind == "cloud.reconcile" {
+			t.Fatalf("an idle tick left an operation: %+v", view)
+		}
+	}
+	interrupted := jsonText(cloudRun{ID: "lost-run", DestinationID: "cloud", State: "running", OwnerPID: 999999999, OwnerHost: currentHost().ID, UpdatedAt: "earlier"})
+	execTx(t, catalog.DB, `INSERT INTO cloud_destinations(id,config_json,credential_json,imported_at) VALUES('cloud','{"name":"Backup"}','{}','2026-10-27')`,
+		`INSERT INTO cloud_backup_runs(id,destination_id,status_json,created_at) VALUES('lost-run','cloud','`+interrupted+`','2026-10-27')`)
+	if err := server.settleCloudRuns(context.Background(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(server.ops.views(), func(view opView) bool { return view.Spec.Kind == "cloud.reconcile" && view.State == opSucceeded }) {
+		t.Fatalf("a tick that recorded a lost run left no operation: %+v", server.ops.views())
 	}
 }

@@ -439,6 +439,23 @@ func (c *Catalog) libraryPass(ctx context.Context) (context.Context, func(), boo
 // cached values (see runCacheHold). Tests shorten it.
 var originsRunInterval = runCacheHold
 
+// originsPass publishes conversation origins as a maintenance.origins pass,
+// an operation only when the projection was out of date (§3.4).
+func (c *Catalog) originsPass(ctx context.Context) {
+	origins := c.beginPass(ctx, "maintenance.origins", triggerChained)
+	published, err := c.publishOrigins(ctx)
+	if published {
+		origins.worked(1)
+	}
+	if ctx.Err() != nil {
+		err = nil
+	}
+	origins.end(err)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Conversation origins: %v\n", err)
+	}
+}
+
 // maintainLibrary keeps the stored projection current, including after
 // ingests run by other processes against the same catalog. It also publishes
 // conversation origins, which requests only read, including while an ingest
@@ -466,18 +483,7 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 	var originsAt time.Time
 	for {
 		if !c.libraryRefreshStopped() && (c.ingestRuns.Load() == 0 || time.Since(originsAt) >= originsRunInterval) {
-			origins := c.beginPass(ctx, "maintenance.origins", triggerChained)
-			published, err := c.publishOrigins(ctx)
-			if published {
-				origins.worked(1)
-			}
-			if ctx.Err() != nil {
-				err = nil
-			}
-			origins.end(err)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Conversation origins: %v\n", err)
-			}
+			c.originsPass(ctx)
 			originsAt = time.Now()
 		}
 		if c.projectionBatches.Load() > 0 || c.libraryRefreshStopped() {
