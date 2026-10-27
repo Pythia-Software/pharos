@@ -126,6 +126,26 @@ func execTx(t testing.TB, db *sql.DB, statements ...string) {
 	commitSeed(t, tx)
 }
 
+// publishProjections leaves catalog as a sync's end does: origins published
+// and the tool rollup built. Requests only read them, so a test that seeds rows
+// directly calls this before reading through a request.
+func publishProjections(t testing.TB, catalog *Catalog) {
+	t.Helper()
+	publishOrigins(t, catalog)
+	if err := catalog.ensureToolRollup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// publishOrigins publishes origins, as the writer that changed their inputs
+// does (see ensureOrigins).
+func publishOrigins(t testing.TB, catalog *Catalog) {
+	t.Helper()
+	if err := catalog.ensureOrigins(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // testConfig is a configuration whose every path is under a new temporary
 // directory. The catalog path is not created.
 func testConfig(t testing.TB) Config {

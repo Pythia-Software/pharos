@@ -437,6 +437,7 @@ func TestParallelismThreadsAndRows(t *testing.T) {
 			`INSERT INTO origin_observations(conversation_id,evidence_key,execution_machine_id,priority,evidence) VALUES('continued','producer','remote',30,'remote continuation')`,
 			`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,source_order,created_at) VALUES('continued-u','continued','u','user','message','','h',0,'2026-11-03T18:00:00Z'),('continued-a','continued','a','assistant','message','','h',1,'2026-11-03T19:00:00Z')`,
 		)
+		publishOrigins(t, c)
 		for _, counting := range []string{"agent", "workspace"} {
 			if err := c.SetUIPreferences(t.Context(), map[string]any{"set": map[string]any{parallelismSettingsKey: map[string]any{"gap": 15, "counting": counting}}}); err != nil {
 				t.Fatal(err)
@@ -539,7 +540,14 @@ func TestParallelismSettingsAndHTTP(t *testing.T) {
 func TestParallelismIncremental(t *testing.T) {
 	c, _ := parallelismTestCatalog(t)
 	_, _, cutoff := parallelismPeriod(c.clock())
+	// Pages compute dirty conversations without storing them; maintenance does.
 	if _, err := c.parallelismActivities(t.Context(), cutoff); err != nil {
+		t.Fatal(err)
+	}
+	if dirty := countRows(t, c, "SELECT COUNT(*) FROM parallelism_dirty"); dirty != 9 {
+		t.Fatalf("a page stored activity: %d dirty", dirty)
+	}
+	if _, err := c.refreshParallelism(t.Context(), 100, false); err != nil {
 		t.Fatal(err)
 	}
 	if dirty := countRows(t, c, "SELECT COUNT(*) FROM parallelism_dirty"); dirty != 0 {

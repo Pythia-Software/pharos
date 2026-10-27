@@ -466,10 +466,6 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/pricing":
 		writeJSON(w, s.Catalog.pricingStatus(), 200)
 	case path == "/api/origins":
-		if err := s.Catalog.ensureOrigins(r.Context()); err != nil {
-			writeError(w, err, 500)
-			return
-		}
 		rows, err := queryMapsContext(r.Context(), s.Catalog.reader(), "SELECT id,label,kind FROM machines ORDER BY label,id")
 		if err != nil {
 			writeError(w, err, 500)

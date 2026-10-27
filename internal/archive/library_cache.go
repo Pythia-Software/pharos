@@ -57,9 +57,6 @@ func (c *Catalog) clock() time.Time {
 // rebuilding them only after source changes, a date change, or a request for fields
 // they lack. Concurrent misses wait for one rebuild.
 func (c *Catalog) cachedLibraryRows(ctx context.Context, fields libraryFields) ([]map[string]any, error) {
-	if err := c.ensureOrigins(ctx); err != nil {
-		return nil, err
-	}
 	cache := &c.library
 	cache.mu.Lock()
 	defer cache.mu.Unlock()

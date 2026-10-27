@@ -109,17 +109,9 @@ func cachedValue[T any](ctx context.Context, c *Catalog, key string, compute fun
 // derivedValue is cachedValue without a type. A request marks the value as
 // used, which keeps it warm.
 func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(context.Context) (any, error), request bool) (any, error) {
-	// Publish attribution before taking the input generation. A lazy publish
-	// inside compute would invalidate the very snapshot being built. Publication
-	// still advances the generation for reads racing with a source commit.
-	// Machine Time is already inside the caller's read transaction over a
-	// published cube. Its publication key supplies attribution consistency;
-	// acquiring a second reader here would exhaust a one-connection pool.
-	if !strings.HasPrefix(key, "machine-time:") {
-		if err := c.ensureOrigins(ctx); err != nil {
-			return nil, err
-		}
-	}
+	// Attribution is published by writers (see ensureOrigins); publication
+	// advances the generation, so values computed from older origins are
+	// recomputed.
 	cache := &c.derived
 	for {
 		if err := ctx.Err(); err != nil {

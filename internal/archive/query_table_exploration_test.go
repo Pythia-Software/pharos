@@ -35,6 +35,7 @@ func TestQueryDatasetsHTTP(t *testing.T) {
 	catalog, config := testCatalog(t)
 	seedToolCalls(t, catalog, 31)
 	ingestUsageFixture(t, catalog)
+	publishProjections(t, catalog)
 	server := testServer(t, config, catalog)
 	call := func(method, path string, body any) *httptest.ResponseRecorder {
 		return apiCall(t, server, config.APIToken, method, path, body)
@@ -210,6 +211,7 @@ func TestUsageQueryItemsRetainSourceAndLoadPayloadOnDemand(t *testing.T) {
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
+	publishProjections(t, catalog)
 	server := testServer(t, config, catalog)
 	w := queryExplorationCall(server, config.APIToken, "POST", "/api/query/tool_calls/rows-v2", `{"version":2,"profile":"qt-sqlite-v1","select":["id"],"limit":1}`)
 	var collection struct {

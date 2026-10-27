@@ -12,12 +12,17 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
 const statisticsRowCap = 100000
 const statisticsByteCap = 64 << 20
 const statisticsTTL = 5 * time.Minute
+
+// statisticsFreshWorkspaces bounds the dirty workspaces a statistics query
+// computes metrics for; tests lower it.
+var statisticsFreshWorkspaces = 100
 
 type statisticsRow struct {
 	ID        string                     `json:"id"`
@@ -52,18 +57,7 @@ func (c *Catalog) queryStatistics(tool string, args map[string]any) (any, error)
 		if !ok || id == "" {
 			return nil, fmt.Errorf("release_snapshot requires snapshot_id")
 		}
-		result, err := c.DB.Exec("DELETE FROM mcp_stat_snapshots WHERE id=?", id)
-		if err != nil {
-			return nil, err
-		}
-		count, err := result.RowsAffected()
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"snapshot_id": id, "released": count > 0, "returned_count": 0}, nil
-	}
-	if err := c.ensureOrigins(context.Background()); err != nil {
-		return nil, err
+		return map[string]any{"snapshot_id": id, "released": statisticsSnapshots.release(c.Path, id), "returned_count": 0}, nil
 	}
 	r, err := parseMetricRequest(tool, args)
 	if err != nil {
@@ -90,7 +84,7 @@ func (c *Catalog) queryStatistics(tool string, args map[string]any) (any, error)
 			r.SnapshotID = parts[0]
 		}
 		var original statisticsRequest
-		snapshot, original, err = c.loadStatisticsSnapshot(ctx, r.SnapshotID)
+		snapshot, original, err = c.loadStatisticsSnapshot(r.SnapshotID)
 		if err != nil {
 			return nil, err
 		}
@@ -122,30 +116,6 @@ func (c *Catalog) queryStatistics(tool string, args map[string]any) (any, error)
 			}
 		}
 	} else {
-		// Do a bounded amount of numeric-summary work. Remaining dirty groups
-		// are explicitly pending, and the service's maintenance loop backfills them.
-		if len(r.Metrics) > 0 {
-			where, args := statisticsContext(r)
-			from := `workspaces w LEFT JOIN repositories repo ON repo.id=w.repository_id`
-			if r.Entity == "conversation" {
-				from = `conversations c JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories repo ON repo.id=w.repository_id`
-			}
-			prefix, originArgs, e := c.originReadSource(ctx, c.reader())
-			if e != nil {
-				return nil, e
-			}
-			dirty, e := queryMapsContext(ctx, c.DB, prefix+`SELECT DISTINCT w.id FROM `+from+` JOIN mcp_metric_dirty d ON d.workspace_id=w.id WHERE `+strings.Join(where, " AND ")+` LIMIT 100`, append(originArgs, args...)...)
-			if e != nil {
-				return nil, e
-			}
-			ids := []string{}
-			for _, row := range dirty {
-				ids = append(ids, firstString(row["id"]))
-			}
-			if _, err = c.refreshMetricProjections(ctx, 100, ids...); err != nil {
-				return nil, err
-			}
-		}
 		snapshot, err = c.buildStatisticsSnapshot(ctx, r)
 		if err != nil {
 			return nil, err
@@ -177,7 +147,7 @@ func (c *Catalog) queryStatistics(tool string, args map[string]any) (any, error)
 		if err != nil {
 			return nil, err
 		}
-		if err = c.saveStatisticsSnapshot(ctx, &snapshot, r); err != nil {
+		if err = c.saveStatisticsSnapshot(&snapshot, r); err != nil {
 			return nil, err
 		}
 	}
@@ -200,7 +170,7 @@ func statisticsNeedsSnapshot(result any) bool {
 
 func (c *Catalog) buildStatisticsSnapshot(ctx context.Context, r statisticsRequest) (statisticsSnapshot, error) {
 	snapshot := statisticsSnapshot{Coverage: map[string]map[string]int{}, Complete: r.Query == ""}
-	tx, err := c.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := c.reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return snapshot, err
 	}
@@ -248,11 +218,33 @@ func (c *Catalog) buildStatisticsSnapshot(ctx context.Context, r statisticsReque
 	if len(rows) > statisticsRowCap {
 		return snapshot, fmt.Errorf("statistics population exceeds %d rows; narrow filters", statisticsRowCap)
 	}
+	// Compute a bounded number of dirty workspaces' metrics here, without
+	// storing them. The rest are explicitly pending until the service's
+	// maintenance loop stores them.
+	fresh := metricProjections{}
+	if len(r.Metrics) > 0 {
+		pending, seen := []string{}, map[string]bool{}
+		for _, row := range rows {
+			if workspace := firstString(row["workspace_id"]); integer(row["metric_pending"]) != 0 && !seen[workspace] && len(pending) < statisticsFreshWorkspaces {
+				pending, seen[workspace] = append(pending, workspace), true
+			}
+		}
+		if fresh, err = c.currentMetrics(ctx, tx, pending); err != nil {
+			return snapshot, err
+		}
+	}
 	all := []statisticsRow{}
 	for _, row := range rows {
 		m, e := decodeMetrics(row["metrics"])
 		if e != nil {
 			return snapshot, e
+		}
+		key := firstString(row["entity_id"])
+		if entity == "workspace" {
+			key = firstString(row["workspace_id"])
+		}
+		if values, ok := fresh[entity][key]; ok {
+			m, row["metric_pending"] = values, int64(0)
 		}
 		selectedMetrics := map[string]statMetricValue{}
 		for _, name := range r.Metrics {
@@ -979,7 +971,66 @@ func prepareStatisticsSnapshot(c *Catalog, s *statisticsSnapshot) {
 	s.Created = c.clock().UnixMilli()
 	s.Expires = s.Created + statisticsTTL.Milliseconds()
 }
-func (c *Catalog) saveStatisticsSnapshot(ctx context.Context, s *statisticsSnapshot, r statisticsRequest) error {
+// statisticsSnapshotStore keeps query_statistics snapshots for continuation
+// in this process's memory, not the catalog: saving one would wait for any
+// sync holding the writer. A forwarded call always reaches the service, and a
+// direct one reaches the agent's long-lived MCP process, so a cursor fails
+// only once the service starts or stops, as an expired snapshot does.
+type statisticsSnapshotStore struct {
+	mu        sync.Mutex
+	snapshots map[string]storedStatisticsSnapshot
+}
+
+type storedStatisticsSnapshot struct {
+	created, expires int64
+	request, payload []byte
+	secret           string
+}
+
+// statisticsSnapshotLimit is how many snapshots each catalog keeps active.
+const statisticsSnapshotLimit = 8
+
+var statisticsSnapshots statisticsSnapshotStore
+
+func statisticsSnapshotKey(catalog, id string) string { return catalog + "\x00" + id }
+
+func (store *statisticsSnapshotStore) save(catalog, id string, now int64, snapshot storedStatisticsSnapshot) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.snapshots == nil {
+		store.snapshots = map[string]storedStatisticsSnapshot{}
+	}
+	active := 0
+	for key, stored := range store.snapshots {
+		if stored.expires <= now {
+			delete(store.snapshots, key)
+		} else if strings.HasPrefix(key, catalog+"\x00") {
+			active++
+		}
+	}
+	if active >= statisticsSnapshotLimit {
+		return fmt.Errorf("eight statistics snapshots are active; reuse a snapshot or retry after expiry")
+	}
+	store.snapshots[statisticsSnapshotKey(catalog, id)] = snapshot
+	return nil
+}
+
+func (store *statisticsSnapshotStore) load(catalog, id string) (storedStatisticsSnapshot, bool) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	stored, ok := store.snapshots[statisticsSnapshotKey(catalog, id)]
+	return stored, ok
+}
+
+func (store *statisticsSnapshotStore) release(catalog, id string) bool {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	_, ok := store.snapshots[statisticsSnapshotKey(catalog, id)]
+	delete(store.snapshots, statisticsSnapshotKey(catalog, id))
+	return ok
+}
+
+func (c *Catalog) saveStatisticsSnapshot(s *statisticsSnapshot, r statisticsRequest) error {
 	payload, err := json.Marshal(s)
 	if err != nil {
 		return err
@@ -990,52 +1041,29 @@ func (c *Catalog) saveStatisticsSnapshot(ctx context.Context, s *statisticsSnaps
 	if s.ID == "" {
 		prepareStatisticsSnapshot(c, s)
 	}
-	tx, err := c.beginWrite(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, "DELETE FROM mcp_stat_snapshots WHERE expires_at<=?", s.Created); err != nil {
-		return err
-	}
-	var count int
-	if err = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM mcp_stat_snapshots").Scan(&count); err != nil {
-		return err
-	}
-	if count >= 8 {
-		return fmt.Errorf("eight statistics snapshots are active; reuse a snapshot or retry after expiry")
-	}
-	_, err = tx.ExecContext(ctx, "INSERT INTO mcp_stat_snapshots VALUES(?,?,?,?,?,?)", s.ID, s.Created, s.Expires, jsonText(r), string(payload), s.Secret)
-	if err != nil {
-		return err
-	}
-	return tx.Commit()
+	return statisticsSnapshots.save(c.Path, s.ID, s.Created, storedStatisticsSnapshot{created: s.Created, expires: s.Expires, request: []byte(jsonText(r)), payload: payload, secret: s.Secret})
 }
-func (c *Catalog) loadStatisticsSnapshot(ctx context.Context, id string) (statisticsSnapshot, statisticsRequest, error) {
+func (c *Catalog) loadStatisticsSnapshot(id string) (statisticsSnapshot, statisticsRequest, error) {
 	s, r := statisticsSnapshot{}, statisticsRequest{}
-	var request, payload string
-	err := c.DB.QueryRowContext(ctx, "SELECT created_at,expires_at,request_json,payload,secret FROM mcp_stat_snapshots WHERE id=?", id).Scan(&s.Created, &s.Expires, &request, &payload, &s.Secret)
-	if err == sql.ErrNoRows {
+	stored, ok := statisticsSnapshots.load(c.Path, id)
+	if !ok {
 		return s, r, fmt.Errorf("snapshot unavailable; restart the query")
 	}
-	if err != nil {
-		return s, r, err
-	}
-	if c.clock().UnixMilli() >= s.Expires {
+	if c.clock().UnixMilli() >= stored.expires {
 		return s, r, fmt.Errorf("snapshot expired; restart the query")
 	}
-	s.ID = id
 	requestArgs := map[string]any{}
-	if err = json.Unmarshal([]byte(request), &requestArgs); err != nil {
+	if err := json.Unmarshal(stored.request, &requestArgs); err != nil {
 		return s, r, err
 	}
-	r, err = parseMetricRequest("query_statistics", requestArgs)
+	r, err := parseMetricRequest("query_statistics", requestArgs)
 	if err != nil {
 		return s, r, err
 	}
-	if err = json.Unmarshal([]byte(payload), &s); err != nil {
+	if err = json.Unmarshal(stored.payload, &s); err != nil {
 		return s, r, err
 	}
+	s.ID, s.Created, s.Expires, s.Secret = id, stored.created, stored.expires, stored.secret
 	return s, r, nil
 }
 

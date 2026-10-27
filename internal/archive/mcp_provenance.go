@@ -67,7 +67,7 @@ func (c *Catalog) boundedWorkDetail(args map[string]any) (map[string]any, error)
 	if section == "identity_links" {
 		values = append(values, id)
 	}
-	transaction, err := c.DB.Begin()
+	transaction, err := c.reader().Begin()
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +228,7 @@ func (c *Catalog) traceWorktree(args map[string]any) (map[string]any, error) {
 		base += " AND w.repository_id IN (SELECT r.id FROM repositories r WHERE " + repositoryNamePredicate("r") + ")"
 		values = append(values, repository, repository)
 	}
-	transaction, err := c.DB.Begin()
+	transaction, err := c.reader().Begin()
 	if err != nil {
 		return nil, err
 	}

@@ -35,6 +35,9 @@ type mcpServer struct {
 	answer  func(*Catalog, map[string]any) map[string]any
 	restart func(pending []byte) error
 	faulted bool // a direct call hit a memory fault (see direct)
+	// release stores a direct call's history and closes its catalog once
+	// the call is answered (see afterAnswer).
+	release func()
 }
 
 func newMCPServer(configPath string) *mcpServer {
@@ -66,11 +69,15 @@ func (m *mcpServer) run(input io.Reader, output io.Writer) error {
 		data, _ := base64.StdEncoding.DecodeString(pending)
 		input = io.MultiReader(bytes.NewReader(data), input)
 	}
+	// Input can end right after an answer, before afterAnswer.
+	defer m.releaseCatalog()
 	return serveMCP(input, output, m.handle, m.afterAnswer)
 }
 
-// afterAnswer restarts the process once the answer to a faulted call is out.
+// afterAnswer releases a direct call's catalog, then restarts the process
+// once the answer to a faulted call is out.
 func (m *mcpServer) afterAnswer(pending []byte) {
+	m.releaseCatalog()
 	if !m.faulted {
 		return
 	}
@@ -199,7 +206,29 @@ func (m *mcpServer) forward(config Config, request map[string]any) (map[string]a
 	return nil, true, fmt.Errorf("the Pharos service answered %s", answer.Status)
 }
 
-// direct opens the catalog for this request alone.
+// releaseCatalog runs the release a direct call left. Storing its history
+// writes to the catalog, so a drive yanked meanwhile faults as in direct.
+func (m *mcpServer) releaseCatalog() {
+	release := m.release
+	if release == nil {
+		return
+	}
+	m.release = nil
+	defer debug.SetPanicOnFault(debug.SetPanicOnFault(true))
+	defer func() {
+		if value := recover(); value != nil {
+			if _, fault := value.(interface{ Addr() uintptr }); !fault {
+				panic(value)
+			}
+			m.faulted, m.verified = true, ""
+		}
+	}()
+	release()
+}
+
+// direct opens the catalog for this request alone. It stays open, with the
+// library's use lease, until the answer is out, when afterAnswer stores the
+// call's history and closes it: the agent does not wait for the write.
 //
 // A drive yanked mid-call faults on SQLite's mapped index (see exitOnFault).
 // The call then fails, and the process restarts after answering (see
@@ -207,18 +236,23 @@ func (m *mcpServer) forward(config Config, request map[string]any) (map[string]a
 // reused for the same file (same device and inode) once the drive is back.
 // So after a fault nothing touches the catalog again, not even to close it.
 func (m *mcpServer) direct(config Config, request map[string]any) (response map[string]any, err error) {
+	m.releaseCatalog()
 	if err := m.checkLibrary(config); err != nil {
 		return nil, err
 	}
 	if releasedRecently(config.CatalogPath) {
 		return nil, errLibraryReleased
 	}
+	var lease *os.File
+	defer func() {
+		if lease != nil {
+			lease.Close()
+		}
+	}()
 	if _, e := os.Stat(config.CatalogPath); e == nil {
-		lease, e := fileLease(libraryUseLock(config), false)
-		if e != nil {
+		if lease, e = fileLease(libraryUseLock(config), false); e != nil {
 			return nil, e
 		}
-		defer lease.Close()
 		if _, e = os.Stat(pendingDeliveryPath(config)); e == nil {
 			return nil, fmt.Errorf("this library is finishing a verified move; resume it in Pharos")
 		}
@@ -249,7 +283,14 @@ func (m *mcpServer) direct(config Config, request map[string]any) (response map[
 	}
 	catalog.setCaptureRoot(config.CaptureRoot)
 	response = m.answer(catalog, request)
-	catalog.closeQuery()
+	held := lease
+	lease = nil
+	m.release = func() {
+		catalog.closeQuery()
+		if held != nil {
+			held.Close()
+		}
+	}
 	return response, nil
 }
 

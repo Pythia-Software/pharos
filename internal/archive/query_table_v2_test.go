@@ -230,6 +230,7 @@ func TestQueryV2IndexedCandidates(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	publishProjections(t, catalog)
 	server := testServer(t, config, catalog)
 	schema, _ := sqliteQuerySchema("tool_calls")
 	for _, where := range [][]qt.WhereTerm{
@@ -585,6 +586,7 @@ func TestQueryV2LeasesTempStorageOnlyToStage(t *testing.T) {
 func TestQueryMetadataQueue(t *testing.T) {
 	catalog, config := testCatalog(t)
 	seedToolCalls(t, catalog, 10)
+	publishProjections(t, catalog)
 	server := testServer(t, config, catalog)
 	t.Run("deadline starts after the queue", func(t *testing.T) {
 		_, release, err := server.beginQueryMetadata(context.Background())
@@ -699,6 +701,7 @@ func TestQueryIndexedDatetimeCandidatesPreserveTypedResults(t *testing.T) {
 func TestQueryV2ComputedCatalogueRecovery(t *testing.T) {
 	catalog, config := testCatalog(t)
 	seedToolCalls(t, catalog, 3)
+	publishProjections(t, catalog)
 	server := testServer(t, config, catalog)
 	store := qt.SQLiteComputedColumnStore{DB: catalog.DB}
 	columns := map[string]qt.ComputedColumn{}

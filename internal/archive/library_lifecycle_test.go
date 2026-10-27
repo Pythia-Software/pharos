@@ -148,6 +148,7 @@ func TestLibraryTransferRetainedEvidence(t *testing.T) {
 	if err != nil || jsonText(actual) != jsonText(evidence) {
 		t.Fatal("move lost raw authority", actual, evidence, err)
 	}
+	publishOrigins(t, c)
 	origins, err := c.conversationOrigins(t.Context())
 	if err != nil || origins[conversation]["channel"] != "desktop" || origins[conversation]["machine_id"] != "portable-mac" {
 		t.Fatal("move lost origin observations", origins[conversation], err)

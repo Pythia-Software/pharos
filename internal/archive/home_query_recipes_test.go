@@ -34,6 +34,7 @@ func TestHomeQueryRecipesV2(t *testing.T) {
 	}
 	catalog, config := testCatalog(t)
 	seedToolCalls(t, catalog, 300)
+	publishProjections(t, catalog)
 	server := testServer(t, config, catalog)
 	for _, recipe := range tracker.Recipes {
 		t.Run(recipe.ID, func(t *testing.T) {
@@ -114,6 +115,7 @@ func TestHomeQueryCardGroupedDestinations(t *testing.T) {
 	catalog, config := testCatalog(t)
 	seedToolCalls(t, catalog, 300)
 	ingestUsageFixture(t, catalog)
+	publishProjections(t, catalog)
 	server := testServer(t, config, catalog)
 	for _, recipe := range tracker.Recipes {
 		if recipe.Exploration == nil {

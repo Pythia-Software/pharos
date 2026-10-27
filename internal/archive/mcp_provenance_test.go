@@ -406,6 +406,9 @@ func TestMCPProvenanceToolDiscoveryAndArgumentLogging(t *testing.T) {
 	if _, failed := toolTextOf(response); failed {
 		t.Fatalf("bounded details failed through MCP: %#v", response)
 	}
+	if err := catalog.flushMCPHistory(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	var logged string
 	if err := catalog.DB.QueryRow("SELECT arguments_json FROM mcp_calls WHERE tool_name='get_work_detail'").Scan(&logged); err != nil {
 		t.Fatal(err)

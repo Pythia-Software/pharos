@@ -48,6 +48,7 @@ func TestWritingRowsFoldSubagentWorkAndFollowFilters(t *testing.T) {
 	if err := catalog.RebuildAuthorship(context.Background(), "test"); err != nil {
 		t.Fatal(err)
 	}
+	publishOrigins(t, catalog)
 	rows, _, err := catalog.writingData(context.Background())
 	if err != nil {
 		t.Fatal(err)

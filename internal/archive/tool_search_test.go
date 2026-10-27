@@ -126,6 +126,7 @@ func TestQueryTextIndexesMatchTypedSubstringFilters(t *testing.T) {
 					}
 				}
 				commitSeed(t, tx)
+				publishProjections(t, c)
 			}
 			check := func() {
 				t.Helper()

@@ -184,9 +184,6 @@ func fitAuditPage(result map[string]any, budget, offset, total int) error {
 }
 
 func (c *Catalog) searchMessages(args map[string]any) (map[string]any, error) {
-	if err := c.ensureOrigins(context.Background()); err != nil {
-		return nil, err
-	}
 	parsed, err := auditMessageQuery(args)
 	if err != nil {
 		return nil, err
@@ -229,7 +226,7 @@ func (c *Catalog) searchMessages(args map[string]any) (map[string]any, error) {
 	base := ` FROM messages_fts JOIN messages m ON m.id=messages_fts.message_id
 		JOIN conversations c ON c.id=m.conversation_id JOIN workspaces w ON w.id=c.workspace_id
 		LEFT JOIN repositories r ON r.id=w.repository_id WHERE ` + strings.Join(clauses, " AND ")
-	transaction, err := c.DB.Begin()
+	transaction, err := c.reader().Begin()
 	if err != nil {
 		return nil, err
 	}

@@ -70,6 +70,7 @@ func TestTextSearchOriginCursorSurvivesBookkeeping(t *testing.T) {
 	if _, err := c.DB.Exec(`UPDATE conversations SET harness='codex/codex_desktop'`); err != nil {
 		t.Fatal(err)
 	}
+	publishOrigins(t, c)
 	o := TextSearchOptions{Query: "cache", Channel: "desktop", Limit: 1}
 	first, err := c.SearchText(t.Context(), o)
 	if err != nil || first.NextCursor == "" {

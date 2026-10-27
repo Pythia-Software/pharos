@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -70,19 +71,9 @@ func (s *Server) reconcileCloudRuns(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	host := currentHost().ID
 	for _, run := range runs {
-		changed := false
 		previousUpdated := run.UpdatedAt
-		if run.State == "running" && run.OwnerHost == host && run.OwnerPID > 0 && (errors.Is(syscall.Kill(run.OwnerPID, 0), syscall.ESRCH) || (run.OwnerPID == os.Getpid() && s.cloud.active != run.ID)) {
-			run.State, run.Phase, run.Error = "failed", "interrupted", "Upload was interrupted before completion could be confirmed. No restore was verified."
-			changed = true
-		}
-		if run.VerificationState == "running" && run.VerificationHost == host && run.VerificationPID > 0 && (errors.Is(syscall.Kill(run.VerificationPID, 0), syscall.ESRCH) || (run.VerificationPID == os.Getpid() && s.cloud.active != run.ID)) {
-			run.VerificationState, run.VerificationError, run.Verified = "failed", "Verification was interrupted. Run verification again.", false
-			changed = true
-		}
-		if !changed {
+		if !s.interruptCloudRun(&run) {
 			continue
 		}
 		run.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
@@ -108,17 +99,28 @@ func (s *Server) reconcileCloudRuns(ctx context.Context) error {
 	return nil
 }
 
+// interruptCloudRun marks run failed where this Mac was running it and its
+// process is gone, or is this one without the job, and reports whether it
+// changed. Callers hold cloud.mu.
+func (s *Server) interruptCloudRun(run *cloudRun) bool {
+	host := currentHost().ID
+	changed := false
+	if run.State == "running" && run.OwnerHost == host && run.OwnerPID > 0 && (errors.Is(syscall.Kill(run.OwnerPID, 0), syscall.ESRCH) || (run.OwnerPID == os.Getpid() && s.cloud.active != run.ID)) {
+		run.State, run.Phase, run.Error = "failed", "interrupted", "Upload was interrupted before completion could be confirmed. No restore was verified."
+		changed = true
+	}
+	if run.VerificationState == "running" && run.VerificationHost == host && run.VerificationPID > 0 && (errors.Is(syscall.Kill(run.VerificationPID, 0), syscall.ESRCH) || (run.VerificationPID == os.Getpid() && s.cloud.active != run.ID)) {
+		run.VerificationState, run.VerificationError, run.Verified = "failed", "Verification was interrupted. Run verification again.", false
+		changed = true
+	}
+	return changed
+}
+
+// getCloud shows interrupted runs as failed and leaves storing that to
+// reconcileCloudRuns in the background, so the page never waits for a sync
+// holding the writer.
 func (s *Server) getCloud(w http.ResponseWriter, r *http.Request) {
-	if err := s.reconcileCloudRuns(r.Context()); err != nil {
-		writeError(w, err, 500)
-		return
-	}
 	destinations, err := s.Catalog.cloudDestinations(r.Context())
-	if err != nil {
-		writeError(w, err, 500)
-		return
-	}
-	runs, err := s.Catalog.cloudRuns(r.Context())
 	if err != nil {
 		writeError(w, err, 500)
 		return
@@ -129,8 +131,24 @@ func (s *Server) getCloud(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.cloud.mu.Lock()
+	runs, err := s.Catalog.cloudRuns(r.Context())
+	interrupted := false
+	for i := range runs {
+		interrupted = s.interruptCloudRun(&runs[i]) || interrupted
+	}
 	active := s.cloud.active
 	s.cloud.mu.Unlock()
+	if err != nil {
+		writeError(w, err, 500)
+		return
+	}
+	if interrupted {
+		s.spawn(func(ctx context.Context) {
+			if err := s.reconcileCloudRuns(ctx); err != nil && ctx.Err() == nil {
+				fmt.Fprintln(os.Stderr, "Pharos cloud runs:", err)
+			}
+		})
+	}
 	writeJSON(w, map[string]any{"current_host_id": currentHost().ID, "schedule_catalog": canonical(s.Catalog.Path), "library_catalog": s.Config().CatalogPath, "library_config": s.Config().Path, "active_run_id": active, "destinations": destinations, "runs": runs, "schedules": schedules, "setup_root": filepath.Join(userHome(), "Library", "Application Support", "Pharos", "cloud-setup"), "executable": executablePath()}, 200)
 }
 func userHome() string { home, _ := os.UserHomeDir(); return home }
