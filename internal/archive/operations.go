@@ -148,6 +148,8 @@ type Op struct {
 	version                        uint64 // bumped on every change, for the journal
 	written                        uint64 // version last written to the journal
 	writtenEver                    bool
+	// tentative is set while a daemon pass's operation is unpublished.
+	tentative bool
 }
 
 // opOutcome is the terminal state the work's own record decided (a SyncRun's
@@ -251,6 +253,7 @@ func (r *opRegistry) changedLocked(op *Op, boundary bool) {
 	if op != nil {
 		op.version++
 		op.updated = r.clock()
+		op.tentative = false
 	}
 	if boundary {
 		r.boundary = true
@@ -301,6 +304,18 @@ func (r *opRegistry) currentRevision() uint64 {
 // work starts, and returns ctx carrying it. A nil registry registers nothing
 // and returns a nil handle.
 func (r *opRegistry) begin(ctx context.Context, spec OperationSpec) (context.Context, *Op) {
+	return r.register(ctx, spec, false)
+}
+
+// beginTentative registers a daemon pass's operation before the pass runs
+// without telling subscribers yet: a pass that turns out to have nothing to
+// do is discarded and leaves no trace, and the first change publishes it.
+// While registered it counts for the verdict like any other.
+func (r *opRegistry) beginTentative(ctx context.Context, spec OperationSpec) (context.Context, *Op) {
+	return r.register(ctx, spec, true)
+}
+
+func (r *opRegistry) register(ctx context.Context, spec OperationSpec, tentative bool) (context.Context, *Op) {
 	if r == nil {
 		return ctx, nil
 	}
@@ -350,8 +365,34 @@ func (r *opRegistry) begin(ctx context.Context, spec OperationSpec) (context.Con
 	op.ctx = withOp(ctx, op)
 	r.ops[op.id] = op
 	r.pruneLocked()
-	r.changedLocked(op, true)
+	if tentative {
+		op.tentative = true
+		op.version++
+	} else {
+		r.changedLocked(op, true)
+	}
 	return op.ctx, op
+}
+
+// discard forgets a tentative operation that did nothing. One that was
+// published since is finished as succeeded instead.
+func (op *Op) discard() {
+	if !op.lock() {
+		return
+	}
+	if !op.tentative || opTerminal(op.state) {
+		op.reg.mu.Unlock()
+		if !opTerminal(op.State()) {
+			op.Finish(nil)
+		}
+		return
+	}
+	delete(op.reg.ops, op.id)
+	if op.parent != nil {
+		op.parent.children = slices.DeleteFunc(op.parent.children, func(child *Op) bool { return child == op })
+	}
+	op.state = opSkipped
+	op.reg.mu.Unlock()
 }
 
 // pruneLocked forgets ended top-level operations (and their children) once
@@ -662,6 +703,10 @@ func (op *Op) Finish(err error) {
 	switch {
 	case err == nil && op.outcome != nil:
 		state, reason, text = op.outcome.state, op.outcome.reason, op.outcome.err
+	case err == nil && op.ctx != nil && op.ctx.Err() != nil && op.parent == nil:
+		// Work that returns quietly once a release cancelled it did not
+		// finish: it is interrupted, and its next run resumes it.
+		state = opInterrupted
 	case err == nil:
 	case errors.Is(err, errOperationSkipped):
 		state, reason = opSkipped, defaultString(op.reason, "nothing-to-do")

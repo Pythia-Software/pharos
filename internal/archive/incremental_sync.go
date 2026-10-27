@@ -212,14 +212,26 @@ func (s *Server) runManualSync(parent context.Context, settings syncSettings) bo
 
 // Scheduled indexing leaves library-wide analysis pending. A manual request
 // uses the same incremental writer, then refreshes every derived analysis.
+// A manual run's operation (queued until it has the ingest coordinator)
+// comes with parent; an automatic run registers its own once it has it.
 func (s *Server) runIncremental(parent context.Context, settings syncSettings, manual bool) bool {
+	handle := opFrom(parent)
 	if manual && !s.acquireManualIngest() {
+		if parent.Err() == nil {
+			handle.Skip("already-running")
+		}
 		return false
 	}
+	handle.Run()
 	s.auto.mu.Lock()
 	if !manual && (s.auto.cancel != nil || s.auto.manualWaiters > 0 || !s.ingestMu.TryLock()) {
 		s.auto.mu.Unlock()
 		return false
+	}
+	if !manual {
+		parent, handle = s.begin(parent, OperationSpec{Kind: "index.changes.automatic", Trigger: triggerSchedule})
+		// Deferred first, so it runs last, after the run's final state.
+		defer handle.Finish(nil)
 	}
 	ctx, cancel := context.WithCancel(parent)
 	mode := modeOf(ctx)
@@ -251,7 +263,7 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 	if manual {
 		kind = manualSyncRunKind
 	}
-	run := s.startRunNamed(kind, names)
+	run := s.startRunFor(handle, kind, names)
 	registered, end := s.beginIngest(run.ID)
 	defer end()
 	stop := context.AfterFunc(registered, cancel)
@@ -783,7 +795,13 @@ func (s *Server) postIncrementalSync(w http.ResponseWriter, r *http.Request, bod
 			writeError(w, err, 500)
 			return
 		}
-		if !s.spawn(func(ctx context.Context) { s.runManualSync(ctx, settings) }) {
+		// The run waits (queued) for an automatic index to yield.
+		if !s.start(OperationSpec{Kind: "index.changes.manual", Trigger: triggerUser, Queued: true}, func(ctx context.Context, op *Op) error {
+			if !s.runManualSync(ctx, settings) && ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return nil
+		}) {
 			writeError(w, errors.New("service stopping"), 503)
 			return
 		}

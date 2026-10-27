@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -641,10 +642,12 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		// The upgrade reads and rewrites much of the catalog, so it runs in the
 		// background; /api/upgrade and the library status report progress. A
 		// release stops it after the unit in progress; starting it again resumes.
-		started := s.spawn(func(ctx context.Context) {
-			if err := s.Catalog.RunUpgrade(ctx, nil); err != nil && ctx.Err() == nil {
+		started := s.start(OperationSpec{Kind: "library.upgrade", Trigger: triggerUser}, func(ctx context.Context, op *Op) error {
+			err := s.Catalog.RunUpgrade(ctx, nil)
+			if err != nil && ctx.Err() == nil {
 				fmt.Fprintf(os.Stderr, "Library upgrade: %v\n", err)
 			}
+			return err
 		})
 		if !started {
 			writeJSON(w, map[string]any{"error": "Pharos is stopping"}, http.StatusServiceUnavailable)
@@ -655,13 +658,21 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		// Building the ledger re-reads every retained conversation, so it runs
 		// in the background; progress is reported by /api/tools/status. A
 		// release stops it between conversations; the next build resumes.
-		started := s.spawn(func(ctx context.Context) {
-			if _, err := s.Catalog.BackfillToolLedger(ctx, nil); err != nil && ctx.Err() == nil {
+		started := s.start(OperationSpec{Kind: "tools.ledger.build", Trigger: triggerUser}, func(ctx context.Context, op *Op) error {
+			op.Plan(StepPlan{Name: "Build the Tools ledger", Unit: "conversation", Total: -1}, StepPlan{Name: "Rebuild the Tools rollup", Total: -1})
+			op.Step("Build the Tools ledger", "conversation", -1)
+			_, err := s.Catalog.BackfillToolLedger(ctx, func(done, total int) {
+				op.progress("Build the Tools ledger", "", "conversation", float64(done), float64(total), total > 0)
+			})
+			if err != nil && ctx.Err() == nil {
 				fmt.Fprintf(os.Stderr, "Tool ledger build: %v\n", err)
 			}
-			if err := s.Catalog.ensureToolRollup(ctx); err != nil && ctx.Err() == nil {
-				fmt.Fprintf(os.Stderr, "Tool rollup: %v\n", err)
+			op.Step("Rebuild the Tools rollup", "", -1)
+			rollup := s.Catalog.ensureToolRollup(ctx)
+			if rollup != nil && ctx.Err() == nil {
+				fmt.Fprintf(os.Stderr, "Tool rollup: %v\n", rollup)
 			}
+			return errors.Join(err, rollup)
 		})
 		if !started {
 			writeJSON(w, map[string]any{"error": "Pharos is stopping"}, http.StatusServiceUnavailable)
@@ -679,7 +690,9 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/index/cancel":
 		writeJSON(w, map[string]any{"stopped": s.stopIngest()}, http.StatusOK)
 	case path == "/api/library/refresh/stop":
-		writeJSON(w, map[string]any{"stopped": s.Catalog.stopLibraryRefresh()}, http.StatusOK)
+		stopped := s.Catalog.stopLibraryRefresh()
+		s.ops.markKindStopping("maintenance.library-view")
+		writeJSON(w, map[string]any{"stopped": stopped}, http.StatusOK)
 	case path == "/api/library/refresh/resume":
 		writeJSON(w, map[string]any{"resumed": s.Catalog.resumeLibraryRefresh()}, http.StatusOK)
 	case strings.HasPrefix(path, "/api/cloud-backup/"):
@@ -687,7 +700,11 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/backup":
 		s.startBackup(w, body)
 	case path == "/api/backup/cancel":
-		writeJSON(w, map[string]any{"cancelled": s.backups.stop()}, http.StatusOK)
+		cancelled := s.backups.stop()
+		if cancelled {
+			s.ops.markKindStopping("backup.local")
+		}
+		writeJSON(w, map[string]any{"cancelled": cancelled}, http.StatusOK)
 	case path == "/api/mcp/rpc":
 		s.mcpRPC(w, r, body)
 	case path == "/api/mcp/enabled":
@@ -900,9 +917,12 @@ func (s *Server) syncSources(w http.ResponseWriter, sources []SourceConfig) {
 		return
 	}
 	defer s.ingestMu.Unlock()
-	run := s.startRun(sources)
+	_, handle := s.begin(s.life.ctx, OperationSpec{Kind: "index.sources.legacy", Trigger: triggerUser})
+	defer handle.Finish(nil) // when the handler returns, after the checkpoint below
+	run := s.startRunFor(handle, "source-sync", sourceNames(sources))
 	results := []IngestResult{}
 	ctx, end := s.beginIngest(run.ID)
+	ctx = withOp(ctx, handle)
 	defer end()
 	for index, source := range sources {
 		if ctx.Err() != nil {
@@ -1016,11 +1036,15 @@ func skippedTotals(results []IngestResult) int {
 	return total
 }
 func (s *Server) startRun(sources []SourceConfig) *SyncRun {
+	return s.startRunNamed("source-sync", sourceNames(sources))
+}
+
+func sourceNames(sources []SourceConfig) []string {
 	names := []string{}
 	for _, source := range sources {
 		names = append(names, source.Name)
 	}
-	return s.startRunNamed("source-sync", names)
+	return names
 }
 
 func (s *Server) startRunNamed(kind string, names []string) *SyncRun {

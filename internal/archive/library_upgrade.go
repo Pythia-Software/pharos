@@ -266,17 +266,27 @@ func (c *Catalog) RepositoryMergePreview(ctx context.Context) ([]upgradeMergeGro
 // resumes.
 func (c *Catalog) RunUpgrade(ctx context.Context, progress func(step string, done, total int)) error {
 	state := c.upgrade()
+	// The caller's library.upgrade operation, if any, plans the pending steps
+	// so the journal can say which step a run reached.
+	op := opFrom(ctx)
+	if op != nil && op.spec.Kind != "library.upgrade" {
+		op = nil
+	}
 	state.mu.Lock()
 	if state.running {
 		state.mu.Unlock()
+		op.Skip("already-running")
 		return fmt.Errorf("an upgrade is already running")
 	}
 	state.running, state.startedAt, state.lastError = true, now(), ""
 	state.mu.Unlock()
+	labels := map[string]upgradeStep{"rollup": {ID: "rollup", Label: "Rebuild the Tools rollup"}}
 	report := func(step string, done, total int) {
 		state.mu.Lock()
 		state.step, state.done, state.total = step, done, total
 		state.mu.Unlock()
+		planned := labels[step]
+		op.progress(defaultString(planned.Label, step), "", planned.Unit, float64(done), float64(total), total > 0)
 		if progress != nil {
 			progress(step, done, total)
 		}
@@ -317,7 +327,19 @@ func (c *Catalog) RunUpgrade(ctx context.Context, progress func(step string, don
 	if len(state.planned) > 0 {
 		state.planned = append(state.planned, upgradeStep{ID: "rollup"})
 	}
+	plan := []StepPlan{}
+	for _, step := range state.planned {
+		if step.ID != "rollup" {
+			labels[step.ID] = step
+		}
+		planned := labels[step.ID]
+		plan = append(plan, StepPlan{Name: defaultString(planned.Label, step.ID), Unit: planned.Unit, Total: -1})
+	}
 	state.mu.Unlock()
+	if len(plan) == 0 {
+		plan = []StepPlan{{Name: labels["rollup"].Label, Total: -1}}
+	}
+	op.Plan(plan...)
 	if pending["repositories"] > 0 {
 		if err := timed("repositories", func() error { return c.applyRepositoryMerges(ctx, report) }); err != nil {
 			return finish(err)

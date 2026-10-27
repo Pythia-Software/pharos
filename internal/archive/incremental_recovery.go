@@ -137,8 +137,15 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 	if r.URL.Path == "/api/library/update" {
 		s.Catalog.resumeLibraryRefresh()
 	}
-	run := s.startRunNamed("library-update", names)
+	kind, variant := runOperationKind("library-update", mode)
+	trigger := triggerUser
+	if resume != "" {
+		trigger = "resume"
+	}
+	_, handle := s.begin(s.life.ctx, OperationSpec{Kind: kind, Variant: variant, Trigger: trigger})
+	run := s.startRunFor(handle, "library-update", names)
 	ctx, end := s.beginIngest(run.ID)
+	ctx = withOp(ctx, handle)
 	job := resume
 	if job == "" {
 		job = run.ID
@@ -178,6 +185,7 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 			end()
 			s.ingestMu.Unlock()
 			s.updateRun(run.ID, func(run *SyncRun) { run.State = "failed"; run.Error = err.Error(); run.CompletedAt = now() })
+			handle.Finish(err)
 			writeError(w, err, 500)
 			return
 		}
@@ -185,10 +193,11 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 		end()
 		s.ingestMu.Unlock()
 		s.updateRun(run.ID, func(run *SyncRun) { run.State = "failed"; run.Error = err.Error(); run.CompletedAt = now() })
+		handle.Finish(err)
 		writeError(w, err, 500)
 		return
 	}
-	started := s.spawn(func(context.Context) {
+	recovery := func() {
 		defer s.ingestMu.Unlock()
 		defer end()
 		op := s.beginOperation(run.ID, "library-update:"+mode)
@@ -339,7 +348,8 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 			s.auditIntentional(ctx, run.ID, names)
 			op.end("verification", ctx.Err() == nil)
 		}
-	})
+	}
+	started := s.launch(handle, func(context.Context, *Op) error { recovery(); return nil })
 	if !started {
 		end()
 		s.ingestMu.Unlock()
@@ -362,10 +372,22 @@ func (s *Server) finishDeferredSync(ctx context.Context) error {
 
 // runPhase lets manual sync expose and measure each expensive stage. Keep the
 // same completion guards for Capture & index and manual incremental indexing.
-func (s *Server) finishDeferredSyncPhases(ctx context.Context, forceFindings bool, runPhase func(string, func() error) error) error {
-	invoke := runPhase
-	if invoke == nil {
-		invoke = func(_ string, work func() error) error { return work() }
+//
+// The chain is an analysis.chain stage of the run ctx carries, and each of
+// its stages a child of it (docs/background-work.md §2.4).
+func (s *Server) finishDeferredSyncPhases(ctx context.Context, forceFindings bool, runPhase func(string, func() error) error) (err error) {
+	ctx, chain := s.Catalog.beginOp(ctx, OperationSpec{Kind: "analysis.chain", Trigger: triggerChained})
+	defer func() { chain.Finish(err) }()
+	measure := runPhase
+	if measure == nil {
+		measure = func(_ string, work func() error) error { return work() }
+	}
+	var stage *Op
+	invoke := func(name string, work func() error) error {
+		_, stage = chain.childFrom(ctx, OperationSpec{Kind: "analysis." + name, Trigger: triggerChained})
+		err := measure(name, work)
+		stage.Finish(err)
+		return err
 	}
 	op := operationOf(ctx)
 	runPhase = invoke
@@ -406,7 +428,8 @@ func (s *Server) finishDeferredSyncPhases(ctx context.Context, forceFindings boo
 		{"git", func() error { return s.Catalog.refreshMainIntegrations(ctx) }},
 		{"tools", func() error { return s.Catalog.ensureToolRollup(ctx) }},
 		{"authorship", func() error {
-			s.Catalog.refreshAuthorshipInContext(ctx)
+			// The rebuild runs in the background, as a child of this stage.
+			s.Catalog.refreshAuthorshipInContext(withOp(ctx, stage))
 			for s.Catalog.authorshipRunning() {
 				select {
 				case <-ctx.Done():

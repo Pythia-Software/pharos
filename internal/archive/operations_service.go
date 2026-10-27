@@ -125,3 +125,52 @@ func flushBudget(started time.Time, timeout time.Duration, now time.Time) time.D
 	}
 	return min(time.Second, left)
 }
+
+// daemonPass is the operation of a daemon's stretch of real work (§3.4): it
+// is registered before the work runs, published once the work does
+// something, and forgotten if the stretch turned out to have nothing to do.
+type daemonPass struct {
+	op  *Op
+	did bool
+}
+
+// beginPass starts a pass of kind for a daemon of c.
+func (c *Catalog) beginPass(ctx context.Context, kind, trigger string) *daemonPass {
+	if c == nil || c.ops == nil {
+		return &daemonPass{}
+	}
+	_, op := c.ops.beginTentative(ctx, OperationSpec{Kind: kind, Trigger: trigger})
+	return &daemonPass{op: op}
+}
+
+// worked records n units of real work.
+func (p *daemonPass) worked(n int) {
+	if p == nil || p.op == nil {
+		return
+	}
+	p.did = true
+	p.op.Advance(int64(n))
+}
+
+// end finishes the pass: discarded when it did nothing and failed nothing.
+func (p *daemonPass) end(err error) {
+	if p == nil || p.op == nil {
+		return
+	}
+	if !p.did && err == nil {
+		p.op.discard()
+		return
+	}
+	p.op.Finish(err)
+}
+
+// active reports a pass with an operation open.
+func (p *daemonPass) active() bool { return p != nil && p.op != nil }
+
+// defaultError is err, or fallback when err is nil.
+func defaultError(err, fallback error) error {
+	if err != nil {
+		return err
+	}
+	return fallback
+}

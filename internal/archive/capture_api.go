@@ -221,9 +221,11 @@ func (s *Server) startCapture(w http.ResponseWriter, body map[string]any) {
 		return
 	}
 	run := s.captures.start(sources)
+	_, handle := s.begin(s.life.ctx, OperationSpec{Kind: "capture.this-mac", Trigger: triggerUser, Legacy: run.ID,
+		Holds: []Hold{{Resource: "drive", Mode: "write"}, {Resource: "ingest", Mode: "write"}, {Resource: "capture:" + currentHost().ID, Mode: "write"}}})
 	// A release (before an eject) cancels the capture between files; every
 	// file and manifest is replaced atomically, so the next run resumes.
-	started := s.spawn(func(ctx context.Context) {
+	started := s.launch(handle, func(ctx context.Context, op *Op) (err error) {
 		defer s.ingestMu.Unlock()
 		defer session.Close()
 		summary, failure := CaptureSummary{OK: true}, error(nil)
@@ -232,6 +234,10 @@ func (s *Server) startCapture(w http.ResponseWriter, body map[string]any) {
 				failure = fmt.Errorf("capture stopped: %v", value)
 			}
 			s.captures.finish(run.ID, summary, failure)
+			err = failure
+			if err == nil && !summary.OK {
+				err = defaultError(ctx.Err(), errors.New("some sources could not be captured"))
+			}
 		}()
 		var previous CaptureSourceResult
 		summary = session.Run(ctx, sources, func(result CaptureSourceResult) {
@@ -240,7 +246,9 @@ func (s *Server) startCapture(w http.ResponseWriter, body map[string]any) {
 			}
 			previous = result
 			s.captures.progress(run.ID, result)
+			op.mirrorWork(captureWork(result))
 		})
+		return nil
 	})
 	if !started {
 		s.ingestMu.Unlock()
