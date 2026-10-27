@@ -409,7 +409,10 @@
     if (run?.error && !isStopError(run, run.error) && !errors.some(error => error.includes(String(run.error)))) errors.unshift(String(run.error));
     return errors;
   };
-  const indexFailed = run => run && ((run.state !== 'complete' && !indexStopped(run)) || indexErrors(run).length > 0);
+  // A run that left sources to the next index because a capture was using
+  // them ("deferred") is not a failure, and there is nothing to do about it.
+  const indexDeferred = run => run?.state === 'deferred';
+  const indexFailed = run => Boolean(run) && ((!['complete', 'deferred'].includes(run.state) && !indexStopped(run)) || indexErrors(run).length > 0);
 
   // Stops the running index (or source sync) between records, or the Library
   // view refresh; it says when it has.
@@ -908,7 +911,8 @@
       const last = node('div', 'pharos-last-index');
       last.append(node('h3', '', 'Last index this session'));
       const failed = indexFailed(recentIndex);
-      const label = indexStopped(recentIndex) ? 'Stopped' : recentIndex.state === 'interrupted' ? 'Interrupted' : failed ? 'Failed' : 'Complete';
+      const label = indexStopped(recentIndex) ? 'Stopped' : recentIndex.state === 'interrupted' ? 'Interrupted' : failed ? 'Failed'
+        : indexDeferred(recentIndex) ? 'Complete, except sources a capture was using' : 'Complete';
       last.append(node('div', failed ? 'pharos-error' : '', `${label} · ${ago(recentIndex.completed_at)} · ${recentIndex.completed_sources} of ${recentIndex.total_sources} sources`));
       last.append(node('div', 'pharos-sub', `${plural(recentIndex.workspaces, 'workspace')} indexed · ${plural(recentIndex.conversations, 'conversation')}${indexStopped(recentIndex) ? '; the next index resumes' : ''}`));
       // A failure's errors are under Needs attention.
@@ -1460,7 +1464,7 @@
 
   window.pharosLibrary = {closePanel, refresh: refreshStatus, status: () => status, runs, refreshSettings, refreshSyncControls: renderSyncControls, renderAlerts: () => { renderChip(); renderPanel(); }, onStatus: listener => listeners.add(listener),
     // Pure helpers, for web/tests/unit/page/library.test.mjs.
-    libraryUpdate, overviewActivities, activityTiming, activityProgress, activityOverallProgress, activityPresentation, estimateRate, workCount, headerBusy, captureIndexDisabled, stopTargets, appUpdatePresentation};
+    libraryUpdate, overviewActivities, indexFailed, activityTiming, activityProgress, activityOverallProgress, activityPresentation, estimateRate, workCount, headerBusy, captureIndexDisabled, stopTargets, appUpdatePresentation};
   const sheet = node('style');
   sheet.textContent = CSS;
   document.head.append(sheet);
