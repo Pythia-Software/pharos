@@ -335,6 +335,9 @@ func (s *Server) libraryActivities() []libraryActivity {
 			Work:    &activityWork{Phase: run.Phase, Unit: "byte", Done: float64(run.BytesCopied)},
 			OnEject: "Stops; the next backup carries on from what was copied."})
 	}
+	if job := s.cloud.job(); job != nil {
+		activities = append(activities, cloudActivity(job))
+	}
 	if running, since, reason := s.tasks.gitRunning(); running {
 		activities = append(activities, libraryActivity{Kind: "git", Label: "Looking up merges in Git", Detail: "Main-branch merges of indexed work, " + reason,
 			ID: "git:" + since, Work: s.tasks.gitProgress(), StartedAt: since, Writes: true, OnEject: "Stops; it runs again after the next index."})
@@ -428,7 +431,7 @@ func unplugAdvice(drive libraryDrive, activities []libraryActivity) map[string]a
 	case len(writing) == 0:
 		unplug["summary"] = fmt.Sprintf("%s is reading the library. Eject %s before unplugging it: Pharos stops the work at a safe point and closes the library first, or refuses the eject and says why.", activities[0].Label, drive.Name)
 	default:
-		unplug["summary"] = fmt.Sprintf("%s: writing to %s now; unplugging it would lose that work. Eject it instead: Pharos stops its own work at a safe point (the next run resumes it) and closes the library first, or refuses and says why.", strings.Join(writing, ", "), drive.Name)
+		unplug["summary"] = fmt.Sprintf("%s: writing to %s now; unplugging it would lose that work. Eject it instead: Pharos stops its own work at a safe point and closes the library first, or refuses and says why; each activity's on_eject says what stopping it does.", strings.Join(writing, ", "), drive.Name)
 		if slices.ContainsFunc(activities, func(activity libraryActivity) bool { return activity.Kind == "capture-other" }) {
 			unplug["summary"] = unplug["summary"].(string) + " A capture by another process keeps the drive busy until it finishes; Pharos cannot stop it."
 		}

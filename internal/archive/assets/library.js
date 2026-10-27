@@ -943,8 +943,13 @@
 
   function ejectConfirm(drive, activities) {
     const row = node('div', 'pharos-row');
-    const stopping = activities.filter(activity => activity.kind !== 'capture-other').map(activity => activity.label);
-    if (stopping.length) row.append(node('p', 'pharos-note', `Ejecting stops ${stopping.join(', ')} at a safe point; ${stopping.length === 1 ? 'it resumes' : 'each resumes'} the next time it runs.`));
+    // The service says what stopping each activity does (on_eject): most
+    // resume on their next run, but a cloud upload starts again.
+    const stopping = activities.filter(activity => activity.kind !== 'capture-other');
+    if (stopping.length) {
+      row.append(node('p', 'pharos-note', `Ejecting stops ${stopping.map(activity => activity.label).join(', ')} at a safe point.`));
+      for (const activity of stopping) if (activity.on_eject) row.append(node('p', 'pharos-note pharos-sub', `${activity.label}: ${activity.on_eject}`));
+    }
     if (activities.some(activity => activity.kind === 'capture-other')) row.append(node('p', 'pharos-note pharos-warn', 'Pharos cannot stop a capture by another process; the drive stays busy until it finishes.'));
     row.append(button(`Stop and Eject ${drive.name}`, 'primary', () => eject(drive)), button('Cancel', '', () => { ejectState = null; renderPanel(); }));
     return row;

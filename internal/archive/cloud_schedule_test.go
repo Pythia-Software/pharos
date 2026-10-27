@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -130,6 +131,10 @@ func TestCloudScheduledBackupsCatchUpOnceAndAllowManualBackups(t *testing.T) {
 	}
 	if run.Trigger != "scheduled" || run.ScheduledFor == "" {
 		t.Fatal("scheduled run lost its trigger or original due date")
+	}
+	// The running upload is listed, so the drive is not reported idle.
+	if activities := server.libraryActivities(); !slices.ContainsFunc(activities, func(a libraryActivity) bool { return a.ID == "cloud:"+run.ID && a.Writes }) {
+		t.Fatalf("a scheduled upload is not a library activity: %+v", activities)
 	}
 	if err := server.cloudScheduleTick(ctx, finishedAt); err != nil {
 		t.Fatal(err)

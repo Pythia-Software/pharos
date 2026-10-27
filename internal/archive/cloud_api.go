@@ -20,9 +20,22 @@ type cloudJobs struct {
 	mu     sync.Mutex
 	active string
 	cancel context.CancelFunc
+	// current is what libraryActivities lists. It has its own lock because
+	// reconcileCloudRuns holds mu across catalog writes, which status
+	// requests must not wait for.
+	currentMu sync.Mutex
+	current   *cloudJob
 }
 
-func (j *cloudJobs) begin(id string, cancel context.CancelFunc) error {
+// cloudJob is the cloud operation in progress: a destination connection test
+// ("connect"), an upload ("upload") or a restore verification ("verify").
+type cloudJob struct {
+	id, operation, kind, startedAt string
+	phase                          string
+	done, total                    int64
+}
+
+func (j *cloudJobs) begin(id, operation, kind string, cancel context.CancelFunc) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.active != "" {
@@ -30,9 +43,71 @@ func (j *cloudJobs) begin(id string, cancel context.CancelFunc) error {
 	}
 	j.active = id
 	j.cancel = cancel
+	j.currentMu.Lock()
+	j.current = &cloudJob{id: id, operation: operation, kind: kind, startedAt: now()}
+	j.currentMu.Unlock()
 	return nil
 }
-func (j *cloudJobs) end() { j.mu.Lock(); defer j.mu.Unlock(); j.active = ""; j.cancel = nil }
+func (j *cloudJobs) end() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.active = ""
+	j.cancel = nil
+	j.currentMu.Lock()
+	j.current = nil
+	j.currentMu.Unlock()
+}
+
+// report records the running job's phase and bytes, for status only.
+func (j *cloudJobs) report(id, phase string, done, total int64) {
+	j.currentMu.Lock()
+	defer j.currentMu.Unlock()
+	if j.current != nil && j.current.id == id {
+		j.current.phase, j.current.done, j.current.total = phase, done, total
+	}
+}
+
+func (j *cloudJobs) job() *cloudJob {
+	j.currentMu.Lock()
+	defer j.currentMu.Unlock()
+	if j.current == nil {
+		return nil
+	}
+	copy := *j.current
+	return &copy
+}
+
+// cloudActivity lists the cloud job as work that holds the drive: each one
+// stages files under staging_root, which is on the library's drive, so an
+// eject stops it. Its kind is backup, which every client already renders.
+func cloudActivity(job *cloudJob) libraryActivity {
+	activity := libraryActivity{ID: "cloud:" + job.id, Kind: "backup", StartedAt: job.startedAt, Writes: true}
+	switch job.operation {
+	case "connect":
+		activity.Label = "Testing a cloud backup destination"
+		activity.Detail = "Uploading a small test file"
+		activity.OnEject = "Stops the test; connect the destination again afterwards."
+	case "verify":
+		activity.Label = "Verifying a cloud backup"
+		activity.Detail = "Checking the downloaded archive and recovering it to staging"
+		activity.OnEject = "Stops the verification and removes the partly recovered copy; run the verification again from Settings → Backups."
+	default:
+		activity.Label = "Uploading a cloud backup"
+		if job.kind == "sample" {
+			activity.Label = "Uploading a cloud test backup"
+		}
+		phase := defaultString(job.phase, "Preparing archive")
+		activity.Detail = phase
+		work := &activityWork{Phase: phase}
+		if phase == "Uploading archive" {
+			work.Unit, work.Done, work.Total = "byte", float64(job.done), float64(job.total)
+			activity.Detail = fmt.Sprintf("%s · %s of %s", phase, humanBytes(job.done), humanBytes(job.total))
+		}
+		activity.Work = work
+		activity.OnEject = "Stops the upload and deletes its staged archive; the last completed cloud backup is unchanged. Start it again from Settings → Backups, or a schedule runs it at its next time."
+	}
+	return activity
+}
 func (j *cloudJobs) stop(id string) bool {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -209,7 +284,7 @@ func (s *Server) postCloud(w http.ResponseWriter, r *http.Request, body map[stri
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 		defer cancel()
-		if err = s.cloud.begin("connect", cancel); err != nil {
+		if err = s.cloud.begin("connect", "connect", "", cancel); err != nil {
 			writeError(w, err, 409)
 			return
 		}
@@ -323,7 +398,7 @@ func (s *Server) postCloud(w http.ResponseWriter, r *http.Request, body map[stri
 			return
 		}
 		ctx, cancel := context.WithCancel(s.life.ctx)
-		if err = s.cloud.begin(run.ID, cancel); err != nil {
+		if err = s.cloud.begin(run.ID, "verify", run.Kind, cancel); err != nil {
 			cancel()
 			writeError(w, err, 409)
 			return
@@ -360,6 +435,7 @@ func (s *Server) uploadCloudRun(ctx context.Context, d cloudDestination, run clo
 	var last time.Time
 	save := func(phase string, force bool) {
 		run.Phase = phase
+		s.cloud.report(run.ID, phase, run.Bytes, run.TotalBytes)
 		if force || time.Since(last) > time.Second {
 			last = time.Now()
 			_ = s.Catalog.saveCloudRun(ctx, &run, nil)

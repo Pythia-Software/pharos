@@ -354,7 +354,7 @@ func (s *Server) startCloudRun(ctx context.Context, id, kind, trigger string, at
 		run.Object += ".roundtrip-test"
 	}
 	work, cancel := context.WithCancel(s.life.ctx)
-	if err = s.cloud.begin(run.ID, cancel); err != nil {
+	if err = s.cloud.begin(run.ID, "upload", kind, cancel); err != nil {
 		cancel()
 		return run, err
 	}

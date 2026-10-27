@@ -242,6 +242,27 @@ func TestLibraryStatusListsEverythingHoldingTheLibrary(t *testing.T) {
 	server.backups.update(BackupRun{ID: "b1", State: "complete"}, true)
 	expect()
 
+	// Cloud work stages files on the library's drive, so it is not idle and
+	// an eject says what it does to the upload or verification.
+	for _, job := range []struct{ operation, label string }{
+		{"upload", "Uploading a cloud backup"}, {"verify", "Verifying a cloud backup"}, {"connect", "Testing a cloud backup destination"},
+	} {
+		if err := server.cloud.begin("run-1", job.operation, "full", cancel); err != nil {
+			t.Fatal(err)
+		}
+		server.cloud.report("run-1", "Uploading archive", 512, 2048)
+		status = expect("backup")
+		activity := status["activities"].([]any)[0].(map[string]any)
+		if status["writing"] != true || activity["label"] != job.label || activity["writes"] != true || activity["on_eject"] == "" || activity["id"] != "cloud:run-1" {
+			t.Fatalf("cloud %s: %#v", job.operation, status)
+		}
+		if job.operation == "upload" && activity["detail"] != "Uploading archive · 512 B of 2.0 KB" {
+			t.Fatalf("cloud upload progress: %#v", activity)
+		}
+		server.cloud.end()
+		expect()
+	}
+
 	// The Git merge lookup after a sync or index, and the Library view's
 	// pending refreshes.
 	server.tasks.addGit(1, "after the last sync or index")

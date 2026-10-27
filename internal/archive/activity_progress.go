@@ -303,6 +303,8 @@ func (s *Server) estimateActivities(activities []libraryActivity, at time.Time) 
 				a.Estimate.Basis = "The other process does not report its progress to this service"
 			case a.Kind == "git":
 				a.Estimate.Basis = "Checking repository history and refreshing derived data; remaining work varies by repository"
+			case strings.HasPrefix(a.ID, "cloud:"):
+				a.Estimate.Basis = "Building or checking the cloud archive; its size is known only once uploading starts"
 			case a.Kind == "backup":
 				a.Estimate.Basis = "Copying the catalog and discovering files; the full backup size is not known yet"
 			case strings.Contains(phase, "database snapshots"):
