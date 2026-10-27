@@ -4,7 +4,9 @@ import { core, schemas } from "../helpers/recipes.mjs";
 import { answerQuery, population } from "../../support/query-server.mjs";
 import { MetricRequestError, metricRequest, metricResults, postMetrics, postQueryV3Metrics } from "../../../src/metric-request";
 import { queryRequest, queryFetch, QueryRequestError, shouldSkipQueryOnRestore } from "../../../src/query-request";
-import { tokenChartMetrics, tokenChartSplit, tokenSummaryMetrics, tokenTypes } from "../../../src/token-chart-request";
+import { tokenSummaryMetrics, tokenTypes } from "../../../src/token-chart-request";
+import { trendQuery } from "../../../src/dashboard-trend-model";
+import { tokenAnalysisCatalog } from "../../../src/token-analysis-catalog";
 
 const response = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
@@ -68,20 +70,19 @@ test("the larger-budget read runs the same metrics through /query-v3 without row
   assert.equal(time.buckets.reduce((total, bucket) => total + bucket.value, 0), kept.reduce((total, row) => total + row.duration_ms, 0));
 });
 
-test("the Token chart sums by its period's field and split; cost by type is by provider", () => {
-  const view = (period, split = "type", metric = "tokens") => ({ period, split, metric });
+test("the Tokens trend sums by its period's field and split; cost by type is by provider", () => {
+  const clauses = (period, split = "type", metric = "tokens") => trendQuery(tokenAnalysisCatalog, { period, split, metric, hours: 6, days: 3 }, []).query.aggregations;
   for (const [period, field] of [["hour", "hour"], ["hours", "hour"], ["day", "day"], ["days", "day"], ["week", "week"], ["month", "month"]]) {
-    assert.deepEqual(tokenChartMetrics(view(period)).map(metric => [metric.id, metric.field, metric.groupBy]), tokenTypes.map(type => [`${type.key}:${field}`, type.key, [field]]), period);
+    assert.deepEqual(clauses(period).map(metric => [metric.field, metric.groupBy]), tokenTypes.map(type => [type.key, [field]]), period);
     for (const split of ["provider", "model_family", "model_effort", "effort", "repository_name", "session_kind"]) {
-      assert.deepEqual(tokenChartMetrics(view(period, split)).map(metric => [metric.op, metric.field, metric.groupBy]), [["sum", "total_tokens", [field, split]]]);
-      assert.deepEqual(tokenChartMetrics(view(period, split, "percent_cost")).map(metric => [metric.field, metric.groupBy]), [["cost_usd", [field, split]]]);
+      assert.deepEqual(clauses(period, split).map(metric => [metric.op, metric.field, metric.groupBy]), [["sum", "total_tokens", [field, split]]]);
+      assert.deepEqual(clauses(period, split, "percent_cost").map(metric => [metric.field, metric.groupBy]), [["cost_usd", [field, split]]]);
     }
   }
-  assert.equal(tokenChartSplit(view("week", "type", "cost")), "provider");
-  assert.equal(tokenChartSplit(view("week", "type", "percent")), "type");
-  assert.deepEqual(tokenChartMetrics(view("week", "type", "cost")).map(metric => [metric.field, metric.groupBy]), [["cost_usd", ["week", "provider"]]]);
+  assert.deepEqual(clauses("week", "type", "cost").map(metric => [metric.field, metric.groupBy]), [["cost_usd", ["week", "provider"]]]);
+  assert.deepEqual(clauses("week", "type", "percent").map(metric => metric.field), tokenTypes.map(type => type.key));
   assert.deepEqual(tokenSummaryMetrics.map(metric => metric.id), ["total_tokens:", "cost_usd:", "uncached_input_tokens:", "cache_read_input_tokens:", "output_tokens:", "agent_sessions"]);
-  for (const clauses of [tokenSummaryMetrics, tokenChartMetrics(view("hour", "repository_name"))]) assert.deepEqual(core.toMetricQuery({ ...core.EMPTY_QUERY, aggregations: clauses }, schemas.usage).diagnostics, []);
+  for (const aggregations of [tokenSummaryMetrics, clauses("hour", "repository_name"), clauses("day", "provider_model", "cache_read_share"), clauses("week", "model_family", "conversations")]) assert.deepEqual(core.toMetricQuery({ ...core.EMPTY_QUERY, aggregations }, schemas.usage).diagnostics, []);
 });
 
 

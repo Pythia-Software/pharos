@@ -6,10 +6,18 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { core, schemas, instantiateRecipe, recipeById, cardCoverQuery } from "../helpers/recipes.mjs";
 import { now, usageRows } from "../helpers/usage-ledger.mjs";
-import { analysisQuery } from "../../../src/dashboard-analysis-model";
+import { analysisQuery, normalizeAnalysis } from "../../../src/dashboard-analysis-model";
 import { tokenAnalysisCatalog } from "../../../src/token-analysis-catalog";
 import { cardDashboardWhere } from "../../../src/card-exploration";
 import { filterBoxSamples } from "../../../src/compact-box-model";
+import { trendQuery, trendSeries } from "../../../src/dashboard-trend-model";
+import { loadQueryPreview, clearPreviewCache } from "../../../src/curiosity-data";
+import { compactTimelineBuckets } from "../../../src/column-marks";
+import { buildCardTrend, cardTrendDays, cardTrendQueries } from "../../../src/card-trend";
+import { usageTime, withTimeRange } from "../../../src/chart-range";
+import { answerQuery } from "../../support/query-server.mjs";
+
+const tokenAnalysisSource = tokenAnalysisCatalog;
 
 const rows = usageRows(), schema = schemas.usage;
 const evaluate = query => core.evaluateMetrics(rows, query, schema, { now }).metrics[0];
@@ -69,4 +77,121 @@ test("session-token-cost: one point per conversation, tokens against cost", () =
   const points = buckets => byKeys(buckets, bucket => [round(bucket.value), round(bucket.y)]);
   assert.ok(Object.keys(points(card.buckets)).length >= 10);
   assert.deepEqual(points(dashboard.buckets), points(card.buckets), "same keys: top-level provider, model, conversation");
+});
+
+// Trend cards. Each opens its destination chart on Over time; the card's own
+// preview (its query, history and timeline transforms) and the dashboard's
+// trend query and series must draw the same points, day by day.
+const serving = new WeakSet();
+function previewServer(t) {
+  if (serving.has(t)) return;
+  serving.add(t);
+  const prior = { fetch: global.fetch, location: global.location };
+  global.location = { origin: "http://parity.test" };
+  t.mock.timers.enable({ apis: ["Date"], now });
+  global.fetch = async (url, init = {}) => {
+    const path = String(url), request = init.body ? JSON.parse(init.body) : undefined;
+    if (path.includes("computed-columns")) return Response.json([]);
+    assert.ok(path.startsWith("/api/query/usage/"), path);
+    const reply = answerQuery(path.split("/").at(-1), request, rows, schema, { now });
+    assert.ok(reply, path);
+    return Response.json(reply);
+  };
+  t.after(() => { Object.assign(global, prior); clearPreviewCache(); });
+}
+const close = (left, right, label) => {
+  assert.deepEqual(Object.keys(left).sort(), Object.keys(right).sort(), `${label}: series`);
+  for (const key of Object.keys(left)) assert.ok(Math.abs(left[key] - right[key]) <= 1e-9 * Math.max(1, Math.abs(right[key])), `${label} ${key}: ${left[key]} != ${right[key]}`);
+};
+async function trendPair(t, id, days, edit = chart => chart) {
+  previewServer(t);
+  const recipe = recipeById(id), item = instantiateRecipe(recipe, days, new Date(now));
+  const preview = await loadQueryPreview("usage", item.query, schema, { recipe: item, cover: item.cover, window: item.window, url: item.url });
+  const card = compactTimelineBuckets(preview.buckets, preview.timeline ?? {});
+  const where = cardDashboardWhere("usage", "usage", (item.query.grouping?.source ?? item.query).where);
+  const state = normalizeAnalysis(tokenAnalysisSource, edit(item.destination.chart)), query = trendQuery(tokenAnalysisSource, state, where, { now });
+  const results = core.evaluateMetrics(rows, query.query, schema, { now }).metrics;
+  const dashboard = trendSeries(tokenAnalysisSource, state, query, results, { where, now });
+  assert.equal(dashboard.error, undefined);
+  assert.deepEqual(dashboard.buckets.map(bucket => bucket.key), card.map(bucket => bucket.key), `${id}: the same days`);
+  // Series match by their group value; Other folds the same groups.
+  assert.deepEqual(dashboard.series.map(item => item.value ?? item.key).sort(), preview.series.map(item => item.value ?? item.key).sort(), `${id}: the same series`);
+  card.forEach((bucket, index) => close(dashboard.buckets[index].values, bucket.values, `${id} ${bucket.key}`));
+  return { preview, dashboard, card, state };
+}
+
+test("token-volume-trend: tokens by provider, 7-day rolling mean", async t => {
+  const { dashboard, state } = await trendPair(t, "token-volume-trend", 30);
+  assert.deepEqual([state.metric, state.split, state.rollingPeriods], ["tokens", "provider", 7]);
+  assert.ok(dashboard.buckets.every(bucket => bucket.windowSize === 7), "history before the range fills every window");
+  assert.ok(dashboard.buckets.some(bucket => Object.values(bucket.values).some(value => value > 0)));
+});
+
+test("token-volume-log: tokens by repository on a log scale", async t => {
+  const { state } = await trendPair(t, "token-volume-log", 30);
+  assert.deepEqual([state.split, state.scale], ["repository_name", "logarithmic"]);
+});
+
+test("cumulative-api-cost: priced cost by provider, cumulative", async t => {
+  const { dashboard } = await trendPair(t, "cumulative-api-cost", 30);
+  // The fully priced measure carries the same population without the filter.
+  const priced = await trendPair(t, "cumulative-api-cost", 30, chart => ({ ...chart, metric: "priced_cost" }));
+  assert.deepEqual(priced.dashboard.buckets.at(-1).values, dashboard.buckets.at(-1).values);
+  const unfiltered = cardDashboardWhere("usage", "usage", []);
+  assert.ok(trendQuery(tokenAnalysisSource, { ...priced.state, metric: "priced_cost" }, unfiltered, { now }).query.where.some(term => term.field === "price_status"), "the population joins the query");
+  const total = rows.filter(row => row.price_status === "priced" && row.cost_usd >= 0 && row.total_tokens > 0).reduce((sum, row) => sum + row.cost_usd, 0);
+  assert.ok(Math.abs(Object.values(dashboard.buckets.at(-1).values).reduce((sum, value) => sum + value, 0) - total) < 1e-9, "the last point is the range's priced total");
+});
+
+test("model-token-share-trend: token shares by model, smoothed before the share", async t => {
+  const { dashboard, state } = await trendPair(t, "model-token-share-trend", 90);
+  assert.deepEqual([state.metric, state.share, state.rollingPeriods], ["tokens", true, 7], "the old percent metric is tokens shown as shares");
+  for (const bucket of dashboard.buckets) {
+    const sum = Object.values(bucket.values).reduce((total, value) => total + value, 0);
+    assert.ok(sum === 0 || Math.abs(sum - 1) < 1e-12, bucket.key);
+  }
+});
+
+test("a pooled ratio trend: cache-read share by model over 7 days, never an average of ratios", () => {
+  const where = [{ field: "last_usage_at", op: ">=", value: "-30d" }, { field: "first_usage_at", op: "<", value: "+0s" }];
+  const state = { metric: "cache_read_share", split: "provider_model", period: "day", hours: 6, days: 3, rollingPeriods: 7 };
+  // Cache reads vary by day here, so pooling and averaging daily ratios differ.
+  const varied = rows.map((row, index) => { const reads = row.cache_read_input_tokens * (1 + index % 4); return { ...row, cache_read_input_tokens: reads, input_tokens: row.input_tokens - row.cache_read_input_tokens + reads }; });
+  const query = trendQuery(tokenAnalysisSource, state, where, { now });
+  const results = core.evaluateMetrics(varied, query.query, schema, { now }).metrics;
+  const built = trendSeries(tokenAnalysisSource, state, query, results, { where, now });
+  assert.equal(built.lines, true, "ratios of several groups are lines, not stacks");
+  // Independently: each day's window pools the reads and inputs of its own
+  // and the six earlier recorded days.
+  const local = day => { const [y, m, d] = day.split("-").map(Number); return new Date(y, m - 1, d); };
+  let checked = 0;
+  for (const bucket of built.buckets) for (const item of built.series) {
+    const end = local(bucket.key), start = new Date(end); start.setDate(start.getDate() - 6);
+    const [provider, model] = JSON.parse(item.value);
+    const window = varied.filter(row => row.provider === provider && row.model_family === model && local(row.day) >= start && local(row.day) <= end);
+    const input = window.reduce((sum, row) => sum + row.input_tokens, 0), reads = window.reduce((sum, row) => sum + row.cache_read_input_tokens, 0);
+    if (!input) { assert.equal(bucket.values[item.key], undefined, "a window without input has no value"); continue; }
+    assert.ok(Math.abs(bucket.values[item.key] - reads / input) < 1e-12, `${bucket.key} ${item.value}`);
+    const days = [...new Set(window.map(row => row.day))];
+    if (days.length > 1) {
+      const mean = days.map(day => window.filter(row => row.day === day)).map(part => part.reduce((sum, row) => sum + row.cache_read_input_tokens, 0) / part.reduce((sum, row) => sum + row.input_tokens, 0)).reduce((a, b) => a + b, 0) / days.length;
+      if (Math.abs(mean - reads / input) > 1e-9) checked++;
+    }
+  }
+  assert.ok(checked > 0, "some windows differ between pooling and averaging daily ratios");
+});
+
+test("a trailing-window card: daily tokens, 7-day mean over complete days, with its norm", () => {
+  const trend = { value: { op: "sum", field: "total_tokens" }, perDay: true, lookback: 7, completeDays: true, valueLabel: "tokens a day", pointValueLabel: "tokens a day", sample: "records", detail: "" };
+  const { days, ends } = cardTrendDays(7, true, now);
+  const card = buildCardTrend(trend, 7, cardTrendQueries([], trend, days).map(query => core.evaluateMetrics(rows, query, schema, { now }).metrics), now).study;
+  const from = new Date(`${ends[0]}T00:00:00`);
+  const where = withTimeRange([], usageTime, from);
+  const state = { metric: "tokens", split: "none", period: "day", hours: 6, days: 3, rollingPeriods: 7, rollingOp: "mean", completePeriods: true, norm: true };
+  const query = trendQuery(tokenAnalysisSource, state, where, { now });
+  const built = trendSeries(tokenAnalysisSource, state, query, core.evaluateMetrics(rows, query.query, schema, { now }).metrics, { where, now });
+  assert.deepEqual(built.buckets.map(bucket => bucket.key), ends, "whole days through yesterday");
+  close(Object.fromEntries(built.buckets.map(bucket => [bucket.key, bucket.values.total ?? 0])), Object.fromEntries(ends.map((end, index) => [end, card.points[index]])), "points");
+  assert.ok(card.points.some(point => point > 0));
+  assert.ok(Math.abs(built.norm - card.baseline) < 1e-9, `norm ${built.norm} != baseline ${card.baseline}`);
 });

@@ -1,5 +1,5 @@
 import "./visit-history";
-import { originDimensions, originLabel, originRenderers, useOriginMetadata, isOriginDimension } from "./origin-dimensions";
+import { originLabel, originRenderers, useOriginMetadata, isOriginDimension } from "./origin-dimensions";
 import "./uifeedback/pharos-client";
 import { matchingSelectionIDs } from "./query-selection";
 import { DataTaxonomyModal, SourceQueryBuilder } from "./data-taxonomy";
@@ -30,11 +30,11 @@ import { MachineActivity } from "./machine-activity";
 import { activityPresentation } from "./machine-activity-data";
 import { ChartSelect, DisplayControl, PeriodControl, RangeControl, ScaleControl, RollingControl, StackedColumns, calendarPresetPeriod, chartPeriodCount, chartSpan, pickRange, presetPeriod, smoothingWhere, timeBounds, withTimeRange, usageTime, writingTime, type FilterChange } from "./usage-chart";
 import { applyUsageAggregations } from "./usage-aggregations";
-import { presetMatches, usageChartPresets, type TokenChartView, type TokenSplit, type UsagePreset } from "./usage-presets";
+import { presetMatches, usageChartPresets, type TokenChartView, type UsagePreset } from "./usage-presets";
 import { withComputedCapabilityRefresh } from "./computed-column-store";
 import { MetricRequestError, postMetrics, postQueryV3Metrics, type MetricResult } from "./metric-request";
-import { costMetric, tokenChartMetrics, tokenChartSplit, tokenSummaryMetrics, tokenTypes } from "./token-chart-request";
-import { chartPeriods, earliestKey, isHourly, localDay, parseDay, periodKey, periodLabel, validPeriodCount, type ChartPeriod } from "./chart-period";
+import { tokenSummaryMetrics } from "./token-chart-request";
+import { chartPeriods, earliestKey, isHourly, localDay, parseDay, periodLabel, validPeriodCount, type ChartPeriod } from "./chart-period";
 import { defaultChartScale, validChartScale } from "./chart-scale";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -90,8 +90,9 @@ import { UsageQueryIdeas } from "./usage-query-ideas";
 import { toolSummaryCallFilters, toolMetricPresentation, defaultToolDashboard, validToolDashboard, cumulativeToolTrend, smoothedToolTrend, toolDashboardMeasures, toolDashboardBreakdowns, toolDashboardQuery, toolTrendRanking, withToolTrendGroups, toolTrendGroups } from "./tools-dashboard-model";
 import { readDashboardQuery, inspectDashboardBucket, recordDashboardMetric, recordDashboards, parallelismSelectionQuery, toolDashboardWhere, type RecordDashboardTopic } from "./usage-dashboard-model";
 import { dashboardChartURL } from "./dashboard-chart-links";
-import { AnalysisViewControl, DashboardAnalysis } from "./dashboard-analysis";
-import { switchView, validAnalysisState, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { DashboardAnalysis } from "./dashboard-analysis";
+import { AnalysisTrend, type AmountFormat } from "./dashboard-trend";
+import { normalizeAnalysis, switchView, validAnalysisState, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { tokenAnalysisCatalog } from "./token-analysis-catalog";
 import type { LocalRows } from "./analysis-request";
 
@@ -1080,97 +1081,14 @@ function useMetrics(dataset: Dataset, where: WhereTerm[], clauses: AggregationCl
   return { ...state, metrics: state.key === key ? state.metrics : [], loading: state.key !== key || state.loading, error: state.key === key ? state.error : "" };
 }
 
-const tokenSplits: Array<[TokenSplit, string]> = [["type", "Token type"], ...originDimensions.map(([key, label]): [TokenSplit, string] => [key, label]), ["provider", "Provider"], ["model_family", "Model"], ["model_effort", "Model + effort"], ["effort", "Effort"], ["repository_name", "Repository"], ["session_kind", "Root Agent/Subagent"]];
-// Providers and agent kinds keep one color each whatever the filters; models
-// and repositories show the fifteen largest in view and fold the rest into Other.
-const fixedSplitOrder: Partial<Record<TokenSplit, string[]>> = { provider: ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"], session_kind: ["root", "subagent"] };
-const sessionKindLabels: Record<string, string> = { root: "Root agent", subagent: "Sub-agent" };
 const tokenChartKey = "pharos-usage-chart";
 const defaultTokenChart: TokenChartView = { metric: "cost", split: "model_family", period: "week", hours: 6, days: 3, rollingPeriods: 0, scale: defaultChartScale, display: "interval" };
 const costTick = (value: number) => Math.abs(value) >= 1e4 ? `$${compactNumber(value)}` : `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
-
-function splitLabel(split: TokenSplit, value: unknown): string {
-  if (value === null || value === undefined || value === "") return split === "repository_name" ? "No repository" : "Unknown";
-  const text = String(value);
-  if (isOriginDimension(split)) return originLabel(split, value);
-  if (split === "provider") return optionLabels(schemas.usage.fields).get("provider")?.get(text) ?? text;
-  if (split === "session_kind") return sessionKindLabels[text] ?? text;
-  return text;
-}
-
-// Split by a row field, the key filters the table to the values clicked; the
-// chart leaves that filter out of its own query so the other values stay in
-// the key to pick from. Token types are not rows, so clicking one only
-// narrows the chart.
-function TokenChart({ where, onFilter, onTimeFilter = onFilter, view, onChange, viewControl }: { where: WhereTerm[]; onFilter: FilterChange; onTimeFilter?: FilterChange; view: TokenChartView; onChange: (next: Partial<TokenChartView>) => void; viewControl?: React.ReactNode }) {
-  const originRevision = useOriginMetadata();
-  const cost = costMetric(view);
-  const percent = view.metric === "percent" || view.metric === "percent_cost";
-  const cumulative = view.display === "cumulative";
-  const split = tokenChartSplit(view);
-  const periodCount = chartPeriodCount(view);
-  const types = view.selection ?? { values: [], excluded: false };
-  const seriesLimit = view.seriesLimit ?? 15;
-  const sliced = split !== "type";
-  const selection = sliced ? readSlice(where, split) : types;
-  const chosen = selection.values.map(value => value ?? "");
-  const chartWhere = sliced ? where.filter(term => !isSliceTerm(term, split)) : where;
-  const requestedWhere = smoothingWhere(chartWhere, usageTime, view.period, cumulative ? 0 : view.rollingPeriods, periodCount);
-  const clauses = useMemo(() => tokenChartMetrics(view), [view.metric, view.split, view.period]);
-  const result = useMetrics("usage", requestedWhere, clauses);
-  const bounds = timeBounds(where, usageTime);
-  const { series, buckets, cumulativeStart } = useMemo(() => {
-    const dates = result.metrics.flatMap(metric => metric.buckets.map(bucket => parseDay(String(bucket.keys[0]))));
-    const earliest = earliestKey(result.metrics.flatMap(metric => metric.buckets.map(bucket => bucket.keys[0])));
-    const buckets = chartBucketsWithHistory(view.period, ...chartSpan(bounds, earliest), periodCount, dates,
-      !cumulative && view.rollingPeriods > 1 ? timeBounds(requestedWhere, usageTime).from ?? earliest : undefined), byKey = new Map(buckets.map(bucket => [bucket.key, bucket]));
-    // Keep the full range's total even when only the latest 5,000 intervals
-    // fit on screen. Earlier amounts become the first visible point's balance.
-    const plottedKey = (value: unknown) => {
-      const key = periodKey(parseDay(String(value)), view.period, periodCount);
-      return cumulative && buckets.length && key < buckets[0].key ? buckets[0].key : key;
-    };
-    const cumulativeStart = bounds.from ?? earliest;
-    if (split === "type") {
-      result.metrics.forEach((metric, index) => {
-        for (const bucket of metric.buckets) {
-          const target = byKey.get(plottedKey(bucket.keys[0]));
-          if (target) target.values[tokenTypes[index].key] = (target.values[tokenTypes[index].key] ?? 0) + (Number(bucket.value) || 0);
-        }
-      });
-      return { series: tokenTypes.filter(type => type.key !== "unclassified_tokens" || buckets.some(bucket => bucket.values[type.key])).map(type => ({ ...type, value: type.key })), buckets, cumulativeStart };
-    }
-    const rows = (result.metrics[0]?.buckets ?? []).map(bucket => [plottedKey(bucket.keys[0]), String(bucket.keys[1] ?? ""), Number(bucket.value) || 0] as [string, string, number]);
-    return { series: foldSeries(rows, byKey, name => splitLabel(split, name), fixedSplitOrder[split], chosen, seriesLimit, split), buckets, cumulativeStart };
-  }, [result.metrics, originRevision, split, view.period, periodCount, bounds.from?.getTime(), bounds.to?.getTime(), chosen.join("\u0000"), seriesLimit, cumulative, view.rollingPeriods]);
-  useUsageChartPalette(sliced ? split : null, series);
-  const selected = series.filter(item => item.value !== undefined && chosen.includes(item.value)).map(item => item.key);
-  function select(key: string | null, action: LegendAction) {
-    const value = key === null ? undefined : series.find(item => item.key === key)?.value;
-    if (!sliced) onChange({ selection: updateSlice(types, value ?? "", action) });
-    else onFilter(current => withSlice(current, split, updateSlice(readSlice(current, split), value || null, action)));
-  }
-  const unit = periodLabel(view.period, periodCount), splitName = tokenSplits.find(([value]) => value === split)?.[1].toLowerCase() ?? split;
-  const title = `${cumulative ? "Cumulative " : ""}${percent ? cost ? "Cost share" : "Token share" : cost ? "API cost" : "Tokens"}${cumulative ? "" : ` per ${unit}`} by ${splitName}`;
-  const controls = <>
-    {viewControl}
-    <ChartSelect label="Metric" value={view.metric} options={[["cost", "API Cost"], ["tokens", "Token Count"], ["percent_cost", "% API Cost"], ["percent", "% Token Count"]]} onChange={metric => onChange({ metric })} />
-    <ChartSelect label="Breakdown" value={split} options={tokenSplits.map(([value, text]) => [value, text, value === "type" && cost ? "Cost is priced per request, not per token type" : undefined])}
-      title={cost ? "Token type is only available for token metrics; cost is priced per request." : "How each chart column is divided"} onChange={next => onChange({ split: next, seriesLimit: 15, selection: { values: [], excluded: false } })} />
-    <DisplayControl value={view.display} onChange={display => onChange({ display })} />
-    <RangeControl bounds={bounds} onPresetChange={(range, oldest) => onChange(presetPeriod(range, oldest))} onChange={(from, to, preset) => onTimeFilter(current => withTimeRange(current, usageTime, from, to, preset))} />
-    <ScaleControl value={view.scale} onChange={scale => onChange({ scale })} percent={percent} />
-    <PeriodControl view={view} onChange={onChange} />
-    <RollingControl value={cumulative ? 0 : view.rollingPeriods} period={view.period} count={periodCount} disabled={cumulative} note={cumulative ? "Cumulative totals use original amounts. Smoothing applies per interval." : undefined} onChange={rollingPeriods => onChange({ rollingPeriods })} />
-  </>;
-  return <StackedColumns title={title} controls={controls} series={series.length ? series : [{ key: "none", label: title, color: "var(--heat-1)" }]} buckets={buckets} period={view.period} periodCount={periodCount} rollingPeriods={view.rollingPeriods} display={view.display} cumulativeStart={cumulativeStart} scale={view.scale}
-    format={percent ? value => `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })}%` : cost ? formatUSD : compactNumber}
-    tickFormat={percent ? value => `${value}%` : cost ? costTick : compactNumber}
-    noun={view.metric === "tokens" ? "tokens" : ""} loading={result.loading} error={result.error} legend={series.length > 0} percent={percent}
-    selected={selected} excluded={selection.excluded} onSelect={select} onExpand={() => onChange({ seriesLimit: Math.min(1000, seriesLimit + 5) })} onRange={pickRange(onTimeFilter, usageTime, view.period, periodCount, period => onChange({ period }))}
-    seriesHref={(range, item) => dashboardChartURL({ dataset: "usage", where: range.rolling ? requestedWhere : where, time: usageTime, range, series: item, split: sliced ? split : null,
-      fields: [sliced ? cost ? "cost_usd" : "total_tokens" : item.key], current: new URLSearchParams(location.search) })} />;
-}
+// Tokens and Cost amounts; shares and ratios are formatted by the trend.
+const tokenAmount: AmountFormat = (value, measure) => measure.unit === "USD" ? formatUSD(value) : compactNumber(value);
+const tokenTick: AmountFormat = (value, measure) => measure.unit === "USD" ? costTick(value) : compactNumber(value);
+// The Usage page's chart shortcuts name a measure shown as values.
+const tokenChartPresets: UsagePreset[] = usageChartPresets.map(preset => ({ ...preset, chart: { ...preset.chart, share: false } }));
 
 function PresetRow({ label, presets, query, chart, onApply, clear }: { label: string; presets: UsagePreset[]; query: QueryTableApi<Row>["query"]; chart?: TokenChartView; onApply: (preset: UsagePreset | null) => void; clear?: boolean }) {
   return <div className="usage-presets" role="group" aria-label={`${label} presets`}>
@@ -1181,21 +1099,20 @@ function PresetRow({ label, presets, query, chart, onApply, clear }: { label: st
 }
 
 function TokenUsage({ scopeWhere, appliedScope, onTimeRangeChange }: { scopeWhere?: WhereTerm[]; appliedScope?: React.MutableRefObject<WhereTerm[]>; onTimeRangeChange?: () => void } = {}) {
-  const [chart, setChart] = useState<TokenChartView>(() => readStored(tokenChartKey, defaultTokenChart, view =>
-    ["tokens", "cost", "percent", "percent_cost"].includes(view.metric) && tokenSplits.some(([value]) => value === view.split) && Object.hasOwn(chartPeriods, view.period) && validPeriodCount(view.hours) && validPeriodCount(view.days) && validRollingPeriods(view.rollingPeriods) && validChartScale(view.scale) && validChartDisplay(view.display) && validChartPresentation(view)));
-  const update = (next: Partial<TokenChartView>) => setChart(previous => { const merged = { ...previous, ...next }; store(tokenChartKey, merged); return merged; });
+  const [chart, setChart] = useState<TokenTrendView>(() => readStored(tokenChartKey, defaultTokenChart as TokenTrendView, view => validTokenChartFields(view) && validAnalysisState(tokenAnalysisCatalog, { ...view, view: "trend" })));
+  const update = (next: Partial<TokenTrendView>) => setChart(previous => { const merged = { ...previous, ...next }; store(tokenChartKey, merged); return merged; });
   return <QuerySurface dataset="usage" scopeWhere={scopeWhere} appliedScope={appliedScope} header={api => {
     const where = toAggregationQuery({ ...api.query, aggregations: [] }, schemas.usage).where;
     return <>
       <p className="muted machine-token-note">Reconciled tokens by session, model, and effort. Input includes cached tokens. Cost is the API list-price equivalent at standard rates; subscriptions and long-context premiums are excluded. ≈ marks costs priced by assumption.</p>
       <TokenSummary where={where} />
-      <TokenChart where={where} onFilter={filterChange(api)} onTimeFilter={change => {
+      <AnalysisTrend catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={chart} where={where} onChange={update} onFilter={filterChange(api)} onTimeFilter={change => {
         // A chart date selection replaces the page period. Release its scope
         // before updating the query so normalization cannot restore that limit.
         onTimeRangeChange?.();
         filterChange(api)(change);
-      }} view={chart} onChange={update} />
-      <PresetRow label="Chart" presets={usageChartPresets} query={api.query} chart={chart} onApply={preset => { if (preset?.chart) update(preset.chart); }} />
+      }} local={tokenSharedRows} format={tokenAmount} tick={tokenTick} links={false} />
+      <PresetRow label="Chart" presets={tokenChartPresets} query={api.query} chart={normalizeAnalysis(tokenAnalysisCatalog, { ...chart, view: "trend" }) as TokenChartView} onApply={preset => { if (preset?.chart) update(preset.chart as Partial<TokenTrendView>); }} />
     </>;
   }} />;
 }
@@ -1558,27 +1475,23 @@ function ParallelismUsageDashboard() {
   </>;
 }
 
-// Over time is the token chart. Other views share its filters and range,
-// and the analysis fields sit beside the trend's in one analyze_chart object.
-type TokenDashboardView = Omit<TokenChartView, "metric" | "split"> & AnalysisState;
+// Over time and the analysis views share the dashboard's filters and range;
+// their fields sit side by side in one analyze_chart object.
+type TokenTrendView = Omit<TokenChartView, "metric" | "split"> & AnalysisState;
 const tokenSharedRows: LocalRows | undefined = shared ? { rows: shared.datasets.usage ?? [], hourly: shared.datasets.usage_hourly ?? [] } : undefined;
 const validTokenChartFields = (view: Omit<TokenChartView, "metric" | "split">) => Object.hasOwn(chartPeriods, view.period) && validPeriodCount(view.hours) && validPeriodCount(view.days) && validRollingPeriods(view.rollingPeriods) && validChartScale(view.scale) && validChartDisplay(view.display) && validChartPresentation(view);
-const validTokenDashboard = (view: TokenDashboardView) => validTokenChartFields(view) && validAnalysisState(tokenAnalysisCatalog, view)
-  && ((view.view ?? "trend") !== "trend" || ["tokens", "cost", "percent", "percent_cost"].includes(view.metric) && tokenSplits.some(([key]) => key === view.split));
+const validTokenDashboard = (view: TokenTrendView) => validTokenChartFields(view) && validAnalysisState(tokenAnalysisCatalog, view);
 
 function TokenUsageDashboard() {
-  const state = useUsageDashboardState<TokenDashboardView>({ ...defaultTokenChart, period: "day" as ChartPeriod }, validTokenDashboard, usageTime);
+  const state = useUsageDashboardState<TokenTrendView>({ ...defaultTokenChart, period: "day" as ChartPeriod }, validTokenDashboard, usageTime);
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
   const choose = (next: AnalysisView) => state.update(switchView(tokenAnalysisCatalog, state.view, next));
   if ((state.view.view ?? "trend") !== "trend") return <DashboardAnalysis catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={state.view} where={state.where}
     onChange={state.update} onView={choose} onFilter={state.onFilter} local={tokenSharedRows} />;
-  const trend = state.view as TokenChartView;
-  return <>
-    <TokenChart where={state.where} onFilter={state.onFilter} view={trend} onChange={state.update} viewControl={<AnalysisViewControl catalog={tokenAnalysisCatalog} state={state.view} onChange={choose} />} />
+  return <AnalysisTrend catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter}
+    local={tokenSharedRows} format={tokenAmount} tick={tokenTick} currentURL="/analyze?analyze_view=tokens&machine_view=tokens">
     <TokenSummary where={state.where} />
-    <UsageDashboardLinks schema={schemas.usage} dataset="usage" query={{ ...EMPTY_QUERY, where: state.where, aggregations: tokenChartMetrics(trend).map(clause => ({ ...clause, label: clause.label === "chart" ? costMetric(trend) ? "API cost (USD)" : "Tokens" : clause.label })) }} currentURL="/analyze?analyze_view=tokens&machine_view=tokens" />
-    <p className="usage-dashboard-note">Click a column or point to pin its key, then follow a series to its contributing usage records. Drag across two or more periods to filter dates. Select legend entries to compare or exclude series. Cumulative links include activity from the range start; rolling-average links include the averaging window. Grouped rows expose the underlying interval amounts before percentages, smoothing, accumulation, or folded series. API cost is the list-price equivalent; subscriptions and long-context premiums are excluded. ≈ marks assumed prices.</p>
-  </>;
+  </AnalysisTrend>;
 }
 
 function HumanUsageDashboard() {
