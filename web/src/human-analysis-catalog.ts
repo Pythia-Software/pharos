@@ -47,8 +47,11 @@ function legacy(state: AnalysisState): AnalysisState {
   const { scope, ...rest } = state as AnalysisState & { scope?: unknown };
   if (scope === undefined && !Object.hasOwn(splits, state.split) && !(state.split === "kind" && state.metric === undefined)) return state;
   const all = scope === "all", split = splits[state.split] ?? state.split;
-  // The typed scope's text source was the typed series alone: one total.
-  return { ...rest, metric: rest.metric ?? (all ? "words" : "typed"), split: split === "kind" && !all ? "none" : split };
+  // Older links had no metric of their own (a dashboard's defaults may fill
+  // one in), so their scope decides it. The typed scope's text source was
+  // the typed series alone: one total.
+  const metric = scope === undefined ? rest.metric : all ? "words" : "typed";
+  return { ...rest, metric, split: split === "kind" && metric !== "words" ? "none" : split };
 }
 
 export const humanAnalysisCatalog: AnalysisCatalog = {

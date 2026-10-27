@@ -50,6 +50,10 @@ test("the three catalogs are well formed and read their older links", () => {
   assert.deepEqual([read({ scope: "all", split: "kind" }).metric, read({ scope: "all", split: "kind" }).split], ["words", "kind"]);
   assert.deepEqual([read({ scope: "all", split: "providers" }).metric, read({ scope: "all", split: "providers" }).split], ["words", "provider"]);
   assert.equal(read({ scope: "typed", split: "channels" }).split, "channel");
+  // The dashboard fills its defaults in before reading: the scope decides.
+  const defaults = { metric: "typed", split: "none", period: "day" };
+  assert.deepEqual([read({ ...defaults, scope: "all", split: "kind" }).metric, read({ ...defaults, scope: "all", split: "kind" }).split], ["words", "kind"]);
+  assert.deepEqual([read({ ...defaults, scope: "typed", split: "kind" }).metric, read({ ...defaults, scope: "typed", split: "kind" }).split], ["typed", "none"]);
   assert.ok(validAnalysisState(human, { period: "day", rollingPeriods: 0, display: "interval", scale: "linear", seriesLimit: 15, scope: "typed", split: "repository_name", hours: 6, days: 3 }));
   // An older link's work filters read as message filters, and its legend
   // filter on the breakdown's field becomes the selection.

@@ -95,7 +95,7 @@ import { readDashboardQuery, parallelismSelectionQuery } from "./usage-dashboard
 import { dashboardChartURL } from "./dashboard-chart-links";
 import { DashboardAnalysis } from "./dashboard-analysis";
 import { AnalysisTrend, type AmountFormat } from "./dashboard-trend";
-import { normalizeAnalysis, readAnalysisLink, switchView, validAnalysisState, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { canonicalState, normalizeAnalysis, readAnalysisLink, switchView, validAnalysisState, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { tokenAnalysisCatalog } from "./token-analysis-catalog";
 import { humanAnalysisCatalog, humanWhere, writingGroups } from "./human-analysis-catalog";
 import { parallelismAnalysisCatalog } from "./parallelism-analysis-catalog";
@@ -1536,7 +1536,7 @@ function TokenUsageDashboard() {
 function HumanUsageDashboard() {
   const [reload, setReload] = useState(0);
   const status = useAuthorshipStatus(() => { setReload(value => value + 1); window.dispatchEvent(new Event("pharos:usage-refresh")); });
-  return <CatalogDashboard catalog={humanAnalysisCatalog} dataset="writing_messages" name="human" defaults={{ metric: "typed", split: "none", period: "day" }} readWhere={humanWhere}
+  return <CatalogDashboard catalog={humanAnalysisCatalog} dataset="writing_messages" name="human" defaults={{ metric: "typed", split: "none", period: "day" }} readWhere={humanWhere} currentURL="/analyze?analyze_view=writing"
     summary={where => <HumanWordsSummary where={where} status={status} />}
     panels={(where, onFilter) => <>
       <p className="usage-dashboard-note">Typed and dictated words are distinguished from pastes, copied agent output, templates, attachments, harness instructions and automated prompts. Select a column, bar or box to open its messages; each message is highlighted by where its text came from.</p>
@@ -1588,7 +1588,9 @@ function CatalogDashboard({ catalog, dataset, name, defaults, currentURL, legacy
   panels?: (where: WhereTerm[], onFilter: FilterChange) => React.ReactNode; readWhere?: (where: WhereTerm[]) => WhereTerm[]; format?: AmountFormat;
   frame?: (views: CatalogViews, where: WhereTerm[], onFilter: FilterChange) => React.ReactNode;
 }) {
-  const state = useUsageDashboardState<AnalysisState>(defaults, view => validAnalysisState(catalog, view), catalog.time, (view, where) => readAnalysisLink(catalog, view, readWhere ? readWhere(where) : where));
+  // An older link is read in the catalog's terms once (canonicalState) and
+  // rewritten, so a later change never merges with its old vocabulary.
+  const state = useUsageDashboardState<AnalysisState>(defaults, view => validAnalysisState(catalog, view), catalog.time, (view, where) => readAnalysisLink(catalog, canonicalState(catalog, view), readWhere ? readWhere(where) : where));
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
   const schema = schemas[dataset];
   const views: CatalogViews = (drawn, amount = format) => {

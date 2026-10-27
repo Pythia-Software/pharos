@@ -729,7 +729,7 @@ for (const viewport of [{ width: 2133, height: 1075 }, { width: 1440, height: 90
     await press(expand);
     await sidebar.waitFor();
     await press(sidebar.getByRole('link', { name: /^Human words$/i }));
-    await page.locator('.usage-dashboard .writing-panel .usage-chart').waitFor();
+    await page.locator('.usage-human-dashboard .usage-chart').waitFor();
     await page.waitForFunction(() => document.activeElement?.tagName === 'MAIN');
     assert.equal(await sidebar.getByRole('link', { name: /^Human words$/i }).getAttribute('aria-current'), 'page');
   });
@@ -792,7 +792,7 @@ for (const width of [1440, 390, 320]) test(`Search long query can scroll to subm
 });
 
 for (const route of [
-  { name: "Analyze", url: "/analyze", ready: ".usage-dashboard .usage-chart", link: /^Human words$/i, destination: ".usage-dashboard .writing-panel .usage-chart" },
+  { name: "Analyze", url: "/analyze", ready: ".usage-dashboard .usage-chart", link: /^Human words$/i, destination: ".usage-human-dashboard .usage-chart" },
   { name: "Settings", url: "/settings", ready: "#healthCards .panel:not([aria-busy])", link: /^Sources$/, destination: "#sourceGrid .source-card" },
   { name: "TL1", url: "/tl1", ready: ".tl1-tiles", link: /^Configurations$/, destination: "#tl1-matrix" },
 ]) test(`${route.name} navigation is usable from the keyboard on a phone`, { skip }, async t => {
