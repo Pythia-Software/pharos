@@ -416,14 +416,7 @@ func (s *Server) finishDeferredSyncPhases(ctx context.Context, forceFindings boo
 	}
 	complete := func(name string) error {
 		return s.Catalog.writeTransaction(ctx, "complete deferred "+name, func(tx *sql.Tx) error {
-			if _, err := tx.ExecContext(ctx, "UPDATE sync_deferred SET completed_generation=MAX(completed_generation,?),completed_at=? WHERE name=?", generation[name], now(), name); err != nil {
-				return err
-			}
-			// The freshness ledger's evidence (§5): this stage completed for
-			// the library's inputs as they are now, after its own writes.
-			_, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) SELECT 'analysis_inputs:'||?,
-				COALESCE((SELECT value FROM meta WHERE key='tool_ledger_generation'),'')||':'||COALESCE((SELECT value FROM meta WHERE key='authorship_inputs_generation'),'')
-				WHERE true ON CONFLICT(key) DO UPDATE SET value=excluded.value`, name)
+			_, err := tx.ExecContext(ctx, "UPDATE sync_deferred SET completed_generation=MAX(completed_generation,?),completed_at=? WHERE name=?", generation[name], now(), name)
 			return err
 		})
 	}
@@ -483,6 +476,8 @@ func (s *Server) finishDeferredSyncPhases(ctx context.Context, forceFindings boo
 			return err
 		}
 	}
+	// The freshness ledger's upgrade count (§5), cheap next to the chain.
+	s.Catalog.storeUpgradeCount(ctx)
 	return nil
 }
 

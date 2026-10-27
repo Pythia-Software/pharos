@@ -55,7 +55,7 @@ func (f *freshnessFixture) builtToday() []string {
 		setMetaSQL("authorship_inputs_generation", "3"), setMetaSQL("authorship_generation", "7:3/"+authorshipVersion), setMetaSQL("authorship_built_at", "2026-10-27T08:00:00Z"),
 		setMetaSQL("findings_generation", c.findingsGeneration()), setMetaSQL("findings_built_at", "2026-10-27T08:05:00Z"),
 		// Each completion was for the library's inputs as they are (7:3).
-		setMetaSQL("findings_inputs_generation", "7:3"), setMetaSQL("analysis_inputs:identities", "7:3"), setMetaSQL("analysis_inputs:git", "7:3"),
+		setMetaSQL("findings_inputs_generation", "7:3"), setMetaSQL("analysis_inputs:identities", "records:3"), setMetaSQL("analysis_inputs:git", "records:3"),
 		"DELETE FROM workspace_library_dirty", "DELETE FROM tool_rollup_dirty",
 	}
 }
@@ -125,14 +125,15 @@ func keysOf[V any](values map[string]V) []string {
 	return keys
 }
 
-// counted is a setup that leaves steps as the upgrade's last count, taken
-// for inputs.
-func counted(inputs string, steps ...upgradeStep) func(*freshnessFixture) {
+// counted is a setup that stores steps as the upgrade's count, taken by
+// build ("" for the build that initialized the catalog).
+func counted(build string, steps ...upgradeStep) func(*freshnessFixture) {
 	return func(f *freshnessFixture) {
-		state := f.catalog.upgrade()
-		state.mu.Lock()
-		state.lastSteps, state.lastStepsAt, state.lastStepsInputs = steps, time.Now(), inputs
-		state.mu.Unlock()
+		if build == "" {
+			build, _ = f.catalog.metaValue(context.Background(), initializedBuildKey)
+		}
+		data, _ := json.Marshal(upgradeCount{Build: build, StartedAt: now(), Steps: steps})
+		f.exec(setMetaSQL(upgradeCountKey, string(data)))
 	}
 }
 
@@ -254,10 +255,11 @@ func TestFreshnessDomains(t *testing.T) {
 		{name: "writing classification behind", domain: "an.authorship", seed: []string{setMetaSQL("authorship_inputs_generation", "4")}, state: freshBehind, reason: "changed", asOf: "2026-10-27T08:00:00Z"},
 		{name: "writing classification caught up", domain: "an.authorship", seed: []string{setMetaSQL("authorship_inputs_generation", "4")},
 			in: freshnessInput{ops: []freshnessOp{runningOp("op-author", "analysis.authorship", "")}}, state: freshBehind, reason: "running", catching: "op-author"},
-		{name: "tools ledger unknown before anything counted it", domain: "an.ledger", state: freshUnknown, reason: "not-counted"},
-		{name: "tools ledger of an older version", domain: "an.ledger", setup: counted("7:3", upgradeStep{ID: "tools", Pending: 12}, upgradeStep{ID: "usage", Pending: 1}),
+		{name: "tools ledger unknown before anything counted it", domain: "an.ledger", seed: []string{"DELETE FROM meta WHERE key='upgrade_count'"}, state: freshUnknown, reason: "not-counted"},
+		{name: "tools ledger of an older version", domain: "an.ledger", setup: counted("", upgradeStep{ID: "tools", Pending: 12}, upgradeStep{ID: "usage", Pending: 1}),
 			state: freshBehind, reason: "version", count: 12, countKnown: true, unit: "conversation"},
-		{name: "tools ledger counted before the library changed", domain: "an.ledger", setup: counted("6:3", upgradeStep{ID: "tools"}), state: freshUnknown, reason: "not-counted"},
+		{name: "tools ledger counted by another build", domain: "an.ledger", setup: counted("another-build", upgradeStep{ID: "tools"}), state: freshUnknown, reason: "not-counted"},
+		{name: "tools ledger stays counted after this build writes", domain: "an.ledger", setup: counted(""), seed: []string{setMetaSQL("authorship_inputs_generation", "9")}, state: freshCurrent},
 
 		{name: "findings current", domain: "findings", state: freshCurrent, asOf: "2026-10-27T08:05:00Z"},
 		{name: "findings daily pass due", domain: "findings", seed: []string{setMetaSQL("findings_generation", findingsVersion+"/2026-10-26")}, state: freshBehind, reason: "daily-pass-due"},
@@ -268,13 +270,10 @@ func TestFreshnessDomains(t *testing.T) {
 		{name: "findings caught up", domain: "findings", seed: []string{"DELETE FROM meta WHERE key='findings_generation'"},
 			in: freshnessInput{ops: []freshnessOp{runningOp("op-find", "analysis.findings", "")}}, state: freshBehind, reason: "running", catching: "op-find"},
 
-		{name: "upgrade unknown before anything counted it", domain: "upgrade", state: freshUnknown, reason: "not-counted"},
-		{name: "upgrade current once counted", domain: "upgrade", setup: func(f *freshnessFixture) {
-			if _, err := f.catalog.UpgradeSteps(context.Background()); err != nil {
-				f.t.Fatal(err)
-			}
-		}, state: freshCurrent},
-		{name: "upgrade available and running", domain: "upgrade", setup: counted("7:3", upgradeStep{ID: "tools", Pending: 12}, upgradeStep{ID: "usage", Pending: 1}, upgradeStep{ID: "harness"}), in: freshnessInput{ops: []freshnessOp{runningOp("op-up", "library.upgrade", "")}}, state: freshBehind, reason: "running", catching: "op-up", count: 2, countKnown: true, unit: "step"},
+		{name: "upgrade unknown before anything counted it", domain: "upgrade", seed: []string{"DELETE FROM meta WHERE key='upgrade_count'"}, state: freshUnknown, reason: "not-counted"},
+		{name: "upgrade counted when the catalog was opened", domain: "upgrade", state: freshCurrent},
+		{name: "upgrade counted again", domain: "upgrade", setup: func(f *freshnessFixture) { f.catalog.storeUpgradeCount(context.Background()) }, state: freshCurrent},
+		{name: "upgrade available and running", domain: "upgrade", setup: counted("", upgradeStep{ID: "tools", Pending: 12}, upgradeStep{ID: "usage", Pending: 1}, upgradeStep{ID: "harness"}), in: freshnessInput{ops: []freshnessOp{runningOp("op-up", "library.upgrade", "")}}, state: freshBehind, reason: "running", catching: "op-up", count: 2, countKnown: true, unit: "step"},
 
 		{name: "local backup unknown without the history", domain: "backup.local", state: freshUnknown},
 		{name: "no local backup yet", domain: "backup.local", in: freshnessInput{files: &freshnessFiles{backupKnown: true}}, state: freshUnknown, reason: "never"},
@@ -419,14 +418,70 @@ func TestFreshnessAfterAutomaticIndexLeavesAnalysesBehind(t *testing.T) {
 		t.Fatalf("a failed stage makes the group failed: %+v", group)
 	}
 
-	// The chain a manual index runs completes them, for the current inputs.
+	// The chain a manual index runs completes them, recording the inputs
+	// each stage started from: with no evidence and new records before it,
+	// identities and Git are current only through what the chain writes.
 	slowTest(t)
+	// (The test's server journals nothing, so the earlier failure is taken
+	// back as the chain's own success would supersede it.)
+	f.exec("DELETE FROM operation_journal WHERE id='j-git'",
+		"DELETE FROM meta WHERE key IN ('analysis_inputs:identities','analysis_inputs:git','findings_inputs_generation')", setMetaSQL("authorship_inputs_generation", "4"))
 	if err := server.finishDeferredSync(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	_, byDomain = ledger()
-	for _, domain := range append(analyses, "findings") {
+	for _, domain := range analyses {
 		expectRow(t, byDomain, domain, freshCurrent, "", "")
+	}
+	// Today's pass exists, so the chain ran findings incrementally: no
+	// record for these inputs until a full pass, which writes one.
+	expectRow(t, byDomain, "findings", freshUnknown, "no-record", "")
+	if err := f.catalog.RefreshFindings(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	_, byDomain = ledger()
+	expectRow(t, byDomain, "findings", freshCurrent, "", "")
+}
+
+// A stage records the generation it started from: a write during it leaves
+// the domain behind, never current.
+func TestStageEvidenceIsWhatTheStageSaw(t *testing.T) {
+	f := newFreshnessFixture(t)
+	if err := f.catalog.completeStage(context.Background(), "git", func() error {
+		// Another process writes records while the stage runs.
+		f.exec(setMetaSQL("authorship_inputs_generation", "4"))
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	expectRow(t, f.ledger(freshnessInput{}), "an.git", freshBehind, "changed", "")
+	if err := f.catalog.completeStage(context.Background(), "git", func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	expectRow(t, f.ledger(freshnessInput{}), "an.git", freshCurrent, "", "")
+	// pharos ingest's path records it too.
+	f.exec(setMetaSQL("authorship_inputs_generation", "5"))
+	if _, err := f.catalog.ReconcileIdentities(); err != nil {
+		t.Fatal(err)
+	}
+	expectRow(t, f.ledger(freshnessInput{}), "an.identities", freshCurrent, "", "")
+}
+
+// The fresh path never waits for the files: while a polled refresh reads
+// them, every other reader takes the last completed value.
+func TestFreshnessFilesNeverWait(t *testing.T) {
+	f := newFreshnessFixture(t)
+	server := testServer(t, f.config, f.catalog)
+	first := server.freshnessFiles(server.Config(), nil, false)
+	override(t, &freshnessFilesMaxAge, 0)
+	server.freshFiles.mu.Lock()
+	server.freshFiles.reading = true
+	server.freshFiles.mu.Unlock()
+	if got := server.freshnessFiles(server.Config(), nil, true); got != first {
+		t.Fatal("the fresh path did not take the last value")
+	}
+	if got := server.freshnessFiles(server.Config(), nil, false); got != first {
+		t.Fatal("a polled reader waited for the reading one")
 	}
 }
 
@@ -488,7 +543,9 @@ func TestFreshnessSummary(t *testing.T) {
 	// Unscheduled backups and findings waiting for tomorrow's pass leave the
 	// row at "All current", the findings muted.
 	quiet := summarizeFreshness(append(slices.Clone(current[:2]),
-		row("findings", "findings", freshScheduled, func(r *freshnessRow) { r.Reason, r.Next = &freshnessReason{Code: "changed", Text: "words"}, text(nextFindingsPass) }),
+		row("findings", "findings", freshScheduled, func(r *freshnessRow) {
+			r.Reason, r.Next, r.short = &freshnessReason{Code: "changed", Text: "words"}, text(nextFindingsPass), "updates tomorrow"
+		}),
 		row("backup.local", "backups", freshUnknown, func(r *freshnessRow) { r.Reason = &freshnessReason{Code: "no-schedule", Text: "words"} })))
 	if g := summaryGroup(t, quiet, "findings"); !quiet.AllCurrent || g.Shown || !g.Muted || g.Short != "updates tomorrow" {
 		t.Fatalf("scheduled findings are muted and all is current: %+v %+v", quiet, g)
@@ -704,25 +761,19 @@ func TestFreshnessReasonsAreTheContracts(t *testing.T) {
 	}
 }
 
-// A count that started before an upgrade ended does not overwrite what the
-// upgrade left, and a count is kept with the inputs it was taken for.
+// The stored count: a later count is never replaced by one that started
+// earlier, and a change of the initializing build invalidates it.
 func TestUpgradeCountKeepsTheNewerAnswer(t *testing.T) {
-	catalog, _ := testCatalog(t)
-	state := catalog.upgrade()
-	if _, err := catalog.UpgradeSteps(context.Background()); err != nil {
-		t.Fatal(err)
+	f := newFreshnessFixture(t)
+	later, _ := json.Marshal(upgradeCount{StartedAt: "2999-01-01T00:00:00Z", Steps: []upgradeStep{{ID: "later"}}})
+	f.exec(setMetaSQL(upgradeCountKey, string(later)))
+	f.catalog.storeUpgradeCount(context.Background())
+	if stored, _ := f.catalog.metaValue(context.Background(), upgradeCountKey); stored != string(later) {
+		t.Fatalf("an earlier count replaced a later one: %s", stored)
 	}
-	_, _, inputs, ok := state.cachedSteps()
-	if !ok || inputs != catalog.inputsGeneration(context.Background()) {
-		t.Fatalf("the count is kept with its inputs: %q %v", inputs, ok)
-	}
-	state.mu.Lock()
-	state.lastSteps, state.lastFinishedAt = []upgradeStep{{ID: "tools"}}, time.Now().Add(time.Hour)
-	state.mu.Unlock()
-	if _, err := catalog.UpgradeSteps(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if steps, _, _, _ := state.cachedSteps(); len(steps) != 1 {
-		t.Fatalf("a count older than the upgrade's end replaced it: %+v", steps)
-	}
+	f.exec("DELETE FROM meta WHERE key='upgrade_count'")
+	f.catalog.storeUpgradeCount(context.Background())
+	expectRow(t, f.ledger(freshnessInput{}), "upgrade", freshCurrent, "", "")
+	f.exec(setMetaSQL(initializedBuildKey, "a-newer-build"))
+	expectRow(t, f.ledger(freshnessInput{}), "upgrade", freshUnknown, "not-counted", "")
 }

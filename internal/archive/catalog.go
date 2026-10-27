@@ -515,7 +515,12 @@ func (c *Catalog) Initialize() error {
 		return fmt.Errorf("initialize query planner statistics: %w", err)
 	}
 	// Last, so a query open skips Initialize only after all of it succeeded.
-	return c.recordInitializedBuild()
+	if err := c.recordInitializedBuild(); err != nil {
+		return err
+	}
+	// The freshness ledger's upgrade count is for this build (§5).
+	c.storeUpgradeCount(context.Background())
+	return nil
 }
 
 // timestampColumns are the stored instants kept in timeLayout. usage_hour

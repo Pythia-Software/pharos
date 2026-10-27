@@ -393,6 +393,10 @@ func (c *Catalog) archiveStatus(args map[string]any) (map[string]any, error) {
 // page with and without it.
 var archiveStatusLedger = true
 
+// archiveStatusLedgerMinimum is about the smallest ledger worth sending (a
+// few behind domains); below it the ledger is not computed.
+const archiveStatusLedgerMinimum = 300
+
 // fitArchiveStatus adds the freshness ledger (docs/background-work.md §5)
 // to the page: domains, each with its state, reason and the operation
 // catching it up, and running, the open operations affecting them. The
@@ -402,6 +406,22 @@ var archiveStatusLedger = true
 func fitArchiveStatus(c *Catalog, result map[string]any, budget, offset, total int) (map[string]any, error) {
 	if !archiveStatusLedger {
 		return result, fitAuditPage(result, budget, offset, total)
+	}
+	// The page first, exactly as without the ledger; the ledger only takes
+	// what budget is left, and is not computed when nothing would fit.
+	if err := fitAuditPage(result, budget, offset, total); err != nil {
+		return nil, err
+	}
+	omitted := func() (map[string]any, error) {
+		page := maps.Clone(result)
+		page["domains_omitted"] = "increase max_output_tokens to see the freshness domains"
+		if len(jsonText(page)) <= budget*3 {
+			return page, nil
+		}
+		return result, nil
+	}
+	if len(jsonText(result))+archiveStatusLedgerMinimum > budget*3 {
+		return omitted()
 	}
 	rows, ops := c.mcpFreshness(context.Background())
 	domains, behind := []map[string]any{}, []map[string]any{}
@@ -435,11 +455,6 @@ func fitArchiveStatus(c *Catalog, result map[string]any, budget, offset, total i
 			running = append(running, map[string]any{"id": op.ID, "kind": op.Kind, "label": op.Label, "state": op.State, "started_at": formatTime(op.Started), "domains": affected})
 		}
 	}
-	// The page first, exactly as without the ledger; the ledger only takes
-	// what budget is left.
-	if err := fitAuditPage(result, budget, offset, total); err != nil {
-		return nil, err
-	}
 	for _, attempt := range []func(map[string]any){
 		func(page map[string]any) { page["domains"], page["running"] = domains, running },
 		func(page map[string]any) {
@@ -452,6 +467,5 @@ func fitArchiveStatus(c *Catalog, result map[string]any, budget, offset, total i
 			return page, nil
 		}
 	}
-	result["domains_omitted"] = "increase max_output_tokens to see the freshness domains"
-	return result, nil
+	return omitted()
 }

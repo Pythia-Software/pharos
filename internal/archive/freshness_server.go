@@ -30,6 +30,8 @@ type freshnessFileCache struct {
 	// key names the operations that change them, as last seen; source the
 	// capture root and backup history they were read from.
 	key, source string
+	// reading is true while one reader reads the files.
+	reading bool
 }
 
 // liveOperation reports whether state is one an operation can still catch a
@@ -115,28 +117,37 @@ func (s *Server) freshnessFiles(config Config, views []opView, cachedOnly bool) 
 	}
 	sort.Strings(parts)
 	key := strings.Join(parts, ",")
+	// The mutex guards only the cache's fields: the files are read outside
+	// it, by one reader at a time, and everyone else (the fresh path always)
+	// takes the last completed value at once.
 	cache := &s.freshFiles
 	cache.mu.Lock()
-	defer cache.mu.Unlock()
 	sameFiles := cache.files != nil && cache.source == source
-	if cachedOnly {
-		if sameFiles {
-			return cache.files
-		}
-		return nil
+	var last *freshnessFiles
+	if sameFiles {
+		last = cache.files
 	}
-	if cache.files != nil && sameFiles {
-		age := time.Since(cache.files.at)
+	if cachedOnly || cache.reading {
+		cache.mu.Unlock()
+		return last
+	}
+	if last != nil {
+		age := time.Since(last.at)
 		if age < freshnessFilesMaxAge && (key == cache.key || age < freshnessFilesMinAge) {
-			return cache.files
+			cache.mu.Unlock()
+			return last
 		}
 	}
+	cache.reading = true
+	cache.mu.Unlock()
 	var previous []freshnessCapture
-	if cache.files != nil && sameFiles {
-		previous = cache.files.captures
+	if last != nil {
+		previous = last.captures
 	}
 	files := readFreshnessFiles(s.Catalog, config.CaptureRoot, &config, previous)
-	cache.files, cache.key, cache.source = files, key, source
+	cache.mu.Lock()
+	cache.files, cache.key, cache.source, cache.reading = files, key, source, false
+	cache.mu.Unlock()
 	return files
 }
 
@@ -181,8 +192,29 @@ func readFreshnessFiles(catalog *Catalog, root string, config *Config, previous 
 // history.
 func (c *Catalog) mcpFreshness(ctx context.Context) ([]freshnessRow, []freshnessOp) {
 	ops := c.journalFreshnessOps(ctx)
-	rows := c.freshness(ctx, freshnessInput{host: currentHost().ID, ops: ops, files: readFreshnessFiles(c, c.captureRootPath(), nil, nil)})
+	rows := c.freshness(ctx, freshnessInput{host: currentHost().ID, ops: ops, files: c.mcpFreshnessFiles()})
 	return rows, ops
+}
+
+// mcpFiles caches the MCP process's capture manifests per catalog for
+// freshnessFilesMaxAge, as the service does, so an agent polling the status
+// does not read every manifest each time.
+var mcpFiles sync.Map // catalog path → *freshnessFiles
+
+func (c *Catalog) mcpFreshnessFiles() *freshnessFiles {
+	root := c.captureRootPath()
+	key := c.Path + "\x00" + root
+	var previous []freshnessCapture
+	if value, ok := mcpFiles.Load(key); ok {
+		files := value.(*freshnessFiles)
+		if time.Since(files.at) < freshnessFilesMaxAge {
+			return files
+		}
+		previous = files.captures
+	}
+	files := readFreshnessFiles(c, root, nil, previous)
+	mcpFiles.Store(key, files)
+	return files
 }
 
 // journalFreshnessOps are this host's open journal rows whose process is

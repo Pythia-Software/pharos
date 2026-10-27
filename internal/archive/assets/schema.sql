@@ -1527,3 +1527,5 @@ CREATE TABLE IF NOT EXISTS operation_journal (
 CREATE INDEX IF NOT EXISTS operation_journal_open ON operation_journal(host_id) WHERE ended_at IS NULL;
 CREATE INDEX IF NOT EXISTS operation_journal_recent ON operation_journal(host_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS operation_journal_root ON operation_journal(root_id);
+-- The freshness ledger reads each analysis stage's latest outcome (§5).
+CREATE INDEX IF NOT EXISTS operation_journal_kind ON operation_journal(host_id, kind, started_at DESC);

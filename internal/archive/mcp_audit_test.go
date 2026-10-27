@@ -511,8 +511,9 @@ func TestMCPArchiveStatusListsDomainsAndRunningWork(t *testing.T) {
 		if without["truncated"] != true && len(args) == 0 {
 			t.Fatal("the fixture must fill the default page")
 		}
-		if with["domains"] == nil && with["domains_omitted"] == nil {
-			t.Fatalf("%v: the ledger is either there or said to be omitted: %#v", args, with)
+		budget := mcpBudget(args, 1800)
+		if len(jsonText(with)) > budget*3 {
+			t.Fatalf("%v: the page with the ledger is over its budget: %d > %d", args, len(jsonText(with)), budget*3)
 		}
 	}
 }

@@ -617,17 +617,31 @@ and an honest reason. The evidence per domain:
   set is empty, or their done flag is set (the triggers keep them current
   after that), at this version;
 - the Tools rollup and writing classification: their built generation
-  equals the generation they are built from (the existing rebuild rules);
-- identity links and Git merges: `meta['analysis_inputs:<stage>']`, written
-  in the chain's completion transaction for that stage, equals the
-  library's input generation, `tool_ledger_generation:authorship_inputs_generation`
-  (every write of conversations moves one of the two), and nothing is
-  deferred;
+  equals the generation they are built from (the existing rebuild rules,
+  which record the generation read before the rebuild);
+- identity links and Git merges: `meta['analysis_inputs:<stage>']` equals
+  the record generation, `records:<authorship_inputs_generation>` (which
+  only ingest moves, with every write of conversations; these stages move
+  the tool ledger's generation themselves, so it is not their evidence),
+  and nothing is deferred. One helper (`completeStage`) runs the stage for
+  every caller (the chain, `pharos ingest`, the legacy source sync, capture
+  indexing, history verification, the Git backfill), snapshots the record
+  generation *before* the stage, and records that value on success: a write
+  during the stage leaves the domain `behind / changed`, never falsely
+  current;
 - findings: today's full pass, and `meta['findings_inputs_generation']`
-  (written with the pass's other meta, read before it starts) equals the
-  input generation, and nothing is deferred;
-- the tool ledger and the upgrade: the last `UpgradeSteps` count was taken
-  for the current input generation;
+  (`tool_ledger_generation:authorship_inputs_generation`, read before the
+  pass and written with its other meta) equals the current value, and
+  nothing is deferred. The pass's day is fixed when it starts, so a pass
+  that crosses midnight records the day it analysed;
+- the tool ledger and the upgrade: `meta['upgrade_count']`
+  (`{build, started_at, steps}`) was counted by the build that last
+  initialized the catalog (`meta.initialized_build`). This build's ingest
+  cannot create upgrade work; only a write by another build can, and that
+  build's open changes `initialized_build`. It is counted again at the end
+  of the analysis chain, after an upgrade completes and on every
+  Initialize, and an answer is never replaced by one whose count started
+  earlier. Every process (the MCP one too) reads the same row;
 - backups: a verified (cloud) or complete (local) backup within an enabled
   schedule. Without a schedule, the newest backup is reported `unknown`
   (`no-schedule`) with its `as_of`; local backups have no schedule.
@@ -637,7 +651,8 @@ Catalogs from before phase 3 have no `analysis_inputs:*` or
 (`no-record`, "Not checked since this version of Pharos; updates with the
 next manual index") until the next manual index (or findings' next full
 pass). This is transitional and expected.
-An older Pharos ignores the rows.
+An older Pharos ignores the rows. The ledger's other storage is one
+additive index, `operation_journal_kind (host_id, kind, started_at DESC)`.
 
 | Domain | `as_of` from | Behind measured by | Reason codes (in order after the running code) | Caught up by |
 |---|---|---|---|---|
@@ -652,8 +667,8 @@ An older Pharos ignores the rows.
 | `an.git` | as above, for `git` | as above | as above (`git-unavailable` is not detected: the 6 h retry timers are in memory) | `analysis.git`, `analysis.chain`, `analysis.refresh` |
 | `an.tools` (Tools rollup) | as above, for `tools` | `COUNT(*)` of `tool_rollup_dirty` (capped), unit workspace, when that is why | `running`, `failed` / `blocked`, `deferred-by-schedule`, `never-built`, `version` (an older layout), `changed` (a newer ledger generation, dirty workspaces, another day or timezone: the `toolRollupStale` rule) | `analysis.tools`, `library.upgrade`, `tools.ledger.build` |
 | `an.authorship` | `authorship_built_at` | `authorship_generation` ≠ `tool_ledger_generation:authorship_inputs_generation/version`; count unknown | `running`, `failed` / `blocked`, `deferred-by-schedule`, `never-built`, `changed` | `analysis.authorship` |
-| `an.ledger` (tool ledger) | when it was last counted | the upgrade's `tools` step count, from the last `UpgradeSteps` | `running`, `not-counted` (unknown: never counted, or counted for other inputs), `version` | `tools.ledger.build`, `library.upgrade` |
-| `findings` | `findings_built_at` | count unknown | `running`, `never-built`, `failed` / `blocked`, `deferred-by-schedule`, `daily-pass-due` (`findings_generation` ≠ `findingsVersion/<today>`), `no-record` (unknown), `changed` (`scheduled`: new data since today's full pass, "updates with Refresh findings now, or the first index tomorrow") | `analysis.findings`, `analysis.chain` |
+| `an.ledger` (tool ledger) | when it was last counted | the upgrade's `tools` step count, from the last `UpgradeSteps` | `running`, `not-counted` (unknown: not counted by this build), `version` | `tools.ledger.build`, `library.upgrade` |
+| `findings` | `findings_built_at` | count unknown | `running`, `failed` / `blocked`, `never-built`, `deferred-by-schedule`, `daily-pass-due` (`findings_generation` ≠ `findingsVersion/<today>`), `no-record` (unknown: today's pass ran on an older build), `changed` (`scheduled`: new data since today's full pass). Both say what runs the next full pass: "updates with Refresh findings now, or the first index tomorrow", or with scheduled indexing on (which defers findings) "…, or the next manual index", and the muted short "updates tomorrow" / "updates with manual index" | `analysis.findings`, `analysis.chain` |
 | `upgrade` | when it was last counted | steps with pending units, from the last `UpgradeSteps` | `running`, `not-counted` (unknown), `upgrade-available` | `library.upgrade` |
 | `backup.local` | the newest non-partial backup in `backups.json` | age only | `running`, `failed` (this process's latest backup failed after `as_of`), `never` (unknown), `no-schedule` (unknown, with `as_of`) | `backup.local` |
 | `backup.cloud:<destination>` | the destination's newest complete, verified full run | against an enabled schedule: older than its cadence + 12 h | `running`, `retrying` (enabled, `failures > 0`), `failed`, `unverified`, `never`, `overdue`, `no-schedule` (unknown, with `as_of`); `paused` replaces any but `failed` when the schedule exists and is off | `cloud.upload`, `cloud.verify` |
@@ -681,18 +696,17 @@ Rules:
   host, two counts capped at 100,000, `cloud_destinations`, two indexed
   queries per destination (its latest finished and latest verified full
   run, through `cloud_runs_destination`) and the schedules, and the
-  journal's newest 200 analysis rows through its `(host_id, started_at)`
-  index. It never probes a lock. The file-derived inputs (`backups.json`,
+  journal's latest outcome and latest success of each chain stage, two
+  lookups per stage through `operation_journal_kind`. It never probes a
+  lock. The file-derived inputs (`backups.json`,
   `capturedHosts`' capture manifests) are cached for a minute per capture
   root and backup history, and read again sooner (not more than once per
   2 s) when an operation affecting `capt:*` or `backup.local` starts or
-  ends. The release path's fresh check (`?fresh=1`) reads no file: it uses
+  ends. The files are read outside the cache's mutex, by one reader at a
+  time; every other reader takes the last completed value at once. The
+  release path's fresh check (`?fresh=1`) never reads or waits: it takes
   the cache for the same configuration, or reports those domains
-  `unknown`. Counting the upgrade's steps scans the catalog, so `upgrade`
-  and `an.ledger` read the answer `UpgradeSteps` last gave (the page asks
-  on every load), with the input generation it was taken for; a count that
-  started before an upgrade ended is not kept; a complete upgrade leaves
-  none pending, and a failed one forgets the count. Measured: about
+  `unknown`. The upgrade's count is the stored row above. Measured: about
   0.25 ms per computation on a test catalog with 2,000 rows in each dirty
   table.
 - **Summary.** `/api/status` also carries `freshness_summary`:
@@ -735,7 +749,10 @@ Rules:
   affecting them: `id`, `kind`, `label`, `state`, `started_at`,
   `domains`). It is additive: the page is fitted first, exactly as without
   the ledger, and the ledger takes only the budget left, dropping the
-  current domains (`domains_partial`), then itself (`domains_omitted`). The
+  current domains (`domains_partial`), then itself (`domains_omitted`, only
+  when that marker fits). The ledger is not computed when less than about
+  300 bytes of budget are left. The MCP process caches its capture
+  manifests per catalog for a minute. The
   MCP process has no registry or configuration: its sources are those the
   state tables know for this host, its operations are this host's open
   journal rows whose process is alive and started no later than the row

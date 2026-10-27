@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"sync"
 	"time"
 )
@@ -45,14 +44,6 @@ type upgradeState struct {
 	// github is the last answer of githubAvailability, and when it was asked.
 	github   string
 	githubAt time.Time
-	// lastSteps is UpgradeSteps' latest answer, and when it was computed:
-	// the freshness ledger reads it instead of counting again (§5).
-	lastSteps       []upgradeStep
-	lastStepsAt     time.Time
-	lastStepsInputs string
-	// lastFinishedAt is when an upgrade last ended, so a count that started
-	// before it does not overwrite what the upgrade left.
-	lastFinishedAt time.Time
 }
 
 type upgradeMergeGroup struct {
@@ -88,8 +79,6 @@ func (c *Catalog) UpgradeSteps(ctx context.Context) ([]upgradeStep, error) {
 		err := c.reader().QueryRowContext(ctx, query, args...).Scan(&value)
 		return value, err
 	}
-	// What the count is for: the library's inputs before counting.
-	started, inputs := time.Now(), c.inputsGeneration(ctx)
 	merged, err := c.metaValue(ctx, "repository_merge_version")
 	if err != nil {
 		return nil, err
@@ -159,9 +148,6 @@ func (c *Catalog) UpgradeSteps(ctx context.Context) ([]upgradeStep, error) {
 	}
 	for index := range steps {
 		steps[index].Seconds = state.seconds[steps[index].ID]
-	}
-	if !state.lastFinishedAt.After(started) && inputs != "" {
-		state.lastSteps, state.lastStepsAt, state.lastStepsInputs = slices.Clone(steps), time.Now(), inputs
 	}
 	return steps, nil
 }
@@ -306,24 +292,17 @@ func (c *Catalog) RunUpgrade(ctx context.Context, progress func(step string, don
 		}
 	}
 	finish := func(err error) error {
-		inputs := c.inputsGeneration(context.WithoutCancel(ctx))
 		state.mu.Lock()
-		state.lastFinishedAt = time.Now()
 		state.running, state.step = false, ""
 		if err != nil && ctx.Err() == nil {
 			state.lastError = err.Error()
 		}
-		// What the ledger remembers of the steps: none pending after a
-		// complete upgrade, unknown after one that did not finish.
-		if err == nil && !state.lastStepsAt.IsZero() {
-			for index := range state.lastSteps {
-				state.lastSteps[index].Pending = 0
-			}
-			state.lastStepsAt, state.lastStepsInputs = time.Now(), inputs
-		} else if err != nil {
-			state.lastSteps, state.lastStepsAt = nil, time.Time{}
-		}
 		state.mu.Unlock()
+		// The freshness ledger's count (§5): counted again once an upgrade
+		// completes.
+		if err == nil {
+			c.storeUpgradeCount(ctx)
+		}
 		return err
 	}
 	timed := func(id string, work func() error) error {
@@ -505,4 +484,37 @@ func (c *Catalog) inputsGeneration(ctx context.Context) string {
 		return ""
 	}
 	return value
+}
+
+// upgradeCount is the upgrade's pending steps as the freshness ledger reads
+// them (§5), stored in meta so every process reads the same answer. It
+// stays valid while meta.initialized_build is the build it names: this
+// build's ingest creates no upgrade work; only a write by another build can.
+type upgradeCount struct {
+	Build     string        `json:"build"`
+	StartedAt string        `json:"started_at"`
+	Steps     []upgradeStep `json:"steps"`
+}
+
+const upgradeCountKey = "upgrade_count"
+
+// storeUpgradeCount counts the upgrade's steps and stores the answer, unless
+// a count that started later is already stored. It is best effort: it runs
+// at the end of the analysis chain, after an upgrade, and on open.
+func (c *Catalog) storeUpgradeCount(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+	started := formatTime(time.Now())
+	build, _ := c.metaValue(ctx, initializedBuildKey)
+	steps, err := c.UpgradeSteps(ctx)
+	if err != nil {
+		return
+	}
+	data, _ := json.Marshal(upgradeCount{Build: build, StartedAt: started, Steps: steps})
+	_ = c.writeTransaction(ctx, "upgrade count", func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value
+			WHERE COALESCE(json_extract(meta.value,'$.started_at'),'')<=?`, upgradeCountKey, string(data), started)
+		return err
+	})
 }

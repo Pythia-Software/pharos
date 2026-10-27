@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"slices"
 	"sort"
@@ -52,6 +53,9 @@ type freshnessRow struct {
 	// Next says what catches it up when nothing is running.
 	Next   *string `json:"next"`
 	NextAt *string `json:"next_at,omitempty"`
+	// short is the summary's words for a scheduled row ("updates
+	// tomorrow").
+	short string
 }
 
 type freshnessBehind struct {
@@ -100,7 +104,7 @@ var freshnessReasons = map[string]string{
 	"no-record":            "Not checked since this version of Pharos; updates with the next manual index",
 	"blocked":              "Waits for an earlier step that failed",
 	"no-schedule":          "Has no schedule, so Pharos cannot say it is current",
-	"not-counted":          "Not counted since the library last changed",
+	"not-counted":          "Not counted by this version of Pharos yet",
 	"unreadable":           "The capture folder cannot be read",
 }
 
@@ -112,7 +116,8 @@ var freshnessReasonOverrides = map[string]string{
 	"backups overdue":    "Older than its schedule",
 	"backup.cloud never": "No verified cloud backup yet",
 	"backup.local never": "No local backup yet",
-	"findings changed":   "New data since today's full pass; the next one runs tomorrow",
+	"findings changed":   "New data since today's full pass",
+	"findings no-record": "Today's full pass ran on an older version of Pharos",
 }
 
 // reasonText is a code's words for domain, in group.
@@ -127,10 +132,6 @@ func reasonText(domain, group, code string) string {
 }
 
 var freshnessStateLabels = map[string]string{freshCurrent: "Current", freshScheduled: "Scheduled", freshBehind: "Behind", freshUnknown: "Unknown"}
-
-// scheduledShort is the Data row's muted words for a scheduled domain:
-// "updates <when>".
-var scheduledShort = map[string]string{"findings": "updates tomorrow"}
 
 // pageGroups are the groups that feed pages, which the Data row covers.
 // Backups are in the ledger, Show all and MCP, and reach the panel only
@@ -149,6 +150,7 @@ const (
 	nextCloudSchedule  = "updates with the next scheduled cloud backup"
 	nextCloudBackup    = "updates with your next cloud backup"
 	nextFindingsPass   = "updates with Refresh findings now, or the first index tomorrow"
+	nextFindingsManual = "updates with Refresh findings now, or the next manual index"
 	nextCapturesRead   = "updates when the capture folder can be read"
 )
 
@@ -210,7 +212,7 @@ var freshnessMetaKeys = []string{"message_trigram_version", "text_search_documen
 	"human_query_text_fts_ready", "tool_query_text_fts_ready", "tool_query_facts_ready", "workspace_library_version",
 	"tool_ledger_generation", "tool_rollup_generation", "tool_rollup_day", "tool_rollup_timezone", "tool_rollup_full_revision", "tool_rollup_built_full_revision",
 	"authorship_inputs_generation", "authorship_generation", "authorship_built_at", "findings_generation", "findings_built_at",
-	"findings_inputs_generation", "analysis_inputs:identities", "analysis_inputs:git"}
+	"findings_inputs_generation", "analysis_inputs:identities", "analysis_inputs:git", upgradeCountKey, initializedBuildKey}
 
 // libraryVersionOnce is libraryVersion, which hashes the projection's
 // definition, computed once.
@@ -249,6 +251,9 @@ func (c *Catalog) freshness(ctx context.Context, in freshnessInput) []freshnessR
 type ledger struct {
 	in   freshnessInput
 	rows []freshnessRow
+	// scheduledIndexing is whether this Mac indexes on a schedule, which
+	// defers findings instead of running their daily pass.
+	scheduledIndexing bool
 }
 
 // domainEntry is one row before the running operation is applied.
@@ -263,6 +268,8 @@ type domainEntry struct {
 	next, nextAt         string
 	// running is the code used when an operation is catching it up.
 	running string
+	// short is the Data row's muted words while scheduled.
+	short string
 }
 
 // add finishes a row: an operation that affects the domain catches it up,
@@ -296,6 +303,7 @@ func (l *ledger) add(entry domainEntry) {
 		row.Next, row.NextAt = optional(entry.next), optional(entry.nextAt)
 	}
 	row.StateLabel = freshnessStateLabels[entry.state]
+	row.short = entry.short
 	l.rows = append(l.rows, row)
 }
 
@@ -401,29 +409,21 @@ func (c *Catalog) freshnessDeferred(ctx context.Context) (map[string]deferredRow
 // latest ended row's state and end, and when it last succeeded.
 type journalEnd struct{ state, ended, succeeded string }
 
-// latestAnalysisEnds reads this host's newest analysis rows through the
-// journal's (host_id, started_at) index.
+// latestAnalysisEnds reads, for each chain stage, this host's latest
+// ended journal row and its latest success, through the journal's
+// (host_id, kind, started_at) index: two indexed lookups per stage, however
+// many other rows are newer.
 func (c *Catalog) latestAnalysisEnds(ctx context.Context, host string) map[string]journalEnd {
 	ends := map[string]journalEnd{}
-	rows, err := c.reader().QueryContext(ctx, `SELECT kind,state,COALESCE(ended_at,'') FROM operation_journal WHERE host_id=? AND kind LIKE 'analysis.%' AND ended_at IS NOT NULL
-		ORDER BY started_at DESC LIMIT 200`, host)
-	if err != nil {
-		return ends
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var kind, state, ended string
-		if rows.Scan(&kind, &state, &ended) != nil {
-			continue
+	for _, stage := range chainStages {
+		var end journalEnd
+		_ = c.reader().QueryRowContext(ctx, `SELECT state,ended_at FROM operation_journal
+			WHERE host_id=? AND kind=? AND ended_at IS NOT NULL ORDER BY started_at DESC LIMIT 1`, host, stage.kind).Scan(&end.state, &end.ended)
+		_ = c.reader().QueryRowContext(ctx, `SELECT ended_at FROM operation_journal
+			WHERE host_id=? AND kind=? AND state='succeeded' AND ended_at IS NOT NULL ORDER BY started_at DESC LIMIT 1`, host, stage.kind).Scan(&end.succeeded)
+		if end.state != "" || end.succeeded != "" {
+			ends[stage.kind] = end
 		}
-		end, seen := ends[kind]
-		if !seen {
-			end.state, end.ended = state, ended
-		}
-		if state == opSucceeded && end.succeeded == "" {
-			end.succeeded = ended
-		}
-		ends[kind] = end
 	}
 	return ends
 }
@@ -469,6 +469,7 @@ func (l *ledger) conversations(ctx context.Context, c *Catalog) {
 		rows.Close()
 	}
 	settings, settingsErr := c.syncSettings(ctx)
+	l.scheduledIndexing = settingsErr == nil && settings.Enabled
 	sources := l.in.sources
 	if sources == nil {
 		for name := range states {
@@ -604,6 +605,14 @@ func (l *ledger) search(ctx context.Context, c *Catalog, meta map[string]string,
 		meta["tool_query_facts_ready"] == toolQueryFacts.version(), 0, false, "")
 }
 
+// recordGeneration is the record writer's generation, which only ingest
+// moves (every write of conversations does): the evidence for the stages
+// that read conversations but bump the tool ledger's generation themselves
+// (identity links, Git merges). "" when the catalog has none yet.
+func recordGeneration(meta map[string]string) string {
+	return "records:" + meta["authorship_inputs_generation"]
+}
+
 // libraryInputs is the catalog's input generation: the tool ledger's
 // generation and the record writer's authorship inputs, which every write of
 // conversations moves. A derived domain is current only when its recorded
@@ -665,7 +674,7 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 		switch {
 		case deferredErr != nil || metaErr != nil:
 			entry.state = freshUnknown
-		case !isDeferred && recorded == inputs:
+		case !isDeferred && recorded == recordGeneration(meta):
 		case chainFailure(&entry, ends, changedAt):
 		case isDeferred:
 			deferral(&entry)
@@ -730,7 +739,7 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 	// from the last time anything asked for the upgrade's steps, and only
 	// while the library has not changed since.
 	ledgerEntry := domainEntry{domain: "an.ledger", group: "analyses", label: "Tools ledger", unit: "conversation", next: nextUpgrade}
-	if steps, ok := l.countedSteps(c, meta, metaErr, &ledgerEntry); ok {
+	if steps, ok := l.countedSteps(meta, metaErr, &ledgerEntry); ok {
 		pending := int64(0)
 		for _, step := range steps {
 			if step.ID == "tools" {
@@ -745,23 +754,31 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 	l.add(ledgerEntry)
 }
 
-// countedSteps is the upgrade's last count when it was taken for the
-// library's current inputs; otherwise it makes entry unknown.
-func (l *ledger) countedSteps(c *Catalog, meta map[string]string, metaErr error, entry *domainEntry) ([]upgradeStep, bool) {
-	steps, at, counted, ok := c.upgrade().cachedSteps()
-	entry.asOf = ""
+// findingsNext is what runs the next full findings pass: tomorrow's first
+// index, unless scheduled indexing (which defers findings) is on.
+func (l *ledger) findingsNext() string {
+	if l.scheduledIndexing {
+		return nextFindingsManual
+	}
+	return nextFindingsPass
+}
+
+// countedSteps is the upgrade's stored count when it was taken by the
+// build that last initialized the catalog; otherwise it makes entry
+// unknown.
+func (l *ledger) countedSteps(meta map[string]string, metaErr error, entry *domainEntry) ([]upgradeStep, bool) {
+	var count upgradeCount
+	ok := metaErr == nil && meta[upgradeCountKey] != "" && json.Unmarshal([]byte(meta[upgradeCountKey]), &count) == nil
 	if ok {
-		entry.asOf = formatTime(at)
+		entry.asOf = count.StartedAt
 	}
 	switch {
 	case metaErr != nil:
 		entry.state = freshUnknown
-	case !ok:
-		entry.state, entry.reason = freshUnknown, "not-counted"
-	case counted != libraryInputs(meta):
+	case !ok || count.Build != meta[initializedBuildKey]:
 		entry.state, entry.reason = freshUnknown, "not-counted"
 	default:
-		return steps, true
+		return count.Steps, true
 	}
 	return nil, false
 }
@@ -776,20 +793,26 @@ func (l *ledger) findings(c *Catalog, meta map[string]string, metaErr error, def
 	case metaErr != nil || deferredErr != nil:
 		entry.state = freshUnknown
 	case today && !isDeferred && meta["findings_inputs_generation"] == libraryInputs(meta):
+	case chainFailure(&entry, ends, conditionalText(isDeferred, row.changedAt)):
 	case meta["findings_generation"] == "":
 		entry.state, entry.reason = freshBehind, "never-built"
-	case chainFailure(&entry, ends, conditionalText(isDeferred, row.changedAt)):
 	case isDeferred:
 		entry.state, entry.reason = freshBehind, "deferred-by-schedule"
 	case !today:
 		entry.state, entry.reason = freshBehind, "daily-pass-due"
 	case meta["findings_inputs_generation"] == "":
-		entry.state, entry.reason = freshUnknown, "no-record"
+		// Today's pass ran on an older build: only a full pass records it.
+		entry.state, entry.reason, entry.next = freshUnknown, "no-record", l.findingsNext()
 	default:
-		// The full pass runs once a day: later data waits for tomorrow's
+		// The full pass runs once a day: later data waits for the next one
 		// (or Refresh findings now). Within today that is its designed
 		// cadence; tomorrow, without a pass, it is daily-pass-due.
-		entry.state, entry.reason, entry.next = freshScheduled, "changed", nextFindingsPass
+		entry.state, entry.reason, entry.next = freshScheduled, "changed", l.findingsNext()
+		entry.short = "updates tomorrow"
+		if l.scheduledIndexing {
+			// A scheduled index defers findings rather than running the pass.
+			entry.short = "updates with manual index"
+		}
 	}
 	l.add(entry)
 }
@@ -805,7 +828,7 @@ func conditionalText(condition bool, value string) string {
 // for the current inputs (counting them scans the catalog).
 func (l *ledger) upgrade(c *Catalog, meta map[string]string, metaErr error) {
 	entry := domainEntry{domain: "upgrade", group: "upgrade", label: "Library upgrade", unit: "step", next: nextUpgrade}
-	steps, ok := l.countedSteps(c, meta, metaErr, &entry)
+	steps, ok := l.countedSteps(meta, metaErr, &entry)
 	if !ok {
 		l.add(entry)
 		return
@@ -1087,10 +1110,10 @@ func summarizeFreshness(rows []freshnessRow) freshnessSummary {
 		switch {
 		case group.State == freshCurrent:
 		case group.State == freshScheduled:
-			group.Short = defaultString(scheduledShort[members[0].Domain], "updates later")
+			group.Short = "updates later"
 			for _, row := range members {
-				if short := scheduledShort[row.Domain]; short != "" && row.Behind.State == freshScheduled {
-					group.Short = short
+				if row.Behind.State == freshScheduled && row.short != "" {
+					group.Short = row.short
 				}
 			}
 		case failed:
@@ -1122,10 +1145,23 @@ func summarizeFreshness(rows []freshnessRow) freshnessSummary {
 	return summary
 }
 
-// cachedSteps is UpgradeSteps' latest answer for the ledger: the steps,
-// when they were counted, and the library's inputs then.
-func (state *upgradeState) cachedSteps() ([]upgradeStep, time.Time, string, bool) {
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	return slices.Clone(state.lastSteps), state.lastStepsAt, state.lastStepsInputs, !state.lastStepsAt.IsZero()
+// completeStage runs one analysis stage that reads conversations (identity
+// links, Git merges) and, when it succeeds, records the record generation it
+// started from as its freshness evidence (§5). Every caller (the chain,
+// pharos ingest, the legacy source sync, capture indexing, history
+// verification) goes through it. A write during the stage leaves the domain
+// behind, never falsely current. The record is best effort.
+func (c *Catalog) completeStage(ctx context.Context, stage string, work func() error) error {
+	var before string
+	known := c.reader().QueryRowContext(ctx, `SELECT 'records:'||COALESCE((SELECT value FROM meta WHERE key='authorship_inputs_generation'),'')`).Scan(&before) == nil
+	if err := work(); err != nil {
+		return err
+	}
+	if known && ctx.Err() == nil {
+		_ = c.writeTransaction(ctx, "freshness evidence "+stage, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", "analysis_inputs:"+stage, before)
+			return err
+		})
+	}
+	return nil
 }
