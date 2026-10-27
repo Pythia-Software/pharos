@@ -355,7 +355,7 @@ func (c *Catalog) IndexCapture(ctx context.Context, target captureTarget, progre
 	}
 	// Lease the whole inventory before planning. Replacement and pruning may
 	// proceed once the host lock is released; every planned path stays stable.
-	captureLock, err := lockCaptureReader(ctx, target.Dir)
+	captureLock, err := lockCaptureReader(ctx, target)
 	if err != nil {
 		return fail(err)
 	}

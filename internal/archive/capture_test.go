@@ -781,10 +781,13 @@ func TestCaptureRootDefaultsAndGuards(t *testing.T) {
 			defer held.Close()
 			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 			defer cancel()
+			// A wait says whose capture it waits for.
+			phases := make(chan string, 4)
+			ctx = withWorkProgress(ctx, func(work activityWork) { phases <- work.Phase })
 			busy := make(chan struct{}, 1)
 			result := make(chan error, 1)
 			go func() {
-				lock, err := waitCaptureLock(ctx, func() (*os.File, error) {
+				lock, err := waitCaptureLock(ctx, "Grady's MacBook", func() (*os.File, error) {
 					lock, err := lockCaptureTarget(ctx, filepath.Join(config.CaptureRoot, currentHost().ID, "reader"))
 					if errors.Is(err, errCaptureBusy) {
 						select {
@@ -812,6 +815,9 @@ func TestCaptureRootDefaultsAndGuards(t *testing.T) {
 			err = <-result
 			if cancelled && !errors.Is(err, context.Canceled) || !cancelled && err != nil {
 				t.Fatal("reader lock wait", err)
+			}
+			if len(phases) != 1 || <-phases != "waiting for the capture on Grady's MacBook to finish" {
+				t.Fatal("the wait was not reported once with the capturing Mac")
 			}
 		})
 	}

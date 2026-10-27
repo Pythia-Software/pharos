@@ -293,6 +293,8 @@ func (s *Server) estimateActivities(activities []libraryActivity, at time.Time) 
 				phase = a.Work.Phase
 			}
 			switch {
+			case strings.HasPrefix(phase, "waiting for the capture on "):
+				a.Estimate.Basis = "Waiting for that capture to finish; this starts as soon as it does"
 			case strings.Contains(phase, "waiting"):
 				a.Estimate.Basis = "Waiting for the catalog write lock; timing resumes when records can be saved"
 			case strings.Contains(phase, "saving"), phase == "finishing":
