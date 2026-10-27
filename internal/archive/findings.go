@@ -269,6 +269,9 @@ type findingEnv struct {
 	cachedCalls    []callGroup
 	featureCache   bool
 	cachedPrompts  map[string]string
+	// pendingFeatures holds feature partitions computed inside the pass's
+	// snapshot, published once it ends (publishFindingFeatures).
+	pendingFeatures []findingFeaturePublication
 }
 
 // callGroup is one conversation's calls of one tool and program.
@@ -1005,6 +1008,9 @@ func (c *Catalog) runFindingsPassWithFeatures(ctx context.Context, full, feature
 	env.db = conn
 	reportWork(ctx, "saving findings", "finding", 0, len(kept))
 	c.setFindingsPhase("saving")
+	if err := env.publishFindingFeatures(); err != nil {
+		return err
+	}
 	if err := c.storeFindings(ctx, env, kept, existing, states, retired, full); err != nil {
 		return err
 	}

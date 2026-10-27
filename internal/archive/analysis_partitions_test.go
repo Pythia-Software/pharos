@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"sync"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -483,6 +484,60 @@ func TestFindingFeaturesOnlyRewriteChangedConversations(t *testing.T) {
 	}
 }
 
+// The pass reads in one snapshot and publishes its feature partitions only
+// after that snapshot ends, so a busy writer (an index commits per record)
+// never keeps the snapshot, and the WAL behind it, open.
+func TestFindingFeaturesPublishAfterTheSnapshotEnds(t *testing.T) {
+	now := time.Date(2026, 9, 28, 15, 0, 0, 0, time.Local)
+	fixture := newFindingFixture(t, now)
+	c := fixture.catalog
+	fixture.monthOf(now, func(day time.Time, index int) {
+		fixture.addConversation(day, "codex", []detectorCall{
+			{program: "sed", command: "sed -n '1,900p' main.go", resultTokens: 9000, carried: 90000}, {category: "edit", tool: "Edit", path: "main.go"},
+		}, 3, 0, 1000)
+	})
+	gate, err := c.acquireWriteGate(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := sync.OnceFunc(gate)
+	t.Cleanup(release)
+	var passErr error
+	done := make(chan struct{})
+	go func() { passErr = c.RefreshFindings(context.Background(), true); close(done) }()
+	t.Cleanup(func() { release(); <-done })
+	waitUntil(t, 30*time.Second, "the pass to reach its save step", func() bool {
+		_, phase := c.findingsRunning()
+		return phase == "saving" && c.writersWaiting()
+	})
+	if countRows(t, c, "SELECT COUNT(*) FROM finding_feature_partitions") != 0 {
+		t.Fatal("feature partitions were published before the writer was free")
+	}
+	release()
+	if <-done; passErr != nil {
+		t.Fatal(passErr)
+	}
+	if countRows(t, c, "SELECT COUNT(*) FROM finding_feature_partitions") == 0 {
+		t.Fatal("feature partitions were not published")
+	}
+	incremental := canonicalFindings(t, c)
+	c.findings.featureMu.Lock()
+	c.findings.featureInputs = nil // Read back what was published.
+	c.findings.featureMu.Unlock()
+	if err := c.RefreshFindings(t.Context(), true); err != nil {
+		t.Fatal(err)
+	}
+	if !same(incremental, canonicalFindings(t, c)) {
+		t.Fatal("findings from published partitions differ")
+	}
+	if err := c.runFindingsPassReference(t.Context(), true); err != nil {
+		t.Fatal(err)
+	}
+	if !same(incremental, canonicalFindings(t, c)) {
+		t.Fatal("deferred publication differs from reference")
+	}
+}
+
 func TestFindingFeatureCorruptionRecovers(t *testing.T) {
 	now := time.Date(2026, 9, 28, 15, 0, 0, 0, time.Local)
 	fixture := newFindingFixture(t, now)
@@ -546,7 +601,13 @@ func TestFindingFeaturesRetainConcurrentInputRevision(t *testing.T) {
 	if len(rows) != 1 || integer(rows[0]["result_tokens"]) != 9000 {
 		t.Fatalf("mixed snapshot: %v", rows)
 	}
+	if countRows(t, c, "SELECT COUNT(*) FROM finding_feature_partitions WHERE feature='snapshot-test'") != 0 {
+		t.Fatal("published inside the pass's snapshot")
+	}
 	if err := snapshot.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.publishFindingFeatures(); err != nil {
 		t.Fatal(err)
 	}
 	if countRows(t, c, `SELECT COUNT(*) FROM finding_tool_revisions r JOIN finding_feature_partitions p USING(conversation_id)
