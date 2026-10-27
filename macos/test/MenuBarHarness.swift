@@ -231,7 +231,9 @@ final class MenuFixture: URLProtocol {
         precondition(ManagedLibraryStatus.answered(["error": "x"]) == nil, "Not a state document")
         // A failed or timed-out request (the broker holding its lock while it
         // creates a library) keeps "Finishing" until an answer says idle.
-        let failed = none.unansweredRequest()
+        let failed = none.failedRequest(timedOut: true)
+        precondition(none.failedRequest(timedOut: false) == none, "A connection or parse error keeps the last answer")
+        precondition(ManagedLibraryStatus().failedRequest(timedOut: false).operation == nil, "No phantom operation before the first answer")
         precondition(!failed.noLibrary && failed.operation == ManagedLibraryStatus.unanswered)
         precondition(failed.current(pendingFor: nil) == failed)
         precondition(none.current(pendingFor: 3) == none && none.current(pendingFor: 7).operation == ManagedLibraryStatus.unanswered)

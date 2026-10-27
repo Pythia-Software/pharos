@@ -59,8 +59,6 @@ struct MenuBarPreferences {
     subscript(_ key: String) -> Bool { values[key] == true }
 }
 
-// The template lighthouse and colored dot are separate views, so macOS can
-// tint the mark for its menu bar appearance without tinting the status dot.
 /// What the broker's /api/app/state says about the selected library and any
 /// library operation, as the native menu shows it. Pure, for the harness.
 struct ManagedLibraryStatus: Equatable {
@@ -93,7 +91,12 @@ struct ManagedLibraryStatus: Equatable {
             operation: operating ? ((running ? job?["phase"] as? String : nil) ?? unanswered) : nil)
     }
 
-    /// A request that failed or timed out: assume the broker is busy until a
+    /// A request that failed. Only a timeout suggests the broker is holding
+    /// its lock for a library operation; a connection or parse error keeps
+    /// the last answer.
+    func failedRequest(timedOut: Bool) -> ManagedLibraryStatus { timedOut ? unansweredRequest() : self }
+
+    /// A request the broker did not answer in time: assume it is busy until a
     /// successful answer says nothing is running.
     func unansweredRequest() -> ManagedLibraryStatus {
         var status = self
@@ -108,6 +111,8 @@ struct ManagedLibraryStatus: Equatable {
     }
 }
 
+// The template lighthouse and colored dot are separate views, so macOS can
+// tint the mark for its menu bar appearance without tinting the status dot.
 final class MenuBarDot: NSView {
     var color = NSColor.systemYellow { didSet { needsDisplay = true } }
     override func draw(_ dirtyRect: NSRect) {

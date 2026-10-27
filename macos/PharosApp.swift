@@ -257,16 +257,18 @@ final class ArchiveService: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in self?.watchManagedLibraries() }
         guard managedLibraryStateTask == nil, let request = localRequest("/api/app/state"), let broker = lock.withLock({ endpoint }) else { return }
         managedStateRequestedAt = Date()
-        managedLibraryStateTask = URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+        managedLibraryStateTask = URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            let timedOut = (error as? URLError)?.code == .timedOut
             let state = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.managedLibraryStateTask = nil
                 guard !self.shuttingDown, self.lock.withLock({ self.endpoint?.url == broker.url }) else { return }
                 guard let state, let status = ManagedLibraryStatus.answered(state), let libraries = state["libraries"] as? [[String: Any]] else {
-                    // The broker may be holding its lock for a library
-                    // operation; keep saying so until it answers.
-                    self.managedStatus = self.managedStatus.unansweredRequest()
+                    // A timeout means the broker may be holding its lock for a
+                    // library operation; keep saying so until it answers.
+                    // Other failures keep the last answer.
+                    self.managedStatus = self.managedStatus.failedRequest(timedOut: timedOut)
                     return
                 }
                 self.managedStatus = status
