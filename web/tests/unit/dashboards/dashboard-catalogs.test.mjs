@@ -367,20 +367,12 @@ test("a ratio part may state a condition: the empty-search rate pools zero-resul
   assert.deepEqual(catalogProblems({ ...mcp, measures: { ...mcp.measures, bad: { ...mcp.measures.empty_rate, ratio: [{ op: "sum", expression: "1" }, "call_count"] } } }), ["bad has an expression part without a label."]);
 });
 
-test("a catalog's request: its parameters reach every request, and its population joins every query but never the dashboard's filters", async t => {
-  const population = [{ field: "status", op: "=", value: "ok" }];
-  const catalog = { ...mcp, request: { params: { carbon_settings: '{"grid":"custom"}' }, where: population, note: "Built under your settings." } };
+test("a catalog's request: its parameters reach every request, and its note every view", async t => {
+  const catalog = { ...mcp, request: { params: { carbon_settings: '{"grid":"custom"}' }, note: "Built under your settings." } };
   const where = month(catalog);
   const compare = analysisQuery(catalog, { view: "compare", metric: "calls", split: "tool_name" }, where, { now });
-  const trend = trendQuery(catalog, { metric: "calls", split: "tool_name" }, where, { now });
-  for (const query of [compare.query, compare.supporting, trend.query, trend.supporting]) assert.ok((query.grouping?.source ?? query).where.some(term => term.field === "status"), JSON.stringify(query.where));
-  assert.ok(trend.records.some(term => term.field === "status"), "drill-downs open the same population");
   assert.match(analysisNote(catalog, { view: "compare", metric: "calls", split: "tool_name" }), /Built under your settings/);
   assert.match(trendNote(catalog, { metric: "calls", split: "tool_name" }), /Built under your settings/);
-  // Back to dashboard leaves the population out of the dashboard's filters.
-  const dashboard = new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: "mcp", analyze_data: "mcp_calls", analyze_filters: core.encodeQuery({ ...core.EMPTY_QUERY, where }) });
-  const opened = new URL(dashboardQueryLinks("mcp_calls", compare.supporting, schemas.mcp_calls, dashboard)[0].href, "http://localhost").searchParams;
-  assert.deepEqual(core.decodeQueryStrict(new URL(usageDashboardReturn(opened).href, "http://localhost").searchParams.get("analyze_filters")).where, where);
   // Parameters ride on /metrics and /query-v3 alike.
   const prior = global.fetch, requests = [];
   global.fetch = async (url, init = {}) => {

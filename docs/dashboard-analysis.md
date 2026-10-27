@@ -118,14 +118,11 @@ what each offers and why.
     (`runAnalysisQuery`, on `/metrics` and `/query-v3` alike). Carbon sends
     the user's current assumptions as `carbon_settings`, under which the
     service estimates each usage record.
-  - `where` is a population the records are built under, for a service
-    that can serve records built several ways. It joins every executed
-    query, supporting query and drill-down as an implied population, never
-    a dashboard filter, so "Back to dashboard" leaves it out. No catalog
-    needs it today: Parallelism's service serves only the saved settings'
-    records, so a filter on them would only turn a settings change in
-    another window into empty charts.
   - `note` says so beneath every view.
+
+  There is no request population: Parallelism's service serves only the
+  saved settings' records, so a filter on them would only turn a settings
+  change in another window into empty charts.
 
   A catalog that depends on the user's settings is built with them:
   `analysisCatalogFor(topic, settings)` (`analysis-catalogs.ts`) gives the
@@ -134,8 +131,10 @@ what each offers and why.
   (`analysis-catalog-hooks.ts`) supply the settings in the page: Carbon's
   current assumptions (`carbon.js`) with the factors the service embeds
   (`carbon/co2_factors.json`), and Parallelism's saved counting. Links are
-  read and compared with the shapes (`carbonCatalogShape`,
-  `parallelismCatalogShape`), which carry no settings.
+  read and validated with the shapes (`carbonCatalogShape`,
+  `parallelismCatalogShape`, `CatalogDashboard`'s `linkCatalog`), which
+  carry no settings, so a link stays valid under any setting and is drawn
+  with the settings' catalog.
 - **Executable bounds** (optional, `executable`). Translates the time bounds
   into predicates the dataset executes, for every executed and supporting
   query and every drill-down (`dashboardChartURL`'s `translate`). The Tools
@@ -361,13 +360,18 @@ reads every link through `readAnalysisLink`:
   filter in its table is a population.
 
 Human Words' older links wrote its legend selection as a filter on the
-split's field (`legacySlices`); their filters on the works dataset are read
-as message filters first (`humanWhere`): the time bounds as `sent_at`, and a
-work's combined providers, channels or machines ("claude,codex") as their
-single values, an equality as an OR over them (so a legend selection of a
-combined group selects each value) and an inequality as one per value. Those
-breakdowns' notes say that older work-level combined groups are now
-per-message groups. Every engine dashboard reads an older link in its
+split's field (`legacySlices`). Their filters on the works dataset are read
+as message filters only where the meaning holds (`readHumanLink`): the time
+bounds as `sent_at`, a work id as `work_id`, a combined field's single value
+(`providers = codex`, a single-value legend selection) as the message's own
+field, and fields both datasets hold with one meaning. The rest are never
+rewritten: a work's totals (`typed_words > 100` meant a work's total;
+`user_words` messages lack), a combined value (`providers = "claude,codex"`
+meant works holding exactly both) or its inequality or `contains`, and a
+legend selection of a combined group. The dashboard opens without them and
+a notice lists them, with a link to the legacy Human words view, where they
+still apply. A versioned link is already in message terms. Every engine
+dashboard reads an older link in its
 catalog's terms once, when it opens, and rewrites it. Carbon's older filters
 came from its filter controls, never a legend, so they stay populations
 (`legacySlices: false`); its older charts (`co2`/`energy`, `tier`) read
@@ -689,13 +693,21 @@ around it. Its default view is the one it always opened on.
   the catalog filters nothing by them. A note names the settings the
   returned records carry (`parallelismSettingsNote`) and warns when they
   differ from what the page believes is saved (another window saved
-  others). "Back to dashboard" keeps `counting` and `gap_minutes` out of the
-  dashboard's filters. A link may open the ribbon with settings it has not
-  saved; the views then follow the saved ones and say so.
+  others), and under workspace counting that Provider and Model need agent
+  counting. A saved setting refreshes the parallelism dataset, so every
+  view and the note rerun (results fetched before a refresh read as
+  loading, so the note never warns about the user's own change). Links are
+  validated with the shape, so a Provider link opened under workspace
+  counting draws the default breakdown. "Back to dashboard" keeps `counting`
+  and `gap_minutes` out of the dashboard's filters. A link may open the
+  ribbon with settings it has not saved; the views then follow the saved
+  ones and say so.
 
 Every engine dashboard, Tokens and Cost included, has a Refresh action,
 which reruns its queries (Pharos MCP's own requests arrive while it is open).
-A shared snapshot has none.
+A refresh of a dashboard's own dataset (`pharos:data-refresh`, such as
+parallelism records after a saved setting) reruns them too
+(`onDatasetRefresh`). A shared snapshot has none.
 
 ## Mapping a card to a dashboard state
 
@@ -810,8 +822,7 @@ rate is in `record-dashboard-parity.test.mjs`:
 A Carbon card reports kilograms and the dashboard grams; the tests scale.
 The Carbon tests also check that each period's token-type parts are the
 calculator's categories for its tokens by tier, and add up to the stored
-estimate, and the Parallelism tests that records built with other settings
-are never counted.
+estimate.
 
 A share's zero group has no slice: `tool-failures` keeps only failing calls,
 a filter the rollup cannot apply, so the dashboard's pie holds tools with no
@@ -910,7 +921,7 @@ The Query Table limitations are requested in
      metric-trend helpers only they used.
    - **2c (done).** Human Words, Carbon and Parallelism are catalogs
      ([The catalogs](#the-catalogs)), with the engine items they needed: a
-     request seam (`request`: parameters and a built-under population),
+     request seam (`request`: parameters every request carries),
      conditional ratio parts, one day boundary for timestamped records
      (`timestamp`: recorded days, timestamp hours and cycles, which also
      gives Pharos MCP, Agent Time and Skills hourly trends), and derived

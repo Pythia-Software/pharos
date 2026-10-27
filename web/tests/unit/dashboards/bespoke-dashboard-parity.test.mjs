@@ -12,9 +12,9 @@ import { now, writingMessages, parallelismRecords, carbonUsage } from "../helper
 import { loadClassicScript } from "../helpers/classic-script.mjs";
 import { canonicalState, analysisQuery, catalogProblems, cycleResult, normalizeAnalysis, selectGroups, trendAdjustments, validAnalysisState, readAnalysisLink, analysisVersion } from "../../../src/dashboard-analysis-model";
 import { trendQuery, trendSeries } from "../../../src/dashboard-trend-model";
-import { humanAnalysisCatalog as human, humanWhere } from "../../../src/human-analysis-catalog";
+import { humanAnalysisCatalog as human, humanLegacyURL, readHumanLink } from "../../../src/human-analysis-catalog";
 import { carbonAnalysisCatalog, carbonCatalogShape, deriveCarbon } from "../../../src/carbon-analysis-catalog";
-import { parallelismAnalysisCatalog, parallelismSettingsNote } from "../../../src/parallelism-analysis-catalog";
+import { parallelismAnalysisCatalog, parallelismCatalogShape, parallelismSettingsNote } from "../../../src/parallelism-analysis-catalog";
 import { legacyCarbonChart } from "../../../src/carbon-analysis-catalog";
 import { windowedChart } from "../../../src/card-windows";
 import { cardDestination } from "../../../src/card-destinations";
@@ -62,11 +62,11 @@ test("the three catalogs are well formed and read their older links", () => {
   // An older link's work filters read as message filters, and its legend
   // filter on the breakdown's field becomes the selection.
   const where = [{ field: "last_message_at", op: ">=", value: "-7d" }, { field: "first_message_at", op: "<", value: "+0s" }, { field: "providers", op: "=", value: "codex" }];
-  const link = readAnalysisLink(human, { scope: "all", split: "providers" }, humanWhere(where));
+  const link = readAnalysisLink(human, { scope: "all", split: "providers" }, readHumanLink(where, false).where);
   assert.deepEqual(link.where, [{ field: "sent_at", op: ">=", value: "-7d" }, { field: "sent_at", op: "<", value: "+0s" }]);
   assert.deepEqual(link.state.selection, { values: ["codex"], excluded: false });
   const current = [{ field: "sent_at", op: ">=", value: "-7d" }];
-  assert.equal(humanWhere(current), current, "a current link is not rewritten");
+  assert.equal(readHumanLink(current, false).where, current, "a current link is not rewritten");
   // Carbon: the model tier split, and filters that were always populations.
   assert.equal(normalizeAnalysis(carbonCatalogShape, { metric: "co2", split: "tier" }).split, "carbon_tier");
   assert.deepEqual(readAnalysisLink(carbonCatalogShape, { metric: "co2", split: "provider" }, [{ field: "provider", op: "=", value: "codex" }]).state.selection, undefined);
@@ -348,7 +348,14 @@ test("parallel-hours, parallel-active-weekday and parallel-weekday: agent hours 
 test("Parallelism names the settings its records carry, warns when they differ, and offers provider and model only under agent counting", () => {
   assert.equal(parallelism.request, undefined, "no built-under filter: the service serves only the saved settings' records");
   const workspace = { counting: "workspace", gap: 60 };
-  assert.deepEqual(parallelismSettingsNote([workspace], workspace), { note: "These records count workspaces and join turns across gaps up to 60 minutes: the saved Parallelism settings the service built them with." });
+  assert.deepEqual(parallelismSettingsNote([workspace], workspace), { note: "These records count workspaces and join turns across gaps up to 60 minutes: the saved Parallelism settings the service built them with. Provider and Model breakdowns need agent counting (Count by Sessions)." });
+  assert.doesNotMatch(parallelismSettingsNote([{ counting: "agent", gap: 60 }], { counting: "agent", gap: 60 }).note, /need agent counting/);
+  // Links are read with the shape, so a Provider link opened under
+  // workspace counting draws the default breakdown instead of failing.
+  const provider = { v: analysisVersion, metric: "agent_hours", split: "provider" };
+  assert.ok(validAnalysisState(parallelismCatalogShape, provider));
+  assert.equal(validAnalysisState(parallelismAnalysisCatalog("workspace"), provider), false, "the counting-specific catalog alone would reject it");
+  assert.equal(normalizeAnalysis(parallelismAnalysisCatalog("workspace"), provider).split, "level_band");
   const stale = parallelismSettingsNote([{ counting: "agent", gap: 15 }], workspace);
   assert.match(stale.note, /count top-level sessions and join turns across gaps up to 15 minutes/);
   assert.match(stale.warning, /believes the saved settings count workspaces/);
@@ -371,18 +378,30 @@ test("Back to dashboard from a Parallelism query leaves counting and gap out of 
   assert.deepEqual(back, [...where, { field: "repository_name", op: "=", value: "pharos" }]);
 });
 
-test("old Human Words links: a work's combined value reads as its single values, as a filter or a selection", () => {
-  const where = [{ field: "sent_at", op: ">=", value: "-7d" }, { field: "channels", op: "=", value: "desktop, cli" }, { field: "machines", op: "!=", value: "laptop, remote" }];
-  assert.deepEqual(humanWhere(where), [where[0], { any: [{ field: "channel", op: "=", value: "desktop" }, { field: "channel", op: "=", value: "cli" }] },
-    { field: "machine_id", op: "!=", value: "laptop" }, { field: "machine_id", op: "!=", value: "remote" }]);
-  // A legend filter on providers ("claude,codex") selects both providers.
-  const link = readAnalysisLink(human, normalizeAnalysis(human, { scope: "all", split: "providers" }), humanWhere([{ any: [{ field: "providers", op: "=", value: "claude,codex" }, { field: "providers", op: "=", value: "tl1" }] }]));
-  assert.deepEqual(link.state.selection, { values: ["claude", "codex", "tl1"], excluded: false });
-  assert.deepEqual(link.where, []);
-  assert.match(human.breakdowns.provider.note, /work-level combined groups .* are now these per-message groups/);
-  // Executed over the messages, the filter keeps either channel.
-  const filtered = core.applyQuery(cardRows.writing_messages, { ...core.EMPTY_QUERY, where: humanWhere([{ field: "channels", op: "=", value: "desktop, cli" }]), limit: 1000 }, schemas.writing_messages, { now }).rows;
-  assert.equal(filtered.length, cardRows.writing_messages.length);
+test("old Human Words links: filters that cannot keep their meaning for messages are left out and listed, never rewritten", () => {
+  const time = [{ field: "last_message_at", op: ">=", value: "-7d" }, { field: "first_message_at", op: "<", value: "+0s" }];
+  const kept = [{ field: "repository_name", op: "=", value: "pharos" }, { field: "providers", op: "=", value: "codex" }, { field: "id", op: "=", value: "work-3" }];
+  const dropped = [
+    { field: "user_words", op: ">", value: "100" }, // a work total messages lack
+    { field: "typed_words", op: ">", value: "100" }, // a work's total, not a message's
+    { field: "providers", op: "=", value: "claude,codex" }, // works holding exactly both
+    { field: "machines", op: "!=", value: "laptop, remote" },
+    { field: "execution_machines", op: "contains", value: "remote" },
+    { any: [{ field: "channels", op: "=", value: "desktop, cli" }, { field: "channels", op: "=", value: "cli" }] }, // a legend selection of a combined group
+  ];
+  const read = readHumanLink([...time, ...kept, ...dropped], false);
+  assert.deepEqual(read.where, [{ field: "sent_at", op: ">=", value: "-7d" }, { field: "sent_at", op: "<", value: "+0s" }, kept[0], { field: "provider", op: "=", value: "codex" }, { field: "work_id", op: "=", value: "work-3" }]);
+  assert.deepEqual(read.unsupported, dropped);
+  // A single-value legend selection still migrates.
+  assert.deepEqual(readAnalysisLink(human, normalizeAnalysis(human, { scope: "all", split: "providers" }), readHumanLink([{ any: [{ field: "providers", op: "=", value: "claude" }, { field: "providers", op: "=", value: "tl1" }] }], false).where).state.selection, { values: ["claude", "tl1"], excluded: false });
+  // A versioned link is in message terms already: typed_words > 0 is a card's population.
+  const card = [{ field: "typed_words", op: ">", value: "0" }];
+  assert.deepEqual(readHumanLink(card, true), { where: card, unsupported: [] });
+  // The legacy Writing view applies the original filters.
+  const legacy = new URL(humanLegacyURL([...time, ...dropped]), "http://localhost").searchParams;
+  assert.equal(legacy.get("analyze_view"), "writing");
+  assert.deepEqual(core.decodeQueryStrict(legacy.get("q_writing")).where, [...time, ...dropped]);
+  assert.match(human.breakdowns.provider.note, /not its work's combined providers/);
 });
 
 test("old Carbon chart links keep their chart: on the legacy page a link wins over the saved chart, and the dashboard reads it in its terms", () => {
@@ -410,7 +429,7 @@ test("every 2c card destination opens a valid, versioned state", () => {
 // What the Human Words dashboard sends: a relative range stays relative, so
 // the same query serves every render and the service resolves its end at
 // each request, which is how Refresh renews it.
-test("Human Words queries keep a relative range relative; each request, Refresh included, resolves the end anew", async t => {
+test("Human Words queries keep a relative range relative, so a repeated request resolves its end at that request", async t => {
   const where = [{ field: "sent_at", op: ">=", value: "-7d" }, { field: "sent_at", op: "<", value: "+0s" }];
   for (const chart of [{ metric: "words", split: "kind" }, { metric: "typed", split: "none", period: "hour" }]) {
     const first = trendQuery(human, chart, where, { now, zone }), later = trendQuery(human, chart, where, { now: now + 3600000, zone });

@@ -68,14 +68,11 @@ export type AnalysisComponents = { label: string; measures: string[]; parts: Ana
 // Calendar fields the trend groups by; several hours or days sum the hourly
 // or daily totals.
 export type TrendPeriodField = "hour" | "day" | "week" | "month";
-// How a catalog's records reach the service, beside the dashboard's filters.
+// How a catalog's records reach the service, beside the dashboard's filters:
 // params are query-string parameters every request carries, such as the
 // user's carbon assumptions, which the service applies to the records it
-// returns. where is the population the records are built under, such as
-// Parallelism's counting and gap settings: it joins every executed query,
-// supporting query and drill-down as an implied population, never a
-// dashboard filter, so Back to dashboard leaves it out. note says so.
-export type AnalysisRequest = { params?: Record<string, string>; where?: WhereTerm[]; note?: string };
+// returns; note says so beneath every view.
+export type AnalysisRequest = { params?: Record<string, string>; note?: string };
 // Breakdowns map to the fields that hold them at unit level. A breakdown is
 // listed only when it is constant within one unit. One with an implied where
 // is never offered for units: it would remove records from each unit and
@@ -497,7 +494,7 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
   const measure = catalog.measures[state.metric], measureY = catalog.measures[state.metricY];
   const breakdown = state.split === noSplit ? undefined : catalog.breakdowns[state.split];
   const unit = state.unit === records ? undefined : catalog.units[state.unit];
-  const implied = [...catalog.request?.where ?? [], ...unit?.where ?? [], ...breakdown?.where ?? [], ...measure.where ?? [], ...state.view === "scatter" ? measureY.where ?? [] : []];
+  const implied = [...unit?.where ?? [], ...breakdown?.where ?? [], ...measure.where ?? [], ...state.view === "scatter" ? measureY.where ?? [] : []];
   const sourceWhere = unique([...where, ...implied]);
   // The supporting query lists the selected groups where one filter can: a
   // record filter on the breakdown's field, or a group filter on the unit's.

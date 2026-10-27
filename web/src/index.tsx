@@ -95,11 +95,12 @@ import { readDashboardQuery, parallelismSelectionQuery } from "./usage-dashboard
 import { dashboardChartURL } from "./dashboard-chart-links";
 import { DashboardAnalysis } from "./dashboard-analysis";
 import { AnalysisTrend, type AmountFormat } from "./dashboard-trend";
-import { canonicalState, normalizeAnalysis, readAnalysisLink, switchView, validAnalysisState, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { analysisVersion, canonicalState, normalizeAnalysis, readAnalysisLink, switchView, validAnalysisState, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { tokenAnalysisCatalog } from "./token-analysis-catalog";
-import { humanAnalysisCatalog, humanWhere, writingGroups } from "./human-analysis-catalog";
-import { parallelismSettingsNote, type ParallelismSettings } from "./parallelism-analysis-catalog";
+import { describeTerm, humanAnalysisCatalog, humanLegacyURL, readHumanLink, writingGroups } from "./human-analysis-catalog";
+import { parallelismCatalogShape, parallelismSettingsNote, type ParallelismSettings } from "./parallelism-analysis-catalog";
 import { useCarbonCatalog, useParallelismCatalog } from "./analysis-catalog-hooks";
+import { datasetsForSavedPreferences, onDatasetRefresh } from "./dataset-refresh";
 import type { LocalRows } from "./analysis-request";
 
 type Row = Record<string, any>;
@@ -1053,22 +1054,18 @@ function Segmented<T extends string>({ label, value, options, onChange }: { labe
 // tagged so a stale response never renders under new chart settings.
 function useMetrics(dataset: Dataset, where: WhereTerm[], clauses: AggregationClause[], largerBudget = false) {
   const key = JSON.stringify({ where, clauses });
-  const [state, setState] = useState<{ key: string; metrics: MetricResult[]; error: string; loading: boolean }>({ key: "", metrics: [], error: "", loading: true });
+  const [state, setState] = useState<{ key: string; refresh: number; metrics: MetricResult[]; error: string; loading: boolean }>({ key: "", refresh: 0, metrics: [], error: "", loading: true });
   const [refresh, setRefresh] = useState(0);
-  useEffect(() => {
-    const bump = () => setRefresh(value => value + 1);
-    window.addEventListener("pharos:usage-refresh", bump);
-    return () => window.removeEventListener("pharos:usage-refresh", bump);
-  }, []);
+  useEffect(() => onDatasetRefresh(dataset, () => setRefresh(value => value + 1)), [dataset]);
   useEffect(() => {
     const request = JSON.parse(key) as { where: WhereTerm[]; clauses: AggregationClause[] };
-    if (!request.clauses.length) { setState({ key, metrics: [], error: "", loading: false }); return; }
+    if (!request.clauses.length) { setState({ key, refresh, metrics: [], error: "", loading: false }); return; }
     if (shared) {
       const rows = shared.datasets[dataset];
       const result = dataset === "usage"
         ? applyUsageAggregations(rows, shared.datasets.usage_hourly ?? [], { where: request.where, aggregations: request.clauses }, schemas.usage)
         : applyAggregations(rows, { ...EMPTY_QUERY, where: request.where, aggregations: request.clauses }, schemas[dataset]);
-      setState({ key, metrics: result.metrics as MetricResult[], error: "", loading: false });
+      setState({ key, refresh, metrics: result.metrics as MetricResult[], error: "", loading: false });
       return;
     }
     const controller = new AbortController();
@@ -1080,11 +1077,11 @@ function useMetrics(dataset: Dataset, where: WhereTerm[], clauses: AggregationCl
         if (largerBudget && failure instanceof MetricRequestError && failure.resourceLimit) return postQueryV3Metrics(dataset, schemas[dataset], request.where, request.clauses, controller.signal);
         throw failure;
       })
-      .then(metrics => setState({ key, metrics, error: "", loading: false }))
-      .catch(failure => { if (!controller.signal.aborted) setState({ key, metrics: [], error: failure instanceof Error ? failure.message : String(failure), loading: false }); });
+      .then(metrics => setState({ key, refresh, metrics, error: "", loading: false }))
+      .catch(failure => { if (!controller.signal.aborted) setState({ key, refresh, metrics: [], error: failure instanceof Error ? failure.message : String(failure), loading: false }); });
     return () => controller.abort();
   }, [dataset, key, refresh, largerBudget]);
-  return { ...state, metrics: state.key === key ? state.metrics : [], loading: state.key !== key || state.loading, error: state.key === key ? state.error : "" };
+  return { ...state, metrics: state.key === key ? state.metrics : [], loading: state.key !== key || state.refresh !== refresh || state.loading, error: state.key === key ? state.error : "" };
 }
 
 const tokenChartKey = "pharos-usage-chart";
@@ -1500,7 +1497,7 @@ function ParallelismUsageDashboard() {
   const [selection, setSelection] = useState<ConcurrencySelection | null>(null);
   const { catalog, settings } = useParallelismCatalog();
   const ribbon = selection?.settings, differs = ribbon && (ribbon.counting !== settings.counting || ribbon.gap !== settings.gap);
-  return <CatalogDashboard catalog={catalog} dataset="parallelism" name="parallelism" defaults={{ metric: "agent_hours", split: "level_band", period: "day" }} currentURL="/analyze?analyze_view=tokens&machine_view=parallelism"
+  return <CatalogDashboard catalog={catalog} linkCatalog={parallelismCatalogShape} dataset="parallelism" name="parallelism" defaults={{ metric: "agent_hours", split: "level_band", period: "day" }} currentURL="/analyze?analyze_view=tokens&machine_view=parallelism"
     summary={where => <ParallelismSettingsNote where={where} believed={settings} />}
     before={<>
       <ConcurrencyPanel routeParameter="analyze_parallelism" onSelection={setSelection} />
@@ -1549,14 +1546,26 @@ function TokenUsageDashboard() {
 // dashboard's queries, and the note says where it stands.
 function HumanUsageDashboard() {
   const [reload, setReload] = useState(0);
-  const status = useAuthorshipStatus(() => { setReload(value => value + 1); window.dispatchEvent(new Event("pharos:usage-refresh")); });
-  return <CatalogDashboard catalog={humanAnalysisCatalog} dataset="writing_messages" name="human" defaults={{ metric: "typed", split: "none", period: "day" }} readWhere={humanWhere} currentURL="/analyze?analyze_view=writing"
+  // Refresh, or a finished classification, reloads the message mix too.
+  useEffect(() => onDatasetRefresh("writing_messages", () => setReload(value => value + 1)), []);
+  const status = useAuthorshipStatus(() => window.dispatchEvent(new Event("pharos:usage-refresh")));
+  return <CatalogDashboard catalog={humanAnalysisCatalog} dataset="writing_messages" name="human" defaults={{ metric: "typed", split: "none", period: "day" }} readWhere={readHumanWhere} currentURL="/analyze?analyze_view=writing"
     summary={where => <HumanWordsSummary where={where} status={status} />}
     panels={(where, onFilter) => <>
       <p className="usage-dashboard-note">Typed and dictated words are distinguished from pastes, copied agent output, templates, attachments, harness instructions and automated prompts. Select a column, bar or box to open its messages; each message is highlighted by where its text came from.</p>
       <MessageMix where={where} reload={reload} onFilter={onFilter} />
     </>} />;
 }
+
+// An older Human Words link: filters messages cannot keep (a work's totals,
+// combined values, a legend selection of a combined group) are left out and
+// listed, with the legacy Writing view where they still apply.
+const readHumanWhere: ReadWhere = (where, state) => {
+  const read = readHumanLink(where, state.v === analysisVersion);
+  if (!read.unsupported.length) return read;
+  const selection = (term: WhereTerm) => ("any" in term ? term.any : [term]).some(clause => clause.field === state.split);
+  return { where: read.where, notice: <>This older link’s {read.unsupported.some(selection) ? "legend selection and filters" : "filters"} on whole works cannot keep their meaning for messages, so they are left out: {read.unsupported.map(describeTerm).join("; ")}. <a href={humanLegacyURL(where)}>Open them in the legacy Human words view</a>, where they still apply.</> };
+};
 
 // The dashboard's population, whatever the chart draws.
 const humanSummaryMetrics: AggregationClause[] = [
@@ -1596,15 +1605,25 @@ const catalogAmount: AmountFormat = (value, measure) => measure.format.kind === 
 // drawing them with the catalog it builds from the user's settings; catalog
 // then only reads links.
 type CatalogViews = (catalog: AnalysisCatalog, format?: AmountFormat) => React.ReactNode;
-function CatalogDashboard({ catalog, dataset, name, defaults, currentURL, legacyInAnalysis = false, before, after, summary, panels, readWhere, format = catalogAmount, frame }: {
-  catalog: AnalysisCatalog; dataset: UsageDataset; name: string; defaults: AnalysisState; currentURL?: string; legacyInAnalysis?: boolean;
+// linkCatalog reads and validates links when the drawn catalog depends on
+// the user's settings (Parallelism's counting), so a link stays valid under
+// any setting. readWhere reads an older link's filters, and may leave out
+// those it cannot keep, with a notice saying so.
+type ReadWhere = (where: WhereTerm[], state: AnalysisState) => { where: WhereTerm[]; notice?: React.ReactNode };
+function CatalogDashboard({ catalog, linkCatalog = catalog, dataset, name, defaults, currentURL, legacyInAnalysis = false, before, after, summary, panels, readWhere, format = catalogAmount, frame }: {
+  catalog: AnalysisCatalog; linkCatalog?: AnalysisCatalog; dataset: UsageDataset; name: string; defaults: AnalysisState; currentURL?: string; legacyInAnalysis?: boolean;
   before?: React.ReactNode; after?: React.ReactNode; summary?: (where: WhereTerm[], selected: boolean) => React.ReactNode;
-  panels?: (where: WhereTerm[], onFilter: FilterChange) => React.ReactNode; readWhere?: (where: WhereTerm[]) => WhereTerm[]; format?: AmountFormat;
+  panels?: (where: WhereTerm[], onFilter: FilterChange) => React.ReactNode; readWhere?: ReadWhere; format?: AmountFormat;
   frame?: (views: CatalogViews, where: WhereTerm[], onFilter: FilterChange) => React.ReactNode;
 }) {
   // An older link is read in the catalog's terms once (canonicalState) and
   // rewritten, so a later change never merges with its old vocabulary.
-  const state = useUsageDashboardState<AnalysisState>(defaults, view => validAnalysisState(catalog, view), catalog.time, (view, where) => readAnalysisLink(catalog, canonicalState(catalog, view), readWhere ? readWhere(where) : where));
+  const notice = useRef<React.ReactNode>(null);
+  const state = useUsageDashboardState<AnalysisState>(defaults, view => validAnalysisState(linkCatalog, view), linkCatalog.time, (view, where) => {
+    const read = readWhere?.(where, view);
+    notice.current = read?.notice ?? null;
+    return readAnalysisLink(linkCatalog, canonicalState(linkCatalog, view), read ? read.where : where);
+  });
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
   const schema = schemas[dataset];
   const views: CatalogViews = (drawn, amount = format) => {
@@ -1618,6 +1637,7 @@ function CatalogDashboard({ catalog, dataset, name, defaults, currentURL, legacy
     </>;
   };
   return <section className={`usage-catalog-dashboard usage-${name}-dashboard`}>
+    {notice.current ? <p className="usage-dashboard-note" role="status">{notice.current}</p> : null}
     {before}
     {frame ? frame(views, state.where, state.onFilter) : views(catalog)}
     {after}
@@ -1993,11 +2013,8 @@ if (!shared && concurrencyPrototypeEnabled) {
 }
 // Carbon and Parallelism settings shape Usage and parallelism values on the
 // server. Refresh their tables and cards once the saved settings have landed.
-const settingDatasets: Record<string, Dataset> = { "pharos-carbon-v1": "usage", "pharos-concurrency-v1": "parallelism" };
 window.addEventListener("pharos:preferences-saved", event => {
-  const saved = (event as CustomEvent<{ set?: Record<string, unknown>; delete?: string[] }>).detail;
-  const keys = [...Object.keys(saved?.set ?? {}), ...(saved?.delete ?? [])];
-  for (const dataset of new Set(keys.flatMap(key => settingDatasets[key] ? [settingDatasets[key]] : []))) window.pharosQueryTables?.refresh(dataset);
+  for (const dataset of datasetsForSavedPreferences((event as CustomEvent<{ set?: Record<string, unknown>; delete?: string[] }>).detail)) window.pharosQueryTables?.refresh(dataset as Dataset);
 });
 window.pharosQueryTables = {
   summaryURL: (metric, window, generatedAt) => usageSummaryURL(metric, window, generatedAt, readConcurrencySettings()),

@@ -57,8 +57,10 @@ export const parallelismCatalogShape = parallelismAnalysisCatalog();
 // settings, say). returned lists the distinct settings the records carry.
 export function parallelismSettingsNote(returned: ParallelismSettings[], believed: ParallelismSettings): { note: string; warning?: string } {
   const describe = ({ counting, gap }: ParallelismSettings) => `count ${counting === "agent" ? "top-level sessions" : "workspaces"} and join turns across gaps up to ${gap} minutes`;
-  if (!returned.length) return { note: `No records in range; records are built with your saved Parallelism settings, which here ${describe(believed)}.` };
-  const note = `These records ${returned.map(describe).join("; others ")}: the saved Parallelism settings the service built them with.`;
+  // Provider and model belong to a top-level session.
+  const agentOnly = believed.counting === "agent" ? "" : " Provider and Model breakdowns need agent counting (Count by Sessions).";
+  if (!returned.length) return { note: `No records in range; records are built with your saved Parallelism settings, which here ${describe(believed)}.${agentOnly}` };
+  const note = `These records ${returned.map(describe).join("; others ")}: the saved Parallelism settings the service built them with.${agentOnly}`;
   const differs = returned.some(item => item.counting !== believed.counting || item.gap !== believed.gap);
   return differs ? { note, warning: `This page believes the saved settings ${describe(believed)}; the records were built with others, perhaps saved in another window. Reload to follow them.` } : { note };
 }

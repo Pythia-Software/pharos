@@ -1,4 +1,6 @@
-import type { WhereClause, WhereTerm } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, encodeQuery, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
+import writing from "../../schemas/writing.schema.json";
+import writingMessages from "../../schemas/writing_messages.schema.json";
 import type { AnalysisCatalog, AnalysisMeasure, AnalysisState } from "./dashboard-analysis-model";
 
 // Human Words over writing_messages: one record is one classified user
@@ -79,27 +81,42 @@ humanAnalysisCatalog.breakdowns.provider.order = ["claude", "antigravity", "code
 // The series endpoint grouped a whole work by its combined providers,
 // channels or machines; messages are grouped by their own.
 for (const [split, label] of [["provider", "providers"], ["channel", "channels"], ["machine_id", "machines"], ["execution_machine_id", "execution machines"]]) {
-  humanAnalysisCatalog.breakdowns[split].note = `Each message counts under its own conversation's ${label.replace(/s$/, "")}; older links' work-level combined groups (such as two ${label} of one work) are now these per-message groups.`;
+  humanAnalysisCatalog.breakdowns[split].note = `Each message counts under its own conversation's ${label.replace(/s$/, "")}, not its work's combined ${label}.`;
 }
 
-// Filters older links wrote against the writing dataset (one row per work):
-// its message-time bounds, and its combined values. A work's providers,
-// channels and machines were one joined value ("claude,codex", "laptop,
-// remote"); a message holds one, so an equality on a combined value reads as
-// an OR over its single values, and an inequality as one per value. Where
-// nothing needs reading, where itself is returned, so the link is not
-// rewritten.
-const timeFields: Record<string, string> = { first_message_at: "sent_at", last_message_at: "sent_at" };
-const singles = (value: string) => value.split(/,\s*/).map(part => part.trim()).filter(Boolean);
-export function humanWhere(where: WhereTerm[]): WhereTerm[] {
-  const field = (name: string) => timeFields[name] ?? splits[name] ?? name;
-  if (!where.some(term => ("any" in term ? term.any : [term]).some(clause => field(clause.field) !== clause.field))) return where;
-  const equal = (clause: WhereClause): WhereClause[] => Object.hasOwn(splits, clause.field) && clause.op === "=" && !clause.negated ? singles(clause.value).map(value => ({ ...clause, field: field(clause.field), value })) : [{ ...clause, field: field(clause.field) }];
-  return where.flatMap((term): WhereTerm[] => {
-    if ("any" in term) return [{ ...term, any: term.any.flatMap(equal) }];
-    if (!Object.hasOwn(splits, term.field)) return [{ ...term, field: field(term.field) }];
-    if (term.op === "!=" && !term.negated) return singles(term.value).map(value => ({ ...term, field: field(term.field), value }));
-    const clauses = equal(term);
-    return clauses.length > 1 ? [{ any: clauses }] : clauses;
-  });
+// Filters older (unversioned) links wrote against the writing dataset, one
+// row per work. Those that keep their meaning on messages are read as
+// message filters: the time bounds as sent_at, a work id as work_id, a
+// combined field's single value as the message's own field, and fields
+// both datasets hold with one meaning (repository, app, title, origin).
+// The rest are never rewritten: a work's totals (typed_words > 100 meant a
+// work's total), a combined value ("claude,codex" meant works holding
+// exactly both) and its inequalities, and fields messages lack. They are
+// left out and listed (unsupported), with the legacy Writing view, where
+// they still apply. A versioned link is already in message terms.
+const timeFields: Record<string, string> = { first_message_at: "sent_at", last_message_at: "sent_at", id: "work_id" };
+const messageFields = new Set<string>(writingMessages.fields.map(field => field.name));
+const workTotals = new Set<string>(writing.fields.filter(field => field.type === "number").map(field => field.name));
+export type HumanLinkRead = { where: WhereTerm[]; unsupported: WhereTerm[] };
+function readClause(clause: WhereClause): WhereClause | undefined {
+  if (Object.hasOwn(timeFields, clause.field)) return { ...clause, field: timeFields[clause.field] };
+  if (Object.hasOwn(splits, clause.field)) return clause.op === "=" && !clause.negated && !clause.value.includes(",") ? { ...clause, field: splits[clause.field] } : undefined;
+  return workTotals.has(clause.field) || !messageFields.has(clause.field) ? undefined : clause;
 }
+export function readHumanLink(where: WhereTerm[], versioned: boolean): HumanLinkRead {
+  if (versioned) return { where, unsupported: [] };
+  const read: WhereTerm[] = [], unsupported: WhereTerm[] = [];
+  let changed = false;
+  for (const term of where) {
+    const clauses = ("any" in term ? term.any : [term]).map(readClause);
+    if (clauses.some(clause => !clause)) { unsupported.push(term); changed = true; continue; }
+    const next: WhereTerm = "any" in term ? { ...term, any: clauses as WhereClause[] } : clauses[0]!;
+    changed ||= JSON.stringify(next) !== JSON.stringify(term);
+    read.push(next);
+  }
+  return { where: changed ? read : where, unsupported };
+}
+// The legacy Writing view of an older link's filters, where they still apply.
+export const humanLegacyURL = (where: WhereTerm[]) => `/analyze?${new URLSearchParams({ analyze_view: "writing", q_writing: encodeQuery({ ...EMPTY_QUERY, where }) })}`;
+const describeClause = (clause: WhereClause) => `${clause.negated ? "not " : ""}${clause.field} ${clause.op} ${clause.value}`.trim();
+export const describeTerm = (term: WhereTerm) => "any" in term ? term.any.map(describeClause).join(" or ") : describeClause(term);

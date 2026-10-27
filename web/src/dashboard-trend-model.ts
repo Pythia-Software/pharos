@@ -64,7 +64,7 @@ export function trendQuery(catalog: AnalysisCatalog, input: AnalysisState, where
     normFrom = shiftPeriod(normTo, state.period, -state.normPeriods, count);
   }
   const requested = smoothingWhere(normFrom ? widenStart(range, catalog.time, normFrom, now) : range, catalog.time, state.period, cumulative ? 0 : state.rollingPeriods, count, now);
-  const population = unique([...catalog.request?.where ?? [], ...measure.where ?? [], ...breakdown?.where ?? []]);
+  const population = unique([...measure.where ?? [], ...breakdown?.where ?? []]);
   const groupBy = [field, ...breakdown?.fields ?? []];
   const derived = components?.derived;
   const clauses: AggregationClause[] = (derived ? derived.inputs.fields.map(input => ({ id: `trend:input:${input}`, op: "sum" as const, field: input, groupBy: [field, ...derived.inputs.groupBy], label: input }))

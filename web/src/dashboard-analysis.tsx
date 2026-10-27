@@ -4,6 +4,7 @@ import { MetricCard, defaultRenderers } from "@pythia-software/query-table-ui";
 import { changeState, cycleUnavailable, notTrended, sampleSubject, selectGroups, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, cycleTotal, noSplit, normalizeAnalysis, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, type AnalysisCatalog, type AnalysisQuery as AnalysisQueryResult, type AnalysisReduce, type AnalysisUnit, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
 import { runAnalysisQuery, type LocalRows } from "./analysis-request";
 import type { RequestParams } from "./metric-request";
+import { onDatasetRefresh } from "./dataset-refresh";
 import { ChartSelect, DisplayControl, PeriodControl, RangeControl, RollingControl, ScaleControl, presetPeriod, timeBounds, withTimeRange, type ChartRange, type FilterChange, type TimeBounds } from "./usage-chart";
 import { trendPeriodCount } from "./dashboard-trend-model";
 import { UsageDashboardLinks } from "./usage-workspace";
@@ -16,23 +17,22 @@ import { useOriginMetadata } from "./origin-dimensions";
 // so a stale response never renders under new settings.
 export function useAnalysisResult(dataset: string, schema: FieldSchema<any>, query: QueryState, local?: LocalRows, params?: RequestParams) {
   const key = JSON.stringify([query, params ?? {}]);
-  const [state, setState] = useState<{ key: string; results: AggregationResultEntry[]; error: string; loading: boolean }>({ key: "", results: [], error: "", loading: true });
+  // A result belongs to its query and to the refresh it was fetched for, so
+  // results from before a refresh read as loading, never as current.
+  const [state, setState] = useState<{ key: string; refresh: number; results: AggregationResultEntry[]; error: string; loading: boolean }>({ key: "", refresh: 0, results: [], error: "", loading: true });
   const [refresh, setRefresh] = useState(0);
-  useEffect(() => {
-    const bump = () => setRefresh(value => value + 1);
-    window.addEventListener("pharos:usage-refresh", bump);
-    return () => window.removeEventListener("pharos:usage-refresh", bump);
-  }, []);
+  useEffect(() => onDatasetRefresh(dataset, () => setRefresh(value => value + 1)), [dataset]);
   useEffect(() => {
     const controller = new AbortController();
     setState(previous => ({ ...previous, loading: true }));
     const [request, parameters] = JSON.parse(key) as [QueryState, RequestParams];
     runAnalysisQuery(dataset, schema, request, { signal: controller.signal, local, params: parameters })
-      .then(results => setState({ key, results, error: "", loading: false }))
-      .catch(failure => { if (!controller.signal.aborted) setState({ key, results: [], error: failure instanceof Error ? failure.message : String(failure), loading: false }); });
+      .then(results => setState({ key, refresh, results, error: "", loading: false }))
+      .catch(failure => { if (!controller.signal.aborted) setState({ key, refresh, results: [], error: failure instanceof Error ? failure.message : String(failure), loading: false }); });
     return () => controller.abort();
   }, [dataset, key, refresh, local]);
-  return { results: state.key === key ? state.results : [], loading: state.key !== key || state.loading, error: state.key === key ? state.error : "" };
+  const current = state.key === key;
+  return { results: current ? state.results : [], loading: !current || state.refresh !== refresh || state.loading, error: current ? state.error : "" };
 }
 
 export function AnalysisViewControl({ catalog, state, onChange }: { catalog: AnalysisCatalog; state: AnalysisState; onChange: (view: AnalysisView) => void }) {
