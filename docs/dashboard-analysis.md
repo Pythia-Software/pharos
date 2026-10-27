@@ -118,16 +118,24 @@ what each offers and why.
     (`runAnalysisQuery`, on `/metrics` and `/query-v3` alike). Carbon sends
     the user's current assumptions as `carbon_settings`, under which the
     service estimates each usage record.
-  - `where` is the population the records are built under. It joins every
-    executed query, supporting query and drill-down as an implied
-    population, never a dashboard filter, so "Back to dashboard" leaves it
-    out. Parallelism names its saved counting and gap settings this way.
+  - `where` is a population the records are built under, for a service
+    that can serve records built several ways. It joins every executed
+    query, supporting query and drill-down as an implied population, never
+    a dashboard filter, so "Back to dashboard" leaves it out. No catalog
+    needs it today: Parallelism's service serves only the saved settings'
+    records, so a filter on them would only turn a settings change in
+    another window into empty charts.
   - `note` says so beneath every view.
 
-  A catalog whose request depends on settings is built per render with
-  them (`carbonAnalysisCatalog(assumptions)`,
-  `parallelismAnalysisCatalog(settings)`); links are read and compared
-  with its shape (`carbonCatalogShape`, `parallelismCatalogShape`).
+  A catalog that depends on the user's settings is built with them:
+  `analysisCatalogFor(topic, settings)` (`analysis-catalogs.ts`) gives the
+  complete catalog of any topic, and `useCarbonCatalog`,
+  `useParallelismCatalog` and `useAnalysisCatalog(topic)`
+  (`analysis-catalog-hooks.ts`) supply the settings in the page: Carbon's
+  current assumptions (`carbon.js`) with the factors the service embeds
+  (`carbon/co2_factors.json`), and Parallelism's saved counting. Links are
+  read and compared with the shapes (`carbonCatalogShape`,
+  `parallelismCatalogShape`), which carry no settings.
 - **Executable bounds** (optional, `executable`). Translates the time bounds
   into predicates the dataset executes, for every executed and supporting
   query and every drill-down (`dashboardChartURL`'s `translate`). The Tools
@@ -139,17 +147,21 @@ what each offers and why.
   totals in the browser. A dataset may leave a period out (a `day` field is
   required); the Time bucket control then disables it with a reason, and a
   link asking for it draws days.
-- **One day boundary** (`timestamp`). On a dataset whose records carry a
-  true timestamp, Over time groups that timestamp with `dateGrouping`:
-  days, weeks and months in the viewer's time zone, and UTC clock hours
-  placed at the viewer's hour, exactly as the cycle does. A traveller's
-  days therefore agree between Over time and the weekday cycle, and every
-  period is offered, hours included. Pharos MCP, Agent Time, Skills, Human
-  Words and Parallelism follow this rule. Usage, a day-grained ledger, keeps
-  its recorded `day` and `hour` (see Limitations). A grouping stage cannot
-  group a timestamp by calendar period (Query Table request 6), so such a
-  trend's supporting query opens the records it draws, and its note says
-  so.
+- **The day boundary** (`timestamp`). Days, weeks and months are always
+  the recorded calendar fields (`day`, `week`, `month`), as the cards group
+  them: the trend runs on `/metrics` (and Agent Time's accelerator), its
+  supporting query opens grouped rows, and a card's daily points are the
+  dashboard's. A dataset whose records carry a true timestamp also offers
+  hours: Over time groups the timestamp by UTC clock hour with
+  `dateGrouping`, placed at the viewer's hour, and the hour and weekday
+  cycles group it in the viewer's zone, as the weekday and hour cards do.
+  Pharos MCP, Agent Time, Skills, Human Words and Parallelism follow this
+  rule; usage keeps its recorded `hour` too. The trade-off: a record's
+  recorded day is the recording Mac's local date, so after a time-zone
+  change a late-evening record can sit on one day in a day trend and on the
+  next in the weekday cycle; the trend's note says so. A grouping stage
+  cannot group a timestamp by hour (Query Table request 6), so an hourly
+  timestamp trend's supporting query opens the records it draws.
 - **Trend defaults.** The trend's default measure and breakdown.
 - **Legacy mapping** (optional, `legacy`). A function that reads a link or
   saved state written in an older vocabulary into the catalog's terms, and
@@ -349,10 +361,19 @@ reads every link through `readAnalysisLink`:
   filter in its table is a population.
 
 Human Words' older links wrote its legend selection as a filter on the
-split's field (`legacySlices`); their filters on the works dataset
-(`first_message_at`, `last_message_at`, `providers`, …) are read as message
-filters first (`humanWhere`). Carbon's older filters came from its filter
-controls, never a legend, so they stay populations (`legacySlices: false`).
+split's field (`legacySlices`); their filters on the works dataset are read
+as message filters first (`humanWhere`): the time bounds as `sent_at`, and a
+work's combined providers, channels or machines ("claude,codex") as their
+single values, an equality as an OR over them (so a legend selection of a
+combined group selects each value) and an inequality as one per value. Those
+breakdowns' notes say that older work-level combined groups are now
+per-message groups. Every engine dashboard reads an older link in its
+catalog's terms once, when it opens, and rewrites it. Carbon's older filters
+came from its filter controls, never a legend, so they stay populations
+(`legacySlices: false`); its older charts (`co2`/`energy`, `tier`) read
+through its legacy mapping, on the dashboard and on the legacy Carbon page,
+where a link's `analyze_chart` wins over the saved chart on entry and on
+route changes (`legacyCarbonChart`).
 Parallelism's ribbon selection keeps its own link (`analyze_parallelism`)
 and its "query view" link (`parallelismSelectionQuery`).
 
@@ -643,7 +664,10 @@ around it. Its default view is the one it always opened on.
   names (`carbon_settings`) or else the saved ones. The catalog is built
   with the calculator's current settings and sends them with every request,
   so the stored estimates are the user's, not the defaults, and a link's
-  assumptions (`analyze_carbon`) are honoured without being saved. Token
+  assumptions (`analyze_carbon`) are honoured without being saved. A shared
+  fixture (`testdata/carbon-estimates.json`) holds the service (a Go test)
+  and the calculator (a node test, with the token-type split) to the same
+  grams and watt-hours under several settings. Token
   type is a derived component: the trend queries token totals by model tier
   per period and the page's own calculator (`window.pharosCarbon.estimate`)
   splits them into uncached input, cache reads, cache writes and output; the
@@ -658,12 +682,16 @@ around it. Its default view is the one it always opened on.
   (`elapsed_hours`: each record's share of the wall time, so groups add up),
   hours with two or more at once, agents at once while active (the pooled
   ratio of `unit_ms` over `elapsed_ms`) and agents (distinct), by agents at
-  once, repository, provider, model, workspace and the origin fields, with
-  an agent unit (`unit_id`). The service builds the records with the saved
-  counting and gap settings, which the catalog names as its population
-  (`request.where`) and in its note; each save rebuilds the catalog. A link
-  may open the ribbon with settings it has not saved; the views then keep
-  the saved ones and say so.
+  once, repository, workspace and the origin fields (provider and model
+  only under agent counting, the only counting for which the service
+  records them), with an agent unit (`unit_id`). The service builds every
+  record with the saved counting and gap settings and serves no others, so
+  the catalog filters nothing by them. A note names the settings the
+  returned records carry (`parallelismSettingsNote`) and warns when they
+  differ from what the page believes is saved (another window saved
+  others). "Back to dashboard" keeps `counting` and `gap_minutes` out of the
+  dashboard's filters. A link may open the ribbon with settings it has not
+  saved; the views then follow the saved ones and say so.
 
 Every engine dashboard, Tokens and Cost included, has a Refresh action,
 which reruns its queries (Pharos MCP's own requests arrive while it is open).
@@ -800,17 +828,21 @@ The input to phase 4. Every other card in the parity tables above matches.
 | `model-conversation-reach` | A share of group incidences (phase 4). |
 | `human-words-per-work` | A workspace directory: the card joins each message's work to its Library location and combines works sharing a repository and directory. Messages carry no location, so the dashboard opens the mean per work (`work_id`), which is not a directory. |
 | `human-specific-feedback`, `human-example-phrases` | Human studies classify typed text in the browser (`human-study.ts`: feedback and detail cues, images, pastes, file references). No dataset field holds those classes; the dataset's own `correction_cue` and `positive_cue` are other rules. They open the correction-cue share and all words by Text source. Matching needs those classes as `writing_messages` fields (a Go change). |
-| `human-word-total` | A trailing total over the card's window beside its norm, from a human study (`volume`). It opens typed words as a 7-day total with a norm, unchecked: the study's window and endpoints are its own. |
+| `human-word-total` | The human study (`volume`) totals elapsed windows ending at the current instant (now − k days), not calendar days. It opens typed words as a total over the card's window with a norm, which counts whole calendar days. |
 | `session-human-output` | A scatter over `conversation_activity` (estimated human text tokens against output tokens per conversation). No catalog reads that dataset; it opens all words by provider. |
-| `carbon-trend` at 30 days | The dashboard's trailing window is fixed in the card's destination (7 days). A card collected with a 30-day window still opens a 7-day total: a window edit does not change a destination's chart. |
 
 Caveats on matched cards:
 - `writing-hours` is all-time on the card; an hour cycle allows 400 days, so
   an older library must choose a shorter range.
 - `parallel-hours` groups the dataset's `hour_of_day`, the service's local
   hour; the cycle places UTC hours at the viewer's hour, which agree on the
-  Mac that recorded them. The cycle also leaves out a partial first and last
-  hour, which the card counts.
+  Mac that recorded them. The cycle counts complete hours only, so the hour
+  in progress is on the card and not on the dashboard; the test opens both
+  mid-hour and asserts exactly that difference.
+- `carbon-trend` and `human-word-total` trail over the card's own window:
+  their destination's `rollingPeriods` follows it when the card opens and
+  when its window is edited (`windowedChart`); `carbon-trend` matches at 7
+  and 30 days.
 - `human-word-mix` lists eight repositories and the dashboard twelve bars.
 
 `machine-operations` has the breakdown it needs (operation) but no parity
@@ -838,12 +870,16 @@ match for windows starting at a local midnight; see Whole days.
   "five distinct conversations per model"; use the conversation unit, where
   each row is one conversation. A minimum over a summed field (Tools' calls)
   runs as a group filter and cannot report how many groups it hid.
-- A grouping stage cannot group a timestamp by calendar date, so a timestamp
-  cycle's or trend's supporting query opens records.
+- A grouping stage cannot group a timestamp by calendar date or hour, so a
+  timestamp cycle's or hourly trend's supporting query opens records.
+- A day trend files a record under its recorded day, the cycles under its
+  day in the viewer's zone; they differ for late records after a time-zone
+  change.
 - Tools' trend has days, weeks and months only: the rollup has no hours.
 - Parallelism records follow the saved counting and gap settings only: the
-  service has no per-request override like Carbon's `carbon_settings`, so a
-  link's unsaved ribbon settings cannot reach the engine's views.
+  service has no per-request override like Carbon's `carbon_settings` (a Go
+  change), so a link's unsaved ribbon settings cannot reach the engine's
+  views.
 - Human Words' message mix shares words, not characters: messages carry
   per-source word counts only.
 
@@ -876,8 +912,9 @@ The Query Table limitations are requested in
      ([The catalogs](#the-catalogs)), with the engine items they needed: a
      request seam (`request`: parameters and a built-under population),
      conditional ratio parts, one day boundary for timestamped records
-     (`timestamp`, which also gives Pharos MCP, Agent Time and Skills hourly
-     trends), and derived components. Pharos MCP's empty-search rate is a
+     (`timestamp`: recorded days, timestamp hours and cycles, which also
+     gives Pharos MCP, Agent Time and Skills hourly trends), and derived
+     components, and the settings each catalog needs from reusable hooks. Pharos MCP's empty-search rate is a
      conditional ratio. The dashboard-only parts of `WritingPanel`
      (`dashboard`, `viewOverride`), Carbon's bespoke chart (`CarbonView`,
      its series builder, `initialView`, the history request and the
@@ -900,4 +937,7 @@ The Query Table limitations are requested in
      yet](#cards-that-cannot-be-matched-yet). Since 2b, a card filtered on
      its own breakdown's field maps to a population filter, which versioned
      card links already write.
+   - Draw any card's state with `useAnalysisCatalog(topic)`, or check all
+     cards with `analysisCatalogFor(topic, settings)`, which give Carbon's
+     and Parallelism's complete catalogs outside their pages.
    - Remove `CardAnalysis`, the stopgap that re-renders a card's own chart.

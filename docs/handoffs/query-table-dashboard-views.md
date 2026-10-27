@@ -204,11 +204,10 @@ as `minCount` does. Request 4's distinct form could share the shape:
 `dateGrouping`, but a grouping stage's `keys` cannot. Pharos's weekday and
 hour profiles of timestamped records (Pharos MCP requests, tool calls, skill
 evidence, user messages, hourly parallelism records) fold daily or hourly
-clause totals, and their trends now group the same timestamps by day, week,
-month or hour in the viewer's time zone, so a traveller's days agree
-between the two. Their "View supporting query" link should open those
-period totals as grouped rows, as it does for datasets with a stored day,
-but can only open the records.
+clause totals, and their hourly trends group the same timestamps by UTC
+hour. Their "View supporting query" link should open those totals as
+grouped rows, as it does for datasets with a stored day, but can only open
+the records.
 
 **Request.** Allow a grouping key with a calendar interval, such as
 `keys: [{ field: "called_at", interval: "day", timeZone }]` or a
@@ -219,7 +218,7 @@ interval with the interval's start as its key, in the given zone.
 - Grouping requests by `called_at` per local day in `America/Denver`
   produces one row per local date, keyed by its local midnight, with the
   same totals as the equivalent `dateGrouping` clause; the same holds for
-  weeks (Monday), months and UTC hours.
+  UTC hours.
 - Group filters, ordering and drill-down (`inspectBucketQuery` on a grouped
   row) select exactly that interval's records.
 
