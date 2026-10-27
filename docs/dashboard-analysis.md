@@ -255,6 +255,9 @@ cache-share denominator fails.
 - Query Table colors chart marks by the first group key only, so a share of
   "Provider + model" draws same-provider slices in one color; see
   [`handoffs/query-table-multi-key-colors.md`](handoffs/query-table-multi-key-colors.md).
+- Query Table's box and horizontal-bar charts clip long group labels at a
+  fixed margin; see
+  [`handoffs/query-table-chart-label-margin.md`](handoffs/query-table-chart-label-margin.md).
 - `minCount` counts rows. A records compare view therefore cannot require
   "five distinct conversations per model"; use the conversation unit, where
   each row is one conversation.

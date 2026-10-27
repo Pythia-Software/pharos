@@ -356,6 +356,10 @@ const WIDTHS = [{ width: 1440, height: 900 }, { width: 1280, height: 720 }, { wi
 // problems match here is marked todo with the bug, so the suite stays honest;
 // any other problem still fails it.
 const KNOWN = [{
+  bug: "Query Table 0.9.5 box and horizontal-bar charts reserve a fixed label margin, so long group labels are cut off; docs/handoffs/query-table-chart-label-margin.md",
+  when: route => route.name.startsWith("Tokens and Cost distribution"),
+  match: /chart label ".*" cut off by svg .* in div\.qt-metric/,
+}, {
   bug: "Query Table 0.9.5 fit-to-screen can clip native Detail and JSON buttons at phone widths; docs/handoffs/query-table-fit-screen-controls.md",
   when: (route, viewport) => route.fitTable && viewport.width < 641,
   match: /a control is cut off where nothing scrolls: button\.qt-(?:link-btn\.qt-item-detail-button|json-preview)/,

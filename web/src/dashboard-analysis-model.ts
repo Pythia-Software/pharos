@@ -55,7 +55,7 @@ export type ResolvedAnalysis = AnalysisState & Required<Pick<AnalysisState, "vie
 
 // Reserved ids: no catalog unit may be named records, nor a breakdown none.
 export const records = "records", noSplit = "none";
-export const analysisViews: Array<[AnalysisView, string]> = [["trend", "Over time"], ["compare", "Compare groups"], ["distribution", "Distribution"], ["scatter", "Two measures"], ["cycle", "Daily cycle"]];
+export const analysisViews: Array<[AnalysisView, string]> = [["trend", "Over time"], ["compare", "Compare groups"], ["distribution", "Distribution"], ["scatter", "Two measures"], ["cycle", "Hour / weekday cycle"]];
 export const analysisReductions: Array<[AnalysisReduce, string]> = [["total", "Total"], ["mean", "Mean per unit"], ["median", "Median per unit"], ["max", "Largest unit"], ["count", "Number of units"]];
 export const sampleThresholds = [0, 2, 3, 5, 10, 20, 50, 100];
 const analysisDefaults = { unit: records, reduce: "total", compareAs: "bars", minSamples: 0, scaleY: "linear", cycle: "weekday" } as const;
@@ -316,7 +316,7 @@ export function analysisInspectQuery(analysis: AnalysisQuery, bucket: Aggregatio
 export function cycleResult(catalog: AnalysisCatalog, input: AnalysisState, result: AggregationResultEntry, bounds: { from?: number; to: number }, zone: string) {
   const state = normalizeAnalysis(catalog, input), measure = catalog.measures[state.metric];
   if (result.error || result.coverage === "partial" || result.hiddenGroups || (result.groupCount ?? 0) > result.buckets.length || result.buckets.some(bucket => bucket.error)) {
-    throw new Error(result.error ?? "Complete totals are required for a daily cycle. Choose a shorter range.");
+    throw new Error(result.error ?? "Complete totals are required for an hour or weekday cycle. Choose a shorter range.");
   }
   const hour = state.cycle === "hour", foldZone = hour ? zone : "UTC";
   const time = (key: unknown) => key === null || key === undefined || key === "" ? NaN : hour ? Date.parse(String(key)) : metricDateTime(String(key), "UTC");

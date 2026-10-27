@@ -32,6 +32,10 @@ hour-of-day and weekday grouping, so dashboard cycle views can fold natively
 and drill into a slot. Pharos folds daily and hourly totals in the browser
 until then.
 
+[`query-table-chart-label-margin.md`](query-table-chart-label-margin.md) asks
+for box and horizontal-bar charts to fit long group labels instead of
+clipping their start.
+
 [`query-table-multi-key-colors.md`](query-table-multi-key-colors.md) asks
 for marks colored by their whole group key, so a share of provider + model
 groups does not repeat colors.
