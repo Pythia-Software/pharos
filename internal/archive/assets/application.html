@@ -17,6 +17,15 @@ body[data-application-setup] #navigator{display:none}
 .application-setup .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr));gap:14px}
 .application-setup .card,.application-setup details{padding:18px;border:1px solid var(--line);border-radius:7px;background:var(--bg);margin:18px 0}
 .application-setup .grid .card{margin:0}
+.application-setup.library-manager #application-intro .setup-art{display:none}
+.application-setup.library-manager #application-intro.setup-story{display:block}
+.application-setup.library-manager #application-intro h1{margin-top:0}
+.application-setup.library-manager #library-actions{justify-content:flex-start;margin:0 0 24px;padding:0 0 24px;border-top:0;border-bottom:1px solid var(--line)}
+.application-setup .library-card-current{border-color:var(--gold);background:color-mix(in srgb,var(--gold) 5%,var(--bg))}
+.application-setup .library-card-heading{display:flex;align-items:flex-start;gap:12px}
+.application-setup .library-card-heading h3{flex:1;min-width:0;overflow-wrap:anywhere}
+.application-setup .library-card-heading .tag{flex:none}
+.application-setup #library-manager-note{font-size:var(--fs-sm);color:var(--muted)}
 .application-setup #setup{padding:0;border:0;background:transparent;margin:0}
 .application-setup button,.application-setup .button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;padding:7px 14px;border:1px solid var(--line);border-radius:5px;font:600 var(--fs-sm)/1.4 var(--sans);text-decoration:none;background:var(--panel);color:var(--ink);cursor:pointer}
 .application-setup button.primary,.application-setup .button:not(.secondary),.application-setup button[type=submit]{background:var(--accent);border-color:var(--accent);color:var(--panel)}
@@ -143,7 +152,7 @@ body[data-application-setup] #navigator{display:none}
 <symbol id="setup-storage-mac" viewBox="0 0 360 210"><use href="#setup-computer" x="60" y="18" width="240" height="155"/><use href="#setup-library-folder" x="148" y="51" width="64" height="54"/></symbol>
 <symbol id="setup-storage-ssd" viewBox="0 0 360 210"><use href="#setup-computer" x="4" y="32" width="208" height="134"/><path d="M196 111H218Q230 111 230 100H252" fill="none" stroke="var(--gold)" stroke-width="2.5"/><path d="M252 72L264 64H351L339 72Z" fill="var(--line)" stroke="var(--gold)" stroke-width="1.5"/><path d="M339 72L351 64V131L339 139Z" fill="var(--bg)" stroke="var(--gold)" stroke-width="1.5"/><rect x="252" y="72" width="87" height="67" rx="2" fill="var(--bg)" stroke="var(--gold)" stroke-width="2"/><use href="#setup-library-folder" x="274" y="80" width="44" height="37"/><rect x="248" y="94" width="5" height="12" rx="1" fill="var(--panel)" stroke="var(--gold)" stroke-width="1.5"/><text x="295" y="130" text-anchor="middle" fill="var(--muted)" font-family="var(--sans)" font-size="9" letter-spacing="1">SSD</text></symbol>
 </defs></svg>
-<div class="application-top"><svg class="setup-header-mark" viewBox="0 0 80 180" aria-hidden="true"><use href="#setup-lighthouse"/></svg><strong>Setup guide</strong><button class="header-icon" id="application-theme" type="button" aria-label="Use light theme" title="Change color theme"><svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#ph-icon-theme-system"/></svg></button><button class="header-icon" id="application-close" type="button" aria-label="Back to library" title="Back to library" hidden><svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#ph-icon-close"/></svg></button></div>
+<div class="application-top"><svg class="setup-header-mark" viewBox="0 0 80 180" aria-hidden="true"><use href="#setup-lighthouse"/></svg><strong id="application-label">Setup guide</strong><button class="header-icon" id="application-theme" type="button" aria-label="Use light theme" title="Change color theme"><svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#ph-icon-theme-system"/></svg></button><button class="header-icon" id="application-close" type="button" aria-label="Back to library" title="Back to library" hidden><svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#ph-icon-close"/></svg></button></div>
 <div class="application-body">
 
 <section id="welcome" class="intro-screen"><div class="setup-story">
@@ -170,10 +179,10 @@ body[data-application-setup] #navigator{display:none}
 <div class="setup-copy"><div class="eyebrow">What is Pharos?</div><h1 id="about-title" tabindex="-1">A home for your work with AI.</h1><p>Pharos brings your coding agent conversations together, so you can find past work and learn from the way you use AI.</p><div class="intro-features"><div class="intro-feature"><svg aria-hidden="true"><use href="#setup-search"/></svg><div><h3>Find your way back</h3><p>Search across conversations, revisit an idea, and bookmark work you want to keep close.</p></div></div><div class="intro-feature"><svg aria-hidden="true"><use href="#setup-chart"/></svg><div><h3>See the bigger picture</h3><p>Explore your usage and patterns, and find opportunities to make your agents more effective.</p></div></div><div class="intro-feature"><svg aria-hidden="true"><use href="#setup-context"/></svg><div><h3>Bring context to your next conversation</h3><p>When you enable MCP, your agents can find useful context in your past work.</p></div></div></div><p class="muted">You choose which conversations Pharos can read. Next, we’ll tailor setup to the way you work.</p></div></div><div class="setup-actions"><button class="secondary" id="back-to-welcome" type="button">Back</button><button class="primary" id="start-setup" type="button">Continue</button></div></section>
 <div id="application-intro" class="setup-story">
 <svg class="setup-art setup-storage-art" viewBox="0 0 440 410" aria-hidden="true" focusable="false"><use href="#setup-library-storage"/></svg>
-<div class="setup-copy"><div class="eyebrow">Your library</div><h1 id="heading" tabindex="-1">Let’s set up your library.</h1><p>A library is a folder of files on your Mac or an attached drive. It holds your conversations, saved views, bookmarks and dashboards. Create a new one, open an existing one, or restore a backup.</p></div></div>
+<div class="setup-copy"><div class="eyebrow">Your library</div><h1 id="heading" tabindex="-1">Let’s set up your library.</h1><p id="library-introduction">A library is a folder of files on your Mac or an attached drive. It holds your conversations, saved views, bookmarks and dashboards. Create a new one, open an existing one, or restore a backup.</p></div></div>
 <p id="notice" role="status" aria-live="polite"></p><div id="job" class="card" hidden></div>
-<section id="libraries" hidden><h2>Your libraries</h2><div id="library-list" class="grid"></div></section>
-<div class="setup-actions" id="library-actions"><button class="secondary" data-flow="recover">Restore a backup</button><button class="secondary" data-flow="open">Open a library</button><button class="primary" data-flow="create">Create a library</button></div>
+<div class="setup-actions" id="library-actions"><button class="primary" data-flow="create">Create a library</button><button class="secondary" data-flow="open">Open a library</button><button class="secondary" data-flow="recover">Restore a backup</button></div>
+<section id="libraries" hidden><h2>Library locations</h2><p id="library-manager-note"></p><div id="library-list" class="grid"></div></section>
 <section id="setup" hidden>
 <h1 id="flow-title" tabindex="-1">Where do you work with AI?</h1>
 <form id="library-form" novalidate>
@@ -200,7 +209,7 @@ body[data-application-setup] #navigator{display:none}
 <section class="wizard-panel" id="wizard-review" hidden>
 <p class="wizard-lead">Check your choices before Pharos creates any files.</p><dl class="wizard-review"><dt>Your Macs</dt><dd id="review-machines"></dd><dt>Storage</dt><dd id="review-storage"></dd><dt>Library name</dt><dd id="review-name"></dd><dt>Library folder</dt><dd class="path" id="review-folder"></dd></dl><p class="wizard-note" id="review-note"></p>
 </section>
-<section class="wizard-panel wizard-fields" id="wizard-open" hidden><p class="wizard-lead">Choose the folder containing your existing library.</p><label for="existing-path">Library folder</label><input id="existing-path" autocomplete="off" spellcheck="false" placeholder="/Volumes/My SSD/My Library"><button class="secondary" type="button" data-pick="existing-path">Choose folder…</button><p class="wizard-note">The folder contains library.toml. A copied or incompatible library needs recovery before it can be opened.</p></section>
+<section class="wizard-panel wizard-fields" id="wizard-open" hidden><p class="wizard-lead">Choose the folder containing your existing library.</p><label for="existing-path">Library folder</label><input id="existing-path" autocomplete="off" spellcheck="false" placeholder="/Volumes/My SSD/My Library"><button class="secondary" type="button" data-pick="existing-path">Choose folder…</button><p class="wizard-note">Open the folder containing your Pharos library. You can also paste its library.toml path. Its history and saved views will be available when you open it.</p></section>
 <section class="wizard-panel wizard-fields" id="wizard-backup" hidden><p class="wizard-lead">Choose a completed backup or a self-contained copy of a library.</p><label for="backup">Backup folder</label><input id="backup" autocomplete="off" spellcheck="false"><button class="secondary" type="button" data-pick="backup">Choose folder…</button><details><summary>Restoring a cloud backup</summary><p>First download and verify its recovery folder using Cloud Backups or pharos cloud-restore. Then choose that folder here.</p></details></section>
 <section class="wizard-panel wizard-fields" id="wizard-recover-target" hidden><p class="wizard-lead">Restore into a new folder. Your backup stays intact.</p><label for="recover-path">New library folder</label><input id="recover-path" autocomplete="off" spellcheck="false" placeholder="/Volumes/My SSD/Recovered Library"><button class="secondary" type="button" data-pick="recover-path">Choose parent folder…</button><p class="wizard-note">Choose a folder that does not exist yet. Pharos verifies the restored history before registering the library.</p></section>
 <section class="wizard-panel" id="wizard-recover-review" hidden><p class="wizard-lead">Pharos will create and verify a separate restored library.</p><dl class="wizard-review"><dt>Backup</dt><dd class="path" id="review-backup"></dd><dt>Restore to</dt><dd class="path" id="review-recover-path"></dd></dl><p class="wizard-note">Capture and automatic delivery start paused, so you can inspect the restored history first.</p></section>
@@ -215,6 +224,12 @@ body[data-application-setup] #navigator{display:none}
 </div>
 </div></dialog>
 <script id="setup-wizard-model">
+function nextPharosLibraryName(libraries) {
+  const names = new Set(libraries.map(library => library.name));
+  let name = 'My Library', number = 2;
+  while (names.has(name)) name = 'My Library ' + number++;
+  return name;
+}
 function createPharosSetupWizard() {
   const order=['machines','storage','details','review'];
   return {
@@ -289,13 +304,55 @@ $('application-close').onclick=returnToLibrary;
 $('application-theme').onclick=()=>{const dark=document.documentElement.dataset.theme==='dark';document.documentElement.dataset.theme=dark?'light':'dark';$('application-theme').setAttribute('aria-label',dark?'Use dark theme':'Use light theme')};
 function leaveSetup(event){event.preventDefault();if(dialog.classList.contains('source-setup-open')){window.pharosOnboarding.back();return}if(!$('setup').hidden){if(!$('cancel').disabled)$('cancel').click()}else if(introStep==='about')showIntroduction('welcome');else if(state.libraries?.some(l=>l.id===state.selected&&l.connected))returnToLibrary();else if(introStep==='setup'&&!state.libraries?.length&&$('next').hidden)showIntroduction('about')}
 dialog.addEventListener('cancel',leaveSetup);
-dialog.addEventListener('keydown',event=>{if(event.key==='Escape'){if(document.querySelector('#feedbackComposer.open')||document.body.classList.contains('feedback-targeting')){event.preventDefault();return}leaveSetup(event);return}if(event.key!=='Tab')return;const controls=[...dialog.querySelectorAll('button,a[href],input,select,textarea,summary,[tabindex]')].filter(el=>el.tabIndex>=0&&!el.disabled&&el.getClientRects().length&&!el.closest('[inert]'));const at=controls.indexOf(document.activeElement);if(!controls.length)return;if(event.shiftKey&&at<=0){event.preventDefault();controls.at(-1).focus()}else if(!event.shiftKey&&at===controls.length-1){event.preventDefault();controls[0].focus()}});
+dialog.addEventListener('keydown',event=>{if(event.key==='Escape'){if(document.querySelector('#feedbackComposer.open')||document.body.classList.contains('feedback-targeting')){event.preventDefault();return}leaveSetup(event);return}if(event.key!=='Tab')return;const controls=[...dialog.querySelectorAll('button,a[href],input,select,textarea,summary,[tabindex]')].filter(el=>el.tabIndex>=0&&!el.disabled&&el.getClientRects().length&&!el.closest('[inert]')&&(el.type!=='radio'||el.checked));const at=controls.indexOf(document.activeElement);if(!controls.length)return;event.preventDefault();controls[at<0?(event.shiftKey?controls.length-1:0):(at+(event.shiftKey?-1:1)+controls.length)%controls.length].focus()});
 for(const el of [document.querySelector('body > header'),document.querySelector('body > main')])el.inert=true;
 document.documentElement.dataset.theme='dark';
 dialog.showModal();$('welcome-title').focus();
 function options(id,selected){const select=$(id);select.replaceChildren();for(const l of state.libraries||[]){const o=document.createElement('option');o.value=l.id;o.textContent=l.name+(l.available?'':' · unavailable');select.append(o)}select.value=selected||select.options[0]?.value||''}
-async function refresh(){state=await call('state');$('job').hidden=!state.job;if(state.job){$('job').textContent=state.job.phase;$('job').classList.toggle('error',state.job.state==='failed'||state.job.state==='paused')};const signature=JSON.stringify({...state,job:null});if(signature===renderSignature)return;renderSignature=signature;if((state.libraries.length||state.job)&&introStep!=='setup')showIntroduction('setup');$('libraries').hidden=!state.libraries.length;$('library-tools').hidden=!state.libraries.length;$('application-close').hidden=!state.libraries.some(l=>l.id===state.selected&&l.connected);$('heading').textContent=state.libraries.length?'Choose a library.':'Let’s set up your library.';const list=$('library-list');list.replaceChildren();for(const l of state.libraries){const c=document.createElement('article');c.className='card';const title=document.createElement('h3');title.textContent=l.name;const tag=document.createElement('span');tag.className='tag';tag.textContent=l.connected?'Connected':l.available?'Available':'Disconnected';const p=document.createElement('p');p.className='path';p.textContent=l.config;const actions=document.createElement('div');actions.className='row';const connect=document.createElement('button');connect.className='secondary';connect.textContent=l.id===state.selected?'Browse library':'Connect';connect.disabled=!l.available||state.busy;connect.onclick=()=>act(async()=>{await call('connect',{id:l.id});location.href='/library'});actions.append(connect);if(l.id===state.selected){const release=document.createElement('button');release.className='secondary';release.textContent='Release library';release.onclick=()=>act(async()=>{await call('disconnect',{id:l.id});notice('Library released. You can eject its drive in Finder. Quit Pharos first if the app is on that drive.');await refresh()});actions.append(release)}c.append(title,tag,p,actions);if(l.error){const error=document.createElement('p');error.className='error path';error.textContent=l.error;c.append(error)}if(l.recovery_point){const recovery=document.createElement('p');recovery.className='muted';recovery.textContent='Recovered from '+l.recovery_point+' · capture paused';c.append(recovery)}if(l.id===state.mcp){const m=document.createElement('p');m.className='muted';m.textContent='MCP is assigned here'+(state.selected!==l.id?' · unavailable while connected elsewhere':'');c.append(m)}list.append(c)}
-options('mcp-library',state.mcp);options('from',state.selected);options('to',state.libraries.find(l=>l.id!==state.selected)?.id);options('pending',state.delivery_source);options('archive',state.delivery_target||state.libraries[1]?.id);$('application-path').textContent='This app: '+state.application;if(!$('setup').hidden&&flow==='create')updateWizardChoices();$('job').hidden=!state.job;if(state.job){$('job').textContent=state.job.phase;$('job').classList.toggle('error',state.job.state==='failed'||state.job.state==='paused')};$('mcp-form').hidden=!state.libraries.length}
+async function refresh(){
+  state=await call('state');
+  $('job').hidden=!state.job;
+  if(state.job){$('job').textContent=state.job.phase;$('job').classList.toggle('error',state.job.state==='failed'||state.job.state==='paused')}
+  const signature=JSON.stringify({...state,job:null});if(signature===renderSignature)return;renderSignature=signature;
+  if((state.libraries.length||state.job)&&introStep!=='setup')showIntroduction('setup');
+  const current=state.libraries.find(l=>l.id===state.selected);
+  dialog.classList.toggle('library-manager',!!state.libraries.length);
+  $('application-label').textContent=state.libraries.length?'Libraries':'Setup guide';
+  $('libraries').hidden=!state.libraries.length;$('library-tools').hidden=!state.libraries.length;
+  $('application-close').hidden=!current?.connected;
+  $('heading').textContent=state.libraries.length?'Your libraries.':'Let’s set up your library.';
+  if(state.libraries.length)$('library-introduction').textContent=current?.connected?`You’re using ${current.name}. Switch libraries below, or create a separate home for more history.`:'Open a library to browse its history, or create a new library on this Mac or an attached drive.';
+  $('library-manager-note').textContent=state.busy?'A library operation is running. You can switch libraries when it finishes.':'Each library keeps its own history, source choices and saved views. MCP assignment is managed separately below.';
+  for(const button of document.querySelectorAll('#library-actions button'))button.disabled=state.busy;
+  const list=$('library-list');
+  // Keep keyboard focus when polling replaces library cards after a state change.
+  const focused=document.activeElement?.dataset.libraryAction;
+  list.replaceChildren();
+  for(const l of state.libraries){
+    const selected=l.id===state.selected,active=selected&&l.connected;
+    const c=document.createElement('article');c.className='card'+(active?' library-card-current':'');
+    const heading=document.createElement('div');heading.className='library-card-heading';
+    const title=document.createElement('h3');title.textContent=l.name;
+    const tag=document.createElement('span');tag.className='tag';tag.textContent=active?'Current library':l.available?'Available':'Unavailable';
+    heading.append(title,tag);
+    const p=document.createElement('p');p.className='path';p.textContent=l.config;
+    const actions=document.createElement('div');actions.className='row';
+    const connect=document.createElement('button');connect.className=active?'primary':'secondary';connect.textContent=active?'Continue browsing':selected?'Reconnect':'Switch to library';
+    connect.setAttribute('aria-label',(active?'Browse ':selected?'Reconnect to ':'Switch to ')+l.name);connect.dataset.libraryAction='connect:'+l.id;
+    connect.disabled=!l.available||state.busy;
+    connect.onclick=()=>act(async()=>{connect.disabled=true;try{await call('connect',{id:l.id});location.href='/library'}finally{connect.disabled=!l.available||state.busy}});
+    actions.append(connect);
+    if(active){const release=document.createElement('button');release.className='secondary';release.textContent='Release library';release.dataset.libraryAction='release:'+l.id;release.disabled=state.busy;release.onclick=()=>act(async()=>{await call('disconnect',{id:l.id});notice('Library released. You can eject its drive in Finder. Quit Pharos first if the app is on that drive.');await refresh()});actions.append(release)}
+    c.append(heading,p);
+    if(l.error){const error=document.createElement('p');error.className='error path';error.textContent=l.error;c.append(error)}
+    if(l.recovery_point){const recovery=document.createElement('p');recovery.className='muted';recovery.textContent='Recovered from '+l.recovery_point+' · capture paused';c.append(recovery)}
+    if(l.id===state.mcp){const m=document.createElement('p');m.className='muted';m.textContent='MCP is assigned here'+(state.selected!==l.id?' · unavailable while connected elsewhere':'');c.append(m)}
+    c.append(actions);list.append(c);
+  }
+  if(focused){const next=[...list.querySelectorAll('button')].find(button=>button.dataset.libraryAction===focused);if(next&&!next.disabled)next.focus()}
+  options('mcp-library',state.mcp);options('from',state.selected);options('to',state.libraries.find(l=>l.id!==state.selected)?.id);options('pending',state.delivery_source);options('archive',state.delivery_target||state.libraries[1]?.id);
+  $('application-path').textContent='This app: '+state.application;if(!$('setup').hidden&&flow==='create')updateWizardChoices();$('mcp-form').hidden=!state.libraries.length;
+}
 async function act(fn){try{await fn()}catch(e){notice(e.message,true)}}
 $('configure-sources').onclick=()=>act(()=>window.pharosOnboarding.open({library:state.selected}));
 function defaultParent(){return state.local_library_parent||'Standard Pharos Libraries folder'}
@@ -343,8 +400,9 @@ function renderWizard(focus=true){
   dialog.setAttribute('aria-labelledby','flow-title');document.querySelector('.application-body').scrollTop=0;if(focus)$('flow-title').focus();
 }
 function startFlow(nextFlow,trigger){
+  if(state.busy){notice('Wait for the current library operation to finish.',true);return}
   flowOrigin=trigger?.closest('#setup')?'machines':state.libraries?.length?'chooser':'about';
-  flow=nextFlow;recoverStep=0;if(flow==='create'){if(trigger?.closest('#library-actions'))wizard=createPharosSetupWizard();else wizard.step='machines'}
+  flow=nextFlow;recoverStep=0;if(flow==='create'){if(trigger?.closest('#library-actions')||(!trigger&&state.libraries?.length)){wizard=createPharosSetupWizard();wizard.name=nextPharosLibraryName(state.libraries||[])}else wizard.step='machines'}
   showIntroduction('setup',false);setFlowOpen(true);$('next').hidden=true;$('setup').hidden=false;notice('');renderWizard();
 }
 for(const b of document.querySelectorAll('[data-flow]'))b.onclick=()=>startFlow(b.dataset.flow,b);
@@ -380,7 +438,7 @@ $('library-form').onsubmit=e=>{e.preventDefault();notice('');
   }
   act(async()=>{$('submit').disabled=true;$('cancel').disabled=true;try{
     const body=flow==='create'?wizard.payload():flow==='open'?{path:$('existing-path').value.trim()}:{path:$('recover-path').value.trim(),backup:$('backup').value.trim()};
-    await call(flow,body);$('setup').hidden=true;setFlowOpen(false);$('next').hidden=flow==='recover';dialog.classList.toggle('library-ready',flow!=='recover');
+    await call(flow,body);if(flow==='open'){location.href='/library';return}$('setup').hidden=true;setFlowOpen(false);$('next').hidden=flow==='recover';dialog.classList.toggle('library-ready',flow!=='recover');
     if(flow!=='recover'){dialog.setAttribute('aria-labelledby','ready-title');$('next').focus()}
     notice(flow==='recover'?'Restoration is running. Your restored library will appear after verification.':'');await refresh();
   }finally{$('submit').disabled=false;$('cancel').disabled=false}});

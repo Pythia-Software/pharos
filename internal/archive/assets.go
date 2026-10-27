@@ -41,6 +41,14 @@ func applicationHTML() string {
 	return strings.Replace(shell, "</body>", string(setup)+"</body>", 1)
 }
 
+func managedLibraryHTML(page string) string {
+	// Inject before the shell reads Settings routes and mounts its workspace.
+	settings, _ := assets.ReadFile("assets/managed-library.html")
+	page = strings.Replace(page, `<div id="settingsContent" class="settings-content">`, `<div id="settingsContent" class="settings-content">`+string(settings), 1)
+	page = strings.Replace(page, "</head>", `<link rel="stylesheet" href="/assets/managed-library.css"></head>`, 1)
+	return strings.Replace(page, "</body>", `<script src="/assets/managed-library.js"></script></body>`, 1)
+}
+
 // uiHTML extracts the page from ui.py, which wraps it in a Python string.
 func uiHTML(source []byte) string {
 	text := string(source)

@@ -389,7 +389,7 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !current {
 			return fmt.Errorf("the application changed libraries; reopen this page")
 		}
-		if !strings.Contains(response.Header.Get("Content-Type"), "text/html") {
+		if !isUIPage(r.URL.Path) || !strings.Contains(response.Header.Get("Content-Type"), "text/html") {
 			return nil
 		}
 		b, err := io.ReadAll(response.Body)
@@ -400,14 +400,15 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		scope, _ := json.Marshal(id)
 		sessionScope := sha256.Sum256([]byte(currentHost().ID + "\x00" + m.id))
 		m.mu.Lock()
-		instance := m.registry.library(id).Instance
+		library := *m.registry.library(id)
 		m.mu.Unlock()
-		session, _ := json.Marshal(map[string]string{"preferences": fmt.Sprintf("pharos-session:%x:", sessionScope[:16]), "storage": id + ":" + instance + ":", "legacy": id + ":"})
-		script := `<script>window.pharosManagedSession=` + string(session) + `;</script>`
+		session, _ := json.Marshal(map[string]string{"preferences": fmt.Sprintf("pharos-session:%x:", sessionScope[:16]), "storage": id + ":" + library.Instance + ":", "legacy": id + ":"})
+		selection, _ := json.Marshal(map[string]string{"id": id, "name": library.Name, "config": library.Config})
+		script := `<script>window.pharosManagedSession=` + string(session) + `;window.pharosManagedLibrary=` + string(selection) + `;</script>`
 		html := strings.Replace(string(b), "<head>", "<head>"+script, 1)
-		binding := `<script>(()=>{const f=window.fetch;window.fetch=(input,options={})=>{const u=new URL(input instanceof Request?input.url:input,location.href);if(u.origin===location.origin&&!u.pathname.startsWith('/api/app/')){const h=new Headers(input instanceof Request?input.headers:options.headers);h.set('X-Pharos-Library',` + string(scope) + `);options={...options,headers:h}}return f.call(window,input,options)};setInterval(()=>f.call(window,'/api/app/state').then(r=>r.json()).then(s=>{if(s.selected!==` + string(scope) + `||!s.libraries?.some(l=>l.id===` + string(scope) + `&&l.connected)){location.replace('/app')}}).catch(()=>{document.body.textContent='Pharos is offline. Reopen the application to reconnect.'}),3000)})();</script>`
+		binding := `<script>(()=>{const f=window.fetch;window.fetch=(input,options={})=>{const u=new URL(input instanceof Request?input.url:input,location.href);if(u.origin===location.origin&&!u.pathname.startsWith('/api/app/')){const h=new Headers(input instanceof Request?input.headers:options.headers);h.set('X-Pharos-Library',` + string(scope) + `);options={...options,headers:h}}return f.call(window,input,options)};setInterval(()=>f.call(window,'/api/app/state').then(r=>r.json()).then(s=>{window.dispatchEvent(new CustomEvent('pharos:application-state',{detail:s}));if(!window.pharosLibrarySwitching&&(s.selected!==` + string(scope) + `||!s.libraries?.some(l=>l.id===` + string(scope) + `&&l.connected))){location.replace('/app')}}).catch(()=>{document.body.textContent='Pharos is offline. Reopen the application to reconnect.'}),3000)})();</script>`
 		html = strings.Replace(html, "<head>", "<head>"+binding, 1)
-		html = strings.Replace(html, `<div class="bar">`, `<div class="bar"><a href="/app" style="color:inherit;font-size:12px;flex:none" title="Choose a library and MCP settings">Libraries</a>`, 1)
+		html = managedLibraryHTML(html)
 		response.Body = io.NopCloser(strings.NewReader(html))
 		response.ContentLength = int64(len(html))
 		response.Header.Set("Content-Length", strconv.Itoa(len(html)))
@@ -615,6 +616,10 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.busy && (r.URL.Path == "/api/app/create" || r.URL.Path == "/api/app/open" || r.URL.Path == "/api/app/connect") {
+		writeError(w, fmt.Errorf("wait for the current library operation to finish"), http.StatusConflict)
+		return
+	}
 	var err error
 	switch r.URL.Path {
 	case "/api/app/create":

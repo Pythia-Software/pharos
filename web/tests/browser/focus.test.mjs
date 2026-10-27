@@ -100,6 +100,86 @@ test('Library setup keeps focus in its modal and returns to the choice after can
   await shot('ready');
 });
 
+const settingsLocal={id:'local',name:'Pending history',config:'/Libraries/Pending/library.toml',available:true,connected:true};
+const settingsArchive={id:'archive',name:'My archive',config:'/Volumes/Archive/library.toml',available:true};
+const settingsState={selected:settingsLocal.id,mcp:settingsLocal.id,busy:false,libraries:[settingsLocal,settingsArchive],local_library_parent:'/Users/test/Libraries'};
+
+test('Library settings opens inline forms and returns focus when cancelled', {skip}, async t => {
+  const {page,shot}=await open(t,{url:'/settings',ready:'#healthCards .panel',managedLibrary:settingsLocal,api:{
+    'GET /api/app/state':settingsState,
+    'POST /api/app/choose-folder':{path:'/Volumes/Research SSD'},
+  }});
+  await page.getByRole('link',{name:'Libraries',exact:true}).click();
+  await page.locator('#library-settings-current h3').waitFor();
+  await shot('libraries');
+  for(const kind of ['open','create']){
+    const button=page.locator(kind==='open'?'#library-settings-open':'#library-settings-new');
+    await button.click();
+    const input=page.locator(kind==='open'?'#library-settings-existing':'#library-settings-name');
+    assert.ok(await input.evaluate(el=>el===document.activeElement));
+    const form=page.locator('#library-settings-'+kind+'-form');
+    if(kind==='create'){
+      await page.locator('#library-settings-storage').selectOption('ssd');
+      await form.getByRole('button',{name:'Choose folder…',exact:true}).click();
+      await page.waitForFunction(()=>document.querySelector('#library-settings-parent').value==='/Volumes/Research SSD'&&document.activeElement?.dataset.libraryPick==='library-settings-parent');
+      assert.ok(await form.getByRole('button',{name:'Choose folder…',exact:true}).evaluate(el=>el===document.activeElement));
+    }
+    await shot(kind);
+    await form.getByRole('button',{name:'Cancel',exact:true}).click();
+    assert.ok(await button.evaluate(el=>el===document.activeElement));
+  }
+});
+
+test('Library settings keeps transfer, delivery, restore and release reachable while connected', {skip}, async t => {
+  const {page,shot}=await open(t,{url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:settingsLocal,api:{
+    'GET /api/app/state':settingsState,
+  }});
+  const operations=page.getByRole('link',{name:'Transfer, delivery, restore and release →',exact:true});
+  await operations.scrollIntoViewIfNeeded();await shot('operations-link');
+  await operations.click();
+  await page.locator('#library-list .card').first().waitFor();
+  await page.getByText('Move or copy history between libraries',{exact:true}).click();
+  await page.getByRole('button',{name:'Start verified transfer',exact:true}).waitFor();
+  await page.getByText('Capture locally, transfer later',{exact:true}).click();
+  await page.getByRole('button',{name:'Enable automatic delivery',exact:true}).waitFor();
+  const release=page.getByRole('button',{name:'Release library',exact:true});
+  await release.focus();
+  assert.ok(await release.evaluate(el=>el===document.activeElement));
+  await shot('operations');
+  await page.getByRole('button',{name:'Restore a backup',exact:true}).click();
+  await page.locator('#backup').waitFor();
+  assert.ok(await page.locator('#flow-title').evaluate(el=>el===document.activeElement));
+});
+
+test('Library settings switches within Settings and opens the selected library', {skip}, async t => {
+  const {page,calls}=await open(t,{url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:settingsLocal,api:{
+    'GET /api/app/state':({state})=>({...settingsState,selected:state.managedLibrary.id}),
+    'POST /api/app/connect':({body,state})=>{assert.equal(body.id,settingsArchive.id);state.managedLibrary=settingsArchive;return {saved:true}},
+  }});
+  await page.getByRole('button',{name:'Switch to My archive',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#library-settings-current h3')?.textContent==='My archive');
+  assert.equal(new URL(page.url()).pathname,'/settings/libraries');
+  assert.deepEqual(calls.filter(call=>call.path==='/api/app/connect').map(call=>call.body),[{id:settingsArchive.id}]);
+});
+
+test('Library settings creates and opens libraries from its inline forms', {skip}, async t => {
+  for(const kind of ['create','open'])await t.test(kind,async t=>{
+    const {page,calls}=await open(t,{url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:settingsLocal,api:{
+      'GET /api/app/state':settingsState,
+      ['POST /api/app/'+kind]:({state})=>{state.managedLibrary=settingsArchive;return {saved:true}},
+    }});
+    await page.locator(kind==='open'?'#library-settings-open':'#library-settings-new').click();
+    if(kind==='open')await page.locator('#library-settings-existing').fill('/Volumes/Archive/library.toml');
+    else {await page.locator('#library-settings-name').fill('Research');await page.locator('#library-settings-parent').fill('/Volumes/Archive')}
+    const saved=page.waitForResponse(response=>response.url().endsWith('/api/app/'+kind)&&response.request().method()==='POST');
+    await page.locator('#library-settings-'+kind+'-form button[type=submit]').click();
+    await saved;
+    await page.waitForFunction(()=>window.pharosManagedLibrary?.id==='archive');
+    assert.equal(new URL(page.url()).pathname,kind==='open'?'/settings/libraries':'/settings/sources');
+    assert.deepEqual(calls.find(call=>call.path==='/api/app/'+kind).body,kind==='open'?{path:'/Volumes/Archive/library.toml'}:{name:'Research',path:'/Volumes/Archive/Research',location:'mac'});
+  });
+});
+
 test('Library proposal allows default setup and deliberate inline overrides', {skip}, async t => {
   const parent='/Users/test/Library/Application Support/Pharos/Libraries';
   const {page,calls}=await open(t,{url:'/app',ready:'#application-setup[open]',api:{

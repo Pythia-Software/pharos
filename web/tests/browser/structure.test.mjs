@@ -49,6 +49,7 @@ const askAPI = {
 };
 const askClarificationSession={...askSession,conversation:[{...askSession.conversation[0],status:'clarification',cards:[],reply:'',clarification:{question:'By “use”, do you mean model tokens, API cost equivalent, or something else?',options:['Model tokens','API cost equivalent']}}]};
 const ROUTES = [
+  ...['overview','open','create'].map(kind=>({name:'Library settings '+kind,url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:{id:'local',name:'Pending history with a long library name',config:'/Users/test/Libraries/Pending/library.toml'},...(kind==='overview'?{}:{open:page=>page.locator(kind==='open'?'#library-settings-open':'#library-settings-new').click(),shown:'#library-settings-'+kind+'-form:not([hidden])'})})),
   {name:"Application first launch",url:"/app",ready:"#application-setup[open]",api:{"GET /api/app/state":{application:"/Applications/Pharos.app",selected:"",mcp:"",busy:false,libraries:[]}}},
   ...["about","machines","storage","details","review"].map(step=>({name:`Application introduction ${step}`,url:"/app",ready:"#application-setup[open]",api:{"GET /api/app/state":{application:"/Applications/Pharos.app",selected:"",mcp:"",busy:false,libraries:[]}},open:async page=>{
     await page.locator('#meet-pharos').click();
@@ -60,7 +61,13 @@ const ROUTES = [
     await page.locator('#submit').click();
     if(step==='review')await page.locator('#submit').click();
   },shown:step==='about'?'#about-pharos:not([hidden])':`#wizard-${step}:not([hidden])`})),
-  {name:"Application library chooser",url:"/app",ready:"#library-list .card"},
+  {name:"Application library chooser",url:"/app",ready:"#library-list .card",check:async page=>{
+    const widths=await page.locator('#application-intro').evaluate(intro=>({
+      available:intro.getBoundingClientRect().width,
+      copy:intro.querySelector('.setup-copy').getBoundingClientRect().width,
+    }));
+    assert.ok(widths.copy>widths.available*.8,'the library introduction leaves an unused artwork column');
+  }},
   ...['tools','other','none','locations','custom','review','empty'].map(step=>({name:`Application sources ${step}`,url:'/app',ready:'#application-setup[open]',api:{
     'GET /api/app/state':{application:'/Applications/Pharos.app',selected:'',mcp:'',busy:false,libraries:[]},
     'POST /api/app/create':{saved:true},
@@ -752,7 +759,7 @@ describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY
     for (const viewport of WIDTHS) {
       const name = `${route.name} @ ${viewport.width}`;
       test(name, { skip }, async t => {
-        const app = await open(t, { url: route.url, viewport, ready: route.ready, preferences: route.preferences, concurrency: route.concurrency, api: route.api });
+        const app = await open(t, { url: route.url, viewport, ready: route.ready, preferences: route.preferences, concurrency: route.concurrency, managedLibrary: route.managedLibrary, api: route.api });
         if (route.open) {
           await route.open(app.page);
           await app.page.locator(route.shown).first().waitFor();
@@ -764,6 +771,7 @@ describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY
             return wrap && wrap.scrollWidth <= wrap.clientWidth + 1;
           });
         }
+        if (route.check) await route.check(app.page);
         await app.shot("top");
         const problems = await layoutProblems(app.page);
         if (!route.open) {

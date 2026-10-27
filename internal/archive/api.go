@@ -246,7 +246,7 @@ func (s *Server) authorized(r *http.Request) bool {
 // of which serves the single-page UI.
 func isUIPage(path string) bool {
 	switch path {
-	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/preferences", "/settings/ask", "/sources", "/activity", "/analyze", "/tools", "/tl1", "/tl1/configurations", "/tl1/followups", "/tl1/quality", "/tl1/runs", "/health", "/mcp", "/findings":
+	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/preferences", "/settings/ask", "/sources", "/activity", "/analyze", "/tools", "/tl1", "/tl1/configurations", "/tl1/followups", "/tl1/quality", "/tl1/runs", "/health", "/mcp", "/findings":
 		return true
 	}
 	return strings.HasPrefix(path, "/work/")
@@ -254,22 +254,24 @@ func isUIPage(path string) bool {
 
 // uiAssets maps each static asset URL the UI loads to its file under assets/.
 var uiAssets = map[string]struct{ name, contentType string }{
-	"/assets/query-tables.js":    {"query-tables.js", "text/javascript; charset=utf-8"},
-	"/assets/query-tables.css":   {"query-tables.css", "text/css; charset=utf-8"},
-	"/assets/onboarding.js":      {"onboarding.js", "text/javascript; charset=utf-8"},
-	"/assets/upgrade.js":         {"upgrade.js", "text/javascript; charset=utf-8"},
-	"/assets/library.js":         {"library.js", "text/javascript; charset=utf-8"},
-	"/assets/cloud-backup.js":    {"cloud-backup.js", "text/javascript; charset=utf-8"},
-	"/assets/sync.js":            {"sync.js", "text/javascript; charset=utf-8"},
-	"/assets/carbon.js":          {"carbon.js", "text/javascript; charset=utf-8"},
-	"/assets/menu-bar.js":        {"menu-bar.js", "text/javascript; charset=utf-8"},
-	"/assets/header.js":          {"header.js", "text/javascript; charset=utf-8"},
-	"/assets/ask-pharos.html":    {"ask-pharos.html", "text/html; charset=utf-8"},
-	"/assets/ask-pharos.css":     {"ask-pharos.css", "text/css; charset=utf-8"},
-	"/assets/ask-model.js":       {"ask-model.js", "text/javascript; charset=utf-8"},
-	"/assets/ask-pharos.js":      {"ask-pharos.js", "text/javascript; charset=utf-8"},
-	"/assets/reader-model.js":    {"reader-model.js", "text/javascript; charset=utf-8"},
-	"/assets/managed-storage.js": {"managed-storage.js", "text/javascript; charset=utf-8"},
+	"/assets/query-tables.js":     {"query-tables.js", "text/javascript; charset=utf-8"},
+	"/assets/query-tables.css":    {"query-tables.css", "text/css; charset=utf-8"},
+	"/assets/onboarding.js":       {"onboarding.js", "text/javascript; charset=utf-8"},
+	"/assets/upgrade.js":          {"upgrade.js", "text/javascript; charset=utf-8"},
+	"/assets/library.js":          {"library.js", "text/javascript; charset=utf-8"},
+	"/assets/cloud-backup.js":     {"cloud-backup.js", "text/javascript; charset=utf-8"},
+	"/assets/sync.js":             {"sync.js", "text/javascript; charset=utf-8"},
+	"/assets/carbon.js":           {"carbon.js", "text/javascript; charset=utf-8"},
+	"/assets/menu-bar.js":         {"menu-bar.js", "text/javascript; charset=utf-8"},
+	"/assets/header.js":           {"header.js", "text/javascript; charset=utf-8"},
+	"/assets/ask-pharos.html":     {"ask-pharos.html", "text/html; charset=utf-8"},
+	"/assets/ask-pharos.css":      {"ask-pharos.css", "text/css; charset=utf-8"},
+	"/assets/ask-model.js":        {"ask-model.js", "text/javascript; charset=utf-8"},
+	"/assets/ask-pharos.js":       {"ask-pharos.js", "text/javascript; charset=utf-8"},
+	"/assets/reader-model.js":     {"reader-model.js", "text/javascript; charset=utf-8"},
+	"/assets/managed-storage.js":  {"managed-storage.js", "text/javascript; charset=utf-8"},
+	"/assets/managed-library.js":  {"managed-library.js", "text/javascript; charset=utf-8"},
+	"/assets/managed-library.css": {"managed-library.css", "text/css; charset=utf-8"},
 }
 
 func (s *Server) get(w http.ResponseWriter, r *http.Request) {

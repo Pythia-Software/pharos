@@ -526,6 +526,82 @@ func TestApplicationMCPConnectionAndLateResponse(t *testing.T) {
 }
 
 func TestApplicationSetupWithoutLibrary(t *testing.T) {
+	t.Run("switch and open preserve the MCP assignment", func(t *testing.T) {
+		a, b := lifecycleLibraries(t)
+		application := filepath.Join(t.TempDir(), "Pharos.app")
+		app, err := newApplicationManager(t.Context(), application)
+		if err != nil {
+			t.Fatal(err)
+		}
+		first, err := app.registry.register(a, "Local history")
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := app.registry.register(b, "Archive")
+		if err != nil {
+			t.Fatal(err)
+		}
+		app.registry.Selected = first
+		app.children[second] = &applicationChild{done: make(chan struct{})}
+		request := func(action string, body map[string]any) *httptest.ResponseRecorder {
+			w := httptest.NewRecorder()
+			app.api(w, httptest.NewRequest(http.MethodPost, "/api/app/"+action, strings.NewReader(jsonText(body))))
+			return w
+		}
+		if w := request("connect", map[string]any{"id": second}); w.Code != http.StatusOK || app.registry.Selected != second {
+			t.Fatal("switch failed", w.Body.String())
+		}
+		if w := request("connect", map[string]any{"id": "missing"}); w.Code == http.StatusOK || app.registry.Selected != second {
+			t.Fatal("failed switch lost the selected library", w.Body.String())
+		}
+		if w := request("open", map[string]any{"path": filepath.Dir(a.Path)}); w.Code != http.StatusOK || app.registry.Selected != first || len(app.registry.Libraries) != 2 {
+			t.Fatal("opening a known library duplicated it or failed to select it", w.Body.String())
+		}
+		if w := request("create", map[string]any{"name": "Research", "path": filepath.Join(t.TempDir(), "Research"), "location": "mac"}); w.Code != http.StatusOK || len(app.registry.Libraries) != 3 || app.registry.Selected == first {
+			t.Fatal("creating another library failed", w.Body.String())
+		}
+		saved, err := loadInstallation(application)
+		if err != nil || saved.Selected != app.registry.Selected || saved.MCP != first {
+			t.Fatal("selection did not persist independently of MCP", saved, err)
+		}
+		app.busy = true
+		for _, action := range []string{"create", "open", "connect"} {
+			w := request(action, map[string]any{"name": "Blocked", "path": filepath.Dir(b.Path), "id": second})
+			if w.Code != http.StatusConflict || app.registry.Selected != saved.Selected || len(app.registry.Libraries) != 3 {
+				t.Fatal("an active operation allowed changing libraries", action, w.Body.String())
+			}
+		}
+	})
+	t.Run("managed pages expose library controls", func(t *testing.T) {
+		a, _ := lifecycleLibraries(t)
+		app, err := newApplicationManager(t.Context(), filepath.Join(t.TempDir(), "Pharos.app"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, err := app.registry.register(a, `History </script><script>bad()</script>`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		app.registry.Selected = id
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { writeHTML(w, appHTML()) }))
+		defer server.Close()
+		app.children[id] = &applicationChild{done: make(chan struct{}), endpoint: applicationEndpoint{URL: server.URL}}
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/settings/libraries", nil)
+		r.Header.Set("Authorization", "Bearer "+app.token)
+		app.ServeHTTP(w, r)
+		body := w.Body.String()
+		if w.Code != http.StatusOK || !strings.Contains(body, "window.pharosManagedLibrary=") || !strings.Contains(body, "/assets/managed-library.js") || !strings.Contains(body, `data-settings-route="/settings/libraries"`) || strings.Contains(body, "<script>bad()") {
+			t.Fatal("managed page omitted library controls or embedded an unsafe name", w.Code)
+		}
+		w = httptest.NewRecorder()
+		r = httptest.NewRequest(http.MethodGet, "/api/share?id=work", nil)
+		r.Header.Set("Authorization", "Bearer "+app.token)
+		app.ServeHTTP(w, r)
+		if w.Code != http.StatusOK || w.Body.String() != appHTML() {
+			t.Fatal("HTML exports received this Mac's library controls or metadata")
+		}
+	})
 	t.Run("unavailable initial library leaves chooser available", func(t *testing.T) {
 		for _, kind := range []string{"missing", "newer"} {
 			t.Run(kind, func(t *testing.T) {
@@ -677,7 +753,7 @@ func TestApplicationSetupWithoutLibrary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"/app", "/assets/query-tables.css", "/assets/ask-pharos.css"} {
+	for _, path := range []string{"/app", "/assets/query-tables.css", "/assets/ask-pharos.css", "/assets/managed-library.js", "/assets/managed-library.css"} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		response := httptest.NewRecorder()
 		m.ServeHTTP(response, request)

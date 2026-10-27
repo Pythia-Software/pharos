@@ -1,0 +1,29 @@
+#librarySettings{max-width:900px}
+#librarySettings[hidden],#librarySettings [hidden]{display:none!important}
+.library-settings-card{margin:0 0 14px;padding:20px;border:1px solid var(--line);border-radius:10px;background:var(--panel);min-width:0}
+.library-settings-card h3{margin:0;font:600 var(--fs-lg)/1.3 var(--serif)}
+.library-settings-card p{margin:8px 0}
+.library-settings-card p:last-child{margin-bottom:0}
+.library-settings-current{border-color:var(--gold)}
+.library-settings-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.library-settings-heading h3{overflow-wrap:anywhere;min-width:0}
+.library-settings-heading .tag{font-size:var(--fs-xs);color:var(--muted)}
+.library-settings-path{font:var(--fs-xs)/1.6 ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere;color:var(--muted)}
+.library-settings-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:14px 0}
+.library-settings-actions:last-child{margin-bottom:0}
+.library-settings-actions a{color:var(--accent)}
+.library-settings-form fieldset,.library-settings-mcp fieldset{border:0;padding:0;margin:0;min-width:0;display:flex;flex-direction:column;gap:8px}
+.library-settings-form label,.library-settings-mcp label{font-weight:600;margin-top:8px}
+#librarySettings input,#librarySettings select{width:100%;min-width:0;box-sizing:border-box}
+.library-settings-folder{display:flex;align-items:center;gap:10px}
+.library-settings-folder input{flex:1}
+.library-settings-folder button{flex:none}
+.library-settings-destination{display:flex;flex-direction:column;gap:4px;padding:12px;background:var(--bg);border-radius:6px;font-size:var(--fs-sm)}
+.library-settings-destination output{font-family:ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere}
+.library-settings-list-heading{margin-top:28px}
+#library-settings-status{white-space:pre-wrap;overflow-wrap:anywhere}
+#library-settings-status:empty{display:none}
+#library-settings-status.error,.library-settings-card .error{color:var(--bad)}
+.library-settings-mcp{margin-top:24px}
+.library-settings-mcp summary{cursor:pointer;font-weight:600}
+@media(max-width:600px){.library-settings-card{padding:14px}.library-settings-folder{align-items:stretch;flex-direction:column}.library-settings-folder button{align-self:flex-start}}

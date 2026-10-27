@@ -92,7 +92,14 @@ function serve(routes, state, record) {
     if (!path.startsWith("/api/")) {
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
       if (path === "/app") return response.end(applicationHTML());
-      return response.end(state.concurrency ? html.replace("<html", "<html data-concurrency-prototype") : html);
+      let page = state.concurrency ? html.replace("<html", "<html data-concurrency-prototype") : html;
+      if (state.managedLibrary) {
+        page = page.replace('<head>', '<head><script>window.pharosManagedLibrary='+JSON.stringify(state.managedLibrary).replace(/</g, '\\u003c')+';</script>')
+          .replace('<div id="settingsContent" class="settings-content">', '<div id="settingsContent" class="settings-content">'+asset('managed-library.html'))
+          .replace('</head>', '<link rel="stylesheet" href="/assets/managed-library.css"></head>')
+          .replace('</body>', '<script src="/assets/managed-library.js"></script></body>');
+      }
+      return response.end(page);
     }
     const chunks = [];
     // The context can close mid-request when the test ends; drop that request.
@@ -132,8 +139,8 @@ let shotCount = 0;
 // Returns the page, `settled`, `shot(name)` (a screenshot, only when
 // PHAROS_UI_SCREENSHOTS is set), `problems()` (what will fail the test when
 // it ends) and the API `calls` made so far.
-export async function open(t, { url = "/", viewport = { width: 1440, height: 900 }, api = {}, preferences = {}, concurrency = false, ready } = {}) {
-  const state = { concurrency, preferences: { "pharos-theme": "dark", ...preferences }, unexpected: [], stubErrors: [] };
+export async function open(t, { url = "/", viewport = { width: 1440, height: 900 }, api = {}, preferences = {}, concurrency = false, managedLibrary = null, ready } = {}) {
+  const state = { concurrency, managedLibrary, preferences: { "pharos-theme": "dark", ...preferences }, unexpected: [], stubErrors: [] };
   const errors = [], failed = [], calls = [], inflight = new Set();
   let wake = () => {};
   const routes = [...routeTable(api), ...routeTable(defaultApi)];
