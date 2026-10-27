@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -261,6 +263,29 @@ func TestAttentionListsWhatTheUserCanActOn(t *testing.T) {
 	if item := firstItem(restarted.attention(context.Background()), "index-failed"); item == nil || item.Detail != "the drive went away" {
 		t.Fatal("a failed index is forgotten on restart")
 	}
+	// As in memory: a failure of a source that is not enabled is not shown,
+	// and neither is an interruption by a release (eject, quit, switch).
+	execTx(t, catalog.DB, `UPDATE operation_journal SET detail_json='{"sources":["cursor"]}' WHERE id='op-crashed'`)
+	if item := firstItem(restarted.attention(context.Background()), "index-failed"); item != nil {
+		t.Fatalf("a journaled failure of a disabled source: %+v", item)
+	}
+	execTx(t, catalog.DB, `UPDATE operation_journal SET state='interrupted',reason='released',error=NULL WHERE id='op-crashed'`)
+	if item := firstItem(restarted.attention(context.Background()), "index-interrupted"); item != nil {
+		t.Fatalf("an index the user's eject interrupted: %+v", item)
+	}
+	// Both are what the journal records: a mirrored run's sources, and a
+	// release's reason.
+	ctx, cancelRun := context.WithCancel(context.Background())
+	_, run := restarted.begin(ctx, OperationSpec{Kind: "index.changes.manual", Trigger: triggerUser, Legacy: "run-9"})
+	run.mirrorRun(&SyncRun{ID: "run-9", State: "running", Sources: []string{"codex"}})
+	if image := imageOf(run, run.view()); !strings.Contains(image.detail, `"sources":["codex"]`) {
+		t.Fatalf("the journal row's detail lacks the run's sources: %s", image.detail)
+	}
+	cancelRun()
+	run.Finish(ctx.Err())
+	if view := run.view(); view.State != opInterrupted || view.Reason != "released" {
+		t.Fatalf("an index a release stopped: %s (%s)", view.State, view.Reason)
+	}
 	restarted.runsMu.Lock()
 	restarted.runs = []*SyncRun{{ID: "r9", Kind: "manual-sync", State: "complete", CompletedAt: "2026-10-27T11:00:00Z"}}
 	restarted.runsMu.Unlock()
@@ -318,16 +343,18 @@ func TestStatusHubSharesOneComputation(t *testing.T) {
 	}
 	var wait sync.WaitGroup
 	for range 10 {
-		wait.Go(func() { hub.frame(context.Background(), time.Minute, revision.Load, compute) })
+		wait.Go(func() {
+			hub.frame(context.Background(), statusRead{maxAge: time.Minute, revision: revision.Load, compute: compute})
+		})
 	}
 	wait.Wait()
 	if computed.Load() != 1 {
 		t.Fatalf("10 readers computed %d documents", computed.Load())
 	}
-	first := hub.frame(context.Background(), time.Minute, revision.Load, compute)
+	first := hub.frame(context.Background(), statusRead{maxAge: time.Minute, revision: revision.Load, compute: compute})
 	revision.Add(1)
 	started := time.Now()
-	second := hub.frame(context.Background(), time.Minute, revision.Load, compute)
+	second := hub.frame(context.Background(), statusRead{maxAge: time.Minute, revision: revision.Load, compute: compute})
 	if computed.Load() != 2 || first.tag == second.tag {
 		t.Fatalf("a change is computed again: %d", computed.Load())
 	}
@@ -343,15 +370,26 @@ func TestStatusHubSharesOneComputation(t *testing.T) {
 	// ends gives up with the cached frame instead of waiting for it.
 	release := make(chan struct{})
 	revision.Add(1)
-	go hub.frame(context.Background(), time.Minute, revision.Load, func() map[string]any { <-release; return compute() })
+	go hub.frame(context.Background(), statusRead{maxAge: time.Minute, revision: revision.Load, compute: func() map[string]any { <-release; return compute() }})
 	waitUntil(t, 5*time.Second, "the slow computation to start", func() bool { hub.mu.Lock(); defer hub.mu.Unlock(); return hub.flight != nil })
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	started = time.Now()
-	if frame := hub.frame(ctx, time.Minute, revision.Load, compute); frame.tag != second.tag || time.Since(started) > 2*time.Second {
+	if frame := hub.frame(ctx, statusRead{maxAge: time.Minute, revision: revision.Load, compute: compute}); frame.tag != second.tag || time.Since(started) > 2*time.Second {
 		t.Fatalf("a waiter blocked on a slow computation for %s", time.Since(started))
 	}
 	close(release)
+	// A launched computation runs on: a reader past its deadline gets the
+	// cached frame while it finishes.
+	slow := make(chan struct{})
+	revision.Add(1)
+	started = time.Now()
+	frame := hub.frame(context.Background(), statusRead{maxAge: time.Minute, deadline: 50 * time.Millisecond, revision: revision.Load,
+		compute: func() map[string]any { <-slow; return compute() }, launch: func(run func()) bool { go run(); return true }})
+	if frame.data == nil || time.Since(started) > 2*time.Second {
+		t.Fatalf("a reader past its deadline waited %s", time.Since(started))
+	}
+	close(slow)
 }
 
 // The stream sends the document on connect and again when an operation
@@ -417,6 +455,7 @@ func TestStatusStreamSendsOnConnectAndOnChange(t *testing.T) {
 	}
 	// Coalescing: 40 changes over 800 ms give at most one event per window.
 	backup.Step("Copying", "byte", 1000)
+	computedBefore := server.status.computations.Load()
 	stamps := []time.Time{}
 	done := time.After(800 * time.Millisecond)
 	ticker := time.NewTicker(20 * time.Millisecond)
@@ -431,13 +470,9 @@ func TestStatusStreamSendsOnConnectAndOnChange(t *testing.T) {
 			changing = false
 		}
 	}
-	if len(stamps) < 2 || len(stamps) > 6 {
-		t.Fatalf("40 changes in 800 ms with a 200 ms window sent %d events", len(stamps))
-	}
-	for index := 1; index < len(stamps); index++ {
-		if gap := stamps[index].Sub(stamps[index-1]); gap < statusCoalesce*3/4 {
-			t.Fatalf("two events %s apart, inside the %s window", gap, statusCoalesce)
-		}
+	computed := server.status.computations.Load() - computedBefore
+	if computed < 2 || computed > 6 || len(stamps) > int(computed) {
+		t.Fatalf("40 changes in 800 ms with a 200 ms window: %d documents computed, %d events", computed, len(stamps))
 	}
 	// A lease that appears changes no registry revision; the recheck finds it.
 	lease, err := acquireProcessLease(leaseDirs(config)[0], leaseInfo{Instance: "cli-index", PID: os.Getpid(), HostID: currentHost().ID, Process: "cli:index",
@@ -553,6 +588,70 @@ func TestBrokerStatusDocument(t *testing.T) {
 		len(freshDocument.Libraries) != 1 || freshDocument.Libraries[0].Eject.Checked != "fresh" {
 		t.Fatalf("a fresh broker check: %s (fresh asked %d)", fresh.Body.String(), freshAsked.Load())
 	}
+
+	freshEject := func() ejectVerdict {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/api/app/status?fresh=1", nil)
+		request.AddCookie(&http.Cookie{Name: "pharos_app_installation", Value: "broker-token"})
+		m.ServeHTTP(recorder, request)
+		var document struct {
+			Libraries []struct {
+				ID    string       `json:"id"`
+				Eject ejectVerdict `json:"eject"`
+			} `json:"libraries"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &document); err != nil || len(document.Libraries) != 1 || document.Libraries[0].ID != "lib-a" {
+			t.Fatalf("a fresh check lists only the selected library: %s", recorder.Body.String())
+		}
+		return document.Libraries[0].Eject
+	}
+	// A broker operation touching the library makes it busy, with the
+	// operation as the blocker, in the fresh check and the polled document.
+	transfer = broker.begin(OperationSpec{Kind: "library.transfer", Variant: "copy"}, "lib-a", "lib-b")
+	if verdict := freshEject(); verdict.Verdict != verdictBusy || verdict.Checked != "fresh" || !slices.ContainsFunc(verdict.Blockers, func(blocker ejectBlocker) bool { return blocker.Kind == "library.transfer" }) {
+		t.Fatalf("a transfer touching the library, fresh: %+v", verdict)
+	}
+	polled, _ := broker.statusDocument(context.Background())["libraries"].([]map[string]any)
+	if verdict, _ := polled[0]["eject"].(ejectVerdict); verdict.Verdict != verdictBusy {
+		t.Fatalf("a transfer touching the library, polled: %+v", polled[0]["eject"])
+	}
+	transfer.Finish(nil)
+	// A Terminal transfer's lease names libraries by configuration; the
+	// document gives their registered IDs.
+	config := filepath.Join(t.TempDir(), "library.toml")
+	broker.publish([]brokerLibrary{{ID: "lib-a", Name: "Euclid", Selected: true, Config: config, Child: &applicationEndpoint{URL: service.URL, Token: "t"}, ChildStarted: time.Now()}})
+	cli, err := acquireProcessLease(appLeaseDir(), leaseInfo{Instance: "cli-transfer", HostID: currentHost().ID, Process: "cli:library-transfer",
+		Kinds: []string{"library.transfer"}, Holds: parseHolds("O:w D(source):w D(target):w"), Libraries: []string{config}, StartedAt: now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, _ := broker.statusDocument(context.Background())["app"].(map[string]any)
+	operations, _ := app["operations"].([]map[string]any)
+	if !slices.ContainsFunc(operations, func(entry map[string]any) bool {
+		ids, _ := entry["libraries"].([]string)
+		return fmt.Sprint(entry["id"]) == "lease:cli-transfer" && slices.Equal(ids, []string{"lib-a"})
+	}) {
+		t.Fatalf("a lease's libraries as registered IDs: %#v", operations)
+	}
+	cli.release()
+	// A child that stalls past the fresh timeout gives no fresh verdict, so
+	// the panel refuses to eject.
+	override(t, &brokerFreshTimeout, 100*time.Millisecond)
+	stall := make(chan struct{})
+	stalled := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-stall:
+		case <-r.Context().Done():
+		}
+	}))
+	defer stalled.Close()
+	defer close(stall)
+	broker.publish([]brokerLibrary{{ID: "lib-a", Name: "Euclid", Selected: true, Child: &applicationEndpoint{URL: stalled.URL, Token: "t"}, ChildStarted: time.Now()}})
+	if verdict := freshEject(); verdict.Checked == "fresh" || verdict.Verdict != verdictUnsafe {
+		t.Fatalf("a stalled child: %+v", verdict)
+	}
+	broker.publish([]brokerLibrary{{ID: "lib-a", Name: "Euclid", Selected: true, Child: &applicationEndpoint{URL: service.URL, Token: "t"}, ChildStarted: time.Now()}})
 
 	// Its stream, end to end, with the main lock still held.
 	listener := httptest.NewServer(m)

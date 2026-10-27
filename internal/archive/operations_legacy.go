@@ -1,5 +1,7 @@
 package archive
 
+import "slices"
+
 // Dual-write (docs/background-work.md §2.3): the existing run records stay
 // exactly as they are, and the registry follows them. A SyncRun linked to an
 // operation mirrors each update into it (updateRun), so the operation's step
@@ -53,6 +55,14 @@ func (op *Op) mirrorRun(run *SyncRun) {
 	}
 	forecast := run.operation
 	stop := run.StopRequested && run.State == "running"
+	if op.lock() {
+		if !slices.Equal(op.sources, run.Sources) {
+			op.sources = slices.Clone(run.Sources)
+			op.unlock(false)
+		} else {
+			op.reg.mu.Unlock()
+		}
+	}
 	if run.State != "running" {
 		op.legacyOutcome(run.State, run.Error)
 		return

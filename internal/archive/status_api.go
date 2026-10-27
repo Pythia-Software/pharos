@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -93,12 +94,16 @@ type statusHub struct {
 	data []byte
 	// at is when the cached document's computation started, so an age
 	// limit equal to a reader's period is not missed by the time the
-	// computation took.
-	at       time.Time
-	revision uint64
+	// computation took; published is when it was stored, which the
+	// coalescing window counts from, so two documents are never published
+	// less than statusCoalesce apart.
+	at, published time.Time
+	revision      uint64
 	// flight is the computation in progress, shared by every reader that
 	// arrives while it runs.
 	flight *statusFlight
+	// computations counts documents computed, for tests.
+	computations atomic.Int64
 }
 
 type statusFlight struct {
@@ -112,43 +117,81 @@ type statusFrame struct {
 	data []byte
 }
 
-// frame returns the latest document, computing it only when revision
-// changed since or it is older than maxAge, and never more often than once
-// per statusCoalesce. The computation runs outside the hub's lock, one at a
-// time: a reader that arrives while one runs waits for it (or gives up with
-// the cached frame when its own request ends).
-func (hub *statusHub) frame(ctx context.Context, maxAge time.Duration, revision func() uint64, compute func() map[string]any) statusFrame {
+// statusRead is how a reader asks the hub for a frame.
+type statusRead struct {
+	// maxAge is the oldest cached document the reader accepts.
+	maxAge time.Duration
+	// deadline, when set, is the longest a reader that has a cached
+	// document waits for a new one; past it the cached one is returned.
+	deadline time.Duration
+	revision func() uint64
+	compute  func() map[string]any
+	// launch, when set, runs the computation in the background, so a
+	// reader past its deadline can return while it finishes; it reports
+	// false to have it run on the reader's goroutine instead.
+	launch func(func()) bool
+}
+
+// frame returns the latest document, computing it only when the revision
+// changed since or it is older than maxAge, and never publishing two less
+// than statusCoalesce apart. The computation runs outside the hub's lock,
+// one at a time: a reader that arrives while one runs waits for it, and
+// gives up with the cached frame when its request ends or its deadline
+// passes.
+func (hub *statusHub) frame(ctx context.Context, read statusRead) statusFrame {
 	for {
 		hub.mu.Lock()
-		current := revision()
+		current := read.revision()
 		cached := statusFrame{hub.tag, hub.data}
-		if hub.data != nil && hub.revision == current && time.Since(hub.at) < maxAge {
+		if hub.data != nil && hub.revision == current && time.Since(hub.at) < read.maxAge {
 			hub.mu.Unlock()
 			return cached
 		}
-		if flight := hub.flight; flight != nil {
+		flight := hub.flight
+		if flight == nil {
+			flight = &statusFlight{done: make(chan struct{})}
+			hub.flight = flight
+			published, cachedAny := hub.published, hub.data != nil
 			hub.mu.Unlock()
-			select {
-			case <-flight.done:
-				if flight.frame.data != nil && flight.revision >= current {
-					return flight.frame
-				}
-				continue
-			case <-ctx.Done():
-				return cached
+			run := func() { hub.run(flight, published, cachedAny, read) }
+			if read.launch == nil || !read.launch(run) {
+				run()
+			}
+		} else {
+			hub.mu.Unlock()
+		}
+		var expired <-chan time.Time
+		var timer *time.Timer
+		if read.deadline > 0 && cached.data != nil {
+			timer = time.NewTimer(read.deadline)
+			expired = timer.C
+		}
+		stop := func() {
+			if timer != nil {
+				timer.Stop()
 			}
 		}
-		flight := &statusFlight{done: make(chan struct{})}
-		hub.flight = flight
-		last, cachedAny := hub.at, hub.data != nil
-		hub.mu.Unlock()
-		return hub.run(flight, last, cachedAny, revision, compute)
+		select {
+		case <-flight.done:
+			stop()
+			if flight.frame.data != nil && flight.revision >= current {
+				return flight.frame
+			}
+			if flight.frame.data == nil && cached.data != nil {
+				return cached
+			}
+		case <-ctx.Done():
+			stop()
+			return cached
+		case <-expired:
+			return cached
+		}
 	}
 }
 
 // run is one computation: it waits out the coalescing window, computes,
 // and publishes the result to the flight's waiters and the cache.
-func (hub *statusHub) run(flight *statusFlight, last time.Time, cached bool, revision func() uint64, compute func() map[string]any) statusFrame {
+func (hub *statusHub) run(flight *statusFlight, published time.Time, cached bool, read statusRead) {
 	defer func() {
 		hub.mu.Lock()
 		if hub.flight == flight {
@@ -157,20 +200,25 @@ func (hub *statusHub) run(flight *statusFlight, last time.Time, cached bool, rev
 		hub.mu.Unlock()
 		close(flight.done)
 	}()
-	if wait := statusCoalesce - time.Since(last); cached && wait > 0 {
+	if wait := statusCoalesce - time.Since(published); cached && wait > 0 {
 		time.Sleep(wait)
 	}
 	started := time.Now()
-	current := revision()
-	document := compute()
+	current := read.revision()
+	hub.computations.Add(1)
+	document := read.compute()
 	data, _ := json.Marshal(document)
 	frame := statusFrame{statusTag(document), data}
 	hub.mu.Lock()
-	hub.tag, hub.data, hub.at, hub.revision = frame.tag, frame.data, started, current
+	hub.tag, hub.data, hub.at, hub.published, hub.revision = frame.tag, frame.data, started, time.Now(), current
 	flight.frame, flight.revision = frame, current
 	hub.mu.Unlock()
-	return frame
 }
+
+// statusReadDeadline is the longest a service's reader with a cached
+// document waits for a new one, below the broker's 2 s fetch timeout, so a
+// slow computation never makes the library look unreachable.
+var statusReadDeadline = 1500 * time.Millisecond
 
 // statusComputeTimeout bounds one computation of a service's document: a
 // slow drive or probe delays readers by at most this much.
@@ -180,11 +228,15 @@ var statusComputeTimeout = 5 * time.Second
 // on the service's lifetime, not the caller's request: the result is
 // shared, and a reader that leaves must not spoil it.
 func (s *Server) statusCurrent(ctx context.Context, maxAge time.Duration) statusFrame {
-	return s.status.frame(ctx, maxAge, s.ops.currentRevision, func() map[string]any {
-		compute, cancel := context.WithTimeout(s.life.ctx, statusComputeTimeout)
-		defer cancel()
-		return s.statusDocument(compute, false)
-	})
+	return s.status.frame(ctx, statusRead{maxAge: maxAge, deadline: statusReadDeadline, revision: s.ops.currentRevision,
+		compute: func() map[string]any {
+			compute, cancel := context.WithTimeout(s.life.ctx, statusComputeTimeout)
+			defer cancel()
+			return s.statusDocument(compute, false)
+		},
+		// Counted with the service's workers, as any catalog reader is, so a
+		// release waits for it and a vanished drive ends the process cleanly.
+		launch: func(run func()) bool { return s.spawn(func(context.Context) { run() }) }})
 }
 
 // serveFrame answers a GET of a snapshot with an ETag, or 304 when the

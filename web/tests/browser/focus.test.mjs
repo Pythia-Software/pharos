@@ -519,10 +519,24 @@ test("Unified activity panel holds focus across refreshes, stops each operation 
   await panel.getByRole("button", { name: "Check again", exact: true }).click();
   await page.waitForFunction(() => window.ejects === 1);
 
+  // A stop that fails leaves Stop enabled to try again; one that works
+  // keeps it disabled while the operations wind down.
+  // (The refusal is answered in the page, as a 409 from the service would
+  // be, so the harness does not count it as a failed request.)
+  await page.evaluate(() => {
+    const real = window.fetch;
+    window.fetch = (input, options) => String(input).includes("/api/operations/stop") && window.stopFails
+      ? Promise.resolve(new Response(JSON.stringify({ error: "try again in a moment" }), { status: 409 })) : real(input, options);
+    window.stopFails = true;
+  });
+  await stop.click();
+  await page.waitForFunction(() => !document.querySelector('#pharosStatusPanel [data-key="stop"]').disabled);
+  await page.evaluate(() => { window.stopFails = false; });
   await stop.click();
   await settled();
   const stopped = calls.filter(call => call.method === "POST" && call.path === "/api/operations/stop").map(call => call.body.id).sort();
   assert.deepEqual(stopped, ["op-backup", "op-index", "op-view"]);
+  assert.ok(await page.evaluate(() => document.querySelector('#pharosStatusPanel [data-key="stop"]').disabled), "Stop enabled again after it worked");
 });
 
 // With the flag off (the default) the old drive panel runs and nothing reads

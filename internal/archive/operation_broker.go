@@ -64,6 +64,11 @@ type brokerLibrary struct {
 	LeaseDirs []string
 }
 
+// brokerFreshTimeout bounds the eject check's request to the selected
+// library's service (a full lock check), inside the 10 s the broker gives
+// the whole check.
+var brokerFreshTimeout = 8 * time.Second
+
 type brokerOperations struct {
 	reg  *opRegistry
 	path string
@@ -278,18 +283,33 @@ func brokerOperationEntry(record brokerOperationRecord) map[string]any {
 // service being unreachable, which makes it unsafe.
 func brokerLibraryVerdict(own *ejectVerdict, records []brokerOperationRecord, library string, unreachable string, leases []leaseProbe) ejectVerdict {
 	in := verdictInput{unreachable: unreachable, leases: leases}
+	extra := computeEjectVerdict(in)
+	// Every running broker operation that touches the library (a transfer,
+	// a recovery, a delivery, its service starting) makes it at least busy,
+	// whatever its holds declare: the broker runs it and Pharos cannot stop
+	// it. A release is the eject itself, not a holder.
 	for _, record := range records {
-		if opTerminal(record.State) || !operationTouches(record, library) {
+		if opTerminal(record.State) || !operationTouches(record, library) || record.Kind == "library.release" {
 			continue
 		}
 		kind, ok := lookupOperationKind(record.Kind)
 		if !ok {
 			kind = operationKindIndex[unknownOperationKind]
 		}
-		in.ops = append(in.ops, opView{ID: OpID(record.ID), Root: OpID(record.ID), Kind: kind, State: record.State, Process: "broker",
-			Spec: OperationSpec{Kind: record.Kind, Variant: record.Variant, Holds: parseHolds(kind.Holds)}})
+		verdict := verdictBusy
+		if kind.Kind == unknownOperationKind {
+			verdict = verdictUnsafe
+		}
+		extra.Blockers = append(extra.Blockers, ejectBlocker{Operation: record.ID, Kind: record.Kind, Label: kind.label(record.Variant), OnEject: kind.OnEject,
+			Latency: kind.Latency, Verdict: verdict, Process: "broker"})
+		if verdictRank[verdict] > verdictRank[extra.Verdict] {
+			extra.Verdict, extra.ETASeconds = verdict, nil
+		}
 	}
-	extra := computeEjectVerdict(in)
+	sort.SliceStable(extra.Blockers, func(i, j int) bool {
+		return verdictRank[extra.Blockers[i].Verdict] > verdictRank[extra.Blockers[j].Verdict]
+	})
+	extra.Summary, extra.Headline = verdictSummary(extra), verdictHeadline(extra)
 	if own == nil {
 		return extra
 	}
@@ -325,13 +345,13 @@ func (b *brokerOperations) start(ctx context.Context) <-chan struct{} {
 
 // fetchServiceOperations asks a library's service for its snapshot at path
 // (/api/operations, or /api/status for the status document).
-func (b *brokerOperations) fetchServiceOperations(ctx context.Context, endpoint applicationEndpoint, path string) (map[string]any, error) {
+func (b *brokerOperations) fetchServiceOperations(ctx context.Context, client *http.Client, endpoint applicationEndpoint, path string) (map[string]any, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.URL+path, nil)
 	if err != nil {
 		return nil, err
 	}
 	request.Header.Set("Authorization", "Bearer "+endpoint.Token)
-	response, err := b.client.Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		return nil, err
 	}
@@ -353,16 +373,23 @@ func (b *brokerOperations) fetchServiceOperations(ctx context.Context, endpoint 
 // the broker's own operations and app-level leases: no child is asked, no
 // library's leases are read.
 func (b *brokerOperations) document(ctx context.Context, withLibraries bool) map[string]any {
-	return b.documentFrom(ctx, withLibraries, "/api/operations")
+	return b.documentFrom(ctx, withLibraries, "/api/operations", false)
 }
 
 // documentFrom is document, with each child's snapshot read from path.
-func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool, path string) map[string]any {
+// fresh is the eject check: only the selected library is asked, with the
+// longer timeout a full lock check may need.
+func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool, path string, fresh bool) map[string]any {
 	b.mu.Lock()
 	libraries := slices.Clone(b.libraries)
 	b.mu.Unlock()
 	if !withLibraries {
 		libraries = nil
+	}
+	client := b.client
+	if fresh {
+		libraries = slices.DeleteFunc(libraries, func(library brokerLibrary) bool { return !library.Selected })
+		client = &http.Client{Timeout: brokerFreshTimeout, Transport: b.client.Transport}
 	}
 	records := b.records()
 	snapshots := make([]map[string]any, len(libraries))
@@ -372,7 +399,9 @@ func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool,
 		if library.Child == nil {
 			continue
 		}
-		wait.Go(func() { snapshots[index], failures[index] = b.fetchServiceOperations(ctx, *library.Child, path) })
+		wait.Go(func() {
+			snapshots[index], failures[index] = b.fetchServiceOperations(ctx, client, *library.Child, path)
+		})
 	}
 	wait.Wait()
 	cutoff := time.Now().Add(-10 * time.Minute)
@@ -449,7 +478,19 @@ func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool,
 		}
 		kind := firstOf(probe.Info.Kinds)
 		entry := brokerOperationEntry(brokerOperationRecord{ID: "lease:" + probe.Info.Instance, Kind: kind, Trigger: triggerCLI, State: opRunning, StartedAt: probe.Info.StartedAt})
-		entry["process"], entry["libraries"] = probe.Info.Process, probe.Info.Libraries
+		// A lease names libraries by configuration; surfaces group by the
+		// registered IDs.
+		ids := []string{}
+		b.mu.Lock()
+		for _, path := range probe.Info.Libraries {
+			for _, library := range b.libraries {
+				if canonical(path) == canonical(library.Config) && !slices.Contains(ids, library.ID) {
+					ids = append(ids, library.ID)
+				}
+			}
+		}
+		b.mu.Unlock()
+		entry["process"], entry["libraries"], entry["library_configs"] = probe.Info.Process, ids, probe.Info.Libraries
 		entry["detail"] = "In another process (" + strings.Replace(probe.Info.Process, "cli:", "pharos ", 1) + ")"
 		app = append(app, entry)
 	}

@@ -40,6 +40,7 @@ var operationReasons = map[string]string{
 	"capture-busy":        "A capture was using it",
 	"stopping":            "Pharos was stopping",
 	"owner-exited":        "The process running it exited",
+	"released":            "Pharos released the library",
 	"panic":               "It stopped on an internal error",
 }
 

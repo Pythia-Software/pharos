@@ -181,11 +181,18 @@
   // when idle; grey before the first snapshot.
   function chipModel(view, {error = null} = {}) {
     const operations = currentOperations(view);
-    if (!view?.library && !operations.length) return {name: 'Library', dot: error?.status === 503 ? 'warn' : 'idle', state: 'unavailable', title: view?.service?.error || ''};
+    const attention = view?.attention || [];
+    const alert = attention.some(item => item.severity !== 'warning') ? 'bad' : attention.length ? 'warn' : '';
+    if (!view?.library && !operations.length) {
+      // No snapshot of the selected library, but the broker may say why
+      // ("… is not open"): its attention still sets the dot and tooltip.
+      const name = view?.service?.name || 'Library';
+      const status = attention[0]?.title || view?.service?.error || '';
+      return {name, dot: alert || (error?.status === 503 ? 'warn' : 'idle'), state: 'unavailable', title: status ? `${name}: ${status}` : ''};
+    }
     const name = driveName(view);
-    const attention = view.attention || [];
     const first = operations.find(operation => operation.priority !== 'background') || operations[0];
-    const dot = attention.some(item => item.severity !== 'warning') ? 'bad' : attention.length ? 'warn' : operations.length ? 'busy' : '';
+    const dot = alert || (operations.length ? 'busy' : '');
     const status = attention[0]?.title || (first ? lineText(operationLine(first)) : view.library?.eject?.headline || view.library?.eject?.summary || '');
     return {name, dot, state: operations.length ? 'busy' : 'idle', title: status ? `${name}: ${status}` : name};
   }
@@ -262,9 +269,14 @@
     for (const target of targets) {
       try {
         const response = await fetch(target.path, {method: target.method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(target.body)});
-        if (!response.ok) toast((await response.json().catch(() => ({}))).error || response.statusText);
-      } catch (error) { toast(error.message); }
+        if (!response.ok) {
+          // Not stopped: let the user try again.
+          stopRequested.delete(target.id);
+          toast((await response.json().catch(() => ({}))).error || response.statusText);
+        }
+      } catch (error) { stopRequested.delete(target.id); toast(error.message); }
     }
+    render();
     window.pharosStatusStore?.refresh();
   }
 

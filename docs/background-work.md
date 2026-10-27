@@ -983,12 +983,18 @@ every 2 s without a registry change (leases, attention and lock evidence
 change without one) and sends only a document whose content changed.
 **One computation:** every reader of a service (each stream and each GET)
 shares one cached document, computed at most once per 500 ms, outside the
-hub's lock and one at a time, on the service's lifetime with a 5 s limit;
-a reader whose request ends stops waiting. The cost does not grow with
+hub's lock and one at a time, in the background on the service's lifetime
+with a 5 s limit. A reader that has a cached document waits at most 1.5 s
+(below the broker's 2 s fetch timeout) and then gets the cached one; a
+reader whose request ends stops waiting. The 500 ms window counts from when
+the last document was published. The cost does not grow with
 the number of pages. Change detection ignores every `generated_at`,
 nested ones included.
 **Polling fallback:** `GET /api/status` with `If-None-Match: <ETag>` returns
-304 when unchanged. The client store polls every 5 s once the stream fails,
+304 when unchanged (the store's tag is the last document it showed, from
+a poll or a stream event's `id`). A refresh after an action (Stop) is one
+fetch that schedules nothing while the stream is open. The client store
+polls every 5 s once the stream fails,
 tries the stream again after 30 s of polling, and holds neither a stream
 nor a poll while the page is hidden.
 
@@ -1021,11 +1027,15 @@ any change to its own registry, rather than holding a stream to each
 child; its readers share one document as a service's do. In the app the
 page reads the broker's stream; the reverse proxy passes a child's
 `/api/status/stream` through unbuffered. Neither endpoint takes the
-broker's main lock. `GET /api/app/status?fresh=1` asks every library's
-service for `/api/status?fresh=1` at that moment and bypasses the shared
-document; the panel's Eject in the app acts only on it, for the selected
-library, and refuses when it is missing or not fresh. Each library entry
-has a `state_label` (the verb of a broker operation touching it, else
+broker's main lock. `GET /api/app/status?fresh=1` asks only the selected
+library's service for `/api/status?fresh=1`, at that moment, with an 8 s
+timeout inside the check's 10 s, and bypasses the shared document; the panel's Eject in the app acts only on it, for the selected
+library, and refuses when it is missing or not fresh. Each library's `eject` is the
+worse of its service's verdict and the broker's: every running broker
+operation that touches the library (other than the release itself) is a
+`busy` blocker, whatever its holds. Broker and lease operations name
+libraries by registered ID in `libraries` (a lease's configuration paths
+are in `library_configs`). Each library entry has a `state_label` (the verb of a broker operation touching it, else
 Open, Opening or Not open). The web panel shows running `app.operations`
 that touch the selected library on its Now row, and the rest under Other.
 It never opens a catalog
@@ -1058,6 +1068,11 @@ Phase 2 (`status_attention.go`): rules 1–7 are the service's, each item
 are left out while an index or capture runs, as the web rule does, and
 read the journal's latest ended top-level index row as well as this
 process's runs (the newer wins), so a restart or crash keeps the warning.
+The journal row applies the same filters: rule 3 only for a failure whose
+recorded sources (`detail_json.sources`) include an enabled one, or that
+has none recorded; rule 4 not for an interruption with reason `released`
+(the service stopped: a release before an eject, a quit, a switch), which
+is the user's doing, unlike `owner-exited` (a crash).
 Rule 8
 is split: the broker adds "<library> is not answering" (its service did not
 answer) and "<library> is not open" (selected, no service, not starting),
@@ -1116,7 +1131,9 @@ Blocked: `capture-running`, `ingest-busy` (another run holds the
 coordinator), `catalog-busy` (the writer, with retries), `destination-busy`,
 `waiting-for-drive`, `waiting-for-network`. Skipped: `already-running`,
 `nothing-to-do`, `disabled`, `capture-busy`, `deferred-to-<kind>`,
-`stopping`. Each code has one server-side sentence.
+`stopping`. Interrupted: `owner-exited` (its process died), `released`
+(the service stopped under it: a release, an eject, a quit). Each code has
+one server-side sentence.
 
 ## 9. Feature flag and rollout
 
@@ -1137,9 +1154,12 @@ the header chip, its panel and Index changes' state, and `library.js` and
 `sync.js` leave those alone; turning it off gives them back without a
 reload. `/api/menu-bar/status` carries `unified_activity`, and only when it
 is true does the native menu also poll the snapshot. The panel's Eject
-requests `/api/status?fresh=1` (in the app, the worse of that and the
-broker's verdict for the library) and acts only on that result: `safe`
-ejects, `safe-in` asks first and checks again, `busy` and `unsafe` refuse.
+requests `/api/status?fresh=1` and acts only on that result; in the app it
+requests `/api/app/status?fresh=1` instead and acts only on the broker's
+fresh verdict for the selected library (§7.2), refusing when that is
+missing, names another library or is not `checked: fresh`; it never acts
+on the library's own verdict there. `safe` ejects, `safe-in` asks first
+and checks again, `busy` and `unsafe` refuse.
 
 **Runs regardless, in shadow:** the registry, the journal, the broker's
 registry, the snapshot endpoints and streams, the freshness function, and

@@ -173,6 +173,19 @@ test("after the stream, a poll compares with what the stream last showed, so it 
   store.stop();
 });
 
+test("a refresh with the stream open is one fetch that schedules nothing", async () => {
+  const { createStore } = loadClassicScript("status-store.js").window.pharosStatusStore;
+  const fake = fakeBrowser({ answers: [{ status: 200, body: { revision: 5 } }] });
+  const store = createStore(fake.browser);
+  store.start();
+  await store.refresh();
+  assert.equal(fake.requests.length, 1);
+  assert.equal(fake.timers.size, 0, "a refresh started a polling feed beside the stream");
+  assert.equal(store.current().mode, "stream");
+  assert.equal(store.current().view.library.revision, 5);
+  store.stop();
+});
+
 test("a poll in flight while the page is hidden and shown again is dropped: one feed, never two", async () => {
   const { createStore } = loadClassicScript("status-store.js").window.pharosStatusStore;
   let release;

@@ -45,7 +45,7 @@ func (b *brokerOperations) statusDocumentChecked(ctx context.Context, fresh bool
 	if fresh {
 		path += "?fresh=1"
 	}
-	document := b.documentFrom(ctx, true, path)
+	document := b.documentFrom(ctx, true, path, fresh)
 	records := b.records()
 	attention := []attentionItem{}
 	entries, _ := document["libraries"].([]map[string]any)
@@ -138,12 +138,12 @@ func libraryStateLabel(state string, touched bool, records []brokerOperationReco
 
 // statusCurrent is the broker's latest document, shared among its readers.
 func (b *brokerOperations) statusCurrent(ctx context.Context, maxAge time.Duration) statusFrame {
-	return b.status.frame(ctx, maxAge, b.statusRevision, func() map[string]any {
+	return b.status.frame(ctx, statusRead{maxAge: maxAge, revision: b.statusRevision, compute: func() map[string]any {
 		// Bounded and detached from the asking request: the result is shared.
 		compute, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		return b.statusDocument(compute)
-	})
+	}})
 }
 
 func (b *brokerOperations) serveStatus(w http.ResponseWriter, r *http.Request) {

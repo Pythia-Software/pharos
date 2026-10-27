@@ -160,6 +160,9 @@ type Op struct {
 	// locks are the capture and index locks the operation has taken: a hold
 	// on each while its file stays open (§4.1, concrete holds).
 	locks []fileHold
+	// sources are the sources a mirrored index run covers, journaled so
+	// attention rule 3 can apply its enabled-source filter after a restart.
+	sources []string
 }
 
 // fileHold is a concrete hold an open lock file gives an operation.
@@ -844,6 +847,12 @@ func (op *Op) Finish(err error) {
 	default:
 		state, text = opFailed, err.Error()
 	}
+	// An interruption because the service stopped (a release before an
+	// eject, a quit, a switch) says so: it is the user's doing, unlike a
+	// crash (owner-exited), and attention rule 4 leaves it out.
+	if state == opInterrupted && reason == "" && op.ctx != nil && op.ctx.Err() != nil {
+		reason = "released"
+	}
 	op.finishLocked(state, reason, text)
 }
 
@@ -970,9 +979,11 @@ type opView struct {
 	Wrote         bool
 	UserStop      bool
 	DuringRelease bool
-	Children      []OpID
-	Forecast      *operationForecast
-	Version       uint64
+	// Sources are a mirrored index run's sources.
+	Sources  []string
+	Children []OpID
+	Forecast *operationForecast
+	Version  uint64
 	// Foreign is true for an operation another process owns (a lease).
 	Foreign bool
 	// Tentative is an unpublished daemon pass: the verdict counts it, the
@@ -987,7 +998,7 @@ func (op *Op) viewLocked() opView {
 	view := opView{ID: op.id, Root: op.root.id, Spec: op.spec, Locks: op.heldLocksLocked(), Kind: op.kind, Process: op.reg.process, Instance: op.reg.instance, State: op.state,
 		Reason: op.reason, Detail: op.detail, Error: op.errText, Started: op.started, Updated: op.updated, Ended: op.ended, Plan: slices.Clone(op.plan),
 		Step: op.step, SafePoint: op.safePoint, SafePointSet: op.safePointKnown, Wrote: op.wrote, UserStop: op.userStop,
-		DuringRelease: op.duringRelease, Forecast: op.forecast, Version: op.version, Tentative: op.tentative}
+		DuringRelease: op.duringRelease, Forecast: op.forecast, Version: op.version, Tentative: op.tentative, Sources: slices.Clone(op.sources)}
 	if op.parent != nil {
 		view.Parent = op.parent.id
 	}

@@ -196,6 +196,9 @@ func imageOf(op *Op, view opView) journalImage {
 	if view.Wrote {
 		detail["wrote"] = true
 	}
+	if len(view.Sources) > 0 {
+		detail["sources"] = view.Sources
+	}
 	data, _ := json.Marshal(detail)
 	image.detail = string(data)
 	return image

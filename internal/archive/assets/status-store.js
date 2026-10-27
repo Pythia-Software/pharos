@@ -178,8 +178,21 @@
       if (!response.ok) throw Object.assign(new Error(`HTTP ${response.status}`), {status: response.status});
       return await response.json();
     }
+    // refresh after an action (Stop): with the stream open, one fetch that
+    // changes no mode and schedules nothing; otherwise the next poll now.
+    async function refresh() {
+      if (!running) return;
+      if (!source) return poll();
+      const mine = generation;
+      try {
+        const response = await get(paths.poll, {});
+        if (!running || mine !== generation || !source || !response.ok) return;
+        const document = await response.json();
+        if (running && mine === generation && source) accept(document);
+      } catch { /* the stream carries on */ }
+    }
     return {
-      start, stop, visibility, fresh, refresh: poll,
+      start, stop, visibility, fresh, refresh,
       current: () => state,
       subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     };

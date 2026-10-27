@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
 	"strings"
 )
@@ -160,10 +161,16 @@ func (s *Server) attention(ctx context.Context) []attentionItem {
 		// process's latest run, and is not that same run.
 		if row, ok := s.Catalog.latestIndexRow(ctx); ok && (latest == nil || row.Legacy != latest.ID && endedAfter(row.EndedAt, firstString(latest.CompletedAt))) {
 			item = nil
-			switch row.State {
-			case opFailed:
+			var detail struct {
+				Sources []string `json:"sources"`
+			}
+			_ = json.Unmarshal(row.Detail, &detail)
+			switch {
+			case row.State == opFailed && relevantSources(detail.Sources):
 				item = &attentionItem{ID: "index-failed", Rule: 3, Severity: "error", Title: "The last index failed", Detail: row.Error, Action: openCaptureAndIndex}
-			case opInterrupted:
+			// A release (eject, quit, switch) is the user's doing; a crash or
+			// a dead process (owner-exited) is not.
+			case row.State == opInterrupted && row.Reason != "released":
 				item = &attentionItem{ID: "index-interrupted", Rule: 4, Severity: "warning", Title: "The last index was interrupted",
 					Detail: "What it wrote is kept; the next index resumes it.", Action: openCaptureAndIndex}
 			}

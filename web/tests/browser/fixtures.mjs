@@ -231,12 +231,16 @@ export const busyStatus = {
   ],
   attention: [{ id: "backup-failed", rule: 6, severity: "error", title: "The last backup failed", detail: "The destination drive is full: /Volumes/Backup Drive With A Long Name/Pharos Backup", action: { label: "Open Backups", path: "/settings/backups" } }],
 };
-// The broker's document, with two other libraries.
+// The broker's document, with two other libraries. A broker operation
+// touching a library makes its verdict busy, as the broker computes it.
+const copyBlocker = { operation: "op-copy", kind: "library.transfer", label: "Copy library", on_eject: "Not stoppable; eject of either drive must wait.", latency: "none", verdict: "busy", process: "broker" };
+const brokerBusy = eject => ({ ...eject, verdict: "busy", eta_seconds: null, headline: "Eject waits for copy library",
+  summary: "Eject waits for copy library, which cannot stop in time.", blockers: [copyBlocker, ...(eject.blockers || [])] });
 export const managedStatus = snapshot => ({
   version: 1, revision: 3, generated_at: iso(0),
   libraries: [
-    { id: "local", name: "Pending history", selected: true, connected: true, service: { state: "running" }, snapshot, eject: snapshot.eject, error: null },
-    { id: "archive", name: "Archive (Backup drive)", selected: false, connected: true, service: { state: "running" }, state_label: "Copying the library", eject: idleStatus.eject, error: null, snapshot: idleStatus },
+    { id: "local", name: "Pending history", selected: true, connected: true, service: { state: "running" }, state_label: "Copying the library", snapshot, eject: brokerBusy(snapshot.eject), error: null },
+    { id: "archive", name: "Archive (Backup drive)", selected: false, connected: true, service: { state: "running" }, state_label: "Copying the library", eject: brokerBusy(idleStatus.eject), error: null, snapshot: idleStatus },
     { id: "spare", name: "Spare", selected: false, connected: false, service: { state: "stopped" }, state_label: "Not open", snapshot: null, eject: idleStatus.eject, error: null },
   ],
   // As the broker reports its own work: in app.operations, naming the

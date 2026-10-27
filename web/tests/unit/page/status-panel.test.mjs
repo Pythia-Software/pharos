@@ -157,6 +157,10 @@ test("the chip's dot: attention first, then running work, then idle", () => {
   assert.equal(chip({ operations: [operation("a")] }, { attention: [{ severity: "error", title: "E" }] }).dot, "bad");
   assert.match(chip({}, { attention: [{ severity: "error", title: "E" }] }).title, /E/);
   assert.equal(plain(panel.chipModel(null)).state, "unavailable");
+  // No snapshot of the selected library, but the broker says why.
+  const notOpen = plain(panel.chipModel({ library: null, appOperations: [], attention: [{ severity: "error", title: "Euclid is not open" }], service: { name: "Euclid" } }));
+  assert.equal(notOpen.dot, "bad");
+  assert.match(notOpen.title, /Euclid is not open/);
   assert.equal(chip().name, "Euclid");
   assert.equal(chip({ library: { drive: { ejectable: false }, portable: false } }).name, "This Mac");
   assert.equal(chip({ library: { drive: { ejectable: false }, portable: true } }).name, "Library");
