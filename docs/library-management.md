@@ -27,6 +27,11 @@ source choices, saved views and preferences. MCP assignment is a separate,
 explicit choice in **Library used by MCP**. Creation, opening and switching
 wait until an active transfer or recovery finishes.
 
+For **Move or copy history**, **Capture locally, transfer later**, **Restore a
+backup**, or **Release library**, choose **Transfer, delivery, restore and
+release** under **Library operations** on the same Settings page. It opens the
+existing operations dialog while keeping switching and creation in Settings.
+
 ## Choose locations
 
 The setup guide asks, in order:

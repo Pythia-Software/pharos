@@ -61,7 +61,13 @@ const ROUTES = [
     await page.locator('#submit').click();
     if(step==='review')await page.locator('#submit').click();
   },shown:step==='about'?'#about-pharos:not([hidden])':`#wizard-${step}:not([hidden])`})),
-  {name:"Application library chooser",url:"/app",ready:"#library-list .card"},
+  {name:"Application library chooser",url:"/app",ready:"#library-list .card",check:async page=>{
+    const widths=await page.locator('#application-intro').evaluate(intro=>({
+      available:intro.getBoundingClientRect().width,
+      copy:intro.querySelector('.setup-copy').getBoundingClientRect().width,
+    }));
+    assert.ok(widths.copy>widths.available*.8,'the library introduction leaves an unused artwork column');
+  }},
   ...['tools','other','none','locations','custom','review','empty'].map(step=>({name:`Application sources ${step}`,url:'/app',ready:'#application-setup[open]',api:{
     'GET /api/app/state':{application:'/Applications/Pharos.app',selected:'',mcp:'',busy:false,libraries:[]},
     'POST /api/app/create':{saved:true},
@@ -765,6 +771,7 @@ describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY
             return wrap && wrap.scrollWidth <= wrap.clientWidth + 1;
           });
         }
+        if (route.check) await route.check(app.page);
         await app.shot("top");
         const problems = await layoutProblems(app.page);
         if (!route.open) {

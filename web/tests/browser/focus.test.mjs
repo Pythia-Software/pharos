@@ -130,6 +130,27 @@ test('Library settings opens inline forms and returns focus when cancelled', {sk
   }
 });
 
+test('Library settings keeps transfer, delivery, restore and release reachable while connected', {skip}, async t => {
+  const {page,shot}=await open(t,{url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:settingsLocal,api:{
+    'GET /api/app/state':settingsState,
+  }});
+  const operations=page.getByRole('link',{name:'Transfer, delivery, restore and release →',exact:true});
+  await operations.scrollIntoViewIfNeeded();await shot('operations-link');
+  await operations.click();
+  await page.locator('#library-list .card').first().waitFor();
+  await page.getByText('Move or copy history between libraries',{exact:true}).click();
+  await page.getByRole('button',{name:'Start verified transfer',exact:true}).waitFor();
+  await page.getByText('Capture locally, transfer later',{exact:true}).click();
+  await page.getByRole('button',{name:'Enable automatic delivery',exact:true}).waitFor();
+  const release=page.getByRole('button',{name:'Release library',exact:true});
+  await release.focus();
+  assert.ok(await release.evaluate(el=>el===document.activeElement));
+  await shot('operations');
+  await page.getByRole('button',{name:'Restore a backup',exact:true}).click();
+  await page.locator('#backup').waitFor();
+  assert.ok(await page.locator('#flow-title').evaluate(el=>el===document.activeElement));
+});
+
 test('Library settings switches within Settings and opens the selected library', {skip}, async t => {
   const {page,calls}=await open(t,{url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:settingsLocal,api:{
     'GET /api/app/state':({state})=>({...settingsState,selected:state.managedLibrary.id}),

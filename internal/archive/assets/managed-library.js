@@ -14,10 +14,18 @@ function pharosLibraryProposal(name, parent, storage) {
   if (parent && !parent.startsWith('/') && !parent.startsWith('~/')) throw Error('Choose an absolute folder path, or one starting with ~/.');
   return {name, path: parent ? parent.replace(/\/+$/, '') + '/' + name : '', location: storage};
 }
-async function switchPharosLibrary(id, {flush, connect, navigate}) {
-  await flush();
-  await connect(id);
-  navigate('/settings/libraries');
+async function changePharosLibrary(operation, {flush, navigate, destination = '/settings/libraries'}) {
+  window.pharosLibrarySwitching = true;
+  try {
+    await flush();
+    await operation();
+    navigate(destination);
+    // Navigation has started, but this document may still receive a state poll.
+    // Keep the guard until unload; only a failed action may resume this page.
+  } catch (error) {
+    window.pharosLibrarySwitching = false;
+    throw error;
+  }
 }
 
 (() => {
@@ -45,18 +53,24 @@ async function switchPharosLibrary(id, {flush, connect, navigate}) {
     for (const button of page.querySelectorAll('button')) button.disabled = disabled || button.dataset.unavailable === 'true';
     for (const fieldset of page.querySelectorAll('fieldset')) fieldset.disabled = disabled;
   }
-  async function action(operation, switching = false) {
+  async function action(operation) {
     if (working || !state || state.busy) return;
     const focused = document.activeElement;
     working = true;
-    window.pharosLibrarySwitching = switching;
     lock();
     try { await operation(); }
     catch (error) { notice(error.message, true); }
     finally {
-      working = false; window.pharosLibrarySwitching = false; lock();
-      if (document.activeElement === document.body && focused?.isConnected) focused.focus();
+      working = window.pharosLibrarySwitching === true; lock();
+      if (!working && document.activeElement === document.body && focused?.isConnected) focused.focus();
     }
+  }
+  function changeLibrary(action, body, destination) {
+    return changePharosLibrary(() => call(action, body), {
+      flush: () => window.pharosSession?.flush(),
+      navigate: path => location.assign(path),
+      destination,
+    });
   }
   function libraryCard(library, selected) {
     const card = document.createElement('article');
@@ -82,12 +96,8 @@ async function switchPharosLibrary(id, {flush, connect, navigate}) {
       button.dataset.unavailable = String(!library.available);
       button.onclick = () => action(async () => {
         notice('Opening ' + library.name + '…');
-        await switchPharosLibrary(library.id, {
-          flush: () => window.pharosSession?.flush(),
-          connect: id => call('connect', {id}),
-          navigate: path => location.assign(path),
-        });
-      }, true);
+        await changeLibrary('connect', {id: library.id});
+      });
       row.append(button); card.append(row);
     }
     return card;
@@ -164,10 +174,8 @@ async function switchPharosLibrary(id, {flush, connect, navigate}) {
     if (!path) { $('existing').focus(); return; }
     void action(async () => {
       notice('Opening library…');
-      await window.pharosSession?.flush();
-      await call('open', {path});
-      location.assign('/settings/libraries');
-    }, true);
+      await changeLibrary('open', {path});
+    });
   };
   $('create-form').onsubmit = event => {
     event.preventDefault();
@@ -176,10 +184,8 @@ async function switchPharosLibrary(id, {flush, connect, navigate}) {
     catch (error) { notice(error.message, true); return; }
     void action(async () => {
       notice('Creating ' + payload.name + '…');
-      await window.pharosSession?.flush();
-      await call('create', payload);
-      location.assign('/settings/sources');
-    }, true);
+      await changeLibrary('create', payload, '/settings/sources');
+    });
   };
   $('mcp-form').onsubmit = event => {
     event.preventDefault();
