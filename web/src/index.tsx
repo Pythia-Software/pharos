@@ -92,7 +92,7 @@ import { readDashboardQuery, inspectDashboardBucket, recordDashboardMetric, reco
 import { dashboardChartURL } from "./dashboard-chart-links";
 import { DashboardAnalysis } from "./dashboard-analysis";
 import { AnalysisTrend, type AmountFormat } from "./dashboard-trend";
-import { normalizeAnalysis, switchView, validAnalysisState, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { normalizeAnalysis, readAnalysisLink, switchView, validAnalysisState, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { tokenAnalysisCatalog } from "./token-analysis-catalog";
 import type { LocalRows } from "./analysis-request";
 
@@ -1411,7 +1411,9 @@ function initialUsageView(): UsageView {
   return saved === "writing" || saved === "carbon" || saved === "conversations" ? saved : "tokens";
 }
 
-function useUsageDashboardState<T extends object>(defaults: T, valid: (value: T) => boolean, time: { first: string; last: string }) {
+// migrate reads an engine dashboard's link (readAnalysisLink): an older link
+// may hold a legend selection as a filter. A migrated link is rewritten.
+function useUsageDashboardState<T extends object>(defaults: T, valid: (value: T) => boolean, time: { first: string; last: string }, migrate?: (view: T, where: WhereTerm[]) => { state: T; where: WhereTerm[] }) {
   const read = () => {
     const params = new URLSearchParams(location.search);
     let view = defaults, error = "";
@@ -1426,30 +1428,38 @@ function useUsageDashboardState<T extends object>(defaults: T, valid: (value: T)
     }
     const from = new Date(); from.setHours(0, 0, 0, 0); from.setDate(from.getDate() - readUsageWorkspace(params).days + 1);
     const restored = readDashboardQuery(params, { ...EMPTY_QUERY, where: withTimeRange([], time, from) });
-    return { view, where: restored.query.where, error: error || restored.error };
+    const read = migrate && !error && !restored.error ? migrate(view, restored.query.where) : { state: view, where: restored.query.where };
+    return { view: read.state, where: read.where, error: error || restored.error, migrated: read.where !== restored.query.where || read.state !== view };
+  };
+  // Write the state a link opened with: defaults it left out, and a
+  // migrated link's state and population, so it is never read twice.
+  const settle = (opened: ReturnType<typeof read>) => {
+    if (opened.error) return;
+    const url = new URL(location.href);
+    if (!url.searchParams.has("analyze_chart") || opened.migrated) url.searchParams.set("analyze_chart", JSON.stringify(opened.view));
+    if (!url.searchParams.has("analyze_filters") || opened.migrated) url.searchParams.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where: opened.where }));
+    history.replaceState(history.state, "", url);
   };
   const [state, setState] = useState(read);
   const live = useRef(state); live.current = state;
+  useEffect(() => settle(state), []);
   useEffect(() => {
-    if (state.error) return;
-    const url = new URL(location.href);
-    if (!url.searchParams.has("analyze_chart")) url.searchParams.set("analyze_chart", JSON.stringify(state.view));
-    if (!url.searchParams.has("analyze_filters")) url.searchParams.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where: state.where }));
-    history.replaceState(history.state, "", url);
-  }, []);
-  useEffect(() => {
+    // A route change can belong to another page, so a restored link is not
+    // rewritten here; the next change writes it whole (persist).
     const restore = () => setState(read());
     window.addEventListener("pharos:route", restore);
     return () => window.removeEventListener("pharos:route", restore);
   }, [time.first, time.last]);
-  const update = (change: Partial<T>) => {
-    const view = { ...live.current.view, ...change };
-    live.current = { ...live.current, view }; setState(live.current); updateURI("analyze_chart", JSON.stringify(view));
+  // A migrated link's state and population are written together, so its
+  // filters are never read as a version 2 population while still holding
+  // the selection.
+  const persist = (next: typeof state, field: "analyze_chart" | "analyze_filters") => {
+    live.current = { ...next, migrated: false }; setState(live.current);
+    if (next.migrated || field === "analyze_chart") updateURI("analyze_chart", JSON.stringify(next.view));
+    if (next.migrated || field === "analyze_filters") updateURI("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where: next.where }));
   };
-  const onFilter: FilterChange = change => {
-    const where = change(live.current.where);
-    live.current = { ...live.current, where }; setState(live.current); updateURI("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where }));
-  };
+  const update = (change: Partial<T>) => persist({ ...live.current, view: { ...live.current.view, ...change } }, "analyze_chart");
+  const onFilter: FilterChange = change => persist({ ...live.current, where: change(live.current.where) }, "analyze_filters");
   return { ...state, update, onFilter };
 }
 
@@ -1482,7 +1492,7 @@ const tokenSharedRows: LocalRows | undefined = shared ? { rows: shared.datasets.
 const validTokenDashboard = (view: TokenTrendView) => validAnalysisState(tokenAnalysisCatalog, view);
 
 function TokenUsageDashboard() {
-  const state = useUsageDashboardState<TokenTrendView>({ ...defaultTokenChart, period: "day" as ChartPeriod }, validTokenDashboard, usageTime);
+  const state = useUsageDashboardState<TokenTrendView>({ ...defaultTokenChart, period: "day" as ChartPeriod }, validTokenDashboard, usageTime, (view, where) => readAnalysisLink(tokenAnalysisCatalog, view, where));
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
   const choose = (next: AnalysisView) => state.update(switchView(tokenAnalysisCatalog, state.view, next));
   if ((state.view.view ?? "trend") !== "trend") return <DashboardAnalysis catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={state.view} where={state.where}

@@ -7,19 +7,20 @@ import { isOriginDimension, originLabel } from "./origin-dimensions";
 // MetricCard displays bucket keys directly. Translate only its presentation
 // copy and retain an exact lookup for record drilldowns, including duplicate
 // device names and the original null group.
-export function toolMetricPresentation(metric: MetricResult | undefined, groupBy: string[]) {
+export function toolMetricPresentation(metric: MetricResult | undefined, groupBy: string[], labels: Record<string, (value: string) => string> = {}) {
   const source = new Map<string, MetricResult["buckets"][number]>();
   if (!metric) return { metric, sourceBucket: (bucket: MetricResult["buckets"][number]) => bucket };
   const names = groupBy.map(field => {
-    const labels = new Map<unknown, string>();
-    if (!isOriginDimension(field)) return labels;
+    const names = new Map<unknown, string>();
+    if (labels[field]) { for (const bucket of metric.buckets) { const value = bucket.keys[groupBy.indexOf(field)]; if (value !== null && value !== undefined && value !== "") names.set(value, labels[field](String(value))); } return names; }
+    if (!isOriginDimension(field)) return names;
     const values = [...new Set(metric.buckets.map(bucket => bucket.keys[groupBy.indexOf(field)]))];
     for (const value of values) {
       const label = originLabel(field, value);
       const repeated = values.some(other => other !== value && originLabel(field, other) === label);
-      labels.set(value, repeated ? `${label} (${String(value ?? "unknown").slice(-8)})` : label);
+      names.set(value, repeated ? `${label} (${String(value ?? "unknown").slice(-8)})` : label);
     }
-    return labels;
+    return names;
   });
   const buckets = metric.buckets.map(bucket => {
     const presented = { ...bucket, keys: bucket.keys.map((key, index) => names[index]?.get(key) ?? key) };

@@ -56,11 +56,12 @@ export const tokenAnalysisCatalog: AnalysisCatalog = {
   // request, not per token type, so cost by type shows providers, as the
   // Usage chart always has.
   components: { type: { label: "Token type", measures: ["tokens"], parts: tokenTypes.map(type => ({ key: type.key, label: type.label, field: type.key, color: type.color, optional: type.key === "unclassified_tokens" })), fallback: "provider" } },
-  cycle: { hour: "hour", weekday: "day" },
+  cycle: { hour: { kind: "instant", field: "hour" }, weekday: { kind: "recorded-date", field: "day" } },
   // The hourly ledger answers hour; the others are recorded calendar dates.
   periods: { hour: "hour", day: "day", week: "week", month: "month" },
   trend: { metric: "tokens", split: "model_family" },
   // The Usage chart's percentage metrics are a measure shown as shares.
+  legacySlices: true,
   legacy: state => state.metric === "percent" || state.metric === "percent_cost" ? { ...state, metric: state.metric === "percent" ? "tokens" : "cost", share: true } : state,
   scatter: ["tokens", "cost"],
 };

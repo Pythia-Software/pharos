@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import type { AggregationClause, AggregationResultEntry, FieldDef, FieldSchema, QueryState, WhereTerm } from "@pythia-software/query-table-core";
 import { MetricCard, defaultRenderers } from "@pythia-software/query-table-ui";
-import { changeState, selectedShares, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, cycleTotal, noSplit, normalizeAnalysis, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, type AnalysisCatalog, type AnalysisQuery as AnalysisQueryResult, type AnalysisReduce, type AnalysisUnit, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
+import { changeState, cycleUnavailable, notTrended, sampleSubject, selectGroups, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, cycleTotal, noSplit, normalizeAnalysis, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, type AnalysisCatalog, type AnalysisQuery as AnalysisQueryResult, type AnalysisReduce, type AnalysisUnit, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
 import { runAnalysisQuery, type LocalRows } from "./analysis-request";
 import { ChartSelect, DisplayControl, PeriodControl, RangeControl, RollingControl, ScaleControl, presetPeriod, timeBounds, withTimeRange, type ChartRange, type FilterChange, type TimeBounds } from "./usage-chart";
 import { trendPeriodCount } from "./dashboard-trend-model";
@@ -49,7 +49,7 @@ export function AnalysisControls({ catalog, view, set, onView, bounds, onRange }
   const subjects = (unit?.plural ?? catalog.records.plural).toLowerCase();
   const measure = catalog.measures[view.metric];
   const trend = view.view === "trend", limits = trendLimits(catalog, view);
-  const grouped = view.view === "compare" || view.view === "distribution" || view.view === "scatter";
+  const grouped = (view.view === "compare" || view.view === "distribution" || view.view === "scatter") && Object.keys(catalog.units).length > 0;
   const unitOptions: Array<[string, string, string?]> = [[records, catalog.records.plural, view.view === "scatter" ? "A scatter pairs two measures of each conversation, session or run." : view.view === "distribution" && !measure.value ? "This measure has no value per record." : undefined],
     ...Object.entries(catalog.units).map(([id, item]): [string, string] => [id, item.plural])];
   const minimum = sampleThresholds.includes(view.minSamples) ? sampleThresholds : [...sampleThresholds, view.minSamples].sort((a, b) => a - b);
@@ -59,17 +59,17 @@ export function AnalysisControls({ catalog, view, set, onView, bounds, onRange }
   const content = <>
     {onView ? <AnalysisViewControl catalog={catalog} state={view} onChange={onView} /> : null}
     {grouped ? <ChartSelect label="Count each" value={view.unit} options={unitOptions} title="What one observation is" onChange={next => set({ unit: next })} /> : null}
-    <ChartSelect label={view.view === "scatter" ? "X metric" : "Metric"} value={view.metric} options={Object.entries(catalog.measures).map(([id, item]) => [id, item.label])} onChange={metric => set({ metric })} />
+    <ChartSelect label={view.view === "scatter" ? "X metric" : "Metric"} value={view.metric} options={Object.entries(catalog.measures).map(([id, item]): [string, string, string?] => [id, item.label, view.view === "distribution" && view.unit === records && !unit && !item.value ? `${item.label} has no value per ${catalog.records.label.toLowerCase()} to distribute` : trend ? notTrended(item) : undefined])} onChange={metric => set({ metric })} />
     {view.view === "scatter" ? <ChartSelect label="Y metric" value={view.metricY} options={Object.entries(catalog.measures).map(([id, item]): [string, string, string?] => [id, item.label, id === view.metric ? "Choose a different measure from X" : undefined])} onChange={metricY => set({ metricY })} /> : null}
-    {grouped || trend ? <ChartSelect label={view.view === "scatter" ? "Color by" : "Breakdown"} value={view.split} options={breakdowns} title={trend ? "How each period is divided into series" : undefined}
-      onChange={split => set({ split, ...trend ? { seriesLimit: 15, selection: { values: [], excluded: false } } : {} })} /> : null}
+    {view.view !== "cycle" ? <ChartSelect label={view.view === "scatter" ? "Color by" : "Breakdown"} value={view.split} options={breakdowns} title={trend ? "How each period is divided into series" : undefined}
+      onChange={split => set({ split, selection: { values: [], excluded: false }, ...trend ? { seriesLimit: 15 } : {} })} /> : null}
     {view.view === "compare" && unit ? <ChartSelect label="Combine" value={view.reduce} options={analysisReductions.map(([id]): [AnalysisReduce, string, string?] => [id, reductionLabel(id, measure, unit), id === "total" && !unitTotal(measure) ? `${measure.label} does not add up across ${subjects}` : undefined])} title={`How each group's ${subjects} combine`} onChange={reduce => set({ reduce })} /> : null}
     {view.view === "cycle" ? <ChartSelect label="Summarize" value={view.reduce} options={[["median", "Distribution"], ["mean", measure.additive ? "Mean" : "Unweighted mean"], ["total", "Total", cycleTotal(measure) ? undefined : `${measure.label} does not add up across ${view.cycle === "hour" ? "hours" : "days"}`]]} title="Each bar summarizes every complete day or hour that falls on it" onChange={reduce => set({ reduce })} /> : null}
     {view.view === "compare" ? <ChartSelect label="Show as" value={view.compareAs} options={[["bars", "Bars"], ["share", "Share of total", shareable(catalog, { ...view, compareAs: "share" }) ? undefined : "Only additive totals and counts form shares"]]} onChange={compareAs => set({ compareAs })} /> : null}
     {trend ? <ChartSelect label="Show as" value={view.share ? "share" : "values"} options={[["values", "Values"], ["share", "Share of total", limits.share]]} title="Values, or each series' share of its period's total" onChange={share => set({ share: share === "share" })} /> : null}
     {trend ? <DisplayControl value={view.display} disabled={limits.cumulative} onChange={display => set({ display })} /> : null}
-    {(view.view === "distribution" || view.view === "compare" && view.compareAs !== "share") && view.split !== noSplit ? <ChartSelect label="Minimum" value={String(view.minSamples)} options={minimum.map(value => [String(value), value ? `${value.toLocaleString()} ${subjects}` : "No minimum"])} title={`Hide groups with fewer ${subjects}`} onChange={value => set({ minSamples: Number(value) })} /> : null}
-    {view.view === "cycle" ? <ChartSelect label="Cycle" value={view.cycle} options={[["hour", "Hour of day"], ["weekday", "Day of week"]]} onChange={cycle => set({ cycle })} /> : null}
+    {(view.view === "distribution" || view.view === "compare" && view.compareAs !== "share") && view.split !== noSplit ? <ChartSelect label="Minimum" value={String(view.minSamples)} options={minimum.map(value => [String(value), value ? `${value.toLocaleString()} ${sampleSubject(catalog, view)}` : "No minimum"])} title={`Hide groups with fewer ${sampleSubject(catalog, view)}`} onChange={value => set({ minSamples: Number(value) })} /> : null}
+    {view.view === "cycle" ? <ChartSelect label="Cycle" value={view.cycle} options={[["hour", "Hour of day", cycleUnavailable(catalog, "hour")], ["weekday", "Day of week", cycleUnavailable(catalog, "weekday")]]} onChange={cycle => set({ cycle })} /> : null}
     {trend ? <ScaleControl value={view.scale ?? "linear"} percent={view.share} onChange={scale => set({ scale })} />
       : !(view.view === "compare" && view.compareAs === "share") ? <ChartSelect label={view.view === "scatter" ? "X scale" : "Scale"} value={axis(view.scale)} options={scales} onChange={scale => set({ scale })} /> : null}
     {view.view === "scatter" ? <ChartSelect label="Y scale" value={axis(view.scaleY)} options={scales} onChange={scaleY => set({ scaleY })} /> : null}
@@ -86,9 +86,10 @@ export function AnalysisControls({ catalog, view, set, onView, bounds, onRange }
 }
 
 const selectionNote = (group: string, unit: AnalysisUnit | undefined, selection: NonNullable<AnalysisQueryResult["selection"]>, missing = 0) =>
-  `Your ${group} selection is drawn as slices and every other group as Other; shares are of every group in your other filters.`
+  (selection.share ? `Your ${group} legend selection is drawn as slices and every other group as Other; shares are of every group in your filters.`
+    : `Only your ${group} legend selection is drawn; your filters are unchanged.`)
   + (selection.mapped && unit ? ` Each ${unit.label.toLowerCase()} is counted in its top-level ${group} group, so the selection is shown as the top-level ${group}.` : "")
-  + (missing ? ` ${missing.toLocaleString()} selected ${missing === 1 ? "group is" : "groups are"} not among the largest groups returned; any ${missing === 1 ? "value it has is" : "values they have are"} counted in Other.` : "");
+  + (missing ? ` ${missing.toLocaleString()} selected ${missing === 1 ? "group is" : "groups are"} not among the largest groups returned; any ${missing === 1 ? "value it has is" : "values they have are"} ${selection.share ? "counted in Other" : "not drawn"}.` : "");
 
 // The folded cycle's slots are not dataset fields; name them for the chart.
 const cycleFields: FieldDef[] = [{ name: "hour_of_day", label: "Local hour", type: "text", source: { kind: "backend" } }, { name: "weekday", label: "Weekday", type: "text", source: { kind: "backend" } }];
@@ -98,9 +99,9 @@ const axis = (value?: string) => value === "logarithmic" ? "logarithmic" : "line
 // Compare, distribution, scatter and cycle views over one catalog. Each view
 // shows only the controls it uses; changes are normalized so the saved state
 // always describes the chart on screen.
-export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, dataset, state, where, onChange, onView, onFilter, local }: {
+export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, dataset, state, where, onChange, onView, onFilter, local, children }: {
   catalog: AnalysisCatalog; schema: FieldSchema<any>; dataset: UsageDataset; state: T; where: WhereTerm[];
-  onChange: (next: Partial<T>) => void; onView: (view: AnalysisView) => void; onFilter: FilterChange; local?: LocalRows;
+  onChange: (next: Partial<T>) => void; onView: (view: AnalysisView) => void; onFilter: FilterChange; local?: LocalRows; children?: React.ReactNode;
 }) {
   const originRevision = useOriginMetadata();
   const view = normalizeAnalysis(catalog, state);
@@ -114,7 +115,7 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
   const unit = view.unit === records ? undefined : catalog.units[view.unit];
   const subjects = (unit?.plural ?? catalog.records.plural).toLowerCase();
 
-  const selected = result.results[0] && selectedShares(result.results[0], analysis.selection);
+  const selected = result.results[0] && selectGroups(result.results[0], analysis.selection);
   let clause: AggregationClause = analysis.clause, entry: AggregationResultEntry | undefined = selected, error = result.error, slots = "";
   if (view.view === "cycle" && entry) {
     try {
@@ -124,7 +125,7 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
       slots = `${folded.slots.toLocaleString()} complete ${view.cycle === "hour" ? "hours" : "days"} in ${zone}.${folded.earlier ? ` ${folded.earlier.toLocaleString()} earlier recorded ${folded.earlier === 1 ? "date was" : "dates were"} left out: recorded in another time zone, ${folded.earlier === 1 ? "it holds" : "they hold"} only part of a day in your range.` : ""}`;
     } catch (failure) { error = failure instanceof Error ? failure.message : String(failure); entry = undefined; }
   }
-  const presentation = useMemo(() => toolMetricPresentation(entry, clause.groupBy), [entry, originRevision, clause]);
+  const presentation = useMemo(() => toolMetricPresentation(entry, clause.groupBy, catalog.labels), [entry, originRevision, clause, catalog]);
   const empty = !result.loading && !error && entry && (!entry.buckets.length || entry.buckets.every(bucket => bucket.distribution?.kind === "histogram" ? !bucket.distribution.n : bucket.distribution?.kind === "box" && !bucket.distribution.summary));
   const hidden = entry?.hiddenGroups ? `${entry.hiddenGroups.toLocaleString()} ${entry.hiddenGroups === 1 ? "group" : "groups"} hidden below the ${view.minSamples.toLocaleString()}-${unit?.label.toLowerCase() ?? "record"} minimum.` : "";
 
@@ -141,7 +142,9 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
           const query = analysisInspectQuery(analysis, presentation.sourceBucket(bucket) as typeof bucket, analysis.clause, schema, view.view);
           if (query) window.pharosNavigate?.(usageWorkspaceURL({ mode: "query", dataset, query: orderedUsageQuery(dataset, query) }, new URLSearchParams(location.search)));
         }} />}
-    {hidden || slots || analysis.selection ? <p className="usage-dashboard-note" role="status">{[hidden, slots, analysis.selection ? selectionNote(catalog.breakdowns[view.split].label.toLowerCase(), unit, analysis.selection, selected?.missing) : ""].filter(Boolean).join(" ")}</p> : null}
+    {hidden || slots || analysis.selection ? <p className="usage-dashboard-note" role="status">{[hidden, slots, analysis.selection ? selectionNote(catalog.breakdowns[view.split].label.toLowerCase(), unit, analysis.selection, selected?.missing) : ""].filter(Boolean).join(" ")}
+      {analysis.selection ? <> <button type="button" className="usage-preset-clear" onClick={() => set({ selection: { values: [], excluded: false } })}>Show every group</button></> : null}</p> : null}
+    {children}
     {/* No legacy link: that page has no analysis views, and would show this query's table under its default chart. */}
     <UsageDashboardLinks schema={schema} dataset={dataset} query={analysis.supporting} />
     <p className="usage-dashboard-note">{analysisNote(catalog, view)}{view.view === "cycle" ? "" : ` Select a ${view.view === "scatter" ? "point" : "bar or box"} to open its ${unit ? subjects : "records"}.`}</p>

@@ -6,12 +6,13 @@ import { usageDatasetTopics, usageTopicDatasets, usageTopics, type UsageDataset 
 import type { MCPDashboardView } from "./mcp-dashboard-model";
 import type { ToolDashboardView } from "./tools-dashboard-model";
 import { cardDashboardWhere } from "./card-exploration";
+import { analysisVersion } from "./dashboard-analysis-model";
 import { concurrencyWindowRange, defaultConcurrencySettings } from "./concurrency-settings";
 import { defaultCardCover } from "./card-cover";
 
 type DailyChart = { period: "day"; rollingPeriods: number; display: "interval"; scale: "linear"; seriesLimit: number };
 export type CardDashboard =
-  | { topic: "tokens"; chart: TokenChartView }
+  | { topic: "tokens"; chart: TokenChartView & { v?: number } }
   | { topic: "mcp"; chart: MCPDashboardView }
   | { topic: "tools"; chart: ToolDashboardView }
   | { topic: "time" | "skills"; chart: DailyChart & { metric: number; split: string } }
@@ -22,7 +23,7 @@ export type CardDestination = CardDashboard & { dataset: UsageDataset; detailAct
 
 const daily: DailyChart = { period: "day", rollingPeriods: 0, display: "interval", scale: "linear", seriesLimit: 15 };
 const tokens = (metric: TokenChartView["metric"], split: TokenChartView["split"], extra: Partial<TokenChartView> = {}): CardDashboard => ({
-  topic: "tokens", chart: { ...daily, metric, split, hours: 6, days: 3, selection: { values: [], excluded: false }, ...extra },
+  topic: "tokens", chart: { ...daily, v: analysisVersion, metric, split, hours: 6, days: 3, selection: { values: [], excluded: false }, ...extra },
 });
 const mcp = (metric: MCPDashboardView["metric"], split: MCPDashboardView["split"], extra: Partial<MCPDashboardView> = {}): CardDashboard => ({
   topic: "mcp", chart: { metric, split, view: "compare", period: "day", rollingPeriods: 0, display: "interval", ...extra },

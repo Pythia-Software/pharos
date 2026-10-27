@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { core, queryRecipes, schemas } from "../helpers/recipes.mjs";
 import { now, usageLedger } from "../helpers/usage-ledger.mjs";
-import { analysisQuery, catalogProblems, changeState, selectedShares, normalizeAnalysis, switchView, trendAdjustments, trendLimits, validAnalysisState } from "../../../src/dashboard-analysis-model";
+import { analysisQuery, catalogProblems, changeState, selectGroups, normalizeAnalysis, readAnalysisLink, analysisVersion, switchView, trendAdjustments, trendLimits, validAnalysisState } from "../../../src/dashboard-analysis-model";
 import { trendNote, trendQuery, trendSeries, trendTitle } from "../../../src/dashboard-trend-model";
 import { tokenAnalysisCatalog as catalog } from "../../../src/token-analysis-catalog";
 import { tokenTypes } from "../../../src/token-chart-request";
@@ -93,19 +93,21 @@ test("options a measure cannot use move to the nearest one, and say why", () => 
 });
 
 test("the query keeps the measure's population and smoothing history off the user's filters", () => {
-  const where = [...range, { field: "provider", op: "=", value: "claude" }];
-  const priced = trendQuery(catalog, { ...base, metric: "priced_cost", split: "provider", rollingPeriods: 7 }, where, { now });
+  const where = range, selection = { values: ["claude"], excluded: false };
+  const priced = trendQuery(catalog, { ...base, metric: "priced_cost", split: "provider", rollingPeriods: 7, selection }, where, { now });
   assert.ok(priced.query.where.some(term => term.field === "price_status"), "the population joins the query");
   assert.ok(!priced.range.some(term => term.field === "price_status") && !priced.requested.some(term => term.field === "price_status"), "and never the filters");
-  assert.ok(!priced.query.where.some(term => term.field === "provider"), "a legend selection is left out so its alternatives stay in the key");
-  assert.ok(priced.supporting.where.some(term => term.field === "provider") && priced.supporting.where.some(term => term.field === "price_status"));
+  assert.ok(!priced.query.where.some(term => term.field === "provider"), "a legend selection is the view's own, so every series stays in the key");
+  assert.ok(priced.supporting.where.some(term => term.field === "provider") && priced.supporting.where.some(term => term.field === "price_status"), "the supporting query covers the selected series");
+  const population = trendQuery(catalog, { ...base, metric: "tokens", split: "provider" }, [...range, { field: "provider", op: "=", value: "claude" }], { now });
+  assert.ok(population.query.where.some(term => term.field === "provider"), "a filter on the breakdown's field is the population");
   const lower = query => new Date(query.query.where.find(term => term.field === "last_usage_at" && term.op === ">=").value);
   const shifted = lower(priced), start = new Date(now - 30 * 86400000);
   start.setHours(0, 0, 0, 0); start.setDate(start.getDate() - 6);
   assert.equal(shifted.getTime(), start.getTime(), "six days of history before the range's first day");
-  const ratio = trendQuery(catalog, { ...base, metric: "cache_read_share", split: "provider_model" }, where, { now });
+  const ratio = trendQuery(catalog, { ...base, metric: "cache_read_share", split: "provider_model" }, [...range, { field: "provider", op: "=", value: "claude" }], { now });
   assert.deepEqual(ratio.query.aggregations.map(clause => [clause.op, clause.field, clause.groupBy]), [["sum", "cache_read_input_tokens", ["day", "provider", "model_family"]], ["sum", "input_tokens", ["day", "provider", "model_family"]]]);
-  assert.ok(ratio.query.where.some(term => term.field === "provider"), "a two-field breakdown's selection is the chart's own, so a filter stays");
+  assert.ok(ratio.query.where.some(term => term.field === "provider"), "a filter stays the population");
   assert.match(ratio.supporting.aggregations[0].expression, /SUM\(\[cache_read_input_tokens\]\)\/NULLIF/);
   const whole = trendQuery(catalog, { ...base, metric: "tokens", split: "none", completePeriods: true }, range, { now });
   const first = new Date(whole.range.find(term => term.op === ">=").value), midnight = new Date(now - 30 * 86400000);
@@ -140,8 +142,7 @@ test("distinct counts are per period: a rolling mean of daily counts, or a rolli
 });
 
 test("shares divide by every series, after smoothing; a selection hides series without changing the total", () => {
-  const where = [...range, { field: "provider", op: "=", value: "codex" }];
-  const { built } = draw({ ...base, metric: "tokens", split: "provider", share: true, rollingPeriods: 3 }, { where });
+  const { built } = draw({ ...base, metric: "tokens", split: "provider", share: true, rollingPeriods: 3, selection: { values: ["codex"], excluded: false } });
   assert.deepEqual(built.selected, ["s:codex"]);
   const busy = built.buckets.filter(bucket => Object.keys(bucket.values).length > 1);
   assert.ok(busy.length);
@@ -250,34 +251,67 @@ test("a share is of every group in the filters; a legend selection only chooses 
   const totals = new Map();
   for (const row of rows) totals.set(row.provider, (totals.get(row.provider) ?? 0) + row.total_tokens);
   const smallest = [...totals].sort((a, b) => a[1] - b[1])[0][0], all = [...totals.values()].reduce((a, b) => a + b, 0);
-  const where = [...range, { field: "provider", op: "=", value: smallest }];
-  const trend = draw({ ...base, metric: "tokens", split: "provider", share: true, display: "cumulative", seriesLimit: 1 }, { where }).built;
+  const selection = { values: [smallest], excluded: false }, where = range;
+  const trend = draw({ ...base, metric: "tokens", split: "provider", share: true, display: "cumulative", seriesLimit: 1, selection }).built;
   assert.ok(trend.series.some(item => item.value === smallest), "a selected group is never folded into Other");
   assert.deepEqual(trend.selected, [`s:${smallest}`]);
   assert.ok(Math.abs(trend.buckets.at(-1).values[`s:${smallest}`] - totals.get(smallest) / all) < 1e-12);
-  const compare = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider", compareAs: "share" }, where, { now });
-  assert.deepEqual(compare.selection, { values: [smallest], excluded: false });
+  const compare = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider", compareAs: "share", selection }, where, { now });
+  assert.deepEqual(compare.selection, { values: [smallest], excluded: false, fields: 1, share: true });
   assert.ok(!compare.query.where.some(term => term.field === "provider"), "the denominator is every provider");
-  assert.ok(compare.supporting.grouping.source.where.some(term => term.field === "provider"), "the supporting query keeps the user's filter");
-  const pie = selectedShares(core.evaluateMetrics(rows, compare.query, schema, { now }).metrics[0], compare.selection);
+  assert.ok(compare.supporting.grouping.source.where.some(term => term.field === "provider"), "the supporting query keeps the selection");
+  const pie = selectGroups(core.evaluateMetrics(rows, compare.query, schema, { now }).metrics[0], compare.selection);
   assert.deepEqual(pie.buckets.map(bucket => bucket.keys[0]), [smallest], "the selected group is drawn");
   assert.equal(pie.other.value, all - totals.get(smallest), "every other provider is Other");
   assert.ok(Math.abs(pie.buckets[0].value / (pie.buckets[0].value + pie.other.value) - trend.buckets.at(-1).values[`s:${smallest}`]) < 1e-12, "the trend and Compare agree");
   // An excluded group: every other group is drawn, the excluded one is Other.
-  const excluded = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider", compareAs: "share" }, [...range, { field: "provider", op: "!=", value: smallest }], { now });
-  assert.deepEqual(excluded.selection, { values: [smallest], excluded: true });
-  assert.equal(selectedShares(core.evaluateMetrics(rows, excluded.query, schema, { now }).metrics[0], excluded.selection).other.value, totals.get(smallest));
+  const excluded = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider", compareAs: "share", selection: { values: [smallest], excluded: true } }, range, { now });
+  assert.deepEqual(excluded.selection, { values: [smallest], excluded: true, fields: 1, share: true });
+  assert.equal(selectGroups(core.evaluateMetrics(rows, excluded.query, schema, { now }).metrics[0], excluded.selection).other.value, totals.get(smallest));
   // Combined groups keep the trend's own selection; so do unit counts.
   const pair = JSON.stringify(["claude", "opus"]);
   const multi = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider_model", compareAs: "share", selection: { values: [pair], excluded: false } }, range, { now });
-  assert.deepEqual(selectedShares(core.evaluateMetrics(rows, multi.query, schema, { now }).metrics[0], multi.selection).buckets.map(bucket => JSON.stringify(bucket.keys)), [pair]);
-  const sessions = analysisQuery(catalog, { view: "compare", unit: "agent_session", reduce: "count", metric: "tokens", split: "provider", compareAs: "share" }, where, { now });
-  assert.deepEqual(sessions.selection, { values: [smallest], excluded: false });
+  assert.deepEqual(selectGroups(core.evaluateMetrics(rows, multi.query, schema, { now }).metrics[0], multi.selection).buckets.map(bucket => JSON.stringify(bucket.keys)), [pair]);
+  const sessions = analysisQuery(catalog, { view: "compare", unit: "agent_session", reduce: "count", metric: "tokens", split: "provider", compareAs: "share", selection }, where, { now });
+  assert.deepEqual(sessions.selection, { values: [smallest], excluded: false, fields: 1, share: true });
   assert.ok(!sessions.query.grouping.source.where.some(term => term.field === "provider") && sessions.supporting.where.some(term => term.field === "provider"), "the supporting query keeps the selected group");
-  const counted = selectedShares(core.evaluateMetrics(rows, sessions.query, schema, { now }).metrics[0], sessions.selection);
+  const counted = selectGroups(core.evaluateMetrics(rows, sessions.query, schema, { now }).metrics[0], sessions.selection);
   assert.equal(counted.buckets[0].value + counted.other.value, new Set(rows.map(row => row.agent_session_id)).size, "unit shares are of every session");
-  // Bars keep the filter: there a selection chooses the groups.
-  assert.ok(analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider" }, where, { now }).query.where.some(term => term.field === "provider"));
+  // Bars draw only the selected groups; the query is still the population.
+  const bars = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider", selection }, where, { now });
+  assert.ok(!bars.query.where.some(term => term.field === "provider"));
+  assert.deepEqual(selectGroups(core.evaluateMetrics(rows, bars.query, schema, { now }).metrics[0], bars.selection).buckets.map(bucket => [bucket.keys[0], bucket.value]), [[smallest, totals.get(smallest)]]);
+  // A population filter on the breakdown's own field is a population: its
+  // shares are of the filtered groups only.
+  const filtered = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider", compareAs: "share" }, [...range, { field: "provider", op: "=", value: smallest }], { now });
+  assert.equal(filtered.selection, undefined);
+  assert.deepEqual(core.evaluateMetrics(rows, filtered.query, schema, { now }).metrics[0].buckets.map(bucket => bucket.keys[0]), [smallest]);
+});
+
+test("links: an unversioned legend filter becomes the selection; a versioned link keeps its filters", () => {
+  const filter = { field: "provider", op: "=", value: "codex" };
+  // An old Tokens link: the legend wrote codex as a filter on the breakdown's field.
+  const old = readAnalysisLink(catalog, { metric: "tokens", split: "provider" }, [...range, filter]);
+  assert.deepEqual(old.state, { v: analysisVersion, metric: "tokens", split: "provider", selection: { values: ["codex"], excluded: false } });
+  assert.deepEqual(old.where, range);
+  const excluded = readAnalysisLink(catalog, { metric: "tokens", split: "provider" }, [...range, { any: [{ field: "provider", op: "!=", value: "codex" }, { field: "provider", op: "is_null", value: "" }] }]);
+  assert.deepEqual([excluded.state.selection, excluded.where], [{ values: ["codex"], excluded: true }, range]);
+  // A filter on another field, or under a breakdown of several fields, stays.
+  assert.deepEqual(readAnalysisLink(catalog, { metric: "tokens", split: "model_family" }, [...range, filter]).where, [...range, filter]);
+  assert.deepEqual(readAnalysisLink(catalog, { metric: "percent", split: "provider_model" }, [...range, filter]).where, [...range, filter]);
+  // A versioned link, as cards write them: the card's filter is its population.
+  const card = queryRecipes.find(recipe => recipe.destination?.topic === "tokens").destination.chart;
+  assert.equal(card.v, analysisVersion);
+  const current = readAnalysisLink(catalog, { ...card, split: "provider" }, [...range, filter]);
+  assert.deepEqual([current.where, current.state.selection], [[...range, filter], card.selection]);
+  // A round trip: the migrated link reads the same again, and draws what the
+  // old link drew, the codex series among every provider.
+  assert.deepEqual(readAnalysisLink(catalog, old.state, old.where), old);
+  const drawn = draw(old.state, { where: old.where }).built;
+  assert.deepEqual(drawn.selected, ["s:codex"]);
+  assert.ok(drawn.series.length > 2, "the other providers stay in the key");
+  // A dashboard whose old chart had no legend selection keeps every filter.
+  assert.deepEqual(readAnalysisLink({ ...catalog, legacySlices: false }, { metric: "tokens", split: "provider" }, [...range, filter]).where, [...range, filter]);
 });
 
 test("a group only smoothing or norm history holds is listed in Other, so series add up to the total", () => {
@@ -308,11 +342,11 @@ test("with whole periods, the partial last period does not rank the series", () 
 });
 
 test("Compare maps a selection through the unit: provider selects top-level provider groups of conversations", () => {
-  const where = [...range, { field: "provider", op: "=", value: "codex" }];
-  const conversations = analysisQuery(catalog, { view: "compare", unit: "conversation", reduce: "count", metric: "tokens", split: "provider", compareAs: "share" }, where, { now });
-  assert.deepEqual(conversations.selection, { values: ["codex"], excluded: false, mapped: "root_provider" });
+  const where = range;
+  const conversations = analysisQuery(catalog, { view: "compare", unit: "conversation", reduce: "count", metric: "tokens", split: "provider", compareAs: "share", selection: { values: ["codex"], excluded: false } }, where, { now });
+  assert.deepEqual(conversations.selection, { values: ["codex"], excluded: false, mapped: "root_provider", fields: 1, share: true });
   assert.ok(!conversations.query.grouping.source.where.some(term => term.field === "provider"), "never a population filter on record provider");
-  const pie = selectedShares(core.evaluateMetrics(rows, conversations.query, schema, { now }).metrics[0], conversations.selection);
+  const pie = selectGroups(core.evaluateMetrics(rows, conversations.query, schema, { now }).metrics[0], conversations.selection);
   const roots = new Map(rows.map(row => [row.root_conversation_id, row.root_provider]));
   assert.deepEqual(pie.buckets.map(bucket => [bucket.keys[0], bucket.value]), [["codex", [...roots.values()].filter(provider => provider === "codex").length]]);
   assert.equal(pie.buckets[0].value + pie.other.value, roots.size, "every conversation is in the denominator");
@@ -321,9 +355,11 @@ test("Compare maps a selection through the unit: provider selects top-level prov
 
 test("a selected group beyond the returned groups is reported, not silently dropped", () => {
   const entry = { id: "analysis", groupCount: 1001, buckets: [{ keys: ["repo-0"], value: 10, count: 1 }], other: { keys: [], value: 5, count: 3 } };
-  const shown = selectedShares(entry, { values: ["repo-0", "repo-1001"], excluded: false });
+  const shown = selectGroups(entry, { values: ["repo-0", "repo-1001"], excluded: false, fields: 1, share: true });
   assert.deepEqual([shown.buckets.length, shown.other.value, shown.missing], [1, 5, 1]);
-  assert.equal(selectedShares({ ...entry, groupCount: 1, other: undefined }, { values: ["repo-0", "unused"], excluded: false }).missing, undefined, "a complete result has nothing beyond it");
+  assert.equal(selectGroups({ ...entry, groupCount: 1, other: undefined }, { values: ["repo-0", "unused"], excluded: false, fields: 1, share: true }).missing, undefined, "a complete result has nothing beyond it");
+  const bars = selectGroups(entry, { values: ["repo-0", "repo-1001"], excluded: false, fields: 1, share: false });
+  assert.deepEqual([bars.buckets.length, bars.other, bars.missing], [1, undefined, 1], "bars hide the rest");
 });
 
 test("while results load there is no error", () => {
