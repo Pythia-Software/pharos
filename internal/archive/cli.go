@@ -101,10 +101,13 @@ func Run(arguments []string) error {
 		// An agent keeps this process for its whole session, so it starts, and
 		// keeps answering, while the library is unavailable. It loads the
 		// configuration and runs the library guards for each request instead.
-		if len(args) != 0 {
-			return fmt.Errorf("usage: pharos [--config PATH] mcp")
+		// --service is for Ask Pharos, which names the service it runs in.
+		flags := flag.NewFlagSet("mcp", flag.ContinueOnError)
+		service := flags.String("service", "", "private endpoint file of the service to answer from")
+		if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
+			return fmt.Errorf("usage: pharos [--config PATH] mcp [--service FILE]")
 		}
-		return RunMCP(configPath, os.Stdin, os.Stdout)
+		return RunMCP(configPath, *service, os.Stdin, os.Stdout)
 	}
 	config, err := LoadConfig(configPath)
 	if err != nil {

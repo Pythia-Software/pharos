@@ -254,24 +254,25 @@ func isUIPage(path string) bool {
 
 // uiAssets maps each static asset URL the UI loads to its file under assets/.
 var uiAssets = map[string]struct{ name, contentType string }{
-	"/assets/query-tables.js":     {"query-tables.js", "text/javascript; charset=utf-8"},
-	"/assets/query-tables.css":    {"query-tables.css", "text/css; charset=utf-8"},
-	"/assets/onboarding.js":       {"onboarding.js", "text/javascript; charset=utf-8"},
-	"/assets/upgrade.js":          {"upgrade.js", "text/javascript; charset=utf-8"},
-	"/assets/library.js":          {"library.js", "text/javascript; charset=utf-8"},
-	"/assets/cloud-backup.js":     {"cloud-backup.js", "text/javascript; charset=utf-8"},
-	"/assets/sync.js":             {"sync.js", "text/javascript; charset=utf-8"},
-	"/assets/carbon.js":           {"carbon.js", "text/javascript; charset=utf-8"},
-	"/assets/menu-bar.js":         {"menu-bar.js", "text/javascript; charset=utf-8"},
-	"/assets/header.js":           {"header.js", "text/javascript; charset=utf-8"},
-	"/assets/ask-pharos.html":     {"ask-pharos.html", "text/html; charset=utf-8"},
-	"/assets/ask-pharos.css":      {"ask-pharos.css", "text/css; charset=utf-8"},
-	"/assets/ask-model.js":        {"ask-model.js", "text/javascript; charset=utf-8"},
-	"/assets/ask-pharos.js":       {"ask-pharos.js", "text/javascript; charset=utf-8"},
-	"/assets/reader-model.js":     {"reader-model.js", "text/javascript; charset=utf-8"},
-	"/assets/managed-storage.js":  {"managed-storage.js", "text/javascript; charset=utf-8"},
-	"/assets/managed-library.js":  {"managed-library.js", "text/javascript; charset=utf-8"},
-	"/assets/managed-library.css": {"managed-library.css", "text/css; charset=utf-8"},
+	"/assets/query-tables.js":      {"query-tables.js", "text/javascript; charset=utf-8"},
+	"/assets/query-tables.css":     {"query-tables.css", "text/css; charset=utf-8"},
+	"/assets/onboarding.js":        {"onboarding.js", "text/javascript; charset=utf-8"},
+	"/assets/upgrade.js":           {"upgrade.js", "text/javascript; charset=utf-8"},
+	"/assets/library.js":           {"library.js", "text/javascript; charset=utf-8"},
+	"/assets/cloud-backup.js":      {"cloud-backup.js", "text/javascript; charset=utf-8"},
+	"/assets/sync.js":              {"sync.js", "text/javascript; charset=utf-8"},
+	"/assets/carbon.js":            {"carbon.js", "text/javascript; charset=utf-8"},
+	"/assets/menu-bar.js":          {"menu-bar.js", "text/javascript; charset=utf-8"},
+	"/assets/header.js":            {"header.js", "text/javascript; charset=utf-8"},
+	"/assets/ask-pharos.html":      {"ask-pharos.html", "text/html; charset=utf-8"},
+	"/assets/ask-pharos.css":       {"ask-pharos.css", "text/css; charset=utf-8"},
+	"/assets/ask-model.js":         {"ask-model.js", "text/javascript; charset=utf-8"},
+	"/assets/ask-pharos.js":        {"ask-pharos.js", "text/javascript; charset=utf-8"},
+	"/assets/reader-model.js":      {"reader-model.js", "text/javascript; charset=utf-8"},
+	"/assets/storage-breakdown.js": {"storage-breakdown.js", "text/javascript; charset=utf-8"},
+	"/assets/managed-storage.js":   {"managed-storage.js", "text/javascript; charset=utf-8"},
+	"/assets/managed-library.js":   {"managed-library.js", "text/javascript; charset=utf-8"},
+	"/assets/managed-library.css":  {"managed-library.css", "text/css; charset=utf-8"},
 }
 
 func (s *Server) get(w http.ResponseWriter, r *http.Request) {
@@ -458,6 +459,9 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeResult(w, value, err)
 	case path == "/api/health/storage":
 		writeJSON(w, merge(storage(s.Config()), map[string]any{"index_bytes": s.Catalog.indexBytes()}), 200)
+	case path == "/api/health/storage/breakdown":
+		value, err := s.storageBreakdown(r.Context())
+		writeResult(w, value, err)
 	case path == "/api/health/freshness":
 		writeJSON(w, merge(s.Catalog.Freshness(), map[string]any{"sync_active": s.syncActive()}), 200)
 	case path == "/api/authorship":
@@ -466,10 +470,6 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/pricing":
 		writeJSON(w, s.Catalog.pricingStatus(), 200)
 	case path == "/api/origins":
-		if err := s.Catalog.ensureOrigins(r.Context()); err != nil {
-			writeError(w, err, 500)
-			return
-		}
 		rows, err := queryMapsContext(r.Context(), s.Catalog.reader(), "SELECT id,label,kind FROM machines ORDER BY label,id")
 		if err != nil {
 			writeError(w, err, 500)

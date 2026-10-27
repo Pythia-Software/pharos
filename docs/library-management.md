@@ -130,7 +130,9 @@ MCP answers only when that app's primary connection is its assigned library and
 that service is ready. Otherwise it returns a helpful unavailable error. It
 does not open the assigned catalog directly. Responses completing after a
 connection or assignment switch are discarded. Private Ask Pharos requests stay
-bound to their originating library.
+bound to their originating library: their CLI's MCP server runs as
+`--config LIBRARY mcp --service FILE`, where FILE is a private endpoint for the
+service handling the request, so the MCP assignment does not apply to them.
 
 The application must remain running, though its window may be closed. This is
 a change from older bundled `mcp` registrations, which could read the catalog

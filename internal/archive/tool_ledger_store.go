@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -461,30 +462,41 @@ func (c *Catalog) toolRollupStale(ctx context.Context) (generation, built, day s
 	return generation, built, day, generation != built || day != builtDay || dirty, err
 }
 
-// currentToolRollup is ensureToolRollup for a page. A full rebuild reads every
-// tool call, half a minute on a large catalog, so once this build's layout
-// exists, a page reads it while the rebuild runs in the background: it lags
-// only the last sync or a change of date.
+// errToolRollupBuilding answers a page while the first rollup in this build's
+// layout is built.
+var errToolRollupBuilding = errors.New("Pharos is rebuilding its tool summaries after an update; try again in a minute")
+
+// currentToolRollup is ensureToolRollup for a page, which never waits for it:
+// a full rebuild reads every tool call, half a minute on a large catalog, and
+// waits for any sync holding the writer. A page reads the stored rollup while
+// the rebuild runs in the background, so it lags only the last sync or a
+// change of date. Until this build's layout exists there is nothing to read.
 func (c *Catalog) currentToolRollup(ctx context.Context) error {
 	_, built, _, stale, err := c.toolRollupStale(ctx)
 	if err != nil || !stale {
 		return err
 	}
 	if !strings.HasSuffix(built, "/"+toolRollupVersion) {
-		return c.ensureToolRollup(ctx)
+		err = errToolRollupBuilding
 	}
 	var deferred bool
-	if err := c.reader().QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sync_deferred WHERE name='tools' AND generation>completed_generation)").Scan(&deferred); err != nil {
-		return err
+	if e := c.reader().QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sync_deferred WHERE name='tools' AND generation>completed_generation)").Scan(&deferred); e != nil {
+		return e
 	}
-	if deferred {
-		return nil
+	if !deferred {
+		c.refreshToolRollup()
 	}
+	return err
+}
+
+// refreshToolRollup runs ensureToolRollup in the background unless it is
+// already running there.
+func (c *Catalog) refreshToolRollup() {
 	state := &c.tools
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	if state.refreshing {
-		return nil
+		return
 	}
 	refresh := func(ctx context.Context) {
 		if err := c.ensureToolRollup(ctx); err != nil && ctx.Err() == nil {
@@ -498,7 +510,6 @@ func (c *Catalog) currentToolRollup(ctx context.Context) error {
 	if !c.runBackground(refresh) {
 		state.refreshing = false // the service is stopping
 	}
-	return nil
 }
 
 // ensureToolRollup rebuilds tool_usage_daily and tool_call_cube when the

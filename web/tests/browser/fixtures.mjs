@@ -265,6 +265,16 @@ export const defaultApi = {
   "GET /api/health/storage": { volume_name: "Pharos SSD", index_bytes: 2_000_000_000, internal_free_bytes: 100_000_000_000, free_bytes: 400_000_000_000, staging_bytes: 0, staging_cap_bytes: 1, path: "/Volumes/Pharos SSD/Pharos", status: "available" },
   "GET /api/health/pricing": { priced_tokens: 90, assumed_tokens: 0, partial_tokens: 0, unpriced_tokens: 10, total_tokens: 2_500_000_000, cost_usd: 1234.5, recent_tokens: 400_000_000, recent_cost_usd: 300, confirmed_changes: 3, proposed_changes: 0, unpriced_models: [] },
   "GET /api/health/carbon": { factors: carbonFactors, windows: [{ key: "all", co2e_g: { central: 123456 } }, { key: "30d", co2e_g: { central: 23456 } }] },
+  "GET /api/health/storage/breakdown": {
+    status: "measured", measured_at: iso(60000), volume_name: "Pharos SSD", volume_total_bytes: 2_000_000_000_000, volume_free_bytes: 400_000_000_000, total_bytes: 170_000_000_000,
+    estimated: "Repository shares, and the catalog's division by Mac and source, are estimated from message counts.",
+    parts: [["originals_latest", "Originals: latest copies", 46e9], ["originals_history", "Originals: earlier versions", 15e9], ["originals_other", "Originals: manifests and indexes", 2e8],
+      ["catalog_database", "Pharos catalog", 94e9], ["catalog_log", "Catalog write-ahead log", 12e9], ["catalog_sidecar", "Search and analysis caches", 1e9], ["preserved", "Preserved packages", 0], ["other", "App, settings and staging", 1.8e9]]
+      .map(([key, label, bytes]) => ({ key, label, bytes })),
+    machines: [{ id: "test-mac", label: "A Mac Studio with a rather long name (this Mac)", originals_bytes: 52e9, catalog_bytes: 90e9 }, { id: "air", label: "MacBook Air", originals_bytes: 9e9, catalog_bytes: 17e9 }],
+    sources: [{ id: "conductor", label: "conductor", originals_bytes: 30e9, catalog_bytes: 50e9 }, { id: "codex", label: "codex", originals_bytes: 16e9, catalog_bytes: 30e9 }],
+    repositories: [{ id: "repo", label: "a-repository-name-without-any-spaces-to-wrap", originals_bytes: 20e9, catalog_bytes: 40e9 }, { id: "", label: "No repository", originals_bytes: 30e9, catalog_bytes: 20e9 }],
+  },
   "GET /api/health/freshness": { sources: [], sync_active: false },
   "GET /api/health/drive": { free_bytes: 400_000_000_000, sizes: { library_bytes: 12_000_000_000 } },
   "GET /api/authorship": { built_at: iso(3600000), running: false, stale: false, error: null, totals: { typed_words: 1234, typed_messages: 98, messages: 400 }, last_30_days: { typed_words: 500 } },

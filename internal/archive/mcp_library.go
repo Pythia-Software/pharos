@@ -28,6 +28,7 @@ import (
 // answer and tool calls fail with a "not connected" error.
 type mcpServer struct {
 	configPath string // --config; "" resolves as LoadConfig does
+	service    string // --service; endpoint file of the service running Ask Pharos
 	identity   func(string) string
 	client     *http.Client
 	verified   string // library directory last checked against volume_id
@@ -35,6 +36,9 @@ type mcpServer struct {
 	answer  func(*Catalog, map[string]any) map[string]any
 	restart func(pending []byte) error
 	faulted bool // a direct call hit a memory fault (see direct)
+	// release stores a direct call's history and closes its catalog once
+	// the call is answered (see afterAnswer).
+	release func()
 }
 
 func newMCPServer(configPath string) *mcpServer {
@@ -47,10 +51,13 @@ func newMCPServer(configPath string) *mcpServer {
 }
 
 // RunMCP serves MCP over stdio for the library or install that configPath
-// names or, without one, that LoadConfig finds.
-func RunMCP(configPath string, input io.Reader, output io.Writer) error {
+// names or, without one, that LoadConfig finds. service, when set, names the
+// service to answer from (see dispatch).
+func RunMCP(configPath, service string, input io.Reader, output io.Writer) error {
 	quickHostDetection = true
-	return newMCPServer(configPath).run(input, output)
+	server := newMCPServer(configPath)
+	server.service = service
+	return server.run(input, output)
 }
 
 // mcpPendingEnv hands input read ahead but not yet answered to the process
@@ -66,11 +73,15 @@ func (m *mcpServer) run(input io.Reader, output io.Writer) error {
 		data, _ := base64.StdEncoding.DecodeString(pending)
 		input = io.MultiReader(bytes.NewReader(data), input)
 	}
+	// Input can end right after an answer, before afterAnswer.
+	defer m.releaseCatalog()
 	return serveMCP(input, output, m.handle, m.afterAnswer)
 }
 
-// afterAnswer restarts the process once the answer to a faulted call is out.
+// afterAnswer releases a direct call's catalog, then restarts the process
+// once the answer to a faulted call is out.
 func (m *mcpServer) afterAnswer(pending []byte) {
+	m.releaseCatalog()
 	if !m.faulted {
 		return
 	}
@@ -110,13 +121,32 @@ func (m *mcpServer) dispatch(request map[string]any) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Ask Pharos answers from the library it runs in. The app's MCP assignment
+	// chooses the library for outside agents and may name another one.
+	if m.service != "" {
+		var endpoint applicationEndpoint
+		b, err := os.ReadFile(m.service)
+		if err == nil {
+			err = json.Unmarshal(b, &endpoint)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("the Pharos service that started Ask Pharos has finished; retry from Pharos")
+		}
+		if response, forwarded, err := m.forward(endpoint.URL, endpoint.Token, config.CatalogPath, request); forwarded {
+			return response, err
+		}
+		return m.direct(config, request)
+	}
 	if application := managedApplicationForConfig(runningExecutable(), config); application != "" {
 		if firstString(request["method"]) == "tools/list" {
 			return mcpResult(request, map[string]any{"tools": mcpTools}), nil
 		}
 		return applicationRPC(m.client, application, request)
 	}
-	if response, forwarded, err := m.forward(config, request); forwarded {
+	if config.Host != "127.0.0.1" && config.Host != "::1" && config.Host != "localhost" {
+		return m.direct(config, request)
+	}
+	if response, forwarded, err := m.forward("http://"+net.JoinHostPort(config.Host, strconv.Itoa(config.Port)), config.APIToken, config.CatalogPath, request); forwarded {
 		return response, err
 	}
 	return m.direct(config, request)
@@ -150,23 +180,20 @@ func libraryNotConnected(path string) error {
 // service with another catalog open on the same port declines it.
 const mcpCatalogHeader = "X-Pharos-Catalog"
 
-// forward sends request to the running service for config. It reports false
-// only when nothing ran there, so the caller may open the catalog itself.
-func (m *mcpServer) forward(config Config, request map[string]any) (map[string]any, bool, error) {
-	if config.Host != "127.0.0.1" && config.Host != "::1" && config.Host != "localhost" {
-		return nil, false, nil
-	}
+// forward sends request to the service at base for catalogPath. It reports
+// false only when nothing ran there, so the caller may open the catalog itself.
+func (m *mcpServer) forward(base, token, catalogPath string, request map[string]any) (map[string]any, bool, error) {
 	body, err := json.Marshal(request)
 	if err != nil {
 		return nil, true, err
 	}
-	post, err := http.NewRequest(http.MethodPost, "http://"+net.JoinHostPort(config.Host, strconv.Itoa(config.Port))+"/api/mcp/rpc", bytes.NewReader(body))
+	post, err := http.NewRequest(http.MethodPost, base+"/api/mcp/rpc", bytes.NewReader(body))
 	if err != nil {
 		return nil, false, nil
 	}
-	post.Header.Set("Authorization", "Bearer "+config.APIToken)
+	post.Header.Set("Authorization", "Bearer "+token)
 	post.Header.Set("Content-Type", "application/json")
-	post.Header.Set(mcpCatalogHeader, config.CatalogPath)
+	post.Header.Set(mcpCatalogHeader, catalogPath)
 	answer, err := m.client.Do(post)
 	if err != nil {
 		var dial *net.OpError
@@ -199,7 +226,29 @@ func (m *mcpServer) forward(config Config, request map[string]any) (map[string]a
 	return nil, true, fmt.Errorf("the Pharos service answered %s", answer.Status)
 }
 
-// direct opens the catalog for this request alone.
+// releaseCatalog runs the release a direct call left. Storing its history
+// writes to the catalog, so a drive yanked meanwhile faults as in direct.
+func (m *mcpServer) releaseCatalog() {
+	release := m.release
+	if release == nil {
+		return
+	}
+	m.release = nil
+	defer debug.SetPanicOnFault(debug.SetPanicOnFault(true))
+	defer func() {
+		if value := recover(); value != nil {
+			if _, fault := value.(interface{ Addr() uintptr }); !fault {
+				panic(value)
+			}
+			m.faulted, m.verified = true, ""
+		}
+	}()
+	release()
+}
+
+// direct opens the catalog for this request alone. It stays open, with the
+// library's use lease, until the answer is out, when afterAnswer stores the
+// call's history and closes it: the agent does not wait for the write.
 //
 // A drive yanked mid-call faults on SQLite's mapped index (see exitOnFault).
 // The call then fails, and the process restarts after answering (see
@@ -207,18 +256,23 @@ func (m *mcpServer) forward(config Config, request map[string]any) (map[string]a
 // reused for the same file (same device and inode) once the drive is back.
 // So after a fault nothing touches the catalog again, not even to close it.
 func (m *mcpServer) direct(config Config, request map[string]any) (response map[string]any, err error) {
+	m.releaseCatalog()
 	if err := m.checkLibrary(config); err != nil {
 		return nil, err
 	}
 	if releasedRecently(config.CatalogPath) {
 		return nil, errLibraryReleased
 	}
+	var lease *os.File
+	defer func() {
+		if lease != nil {
+			lease.Close()
+		}
+	}()
 	if _, e := os.Stat(config.CatalogPath); e == nil {
-		lease, e := fileLease(libraryUseLock(config), false)
-		if e != nil {
+		if lease, e = fileLease(libraryUseLock(config), false); e != nil {
 			return nil, e
 		}
-		defer lease.Close()
 		if _, e = os.Stat(pendingDeliveryPath(config)); e == nil {
 			return nil, fmt.Errorf("this library is finishing a verified move; resume it in Pharos")
 		}
@@ -249,7 +303,14 @@ func (m *mcpServer) direct(config Config, request map[string]any) (response map[
 	}
 	catalog.setCaptureRoot(config.CaptureRoot)
 	response = m.answer(catalog, request)
-	catalog.closeQuery()
+	held := lease
+	lease = nil
+	m.release = func() {
+		catalog.closeQuery()
+		if held != nil {
+			held.Close()
+		}
+	}
 	return response, nil
 }
 

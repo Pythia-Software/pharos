@@ -173,12 +173,14 @@ func TestStatisticsSnapshotsSurviveChangesAndReopen(t *testing.T) {
 	if _, err := callMCP(c, "query_statistics", args); err == nil {
 		t.Fatal("uncaptured metric accepted")
 	}
-	if _, err := c.DB.Exec("UPDATE mcp_stat_snapshots SET expires_at=0 WHERE id=?", first["snapshot_id"]); err != nil {
-		t.Fatal(err)
-	}
+	c.now = func() time.Time { return time.Now().Add(statisticsTTL) }
 	args["select"] = []string{"total_tokens"}
-	if _, err := callMCP(c, "query_statistics", args); err == nil {
-		t.Fatal("expired snapshot accepted")
+	if _, err := callMCP(c, "query_statistics", args); err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("expired snapshot accepted: %v", err)
+	}
+	// Snapshots can be large, so reading one frees every expired snapshot.
+	if count := activeStatisticsSnapshots(c); count != 0 {
+		t.Fatalf("%d expired snapshots kept in memory", count)
 	}
 }
 
@@ -345,15 +347,16 @@ func TestStatisticsIncrementalProjectionAndPriceInvalidation(t *testing.T) {
 	if statisticsItems(after)[0]["cost_usd"] == before {
 		t.Fatal("price update didn't invalidate projection")
 	}
+	// Reads compute the repriced metrics; maintenance stores them.
+	if _, err := c.refreshMetricProjections(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := c.DB.Exec("INSERT INTO mcp_calls(called_at,tool_name,status,duration_ms,response_bytes,estimated_output_tokens) VALUES('x','query_statistics','ok',0,0,0)"); err != nil {
 		t.Fatal(err)
 	}
 	var n int
 	if err := c.DB.QueryRow("SELECT COUNT(*) FROM mcp_metric_dirty").Scan(&n); err != nil || n != 0 {
 		t.Fatalf("audit dirtied metrics: %d %v", n, err)
-	}
-	if _, err := c.refreshMetricProjections(context.Background(), 10); err != nil {
-		t.Fatal(err)
 	}
 	c.now = func() time.Time { return time.Now().Add(10 * time.Minute) }
 	if _, err := callMCP(c, "query_statistics", map[string]any{"snapshot_id": first["snapshot_id"], "select": []string{"cost_usd"}}); err == nil {
@@ -528,8 +531,12 @@ func TestStatisticsReleaseAndConcurrentClients(t *testing.T) {
 }
 
 func TestStatisticsPendingProjectionRetainsRecordedEvidence(t *testing.T) {
+	// Beyond the workspaces a query computes, dirty ones stay pending.
+	override(t, &statisticsFreshWorkspaces, 0)
 	c := statisticsFixture(t)
-	_ = statisticsCall(t, c, "query_statistics", map[string]any{"select": []string{"total_tokens"}})
+	if _, err := c.refreshMetricProjections(t.Context(), 10); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := c.DB.Exec("UPDATE agent_session_usage SET total_tokens=9999 WHERE agent_session_id=?", stableID("agent-session", "c1", "main")); err != nil {
 		t.Fatal(err)
 	}
@@ -576,9 +583,8 @@ func TestStatisticsBudgetFailureDoesNotConsumeSnapshotSlots(t *testing.T) {
 			t.Fatal("insufficient budget accepted")
 		}
 	}
-	var count int
-	if err := c.DB.QueryRow("SELECT COUNT(*) FROM mcp_stat_snapshots").Scan(&count); err != nil || count != 0 {
-		t.Fatalf("budget failures leaked %d snapshots: %v", count, err)
+	if count := activeStatisticsSnapshots(c); count != 0 {
+		t.Fatalf("budget failures leaked %d snapshots", count)
 	}
 	_ = statisticsCall(t, c, "query_statistics", map[string]any{"select": []string{}})
 }
@@ -619,7 +625,7 @@ func TestStatisticsVectorScoringUsesLeasedSnapshotConnection(t *testing.T) {
 	}
 }
 
-func TestStatisticsOverviewRefreshesRequestedWorkspace(t *testing.T) {
+func TestStatisticsOverviewComputesRequestedWorkspace(t *testing.T) {
 	c := statisticsFixture(t)
 	tx, err := c.DB.Begin()
 	if err != nil {
@@ -645,11 +651,12 @@ func TestStatisticsOverviewRefreshesRequestedWorkspace(t *testing.T) {
 	overview := statisticsCall(t, c, "get_conversation_overview", map[string]any{"conversation_id": "c1", "include_metrics": true, "max_output_tokens": 4000})
 	metric := overview["metrics"].(map[string]any)["total_tokens"].(map[string]any)
 	if metric["status"] != "complete" || metric["effective_value"] != float64(1100000) {
-		t.Fatalf("requested workspace not refreshed on first call: %#v", metric)
+		t.Fatalf("requested workspace not computed on first call: %#v", metric)
 	}
+	// Storing projections is left to the maintenance loop.
 	var dirty int
-	if err = c.DB.QueryRow("SELECT COUNT(*) FROM mcp_metric_dirty").Scan(&dirty); err != nil || dirty != 150 {
-		t.Fatalf("overview refreshed unrelated workspaces: %d dirty, %v", dirty, err)
+	if err = c.DB.QueryRow("SELECT COUNT(*) FROM mcp_metric_dirty").Scan(&dirty); err != nil || dirty != 151 {
+		t.Fatalf("overview stored metric projections: %d dirty, %v", dirty, err)
 	}
 }
 
@@ -702,9 +709,8 @@ func TestStatisticsOneShotQueriesDoNotConsumeSnapshotSlots(t *testing.T) {
 			}
 		}
 	}
-	var count int
-	if err := c.DB.QueryRow("SELECT COUNT(*) FROM mcp_stat_snapshots").Scan(&count); err != nil || count != 0 {
-		t.Fatalf("one-shot queries leaked %d snapshots: %v", count, err)
+	if count := activeStatisticsSnapshots(c); count != 0 {
+		t.Fatalf("one-shot queries leaked %d snapshots", count)
 	}
 	// Even a full set of explicitly retained snapshots must not block one-shots.
 	retained := []string{}
@@ -733,4 +739,16 @@ func TestStatisticsOneShotQueriesDoNotConsumeSnapshotSlots(t *testing.T) {
 			t.Fatal("card mode accepted snapshot retention")
 		}
 	}
+}
+
+func activeStatisticsSnapshots(c *Catalog) int {
+	statisticsSnapshots.mu.Lock()
+	defer statisticsSnapshots.mu.Unlock()
+	count := 0
+	for key := range statisticsSnapshots.snapshots {
+		if strings.HasPrefix(key, c.Path+"\x00") {
+			count++
+		}
+	}
+	return count
 }

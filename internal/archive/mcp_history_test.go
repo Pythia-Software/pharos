@@ -17,9 +17,10 @@ func TestMCPRequestedArchiveSourceProjection(t *testing.T) {
 		"codex":  {"source": "codex"}, "blank": {"source": " "},
 		"missing": {}, "number": {"source": 123}, "malformed": {},
 	} {
-		if err := catalog.RecordMCPCall(name, args, "ok", "", time.Millisecond, 10, nil, false); err != nil {
-			t.Fatal(err)
-		}
+		catalog.RecordMCPCall(name, args, "ok", "", time.Millisecond, 10, nil, false)
+	}
+	if err := catalog.flushMCPHistory(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := catalog.DB.Exec(`UPDATE mcp_calls SET arguments_json='invalid' WHERE tool_name='malformed'`); err != nil {
 		t.Fatal(err)
@@ -106,6 +107,9 @@ func TestMCPControlAndCallHistory(t *testing.T) {
 	}
 	if response := call("search_conversations", map[string]any{"query": "parser"}); response["result"].(map[string]any)["isError"] != true {
 		t.Fatalf("disabled MCP accepted a call: %#v", response)
+	}
+	if err := catalog.flushMCPHistory(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 	history := get("/api/mcp/calls?limit=10")
 	if history.Code != 200 {

@@ -36,6 +36,7 @@ func seedSharedWork(t *testing.T, catalog *Catalog) string {
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
+	publishProjections(t, catalog)
 	rows, err := queryMaps(catalog.DB, "SELECT id FROM workspaces WHERE source_id='share-me'")
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("workspace rows = %v %v", rows, err)
@@ -157,6 +158,7 @@ func TestSharedExportScopesTablesToItsWorks(t *testing.T) {
 		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth) VALUES('remote-child','ws-0','codex','local','remote-child','conv-0',1)`,
 		`INSERT INTO origin_observations(conversation_id,evidence_key,channel,machine_id,execution_machine_id,priority,evidence) VALUES('conv-0','producer','desktop','laptop','laptop',30,'desktop start'),('conv-1','producer',NULL,NULL,'remote',30,'remote child'),('remote-child','producer',NULL,NULL,'remote',30,'remote child')`,
 	)
+	publishProjections(t, catalog)
 	page, name, err := catalog.SharedHTML(context.Background(), []string{"ws-1", "ws-0", "ws-1"})
 	if err != nil {
 		t.Fatal(err)
@@ -242,6 +244,7 @@ func TestSharedExportMCPMethodPreset(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	publishProjections(t, catalog)
 	ctx := context.Background()
 	page, _, err := catalog.SharedHTML(ctx, []string{"ws-0"})
 	if err != nil {

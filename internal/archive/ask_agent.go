@@ -5,7 +5,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -37,6 +41,30 @@ type askAnswer struct {
 	Message       string
 	Cards         []askCard
 	Clarification *askClarification
+}
+
+// askMCPExecutable runs the CLI's MCP server. It is this service's own binary,
+// which reads this catalog's schema; a copy beside library.toml may be older.
+var askMCPExecutable = runningExecutable
+
+// askMCP connects the CLI to this service's library through a private endpoint
+// file at path, which lasts for the request. The installed app's MCP assignment
+// is for outside agents and may name another library.
+func (s *Server) askMCP(path string) (askMCPServer, error) {
+	executable := askMCPExecutable()
+	if executable == "" {
+		return askMCPServer{}, fmt.Errorf("locate the Pharos executable")
+	}
+	config := s.Config()
+	configPath, err := filepath.Abs(config.Path)
+	if err != nil {
+		return askMCPServer{}, err
+	}
+	endpoint := applicationEndpoint{URL: "http://" + net.JoinHostPort(config.Host, strconv.Itoa(config.Port)), Token: config.APIToken, PID: os.Getpid(), Catalog: config.CatalogPath}
+	if err = os.WriteFile(path, []byte(jsonText(endpoint)), 0600); err != nil {
+		return askMCPServer{}, err
+	}
+	return askMCPServer{Command: executable, Args: []string{"--config", configPath, "mcp", "--service", path}}, nil
 }
 
 func askValidateClarification(c *askClarification) error {
@@ -85,7 +113,12 @@ func (s *Server) answerAsk(ctx context.Context, p askProvider, session askSessio
 	if !enabled {
 		return askAnswer{}, fmt.Errorf("Pharos MCP is turned off. Enable it in Settings → MCP, then retry")
 	}
-	p.mcp.Command, p.mcp.Args, err = mcpCommand(s.Config())
+	dir, err := os.MkdirTemp("", "pharos-ask-mcp-")
+	if err != nil {
+		return askAnswer{}, fmt.Errorf("configure Pharos MCP: %w", err)
+	}
+	defer os.RemoveAll(dir)
+	p.mcp, err = s.askMCP(filepath.Join(dir, "service.json"))
 	if err != nil {
 		return askAnswer{}, fmt.Errorf("configure Pharos MCP: %w", err)
 	}

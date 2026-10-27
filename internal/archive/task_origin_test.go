@@ -17,7 +17,7 @@ func TestTaskOriginsInheritAcrossProvidersAndMirrors(t *testing.T) {
 		`INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('r','w','native-alias',1,'{}')`,
 		`INSERT INTO conversation_launches(child_id,parent_id,tool_call_id,program) VALUES('c','r','call','claude')`,
 	)
-	origins, err := c.conversationOrigins(t.Context())
+	origins, err := publishedOrigins(c, t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestTaskOriginMachinesAndLateParents(t *testing.T) {
 	child := ConversationRecord{NativeID: "child", Provider: "claude", Account: "local", ParentProvider: "codex", ParentNativeID: "parent", AgentDepth: 1, Harness: "codex/codex_exec", Initiation: &InitiationRecord{ExecutionMachine: &MachineRecord{"remote", "Remote", "cloud"}}}
 	add(child)
 	childID := stableID("conversation", "claude", "local", "child")
-	origins, err := c.conversationOrigins(t.Context())
+	origins, err := publishedOrigins(c, t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestTaskOriginMachinesAndLateParents(t *testing.T) {
 		t.Fatal(origins[childID])
 	}
 	add(ConversationRecord{NativeID: "parent", Provider: "codex", Account: "local", Initiation: &InitiationRecord{Channel: "desktop", Machine: &MachineRecord{"laptop", "Laptop", "device"}, ExecutionMachine: &MachineRecord{"laptop", "Laptop", "device"}}})
-	origins, err = c.conversationOrigins(t.Context())
+	origins, err = publishedOrigins(c, t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestTaskOriginMachinesAndLateParents(t *testing.T) {
 	if _, err := c.DB.Exec("UPDATE conversations SET origin_host_id='another-copy' WHERE id=?", childID); err != nil {
 		t.Fatal(err)
 	}
-	origins, err = c.conversationOrigins(t.Context())
+	origins, err = publishedOrigins(c, t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestTaskOriginMachinesAndLateParents(t *testing.T) {
 	}
 	add(ConversationRecord{NativeID: "alias-child", Provider: "claude", Account: "local", ParentProvider: "codex", ParentNativeID: "parent-alias", AgentDepth: 1})
 	aliasID := stableID("conversation", "claude", "local", "alias-child")
-	origins, err = c.conversationOrigins(t.Context())
+	origins, err = publishedOrigins(c, t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestTaskOriginMachinesAndLateParents(t *testing.T) {
 	if _, err := c.DB.Exec(`UPDATE conversations SET aliases_json='["parent-alias"]' WHERE native_id='parent'`); err != nil {
 		t.Fatal(err)
 	}
-	origins, err = c.conversationOrigins(t.Context())
+	origins, err = publishedOrigins(c, t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestTaskOriginUnknownConflictAndCycle(t *testing.T) {
 		`INSERT INTO origin_observations(conversation_id,evidence_key,priority,evidence,parent_native_id) VALUES('parent-conflict','a',30,'producer a','u'),('parent-conflict','b',30,'producer b','x')`,
 		`INSERT INTO conversation_launches(child_id,parent_id,tool_call_id,program) VALUES('launch-conflict','unknown','call-a','codex'),('launch-alias','conflict','call-b','codex')`,
 	)
-	origins, err := c.conversationOrigins(context.Background())
+	origins, err := publishedOrigins(c, context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,6 +151,7 @@ func TestTaskOriginUsageKeepsOwnProvider(t *testing.T) {
 		`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,depth,provider,model,usage_status) VALUES('session','work','child','main','root',1,'claude','claude-sonnet-4-6','reported')`,
 		`INSERT INTO agent_session_usage(agent_session_id,usage_hour,model,attribution,total_tokens) VALUES('session','2026-10-26T12:00:00Z','claude-sonnet-4-6','request',100)`,
 	)
+	publishOrigins(t, c)
 	rows, err := c.usageRows(time.UTC)
 	if err != nil {
 		t.Fatal(err)
@@ -173,6 +174,7 @@ func TestTaskOriginUsageKeepsOwnProvider(t *testing.T) {
 	if err := c.RebuildAuthorship(t.Context(), "origin fixture"); err != nil {
 		t.Fatal(err)
 	}
+	publishProjections(t, c)
 	s := testServer(t, config, c)
 	for _, dataset := range []string{"usage", "tool_calls", "skill_usages", "conversation_activity"} {
 		for field, value := range map[string]string{"channels": "desktop", "machines": "laptop", "execution_machines": "laptop"} {
@@ -266,7 +268,7 @@ func TestTaskOriginRollupsAndReadonlyQueries(t *testing.T) {
 	}
 	declare("desktop", "remote")
 	check()
-	origins, err := c.conversationOrigins(t.Context())
+	origins, err := publishedOrigins(c, t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +326,7 @@ func TestTaskOriginMachineEvidenceAndWebFallback(t *testing.T) {
 		`INSERT INTO host_machines VALUES('host-a','device'),('host-b','device')`,
 		`INSERT INTO conversation_sightings(conversation_id,host_id,origin,source_name,first_seen_at,last_seen_at) VALUES('local','host-a','a','codex','x','x'),('local','host-b','b','codex','x','x'),('export','host-a','download','chatgpt','x','x')`,
 		`INSERT INTO origin_observations(conversation_id,evidence_key,channel,priority,evidence) VALUES('web','producer','web',30,'explicit web origin')`)
-	origins, err := c.conversationOrigins(t.Context())
+	origins, err := publishedOrigins(c, t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +342,7 @@ func TestTaskOriginMachineEvidenceAndWebFallback(t *testing.T) {
 	if _, err := c.DB.Exec("UPDATE machines SET label='New name' WHERE id='device'"); err != nil {
 		t.Fatal(err)
 	}
-	origins, err = c.conversationOrigins(t.Context())
+	origins, err = publishedOrigins(c, t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,7 +352,7 @@ func TestTaskOriginMachineEvidenceAndWebFallback(t *testing.T) {
 	if _, err := c.DB.Exec(`INSERT INTO conversation_sightings(conversation_id,host_id,origin,source_name,first_seen_at,last_seen_at) VALUES('local','unmapped-host','copy','codex','x','x')`); err != nil {
 		t.Fatal(err)
 	}
-	origins, err = c.conversationOrigins(t.Context())
+	origins, err = publishedOrigins(c, t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +376,7 @@ func TestTaskOriginKeepsInitialMarkerAfterResume(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	origins, err := c.conversationOrigins(t.Context())
+	origins, err := publishedOrigins(c, t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +396,7 @@ func TestTaskOriginKeepsInitialMarkerAfterResume(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		origins, err = c.conversationOrigins(t.Context())
+		origins, err = publishedOrigins(c, t.Context())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -408,6 +410,7 @@ func TestTaskOriginKeepsInitialMarkerAfterResume(t *testing.T) {
 func TestTaskOriginStatisticsThreeDimensions(t *testing.T) {
 	c := statisticsFixture(t)
 	execTx(t, c.DB, `UPDATE conversations SET harness='codex/codex_desktop' WHERE id='c1'`, `UPDATE conversations SET harness='codex/codex_exec' WHERE id='c2'`)
+	publishOrigins(t, c)
 	value, err := c.queryStatistics("query_statistics", map[string]any{"entity": "conversation", "result_type": "aggregate", "group_by": []any{"provider", "channel", "machine_id"}, "aggregations": []any{map[string]any{"id": "tokens", "op": "sum", "metric": "total_tokens"}}, "max_output_tokens": 4000})
 	if err != nil {
 		t.Fatal(err)
@@ -424,5 +427,42 @@ func TestTaskOriginStatisticsThreeDimensions(t *testing.T) {
 	expected := integer(baseline.(map[string]any)["groups"].([]map[string]any)[0]["values"].(map[string]any)["tokens"])
 	if len(groups) != 2 || total != expected {
 		t.Fatalf("origin grouping changed totals: %#v", value)
+	}
+}
+
+// publishedOrigins publishes origins, as the writer that changed their inputs
+// does, and reads them.
+func publishedOrigins(c *Catalog, ctx context.Context) (map[string]map[string]any, error) {
+	if err := c.ensureOrigins(ctx); err != nil {
+		return nil, err
+	}
+	return c.conversationOrigins(ctx)
+}
+
+// An ingest pauses the rest of the Library maintenance loop, which still
+// publishes the origins of the conversations it adds, spaced while it runs.
+func TestTaskOriginsPublishDuringAnIngest(t *testing.T) {
+	override(t, &originsRunInterval, 50*time.Millisecond)
+	c, _ := testCatalog(t)
+	// What beginIngest does for a sync or a capture index run.
+	c.projectionBatches.Add(1)
+	c.ingestRuns.Add(1)
+	defer c.ingestRuns.Add(-1)
+	defer c.projectionBatches.Add(-1)
+	ctx, cancel := context.WithCancel(t.Context())
+	stopped := make(chan struct{})
+	go func() { c.maintainLibrary(ctx); close(stopped) }()
+	defer func() { cancel(); <-stopped }()
+	for _, id := range []string{"first", "second"} {
+		execTx(t, c.DB,
+			`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('`+id+`','codex','local','`+id+`','`+id+`','2026-10-26')`,
+			`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness) VALUES('`+id+`','`+id+`','codex','local','`+id+`','codex/codex_desktop')`)
+		if !waitFor(10*time.Second, func() {
+			for countRows(t, c, "SELECT COUNT(*) FROM conversation_origins WHERE conversation_id='"+id+"' AND channel='desktop'") == 0 {
+				time.Sleep(10 * time.Millisecond)
+			}
+		}) {
+			t.Fatalf("%s: origins not published during the ingest", id)
+		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -67,6 +68,15 @@ type askState struct {
 	mu          sync.Mutex
 	active      map[string]askActive
 	models      map[string]askProvider
+	saving      map[string]*askSaving
+}
+
+// askSaving is a finished answer that its chat has not saved yet. Until it is
+// saved, only saveFinishedAsk writes that chat; drafts and a stop change this
+// copy, and version counts those changes.
+type askSaving struct {
+	session askSession
+	version int
 }
 
 var askID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,100}$`)
@@ -373,6 +383,10 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(fmt.Errorf("invalid chat ID"))
 			return
 		}
+		if saving := s.ask.saving[id]; saving != nil && r.Method == http.MethodGet {
+			writeJSON(w, saving.session, 200)
+			return
+		}
 		session, err := s.askSession(ctx, id)
 		if r.Method == http.MethodGet {
 			if errors.Is(err, sql.ErrNoRows) {
@@ -423,6 +437,15 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			session.ClarificationDraft = text
 		}
+		if saving := s.ask.saving[id]; saving != nil {
+			saving.session.Draft = draft
+			if _, ok := body["clarificationDraft"]; ok {
+				saving.session.ClarificationDraft = session.ClarificationDraft
+			}
+			saving.version++
+			writeJSON(w, saving.session, 200)
+			return
+		}
 		session.UpdatedAt = time.Now().UnixMilli()
 		if err = s.saveAskSession(ctx, session, false); err != nil {
 			fail(err)
@@ -434,7 +457,8 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(fmt.Errorf("POST required"))
 			return
 		}
-		if active, ok := s.ask.active[firstString(body["id"])]; ok {
+		id := firstString(body["id"])
+		if active, ok := s.ask.active[id]; ok {
 			active.cancel()
 			s.ask.mu.Unlock()
 			select {
@@ -442,6 +466,16 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			case <-ctx.Done():
 			}
 			s.ask.mu.Lock()
+		}
+		// An answer that arrived but is not saved yet, perhaps just now, is
+		// replaced by the stop the user sees. Clone the conversation, since a
+		// save in progress reads the old one.
+		if saving := s.ask.saving[id]; saving != nil {
+			conversation := slices.Clone(saving.session.Conversation)
+			turn := &conversation[len(conversation)-1]
+			turn.Status, turn.Reply, turn.Cards, turn.Clarification = "canceled", askCanceledReply, []askCard{}, nil
+			saving.session.Conversation = conversation
+			saving.version++
 		}
 		writeJSON(w, map[string]bool{"ok": true}, 200)
 	case "/api/ask/visits":
@@ -565,7 +599,7 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			if errors.Is(runErr, context.Canceled) {
 				turn.Status = "canceled"
-				turn.Reply = "Request canceled. Your question is still in this conversation."
+				turn.Reply = askCanceledReply
 			}
 		} else {
 			turn.Cards = result.Cards
@@ -579,20 +613,95 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		session.UpdatedAt = time.Now().UnixMilli()
-		saveCtx, saveCancel := context.WithTimeout(s.life.ctx, 5*time.Second)
-		defer saveCancel()
-		err = s.saveAskSession(saveCtx, session, true)
+		// The request is over, so a stop or turning Ask off need not wait for
+		// the save, and the chat answers from this copy until it is saved.
+		// Saving can wait seconds for a busy catalog, so it does not hold the
+		// lock that every Ask request takes.
+		if s.ask.saving == nil {
+			s.ask.saving = map[string]*askSaving{}
+		}
+		s.ask.saving[session.ID] = &askSaving{session: session}
 		close(s.ask.active[session.ID].done)
 		delete(s.ask.active, session.ID)
-		if err != nil {
-			writeError(w, err, 500)
-			return
+		s.ask.mu.Unlock()
+		if pending, err := s.saveFinishedAsk(session.ID); pending {
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Ask Pharos: saving chat %s failed; retrying: %v\n", session.ID, err)
+			}
+			if !s.spawn(func(life context.Context) { s.retryFinishedAsk(life, session.ID) }) {
+				s.dropFinishedAsk(session.ID)
+			}
 		}
+		s.ask.mu.Lock()
 		writeJSON(w, session, 200)
 	default:
 		writeError(w, fmt.Errorf("not found"), 404)
 	}
 }
+
+const askCanceledReply = "Request canceled. Your question is still in this conversation."
+
+// A busy catalog can hold its writer for seconds, so a finished answer is
+// saved with a deadline and then retried in the background for a while.
+var (
+	askSaveTimeout = 10 * time.Second
+	askSaveRetry   = 2 * time.Second
+	askSaveWindow  = 5 * time.Minute
+)
+
+// saveFinishedAsk makes one attempt to save the chat's finished answer, without
+// holding s.ask.mu. It reports whether the chat still has one to save: the
+// attempt failed, or a draft or stop changed it meanwhile.
+func (s *Server) saveFinishedAsk(id string) (bool, error) {
+	s.ask.mu.Lock()
+	saving := s.ask.saving[id]
+	if saving == nil {
+		s.ask.mu.Unlock()
+		return false, nil
+	}
+	session, version := saving.session, saving.version
+	s.ask.mu.Unlock()
+	ctx, cancel := context.WithTimeout(s.life.ctx, askSaveTimeout)
+	defer cancel()
+	err := s.saveAskSession(ctx, session, true)
+	s.ask.mu.Lock()
+	defer s.ask.mu.Unlock()
+	if err == nil && s.ask.saving[id] == saving && saving.version == version {
+		delete(s.ask.saving, id)
+		return false, nil
+	}
+	return s.ask.saving[id] != nil, err
+}
+
+func (s *Server) retryFinishedAsk(life context.Context, id string) {
+	deadline := time.Now().Add(askSaveWindow)
+	for {
+		select {
+		case <-life.Done():
+			return
+		case <-time.After(askSaveRetry):
+		}
+		pending, err := s.saveFinishedAsk(id)
+		if !pending {
+			return
+		}
+		if time.Now().After(deadline) {
+			fmt.Fprintf(os.Stderr, "Ask Pharos: gave up saving chat %s: %v\n", id, err)
+			s.dropFinishedAsk(id)
+			return
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Ask Pharos: saving chat %s failed; retrying: %v\n", id, err)
+		}
+	}
+}
+
+func (s *Server) dropFinishedAsk(id string) {
+	s.ask.mu.Lock()
+	delete(s.ask.saving, id)
+	s.ask.mu.Unlock()
+}
+
 func (s *Server) startAsk(ctx context.Context, body map[string]any) (askSession, askProvider, context.Context, context.CancelFunc, error) {
 	var input struct {
 		ID        string
@@ -630,6 +739,9 @@ func (s *Server) startAsk(ctx context.Context, body map[string]any) (askSession,
 	}
 	if _, running := s.ask.active[input.ID]; running {
 		return fail(fmt.Errorf("this chat is already processing a question"))
+	}
+	if _, saving := s.ask.saving[input.ID]; saving {
+		return fail(fmt.Errorf("this chat is still saving its last answer; try again in a moment"))
 	}
 	session, err := s.askSession(ctx, input.ID)
 	if errors.Is(err, sql.ErrNoRows) {

@@ -258,38 +258,49 @@ func recordOriginObservation(tx *sql.Tx, id, host, source string, cv Conversatio
 
 // Origins are materialized once per graph revision, shared by all datasets.
 // Source observations are never overwritten by another copy's authority.
+//
+// Only writers publish them: the end of each ingest, the Library maintenance
+// loop and the tool rollup. Requests read what is published, which a sync
+// leaves up to originsRunInterval behind (see maintainLibrary).
+// The origins are computed from a read snapshot, so the writer is held only to
+// store the rows that changed. built records the snapshot's revision; commits
+// since then leave the projection dirty for the next pass.
 func (c *Catalog) ensureOrigins(ctx context.Context) error {
 	if c.queryOnly {
 		return ctx.Err()
 	}
 	c.originsMu.Lock()
 	defer c.originsMu.Unlock()
-	var dirty bool
-	if err := c.reader().QueryRowContext(ctx, "SELECT revision<>built FROM origin_state WHERE id=1").Scan(&dirty); err != nil || !dirty {
+	snapshot, err := c.reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
 		return err
 	}
+	defer snapshot.Rollback()
+	var revision, built int64
+	if err := snapshot.QueryRowContext(ctx, "SELECT revision,built FROM origin_state WHERE id=1").Scan(&revision, &built); err != nil || revision == built {
+		return err
+	}
+	rows, err := computeOrigins(ctx, snapshot)
+	if err != nil {
+		return err
+	}
+	// Linked child executions also supply attribution for tool calls stored
+	// in their parent's workspace, through the session's child handle.
+	linked, err := queryMapsContext(ctx, snapshot, `SELECT DISTINCT child_conversation_id,workspace_id FROM agent_sessions WHERE child_conversation_id IS NOT NULL`)
+	if err != nil {
+		return err
+	}
+	_ = snapshot.Rollback()
+	dependentWorkspaces := map[string][]string{}
+	for _, session := range linked {
+		id := firstString(session["child_conversation_id"])
+		dependentWorkspaces[id] = append(dependentWorkspaces[id], firstString(session["workspace_id"]))
+	}
 	return c.writeTransaction(ctx, "conversation-origins", func(tx *sql.Tx) error {
-		var revision, built int64
-		if err := tx.QueryRowContext(ctx, "SELECT revision,built FROM origin_state WHERE id=1").Scan(&revision, &built); err != nil {
+		// Another process may have published a later snapshot meanwhile.
+		var current int64
+		if err := tx.QueryRowContext(ctx, "SELECT built FROM origin_state WHERE id=1").Scan(&current); err != nil || current >= revision {
 			return err
-		}
-		if revision == built {
-			return nil
-		}
-		rows, err := computeOrigins(ctx, tx)
-		if err != nil {
-			return err
-		}
-		// Linked child executions also supply attribution for tool calls stored
-		// in their parent's workspace, through the session's child handle.
-		linked, err := queryMapsContext(ctx, tx, `SELECT DISTINCT child_conversation_id,workspace_id FROM agent_sessions WHERE child_conversation_id IS NOT NULL`)
-		if err != nil {
-			return err
-		}
-		dependentWorkspaces := map[string][]string{}
-		for _, session := range linked {
-			id := firstString(session["child_conversation_id"])
-			dependentWorkspaces[id] = append(dependentWorkspaces[id], firstString(session["workspace_id"]))
 		}
 		cols := append([]string{"conversation_id"}, originFields...)
 		updates, changes := []string{}, []string{}
@@ -297,18 +308,20 @@ func (c *Catalog) ensureOrigins(ctx context.Context) error {
 			updates = append(updates, f+"=excluded."+f)
 			changes = append(changes, "conversation_origins."+f+" IS NOT excluded."+f)
 		}
-		statement, err := tx.PrepareContext(ctx, `INSERT INTO conversation_origins(`+strings.Join(cols, ",")+`) VALUES(`+placeholders(len(cols))+`) ON CONFLICT(conversation_id) DO UPDATE SET `+strings.Join(updates, ",")+" WHERE "+strings.Join(changes, " OR "))
+		// A conversation deleted since the snapshot gets no row.
+		statement, err := tx.PrepareContext(ctx, `INSERT INTO conversation_origins(`+strings.Join(cols, ",")+`) SELECT `+placeholders(len(cols))+
+			` WHERE EXISTS(SELECT 1 FROM conversations WHERE id=?) ON CONFLICT(conversation_id) DO UPDATE SET `+strings.Join(updates, ",")+" WHERE "+strings.Join(changes, " OR "))
 		if err != nil {
 			return err
 		}
 		defer statement.Close()
 		dirtyWorkspaces := map[string]bool{}
 		for _, row := range rows {
-			values := make([]any, len(cols))
+			values := make([]any, len(cols), len(cols)+1)
 			for i, f := range cols {
 				values[i] = row[f]
 			}
-			result, err := statement.ExecContext(ctx, values...)
+			result, err := statement.ExecContext(ctx, append(values, row["conversation_id"])...)
 			if err != nil {
 				return err
 			}
@@ -547,10 +560,6 @@ func (c *Catalog) conversationOrigins(ctx context.Context) (map[string]map[strin
 			}
 			return result, nil
 		})
-	}
-
-	if err := c.ensureOrigins(ctx); err != nil {
-		return nil, err
 	}
 	return cachedValue(ctx, c, "conversation-origins", func(ctx context.Context) (map[string]map[string]any, error) {
 		rows, err := queryMapsContext(ctx, c.reader(), "SELECT * FROM conversation_origins")

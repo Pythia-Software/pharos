@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"sort"
 	"strings"
@@ -346,21 +347,7 @@ func (c *Catalog) conversationOverview(args map[string]any) (map[string]any, err
 		"note":              "Extractive previews; inspect cited messages before treating an outcome as verified."}
 	copyOrigin(result, row)
 	if args["include_metrics"] == true {
-		if _, err := c.refreshMetricProjections(context.Background(), 1, firstString(row["workspace_id"])); err != nil {
-			return nil, err
-		}
-		values, err := queryMaps(c.DB, `SELECT p.metrics_json metrics,
-			EXISTS(SELECT 1 FROM mcp_metric_dirty d WHERE d.workspace_id=c.workspace_id) metric_pending,
-			CASE WHEN `+currentGroupConversation("c")+` THEN 1 ELSE 0 END current_group_member
-			FROM conversations c LEFT JOIN mcp_metric_projection p ON p.entity='conversation' AND p.entity_id=c.id WHERE c.id=?`, id)
-		if err != nil {
-			return nil, err
-		}
-		raw := any(nil)
-		if len(values) > 0 {
-			raw = values[0]["metrics"]
-		}
-		metrics, err := decodeMetrics(raw)
+		metrics, values, err := c.conversationMetrics(context.Background(), id, firstString(row["workspace_id"]))
 		if err != nil {
 			return nil, err
 		}
@@ -574,4 +561,41 @@ func (c *Catalog) conversationMessages(args map[string]any) (map[string]any, err
 		result["next_offset"] = offset + len(result["items"].([]map[string]any))
 	}
 	return result, nil
+}
+
+// conversationMetrics reads conversation id's stored metrics, or computes them
+// when its workspace's projection is dirty, with whether it is a current group
+// member.
+func (c *Catalog) conversationMetrics(ctx context.Context, id, workspace string) (map[string]statMetricValue, []map[string]any, error) {
+	tx, err := c.reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, nil, err
+	}
+	defer tx.Rollback()
+	values, err := queryMapsContext(ctx, tx, `SELECT p.metrics_json metrics,
+		EXISTS(SELECT 1 FROM mcp_metric_dirty d WHERE d.workspace_id=c.workspace_id) metric_pending,
+		CASE WHEN `+currentGroupConversation("c")+` THEN 1 ELSE 0 END current_group_member
+		FROM conversations c LEFT JOIN mcp_metric_projection p ON p.entity='conversation' AND p.entity_id=c.id WHERE c.id=?`, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	raw := any(nil)
+	if len(values) > 0 {
+		raw = values[0]["metrics"]
+	}
+	metrics, err := decodeMetrics(raw)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(values) > 0 && integer(values[0]["metric_pending"]) != 0 {
+		fresh, err := c.currentMetrics(ctx, tx, []string{workspace})
+		if err != nil {
+			return nil, nil, err
+		}
+		values[0]["metric_pending"] = int64(0)
+		if metrics = fresh["conversation"][id]; metrics == nil {
+			metrics = absentMetrics("pending")
+		}
+	}
+	return metrics, values, nil
 }

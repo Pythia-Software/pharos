@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -141,7 +142,30 @@ func mcpResultTruncated(value any) bool {
 	return false
 }
 
-func (c *Catalog) RecordMCPCall(name string, args map[string]any, status, errorText string, duration time.Duration, responseBytes int, resultCount *int, truncated bool) error {
+// mcpHistory queues MCP call records for one background writer, so a call is
+// answered without waiting for the catalog writer, which a sync holds for
+// seconds at a time. Closing the catalog stores what is still queued.
+type mcpHistory struct {
+	// flush serializes writers; mu guards the fields below.
+	flush   sync.Mutex
+	mu      sync.Mutex
+	pending [][]any
+	// dropped counts records discarded while the queue was full.
+	dropped int
+	// scheduled is set while a background flush has yet to take the queue.
+	scheduled bool
+}
+
+// mcpHistoryQueue bounds the records waiting for the writer; beyond it the
+// oldest are dropped, which a catalog unwritable for that long would
+// otherwise turn into unbounded memory.
+const mcpHistoryQueue = 1000
+
+// RecordMCPCall queues one call's history record. The service stores it in
+// the background. Without one (a direct MCP call) it is stored when the catalog
+// closes, which the MCP process does once the call is answered, under its
+// memory-fault guard; a background goroutine would have none.
+func (c *Catalog) RecordMCPCall(name string, args map[string]any, status, errorText string, duration time.Duration, responseBytes int, resultCount *int, truncated bool) {
 	if len(errorText) > 500 {
 		errorText = errorText[:500]
 	}
@@ -149,14 +173,81 @@ func (c *Catalog) RecordMCPCall(name string, args map[string]any, status, errorT
 	if resultCount != nil {
 		count = *resultCount
 	}
-	_, err := c.DB.Exec(`INSERT INTO mcp_calls(called_at,tool_name,arguments_json,status,error_text,duration_ms,response_bytes,estimated_output_tokens,result_count,truncated)
-		VALUES(?,?,?,?,?,?,?,?,?,?)`, now(), clipText(name, 100), mcpArgumentSummary(args), status,
-		nilIfEmpty(errorText), duration.Milliseconds(), responseBytes, (responseBytes+2)/3, count, boolInt(truncated))
-	if err != nil {
-		return err
+	record := []any{now(), clipText(name, 100), mcpArgumentSummary(args), status,
+		nilIfEmpty(errorText), duration.Milliseconds(), responseBytes, (responseBytes + 2) / 3, count, boolInt(truncated)}
+	history := &c.mcpHistory
+	history.mu.Lock()
+	if len(history.pending) >= mcpHistoryQueue {
+		history.pending = history.pending[1:]
+		history.dropped++
 	}
-	_, err = c.DB.Exec(`DELETE FROM mcp_calls WHERE id <= COALESCE((SELECT id FROM mcp_calls ORDER BY id DESC LIMIT 1 OFFSET 5000),0)`)
+	history.pending = append(history.pending, record)
+	schedule := c.background != nil && !history.scheduled
+	history.scheduled = history.scheduled || schedule
+	history.mu.Unlock()
+	if schedule && !c.background(func(ctx context.Context) {
+		if err := c.flushMCPHistory(ctx); err != nil && ctx.Err() == nil {
+			fmt.Fprintf(os.Stderr, "MCP history: %v\n", err)
+		}
+	}) {
+		// The service is stopping; closing the catalog stores the queue.
+		history.mu.Lock()
+		history.scheduled = false
+		history.mu.Unlock()
+	}
+}
+
+// flushMCPHistory stores every queued record in one transaction, trimming the
+// log to its newest 5,000 calls. Records stay queued when it fails.
+func (c *Catalog) flushMCPHistory(ctx context.Context) error {
+	history := &c.mcpHistory
+	history.flush.Lock()
+	defer history.flush.Unlock()
+	history.mu.Lock()
+	batch, dropped := history.pending, history.dropped
+	history.pending, history.dropped, history.scheduled = nil, 0, false
+	history.mu.Unlock()
+	if dropped > 0 {
+		fmt.Fprintf(os.Stderr, "MCP history: dropped %d calls while the catalog could not be written\n", dropped)
+	}
+	if len(batch) == 0 {
+		return nil
+	}
+	err := c.writeTransaction(ctx, "mcp-history", func(tx *sql.Tx) error {
+		statement, err := tx.PrepareContext(ctx, `INSERT INTO mcp_calls(called_at,tool_name,arguments_json,status,error_text,duration_ms,response_bytes,estimated_output_tokens,result_count,truncated)
+		VALUES(?,?,?,?,?,?,?,?,?,?)`)
+		if err != nil {
+			return err
+		}
+		defer statement.Close()
+		for _, record := range batch {
+			if _, err := statement.ExecContext(ctx, record...); err != nil {
+				return err
+			}
+		}
+		_, err = tx.ExecContext(ctx, `DELETE FROM mcp_calls WHERE id <= COALESCE((SELECT id FROM mcp_calls ORDER BY id DESC LIMIT 1 OFFSET 5000),0)`)
+		return err
+	})
+	if err != nil {
+		history.mu.Lock()
+		history.pending = append(batch, history.pending...)
+		if extra := len(history.pending) - mcpHistoryQueue; extra > 0 {
+			history.pending = history.pending[extra:]
+			history.dropped += extra
+		}
+		history.mu.Unlock()
+	}
 	return err
+}
+
+// closeMCPHistory stores what is queued before the catalog closes, waiting
+// briefly for a writer in another process.
+func (c *Catalog) closeMCPHistory() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := c.flushMCPHistory(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "MCP history: %v\n", err)
+	}
 }
 
 func (c *Catalog) MCPCallHistory(limit, offset int, tool, status string) (map[string]any, error) {

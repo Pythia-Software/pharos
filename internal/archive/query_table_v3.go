@@ -96,9 +96,6 @@ func (s *Server) queryV3SourceFields(ctx context.Context, schema qt.Schema, q qt
 }
 
 func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.Values, schema qt.Schema, q qt.QueryRequestV3) (qt.QueryResultV3, *libraryFindSummary, error) {
-	if err := s.Catalog.ensureOrigins(ctx); err != nil {
-		return qt.QueryResultV3{}, nil, err
-	}
 	record, recordErr := s.recordSearch(ctx, dataset, params)
 	if recordErr != nil {
 		return qt.QueryResultV3{}, nil, recordErr

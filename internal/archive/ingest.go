@@ -280,6 +280,11 @@ func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress P
 		result.Error = err.Error()
 		return result
 	}
+	// Reads only see published origins (see ensureOrigins); the ingest that
+	// changed them publishes them.
+	if err := c.ensureOrigins(ctx); err != nil && ctx.Err() == nil {
+		fmt.Fprintf(os.Stderr, "Conversation origins: %v\n", err)
+	}
 	report("complete")
 	return result
 }

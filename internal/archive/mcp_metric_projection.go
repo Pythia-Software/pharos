@@ -99,11 +99,45 @@ func (c *Catalog) refreshMetricProjections(ctx context.Context, batch int, works
 		return 0, err
 	}
 	for _, row := range rows {
-		if err = c.projectWorkspaceMetrics(ctx, tx, book, firstString(row["workspace_id"])); err != nil {
+		id := firstString(row["workspace_id"])
+		if _, err = tx.ExecContext(ctx, "DELETE FROM mcp_metric_projection WHERE workspace_id=?", id); err != nil {
+			return 0, err
+		}
+		if err = c.projectWorkspaceMetrics(ctx, tx, book, id, func(entity, entityID string, values map[string]statMetricValue) error {
+			return storeMetricProjection(ctx, tx, entity, entityID, id, values)
+		}); err != nil {
 			return 0, err
 		}
 	}
 	return len(rows), tx.Commit()
+}
+
+// metricProjections are metrics computed for reading but not stored, keyed by
+// entity ("workspace" or "conversation") and then entity ID.
+type metricProjections map[string]map[string]map[string]statMetricValue
+
+// currentMetrics computes the metrics of workspaces whose projection is dirty
+// in tx's snapshot, for a read that must not wait to store them: the Library
+// maintenance loop does. Clean workspaces are skipped.
+func (c *Catalog) currentMetrics(ctx context.Context, tx *sql.Tx, workspaces []string) (metricProjections, error) {
+	fresh := metricProjections{"workspace": {}, "conversation": {}}
+	dirty, err := queryMapsContext(ctx, tx, `SELECT workspace_id FROM mcp_metric_dirty WHERE workspace_id IN (SELECT value FROM json_each(?))`, jsonText(workspaces))
+	if err != nil || len(dirty) == 0 {
+		return fresh, err
+	}
+	book, err := c.loadPriceBookFrom(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range dirty {
+		if err = c.projectWorkspaceMetrics(ctx, tx, book, firstString(row["workspace_id"]), func(entity, entityID string, values map[string]statMetricValue) error {
+			fresh[entity][entityID] = values
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+	}
+	return fresh, nil
 }
 
 func absentMetrics(status string) map[string]statMetricValue {
@@ -118,12 +152,11 @@ func absentMetrics(status string) map[string]statMetricValue {
 // conversations_parent_idx alone.
 const childConversationQuery = "SELECT EXISTS(SELECT 1 FROM conversations WHERE parent_id=?)"
 
-func (c *Catalog) projectWorkspaceMetrics(ctx context.Context, tx *sql.Tx, book priceBook, id string) error {
+// projectWorkspaceMetrics computes workspace id's metrics and its current
+// conversations' metrics from tx, passing each entity's values to store.
+func (c *Catalog) projectWorkspaceMetrics(ctx context.Context, tx *sql.Tx, book priceBook, id string, store func(entity, entityID string, values map[string]statMetricValue) error) error {
 	conversations, err := queryMapsContext(ctx, tx, `SELECT c.id,c.provider,c.started_at,c.ended_at FROM conversations c WHERE c.workspace_id=? AND `+currentGroupConversation("c"), id)
 	if err != nil {
-		return err
-	}
-	if _, err = tx.ExecContext(ctx, "DELETE FROM mcp_metric_projection WHERE workspace_id=?", id); err != nil {
 		return err
 	}
 	workspace := absentMetrics("unavailable")
@@ -248,7 +281,7 @@ func (c *Catalog) projectWorkspaceMetrics(ctx context.Context, tx *sql.Tx, book 
 		if err = metricFallback(ctx, tx, id, cid, own); err != nil {
 			return err
 		}
-		if err = storeMetricProjection(ctx, tx, "conversation", cid, id, own); err != nil {
+		if err = store("conversation", cid, own); err != nil {
 			return err
 		}
 	}
@@ -265,7 +298,7 @@ func (c *Catalog) projectWorkspaceMetrics(ctx context.Context, tx *sql.Tx, book 
 	if err = metricFallback(ctx, tx, id, "", workspace); err != nil {
 		return err
 	}
-	return storeMetricProjection(ctx, tx, "workspace", id, id, workspace)
+	return store("workspace", id, workspace)
 }
 
 func addMetricCount(values map[string]statMetricValue, name string, n float64) {

@@ -159,6 +159,7 @@ func TestQueryDimensionCountMatchesRawCalls(t *testing.T) {
 func TestQueryCountOnlyMetricRetainsEnvelope(t *testing.T) {
 	c, cfg := testCatalog(t)
 	seedToolCalls(t, c, 31)
+	publishProjections(t, c)
 	s := testServer(t, cfg, c)
 	q := metricRequest(qt.AggSpec{ID: "count", Op: "count"}, qt.AggSpec{ID: "formula", Expression: "COUNT()"})
 	result, err := s.executeQueryV2(context.Background(), "tool_calls", nil, PharosToolCallsSchema(), nil, &q)

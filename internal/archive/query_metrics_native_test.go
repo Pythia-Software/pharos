@@ -332,6 +332,7 @@ func TestNativeMetricsMatchTheAdapterOnPharosDatasets(t *testing.T) {
 	if err := catalog.RebuildAuthorship(context.Background(), "test"); err != nil {
 		t.Fatal(err)
 	}
+	publishProjections(t, catalog)
 	server := testServer(t, config, catalog)
 	mix := metricRequest(qt.AggSpec{ID: "messages", Op: "count"})
 	for _, category := range authorshipCategories {

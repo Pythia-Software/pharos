@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -42,54 +43,22 @@ func (j *cloudJobs) stop(id string) bool {
 	return true
 }
 
-// Reconcile without requiring an open settings page. Holding cloud.mu keeps a
-// just-admitted job from being mistaken for an interrupted job by a stale poll.
+// Reconcile without requiring an open settings page. Holding cloud.mu while
+// deciding which runs were interrupted keeps a just-admitted job from being
+// mistaken for one by a stale poll. It is released before storing them, which
+// can wait for a sync holding the writer, so the Cloud page does not wait too;
+// the update applies only to a run unchanged since it was read.
 func (s *Server) reconcileCloudRuns(ctx context.Context) error {
-	s.cloud.mu.Lock()
-	defer s.cloud.mu.Unlock()
-	rows, err := s.Catalog.reader().QueryContext(ctx, "SELECT status_json FROM cloud_backup_runs WHERE json_extract(status_json,'$.state')='running' OR json_extract(status_json,'$.verification_state')='running'")
+	interrupted, err := s.interruptedCloudRuns(ctx)
 	if err != nil {
 		return err
 	}
-	var runs []cloudRun
-	for rows.Next() {
-		var raw string
-		var run cloudRun
-		if err = rows.Scan(&raw); err != nil {
-			break
-		}
-		if err = json.Unmarshal([]byte(raw), &run); err != nil {
-			break
-		}
-		runs = append(runs, run)
-	}
-	if err == nil {
-		err = rows.Err()
-	}
-	rows.Close()
-	if err != nil {
-		return err
-	}
-	host := currentHost().ID
-	for _, run := range runs {
-		changed := false
-		previousUpdated := run.UpdatedAt
-		if run.State == "running" && run.OwnerHost == host && run.OwnerPID > 0 && (errors.Is(syscall.Kill(run.OwnerPID, 0), syscall.ESRCH) || (run.OwnerPID == os.Getpid() && s.cloud.active != run.ID)) {
-			run.State, run.Phase, run.Error = "failed", "interrupted", "Upload was interrupted before completion could be confirmed. No restore was verified."
-			changed = true
-		}
-		if run.VerificationState == "running" && run.VerificationHost == host && run.VerificationPID > 0 && (errors.Is(syscall.Kill(run.VerificationPID, 0), syscall.ESRCH) || (run.VerificationPID == os.Getpid() && s.cloud.active != run.ID)) {
-			run.VerificationState, run.VerificationError, run.Verified = "failed", "Verification was interrupted. Run verification again.", false
-			changed = true
-		}
-		if !changed {
-			continue
-		}
-		run.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	for _, change := range interrupted {
+		run := change.run
 		data, _ := json.Marshal(run)
 		var updated int64
 		err = s.Catalog.writeTransaction(ctx, "cloud-interrupted", func(tx *sql.Tx) error {
-			result, e := tx.ExecContext(ctx, "UPDATE cloud_backup_runs SET status_json=? WHERE id=? AND json_extract(status_json,'$.updated_at')=?", string(data), run.ID, previousUpdated)
+			result, e := tx.ExecContext(ctx, "UPDATE cloud_backup_runs SET status_json=? WHERE id=? AND json_extract(status_json,'$.updated_at')=?", string(data), run.ID, change.previousUpdated)
 			if e != nil {
 				return e
 			}
@@ -108,17 +77,62 @@ func (s *Server) reconcileCloudRuns(ctx context.Context) error {
 	return nil
 }
 
-func (s *Server) getCloud(w http.ResponseWriter, r *http.Request) {
-	if err := s.reconcileCloudRuns(r.Context()); err != nil {
-		writeError(w, err, 500)
-		return
-	}
-	destinations, err := s.Catalog.cloudDestinations(r.Context())
+type interruptedCloudRun struct {
+	run             cloudRun
+	previousUpdated string
+}
+
+// interruptedCloudRuns reads the running runs and returns those this Mac was
+// running and has lost, marked failed.
+func (s *Server) interruptedCloudRuns(ctx context.Context) ([]interruptedCloudRun, error) {
+	s.cloud.mu.Lock()
+	defer s.cloud.mu.Unlock()
+	rows, err := s.Catalog.reader().QueryContext(ctx, "SELECT status_json FROM cloud_backup_runs WHERE json_extract(status_json,'$.state')='running' OR json_extract(status_json,'$.verification_state')='running'")
 	if err != nil {
-		writeError(w, err, 500)
-		return
+		return nil, err
 	}
-	runs, err := s.Catalog.cloudRuns(r.Context())
+	defer rows.Close()
+	interrupted := []interruptedCloudRun{}
+	for rows.Next() {
+		var raw string
+		var run cloudRun
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(raw), &run); err != nil {
+			return nil, err
+		}
+		previousUpdated := run.UpdatedAt
+		if s.interruptCloudRun(&run) {
+			run.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			interrupted = append(interrupted, interruptedCloudRun{run, previousUpdated})
+		}
+	}
+	return interrupted, rows.Err()
+}
+
+// interruptCloudRun marks run failed where this Mac was running it and its
+// process is gone, or is this one without the job, and reports whether it
+// changed. Callers hold cloud.mu.
+func (s *Server) interruptCloudRun(run *cloudRun) bool {
+	host := currentHost().ID
+	changed := false
+	if run.State == "running" && run.OwnerHost == host && run.OwnerPID > 0 && (errors.Is(syscall.Kill(run.OwnerPID, 0), syscall.ESRCH) || (run.OwnerPID == os.Getpid() && s.cloud.active != run.ID)) {
+		run.State, run.Phase, run.Error = "failed", "interrupted", "Upload was interrupted before completion could be confirmed. No restore was verified."
+		changed = true
+	}
+	if run.VerificationState == "running" && run.VerificationHost == host && run.VerificationPID > 0 && (errors.Is(syscall.Kill(run.VerificationPID, 0), syscall.ESRCH) || (run.VerificationPID == os.Getpid() && s.cloud.active != run.ID)) {
+		run.VerificationState, run.VerificationError, run.Verified = "failed", "Verification was interrupted. Run verification again.", false
+		changed = true
+	}
+	return changed
+}
+
+// getCloud shows interrupted runs as failed and leaves storing that to
+// reconcileCloudRuns in the background, so the page never waits for a sync
+// holding the writer.
+func (s *Server) getCloud(w http.ResponseWriter, r *http.Request) {
+	destinations, err := s.Catalog.cloudDestinations(r.Context())
 	if err != nil {
 		writeError(w, err, 500)
 		return
@@ -129,8 +143,24 @@ func (s *Server) getCloud(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.cloud.mu.Lock()
+	runs, err := s.Catalog.cloudRuns(r.Context())
+	interrupted := false
+	for i := range runs {
+		interrupted = s.interruptCloudRun(&runs[i]) || interrupted
+	}
 	active := s.cloud.active
 	s.cloud.mu.Unlock()
+	if err != nil {
+		writeError(w, err, 500)
+		return
+	}
+	if interrupted {
+		s.spawn(func(ctx context.Context) {
+			if err := s.reconcileCloudRuns(ctx); err != nil && ctx.Err() == nil {
+				fmt.Fprintln(os.Stderr, "Pharos cloud runs:", err)
+			}
+		})
+	}
 	writeJSON(w, map[string]any{"current_host_id": currentHost().ID, "schedule_catalog": canonical(s.Catalog.Path), "library_catalog": s.Config().CatalogPath, "library_config": s.Config().Path, "active_run_id": active, "destinations": destinations, "runs": runs, "schedules": schedules, "setup_root": filepath.Join(userHome(), "Library", "Application Support", "Pharos", "cloud-setup"), "executable": executablePath()}, 200)
 }
 func userHome() string { home, _ := os.UserHomeDir(); return home }

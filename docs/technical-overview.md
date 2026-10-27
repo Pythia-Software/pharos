@@ -81,6 +81,7 @@ Past Work also shows when an archived commit appears on the local `origin/main` 
 - **Analyze → Carbon Impact** estimates the electricity and CO₂e behind your token usage, all time or the last 30 days, split by token type (uncached input, cache writes, cache reads, output) and model tier. Energy per token comes from published inference measurements, with cache reads charged far less than recomputed input; you choose the electricity grid, data-center overhead (PUE), and a low, central, or high estimate. It is an estimate, not a measurement: factors and sources are in [`carbon/`](../carbon/README.md).
 - **Library upgrade** appears when a catalog indexed by an older version needs its derived data brought up to date: repository merges, token attribution, harness versions, loaded instructions, and the tool ledger, run in that order as one resumable background job. See [Upgrading an existing library](releases-and-updates.md#upgrading-an-existing-library).
 - **Health** shows retrieval coverage/freshness, index size, and external-storage health. Retrieval-only is shown as an intentional capability.
+- **Storage** (on Health, `/api/health/storage/breakdown`) splits the library drive's space into captured originals (latest copies, earlier versions, manifests) and Pharos's catalog (database, write-ahead log, caches), and tabulates both by Mac, source and repository. Sizes come from the drive checks' cached walk of the library, which counts each hard-linked file once. Originals by Mac and source are measured. Nothing records which repository a capture's or the catalog's bytes belong to, and measuring that would read the whole catalog, so repository shares, and the catalog's split by Mac and source, are estimated from each conversation's message count in its sightings (`storage_breakdown.go`). The catalog's copy of a conversation belongs to the Mac and source it was written from; a merged copy is spread across every Mac that saw it.
 
 Delegated work is retained as a recursive `agent_sessions` tree, including sub-agents of sub-agents and links back to each session's messages. Session and workspace usage preserve uncached input, cache reads, cache creation, output, reasoning, and any unclassified aggregate remainder separately so pricing can be applied without reconstructing provider envelopes.
 
@@ -125,6 +126,22 @@ for the protocol, privacy boundaries, deployment, and operation.
 The Library UI sends its text, file, and URL searches to the Library query table as `find=` (with `find_kind`, `find_fuzzy`, `find_case`, and `find_separators`), which keeps the work `/api/library/find` hits and adds each row's best match and match count; `/api/library/find` still returns the hits themselves. Its text path uses FTS vocabulary and message verification without vector ranking. Legacy `/api/search`, query-table `search=`, and MCP conversation discovery still retain the previous concept/feature embedding behavior. Search and MCP do not upload archive content. Extractive summaries cite retained source locators.
 
 The workspace page loads a workspace in pieces, since one long session with many sub-agents can retain hundreds of megabytes. `/api/work/{id}` returns the workspace without messages, plus what the page used to derive from all of them: each conversation's message count and first prompt, pull request links found in any message, and the files its tool calls touched. `/api/work/{id}/conversations/{id}` returns one conversation for the reader. Its long tool outputs and event bodies are shortened past 2 KB, with JSON keeping its structure so error flags, exit codes, and token usage survive, and are marked `text_clipped`/`raw_clipped`. `/api/messages/{id}` returns a message's original when the reader opens it. Finding text across a workspace's conversations runs on the service (`/find`). In the reader, a turn initially renders 50 events and adds pages of 150 as it scrolls; event details are built when opened.
+
+Requests never wait for the catalog writer, which a sync holds for seconds at
+a time. They read through a read-only connection pool and never write:
+
+- Conversation origins are published at the end of each ingest and by the
+  Library maintenance loop, at most once a minute while a sync runs, so pages
+  can show channel and machine up to a minute behind during a sync.
+- Dirty parallelism timings and MCP metric projections are computed in the
+  request's snapshot without being stored; maintenance stores them.
+- The tool rollup rebuilds in the background. Until the first rollup in a new
+  layout exists, tool pages report that it is rebuilding.
+- MCP call history is queued in memory and stored by a background writer, and
+  on close. `query_statistics` snapshots live in the answering process's memory.
+
+`TestRequestReadsDoNotWaitForTheCatalogWriter` holds the writer, as a sync
+does, and checks page reads, query datasets and MCP tools against it.
 
 The HTTP service binds only to loopback and requires either a bearer token or its HttpOnly UI cookie. Core endpoints are:
 
@@ -237,7 +254,7 @@ Settings → MCP controls a shared enabled flag in the local catalog. Turning it
 hides tools from new listings and rejects calls from already-connected clients;
 it does not alter another client's configuration. Tool-call history retains the
 latest 5,000 calls with an allowlisted, shortened argument summary and response
-metrics, never response bodies. Analyze → Pharos MCP provides guided charts;
+metrics, never response bodies. A call is recorded after it is answered. Analyze → Pharos MCP provides guided charts;
 Analyze → Query → MCP calls provides filtering, grouping, metrics, and call details. Output token counts are estimates from bytes.
 
 ## Sharing conversations
