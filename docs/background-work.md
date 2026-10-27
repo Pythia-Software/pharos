@@ -345,11 +345,11 @@ checkpoint starts `maintenance.checkpoint`, which is registered (so eject
 sees it) but journaled only past 1 s. The same pattern applies to every
 `>T` row: register always, journal only past T or when `op.Wrote()` was
 called. `drive.measure`, `maintenance.metrics`, `maintenance.origins`,
-`maintenance.mcp-history` and `ask.save` are listed only so the
-unregistered-work test passes and eject sees them; they are D-family and
-hidden from surfaces. Requests never write: the writes they used to make
-(origins, MCP history) are these background operations, and no request
-waits for one. Ask Pharos stays out of scope (§1): only the background
+`maintenance.mcp-history`, `ask.save` and `cloud.reconcile` (§3.6) are
+listed only so the unregistered-work test passes and eject sees them; they
+are D-family and hidden from surfaces. Requests never write: the writes
+they used to make (origins, MCP history, interrupted cloud runs) are these
+background operations, and no request waits for one. Ask Pharos stays out of scope (§1): only the background
 save of a finished answer, which writes the catalog after its request has
 ended, is registered.
 
@@ -380,6 +380,7 @@ Notes:
 | `cloud.connect` | Test a cloud backup destination · Testing the destination | user | svc (inside the request, merged with `s.life.ctx`) | D:w K:w (a probe file in staging) | — | cloud | Stops the test; connect the destination again afterwards. | instant | always | fg |
 | `cloud.upload` (variants `sample`, `full`) | Upload a cloud backup · Uploading a cloud backup | user, schedule | svc | D:w K(d):w (staging; reads a catalog snapshot) | backup.cloud:d | cloud | Stops the upload and deletes its staged archive; the last completed cloud backup is unchanged. It starts again from the beginning when started again, or at the schedule's next time. | batch (snapshot), record (upload: the S3 abort and the final save have 2 s limits each, then the staging is removed) | always | fg (`user`), bg (`schedule`) |
 | `cloud.verify` | Verify a cloud backup · Verifying a cloud backup | user, cli (`cloud-backup verify`, required for password-protected backups) | svc, cli (catalog writer: journal and lease) | D:w K(d):w W:w (staging; saves the verification state) | backup.cloud:d | cloud (service only) | Stops and removes the partly recovered copy; run the verification again. | record | always | fg |
+| `cloud.reconcile` | Record interrupted cloud backups · Recording interrupted cloud backups | read (`GET /api/cloud-backup` that finds a run whose process is gone; the schedule tick reconciles inside its own pass) | svc | D:w W:w (and removes the run's staging) | — | — | Stops; the next Cloud page load or schedule tick records them. | record | never | bg |
 | `cloud.restore` | Restore from the cloud (Terminal) · Restoring | cli (`cloud-restore`) | cli | — (a new location; out of scope) | — | — | **Out of status scope.** It restores to a new location, often on a Mac with no library or Pharos configuration (`cloud_cli.go`), so there is no library whose status could show it. It takes no lease and writes no journal. | — | never | fg |
 | `library.transfer` (variants `copy`, `move`) | Copy library / Move library · Copying the library | user (Libraries page), cli (`library-transfer`) | brk, cli | O:w D(source):w D(target):w | (target) conv:\* | — | Not stoppable; eject of either drive must wait. | none | always (broker registry) | fg |
 | `library.recover` | Restore a backup · Restoring a backup | user, cli (`library-recover`) | brk, cli | O:w D(target):w | (target) all | — | Not stoppable; eject must wait. | none | always (broker registry) | fg |
@@ -796,7 +797,7 @@ a server-sent-events stream of the same document.
   `children` holds running children; `children_count` all of them. Daemons
   and kinds marked hidden (`drive.measure`, `maintenance.metrics`,
   `maintenance.origins`, `maintenance.mcp-history`, `ask.save`,
-  `maintenance.cache-warm`) are omitted but still count for the verdict.
+  `cloud.reconcile`, `maintenance.cache-warm`) are omitted but still count for the verdict.
 - `step.fraction` is present only when `unit` is real and `total` known.
   There is no overall percentage.
 - `time` reuses the forecast states of

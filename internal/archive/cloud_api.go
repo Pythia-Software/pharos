@@ -25,6 +25,8 @@ type cloudJobs struct {
 	// requests must not wait for.
 	currentMu sync.Mutex
 	current   *cloudJob
+	// op is the running job's operation, which report and stop follow.
+	op *Op
 }
 
 // cloudJob is the cloud operation in progress: a destination connection test
@@ -55,6 +57,14 @@ func (j *cloudJobs) end() {
 	j.cancel = nil
 	j.currentMu.Lock()
 	j.current = nil
+	j.op = nil
+	j.currentMu.Unlock()
+}
+
+// attach makes op the running job's operation.
+func (j *cloudJobs) attach(op *Op) {
+	j.currentMu.Lock()
+	j.op = op
 	j.currentMu.Unlock()
 }
 
@@ -64,6 +74,7 @@ func (j *cloudJobs) report(id, phase string, done, total int64) {
 	defer j.currentMu.Unlock()
 	if j.current != nil && j.current.id == id {
 		j.current.phase, j.current.done, j.current.total = phase, done, total
+		j.op.progress(phase, "", "byte", float64(done), float64(total), total > 0)
 	}
 }
 
@@ -117,6 +128,9 @@ func (j *cloudJobs) stop(id string) bool {
 		return false
 	}
 	j.cancel()
+	j.currentMu.Lock()
+	j.op.markStopping()
+	j.currentMu.Unlock()
 	return true
 }
 
@@ -232,10 +246,14 @@ func (s *Server) getCloud(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if interrupted {
-		s.spawn(func(ctx context.Context) {
-			if err := s.reconcileCloudRuns(ctx); err != nil && ctx.Err() == nil {
+		// A write a read starts (§1): stored in the background, so the page
+		// does not wait for the writer.
+		s.start(OperationSpec{Kind: "cloud.reconcile", Trigger: triggerRead}, func(ctx context.Context, _ *Op) error {
+			err := s.reconcileCloudRuns(ctx)
+			if err != nil && ctx.Err() == nil {
 				fmt.Fprintln(os.Stderr, "Pharos cloud runs:", err)
 			}
+			return err
 		})
 	}
 	writeJSON(w, map[string]any{"current_host_id": currentHost().ID, "schedule_catalog": canonical(s.Catalog.Path), "library_catalog": s.Config().CatalogPath, "library_config": s.Config().Path, "active_run_id": active, "destinations": destinations, "runs": runs, "schedules": schedules, "setup_root": filepath.Join(userHome(), "Library", "Application Support", "Pharos", "cloud-setup"), "executable": executablePath()}, 200)
@@ -295,6 +313,9 @@ func (s *Server) postCloud(w http.ResponseWriter, r *http.Request, body map[stri
 			return
 		}
 		defer s.cloud.end()
+		_, connect := s.begin(ctx, OperationSpec{Kind: "cloud.connect", Subject: d.ID, Trigger: triggerUser})
+		s.cloud.attach(connect)
+		defer func() { connect.Finish(err) }()
 		err = cloudConnectProbe(ctx, s.Config(), d, p.Object+".roundtrip-test")
 		if err == nil && ctx.Err() != nil {
 			err = ctx.Err()
@@ -404,10 +425,12 @@ func (s *Server) postCloud(w http.ResponseWriter, r *http.Request, body map[stri
 			writeError(w, err, 500)
 			return
 		}
-		if !s.spawn(func(context.Context) {
+		_, verify := s.begin(s.life.ctx, OperationSpec{Kind: "cloud.verify", Variant: run.Kind, Subject: run.DestinationID, Trigger: triggerUser, Legacy: run.ID})
+		s.cloud.attach(verify)
+		if !s.launch(verify, func(context.Context, *Op) error {
 			defer s.cloud.end()
 			defer cancel()
-			_ = s.Catalog.finishCloudVerification(ctx, s.Config(), &run, path, nil)
+			return s.Catalog.finishCloudVerification(ctx, s.Config(), &run, path, nil)
 		}) {
 			s.cloud.end()
 			cancel()

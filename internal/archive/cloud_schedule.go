@@ -364,11 +364,18 @@ func (s *Server) startCloudRun(ctx context.Context, id, kind, trigger string, at
 		return run, err
 	}
 	perform := cloudPerformUpload
-	if !s.spawn(func(context.Context) {
+	spec := OperationSpec{Kind: "cloud.upload", Variant: kind, Subject: id, Trigger: triggerUser, Priority: priorityForeground, Legacy: run.ID}
+	if trigger == "scheduled" {
+		spec.Trigger, spec.Priority = triggerSchedule, priorityBackground
+	}
+	_, upload := s.begin(s.life.ctx, spec)
+	s.cloud.attach(upload)
+	if !s.launch(upload, func(context.Context, *Op) error {
 		defer cancel()
 		defer s.cloud.end()
 		defer clear(d.credential)
 		perform(s, work, d, run)
+		return s.cloudRunOutcome(work, run.ID)
 	}) {
 		s.cloud.end()
 		cancel()
@@ -473,4 +480,20 @@ func (s *Server) cloudScheduleLoop(ctx context.Context) {
 		case <-ticker.C:
 		}
 	}
+}
+
+// cloudRunOutcome is a finished upload's result for its operation, from the
+// state it saved.
+func (s *Server) cloudRunOutcome(ctx context.Context, id string) error {
+	run, err := s.Catalog.cloudRun(context.Background(), id)
+	if err != nil {
+		return err
+	}
+	switch run.State {
+	case "complete":
+		return nil
+	case "cancelled":
+		return defaultError(ctx.Err(), errors.New("cloud upload cancelled"))
+	}
+	return errors.New(defaultString(run.Error, "cloud upload "+run.State))
 }

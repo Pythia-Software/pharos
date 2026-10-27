@@ -160,6 +160,8 @@ var operationKinds = []operationKind{
 		OnEject: "Stops the upload and deletes its staged archive; the last completed cloud backup is unchanged. It starts again from the beginning when started again, or at the schedule's next time.", Latency: "batch", Journal: journalAlways, Priority: priorityForeground},
 	{Kind: "cloud.verify", Label: "Verify a cloud backup", Verb: "Verifying a cloud backup", Holds: "D:w K(d):w W:w", Affects: "backup.cloud:d", Stop: "cloud",
 		OnEject: "Stops and removes the partly recovered copy; run the verification again.", Latency: "record", Journal: journalAlways, Priority: priorityForeground},
+	{Kind: "cloud.reconcile", Label: "Record interrupted cloud backups", Verb: "Recording interrupted cloud backups", Holds: "D:w W:w", Affects: "—",
+		OnEject: "Stops; the next Cloud page load or schedule tick records them.", Latency: "record", Journal: journalNever, Priority: priorityBackground, Hidden: true},
 	{Kind: "cloud.restore", Label: "Restore from the cloud (Terminal)", Verb: "Restoring", Holds: "—", Affects: "—",
 		OnEject: "Out of status scope. It restores to a new location, often on a Mac with no library or Pharos configuration (cloud_cli.go), so there is no library whose status could show it. It takes no lease and writes no journal.", Journal: journalNever, Priority: priorityForeground},
 	{Kind: "library.transfer", Label: "Copy library / Move library", Verb: "Copying the library", VariantLabels: map[string]string{"copy": "Copy library", "move": "Move library"},
