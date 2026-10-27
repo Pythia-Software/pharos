@@ -321,6 +321,9 @@ func retainedTree(ctx context.Context, source, target, label string, skipImports
 			return fmt.Errorf("retained evidence contains a symbolic link at %s; resolve it before migration", path)
 		}
 		if entry.IsDir() {
+			if filepath.Base(filepath.Dir(path)) == ".imports" && strings.HasPrefix(entry.Name(), ".stage-") {
+				return filepath.SkipDir
+			}
 			if skipImports && entry.Name() == ".imports" {
 				return filepath.SkipDir
 			}
@@ -1164,7 +1167,16 @@ func cleanupDeliveredHistory(ctx context.Context, source Config, receipt library
 				if exists == 0 {
 					continue
 				}
-				if _, e := tx.ExecContext(ctx, "INSERT OR REPLACE INTO "+quotedIdentifier(table)+" SELECT * FROM prior."+quotedIdentifier(table)); e != nil {
+				columns, e := transferColumns(ctx, tx, table)
+				if e != nil {
+					return e
+				}
+				names := make([]string, len(columns))
+				for i, column := range columns {
+					names[i] = quotedIdentifier(column.name)
+				}
+				list := strings.Join(names, ",")
+				if _, e := tx.ExecContext(ctx, "INSERT OR REPLACE INTO "+quotedIdentifier(table)+"("+list+") SELECT "+list+" FROM prior."+quotedIdentifier(table)); e != nil {
 					return e
 				}
 			}

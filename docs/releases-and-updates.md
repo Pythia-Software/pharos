@@ -477,8 +477,9 @@ full signed installation test.
 
 ## Upgrading an existing library
 
-The preservation update upgrades catalog schema 18 to 20 and writes capture
-manifest version 4. Earlier builds refuse these versions. Take and verify a backup of
+This build upgrades catalogs to schema 21 and writes capture manifest version 5,
+combining durable preservation with managed-library delivery safeguards. Earlier
+builds refuse these versions. Take and verify a backup of
 both the catalog and captures before upgrading: rollback requires restoring
 the pre-upgrade catalog and capture tree together, not just replacing the app.
 New automatic retained-input options remain off unless explicitly configured.

@@ -236,18 +236,26 @@ func (r *installationRegistry) register(config Config, name string) (string, err
 		if old.Instance != d.Instance {
 			return "", fmt.Errorf("a different writable copy of %s is already registered; recover it separately", d.Name)
 		}
-		old.Config = config.Path
+		old.rememberLocation(config)
 		return d.ID, nil
 	}
-	entry := registeredLibrary{LibraryDescriptor: d, Config: config.Path, Volume: config.VolumeID}
-	if mount, _, err := volumeMount(config.Path); err == nil {
-		entry.Relative, _ = filepath.Rel(mount, config.Path)
-	}
+	entry := registeredLibrary{LibraryDescriptor: d}
+	entry.rememberLocation(config)
 	r.Libraries = append(r.Libraries, entry)
 	if r.MCP == "" {
 		r.MCP = d.ID
 	}
 	return d.ID, nil
+}
+
+func (l *registeredLibrary) rememberLocation(config Config) {
+	l.Config, l.Volume, l.Relative = config.Path, config.VolumeID, ""
+	if l.Volume == "" {
+		l.Volume = libraryVolumeIdentity(filepath.Dir(config.Path))
+	}
+	if mount, _, err := volumeMount(config.Path); err == nil {
+		l.Relative, _ = filepath.Rel(mount, config.Path)
+	}
 }
 
 func (r *installationRegistry) save() error {

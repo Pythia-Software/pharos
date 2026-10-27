@@ -103,14 +103,18 @@ func runApplicationCLI(args []string) error {
 	defer owner.Close()
 	if *initial != "" && len(m.registry.Libraries) == 0 {
 		config, err := LoadConfig(*initial)
-		if err != nil {
-			return err
+		if err == nil {
+			var id string
+			id, err = m.registry.register(config, "My Library")
+			if err == nil {
+				m.registry.Selected = id
+			}
 		}
-		id, err := m.registry.register(config, "My Library")
 		if err != nil {
-			return err
+			message := fmt.Sprintf("Could not open the previous library: %v. Choose an available library or upgrade Pharos, then try again.", err)
+			m.reportJob("paused", message)
+			fmt.Fprintln(os.Stderr, message)
 		}
-		m.registry.Selected = id
 	}
 	if err = m.registry.save(); err != nil {
 		return err
@@ -586,7 +590,14 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 			writeError(w, fmt.Errorf("missing volume identity"), 400)
 			return
 		}
-		for _, l := range m.registry.Libraries {
+		for i := range m.registry.Libraries {
+			l := &m.registry.Libraries[i]
+			if l.Volume == "" {
+				// Registries saved by earlier builds used only the optional pin.
+				if config, err := LoadConfig(l.resolve()); err == nil {
+					l.rememberLocation(config)
+				}
+			}
 			if strings.EqualFold(l.Volume, volume) {
 				m.suspended[l.ID] = true
 				m.stopChildLocked(l.ID)
@@ -632,6 +643,10 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 			path = expandPath(path)
 			if !filepath.IsAbs(path) {
 				err = fmt.Errorf("choose an absolute library location")
+			} else if location != "ssd" && canonical(filepath.Dir(path)) == canonical(filepath.Join(pharosSupportDir(), "Libraries")) {
+				// Editing the proposed default sends an explicit path on a fresh
+				// install. Only this managed parent may be created implicitly.
+				err = os.MkdirAll(filepath.Dir(path), 0o700)
 			} else {
 				_, err = os.Stat(filepath.Dir(path))
 			}

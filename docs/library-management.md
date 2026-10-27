@@ -217,7 +217,8 @@ moves retain each library's cloud destinations, credentials and schedules.
 
 Opening a catalog written by a newer incompatible build is refused before
 migration or transfer. This implementation advances the catalog writer guard to
-18 because older writers do not understand delivery checkpoints. App rollback
+21 to preserve raw-evidence authority and delivery checkpoints. Capture manifest
+version 5 also protects pending-file observations and retention. App rollback
 does not roll a library back.
 
 ## CLI operations

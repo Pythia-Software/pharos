@@ -21,11 +21,6 @@ func (m *applicationManager) startOperation(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	m.mu.Lock()
-	m.busy = true
-	m.generation++
-	for id := range m.children {
-		m.stopChildLocked(id)
-	}
 	var source, target Config
 	var err error
 	recovering := r.URL.Path == "/api/app/recover"
@@ -40,15 +35,18 @@ func (m *applicationManager) startOperation(w http.ResponseWriter, r *http.Reque
 			}
 		}
 	}
-	m.mu.Unlock()
 	if err != nil {
-		m.mu.Lock()
-		m.busy = false
 		m.mu.Unlock()
 		m.operationMu.Unlock()
 		writeError(w, err, 400)
 		return
 	}
+	m.busy = true
+	m.generation++
+	for id := range m.children {
+		m.stopChildLocked(id)
+	}
+	m.mu.Unlock()
 	m.reportJob("running", "Preparing library operation")
 	go func() {
 		defer m.operationMu.Unlock()

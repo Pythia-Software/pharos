@@ -481,6 +481,17 @@ func TestCloudRestoresSQLiteRecordReplay(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
+			override(t, &libraryVolumeIdentity, testIdentity)
+			if _, e = os.Stat(filepath.Join(restored, backupLockName)); !os.IsNotExist(e) {
+				t.Fatal("cloud archive unexpectedly restored a process lock", e)
+			}
+			candidate, e := RecoverLibrary(t.Context(), restored, filepath.Join(t.TempDir(), "cloud-candidate"), nil)
+			if e != nil {
+				t.Fatal("cloud restore cannot become a library", e)
+			}
+			if catalogCount(t, candidate, "messages") != catalogCount(t, config, "messages") {
+				t.Fatal("cloud recovery lost catalog history")
+			}
 			os.RemoveAll(original)
 			config.CaptureRoot = filepath.Join(restored, "captures")
 			os.RemoveAll(capturedPath(config, "records", "files"))

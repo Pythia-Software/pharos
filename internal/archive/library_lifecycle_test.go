@@ -8,9 +8,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
 )
@@ -36,6 +39,21 @@ func catalogCount(t *testing.T, cfg Config, table string) int {
 	}
 	return n
 }
+
+// A private idle child makes service-stop behavior observable without opening
+// a real library server or sharing resources with the user's application.
+func lifecycleChild(t *testing.T) *applicationChild {
+	t.Helper()
+	cmd := exec.Command("/usr/bin/tail", "-f", "/dev/null")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	child := &applicationChild{cmd: cmd, done: make(chan struct{})}
+	go func() { _ = cmd.Wait(); close(child.done) }()
+	t.Cleanup(func() { _ = cmd.Process.Kill(); <-child.done })
+	return child
+}
+
 func TestLibraryRegistryAssignmentAndCopies(t *testing.T) {
 	a, b := lifecycleLibraries(t)
 	r := installationRegistry{Version: 1, Libraries: []registeredLibrary{}}
@@ -199,6 +217,26 @@ func TestLibraryTransferRetainedEvidence(t *testing.T) {
 }
 
 func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
+	t.Run("legacy operational column order", func(t *testing.T) {
+		a, b := lifecycleLibraries(t)
+		c := reopenCatalog(t, a.CatalogPath)
+		execTx(t, c.DB, `ALTER TABLE source_states DROP COLUMN index_version`, `ALTER TABLE source_states ADD COLUMN index_version TEXT`,
+			`INSERT INTO source_states(host_id,source_name,kind,capability,fingerprint,coverage,pending_count,updated_at,index_version) VALUES('legacy','one','codex','incremental','fingerprint-a','complete',7,'2026-10-20',NULL),('legacy','two','claude','incremental','fingerprint-b','pending',3,'2026-10-21','parser-v1')`)
+		before, err := queryMaps(c.DB, "SELECT * FROM source_states ORDER BY source_name")
+		c.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = TransferLibrary(t.Context(), a, b, true, nil); err != nil {
+			t.Fatal("move upgraded legacy source states", err)
+		}
+		c = reopenCatalog(t, a.CatalogPath)
+		defer c.Close()
+		after, err := queryMaps(c.DB, "SELECT * FROM source_states ORDER BY source_name")
+		if err != nil || jsonText(before) != jsonText(after) {
+			t.Fatal("move shifted legacy source-state columns", before, after, err)
+		}
+	})
 	a, b := lifecycleLibraries(t)
 	c := reopenCatalog(t, a.CatalogPath)
 	if err := c.SetMCPEnabled(false); err != nil {
@@ -335,6 +373,30 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 	}
 }
 func TestLibraryTransferRejectsNewerCatalogAndBusySource(t *testing.T) {
+	t.Run("unpublished staging", func(t *testing.T) {
+		a, b := lifecycleLibraries(t)
+		partial := filepath.Join(a.CaptureRoot, ".imports", ".stage-interrupted", "partial.txt")
+		writeSourceFile(t, partial, "unpublished output")
+		receipt, err := TransferLibrary(t.Context(), a, b, false, nil)
+		if err != nil {
+			t.Fatal("interrupted staging blocked a later transfer", err)
+		}
+		copied := filepath.Join(b.CaptureRoot, ".imports", receipt.ID, "captures", ".imports", ".stage-interrupted", "partial.txt")
+		if _, err = os.Stat(copied); !os.IsNotExist(err) {
+			t.Fatal("transfer copied unpublished staging", err)
+		}
+		candidate, err := RecoverLibrary(t.Context(), filepath.Dir(a.Path), filepath.Join(t.TempDir(), "recovered"), nil)
+		if err != nil {
+			t.Fatal("unpublished staging blocked recovery", err)
+		}
+		if _, err = os.Stat(filepath.Join(candidate.CaptureRoot, ".imports", ".stage-interrupted")); !os.IsNotExist(err) {
+			t.Fatal("recovery copied unpublished staging", err)
+		}
+		writeSourceFile(t, filepath.Join(a.CaptureRoot, ".imports", hashBytes([]byte("published")), "history.sqlite3"), "broken published import")
+		if err = validateCaptureEvidence(t.Context(), a.CaptureRoot); err == nil {
+			t.Fatal("ignored a broken published import")
+		}
+	})
 	a, b := lifecycleLibraries(t)
 	t.Run("separate storage", func(t *testing.T) {
 		for _, sourcePath := range []string{a.CaptureRoot, a.ArchiveRoot} {
@@ -464,6 +526,153 @@ func TestApplicationMCPConnectionAndLateResponse(t *testing.T) {
 }
 
 func TestApplicationSetupWithoutLibrary(t *testing.T) {
+	t.Run("unavailable initial library leaves chooser available", func(t *testing.T) {
+		for _, kind := range []string{"missing", "newer"} {
+			t.Run(kind, func(t *testing.T) {
+				initial := filepath.Join(t.TempDir(), "unmounted", "library.toml")
+				var config Config
+				if kind == "newer" {
+					config, _ = lifecycleLibraries(t)
+					initial = config.Path
+					c := reopenCatalog(t, config.CatalogPath)
+					execSQL(t, c.DB, "UPDATE meta SET value='"+fmt.Sprint(catalogSchemaVersion+1)+"' WHERE key='schema_version'")
+					c.Close()
+				}
+				root := t.TempDir()
+				endpoint := filepath.Join(root, "endpoint.json")
+				cmd := exec.Command(os.Args[0], "-test.run=^TestApplicationStartupHelper$")
+				cmd.Env = append(os.Environ(), "PHAROS_APP_TEST_INITIAL="+initial, "PHAROS_APP_TEST_PATH="+filepath.Join(root, "Pharos.app"), "PHAROS_APP_TEST_SUPPORT="+filepath.Join(root, "support"), "PHAROS_APP_TEST_ENDPOINT="+endpoint)
+				cmd.Stderr = os.Stderr
+				if err := cmd.Start(); err != nil {
+					t.Fatal(err)
+				}
+				done := make(chan struct{})
+				var processErr error
+				go func() { processErr = cmd.Wait(); close(done) }()
+				t.Cleanup(func() { _ = cmd.Process.Kill(); <-done })
+				deadline := time.NewTimer(10 * time.Second)
+				defer deadline.Stop()
+				tick := time.NewTicker(10 * time.Millisecond)
+				defer tick.Stop()
+				var ep applicationEndpoint
+				for ep.URL == "" {
+					if data, err := os.ReadFile(endpoint); err == nil {
+						if err = json.Unmarshal(data, &ep); err != nil {
+							t.Fatal(err)
+						}
+						break
+					}
+					select {
+					case <-done:
+						t.Fatal("initial library prevented startup", processErr)
+					case <-deadline.C:
+						t.Fatal("application did not publish its endpoint")
+					case <-tick.C:
+					}
+				}
+				client := &http.Client{Timeout: 2 * time.Second}
+				request, _ := http.NewRequest(http.MethodGet, ep.URL+"/api/app/state", nil)
+				request.Header.Set("Authorization", "Bearer "+ep.Token)
+				response, err := client.Do(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var state map[string]any
+				err = json.NewDecoder(response.Body).Decode(&state)
+				response.Body.Close()
+				if err != nil || response.StatusCode != http.StatusOK || state["selected"] != "" || len(state["libraries"].([]any)) != 0 || state["job"].(map[string]any)["state"] != "paused" {
+					t.Fatal("startup did not expose library recovery choices", state, err)
+				}
+				request, _ = http.NewRequest(http.MethodGet, ep.URL+"/app", nil)
+				request.Header.Set("Authorization", "Bearer "+ep.Token)
+				response, err = client.Do(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				response.Body.Close()
+				if response.StatusCode != http.StatusOK {
+					t.Fatal("setup is inaccessible after initial-library failure", response.StatusCode)
+				}
+				if err = cmd.Process.Signal(syscall.SIGTERM); err != nil {
+					t.Fatal(err)
+				}
+				select {
+				case <-done:
+					if processErr != nil {
+						t.Fatal(processErr)
+					}
+				case <-deadline.C:
+					t.Fatal("application failed to stop")
+				}
+				if kind == "newer" {
+					db, err := openReadOnlySQLite(config.CatalogPath)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer db.Close()
+					var version string
+					if err = db.QueryRow("SELECT value FROM meta WHERE key='schema_version'").Scan(&version); err != nil || version != fmt.Sprint(catalogSchemaVersion+1) {
+						t.Fatal("startup modified an incompatible catalog", version, err)
+					}
+				}
+			})
+		}
+	})
+	t.Run("edited default local folder", func(t *testing.T) {
+		support := t.TempDir()
+		t.Setenv("PHAROS_SUPPORT_DIR", support)
+		override(t, &libraryVolumeIdentity, testIdentity)
+		app, err := newApplicationManager(t.Context(), filepath.Join(t.TempDir(), "Pharos.app"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(support, "Libraries", "My Library")
+		w := httptest.NewRecorder()
+		app.api(w, httptest.NewRequest(http.MethodPost, "/api/app/create", strings.NewReader(jsonText(map[string]any{"name": "My Library", "location": "mac", "path": path}))))
+		if w.Code != http.StatusOK || len(app.registry.Libraries) != 1 {
+			t.Fatal("edited default failed on fresh installation", w.Body.String())
+		}
+		if _, err = os.Stat(filepath.Join(path, libraryConfigName)); err != nil {
+			t.Fatal(err)
+		}
+		missing := filepath.Join(t.TempDir(), "missing-drive", "Libraries", "Other")
+		w = httptest.NewRecorder()
+		app.api(w, httptest.NewRequest(http.MethodPost, "/api/app/create", strings.NewReader(jsonText(map[string]any{"name": "Other", "location": "ssd", "path": missing}))))
+		if w.Code != http.StatusBadRequest {
+			t.Fatal("created a missing external parent", w.Body.String())
+		}
+		if _, err = os.Stat(filepath.Dir(missing)); !os.IsNotExist(err) {
+			t.Fatal("external refusal created a mount-like parent", err)
+		}
+	})
+	t.Run("rejected transfer preserves active services", func(t *testing.T) {
+		a, _ := lifecycleLibraries(t)
+		app, err := newApplicationManager(t.Context(), filepath.Join(t.TempDir(), "Pharos.app"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, err := app.registry.register(a, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		child := lifecycleChild(t)
+		app.children[id] = child
+		for _, body := range []map[string]any{{"source": id, "target": id}, {"source": id, "target": "unknown"}} {
+			w := httptest.NewRecorder()
+			app.startOperation(w, httptest.NewRequest(http.MethodPost, "/api/app/transfer", nil), body)
+			if w.Code != http.StatusBadRequest {
+				t.Fatal(w.Code, w.Body.String())
+			}
+			select {
+			case <-child.done:
+				t.Fatal("rejected transfer stopped a running library")
+			default:
+			}
+			if app.children[id] != child || app.busy || app.generation != 0 {
+				t.Fatal("rejected transfer changed connection state")
+			}
+		}
+	})
 	m, err := newApplicationManager(context.Background(), filepath.Join(t.TempDir(), "Pharos.app"))
 	if err != nil {
 		t.Fatal(err)
@@ -1320,6 +1529,41 @@ func TestPendingCaptureDoesNotRecaptureDeliveredInputs(t *testing.T) {
 }
 
 func TestApplicationReleasePreservesOtherLibraryAndLegacyMCPGate(t *testing.T) {
+	t.Run("unpinned library", func(t *testing.T) {
+		a, _ := lifecycleLibraries(t)
+		if err := SetRootString(a.Path, "volume_id", ""); err != nil {
+			t.Fatal(err)
+		}
+		a, err := LoadConfig(a.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		app, err := newApplicationManager(t.Context(), filepath.Join(t.TempDir(), "Pharos.app"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, err := app.registry.register(a, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if app.registry.library(id).Volume != testVolume {
+			t.Fatal("registration did not measure the unpinned library drive", app.registry.library(id).Volume)
+		}
+		child := lifecycleChild(t)
+		app.children[id] = child
+		// Simulate a registry saved before drive measurement was introduced.
+		app.registry.library(id).Volume = ""
+		w := httptest.NewRecorder()
+		app.api(w, httptest.NewRequest(http.MethodPost, "/api/app/release-volume", strings.NewReader(jsonText(map[string]any{"volume": testVolume}))))
+		if w.Code != http.StatusOK || app.children[id] != nil || !app.suspended[id] {
+			t.Fatal("unpinning bypassed release", w.Body.String())
+		}
+		select {
+		case <-child.done:
+		default:
+			t.Fatal("release returned before the library stopped")
+		}
+	})
 	a, b := lifecycleLibraries(t)
 	application := filepath.Join(t.TempDir(), "Pharos.app")
 	m, err := newApplicationManager(context.Background(), application)
@@ -1396,5 +1640,19 @@ func TestApplicationReleasePreservesOtherLibraryAndLegacyMCPGate(t *testing.T) {
 	fresh, err = newApplicationManager(context.Background(), application)
 	if err != nil || fresh.registry.Selected != first {
 		t.Fatal("an older eject-erased selection was not repaired from its MCP assignment", err)
+	}
+}
+
+// Runs only as the owned subprocess used by the initial-library startup test.
+func TestApplicationStartupHelper(t *testing.T) {
+	initial := os.Getenv("PHAROS_APP_TEST_INITIAL")
+	if initial == "" {
+		return
+	}
+	t.Setenv("PHAROS_SUPPORT_DIR", os.Getenv("PHAROS_APP_TEST_SUPPORT"))
+	t.Setenv(parentEnv, "")
+	override(t, &libraryVolumeIdentity, testIdentity)
+	if err := runApplicationCLI([]string{"--application", os.Getenv("PHAROS_APP_TEST_PATH"), "--endpoint", os.Getenv("PHAROS_APP_TEST_ENDPOINT"), "--initial-config", initial}); err != nil {
+		t.Fatal(err)
 	}
 }

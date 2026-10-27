@@ -12,8 +12,9 @@ import (
 	"syscall"
 )
 
-// RecoverLibrary publishes a separate, inactive candidate. It never opens a
-// backup for writing and never reuses the original writable-instance identity.
+// RecoverLibrary publishes a separate, inactive candidate. It never writes
+// backup payloads or reuses their writable-instance identity. A
+// downloaded cloud backup may need a fresh coordination lock file.
 func RecoverLibrary(ctx context.Context, backup, destination string, progress func(string)) (Config, error) {
 	backup, destination = canonical(expandPath(backup)), canonical(expandPath(destination))
 	if !filepath.IsAbs(destination) || destination == "/" || within(destination, backup) || within(backup, destination) {
@@ -77,7 +78,7 @@ func RecoverLibrary(ctx context.Context, backup, destination string, progress fu
 		if err = json.Unmarshal(b, &manifest); err != nil {
 			return Config{}, err
 		}
-		lock, err = os.Open(filepath.Join(backup, backupLockName))
+		lock, err = os.OpenFile(filepath.Join(backup, backupLockName), os.O_RDONLY|os.O_CREATE, 0o600)
 		if err == nil {
 			err = syscall.Flock(int(lock.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
 		}
@@ -309,6 +310,11 @@ func validateCaptureEvidence(ctx context.Context, root string) error {
 		}
 		if entry.IsDir() {
 			if filepath.Base(filepath.Dir(path)) == ".imports" {
+				// Interrupted private staging has never authorized source cleanup.
+				// Published import IDs are hashes and cannot use this prefix.
+				if strings.HasPrefix(entry.Name(), ".stage-") {
+					return filepath.SkipDir
+				}
 				receipt, err := readTransferReceipt(filepath.Join(path, "transfer.json"))
 				if err != nil {
 					return fmt.Errorf("invalid retained import %s: %w", path, err)
