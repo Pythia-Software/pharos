@@ -165,8 +165,8 @@ const ROUTES = [
     open: async page => {
       await page.evaluate(() => { window.webkit = {messageHandlers: {pharosLibrary: {postMessage: async () => {}}}}; });
       await activateHeaderTool(page, 'pharosDrive');
-      if (snapshot !== idleStatus) await page.locator('#pharosStatusPanel summary').click();
-    }, shown: snapshot === idleStatus ? '#pharosStatusPanel .pharos-status-verdict' : '#pharosStatusPanel .pharos-status-tree',
+      await page.locator('#pharosStatusPanel summary').click();
+    }, shown: '#pharosStatusPanel .pharos-status-domains',
   })),
   { name: "Home", url: "/", ready: ".home-belt-row .query-card" },
   { name: "Home search composer", url: "/", ready: ".home-search-trigger", open: page => page.getByRole("button", { name: "Search past work", exact: true }).click(), shown: ".home-search-disclosure.is-expanded" },

@@ -98,9 +98,51 @@ test("freshness and load rows stay out while the snapshot says null", () => {
   const idle = model(view());
   assert.equal(idle.freshness, null);
   assert.equal(idle.load, null);
-  const filled = model(view({ freshness: [{ domain: "conv:codex" }], resources: { cpu_percent: 45 } }));
+  const filled = model(view({ freshness: [{ domain: "conv:codex" }], freshness_summary: [], resources: { cpu_percent: 45 } }));
   assert.ok(filled.freshness);
   assert.ok(filled.load);
+});
+
+const at = Date.parse("2026-10-27T12:00:00Z");
+const minutesAgo = minutes => new Date(at - minutes * 60000).toISOString();
+const ledger = {
+  freshness: [
+    { domain: "conv:codex", group: "conversations", label: "Conversations (codex)", as_of: minutesAgo(2), behind: { state: "current", count: null, unit: null }, state_label: "Current", reason: null, catching_up: null, next: null },
+    { domain: "an.tools", group: "analyses", label: "Tools rollup", as_of: minutesAgo(180), behind: { state: "behind", count: 2, unit: "scheduled index" }, state_label: "Behind",
+      reason: { code: "deferred-by-schedule", text: "Reason words" }, catching_up: null, next: "Next words" },
+    { domain: "findings", group: "findings", label: "Findings", as_of: null, behind: { state: "behind", count: null, unit: null }, state_label: "Behind",
+      reason: { code: "running", text: "Running words" }, catching_up: "op-1", catching_up_label: "Index changes", next: null },
+  ],
+  freshness_summary: [
+    { group: "conversations", label: "Conversations", state: "current", text: "current", as_of: minutesAgo(2), as_of_label: "", shown: true },
+    { group: "analyses", label: "Analyses", state: "behind", text: "behind, next words", as_of: minutesAgo(180), as_of_label: "last current", tooltip: "Tools rollup: behind", shown: true },
+    { group: "backups", label: "Backups", state: "current", text: "current", as_of: null, shown: false },
+  ],
+};
+
+test("the Data row shows the server's shown groups with their ages; Show all lists every domain", () => {
+  const data = plain(panel.dataModel(ledger, at));
+  assert.deepEqual(data.line.map(group => group.group), ["conversations", "analyses"]);
+  assert.equal(data.line[0].text, "current (2 min ago)");
+  assert.equal(data.line[1].text, "behind, next words (last current 3 h ago)");
+  assert.equal(data.line[1].tooltip, "Tools rollup: behind");
+  assert.deepEqual(data.domains.map(domain => domain.domain), ["conv:codex", "an.tools", "findings"]);
+  assert.equal(data.domains[1].text, "Behind · Reason words · 2 scheduled indexes · 3 h ago");
+  assert.equal(data.domains[1].tooltip, "Next words");
+  assert.equal(data.domains[2].text, "Behind · Running words (Index changes)");
+});
+
+test("ages are whole minutes, hours or days", () => {
+  assert.equal(panel.ago(minutesAgo(0.5), at), "just now");
+  assert.equal(panel.ago(minutesAgo(59), at), "59 min ago");
+  assert.equal(panel.ago(minutesAgo(60 * 47), at), "47 h ago");
+  assert.equal(panel.ago(minutesAgo(60 * 72), at), "3 d ago");
+});
+
+test("Show all appears for the domains even with nothing running", () => {
+  const idle = model(view(ledger));
+  assert.equal(idle.moreCount, 0);
+  assert.equal(idle.freshness.domains.length, 3);
 });
 
 test("Stop reaches every stoppable top-level operation through its declared stop", () => {

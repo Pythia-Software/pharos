@@ -206,10 +206,47 @@ export const cloudScheduledStatus={
 // stays open.
 export const eventStream = documents => ({ __eventStream: [documents].flat() });
 const statusLibrary = { id: "library-fixture", name: "Pharos SSD", drive: { name: "Pharos SSD", ejectable: true, location: "external", mounted: true }, portable: true, path: "/Volumes/Pharos SSD/Pharos" };
+// The freshness ledger (§5) in the server's shape: rows, and the summary
+// groups the Data row shows.
+const domain = (id, group, label, state, changes = {}) => ({ domain: id, group, label, as_of: null, behind: { state, count: null, unit: null },
+  state_label: { current: "Current", behind: "Behind", unknown: "Unknown" }[state], reason: null, catching_up: null, catching_up_label: null, next: null, ...changes });
+const idleLedger = [
+  domain("conv:claude-code-with-a-long-source-name", "conversations", "Conversations (claude-code-with-a-long-source-name)", "current", { as_of: iso(120000) }),
+  domain("conv:codex", "conversations", "Conversations (codex)", "current", { as_of: iso(180000) }),
+  domain("view", "search", "Search view", "current"),
+  domain("search.substring", "search", "Substring search", "current"),
+  domain("an.identities", "analyses", "Identity links", "current", { as_of: iso(3 * 3600000) }),
+  domain("an.tools", "analyses", "Tools rollup", "current", { as_of: iso(3 * 3600000) }),
+  domain("findings", "findings", "Findings", "current", { as_of: iso(3 * 3600000) }),
+  domain("backup.local", "backups", "Local backup", "current", { as_of: iso(2 * day) }),
+];
+const idleSummary = [
+  { group: "conversations", label: "Conversations", state: "current", text: "current", as_of: iso(180000), as_of_label: "", catching_up: null, shown: true },
+  { group: "analyses", label: "Analyses", state: "current", text: "current", as_of: iso(3 * 3600000), as_of_label: "", catching_up: null, shown: true },
+  { group: "findings", label: "Findings", state: "current", text: "current", as_of: iso(3 * 3600000), as_of_label: "", catching_up: null, shown: false },
+  { group: "backups", label: "Backups", state: "current", text: "current", as_of: iso(2 * day), as_of_label: "", catching_up: null, shown: false },
+];
+const deferred = { reason: { code: "deferred-by-schedule", text: "Scheduled indexing skips analyses" }, next: "updates with the next manual index", behind: { state: "behind", count: 4, unit: "scheduled index" } };
+const busyLedger = [
+  domain("conv:claude-code-with-a-long-source-name", "conversations", "Conversations (claude-code-with-a-long-source-name)", "behind", { as_of: iso(2 * day), reason: { code: "indexing", text: "Indexing now" }, catching_up: "op-index", catching_up_label: "Index changes" }),
+  domain("conv:codex", "conversations", "Conversations (codex)", "unknown", { as_of: iso(3600000), reason: { code: "schedule-off", text: "Scheduled indexing is off for it" }, next: "updates with the next manual index" }),
+  domain("view", "search", "Search view", "behind", { behind: { state: "behind", count: 38, unit: "workspace" }, reason: { code: "refreshing", text: "Updating now" }, catching_up: "op-view", catching_up_label: "Index the Search view" }),
+  domain("an.identities", "analyses", "Identity links", "behind", { as_of: iso(3 * 3600000), ...deferred }),
+  domain("an.tools", "analyses", "Tools rollup", "behind", { as_of: iso(3 * 3600000), ...deferred }),
+  domain("findings", "findings", "Findings", "behind", { as_of: iso(3 * 3600000), reason: { code: "daily-pass-due", text: "Today's full pass has not run yet" }, next: "updates with the next manual index" }),
+  domain("backup.cloud:archive", "backups", "Cloud backup (Archive bucket with a long name)", "behind", { as_of: iso(9 * day), reason: { code: "overdue", text: "Older than its schedule" }, next: "updates with the next scheduled cloud backup" }),
+];
+const busySummary = [
+  { group: "conversations", label: "Conversations", state: "behind", text: "catching up", as_of: iso(2 * day), as_of_label: "last current", catching_up: "op-index", tooltip: "Conversations (claude-code-with-a-long-source-name): behind, indexing now", shown: true },
+  { group: "analyses", label: "Analyses", state: "behind", text: "behind, updates with the next manual index", as_of: iso(3 * 3600000), as_of_label: "last current", catching_up: null, tooltip: "Identity links: behind, scheduled indexing skips analyses\nTools rollup: behind, scheduled indexing skips analyses", shown: true },
+  { group: "findings", label: "Findings", state: "behind", text: "behind, updates with the next manual index", as_of: iso(3 * 3600000), as_of_label: "last current", catching_up: null, shown: true },
+  { group: "search", label: "Search", state: "behind", text: "catching up", as_of: null, as_of_label: "", catching_up: "op-view", shown: true },
+  { group: "backups", label: "Backups", state: "behind", text: "behind, updates with the next scheduled cloud backup", as_of: iso(9 * day), as_of_label: "last current", catching_up: null, shown: true },
+];
 export const idleStatus = {
   version: 1, revision: 1, generated_at: iso(0), host: { id: "test-mac", label: "This Mac" }, library: statusLibrary,
   eject: { verdict: "safe", eta_seconds: null, checked: "polled", blockers: [], headline: "Safe to eject; checked again on eject", summary: "Nothing Pharos can see is writing to the library. Pharos checks everything again when you eject." },
-  operations: [], attention: [], freshness: null, resources: null, features: { unified_activity: true }, journal: { dropped: 0 },
+  operations: [], attention: [], freshness: idleLedger, freshness_summary: idleSummary, resources: null, features: { unified_activity: true }, journal: { dropped: 0 },
 };
 const statusOperation = (id, changes) => ({
   id, kind: "index.changes.manual", variant: null, subject: null, label: "Index changes", verb: "Indexing changes", state: "running", state_label: "Indexing changes",
@@ -229,6 +266,7 @@ export const busyStatus = {
     statusOperation("op-backup", { kind: "backup.local", label: "Back up", state: "blocked", state_label: "Waiting", priority: "background", stoppable: true, stop: { method: "POST", path: "/api/operations/stop", body: { id: "op-backup" } }, detail: "Waiting for a capture to finish" }),
     statusOperation("op-old", { kind: "analysis.findings", label: "Update findings", state: "succeeded", state_label: "Done", stoppable: false, stop: undefined, ended_at: iso(60000) }),
   ],
+  freshness: busyLedger, freshness_summary: busySummary,
   attention: [{ id: "backup-failed", rule: 6, severity: "error", title: "The last backup failed", detail: "The destination drive is full: /Volumes/Backup Drive With A Long Name/Pharos Backup", action: { label: "Open Backups", path: "/settings/backups" } }],
 };
 // The broker's document, with two other libraries. A broker operation
