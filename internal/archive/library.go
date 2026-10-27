@@ -436,15 +436,23 @@ func (c *Catalog) libraryPass(ctx context.Context) (context.Context, func(), boo
 // originsRunInterval spaces origin publications while this process ingests:
 // each one reads every conversation, and the next commit leaves the projection
 // dirty again. Pages then show attribution up to this far behind, like their
-// cached values (see runCacheHold).
-const originsRunInterval = runCacheHold
+// cached values (see runCacheHold). Tests shorten it.
+var originsRunInterval = runCacheHold
 
 // maintainLibrary keeps the stored projection current, including after
 // ingests run by other processes against the same catalog. It also publishes
-// conversation origins, which requests only read.
+// conversation origins, which requests only read, including while an ingest
+// pauses the rest of the loop: a long ingest otherwise leaves the conversations
+// it adds without channel or machine until it ends.
 func (c *Catalog) maintainLibrary(ctx context.Context) {
 	var originsAt time.Time
 	for {
+		if !c.libraryRefreshStopped() && (c.ingestRuns.Load() == 0 || time.Since(originsAt) >= originsRunInterval) {
+			if err := c.ensureOrigins(ctx); err != nil && ctx.Err() == nil {
+				fmt.Fprintf(os.Stderr, "Conversation origins: %v\n", err)
+			}
+			originsAt = time.Now()
+		}
 		if c.projectionBatches.Load() > 0 || c.libraryRefreshStopped() {
 			select {
 			case <-ctx.Done():
@@ -456,12 +464,6 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 		pass, done, running := c.libraryPass(ctx)
 		if !running {
 			continue
-		}
-		if c.ingestRuns.Load() == 0 || time.Since(originsAt) >= originsRunInterval {
-			if err := c.ensureOrigins(pass); err != nil && pass.Err() == nil {
-				fmt.Fprintf(os.Stderr, "Conversation origins: %v\n", err)
-			}
-			originsAt = time.Now()
 		}
 		count, err := c.RefreshLibrary(pass, 10)
 		c.noteLibraryRefresh(count, err)

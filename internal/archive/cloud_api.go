@@ -43,44 +43,22 @@ func (j *cloudJobs) stop(id string) bool {
 	return true
 }
 
-// Reconcile without requiring an open settings page. Holding cloud.mu keeps a
-// just-admitted job from being mistaken for an interrupted job by a stale poll.
+// Reconcile without requiring an open settings page. Holding cloud.mu while
+// deciding which runs were interrupted keeps a just-admitted job from being
+// mistaken for one by a stale poll. It is released before storing them, which
+// can wait for a sync holding the writer, so the Cloud page does not wait too;
+// the update applies only to a run unchanged since it was read.
 func (s *Server) reconcileCloudRuns(ctx context.Context) error {
-	s.cloud.mu.Lock()
-	defer s.cloud.mu.Unlock()
-	rows, err := s.Catalog.reader().QueryContext(ctx, "SELECT status_json FROM cloud_backup_runs WHERE json_extract(status_json,'$.state')='running' OR json_extract(status_json,'$.verification_state')='running'")
+	interrupted, err := s.interruptedCloudRuns(ctx)
 	if err != nil {
 		return err
 	}
-	var runs []cloudRun
-	for rows.Next() {
-		var raw string
-		var run cloudRun
-		if err = rows.Scan(&raw); err != nil {
-			break
-		}
-		if err = json.Unmarshal([]byte(raw), &run); err != nil {
-			break
-		}
-		runs = append(runs, run)
-	}
-	if err == nil {
-		err = rows.Err()
-	}
-	rows.Close()
-	if err != nil {
-		return err
-	}
-	for _, run := range runs {
-		previousUpdated := run.UpdatedAt
-		if !s.interruptCloudRun(&run) {
-			continue
-		}
-		run.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	for _, change := range interrupted {
+		run := change.run
 		data, _ := json.Marshal(run)
 		var updated int64
 		err = s.Catalog.writeTransaction(ctx, "cloud-interrupted", func(tx *sql.Tx) error {
-			result, e := tx.ExecContext(ctx, "UPDATE cloud_backup_runs SET status_json=? WHERE id=? AND json_extract(status_json,'$.updated_at')=?", string(data), run.ID, previousUpdated)
+			result, e := tx.ExecContext(ctx, "UPDATE cloud_backup_runs SET status_json=? WHERE id=? AND json_extract(status_json,'$.updated_at')=?", string(data), run.ID, change.previousUpdated)
 			if e != nil {
 				return e
 			}
@@ -97,6 +75,40 @@ func (s *Server) reconcileCloudRuns(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+type interruptedCloudRun struct {
+	run             cloudRun
+	previousUpdated string
+}
+
+// interruptedCloudRuns reads the running runs and returns those this Mac was
+// running and has lost, marked failed.
+func (s *Server) interruptedCloudRuns(ctx context.Context) ([]interruptedCloudRun, error) {
+	s.cloud.mu.Lock()
+	defer s.cloud.mu.Unlock()
+	rows, err := s.Catalog.reader().QueryContext(ctx, "SELECT status_json FROM cloud_backup_runs WHERE json_extract(status_json,'$.state')='running' OR json_extract(status_json,'$.verification_state')='running'")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	interrupted := []interruptedCloudRun{}
+	for rows.Next() {
+		var raw string
+		var run cloudRun
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(raw), &run); err != nil {
+			return nil, err
+		}
+		previousUpdated := run.UpdatedAt
+		if s.interruptCloudRun(&run) {
+			run.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			interrupted = append(interrupted, interruptedCloudRun{run, previousUpdated})
+		}
+	}
+	return interrupted, rows.Err()
 }
 
 // interruptCloudRun marks run failed where this Mac was running it and its

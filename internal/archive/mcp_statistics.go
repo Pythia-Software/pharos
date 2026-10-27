@@ -57,7 +57,7 @@ func (c *Catalog) queryStatistics(tool string, args map[string]any) (any, error)
 		if !ok || id == "" {
 			return nil, fmt.Errorf("release_snapshot requires snapshot_id")
 		}
-		return map[string]any{"snapshot_id": id, "released": statisticsSnapshots.release(c.Path, id), "returned_count": 0}, nil
+		return map[string]any{"snapshot_id": id, "released": statisticsSnapshots.release(c.Path, id, c.clock().UnixMilli()), "returned_count": 0}, nil
 	}
 	r, err := parseMetricRequest(tool, args)
 	if err != nil {
@@ -994,17 +994,26 @@ var statisticsSnapshots statisticsSnapshotStore
 
 func statisticsSnapshotKey(catalog, id string) string { return catalog + "\x00" + id }
 
+// prune frees expired snapshots, which can hold 64 MiB each, whenever the
+// store is used. Callers hold mu.
+func (store *statisticsSnapshotStore) prune(now int64) {
+	for key, stored := range store.snapshots {
+		if stored.expires <= now {
+			delete(store.snapshots, key)
+		}
+	}
+}
+
 func (store *statisticsSnapshotStore) save(catalog, id string, now int64, snapshot storedStatisticsSnapshot) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	store.prune(now)
 	if store.snapshots == nil {
 		store.snapshots = map[string]storedStatisticsSnapshot{}
 	}
 	active := 0
-	for key, stored := range store.snapshots {
-		if stored.expires <= now {
-			delete(store.snapshots, key)
-		} else if strings.HasPrefix(key, catalog+"\x00") {
+	for key := range store.snapshots {
+		if strings.HasPrefix(key, catalog+"\x00") {
 			active++
 		}
 	}
@@ -1015,18 +1024,22 @@ func (store *statisticsSnapshotStore) save(catalog, id string, now int64, snapsh
 	return nil
 }
 
-func (store *statisticsSnapshotStore) load(catalog, id string) (storedStatisticsSnapshot, bool) {
+// load returns snapshot id even when it has just expired, so the caller can
+// say so, while freeing it and any other expired snapshot.
+func (store *statisticsSnapshotStore) load(catalog, id string, now int64) (storedStatisticsSnapshot, bool) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	stored, ok := store.snapshots[statisticsSnapshotKey(catalog, id)]
+	store.prune(now)
 	return stored, ok
 }
 
-func (store *statisticsSnapshotStore) release(catalog, id string) bool {
+func (store *statisticsSnapshotStore) release(catalog, id string, now int64) bool {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	_, ok := store.snapshots[statisticsSnapshotKey(catalog, id)]
 	delete(store.snapshots, statisticsSnapshotKey(catalog, id))
+	store.prune(now)
 	return ok
 }
 
@@ -1045,7 +1058,7 @@ func (c *Catalog) saveStatisticsSnapshot(s *statisticsSnapshot, r statisticsRequ
 }
 func (c *Catalog) loadStatisticsSnapshot(id string) (statisticsSnapshot, statisticsRequest, error) {
 	s, r := statisticsSnapshot{}, statisticsRequest{}
-	stored, ok := statisticsSnapshots.load(c.Path, id)
+	stored, ok := statisticsSnapshots.load(c.Path, id, c.clock().UnixMilli())
 	if !ok {
 		return s, r, fmt.Errorf("snapshot unavailable; restart the query")
 	}

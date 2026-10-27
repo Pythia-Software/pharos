@@ -102,11 +102,15 @@ func TestRequestReadsDoNotWaitForTheCatalogWriter(t *testing.T) {
 	if err := catalog.ensureToolRollup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	// A sync's commits leave every projection stale.
+	// A sync's commits leave every projection stale, and a cloud backup this
+	// Mac was running has lost its process.
+	interrupted := jsonText(cloudRun{ID: "lost-run", DestinationID: "cloud", State: "running", OwnerPID: 999999999, OwnerHost: currentHost().ID, UpdatedAt: "earlier"})
 	execTx(t, catalog.DB, "UPDATE origin_state SET revision=revision+1",
 		"INSERT OR IGNORE INTO parallelism_dirty SELECT id,'' FROM conversations",
 		"INSERT OR IGNORE INTO mcp_metric_dirty SELECT id FROM workspaces",
-		"INSERT OR IGNORE INTO tool_rollup_dirty SELECT id,'stale' FROM workspaces")
+		"INSERT OR IGNORE INTO tool_rollup_dirty SELECT id,'stale' FROM workspaces",
+		`INSERT INTO cloud_destinations(id,config_json,credential_json,imported_at) VALUES('cloud','{"name":"Backup"}','{}','2026-10-27')`,
+		`INSERT INTO cloud_backup_runs(id,destination_id,status_json,created_at) VALUES('lost-run','cloud','`+interrupted+`','2026-10-27')`)
 	server := testServer(t, config, catalog)
 
 	// Hold the writer as a sync does: SQLite's lock, from another connection,
@@ -148,7 +152,9 @@ func TestRequestReadsDoNotWaitForTheCatalogWriter(t *testing.T) {
 		{"GET", "/api/authorship", ""}, {"GET", "/api/pricing", ""}, {"GET", "/api/origins", ""},
 		{"GET", "/api/usage/history", ""}, {"GET", "/api/usage/parallelism", ""}, {"GET", "/api/usage/summary", ""},
 		{"GET", "/api/menu-bar/usage", ""}, {"GET", "/api/tools/status", ""}, {"GET", "/api/sources", ""},
-		{"GET", "/api/cloud-backup", ""}, {"GET", "/api/mcp/calls", ""}, {"GET", "/api/search?q=parser", ""},
+		// The first shows the lost run as failed and stores that in the
+		// background, which waits for the writer; the next does not.
+		{"GET", "/api/cloud-backup", ""}, {"GET", "/api/cloud-backup", ""}, {"GET", "/api/mcp/calls", ""}, {"GET", "/api/search?q=parser", ""},
 		{"POST", "/api/search/text", `{"query":"parser"}`}, {"GET", "/api/work/" + workspace, ""}, {"GET", "/api/findings", ""},
 		{"GET", "/api/tl1", ""}, {"GET", "/api/preferences", ""}, {"GET", "/api/sync/status", ""},
 	}
@@ -192,11 +198,20 @@ func TestRequestReadsDoNotWaitForTheCatalogWriter(t *testing.T) {
 		}
 		if answer := w.Body.String(); w.Code != http.StatusOK || strings.Contains(answer, `"isError":true`) {
 			t.Errorf("%s %s %.300s while the writer was held: %d: %.300s", request.method, request.path, request.body, w.Code, answer)
+		} else if request.path == "/api/cloud-backup" && !strings.Contains(answer, `"phase":"interrupted"`) {
+			t.Errorf("the Cloud page did not show the lost run as interrupted: %.500s", answer)
 		}
 	}
 
-	// History waits for the writer, then records every call.
+	// History and the lost run wait for the writer, then are stored.
 	release()
+	if !waitFor(10*time.Second, func() {
+		for countRows(t, catalog, `SELECT COUNT(*) FROM cloud_backup_runs WHERE json_extract(status_json,'$.state')='failed'`) == 0 {
+			time.Sleep(20 * time.Millisecond)
+		}
+	}) {
+		t.Fatal("the interrupted run was not stored once the writer was free")
+	}
 	if !waitFor(10*time.Second, func() {
 		for mcpCalls(t, catalog) < len(tools) {
 			time.Sleep(20 * time.Millisecond)

@@ -438,3 +438,31 @@ func publishedOrigins(c *Catalog, ctx context.Context) (map[string]map[string]an
 	}
 	return c.conversationOrigins(ctx)
 }
+
+// An ingest pauses the rest of the Library maintenance loop, which still
+// publishes the origins of the conversations it adds, spaced while it runs.
+func TestTaskOriginsPublishDuringAnIngest(t *testing.T) {
+	override(t, &originsRunInterval, 50*time.Millisecond)
+	c, _ := testCatalog(t)
+	// What beginIngest does for a sync or a capture index run.
+	c.projectionBatches.Add(1)
+	c.ingestRuns.Add(1)
+	defer c.ingestRuns.Add(-1)
+	defer c.projectionBatches.Add(-1)
+	ctx, cancel := context.WithCancel(t.Context())
+	stopped := make(chan struct{})
+	go func() { c.maintainLibrary(ctx); close(stopped) }()
+	defer func() { cancel(); <-stopped }()
+	for _, id := range []string{"first", "second"} {
+		execTx(t, c.DB,
+			`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('`+id+`','codex','local','`+id+`','`+id+`','2026-10-26')`,
+			`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness) VALUES('`+id+`','`+id+`','codex','local','`+id+`','codex/codex_desktop')`)
+		if !waitFor(10*time.Second, func() {
+			for countRows(t, c, "SELECT COUNT(*) FROM conversation_origins WHERE conversation_id='"+id+"' AND channel='desktop'") == 0 {
+				time.Sleep(10 * time.Millisecond)
+			}
+		}) {
+			t.Fatalf("%s: origins not published during the ingest", id)
+		}
+	}
+}

@@ -175,8 +175,12 @@ func TestStatisticsSnapshotsSurviveChangesAndReopen(t *testing.T) {
 	}
 	c.now = func() time.Time { return time.Now().Add(statisticsTTL) }
 	args["select"] = []string{"total_tokens"}
-	if _, err := callMCP(c, "query_statistics", args); err == nil {
-		t.Fatal("expired snapshot accepted")
+	if _, err := callMCP(c, "query_statistics", args); err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("expired snapshot accepted: %v", err)
+	}
+	// Snapshots can be large, so reading one frees every expired snapshot.
+	if count := activeStatisticsSnapshots(c); count != 0 {
+		t.Fatalf("%d expired snapshots kept in memory", count)
 	}
 }
 

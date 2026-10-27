@@ -147,7 +147,7 @@ available until expiry, including after the final page, and can be released earl
 ```
 
 Snapshots store local derived metadata, not transcripts. Expired snapshots are
-removed when new snapshots are created. No SQLite read transaction remains open
+freed whenever a snapshot is created, read, or released. No SQLite read transaction remains open
 between MCP calls. Metadata-only queries without text report exact retrieval
 populations; metrics may still have pending/partial evidence. Text searches
 apply eligibility before the 25,000 recent-match and top-500 lexical cuts, and
