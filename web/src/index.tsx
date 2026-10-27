@@ -90,6 +90,10 @@ import { UsageQueryIdeas } from "./usage-query-ideas";
 import { toolSummaryCallFilters, toolMetricPresentation, defaultToolDashboard, validToolDashboard, cumulativeToolTrend, smoothedToolTrend, toolDashboardMeasures, toolDashboardBreakdowns, toolDashboardQuery, toolTrendRanking, withToolTrendGroups, toolTrendGroups } from "./tools-dashboard-model";
 import { readDashboardQuery, inspectDashboardBucket, recordDashboardMetric, recordDashboards, parallelismSelectionQuery, toolDashboardWhere, type RecordDashboardTopic } from "./usage-dashboard-model";
 import { dashboardChartURL } from "./dashboard-chart-links";
+import { AnalysisViewControl, DashboardAnalysis } from "./dashboard-analysis";
+import { switchView, validAnalysisState, type AnalysisState } from "./dashboard-analysis-model";
+import { tokenAnalysisCatalog } from "./token-analysis-catalog";
+import type { LocalRows } from "./analysis-request";
 
 type Row = Record<string, any>;
 const relationships: RelationshipAdapter = {
@@ -1098,7 +1102,7 @@ function splitLabel(split: TokenSplit, value: unknown): string {
 // chart leaves that filter out of its own query so the other values stay in
 // the key to pick from. Token types are not rows, so clicking one only
 // narrows the chart.
-function TokenChart({ where, onFilter, onTimeFilter = onFilter, view, onChange }: { where: WhereTerm[]; onFilter: FilterChange; onTimeFilter?: FilterChange; view: TokenChartView; onChange: (next: Partial<TokenChartView>) => void }) {
+function TokenChart({ where, onFilter, onTimeFilter = onFilter, view, onChange, viewControl }: { where: WhereTerm[]; onFilter: FilterChange; onTimeFilter?: FilterChange; view: TokenChartView; onChange: (next: Partial<TokenChartView>) => void; viewControl?: React.ReactNode }) {
   const originRevision = useOriginMetadata();
   const cost = costMetric(view);
   const percent = view.metric === "percent" || view.metric === "percent_cost";
@@ -1149,6 +1153,7 @@ function TokenChart({ where, onFilter, onTimeFilter = onFilter, view, onChange }
   const unit = periodLabel(view.period, periodCount), splitName = tokenSplits.find(([value]) => value === split)?.[1].toLowerCase() ?? split;
   const title = `${cumulative ? "Cumulative " : ""}${percent ? cost ? "Cost share" : "Token share" : cost ? "API cost" : "Tokens"}${cumulative ? "" : ` per ${unit}`} by ${splitName}`;
   const controls = <>
+    {viewControl}
     <ChartSelect label="Metric" value={view.metric} options={[["cost", "API Cost"], ["tokens", "Token Count"], ["percent_cost", "% API Cost"], ["percent", "% Token Count"]]} onChange={metric => onChange({ metric })} />
     <ChartSelect label="Breakdown" value={split} options={tokenSplits.map(([value, text]) => [value, text, value === "type" && cost ? "Cost is priced per request, not per token type" : undefined])}
       title={cost ? "Token type is only available for token metrics; cost is priced per request." : "How each chart column is divided"} onChange={next => onChange({ split: next, seriesLimit: 15, selection: { values: [], excluded: false } })} />
@@ -1553,13 +1558,25 @@ function ParallelismUsageDashboard() {
   </>;
 }
 
+// Over time is the token chart. Other views share its filters and range,
+// and the analysis fields sit beside the trend's in one analyze_chart object.
+type TokenDashboardView = Omit<TokenChartView, "metric" | "split"> & AnalysisState;
+const tokenSharedRows: LocalRows | undefined = shared ? { rows: shared.datasets.usage ?? [], hourly: shared.datasets.usage_hourly ?? [] } : undefined;
+const validTokenChartFields = (view: Omit<TokenChartView, "metric" | "split">) => Object.hasOwn(chartPeriods, view.period) && validPeriodCount(view.hours) && validPeriodCount(view.days) && validRollingPeriods(view.rollingPeriods) && validChartScale(view.scale) && validChartDisplay(view.display) && validChartPresentation(view);
+const validTokenDashboard = (view: TokenDashboardView) => validTokenChartFields(view) && validAnalysisState(tokenAnalysisCatalog, view)
+  && ((view.view ?? "trend") !== "trend" || ["tokens", "cost", "percent", "percent_cost"].includes(view.metric) && tokenSplits.some(([key]) => key === view.split));
+
 function TokenUsageDashboard() {
-  const state = useUsageDashboardState({ ...defaultTokenChart, period: "day" as ChartPeriod }, view => ["tokens", "cost", "percent", "percent_cost"].includes(view.metric) && tokenSplits.some(([key]) => key === view.split) && Object.hasOwn(chartPeriods, view.period) && validPeriodCount(view.hours) && validPeriodCount(view.days) && validRollingPeriods(view.rollingPeriods) && validChartScale(view.scale) && validChartDisplay(view.display) && validChartPresentation(view), usageTime);
+  const state = useUsageDashboardState<TokenDashboardView>({ ...defaultTokenChart, period: "day" as ChartPeriod }, validTokenDashboard, usageTime);
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
+  const choose = (next: Parameters<typeof switchView>[2]) => state.update(switchView(tokenAnalysisCatalog, state.view, next));
+  if ((state.view.view ?? "trend") !== "trend") return <DashboardAnalysis catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={state.view} where={state.where}
+    onChange={state.update} onFilter={state.onFilter} local={tokenSharedRows} currentURL="/analyze?analyze_view=tokens&machine_view=tokens" />;
+  const trend = state.view as TokenChartView;
   return <>
-    <TokenChart where={state.where} onFilter={state.onFilter} view={state.view} onChange={state.update} />
+    <TokenChart where={state.where} onFilter={state.onFilter} view={trend} onChange={state.update} viewControl={<AnalysisViewControl value="trend" onChange={choose} />} />
     <TokenSummary where={state.where} />
-    <UsageDashboardLinks schema={schemas.usage} dataset="usage" query={{ ...EMPTY_QUERY, where: state.where, aggregations: tokenChartMetrics(state.view).map(clause => ({ ...clause, label: clause.label === "chart" ? costMetric(state.view) ? "API cost (USD)" : "Tokens" : clause.label })) }} currentURL="/analyze?analyze_view=tokens&machine_view=tokens" />
+    <UsageDashboardLinks schema={schemas.usage} dataset="usage" query={{ ...EMPTY_QUERY, where: state.where, aggregations: tokenChartMetrics(trend).map(clause => ({ ...clause, label: clause.label === "chart" ? costMetric(trend) ? "API cost (USD)" : "Tokens" : clause.label })) }} currentURL="/analyze?analyze_view=tokens&machine_view=tokens" />
     <p className="usage-dashboard-note">Click a column or point to pin its key, then follow a series to its contributing usage records. Drag across two or more periods to filter dates. Select legend entries to compare or exclude series. Cumulative links include activity from the range start; rolling-average links include the averaging window. Grouped rows expose the underlying interval amounts before percentages, smoothing, accumulation, or folded series. API cost is the list-price equivalent; subscriptions and long-context premiums are excluded. ≈ marks assumed prices.</p>
   </>;
 }

@@ -26,6 +26,11 @@ V3/V2 reduction cost gaps and let computed previews use modern transports.
 It includes the 0.9.3 baseline, complete reproduction context and acceptance
 criteria, and can be sent directly to the Query Table team.
 
+[`query-table-calendar-cycles.md`](query-table-calendar-cycles.md) asks for
+hour-of-day and weekday grouping, so dashboard cycle views can fold natively
+and drill into a slot. Pharos folds daily and hourly totals in the browser
+until then.
+
 The [manual-interventions audit and upstream handoff](query-table-manual-interventions.md)
 records the previous patches and source snapshots, the 0.9.3 response, and the
 remaining host SQL reduction and scratch-lifecycle decisions. Cross-field V2
