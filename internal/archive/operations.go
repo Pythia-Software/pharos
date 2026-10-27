@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"sync"
@@ -43,6 +44,10 @@ const (
 	triggerCLI        = "cli"
 	triggerRespawn    = "respawn"
 	triggerOnboarding = "onboarding"
+	// What stops the service other than a user: library.release's triggers.
+	triggerSignal       = "signal"
+	triggerParentExited = "parent-exited"
+	triggerError        = "error"
 )
 
 // OperationSpec is fixed for an operation's life (§2.1).
@@ -62,6 +67,8 @@ type OperationSpec struct {
 	// Queued registers the operation as waiting for its turn rather than
 	// running.
 	Queued bool
+	// Libraries are the registered libraries a broker operation touches.
+	Libraries []string
 }
 
 // StepPlan is one step declared up front (§2.3 Plan).
@@ -150,6 +157,66 @@ type Op struct {
 	writtenEver                    bool
 	// tentative is set while a daemon pass's operation is unpublished.
 	tentative bool
+	// locks are the capture and index locks the operation has taken: a hold
+	// on each while its file stays open (§4.1, concrete holds).
+	locks []fileHold
+}
+
+// fileHold is a concrete hold an open lock file gives an operation.
+type fileHold struct {
+	hold Hold
+	file *os.File
+}
+
+// fileOpen reports whether f has not been closed.
+func fileOpen(f *os.File) bool {
+	conn, err := f.SyscallConn()
+	if err != nil {
+		return false
+	}
+	return conn.Control(func(uintptr) {}) == nil
+}
+
+// lockResource names the resource a capture or index lock file guards:
+// capture:<host> for <root>/<host>/.capture.lock, index:<host>/<source> for
+// <root>/<host>/<source>/.index.lock; "" for anything else.
+func lockResource(path string) string {
+	dir := filepath.Dir(path)
+	switch filepath.Base(path) {
+	case captureLockName:
+		return "capture:" + filepath.Base(dir)
+	case indexLockName:
+		return "index:" + filepath.Base(filepath.Dir(dir)) + "/" + filepath.Base(dir)
+	}
+	return ""
+}
+
+// holdLock records that the operation has taken the lock open in file: a
+// write hold on its resource for as long as the file stays open, so the
+// verdict can tell this lock from one an unknown process holds.
+func (op *Op) holdLock(file *os.File) {
+	if file == nil || !op.lock() {
+		return
+	}
+	if resource := lockResource(file.Name()); resource != "" {
+		op.locks = append(slices.DeleteFunc(op.locks, func(held fileHold) bool { return !fileOpen(held.file) }),
+			fileHold{hold: Hold{Resource: resource, Mode: "write"}, file: file})
+	}
+	op.unlock(false)
+	if op.reg.holdsChanged != nil {
+		op.reg.holdsChanged()
+	}
+}
+
+// heldLocksLocked are the concrete holds of the lock files still open.
+func (op *Op) heldLocksLocked() []Hold {
+	holds := []Hold{}
+	for _, held := range op.locks {
+		if fileOpen(held.file) {
+			holds = append(holds, held.hold)
+		}
+	}
+	return holds
 }
 
 // opOutcome is the terminal state the work's own record decided (a SyncRun's
@@ -210,10 +277,16 @@ type opRegistry struct {
 	// releasing reports a release in progress (§2.3 detail.during_release).
 	releasing func() bool
 	// invalid counts programming errors (invalid transitions, unknown kinds).
-	invalid  int
-	loggedAt time.Time
+	invalid int
+	// forgotten counts ended operations dropped before the journal wrote
+	// them.
+	forgotten int64
+	loggedAt  time.Time
 	// keepEnded is how long an ended top-level operation stays listed.
 	keepEnded time.Duration
+	// holdsChanged runs after an operation takes a lock (a Terminal command
+	// rewrites its lease's holds).
+	holdsChanged func()
 	// journaled is true when a journal writer drains this registry; without
 	// one, ended operations need not wait to be written before they are
 	// forgotten.
@@ -433,12 +506,21 @@ func (r *opRegistry) pruneLocked() {
 		if index < 200 && op.ended.After(cutoff) {
 			continue
 		}
-		if r.journaled && op.treeUnwrittenLocked() {
+		// While the journal cannot write, unwritten ones are kept, up to a
+		// cap: past it the oldest are forgotten and counted as dropped.
+		if r.journaled && op.treeUnwrittenLocked() && index < maxUnwrittenOperations {
 			continue
+		}
+		if r.journaled && op.treeUnwrittenLocked() {
+			r.forgotten++
 		}
 		op.forgetLocked()
 	}
 }
+
+// maxUnwrittenOperations caps the ended operations kept for a journal that
+// keeps failing; tests lower it.
+var maxUnwrittenOperations = 2000
 
 func (op *Op) treeUnwrittenLocked() bool {
 	if op.version != op.written && op.reg.journalEligibleLocked(op) {
@@ -867,13 +949,20 @@ type opView struct {
 	Version       uint64
 	// Foreign is true for an operation another process owns (a lease).
 	Foreign bool
+	// Tentative is an unpublished daemon pass: the verdict counts it, the
+	// snapshot does not list it.
+	Tentative bool
 }
 
 func (op *Op) viewLocked() opView {
-	view := opView{ID: op.id, Root: op.root.id, Spec: op.spec, Kind: op.kind, Process: op.reg.process, Instance: op.reg.instance, State: op.state,
+	spec := op.spec
+	if held := op.heldLocksLocked(); len(held) > 0 {
+		spec.Holds = append(slices.Clone(spec.Holds), held...)
+	}
+	view := opView{ID: op.id, Root: op.root.id, Spec: spec, Kind: op.kind, Process: op.reg.process, Instance: op.reg.instance, State: op.state,
 		Reason: op.reason, Detail: op.detail, Error: op.errText, Started: op.started, Updated: op.updated, Ended: op.ended, Plan: slices.Clone(op.plan),
 		Step: op.step, SafePoint: op.safePoint, SafePointSet: op.safePointKnown, Wrote: op.wrote, UserStop: op.userStop,
-		DuringRelease: op.duringRelease, Forecast: op.forecast, Version: op.version}
+		DuringRelease: op.duringRelease, Forecast: op.forecast, Version: op.version, Tentative: op.tentative}
 	if op.parent != nil {
 		view.Parent = op.parent.id
 	}

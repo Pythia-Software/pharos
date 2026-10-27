@@ -240,7 +240,12 @@ func fraction(done, total float64) *float64 {
 }
 
 // libraryActivities lists what is running now.
-func (s *Server) libraryActivities() []libraryActivity {
+func (s *Server) libraryActivities() []libraryActivity { return s.libraryActivitiesProbing(true) }
+
+// libraryActivitiesProbing is libraryActivities; without probeLocks it skips
+// the capture lock probe (captureActive), so a shadow read never takes a lock
+// a capture might be about to take.
+func (s *Server) libraryActivitiesProbing(probeLocks bool) []libraryActivity {
 	activities := []libraryActivity{}
 	s.runsMu.RLock()
 	for _, run := range s.runs {
@@ -332,7 +337,7 @@ func (s *Server) libraryActivities() []libraryActivity {
 			Work: work, StartedAt: run.StartedAt, Writes: true,
 			OnEject: "Stops between files; the next capture resumes it, and what was captured stays valid."})
 	}
-	if !serviceCapture && s.captureActive() {
+	if !serviceCapture && probeLocks && s.captureActive() {
 		activities = append(activities, libraryActivity{Kind: "capture-other", Label: "Capture by another process",
 			Detail: "Another process on this Mac, such as pharos capture, is capturing into the library.", Writes: true,
 			OnEject: "Pharos cannot stop it: wait for it to finish, or stop it, before ejecting; until then it keeps the drive busy."})

@@ -376,6 +376,7 @@ func lockCaptureTarget(ctx context.Context, dir string) (*os.File, error) {
 		}
 		return nil, err
 	}
+	opFrom(ctx).holdLock(f)
 	return f, nil
 }
 
@@ -431,6 +432,7 @@ func beginInputCapture(ctx context.Context, config Config) (*captureSession, err
 		if err != nil {
 			return nil, err
 		}
+		opFrom(ctx).holdLock(session.lock)
 		return session.lock, nil
 	})
 	return session, err

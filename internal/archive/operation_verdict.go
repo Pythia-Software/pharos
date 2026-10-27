@@ -305,29 +305,28 @@ func heldCaptureLocks(root string) []heldLock {
 }
 
 // unnamedLocks keeps the held locks that no running operation of this
-// process and no live lease accounts for: capture and index locks are taken
-// under the ingest coordinator in the service, and declared in a lease
-// elsewhere.
+// process and no live lease names by an exact write hold on the lock's
+// resource (capture:<host>, index:<host>/<source>): an operation gains that
+// hold only once it has taken the lock, and a lease declares resolved hosts.
 func unnamedLocks(locks []heldLock, ops []opView, leases []leaseProbe) []heldLock {
-	if len(locks) == 0 {
-		return locks
-	}
-	// Only a write hold takes these locks exclusively (a backup's read of
-	// the captures takes them shared, which a probe does not see).
-	names := func(holds []Hold, kind string) bool {
-		return slices.ContainsFunc(holds, func(hold Hold) bool {
-			return hold.Mode == "write" && (hold.Resource == "ingest" || hold.Resource == kind || strings.HasPrefix(hold.Resource, kind+":"))
-		})
-	}
 	unnamed := []heldLock{}
 	for _, lock := range locks {
-		named := slices.ContainsFunc(ops, func(view opView) bool { return !opTerminal(view.State) && names(view.Spec.Holds, lock.Kind) }) ||
-			slices.ContainsFunc(leases, func(probe leaseProbe) bool {
-				return probe.Live && probe.Info != nil && (names(probe.Info.Holds, lock.Kind) || names(probe.Info.Holds, "capture") || names(probe.Info.Holds, "index"))
-			})
-		if !named {
+		if !lockNamed(lockResource(lock.Path), ops, leases) {
 			unnamed = append(unnamed, lock)
 		}
 	}
 	return unnamed
+}
+
+// lockNamed reports whether a running operation or a live lease holds
+// resource for writing.
+func lockNamed(resource string, ops []opView, leases []leaseProbe) bool {
+	if resource == "" {
+		return false
+	}
+	names := func(holds []Hold) bool {
+		return slices.ContainsFunc(holds, func(hold Hold) bool { return hold.Mode == "write" && hold.Resource == resource })
+	}
+	return slices.ContainsFunc(ops, func(view opView) bool { return !opTerminal(view.State) && names(view.Spec.Holds) }) ||
+		slices.ContainsFunc(leases, func(probe leaseProbe) bool { return probe.Live && probe.Info != nil && names(probe.Info.Holds) })
 }

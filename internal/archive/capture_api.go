@@ -221,8 +221,8 @@ func (s *Server) startCapture(w http.ResponseWriter, body map[string]any) {
 		return
 	}
 	run := s.captures.start(sources)
-	_, handle := s.begin(s.life.ctx, OperationSpec{Kind: "capture.this-mac", Trigger: triggerUser, Legacy: run.ID,
-		Holds: []Hold{{Resource: "drive", Mode: "write"}, {Resource: "ingest", Mode: "write"}, {Resource: "capture:" + currentHost().ID, Mode: "write"}}})
+	_, handle := s.begin(s.life.ctx, OperationSpec{Kind: "capture.this-mac", Trigger: triggerUser, Legacy: run.ID})
+	handle.holdLock(session.lock)
 	// A release (before an eject) cancels the capture between files; every
 	// file and manifest is replaced atomically, so the next run resumes.
 	started := s.launch(handle, func(ctx context.Context, op *Op) (err error) {

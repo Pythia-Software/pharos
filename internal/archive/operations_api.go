@@ -244,8 +244,13 @@ func (s *Server) ejectInputs(ctx context.Context, fresh bool) (verdictInput, []o
 	own := s.ops.views()
 	foreign := s.foreignOperations(ctx, leases)
 	in := verdictInput{ops: own, leases: leases}
-	in.locks = unnamedLocks(heldCaptureLocks(s.Config().CaptureRoot), own, leases)
-	in.unregistered = unregisteredActivities(s.libraryActivities(), own, leases)
+	// Capture and index locks are probed only on the release and quit path,
+	// where stopping work is the intent: writers take them with LOCK_NB, so
+	// a probe from a polled read could make a capture or index fail.
+	if fresh {
+		in.locks = unnamedLocks(heldCaptureLocks(s.Config().CaptureRoot), own, leases)
+	}
+	in.unregistered = unregisteredActivities(s.libraryActivitiesProbing(fresh), own, leases)
 	// A lease listed through its journal rows is one holder, not two.
 	in.leases = slices.DeleteFunc(slices.Clone(leases), func(probe leaseProbe) bool {
 		return probe.Info != nil && slices.ContainsFunc(foreign, func(view opView) bool {
@@ -274,7 +279,7 @@ func (s *Server) operationsDocument(ctx context.Context) map[string]any {
 	}
 	operations := []map[string]any{}
 	for _, view := range views {
-		if view.Parent != "" || view.Kind == nil || view.Kind.Hidden {
+		if view.Parent != "" || view.Kind == nil || view.Kind.Hidden || view.Tentative {
 			continue
 		}
 		if opTerminal(view.State) && at.Sub(view.Ended) > operationsRecent {
@@ -307,7 +312,8 @@ func (s *Server) operationsDocument(ctx context.Context) map[string]any {
 // operationsETag changes whenever the document may: the registry's revision
 // and what the lease probes found.
 func operationsETag(document map[string]any) string {
-	data, _ := json.Marshal(map[string]any{"eject": document["eject"], "operations": document["operations"], "recent": document["journal"]})
+	eject, _ := document["eject"].(ejectVerdict)
+	data, _ := json.Marshal(map[string]any{"verdict": eject.Verdict, "operations": document["operations"], "recent": document["journal"]})
 	sum := sha256.Sum256(data)
 	return fmt.Sprintf("\"%v-%x\"", document["revision"], sum[:8])
 }
@@ -399,18 +405,10 @@ func unregisteredActivities(activities []libraryActivity, ops []opView, leases [
 				ok = running(legacy(parts[2]))
 			}
 		case activity.Kind == "capture-other":
-			// The capture lock is held by a Terminal capture (its lease), or
-			// by this service's own work that captures under the ingest
-			// coordinator (Capture & index, which libraryActivities lists as
-			// another process's capture).
-			capturing := func(holds []Hold) bool {
-				return slices.ContainsFunc(holds, func(hold Hold) bool {
-					return hold.Mode == "write" && (hold.Resource == "ingest" || strings.HasPrefix(hold.Resource, "capture"))
-				})
-			}
-			ok = running(func(view opView) bool { return capturing(view.Spec.Holds) }) || slices.ContainsFunc(leases, func(probe leaseProbe) bool {
-				return probe.Live && probe.Info != nil && capturing(probe.Info.Holds)
-			})
+			// This Mac's capture lock, held by an operation that took it
+			// (Capture & index, which libraryActivities lists as another
+			// process's capture) or by a lease that declares it.
+			ok = lockNamed("capture:"+currentHost().ID, ops, leases)
 		case activity.Kind == "git":
 			ok = running(kinds("analysis.git", "analysis.refresh"))
 		case strings.HasPrefix(activity.ID, "upgrade:"):

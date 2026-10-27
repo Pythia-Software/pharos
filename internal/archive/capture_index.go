@@ -298,6 +298,7 @@ func (c *Catalog) IndexCapture(ctx context.Context, target captureTarget, progre
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		return fail(fmt.Errorf("%s is already being indexed: %w", target.label(), err))
 	}
+	opFrom(ctx).holdLock(lock)
 	historyWarnings := []captureError{}
 	reportHistoryWarning := func(warning captureError) {
 		for _, previous := range historyWarnings {

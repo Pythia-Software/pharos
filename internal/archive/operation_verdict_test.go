@@ -35,7 +35,7 @@ func TestEjectVerdictErrsTowardNotSafe(t *testing.T) {
 		}
 		return fmt.Sprint(*v.ETASeconds)
 	}
-	live := leaseProbe{Path: "/x/a.json", Live: true, Info: &leaseInfo{Instance: "a", Process: "cli:capture", Kinds: []string{"capture.cli"}, Holds: parseHolds("D:w C(this):w")}}
+	live := leaseProbe{Path: "/x/a.json", Live: true, Info: &leaseInfo{Instance: "a", Process: "cli:capture", Kinds: []string{"capture.cli"}, Holds: resolveHolds(parseHolds("D:w C(this):w"))}}
 	for _, test := range []struct {
 		name, verdict, eta, summary string
 		in                          verdictInput
@@ -65,18 +65,51 @@ func TestEjectVerdictErrsTowardNotSafe(t *testing.T) {
 			t.Errorf("%s: %s eta %s %q; want %s eta %s containing %q", test.name, got.Verdict, eta(got), got.Summary, test.verdict, test.eta, test.summary)
 		}
 	}
-	// A capture lock is named by the ingest coordinator's holder, or by a
-	// lease that declares capture work.
-	locks := []heldLock{{Kind: "capture", Path: "/c/host/.capture.lock"}, {Kind: "index", Path: "/c/host/claude/.index.lock"}}
-	if left := unnamedLocks(locks, []opView{runningView("index.captures", nil)}, nil); len(left) != 0 {
-		t.Fatalf("locks an index holds: %+v", left)
+	// A lock is named only by an exact write hold on it: one an operation
+	// took (a concrete hold) or a lease declares with this Mac resolved.
+	// Holding the ingest coordinator names nothing: an index may still be
+	// waiting for the lock an older build's capture holds.
+	host := currentHost().ID
+	locks := []heldLock{{Kind: "capture", Path: "/c/" + host + "/.capture.lock"}, {Kind: "index", Path: "/c/" + host + "/claude/.index.lock"}}
+	if left := unnamedLocks(locks, []opView{runningView("index.captures", nil)}, nil); len(left) != 2 {
+		t.Fatalf("an index that took no lock named %d of 2: %+v", 2-len(left), left)
 	}
-	if left := unnamedLocks(locks, nil, []leaseProbe{live}); len(left) != 0 {
-		t.Fatalf("locks a Terminal capture holds: %+v", left)
+	indexing := runningView("index.captures", func(view *opView) {
+		view.Spec.Holds = append(view.Spec.Holds, Hold{Resource: "index:" + host + "/claude", Mode: "write"})
+	})
+	if left := unnamedLocks(locks, []opView{indexing}, nil); len(left) != 1 || left[0].Kind != "capture" {
+		t.Fatalf("an index holding one source's lock: %+v", left)
+	}
+	if left := unnamedLocks(locks, nil, []leaseProbe{live}); len(left) != 1 || left[0].Kind != "index" {
+		t.Fatalf("a Terminal capture names this Mac's capture lock only: %+v", left)
 	}
 	if left := unnamedLocks(locks, []opView{runningView("backup.local", nil)}, nil); len(left) != 2 {
 		t.Fatalf("a backup does not take the exclusive locks: %+v", left)
 	}
+}
+
+// An operation holds a capture or index lock from when it takes it until
+// it closes the file.
+func TestOperationHoldsTheLocksItTook(t *testing.T) {
+	reg := newOpRegistry("service")
+	_, op := reg.begin(context.Background(), OperationSpec{Kind: "index.captures"})
+	path := filepath.Join(t.TempDir(), "host-a", "claude", indexLockName)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	op.holdLock(file)
+	if !lockNamed("index:host-a/claude", []opView{op.view()}, nil) {
+		t.Fatalf("holds while the lock is open: %+v", op.view().Spec.Holds)
+	}
+	file.Close()
+	if lockNamed("index:host-a/claude", []opView{op.view()}, nil) {
+		t.Fatal("still holds the lock after closing it")
+	}
+	op.Finish(nil)
 }
 
 // Parity of holds (§4.3): no kind that writes the catalog or the drive can
@@ -236,7 +269,7 @@ func TestShadowOperationsCoverLibraryActivities(t *testing.T) {
 			t.Fatal(err)
 		}
 		lease, err := acquireProcessLease(leaseDirs(config)[1], leaseInfo{Instance: "terminal-capture", HostID: "host-a", Process: "cli:capture",
-			Kinds: []string{"capture.cli"}, Holds: parseHolds("D:w C(this):w"), StartedAt: now()})
+			Kinds: []string{"capture.cli"}, Holds: []Hold{{Resource: "drive", Mode: "write"}, {Resource: "capture:host-a", Mode: "write"}}, StartedAt: now()})
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -280,6 +280,7 @@ func Capture(ctx context.Context, config Config, sources []SourceConfig, progres
 		return CaptureSummary{}, err
 	}
 	defer session.Close()
+	opFrom(ctx).holdLock(session.lock)
 	return session.Run(ctx, sources, progress), nil
 }
 
