@@ -99,7 +99,7 @@ final class ArchiveService: ObservableObject {
 
     @Published var url: URL? {
         // A page error belongs to the service it came from.
-        didSet { if url != oldValue { clearPageFailure() } }
+        didSet { if url != oldValue { clearPageFailure(); pageTarget = nil } }
     }
     // The broker keeps one URL while the selected library can change.
     @Published private(set) var libraryConnection: String?
@@ -123,6 +123,8 @@ final class ArchiveService: ObservableObject {
     /// itself once the service answers.
     @Published var pageWaiting = false
     private var pageWatch = 0
+    /// The page that failed, which the web view loads when it comes back.
+    private var pageTarget: URL?
     @Published var status = "Starting local archive…"
     @Published var disconnected: Disconnection?
     /// The Eject button's release and eject are under way.
@@ -371,8 +373,9 @@ final class ArchiveService: ObservableObject {
     /// error to show with Reload. While it does not, wait: check again after
     /// 0.5 s, doubling up to every 10 s, and bring the page back (a new web
     /// view loads it) once the service answers.
-    func pageFailed(_ reason: String, serviceAnswers: Bool) {
+    func pageFailed(_ reason: String, serviceAnswers: Bool, target: URL) {
         pageWatch += 1
+        pageTarget = target
         if serviceAnswers {
             pageWaiting = false
             pageError = "\(reason)\n\nThe Pharos service is running, but the page still did not load. Choose View → Reload (⌘R) to try again."
@@ -391,6 +394,14 @@ final class ArchiveService: ObservableObject {
                 if ready { self.clearPageFailure() } else { self.watchForService(watch, delay: min(delay * 2, 10)) }
             }
         }
+    }
+
+    /// The page a new web view should load: the one that failed, if it is
+    /// this service's, else the service's own.
+    func takePageTarget() -> URL? {
+        defer { pageTarget = nil }
+        guard let target = pageTarget, let url, target.scheme == url.scheme, target.host == url.host, target.port == url.port else { return url }
+        return target
     }
 
     private func clearPageFailure() {
@@ -1120,7 +1131,8 @@ struct ArchiveWebView: NSViewRepresentable {
                 if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled { return }
                 // WebKitErrorFrameLoadInterruptedByPolicyChange: a download, or
                 // a link the policy opened elsewhere.
-                if nsError.domain == "WebKitErrorDomain" && nsError.code == 102 { return }
+                // WebKitErrorPlugInWillHandleLoad (204) is not a failure either.
+                if nsError.domain == "WebKitErrorDomain" && (nsError.code == 102 || nsError.code == 204) { return }
             }
             let failing = nsError?.userInfo[NSURLErrorFailingURLErrorKey] as? URL
             let target = failing.flatMap { isArchivePage($0) && $0.scheme != "about" ? $0 : nil } ?? webView.url ?? origin
@@ -1137,7 +1149,7 @@ struct ArchiveWebView: NSViewRepresentable {
                         webView.load(URLRequest(url: target))
                     }
                 } else {
-                    service.pageFailed(reason, serviceAnswers: ready)
+                    service.pageFailed(reason, serviceAnswers: ready, target: target)
                 }
             }
         }
@@ -1404,7 +1416,7 @@ struct ArchiveWebView: NSViewRepresentable {
         if view.responds(to: NSSelectorFromString("setDrawsBackground:")) {
             view.setValue(false, forKey: "drawsBackground")
         }
-        view.load(URLRequest(url: url))
+        view.load(URLRequest(url: service.takePageTarget() ?? url))
         return view
     }
     func updateNSView(_ view: ArchiveWKWebView, context: Context) {
