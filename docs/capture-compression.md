@@ -133,7 +133,12 @@ Each phase ships as one PR.
    all of them whenever any input changes) stay uncompressed. So in practice
    this compresses Antigravity's per-conversation request databases, which
    are read only when their conversation is parsed. SQLite-record sources
-   are left out: their capture exports the latest snapshot on every run.
+   are left out: their capture exports the latest snapshot on every run, so
+   turning record capture on restores a compressed one to its original
+   bytes once. A snapshot is also skipped while its source's index version
+   is not current or after a capture that failed. A pin links a compressed
+   snapshot into history under a name the manifest does not list; readers
+   take its encoding from the pin.
    Readers open an encoded snapshot through the capture view, which decodes
    it into the reader's lease; a normal sync decodes none. When the source
    changes again, capture takes a new, uncompressed snapshot and the encoded

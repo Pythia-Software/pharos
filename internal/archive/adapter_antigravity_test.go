@@ -848,10 +848,33 @@ func TestAntigravityIdleSnapshotsAreCompressed(t *testing.T) {
 	requests := "files/conversations/" + antigravityRoot + ".db"
 	summaries := "files/" + antigravitySummaries
 
-	compressed := []string{}
-	if err := compressCaptures(t.Context(), config, catalog, func(g compressedGeneration) { compressed = append(compressed, g.Path) }); err != nil {
+	compress := func() []string {
+		t.Helper()
+		compressed := []string{}
+		if err := compressCaptures(t.Context(), config, catalog, func(g compressedGeneration) { compressed = append(compressed, g.Path) }); err != nil {
+			t.Fatal(err)
+		}
+		return compressed
+	}
+	// Not while the next index must read everything again (a new index
+	// version), nor after a capture that failed.
+	if err := catalog.advanceSyncGeneration(t.Context(), "host-a", source.Name); err != nil {
 		t.Fatal(err)
 	}
+	if got := compress(); slices.Contains(got, requests) {
+		t.Fatal("compressed a snapshot the next index will read", got)
+	}
+	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+	failed := readCaptureManifest(t, config, source.Name)
+	failed.LastRun.Errors = []captureError{{Path: "elsewhere", Error: "unreadable"}}
+	if err := writeCaptureManifest(target.Dir, &failed); err != nil {
+		t.Fatal(err)
+	}
+	if got := compress(); slices.Contains(got, requests) {
+		t.Fatal("compressed a snapshot after a failed capture", got)
+	}
+	runCapture(t, config)
+	compressed := compress()
 	if !slices.Contains(compressed, requests) || slices.Contains(compressed, summaries) {
 		t.Fatalf("compressed %v: want the idle requests database, not the summaries every plan reads", compressed)
 	}
@@ -862,8 +885,16 @@ func TestAntigravityIdleSnapshotsAreCompressed(t *testing.T) {
 			snapshot = s
 		}
 	}
-	if snapshot == nil || snapshot.Encoding != captureEncodingZstd || snapshot.SHA256 == "" || !zstdOnDisk(t, capturedPath(config, source.Name, requests)) || manifest.Version != captureManifestVersion {
+	if snapshot == nil || snapshot.Encoding != captureEncodingZstd || snapshot.SHA256 == "" || !zstdOnDisk(t, capturedPath(config, source.Name, requests)) || manifest.Version != captureSnapshotsVersion {
 		t.Fatalf("idle snapshot: %+v", snapshot)
+	}
+	// A build that reads encoded files but not encoded snapshots (phase 2)
+	// refuses the capture.
+	captureManifestUnderstood = captureFilesVersion
+	_, err := loadCaptureManifest(target.Dir)
+	captureManifestUnderstood = captureManifestVersion
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("has version %d; this build understands up to %d", captureSnapshotsVersion, captureFilesVersion)) {
+		t.Fatal("a files-level build accepted an encoded latest snapshot", err)
 	}
 	if err := validateCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
 		t.Fatal(err)
@@ -919,6 +950,14 @@ func TestAntigravityIdleSnapshotsAreCompressed(t *testing.T) {
 	if err != nil || revision.InputHash != snapshot.SHA256 || revision.Input != requests {
 		t.Fatal("record export of an idle compressed snapshot", revision.Input, err)
 	}
+	// The pin links the encoded snapshot into history under a name the
+	// manifest does not list: history backfill exports it from there.
+	if ref, err = newRecordStore(c).exportSQLite(filepath.Join(target.Dir, filepath.FromSlash(pin.Path)), snapshot.Path, "database", snapshot.Source, "", nil); err != nil {
+		t.Fatal("export of a pinned compressed snapshot", err)
+	}
+	if revision, err = newRecordStore(c).loadRevision(ref); err != nil || revision.InputHash != snapshot.SHA256 || revision.Input != pin.Path {
+		t.Fatal("export of a pinned compressed snapshot", revision.Input, err)
+	}
 	releaseLockFile(lock)
 	if err = releasePreservationOwner(target.Dir, "job"); err != nil {
 		t.Fatal(err)
@@ -935,6 +974,35 @@ func TestAntigravityIdleSnapshotsAreCompressed(t *testing.T) {
 	}
 	if !planned {
 		t.Fatal("history planning did not read the idle compressed snapshot")
+	}
+
+	// Turning on SQLite record capture, which exports every database on every
+	// capture, restores the compressed snapshot to its original bytes once;
+	// later captures decode nothing.
+	config.Sources[0].Options = map[string]any{"sqlite_record_capture": true}
+	decodes.Store(0)
+	if run := runCapture(t, config); !run.OK || decodes.Load() == 0 {
+		t.Fatal("record capture did not restore the compressed snapshot", run)
+	}
+	restored := readCaptureManifest(t, config, source.Name)
+	for _, s := range restored.Snapshots {
+		if s.Captured == requests && (s.Encoding != "" || zstdOnDisk(t, capturedPath(config, source.Name, requests))) {
+			t.Fatalf("record capture left the snapshot compressed: %+v", s)
+		}
+	}
+	decodes.Store(0)
+	if run := runCapture(t, config); !run.OK || decodes.Load() != 0 {
+		t.Fatalf("record capture decoded again: %d decodes, %+v", decodes.Load(), run)
+	}
+	if err := validateCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
+		t.Fatal(err)
+	}
+	// Turned off again, the idle snapshot is compressed again.
+	config.Sources[0].Options = nil
+	runCapture(t, config)
+	runCapture(t, config)
+	if got := compress(); !slices.Contains(got, requests) {
+		t.Fatal("idle snapshot not compressed again after record capture was turned off", got)
 	}
 
 	// The source changes again: a new uncompressed snapshot, and the
@@ -954,29 +1022,5 @@ func TestAntigravityIdleSnapshotsAreCompressed(t *testing.T) {
 	}
 	if err := validateCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
 		t.Fatal(err)
-	}
-}
-
-// Each adapter says which captured databases its index opens every run.
-func TestSnapshotReadersDeclareWhatEveryIndexReads(t *testing.T) {
-	root := t.TempDir()
-	for _, test := range []struct {
-		adapter Adapter
-		path    string
-		want    bool
-	}{
-		{&conductorAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: root}}}, filepath.Join(root, "conductor.db"), true},
-		{&jsonlAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: root}}, provider: "codex"}, filepath.Join(root, "state_5.sqlite"), true},
-		{&jsonlAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: root}}, provider: "codex"}, filepath.Join(root, "logs_1.sqlite"), false},
-		{&antigravityAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: root}}}, filepath.Join(root, antigravitySummaries), true},
-		{&antigravityAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: root}}}, filepath.Join(root, "conversations", "x.db"), false},
-		{&tl1Adapter{baseAdapter: baseAdapter{config: SourceConfig{Path: root}}}, filepath.Join(root, "explo.db"), true},
-	} {
-		if got := test.adapter.(snapshotReader).readsEveryIndex(test.path); got != test.want {
-			t.Errorf("%T %s: %v, want %v", test.adapter, filepath.Base(test.path), got, test.want)
-		}
-	}
-	if _, ok := Adapter(&canonicalAdapter{}).(snapshotReader); ok {
-		t.Error("an adapter that captures no database declares readers")
 	}
 }

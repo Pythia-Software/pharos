@@ -1632,3 +1632,49 @@ func TestIndexEncodedCodexRolloutHeadersAreCached(t *testing.T) {
 		t.Fatalf("index with a cold cache: %d decodes, %d parses, title %q", decodes.Load(), parses.Load(), title)
 	}
 }
+
+// Conductor's index opens its latest snapshot on every run, so an idle one is
+// never compressed (its adapter's snapshotReader rule is the only thing that
+// keeps it out), and a normal index of it decodes nothing.
+func TestIdleConductorLatestSnapshotStaysUncompressed(t *testing.T) {
+	useHost(t, "host-a")
+	override(t, &compressMinBytes, 1)
+	catalog, _ := testCatalog(t)
+	dir := filepath.Join(t.TempDir(), "conductor")
+	exec := conductorFixture(t, dir)
+	exec(addConductorSession("idle", 2)...)
+	old := time.Now().AddDate(0, -1, 0)
+	files, _ := filepath.Glob(filepath.Join(dir, "conductor.db*"))
+	for _, file := range files {
+		if err := os.Chtimes(file, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	config := captureTestConfig(t, SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true})
+	runCapture(t, config)
+	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+	runCapture(t, config)
+	target := captureTarget{Host: currentHost(), Source: "conductor", Dir: capturedPath(config, "conductor", "")}
+	manifest, err := loadCaptureManifest(target.Dir)
+	if err != nil || len(manifest.Snapshots) != 1 {
+		t.Fatal("fixture needs one latest snapshot", err)
+	}
+	snapshot := manifest.Snapshots[0]
+	// Everything else about it is idle.
+	idle := compressPolicy{afterDays: 14, now: time.Now(), readEveryIndex: func(string, string) bool { return false }, indexCurrent: func(string) bool { return true }}
+	if !idleSnapshot(target.Dir, manifest, snapshot, idle) {
+		t.Fatal("fixture snapshot is not otherwise idle")
+	}
+	if err := compressCaptures(t.Context(), config, catalog, nil); err != nil {
+		t.Fatal(err)
+	}
+	if after := readCaptureManifest(t, config, "conductor"); after.Snapshots[0].Encoding != "" || zstdOnDisk(t, capturedPath(config, "conductor", snapshot.Captured)) {
+		t.Fatal("compressed the snapshot Conductor's index reads on every run")
+	}
+	var decodes atomic.Int64
+	override(t, &capturedContentHook, func(string) { decodes.Add(1) })
+	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+	if decodes.Load() != 0 || conversationMessages(t, catalog, "conductor:idle") != 2 {
+		t.Fatalf("normal index of an idle Conductor capture: %d decodes", decodes.Load())
+	}
+}

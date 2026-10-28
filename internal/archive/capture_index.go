@@ -484,9 +484,14 @@ func (c *Catalog) indexGenerations(ctx context.Context, adapter Adapter, view *c
 		handled := map[string]bool{}
 		latest := filepath.Join(view.dir, filepath.FromSlash(snapshot.Captured))
 		if _, err := os.Stat(latest); !errors.Is(err, fs.ErrNotExist) {
-			var err error
-			handled, err = conductorSessionIDs(latest)
+			// Through the view, as every database reader: Conductor declares
+			// its database read on every index, so it is not compressed, but
+			// a capture whose latest snapshot is still reads correctly.
+			readable, err := view.materialize(ctx, snapshot.Captured)
 			if err != nil {
+				return err
+			}
+			if handled, err = conductorSessionIDs(readable); err != nil {
 				return err
 			}
 		}

@@ -986,6 +986,16 @@ func (s *recordStore) dependencies() ([]recordDependency, error) {
 		// Hashes and the stored object describe the original bytes.
 		file := filepath.Join(s.c.dir, filepath.FromSlash(f.Captured))
 		encoding := s.c.encodingOf(f.Captured)
+		// An encoded file is unchanged since it was compressed, when its
+		// digest was verified by decoding: once its object is stored, it is
+		// not decoded again on every capture.
+		if encoding != "" && f.SHA256 != "" {
+			ref := recordObject{Hash: f.SHA256, Length: f.Size, Encoding: "gzip"}
+			if _, e := os.Stat(s.objectPath(f.SHA256)); e == nil {
+				deps = append(deps, recordDependency{Path: f.Path, Object: &ref, State: "retained", MTimeNS: f.MTimeNS, MissingSince: f.MissingSince})
+				continue
+			}
+		}
 		h, size, e := capturedSHA256(s.c.ctx, file, encoding)
 		if e != nil || h != f.SHA256 || size != f.Size {
 			return nil, errors.New("retained dependency changed or is unreadable")

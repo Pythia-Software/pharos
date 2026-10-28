@@ -39,6 +39,16 @@ func (c *sourceCapture) captureDatabases(items []captureItem, present map[string
 			previous.MissingSince = ""
 			if previous.Path == item.path && (c.session.recoveryID == "" || previous.RecoveryID == c.session.recoveryID) && previous.Source == state && c.intactSnapshot(previous) {
 				c.result.SnapshotsUnchanged++
+				// SQLite record capture exports every database on every run
+				// (each group names this run's revisions), so a compressed
+				// latest snapshot is restored to its original bytes once
+				// rather than decoded on every capture.
+				if c.source.Options["sqlite_record_capture"] == true && previous.Encoding != "" {
+					if err := c.restorePlainSnapshot(previous); err != nil {
+						c.fail(item.path, err)
+						continue
+					}
+				}
 				if err := c.exportSnapshot(previous); err != nil {
 					c.fail(item.path, err)
 				}
@@ -109,6 +119,43 @@ func sqliteDependencyState(file string) (sqliteSourceState, error) {
 		}
 	}
 	return state, nil
+}
+
+// restorePlainSnapshot replaces an encoded latest snapshot with its original
+// bytes, under the capture lock this writer holds: decoded and verified into
+// a temporary, flushed, renamed over the name, then recorded plain at the
+// next commit. A kill before that commit leaves an entry marked encoded over
+// the original bytes, which every reader reads as plain (storedAs).
+func (c *sourceCapture) restorePlainSnapshot(s *capturedSnapshot) error {
+	file := filepath.Join(c.dir, filepath.FromSlash(s.Captured))
+	v := c.storedSnapshot(s)
+	if v.Encoding == "" {
+		s.Encoding, s.StoredSize = "", 0
+		return nil
+	}
+	if err := c.ensureSpace(v.Size); err != nil {
+		return err
+	}
+	temporary := file + captureTempSuffix
+	if err := materializeCaptured(c.ctx, file, temporary, v); err != nil {
+		os.Remove(temporary)
+		return err
+	}
+	out, err := os.Open(temporary)
+	if err == nil {
+		err = out.Sync() // F_FULLFSYNC before the original encoding is replaced
+		out.Close()
+	}
+	if err == nil {
+		err = os.Rename(temporary, file)
+	}
+	if err != nil {
+		os.Remove(temporary)
+		return toDestination(err)
+	}
+	syncDir(filepath.Dir(file))
+	s.Encoding, s.StoredSize = "", 0
+	return nil
 }
 
 // storedSnapshot is a latest snapshot's entry as its copy is actually stored

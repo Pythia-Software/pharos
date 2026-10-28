@@ -75,7 +75,7 @@ func (m *captureManifest) writerVersion() int {
 	}
 	for _, snapshot := range m.Snapshots {
 		if snapshot.Encoding != "" {
-			return true
+			version = max(version, captureSnapshotsVersion)
 		}
 		for _, generation := range snapshot.Generations {
 			if generation.Encoding != "" {
@@ -165,10 +165,40 @@ func (c *sourceCapture) storedVersion(rel string) (capturedVersion, bool) {
 		}
 	}
 	if found == nil {
+		// A pin of a latest file or snapshot links it into history under a
+		// name the manifest does not list; the pin records how it is stored.
+		if v, ok := pinnedVersion(c.dir, rel); ok {
+			found = &v
+		}
+	}
+	if found == nil {
 		return capturedVersion{}, false
 	}
 	v := storedAs(filepath.Join(c.dir, filepath.FromSlash(rel)), *found)
 	return v, v.Encoding != ""
+}
+
+// pinnedVersion is the history file rel as a pin describes it: its original
+// size and digest, and its encoding.
+func pinnedVersion(dir, rel string) (capturedVersion, bool) {
+	if !strings.HasPrefix(rel, captureHistoryDir+"/") {
+		return capturedVersion{}, false
+	}
+	pins, err := loadPreservationPins(dir)
+	if err != nil {
+		return capturedVersion{}, false
+	}
+	for _, pin := range pins.Pins {
+		if pin.Path != rel || pin.Encoding == "" {
+			continue
+		}
+		info, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel)))
+		if err != nil {
+			return capturedVersion{}, false
+		}
+		return capturedVersion{Captured: rel, Size: pin.Size, SHA256: pin.SHA256, Encoding: pin.Encoding, StoredSize: info.Size()}, true
+	}
+	return capturedVersion{}, false
 }
 
 // storedAs is v as its file is actually stored. Compression commits the
@@ -521,12 +551,12 @@ func leaseCapturedVersion(ctx context.Context, target captureTarget, rel string)
 		releaseLockFile(lock)
 		return "", "", nil, err
 	}
-	entry, ok := manifest.version(rel)
+	entry, ok := manifest.entry(rel)
 	if !ok {
 		releaseLockFile(lock)
 		return "", "", nil, fmt.Errorf("%s: %w", rel, os.ErrNotExist)
 	}
-	v := storedAs(filepath.Join(target.Dir, filepath.FromSlash(rel)), *entry)
+	v := storedAs(filepath.Join(target.Dir, filepath.FromSlash(rel)), entry)
 	if leaseDir, release, err = openReaderLease(target.Dir); err != nil {
 		releaseLockFile(lock)
 		return "", "", nil, err

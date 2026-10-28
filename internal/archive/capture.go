@@ -43,20 +43,23 @@ const (
 	// the captures holding a kind it cannot read: a writer stamps the lowest
 	// version describing its encoded entries (writerVersion), and
 	// capturePlainManifestVersion when there are none.
-	captureManifestVersion      = captureFilesVersion
+	captureManifestVersion      = captureSnapshotsVersion
 	capturePlainManifestVersion = 5
 	// captureGenerationsVersion: encoded snapshot generations.
 	captureGenerationsVersion = 6
 	// captureFilesVersion: an encoded latest or earlier plain file, which
 	// adapters read through the capture view (phase 2).
 	captureFilesVersion = 7
-	captureManifestName = "manifest.json"
-	captureHostName     = "host.json"
-	captureFilesDir     = "files"
-	captureHistoryDir   = "history"
-	captureTempSuffix   = ".pharos-tmp"
-	captureLockName     = ".capture.lock"
-	captureStampLayout  = "20060102T150405.000000000Z"
+	// captureSnapshotsVersion: an encoded latest database snapshot, which
+	// database readers decode through the capture view (phase 3).
+	captureSnapshotsVersion = 8
+	captureManifestName     = "manifest.json"
+	captureHostName         = "host.json"
+	captureFilesDir         = "files"
+	captureHistoryDir       = "history"
+	captureTempSuffix       = ".pharos-tmp"
+	captureLockName         = ".capture.lock"
+	captureStampLayout      = "20060102T150405.000000000Z"
 )
 
 var (
