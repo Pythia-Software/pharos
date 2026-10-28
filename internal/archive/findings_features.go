@@ -161,7 +161,15 @@ func (env *findingEnv) featureRowsWithRevisions(name, query, column, revisionsTa
 			nextInput.partitions[id] = findingFeaturePartition{revision: firstString(row["revision"]), rows: partitions[id]}
 		}
 	}
-	publication := findingFeaturePublication{name: name, version: version, built: built, full: full, revisions: revisions, partitions: partitions, input: nextInput}
+	// Serialize the changed partitions now, before any detector sees the
+	// rows: what is stored is what the query returned, whatever a detector
+	// does with the maps later.
+	encoded := make(map[string]string, len(revisions))
+	for _, row := range revisions {
+		id := firstString(row["conversation_id"])
+		encoded[id] = jsonText(partitions[id])
+	}
+	publication := findingFeaturePublication{name: name, version: version, built: built, full: full, revisions: revisions, rowsJSON: encoded, input: nextInput}
 	if shared {
 		// The pass's snapshot is still open: waiting for the writer here would
 		// keep it, and the WAL behind it, open for every queued write (an index
@@ -194,7 +202,7 @@ type findingFeaturePublication struct {
 	name, version, built string
 	full                 bool
 	revisions            []map[string]any
-	partitions           map[string][]map[string]any
+	rowsJSON             map[string]string // each changed partition's rows, serialized when computed
 	input                *findingFeatureInput
 }
 
@@ -240,7 +248,7 @@ func (c *Catalog) publishFindingFeature(ctx context.Context, p findingFeaturePub
 			defer statement.Close()
 			for _, row := range p.revisions {
 				id := firstString(row["conversation_id"])
-				if _, err := statement.ExecContext(ctx, p.name, id, row["revision"], jsonText(p.partitions[id])); err != nil {
+				if _, err := statement.ExecContext(ctx, p.name, id, row["revision"], p.rowsJSON[id]); err != nil {
 					return err
 				}
 			}

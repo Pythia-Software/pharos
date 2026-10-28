@@ -521,6 +521,29 @@ func TestFindingFeaturesPublishAfterTheSnapshotEnds(t *testing.T) {
 	if countRows(t, c, "SELECT COUNT(*) FROM finding_feature_partitions") == 0 {
 		t.Fatal("feature partitions were not published")
 	}
+	// What the pass published after its snapshot is what publishing each
+	// feature at once (outside a shared snapshot, as before) stores.
+	published := featurePartitionDump(t, c)
+	execTx(t, c.DB, "DELETE FROM finding_feature_partitions", "DELETE FROM finding_feature_builds")
+	c.findings.featureMu.Lock()
+	c.findings.featureInputs = nil
+	c.findings.featureMu.Unlock()
+	env, err := c.loadFindingEnv(t.Context(), c.DB, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.featureCache = true
+	for _, detector := range findingDetectors {
+		if _, err := detector.run(env); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(env.pendingFeatures) != 0 {
+		t.Fatal("a pass outside a shared snapshot deferred its publication")
+	}
+	if immediate := featurePartitionDump(t, c); !reflect.DeepEqual(published, immediate) {
+		t.Fatalf("deferred publication differs from immediate: %d vs %d rows", len(published), len(immediate))
+	}
 	incremental := canonicalFindings(t, c)
 	c.findings.featureMu.Lock()
 	c.findings.featureInputs = nil // Read back what was published.
@@ -537,6 +560,21 @@ func TestFindingFeaturesPublishAfterTheSnapshotEnds(t *testing.T) {
 	if !same(incremental, canonicalFindings(t, c)) {
 		t.Fatal("deferred publication differs from reference")
 	}
+}
+
+// featurePartitionDump is every published feature partition and build.
+func featurePartitionDump(t *testing.T, c *Catalog) []string {
+	t.Helper()
+	rows, err := queryMaps(c.DB, `SELECT feature,conversation_id,revision,rows_json FROM finding_feature_partitions
+ UNION ALL SELECT feature,'build','',version FROM finding_feature_builds ORDER BY 1,2`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dump := make([]string, 0, len(rows))
+	for _, row := range rows {
+		dump = append(dump, jsonText(row))
+	}
+	return dump
 }
 
 // A pass that fails or is stopped after its detectors built their inputs
@@ -592,6 +630,8 @@ func TestFindingFeaturesSurviveAPassThatEndsEarly(t *testing.T) {
 // A stop while the pass waits to publish its inputs, after its snapshot
 // ended, still keeps them once the writer is free.
 func TestFindingFeaturesSurviveAStopWhileSaving(t *testing.T) {
+	// The cleanup's own wait must outlast this test's scheduling, not 2 s.
+	override(t, &findingsAbortPublishWait, 30*time.Second)
 	now := time.Date(2026, 9, 28, 15, 0, 0, 0, time.Local)
 	fixture := newFindingFixture(t, now)
 	c := fixture.catalog
