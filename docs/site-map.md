@@ -462,7 +462,9 @@ browsing never blocks on, starts or writes a derived build:
   (`siteValuesDeadline`, 1.5 s). A tool-call field the cube groups by is
   counted from the cube's group counts. The read does not bring the tool
   rollup or authorship up to date first.
-- MCP calls are counted from the call history, one bounded read.
+- MCP calls are counted in one bounded `GROUP BY … LIMIT` on the reader,
+  for fields stored as columns of `mcp_calls`. Computed fields (`day`,
+  `query_source` …) list none.
 - Other datasets are counted only from rows already in the derived cache
   (`warmOnly`). A value not yet computed, or still being computed, lists no
   values and says they are not available yet; opening the page computes

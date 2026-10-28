@@ -438,6 +438,26 @@ func TestSiteLinkChangesACardAsItsDashboardDoes(t *testing.T) {
 	if again, err := site.linkTool(linkArgs(t, compactJSON(page["arguments"]))); err != nil || again["url"] != page["url"] {
 		t.Errorf("arguments %s give %v, %v", compactJSON(page["arguments"]), again["url"], err)
 	}
+	// Changes that leave the card as it is give the card's own link, which
+	// reads back and rebuilds byte for byte.
+	for _, args := range []string{
+		`{"card": "human-word-total", "options": {"scale": "linear"}}`,
+		`{"card": "human-word-total", "filters": [{"field": "typed_words", "op": ">", "value": "0"}]}`,
+		`{"card": "human-word-total", "days": 30, "options": {"rollingPeriods": 30}}`,
+	} {
+		result, err := site.linkTool(linkArgs(t, args))
+		if err != nil {
+			t.Fatalf("%s: %v", args, err)
+		}
+		state, err := site.parseURL(result["url"].(string))
+		if err != nil {
+			t.Fatalf("%s: %v", args, err)
+		}
+		rebuilt, _ := site.build(state)
+		if state.Changed || rebuilt != result["url"] || result["arguments"].(map[string]any)["options"] != nil {
+			t.Errorf("%s: changed %v, rebuilt the same %v, arguments %s", args, state.Changed, rebuilt == result["url"], compactJSON(result["arguments"]))
+		}
+	}
 	// A card that opens a query table changes only its window.
 	if _, err := site.linkTool(linkArgs(t, `{"card": "findings-open", "options": {"view": "trend"}}`)); err == nil || !strings.Contains(err.Error(), "only change days") {
 		t.Errorf("query-table card with options: %v", err)

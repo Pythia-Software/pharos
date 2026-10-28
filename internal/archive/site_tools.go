@@ -484,8 +484,7 @@ func (c *Catalog) frequentFieldValues(parent context.Context, dataset, field str
 		// Without ensureAuthorship, which may start a rebuild.
 		rows, _, err = c.cachedWritingData(cold)
 	case "mcp_calls":
-		// A bounded read of the call history, at most its retained calls.
-		rows, err = c.mcpQueryRows(ctx)
+		return c.storedFrequentValues(ctx, "mcp_calls", field, slow)
 	default:
 		return nil, "Current values are not listed for this dataset; for repositories, list_repositories gives the names."
 	}
@@ -516,6 +515,40 @@ func (c *Catalog) frequentFieldValues(parent context.Context, dataset, field str
 	})
 	if len(values) > siteValuesLimit {
 		values = values[:siteValuesLimit]
+	}
+	return values, frequentNote(len(values))
+}
+
+// storedFrequentValues counts a field stored as a column of table, in one
+// bounded GROUP BY on the reader. A field computed from other columns lists
+// none.
+func (c *Catalog) storedFrequentValues(ctx context.Context, table, field, slow string) ([]fieldFrequency, string) {
+	columns, err := queryMapsContext(ctx, c.reader(), "SELECT name FROM pragma_table_info(?)", table)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, slow
+		}
+		return nil, "The values could not be read: " + err.Error()
+	}
+	stored := false
+	for _, column := range columns {
+		stored = stored || firstString(column["name"]) == field
+	}
+	if !stored {
+		return nil, "This field is computed from others, so its current values are not listed; filter with contains instead."
+	}
+	// The column name is one the table itself reported.
+	column := sqlIdentifier(field)
+	rows, err := queryMapsContext(ctx, c.reader(), fmt.Sprintf("SELECT CAST(%s AS TEXT) value, COUNT(*) n FROM %s WHERE %s IS NOT NULL AND %s <> '' GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT ?", column, sqlIdentifier(table), column, column), siteValuesLimit)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, slow
+		}
+		return nil, "The values could not be read: " + err.Error()
+	}
+	values := make([]fieldFrequency, 0, len(rows))
+	for _, row := range rows {
+		values = append(values, fieldFrequency{Value: firstString(row["value"]), Count: integer(row["n"])})
 	}
 	return values, frequentNote(len(values))
 }

@@ -162,6 +162,10 @@ func TestBrowseSiteListsAFieldsMostFrequentValues(t *testing.T) {
 	if len(items) != 2 || items[0].(map[string]any)["value"] != "site_link" || items[0].(map[string]any)["count"] != float64(3) {
 		t.Fatalf("tool_name values %v", items)
 	}
+	// A field computed from the stored columns lists none.
+	if value, _ := browseText(t, catalog, map[string]any{"path": "analyze/mcp/filters/day"}); len(value["items"].([]any)) != 0 || !strings.Contains(value["values"].(string), "computed") {
+		t.Errorf("computed field: %v", value)
+	}
 	if operators := value["operators"].([]any); len(operators) == 0 || operators[0] != "=" {
 		t.Errorf("operators %v", operators)
 	}

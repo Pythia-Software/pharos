@@ -534,6 +534,18 @@ func (site *siteMap) linkFromArgs(args map[string]any) (siteState, error) {
 				return siteState{}, err
 			}
 		}
+		// Changes that leave the card as it is give the card's own link, which
+		// is how that link reads back.
+		own := siteState{Page: page, Card: card.ID, Days: days}
+		ownLink, ownErr := site.build(own)
+		changedLink, changedErr := site.build(state)
+		if ownErr == nil && changedErr == nil {
+			left, _ := url.Parse(ownLink)
+			right, _ := url.Parse(changedLink)
+			if left.Path == right.Path && sameSiteParams(left.Query(), right.Query()) {
+				return own, nil
+			}
+		}
 		return state, nil
 	}
 	if page == "" {
