@@ -447,7 +447,7 @@ func TestAuthorshipRebuildsAfterIndex(t *testing.T) {
 	if _, err := catalog.DB.Exec("UPDATE meta SET value='1/authorship-v0' WHERE key='authorship_generation'"); err != nil {
 		t.Fatal(err)
 	}
-	catalog.ingestRuns.Add(1)
+	catalog.ingestStarted()
 	catalog.ensureAuthorship()
 	check("a page with older rules during an index", 5, true)
 	if err := bumpToolLedgerGeneration(catalog.DB); err != nil {
@@ -473,9 +473,13 @@ func TestAuthorshipRebuildsAfterIndex(t *testing.T) {
 	if err := bumpToolLedgerGeneration(catalog.DB); err != nil {
 		t.Fatal(err)
 	}
-	catalog.ingestRuns.Add(-1)
-	catalog.refreshAuthorship()
-	check("the next refresh after the index ends", 8, true)
+	// The page's rebuild skipped its follow-up, so the index's end runs it
+	// (here the chain's rebuild left it current only until the last bump).
+	catalog.ingestEnded(false)
+	check("the index's end", 8, true)
+	if catalog.authorship.deferred.Load() {
+		t.Fatal("the deferred follow-up stayed deferred after it ran")
+	}
 	started[7](context.Background())
 	check("after that refresh", 8, false)
 
@@ -493,11 +497,30 @@ func TestAuthorshipRebuildsAfterIndex(t *testing.T) {
 	}
 	started[8](context.Background())
 	check("the page's rebuild skipped its follow-up", 9, false)
-	catalog.ingestEnded()
-	check("the scheduled index ended", 10, true)
+	if !catalog.authorship.deferred.Load() {
+		t.Fatal("the skipped follow-up was not deferred")
+	}
+	// A stopped index, or one the service's stop ended, starts nothing and
+	// keeps the follow-up for later.
+	catalog.ingestEnded(true)
+	check("a stopped index ended", 9, false)
+	catalog.ingestStarted()
+	registry := catalog.ops
+	stopping := newOpRegistry("service")
+	stopping.releasing = func() bool { return true }
+	catalog.ops = stopping
+	catalog.ingestEnded(false)
+	check("an index ended by the service stopping", 9, false)
+	catalog.ops = registry
+	if !catalog.authorship.deferred.Load() {
+		t.Fatal("a stop dropped the deferred follow-up")
+	}
+	catalog.ingestStarted()
+	catalog.ingestEnded(false)
+	check("the next index that ends normally", 10, true)
 	started[9](context.Background())
 	catalog.ingestStarted()
-	catalog.ingestEnded()
+	catalog.ingestEnded(false)
 	check("a later index with nothing deferred", 10, false)
 }
 

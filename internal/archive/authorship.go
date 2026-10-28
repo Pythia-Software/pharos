@@ -1204,10 +1204,13 @@ func (c *Catalog) ensureAuthorship() (stale bool) {
 // messages an index wrote while it ran, except one a page started while this
 // process indexes: the index writes on every record, so that rebuild would
 // start again as soon as it ended, rewriting message_authorship and holding a
-// read snapshot round after round. The index's analysis chain rebuilds at its
-// end (refreshAuthorship), and a scheduled index leaves it pending in
-// sync_deferred for the next explicit one; pages show the last ledger
-// meanwhile (ensureAuthorship).
+// read snapshot round after round. The skipped follow-up is remembered
+// (authorshipFollowUp) and runs once when the last ingest ends, unless it was
+// stopped or the service is stopping, in which case it waits for the next
+// ingest that ends normally or an explicit refresh. A manual index's
+// analysis chain has rebuilt by then (refreshAuthorship), so that run finds
+// the ledger current. Pages show the last ledger meanwhile
+// (ensureAuthorship).
 func (c *Catalog) startAuthorship(generation string) {
 	c.startAuthorshipInContext(generation, nil)
 }
@@ -1231,11 +1234,17 @@ func (c *Catalog) authorshipFollowUp(parent context.Context) bool {
 // ingestStarted and ingestEnded bracket an ingest in this process. Once the
 // last one ends, a follow-up rebuild deferred while it ran runs, once. A
 // manual index's chain has rebuilt by then, so the refresh finds the
-// ledger current and starts nothing.
+// ledger current and starts nothing. An ingest that was stopped, or that
+// ends because the service is stopping, starts no work the stop no longer
+// controls: the follow-up stays deferred for the next ingest to end
+// normally, and the generation stays dirty for an explicit refresh.
 func (c *Catalog) ingestStarted() { c.ingestRuns.Add(1) }
 
-func (c *Catalog) ingestEnded() {
-	if c.ingestRuns.Add(-1) == 0 && c.authorship.deferred.Swap(false) {
+func (c *Catalog) ingestEnded(stopped bool) {
+	if c.ingestRuns.Add(-1) != 0 || stopped || c.serviceStopping() {
+		return
+	}
+	if c.authorship.deferred.Swap(false) {
 		c.refreshAuthorship()
 	}
 }

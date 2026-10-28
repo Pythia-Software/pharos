@@ -40,8 +40,10 @@ func (s *Server) beginIngest(runID string) (context.Context, func()) {
 		s.ingestStop.mu.Lock()
 		s.ingestStop.runID, s.ingestStop.cancel = "", nil
 		s.ingestStop.mu.Unlock()
+		// Stopped by the user or a release, not by this end's own cancel.
+		stopped := ctx.Err() != nil
 		cancel()
-		s.Catalog.ingestEnded()
+		s.Catalog.ingestEnded(stopped)
 		s.Catalog.projectionBatches.Add(-1)
 	}
 }
