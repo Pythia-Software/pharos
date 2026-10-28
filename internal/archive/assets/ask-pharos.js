@@ -752,7 +752,7 @@ window.initPharosAsk = function(root) {
   const edgeObserver=new ResizeObserver(() => {if(product.getBoundingClientRect().width && !ai.hidden){autoFit();drawEdge();sizePicker();}});edgeObserver.observe(find('.pharos-ai-frame'));
   async function startRequest(turn,retry=true){
     stop();flushDraft();const request=++serial;
-    turn.status='loading';turn.reply='';turn.cards=[];delete turn.clarification;turn.elapsedMs=0;
+    turn.status='loading';turn.reply='';turn.cards=[];delete turn.omitted;delete turn.clarification;turn.elapsedMs=0;
     turn.message='Starting '+turn.cli+'…';
     const controller=new AbortController();pending={request,turnId:turn.id,started:Date.now(),controller,edited:false};
     turns.forEach(updateTurn);syncComposer();writeHistory();

@@ -163,7 +163,7 @@ func askDestination(allowed map[string]askCard, rawID, rawURL, description strin
 		return askCard{}, fmt.Errorf("the agent returned a destination without exactly one of an id and a url; try again")
 	}
 	if len(description) > 1000 {
-		return askCard{}, fmt.Errorf("destination description was too long")
+		return askCard{}, fmt.Errorf("the agent returned a destination description that was too long; try again")
 	}
 	card, ok := allowed[id]
 	if link != "" {
