@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -31,10 +32,13 @@ var verdictRank = map[string]int{verdictSafe: 0, verdictSafeIn: 1, verdictBusy: 
 
 // ejectVerdict is the snapshot's eject document.
 type ejectVerdict struct {
-	Verdict    string         `json:"verdict"`
-	ETASeconds *float64       `json:"eta_seconds"`
-	Summary    string         `json:"summary"`
-	Blockers   []ejectBlocker `json:"blockers"`
+	Verdict    string   `json:"verdict"`
+	ETASeconds *float64 `json:"eta_seconds"`
+	Summary    string   `json:"summary"`
+	// Headline is the verdict as one short clause, for a panel's row; the
+	// summary is the full sentence, for its tooltip (phase 2).
+	Headline string         `json:"headline"`
+	Blockers []ejectBlocker `json:"blockers"`
 	// Checked is fresh for the release path's full check (every capture
 	// and index lock probed) and polled otherwise (§4.2).
 	Checked string `json:"checked"`
@@ -203,7 +207,7 @@ func computeEjectVerdict(in verdictInput) ejectVerdict {
 	if in.fresh {
 		result.Checked = "fresh"
 	}
-	result.Summary = verdictSummary(result)
+	result.Summary, result.Headline = verdictSummary(result), verdictHeadline(result)
 	return result
 }
 
@@ -278,6 +282,38 @@ func verdictSummary(v ejectVerdict) string {
 	return "Safe to eject: nothing is writing to the library."
 }
 
+// verdictHeadline is the verdict in one short clause (server text, §7.1):
+// "Safe to eject in ~2 s: stops back up first". The details, including the
+// release's 7 s limit, are in the summary.
+func verdictHeadline(v ejectVerdict) string {
+	labels := func(verdict string) string { return lowerFirst(blockerLabels(v.Blockers, verdict)) }
+	switch v.Verdict {
+	case verdictUnsafe:
+		return "Not safe to eject: " + labels(verdictUnsafe)
+	case verdictBusy:
+		return "Eject waits for " + labels(verdictBusy)
+	case verdictSafeIn:
+		if v.ETASeconds != nil {
+			return fmt.Sprintf("Safe to eject in ~%s: stops %s first", secondsLabel(*v.ETASeconds), labels(verdictSafeIn))
+		}
+		unit := "step"
+		for _, blocker := range v.Blockers {
+			if blocker.Verdict == verdictSafeIn && blocker.ETASeconds == nil && blocker.unit != "" && blocker.unit != "byte" {
+				unit = blocker.unit
+				break
+			}
+		}
+		return fmt.Sprintf("Safe to eject after the current %s: stops %s", unit, labels(verdictSafeIn))
+	}
+	if readers := labels(verdictSafe); readers != "" {
+		return "Safe to eject: stops " + readers
+	}
+	if v.Checked != "fresh" {
+		return "Safe to eject; checked again on eject"
+	}
+	return "Safe to eject"
+}
+
 func secondsLabel(seconds float64) string {
 	if seconds < 60 {
 		return fmt.Sprintf("%d s", int(seconds))
@@ -294,10 +330,15 @@ func lowerFirst(text string) string {
 	return strings.ToLower(text[:1]) + text[1:]
 }
 
+// lockScans and lockProbes count fresh lock scans and lock-file probes, so
+// tests can show that a polled read takes none (§4.2).
+var lockScans, lockProbes atomic.Int64
+
 // probeLockFile reports whether another holder has path's lock
 // exclusively (a shared, non-blocking lock cannot be taken), as captureActive
 // does. A missing file is not held; any other failure is an error.
 func probeLockFile(path string) (bool, error) {
+	lockProbes.Add(1)
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
@@ -322,6 +363,7 @@ func probeLockFile(path string) (bool, error) {
 // Any read error (the root, a host directory, a lock file) is returned, for
 // an unsafe blocker: the scan cannot vouch for what it could not read.
 func heldCaptureLocks(root string) ([]heldLock, []string) {
+	lockScans.Add(1)
 	held, failures := []heldLock{}, []string{}
 	hosts, err := os.ReadDir(root)
 	if errors.Is(err, os.ErrNotExist) {

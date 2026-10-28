@@ -66,15 +66,17 @@ type Server struct {
 	ingestStop ingestStopper
 	runsMu     sync.RWMutex
 	runs       []*SyncRun
-	life       lifecycle
-	captures   captureRuns
-	backups    backupRuns
-	cloud      cloudJobs
-	tasks      backgroundTasks
-	timingMu   sync.Mutex
-	estimator  activityEstimator
-	forecasts  forecastStore
-	auto       automaticSync
+	// status shares the latest status snapshot among its readers.
+	status    statusHub
+	life      lifecycle
+	captures  captureRuns
+	backups   backupRuns
+	cloud     cloudJobs
+	tasks     backgroundTasks
+	timingMu  sync.Mutex
+	estimator activityEstimator
+	forecasts forecastStore
+	auto      automaticSync
 	// Leave catalog connections available for rows/previews while metadata scans run.
 	queryMetadata chan struct{}
 	ask           askState
@@ -277,6 +279,8 @@ var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/onboarding.js":        {"onboarding.js", "text/javascript; charset=utf-8"},
 	"/assets/upgrade.js":           {"upgrade.js", "text/javascript; charset=utf-8"},
 	"/assets/library.js":           {"library.js", "text/javascript; charset=utf-8"},
+	"/assets/status-store.js":      {"status-store.js", "text/javascript; charset=utf-8"},
+	"/assets/status-panel.js":      {"status-panel.js", "text/javascript; charset=utf-8"},
 	"/assets/cloud-backup.js":      {"cloud-backup.js", "text/javascript; charset=utf-8"},
 	"/assets/sync.js":              {"sync.js", "text/javascript; charset=utf-8"},
 	"/assets/carbon.js":            {"carbon.js", "text/javascript; charset=utf-8"},
@@ -549,6 +553,10 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, s.libraryStatus(), http.StatusOK)
 	case path == "/api/operations":
 		s.serveOperations(w, r)
+	case path == "/api/status":
+		s.serveStatus(w, r)
+	case path == "/api/status/stream":
+		s.serveStatusStream(w, r)
 	case path == "/api/health/drive":
 		// Just the drive checks, from their cache: cheap enough to poll.
 		writeJSON(w, s.driveHealth(), http.StatusOK)

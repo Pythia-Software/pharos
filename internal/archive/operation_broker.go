@@ -62,7 +62,14 @@ type brokerLibrary struct {
 	// commands writing it take their leases.
 	Config    string
 	LeaseDirs []string
+	// Canonical is Config resolved (canonical), once, when it is published.
+	Canonical string
 }
+
+// brokerFreshTimeout bounds the eject check's request to the selected
+// library's service (a full lock check), inside the 10 s the broker gives
+// the whole check.
+var brokerFreshTimeout = 8 * time.Second
 
 type brokerOperations struct {
 	reg  *opRegistry
@@ -71,8 +78,15 @@ type brokerOperations struct {
 	mu        sync.Mutex
 	previous  []brokerOperationRecord // from earlier broker lifetimes
 	libraries []brokerLibrary
+	// published counts library-list changes, for the status hub.
+	published uint64
 	lastWrite time.Time
 	client    *http.Client
+	// status shares the latest /api/app/status document among its readers.
+	status statusHub
+	// unavailable counts, per library, the documents in a row that found it
+	// unreachable or not open (rule 8).
+	unavailable map[string]int
 }
 
 func brokerOperationsPath(installation string) string {
@@ -211,6 +225,7 @@ func (b *brokerOperations) publish(libraries []brokerLibrary) {
 	}
 	b.mu.Lock()
 	b.libraries = libraries
+	b.published++
 	b.mu.Unlock()
 }
 
@@ -222,6 +237,14 @@ func (m *applicationManager) publishLocked() {
 	libraries := make([]brokerLibrary, 0, len(m.registry.Libraries))
 	for _, l := range m.registry.Libraries {
 		library := brokerLibrary{ID: l.ID, Name: l.Name, Selected: l.ID == m.registry.Selected, Config: l.resolve()}
+		if resolved, ok := m.canonicalCache[library.Config]; ok {
+			library.Canonical = resolved
+		} else {
+			library.Canonical = canonical(library.Config)
+			if m.canonicalCache != nil {
+				m.canonicalCache[library.Config] = library.Canonical
+			}
+		}
 		if dirs, ok := m.leaseDirCache[library.Config]; ok {
 			library.LeaseDirs = dirs
 		} else if config, err := LoadConfig(library.Config); err == nil {
@@ -270,18 +293,33 @@ func brokerOperationEntry(record brokerOperationRecord) map[string]any {
 // service being unreachable, which makes it unsafe.
 func brokerLibraryVerdict(own *ejectVerdict, records []brokerOperationRecord, library string, unreachable string, leases []leaseProbe) ejectVerdict {
 	in := verdictInput{unreachable: unreachable, leases: leases}
+	extra := computeEjectVerdict(in)
+	// Every running broker operation that touches the library (a transfer,
+	// a recovery, a delivery, its service starting) makes it at least busy,
+	// whatever its holds declare: the broker runs it and Pharos cannot stop
+	// it. A release is the eject itself, not a holder.
 	for _, record := range records {
-		if opTerminal(record.State) || !operationTouches(record, library) {
+		if opTerminal(record.State) || !operationTouches(record, library) || record.Kind == "library.release" {
 			continue
 		}
 		kind, ok := lookupOperationKind(record.Kind)
 		if !ok {
 			kind = operationKindIndex[unknownOperationKind]
 		}
-		in.ops = append(in.ops, opView{ID: OpID(record.ID), Root: OpID(record.ID), Kind: kind, State: record.State, Process: "broker",
-			Spec: OperationSpec{Kind: record.Kind, Variant: record.Variant, Holds: parseHolds(kind.Holds)}})
+		verdict := verdictBusy
+		if kind.Kind == unknownOperationKind {
+			verdict = verdictUnsafe
+		}
+		extra.Blockers = append(extra.Blockers, ejectBlocker{Operation: record.ID, Kind: record.Kind, Label: kind.label(record.Variant), OnEject: kind.OnEject,
+			Latency: kind.Latency, Verdict: verdict, Process: "broker"})
+		if verdictRank[verdict] > verdictRank[extra.Verdict] {
+			extra.Verdict, extra.ETASeconds = verdict, nil
+		}
 	}
-	extra := computeEjectVerdict(in)
+	sort.SliceStable(extra.Blockers, func(i, j int) bool {
+		return verdictRank[extra.Blockers[i].Verdict] > verdictRank[extra.Blockers[j].Verdict]
+	})
+	extra.Summary, extra.Headline = verdictSummary(extra), verdictHeadline(extra)
 	if own == nil {
 		return extra
 	}
@@ -300,7 +338,7 @@ func brokerLibraryVerdict(own *ejectVerdict, records []brokerOperationRecord, li
 	sort.SliceStable(merged.Blockers, func(i, j int) bool {
 		return verdictRank[merged.Blockers[i].Verdict] > verdictRank[merged.Blockers[j].Verdict]
 	})
-	merged.Summary = verdictSummary(merged)
+	merged.Summary, merged.Headline = verdictSummary(merged), verdictHeadline(merged)
 	return merged
 }
 
@@ -315,14 +353,15 @@ func (b *brokerOperations) start(ctx context.Context) <-chan struct{} {
 	return done
 }
 
-// fetchServiceOperations asks a library's service for its snapshot.
-func (b *brokerOperations) fetchServiceOperations(ctx context.Context, endpoint applicationEndpoint) (map[string]any, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.URL+"/api/operations", nil)
+// fetchServiceOperations asks a library's service for its snapshot at path
+// (/api/operations, or /api/status for the status document).
+func (b *brokerOperations) fetchServiceOperations(ctx context.Context, client *http.Client, endpoint applicationEndpoint, path string) (map[string]any, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.URL+path, nil)
 	if err != nil {
 		return nil, err
 	}
 	request.Header.Set("Authorization", "Bearer "+endpoint.Token)
-	response, err := b.client.Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		return nil, err
 	}
@@ -344,11 +383,26 @@ func (b *brokerOperations) fetchServiceOperations(ctx context.Context, endpoint 
 // the broker's own operations and app-level leases: no child is asked, no
 // library's leases are read.
 func (b *brokerOperations) document(ctx context.Context, withLibraries bool) map[string]any {
+	return b.documentFrom(ctx, withLibraries, "/api/operations", false)
+}
+
+// documentFrom is document, with each child's snapshot read from path.
+// fresh is the eject check: only the selected library is asked, with the
+// longer timeout a full lock check may need.
+func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool, path string, fresh bool) map[string]any {
 	b.mu.Lock()
 	libraries := slices.Clone(b.libraries)
 	b.mu.Unlock()
+	// Every registered library, before the filters below, for naming the
+	// libraries a lease touches.
+	registered := slices.Clone(libraries)
 	if !withLibraries {
 		libraries = nil
+	}
+	client := b.client
+	if fresh {
+		libraries = slices.DeleteFunc(libraries, func(library brokerLibrary) bool { return !library.Selected })
+		client = &http.Client{Timeout: brokerFreshTimeout, Transport: b.client.Transport}
 	}
 	records := b.records()
 	snapshots := make([]map[string]any, len(libraries))
@@ -358,7 +412,9 @@ func (b *brokerOperations) document(ctx context.Context, withLibraries bool) map
 		if library.Child == nil {
 			continue
 		}
-		wait.Go(func() { snapshots[index], failures[index] = b.fetchServiceOperations(ctx, *library.Child) })
+		wait.Go(func() {
+			snapshots[index], failures[index] = b.fetchServiceOperations(ctx, client, *library.Child, path)
+		})
 	}
 	wait.Wait()
 	cutoff := time.Now().Add(-10 * time.Minute)
@@ -408,7 +464,7 @@ func (b *brokerOperations) document(ctx context.Context, withLibraries bool) map
 			leases = probeLeases(library.LeaseDirs)
 		}
 		for _, probe := range appLeases {
-			if probe.Info != nil && slices.ContainsFunc(probe.Info.Libraries, func(path string) bool { return canonical(path) == canonical(library.Config) }) {
+			if probe.Info != nil && slices.ContainsFunc(probe.Info.Libraries, func(path string) bool { return sameConfig(path, library) }) {
 				leases = append(leases, probe)
 			}
 		}
@@ -435,7 +491,18 @@ func (b *brokerOperations) document(ctx context.Context, withLibraries bool) map
 		}
 		kind := firstOf(probe.Info.Kinds)
 		entry := brokerOperationEntry(brokerOperationRecord{ID: "lease:" + probe.Info.Instance, Kind: kind, Trigger: triggerCLI, State: opRunning, StartedAt: probe.Info.StartedAt})
-		entry["process"], entry["libraries"] = probe.Info.Process, probe.Info.Libraries
+		// A lease names libraries by configuration; surfaces group by the
+		// registered IDs.
+		// No lock is held: canonical reads the filesystem.
+		ids := []string{}
+		for _, path := range probe.Info.Libraries {
+			for _, library := range registered {
+				if sameConfig(path, library) && !slices.Contains(ids, library.ID) {
+					ids = append(ids, library.ID)
+				}
+			}
+		}
+		entry["process"], entry["libraries"], entry["library_configs"] = probe.Info.Process, ids, probe.Info.Libraries
 		entry["detail"] = "In another process (" + strings.Replace(probe.Info.Process, "cli:", "pharos ", 1) + ")"
 		app = append(app, entry)
 	}
@@ -459,4 +526,17 @@ func cleanDeadLeases(dir string) {
 			done(true)
 		}
 	}
+}
+
+// sameConfig reports whether a lease's library path is library's
+// configuration, using the canonical path stored when it was published.
+func sameConfig(path string, library brokerLibrary) bool {
+	if path == library.Config {
+		return true
+	}
+	resolved := library.Canonical
+	if resolved == "" {
+		resolved = canonical(library.Config) // published without one (tests)
+	}
+	return canonical(path) == resolved
 }

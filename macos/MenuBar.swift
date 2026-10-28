@@ -137,6 +137,58 @@ struct ManagedLibraryStatus: Equatable {
     }
 }
 
+/// The menu's status line from the status snapshot (docs/background-work.md
+/// §7), used only while the library's pharos-unified-activity-v1 preference
+/// is on. Every word is the server's: the first attention item's title, else
+/// the first top-level operation's line, else the eject verdict's headline.
+/// Pure, for the harness.
+struct UnifiedMenuStatus: Equatable {
+    enum State: Equatable { case attention, warning, working, idle }
+    var state: State
+    var detail: String
+
+    private static let ended: Set<String> = ["succeeded", "failed", "cancelled", "interrupted", "skipped"]
+
+    /// The status of a service's /api/status or the broker's /api/app/status;
+    /// nil when the document has no library to describe.
+    static func from(_ document: [String: Any]) -> UnifiedMenuStatus? {
+        var library: [String: Any]? = document
+        var operations: [[String: Any]] = []
+        if let libraries = document["libraries"] as? [[String: Any]] {
+            let selected = libraries.first { $0["selected"] as? Bool == true }
+            library = selected?["snapshot"] as? [String: Any]
+            let app = document["app"] as? [String: Any]
+            operations += app?["operations"] as? [[String: Any]] ?? []
+        }
+        let attention = document["attention"] as? [[String: Any]] ?? []
+        if let first = attention.first(where: { $0["severity"] as? String != "warning" }) ?? attention.first, let title = first["title"] as? String {
+            return UnifiedMenuStatus(state: first["severity"] as? String == "warning" ? .warning : .attention, detail: title)
+        }
+        guard let library, library["eject"] != nil else { return nil }
+        operations += library["operations"] as? [[String: Any]] ?? []
+        let running = operations.filter { !ended.contains($0["state"] as? String ?? "") }
+        if let operation = running.first(where: { $0["priority"] as? String != "background" }) ?? running.first {
+            return UnifiedMenuStatus(state: .working, detail: line(operation))
+        }
+        let eject = library["eject"] as? [String: Any]
+        return UnifiedMenuStatus(state: .idle, detail: eject?["headline"] as? String ?? eject?["summary"] as? String ?? "")
+    }
+
+    /// label · state when not running · step N of M · the step · a time
+    /// range when the server gives one.
+    static func line(_ operation: [String: Any]) -> String {
+        let label = operation["label"] as? String ?? "Pharos"
+        var parts = [label]
+        if operation["state"] as? String != "running", let state = operation["state_label"] as? String, !state.isEmpty { parts.append(state) }
+        if let step = operation["step"] as? [String: Any] {
+            if let index = step["index"] as? Int, let count = step["count"] as? Int, index > 0, count > 0 { parts.append("step \(index) of \(count)") }
+            if let name = step["name"] as? String, !name.isEmpty, name != label { parts.append(name) }
+        }
+        if let time = (operation["time"] as? [String: Any])?["label"] as? String, !time.isEmpty { parts.append(time) }
+        return parts.joined(separator: " · ")
+    }
+}
+
 // The template lighthouse and colored dot are separate views, so macOS can
 // tint the mark for its menu bar appearance without tinting the status dot.
 final class MenuBarDot: NSView {
@@ -241,6 +293,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var actionErrorVersion = 0
     private var actionError: String? { didSet { actionErrorVersion += 1 } }
     private var statusTask: URLSessionDataTask?
+    /// With the unified activity preference on, the status snapshot and its
+    /// request; off, both stay nil and the menu is as before.
+    private var unified: UnifiedMenuStatus?
+    private var unifiedOn = false
+    private var unifiedTask: URLSessionDataTask?
     private var usageTask: URLSessionDataTask?
     private var usageUpdated = Date.distantPast
     private var connectedURL: URL?
@@ -367,6 +424,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             preferencesChangedAt = .distantPast
             statusTask?.cancel(); statusTask = nil
             usageTask?.cancel(); usageTask = nil
+            unifiedTask?.cancel(); unifiedTask = nil; unified = nil; unifiedOn = false
             snapshot = [:]; usage = nil; usageUpdated = .distantPast
             statusError = nil; usageError = nil; actionError = nil
         }
@@ -386,7 +444,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 // Only a poll started after the action failure can clear it.
                 if self.actionErrorVersion == actionErrorVersion { self.actionError = nil }
                 if let saved = value["settings"] as? [String: Any] { self.applyPreferences(saved, fromServer: true) }
+                self.unifiedOn = value["unified_activity"] as? Bool == true
+                if !self.unifiedOn { self.unifiedTask?.cancel(); self.unifiedTask = nil; self.unified = nil }
                 self.refreshUsage()
+                self.refreshUnified()
             case .failure(let error): self.statusError = error.localizedDescription
             }
             self.update()
@@ -408,6 +469,22 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             case .success(let value): self.usage = value; self.usageError = nil
             case .failure(let error): self.usage = nil; self.usageError = error.localizedDescription
             }
+            self.update()
+        }
+    }
+
+    /// Polls the status snapshot with the 5 s refresh, only while the flag is on.
+    private func refreshUnified() {
+        guard unifiedOn, unifiedTask == nil, let service, service.hasConnectedLibrary,
+              let request = service.localRequest(service.managedApplication ? "/api/app/status" : "/api/status") else { return }
+        let origin = service.url
+        let connection = service.libraryConnection
+        let generation = self.generation
+        unifiedTask = fetch(request) { [weak self] result in
+            guard let self, self.generation == generation, self.service?.url == origin, self.service?.libraryConnection == connection else { return }
+            self.unifiedTask = nil
+            guard self.unifiedOn else { return }
+            if case .success(let value) = result { self.unified = UnifiedMenuStatus.from(value) } else { self.unified = nil }
             self.update()
         }
     }
@@ -462,8 +539,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // is not up yet (starting, respawning, stopped by a delivery) is work.
         let noLibrary = service.url != nil && service.noLibrarySelected && !service.ejecting && !service.settingUp && service.disconnected?.state != .finishing
         let busy = service.ejecting || service.settingUp || service.disconnected?.state == .finishing || service.url == nil || !activities.isEmpty || indexing || (snapshot["library"] == nil && !noLibrary)
-        let title: String
-        let detail: String
+        var title: String
+        var detail: String
         if let problem {
             title = "Pharos · Needs attention"
             detail = String(problem.split(separator: "\n").first ?? "Unknown error")
@@ -492,6 +569,21 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             title = "Pharos · Idle"
             detail = ""
             dot.color = .systemGreen
+        }
+        // With the flag on, the snapshot's attention list and operations set
+        // the line, after the app's own problems and transitions above.
+        // Not over the transitions the line above checks first: setting up, an
+        // index this menu just started, a library operation, or no library
+        // snapshot yet.
+        if let unified, problem == nil, !noLibrary, !service.ejecting, service.url != nil, service.disconnected == nil,
+           !service.settingUp, !indexing, service.libraryOperation == nil, snapshot["library"] != nil {
+            switch unified.state {
+            case .attention: title = "Pharos · Needs attention"; dot.color = .systemRed
+            case .warning: title = "Pharos · Needs attention"; dot.color = .systemOrange
+            case .working: title = "Pharos · Working"; dot.color = .systemYellow
+            case .idle: title = "Pharos · Idle"; dot.color = .systemGreen
+            }
+            detail = unified.detail
         }
         setRowTitle("status", title)
         setRowTitle("detail", detail)

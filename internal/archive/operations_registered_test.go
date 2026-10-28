@@ -40,6 +40,7 @@ var unregisteredWorkAllowed = map[string]allowedWork{
 	"adopt.go:runAdoptCLI":                        {1, "signal handling for a Terminal command"},
 	"incremental_metrics.go:beginSyncMeasurement": {1, "a timer sampling memory inside an index run, which is the operation"},
 	"main.go:run":                                 {1, "cmd/feedback's signal handling, outside the service"},
+	"status_api.go:statusCurrent":                 {1, "the status snapshot's shared computation: a read, bounded by statusComputeTimeout, that writes nothing"},
 }
 
 type allowedWork struct {

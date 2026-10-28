@@ -65,7 +65,11 @@ type applicationManager struct {
 	starts map[string]int
 	// leaseDirCache maps a library configuration to its lease directories.
 	leaseDirCache map[string][]string
-	startTrigger  string
+	// canonicalCache maps a library configuration to its canonical path,
+	// resolved once, so the status document never touches the filesystem
+	// to match a lease's libraries.
+	canonicalCache map[string]string
+	startTrigger   string
 }
 
 func applicationRuntimePath(id string) string {
@@ -83,7 +87,7 @@ func newApplicationManager(ctx context.Context, application string) (*applicatio
 		r.Selected = r.MCP
 	}
 	m := &applicationManager{registry: r, id: installationID(application), token: randomToken(), children: map[string]*applicationChild{}, suspended: map[string]bool{}, missing: map[string]bool{}, ctx: ctx,
-		client: &http.Client{Timeout: 2 * time.Minute, Transport: &http.Transport{Proxy: nil}}, starts: map[string]int{}, leaseDirCache: map[string][]string{}}
+		client: &http.Client{Timeout: 2 * time.Minute, Transport: &http.Transport{Proxy: nil}}, starts: map[string]int{}, leaseDirCache: map[string][]string{}, canonicalCache: map[string]string{}}
 	m.operations = newBrokerOperations(brokerOperationsPath(m.id))
 	m.publishLocked()
 	return m, nil
@@ -345,6 +349,14 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Never takes m.mu, which create and child starts hold for minutes.
 	if r.URL.Path == "/api/app/operations" && r.Method == http.MethodGet {
 		writeJSON(w, m.operations.document(r.Context(), r.URL.Query().Get("libraries") != "0"), http.StatusOK)
+		return
+	}
+	if r.URL.Path == "/api/app/status" && r.Method == http.MethodGet {
+		m.operations.serveStatus(w, r)
+		return
+	}
+	if r.URL.Path == "/api/app/status/stream" && r.Method == http.MethodGet {
+		m.operations.serveStatusStream(w, r)
 		return
 	}
 	if r.Method == "POST" && !sameOrigin(r) {

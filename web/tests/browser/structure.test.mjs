@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { layoutProblems, scrollProblems } from "./layout.mjs";
-import { defaultApi, cloudScheduledStatus, rootConversation, workID } from "./fixtures.mjs";
+import { defaultApi, cloudScheduledStatus, rootConversation, workID, eventStream, idleStatus, busyStatus, managedStatus } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 const work = `/work/${workID}`;
@@ -155,6 +155,19 @@ const ROUTES = [
   { name: 'Idle drive overview', url: '/library', ready: '#queryTableLibrary .qt-row',
     open: page => activateHeaderTool(page, 'pharosDrive'), shown: '#pharosDrivePanel',
   },
+  // The unified activity panel (flag on), idle and busy, in the browser and
+  // in the app (other libraries).
+  ...[['idle', idleStatus, false], ['busy', busyStatus, false], ['busy in the app', busyStatus, true]].map(([state, snapshot, managed]) => ({
+    name: `Unified activity panel ${state}`, url: '/library', ready: '#queryTableLibrary .qt-row', preferences: {'pharos-unified-activity-v1': true},
+    managedLibrary: managed ? {id: 'local', name: 'Pending history', config: '/Users/test/Libraries/Pending/library.toml'} : null,
+    api: managed ? {'GET /api/app/status/stream': eventStream(managedStatus(snapshot)), 'GET /api/app/status': managedStatus(snapshot)}
+      : {'GET /api/status/stream': eventStream(snapshot), 'GET /api/status': snapshot},
+    open: async page => {
+      await page.evaluate(() => { window.webkit = {messageHandlers: {pharosLibrary: {postMessage: async () => {}}}}; });
+      await activateHeaderTool(page, 'pharosDrive');
+      if (snapshot !== idleStatus) await page.locator('#pharosStatusPanel summary').click();
+    }, shown: snapshot === idleStatus ? '#pharosStatusPanel .pharos-status-verdict' : '#pharosStatusPanel .pharos-status-tree',
+  })),
   { name: "Home", url: "/", ready: ".home-belt-row .query-card" },
   { name: "Home search composer", url: "/", ready: ".home-search-trigger", open: page => page.getByRole("button", { name: "Search past work", exact: true }).click(), shown: ".home-search-disclosure.is-expanded" },
   { name: "Home search before date", url: "/", ready: ".home-search-trigger", open: async page => { await page.getByRole("button", { name: "Search past work", exact: true }).click(); await page.getByRole("combobox", { name: "Date comparison", exact: true }).selectOption("to"); }, shown: ".home-search-disclosure.is-expanded" },

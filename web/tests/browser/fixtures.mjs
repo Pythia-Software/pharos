@@ -200,6 +200,56 @@ export const cloudScheduledStatus={
     {id:'cloud-full-verified',destination_id:'cloud-browser',kind:'full',trigger:'manual',state:'complete',object:scheduledCloudPlan.object,version:'1792684800000000',total_bytes:40000000000,file_bytes:135000000000,files:40000,started_at:iso(8*day),verified:true,restored_directory:'/tmp/pharos/recovered-library'}]
 };
 
+// The status snapshot (docs/background-work.md §7) the unified activity
+// panel renders. `eventStream` marks a stub the harness serves as
+// server-sent events: each document is one `snapshot` event, and the stream
+// stays open.
+export const eventStream = documents => ({ __eventStream: [documents].flat() });
+const statusLibrary = { id: "library-fixture", name: "Pharos SSD", drive: { name: "Pharos SSD", ejectable: true, location: "external", mounted: true }, portable: true, path: "/Volumes/Pharos SSD/Pharos" };
+export const idleStatus = {
+  version: 1, revision: 1, generated_at: iso(0), host: { id: "test-mac", label: "This Mac" }, library: statusLibrary,
+  eject: { verdict: "safe", eta_seconds: null, checked: "polled", blockers: [], headline: "Safe to eject; checked again on eject", summary: "Nothing Pharos can see is writing to the library. Pharos checks everything again when you eject." },
+  operations: [], attention: [], freshness: null, resources: null, features: { unified_activity: true }, journal: { dropped: 0 },
+};
+const statusOperation = (id, changes) => ({
+  id, kind: "index.changes.manual", variant: null, subject: null, label: "Index changes", verb: "Indexing changes", state: "running", state_label: "Indexing changes",
+  detail: null, reason: null, trigger: "user", process: "service", priority: "foreground", started_at: iso(120000), ended_at: null,
+  step: null, time: null, stoppable: true, stop: { method: "POST", path: "/api/operations/stop", body: { id } }, holds: [{ resource: "drive", mode: "write" }],
+  affects: [], on_eject: "Stops between workspaces; the next index resumes it.", latency: "batch", severity: "none", legacy: null, children: [], children_count: 0, ...changes,
+});
+export const busyStatus = {
+  ...idleStatus, revision: 2,
+  eject: { verdict: "safe-in", eta_seconds: null, checked: "polled", headline: "Safe to eject after the current workspace: stops index changes", summary: "Ejecting stops index changes after the current workspace; if that takes more than 7 s, Pharos refuses and you can try again.",
+    blockers: [{ operation: "op-index", label: "Index changes", on_eject: "Stops between workspaces; the next index resumes it.", latency: "batch", verdict: "safe-in" }] },
+  operations: [
+    statusOperation("op-index", { step: { index: 3, count: 6, name: "Indexing a source with a very long name that has to wrap somewhere", source: "Claude Code", unit: "byte", done: 812e6, total: 1980e6, fraction: 0.41 },
+      time: { state: "estimating", low_seconds: 180, high_seconds: 360, label: "about 3–6 min" },
+      children: [statusOperation("op-chain", { kind: "analysis.chain", label: "Update analyses", state_label: "Updating analyses", stoppable: false, stop: undefined })], children_count: 2 }),
+    statusOperation("op-view", { kind: "maintenance.library-view", label: "Index the Search view", state_label: "Indexing the Search view", priority: "background", stop: { method: "POST", path: "/api/operations/stop", body: { id: "op-view" } }, step: { index: 1, count: null, name: "Search view", unit: "workspace", done: 2, total: 40, fraction: 0.05 } }),
+    statusOperation("op-backup", { kind: "backup.local", label: "Back up", state: "blocked", state_label: "Waiting", priority: "background", stoppable: true, stop: { method: "POST", path: "/api/operations/stop", body: { id: "op-backup" } }, detail: "Waiting for a capture to finish" }),
+    statusOperation("op-old", { kind: "analysis.findings", label: "Update findings", state: "succeeded", state_label: "Done", stoppable: false, stop: undefined, ended_at: iso(60000) }),
+  ],
+  attention: [{ id: "backup-failed", rule: 6, severity: "error", title: "The last backup failed", detail: "The destination drive is full: /Volumes/Backup Drive With A Long Name/Pharos Backup", action: { label: "Open Backups", path: "/settings/backups" } }],
+};
+// The broker's document, with two other libraries. A broker operation
+// touching a library makes its verdict busy, as the broker computes it.
+const copyBlocker = { operation: "op-copy", kind: "library.transfer", label: "Copy library", on_eject: "Not stoppable; eject of either drive must wait.", latency: "none", verdict: "busy", process: "broker" };
+const brokerBusy = eject => ({ ...eject, verdict: "busy", eta_seconds: null, headline: "Eject waits for copy library",
+  summary: "Eject waits for copy library, which cannot stop in time.", blockers: [copyBlocker, ...(eject.blockers || [])] });
+export const managedStatus = snapshot => ({
+  version: 1, revision: 3, generated_at: iso(0),
+  libraries: [
+    { id: "local", name: "Pending history", selected: true, connected: true, service: { state: "running" }, state_label: "Copying the library", snapshot, eject: brokerBusy(snapshot.eject), error: null },
+    { id: "archive", name: "Archive (Backup drive)", selected: false, connected: true, service: { state: "running" }, state_label: "Copying the library", eject: brokerBusy(idleStatus.eject), error: null, snapshot: idleStatus },
+    { id: "spare", name: "Spare", selected: false, connected: false, service: { state: "stopped" }, state_label: "Not open", snapshot: null, eject: idleStatus.eject, error: null },
+  ],
+  // As the broker reports its own work: in app.operations, naming the
+  // libraries it touches (a copy from the selected library to Archive).
+  app: { operations: [statusOperation("op-copy", { kind: "library.transfer", label: "Copy library", state_label: "Copying the library", process: "broker", stoppable: false, stop: undefined,
+    libraries: ["local", "archive"], step: { index: 2, count: 3, name: "Verified copy", unit: "byte", done: 4e9, total: 1e10, fraction: 0.4 } })], update: null },
+  attention: snapshot.attention,
+});
+
 export const defaultApi = {
   "GET /api/app/state": {application:"/Applications/Pharos.app",selected:"local",mcp:"external",busy:false,libraries:[{id:"local",name:"Pending history",available:true,config:"/Users/test/Library/Application Support/Pharos/Libraries/Pending/library.toml"},{id:"external",name:"My archive",available:false,config:"/Volumes/Archive/Pharos/library.toml"}]},
   "GET /api/cloud-backup": {destinations:[],runs:[],schedules:[],active_run_id:"",setup_root:"/tmp/pharos/cloud-setup"},
@@ -256,6 +306,11 @@ export const defaultApi = {
   "GET /api/search/text/capabilities": { fuzzy: true, regex: true, case_sensitive: true },
   "GET /api/tools/status": toolsStatus,
   "GET /api/menu-bar/status": { error: "", indexed_at: iso(60000), library: { library_dir: "/Volumes/Pharos SSD/Pharos", activities: [], drive: { name: "Pharos SSD", ejectable: true } } },
+  "GET /api/status": idleStatus,
+  "GET /api/status/stream": eventStream(idleStatus),
+  "GET /api/app/status": managedStatus(idleStatus),
+  "GET /api/app/status/stream": eventStream(managedStatus(idleStatus)),
+  "POST /api/operations/stop": { stopping: true },
   "GET /api/menu-bar/usage": { human_words: 3240, tokens: 1200000, cost_usd: 8.42, co2e_g: 18.25 },
 
   // Settings.

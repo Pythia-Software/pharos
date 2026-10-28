@@ -116,6 +116,14 @@ function serve(routes, state, record) {
       try {
         const result = typeof route.handler === "function" ? await route.handler({ ...call, params, state }) : route.handler;
         // A handler that returns nothing passes the request on.
+        if (result?.__eventStream) {
+          response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store" });
+          for (const document of result.__eventStream) response.write(`event: snapshot\ndata: ${JSON.stringify(document)}\n\n`);
+          // Left open, as a live stream is, for push(); closed with the server.
+          (state.streams[path] ??= new Set()).add(response);
+          response.on("close", () => state.streams[path].delete(response));
+          return;
+        }
         if (result !== undefined) return json(response, 200, result);
       } catch (error) {
         state.stubErrors.push(`${request.method} ${path}: ${error.stack}`);
@@ -138,9 +146,11 @@ let shotCount = 0;
 //   preferences  library preferences served at /assets/preferences.js
 // Returns the page, `settled`, `shot(name)` (a screenshot, only when
 // PHAROS_UI_SCREENSHOTS is set), `problems()` (what will fail the test when
-// it ends) and the API `calls` made so far.
+// it ends), the API `calls` made so far, and `push(path, document)`, which
+// sends an event on the open event streams of path (see eventStream in
+// fixtures.mjs).
 export async function open(t, { url = "/", viewport = { width: 1440, height: 900 }, api = {}, preferences = {}, concurrency = false, managedLibrary = null, ready } = {}) {
-  const state = { concurrency, managedLibrary, preferences: { "pharos-theme": "dark", ...preferences }, unexpected: [], stubErrors: [] };
+  const state = { concurrency, managedLibrary, preferences: { "pharos-theme": "dark", ...preferences }, unexpected: [], stubErrors: [], streams: {} };
   const errors = [], failed = [], calls = [], inflight = new Set();
   let wake = () => {};
   const routes = [...routeTable(api), ...routeTable(defaultApi)];
@@ -214,5 +224,7 @@ export async function open(t, { url = "/", viewport = { width: 1440, height: 900
   await page.goto(origin + url);
   if (ready) await page.locator(ready).first().waitFor();
   await settled();
-  return { page, settled, shot, problems, calls };
+  // Sends a snapshot event to every open event stream of path.
+  const push = (path, document) => { for (const response of state.streams[path] ?? []) response.write(`event: snapshot\ndata: ${JSON.stringify(document)}\n\n`); };
+  return { page, settled, shot, problems, calls, push };
 }

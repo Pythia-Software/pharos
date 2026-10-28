@@ -161,6 +161,8 @@ func TestRequestReadsDoNotWaitForTheCatalogWriter(t *testing.T) {
 		// The operations snapshot reads the registry and the journal, which
 		// the low-priority lane writes (§6.2).
 		{"GET", "/api/operations", ""},
+		// The status snapshot, and its fresh check on the release path.
+		{"GET", "/api/status", ""}, {"GET", "/api/status?fresh=1", ""},
 	}
 	for _, dataset := range []string{"library", "usage", "tools", "tool_calls", "writing", "writing_messages", "parallelism",
 		"conversation_activity", "activity", "mcp_calls", "skill_usages", "tl1_attempts", "findings"} {

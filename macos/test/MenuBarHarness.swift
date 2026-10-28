@@ -14,6 +14,7 @@ final class ArchiveService: ObservableObject {
     @Published var url: URL? = URL(string: "http://menu-bar-test.invalid/")
     @Published var libraryConnection: String?
     var hasConnectedLibrary = true
+    var managedApplication = false
     var noLibrarySelected = false
     var libraryOperation: String?
     var error: String?
@@ -250,6 +251,19 @@ final class MenuFixture: URLProtocol {
         precondition(!whileCreating.noLibrary && whileCreating.activeOperation == "Creating the library")
         precondition(whileCreating.withBrokerOperations([]).noLibrary, "Once it ends, no library again")
         precondition(recovering.withBrokerOperations([]).activeOperation == "Restoring the backup", "An older broker's job still counts")
+        // The unified activity flag's line comes from the snapshot's words.
+        let indexing: [String: Any] = ["eject": ["verdict": "safe-in"], "operations": [
+            ["state": "running", "label": "Index changes", "priority": "foreground", "step": ["index": 3, "count": 6, "name": "Claude Code"], "time": ["label": "about 3–6 min"]],
+            ["state": "running", "label": "Index the Search view", "priority": "background"]], "attention": []]
+        precondition(UnifiedMenuStatus.from(indexing) == UnifiedMenuStatus(state: .working, detail: "Index changes · step 3 of 6 · Claude Code · about 3–6 min"))
+        precondition(UnifiedMenuStatus.from(["eject": ["verdict": "safe", "headline": "Safe to eject"], "operations": [["state": "succeeded", "label": "Back up"]], "attention": []])
+            == UnifiedMenuStatus(state: .idle, detail: "Safe to eject"), "Idle, the detail is the verdict's headline")
+        let failing: [String: Any] = ["eject": ["verdict": "safe"], "operations": [], "attention": [["severity": "warning", "title": "Interrupted"], ["severity": "error", "title": "The last backup failed"]]]
+        precondition(UnifiedMenuStatus.from(failing) == UnifiedMenuStatus(state: .attention, detail: "The last backup failed"), "An error outranks a warning")
+        let broker: [String: Any] = ["libraries": [["selected": true, "snapshot": ["eject": ["verdict": "safe"], "operations": []]]],
+                                     "app": ["operations": [["state": "running", "label": "Copy library", "state_label": "Copying the library"]]], "attention": []]
+        precondition(UnifiedMenuStatus.from(broker)?.state == .working, "A broker operation is work")
+        precondition(UnifiedMenuStatus.from(["libraries": [], "app": ["operations": []], "attention": []]) == nil, "No library: the app's own rules decide")
         let font = NSFont.menuFont(ofSize: 13)
         for text in [String(repeating: "conversation/", count: 20), "👩🏽‍💻 日本語の会話を読み込み、ライブラリのインデックスを更新しています。"] {
             let wrapped = MenuBarController.wrappedMenuTitle(text, width: 160, font: font)
