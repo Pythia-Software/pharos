@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -200,6 +201,9 @@ type authorshipState struct {
 	mu        sync.Mutex
 	running   bool
 	lastError string
+	// deferred records a follow-up a rebuild skipped while this process
+	// indexed; the ingest's end runs it (ingestEnded).
+	deferred atomic.Bool
 }
 
 var (
@@ -1210,8 +1214,30 @@ func (c *Catalog) startAuthorship(generation string) {
 
 // authorshipFollowUp reports whether a rebuild that just succeeded should
 // check again for inputs written while it ran.
+// A skipped follow-up is remembered for the ingest's end: a scheduled
+// index runs no analysis chain, and a page does not rebuild a ledger of the
+// current rules, so without it authorship could stay stale until the next
+// manual index.
 func (c *Catalog) authorshipFollowUp(parent context.Context) bool {
-	return parent != nil || c.ingestRuns.Load() == 0
+	if parent != nil || c.ingestRuns.Load() == 0 {
+		return true
+	}
+	c.authorship.deferred.Store(true)
+	// The ingest may have ended between the check and the store, its end
+	// finding nothing deferred: then follow up now.
+	return c.ingestRuns.Load() == 0 && c.authorship.deferred.Swap(false)
+}
+
+// ingestStarted and ingestEnded bracket an ingest in this process. Once the
+// last one ends, a follow-up rebuild deferred while it ran runs, once. A
+// manual index's chain has rebuilt by then, so the refresh finds the
+// ledger current and starts nothing.
+func (c *Catalog) ingestStarted() { c.ingestRuns.Add(1) }
+
+func (c *Catalog) ingestEnded() {
+	if c.ingestRuns.Add(-1) == 0 && c.authorship.deferred.Swap(false) {
+		c.refreshAuthorship()
+	}
 }
 
 func (c *Catalog) startAuthorshipInContext(generation string, parent context.Context) bool {

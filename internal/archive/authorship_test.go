@@ -476,6 +476,29 @@ func TestAuthorshipRebuildsAfterIndex(t *testing.T) {
 	catalog.ingestRuns.Add(-1)
 	catalog.refreshAuthorship()
 	check("the next refresh after the index ends", 8, true)
+	started[7](context.Background())
+	check("after that refresh", 8, false)
+
+	// A scheduled index runs no analysis chain: a page's rebuild that
+	// skipped its follow-up during it runs one once the index ends, and
+	// only once.
+	if _, err := catalog.DB.Exec("UPDATE meta SET value='1/authorship-v0' WHERE key='authorship_generation'"); err != nil {
+		t.Fatal(err)
+	}
+	catalog.ingestStarted()
+	catalog.ensureAuthorship()
+	check("a page during a scheduled index", 9, true)
+	if err := bumpToolLedgerGeneration(catalog.DB); err != nil {
+		t.Fatal(err)
+	}
+	started[8](context.Background())
+	check("the page's rebuild skipped its follow-up", 9, false)
+	catalog.ingestEnded()
+	check("the scheduled index ended", 10, true)
+	started[9](context.Background())
+	catalog.ingestStarted()
+	catalog.ingestEnded()
+	check("a later index with nothing deferred", 10, false)
 }
 
 func TestAuthorshipManualRefreshHonorsRunCancellation(t *testing.T) {
