@@ -113,9 +113,11 @@ func (c *Catalog) libraryFindMatches(ctx context.Context, o LibraryFindOptions) 
 			match.Count++
 		}
 	}
-	// A withheld page or a deadline without progress is not a reusable batch.
-	// A retry after transient load must be able to search again.
-	if versionErr == nil && (!o.WorkspaceRows || !limited) && search.StopReason != "consistency_check_timeout" && search.StopReason != "time_budget_no_progress" {
+	// A withheld page or a deadline without progress is not a reusable batch,
+	// nor are incomplete workspace rows, which Find reports as an error. A
+	// retry after transient load must be able to search again.
+	incomplete := o.WorkspaceRows && (limited || search.Strategy != "" && !search.Complete)
+	if versionErr == nil && !incomplete && search.StopReason != "consistency_check_timeout" && search.StopReason != "time_budget_no_progress" {
 		cache.mu.Lock()
 		if len(cache.entries) >= 8 {
 			cache.entries = nil

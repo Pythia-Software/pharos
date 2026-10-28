@@ -161,6 +161,7 @@ func (s *Server) Serve() error {
 	s.startJournal()
 	s.daemon("maintainLibrary", s.Catalog.maintainLibrary)
 	s.daemon("maintainSubstringIndex", s.Catalog.maintainSubstringIndex)
+	s.daemon("maintainToolOutputIndex", s.Catalog.maintainToolOutputIndex)
 	s.daemon("maintainTextSearch", s.Catalog.maintainTextSearch)
 	s.daemon("maintainToolSearch", s.Catalog.maintainToolSearch)
 	s.daemon("maintainQueryTextIndexes", s.Catalog.maintainQueryTextIndexes)
@@ -563,7 +564,12 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, s.backupStatus(), http.StatusOK)
 	case path == "/api/search/status":
 		progress, err := s.Catalog.substringIndexProgress(r.Context())
-		writeResult(w, map[string]any{"substring": progress}, err)
+		if err != nil {
+			writeResult(w, nil, err)
+			break
+		}
+		toolOutput, err := s.Catalog.toolOutputIndexProgress(r.Context())
+		writeResult(w, map[string]any{"substring": progress, "tool_output": toolOutput}, err)
 	case path == "/api/library/status":
 		writeJSON(w, s.libraryStatus(), http.StatusOK)
 	case path == "/api/operations":

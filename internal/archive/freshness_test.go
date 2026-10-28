@@ -238,6 +238,8 @@ func TestFreshnessDomains(t *testing.T) {
 		{name: "text search building", domain: "search.text", seed: []string{"DELETE FROM meta WHERE key='text_search_documents_version'"},
 			in: freshnessInput{ops: []freshnessOp{runningOp("op-text", "maintenance.search.text", "")}}, state: freshBehind, reason: "building", catching: "op-text"},
 		{name: "substring search counts what is left", domain: "search.substring", seed: []string{"DELETE FROM meta WHERE key='message_trigram_version'"}, state: freshBehind, reason: "version", countKnown: true, unit: "conversation"},
+		{name: "word search removing tool output", domain: "search.words", seed: []string{"DELETE FROM meta WHERE key='message_fts_tool_output_merged'"},
+			in: freshnessInput{ops: []freshnessOp{runningOp("op-words", "maintenance.search.tool-output", "")}}, state: freshBehind, reason: "building", catching: "op-words"},
 		{name: "table search on an older version", domain: "search.query", seed: []string{setMetaSQL("tool_query_facts_ready", "old")}, state: freshBehind, reason: "version"},
 
 		{name: "identities current", domain: "an.identities", state: freshCurrent},

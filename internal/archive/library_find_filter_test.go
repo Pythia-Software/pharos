@@ -313,14 +313,20 @@ func TestLibraryFindCacheTracksSearchInputs(t *testing.T) {
 
 func TestLibraryFindNoProgressCanRetry(t *testing.T) {
 	c := textFixture(t)
-	stalled := true
+	stalled, afterRow, rows := true, false, 0
 	hookTextSearch(t, c, func(ctx context.Context) error {
-		if stalled {
+		if stalled && !afterRow {
 			<-ctx.Done()
 			return ctx.Err()
 		}
 		return nil
-	}, nil)
+	}, func(ctx context.Context) error {
+		if rows++; stalled && afterRow && rows > 1 {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		return nil
+	})
 	options := LibraryFindOptions{Query: "cache", Search: TextSearchOptions{TimeoutMS: 100}}
 	first, err := c.libraryFindMatches(t.Context(), options)
 	if err != nil || first.search.StopReason != "time_budget_no_progress" {
@@ -330,6 +336,20 @@ func TestLibraryFindNoProgressCanRetry(t *testing.T) {
 	again, err := c.libraryFindMatches(t.Context(), options)
 	if err != nil || again == first || len(again.matches) == 0 {
 		t.Fatalf("transient timeout was cached: %+v %v", again, err)
+	}
+	// Workspace rows that time out after some progress are incomplete, an
+	// error to Find, and a retry must search again rather than return it
+	// from the cache.
+	stalled, afterRow, rows = true, true, 0
+	options = LibraryFindOptions{Query: "cache", WorkspaceRows: true, Search: TextSearchOptions{TimeoutMS: 100}}
+	first, err = c.libraryFindMatches(t.Context(), options)
+	if err != nil || first.search.Complete || first.search.StopReason != "time_budget" {
+		t.Fatalf("expected incomplete workspace rows: %+v %v", first, err)
+	}
+	stalled = false
+	again, err = c.libraryFindMatches(t.Context(), options)
+	if err != nil || again == first || !again.search.Complete {
+		t.Fatalf("incomplete workspace rows were cached: %+v %v", again, err)
 	}
 }
 

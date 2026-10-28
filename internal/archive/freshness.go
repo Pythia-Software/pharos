@@ -213,7 +213,7 @@ type freshnessCapture struct {
 }
 
 // freshnessMetaKeys are the meta rows the ledger reads, in one query.
-var freshnessMetaKeys = []string{"message_trigram_version", "text_search_documents_version", "text_search_documents_cursor", "tool_command_fts_version",
+var freshnessMetaKeys = []string{"message_trigram_version", toolOutputMergedKey, "text_search_documents_version", "text_search_documents_cursor", "tool_command_fts_version",
 	"human_query_text_fts_ready", "tool_query_text_fts_ready", "tool_query_facts_ready", "workspace_library_version",
 	"tool_ledger_generation", "tool_rollup_generation", "tool_rollup_day", "tool_rollup_timezone", "tool_rollup_full_revision", "tool_rollup_built_full_revision",
 	"authorship_inputs_generation", "authorship_generation", "authorship_built_at", "findings_generation", "findings_built_at",
@@ -599,7 +599,7 @@ func (l *ledger) view(ctx context.Context, c *Catalog, meta map[string]string, m
 	l.add(entry)
 }
 
-// search is the four index backfills, each with a done flag in meta.
+// search is the five index backfills, each with a done flag in meta.
 func (l *ledger) search(ctx context.Context, c *Catalog, meta map[string]string, metaErr error) {
 	add := func(domain, label string, ready bool, count int64, countKnown bool, unit string) {
 		entry := domainEntry{domain: domain, group: "search", label: label, running: "building", next: nextOnItsOwn, unit: unit, count: count, countKnown: countKnown}
@@ -624,6 +624,7 @@ func (l *ledger) search(ctx context.Context, c *Catalog, meta map[string]string,
 		}
 	}
 	add("search.substring", "Substring search", substringReady, remaining, known, "conversation")
+	add("search.words", "Word search", meta[toolOutputMergedKey] != "", 0, false, "")
 	add("search.text", "Text search", meta["text_search_documents_version"] == "1", 0, false, "")
 	add("search.tools", "Tool search", meta["tool_command_fts_version"] == "1", 0, false, "")
 	add("search.query", "Table search", meta["human_query_text_fts_ready"] == humanQueryText.version() && meta["tool_query_text_fts_ready"] == toolQueryText.version() &&

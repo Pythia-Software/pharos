@@ -791,9 +791,12 @@ func snapshotAuditScope(ctx context.Context, catalog *Catalog, record WorkspaceR
 		}
 		result[name] = rows
 	}
+	// Tool output is expected to be absent from the word index (see
+	// wordIndexedKind); a catalog still removing its old postings has some.
+	// Neither is a difference from the reference ingest.
 	search, err := queryAuditRows(ctx, tx, `SELECT m.id AS message_id,f.message_id AS indexed_message,f.text AS fts_text,r.fts_rowid,CASE WHEN tr.rowid IS NULL THEN 0 ELSE 1 END AS trigram_coverage
 		FROM messages m LEFT JOIN message_fts_rows r ON r.message_id=m.id LEFT JOIN messages_fts f ON f.rowid=r.fts_rowid
-		LEFT JOIN messages_trigram tr ON tr.rowid=r.fts_rowid WHERE m.conversation_id IN (SELECT id FROM conversations WHERE workspace_id=?) ORDER BY m.id`, budget, &bytes, id)
+		LEFT JOIN messages_trigram tr ON tr.rowid=r.fts_rowid WHERE m.conversation_id IN (SELECT id FROM conversations WHERE workspace_id=?) AND `+wordIndexedKind("m.")+` ORDER BY m.id`, budget, &bytes, id)
 	if err != nil {
 		return nil, err
 	}

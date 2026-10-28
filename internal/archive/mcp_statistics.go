@@ -539,7 +539,7 @@ func (c *Catalog) statisticsTextMatches(ctx context.Context, tx *sql.Tx, rows []
 	if parsed := ftsQuery(r.Query); parsed != "" {
 		matches, err := queryMapsContext(ctx, tx, `WITH recent AS MATERIALIZED (
 		SELECT message_id,rank FROM messages_fts WHERE messages_fts MATCH ? AND rowid IN
-		(SELECT f.fts_rowid FROM message_fts_rows f JOIN messages m ON m.id=f.message_id JOIN temp.mcp_statistics_eligible e ON e.id=m.conversation_id)
+		(SELECT f.fts_rowid FROM message_fts_rows f JOIN messages m ON m.id=f.message_id JOIN temp.mcp_statistics_eligible e ON e.id=m.conversation_id WHERE `+wordIndexedKind("m.")+`)
 		ORDER BY rowid DESC LIMIT `+fmt.Sprint(statisticsTextLimits.recent)+`)
 		SELECT m.conversation_id,c.workspace_id,recent.message_id FROM recent JOIN messages m ON m.id=recent.message_id JOIN conversations c ON c.id=m.conversation_id ORDER BY recent.rank LIMIT `+fmt.Sprint(statisticsTextLimits.ranked), parsed)
 		if err != nil {
@@ -767,6 +767,9 @@ func statisticsEnvelope(s statisticsSnapshot, r statisticsRequest) map[string]an
 	result := map[string]any{"metric_schema": schema, "metric_coverage": map[string]any{"cohort": "structured_context_before_metric_filters", "counts": s.Coverage}, "effective_request": effective, "freshness": s.Freshness, "population_complete": s.Complete, "total_matching": len(s.Rows)}
 	if !s.Complete {
 		result["retrieval_limits"] = map[string]any{"recent_eligible_matches": statisticsTextLimits.recent, "ranked_messages": statisticsTextLimits.ranked, "semantic_minimum": .1}
+	}
+	if r.Query != "" {
+		result["coverage"] = toolOutputCoverage
 	}
 	if s.ID != "" {
 		result["snapshot_id"] = s.ID

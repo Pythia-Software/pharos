@@ -285,3 +285,19 @@ test("only a withheld batch offers a retry of the same request", () => {
   for (const stop_reason of ["complete", "time_budget", "time_budget_no_progress", "page_limit"]) assert.equal(m.withheldBatch({ stop_reason }), false);
   assert.equal(m.withheldBatch(undefined), false);
 });
+
+test("the scope note says when a word search leaves tool output out, and when a literal search needs a scope", () => {
+  const draft = (change = {}, scope = {}) => ({ ...m.emptyTextSearch(), ...change, scope: { ...m.emptyScope(), ...scope } });
+  assert.equal(m.textScopeNote(draft({}, { surface: "tools" })), "tool-output");
+  assert.equal(m.textScopeNote(draft({}, { surface: "all", roles: ["tool"] })), "tool-output");
+  assert.equal(m.textScopeNote(draft({}, { surface: "all", workspace_id: "w" })), "tool-output");
+  assert.equal(m.textScopeNote(draft({}, { surface: "all", roles: ["system"] })), null);
+  assert.equal(m.textScopeNote(draft({}, { surface: "tools", conversation_id: "c" })), null);
+  assert.equal(m.textScopeNote(draft({}, { surface: "prose" })), null);
+  // Literal and regex searches scan stored text, tool output included.
+  for (const literal of [{ match: "literal" }, { match: "regex" }, { editor: "syntax", mode: "regex" }]) {
+    assert.equal(m.textScopeNote(draft(literal, { surface: "tools" })), "scan");
+    assert.equal(m.textScopeNote(draft(literal, { surface: "tools", conversation_id: "c" })), null);
+  }
+  assert.equal(m.textScopeNote(draft({ editor: "syntax", mode: "advanced" }, { surface: "all" })), "tool-output");
+});

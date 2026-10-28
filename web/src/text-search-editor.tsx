@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Icon } from "./icons";
 import { SearchSelect } from "./search-select";
 import { SearchInput, WrappingInput } from "./search-input";
-import { chooseScope, compileRules, newGroup, newRule, optionScope, optionsInEffect, querySyntax, scopeChoice, scopes, searchDateValue, searchDateWindow, searchRequest, searchSentence, sourceLabel, visualFromQuery, withSearchDateComparison, withSearchDateRange, withSearchDateWindow, type SentencePart, type RuleKind, type SearchDateComparison, type SearchIssue, type TextCondition, type TextGroup, type TextQuery, type TextScope, type TextSearchDraft } from "./text-search-model";
+import { chooseScope, compileRules, newGroup, newRule, optionScope, optionsInEffect, querySyntax, scopeChoice, scopes, searchDateValue, searchDateWindow, searchRequest, searchSentence, sourceLabel, textScopeNote, visualFromQuery, withSearchDateComparison, withSearchDateRange, withSearchDateWindow, type SentencePart, type RuleKind, type SearchDateComparison, type SearchIssue, type TextCondition, type TextGroup, type TextQuery, type TextScope, type TextSearchDraft } from "./text-search-model";
 import "./text-search-editor.css";
 
 const EditorDOMPrefix = createContext("");
@@ -411,7 +411,8 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
       <div className="text-editor-messages">
         {textKind ? <>
           {issueList.filter(issue => issue.id === "text").map(issue => <p className="text-editor-error" key={issue.id}>{issue.message}</p>)}
-          {(draft.editor === "visual" ? draft.match !== "rules" : ["literal", "regex"].includes(draft.mode)) && ["all", "tools"].includes(draft.scope.surface) && !draft.scope.conversation_id && !draft.scope.workspace_id ? <p className="text-editor-scope-note">For this search across instructions or tools, add a Conversation ID filter or use workspace properties to select at most 100 workspaces.</p> : null}
+          {textScopeNote(draft) === "scan" ? <p className="text-editor-scope-note">For this search across instructions or tools, add a Conversation ID filter or use workspace properties to select at most 100 workspaces.</p>
+            : textScopeNote(draft) === "tool-output" ? <p className="text-editor-scope-note">Tool output is not word-indexed, so this search leaves it out. To search it, add a Conversation ID filter.</p> : null}
           {error ? <div className="text-editor-error text-editor-alert" role="alert"><strong>Search not applied.</strong> {error} {active ? "Your previous results are still shown." : "No search has been applied."}</div> : null}
         </> : null}
         {filterError ? <p role="alert" className="text-editor-error">{filterError}</p> : null}
