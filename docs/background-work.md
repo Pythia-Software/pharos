@@ -1518,3 +1518,42 @@ Found while writing it (phase 0 report has file and line):
 - **`pharos ingest`** takes no ingest coordinator lock.
 - **Capture this Mac** cannot be stopped, and holds the ingest coordinator
   for the whole capture.
+
+## Parked investigations
+
+These came out of measuring a real library (the author's euclid library on
+Pharos 0.7.5, 2026-10-27). They are recorded for later and not scheduled. PRs
+landing in the meantime may make some of them unnecessary, so check each one
+against current code before starting it.
+
+- **Forecast ranges are much wider than the evidence needs.**
+  - Automatic runs: the point estimate's median relative error is about 6% at
+    launch, yet the interval contains the outcome in about 99% of runs (75 of
+    76), with a median high/low ratio of about 9.
+  - Manual Index changes: median interval widths of 870–3,745 s on runs of
+    4–6 min, with 14 of 14 covered.
+  - The worst-case composition (adding the highs of sequential steps, the
+    live ×2 and overrun ×3 widening) plus calibration targets far more
+    coverage than needed. Aim for 80–90% (§10 and
+    [progress estimates](progress-estimates.md)).
+- **Stopped runs never train the forecast.** Capture & index runs took
+  between 6 minutes and 5 hours, every snapshot was `partial`, and 3 of 5
+  were interrupted. Interrupted runs record no outcome, so the operation
+  people most want a time for never reaches a total. Learning from the steps
+  that did finish would fix that.
+- **Memory peaks around 9.6 GB during routine incremental runs.** That is the
+  median of the observed peak RSS (p95 9.8 GB, max 11.2 GB), at a median CPU
+  of 236% of one core. The figure is process-wide, so concurrent maintenance
+  is included. A lead: the findings feature cache, which allocates about 7 GB
+  on its cold daily rebuild.
+- **The per-pass audit is almost always deferred.** 183 of the last 200
+  incremental runs have class `changes_audit_deferred`. Find out whether the
+  5 s / 16 MiB budget, writer contention or the capture lock is the cause.
+- **Retire the old status paths.** This is the phase that follows this
+  contract's rollout. Once the flag defaults on and has been stable, remove
+  the run-record progress fields, the `detail` strings, client grouping by
+  label, the duplicate pollers and the three older freshness rules (§5).
+- **SQLite maintenance as operation kinds.** Add automatic `VACUUM`, a
+  periodic `ANALYZE` refresh (statistics are currently built only when
+  missing) and FTS `optimize`, each a registered, background-priority kind
+  under §3.
