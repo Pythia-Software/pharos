@@ -126,6 +126,10 @@ final class ArchiveService: ObservableObject {
     /// not answer yet (it may be opening a large catalog); it reloads by
     /// itself once the service answers.
     @Published var pageWaiting = false
+    // The broker can answer before its library service has opened the catalog.
+    // Keep the startup beacon until a page finishes or a navigation is cancelled
+    // or diverted. Once dismissed, later navigations keep the old page visible.
+    @Published var pageLoading = true
     private var pageWatch = 0
     /// The page that failed, which the web view loads when it comes back.
     private var pageTarget: URL?
@@ -1125,7 +1129,11 @@ struct ArchiveWebView: NSViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            if Self.ignorable(error) || repeatedFailure(webView, reason: (error as NSError).localizedDescription) { return }
+            if Self.ignorable(error) {
+                service?.pageLoading = false
+                return
+            }
+            if repeatedFailure(webView, reason: (error as NSError).localizedDescription) { return }
             loadFailed(webView, error: error)
         }
 
@@ -1169,7 +1177,10 @@ struct ArchiveWebView: NSViewRepresentable {
         /// itself (ArchiveService.pageFailed).
         private func loadFailed(_ webView: WKWebView, error: Error?) {
             let nsError = error as NSError?
-            if let error, Self.ignorable(error) { return }
+            if let error, Self.ignorable(error) {
+                service?.pageLoading = false
+                return
+            }
             // Retry only the service's own pages; a blob:, data: or about:
             // navigation that failed falls back to the page shown.
             let servicePage = { (url: URL?) -> URL? in
@@ -1199,6 +1210,7 @@ struct ArchiveWebView: NSViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             failedLoads = 0
+            service?.pageLoading = false
             setFullScreenClass(webView.window?.styleMask.contains(.fullScreen) == true)
             service?.menuBar.navigationFinished()
             publishedUpdateState = nil
@@ -1762,7 +1774,21 @@ struct PharosWindow: View {
             else if let pageError = service.pageError, service.url != nil {
                 ArchiveErrorView(message: pageError, title: "Pharos couldn’t load this page", retry: service.reloadPage)
             }
-            else if let url = service.url { ArchiveWebView(url: url, service: service, updates: updates).ignoresSafeArea() }
+            else if let url = service.url {
+                ArchiveWebView(url: url, service: service, updates: updates)
+                    .ignoresSafeArea()
+                    .overlay {
+                        if service.pageLoading {
+                            VStack(spacing: 16) {
+                                PharosBeacon()
+                                Text(service.hasConnectedLibrary ? "Opening your library…" : "Opening Pharos…")
+                                    .opacity(0.8)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .harborBackdrop()
+                        }
+                    }
+            }
             else if service.setupNeeded { FirstRunView(service: service) }
             else if let error = service.error { ArchiveErrorView(message: error) }
             else {

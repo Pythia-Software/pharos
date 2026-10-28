@@ -683,6 +683,69 @@ func TestMCPAnswersFromTheNamedService(t *testing.T) {
 	}
 }
 
+func TestOpenCatalogSkipsCompletedInitialization(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	path := catalog.Path
+	if err := catalog.SetUIPreferences(t.Context(), map[string]any{"set": map[string]any{"pharos-theme": "dark"}}); err != nil {
+		t.Fatal(err)
+	}
+	catalog.Close()
+	// A portable library still learns about the next Mac on the fast path.
+	useHost(t, "host_second_mac")
+	opened, err := OpenCatalog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opened.initialized != nil {
+		t.Fatal("reopening with the same build reran catalog initialization")
+	}
+	var host string
+	if err := opened.DB.QueryRow("SELECT id FROM hosts WHERE id=?", currentHost().ID).Scan(&host); err != nil || host != "host_second_mac" {
+		t.Fatalf("fast open did not register the current Mac: %q, %v", host, err)
+	}
+	values, err := opened.UIPreferences(t.Context())
+	if err != nil || string(values["pharos-theme"]) != `"dark"` {
+		t.Fatalf("fast open lost saved UI state: %v, %v", values, err)
+	}
+	opened.Close()
+	for _, test := range []struct{ name, statement string }{
+		{"another build", "UPDATE meta SET value='other' WHERE key='initialized_build'"},
+		{"missing build stamp", "DELETE FROM meta WHERE key='initialized_build'"},
+		{"stale projection", "UPDATE meta SET value='stale' WHERE key='workspace_library_version'"},
+		{"older schema", "UPDATE meta SET value='" + strconv.Itoa(catalogSchemaVersion-1) + "' WHERE key='schema_version'"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db, err := sql.Open("sqlite", catalogDSN(path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = db.Exec(test.statement)
+			db.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			opened, err := OpenCatalog(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer opened.Close()
+			current, err := opened.initializedByThisBuild()
+			if opened.initialized == nil || !current || err != nil {
+				t.Fatalf("required initialization was skipped or incomplete: %v, %v", current, err)
+			}
+		})
+	}
+	// A brand new database must still get its schema and completed-build stamp.
+	fresh, err := OpenCatalog(filepath.Join(t.TempDir(), "catalog.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fresh.Close()
+	if current, err := fresh.initializedByThisBuild(); !current || err != nil || fresh.initialized == nil {
+		t.Fatalf("new catalog was not initialized: %v, %v", current, err)
+	}
+}
+
 func TestOpenCatalogForQuerySkipsInitialize(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	ingestMCPFixture(t, catalog)
