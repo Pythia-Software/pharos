@@ -964,7 +964,7 @@ func TestAskCLIConnections(t *testing.T) {
 				if err := json.Unmarshal([]byte(config["mcp_servers.pharos.args"]), &got.Args); err != nil {
 					t.Fatal(err)
 				}
-				if config["mcp_servers.pharos.required"] != "true" || config["features.shell_tool"] != "false" || flag("--sandbox") != "read-only" || cmd.Args[len(cmd.Args)-1] != "-" {
+				if config["mcp_servers.pharos.required"] != "true" || config["mcp_servers.pharos.default_tools_approval_mode"] != `"approve"` || config["features.shell_tool"] != "false" || flag("--sandbox") != "read-only" || cmd.Args[len(cmd.Args)-1] != "-" {
 					t.Fatalf("missing required MCP startup or sandbox: %v", cmd.Args)
 				}
 			case "Claude":
