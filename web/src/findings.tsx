@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import "./findings.css";
 import { Icon } from "./icons";
+import { findingDetailURL, readFindingsRoute, type FindingsList, type FindingsRoute } from "./findings-route";
 
 // The Findings tab: recurring patterns in agents' work that a change to a
 // repository, its instructions, or a harness setting can fix, the prompt cart
@@ -41,8 +42,8 @@ type Detail = Card & {
   evidence?: Row[]; facts?: Row; attempts?: Row[]; prompt?: string; steps?: Array<{ change: string; label: string }>; metric?: Row; baseline?: Row;
 };
 type Week = { start: string; events: number; exposure: number; rate?: number | null; hollow: boolean; after: boolean; cost_usd: number };
-type List = "open" | "watching" | "wins" | "dismissed";
-type Route = { finding: string; tab: "overview" | "evidence" | "prompt"; view: "" | "settings" | "table"; list: List; repo: string };
+type List = FindingsList;
+type Route = FindingsRoute;
 type Copy = (text: string) => Promise<void>;
 type Act = (id: string, body: Row, done?: string) => Promise<boolean>;
 
@@ -104,25 +105,14 @@ function navigate(url: string) {
   if (window.pharosNavigate) window.pharosNavigate(url);
   else { history.pushState(null, "", url); window.dispatchEvent(new Event("pharos:route")); }
 }
-function readRoute(): Route {
-  const params = new URLSearchParams(location.search);
-  const tab = params.get("tab");
-  const list = params.get("list");
-  return {
-    finding: params.get("finding") ?? "",
-    tab: tab === "evidence" || tab === "prompt" ? tab : "overview",
-    view: params.get("view") === "settings" ? "settings" : params.get("view") === "table" ? "table" : "",
-    list: list === "watching" || list === "wins" || list === "dismissed" ? list : "open",
-    repo: params.get("repo") ?? "",
-  };
-}
+const readRoute = (): Route => readFindingsRoute(new URLSearchParams(location.search));
 /** Changes the address in place (no new history entry), like the other pages' view toggles. */
 function replaceParams(values: Record<string, string>) {
   const url = new URL(location.href);
   for (const [key, value] of Object.entries(values)) value ? url.searchParams.set(key, value) : url.searchParams.delete(key);
   if (url.href !== location.href) { history.replaceState(null, "", url); window.dispatchEvent(new Event("pharos:uri-changed")); }
 }
-const detailURL = (id: string, tab = "") => `/findings?${new URLSearchParams({ finding: id, ...(tab ? { tab } : {}) })}`;
+const detailURL = findingDetailURL;
 const listForState = (state: string): List => state === "watching" ? "watching" : state === "won" ? "wins" : state === "dismissed" || state === "snoozed" ? "dismissed" : "open";
 const mainScroller = () => document.querySelector("main");
 

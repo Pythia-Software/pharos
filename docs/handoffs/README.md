@@ -38,6 +38,14 @@ asks for:
 
 It can be sent directly to the Query Table team.
 
+[`query-table-go-link-codec.md`](query-table-go-link-codec.md) is a standalone
+assignment against 0.9.5. It asks for Go `EncodeQueryLink` and
+`DecodeQueryLink`, at parity with `encodeQuery` and `decodeQueryStrict`, so
+Pharos can build and read query links in Go for the
+[site map](../site-map.md)'s link tools. It covers the parity contract, the
+pitfalls a reviewed reference port found, and how to prove parity. It can be
+sent directly to the Query Table team.
+
 The [manual-interventions audit and upstream handoff](query-table-manual-interventions.md)
 records the previous patches and source snapshots, the 0.9.3 response, and the
 remaining host SQL reduction and scratch-lifecycle decisions. Cross-field V2

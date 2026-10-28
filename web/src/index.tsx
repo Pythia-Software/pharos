@@ -91,11 +91,12 @@ import { agentTimeAnalysisCatalog, skillsAnalysisCatalog } from "./record-analys
 import { UsageWorkspace, UsageDashboardLinks, UsageWorkspaceLink } from "./usage-workspace";
 import { UsageQueryIdeas } from "./usage-query-ideas";
 import { toolSummaryCallFilters } from "./tools-dashboard-model";
-import { readDashboardQuery, parallelismSelectionQuery } from "./usage-dashboard-model";
+import { readDashboardLink, readDashboardQuery, parallelismSelectionQuery } from "./usage-dashboard-model";
 import { dashboardChartURL } from "./dashboard-chart-links";
 import { DashboardAnalysis } from "./dashboard-analysis";
 import { AnalysisTrend, type AmountFormat } from "./dashboard-trend";
 import { analysisVersion, canonicalState, normalizeAnalysis, readAnalysisLink, switchView, validAnalysisState, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { dashboardDefaults, defaultTokenChart } from "./dashboard-defaults";
 import { tokenAnalysisCatalog } from "./token-analysis-catalog";
 import { describeTerm, humanAnalysisCatalog, humanLegacyURL, readHumanLink, writingGroups } from "./human-analysis-catalog";
 import { parallelismCatalogShape, parallelismSettingsNote, type ParallelismSettings } from "./parallelism-analysis-catalog";
@@ -1085,7 +1086,6 @@ function useMetrics(dataset: Dataset, where: WhereTerm[], clauses: AggregationCl
 }
 
 const tokenChartKey = "pharos-usage-chart";
-const defaultTokenChart: TokenChartView = { metric: "cost", split: "model_family", period: "week", hours: 6, days: 3, rollingPeriods: 0, scale: defaultChartScale, display: "interval" };
 const costTick = (value: number) => Math.abs(value) >= 1e4 ? `$${compactNumber(value)}` : `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 // Tokens and Cost amounts; shares and ratios are formatted by the trend.
 const tokenAmount: AmountFormat = (value, measure) => measure.unit === "USD" ? formatUSD(value) : compactNumber(value);
@@ -1399,23 +1399,7 @@ function initialUsageView(): UsageView {
 // migrate reads an engine dashboard's link (readAnalysisLink): an older link
 // may hold a legend selection as a filter. A migrated link is rewritten.
 function useUsageDashboardState<T extends object>(defaults: T, valid: (value: T) => boolean, time: { first: string; last: string }, migrate?: (view: T, where: WhereTerm[]) => { state: T; where: WhereTerm[] }) {
-  const read = () => {
-    const params = new URLSearchParams(location.search);
-    let view = defaults, error = "";
-    if (params.has("analyze_chart")) {
-      try {
-        const saved = JSON.parse(params.get("analyze_chart")!);
-        if (!saved || typeof saved !== "object" || Array.isArray(saved)) throw new Error();
-        const candidate = { ...defaults, ...saved };
-        if (valid(candidate)) view = candidate; else throw new Error();
-      }
-      catch { error = "This dashboard link has invalid chart settings. Choose another dashboard to reset it."; }
-    }
-    const from = new Date(); from.setHours(0, 0, 0, 0); from.setDate(from.getDate() - readUsageWorkspace(params).days + 1);
-    const restored = readDashboardQuery(params, { ...EMPTY_QUERY, where: withTimeRange([], time, from) });
-    const read = migrate && !error && !restored.error ? migrate(view, restored.query.where) : { state: view, where: restored.query.where };
-    return { view: read.state, where: read.where, error: error || restored.error, migrated: read.where !== restored.query.where || read.state !== view };
-  };
+  const read = () => readDashboardLink(new URLSearchParams(location.search), defaults, valid, time, migrate);
   // Write the state a link opened with: defaults it left out, and a
   // migrated link's state and population, so it is never read twice.
   const settle = (opened: ReturnType<typeof read>) => {
@@ -1467,7 +1451,7 @@ const carbonLoading = <p className="muted" role="status">Loading your Carbon ass
 // the Carbon page's filters and estimate. Older links read through the shape.
 function CarbonDashboard() {
   const carbon = useCarbonCatalog();
-  return <CatalogDashboard catalog={carbon.catalog ?? carbonCatalogShape} dataset="usage" name="carbon" defaults={{ metric: "co2", split: "type", period: "day" }} currentURL="/analyze?analyze_view=carbon"
+  return <CatalogDashboard catalog={carbon.catalog ?? carbonCatalogShape} dataset="usage" name="carbon" defaults={dashboardDefaults.carbon} currentURL="/analyze?analyze_view=carbon"
     frame={(views, where, onFilter) => <CarbonImpact where={where} onFilter={onFilter}>{carbon.catalog ? views(carbon.catalog, carbonAmount(carbon.format)) : carbonLoading}</CarbonImpact>} />;
 }
 
@@ -1497,7 +1481,7 @@ function ParallelismUsageDashboard() {
   const [selection, setSelection] = useState<ConcurrencySelection | null>(null);
   const { catalog, settings } = useParallelismCatalog();
   const ribbon = selection?.settings, differs = ribbon && (ribbon.counting !== settings.counting || ribbon.gap !== settings.gap);
-  return <CatalogDashboard catalog={catalog} linkCatalog={parallelismCatalogShape} dataset="parallelism" name="parallelism" defaults={{ metric: "agent_hours", split: "level_band", period: "day" }} currentURL="/analyze?analyze_view=tokens&machine_view=parallelism"
+  return <CatalogDashboard catalog={catalog} linkCatalog={parallelismCatalogShape} dataset="parallelism" name="parallelism" defaults={dashboardDefaults.parallelism} currentURL="/analyze?analyze_view=tokens&machine_view=parallelism"
     summary={where => <ParallelismSettingsNote where={where} believed={settings} />}
     before={<>
       <ConcurrencyPanel routeParameter="analyze_parallelism" onSelection={setSelection} />
@@ -1529,7 +1513,7 @@ function DashboardRefresh() {
 }
 
 function TokenUsageDashboard() {
-  const state = useUsageDashboardState<TokenTrendView>({ ...defaultTokenChart, period: "day" as ChartPeriod }, validTokenDashboard, usageTime, (view, where) => readAnalysisLink(tokenAnalysisCatalog, view, where));
+  const state = useUsageDashboardState<TokenTrendView>(dashboardDefaults.tokens as TokenTrendView, validTokenDashboard, usageTime, (view, where) => readAnalysisLink(tokenAnalysisCatalog, view, where));
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
   const choose = (next: AnalysisView) => state.update(switchView(tokenAnalysisCatalog, state.view, next));
   if ((state.view.view ?? "trend") !== "trend") return <><DashboardAnalysis catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={state.view} where={state.where}
@@ -1549,7 +1533,7 @@ function HumanUsageDashboard() {
   // Refresh, or a finished classification, reloads the message mix too.
   useEffect(() => onDatasetRefresh("writing_messages", () => setReload(value => value + 1)), []);
   const status = useAuthorshipStatus(() => window.dispatchEvent(new Event("pharos:usage-refresh")));
-  return <CatalogDashboard catalog={humanAnalysisCatalog} dataset="writing_messages" name="human" defaults={{ metric: "typed", split: "none", period: "day" }} readWhere={readHumanWhere} currentURL="/analyze?analyze_view=writing"
+  return <CatalogDashboard catalog={humanAnalysisCatalog} dataset="writing_messages" name="human" defaults={dashboardDefaults.human} readWhere={readHumanWhere} currentURL="/analyze?analyze_view=writing"
     summary={where => <HumanWordsSummary where={where} status={status} />}
     panels={(where, onFilter) => <>
       <p className="usage-dashboard-note">Typed and dictated words are distinguished from pastes, copied agent output, templates, attachments, harness instructions and automated prompts. Select a column, bar or box to open its messages; each message is highlighted by where its text came from.</p>
@@ -1645,23 +1629,23 @@ function CatalogDashboard({ catalog, linkCatalog = catalog, dataset, name, defau
 }
 
 function MCPUsageDashboard() {
-  return <CatalogDashboard catalog={mcpAnalysisCatalog} dataset="mcp_calls" name="mcp" defaults={{ metric: "calls", split: "tool_name", view: "compare" }} after={<MCPUsageNote />} />;
+  return <CatalogDashboard catalog={mcpAnalysisCatalog} dataset="mcp_calls" name="mcp" defaults={dashboardDefaults.mcp} after={<MCPUsageNote />} />;
 }
 
 // The Tools dashboard reads the daily rollup; its compare view opened by
 // default, as before.
 function ToolsUsageDashboard() {
-  return <CatalogDashboard catalog={toolsAnalysisCatalog} dataset="tools" name="tools" defaults={{ metric: "calls", split: "tool_category", view: "compare" }} currentURL="/tools?tools_view=summary" legacyInAnalysis before={<ToolLedgerBanner />}
+  return <CatalogDashboard catalog={toolsAnalysisCatalog} dataset="tools" name="tools" defaults={dashboardDefaults.tools} currentURL="/tools?tools_view=summary" legacyInAnalysis before={<ToolLedgerBanner />}
     after={<p className="usage-dashboard-note">Select a bar or point to inspect its daily summaries, then follow a summary’s Calls link to individual calls and source conversations. The legacy view includes failure kinds and the existing command and context presets.</p>} />;
 }
 
 function AgentTimeDashboard() {
-  return <CatalogDashboard catalog={agentTimeAnalysisCatalog} dataset="tool_calls" name="time" defaults={{ metric: "time", split: "activity", period: "day" }} currentURL={currentUsageAnalyses.find(item => item.topic === "time")!.url}
+  return <CatalogDashboard catalog={agentTimeAnalysisCatalog} dataset="tool_calls" name="time" defaults={dashboardDefaults.time} currentURL={currentUsageAnalyses.find(item => item.topic === "time")!.url}
     summary={(where, selected) => <AgentTimeSummary where={where} selected={selected} />} />;
 }
 
 function SkillsDashboard() {
-  return <CatalogDashboard catalog={skillsAnalysisCatalog} dataset="skill_usages" name="skills" defaults={{ metric: "records", split: "skill_name", period: "day" }} currentURL={currentUsageAnalyses.find(item => item.topic === "skills")!.url} />;
+  return <CatalogDashboard catalog={skillsAnalysisCatalog} dataset="skill_usages" name="skills" defaults={dashboardDefaults.skills} currentURL={currentUsageAnalyses.find(item => item.topic === "skills")!.url} />;
 }
 
 function UsagePage() {

@@ -75,6 +75,7 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
 | Python tools | `python3 -m unittest discover -s tools` |
 | Frontend bundle | `npm --prefix web run build` after any `web/src` or `pricing/*.json` change; outputs are gitignored |
 | Recipe snapshot | `npm --prefix web run generate-recipes` after changing card recipes; it rewrites `implemented_recipes` in `docs/homepage-query-cards.json`, which Go's `TestHomeQueryRecipesV2` executes |
+| Site map | `npm --prefix web run generate-site-map` after changing pages, routes, analysis catalogs, dashboard defaults, schemas or card recipes; it rewrites `internal/archive/assets/site-map.json` and `testdata/site-map-cases.json` ([docs/site-map.md](docs/site-map.md)) |
 
 - **JS unit tests** live in `web/tests/unit/**` and import `web/src` and
   schema JSON directly. `web/tests/run.mjs` bundles them once with esbuild
