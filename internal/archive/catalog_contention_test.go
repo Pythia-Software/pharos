@@ -225,6 +225,16 @@ func TestRequestReadsDoNotWaitForTheCatalogWriter(t *testing.T) {
 			t.Fatalf("the storage breakdown was not measured while the writer was held: %d %.300s", w.Code, w.Body.String())
 		}
 	}
+	// That refresh is still waiting to record the size history, so a poll
+	// after the sizes go stale starts no second walk of the library.
+	drives.mu.Lock()
+	stale := *drives.state
+	stale.checked = time.Now().Add(-2 * driveFactsTTL)
+	drives.state = &stale
+	drives.mu.Unlock()
+	if _, refresh := drives.cached(config); refresh {
+		t.Error("a second drive refresh started while the first still waited for the writer")
+	}
 
 	// Meanwhile those background writes are hidden operations that keep the
 	// drive from being safe to eject.
