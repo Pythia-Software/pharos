@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -311,6 +313,12 @@ func TestLabelingContextReproducesTheMeasuredConstruction(t *testing.T) {
 	if full, _, _ := labelingContext("use sk-abcdefghijklmnopqrstuv now", ""); !strings.Contains(full, "[REDACTED_API_KEY]") {
 		t.Fatalf("secret kept: %q", full)
 	}
+	// A token straddling the 800-character cut of the agent reply.
+	token := "abcdefghijklmnopqrstuvwxyz0123"
+	reply := "Use Authorization: Bearer " + token + strings.Repeat(" more text", 77)
+	if full, _, _ := labelingContext("", reply); strings.Contains(full, token[5:]) {
+		t.Fatalf("a token fragment survived the cut: %q", full[:80])
+	}
 }
 
 func TestLabelingSplitIsDeterministicWithAFreshHoldout(t *testing.T) {
@@ -348,12 +356,56 @@ func TestLabelingTaxonomyIsTheMeasuredFile(t *testing.T) {
 func TestPackLabelingRequests(t *testing.T) {
 	// Overhead 1,000 tokens, budget 3,000: items may add 2,000 per request.
 	sizes := []float64{100, 200, 300, 400, 500, 2500, 50, 1000, 1000, 1000}
-	got, oversize := packLabelingRequests(sizes, 4, 1000, 3000)
+	chars := make([]int, len(sizes))
+	got, oversize := packLabelingRequests(sizes, chars, 4, 1000, 3000, 0)
 	if want := "[[0 1 2 3] [4 6 7] [8 9]]"; fmt.Sprint(got) != want || fmt.Sprint(oversize) != "[5]" {
 		t.Fatalf("requests = %v (oversize %v), want %s and [5]", got, oversize, want)
 	}
-	if got, _ := packLabelingRequests(sizes, 2, 0, 1_000_000); len(got) != 5 || len(got[0]) != 2 {
+	if got, _ := packLabelingRequests(sizes, chars, 2, 0, 1_000_000, 0); len(got) != 5 || len(got[0]) != 2 {
 		t.Fatalf("two per request = %v", got)
+	}
+	// The character cap binds at its boundary: 600+400 fits 1,000, one more does not.
+	got, oversize = packLabelingRequests([]float64{1, 1, 1, 1}, []int{600, 400, 1, 1001}, 4, 0, 1_000_000, 1000)
+	if fmt.Sprint(got) != "[[0 1] [2]]" || fmt.Sprint(oversize) != "[3]" {
+		t.Fatalf("character cap = %v (oversize %v)", got, oversize)
+	}
+}
+
+func TestLabelingItemTokensCountDenseScripts(t *testing.T) {
+	for _, tc := range []struct {
+		text string
+		want float64
+	}{
+		{strings.Repeat("plain words ", 100), 1200 / labelingCharsPerToken},
+		{strings.Repeat("漢字", 500), 1500}, // 1,000 characters, 3,000 bytes
+		{strings.Repeat("😀", 300), 600},   // 300 characters, 1,200 bytes
+	} {
+		if got := labelingItemTokens(tc.text, labelingCharsPerToken); got != tc.want {
+			t.Errorf("%q…: %.1f tokens, want %.1f", tc.text[:8], got, tc.want)
+		}
+	}
+}
+
+func TestLabelingCopyStableSeesChanges(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "catalog.sqlite3")
+	if err := os.WriteFile(path, []byte("main"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	access := map[string]any{"files": labelingCopyFiles(path)}
+	if err := labelingCopyStable(path, access); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+"-shm", []byte("opened"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := labelingCopyStable(path, access); err == nil || !strings.Contains(err.Error(), "shm") {
+		t.Fatalf("a new -shm = %v", err)
+	}
+	if err := os.WriteFile(path+"-wal", []byte("frames"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := labelingCopyStable(path, access); err == nil || !strings.Contains(err.Error(), "write-ahead") {
+		t.Fatalf("a new WAL = %v", err)
 	}
 }
 
@@ -368,6 +420,17 @@ func TestReuseNeedsOneAttributionInItsSource(t *testing.T) {
 	piece := labelingPiece{Role: pieceTarget, Status: "reused_own_message", Start: 0, End: len(phrase), SourceMessage: "source"}
 	if parts := p.reusePieces(phrase, piece); parts != nil {
 		t.Fatalf("a phrase quoted once and typed once resolved as %+v", parts)
+	}
+	// Split by the source's attribution, each part names its own source bytes.
+	mixed := "first words were typed here and then " + phrase
+	p.authorship["mixed"] = &authorResult{Input: authorInput{ID: "mixed", Text: mixed}, Spans: []authorSpan{
+		{Start: 0, End: len(mixed) - len(phrase), Category: spanTyped},
+		{Start: len(mixed) - len(phrase), End: len(mixed), Category: spanQuoted, Reason: "Quoted with >"}}}
+	copied := "  " + mixed
+	split := p.reusePieces(copied, labelingPiece{Role: pieceTarget, Status: "reused_own_message", Start: 0, End: len(copied), SourceMessage: "mixed"})
+	if len(split) != 2 || split[0].SourceStart != 0 || split[0].SourceEnd != len(mixed)-len(phrase) ||
+		split[1].SourceStart != len(mixed)-len(phrase) || split[1].SourceEnd != len(mixed) || split[1].Status != "reused_unverified" {
+		t.Fatalf("split parts = %+v", split)
 	}
 	p.authorship["source"].Spans = []authorSpan{{Start: 0, End: len(source), Category: spanTyped}}
 	p.targetCache = map[string][]bool{}
@@ -415,5 +478,24 @@ func TestLabelingSentencesKeepOriginalRanges(t *testing.T) {
 	}
 	if fmt.Sprint(got) != "[First one. Second? Third! Last line without end]" {
 		t.Fatalf("sentences = %q", got)
+	}
+}
+
+func TestMarkerChunksAttachToTheirNeighbors(t *testing.T) {
+	// A 6,000-character target ending exactly at the cut, then a quote marker.
+	target := strings.Repeat("a", labelingChunkChars)
+	marker := `⟦quoted agent text, context only, 30 chars: "the quote"⟧`
+	visible := target + marker
+	pieces := []labelingPiece{{Role: pieceTarget, Start: 0, End: len(target), VisibleStart: 0, VisibleEnd: len(target)}}
+	chunks, attached := attachMarkerChunks(chunkLabelingText(visible, labelingChunkChars, []labelingChunk{{len(target), len(visible)}}), pieces)
+	if attached != 1 || len(chunks) != 1 || visible[chunks[0].Start:chunks[0].End] != visible {
+		t.Fatalf("trailing marker: %+v (%d attached)", chunks, attached)
+	}
+	// A leading marker joins the item after it.
+	visible = marker + target
+	pieces = []labelingPiece{{Role: pieceTarget, Start: 0, End: len(target), VisibleStart: len(marker), VisibleEnd: len(visible)}}
+	chunks, attached = attachMarkerChunks([]labelingChunk{{0, len(marker)}, {len(marker), len(visible)}}, pieces)
+	if attached != 1 || len(chunks) != 1 || chunks[0].Start != 0 || chunks[0].End != len(visible) {
+		t.Fatalf("leading marker: %+v", chunks)
 	}
 }

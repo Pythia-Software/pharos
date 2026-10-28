@@ -48,6 +48,7 @@ func seedLabelingCatalog(t *testing.T, catalog *Catalog) {
 		{"c-fork2", "ws-main", "codex", "c-root", "2026-09-02T12:01:00.000Z", 0},
 		{"c-fork3", "ws-main", "codex", "c-root", "", 0},
 		{"c-fork4", "ws-main", "codex", "c-root", "2026-09-02T00:00:00.000Z", 0},
+		{"c-fork5", "ws-main", "codex", "c-root", "2026-09-02T12:02:00.000Z", 0},
 		{"c-late", "ws-late", "claude", "", "2026-10-21T12:00:00.000Z", 0},
 		{"c-daily1", "ws-daily1", "claude", "", "2026-09-05T12:00:00.000Z", 0},
 		{"c-daily2", "ws-daily2", "claude", "", "2026-09-06T12:00:00.000Z", 0},
@@ -141,6 +142,11 @@ func seedLabelingCatalog(t *testing.T, catalog *Catalog) {
 	// A catalog that stamps copies when it forks: found in order, too.
 	message("m-f4-1", "c-fork4", "user", "message", "<system-reminder>\nBe brief.\n</system-reminder>\n"+request, at(2, 5), nil)
 	message("m-f4-2", "c-fork4", "user", "message", "Fresh question here", at(2, 6), nil)
+	// A copy whose first record differs from the parent's: later copies are
+	// still marked as duplicates.
+	message("m-f5-1", "c-fork5", "user", "message", "Regenerated instructions for this fork", at(2, 10), nil)
+	message("m-f5-2", "c-fork5", "user", "message", "<system-reminder>\nBe brief.\n</system-reminder>\n"+request, at(2, 11), nil)
+	message("m-f5-3", "c-fork5", "user", "message", "?", at(2, 12), nil)
 	exec(`INSERT INTO tool_calls(id,workspace_id,conversation_id,call_id,call_message_id,result_message_id,sequence,provider,kind,tool_name,tool_category,status,started_at,ended_at)
 		VALUES('t-ask','ws-other','c-other','call-3','m-ask','m-ask-result',1,'claude','tool','AskUserQuestion','user','ok',?,?)`, at(3, 1), at(3, 2))
 	exec(`INSERT INTO tool_calls(id,workspace_id,conversation_id,call_id,call_message_id,result_message_id,sequence,provider,kind,tool_name,tool_category,status,started_at,ended_at)
@@ -239,7 +245,7 @@ func TestLabelingPrepareBuildsTheDatasetWithoutWritingTheCatalog(t *testing.T) {
 		"m-h2": "human", "m-auto": "agent_in_user_role", "m-a2": "agent_reply", "m-c1": "agent_in_user_role", "m-c2": "agent_reply",
 		"m-o1": "human", "m-n1": "human", "m-n2": "human", "m-o3": "agent_reply", "m-fork-3": "human", "m-h3": "human",
 		"m-sub1": "agent_in_user_role", "m-sub2": "agent_reply", "m-o4": "human", "m-o5": "agent_reply", "m-o6": "human", "m-n3": "human",
-		"m-d1": "agent_in_user_role", "m-d2": "agent_in_user_role", "m-f2-3": "human", "m-f3-2": "human", "m-f4-2": "human", "m-o7": "human",
+		"m-d1": "agent_in_user_role", "m-d2": "agent_in_user_role", "m-f2-3": "human", "m-f3-2": "human", "m-f4-2": "human", "m-f5-1": "human", "m-f5-2": "human", "m-f5-3": "human", "m-o7": "human",
 	}
 	for message, cohort := range want {
 		if units[message]["cohort"] != cohort {
@@ -332,8 +338,14 @@ func TestLabelingPrepareBuildsTheDatasetWithoutWritingTheCatalog(t *testing.T) {
 	if visible := firstString(units["m-o7"]["visible_text"]); !strings.Contains(visible, "re-sent text of unverified origin") || !strings.HasSuffix(visible, "thanks") {
 		t.Errorf("re-sent sub-agent prompt = %q", visible)
 	}
-	if dropped := stored["actions"].(map[string]any)["duplicates_dropped"]; dropped != 1.0 {
-		t.Errorf("duplicate actions dropped = %v", dropped)
+	// A short repeat ("?") is not taken for a copy.
+	if units["m-f5-2"]["duplicate_of"] != "m-h1" || units["m-f5-3"]["duplicate_of"] != nil || units["m-f5-1"]["duplicate_of"] != nil {
+		t.Errorf("later fork copies: %v %v %v", units["m-f5-1"]["duplicate_of"], units["m-f5-2"]["duplicate_of"], units["m-f5-3"]["duplicate_of"])
+	}
+	// The first new turn of a fork sees the copied request and reply.
+	if context := firstString(units["m-fork-3"]["context_text"]); !strings.HasPrefix(context, "Previous user request:\nPlease investigate why") ||
+		!strings.HasSuffix(context, "Previous assistant message:\nI will look into the export button.") {
+		t.Errorf("fork context = %q", context)
 	}
 	// Secrets never reach visible text.
 	if visible := firstString(units["m-o3"]["visible_text"]); strings.Contains(visible, "abcd1234") || !strings.Contains(visible, "⟦excluded: redacted secret") {
@@ -391,7 +403,7 @@ func TestLabelingPrepareBuildsTheDatasetWithoutWritingTheCatalog(t *testing.T) {
 		counted[firstString(row["reason"])] += int(row["records"].(float64))
 	}
 	for reason, count := range map[string]int{"mirrored_work": 1, "reasoning_unavailable": 1, "kind_tool_call": 4, "kind_tool_result": 1,
-		"tool_result_answer": 2, "tool_result_answer_unverified": 1, "inherited_history": 6, "unselected_branch": 3} {
+		"tool_result_answer": 1, "tool_result_answer_duplicate": 1, "tool_result_answer_unverified": 1, "inherited_history": 6, "unselected_branch": 3} {
 		if counted[reason] != count {
 			t.Errorf("%s counted %d, want %d (%v)", reason, counted[reason], count, counted)
 		}
@@ -399,7 +411,8 @@ func TestLabelingPrepareBuildsTheDatasetWithoutWritingTheCatalog(t *testing.T) {
 	actions := labelingRows(t, db, `SELECT * FROM actions ORDER BY message_id`)
 	if len(actions) != 3 || actions[2]["message_id"] != "m-o2" || actions[2]["option"] != "Records" || actions[2]["question_message_id"] != "m-ask" ||
 		actions[2]["actor"] != "human" || actions[0]["message_id"] != "m-ask2-result" || actions[0]["status"] != "tool_result_answer" || actions[0]["option"] != "Yes" ||
-		actions[0]["actor"] != "human" || actions[0]["question_call_id"] != "call-4" ||
+		actions[0]["actor"] != "human" || actions[0]["question_call_id"] != "call-4" || actions[0]["actor_evidence"] != "interactive_session_question_tool" ||
+		actions[1]["actor_evidence"] != "delegated_or_unresolved_run" || actions[2]["actor_evidence"] != "flattened_question_form_message" ||
 		actions[1]["message_id"] != "m-c-ask-result" || actions[1]["actor"] != "unknown" || actions[1]["status"] != "tool_result_answer_unverified" {
 		t.Errorf("actions = %v", actions)
 	}
@@ -537,7 +550,7 @@ func TestLabelingPlanReadsOnlyTheDataset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan["items"] != 27 || plan["requests"] != 7 || plan["selection"].(map[string]any)["duplicate_items_skipped"] != 2 {
+	if plan["items"] != 29 || plan["requests"] != 8 || plan["selection"].(map[string]any)["duplicate_items_skipped"] != 3 {
 		t.Fatalf("plan = %v items in %v requests", plan["items"], plan["requests"])
 	}
 	price := plan["price"].(map[string]any)
@@ -546,7 +559,7 @@ func TestLabelingPlanReadsOnlyTheDataset(t *testing.T) {
 	}
 	luna, err := planLabeling(context.Background(), labelingPlanOptions{Dir: dir, Route: "codex", Model: "gpt-6-luna", Effort: "medium", Cohorts: []string{"human"},
 		ItemsPerRequest: 4, MaxRequestTokens: 24000, Concurrency: 3, CharsPerToken: labelingCharsPerToken, TokensPerMinute: 2_000_000, Today: today})
-	if err != nil || luna["items"] != 15 || luna["price"].(map[string]any)["status"] != "priced" {
+	if err != nil || luna["items"] != 17 || luna["price"].(map[string]any)["status"] != "priced" {
 		t.Fatalf("luna plan = %v, %v", luna, err)
 	}
 	unknown, err := planLabeling(context.Background(), labelingPlanOptions{Dir: dir, Route: "codex", Model: "made-up-model", Effort: "high",
@@ -556,7 +569,7 @@ func TestLabelingPlanReadsOnlyTheDataset(t *testing.T) {
 	}
 	all, err := planLabeling(context.Background(), labelingPlanOptions{Dir: dir, Route: "claude", Model: "claude-haiku-5-5", Effort: "high", IncludeDuplicates: true,
 		ItemsPerRequest: 4, MaxRequestTokens: 24000, Concurrency: 3, CharsPerToken: labelingCharsPerToken, TokensPerMinute: 2_000_000, Today: today})
-	if err != nil || all["items"] != 29 {
+	if err != nil || all["items"] != 32 {
 		t.Fatalf("with duplicates = %v items, %v", all["items"], err)
 	}
 	if _, err := os.Stat(started); !os.IsNotExist(err) {
@@ -767,5 +780,51 @@ func TestLabelingPrepareChoosesItsSourceExplicitly(t *testing.T) {
 	}
 	if _, err := prepareLabeling(context.Background(), labelingPrepareOptions{CatalogPath: catalog.Path, DryRun: true}); err == nil {
 		t.Fatal("prepared without choosing a copy or the live catalog")
+	}
+}
+
+func TestLabelingPrepareFromACurrentCopyMatchesTheCatalog(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	seedLabelingCatalog(t, catalog)
+	now := func() time.Time { return labelingFixtureNow }
+	live := filepath.Join(t.TempDir(), "live")
+	if _, err := prepareLabelingDataset(context.Background(), labelingPrepareOptions{Dir: live, CatalogPath: catalog.Path, Live: true, FreshDays: 14, Now: now}, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.DB.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(catalog.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backup := filepath.Join(t.TempDir(), "catalog.sqlite3")
+	if err := os.WriteFile(backup, data, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	copied := filepath.Join(t.TempDir(), "copy")
+	manifest, err := prepareLabelingDataset(context.Background(), labelingPrepareOptions{Dir: copied, CatalogPath: backup, SnapshotCopy: true, FreshDays: 14, Now: now}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest["snapshot"].(map[string]any)["access"].(map[string]any)["mode"] != "snapshot_copy" {
+		t.Fatalf("access = %v", manifest["snapshot"])
+	}
+	read := func(dir string) string {
+		db, err := sql.Open("sqlite", filepath.Join(dir, labelingDatasetFile)+"?mode=ro")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		var out strings.Builder
+		for _, query := range []string{`SELECT message_id,cohort,visible_text,context_text,split,duplicate_of FROM units ORDER BY message_id`,
+			`SELECT id,text,source_ranges,target_hash,cross_split_duplicate,seen_in_train FROM items ORDER BY id`,
+			`SELECT message_id,reason FROM exclusions ORDER BY message_id`, `SELECT message_id,position,option,actor FROM actions ORDER BY message_id,position`} {
+			out.WriteString(fmt.Sprint(labelingRows(t, db, query)))
+		}
+		return out.String()
+	}
+	if read(live) != read(copied) {
+		t.Fatal("preparing from a copy differs from preparing from the catalog")
 	}
 }

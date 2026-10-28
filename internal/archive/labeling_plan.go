@@ -48,26 +48,45 @@ const labelingCharsPerToken = 3.6
 type labelingPlanItem struct {
 	id, cohort, split string
 	chars             int
+	tokens            float64
+}
+
+// labelingItemTokens is a conservative input estimate for text: ASCII at
+// charsPerToken characters per token, and every other character at half a
+// token per UTF-8 byte (1.5 for a CJK character, 2 for an emoji), so dense
+// scripts are not underestimated by the English-calibrated ratio.
+func labelingItemTokens(text string, charsPerToken float64) float64 {
+	ascii, other := 0, 0
+	for _, r := range text {
+		if r < utf8.RuneSelf {
+			ascii++
+		} else {
+			other += utf8.RuneLen(r)
+		}
+	}
+	return float64(ascii)/charsPerToken + float64(other)/2
 }
 
 // packLabelingRequests groups items, in the order given, into requests of
 // at most perRequest items whose estimated input, the fixed overhead plus
-// the items' tokens, stays within budget. An item that does not fit even
-// alone is returned in oversize and placed in no request: a request is never
-// silently larger than the budget.
-func packLabelingRequests(tokens []float64, perRequest int, overhead, budget float64) (requests [][]int, oversize []int) {
-	current, total := []int{}, overhead
+// the items' tokens, stays within budget, and whose characters stay within
+// maxChars (0 for no character cap). An item that does not fit even alone is
+// returned in oversize and placed in no request: a request is never silently
+// larger than either cap.
+func packLabelingRequests(tokens []float64, chars []int, perRequest int, overhead, budget float64, maxChars int) (requests [][]int, oversize []int) {
+	current, total, length := []int{}, overhead, 0
 	for index, size := range tokens {
-		if overhead+size > budget {
+		if overhead+size > budget || maxChars > 0 && chars[index] > maxChars {
 			oversize = append(oversize, index)
 			continue
 		}
-		if len(current) > 0 && (len(current) >= perRequest || total+size > budget) {
+		if len(current) > 0 && (len(current) >= perRequest || total+size > budget || maxChars > 0 && length+chars[index] > maxChars) {
 			requests = append(requests, current)
-			current, total = []int{}, overhead
+			current, total, length = []int{}, overhead, 0
 		}
 		current = append(current, index)
 		total += size
+		length += chars[index]
 	}
 	if len(current) > 0 {
 		requests = append(requests, current)
@@ -103,6 +122,7 @@ type labelingPlanOptions struct {
 	Dir, Route, Model, Effort        string
 	ItemsPerRequest                  int
 	MaxRequestTokens                 float64
+	MaxRequestChars                  int
 	Concurrency, LimitItems          int
 	Cohorts, Splits                  []string
 	IncludeDuplicates                bool
@@ -121,6 +141,7 @@ func runLabelingPlan(args []string, stdout io.Writer) error {
 	flags.StringVar(&opts.Effort, "effort", "", "reasoning effort")
 	flags.IntVar(&opts.ItemsPerRequest, "items-per-request", 4, "items per request (4 was measured)")
 	flags.Float64Var(&opts.MaxRequestTokens, "max-request-tokens", 24000, "estimated input tokens per request, fixed overhead included")
+	flags.IntVar(&opts.MaxRequestChars, "max-request-chars", 0, "also cap the characters of item text and context per request (0: no cap)")
 	flags.IntVar(&opts.Concurrency, "concurrency", 3, "concurrent requests")
 	flags.IntVar(&opts.LimitItems, "limit-items", 0, "plan only the first N selected items")
 	flags.BoolVar(&opts.IncludeDuplicates, "include-duplicates", false, "also plan delegation units that repeat a child's message")
@@ -138,8 +159,8 @@ func runLabelingPlan(args []string, stdout io.Writer) error {
 	if labelingCalibrations[opts.Route].source == "" {
 		return fmt.Errorf("unknown route %q: use claude or codex", opts.Route)
 	}
-	if opts.ItemsPerRequest < 1 || opts.MaxRequestTokens <= 0 || opts.Concurrency < 1 || opts.CharsPerToken <= 0 || opts.TokensPerMinute <= 0 {
-		return errors.New("items per request, request characters, concurrency, characters per token and tokens per minute must be positive")
+	if opts.ItemsPerRequest < 1 || opts.MaxRequestTokens <= 0 || opts.MaxRequestChars < 0 || opts.Concurrency < 1 || opts.CharsPerToken <= 0 || opts.TokensPerMinute <= 0 {
+		return errors.New("--items-per-request, --max-request-tokens, --concurrency, --chars-per-token and --tokens-per-minute must be positive, and --max-request-chars not negative")
 	}
 	opts.Cohorts, opts.Splits = cohorts, splits
 	plan, err := planLabeling(context.Background(), opts)
@@ -180,7 +201,7 @@ func planLabeling(ctx context.Context, opts labelingPlanOptions) (map[string]any
 		return nil, err
 	}
 	defer db.Close()
-	rows, err := db.QueryContext(ctx, `SELECT i.id,u.cohort,COALESCE(u.split,''),i.chars,u.context_prompt,u.duplicate_of IS NOT NULL FROM items i JOIN units u ON u.id=i.unit_id ORDER BY i.id`)
+	rows, err := db.QueryContext(ctx, `SELECT i.id,u.cohort,COALESCE(u.split,''),i.chars,i.text,u.context_prompt,u.duplicate_of IS NOT NULL FROM items i JOIN units u ON u.id=i.unit_id ORDER BY i.id`)
 	if err != nil {
 		return nil, err
 	}
@@ -189,9 +210,9 @@ func planLabeling(ctx context.Context, opts labelingPlanOptions) (map[string]any
 	duplicates := 0
 	for rows.Next() {
 		var item labelingPlanItem
-		var context string
+		var text, context string
 		var duplicate bool
-		if err := rows.Scan(&item.id, &item.cohort, &item.split, &item.chars, &context, &duplicate); err != nil {
+		if err := rows.Scan(&item.id, &item.cohort, &item.split, &item.chars, &text, &context, &duplicate); err != nil {
 			return nil, err
 		}
 		if len(opts.Cohorts) > 0 && !slices.Contains(opts.Cohorts, item.cohort) || len(opts.Splits) > 0 && !slices.Contains(opts.Splits, item.split) {
@@ -202,6 +223,7 @@ func planLabeling(ctx context.Context, opts labelingPlanOptions) (map[string]any
 			continue
 		}
 		item.chars += utf8.RuneCountInString(context)
+		item.tokens = labelingItemTokens(text, opts.CharsPerToken) + labelingItemTokens(context, opts.CharsPerToken)
 		items = append(items, item)
 		if opts.LimitItems > 0 && len(items) == opts.LimitItems {
 			break
@@ -221,19 +243,26 @@ func planLabeling(ctx context.Context, opts labelingPlanOptions) (map[string]any
 	if opts.SecondsPerRequest > 0 {
 		seconds = opts.SecondsPerRequest
 	}
-	sizes := make([]float64, len(items))
+	sizes, lengths := make([]float64, len(items)), make([]int, len(items))
 	chars := 0
 	for index, item := range items {
-		sizes[index] = float64(item.chars) / opts.CharsPerToken
+		sizes[index] = item.tokens
+		lengths[index] = item.chars
 		chars += item.chars
 	}
-	requests, oversize := packLabelingRequests(sizes, opts.ItemsPerRequest, overhead, opts.MaxRequestTokens)
+	requests, oversize := packLabelingRequests(sizes, lengths, opts.ItemsPerRequest, overhead, opts.MaxRequestTokens, opts.MaxRequestChars)
+	contentTokens := 0.0
+	for index, size := range sizes {
+		if !slices.Contains(oversize, index) {
+			contentTokens += size
+		}
+	}
 	oversized := []string{}
 	for _, index := range oversize {
 		oversized = append(oversized, items[index].id)
 		chars -= items[index].chars
 	}
-	input := float64(len(requests))*overhead + float64(chars)/opts.CharsPerToken
+	input := float64(len(requests))*overhead + contentTokens
 	outputTokens := float64(len(items)-len(oversize)) * output
 	day := opts.Today.Format("2006-01-02")
 	book, err := embeddedPriceBook(ctx, opts.Today)
@@ -251,7 +280,7 @@ func planLabeling(ctx context.Context, opts labelingPlanOptions) (map[string]any
 	hours := max(serial/float64(opts.Concurrency)/3600, input/opts.TokensPerMinute/60, outputTokens/(opts.TokensPerMinute/5)/60) * 1.25
 	assumptions := []string{
 		"Calibration: " + calibration.source + ".",
-		fmt.Sprintf("Input per request: %.0f tokens of prompt, taxonomy, schema and CLI framing, plus item text and context at %.2f characters per token.", overhead, opts.CharsPerToken),
+		fmt.Sprintf("Input per request: %.0f tokens of prompt, taxonomy, schema and CLI framing, plus item text and context at %.2f ASCII characters per token and half a token per UTF-8 byte of other characters.", overhead, opts.CharsPerToken),
 		fmt.Sprintf("Output per item: %.0f tokens, reasoning included.", output),
 		"Price: standard rates for uncached input and output from the built-in price book; no cache or batch discount.",
 		fmt.Sprintf("Runtime: %.2f s per request; the larger of request time over %d concurrent requests, input over %.0f tokens/min, and output over a fifth of that, plus 25%%; planning high is 3 times that. Capacity is assumed, not measured.",
@@ -265,7 +294,7 @@ func planLabeling(ctx context.Context, opts labelingPlanOptions) (map[string]any
 	return map[string]any{
 		"dataset": opts.Dir, "route": opts.Route, "model": opts.Model, "effort": opts.Effort, "selection": selection,
 		"items": len(items) - len(oversize), "item_chars": chars, "requests": len(requests), "items_per_request": opts.ItemsPerRequest,
-		"max_request_tokens": opts.MaxRequestTokens, "oversize_items": oversized,
+		"max_request_tokens": opts.MaxRequestTokens, "max_request_chars": opts.MaxRequestChars, "oversize_items": oversized,
 		"tokens":      map[string]any{"input": int64(input), "output": int64(outputTokens)},
 		"price":       price,
 		"runtime":     map[string]any{"concurrency": opts.Concurrency, "serial_hours": serial / 3600, "hours": hours, "planning_high_hours": hours * 3},

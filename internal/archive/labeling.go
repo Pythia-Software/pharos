@@ -26,7 +26,7 @@ func (l *stringList) Set(value string) error { *l = append(*l, value); return ni
 
 const labelingUsage = `usage:
   pharos [--config PATH] labeling prepare --dir DIR [--fresh-days 14] [--limit-conversations N] [--conversation ID ...] [--splits-from OLD_DIR] --catalog COPY --snapshot-copy [--allow-stale-shm] [--replace] [--dry-run]
-  pharos labeling plan --dir DIR --route claude|codex --model M --effort E [--items-per-request 4] [--max-request-chars N] [--concurrency 3] [--cohort C ...] [--split S ...] [--limit-items N]
+  pharos labeling plan --dir DIR --route claude|codex --model M --effort E [--items-per-request 4] [--max-request-tokens 24000] [--max-request-chars N] [--include-duplicates] [--concurrency 3] [--cohort C ...] [--split S ...] [--limit-items N]
   pharos labeling status --dir DIR`
 
 // runLabelingCLI runs the offline labeling commands. None of them opens the

@@ -23,7 +23,7 @@ CREATE TABLE units(
   provider TEXT NOT NULL, kind TEXT NOT NULL, channel TEXT NOT NULL, reasoning_format TEXT, created_at TEXT,
   content_hash TEXT, message_sha256 TEXT NOT NULL, message_text TEXT NOT NULL, authorship_reason TEXT,
   visible_text TEXT NOT NULL, visible_chars INTEGER NOT NULL, marker_ranges TEXT NOT NULL, length_bucket TEXT NOT NULL,
-  chunk_count INTEGER NOT NULL, dropped_chunks INTEGER NOT NULL,
+  chunk_count INTEGER NOT NULL, attached_marker_chunks INTEGER NOT NULL,
   context_text TEXT NOT NULL, context_prompt TEXT NOT NULL, context_excerpt INTEGER NOT NULL, context_refs TEXT NOT NULL,
   duplicate_of TEXT, duplicate_relation TEXT, family_id TEXT, split TEXT);
 CREATE TABLE pieces(
@@ -33,14 +33,15 @@ CREATE TABLE pieces(
 CREATE TABLE items(
   id TEXT PRIMARY KEY, unit_id TEXT NOT NULL, chunk_index INTEGER NOT NULL, chunk_count INTEGER NOT NULL,
   visible_start INTEGER NOT NULL, visible_end INTEGER NOT NULL, text TEXT NOT NULL, chars INTEGER NOT NULL, source_ranges TEXT NOT NULL,
-  target_hash TEXT NOT NULL, cross_split_duplicate INTEGER NOT NULL DEFAULT 0, seen_in_train INTEGER NOT NULL DEFAULT 0);
+  target_hash TEXT NOT NULL, cross_split_duplicate INTEGER NOT NULL DEFAULT 0, seen_in_train INTEGER NOT NULL DEFAULT 0,
+  common_short_text INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX items_hash_idx ON items(target_hash);
 CREATE INDEX items_unit_idx ON items(unit_id);
 CREATE TABLE sentences(
   unit_id TEXT NOT NULL, position INTEGER NOT NULL, piece_position INTEGER NOT NULL, start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL,
   transform TEXT, PRIMARY KEY(unit_id, position)) WITHOUT ROWID;
 CREATE TABLE actions(
-  message_id TEXT NOT NULL, position INTEGER NOT NULL, conversation_id TEXT NOT NULL, actor TEXT NOT NULL, kind TEXT NOT NULL,
+  message_id TEXT NOT NULL, position INTEGER NOT NULL, conversation_id TEXT NOT NULL, actor TEXT NOT NULL, actor_evidence TEXT, kind TEXT NOT NULL,
   status TEXT NOT NULL, source TEXT NOT NULL, question TEXT NOT NULL, option TEXT, answer_text TEXT, title_start INTEGER, title_end INTEGER,
   answer_start INTEGER, answer_end INTEGER, question_conversation_id TEXT, question_message_id TEXT, question_call_id TEXT,
   PRIMARY KEY(message_id, position));
@@ -103,12 +104,12 @@ func (w *labelingWriter) unit(unit *labelingUnit) error {
 	refs, _ := json.Marshal(unit.contextRefs)
 	if err := w.exec(`INSERT INTO units(id,message_id,conversation_id,canonical_conversation_id,workspace_id,root_conversation_id,run_id,depth,depth_status,
 		session_id,session_role,cohort,actor_kind,sender_role,sender,provider,kind,channel,reasoning_format,created_at,content_hash,message_sha256,message_text,
-		authorship_reason,visible_text,visible_chars,marker_ranges,length_bucket,chunk_count,dropped_chunks,context_text,context_prompt,context_excerpt,context_refs)
+		authorship_reason,visible_text,visible_chars,marker_ranges,length_bucket,chunk_count,attached_marker_chunks,context_text,context_prompt,context_excerpt,context_refs)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		unit.id, unit.messageID, unit.conversation, nilIfEmpty(unit.canonical), unit.workspace, nilIfEmpty(unit.root), nilIfEmpty(unit.run), unit.depth, unit.depthStatus,
 		nilIfEmpty(unit.session), nilIfEmpty(unit.sessionRole), unit.cohort, unit.actor, unit.role, nilIfEmpty(unit.sender), unit.provider, unit.kind, unit.channel,
 		nilIfEmpty(unit.format), nilIfEmpty(unit.createdAt), nilIfEmpty(unit.contentHash), hashBytes([]byte(unit.text)), unit.text, nilIfEmpty(unit.authorship),
-		unit.visible, utf8.RuneCountInString(unit.visible), jsonText(markerPairs(unit.markers)), unit.length, len(unit.chunks), unit.droppedChunks, unit.context, unit.contextPrompt, unit.contextExcerpt, string(refs)); err != nil {
+		unit.visible, utf8.RuneCountInString(unit.visible), jsonText(markerPairs(unit.markers)), unit.length, len(unit.chunks), unit.attachedChunks, unit.context, unit.contextPrompt, unit.contextExcerpt, string(refs)); err != nil {
 		return err
 	}
 	for position, piece := range unit.pieces {
@@ -196,8 +197,8 @@ func (w *labelingWriter) action(message, conversation string, position int, answ
 		}
 		return value
 	}
-	return w.exec(`INSERT INTO actions(message_id,position,conversation_id,actor,kind,status,source,question,option,answer_text,title_start,title_end,answer_start,answer_end,
-		question_conversation_id,question_message_id,question_call_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, message, position, conversation, answer.actor, answer.kind,
+	return w.exec(`INSERT INTO actions(message_id,position,conversation_id,actor,actor_evidence,kind,status,source,question,option,answer_text,title_start,title_end,answer_start,answer_end,
+		question_conversation_id,question_message_id,question_call_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, message, position, conversation, answer.actor, nilIfEmpty(answer.evidence), answer.kind,
 		answer.status, answer.source, answer.question, nilIfEmpty(answer.option), nilIfEmpty(answer.text), rangeValue(answer.titleStart), rangeValue(answer.titleEnd),
 		rangeValue(answer.start), rangeValue(answer.end), nilIfEmpty(answer.questionConversation), nilIfEmpty(answer.questionMessage), nilIfEmpty(answer.questionCall))
 }
@@ -207,7 +208,7 @@ func (w *labelingWriter) duplicate(message, of, relation string) error {
 }
 
 // finish records families and splits, stores the manifest, and commits.
-func (w *labelingWriter) finish(families map[string]labelingFamily, crossSplit, seenInTrain map[string]bool, manifest map[string]any) error {
+func (w *labelingWriter) finish(families map[string]labelingFamily, crossSplit, seenInTrain, short map[string]bool, manifest map[string]any) error {
 	for conversation, family := range families {
 		if err := w.exec(`INSERT INTO families(conversation_id,family_id,split,first_at) VALUES(?,?,?,?)`, conversation, family.id, family.split, nilIfEmpty(family.first)); err != nil {
 			return err
@@ -217,8 +218,8 @@ func (w *labelingWriter) finish(families map[string]labelingFamily, crossSplit, 
 		return err
 	}
 	for hash := range crossSplit {
-		if err := w.exec(`UPDATE items SET cross_split_duplicate=1,
-			seen_in_train=(?2 AND (SELECT split FROM units WHERE units.id=items.unit_id)<>'train') WHERE target_hash=?1`, hash, seenInTrain[hash]); err != nil {
+		if err := w.exec(`UPDATE items SET cross_split_duplicate=1,common_short_text=?3,
+			seen_in_train=(?2 AND (SELECT split FROM units WHERE units.id=items.unit_id)<>'train') WHERE target_hash=?1`, hash, seenInTrain[hash], short[hash]); err != nil {
 			return err
 		}
 	}

@@ -138,8 +138,7 @@ func labelingCompatibility(ctx context.Context, tx *sql.Tx) ([]string, map[strin
 // WAL and touches no -shm; it is refused while a non-empty WAL beside it
 // means the copy is not complete in its main file.
 func openLabelingSnapshot(ctx context.Context, path string, copy, allowStaleShm bool) (*sql.DB, *sql.Tx, map[string]any, error) {
-	info, err := os.Stat(path)
-	if err != nil {
+	if _, err := os.Stat(path); err != nil {
 		return nil, nil, nil, err
 	}
 	// A library's catalog folder holds Pharos's lock files; a backup's does not.
@@ -160,7 +159,10 @@ func openLabelingSnapshot(ctx context.Context, path string, copy, allowStaleShm 
 		}
 		query = "?mode=ro&immutable=1&_pragma=query_only(1)"
 		access = map[string]any{"mode": "snapshot_copy", "uri": "mode=ro, immutable=1, query_only, one connection", "path": path, "allow_stale_shm": allowStaleShm,
-			"bytes": info.Size(), "modified_at": formatTime(info.ModTime().Truncate(time.Millisecond))}
+			"files": labelingCopyFiles(path)}
+		for key, value := range labelingCopyFiles(path)["main"] {
+			access[key] = value
+		}
 	}
 	db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String()+query)
 	if err != nil {
@@ -173,4 +175,33 @@ func openLabelingSnapshot(ctx context.Context, path string, copy, allowStaleShm 
 		return nil, nil, nil, err
 	}
 	return db, tx, access, nil
+}
+
+// labelingCopyFiles describes a copy's main file, -wal and -shm (size and
+// modification time; absent files are omitted), so preparation can check
+// at the end that none of them changed while it read.
+func labelingCopyFiles(path string) map[string]map[string]any {
+	files := map[string]map[string]any{}
+	for name, suffix := range map[string]string{"main": "", "wal": "-wal", "shm": "-shm"} {
+		if info, err := os.Stat(path + suffix); err == nil {
+			files[name] = map[string]any{"bytes": info.Size(), "modified_at": formatTime(info.ModTime().Truncate(time.Millisecond))}
+		}
+	}
+	return files
+}
+
+// labelingCopyStable reports whether a copy's files are as they were when
+// preparation opened it, and the WAL still absent or empty.
+func labelingCopyStable(path string, access map[string]any) error {
+	before, _ := access["files"].(map[string]map[string]any)
+	after := labelingCopyFiles(path)
+	if wal := after["wal"]; wal != nil && wal["bytes"] != int64(0) {
+		return fmt.Errorf("%s gained a %v-byte write-ahead log while it was read, so it is not a static copy; nothing was published", path, wal["bytes"])
+	}
+	for _, name := range []string{"main", "wal", "shm"} {
+		if fmt.Sprint(before[name]) != fmt.Sprint(after[name]) {
+			return fmt.Errorf("%s (%s file) changed while it was read, so the copy is not static; nothing was published", path, name)
+		}
+	}
+	return nil
 }

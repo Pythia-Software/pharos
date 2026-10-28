@@ -80,8 +80,8 @@ type labelingUnit struct {
 	contextRefs                                                                 map[string]any
 	pieces                                                                      []labelingPiece
 	chunks, markers                                                             []labelingChunk
-	// droppedChunks counts chunks holding only markers, which become no item.
-	droppedChunks int
+	// attachedChunks counts chunks holding only markers, attached to an item.
+	attachedChunks int
 	// hashes are the items' normalized target-text hashes.
 	hashes []string
 }
@@ -110,6 +110,15 @@ type labelingPass struct {
 	targetCache map[string][]bool
 	// automated marks conversations with a user message from automation.
 	automated map[string]bool
+	// laterCopies maps fork records after the in-order copy that repeat a
+	// parent message to it.
+	laterCopies map[string]string
+	// userTimeline holds each conversation's user messages in send order;
+	// flattenedKeys, the current conversation's flattened question answers.
+	userTimeline map[string][]labelingUserMessage
+	// shortHashes are item hashes of texts under labelingShortChars.
+	shortHashes   map[string]bool
+	flattenedKeys map[string]bool
 	// pending holds a conversation's actions until it is read; unparsedActor
 	// is who would have answered each unparsed question-tool result.
 	pending        []labelingPendingAction
@@ -149,11 +158,11 @@ type labelingChild struct {
 	firstID, lastID string
 }
 
-type labelingParentMessage struct{ id, key, createdAt string }
+type labelingParentMessage struct{ id, key, norm, createdAt string }
 
 // itemTargetHash hashes an item's target text, without markers, lowercased
 // with whitespace collapsed.
-func itemTargetHash(visible string, chunk labelingChunk, markers []labelingChunk) string {
+func itemTargetHash(visible string, chunk labelingChunk, markers []labelingChunk) (string, bool) {
 	var target strings.Builder
 	at := chunk.Start
 	for _, marker := range markers {
@@ -167,8 +176,13 @@ func itemTargetHash(visible string, chunk labelingChunk, markers []labelingChunk
 	target.WriteString(visible[at:chunk.End])
 	normalized := strings.ToLower(normalizeSpace(target.String()))
 	sum := sha256.Sum256([]byte(normalized))
-	return hex.EncodeToString(sum[:16])
+	return hex.EncodeToString(sum[:16]), utf8.RuneCountInString(normalized) < labelingShortChars
 }
+
+// labelingShortChars is the length below which identical texts ("continue",
+// "yes", "do it") recur by chance: their repeats are a stratum to report
+// (common_short_text), not near-duplicates to drop from evaluation.
+const labelingShortChars = 40
 
 // normalizeSpace collapses whitespace runs to one space.
 func normalizeSpace(text string) string { return strings.Join(strings.Fields(text), " ") }
@@ -400,7 +414,7 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 	snapshot["build"] = labelingBuild()
 
 	progress("reading works, identity links and lineage")
-	p := &labelingPass{tx: tx, reasoningStore: present["reasoning_extraction_state"], targetCache: map[string][]bool{}, automated: map[string]bool{}, unparsedActor: map[string]string{}, conversations: map[string]*labelingConversation{}, mainSession: map[string]string{}, sessionKind: map[string]string{},
+	p := &labelingPass{tx: tx, reasoningStore: present["reasoning_extraction_state"], targetCache: map[string][]bool{}, automated: map[string]bool{}, unparsedActor: map[string]string{}, laterCopies: map[string]string{}, userTimeline: map[string][]labelingUserMessage{}, shortHashes: map[string]bool{}, conversations: map[string]*labelingConversation{}, mainSession: map[string]string{}, sessionKind: map[string]string{},
 		childOwners: map[string]bool{}, current: map[string]bool{}, children: map[string]*labelingChild{}, parents: map[string][]labelingParentMessage{},
 		units:      map[[4]string]*[3]int{},
 		exclusions: map[[2]string]int{}, counters: map[string]int{}, firstAt: map[string]string{}}
@@ -511,9 +525,13 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 	p.authorship = make(map[string]*authorResult, len(results))
 	for index := range results {
 		p.authorship[results[index].Input.ID] = &results[index]
-		if spans := results[index].Spans; len(spans) > 0 && spans[0].Category == spanAutomated {
+		automated := len(results[index].Spans) > 0 && results[index].Spans[0].Category == spanAutomated
+		if automated {
 			p.automated[results[index].Input.ConversationID] = true
 		}
+		// Results are in send order, so each timeline is sorted.
+		conversation := results[index].Input.ConversationID
+		p.userTimeline[conversation] = append(p.userTimeline[conversation], labelingUserMessage{formatTime(results[index].Input.SentAt), automated})
 	}
 	want := generations["tool_ledger_generation"] + ":" + generations["authorship_inputs_generation"] + "/" + authorshipVersion
 
@@ -564,9 +582,8 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 	}
 	// An immutable read is only sound if the copy did not change under it.
 	if opts.SnapshotCopy {
-		info, err := os.Stat(opts.CatalogPath)
-		if err != nil || info.Size() != access["bytes"] || formatTime(info.ModTime().Truncate(time.Millisecond)) != access["modified_at"] {
-			return nil, fmt.Errorf("%s changed while it was read, so it is not a static copy; nothing was published", opts.CatalogPath)
+		if err := labelingCopyStable(opts.CatalogPath, access); err != nil {
+			return nil, err
 		}
 	}
 	snapshot["ended_at"] = now()
@@ -643,7 +660,10 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 			}
 			crossSplit[hash] = true
 			duplicateCounts["items"]++
-			if split != "train" && splitsOf[hash]["train"] {
+			switch {
+			case p.shortHashes[hash]:
+				duplicateCounts["common_short_text"]++
+			case split != "train" && splitsOf[hash]["train"]:
 				seenInTrain[hash] = true
 				duplicateCounts["seen_in_train_"+split]++
 			}
@@ -652,7 +672,8 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 	splits["cross_split_duplicates"] = map[string]any{"texts": len(crossSplit), "items": duplicateCounts["items"],
 		"seen_in_train": map[string]int{"dev": duplicateCounts["seen_in_train_dev"], "test": duplicateCounts["seen_in_train_test"],
 			"fresh": duplicateCounts["seen_in_train_fresh"], "quarantine": duplicateCounts["seen_in_train_quarantine"]},
-		"note": "items whose normalized target text occurs in more than one split are cross_split_duplicate; held-out items whose text also occurs in train are seen_in_train, which evaluation excludes"}
+		"common_short_text": duplicateCounts["common_short_text"], "short_chars": labelingShortChars,
+		"note": "items whose normalized target text occurs in more than one split are cross_split_duplicate. Held-out items whose text (at least short_chars characters) also occurs in train are seen_in_train, which evaluation should exclude; shorter repeated texts are common_short_text, a stratum to report separately, not to drop"}
 	manifest["coverage"] = coverage
 	manifest["reasoning"] = map[string]any{
 		"extraction_version": reasoningExtractionVersion, "pending_conversations": p.counters["reasoning_pending_conversations"],
@@ -666,7 +687,7 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 		"question_form_actions": p.counters["actions_flattened_message"],
 	}
 	if p.writer != nil {
-		if err := p.writer.finish(families, crossSplit, seenInTrain, manifest); err != nil {
+		if err := p.writer.finish(families, crossSplit, seenInTrain, p.shortHashes, manifest); err != nil {
 			return nil, err
 		}
 		p.writer = nil
@@ -754,6 +775,14 @@ func (p *labelingPass) conversation(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	p.flattenedKeys = map[string]bool{}
+	for _, record := range records {
+		if result := p.authorship[record.id]; result != nil && record.selected {
+			for _, answer := range result.Answers {
+				p.flattenedKeys[answer.Origin.message+"\x00"+answer.Title] = true
+			}
+		}
+	}
 	inherited, copied, err := p.inheritedHistory(ctx, info, records)
 	if err != nil {
 		return err
@@ -811,6 +840,12 @@ func (p *labelingPass) conversation(ctx context.Context, id string) error {
 					state.assistant, state.assistantRef = "", nil
 				}
 			}
+			// A copied request is context for what follows it, though not a unit.
+			if copied[record.id] && record.kind == "message" && record.role == "user" {
+				if visible := p.requestVisible(record); visible != "" {
+					state.user, state.userRef = visible, map[string]any{"message": record.id, "inherited_from": inherited[record.id]}
+				}
+			}
 			continue
 		}
 		unit.context, unit.contextPrompt, unit.contextExcerpt = labelingContext(state.user, state.assistant)
@@ -826,6 +861,11 @@ func (p *labelingPass) conversation(ctx context.Context, id string) error {
 			if err := p.writer.unit(unit); err != nil {
 				return err
 			}
+			if parent := p.laterCopies[record.id]; parent != "" {
+				if err := p.writer.duplicate(record.id, parent, "fork_copy_after_difference"); err != nil {
+					return err
+				}
+			}
 		}
 		if unit.cohort == "human" || unit.cohort == "agent_in_user_role" {
 			state.user, state.userRef = unit.visible, map[string]any{"unit": unit.id, "message": record.id}
@@ -835,6 +875,51 @@ func (p *labelingPass) conversation(ctx context.Context, id string) error {
 		}
 	}
 	return p.flushActions()
+}
+
+// attachMarkerChunks folds each chunk that holds only markers into the item
+// before it, or, at the start, into the one after it: every item holds target
+// text, the teacher still sees the marker (a quote the person reacts to), and
+// items concatenate to the visible text exactly. An attached marker can take
+// an item past the chunk limit by its own length. It returns how many chunks
+// were attached.
+func attachMarkerChunks(chunks []labelingChunk, pieces []labelingPiece) ([]labelingChunk, int) {
+	result, attached, leading := []labelingChunk{}, 0, -1
+	for _, chunk := range chunks {
+		if len(chunkSourceRanges(pieces, chunk)) == 0 {
+			attached++
+			if len(result) > 0 {
+				result[len(result)-1].End = chunk.End
+			} else if leading < 0 {
+				leading = chunk.Start
+			}
+			continue
+		}
+		if leading >= 0 {
+			chunk.Start, leading = leading, -1
+		}
+		result = append(result, chunk)
+	}
+	return result, attached
+}
+
+// requestVisible is the visible text a user-role record would have as a
+// unit, without recording anything: context for the records after a copy.
+func (p *labelingPass) requestVisible(record labelingRecord) string {
+	result := p.authorship[record.id]
+	if result == nil || len(result.Spans) == 0 || !utf8.ValidString(record.text.String) {
+		return ""
+	}
+	var unit humanUnit
+	if result.Spans[0].Category == spanAutomated || p.sessionKind[record.session] == "subagent" {
+		unit = agentUserPieces(record.text.String)
+	} else {
+		unit = humanPieces(record.text.String, result.Spans, p.reusePieces)
+	}
+	if unit.Exclude != "" {
+		return ""
+	}
+	return unit.Visible
 }
 
 // inheritedHistory finds the records a forked conversation copied from its
@@ -859,7 +944,8 @@ func (p *labelingPass) inheritedHistory(ctx context.Context, info *labelingConve
 		}
 		for _, record := range parentRecords {
 			if record.selected && record.text.Valid && strings.TrimSpace(record.text.String) != "" {
-				history = append(history, labelingParentMessage{record.id, record.role + "\x00" + textKey(record.text.String), record.createdAt})
+				history = append(history, labelingParentMessage{record.id, record.role + "\x00" + textKey(record.text.String),
+					record.role + "\x00" + textKey(normalizeSpace(record.text.String)), record.createdAt})
 			}
 		}
 		p.parents[info.parent] = history
@@ -910,6 +996,33 @@ func (p *labelingPass) inheritedHistory(ctx context.Context, info *labelingConve
 		for index, record := range records[:last+1] {
 			if record.selected {
 				copied[records[index].id] = true
+			}
+		}
+		// A copy can differ from the parent early on (a regenerated
+		// instruction message), ending the walk before the copy ends. Later
+		// records that repeat a parent message from before the fork, not yet
+		// matched, are kept as units but marked duplicate_of it, so plan
+		// skips them and training does not count them twice.
+		used := map[int]bool{}
+		for index := 0; index < next; index++ {
+			used[index] = true
+		}
+		// Short texts ("Done.", "continue") repeat by chance, in sub-agents
+		// that copied nothing; only longer ones are taken for copies.
+		for _, record := range records[last+1:] {
+			if !text(record) || utf8.RuneCountInString(normalizeSpace(record.text.String)) < labelingShortChars {
+				continue
+			}
+			norm := record.role + "\x00" + textKey(normalizeSpace(record.text.String))
+			for index, entry := range history {
+				if used[index] || entry.norm != norm || info.started != "" && entry.createdAt != "" && entry.createdAt >= info.started {
+					continue
+				}
+				used[index] = true
+				p.laterCopies[record.id] = entry.id
+				p.counters["fork_copies_after_difference"]++
+				p.counters["copies_after_difference:"+info.provider]++
+				break
 			}
 		}
 	}
@@ -974,6 +1087,8 @@ type labelingAnswer struct {
 	kind, status, source, question, option, text, actor string
 	titleStart, titleEnd, start, end                    int
 	questionConversation, questionMessage, questionCall string
+	// evidence names what the actor rests on.
+	evidence string
 }
 
 // toolResultAnswers reads the answers to question tools whose results this
@@ -982,7 +1097,7 @@ type labelingAnswer struct {
 func (p *labelingPass) toolResultAnswers(ctx context.Context, conversation string) (map[string][]labelingAnswer, error) {
 	answers := map[string][]labelingAnswer{}
 	calls, err := queryMapsContext(ctx, p.tx, `SELECT t.tool_name,t.result_message_id,COALESCE(t.call_message_id,'') call_message_id,COALESCE(t.call_id,t.id) call_id,
-		COALESCE(c.text,'') call_text,COALESCE(r.text,'') result_text FROM tool_calls t
+		COALESCE(c.text,'') call_text,COALESCE(r.text,'') result_text,COALESCE(r.created_at,'') result_at FROM tool_calls t
 		LEFT JOIN messages c ON c.id=t.call_message_id LEFT JOIN messages r ON r.id=t.result_message_id
 		WHERE t.conversation_id=? AND t.result_message_id IS NOT NULL AND (t.tool_name LIKE '%question%' OR t.tool_name LIKE '%user_input%')`, conversation)
 	if err != nil {
@@ -995,10 +1110,11 @@ func (p *labelingPass) toolResultAnswers(ctx context.Context, conversation strin
 			parsed := parseQuestionAnswers(asString(call["call_text"]), asString(call["result_text"]))
 			// Only an interactive session's answer to a question asked in it
 			// is credited to a person; automated, headless and delegated runs
-			// have no person to answer.
-			interactive := !p.automated[conversation] && p.lineage.roots[conversation] != nil && p.lineage.runs[conversation] == ""
+			// have no person to answer. The session's state is judged at the
+			// answer's time, and the evidence is recorded for consumers.
+			interactive, evidence := p.interactiveAt(conversation, firstString(call["result_at"]))
 			for index := range parsed {
-				parsed[index].questionCall = firstString(call["call_id"])
+				parsed[index].questionCall, parsed[index].evidence = firstString(call["call_id"]), evidence
 				if !interactive {
 					parsed[index].actor, parsed[index].status = "unknown", "tool_result_answer_unverified"
 				}
@@ -1103,6 +1219,31 @@ func jsonShape(value any, depth int) string {
 }
 
 var numberedAnswer = regexp.MustCompile(`(?m)^([0-9]+)\. (.*)$`)
+
+// interactiveAt reports whether a conversation was an interactive session
+// at a time: a root's own execution (not delegated or launched) whose latest
+// user message by then came from a person, not automation. It returns the
+// evidence either way.
+func (p *labelingPass) interactiveAt(conversation, at string) (bool, string) {
+	if p.lineage.roots[conversation] == nil || p.lineage.runs[conversation] != "" {
+		return false, "delegated_or_unresolved_run"
+	}
+	timeline := p.userTimeline[conversation]
+	index := sort.Search(len(timeline), func(i int) bool { return timeline[i].at > at }) - 1
+	switch {
+	case at == "" || index < 0:
+		return false, "no_user_message_before_answer"
+	case timeline[index].automated:
+		return false, "automated_session"
+	}
+	return true, "interactive_session_question_tool"
+}
+
+// labelingUserMessage is one user message's send time and automation.
+type labelingUserMessage struct {
+	at        string
+	automated bool
+}
 
 // labelingQuestion is one question a question tool asked.
 type labelingQuestion struct {
@@ -1299,10 +1440,21 @@ func (p *labelingPass) record(conversation string, record labelingRecord, answer
 		p.counters["unparsed_answer_actor:"+p.unparsedActor[record.id]]++
 		return nil, "question_tool_result_unparsed", "a question tool's result whose answer could not be read (often none: accepted-only or an error)", nil
 	case asked:
-		if err := p.actions(record.id, conversation, parsed); err != nil {
+		// An answer also submitted as a flattened question-form message is
+		// recorded there, with byte ranges; this copy adds nothing.
+		fresh := []labelingAnswer{}
+		for _, answer := range parsed {
+			if !p.flattenedKeys[answer.questionMessage+"\x00"+answer.question] {
+				fresh = append(fresh, answer)
+			}
+		}
+		if len(fresh) == 0 {
+			return nil, "tool_result_answer_duplicate", "the same answers were submitted as a question-form message", nil
+		}
+		if err := p.actions(record.id, conversation, fresh); err != nil {
 			return nil, "", "", err
 		}
-		return nil, parsed[0].status, "answers recorded as actions", nil
+		return nil, fresh[0].status, "answers recorded as actions", nil
 	case record.kind == "metadata" && strings.HasPrefix(text, `{"reason":`):
 		if value, ok := parseReaderJSON(text); ok && firstString(mapValue(value)["type"]) == "reasoning_unavailable" {
 			return nil, "reasoning_unavailable", "", nil
@@ -1356,7 +1508,7 @@ func (p *labelingPass) record(conversation string, record labelingRecord, answer
 		flattened := []labelingAnswer{}
 		for _, answer := range result.Answers {
 			flattened = append(flattened, labelingAnswer{kind: "submitted_option", status: "recognized_question_form", source: "flattened_message",
-				question: answer.Title, option: answer.Option, actor: unit.actor, titleStart: answer.TitleStart, titleEnd: answer.TitleEnd,
+				question: answer.Title, option: answer.Option, actor: unit.actor, evidence: "flattened_question_form_message", titleStart: answer.TitleStart, titleEnd: answer.TitleEnd,
 				start: answer.Start, end: answer.End, questionConversation: answer.Origin.conversation, questionMessage: answer.Origin.message})
 		}
 		if err := p.actions(record.id, conversation, flattened); err != nil {
@@ -1399,26 +1551,18 @@ func (p *labelingPass) record(conversation string, record labelingRecord, answer
 		return nil, rendered.Exclude, "", nil
 	}
 	unit.pieces, unit.visible, unit.markers = rendered.Pieces, rendered.Visible, rendered.Markers
-	// Chunks holding only markers carry nothing to label: merge each into the
-	// chunk before it when that fits, otherwise drop it.
-	for _, chunk := range chunkLabelingText(unit.visible, labelingChunkChars, unit.markers) {
-		if len(chunkSourceRanges(unit.pieces, chunk)) > 0 {
-			unit.chunks = append(unit.chunks, chunk)
-			continue
-		}
-		if last := len(unit.chunks) - 1; last >= 0 && utf8.RuneCountInString(unit.visible[unit.chunks[last].Start:chunk.End]) <= labelingChunkChars {
-			unit.chunks[last].End = chunk.End
-			continue
-		}
-		unit.droppedChunks++
-		p.counters["marker_only_chunks"]++
-	}
+	unit.chunks, unit.attachedChunks = attachMarkerChunks(chunkLabelingText(unit.visible, labelingChunkChars, unit.markers), unit.pieces)
+	p.counters["marker_chunks_attached"] += unit.attachedChunks
 	unit.length = "short"
 	if len(unit.chunks) > 1 {
 		unit.length = "long"
 	}
 	for _, chunk := range unit.chunks {
-		unit.hashes = append(unit.hashes, itemTargetHash(unit.visible, chunk, unit.markers))
+		hash, short := itemTargetHash(unit.visible, chunk, unit.markers)
+		unit.hashes = append(unit.hashes, hash)
+		if short {
+			p.shortHashes[hash] = true
+		}
 	}
 	return unit, "", "", nil
 }
@@ -1776,6 +1920,7 @@ func (p *labelingPass) manifest(opts labelingPrepareOptions, snapshot, selection
 				"records_before_start":        p.prefixed("records_before_child_start:"),
 				"forks_with_unmatched_copies": p.counters["forks_with_unmatched_copies"], "unmatched_copies": p.counters["fork_unmatched_copies"],
 				"with_original_times": p.counters["forks_with_original_times"], "restamped_or_no_copy": p.counters["forks_restamped"],
+				"copies_after_difference": p.counters["fork_copies_after_difference"], "copies_after_difference_by_provider": p.prefixed("copies_after_difference:"),
 				"in_order_copy_times": p.prefixed("fork_copy_time:")},
 			"note": "delegation units that repeat a child's message (equal or containing, whitespace-normalized) are kept with duplicate_of set; inherited history is excluded"},
 		"invalid_utf8":       p.exclusionTotal("invalid_utf8"),
@@ -1786,7 +1931,7 @@ func (p *labelingPass) manifest(opts labelingPrepareOptions, snapshot, selection
 			"duplicates_dropped": p.counters["duplicate_actions"], "unparsed_shapes": p.prefixed("unparsed_answer_shape:")},
 		"redacted_secrets":          p.counters["redacted_secrets"],
 		"unrecognized_harness_tags": p.counters["unrecognized_harness_tags"],
-		"marker_only_chunks":        p.counters["marker_only_chunks"],
+		"marker_chunks_attached":    p.counters["marker_chunks_attached"],
 		"splits":                    map[string]any{"families": len(familyIDs), "family_sizes": familyStats, "coverage": coverage},
 	}
 }
@@ -1830,15 +1975,26 @@ func (p *labelingPass) reuseFrom(text string, piece labelingPiece, visiting map[
 	}
 	offset := piece.Start + strings.Index(value, core)
 	parts := []labelingPiece{}
+	// Each part records the bytes it matched in the source; whitespace
+	// around the match matched nothing there.
 	add := func(start, end int, target bool) {
 		part := piece
 		part.Start, part.End = start, end
-		part.SourceStart, part.SourceEnd = at, at+len(core)
+		part.SourceStart, part.SourceEnd = 0, 0
+		if from, to := max(start, offset), min(end, offset+len(core)); from < to {
+			part.SourceStart, part.SourceEnd = at+from-offset, at+to-offset
+		}
 		if !target {
 			part.Role, part.Status = pieceContext, "reused_unverified"
 		}
 		if last := len(parts) - 1; last >= 0 && parts[last].Status == part.Status {
 			parts[last].End = end
+			if part.SourceEnd > 0 {
+				if parts[last].SourceEnd == 0 {
+					parts[last].SourceStart = part.SourceStart
+				}
+				parts[last].SourceEnd = part.SourceEnd
+			}
 			return
 		}
 		parts = append(parts, part)

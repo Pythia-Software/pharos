@@ -15,7 +15,7 @@ import (
 const (
 	labelingUnitsVersion    = "labeling-units-v1"
 	humanPiecesVersion      = "human-pieces-v1"
-	labelingContextVersion  = "context-v2"
+	labelingContextVersion  = "context-v3"
 	labelingChunkVersion    = "chunking-v1"
 	labelingSplitsVersion   = "splits-v1"
 	labelingSentenceVersion = "sentences-v1"
@@ -639,7 +639,8 @@ var labelingSecrets = []struct {
 	{regexp.MustCompile(`(?i)([?&](?:token|api_key|access_token|key)=)[^\s&#"<>]+`), "${1}[REDACTED_TOKEN]"},
 }
 
-// labelingContext builds context-v2: the measured construction, except that
+// labelingContext builds context-v3 (v2, with each part redacted before it is
+// cut, so no cut can expose a token): the measured construction, except that
 // the previous request is the previous request unit, a person's or an
 // agent's (the historical extractor used human typed text only): its last
 // 1,400 and the previous agent reply's last 800 characters
@@ -647,17 +648,22 @@ var labelingSecrets = []struct {
 // characters; a prompt shows its last 600 (excerpt reports that it cut).
 // Characters are code points, as in the Python that defined it.
 func labelingContext(priorUser, priorAssistant string) (full, prompt string, excerpt bool) {
+	// Each part is redacted whole before its tail is taken: a cut could
+	// leave a token without the prefix the patterns need ("Bearer ", "sk-").
+	redact := func(text string) string {
+		for _, secret := range labelingSecrets {
+			text = secret.pattern.ReplaceAllString(text, secret.replacement)
+		}
+		return text
+	}
 	previous := ""
 	if priorUser != "" {
-		previous = "Previous user request:\n" + lastRunes(priorUser, 1400)
+		previous = "Previous user request:\n" + lastRunes(redact(priorUser), 1400)
 	}
 	if priorAssistant != "" {
-		previous += "\nPrevious assistant message:\n" + lastRunes(priorAssistant, 800)
+		previous += "\nPrevious assistant message:\n" + lastRunes(redact(priorAssistant), 800)
 	}
-	previous = strings.TrimFunc(previous, pythonSpace)
-	for _, secret := range labelingSecrets {
-		previous = secret.pattern.ReplaceAllString(previous, secret.replacement)
-	}
+	previous = redact(strings.TrimFunc(previous, pythonSpace))
 	full = firstRunes(previous, 2200)
 	prompt = lastRunes(full, 600)
 	return full, prompt, prompt != full
