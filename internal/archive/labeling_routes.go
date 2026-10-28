@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -61,16 +62,19 @@ func labelingCommand(route, model, effort, schemaText, schemaPath, answerPath, s
 // sanitized events, so replaying a saved events.jsonl rebuilds the same
 // state the live run saw.
 type labelingStream struct {
-	route                  string
-	SessionID              string           `json:"session_id,omitempty"`
-	Models                 []string         `json:"reported_models,omitempty"`
-	Terminal               string           `json:"terminal_event,omitempty"`
-	Failed                 bool             `json:"failed,omitempty"`
-	Error                  string           `json:"error,omitempty"`
-	Refusal                string           `json:"refusal,omitempty"`
-	Tools                  []map[string]any `json:"tool_events,omitempty"`
-	Warnings               []string         `json:"warnings,omitempty"`
-	Unparsed               int              `json:"unparsed_lines,omitempty"`
+	route     string
+	SessionID string           `json:"session_id,omitempty"`
+	Models    []string         `json:"reported_models,omitempty"`
+	Terminal  string           `json:"terminal_event,omitempty"`
+	Failed    bool             `json:"failed,omitempty"`
+	Error     string           `json:"error,omitempty"`
+	Refusal   string           `json:"refusal,omitempty"`
+	Tools     []map[string]any `json:"tool_events,omitempty"`
+	Warnings  []string         `json:"warnings,omitempty"`
+	Unparsed  int              `json:"unparsed_lines,omitempty"`
+	// Started is set by the route's first session event (Claude
+	// system/init, Codex thread.started): before it nothing was sent.
+	Started                bool `json:"started,omitempty"`
 	structured, structTool json.RawMessage
 	text                   string
 	usage                  map[string]any
@@ -155,6 +159,7 @@ func (s *labelingStream) observe(event map[string]any) {
 		switch kind {
 		case "system":
 			if event["subtype"] == "init" {
+				s.Started = true
 				s.SessionID = defaultString(firstString(event["session_id"]), s.SessionID)
 				s.model(firstString(event["model"]))
 			}
@@ -189,6 +194,9 @@ func (s *labelingStream) observe(event map[string]any) {
 				if errs, ok := event["errors"].([]any); ok && len(errs) > 0 {
 					s.Error += ": " + compactJSON(errs)
 				}
+				if text := firstString(event["result"]); text != "" {
+					s.Error += ": " + firstRunes(text, 500)
+				}
 			}
 			if event["stop_reason"] == "refusal" {
 				s.Refusal = "stop_reason refusal"
@@ -212,6 +220,7 @@ func (s *labelingStream) observe(event map[string]any) {
 	}
 	switch kind {
 	case "thread.started":
+		s.Started = true
 		s.SessionID = firstString(event["thread_id"])
 	case "turn.completed":
 		s.Terminal = kind
@@ -322,6 +331,11 @@ func (s *labelingStream) output(answerPath string) json.RawMessage {
 	return nil
 }
 
+// labelingAccountError recognizes an authentication, rate-limit or quota
+// error in a CLI's terminal error: every further request would fail the
+// same way, so the run halts at once.
+var labelingAccountError = regexp.MustCompile(`(?i)(rate[ _-]?limit|too many requests|\b429\b|quota|usage limit|credit balance|billing|\b40[13]\b|unauthori[sz]ed|forbidden|authenticat|invalid (api|x-api)[ _-]?key|not logged in|log ?in again|/login|expired (token|session|credentials))`)
+
 // refusalText reports text that declines the task instead of answering.
 var refusalText = regexp.MustCompile(`(?i)\b(I can(no|')t|I cannot|I won'?t|I'm (not able|unable)|I am (not able|unable)|unable to (help|comply|assist)|I must decline)\b`)
 
@@ -333,7 +347,16 @@ type labelingProcess struct {
 	Stopped    bool             `json:"stopped,omitempty"`
 	Cleanup    []map[string]any `json:"cleanup,omitempty"`
 	PID        int              `json:"pid,omitempty"`
-	Duration   time.Duration    `json:"-"`
+	// ReceiptError is the first failure to write or sync the saved stream:
+	// the attempt's receipt is then not durable.
+	ReceiptError string        `json:"receipt_error,omitempty"`
+	Duration     time.Duration `json:"-"`
+}
+
+// labelingReceipt is where an attempt's sanitized stream is saved.
+type labelingReceipt interface {
+	io.Writer
+	Sync() error
 }
 
 // cliEnvironment is the user's environment, so the CLI finds its login,
@@ -356,7 +379,7 @@ func cliEnvironment(path string) []string {
 // after a terminal event (labelingLingerGrace, SIGTERM, labelingKillGrace,
 // SIGKILL), on timeout or on a hard stop. started is called with the pid
 // once the process runs.
-func runLabelingProcess(path string, args []string, dir, prompt string, events, stderr *os.File, stream *labelingStream, mu *sync.Mutex,
+func runLabelingProcess(path string, args []string, dir, prompt string, events labelingReceipt, stderr *os.File, stream *labelingStream, mu *sync.Mutex,
 	timeout time.Duration, hardStop <-chan struct{}, started func(pid int)) (result labelingProcess) {
 	begin := time.Now()
 	defer func() { result.Duration = time.Since(begin) }()
@@ -396,6 +419,7 @@ func runLabelingProcess(path string, args []string, dir, prompt string, events, 
 	}()
 	terminal := make(chan struct{})
 	readerDone := make(chan struct{})
+	var receiptError error
 	go func() {
 		defer close(readerDone)
 		reader := bufio.NewReaderSize(stdoutR, 1<<16)
@@ -407,11 +431,19 @@ func runLabelingProcess(path string, args []string, dir, prompt string, events, 
 				saved := stream.line(raw)
 				isTerminal := stream.Terminal != ""
 				mu.Unlock()
-				if saved != nil {
-					events.Write(append(saved, '\n'))
+				// The CLI is still read to the end after a write fails, so it
+				// never blocks on a full pipe; the attempt stays uncertain.
+				if saved != nil && receiptError == nil {
+					if _, err := events.Write(append(saved, '\n')); err != nil {
+						receiptError = fmt.Errorf("write: %w", err)
+					}
 				}
 				if isTerminal && !signaled {
-					events.Sync()
+					if receiptError == nil {
+						if err := events.Sync(); err != nil {
+							receiptError = fmt.Errorf("sync: %w", err)
+						}
+					}
 					signaled = true
 					close(terminal)
 				}
@@ -490,6 +522,11 @@ wait:
 		<-readerDone
 	}
 	stdoutR.Close()
+	if receiptError != nil {
+		result.ReceiptError = receiptError.Error()
+	} else if err := events.Sync(); err != nil {
+		result.ReceiptError = "sync: " + err.Error()
+	}
 	if cmd.ProcessState != nil {
 		code := cmd.ProcessState.ExitCode()
 		result.ExitCode = &code

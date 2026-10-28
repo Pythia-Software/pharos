@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS jobs(
   name TEXT PRIMARY KEY, created_at TEXT NOT NULL, route TEXT NOT NULL, model TEXT NOT NULL, effort TEXT NOT NULL,
   prompt_version TEXT NOT NULL, schema_version TEXT NOT NULL, schema_sha256 TEXT NOT NULL, taxonomy_version TEXT NOT NULL, taxonomy_sha256 TEXT NOT NULL,
   dataset_contracts TEXT NOT NULL, selection TEXT NOT NULL, packing TEXT NOT NULL, imported_from TEXT,
-  cli_path TEXT, cli_version TEXT, stop_requested INTEGER NOT NULL DEFAULT 0, run_started_at TEXT, run_settings TEXT, halted TEXT);
+  served_model TEXT NOT NULL, cli_path TEXT, cli_version TEXT, stop_requested INTEGER NOT NULL DEFAULT 0, run_started_at TEXT, run_settings TEXT, halted TEXT);
 CREATE TABLE IF NOT EXISTS requests(
   id TEXT PRIMARY KEY, job TEXT NOT NULL, position INTEGER NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
   retry_of TEXT, items INTEGER NOT NULL, chars INTEGER NOT NULL, est_input_tokens REAL NOT NULL, est_output_tokens REAL NOT NULL,
@@ -35,18 +35,19 @@ CREATE TABLE IF NOT EXISTS requests(
 CREATE INDEX IF NOT EXISTS requests_job_state_idx ON requests(job, state, position);
 CREATE TABLE IF NOT EXISTS request_items(
   request_id TEXT NOT NULL, position INTEGER NOT NULL, item_id TEXT NOT NULL, contract_hash TEXT NOT NULL, tokens REAL NOT NULL,
-  PRIMARY KEY(request_id, position)) WITHOUT ROWID;
+  chars INTEGER NOT NULL, PRIMARY KEY(request_id, position)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS request_items_item_idx ON request_items(item_id);
 CREATE TABLE IF NOT EXISTS attempts(
   id TEXT PRIMARY KEY, request_id TEXT NOT NULL, number INTEGER NOT NULL, job TEXT NOT NULL, state TEXT NOT NULL, outcome TEXT,
   submitted_at TEXT NOT NULL, finished_at TEXT, day TEXT NOT NULL, dir TEXT NOT NULL, prompt_sha256 TEXT NOT NULL, session_id TEXT,
   reported_models TEXT, pid INTEGER, exit_code INTEGER, terminal_event TEXT, cleanup TEXT, tool_events TEXT, refusal TEXT, error TEXT,
-  cli_cost_usd REAL, duration_ms INTEGER, problems TEXT, recovered INTEGER NOT NULL DEFAULT 0);
+  cli_cost_usd REAL, duration_ms INTEGER, problems TEXT, recovered INTEGER NOT NULL DEFAULT 0,
+  not_sent INTEGER NOT NULL DEFAULT 0, served_model TEXT, cli_version TEXT, process_start TEXT, receipt_error TEXT);
 CREATE INDEX IF NOT EXISTS attempts_request_idx ON attempts(request_id, number);
 CREATE TABLE IF NOT EXISTS item_results(
   attempt_id TEXT NOT NULL, item_id TEXT NOT NULL, job TEXT NOT NULL, request_id TEXT, outcome TEXT NOT NULL,
   labels TEXT NOT NULL, uncertain_labels TEXT NOT NULL, evidence TEXT NOT NULL, need_context INTEGER, issues TEXT NOT NULL,
-  annotation TEXT, contract_hash TEXT NOT NULL, imported_from TEXT, created_at TEXT NOT NULL, PRIMARY KEY(attempt_id, item_id));
+  annotation TEXT, contract_hash TEXT NOT NULL, imported_from TEXT, served_model TEXT, created_at TEXT NOT NULL, PRIMARY KEY(attempt_id, item_id));
 CREATE INDEX IF NOT EXISTS item_results_job_item_idx ON item_results(job, item_id);
 CREATE TABLE IF NOT EXISTS usage(
   attempt_id TEXT NOT NULL, model TEXT NOT NULL, model_source TEXT NOT NULL, tokens TEXT NOT NULL, cost_usd REAL, cost_status TEXT NOT NULL,
@@ -65,10 +66,20 @@ const (
 	requestFailed    = "failed"
 	requestUnknown   = "unknown"
 	requestStopped   = "stopped"
+	// held: a model other than the requested one answered; its results are
+	// kept, not published, and the run halts for a decision.
+	requestHeld = "held"
+)
+
+// Served-model verification, per job, attempt and item result.
+const (
+	servedModelVerified   = "verified"
+	servedModelUnverified = "served_model_unverified"
+	servedModelDiffers    = "served_model_differs"
 )
 
 var labelingRequestStates = []string{requestPending, requestLeased, requestSubmitted, requestCompleted, requestInvalid, requestRefused,
-	requestFailed, requestUnknown, requestStopped}
+	requestFailed, requestUnknown, requestHeld, requestStopped}
 
 var labelingJobName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
@@ -210,10 +221,26 @@ func selectLabelingItems(ctx context.Context, db *sql.DB, spec labelingJobSpec) 
 	return items, duplicates, nil
 }
 
+// labelingImported is a result copied from an earlier dataset's job.
+type labelingImported struct {
+	result             labelingItemResult
+	hash, from, served string
+}
+
+// labelingImportHook runs inside the creation transaction between the
+// requests and the imported results; tests make it fail.
+var labelingImportHook = func() error { return nil }
+
 // createLabelingJob freezes a job's selection and packs it into pending
-// requests with phase 1's packer. skip names items that already have a
-// result (imported from an earlier dataset); they are selected but not sent.
-func createLabelingJob(ctx context.Context, db *sql.DB, name string, spec labelingJobSpec, skip map[string]bool, importedFrom string) (map[string]any, error) {
+// requests with phase 1's packer. Imported results (from an earlier
+// dataset) are written in the same transaction; their items are selected
+// but not sent. Every selected item ends up requested, imported or listed
+// as oversize, or nothing is written.
+func createLabelingJob(ctx context.Context, db *sql.DB, name string, spec labelingJobSpec, imports []labelingImported, importedFrom string) (map[string]any, error) {
+	skip := map[string]bool{}
+	for _, imported := range imports {
+		skip[imported.result.ItemID] = true
+	}
 	if !labelingJobName.MatchString(name) {
 		return nil, fmt.Errorf("job name %q: use letters, digits, '.', '_' and '-'", name)
 	}
@@ -286,10 +313,14 @@ func createLabelingJob(ctx context.Context, db *sql.DB, name string, spec labeli
 		return nil, err
 	}
 	defer tx.Rollback()
+	served := servedModelVerified
+	if spec.Route == labelingRouteCodex {
+		served = servedModelUnverified
+	}
 	if _, err := tx.Exec(`INSERT INTO jobs(name,created_at,route,model,effort,prompt_version,schema_version,schema_sha256,taxonomy_version,taxonomy_sha256,
-		dataset_contracts,selection,packing,imported_from) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		dataset_contracts,selection,packing,imported_from,served_model) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		name, now(), spec.Route, spec.Model, spec.Effort, spec.Prompt, labelingSchemaVersion, hashBytes([]byte(schema)), labelingTaxonomyVersion,
-		hashBytes(labelingTaxonomy), compactJSON(manifest["contracts"]), compactJSON(selection), compactJSON(packing), nilIfEmpty(importedFrom)); err != nil {
+		hashBytes(labelingTaxonomy), compactJSON(manifest["contracts"]), compactJSON(selection), compactJSON(packing), nilIfEmpty(importedFrom), served); err != nil {
 		return nil, err
 	}
 	for position, request := range packed {
@@ -305,11 +336,29 @@ func createLabelingJob(ctx context.Context, db *sql.DB, name string, spec labeli
 		}
 		for itemPosition, index := range request {
 			item := send[index]
-			if _, err := tx.Exec(`INSERT INTO request_items(request_id,position,item_id,contract_hash,tokens) VALUES(?,?,?,?,?)`,
-				id, itemPosition, item.row.ID, labelingContractHash(spec.Prompt, item.row), item.tokens); err != nil {
+			if _, err := tx.Exec(`INSERT INTO request_items(request_id,position,item_id,contract_hash,tokens,chars) VALUES(?,?,?,?,?,?)`,
+				id, itemPosition, item.row.ID, labelingContractHash(spec.Prompt, item.row), item.tokens, item.chars); err != nil {
 				return nil, err
 			}
 		}
+	}
+	if err := labelingImportHook(); err != nil {
+		return nil, err
+	}
+	for _, imported := range imports {
+		if err := insertLabelingItemResult(tx, "imported:"+hashBytes([]byte(imported.from))[:16], name, "", imported.result, imported.hash, imported.from, imported.served); err != nil {
+			return nil, err
+		}
+	}
+	var requested, copied int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM request_items i JOIN requests r ON r.id=i.request_id WHERE r.job=?`, name).Scan(&requested); err != nil {
+		return nil, err
+	}
+	if err := tx.QueryRow(`SELECT COUNT(DISTINCT item_id) FROM item_results WHERE job=? AND imported_from IS NOT NULL`, name).Scan(&copied); err != nil {
+		return nil, err
+	}
+	if requested+copied+len(oversized) != len(items) {
+		return nil, fmt.Errorf("job %s: %d selected items but %d requested, %d imported and %d oversize; nothing was written", name, len(items), requested, copied, len(oversized))
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -329,21 +378,22 @@ func labelingRetryRequest(tx *sql.Tx, job, retryOf string, items []string, outpu
 		return err
 	}
 	var overhead float64
-	var chars int
-	if err := tx.QueryRow(`SELECT est_input_tokens - (SELECT COALESCE(SUM(tokens),0) FROM request_items WHERE request_id=?), chars FROM requests WHERE id=?`,
-		retryOf, retryOf).Scan(&overhead, &chars); err != nil {
+	if err := tx.QueryRow(`SELECT est_input_tokens - (SELECT COALESCE(SUM(tokens),0) FROM request_items WHERE request_id=?) FROM requests WHERE id=?`,
+		retryOf, retryOf).Scan(&overhead); err != nil {
 		return err
 	}
 	id := fmt.Sprintf("%s:%06d", job, position)
-	input := overhead
+	input, chars := overhead, 0
 	for index, item := range items {
 		var hash string
 		var tokens float64
-		if err := tx.QueryRow(`SELECT contract_hash,tokens FROM request_items WHERE request_id=? AND item_id=?`, retryOf, item).Scan(&hash, &tokens); err != nil {
+		var length int
+		if err := tx.QueryRow(`SELECT contract_hash,tokens,chars FROM request_items WHERE request_id=? AND item_id=?`, retryOf, item).Scan(&hash, &tokens, &length); err != nil {
 			return err
 		}
 		input += tokens
-		if _, err := tx.Exec(`INSERT INTO request_items(request_id,position,item_id,contract_hash,tokens) VALUES(?,?,?,?,?)`, id, index, item, hash, tokens); err != nil {
+		chars += length
+		if _, err := tx.Exec(`INSERT INTO request_items(request_id,position,item_id,contract_hash,tokens,chars) VALUES(?,?,?,?,?,?)`, id, index, item, hash, tokens, length); err != nil {
 			return err
 		}
 	}
@@ -371,8 +421,8 @@ type labelingSpend struct {
 	Known             float64                     `json:"known_usd"`
 	PartialTokens     map[string]map[string]int64 `json:"partial_or_unpriced_tokens"`
 	UnpricedAttempts  int                         `json:"attempts_with_unpriced_usage"`
-	UnknownExposure   float64                     `json:"unknown_outcome_exposure_usd"`
-	UnknownAttempts   int                         `json:"unknown_outcome_attempts"`
+	UnknownExposure   float64                     `json:"possibly_charged_exposure_usd"`
+	UnknownAttempts   int                         `json:"possibly_charged_attempts"`
 	InFlight          float64                     `json:"in_flight_estimate_usd"`
 	CLIReported       float64                     `json:"cli_reported_usd"`
 	CLIReportedNote   string                      `json:"cli_reported_note"`
@@ -421,8 +471,12 @@ func computeLabelingSpend(db *sql.DB, job labelingJob, book priceBook, day strin
 		return *cost
 	}
 	var input, output sql.NullFloat64
+	// Attempts that may have been charged without reporting usage: unknown
+	// outcomes, and failures after the CLI began a session. They stay in
+	// the job's lifetime spend even when re-queued.
 	if err := db.QueryRow(`SELECT COUNT(*),SUM(r.est_input_tokens),SUM(r.est_output_tokens) FROM attempts a JOIN requests r ON r.id=a.request_id
-		WHERE a.job=? AND a.outcome='unknown' AND NOT EXISTS(SELECT 1 FROM usage u WHERE u.attempt_id=a.id)`, job.Name).Scan(&spend.UnknownAttempts, &input, &output); err != nil {
+		WHERE a.job=? AND a.outcome IN ('unknown','failed') AND a.not_sent=0 AND NOT EXISTS(SELECT 1 FROM usage u WHERE u.attempt_id=a.id)`, job.Name).
+		Scan(&spend.UnknownAttempts, &input, &output); err != nil {
 		return spend, err
 	}
 	spend.UnknownExposure = estimate(input.Float64, output.Float64)
@@ -527,7 +581,7 @@ func labelingStatusLine(status map[string]any) string {
 		}
 	}
 	spend := status["spend"].(labelingSpend)
-	line := fmt.Sprintf("%s: %d requests (%s); known $%.4f, in flight ~$%.4f, unknown-outcome exposure ~$%.4f (%d attempts), CLI-reported $%.4f",
+	line := fmt.Sprintf("%s: %d requests (%s); known $%.4f, in flight ~$%.4f, possibly charged ~$%.4f (%d unknown or failed attempts without usage), CLI-reported $%.4f",
 		status["job"], status["requests"], strings.Join(parts, ", "), spend.Known, spend.InFlight, spend.UnknownExposure, spend.UnknownAttempts, spend.CLIReported)
 	if spend.UnpricedAttempts > 0 {
 		line += fmt.Sprintf(", %d attempts with unpriced usage", spend.UnpricedAttempts)
@@ -669,13 +723,7 @@ func importLabelingResults(ctx context.Context, dir, from, name string, w io.Wri
 		return err
 	}
 	labels := labelingLabels()
-	skip := map[string]bool{}
-	type imported struct {
-		result labelingItemResult
-		hash   string
-		from   string
-	}
-	copies := []imported{}
+	copies := []labelingImported{}
 	stale := 0
 	for _, row := range previous {
 		id := firstString(row["item_id"])
@@ -698,24 +746,10 @@ func importLabelingResults(ctx context.Context, dir, from, name string, w io.Wri
 			stale++
 			continue
 		}
-		skip[id] = true
-		copies = append(copies, imported{result: result, hash: hash, from: from + "#" + firstString(row["attempt_id"])})
+		copies = append(copies, labelingImported{result: result, hash: hash, from: from + "#" + firstString(row["attempt_id"]), served: firstString(row["served_model"])})
 	}
-	summary, err := createLabelingJob(ctx, db, name, spec, skip, from)
+	summary, err := createLabelingJob(ctx, db, name, spec, copies, from)
 	if err != nil {
-		return err
-	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	for _, copy := range copies {
-		if err := insertLabelingItemResult(tx, "imported:"+hashBytes([]byte(copy.from))[:16], name, "", copy.result, copy.hash, copy.from); err != nil {
-			return err
-		}
-	}
-	if err := tx.Commit(); err != nil {
 		return err
 	}
 	fmt.Fprintf(w, "Imported %d usable results from %s (%d stale: contract changed or no longer valid); %d items left to label.\n",
@@ -731,7 +765,7 @@ func itemIDs(items []labelingSelectedItem) []string {
 	return ids
 }
 
-func insertLabelingItemResult(tx *sql.Tx, attempt, job, request string, result labelingItemResult, hash, importedFrom string) error {
+func insertLabelingItemResult(tx *sql.Tx, attempt, job, request string, result labelingItemResult, hash, importedFrom, served string) error {
 	var need any
 	if result.NeedContext != nil {
 		need = *result.NeedContext
@@ -741,8 +775,9 @@ func insertLabelingItemResult(tx *sql.Tx, attempt, job, request string, result l
 		annotation = string(result.Annotation)
 	}
 	_, err := tx.Exec(`INSERT INTO item_results(attempt_id,item_id,job,request_id,outcome,labels,uncertain_labels,evidence,need_context,issues,annotation,
-		contract_hash,imported_from,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, attempt, result.ItemID, job, nilIfEmpty(request), result.Outcome,
-		jsonText(result.Labels), jsonText(result.Uncertain), jsonText(result.Evidence), need, jsonText(result.Issues), annotation, hash, nilIfEmpty(importedFrom), now())
+		contract_hash,imported_from,served_model,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, attempt, result.ItemID, job, nilIfEmpty(request), result.Outcome,
+		jsonText(result.Labels), jsonText(result.Uncertain), jsonText(result.Evidence), need, jsonText(result.Issues), annotation, hash, nilIfEmpty(importedFrom),
+		nilIfEmpty(served), now())
 	return err
 }
 

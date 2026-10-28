@@ -18,6 +18,9 @@ const (
 	itemInvalid        = "invalid"
 	itemMissing        = "missing"
 	itemRefused        = "refused"
+	// itemHeld: answered by a model other than the requested one; kept
+	// for an operator decision, never published by default.
+	itemHeld = "held"
 )
 
 // labelingTargetPiece is a target piece shown in the unit's visible text.
@@ -120,6 +123,21 @@ func validateLabelingOutput(output json.RawMessage, items []labelingItemSource, 
 			continue
 		}
 		results[i] = validateLabelingItem(items[i], fields, raw, labels)
+	}
+	// An id set that is not exactly the request's (an id missing, extra,
+	// repeated or absent) suggests annotations may be misassigned: no item
+	// of the request is trusted. Missing items stay missing.
+	mismatch := len(problems) > 0
+	for _, result := range results {
+		mismatch = mismatch || result.Outcome == itemMissing
+	}
+	if mismatch {
+		for i := range results {
+			if results[i].Outcome != itemMissing {
+				results[i].Outcome = itemInvalid
+			}
+			results[i].Issues = appendUnique(results[i].Issues, "request_id_set_mismatch")
+		}
 	}
 	return results, problems
 }

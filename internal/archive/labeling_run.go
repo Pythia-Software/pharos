@@ -42,6 +42,9 @@ type labelingRunOptions struct {
 	Timeout            time.Duration
 	RetryInvalid       int
 	AllowUnpriced      bool
+	// MaxConsecutiveFailures halts the run after this many failed or
+	// unknown outcomes in a row (default 3).
+	MaxConsecutiveFailures int
 	// CLIPath runs this executable for the route instead of the one on
 	// PATH; tests point it at a fake CLI.
 	CLIPath string
@@ -67,6 +70,8 @@ type labelingRunner struct {
 	hardOnce                     sync.Once
 	started                      time.Time
 	finished                     int
+	cliVersion                   string
+	consecutiveFailures          int
 }
 
 func (r *labelingRunner) now() time.Time {
@@ -112,6 +117,12 @@ func runLabelingJob(ctx context.Context, opts labelingRunOptions) error {
 	if opts.Timeout <= 0 {
 		opts.Timeout = labelingAttemptTimeout
 	}
+	if opts.MaxConsecutiveFailures < 1 {
+		opts.MaxConsecutiveFailures = 3
+	}
+	if !opts.CreateOnly && (!(opts.MaxUSD > 0) || math.IsInf(opts.MaxUSD, 0)) {
+		return errors.New("--max-usd must be a positive, finite number of dollars: the job's lifetime spend ceiling")
+	}
 	dir, err := filepath.Abs(opts.Dir)
 	if err != nil {
 		return err
@@ -144,9 +155,6 @@ func runLabelingJob(ctx context.Context, opts labelingRunOptions) error {
 			return nil
 		}
 	}
-	if opts.MaxUSD <= 0 {
-		return errors.New("--max-usd must be positive: a run needs a spend ceiling")
-	}
 	job, err := loadLabelingJob(db, opts.Job)
 	if err != nil {
 		return err
@@ -168,8 +176,21 @@ func runLabelingJob(ctx context.Context, opts labelingRunOptions) error {
 	if err := r.recover(); err != nil {
 		return err
 	}
+	// Usage an earlier run could not price keeps blocking new requests
+	// until the operator allows it.
+	if !opts.AllowUnpriced {
+		var unpriced int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.job=? AND u.cost_status IN ('partial','unpriced')`,
+			job.Name).Scan(&unpriced); err != nil {
+			return err
+		}
+		if unpriced > 0 {
+			return fmt.Errorf("job %s holds %d usage records the price book cannot price (see status --json); pass --allow-unpriced to continue", job.Name, unpriced)
+		}
+	}
 	settings := map[string]any{"max_usd": opts.MaxUSD, "concurrency": opts.Concurrency, "timeout_seconds": opts.Timeout.Seconds(),
-		"retry_invalid": opts.RetryInvalid, "allow_unpriced": opts.AllowUnpriced, "pid": os.Getpid()}
+		"retry_invalid": opts.RetryInvalid, "allow_unpriced": opts.AllowUnpriced, "max_consecutive_failures": opts.MaxConsecutiveFailures,
+		"pid": os.Getpid(), "cli_path": r.cliPath, "cli_version": r.cliVersion}
 	if _, err := db.Exec(`UPDATE jobs SET stop_requested=0,halted=NULL,run_started_at=?,run_settings=? WHERE name=?`, now(), compactJSON(settings), job.Name); err != nil {
 		return err
 	}
@@ -187,8 +208,9 @@ func runLabelingJob(ctx context.Context, opts labelingRunOptions) error {
 	return nil
 }
 
-// prepareFiles resolves the CLI and its version (recorded once per job),
-// the private runner directory, and the content-addressed schema file.
+// prepareFiles resolves the CLI and its version (asked at every run start:
+// CLIs update themselves; the job keeps the first), the private runner
+// directory, and the content-addressed schema file.
 func (r *labelingRunner) prepareFiles() error {
 	r.cliPath = r.opts.CLIPath
 	if r.cliPath == "" {
@@ -198,11 +220,14 @@ func (r *labelingRunner) prepareFiles() error {
 		}
 		r.cliPath = path
 	}
+	r.cliVersion = labelingCLIVersion(r.cliPath)
 	if r.job.CLIVersion == "" {
-		r.job.CLIVersion = labelingCLIVersion(r.cliPath)
+		r.job.CLIVersion = r.cliVersion
 		if _, err := r.db.Exec(`UPDATE jobs SET cli_version=?,cli_path=? WHERE name=?`, r.job.CLIVersion, r.cliPath, r.job.Name); err != nil {
 			return err
 		}
+	} else if r.job.CLIVersion != r.cliVersion {
+		r.printf("%s: the %s CLI is now %q (the job began with %q); each attempt records its version\n", r.job.Name, r.job.Route, r.cliVersion, r.job.CLIVersion)
 	}
 	r.runner = filepath.Join(r.dir, "runner")
 	if err := os.MkdirAll(r.runner, 0o700); err != nil {
@@ -238,7 +263,7 @@ func (r *labelingRunner) recover() error {
 	if _, err := r.db.Exec(`UPDATE requests SET state='pending',updated_at=? WHERE job=? AND state IN ('leased','stopped')`, now(), r.job.Name); err != nil {
 		return err
 	}
-	rows, err := queryMaps(r.db, `SELECT a.id,a.request_id,a.number,a.dir,a.day,a.pid,a.submitted_at FROM attempts a JOIN requests r ON r.id=a.request_id
+	rows, err := queryMaps(r.db, `SELECT a.id,a.request_id,a.number,a.dir,a.day,a.pid,a.process_start FROM attempts a JOIN requests r ON r.id=a.request_id
 		WHERE a.job=? AND a.state='submitted' ORDER BY a.id`, r.job.Name)
 	if err != nil {
 		return err
@@ -248,12 +273,16 @@ func (r *labelingRunner) recover() error {
 			dir: firstString(row["dir"]), day: firstString(row["day"])}
 		cleanup := []map[string]any{}
 		// The CLI of a runner that died may still run; its output has no
-		// reader any more. Only a recent attempt's pid is trusted.
-		if pid := int(integer(row["pid"])); pid > 0 {
-			if submitted, err := time.Parse(timeLayout, firstString(row["submitted_at"])); err == nil && time.Since(submitted) < r.opts.Timeout+labelingStopGrace {
+		// reader any more. The group is signalled only while its leader is
+		// still the process the attempt started (same pid and start time).
+		if pid := int(integer(row["pid"])); pid > 0 && syscall.Kill(-pid, 0) == nil {
+			if recorded := firstString(row["process_start"]); recorded != "" && labelingProcessStart(pid) == recorded {
 				if syscall.Kill(-pid, syscall.SIGKILL) == nil {
 					cleanup = append(cleanup, map[string]any{"signal": "SIGKILL", "reason": "orphaned by an earlier runner"})
 				}
+			} else {
+				cleanup = append(cleanup, map[string]any{"reason": "possibly_orphaned", "pid": pid,
+					"note": "a process group with the recorded id runs, but its leader is not the recorded CLI process; not signalled"})
 			}
 		}
 		stream, err := replayLabelingStream(r.job.Route, filepath.Join(attempt.dir, "events.jsonl"))
@@ -268,6 +297,16 @@ func (r *labelingRunner) recover() error {
 	// transaction writes both), but would otherwise wait forever.
 	_, err = r.db.Exec(`UPDATE requests SET state='unknown',note='submitted without an attempt record' WHERE job=? AND state='submitted'`, r.job.Name)
 	return err
+}
+
+// labelingProcessStart identifies a running process by its start time, so a
+// reused pid is not mistaken for it. Empty when it does not run.
+func labelingProcessStart(pid int) string {
+	output, err := exec.Command("ps", "-o", "lstart=", "-p", fmt.Sprint(pid)).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func (r *labelingRunner) stopRequested(ctx context.Context) bool {
@@ -387,8 +426,8 @@ func (r *labelingRunner) lease(request labelingPendingRequest) (bool, error) {
 		next = *cost
 	}
 	if committed := spend.CommittedEstimate + next; committed > r.opts.MaxUSD {
-		r.halt(fmt.Sprintf("spend ceiling: known $%.4f + in flight ~$%.4f + unknown-outcome ~$%.4f + next request ~$%.4f exceeds --max-usd %.4f",
-			spend.Known, spend.InFlight, spend.UnknownExposure, next, r.opts.MaxUSD))
+		r.halt(fmt.Sprintf("job lifetime spend ceiling: known $%.4f + in flight ~$%.4f + %d unknown or failed attempts without usage ~$%.4f (counted even after a retry: they may have been charged) + next request ~$%.4f exceeds --max-usd %.4f; to continue, run again with a higher --max-usd",
+			spend.Known, spend.InFlight, spend.UnknownAttempts, spend.UnknownExposure, next, r.opts.MaxUSD))
 		return false, nil
 	}
 	result, err := r.db.Exec(`UPDATE requests SET state='leased',updated_at=? WHERE id=? AND state='pending'`, now(), request.id)
@@ -397,6 +436,17 @@ func (r *labelingRunner) lease(request labelingPendingRequest) (bool, error) {
 	}
 	n, _ := result.RowsAffected()
 	return n == 1, nil
+}
+
+// labelingOpenReceipt creates an attempt's events.jsonl; tests substitute
+// a failing writer.
+var labelingOpenReceipt = func(path string) (labelingReceiptFile, error) {
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+}
+
+type labelingReceiptFile interface {
+	labelingReceipt
+	Close() error
 }
 
 type labelingAttemptInfo struct {
@@ -486,18 +536,28 @@ func (r *labelingRunner) attempt(ctx context.Context, request labelingPendingReq
 		}
 	}
 	promptHash := hashBytes([]byte(prompt))
-	command := map[string]any{"cli": r.cliPath, "cli_version": r.job.CLIVersion, "argv": recorded, "stdin": "prompt.txt sha256 " + promptHash,
+	command := map[string]any{"cli": r.cliPath, "cli_version": r.cliVersion, "argv": recorded, "stdin": "prompt.txt sha256 " + promptHash,
 		"cwd": r.runner, "environment": "inherited from the runner, minus CLAUDECODE, CLAUDE_CODE_ENTRYPOINT and PHAROS_API_TOKEN; not recorded",
 		"session_id": session}
 	if err := durableJSON(filepath.Join(attempt.dir, "command.json"), command); err != nil {
 		return err
 	}
+	events, err := labelingOpenReceipt(filepath.Join(attempt.dir, "events.jsonl"))
+	if err != nil {
+		return err
+	}
+	defer events.Close()
+	stderr, err := os.OpenFile(filepath.Join(attempt.dir, "stderr.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer stderr.Close()
 	tx, err := r.db.Begin()
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO attempts(id,request_id,number,job,state,submitted_at,day,dir,prompt_sha256,session_id) VALUES(?,?,?,?,?,?,?,?,?,?)`,
-		attempt.id, request.id, number, r.job.Name, requestSubmitted, now(), attempt.day, attempt.dir, promptHash, session); err != nil {
+	if _, err := tx.Exec(`INSERT INTO attempts(id,request_id,number,job,state,submitted_at,day,dir,prompt_sha256,session_id,cli_version) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		attempt.id, request.id, number, r.job.Name, requestSubmitted, now(), attempt.day, attempt.dir, promptHash, session, r.cliVersion); err != nil {
 		tx.Rollback()
 		return err
 	}
@@ -508,20 +568,10 @@ func (r *labelingRunner) attempt(ctx context.Context, request labelingPendingReq
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	events, err := os.OpenFile(filepath.Join(attempt.dir, "events.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	defer events.Close()
-	stderr, err := os.OpenFile(filepath.Join(attempt.dir, "stderr.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	defer stderr.Close()
 	stream := newLabelingStream(r.job.Route)
 	var mu sync.Mutex
 	process := runLabelingProcess(r.cliPath, args, r.runner, prompt, events, stderr, stream, &mu, r.opts.Timeout, r.hardStop, func(pid int) {
-		r.db.Exec(`UPDATE attempts SET pid=? WHERE id=?`, pid, attempt.id)
+		r.db.Exec(`UPDATE attempts SET pid=?,process_start=? WHERE id=?`, pid, nilIfEmpty(labelingProcessStart(pid)), attempt.id)
 	})
 	return r.finalize(attempt, stream, &process, false)
 }
@@ -566,16 +616,33 @@ func labelingAttemptUsage(stream *labelingStream, requested, day string, book pr
 			models = append(models, model)
 		}
 		sort.Strings(models)
-		matched := false
+		matched := ""
+		for _, model := range models {
+			counts := normalizeTokenCounts(stream.modelUsage[model])
+			if matched == "" && top != nil && counts != nil && counts["input_tokens"] == top["input_tokens"] && counts["output_tokens"] == top["output_tokens"] {
+				matched = model
+			}
+		}
+		// Without an exact match, the requested model's cache writes take
+		// the result's one-hour share (at most its own writes), so the TTL
+		// split is not lost to the cheaper 5-minute rate.
+		oneHour := top["cache_creation_1h_input_tokens"]
 		for _, model := range models {
 			usage := stream.modelUsage[model]
-			counts := normalizeTokenCounts(usage)
-			if !matched && top != nil && counts != nil && counts["input_tokens"] == top["input_tokens"] && counts["output_tokens"] == top["output_tokens"] {
-				matched = true
+			switch {
+			case model == matched:
 				add(model, "result usage", stream.usage)
-				continue
+			case matched == "" && model == requested && oneHour > 0:
+				counts := normalizeTokenCounts(usage)
+				if counts == nil {
+					continue
+				}
+				counts["cache_creation_1h_input_tokens"] = math.Min(oneHour, counts["cache_creation_input_tokens"])
+				tokens := labelingCostTokens(counts)
+				rows = append(rows, labelingUsageRow{model: model, source: "modelUsage with the result's 1h cache-write share", tokens: tokens, cost: book.cost(model, day, tokens)})
+			default:
+				add(model, "modelUsage", usage)
 			}
-			add(model, "modelUsage", usage)
 		}
 		return rows
 	}
@@ -617,9 +684,18 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 	var outcome, errorText string
 	var results []labelingItemResult
 	problems := []string{}
+	notSent := false
+	exitedAlone := !recovered && !process.TimedOut && !process.Stopped
 	switch {
 	case process.StartError != "":
-		outcome, errorText = requestFailed, "the CLI did not start: "+process.StartError
+		outcome, errorText, notSent = requestFailed, "the CLI did not start: "+process.StartError, true
+	case process.ReceiptError != "":
+		// Without a durable receipt the result cannot be audited or
+		// recovered: the attempt stays uncertain and the run halts.
+		outcome, errorText = requestUnknown, "the saved stream is not durable: "+process.ReceiptError
+	case stream.Terminal == "" && !stream.Started && exitedAlone:
+		// No session event at all: the CLI stopped before sending anything.
+		outcome, errorText, notSent = requestFailed, fmt.Sprintf("not_sent: the CLI exited (code %v) before starting a session", exitCode(process)), true
 	case stream.Terminal == "":
 		outcome = requestUnknown
 		switch {
@@ -667,9 +743,29 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 		}
 	}
 	usage := labelingAttemptUsage(stream, r.job.Model, attempt.day, r.book)
+	// The served model must be exactly the requested one. Codex names none,
+	// so its results are usable but unverified.
+	served := servedModelUnverified
+	if r.job.Route == labelingRouteClaude && len(stream.Models) > 0 {
+		served = servedModelVerified
+	}
+	differs := []string{}
 	for _, model := range stream.Models {
-		if r.book.resolve(model, attempt.day) != r.book.resolve(r.job.Model, attempt.day) {
-			problems = append(problems, "served_model_differs:"+model)
+		if model != r.job.Model {
+			differs = append(differs, model)
+		}
+	}
+	if len(differs) > 0 {
+		served = servedModelDiffers
+		problems = append(problems, servedModelDiffers+":"+strings.Join(differs, ","))
+		if outcome == requestCompleted || outcome == requestInvalid {
+			outcome = requestHeld
+			for index := range results {
+				if results[index].Outcome == itemUsable || results[index].Outcome == itemEvidenceIssues {
+					results[index].Outcome = itemHeld
+				}
+				results[index].Issues = appendUnique(results[index].Issues, servedModelDiffers)
+			}
 		}
 	}
 	tx, err := r.db.Begin()
@@ -694,9 +790,10 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 		toolEvents = []map[string]any{}
 	}
 	if _, err := tx.Exec(`UPDATE attempts SET state='finished',outcome=?,finished_at=?,session_id=COALESCE(?,session_id),reported_models=?,exit_code=?,terminal_event=?,
-		cleanup=?,tool_events=?,refusal=?,error=?,cli_cost_usd=?,duration_ms=?,problems=?,recovered=? WHERE id=?`,
+		cleanup=?,tool_events=?,refusal=?,error=?,cli_cost_usd=?,duration_ms=?,problems=?,recovered=?,not_sent=?,served_model=?,receipt_error=? WHERE id=?`,
 		outcome, now(), nilIfEmpty(stream.SessionID), jsonText(stream.Models), exit, nilIfEmpty(stream.Terminal), jsonText(cleanup), jsonText(toolEvents),
-		nilIfEmpty(stream.Refusal), nilIfEmpty(errorText), cliCost, process.Duration.Milliseconds(), jsonText(problems), recovered, attempt.id); err != nil {
+		nilIfEmpty(stream.Refusal), nilIfEmpty(errorText), cliCost, process.Duration.Milliseconds(), jsonText(problems), recovered, notSent, served,
+		nilIfEmpty(process.ReceiptError), attempt.id); err != nil {
 		return err
 	}
 	unpriced := []string{}
@@ -715,10 +812,10 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 	}
 	retry := []string{}
 	for _, result := range results {
-		if err := insertLabelingItemResult(tx, attempt.id, r.job.Name, attempt.request, result, hashes[result.ItemID], ""); err != nil {
+		if err := insertLabelingItemResult(tx, attempt.id, r.job.Name, attempt.request, result, hashes[result.ItemID], "", served); err != nil {
 			return err
 		}
-		if result.Outcome == itemInvalid || result.Outcome == itemMissing {
+		if outcome != requestHeld && (result.Outcome == itemInvalid || result.Outcome == itemMissing) {
 			var failures int
 			if err := tx.QueryRow(`SELECT COUNT(*) FROM item_results WHERE job=? AND item_id=? AND outcome IN ('invalid','missing')`, r.job.Name, result.ItemID).
 				Scan(&failures); err != nil {
@@ -743,6 +840,30 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 	r.mu.Unlock()
 	if len(unpriced) > 0 && !r.opts.AllowUnpriced {
 		r.halt("usage the price book cannot price: " + strings.Join(unpriced, ", ") + " (attempt " + attempt.id + "); pass --allow-unpriced to continue")
+	}
+	if process.ReceiptError != "" {
+		r.halt("attempt " + attempt.id + ": its saved stream is not durable (" + process.ReceiptError + "); it stays unknown; fix the storage and run again")
+	}
+	if outcome == requestHeld {
+		r.halt(fmt.Sprintf("attempt %s was answered by %s, not the requested %s; its results are held (not usable). Decide whether to accept that model before running again",
+			attempt.id, strings.Join(differs, ", "), r.job.Model))
+	}
+	if outcome == requestFailed && labelingAccountError.MatchString(errorText+" "+strings.Join(stream.Warnings, " ")) {
+		r.halt("attempt " + attempt.id + " failed with an authentication, rate-limit or quota error: " + firstRunes(errorText, 300))
+	}
+	if !recovered {
+		r.mu.Lock()
+		if outcome == requestFailed || outcome == requestUnknown {
+			r.consecutiveFailures++
+		} else {
+			r.consecutiveFailures = 0
+		}
+		failures := r.consecutiveFailures
+		r.mu.Unlock()
+		if failures >= r.opts.MaxConsecutiveFailures {
+			r.halt(fmt.Sprintf("%d consecutive attempts failed or ended unknown (last: %s); check the route (login, flags, quota) before running again",
+				failures, firstRunes(errorText, 300)))
+		}
 	}
 	usable := 0
 	for _, result := range results {
@@ -795,6 +916,9 @@ func (r *labelingRunner) progress(attempt labelingAttemptInfo, outcome string, u
 // requestLabelingStop asks a job's runner to stop: it leases nothing more
 // and lets in-flight attempts finish.
 func requestLabelingStop(dir, name string) error {
+	if err := requireLabelingLedger(dir); err != nil {
+		return err
+	}
 	db, err := openLabelingLedger(dir)
 	if err != nil {
 		return err
@@ -810,8 +934,24 @@ func requestLabelingStop(dir, name string) error {
 	return nil
 }
 
-// withLabelingJobLock runs fn while no runner holds the job.
-func withLabelingJobLock(dir, name string, fn func(db *sql.DB) error) error {
+// requireLabelingLedger refuses a dataset without run tables, so commands
+// that only act on jobs never create them (which would make the dataset
+// impossible to prepare --replace).
+func requireLabelingLedger(dir string) error {
+	db, err := openLabelingDataset(dir)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if !labelingHasLedger(db) {
+		return fmt.Errorf("no labeling jobs in %s", dir)
+	}
+	return nil
+}
+
+// withLabelingJobLock runs fn while no runner holds the job. Unless
+// create, the dataset must already hold run tables.
+func withLabelingJobLock(dir, name string, create bool, fn func(db *sql.DB) error) error {
 	if !labelingJobName.MatchString(name) {
 		return fmt.Errorf("job name %q: use letters, digits, '.', '_' and '-'", name)
 	}
@@ -824,6 +964,11 @@ func withLabelingJobLock(dir, name string, fn func(db *sql.DB) error) error {
 		return fmt.Errorf("a runner is running job %s; stop it first", name)
 	}
 	defer lock.Close()
+	if !create {
+		if err := requireLabelingLedger(dir); err != nil {
+			return err
+		}
+	}
 	db, err := openLabelingLedger(dir)
 	if err != nil {
 		return err
