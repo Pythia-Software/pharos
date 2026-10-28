@@ -254,6 +254,40 @@ func TestWorkspaceNameEdgesFromEitherSide(t *testing.T) {
 			t.Fatalf("edges from %v = %v, want %v once each", ids, got, all)
 		}
 	}
+	// Two links between conversations of the same two workspaces, in the
+	// same orientation, are one edge.
+	var left, right string
+	if err := c.DB.QueryRow(`SELECT l.left_id,l.right_id FROM conversation_identity_links l JOIN conversations a ON a.id=l.left_id
+		WHERE l.relationship='native-alias' AND a.workspace_id=?`, all[0].left).Scan(&left, &right); err != nil {
+		t.Fatal(err)
+	}
+	// The task workspace has a second conversation; link it on its side.
+	sibling := func(workspace, except string) string {
+		var id string
+		_ = c.DB.QueryRow(`SELECT id FROM conversations WHERE workspace_id=? AND id<>? ORDER BY id LIMIT 1`, workspace, except).Scan(&id)
+		return id
+	}
+	if other := sibling(all[0].right, right); other != "" {
+		right = other
+	} else if other := sibling(all[0].left, left); other != "" {
+		left = other
+	} else {
+		t.Fatal("no second conversation on either side")
+	}
+	execTx(t, c.DB, `INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('`+left+`','`+right+`','native-alias',1,'{}')`)
+	if n := countRows(t, c, "SELECT COUNT(*) FROM conversation_identity_links l JOIN conversations a ON a.id=l.left_id JOIN conversations b ON b.id=l.right_id WHERE l.relationship='native-alias' AND a.workspace_id='"+all[0].left+"' AND b.workspace_id='"+all[0].right+"'"); n != 2 {
+		t.Fatalf("fixture has %d same-orientation links, want 2", n)
+	}
+	for _, ids := range [][]string{{all[0].left}, {all[0].right}, {native, taskID}} {
+		got := edges(ids)
+		seen := map[workspaceNameEdge]int{}
+		for _, edge := range got {
+			seen[edge]++
+		}
+		if len(got) != 2 || seen[all[0]] != 1 || seen[all[1]] != 1 {
+			t.Fatalf("duplicate links from %v = %v, want %v once each", ids, got, all)
+		}
+	}
 	if got := edges([]string{stableID("workspace", "codex", "local", "unrelated")}); len(got) != 0 {
 		t.Fatalf("unlinked workspace has edges %v", got)
 	}
