@@ -732,7 +732,16 @@ func addSQLiteRecordBackupFixture(t *testing.T, config *Config) string {
 func TestBackupRestoresSQLiteRecordReplay(t *testing.T) {
 	config, dest := backupFixture(t)
 	original := addSQLiteRecordBackupFixture(t, &config)
+	// A compressed latest transcript and earlier version are backed up as
+	// stored and recover as valid evidence.
+	addEncodedClaudeFixture(t, &config)
 	runBackup(t, config, dest, false)
+	assertEncodedClaudeFixture(t, filepath.Join(dest, "captures"), "host-a")
+	recovered, err := RecoverLibrary(t.Context(), dest, filepath.Join(t.TempDir(), "recovered"), nil)
+	if err != nil {
+		t.Fatal("recovery of a backup with compressed captures", err)
+	}
+	assertEncodedClaudeFixture(t, recovered.CaptureRoot, "host-a")
 	os.RemoveAll(original)
 	restored := config
 	restored.CaptureRoot = filepath.Join(dest, "captures")

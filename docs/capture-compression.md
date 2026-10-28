@@ -101,13 +101,27 @@ Each phase ships as one PR.
    Follow-up: on a volume without hard links (exFAT), verify-all's lease of
    a generation falls back to copying it, and does so while holding the
    host's capture lock; move that copy out from under the lock.
-2. **Cold files** ([handoff](handoffs/capture-compression-2-cold-files.md)). Compress superseded plain-file versions, and latest files
-   whose source has not changed for a configurable period (14 days, say).
-   Capture always rewrites a changed file in full (`copyOnce`), so a cold
-   file that changes again is simply recopied uncompressed. Planning must
-   take part sizes and versions from the manifest rather than from `stat` of
-   an encoded file, and decode only the parts it will parse. This saves about
-   15 GB, mostly Codex and Claude.
+2. **Cold files** ([handoff](handoffs/capture-compression-2-cold-files.md)).
+   Compress superseded plain-file versions, which no index reads again, and
+   latest files whose source has not changed for
+   `capture_compress_after_days` (default 14; 0 turns it off), that the last
+   capture found unchanged, and whose current version the catalog records as
+   indexed by the current extractor. Only transcripts the index parses when
+   they themselves change qualify (`compressibleLatest`): Claude transcripts,
+   Codex rollouts and Antigravity transcripts. Index and name files every plan
+   reads, run logs, annotations and TL1 transcripts (TL1's index re-parses
+   them whenever its database changes) stay uncompressed. Adapters list, stat
+   and open captured files through the capture view (`sourceFiles`,
+   `capture_fs.go`): stat reports an encoded file at its original size, and
+   only opening it decodes, streaming. So planning takes sizes and versions
+   without decoding, and a normal sync over unchanged cold files decodes
+   nothing; heads a plan reads anyway (a Codex rollout's session id, an
+   Antigravity transcript's start time) are cached per process by original
+   path, size and mtime. Capture always rewrites a changed file in full
+   (`copyOnce`), so a cold file that changes again is recopied uncompressed,
+   and a rewritten one keeps its encoded copy in `history/`. On a sample of
+   the production captures this saves about 9 GB now (Codex 3.7×, Claude
+   3.3×), rising as files go cold.
 3. **Idle latest snapshots** ([handoff](handoffs/capture-compression-3-idle-snapshots.md)). Antigravity-CLI keeps a database per
    conversation, and most are idle. Compress latest snapshots whose source
    has not changed for the same period. Keep Conductor's latest snapshot

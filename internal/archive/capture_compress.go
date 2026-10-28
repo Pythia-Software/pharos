@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -17,13 +18,16 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-// Compressing superseded snapshot generations at rest (docs/capture-compression.md,
-// phase 1). A generation is only read again by a forced reindex, salvage of
-// sessions deleted at the source, record exports, history backfill, pins and
-// transfer, all of which decode it first; so once the index no longer needs
-// it, it is stored zstd-compressed under its own name.
+// Compressing captured files at rest (docs/capture-compression.md). Phase 1:
+// superseded snapshot generations, read again only by a forced reindex,
+// salvage of sessions deleted at the source, record exports, history
+// backfill, pins and transfer, all of which decode them first. Phase 2:
+// earlier versions of captured files, and cold latest transcripts that the
+// index has recorded and reads again only when they change; adapters read
+// them through the capture view (capture_fs.go). Each is stored
+// zstd-compressed under its own name.
 //
-// Order, for one generation:
+// Order, for one file:
 //
 //  1. encode it into a flocked reader lease of its own (which no capture's
 //     sweep removes while it is held), hashing the original bytes as read;
@@ -81,7 +85,7 @@ var (
 // capturing Mac's own build is known to be new enough to keep capturing.
 // A library that keeps pending evidence for delivery is left alone. Every
 // pass first removes abandoned reader leases under all hosts' captures.
-func compressCaptures(ctx context.Context, config Config, done func(compressedGeneration)) error {
+func compressCaptures(ctx context.Context, config Config, catalog *Catalog, done func(compressedGeneration)) error {
 	if config.CaptureRoot == "" {
 		return nil
 	}
@@ -97,6 +101,34 @@ func compressCaptures(ctx context.Context, config Config, done func(compressedGe
 	host := currentHost()
 	if host.Fallback || !validCaptureName(host.ID) {
 		return nil
+	}
+	policy := compressPolicy{afterDays: config.CaptureCompressAfterDays, now: time.Now()}
+	if catalog != nil {
+		// Recorded by the current extractor: after an extractor change the
+		// next index parses every part again, so nothing is cold until then.
+		extractors := map[string]string{}
+		extractor := func(source string) string {
+			if value, ok := extractors[source]; ok {
+				return value
+			}
+			value := ""
+			target := captureTarget{Host: host, Source: source, Dir: filepath.Join(config.CaptureRoot, host.ID, source)}
+			if adapter, _, _, err := openCaptureAdapter(target); err == nil {
+				value, _ = catalog.effectiveIndexVersion(host.ID, source, adapter)
+			}
+			extractors[source] = value
+			return value
+		}
+		policy.indexed = func(source, item string, size, version int64) bool {
+			current := extractor(source)
+			if current == "" {
+				return false
+			}
+			own, offHost := extractorVariants(current)
+			var found int
+			err := catalog.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM source_item_states WHERE host_id=? AND source_name=? AND item=? AND extractor IN (?,?) AND size=? AND version=?", host.ID, source, item, own, offHost, size, version).Scan(&found)
+			return err == nil && found > 0
+		}
 	}
 	hostDir := filepath.Join(config.CaptureRoot, host.ID)
 	entries, err := os.ReadDir(hostDir)
@@ -117,7 +149,7 @@ func compressCaptures(ctx context.Context, config Config, done func(compressedGe
 		if _, err := os.Stat(filepath.Join(dir, captureManifestName)); err != nil {
 			continue
 		}
-		if err := compressSourceGenerations(ctx, captureTarget{Host: host, Source: entry.Name(), Dir: dir}, done); err != nil {
+		if err := compressSourceFiles(ctx, captureTarget{Host: host, Source: entry.Name(), Dir: dir}, policy, done); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -127,11 +159,190 @@ func compressCaptures(ctx context.Context, config Config, done func(compressedGe
 	return errors.Join(failures...)
 }
 
-// compressSourceGenerations corrects what a killed pass left, then
-// compresses each eligible generation of one captured source. A failure of
-// one generation does not stop the others; each is reported.
-func compressSourceGenerations(ctx context.Context, target captureTarget, done func(compressedGeneration)) error {
-	if err := correctUnrenamedGenerations(ctx, target); err != nil && !errors.Is(err, errCaptureBusy) {
+// compressPolicy decides which latest files are cold (phase 2).
+type compressPolicy struct {
+	// afterDays is capture_compress_after_days; 0 leaves latest files alone.
+	afterDays int
+	now       time.Time
+	// indexed reports that source_item_states holds this exact version of a
+	// part, so the next index will not read it; nil (no catalog) is never.
+	indexed func(source, item string, size, version int64) bool
+}
+
+// extractorVariants is an index version as this Mac's index records it and
+// as another Mac's index of the same capture does (with "@offhost", before
+// any "@generation:N"). Either one recording a part's exact size and version
+// makes the file cold: both ran the same parser over the same bytes. An
+// "@offhost" record alone does not stop this Mac's own index of the capture
+// from parsing the file once more (its tracker matches extractors exactly,
+// to fill in what only this Mac's Git checkouts know), which then decodes it
+// once; most files another Mac indexed are never indexed here again.
+func extractorVariants(version string) (own, offHost string) {
+	head, generation := version, ""
+	if index := strings.Index(version, "@generation:"); index >= 0 {
+		head, generation = version[:index], version[index:]
+	}
+	head = strings.TrimSuffix(head, "@offhost")
+	return head + generation, head + "@offhost" + generation
+}
+
+// compressMinBytes is the smallest file worth compressing.
+var compressMinBytes int64 = 64 << 10
+
+// compressCandidate is one captured file a pass may store encoded: a snapshot
+// generation, an earlier version of a file, or a cold latest file.
+type compressCandidate struct {
+	kind     string // generation, version or file
+	database string // a generation's database
+	v        capturedVersion
+}
+
+// compressCandidates lists the entries of manifest a pass considers.
+func compressCandidates(manifest *captureManifest) []compressCandidate {
+	candidates := []compressCandidate{}
+	for _, snapshot := range manifest.Snapshots {
+		for _, generation := range snapshot.Generations {
+			candidates = append(candidates, compressCandidate{kind: "generation", database: snapshot.Path, v: generation})
+		}
+	}
+	for _, file := range manifest.Files {
+		candidates = append(candidates, compressCandidate{kind: "file", v: file.version()})
+		for _, version := range file.Previous {
+			candidates = append(candidates, compressCandidate{kind: "version", v: version})
+		}
+	}
+	return candidates
+}
+
+// locate finds the candidate's entry in manifest, as it is now, and how to
+// record its encoding there.
+func (c compressCandidate) locate(manifest *captureManifest) (capturedVersion, func(encoding string, stored int64, hash string), bool) {
+	switch c.kind {
+	case "generation":
+		if entry := currentGeneration(manifest, c.database, c.v.Captured); entry != nil {
+			return *entry, func(encoding string, stored int64, hash string) {
+				entry.Encoding, entry.StoredSize, entry.SHA256 = encoding, stored, hash
+			}, true
+		}
+	case "version":
+		if entry, ok := manifest.version(c.v.Captured); ok && !strings.HasPrefix(c.v.Captured, captureFilesDir+"/") {
+			return *entry, func(encoding string, stored int64, hash string) {
+				entry.Encoding, entry.StoredSize, entry.SHA256 = encoding, stored, hash
+			}, true
+		}
+	case "file":
+		for _, file := range manifest.Files {
+			if file.Captured == c.v.Captured {
+				return file.version(), func(encoding string, stored int64, hash string) {
+					file.Encoding, file.StoredSize = encoding, stored
+				}, true
+			}
+		}
+	}
+	return capturedVersion{}, nil, false
+}
+
+// unchanged reports that now is the entry that was encoded.
+func (c compressCandidate) unchanged(now capturedVersion) bool {
+	return now.Encoding == "" && now.Size == c.v.Size && now.CapturedAt == c.v.CapturedAt && now.MTimeNS == c.v.MTimeNS && (c.v.SHA256 == "" || now.SHA256 == c.v.SHA256)
+}
+
+// eligible is whether the candidate may be stored encoded now.
+func (c compressCandidate) eligible(dir string, manifest *captureManifest, policy compressPolicy) bool {
+	switch c.kind {
+	case "generation":
+		return compressible(dir, manifest, c.database, c.v)
+	case "version":
+		// Superseded, so cold by definition; no parse reads it again.
+		return c.v.Encoding == "" && strings.HasPrefix(c.v.Captured, captureHistoryDir+"/") && c.v.Size >= compressMinBytes && !pinnedOrUnknown(dir, c.v.Captured)
+	case "file":
+		var file *capturedFile
+		for _, f := range manifest.Files {
+			if f.Captured == c.v.Captured {
+				file = f
+			}
+		}
+		return file != nil && coldLatest(dir, manifest, file, policy)
+	}
+	return false
+}
+
+// lastRunSaw reports a finished last capture that did not fail on the source
+// file at path: one whose errors name other files only. An error naming no
+// file (the drive, the whole source) may have stopped it before path.
+func lastRunSaw(run *captureRunRecord, path string) bool {
+	if run == nil || run.FinishedAt == "" {
+		return false
+	}
+	for _, failure := range run.Errors {
+		if failure.Path == "" || failure.Path == path {
+			return false
+		}
+	}
+	return true
+}
+
+func pinnedOrUnknown(dir, rel string) bool {
+	pinned, err := pinnedPath(dir, rel)
+	return err != nil || pinned
+}
+
+// coldLatest is whether a latest file is cold: a transcript kind the index
+// parses only when it changes (compressibleLatest), whose source has not
+// changed for policy.afterDays, that the last capture found unchanged (or
+// that left its source), and whose current version the index has recorded,
+// so the next index will not read it. Sources with retained-input capture
+// are left out: their durable revisions keep the original inode anyway.
+func coldLatest(dir string, manifest *captureManifest, file *capturedFile, policy compressPolicy) bool {
+	if policy.afterDays <= 0 || policy.indexed == nil || manifest.RetainedInputCapture || file.Encoding != "" || file.Size < compressMinBytes || !compressibleLatest(manifest.Source.Kind, file.Captured) {
+		return false
+	}
+	if time.Unix(0, file.MTimeNS).After(policy.now.AddDate(0, 0, -policy.afterDays)) {
+		return false
+	}
+	if file.MissingSince == "" {
+		run := manifest.LastRun
+		if !lastRunSaw(run, file.Path) {
+			return false
+		}
+		captured, ok := parseTime(file.CapturedAt)
+		started, ok2 := parseTime(run.StartedAt)
+		if !ok || !ok2 || !captured.Before(started) {
+			return false // copied by the last capture: not yet seen unchanged
+		}
+	}
+	if pinnedOrUnknown(dir, file.Captured) {
+		return false
+	}
+	return policy.indexed(manifest.Source.Name, file.Path, file.Size, file.MTimeNS)
+}
+
+// compressibleLatest is the allowlist of latest files that may be stored
+// encoded: transcripts the index parses only when their own size or mtime
+// changes. Index and name files every plan reads (Claude sessions-index.json,
+// Codex session_index.jsonl), run logs and annotations stay plain, as do TL1
+// transcripts, which its index parses whenever the database changes.
+func compressibleLatest(kind, rel string) bool {
+	name := path.Base(rel)
+	if !strings.HasPrefix(rel, captureFilesDir+"/") || !strings.HasSuffix(name, ".jsonl") {
+		return false
+	}
+	switch strings.ToLower(kind) {
+	case "claude":
+		return true
+	case "codex":
+		return strings.HasPrefix(name, "rollout-")
+	case "antigravity":
+		return name == "transcript_full.jsonl" || name == "transcript.jsonl"
+	}
+	return false
+}
+
+// compressSourceFiles corrects what a killed pass left, then compresses each
+// eligible entry of one captured source. A failure of one entry does not stop
+// the others; each is reported.
+func compressSourceFiles(ctx context.Context, target captureTarget, policy compressPolicy, done func(compressedGeneration)) error {
+	if err := correctUnrenamedEntries(ctx, target); err != nil && !errors.Is(err, errCaptureBusy) {
 		return err
 	}
 	manifest, err := loadCaptureManifest(target.Dir)
@@ -143,35 +354,34 @@ func compressSourceGenerations(ctx context.Context, target captureTarget, done f
 	}
 	outcomes := loadCompressionOutcomes(target.Dir)
 	var failures []error
-	for _, snapshot := range manifest.Snapshots {
-		for _, generation := range snapshot.Generations {
-			if err := ctx.Err(); err != nil {
-				return err
+	for _, candidate := range compressCandidates(manifest) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		generation := candidate.v
+		if outcomes.settled(target.Dir, generation) || !candidate.eligible(target.Dir, manifest, policy) {
+			continue
+		}
+		stored, err := compressEntry(ctx, target, manifest, candidate, policy, outcomes)
+		switch {
+		case err == nil:
+			if stored > 0 && done != nil {
+				done(compressedGeneration{Source: target.Source, Path: generation.Captured, Size: generation.Size, Stored: stored})
 			}
-			if outcomes.settled(target.Dir, generation) || !compressible(target.Dir, manifest, snapshot.Path, generation) {
-				continue
-			}
-			stored, err := compressGeneration(ctx, target, manifest, snapshot.Path, generation, outcomes)
-			switch {
-			case err == nil:
-				if stored > 0 && done != nil {
-					done(compressedGeneration{Source: target.Source, Path: generation.Captured, Size: generation.Size, Stored: stored})
-				}
-			case errors.Is(err, errCompressIncompressible):
-				outcomes.record(generation, "incompressible", "")
-			case errors.Is(err, errCompressMismatch):
-				// Evidence that disagrees with its manifest is reported once,
-				// not compressed and not read again for this purpose.
-				outcomes.record(generation, "mismatch", err.Error())
-				failures = append(failures, err)
-			case errors.Is(err, errCompressVerify):
-				outcomes.failed(target.Dir, generation, err.Error())
-				failures = append(failures, err)
-			case ctx.Err() != nil:
-				return ctx.Err()
-			default:
-				failures = append(failures, fmt.Errorf("%s: %w", generation.Captured, err))
-			}
+		case errors.Is(err, errCompressIncompressible):
+			outcomes.record(generation, "incompressible", "")
+		case errors.Is(err, errCompressMismatch):
+			// Evidence that disagrees with its manifest is reported once,
+			// not compressed and not read again for this purpose.
+			outcomes.record(generation, "mismatch", err.Error())
+			failures = append(failures, err)
+		case errors.Is(err, errCompressVerify):
+			outcomes.failed(target.Dir, generation, err.Error())
+			failures = append(failures, err)
+		case ctx.Err() != nil:
+			return ctx.Err()
+		default:
+			failures = append(failures, fmt.Errorf("%s: %w", generation.Captured, err))
 		}
 	}
 	if err := outcomes.save(target.Dir, manifest); err != nil {
@@ -199,10 +409,11 @@ func compressible(dir string, manifest *captureManifest, database string, genera
 	return true
 }
 
-// compressGeneration stores one generation encoded, in the order above. It
-// returns the encoded size, or 0 when the generation was left as it was (it
+// compressEntry stores one captured file encoded, in the order above. It
+// returns the encoded size, or 0 when the file was left as it was (it
 // changed, was pruned or pinned meanwhile, or awaits a verified export).
-func compressGeneration(ctx context.Context, target captureTarget, manifest *captureManifest, database string, generation capturedVersion, outcomes *compressionOutcomes) (int64, error) {
+func compressEntry(ctx context.Context, target captureTarget, manifest *captureManifest, candidate compressCandidate, policy compressPolicy, outcomes *compressionOutcomes) (int64, error) {
+	generation := candidate.v
 	rel := generation.Captured
 	file := filepath.Join(target.Dir, filepath.FromSlash(rel))
 	fault := func(stage string) error {
@@ -211,7 +422,7 @@ func compressGeneration(ctx context.Context, target captureTarget, manifest *cap
 		}
 		return nil
 	}
-	if manifest.SQLiteRecordCapture {
+	if manifest.SQLiteRecordCapture && candidate.kind == "generation" {
 		c, err := sourceCaptureForTarget(ctx, target)
 		if err != nil {
 			return 0, err
@@ -329,14 +540,14 @@ func compressGeneration(ctx context.Context, target captureTarget, manifest *cap
 	if err != nil {
 		return abandon(err)
 	}
-	entry := currentGeneration(current, database, rel)
-	if entry == nil || entry.Encoding != "" || entry.Size != generation.Size || entry.CapturedAt != generation.CapturedAt || !compressible(target.Dir, current, database, *entry) {
+	now, record, ok := candidate.locate(current)
+	if !ok || !candidate.unchanged(now) || !(compressCandidate{kind: candidate.kind, database: candidate.database, v: now}).eligible(target.Dir, current, policy) {
 		return abandon(nil)
 	}
-	if now, err := os.Stat(file); err != nil || !os.SameFile(now, original) {
+	if same, err := os.Stat(file); err != nil || !os.SameFile(same, original) {
 		return abandon(nil)
 	}
-	entry.Encoding, entry.StoredSize, entry.SHA256 = captureEncodingZstd, stored.Size(), hash
+	record(captureEncodingZstd, stored.Size(), hash)
 	if err = fault("compress-manifest"); err != nil {
 		return abandon(err)
 	}
@@ -354,19 +565,31 @@ func compressGeneration(ctx context.Context, target captureTarget, manifest *cap
 	return stored.Size(), nil
 }
 
-// correctUnrenamedGenerations returns to plain the entries a killed pass
-// marked encoded but never renamed: their files still hold the original
-// bytes (storedAs). The check under the lock is a stat and a header read;
-// the entry keeps the digest the pass recorded, which describes those bytes.
-func correctUnrenamedGenerations(ctx context.Context, target captureTarget) error {
+// correctUnrenamedEntries returns to plain the entries a killed pass marked
+// encoded but never renamed: their files still hold the original bytes
+// (storedAs). The check under the lock is a stat and a header read; the entry
+// keeps the digest the pass recorded, which describes those bytes.
+func correctUnrenamedEntries(ctx context.Context, target captureTarget) error {
 	unrenamed := func(manifest *captureManifest) bool {
 		found := false
+		plain := func(v capturedVersion) (capturedVersion, bool) {
+			stored := storedAs(filepath.Join(target.Dir, filepath.FromSlash(v.Captured)), v)
+			return stored, stored.Encoding != v.Encoding
+		}
 		for _, snapshot := range manifest.Snapshots {
 			for i, generation := range snapshot.Generations {
-				plain := storedAs(filepath.Join(target.Dir, filepath.FromSlash(generation.Captured)), generation)
-				if plain.Encoding != generation.Encoding {
-					snapshot.Generations[i] = plain
-					found = true
+				if stored, changed := plain(generation); changed {
+					snapshot.Generations[i], found = stored, true
+				}
+			}
+		}
+		for _, file := range manifest.Files {
+			if stored, changed := plain(file.version()); changed {
+				file.Encoding, file.StoredSize, found = stored.Encoding, stored.StoredSize, true
+			}
+			for i, version := range file.Previous {
+				if stored, changed := plain(version); changed {
+					file.Previous[i], found = stored, true
 				}
 			}
 		}
@@ -521,7 +744,7 @@ const noReceipt = "none"
 // save keeps only the generations the manifest still names.
 func (o *compressionOutcomes) save(dir string, manifest *captureManifest) error {
 	for rel := range o.Entries {
-		if v, ok := manifest.version(rel); !ok || v.Encoding != "" {
+		if v, ok := manifest.entry(rel); !ok || v.Encoding != "" {
 			delete(o.Entries, rel)
 			o.modified = true
 		}
@@ -578,7 +801,7 @@ func (s *Server) compressCapturesLoop(ctx context.Context) {
 		}
 		var err error
 		pass.runIO(func() {
-			err = compressCaptures(passCtx, s.Config(), func(compressedGeneration) { pass.worked(1) })
+			err = compressCaptures(passCtx, s.Config(), s.Catalog, func(compressedGeneration) { pass.worked(1) })
 		})
 		if ctx.Err() != nil {
 			err = nil

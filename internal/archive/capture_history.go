@@ -224,7 +224,7 @@ func planHistory(ctx context.Context, config Config, scope historyScope) (histor
 				}
 			}
 			for _, f := range m.Files {
-				for _, v := range append([]capturedVersion{{Captured: f.Captured, Size: f.Size, MTimeNS: f.MTimeNS, ObservedNS: f.ObservedNS, SHA256: f.SHA256, CapturedAt: f.CapturedAt}}, f.Previous...) {
+				for _, v := range append([]capturedVersion{f.version()}, f.Previous...) {
 					if e = addNative("file", f.Path, v); e != nil {
 						return p, e
 					}

@@ -3,10 +3,13 @@
 package archive
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // TestCaptureCompressionProbe times compressing one real snapshot generation
@@ -65,7 +68,7 @@ func TestCaptureCompressionProbe(t *testing.T) {
 		}
 	}()
 	started := time.Now()
-	stored, err := compressGeneration(t.Context(), target, manifest, "/probe/conductor.db", manifest.Snapshots[0].Generations[0], loadCompressionOutcomes(target.Dir))
+	stored, err := compressEntry(t.Context(), target, manifest, compressCandidate{kind: "generation", database: "/probe/conductor.db", v: manifest.Snapshots[0].Generations[0]}, compressPolicy{}, loadCompressionOutcomes(target.Dir))
 	elapsed := time.Since(started)
 	close(stop)
 	<-sampled
@@ -83,3 +86,84 @@ func TestCaptureCompressionProbe(t *testing.T) {
 	release()
 	t.Logf("decoded into a reader lease in %s (%d bytes of temporary disk)", time.Since(started), decodedInfo.Size())
 }
+
+// TestCaptureCompressionSampleProbe measures what phase 2 would save on a
+// plain file copy of real captures: for each source directory under
+// PHAROS_COMPRESS_SAMPLE_DIR (named for its kind, holding that capture's
+// files/), the bytes compressCaptures's allowlist admits, and their size at
+// zstd level 3, in total and for files unchanged for 14 days. It encodes into
+// a counter and writes nothing; it opens nothing with SQLite.
+//
+//	cp -Rc "<backup>/captures/<host>/claude" /Volumes/euclid/.pharos-compress-sample/claude
+//	PHAROS_COMPRESS_SAMPLE_DIR=/Volumes/euclid/.pharos-compress-sample \
+//	  go test -tags probe ./internal/archive -run TestCaptureCompressionSampleProbe -v -timeout 60m
+func TestCaptureCompressionSampleProbe(t *testing.T) {
+	root := os.Getenv("PHAROS_COMPRESS_SAMPLE_DIR")
+	if root == "" {
+		t.Skip("set PHAROS_COMPRESS_SAMPLE_DIR to copies of captured sources")
+	}
+	kinds, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cold := time.Now().AddDate(0, 0, -14)
+	for _, kind := range kinds {
+		if !kind.IsDir() {
+			continue
+		}
+		dir := filepath.Join(root, kind.Name())
+		var all, allowed, allowedStored, coldBytes, coldStored int64
+		var files, coldFiles int
+		started := time.Now()
+		err := filepath.WalkDir(filepath.Join(dir, captureFilesDir), func(path string, entry os.DirEntry, err error) error {
+			if err != nil || entry.IsDir() {
+				return err
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			all += info.Size()
+			rel, _ := filepath.Rel(dir, path)
+			if !compressibleLatest(kind.Name(), filepath.ToSlash(rel)) || info.Size() < compressMinBytes {
+				return nil
+			}
+			in, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer in.Close()
+			var counter countingWriter
+			encoder, err := zstd.NewWriter(&counter, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(captureCompressLevel)), zstd.WithEncoderConcurrency(captureCompressThreads))
+			if err != nil {
+				return err
+			}
+			if _, err = io.Copy(encoder, in); err != nil {
+				return err
+			}
+			if err = encoder.Close(); err != nil {
+				return err
+			}
+			files++
+			allowed += info.Size()
+			allowedStored += counter.n
+			if info.ModTime().Before(cold) {
+				coldFiles++
+				coldBytes += info.Size()
+				coldStored += counter.n
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("%s: %.2f GB captured; allowlisted %d files %.2f GB -> %.2f GB (%.1fx); unchanged 14+ days %d files %.2f GB -> %.2f GB, saving %.2f GB; %s",
+			kind.Name(), gb(all), files, gb(allowed), gb(allowedStored), float64(allowed)/float64(max(allowedStored, 1)), coldFiles, gb(coldBytes), gb(coldStored), gb(coldBytes-coldStored), time.Since(started).Round(time.Second))
+	}
+}
+
+type countingWriter struct{ n int64 }
+
+func (c *countingWriter) Write(b []byte) (int, error) { c.n += int64(len(b)); return len(b), nil }
+
+func gb(n int64) float64 { return float64(n) / 1e9 }

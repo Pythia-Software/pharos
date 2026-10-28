@@ -62,7 +62,11 @@ type Config struct {
 	// CaptureRoot holds raw captures of each host's sources; see capture.go.
 	CaptureRoot        string
 	CaptureGenerations int
-	CaptureRecoveryID  string
+	// CaptureCompressAfterDays is how long a captured file's source must be
+	// unchanged before the file is stored compressed; 0 keeps latest files
+	// uncompressed (docs/capture-compression.md).
+	CaptureCompressAfterDays int
+	CaptureRecoveryID        string
 }
 
 func defaultConfig(path string) Config {
@@ -74,7 +78,7 @@ func defaultConfig(path string) Config {
 		Host: "127.0.0.1", Port: 8765, PackageCapBytes: defaultCap,
 		UpcomingDays: 23, EligibleDays: 30, SnoozeDays: 14, StagingCapBytes: 2_000_000_000,
 		CPUIDLECeiling: .35, IOMBPSCeiling: 25, YieldPollSeconds: 2,
-		CaptureRoot: filepath.Join(root, "captures"), CaptureGenerations: 1,
+		CaptureRoot: filepath.Join(root, "captures"), CaptureGenerations: 1, CaptureCompressAfterDays: 14,
 	}
 }
 
@@ -175,6 +179,7 @@ func loadConfig(path string, hostSources bool) (Config, error) {
 	}
 	config.CaptureRoot = resolvePath(base, stringValue(root, "capture_root", captureRoot))
 	config.CaptureGenerations = intValue(root, "capture_snapshot_generations", config.CaptureGenerations)
+	config.CaptureCompressAfterDays = max(intValue(root, "capture_compress_after_days", config.CaptureCompressAfterDays), 0)
 	config.VolumeID = stringValue(root, "volume_id", "")
 	config.APIToken = stringValue(root, "api_token", os.Getenv("PHAROS_API_TOKEN"))
 	config.Executable = resolvePath(base, stringValue(root, "executable", ""))

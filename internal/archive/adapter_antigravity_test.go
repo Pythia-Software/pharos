@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/binary"
@@ -12,8 +13,11 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 const (
@@ -243,6 +247,17 @@ func TestAntigravityIngestIsIncrementalAndCaptured(t *testing.T) {
 	catalog, config := testCatalog(t)
 	config.CaptureRoot = filepath.Join(t.TempDir(), "captures")
 	dir := antigravityFixture(t)
+	// Transcripts last written a month ago are cold (compressed below).
+	transcripts, _ := filepath.Glob(filepath.Join(dir, "brain", "*", filepath.FromSlash(antigravityLogs), "transcript*.jsonl"))
+	if len(transcripts) == 0 {
+		t.Fatal("fixture has no transcripts")
+	}
+	for _, transcript := range transcripts {
+		old := time.Now().AddDate(0, -1, 0)
+		if err := os.Chtimes(transcript, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
 	source := SourceConfig{Name: "antigravity-cli", Kind: "antigravity", Path: dir, Account: "local", Enabled: true}
 	config.Sources = []SourceConfig{source}
 	parses := countParses(t)
@@ -290,6 +305,28 @@ func TestAntigravityIngestIsIncrementalAndCaptured(t *testing.T) {
 	}
 	if a, b := countRows(t, catalog, "SELECT COUNT(*) FROM messages"), countRows(t, other, "SELECT COUNT(*) FROM messages"); a != b || a == 0 {
 		t.Fatalf("messages live %d, from capture %d", a, b)
+	}
+
+	// Cold transcripts the index recorded are stored compressed; another
+	// index of them, forced, reads them through the capture view.
+	override(t, &compressMinBytes, 1)
+	runCapture(t, config)
+	compressed := 0
+	if err := compressCaptures(t.Context(), config, other, func(compressedGeneration) { compressed++ }); err != nil || compressed == 0 {
+		t.Fatalf("compressed %d of %d transcripts: %v", compressed, len(transcripts), err)
+	}
+	forced, _ := testCatalog(t)
+	targets, err := captureTargets(config.CaptureRoot, []string{"host-a"}, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range targets {
+		if result := forced.IndexCapture(withIngestMode(t.Context(), ingestMode{force: true}), target, nil); result.Error != nil {
+			t.Fatal(result.Error)
+		}
+	}
+	if a, b := countRows(t, catalog, "SELECT COUNT(*) FROM messages"), countRows(t, forced, "SELECT COUNT(*) FROM messages"); a != b {
+		t.Fatalf("messages live %d, from compressed capture %d", a, b)
 	}
 }
 
@@ -423,6 +460,82 @@ func TestAntigravityPrintModeRunsAreHeadless(t *testing.T) {
 	indexCaptures(t, other, config.CaptureRoot, "host-a")
 	if got := sender(other, antigravityRoot); got != "automation:agy-print" {
 		t.Fatalf("sender from a capture the CLI rotated its log out of = %q", got)
+	}
+
+	// Once the transcripts are cold and stored compressed, print-mode
+	// detection, which reads transcripts' start times on every plan, reads
+	// their original bytes, and a normal index decodes nothing.
+	override(t, &compressMinBytes, 1)
+	transcripts, _ := filepath.Glob(filepath.Join(config.CaptureRoot, "host-a", "antigravity-cli", "files", "brain", "*", filepath.FromSlash(antigravityLogs), "transcript*.jsonl"))
+	old := time.Now().AddDate(0, -1, 0)
+	for _, transcript := range transcripts {
+		if err := os.Chtimes(transcript, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lease := func() *antigravityAdapter {
+		t.Helper()
+		target := captureTarget{Host: currentHost(), Source: "antigravity-cli", Dir: filepath.Join(config.CaptureRoot, "host-a", "antigravity-cli")}
+		input, err := leaseCaptureForIndex(t.Context(), target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(input.Close)
+		return input.Adapter.(*antigravityAdapter)
+	}
+	plain := lease()
+	starts := map[string]time.Time{}
+	plainTranscripts, err := plain.transcripts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, path := range plainTranscripts {
+		if starts[id], err = plain.files().readAntigravityStarted(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The capture keeps source mtimes: make its copies cold by recording them
+	// in the manifest as the source's.
+	manifest, err := loadCaptureManifest(filepath.Join(config.CaptureRoot, "host-a", "antigravity-cli"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range manifest.Files {
+		if slices.ContainsFunc(transcripts, func(path string) bool {
+			return strings.HasSuffix(path, filepath.FromSlash(strings.TrimPrefix(file.Captured, "files/")))
+		}) {
+			file.MTimeNS, file.MTime = old.UnixNano(), old.UTC().Format(time.RFC3339Nano)
+		}
+	}
+	if err = writeCaptureManifest(filepath.Join(config.CaptureRoot, "host-a", "antigravity-cli"), manifest); err != nil {
+		t.Fatal(err)
+	}
+	reindexed, _ := testCatalog(t)
+	indexCaptures(t, reindexed, config.CaptureRoot, "host-a")
+	compressed := 0
+	if err := compressCaptures(t.Context(), config, reindexed, func(compressedGeneration) { compressed++ }); err != nil || compressed == 0 {
+		t.Fatal("no cold transcript was compressed", compressed, err)
+	}
+	var decodes atomic.Int64
+	override(t, &capturedContentHook, func(string) { decodes.Add(1) })
+	indexCaptures(t, reindexed, config.CaptureRoot, "host-a")
+	if got := sender(reindexed, antigravityRoot); decodes.Load() != 0 || got != "automation:agy-print" {
+		t.Fatalf("normal index over compressed transcripts: %d decodes, sender %q", decodes.Load(), got)
+	}
+	// With nothing cached, the start times read from the encoded transcripts
+	// are the original ones.
+	headCacheMu.Lock()
+	headCache = map[headKey]any{}
+	headCacheMu.Unlock()
+	encoded := lease()
+	encodedTranscripts, err := encoded.transcripts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, path := range encodedTranscripts {
+		if got, err := encoded.files().antigravityStarted(path); err != nil || !got.Equal(starts[id]) || got.IsZero() {
+			t.Fatalf("start of %s from its compressed transcript = %v, want %v", id, got, starts[id])
+		}
 	}
 }
 
@@ -610,5 +723,97 @@ func TestAntigravityLogReaderHandlesChunkBoundariesAndLongLines(t *testing.T) {
 		if _, err := readAntigravityRunLog(ctx, path, make([]byte, 64*1024)); !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancelled log read did not stop: %v", err)
 		}
+	}
+}
+
+// A transcript's start time that could not be read (the file could not be
+// opened, or its encoded bytes not decoded) is not cached as "no start
+// time": print-mode attribution would be lost for the life of the process.
+func TestAntigravityStartTimeFailuresAreNotCached(t *testing.T) {
+	started := time.Date(2026, 9, 28, 14, 30, 2, 0, time.UTC)
+	content := []byte(antigravitySteps(map[string]any{"type": "USER_INPUT", "content": "hello", "created_at": started.Format(time.RFC3339)}))
+	dir := t.TempDir()
+
+	// Open failure: a transcript that stats (so it has a cache key) but
+	// cannot be opened, then can, unchanged.
+	live := filepath.Join(dir, "live", "transcript.jsonl")
+	writeSourceFile(t, live, string(content))
+	if err := os.Chmod(live, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(live, 0o600) })
+	if got, err := (sourceFiles{}).antigravityStarted(live); err == nil || !got.IsZero() {
+		t.Fatal("start time of a transcript that cannot be opened", got, err)
+	}
+	if err := os.Chmod(live, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := (sourceFiles{}).antigravityStarted(live); err != nil || !got.Equal(started) {
+		t.Fatalf("start time after an open failure = %v (%v), want %v", got, err, started)
+	}
+
+	// A plan whose print-mode detection cannot read a conversation's start
+	// time leaves that group undiscovered, with an error, rather than
+	// discovering it as an interactive run.
+	source := antigravityFixture(t)
+	probePut(t, filepath.Join(source, "log", "cli-20260928_080412.log"), "I0928 08:03:00.100000 1 printmode.go:181] Print mode: starting (promptLength=13)\n")
+	adapter := &antigravityAdapter{baseAdapter: baseAdapter{config: SourceConfig{Name: "antigravity-cli", Kind: "antigravity", Path: source}}}
+	transcripts, err := adapter.transcripts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unreadable := transcripts[antigravityOther]
+	if err := os.Chmod(unreadable, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(unreadable, 0o600) })
+	plan, err := adapter.planParts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.discoveryError == nil || !strings.Contains(plan.discoveryError.Error(), "start time") {
+		t.Fatal("unreadable start time did not fail its group's discovery", plan.discoveryError)
+	}
+	for _, group := range plan.groups {
+		for _, part := range group.parts {
+			if part.item == unreadable {
+				t.Fatal("the group whose start time is unreadable was planned")
+			}
+		}
+	}
+
+	// Decode failure: an encoded capture whose bytes do not decode, then the
+	// real encoding under the same name, size and mtime (the same cache key).
+	var encoded bytes.Buffer
+	writer, err := zstd.NewWriter(&encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer.Write(content)
+	writer.Close()
+	rel := "files/brain/x/transcript.jsonl"
+	file := filepath.Join(dir, "capture", filepath.FromSlash(rel))
+	corrupt := append([]byte{}, encoded.Bytes()...)
+	for i := len(zstdMagic) + 8; i < len(corrupt); i++ {
+		corrupt[i] ^= 0x5a
+	}
+	writeSourceFile(t, file, string(corrupt))
+	stamp := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(file, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	view := &captureView{host: Host{ID: "host-a"}, dir: filepath.Join(dir, "capture"), manifest: &captureManifest{Files: []*capturedFile{{Path: "/source/transcript.jsonl", Captured: rel, Size: int64(len(content)), Encoding: captureEncodingZstd, StoredSize: int64(encoded.Len())}}}}
+	files := sourceFiles{view: view}
+	if got, err := files.antigravityStarted(file); err == nil || !got.IsZero() {
+		t.Fatal("start time from undecodable bytes", got, err)
+	}
+	if err := os.WriteFile(file, encoded.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(file, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := files.antigravityStarted(file); !got.Equal(started) {
+		t.Fatalf("start time after a decode failure = %v, want %v", got, started)
 	}
 }

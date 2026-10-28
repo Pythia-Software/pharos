@@ -243,7 +243,8 @@ What it does, in order:
 and no sources. From the install it carries over `package_cap_bytes`,
 `upcoming_days`, and `eligible_days`, and, when set, `snooze_days`,
 `staging_cap_bytes`, `cpu_idle_ceiling`, `io_mbps_ceiling`,
-`yield_poll_seconds`, and `capture_snapshot_generations`. The rest does not
+`yield_poll_seconds`, `capture_snapshot_generations`, and
+`capture_compress_after_days`. The rest does not
 carry over, and the summary lists what was set:
 
 - locations (`data_dir`, `catalog_path`, `archive_root`, `staging_root`,
@@ -673,6 +674,9 @@ the catalog open, so eject the drive rather than pulling it.
 capture_root = "captures"
 # Previous database snapshots kept besides the latest (see below).
 capture_snapshot_generations = 1
+# Days a transcript's source must be unchanged before its capture is stored
+# compressed; 0 keeps latest transcripts uncompressed (see below).
+capture_compress_after_days = 14
 ```
 
 Outside a library the default is beside the catalog rather than under
@@ -767,6 +771,21 @@ verification) decode it into a temporary reader directory first, which needs
 its original size free on the drive. Each Mac compresses only its own
 captures. A capture with a compressed generation has manifest version 6, which
 builds before this change refuse rather than misread.
+
+The same pass compresses earlier versions of captured files, which are kept in
+`history/` and never parsed again, and cold latest transcripts: Claude
+transcripts, Codex rollouts and Antigravity transcripts whose source has not
+changed for `capture_compress_after_days` (default 14; 0 turns this off), that
+the last capture found unchanged, and whose current version the catalog has
+indexed (Claude JSONL about 3×, Codex rollouts about 2.2×). Index files every
+index reads (`sessions-index.json`, `session_index.jsonl`), run logs,
+annotations and TL1 transcripts, which TL1's index parses whenever its
+database changes, stay uncompressed, as do the latest files of sources with
+retained-input capture, whose durable revisions keep the original anyway. An
+index reads a compressed transcript only when it parses it, decoding it as it
+reads; a normal index over unchanged files decodes nothing. A transcript that
+changes again is captured in full and uncompressed, and its compressed copy
+moves to `history/` if it was rewritten.
 
 **Low impact.** The capture's disk I/O runs in the utility I/O tier on its own
 thread, yielding to interactive work without the background tier's long stalls,

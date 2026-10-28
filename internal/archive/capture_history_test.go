@@ -1172,3 +1172,60 @@ func TestHistoryRecoveryConflictsRespectSourceScope(t *testing.T) {
 		})
 	}
 }
+
+// History backfill reads compressed latest files and earlier versions by
+// their original bytes: planning, pins, the rollback backup's check and the
+// raw export all decode them.
+func TestHistoryBackfillsCompressedFiles(t *testing.T) {
+	c, config, dest := historyFixture(t)
+	override(t, &compressMinBytes, 1)
+	claude := filepath.Join(t.TempDir(), "claude")
+	lines := ""
+	for line := range 30 {
+		lines += claudeLine("kept", fmt.Sprintf("kept-%d", line), strings.Repeat("retained text ", 20), "/proj", line)
+	}
+	writeSourceFile(t, filepath.Join(claude, "p", "kept.jsonl"), lines)
+	writeSourceFile(t, filepath.Join(claude, "p", "rewritten.jsonl"), lines)
+	config.Sources = []SourceConfig{{Name: "claude", Kind: "claude", Path: claude, Account: "local", Enabled: true}}
+	runCapture(t, config)
+	writeSourceFile(t, filepath.Join(claude, "p", "rewritten.jsonl"), claudeLine("rewritten", "r-1", "new", "/proj", 1))
+	runCapture(t, config)
+	indexCaptures(t, c, config.CaptureRoot, "host-a")
+	runCapture(t, config)
+	compressed := 0
+	if err := compressCaptures(t.Context(), config, c, func(compressedGeneration) { compressed++ }); err != nil || compressed != 2 {
+		t.Fatal("fixture: expected the cold latest file and the superseded version compressed", compressed, err)
+	}
+	p, err := planHistory(t.Context(), config, historyScope{Host: "host-a", Source: "claude"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := 0
+	for _, u := range p.Units {
+		if u.Kind == "file" && u.Gap != "" {
+			t.Fatal("compressed file planned as a gap", u)
+		}
+		if u.Version.Encoding != "" {
+			encoded++
+		}
+	}
+	if encoded != 2 {
+		t.Fatal("plan did not see both compressed files", encoded)
+	}
+	j, err := prepareHistory(t.Context(), config, p, dest, 128<<20, 128<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned := 0
+	for _, pin := range j.Protected {
+		if pin.Encoding == captureEncodingZstd {
+			pinned++
+		}
+	}
+	if pinned != 2 {
+		t.Fatal("pins do not record the compressed inputs' encoding", j.Protected)
+	}
+	if j, err = runHistory(t.Context(), config, j.ID); err != nil || j.State != "exported" {
+		t.Fatal("backfill over compressed files", j.State, err)
+	}
+}

@@ -424,7 +424,7 @@ func (j *historyJob) verifyReceipt(ctx context.Context, u historyUnit, r history
 			return errors.New("unresolved historical view identity/closure")
 		}
 		for _, f := range m.Files {
-			hash, size, e := fileSHA256Context(ctx, filepath.Join(dir, filepath.FromSlash(f.Captured)))
+			hash, size, e := capturedSHA256(ctx, filepath.Join(dir, filepath.FromSlash(f.Captured)), f.Encoding)
 			if e != nil {
 				return e
 			}
@@ -642,7 +642,7 @@ func (j *historyJob) exportUnit(ctx context.Context, u historyUnit) (historyRece
 			return r, 0, errors.New("historical parsing inventory changed")
 		}
 		for _, f := range m.Files {
-			hash, size, e := fileSHA256Context(ctx, filepath.Join(inputDir, filepath.FromSlash(f.Captured)))
+			hash, size, e := capturedSHA256(ctx, filepath.Join(inputDir, filepath.FromSlash(f.Captured)), f.Encoding)
 			if e != nil || hash != f.SHA256 || size != f.Size {
 				return r, 0, errors.New("historical view dependency failed verification")
 			}

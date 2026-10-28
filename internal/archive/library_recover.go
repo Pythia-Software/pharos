@@ -382,12 +382,53 @@ func validateCaptures(ctx context.Context, root string, staged bool) error {
 			}
 			return nil
 		}
+		// A file stored encoded must be its stored size on disk and decode to
+		// the original size and digest. A compression killed between its
+		// manifest and its rename left an entry marked encoded over the
+		// original bytes; that is checked as plain. The tree may be live, so
+		// one handle is classified and read.
+		verifyStored := func(v capturedVersion) error {
+			if !filepath.IsLocal(v.Captured) || v.Captured == "." || strings.Contains(v.Captured, "\\") {
+				return fmt.Errorf("unsafe captured evidence path: %q", v.Captured)
+			}
+			file := filepath.Join(dir, filepath.FromSlash(v.Captured))
+			if info, err := os.Lstat(file); err != nil {
+				return fmt.Errorf("missing captured evidence %s: %w", file, err)
+			} else if !info.Mode().IsRegular() {
+				return fmt.Errorf("captured evidence failed verification: %s", file)
+			}
+			f, err := os.Open(file)
+			if err != nil {
+				return fmt.Errorf("missing captured evidence %s: %w", file, err)
+			}
+			defer f.Close()
+			recorded := storedAsFile(f, v)
+			v = storedAsUnlocked(f, v)
+			if staged && v.Encoding != recorded.Encoding {
+				return fmt.Errorf("captured evidence %s is stored compressed but its manifest records it uncompressed; copy the capture again", file)
+			}
+			info, err := f.Stat()
+			if err != nil || info.Size() != v.storedSize() {
+				return fmt.Errorf("captured evidence failed verification: %s", file)
+			}
+			if v.Encoding == "" && v.SHA256 == "" {
+				return nil
+			}
+			digest, size, err := capturedSHA256File(ctx, f, v.Encoding)
+			if err != nil {
+				return err
+			}
+			if size != v.Size || v.SHA256 != "" && digest != v.SHA256 {
+				return fmt.Errorf("captured evidence failed verification: %s", file)
+			}
+			return nil
+		}
 		for _, file := range manifest.Files {
-			if err = verify(file.Captured, file.Size, file.SHA256); err != nil {
+			if err = verifyStored(file.version()); err != nil {
 				return err
 			}
 			for _, previous := range file.Previous {
-				if err = verify(previous.Captured, previous.Size, previous.SHA256); err != nil {
+				if err = verifyStored(previous); err != nil {
 					return err
 				}
 			}
@@ -397,46 +438,8 @@ func validateCaptures(ctx context.Context, root string, staged bool) error {
 				return err
 			}
 			for _, generation := range snapshot.Generations {
-				// An encoded generation must be its stored size on disk and
-				// decode to the original size and digest. A compression killed
-				// between its manifest and its rename left an entry marked
-				// encoded over the original bytes; that is checked as plain.
-				// The tree may be live, so one handle is classified and read.
-				if !filepath.IsLocal(generation.Captured) || strings.Contains(generation.Captured, "\\") {
-					return fmt.Errorf("unsafe captured evidence path: %q", generation.Captured)
-				}
-				file := filepath.Join(dir, filepath.FromSlash(generation.Captured))
-				if info, err := os.Lstat(file); err != nil || !info.Mode().IsRegular() {
-					return fmt.Errorf("missing captured evidence %s: %v", file, err)
-				}
-				f, err := os.Open(file)
-				if err != nil {
-					return fmt.Errorf("missing captured evidence %s: %w", file, err)
-				}
-				recorded := storedAsFile(f, generation)
-				generation = storedAsUnlocked(f, generation)
-				if staged && generation.Encoding != recorded.Encoding {
-					f.Close()
-					return fmt.Errorf("captured evidence %s is stored compressed but its manifest records it uncompressed; copy the capture again", file)
-				}
-				info, err := f.Stat()
-				stored := generation.Size
-				if generation.Encoding != "" {
-					stored = generation.StoredSize
-				}
-				var digest string
-				var size int64
-				if err == nil && info.Size() == stored && (generation.Encoding != "" || generation.SHA256 != "") {
-					digest, size, err = capturedSHA256File(ctx, f, generation.Encoding)
-				} else if err == nil {
-					size = info.Size()
-					if generation.Encoding != "" {
-						size = -1
-					}
-				}
-				f.Close()
-				if err != nil || info.Size() != stored || size != generation.Size || generation.SHA256 != "" && digest != generation.SHA256 {
-					return fmt.Errorf("captured evidence failed verification: %s", file)
+				if err = verifyStored(generation); err != nil {
+					return err
 				}
 			}
 		}

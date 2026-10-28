@@ -77,7 +77,7 @@ func (a *antigravityAdapter) transcripts() (map[string]string, error) {
 		}
 		logs := filepath.Join(brain, entry.Name(), filepath.FromSlash(antigravityLogs))
 		for _, name := range []string{"transcript_full.jsonl", "transcript.jsonl"} {
-			if info, err := os.Stat(filepath.Join(logs, name)); err == nil && info.Mode().IsRegular() {
+			if info, err := a.files().Stat(filepath.Join(logs, name)); err == nil && info.Mode().IsRegular() {
 				found[entry.Name()] = filepath.Join(logs, name)
 				break
 			}
@@ -186,11 +186,26 @@ func (a *antigravityAdapter) readRunLogs() ([]antigravityRunLog, error) {
 
 // printModeConversations returns which of the transcripts' conversations were
 // run with -p: those a print-mode run log names, and those no run log names
-// that started just after a print-mode run did.
+// that started just after a print-mode run did. A start time that cannot be
+// read is an error.
 func (a *antigravityAdapter) printModeConversations(transcripts map[string]string) (map[string]bool, error) {
+	printed, unreadable, err := a.printModeDetail(transcripts)
+	if err == nil {
+		for _, failure := range unreadable {
+			return nil, failure
+		}
+	}
+	return printed, err
+}
+
+// printModeDetail is printModeConversations that reports, by conversation,
+// the start times it could not read, so a plan fails only those groups'
+// discovery rather than attributing them wrongly.
+func (a *antigravityAdapter) printModeDetail(transcripts map[string]string) (map[string]bool, map[string]error, error) {
+	unreadable := map[string]error{}
 	logs, err := a.readRunLogs()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	printed, named, anyPrint := map[string]bool{}, map[string]bool{}, false
 	for _, log := range logs {
@@ -204,11 +219,16 @@ func (a *antigravityAdapter) printModeConversations(transcripts map[string]strin
 		if named[id] || !anyPrint {
 			continue
 		}
-		if log := launchingRunLog(logs, antigravityStarted(path)); log != nil && log.print {
+		started, err := a.files().antigravityStarted(path)
+		if err != nil {
+			unreadable[id] = err
+			continue
+		}
+		if log := launchingRunLog(logs, started); log != nil && log.print {
 			printed[id] = true
 		}
 	}
-	return printed, nil
+	return printed, unreadable, nil
 }
 
 // launchingRunLog returns the log of the run that started last before a
@@ -235,9 +255,28 @@ func launchingRunLog(logs []antigravityRunLog, started time.Time) *antigravityRu
 // antigravityStarted returns when a transcript's first dated step was
 // created, or the zero time.
 func antigravityStarted(path string) time.Time {
-	file, err := os.Open(path)
+	started, _ := sourceFiles{}.antigravityStarted(path)
+	return started
+}
+
+// antigravityStarted reads through the capture view, so an encoded transcript
+// is read as its original bytes, and caches the time while the transcript is
+// unchanged: print-mode detection asks on every plan.
+func (s sourceFiles) antigravityStarted(path string) (time.Time, error) {
+	started, err := s.cachedHead("antigravity-started", path, func() (any, error) { return s.readAntigravityStarted(path) })
 	if err != nil {
-		return time.Time{}
+		return time.Time{}, err // not cached: the next plan reads it again
+	}
+	return started.(time.Time), nil
+}
+
+// readAntigravityStarted reports a failure to open or read (or decode) the
+// transcript as an error, so that it is not cached as "no start time"; the
+// zero time is an answer only once the lines it looks at were all read.
+func (s sourceFiles) readAntigravityStarted(path string) (time.Time, error) {
+	file, err := s.Open(path)
+	if err != nil {
+		return time.Time{}, err
 	}
 	defer file.Close()
 	reader := bufio.NewReader(file)
@@ -248,14 +287,16 @@ func antigravityStarted(path string) time.Time {
 		}
 		if json.Unmarshal(line, &step) == nil && step.CreatedAt != "" {
 			if created, err := time.Parse(time.RFC3339Nano, step.CreatedAt); err == nil {
-				return created
+				return created, nil
 			}
 		}
-		if err != nil {
+		if err == io.EOF {
 			break
+		} else if err != nil {
+			return time.Time{}, err
 		}
 	}
-	return time.Time{}
+	return time.Time{}, nil
 }
 
 func readAntigravityRunLog(ctx context.Context, path string, buffer []byte) (antigravityRunLog, error) {
@@ -339,7 +380,11 @@ func (a *antigravityAdapter) runLogsFor(ids map[string]bool) ([]string, error) {
 	}
 	for id := range ids {
 		if path, ok := transcripts[id]; ok && !named[id] {
-			if log := launchingRunLog(logs, antigravityStarted(path)); log != nil {
+			started, err := a.files().antigravityStarted(path)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return nil, err
+			} // a conversation deleted meanwhile has no start time, as in planParts
+			if log := launchingRunLog(logs, started); log != nil {
 				wanted[log] = true
 			}
 		}
@@ -394,7 +439,8 @@ func (a *antigravityAdapter) Fingerprint() (string, error) {
 		files = append(files, database, database+"-wal")
 	}
 	for _, file := range files {
-		if info, err := os.Stat(file); err == nil {
+		// Through the capture view: an encoded transcript at its original size.
+		if info, err := a.files().Stat(file); err == nil {
 			relative, _ := filepath.Rel(a.config.Path, file)
 			rows = append(rows, fmt.Sprintf("%s:%d:%d", filepath.ToSlash(relative), info.Size(), info.ModTime().UnixNano()))
 		}
@@ -515,7 +561,7 @@ func (a *antigravityAdapter) planParts() (*sourceWorkPlan, error) {
 	if err != nil {
 		return nil, err
 	}
-	printed, err := a.printModeConversations(transcripts)
+	printed, unreadable, err := a.printModeDetail(transcripts)
 	if err != nil {
 		return nil, err
 	}
@@ -562,7 +608,15 @@ groupsLoop:
 		})
 		parts := []sourcePart{}
 		for _, id := range ids {
-			if info, err := os.Stat(transcripts[id]); err == nil {
+			// Print mode is part of the group's record: without its start
+			// time the group is not discovered this time, not misattributed.
+			if err := unreadable[id]; err != nil {
+				if !errors.Is(err, os.ErrNotExist) {
+					failures = append(failures, fmt.Errorf("read group %s start time: %w", rootID, err))
+				}
+				continue groupsLoop
+			}
+			if info, err := a.files().Stat(transcripts[id]); err == nil {
 				parts = append(parts, sourcePart{item: a.original(transcripts[id]), size: info.Size(), version: info.ModTime().UnixNano(), signal: summaries[id].signal()})
 			} else {
 				if !errors.Is(err, os.ErrNotExist) {
@@ -632,7 +686,7 @@ func (a *antigravityAdapter) readPlannedGroup(rootID string, ids []string, parts
 		}
 		for _, transcript := range transcripts {
 			if a.original(transcript) == part.item {
-				info, err := os.Stat(transcript)
+				info, err := a.files().Stat(transcript)
 				if err != nil {
 					if !errors.Is(err, os.ErrNotExist) {
 						return fmt.Errorf("stat group %s after parse: %w", rootID, err)
@@ -700,7 +754,7 @@ func (a *antigravityAdapter) requestsPart(id string) (sourcePart, bool, error) {
 }
 
 func (a *antigravityAdapter) parseFile(id, path string, summary antigravitySummary) (WorkspaceRecord, sourcePart, error) {
-	file, err := os.Open(path)
+	file, err := a.files().Open(path)
 	if err != nil {
 		return WorkspaceRecord{}, sourcePart{}, err
 	}
