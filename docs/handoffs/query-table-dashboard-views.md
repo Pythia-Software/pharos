@@ -25,7 +25,8 @@ All four Pharos npm packages and the Go module pin **0.9.5**, unmodified.
 
 The requests are in priority order. Each one can ship on its own. Requests 5
 to 7 came from moving the Tools, Pharos MCP, Agent Time and Skills dashboards
-onto the analysis model.
+onto the analysis model. Moving Human Words, Carbon and Parallelism added no
+new request; it widened request 6.
 
 ---
 
@@ -202,9 +203,11 @@ as `minCount` does. Request 4's distinct form could share the shape:
 **Problem.** A clause can group a datetime field by calendar interval with
 `dateGrouping`, but a grouping stage's `keys` cannot. Pharos's weekday and
 hour profiles of timestamped records (Pharos MCP requests, tool calls, skill
-evidence) fold daily or hourly clause totals. Their "View supporting query"
-link should open those daily totals as grouped rows, as it does for datasets
-with a stored day, but can only open the records.
+evidence, user messages, hourly parallelism records) fold daily or hourly
+clause totals, and their hourly trends group the same timestamps by UTC
+hour. Their "View supporting query" link should open those totals as
+grouped rows, as it does for datasets with a stored day, but can only open
+the records.
 
 **Request.** Allow a grouping key with a calendar interval, such as
 `keys: [{ field: "called_at", interval: "day", timeZone }]` or a
@@ -214,7 +217,8 @@ interval with the interval's start as its key, in the given zone.
 **Acceptance.**
 - Grouping requests by `called_at` per local day in `America/Denver`
   produces one row per local date, keyed by its local midnight, with the
-  same totals as the equivalent `dateGrouping` clause.
+  same totals as the equivalent `dateGrouping` clause; the same holds for
+  UTC hours.
 - Group filters, ordering and drill-down (`inspectBucketQuery` on a grouped
   row) select exactly that interval's records.
 

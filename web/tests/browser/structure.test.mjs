@@ -240,7 +240,7 @@ const ROUTES = [
   { name: "Analyze cumulative tools", url: `/analyze?analyze_topic=tools&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20, "view": "trend", "metric": "mean_time", "period": "day"}))}`, ready: `.usage-tools-dashboard ${overTimeReady}` },
   { name: "Analyze cumulative mcp", url: `/analyze?analyze_topic=mcp&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20, "view": "trend", "metric": "mean_time", "period": "day"}))}`, ready: `.usage-mcp-dashboard ${overTimeReady}` },
   { name: "Analyze workspace custom intervals", url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify({ period: "hours", hours: 6, rollingPeriods: 37 }))}`, ready: ".usage-dashboard .usage-period-custom input" },
-  { name: "Analyze workspace human dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=human", ready: ".usage-dashboard .writing-panel .usage-chart" },
+  { name: "Analyze workspace human dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=human", ready: `.usage-human-dashboard ${overTimeReady}` },
   { name: "Analyze workspace tools dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=tools", ready: `.usage-tools-dashboard ${analysisReady}` },
   // Seven weeks keeps the history request within the stub's equality-filter
   // capability; wider day regex filters are exercised against the Go service.
@@ -250,6 +250,10 @@ const ROUTES = [
     tools: { "compare share": { view: "compare", metric: "calls", split: "tool_name", compareAs: "share" }, "compare minimum": { view: "compare", metric: "failure_rate", split: "tool_name", minSamples: 10 }, "over time": { view: "trend", metric: "truncation_rate", split: "mcp_method", rollingPeriods: 7, completePeriods: true } },
     mcp: { compare: { view: "compare", metric: "mean_output", split: "query_source" }, distribution: { view: "distribution", metric: "bytes", split: "tool_name", minSamples: 3, scale: "logarithmic" }, "hour cycle": { view: "cycle", cycle: "hour", metric: "calls", split: "none" }, "weekday cycle": { view: "cycle", cycle: "weekday", metric: "time", split: "none", reduce: "mean" }, "over time": { view: "trend", metric: "failure_rate", split: "status", rollingPeriods: 7 } },
     time: { compare: { view: "compare", metric: "time", split: "activity", compareAs: "share" }, "unit compare": { view: "compare", unit: "conversation", metric: "calls", split: "repository_name", reduce: "median" }, distribution: { view: "distribution", metric: "time", split: "command_source", minSamples: 3, scale: "logarithmic" }, "unit distribution": { view: "distribution", unit: "tool_conversation", metric: "calls", split: "tool_name" }, scatter: { view: "scatter", unit: "conversation", metric: "calls", metricY: "time", split: "provider" }, cycle: { view: "cycle", cycle: "hour", metric: "time", split: "none", reduce: "total" }, "over time": { v: 2, metric: "mean_time", split: "none", rollingPeriods: 7, completePeriods: true, norm: true } },
+    // 2c: messages, usage under the Carbon assumptions, and parallelism records.
+    human: { compare: { view: "compare", metric: "typed", split: "repository_name", compareAs: "share" }, "unit compare": { view: "compare", unit: "conversation", metric: "typed", split: "repository_name", reduce: "mean" }, distribution: { view: "distribution", unit: "conversation", metric: "typed", split: "none" }, "hour cycle": { view: "cycle", cycle: "hour", metric: "typed", split: "none", reduce: "total" }, "weekday cycle": { view: "cycle", cycle: "weekday", metric: "typed_messages", split: "none" }, "over time": { v: 2, metric: "words", split: "kind", rollingPeriods: 7 }, "cue share": { v: 2, metric: "correction_share", split: "none", period: "week" }, hourly: { v: 2, metric: "typed", split: "none", period: "hour" } },
+    carbon: { compare: { view: "compare", metric: "co2", split: "carbon_tier", compareAs: "share" }, "over time": { v: 2, metric: "energy", split: "type", rollingPeriods: 7, rollingOp: "sum" }, cycle: { view: "cycle", cycle: "weekday", metric: "co2", split: "none" } },
+    parallelism: { "over time": { v: 2, metric: "at_once", split: "none", rollingPeriods: 7, completePeriods: true, norm: true }, compare: { view: "compare", metric: "agent_hours", split: "repository_name" }, distribution: { view: "distribution", unit: "agent", metric: "agent_hours", split: "repository_name" }, cycle: { view: "cycle", cycle: "hour", metric: "agent_hours", split: "none", reduce: "total" } },
     skills: { compare: { view: "compare", metric: "conversations", split: "skill_name" }, distribution: { view: "distribution", metric: "body", split: "skill_evidence", minSamples: 3 }, "unit distribution": { view: "distribution", unit: "skill_path", metric: "loads", split: "skill_name" }, scatter: { view: "scatter", unit: "conversation", metric: "records", metricY: "body", split: "provider" }, cycle: { view: "cycle", cycle: "weekday", metric: "records", split: "none" }, "over time": { v: 2, metric: "records", split: "evidence_type", share: true, rollingPeriods: 7 } },
   }).flatMap(([topic, charts]) => Object.entries(charts).map(([name, chart]) => ({ name: `${topic} dashboard ${name}`, url: `/analyze?analyze_topic=${topic}&analyze_chart=${encodeURIComponent(JSON.stringify(chart))}`,
     ready: `.usage-${topic}-dashboard ${(chart.view ?? "trend") === "trend" ? overTimeReady : analysisReady}`,
@@ -379,7 +383,7 @@ const WIDTHS = [{ width: 1440, height: 900 }, { width: 1280, height: 720 }, { wi
 // any other problem still fails it.
 const KNOWN = [{
   bug: "Query Table 0.9.5 box and horizontal-bar charts reserve a fixed label margin, so long group labels are cut off; docs/handoffs/query-table-dashboard-views.md (request 1)",
-  when: route => route.name.startsWith("Tokens and Cost distribution") || /^(tools|mcp|time|skills) dashboard (compare|unit compare|distribution|unit distribution)/.test(route.name),
+  when: route => route.name.startsWith("Tokens and Cost distribution") || /^(tools|mcp|time|skills|human|carbon|parallelism) dashboard (compare|unit compare|distribution|unit distribution)/.test(route.name),
   match: /chart label ".*" cut off by svg .* in div\.qt-metric/,
 }, {
   bug: "Query Table 0.9.5 fit-to-screen can clip native Detail and JSON buttons at phone widths; docs/handoffs/query-table-fit-screen-controls.md",
@@ -749,7 +753,8 @@ for (const width of [1504, 390, 320]) test(`Parallelism dashboard and inline ran
   assert.ok(stats.y >= chart.y + chart.height, 'summary statistics follow the graph');
   assert.deepEqual(await layoutProblems(page), []);
   await app.shot('relative-card-range');
-  const range = page.getByRole('combobox', { name: 'Range', exact: true });
+  // The ribbon's Range; the engine views below have their own.
+  const range = page.getByRole('region', { name: 'Parallelism chart', exact: true }).getByRole('combobox', { name: 'Range', exact: true });
   await range.selectOption('custom');
   const from = page.getByLabel('From date', { exact: true });
   await from.waitFor();
@@ -760,44 +765,6 @@ for (const width of [1504, 390, 320]) test(`Parallelism dashboard and inline ran
     assert.ok(dates.x >= picker.x + picker.width && dates.y < picker.y + picker.height && picker.y < dates.y + dates.height, 'custom inputs sit beside the range selector');
   }
   await app.shot('custom-dates');
-});
-
-for (const [name, chart, requestCount] of [
-  ["text sources", { split: "kind" }, 1],
-  ["smoothed repositories", { split: "repository_name", rollingPeriods: 7 }, 2],
-  ["hourly", { split: "kind", period: "hour" }, 1],
-]) test(`Human Words relative dates settle across renders and renew on refresh (${name})`, { skip }, async t => {
-  const query = days => ({ ...EMPTY_QUERY, where: [
-    { field: "last_message_at", op: ">=", value: `-${days}d` },
-    { field: "first_message_at", op: "<", value: "+0s" },
-  ] });
-  const params = new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: "human", analyze_filters: encodeQuery(query(7)), analyze_chart: JSON.stringify({ period: "day", ...chart }) });
-  const app = await open(t, { url: `/analyze?${params}`, ready: ".writing-panel .usage-chart" });
-  const requests = () => app.calls.filter(call => call.path === "/api/query/writing/series");
-  assert.equal(requests().length, requestCount, "loading and data renders complete without refetching");
-  const initial = requests().map(call => call.body);
-  await app.page.clock.setFixedTime(new Date(Date.now() + 86400000));
-  await app.page.getByRole("combobox", { name: "Metric", exact: true }).selectOption("all");
-  await app.page.setViewportSize({ width: 390, height: 844 });
-  await app.settled();
-  assert.equal(requests().length, requestCount, "presentation changes keep the resolved request bounds");
-
-  const refreshed = app.page.waitForResponse(response => response.url().endsWith("/api/query/writing/series"));
-  await app.page.evaluate(() => window.dispatchEvent(new Event("pharos:usage-refresh")));
-  await refreshed;
-  await app.settled();
-  assert.equal(requests().length, requestCount * 2);
-  assert.ok(requests().slice(requestCount).every(call => call.body.end > initial[0].end), "refresh renews the relative end");
-
-  const filtered = app.page.waitForResponse(response => response.url().endsWith("/api/query/writing/series"));
-  await app.page.evaluate(filters => {
-    const url = new URL(location.href); url.searchParams.set("analyze_filters", filters);
-    history.replaceState(history.state, "", url); window.dispatchEvent(new Event("pharos:route"));
-  }, encodeQuery(query(30)));
-  await filtered;
-  await app.settled();
-  assert.equal(requests().length, requestCount * 3);
-  assert.ok(requests().slice(requestCount * 2).some(call => call.body.where.some(term => term.value === "-30d")), "filter changes issue the new request");
 });
 
 describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY || 3) }, () => {

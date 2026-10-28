@@ -3,11 +3,28 @@ import { tokenAnalysisCatalog } from "./token-analysis-catalog";
 import { toolsAnalysisCatalog } from "./tools-analysis-catalog";
 import { mcpAnalysisCatalog } from "./mcp-analysis-catalog";
 import { agentTimeAnalysisCatalog, skillsAnalysisCatalog } from "./record-analysis-catalogs";
+import { humanAnalysisCatalog } from "./human-analysis-catalog";
+import { carbonAnalysisCatalog, carbonCatalogShape, type CarbonAssumptions } from "./carbon-analysis-catalog";
+import { parallelismAnalysisCatalog, parallelismCatalogShape, type ParallelismCounting } from "./parallelism-analysis-catalog";
 
-// The engine dashboards, by Analyze topic.
+// The engine dashboards, by Analyze topic. Carbon and Parallelism build
+// their catalogs with the user's settings; these are their shapes, for
+// reading and comparing links.
 export const analysisCatalogs: Partial<Record<string, AnalysisCatalog>> = {
   tokens: tokenAnalysisCatalog, tools: toolsAnalysisCatalog, mcp: mcpAnalysisCatalog, time: agentTimeAnalysisCatalog, skills: skillsAnalysisCatalog,
+  human: humanAnalysisCatalog, carbon: carbonCatalogShape, parallelism: parallelismCatalogShape,
 };
+
+// The complete catalog a topic draws with, given the user's settings: Carbon
+// needs the current assumptions and factors, Parallelism the saved counting.
+// Without them, Carbon and Parallelism give their shapes, which read links
+// but cannot draw (useAnalysisCatalog supplies them in the page).
+export type CatalogSettings = { carbon?: CarbonAssumptions; parallelism?: ParallelismCounting };
+export function analysisCatalogFor(topic: string, settings: CatalogSettings = {}): AnalysisCatalog | undefined {
+  if (topic === "carbon") return settings.carbon ? carbonAnalysisCatalog(settings.carbon) : undefined;
+  if (topic === "parallelism") return settings.parallelism ? parallelismAnalysisCatalog(settings.parallelism) : undefined;
+  return analysisCatalogs[topic];
+}
 
 // A dashboard chart as it draws, whatever version or vocabulary wrote it, so
 // two links to the same view compare equal: defaults are filled in (an

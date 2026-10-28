@@ -204,7 +204,7 @@ test('page parameters choose the dataset, and every card URL opens its own datas
  for(const recipe of queryRecipes)assert.equal(m.queryFromURL(instantiateRecipe(recipe,7,clock).url)?.dataset,recipe.dataset,recipe.id);
  const writing=new URL(instantiateRecipe(queryRecipes.find(item=>item.id==='human-words'),7,clock).url,location.origin);
  assert.equal(writing.pathname,'/analyze');
- assert.equal(writing.searchParams.get('analyze_data'),'writing');
+ assert.equal(writing.searchParams.get('analyze_data'),'writing_messages');
  assert.equal(writing.searchParams.get('card_query'),'writing_messages');
 });
 

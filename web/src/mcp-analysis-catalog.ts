@@ -17,6 +17,11 @@ const measures: Record<string, AnalysisMeasure> = {
   bytes: { label: "Response bytes", unit: "bytes", format: count, op: "sum", field: "response_bytes", value: "response_bytes", additive: true, note: "Recorded response size in bytes." },
   truncated: { label: "Truncated calls", unit: "calls", format: count, op: "sum", field: "truncated_count", additive: true, note: "Requests whose responses were marked truncated." },
   time: { label: "Request time", unit: "ms", format: duration, op: "sum", field: "duration_ms", value: "duration_ms", additive: true, note: "Recorded server durations. Concurrent requests can overlap, so totals are not elapsed time." },
+  // A conditional part: zero-result searches over searches with a known
+  // count, among successful requests (the measure's population).
+  empty_rate: { label: "Empty-search rate", unit: "percent", format: percent, op: "sum", ratio: [{ op: "sum", expression: "IF([result_count]=0,1,0)", label: "requests with no results" }, { op: "count", field: "result_count", label: "successful requests with a recorded result count" }], additive: false,
+    where: [{ field: "status", op: "=", value: "ok" }, { field: "result_count", op: ">=", value: "0" }],
+    note: "Successful requests that returned no results, divided by successful requests with a recorded result count, pooled over each group's requests. Requests without a count, and failed requests, are left out." },
   mean_time: { label: "Mean request duration", unit: "ms", format: duration, op: "sum", ratio: ["duration_ms", { op: "count", field: "duration_ms" }], additive: false, note: "Recorded server duration divided by requests with a duration, pooled over each group's requests." },
 };
 
@@ -29,9 +34,10 @@ export const mcpAnalysisCatalog: AnalysisCatalog = {
   },
   units: {},
   records: { label: "Pharos request", plural: "Pharos requests", note: "The latest 5,000 requests are retained, so a long range can hold fewer than were made." },
-  // Requests are timestamps: hours and local days come from called_at.
+  // Requests are timestamps: the cycles' hours and local days come from
+  // called_at, as do Over time's hours; its days are the recorded day.
   cycle: { hour: { kind: "timestamp", field: "called_at" }, weekday: { kind: "timestamp", field: "called_at" } },
-  periods: { day: "day", week: "week", month: "month" },
+  periods: { day: "day", week: "week", month: "month" }, timestamp: "called_at",
   trend: { metric: "calls", split: "tool_name" },
   scatter: ["calls", "output"],
 };

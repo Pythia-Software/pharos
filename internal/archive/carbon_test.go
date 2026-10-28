@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -318,5 +319,53 @@ func testCarbon() carbonDocument {
 		Grids:       []carbonGrid{{Key: "test", Label: "Test grid", GramsPerKWh: 400, Basis: "test", Sources: cite}},
 		DefaultGrid: "test",
 		Sources:     []carbonSource{{ID: "s", Title: "Source", URL: "https://example.com", Finding: "test"}},
+	}
+}
+
+// TestCarbonSharedEstimates holds the service to the estimates in
+// testdata/carbon-estimates.json, which the page's calculator (carbon.js,
+// web/tests/unit/page/carbon.test.mjs) must also reproduce, so usage rows
+// and the Carbon dashboard's token-type split agree under any settings.
+func TestCarbonSharedEstimates(t *testing.T) {
+	raw, err := os.ReadFile("../../testdata/carbon-estimates.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Tokens map[string]map[string]float64 `json:"tokens"`
+		Cases  []struct {
+			Name       string             `json:"name"`
+			Settings   map[string]any     `json:"settings"`
+			FacilityWh float64            `json:"facility_wh"`
+			CO2eG      float64            `json:"co2e_g"`
+			ByCategory map[string]float64 `json:"co2e_g_by_category"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := loadCarbonDocument()
+	if err != nil {
+		t.Fatal(err)
+	}
+	close := func(got, want float64) bool { return math.Abs(got-want) <= 1e-9*math.Max(1, math.Abs(want)) }
+	for _, c := range fixture.Cases {
+		a := doc.assumptions(c.Settings)
+		total, byCategory := 0.0, map[string]float64{}
+		for tier, counts := range fixture.Tokens {
+			for category, tokens := range counts {
+				wh := a.wh(tier, category, tokens)
+				total += wh
+				byCategory[category] += wh
+			}
+		}
+		if !close(total*a.pue, c.FacilityWh) || !close(a.grams(total), c.CO2eG) {
+			t.Errorf("%s: facility %v Wh, %v g; want %v Wh, %v g", c.Name, total*a.pue, a.grams(total), c.FacilityWh, c.CO2eG)
+		}
+		for category, want := range c.ByCategory {
+			if got := a.grams(byCategory[category]); !close(got, want) {
+				t.Errorf("%s %s: %v g, want %v g", c.Name, category, got, want)
+			}
+		}
 	}
 }

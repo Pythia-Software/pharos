@@ -50,24 +50,28 @@ async function post<T>(url: string, body: unknown, signal?: AbortSignal): Promis
   }
 }
 
+// A request's query-string parameters, such as Carbon's assumptions.
+export type RequestParams = Record<string, string>;
+const withParams = (path: string, params?: RequestParams) => params && Object.keys(params).length ? `${path}?${new URLSearchParams(params)}` : path;
+
 // postMetrics runs clauses over dataset's rows matching where.
-export async function postMetrics(dataset: string, schema: FieldSchema<any>, where: WhereTerm[], clauses: AggregationClause[], signal?: AbortSignal): Promise<MetricResult[]> {
-  return metricResults(await post<MetricResponse>(`/api/query/${dataset}/metrics`, metricRequest(schema, where, clauses), signal), clauses);
+export async function postMetrics(dataset: string, schema: FieldSchema<any>, where: WhereTerm[], clauses: AggregationClause[], signal?: AbortSignal, params?: RequestParams): Promise<MetricResult[]> {
+  return metricResults(await post<MetricResponse>(withParams(`/api/query/${dataset}/metrics`, params), metricRequest(schema, where, clauses), signal), clauses);
 }
 
 // postQueryV3Metrics runs the same clauses through /query-v3, which stages up
 // to ten million matching rows and allows more groups than /metrics: slower,
 // but it answers what /metrics refuses for its budgets.
-export async function postQueryV3Metrics(dataset: string, schema: FieldSchema<any>, where: WhereTerm[], clauses: AggregationClause[], signal?: AbortSignal): Promise<MetricResult[]> {
-  return postQueryStateMetrics(dataset, schema, { ...EMPTY_QUERY, where, aggregations: clauses }, signal);
+export async function postQueryV3Metrics(dataset: string, schema: FieldSchema<any>, where: WhereTerm[], clauses: AggregationClause[], signal?: AbortSignal, params?: RequestParams): Promise<MetricResult[]> {
+  return postQueryStateMetrics(dataset, schema, { ...EMPTY_QUERY, where, aggregations: clauses }, signal, params);
 }
 
 // postQueryStateMetrics runs a query's metrics through /query-v3, including
 // metrics over a grouping stage, which /metrics cannot express.
-export async function postQueryStateMetrics(dataset: string, schema: FieldSchema<any>, query: QueryState, signal?: AbortSignal): Promise<MetricResult[]> {
+export async function postQueryStateMetrics(dataset: string, schema: FieldSchema<any>, query: QueryState, signal?: AbortSignal, params?: RequestParams): Promise<MetricResult[]> {
   const handshake = await queryRequest<{ queryCapabilities?: QueryCapabilitiesV3; computedExecution?: ComputedExecution }>(`/api/query/${dataset}/capabilities`, { signal });
   if (handshake.queryCapabilities?.version !== 3) throw new MetricRequestError("This server cannot run the query with a larger budget.");
   const request = toQueryRequestV3(query, schema, handshake.queryCapabilities, handshake.computedExecution, { rows: false });
   if (request.diagnostics?.length) throw new MetricRequestError(request.diagnostics.join(" "));
-  return metricResults(await post<MetricResponse>(`/api/query/${dataset}/query-v3`, request, signal), query.aggregations ?? []);
+  return metricResults(await post<MetricResponse>(withParams(`/api/query/${dataset}/query-v3`, params), request, signal), query.aggregations ?? []);
 }

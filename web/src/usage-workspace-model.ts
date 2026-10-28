@@ -32,7 +32,7 @@ export const usageDatasetTopics: Record<UsageDataset, UsageTopic> = {
   tools: "tools", tool_calls: "tools", mcp_calls: "mcp", skill_usages: "skills", parallelism: "parallelism",
 };
 export const usageTopicDatasets: Record<UsageTopic, UsageDataset> = {
-  tokens: "usage", human: "writing", time: "tool_calls", parallelism: "parallelism", tools: "tools", mcp: "mcp_calls", skills: "skill_usages", carbon: "usage",
+  tokens: "usage", human: "writing_messages", time: "tool_calls", parallelism: "parallelism", tools: "tools", mcp: "mcp_calls", skills: "skill_usages", carbon: "usage",
 };
 
 // Fields that hold a dashboard's dates, by dataset: its range, and the day
@@ -42,6 +42,7 @@ const timeFields: Record<UsageDataset, string[]> = {
   writing: ["first_message_at", "last_message_at"], writing_messages: ["sent_at", "day", "week", "month"], tools: ["day", "week", "month"], tool_calls: ["started_at", "ended_at", "day", "week", "month"],
   mcp_calls: ["called_at", "day", "week", "month"], skill_usages: ["created_at", "day", "week", "month"], parallelism: ["started_at", "day", "hour_of_day", "week", "month"],
 };
+const builtWith: Partial<Record<UsageDataset, string[]>> = { parallelism: ["counting", "gap_minutes"] };
 const termFields = (term: WhereTerm): string[] => "any" in term ? term.any.map(clause => clause.field) : [term.field];
 
 // The dashboard's own filters, with the user's edits to the query a dashboard
@@ -74,9 +75,13 @@ export function usageDashboardReturn(current: URLSearchParams) {
   };
   let query: QueryState | undefined;
   try { query = decodeQueryStrict(current.get(`q_${state.dataset}`) ?? "") ?? undefined; } catch { /* Explicitly reset an unavailable query. */ }
-  const compatible = dataset === state.dataset && state.topic !== "parallelism" && Boolean(query);
+  const compatible = dataset === state.dataset && Boolean(query);
   const params = new URLSearchParams(current);
   const returned = compatible ? returnedWhere(current, (query!.grouping?.source ?? query!).where, state.dataset) : { where: [], dates: false };
+  // Settings a dataset's records are built with are not the dashboard's
+  // filters: Parallelism's counting and gap follow the saved settings.
+  const settings = builtWith[state.dataset] ?? [];
+  if (settings.length) returned.where = returned.where.filter(term => !termFields(term).some(field => settings.includes(field)));
   params.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where: returned.where }));
   return {
     href: usageWorkspaceURL({ mode: "dashboards", dataset, search: false }, params),

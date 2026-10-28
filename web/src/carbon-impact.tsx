@@ -1,16 +1,12 @@
 import { originDimensions, originLabel, isOriginDimension, useOriginMetadata } from "./origin-dimensions";
-import React, { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import React, { useEffect, useLayoutEffect, useState } from "react";
 import { EMPTY_QUERY, decodeQuery, encodeQuery, type WhereTerm } from "@pythia-software/query-table-core";
-import { ChartSelect, DisplayControl, PeriodControl, RangeControl, RollingControl, StackedColumns, chartPeriodCount, chartSpan, pickRange, presetPeriod, rangeLabel, smoothingWhere, timeBounds, usageTime, withTimeRange, type ChartRange, type FilterChange, type PeriodView } from "./usage-chart";
-import { chartPeriods, earliestKey, isHourly, parseDay, periodLabel, validPeriodCount } from "./chart-period";
-import { chartBucketsWithHistory, foldSeries, plottedBucketKey, validChartDisplay, validRollingPeriods, type ChartDisplay, type ChartSeries } from "./chart-series";
+import { ChartSelect, rangeLabel, timeBounds, usageTime, withTimeRange, type FilterChange } from "./usage-chart";
 import { readSlice, withSlice } from "./chart-selection";
-import { validChartPresentation, type ChartPresentation } from "./chart-selection";
 import { preferences } from "./preferences";
-import { dashboardChartURL } from "./dashboard-chart-links";
+import type { CarbonFactors } from "./carbon-analysis-catalog";
 
 type CarbonTokens = { tokens: Record<string, Record<string, number>> };
-type CarbonFactors = { tiers: Array<{ key: string; label: string }> };
 type CarbonResult = { pue: number; co2: number; facilityWh: number; byCategory: Record<string, { wh: number }>; grams: (wh: number) => number };
 type CarbonData = {
   factors: CarbonFactors;
@@ -27,42 +23,21 @@ declare global {
       estimate: (factors: CarbonFactors, period: CarbonTokens) => CarbonResult;
       mass: (grams: number) => string;
       energy: (wh: number) => string;
-      settingsSnapshot: () => Record<string, unknown>;
+      settingsSnapshot: (factors?: CarbonFactors) => Record<string, unknown>;
     };
   }
 }
 
-type CarbonView = PeriodView & ChartPresentation & { metric: "co2" | "energy"; split: "type" | "channel" | "machine_id" | "execution_machine_id" | "provider" | "repository_name" | "tier"; rollingPeriods: number; display?: ChartDisplay };
-const viewKey = "pharos-carbon-chart", filtersKey = "pharos-carbon-filters";
-const defaultView: CarbonView = { metric: "co2", split: "type", period: "week", hours: 6, days: 3, seriesLimit: 15, rollingPeriods: 0, display: "interval" };
-const splits: Array<[CarbonView["split"], string]> = [["type", "Token type"], ...originDimensions.map(([key,label]): [CarbonView["split"], string] => [key,label]), ["provider", "Provider"], ["repository_name", "Repository"], ["tier", "Model tier"]];
-const categories: ChartSeries[] = [
-  { key: "uncached_input", label: "Uncached input", color: "var(--heat-3)" },
-  { key: "cache_read", label: "Cache reads", color: "var(--heat-1)" },
-  { key: "cache_write", label: "Cache writes", color: "var(--gold)" },
-  { key: "output", label: "Output", color: "var(--heat-2)" },
-];
+const filtersKey = "pharos-carbon-filters";
 const providers: Record<string, string> = { claude: "Claude", codex: "Codex", chatgpt: "ChatGPT", antigravity: "Antigravity", canonical: "Canonical", tl1: "TL1" };
 
-function initialView(dashboard = false): CarbonView {
-  let saved = dashboard ? {} : preferences().get<Partial<CarbonView>>(viewKey, {});
-  if (new URLSearchParams(location.search).has("analyze_chart")) {
-    try { saved = JSON.parse(new URLSearchParams(location.search).get("analyze_chart") ?? "null") ?? saved; } catch { /* Keep existing view. */ }
-  }
-  // Keep only supported preferences, filling new controls for older links.
-  const view = Object.fromEntries(Object.entries(defaultView).map(([key, value]) => [key, saved[key as keyof CarbonView] ?? value])) as CarbonView;
-  return ["co2", "energy"].includes(view.metric) && splits.some(([key]) => key === view.split) && Object.hasOwn(chartPeriods, view.period)
-    && validPeriodCount(view.hours) && validPeriodCount(view.days) && validRollingPeriods(view.rollingPeriods) && validChartDisplay(view.display) && validChartPresentation(view) ? view : defaultView;
-}
-
-function initialWhere(dashboard = false): WhereTerm[] {
-  const params = new URLSearchParams(location.search);
-  const encoded = (params.get("analyze_topic") === "carbon" ? params.get("analyze_filters") : null) ?? params.get("q_carbon") ?? (dashboard ? "" : preferences().get<string>(filtersKey, ""));
+function initialWhere(): WhereTerm[] {
+  const encoded = new URLSearchParams(location.search).get("q_carbon") ?? preferences().get<string>(filtersKey, "");
   if (encoded) {
     try { return decodeQuery(encoded).where; } catch { return []; }
   }
   // Preserve the old calculator's 30-day choice until new filters are saved.
-  if (dashboard || preferences().get<{ window?: string }>("pharos-carbon-v1", {}).window === "30d") {
+  if (preferences().get<{ window?: string }>("pharos-carbon-v1", {}).window === "30d") {
     const from = new Date(); from.setHours(0, 0, 0, 0); from.setDate(from.getDate() - 29);
     return withTimeRange([], usageTime, from);
   }
@@ -97,31 +72,34 @@ function useCarbonData(requestKey: string, refresh: number) {
   return { ...state, data: state.key === requestKey && !state.loading ? state.data : null, loading: state.key !== requestKey || state.loading, error: state.key === requestKey ? state.error : "" };
 }
 
-export function CarbonImpact({ queryLinks }: { queryLinks?: (state: { where: WhereTerm[]; view: CarbonView }) => React.ReactNode } = {}) {
-  const originRevision = useOriginMetadata();
-  const [view, setView] = useState(() => initialView(Boolean(queryLinks))), [where, setWhere] = useState(() => initialWhere(Boolean(queryLinks)));
-  const [calculator, setCalculator] = useState(() => window.pharosCarbon);
-  const [refresh, setRefresh] = useState(0), [assumptions, setAssumptions] = useState(0);
-  const limit = view.seriesLimit ?? 15;
-  const update = (change: Partial<CarbonView>) => setView(previous => { const next = { ...previous, ...change }; preferences().set(viewKey, next);
-    if (queryLinks) { const url = new URL(location.href); url.searchParams.set("analyze_chart", JSON.stringify(next)); history.replaceState(history.state, "", url); }
-    return next; });
+// The Carbon page's filters and legacy-page filter storage. The dashboard
+// keeps its filters in analyze_filters (useUsageDashboardState); the legacy
+// page in q_carbon and its saved preference.
+export function useLegacyCarbonFilters(): [WhereTerm[], FilterChange] {
+  const [where, setWhere] = useState(() => initialWhere());
+  useEffect(() => {
+    const restore = () => setWhere(initialWhere());
+    window.addEventListener("pharos:route", restore);
+    return () => window.removeEventListener("pharos:route", restore);
+  }, []);
   const onFilter: FilterChange = change => setWhere(previous => {
     const next = change(previous), encoded = encodeQuery({ ...EMPTY_QUERY, where: next });
     preferences().set(filtersKey, encoded);
     const url = new URL(location.href);
-    const parameter = queryLinks ? "analyze_filters" : "q_carbon";
-    if (next.length || queryLinks) url.searchParams.set(parameter, encoded); else url.searchParams.delete(parameter);
+    if (next.length) url.searchParams.set("q_carbon", encoded); else url.searchParams.delete("q_carbon");
     history.replaceState(null, "", url.pathname + url.search + url.hash);
     return next;
   });
-  useEffect(() => {
-    if (!queryLinks) return;
-    const url = new URL(location.href);
-    if (!url.searchParams.has("analyze_chart")) url.searchParams.set("analyze_chart", JSON.stringify(view));
-    if (!url.searchParams.has("analyze_filters")) url.searchParams.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where }));
-    history.replaceState(history.state, "", url);
-  }, []);
+  return [where, onFilter];
+}
+
+// Carbon Impact: the usage filters and the page's own estimate and
+// assumptions (carbon.js), around a chart its caller draws with the engine
+// (useCarbonCatalog builds the catalog from the current assumptions).
+export function CarbonImpact({ where, onFilter, children }: { where: WhereTerm[]; onFilter: FilterChange; children: React.ReactNode }) {
+  useOriginMetadata();
+  const [calculator, setCalculator] = useState(() => window.pharosCarbon);
+  const [refresh, setRefresh] = useState(0);
   useEffect(() => {
     const ready = () => setCalculator(window.pharosCarbon);
     window.addEventListener("pharos:carbon-ready", ready);
@@ -129,25 +107,14 @@ export function CarbonImpact({ queryLinks }: { queryLinks?: (state: { where: Whe
     return () => window.removeEventListener("pharos:carbon-ready", ready);
   }, []);
   useEffect(() => {
-    const reload = () => setRefresh(value => value + 1), recalculate = () => setAssumptions(value => value + 1), restore = () => { setWhere(initialWhere(Boolean(queryLinks))); setView(initialView(Boolean(queryLinks))); };
+    const reload = () => setRefresh(value => value + 1);
     window.addEventListener("pharos:usage-refresh", reload);
-    window.addEventListener("pharos:carbon-settings", recalculate);
-    window.addEventListener("pharos:route", restore);
-    return () => {
-      window.removeEventListener("pharos:usage-refresh", reload);
-      window.removeEventListener("pharos:carbon-settings", recalculate);
-      window.removeEventListener("pharos:route", restore);
-    };
+    return () => window.removeEventListener("pharos:usage-refresh", reload);
   }, []);
-  const requestKey = JSON.stringify({ where, hourly: isHourly(view.period), split: view.split === "type" ? "" : view.split });
-  const bounds = timeBounds(where, usageTime), count = chartPeriodCount(view);
-  const cumulative = view.display === "cumulative";
-  const requestedWhere = smoothingWhere(where, usageTime, view.period, cumulative ? 0 : view.rollingPeriods, count);
-  const separate = requestedWhere !== where;
+  const requestKey = JSON.stringify({ where, hourly: false, split: "" });
+  const bounds = timeBounds(where, usageTime);
   const state = useCarbonData(requestKey, refresh);
-  const historyData = useCarbonData(separate ? JSON.stringify({ where: requestedWhere, hourly: isHourly(view.period), split: view.split === "type" ? "" : view.split }) : "", refresh);
-  const data = state.data, chartData = separate ? historyData.data : data;
-  const loading = state.loading || separate && historyData.loading, error = state.error || (separate ? historyData.error : "");
+  const data = state.data, error = state.error;
   const scopeValue = (field: "repository_name" | "provider" | "channel" | "machine_id" | "execution_machine_id") => {
     const selection = readSlice(where, field);
     if (!selection.values.length) return field === "repository_name" ? "All repositories" : field === "provider" ? "All providers" : `All ${originDimensions.find(([key]) => key===field)?.[1].toLowerCase()} values`;
@@ -156,37 +123,10 @@ export function CarbonImpact({ queryLinks }: { queryLinks?: (state: { where: Whe
   const originScope = originDimensions.filter(([field]) => readSlice(where,field).values.length).map(([field]) => scopeValue(field)).join(" · ");
   const scope = `${originScope ? originScope+" · " : ""}${scopeValue("repository_name")} · ${scopeValue("provider")} · ${bounds.from || bounds.to ? `${bounds.from?.toLocaleString() ?? "Start of history"} → ${bounds.to?.toLocaleString() ?? "Present"}${bounds.to ? " (end exclusive)" : ""}` : "All time"}`;
   const label = `${originScope ? originScope+" · " : ""}${scopeValue("repository_name")} · ${scopeValue("provider")} · ${rangeLabel(bounds) || "All time"}`;
-  const onDateRange = (from?: Date, to?: Date, preset?: ChartRange | "all") => {
-    onFilter(current => withTimeRange(current, usageTime, from, to, preset));
-  };
   useLayoutEffect(() => {
     if (data) calculator?.show(data, label, scope);
     else calculator?.pending(error);
   }, [calculator, data, label, scope, error]);
-  const { series, buckets, cumulativeStart } = useMemo(() => {
-    const dates = chartData?.series.map(point => parseDay(point.day)) ?? [], earliest = earliestKey(chartData?.series.map(point => point.day) ?? []);
-    const buckets = chartBucketsWithHistory(view.period, ...chartSpan(bounds, earliest), count, dates,
-      !cumulative && view.rollingPeriods > 1 ? timeBounds(requestedWhere, usageTime).from ?? earliest : undefined);
-    const byKey = new Map(buckets.map(bucket => [bucket.key, bucket]));
-    const cumulativeStart = bounds.from ?? earliest;
-    if (!chartData || !calculator) return { series: [], buckets, cumulativeStart };
-    const rows: Array<[string, string, number]> = [];
-    for (const point of chartData.series) {
-      const key = plottedBucketKey(parseDay(point.day), view.period, count, buckets, view.display), bucket = byKey.get(key);
-      if (!bucket) continue;
-      const result = calculator.estimate(chartData.factors, point);
-      if (view.split === "type") {
-        for (const category of categories) {
-          const wh = result.byCategory[category.key].wh;
-          bucket.values[category.key] = (bucket.values[category.key] ?? 0) + (view.metric === "co2" ? result.grams(wh) : wh * result.pue);
-        }
-      } else rows.push([key, point.value, view.metric === "co2" ? result.co2 : result.facilityWh]);
-    }
-    const name = (value: string) => view.split === "tier" ? chartData.factors.tiers.find(tier => tier.key === value)?.label ?? value : isOriginDimension(view.split) ? originLabel(view.split, value) : view.split === "provider" ? (providers[value] ?? value) || "Unknown provider" : value || "No repository";
-    return { series: view.split === "type" ? categories : foldSeries(rows, byKey, name, undefined, [], limit, view.split === "tier" ? "carbon:tier" : view.split), buckets, cumulativeStart };
-  }, [calculator, chartData, originRevision, assumptions, view.metric, view.split, view.period, count, bounds.from?.getTime(), bounds.to?.getTime(), limit, view.rollingPeriods, cumulative]);
-  const format = view.metric === "co2" ? calculator?.mass : calculator?.energy;
-  const title = `${cumulative ? "Cumulative estimated" : "Estimated"} ${view.metric === "co2" ? "CO₂e" : "electricity"}${cumulative ? "" : ` per ${periodLabel(view.period, count)}`} by ${splits.find(([key]) => key === view.split)?.[1].toLowerCase()}`;
   const choices = state.data?.choices ?? {};
   return <section className="carbon-impact" aria-label="Carbon Impact" data-feedback-label="Carbon Impact">
     <section className="carbon-analysis" aria-label="Carbon usage analysis">
@@ -200,27 +140,9 @@ export function CarbonImpact({ queryLinks }: { queryLinks?: (state: { where: Whe
     </section>
     {data && !data.windows.some(window => Object.values(window.tokens).some(counts => Object.values(counts).some(value => value > 0))) ? <p className="muted" role="status">No reported token usage matches these filters.</p> : null}
     {error ? <button type="button" onClick={() => setRefresh(value => value + 1)}>Retry carbon usage</button> : null}
-    <StackedColumns title={title} controls={<>
-      <ChartSelect label="Metric" value={view.metric} options={[["co2", "CO₂e"], ["energy", "Electricity"]]} onChange={metric => update({ metric })} />
-      <ChartSelect label="Breakdown" value={view.split} options={splits} onChange={split => update({ split, seriesLimit: 15 })} />
-      <DisplayControl value={view.display} onChange={display => update({ display })} />
-      <RangeControl bounds={bounds} editable onPresetChange={(range, oldest) => update(presetPeriod(range, oldest))} onChange={onDateRange} />
-      <PeriodControl view={view} onChange={update} />
-      <RollingControl value={view.rollingPeriods} display={view.display} period={view.period} count={count} onChange={rollingPeriods => update({ rollingPeriods })} />
-    </>} series={series} buckets={buckets} period={view.period} periodCount={count} rollingPeriods={view.rollingPeriods} display={view.display} cumulativeStart={cumulativeStart} scale="linear"
-      format={format ?? (value => String(value))} noun="" loading={loading} error={error} legend={series.length > 0} onExpand={() => update({ seriesLimit: Math.min(1000, limit + 5) })}
-      onRange={pickRange(onFilter, usageTime, view.period, count, period => update({ period }))}
-      seriesHref={(range, item) => {
-        const current = new URLSearchParams(location.search);
-        current.set("analyze_topic", "carbon");
-        const fields = view.split !== "type" ? ["total_tokens"] : item.key === "uncached_input" ? ["uncached_input_tokens", "unclassified_tokens"]
-          : [{ cache_read: "cache_read_input_tokens", cache_write: "cache_creation_input_tokens", output: "output_tokens" }[item.key]!];
-        return dashboardChartURL({ dataset: "usage", where: range.rolling ? requestedWhere : where, time: usageTime, range, series: item,
-          split: view.split === "type" ? null : view.split === "tier" ? "carbon_tier" : view.split, fields, current });
-      }} />
+    {children}
     <div id="carbonSummary" className="carbon-card carbon-summary" aria-label="Filtered carbon estimate" />
     {data?.undated_tokens ? <p className="muted">{data.undated_tokens.toLocaleString()} tokens have no usage date. They are included in the total but cannot be placed on the chart.</p> : null}
-    {queryLinks?.({ where, view })}
     </section>
     <div id="carbonAssumptions" className="carbon-card carbon-assumptions-card" />
     <div id="carbonCard" className={data ? "carbon-card" : ""} />

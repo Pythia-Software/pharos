@@ -1,5 +1,5 @@
 import { EMPTY_QUERY, coerceValue, type WhereClause, inspectBucketQuery, metricDateFloor, metricDateNext, metricDateTime, type AggOp, type AggregationBucket, type AggregationClause, type AggregationResultEntry, type FieldSchema, type MetricDisplay, type MetricValueFormat, type QueryState, type SummaryColumn, type WhereTerm } from "@pythia-software/query-table-core";
-import { validChartScale, type ChartScale } from "./chart-scale";
+import { defaultChartScale, validChartScale, type ChartScale } from "./chart-scale";
 import { chartPeriods, validPeriodCount, type ChartPeriod } from "./chart-period";
 import { validChartDisplay, validRollingPeriods, type ChartDisplay } from "./chart-series";
 import { isSliceTerm, readSlice, validChartPresentation, withSlice, type SliceSelection } from "./chart-selection";
@@ -28,10 +28,21 @@ export type AnalysisMeasure = {
   note: string;
 };
 // A ratio's part is a summed field, or a count of a field's non-empty values,
-// as in a mean duration per timed call: sum(duration) / count(duration).
-export type RatioPart = string | { op: "sum" | "count"; field: string };
-export const ratioPart = (part: RatioPart): { op: "sum" | "count"; field: string } => typeof part === "string" ? { op: "sum", field: part } : part;
-const partExpression = (part: RatioPart) => `${ratioPart(part).op.toUpperCase()}([${ratioPart(part).field}])`;
+// as in a mean duration per timed call: sum(duration) / count(duration). A
+// part may instead sum a row expression, which states a condition: zero-result
+// searches are SUM(IF([result_count]=0,1,0)). Pooling still sums each part per
+// period, window or unit. Such a part names what it counts (label).
+export type RatioPart = string | { op: "sum" | "count"; field: string; label?: string } | { op: "sum"; expression: string; label: string };
+type Part = { op: "sum" | "count"; field?: string; expression?: string; label?: string };
+export const ratioPart = (part: RatioPart): Part => typeof part === "string" ? { op: "sum", field: part } : part;
+const partExpression = (part: RatioPart) => { const { op, field, expression } = ratioPart(part); return `${op.toUpperCase()}(${expression ?? `[${field}]`})`; };
+// A part as an aggregation clause, or a grouped row's summary column.
+export const partClause = (part: RatioPart): Pick<AggregationClause, "op" | "field" | "expression"> => { const { op, field, expression } = ratioPart(part); return expression ? { op: "sum", expression: partExpression(part) } : { op, field }; };
+const partColumn = (part: RatioPart): Pick<SummaryColumn, "op" | "field" | "expression"> => { const { op, field, expression } = ratioPart(part); return expression ? { op: "formula", expression: partExpression(part) } : { op, field }; };
+// What a part adds up, in words: "summed input tokens", "the count of duration ms".
+export const partLabel = (part: RatioPart) => { const { op, field, label } = ratioPart(part); return label ?? `${op === "sum" ? "summed" : "the count of"} ${field!.replaceAll("_", " ")}`; };
+// The field a drill-down shows for a part, where it has one.
+export const partField = (part: RatioPart) => ratioPart(part).field;
 // A breakdown groups by one or more fields, such as provider and model. The
 // trend draws its groups as series: in a fixed order where one is given,
 // with labels for known values and for a missing one.
@@ -41,11 +52,27 @@ export type AnalysisBreakdown = { label: string; fields: string[]; where?: Where
 // tokens into uncached input, cache reads and writes, and output. Its series
 // are fields, not groups of records, so only the trend draws it, and only for
 // the measures it lists; any other measure moves to its fallback breakdown.
-export type AnalysisComponent = { key: string; label: string; field: string; color: string; optional?: boolean };
-export type AnalysisComponents = { label: string; measures: string[]; parts: AnalysisComponent[]; fallback: string };
+export type AnalysisComponent = { key: string; label: string; field?: string; color: string; optional?: boolean; fields?: string[] };
+// A derived component breakdown computes its parts rather than summing them:
+// the trend queries the summed input fields per period, grouped further by
+// groupBy (Carbon's model tier), and derive turns one period's totals into
+// that period's part values for the measure shown. Its parameters (the
+// user's carbon factors) are closed over when the catalog is built, so new
+// parameters are a new catalog. derive runs before smoothing, accumulating or
+// shares, so the order of operations is the same as for summed parts. A
+// derived part names the fields its drill-down shows (fields).
+export type DerivedInputs = { fields: string[]; groupBy: string[] };
+export type DerivedTotals = Array<{ keys: unknown[]; values: Record<string, number> }>;
+export type AnalysisComponents = { label: string; measures: string[]; parts: AnalysisComponent[]; fallback: string;
+  derived?: { inputs: DerivedInputs; derive: (totals: DerivedTotals, metric: string) => Record<string, number> } };
 // Calendar fields the trend groups by; several hours or days sum the hourly
 // or daily totals.
 export type TrendPeriodField = "hour" | "day" | "week" | "month";
+// How a catalog's records reach the service, beside the dashboard's filters:
+// params are query-string parameters every request carries, such as the
+// user's carbon assumptions, which the service applies to the records it
+// returns; note says so beneath every view.
+export type AnalysisRequest = { params?: Record<string, string>; note?: string };
 // Breakdowns map to the fields that hold them at unit level. A breakdown is
 // listed only when it is constant within one unit. One with an implied where
 // is never offered for units: it would remove records from each unit and
@@ -69,6 +96,14 @@ export type AnalysisCatalog = {
   // A dataset without one of them (no hour field, say) leaves it out, and the
   // trend offers it disabled.
   periods: Partial<Record<TrendPeriodField, string>>;
+  // The day-boundary rule. Days, weeks and months are the recorded calendar
+  // fields (periods), as the cards group them, so the trend runs on /metrics
+  // and its supporting query is grouped. Records with a true timestamp group
+  // it for hours, in the viewer's zone (UTC clock hours placed at the local
+  // hour, dateGrouping), as the hour and weekday cycles do. A day-grained
+  // ledger (usage) keeps its recorded hour field too.
+  timestamp?: string;
+  request?: AnalysisRequest;
   // The trend's default measure and breakdown.
   trend: { metric: string; split: string };
   // Reads a link or saved state written in an older vocabulary, such as a
@@ -180,6 +215,7 @@ export function catalogProblems(catalog: AnalysisCatalog): string[] {
   }
   if (!has(catalog.measures, catalog.trend.metric) || !trendSplit(catalog, catalog.trend.split)) problems.push("The trend's default measure or breakdown is unknown.");
   if (!catalog.periods.day) problems.push("The trend needs a day field.");
+  for (const [id, measure] of Object.entries(catalog.measures)) for (const part of measure.ratio ?? []) if (typeof part !== "string" && "expression" in part && !part.label) problems.push(`${id} has an expression part without a label.`);
   return problems;
 }
 
@@ -312,7 +348,7 @@ export function trendLimits(catalog: AnalysisCatalog, state: Pick<ResolvedAnalys
     cumulative: kind === "count" ? `A running count of distinct ${measure.unit} cannot be built from per-period counts` : kind === "level" ? `${measure.label} does not accumulate` : undefined,
     rollingSum: kind === "ratio" ? `${measure.label} pools its window; a sum of ratios means nothing` : kind === "level" ? `${measure.label} does not add up across periods` : undefined,
     multiple: kind === "count" ? `Distinct ${measure.unit} are counted per hour, day, week or month; several periods would add their counts` : undefined,
-    period: (period: ChartPeriod) => catalog.periods[periodField(period)] ? undefined : `These records have no ${periodField(period)} to group by`,
+    period: (period: ChartPeriod) => catalog.periods[periodField(period)] || periodField(period) === "hour" && catalog.timestamp ? undefined : `These records have no ${periodField(period)} to group by`,
     norm: state.display === "cumulative" ? "A norm compares interval values, not running totals" : state.share ? "Shares have no norm" : !measure.additive && state.split !== noSplit ? `${measure.label} has no total across groups; choose no breakdown for a norm` : undefined,
     component, name,
   };
@@ -328,6 +364,9 @@ function normalizeTrend<T extends AnalysisState>(catalog: AnalysisCatalog, next:
   if (!trendSplit(catalog, next.split)) next.split = catalog.trend.split;
   if (catalog.components?.[next.split] && !catalog.components[next.split].measures.includes(next.metric)) next.split = catalog.components[next.split].fallback;
   next.share = next.share === true; next.completePeriods = next.completePeriods === true; next.norm = next.norm === true;
+  // The trend's scale, resolved once for the control and the chart: a state
+  // without one draws the old trend charts' default, the linear + log split.
+  if (!validChartScale(next.scale)) next.scale = defaultChartScale;
   if (!oneOf(next.rollingOp, ["mean", "sum"])) next.rollingOp = "mean";
   let limits = trendLimits(catalog, next);
   if (next.share && limits.share) next.share = false;
@@ -394,7 +433,8 @@ function summary(id: string, measure: AnalysisMeasure): SummaryColumn {
     : { id, op: measure.op, ...(measure.field ? { field: measure.field } : {}), label: measure.label, ...cellDisplay(measure.format) };
 }
 // A ratio's parts beside it, so grouped rows show what each group pools.
-const ratioParts = (measure: AnalysisMeasure): SummaryColumn[] => measure.ratio ? measure.ratio.map((part, index) => ({ id: index ? "analysis_denominator" : "analysis_numerator", ...ratioPart(part), label: `${ratioPart(part).op === "count" ? "Records with" : "Total"} ${ratioPart(part).field.replaceAll("_", " ")}` })) : [];
+const ratioParts = (measure: AnalysisMeasure): SummaryColumn[] => measure.ratio ? measure.ratio.map((part, index) => ({ id: index ? "analysis_denominator" : "analysis_numerator", ...partColumn(part),
+  label: ratioPart(part).label ? `${ratioPart(part).label![0].toUpperCase()}${ratioPart(part).label!.slice(1)}` : `${ratioPart(part).op === "count" ? "Records with" : "Total"} ${ratioPart(part).field!.replaceAll("_", " ")}` })) : [];
 export function aggregate(measure: AnalysisMeasure): Pick<AggregationClause, "op" | "field" | "expression"> {
   const expression = measureExpression(measure);
   return { op: measure.op, ...(measure.field && !expression ? { field: measure.field } : {}), ...(expression ? { expression } : {}) };
@@ -522,7 +562,7 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
   const keys = [...groupBy, ...[unit.key].flat().filter(field => !groupBy.includes(field))];
   const pooled = state.view === "compare" && state.reduce === "total" && measure.ratio;
   const summaries = [summary("analysis_value", measure), ...state.view === "scatter" ? [summary("analysis_y", measureY)] : [],
-    ...pooled ? [{ id: "analysis_numerator", ...ratioPart(measure.ratio![0]) }, { id: "analysis_denominator", ...ratioPart(measure.ratio![1]) }] : []];
+    ...pooled ? [{ id: "analysis_numerator", ...partColumn(measure.ratio![0]) }, { id: "analysis_denominator", ...partColumn(measure.ratio![1]) }] : []];
   const reduce: Record<AnalysisReduce, Pick<AggregationClause, "op" | "field" | "expression">> = {
     total: pooled ? { op: "sum", expression: "SUM([analysis_numerator])/NULLIF(SUM([analysis_denominator]),0)" } : { op: "sum", field: "analysis_value" }, mean: { op: "avg", field: "analysis_value" }, max: { op: "max", field: "analysis_value" },
     count: { op: "count" }, median: { op: "count", field: "analysis_value", expression: "MEDIAN([analysis_value])" },
@@ -652,7 +692,7 @@ export function analysisNote(catalog: AnalysisCatalog, input: AnalysisState): st
   const state = normalizeAnalysis(catalog, input), measure = catalog.measures[state.metric];
   const unit = state.unit === records ? undefined : catalog.units[state.unit];
   const subject = unit ? unit.plural.toLowerCase() : catalog.records.plural.toLowerCase();
-  const parts = [measure.note, ...catalog.rangeNote ? [catalog.rangeNote] : []];
+  const parts = [measure.note, ...catalog.rangeNote ? [catalog.rangeNote] : [], ...catalog.request?.note ? [catalog.request.note] : []];
   const idle = idleIsZero(aggregate(measure)) ? " as zero" : ", which have no value", kind = state.view === "cycle" ? catalog.cycle![state.cycle]!.kind : undefined;
   if (state.view === "cycle") parts.push(state.cycle === "hour"
     ? `One observation is one complete clock hour in the range, placed at its hour in your time zone, idle hours included${idle}. Partial first and last hours are left out. An hour bar spans many dates, so it has no single drill-down; hourly totals cannot yet open as a grouped query, so the link opens the records.`

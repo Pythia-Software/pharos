@@ -3,6 +3,8 @@ import type { AggregationClause, AggregationResultEntry, FieldDef, FieldSchema, 
 import { MetricCard, defaultRenderers } from "@pythia-software/query-table-ui";
 import { changeState, cycleUnavailable, notTrended, sampleSubject, selectGroups, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, cycleTotal, noSplit, normalizeAnalysis, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, type AnalysisCatalog, type AnalysisQuery as AnalysisQueryResult, type AnalysisReduce, type AnalysisUnit, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
 import { runAnalysisQuery, type LocalRows } from "./analysis-request";
+import type { RequestParams } from "./metric-request";
+import { onDatasetRefresh } from "./dataset-refresh";
 import { ChartSelect, DisplayControl, PeriodControl, RangeControl, RollingControl, ScaleControl, presetPeriod, timeBounds, withTimeRange, type ChartRange, type FilterChange, type TimeBounds } from "./usage-chart";
 import { trendPeriodCount } from "./dashboard-trend-model";
 import { UsageDashboardLinks } from "./usage-workspace";
@@ -13,24 +15,24 @@ import { useOriginMetadata } from "./origin-dimensions";
 
 // Runs an analysis query, again on Refresh, and tags results with their query
 // so a stale response never renders under new settings.
-export function useAnalysisResult(dataset: string, schema: FieldSchema<any>, query: QueryState, local?: LocalRows) {
-  const key = JSON.stringify(query);
-  const [state, setState] = useState<{ key: string; results: AggregationResultEntry[]; error: string; loading: boolean }>({ key: "", results: [], error: "", loading: true });
+export function useAnalysisResult(dataset: string, schema: FieldSchema<any>, query: QueryState, local?: LocalRows, params?: RequestParams) {
+  const key = JSON.stringify([query, params ?? {}]);
+  // A result belongs to its query and to the refresh it was fetched for, so
+  // results from before a refresh read as loading, never as current.
+  const [state, setState] = useState<{ key: string; refresh: number; results: AggregationResultEntry[]; error: string; loading: boolean }>({ key: "", refresh: 0, results: [], error: "", loading: true });
   const [refresh, setRefresh] = useState(0);
-  useEffect(() => {
-    const bump = () => setRefresh(value => value + 1);
-    window.addEventListener("pharos:usage-refresh", bump);
-    return () => window.removeEventListener("pharos:usage-refresh", bump);
-  }, []);
+  useEffect(() => onDatasetRefresh(dataset, () => setRefresh(value => value + 1)), [dataset]);
   useEffect(() => {
     const controller = new AbortController();
     setState(previous => ({ ...previous, loading: true }));
-    runAnalysisQuery(dataset, schema, JSON.parse(key) as QueryState, { signal: controller.signal, local })
-      .then(results => setState({ key, results, error: "", loading: false }))
-      .catch(failure => { if (!controller.signal.aborted) setState({ key, results: [], error: failure instanceof Error ? failure.message : String(failure), loading: false }); });
+    const [request, parameters] = JSON.parse(key) as [QueryState, RequestParams];
+    runAnalysisQuery(dataset, schema, request, { signal: controller.signal, local, params: parameters })
+      .then(results => setState({ key, refresh, results, error: "", loading: false }))
+      .catch(failure => { if (!controller.signal.aborted) setState({ key, refresh, results: [], error: failure instanceof Error ? failure.message : String(failure), loading: false }); });
     return () => controller.abort();
   }, [dataset, key, refresh, local]);
-  return { results: state.key === key ? state.results : [], loading: state.key !== key || state.loading, error: state.key === key ? state.error : "" };
+  const current = state.key === key;
+  return { results: current ? state.results : [], loading: !current || state.refresh !== refresh || state.loading, error: current ? state.error : "" };
 }
 
 export function AnalysisViewControl({ catalog, state, onChange }: { catalog: AnalysisCatalog; state: AnalysisState; onChange: (view: AnalysisView) => void }) {
@@ -70,7 +72,7 @@ export function AnalysisControls({ catalog, view, set, onView, bounds, onRange }
     {trend ? <DisplayControl value={view.display} disabled={limits.cumulative} onChange={display => set({ display })} /> : null}
     {(view.view === "distribution" || view.view === "compare" && view.compareAs !== "share") && view.split !== noSplit ? <ChartSelect label="Minimum" value={String(view.minSamples)} options={minimum.map(value => [String(value), value ? `${value.toLocaleString()} ${sampleSubject(catalog, view)}` : "No minimum"])} title={`Hide groups with fewer ${sampleSubject(catalog, view)}`} onChange={value => set({ minSamples: Number(value) })} /> : null}
     {view.view === "cycle" ? <ChartSelect label="Cycle" value={view.cycle} options={[["hour", "Hour of day", cycleUnavailable(catalog, "hour")], ["weekday", "Day of week", cycleUnavailable(catalog, "weekday")]]} onChange={cycle => set({ cycle })} /> : null}
-    {trend ? <ScaleControl value={view.scale ?? "linear"} percent={view.share} onChange={scale => set({ scale })} />
+    {trend ? <ScaleControl value={view.scale!} percent={view.share} onChange={scale => set({ scale })} />
       : !(view.view === "compare" && view.compareAs === "share") ? <ChartSelect label={view.view === "scatter" ? "X scale" : "Scale"} value={axis(view.scale)} options={scales} onChange={scale => set({ scale })} /> : null}
     {view.view === "scatter" ? <ChartSelect label="Y scale" value={axis(view.scaleY)} options={scales} onChange={scaleY => set({ scaleY })} /> : null}
     <RangeControl bounds={bounds} onPresetChange={trend ? (range, oldest) => set(presetPeriod(range, oldest)) : undefined} onChange={onRange} />
@@ -109,7 +111,7 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   // Rounding a relative start to midnight is stable within a day.
   const analysis = useMemo(() => analysisQuery(catalog, view, where, { zone }), [catalog, JSON.stringify(view), JSON.stringify(where), zone, new Date().toDateString()]);
-  const result = useAnalysisResult(dataset, schema, analysis.query, local);
+  const result = useAnalysisResult(dataset, schema, analysis.query, local, catalog.request?.params);
   const bounds = timeBounds(where, catalog.time);
   // Save what was asked for; only drawing and querying normalize.
   const set = (change: Partial<AnalysisState>) => onChange(changeState(catalog, state, change) as Partial<T>);

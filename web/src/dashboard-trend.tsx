@@ -1,8 +1,8 @@
 import React, { useMemo } from "react";
 import type { FieldSchema, WhereTerm } from "@pythia-software/query-table-core";
 import { AnalysisControls, useAnalysisResult } from "./dashboard-analysis";
-import { changeState, normalizeAnalysis, ratioPart, rollingSumUnit, trendAdjustments, trendKind, type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
-import { trendNote, trendPeriodCount, trendQuery, trendSeries, trendTitle } from "./dashboard-trend-model";
+import { changeState, normalizeAnalysis, partField, rollingSumUnit, trendAdjustments, trendKind, type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { timestampHours, trendNote, trendPeriodCount, trendQuery, trendSeries, trendTitle } from "./dashboard-trend-model";
 import type { LocalRows } from "./analysis-request";
 import { StackedColumns, pickRange, timeBounds, withTimeRange, type FilterChange } from "./usage-chart";
 import { updateSlice, type LegendAction } from "./chart-selection";
@@ -34,11 +34,11 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
   // Relative bounds resolve to period boundaries, so the query is stable
   // between renders within one period.
   const trend = trendQuery(catalog, view, where);
-  const result = useAnalysisResult(dataset, schema, trend.query, local);
+  const result = useAnalysisResult(dataset, schema, trend.query, local, catalog.request?.params);
   const labels = useMemo(() => optionLabels(schema.fields), [schema]);
   const label = (field: string, value: unknown) => isOriginDimension(field) ? originLabel(field, value) : labels.get(field)?.get(String(value)) ?? String(value);
   const built = useMemo(() => trendSeries(catalog, view, trend, result.results, { label }),
-    [result.results, originRevision, JSON.stringify(view), JSON.stringify(trend.range), JSON.stringify(where)]);
+    [catalog, result.results, originRevision, JSON.stringify(view), JSON.stringify(trend.range), JSON.stringify(where)]);
   useUsageChartPalette(trend.slice ?? null, built.series);
   // Save what was asked for; only drawing and querying normalize, so a
   // setting a measure cannot use returns with one that can.
@@ -60,8 +60,11 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
   const href = (range: ChartInspectionRange, item: ChartSeries) => {
     const base = [...range.rolling ? trend.requested : where, ...trend.records];
     const components = catalog.components?.[view.split];
-    if (components) return dashboardChartURL({ dataset, where: base, time: catalog.time, range, series: item, fields: [components.parts.find(part => part.key === item.key)?.field ?? measure.field ?? ""], current: new URLSearchParams(location.search), translate });
-    const fields = kind === "ratio" ? [ratioPart(measure.ratio![1]).field] : measure.op === "sum" && measure.field ? [measure.field] : [];
+    if (components) {
+      const part = components.parts.find(candidate => candidate.key === item.key);
+      return dashboardChartURL({ dataset, where: base, time: catalog.time, range, series: item, fields: part?.fields ?? [part?.field ?? measure.field ?? ""], current: new URLSearchParams(location.search), translate });
+    }
+    const fields = kind === "ratio" ? [partField(measure.ratio![1])].filter((field): field is string => Boolean(field)) : measure.op === "sum" && measure.field ? [measure.field] : [];
     if (breakdown && breakdown.fields.length > 1) {
       // A combined group is several equalities; Other has no single filter.
       if (item.value === undefined) return;
@@ -91,7 +94,7 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
     {children}
     {links ? <>
       <UsageDashboardLinks schema={schema} dataset={dataset} query={trend.supporting} currentURL={currentURL} />
-      <p className="usage-dashboard-note">{trendNote(catalog, view)} Click a column or point to pin its key, then follow a series to its contributing records. Drag across two or more periods to filter dates. Select legend entries to compare or exclude series. Grouped rows show the interval amounts before smoothing, accumulation, shares or folding.</p>
+      <p className="usage-dashboard-note">{trendNote(catalog, view)} Click a column or point to pin its key, then follow a series to its contributing records. Drag across two or more periods to filter dates. Select legend entries to compare or exclude series. {timestampHours(catalog, view) ? "Hourly totals of a timestamp cannot yet open as a grouped query, so the link opens the records drawn." : "Grouped rows show the interval amounts before smoothing, accumulation, shares or folding."}</p>
     </> : null}
   </section>;
 }

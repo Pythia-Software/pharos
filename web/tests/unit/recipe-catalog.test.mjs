@@ -17,6 +17,7 @@ import { mcpAnalysisCatalog } from "../../src/mcp-analysis-catalog";
 import { toolsAnalysisCatalog } from "../../src/tools-analysis-catalog";
 import { agentTimeAnalysisCatalog, skillsAnalysisCatalog } from "../../src/record-analysis-catalogs";
 import { cardDashboardWhere, cardDetailsURL } from "../../src/card-exploration";
+import { windowedChart } from "../../src/card-windows";
 
 const catalogs = { tokens: tokenAnalysisCatalog, mcp: mcpAnalysisCatalog, tools: toolsAnalysisCatalog, time: agentTimeAnalysisCatalog, skills: skillsAnalysisCatalog };
 
@@ -59,7 +60,7 @@ for (const recipe of queryRecipes) test(`${recipe.id}${recipe.retired ? " (retir
       const { topic, chart } = recipe.destination;
       assert.equal(readUsageWorkspace(url.searchParams).mode, "dashboards");
       assert.equal(readUsageWorkspace(url.searchParams).topic, topic);
-      assert.deepEqual(JSON.parse(url.searchParams.get("analyze_chart")), chart);
+      assert.deepEqual(JSON.parse(url.searchParams.get("analyze_chart")), windowedChart(recipe.id, chart, days));
       const filters = readDashboardQuery(url.searchParams, core.EMPTY_QUERY);
       assert.equal(filters.error, "");
       assert.deepEqual(filters.query.where, cardDashboardWhere(recipe.dataset, recipe.destination.dataset, (query.grouping?.source ?? query).where), "dashboard carries compatible context");
