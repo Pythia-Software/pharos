@@ -54,11 +54,17 @@ handoffs cite file and line for each.
    into the reader's temporary directory, at the same relative path, with the
    recorded mtime. Durable `inputs/<revision>/` trees keep links to the
    encoded files and never hold permanent decoded copies.
-4. **Compression never loses the only copy.** An entry is encoded to
-   `<name>.pharos-tmp`, the encoded stream is verified by decoding and
-   hashing, the result is fsynced and renamed over the name, and then the
-   manifest is replaced atomically after a device flush. That is the same
-   order capture already uses. Readers holding the old inode through a
+4. **Compression never loses the only copy.** An entry is encoded into a
+   flocked `.reader-*` lease of its own, which no capture's sweep removes
+   while it is held. The encoded stream is flushed to the drive
+   (F_FULLFSYNC) and verified by decoding and hashing. Then, under the
+   capture lock, the manifest naming it encoded is replaced atomically after
+   a device flush, and only then is the file renamed over the name. The
+   manifest goes first so that whenever the name may hold zstd, the manifest
+   already has the version older builds refuse (invariant 5). A kill between
+   the two leaves an entry marked encoded over the original bytes, at the
+   original size and with no zstd frame; readers read it as plain and the
+   next pass corrects the entry. Readers holding the old inode through a
    `.reader-*` hard link keep reading the uncompressed bytes.
 5. **Older builds must not misread an encoded capture.** Bump the capture
    manifest version, so that builds that do not know `encoding` refuse the
@@ -74,6 +80,17 @@ Each phase ships as one PR.
    they are indexed. Generations are only read by full reindexes, salvage,
    record exports, backfill, pins and transfer. They hold ~21.6 GB on
    production, which becomes ~3 GB.
+
+   **Cost, accepted.** With one retained generation, Conductor's is replaced
+   about hourly, and each replacement is compressed once indexed and pruned
+   at the next rotation. That re-reads ~14.5 GB and writes ~1.5–2 GB an hour
+   at utility IO priority (an 11.2 GB generation took 55 s, encode through
+   verify, at 6.8×), for ~13 GB saved in steady state. Capture already
+   rewrites the 14.5 GB snapshot hourly, so this adds about one more read
+   of it. A pass remembers generations it left uncompressed (incompressible,
+   a digest mismatch, repeated verification failures, an unverified record
+   export) in the source's `compression.json`, so it does not read them
+   again every pass.
 2. **Cold files** ([handoff](handoffs/capture-compression-2-cold-files.md)). Compress superseded plain-file versions, and latest files
    whose source has not changed for a configurable period (14 days, say).
    Capture always rewrites a changed file in full (`copyOnce`), so a cold

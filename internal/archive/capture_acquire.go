@@ -171,11 +171,11 @@ func freezeManifestInputPolicy(ctx context.Context, target captureTarget, source
 		return result, err
 	}
 	// An entry stored encoded is leased as stored and decoded only when a
-	// reader opens it (captureView.materialize); a compression interrupted
-	// before its manifest committed is recognised here too.
+	// reader opens it (captureView.materialize). An entry a compression
+	// marked encoded before it was killed short of the rename is read as stored.
 	for _, snapshot := range frozen.Snapshots {
 		for i, generation := range snapshot.Generations {
-			snapshot.Generations[i] = adoptEncoded(filepath.Join(target.Dir, filepath.FromSlash(generation.Captured)), generation)
+			snapshot.Generations[i] = storedAs(filepath.Join(target.Dir, filepath.FromSlash(generation.Captured)), generation)
 		}
 	}
 	unavailable := map[string]bool{}

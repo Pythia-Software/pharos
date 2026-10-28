@@ -745,11 +745,12 @@ func TestBackupRestoresSQLiteRecordReplay(t *testing.T) {
 	}
 }
 
-// A backup taken while a compression is half done (its encoding not yet
-// renamed, or renamed before its manifest committed) restores a capture that
-// validates and still yields the session only the generation holds.
+// A backup taken while a compression is half done (its encoding still in its
+// lease, or its manifest committed but the file not yet renamed) recovers to
+// a library whose capture validates and still yields the session only the
+// generation holds.
 func TestBackupTakenMidCompressionRestoresAValidCapture(t *testing.T) {
-	for _, stage := range []string{"compress-verify", "compress-manifest"} {
+	for _, stage := range []string{"compress-verify", "compress-rename"} {
 		t.Run(stage, func(t *testing.T) {
 			config, dest := backupFixture(t)
 			dir := filepath.Join(t.TempDir(), "conductor")
@@ -772,10 +773,14 @@ func TestBackupTakenMidCompressionRestoresAValidCapture(t *testing.T) {
 			}()
 			captureFault = nil
 			runBackup(t, config, dest, false)
-			restored := config
-			restored.CaptureRoot = filepath.Join(dest, "captures")
-			if left := temporariesUnder(t, restored.CaptureRoot); len(left) != 0 {
+			if left := temporariesUnder(t, filepath.Join(dest, "captures")); len(left) != 0 {
 				t.Fatal("backup copied a compression's temporary", left)
+			}
+			// Restore through the recovery entry point, which validates every
+			// captured file before publishing the library.
+			restored, err := RecoverLibrary(t.Context(), dest, filepath.Join(t.TempDir(), "restored"), nil)
+			if err != nil {
+				t.Fatal("recovery of a backup taken mid-compression", err)
 			}
 			if err := validateCaptureEvidence(t.Context(), restored.CaptureRoot); err != nil {
 				t.Fatal("restored capture is invalid", err)

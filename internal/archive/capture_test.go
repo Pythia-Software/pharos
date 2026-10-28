@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -1105,6 +1106,37 @@ func TestCaptureCleansOnlyAbandonedReaderLeases(t *testing.T) {
 	if _, err = os.Stat(lease); !os.IsNotExist(err) {
 		t.Fatalf("abandoned native lease remains: %v", err)
 	}
+
+	// The compression pass sweeps abandoned leases under every host's
+	// captures (decoded copies a crashed reindex of another Mac left), keeps
+	// held ones, and leaves preservation-pin readers to their capture.
+	root := t.TempDir()
+	other := filepath.Join(root, "host-b", "conductor")
+	if err = os.MkdirAll(other, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	held, release, err := openReaderLease(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	abandoned, abandonedLock, err := lockedLease(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSourceFile(t, filepath.Join(abandoned, "history", "decoded.db"), "decoded bytes")
+	abandonedLock.Close()
+	pin := filepath.Join(other, ".reader-pin-x"+captureTempSuffix)
+	writeSourceFile(t, filepath.Join(pin, ".reader.lock"), "")
+	sweepAbandonedLeases(root)
+	if _, err = os.Stat(abandoned); !os.IsNotExist(err) {
+		t.Fatal("abandoned lease of another host survived the sweep", err)
+	}
+	for _, kept := range []string{held, pin} {
+		if _, err = os.Stat(kept); err != nil {
+			t.Fatal("sweep removed a lease it must keep", kept, err)
+		}
+	}
 }
 
 func TestFreezeRetainedInputsWithoutHardLinks(t *testing.T) {
@@ -1439,7 +1471,7 @@ func TestCaptureCompressesIndexedUnpinnedGenerations(t *testing.T) {
 // A kill at each step of the compression order leaves a capture that
 // validates and indexes, and the next pass finishes the job.
 func TestCaptureCompressionSurvivesAKillAtEachStep(t *testing.T) {
-	for _, stage := range []string{"compress-encode", "compress-verify", "compress-rename", "compress-manifest"} {
+	for _, stage := range []string{"compress-encode", "compress-verify", "compress-manifest", "compress-rename"} {
 		t.Run(stage, func(t *testing.T) {
 			config, target := compressionFixture(t)
 			catalog, _ := testCatalog(t)
@@ -1459,6 +1491,29 @@ func TestCaptureCompressionSurvivesAKillAtEachStep(t *testing.T) {
 				compressGenerations(t, config)
 			}()
 			captureFault = nil
+			// Whenever the name may hold zstd (once the manifest committed),
+			// an older build refuses the capture, also after a capture runs
+			// before the next pass.
+			gate := func() {
+				t.Helper()
+				committed := readCaptureManifest(t, config, "conductor").Snapshots[0].Generations[0].Encoding != ""
+				if zstdOnDisk(t, capturedPath(config, "conductor", generation.Captured)) && !committed {
+					t.Fatal("the name holds zstd under a plain entry")
+				}
+				captureManifestUnderstood = capturePlainManifestVersion
+				_, err := loadCaptureManifest(target.Dir)
+				captureManifestUnderstood = captureManifestVersion
+				if committed != (err != nil) {
+					t.Fatalf("older build after a kill at %s: committed %v, load error %v", stage, committed, err)
+				}
+			}
+			gate()
+			if stage == "compress-rename" {
+				if run := runCapture(t, config); !run.OK {
+					t.Fatal(run)
+				}
+				gate()
+			}
 			if err := validateCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
 				t.Fatal("killed compression left an invalid capture", err)
 			}
@@ -1490,5 +1545,64 @@ func TestCaptureCompressionSurvivesAKillAtEachStep(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+// A pass remembers what it decided not to compress, so it does not read the
+// same large generation again every pass; one generation's problem does not
+// keep the others uncompressed; and a capture that starts mid-encode leaves
+// the encoding alone.
+func TestCaptureCompressionRemembersWhatItLeft(t *testing.T) {
+	useHost(t, "host-a")
+	dir := filepath.Join(t.TempDir(), "conductor")
+	exec := conductorFixture(t, dir)
+	config := captureTestConfig(t, SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true})
+	config.CaptureGenerations = 3
+	for _, id := range []string{"a", "b", "c", "d"} {
+		exec(addConductorSession(id, 1)...)
+		runCapture(t, config)
+	}
+	target := captureTarget{Host: currentHost(), Source: "conductor", Dir: capturedPath(config, "conductor", "")}
+	manifest, err := loadCaptureManifest(target.Dir)
+	if err != nil || len(manifest.Snapshots[0].Generations) != 3 {
+		t.Fatal("fixture needs three generations", err)
+	}
+	generations := manifest.Snapshots[0].Generations
+	// The bytes of one disagree with its recorded digest: evidence trouble.
+	manifest.Snapshots[0].Generations[0].SHA256 = strings.Repeat("0", 64)
+	if err = writeCaptureManifest(target.Dir, manifest); err != nil {
+		t.Fatal(err)
+	}
+	// Another does not shrink (stand-in bytes of the recorded size).
+	noise := make([]byte, generations[1].Size)
+	if _, err = rand.Read(noise); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(capturedPath(config, "conductor", generations[1].Captured), noise, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	encodes := 0
+	override(t, &captureFault, func(stage, rel string) error {
+		if stage == "compress-encode" {
+			encodes++
+			// A capture starting now does not sweep the encoding in progress.
+			if run := runCapture(t, config); !run.OK {
+				t.Fatal(run)
+			}
+		}
+		return nil
+	})
+	var done []compressedGeneration
+	err = compressCaptures(t.Context(), config, func(g compressedGeneration) { done = append(done, g) })
+	if err == nil || !strings.Contains(err.Error(), "does not match its manifest digest") || len(done) != 1 || done[0].Path != generations[2].Captured || encodes != 3 {
+		t.Fatalf("first pass: %v, compressed %+v, %d encodes", err, done, encodes)
+	}
+	outcomes := loadCompressionOutcomes(target.Dir)
+	if outcomes.Entries[generations[0].Captured].Outcome != "mismatch" || outcomes.Entries[generations[1].Captured].Outcome != "incompressible" {
+		t.Fatalf("outcomes: %+v", outcomes.Entries)
+	}
+	done = nil
+	if err = compressCaptures(t.Context(), config, func(g compressedGeneration) { done = append(done, g) }); err != nil || len(done) != 0 || encodes != 3 {
+		t.Fatalf("second pass read settled generations again: %v, %+v, %d encodes", err, done, encodes)
 	}
 }

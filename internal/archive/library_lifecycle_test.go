@@ -143,6 +143,10 @@ func TestLibraryTransferRetainedEvidence(t *testing.T) {
 		t.Fatal("compression broke a verified export receipt")
 	}
 	releaseLockFile(pinLock)
+	// What a killed compression or reader leaves is not evidence; a transfer
+	// leaves it out, as local backup does.
+	writeSourceFile(t, filepath.Join(pinTarget.Dir, ".reader-abandoned"+captureTempSuffix, filepath.FromSlash(generation.Captured)), "decoded copy")
+	writeSourceFile(t, filepath.Join(pinTarget.Dir, filepath.FromSlash(generation.Captured))+captureTempSuffix, "half encoded")
 	c := reopenCatalog(t, a.CatalogPath)
 	c.setCaptureRoot(a.CaptureRoot)
 	recordTestReplay(t, a, source.Name, c)
@@ -198,6 +202,9 @@ func TestLibraryTransferRetainedEvidence(t *testing.T) {
 	if err != nil || len(moved.Snapshots) != 1 || len(moved.Snapshots[0].Generations) != 1 || jsonText(moved.Snapshots[0].Generations[0]) != jsonText(generation) ||
 		!zstdOnDisk(t, filepath.Join(imported, "host-a", source.Name, filepath.FromSlash(generation.Captured))) {
 		t.Fatal("transfer did not carry the compressed generation as stored", err)
+	}
+	if left := temporariesUnder(t, imported); len(left) != 0 {
+		t.Fatal("transfer copied temporaries", left)
 	}
 	recovered, err := RecoverLibrary(t.Context(), filepath.Dir(b.Path), filepath.Join(t.TempDir(), "recovered"), nil)
 	if err != nil {

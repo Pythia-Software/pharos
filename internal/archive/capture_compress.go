@@ -25,21 +25,24 @@ import (
 //
 // Order, for one generation:
 //
-//  1. encode it to <name>.pharos-tmp, hashing the original bytes as read;
+//  1. encode it into a flocked reader lease of its own (which no capture's
+//     sweep removes while it is held), hashing the original bytes as read;
 //  2. flush the encoded file to the drive (F_FULLFSYNC);
 //  3. verify it by decoding and hashing;
 //  4. under the host's capture lock, re-check that the manifest still names
-//     the same, unpinned, indexed generation, rename over the name, and
-//     replace the manifest (encoding, stored_size, sha256) after a full
-//     device flush.
+//     the same, unpinned, indexed generation, and replace the manifest
+//     (encoding, stored_size, sha256; version 6) after a full device flush;
+//  5. still under the lock, rename the encoded file over the name.
 //
-// A kill before the rename leaves the original and a temporary the next
-// capture sweeps. A kill between the rename and the manifest leaves an
-// encoded file under a plain entry, which readers recognise (adoptEncoded)
-// and the next pass records. Encoding runs without the capture lock, so a
-// capture is never kept waiting for minutes; it takes the lock only for the
-// rename and manifest. Readers holding the old inode through a lease keep
-// reading the original bytes.
+// The manifest commits first so that whenever the name may hold zstd, the
+// manifest already has the version older builds refuse. A kill before the
+// manifest leaves the original and an abandoned lease that sweeps remove. A
+// kill between the manifest and the rename leaves an entry marked encoded
+// over the original bytes, which readers recognise (storedAs) and the next
+// pass corrects. Encoding runs without the capture lock, so a capture is
+// never kept waiting for minutes; a pass waits for a running capture before
+// its commit instead of throwing the encoding away. Readers holding the old
+// inode through a lease keep reading the original bytes.
 
 var (
 	// captureCompressInterval spaces the daemon's passes; the first runs
@@ -48,6 +51,9 @@ var (
 	captureCompressDelay    = 2 * time.Minute
 	// captureCompressThreads bounds the encoder's goroutines.
 	captureCompressThreads = 4
+	// captureCompressAttempts is how many failed verifications of one
+	// generation a pass tolerates before it stops trying.
+	captureCompressAttempts = 3
 )
 
 // captureCompressLevel is zstd level 3: about 400 MB/s here, so the drive,
@@ -61,13 +67,26 @@ type compressedGeneration struct {
 	Size, Stored int64
 }
 
+// Outcomes a pass remembers, so that it does not read a large generation
+// again every 15 minutes to reach the same answer.
+var (
+	errCompressIncompressible = errors.New("generation does not shrink")
+	errCompressMismatch       = errors.New("generation does not match its manifest digest")
+	errCompressVerify         = errors.New("encoded generation failed verification")
+)
+
 // compressCaptures compresses the eligible snapshot generations of this
 // Mac's captures. Other Macs' captures are left to their own Macs: a manifest
 // with an encoded entry stops any build that cannot decode it, and only the
 // capturing Mac's own build is known to be new enough to keep capturing.
-// A library that keeps pending evidence for delivery is left alone.
+// A library that keeps pending evidence for delivery is left alone. Every
+// pass first removes abandoned reader leases under all hosts' captures.
 func compressCaptures(ctx context.Context, config Config, done func(compressedGeneration)) error {
-	if config.CaptureRoot == "" || config.PendingCapture {
+	if config.CaptureRoot == "" {
+		return nil
+	}
+	sweepAbandonedLeases(config.CaptureRoot)
+	if config.PendingCapture {
 		return nil
 	}
 	if d, err := readLibraryDescriptor(config); err == nil && d.RetainPendingEvidence {
@@ -98,7 +117,7 @@ func compressCaptures(ctx context.Context, config Config, done func(compressedGe
 		if _, err := os.Stat(filepath.Join(dir, captureManifestName)); err != nil {
 			continue
 		}
-		if err := compressSourceGenerations(ctx, captureTarget{Host: host, Source: entry.Name(), Dir: dir}, done); err != nil && !errors.Is(err, errCaptureBusy) {
+		if err := compressSourceGenerations(ctx, captureTarget{Host: host, Source: entry.Name(), Dir: dir}, done); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -108,10 +127,11 @@ func compressCaptures(ctx context.Context, config Config, done func(compressedGe
 	return errors.Join(failures...)
 }
 
-// compressSourceGenerations records what an interrupted pass left encoded,
-// then compresses each eligible generation of one captured source.
+// compressSourceGenerations corrects what a killed pass left, then
+// compresses each eligible generation of one captured source. A failure of
+// one generation does not stop the others; each is reported.
 func compressSourceGenerations(ctx context.Context, target captureTarget, done func(compressedGeneration)) error {
-	if err := recordEncodedGenerations(ctx, target); err != nil {
+	if err := correctUnrenamedGenerations(ctx, target); err != nil && !errors.Is(err, errCaptureBusy) {
 		return err
 	}
 	manifest, err := loadCaptureManifest(target.Dir)
@@ -121,24 +141,43 @@ func compressSourceGenerations(ctx context.Context, target captureTarget, done f
 	if manifest.Version == 0 || manifest.Host.ID != target.Host.ID || manifest.Source.Name != target.Source {
 		return nil
 	}
+	outcomes := loadCompressionOutcomes(target.Dir)
+	var failures []error
 	for _, snapshot := range manifest.Snapshots {
 		for _, generation := range snapshot.Generations {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if !compressible(target.Dir, manifest, snapshot.Path, generation) {
+			if outcomes.settled(target.Dir, generation) || !compressible(target.Dir, manifest, snapshot.Path, generation) {
 				continue
 			}
-			stored, err := compressGeneration(ctx, target, snapshot.Path, generation)
-			if err != nil {
-				return err
-			}
-			if stored > 0 && done != nil {
-				done(compressedGeneration{Source: target.Source, Path: generation.Captured, Size: generation.Size, Stored: stored})
+			stored, err := compressGeneration(ctx, target, manifest, snapshot.Path, generation, outcomes)
+			switch {
+			case err == nil:
+				if stored > 0 && done != nil {
+					done(compressedGeneration{Source: target.Source, Path: generation.Captured, Size: generation.Size, Stored: stored})
+				}
+			case errors.Is(err, errCompressIncompressible):
+				outcomes.record(generation, "incompressible", "")
+			case errors.Is(err, errCompressMismatch):
+				// Evidence that disagrees with its manifest is reported once,
+				// not compressed and not read again for this purpose.
+				outcomes.record(generation, "mismatch", err.Error())
+				failures = append(failures, err)
+			case errors.Is(err, errCompressVerify):
+				outcomes.failed(generation, err.Error())
+				failures = append(failures, err)
+			case ctx.Err() != nil:
+				return ctx.Err()
+			default:
+				failures = append(failures, fmt.Errorf("%s: %w", generation.Captured, err))
 			}
 		}
 	}
-	return nil
+	if err := outcomes.save(target.Dir, manifest); err != nil {
+		failures = append(failures, err)
+	}
+	return errors.Join(failures...)
 }
 
 // compressible is whether a generation may be stored encoded: one that
@@ -146,7 +185,7 @@ func compressSourceGenerations(ctx context.Context, target captureTarget, done f
 // That is a superseded, plain generation that is not pinned (a pin, or a
 // backfill's native pause, holds its exact bytes) and that the index marker
 // covers when the source has one. A SQLite-record source also needs the
-// generation's export verified, since retain keeps it until then.
+// generation's export verified (compressGeneration checks that).
 func compressible(dir string, manifest *captureManifest, database string, generation capturedVersion) bool {
 	if generation.Encoding != "" || !strings.HasPrefix(generation.Captured, captureHistoryDir+"/") || generation.Size <= 0 {
 		return false
@@ -162,26 +201,15 @@ func compressible(dir string, manifest *captureManifest, database string, genera
 
 // compressGeneration stores one generation encoded, in the order above. It
 // returns the encoded size, or 0 when the generation was left as it was (it
-// changed, was pruned or pinned meanwhile, or did not shrink).
-func compressGeneration(ctx context.Context, target captureTarget, database string, generation capturedVersion) (int64, error) {
+// changed, was pruned or pinned meanwhile, or awaits a verified export).
+func compressGeneration(ctx context.Context, target captureTarget, manifest *captureManifest, database string, generation capturedVersion, outcomes *compressionOutcomes) (int64, error) {
 	rel := generation.Captured
 	file := filepath.Join(target.Dir, filepath.FromSlash(rel))
-	temporary := file + captureTempSuffix
 	fault := func(stage string) error {
 		if captureFault != nil {
 			return captureFault(stage, rel)
 		}
 		return nil
-	}
-	// Removed explicitly rather than deferred: a kill leaves the temporary
-	// behind exactly as a crash would, for the next capture to sweep.
-	abandon := func(err error) (int64, error) {
-		os.Remove(temporary)
-		return 0, err
-	}
-	manifest, err := loadCaptureManifest(target.Dir)
-	if err != nil {
-		return 0, err
 	}
 	if manifest.SQLiteRecordCapture {
 		c, err := sourceCaptureForTarget(ctx, target)
@@ -189,6 +217,8 @@ func compressGeneration(ctx context.Context, target captureTarget, database stri
 			return 0, err
 		}
 		if _, verified := c.verifiedSnapshotReceipt(rel, rel); !verified {
+			// Checked again only once the receipt changes.
+			outcomes.unverified(target.Dir, generation)
 			return 0, nil
 		}
 	}
@@ -204,11 +234,24 @@ func compressGeneration(ctx context.Context, target captureTarget, database stri
 		return 0, err
 	}
 	if !original.Mode().IsRegular() || original.Size() != generation.Size {
-		return 0, nil // not what the manifest says; nothing to compress
+		return 0, nil // not what the manifest says; validation reports that
 	}
-	out, err := os.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	lease, leaseLock, err := lockedLease(target.Dir)
 	if err != nil {
 		return 0, err
+	}
+	// A kill releases the lease's flock, as this deferred close does when a
+	// test simulates one, and leaves the directory for a sweep. Every other
+	// way out removes it.
+	defer leaseLock.Close()
+	abandon := func(err error) (int64, error) {
+		_ = os.RemoveAll(lease)
+		return 0, err
+	}
+	encoded := filepath.Join(lease, filepath.Base(file))
+	out, err := os.OpenFile(encoded, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return abandon(err)
 	}
 	writer := &spaceCheckedWriter{w: out, dir: target.Dir}
 	encoder, err := zstd.NewWriter(writer, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(captureCompressLevel)), zstd.WithEncoderConcurrency(captureCompressThreads))
@@ -231,10 +274,10 @@ func compressGeneration(ctx context.Context, target captureTarget, database stri
 	}
 	hash := hex.EncodeToString(digest.Sum(nil))
 	if err == nil && generation.SHA256 != "" && hash != generation.SHA256 {
-		err = fmt.Errorf("%s does not match its manifest; left uncompressed", rel)
+		err = fmt.Errorf("%w: %s", errCompressMismatch, rel)
 	}
 	if err == nil {
-		err = os.Chtimes(temporary, original.ModTime(), original.ModTime())
+		err = os.Chtimes(encoded, original.ModTime(), original.ModTime())
 	}
 	if err == nil {
 		// F_FULLFSYNC: the encoded bytes are on the drive before the rename
@@ -250,22 +293,27 @@ func compressGeneration(ctx context.Context, target captureTarget, database stri
 	if err = fault("compress-verify"); err != nil {
 		return abandon(err)
 	}
-	stored, err := os.Stat(temporary)
+	stored, err := os.Stat(encoded)
 	if err != nil {
 		return abandon(err)
 	}
 	if stored.Size() >= generation.Size {
-		return abandon(nil) // incompressible: keep the original
+		return abandon(fmt.Errorf("%w: %s", errCompressIncompressible, rel))
 	}
-	verified, size, err := capturedSHA256(ctx, temporary, captureEncodingZstd)
+	verified, size, err := capturedSHA256(ctx, encoded, captureEncodingZstd)
+	if err != nil && ctx.Err() == nil {
+		err = fmt.Errorf("%w: %s: %v", errCompressVerify, rel, err)
+	}
+	if err == nil && (size != generation.Size || verified != hash) {
+		err = fmt.Errorf("%w: %s", errCompressVerify, rel)
+	}
 	if err != nil {
 		return abandon(err)
 	}
-	if size != generation.Size || verified != hash {
-		return abandon(fmt.Errorf("%w: %s", errCapturedContentMismatch, temporary))
-	}
 
-	lock, err := lockCaptureTarget(ctx, target.Dir)
+	// A running capture holds the lock for its whole run: wait for it rather
+	// than discard the encoding.
+	lock, err := waitCaptureLock(ctx, defaultString(target.Host.Label, target.Host.ID), func() (*os.File, error) { return lockCaptureTarget(ctx, target.Dir) })
 	if err != nil {
 		return abandon(err)
 	}
@@ -283,68 +331,53 @@ func compressGeneration(ctx context.Context, target captureTarget, database stri
 	if now, err := os.Stat(file); err != nil || !os.SameFile(now, original) {
 		return abandon(nil)
 	}
+	entry.Encoding, entry.StoredSize, entry.SHA256 = captureEncodingZstd, stored.Size(), hash
+	if err = fault("compress-manifest"); err != nil {
+		return abandon(err)
+	}
+	if err = writeCaptureManifest(target.Dir, current); err != nil {
+		return abandon(err)
+	}
 	if err = fault("compress-rename"); err != nil {
 		return abandon(err)
 	}
-	if err = os.Rename(temporary, file); err != nil {
+	if err = os.Rename(encoded, file); err != nil {
 		return abandon(err)
 	}
 	syncDir(filepath.Dir(file))
-	entry.Encoding, entry.StoredSize, entry.SHA256 = captureEncodingZstd, stored.Size(), hash
-	if err = fault("compress-manifest"); err != nil {
-		return 0, err
-	}
-	if err = writeCaptureManifest(target.Dir, current); err != nil {
-		return 0, err
-	}
+	_ = os.RemoveAll(lease)
 	return stored.Size(), nil
 }
 
-// recordEncodedGenerations commits, under the capture lock, the manifest
-// entries of generations a pass encoded and renamed but was killed before
-// recording: each must decode to its recorded size (and digest, if known).
-func recordEncodedGenerations(ctx context.Context, target captureTarget) error {
-	manifest, err := loadCaptureManifest(target.Dir)
-	if err != nil {
-		return err
-	}
-	pending := false
-	for _, snapshot := range manifest.Snapshots {
-		for _, generation := range snapshot.Generations {
-			file := filepath.Join(target.Dir, filepath.FromSlash(generation.Captured))
-			pending = pending || adoptEncoded(file, generation).Encoding != generation.Encoding
+// correctUnrenamedGenerations returns to plain the entries a killed pass
+// marked encoded but never renamed: their files still hold the original
+// bytes (storedAs). The check under the lock is a stat and a header read;
+// the entry keeps the digest the pass recorded, which describes those bytes.
+func correctUnrenamedGenerations(ctx context.Context, target captureTarget) error {
+	unrenamed := func(manifest *captureManifest) bool {
+		found := false
+		for _, snapshot := range manifest.Snapshots {
+			for i, generation := range snapshot.Generations {
+				plain := storedAs(filepath.Join(target.Dir, filepath.FromSlash(generation.Captured)), generation)
+				if plain.Encoding != generation.Encoding {
+					snapshot.Generations[i] = plain
+					found = true
+				}
+			}
 		}
+		return found
 	}
-	if !pending {
-		return nil
+	manifest, err := loadCaptureManifest(target.Dir)
+	if err != nil || !unrenamed(manifest) {
+		return err
 	}
 	lock, err := lockCaptureTarget(ctx, target.Dir)
 	if err != nil {
 		return err
 	}
 	defer releaseLockFile(lock)
-	if manifest, err = loadCaptureManifest(target.Dir); err != nil {
+	if manifest, err = loadCaptureManifest(target.Dir); err != nil || !unrenamed(manifest) {
 		return err
-	}
-	changed := false
-	for _, snapshot := range manifest.Snapshots {
-		for i, generation := range snapshot.Generations {
-			file := filepath.Join(target.Dir, filepath.FromSlash(generation.Captured))
-			adopted := adoptEncoded(file, generation)
-			if adopted.Encoding == generation.Encoding {
-				continue
-			}
-			hash, size, err := capturedSHA256(ctx, file, adopted.Encoding)
-			if err != nil || size != adopted.Size || adopted.SHA256 != "" && hash != adopted.SHA256 {
-				continue // not a compression's output: left for validation to report
-			}
-			adopted.SHA256 = hash
-			snapshot.Generations[i] = adopted
-			changed = true
-		}
-	}
-	if !changed {
-		return nil
 	}
 	return writeCaptureManifest(target.Dir, manifest)
 }
@@ -376,6 +409,115 @@ func writeCaptureManifest(dir string, manifest *captureManifest) error {
 		return err
 	}
 	return writeFileDurably(filepath.Join(dir, captureManifestName), append(data, '\n'))
+}
+
+// compressionOutcomesName, in a captured source's directory, remembers the
+// generations a pass decided not to compress, keyed by captured path and
+// identified by captured_at and size. Only the compression pass writes it;
+// losing it costs one more read of each generation it named.
+const compressionOutcomesName = "compression.json"
+
+type compressionOutcome struct {
+	CapturedAt string `json:"captured_at"`
+	Size       int64  `json:"size"`
+	// Outcome is incompressible, mismatch (the bytes disagree with the
+	// manifest's digest), failed (verification; Failures counts), or
+	// unverified (a SQLite-record export not yet verified; ReceiptNS is its
+	// receipt's mtime then, -1 for none).
+	Outcome   string `json:"outcome"`
+	Failures  int    `json:"failures,omitempty"`
+	ReceiptNS int64  `json:"receipt_mtime_ns,omitempty"`
+	Detail    string `json:"detail,omitempty"`
+	At        string `json:"at"`
+}
+
+type compressionOutcomes struct {
+	Version  int                           `json:"version"`
+	Entries  map[string]compressionOutcome `json:"generations"`
+	modified bool
+}
+
+func loadCompressionOutcomes(dir string) *compressionOutcomes {
+	outcomes := &compressionOutcomes{}
+	if data, err := os.ReadFile(filepath.Join(dir, compressionOutcomesName)); err == nil {
+		_ = json.Unmarshal(data, outcomes)
+	}
+	if outcomes.Version != 1 || outcomes.Entries == nil {
+		outcomes.Version, outcomes.Entries = 1, map[string]compressionOutcome{}
+	}
+	return outcomes
+}
+
+func (o *compressionOutcomes) lookup(generation capturedVersion) (compressionOutcome, bool) {
+	entry, ok := o.Entries[generation.Captured]
+	return entry, ok && entry.CapturedAt == generation.CapturedAt && entry.Size == generation.Size
+}
+
+// settled reports a generation whose last outcome still stands.
+func (o *compressionOutcomes) settled(dir string, generation capturedVersion) bool {
+	entry, ok := o.lookup(generation)
+	switch {
+	case !ok:
+		return false
+	case entry.Outcome == "failed":
+		return entry.Failures >= captureCompressAttempts
+	case entry.Outcome == "unverified":
+		return receiptStamp(dir, generation.Captured) == entry.ReceiptNS
+	}
+	return true
+}
+
+func (o *compressionOutcomes) record(generation capturedVersion, outcome, detail string) {
+	entry, _ := o.lookup(generation)
+	entry.CapturedAt, entry.Size, entry.Outcome, entry.Detail, entry.At = generation.CapturedAt, generation.Size, outcome, detail, now()
+	o.Entries[generation.Captured] = entry
+	o.modified = true
+}
+
+func (o *compressionOutcomes) failed(generation capturedVersion, detail string) {
+	entry, ok := o.lookup(generation)
+	failures := 1
+	if ok && entry.Outcome == "failed" {
+		failures = entry.Failures + 1
+	}
+	o.record(generation, "failed", detail)
+	entry = o.Entries[generation.Captured]
+	entry.Failures = failures
+	o.Entries[generation.Captured] = entry
+}
+
+func (o *compressionOutcomes) unverified(dir string, generation capturedVersion) {
+	o.record(generation, "unverified", "")
+	entry := o.Entries[generation.Captured]
+	entry.ReceiptNS = receiptStamp(dir, generation.Captured)
+	o.Entries[generation.Captured] = entry
+}
+
+// receiptStamp is the mtime of rel's SQLite export receipt, -1 without one.
+func receiptStamp(dir, rel string) int64 {
+	info, err := os.Stat(filepath.Join(dir, recordDir, "receipts", hashBytes([]byte(rel))+".json"))
+	if err != nil {
+		return -1
+	}
+	return info.ModTime().UnixNano()
+}
+
+// save keeps only the generations the manifest still names.
+func (o *compressionOutcomes) save(dir string, manifest *captureManifest) error {
+	for rel := range o.Entries {
+		if v, ok := manifest.version(rel); !ok || v.Encoding != "" {
+			delete(o.Entries, rel)
+			o.modified = true
+		}
+	}
+	if !o.modified {
+		return nil
+	}
+	data, err := json.MarshalIndent(o, "", " ")
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(filepath.Join(dir, compressionOutcomesName), append(data, '\n'), 0o600)
 }
 
 // spaceCheckedWriter keeps the capture free-space margin while an encoded

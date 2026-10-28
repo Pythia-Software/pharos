@@ -1203,9 +1203,10 @@ func (s *Server) verifyAllInputs(ctx context.Context, runID string, progress fun
 				if ctx.Err() != nil {
 					break
 				}
-				// An encoded generation is decoded into a reader lease of its
-				// own for this check, and the lease removed after it.
-				file, dir, release, err := leaseDecoded(ctx, view.dir, generation)
+				// Each generation is leased under the capture lock, so a
+				// compression or pruning cannot change it while it is read; an
+				// encoded one is decoded in that lease, removed after the check.
+				file, dir, release, err := leaseCapturedVersion(ctx, target, generation.Captured)
 				if err != nil {
 					if errors.Is(err, os.ErrNotExist) {
 						summary.Deferred++

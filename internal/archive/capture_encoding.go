@@ -11,7 +11,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -107,8 +109,7 @@ func (c *sourceCapture) encodingOf(rel string) string {
 }
 
 // storedVersion is the superseded entry captured at rel when it is stored
-// encoded (or was left encoded by an interrupted compression), from this
-// writer's inventory.
+// encoded, from this writer's inventory (see storedAs).
 func (c *sourceCapture) storedVersion(rel string) (capturedVersion, bool) {
 	var found *capturedVersion
 	for _, snapshot := range c.snapshots {
@@ -124,35 +125,40 @@ func (c *sourceCapture) storedVersion(rel string) (capturedVersion, bool) {
 	if found == nil {
 		return capturedVersion{}, false
 	}
-	v := adoptEncoded(filepath.Join(c.dir, filepath.FromSlash(rel)), *found)
+	v := storedAs(filepath.Join(c.dir, filepath.FromSlash(rel)), *found)
 	return v, v.Encoding != ""
 }
 
-// adoptEncoded recognises the one state an interrupted compression leaves
-// that its manifest does not describe: the encoded file renamed over the name
-// before the manifest naming it committed. A plain entry whose file has the
-// wrong size and opens with a zstd frame is that file; decoding it is checked
-// against the recorded size (and SHA-256 when known), so nothing is trusted
-// on the sniff alone. Any other mismatch is left for the caller to reject.
-func adoptEncoded(file string, v capturedVersion) capturedVersion {
-	if v.Encoding != "" {
+// storedAs is v as its file is actually stored. Compression commits the
+// manifest naming the encoded file (and with it the version older builds
+// refuse) before it renames that file over the name, so the gate never lags
+// the bytes. Killed between the two, the entry says zstd while the file still
+// holds its original bytes: the original size, and no zstd frame (an encoded
+// file is always smaller). That file is read as it is; the next compression
+// pass corrects the entry. Any other mismatch is left for the caller to
+// reject.
+func storedAs(file string, v capturedVersion) capturedVersion {
+	if v.Encoding == "" {
 		return v
 	}
 	info, err := os.Stat(file)
-	if err != nil || !info.Mode().IsRegular() || info.Size() == v.Size || info.Size() < int64(len(zstdMagic)) {
+	if err != nil || !info.Mode().IsRegular() || info.Size() != v.Size || info.Size() == v.StoredSize || zstdHeader(file) {
 		return v
 	}
+	v.Encoding, v.StoredSize = "", 0
+	return v
+}
+
+// zstdHeader reports whether file opens with a zstd frame.
+func zstdHeader(file string) bool {
 	f, err := os.Open(file)
 	if err != nil {
-		return v
+		return false
 	}
 	defer f.Close()
 	head := make([]byte, len(zstdMagic))
-	if _, err := io.ReadFull(f, head); err != nil || !bytes.Equal(head, zstdMagic) {
-		return v
-	}
-	v.Encoding, v.StoredSize = captureEncodingZstd, info.Size()
-	return v
+	_, err = io.ReadFull(f, head)
+	return err == nil && bytes.Equal(head, zstdMagic)
 }
 
 func newCaptureDecoder(r io.Reader) (*zstd.Decoder, error) {
@@ -275,23 +281,97 @@ func materializeCaptured(ctx context.Context, src, dst string, v capturedVersion
 }
 
 // openReaderLease makes a temporary reader directory under a capture
-// directory, held by its flock: a capture's sweep removes only abandoned ones.
+// directory, held by its flock: sweeps remove only abandoned ones.
 func openReaderLease(dir string) (string, func(), error) {
-	lease, err := os.MkdirTemp(dir, ".reader-*"+captureTempSuffix)
+	lease, lock, err := lockedLease(dir)
 	if err != nil {
 		return "", nil, err
 	}
-	lock, err := os.OpenFile(filepath.Join(lease, ".reader.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	return lease, func() { lock.Close(); _ = os.RemoveAll(lease) }, nil
+}
+
+// leaseStagingPrefix names a reader lease before its flock is held. A lease
+// is published as .reader-* only once locked, so a sweep that does not hold
+// the capture lock never mistakes a new lease for an abandoned one.
+const leaseStagingPrefix = ".lease-"
+
+// lockedLease makes a reader lease directory and returns it with its lock
+// file, flocked. The caller closes the lock and removes the directory.
+func lockedLease(dir string) (string, *os.File, error) {
+	staged, err := os.MkdirTemp(dir, leaseStagingPrefix+"*"+captureTempSuffix)
 	if err != nil {
-		_ = os.RemoveAll(lease)
+		return "", nil, err
+	}
+	lock, err := os.OpenFile(filepath.Join(staged, ".reader.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		_ = os.RemoveAll(staged)
 		return "", nil, err
 	}
 	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		lock.Close()
-		_ = os.RemoveAll(lease)
+		_ = os.RemoveAll(staged)
 		return "", nil, err
 	}
-	return lease, func() { lock.Close(); _ = os.RemoveAll(lease) }, nil
+	lease := filepath.Join(dir, ".reader-"+strings.TrimPrefix(filepath.Base(staged), leaseStagingPrefix))
+	if err = os.Rename(staged, lease); err != nil {
+		lock.Close()
+		_ = os.RemoveAll(staged)
+		return "", nil, err
+	}
+	return lease, lock, nil
+}
+
+// sweepAbandonedLeases removes the reader leases no process holds under
+// every host's captured sources: decoded copies a crashed reader left (a
+// forced reindex of another Mac's capture, say) are otherwise only swept by a
+// capture of that same source. Preservation-pin readers keep their own
+// bookkeeping and are left to the capture.
+func sweepAbandonedLeases(root string) {
+	hosts, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	for _, host := range hosts {
+		if !host.IsDir() || !validCaptureName(host.Name()) {
+			continue
+		}
+		sources, err := os.ReadDir(filepath.Join(root, host.Name()))
+		if err != nil {
+			continue
+		}
+		for _, source := range sources {
+			if !source.IsDir() || !validCaptureName(source.Name()) {
+				continue
+			}
+			dir := filepath.Join(root, host.Name(), source.Name())
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				continue
+			}
+			for _, entry := range entries {
+				name := entry.Name()
+				staged := strings.HasPrefix(name, leaseStagingPrefix)
+				if !entry.IsDir() || !strings.HasSuffix(name, captureTempSuffix) || strings.HasPrefix(name, ".reader-pin-") || !staged && !strings.HasPrefix(name, ".reader-") {
+					continue
+				}
+				lease := filepath.Join(dir, name)
+				if staged {
+					// Not yet locked by its maker if it is new.
+					if info, err := entry.Info(); err != nil || time.Since(info.ModTime()) < time.Hour {
+						continue
+					}
+				}
+				lock, err := os.OpenFile(filepath.Join(lease, ".reader.lock"), os.O_RDWR|os.O_CREATE, 0o600)
+				if err != nil {
+					continue
+				}
+				if syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil {
+					_ = os.RemoveAll(lease)
+				}
+				lock.Close()
+			}
+		}
+	}
 }
 
 // leaseDecoded materializes the encoded entry v of the capture in dir into a
@@ -299,7 +379,7 @@ func openReaderLease(dir string) (string, func(), error) {
 // lease of its own. A plain entry is read in place.
 func leaseDecoded(ctx context.Context, dir string, v capturedVersion) (file, leaseDir string, release func(), err error) {
 	file = filepath.Join(dir, filepath.FromSlash(v.Captured))
-	v = adoptEncoded(file, v)
+	v = storedAs(file, v)
 	if v.Encoding == "" {
 		return file, dir, func() {}, nil
 	}
@@ -313,6 +393,50 @@ func leaseDecoded(ctx context.Context, dir string, v capturedVersion) (file, lea
 		return "", "", nil, err
 	}
 	return decoded, leaseDir, release, nil
+}
+
+// leaseCapturedVersion is leaseDecoded for a reader that holds no capture
+// lock: under the lock it reads the current entry rel and links its file into
+// a new reader lease, so neither a compression nor pruning can change what it
+// reads; then, without the lock, it decodes an encoded file in the lease.
+func leaseCapturedVersion(ctx context.Context, target captureTarget, rel string) (file, leaseDir string, release func(), err error) {
+	lock, err := lockCaptureReader(ctx, target)
+	if err != nil {
+		return "", "", nil, err
+	}
+	manifest, err := loadCaptureManifest(target.Dir)
+	if err != nil {
+		releaseLockFile(lock)
+		return "", "", nil, err
+	}
+	entry, ok := manifest.version(rel)
+	if !ok {
+		releaseLockFile(lock)
+		return "", "", nil, fmt.Errorf("%s: %w", rel, os.ErrNotExist)
+	}
+	v := storedAs(filepath.Join(target.Dir, filepath.FromSlash(rel)), *entry)
+	if leaseDir, release, err = openReaderLease(target.Dir); err != nil {
+		releaseLockFile(lock)
+		return "", "", nil, err
+	}
+	size, hash := v.Size, v.SHA256
+	if v.Encoding != "" {
+		size, hash = v.StoredSize, ""
+	}
+	err = freezeRetainedFile(ctx, target.Dir, leaseDir, rel, size, hash)
+	releaseLockFile(lock)
+	if err != nil {
+		release()
+		return "", "", nil, err
+	}
+	file = filepath.Join(leaseDir, filepath.FromSlash(rel))
+	if v.Encoding != "" {
+		if err = materializeCaptured(ctx, file, file, v); err != nil {
+			release()
+			return "", "", nil, err
+		}
+	}
+	return file, leaseDir, release, nil
 }
 
 // materialize returns a path at which the captured entry rel can be opened

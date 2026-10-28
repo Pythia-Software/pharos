@@ -379,9 +379,9 @@ func validateCaptureEvidence(ctx context.Context, root string) error {
 			for _, generation := range snapshot.Generations {
 				// An encoded generation must be its stored size on disk and
 				// decode to the original size and digest. A compression killed
-				// before its manifest committed left one the manifest does not
-				// yet describe; it is checked the same way.
-				generation = adoptEncoded(filepath.Join(dir, filepath.FromSlash(generation.Captured)), generation)
+				// between its manifest and its rename left an entry marked
+				// encoded over the original bytes; that is checked as plain.
+				generation = storedAs(filepath.Join(dir, filepath.FromSlash(generation.Captured)), generation)
 				if generation.Encoding == "" {
 					if err = verify(generation.Captured, generation.Size, generation.SHA256); err != nil {
 						return err

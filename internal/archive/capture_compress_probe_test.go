@@ -57,13 +57,15 @@ func TestCaptureCompressionProbe(t *testing.T) {
 				return
 			case <-time.After(200 * time.Millisecond):
 			}
-			if tmp, err := os.Stat(filepath.Join(target.Dir, rel) + captureTempSuffix); err == nil && tmp.Size() > peak {
-				peak = tmp.Size()
+			if leases, _ := filepath.Glob(filepath.Join(target.Dir, ".reader-*", "conductor.db")); len(leases) == 1 {
+				if tmp, err := os.Stat(leases[0]); err == nil && tmp.Size() > peak {
+					peak = tmp.Size()
+				}
 			}
 		}
 	}()
 	started := time.Now()
-	stored, err := compressGeneration(t.Context(), target, "/probe/conductor.db", manifest.Snapshots[0].Generations[0])
+	stored, err := compressGeneration(t.Context(), target, manifest, "/probe/conductor.db", manifest.Snapshots[0].Generations[0], loadCompressionOutcomes(target.Dir))
 	elapsed := time.Since(started)
 	close(stop)
 	<-sampled
