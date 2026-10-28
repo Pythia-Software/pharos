@@ -498,8 +498,7 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/health/storage":
 		writeJSON(w, merge(storage(s.Config()), map[string]any{"index_bytes": s.Catalog.indexBytes()}), 200)
 	case path == "/api/health/storage/breakdown":
-		value, err := s.storageBreakdown(r.Context())
-		writeResult(w, value, err)
+		writeJSON(w, s.storageBreakdown(), 200)
 	case path == "/api/health/freshness":
 		writeJSON(w, merge(s.Catalog.Freshness(), map[string]any{"sync_active": s.syncActive()}), 200)
 	case path == "/api/authorship":
