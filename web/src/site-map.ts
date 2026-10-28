@@ -560,7 +560,11 @@ export function settingsPages(...html: string[]) {
 
 // ----- The tree ------------------------------------------------------------------
 
-type Option = { name: string; param: string; key?: string; kind: string; values?: Array<{ value: Scalar; label?: string; description?: string }>; default?: unknown; constraints?: Record<string, unknown>; id?: string; description?: string };
+// requires: options this one needs, each given, or with values: holding (or
+// defaulting to) one of them. conflicts: options a link cannot give with it.
+type Requirement = { option: string; values?: Scalar[] };
+type Option = { name: string; param: string; key?: string; end_param?: string; kind: string; values?: Array<{ value: Scalar; label?: string; description?: string }>; default?: unknown; requires?: Requirement[]; conflicts?: string[]; id?: string; description?: string };
+const needs = (option: string, ...values: Scalar[]): Requirement => ({ option, ...values.length ? { values } : {} });
 type SiteNode = { ribbon?: unknown; path: string; title: string; description?: string; route: string; fixed?: Record<string, string>; options?: Option[]; children?: string[]; dataset?: string; dashboard?: string; cards?: boolean; settings?: string; builder?: string };
 const values = (entries: ReadonlyArray<readonly [string, string]> | ReadonlyArray<string>, describe?: (value: string) => string | undefined) =>
   entries.map(entry => typeof entry === "string" ? { value: entry, ...describe?.(entry) ? { description: describe(entry) } : {} } : { value: entry[0], label: entry[1] });
@@ -608,12 +612,12 @@ export function buildSiteMap(inputs: SiteInputs) {
       node.dataset = "library";
       node.builder = "searchURL: q_library (base_query with the where terms, offset 0), the window parameters, then text_builder for a text search, or kind, search and case for a file or URL search.";
       node.options = [
-        { name: "text", param: "text_builder", kind: "text_search", description: "A text search: one rule per condition (rule_template), joined by all of them. Needs at least one word." },
-        { name: "rule", param: "text_builder", key: "root.children[].kind", kind: "enum", values: Object.entries(ruleLabels).map(([value, label]) => ({ value, label })), default: newRule().kind, description: "near and pre also need other, the second phrase, within distance words." },
-        { name: "scope", param: "text_builder", key: "scope", kind: "enum", values: scopes.map(scope => ({ value: scope.id, label: scope.label, description: scope.description })), default: scopes[0].id, description: "Set scope.surface to the scope's surface, scope.roles to its role (if any) and scope.kinds to [] (chooseScope); scope_surfaces lists them." },
+        { name: "text", param: "text_builder", kind: "text_search", requires: [needs("kind", "text")], description: "A text search: one rule per condition (rule_template), joined by all of them. Needs at least one word." },
+        { name: "rule", param: "text_builder", key: "root.children[].kind", kind: "enum", requires: [needs("text")], values: Object.entries(ruleLabels).map(([value, label]) => ({ value, label })), default: newRule().kind, description: "near and pre also need other, the second phrase, within distance words." },
+        { name: "scope", param: "text_builder", key: "scope", kind: "enum", requires: [needs("text")], values: scopes.map(scope => ({ value: scope.id, label: scope.label, description: scope.description })), default: scopes[0].id, description: "Set scope.surface to the scope's surface, scope.roles to its role (if any) and scope.kinds to [] (chooseScope); scope_surfaces lists them." },
         { name: "kind", param: "kind", kind: "enum", values: values(["text", "file", "url"]), default: "text", description: "file and url search file paths or URLs instead, with search holding the text and case=1 for case-sensitive." },
-        { name: "search", param: "search", kind: "text", description: "The file path or URL text, for kind file or url." },
-        { name: "case", param: "case", kind: "boolean", values: [{ value: "1" }], description: "Case-sensitive file or URL search." },
+        { name: "search", param: "search", kind: "text", requires: [needs("kind", "file", "url")], description: "The file path or URL text, for kind file or url." },
+        { name: "case", param: "case", kind: "boolean", values: [{ value: "1" }], requires: [needs("kind", "file", "url")], description: "Case-sensitive file or URL search." },
         { name: "view", param: "view", kind: "enum", values: values(["table", "conversation"]), default: "table", description: "The default, table, is left out of the link." },
         whereOption("q_library", "library"),
         windowOption("window_days", rollingWindowDays, "A rolling window on library.window_field, written as window_mode=relative, window_days, window_field and window_dataset=library."),
@@ -649,7 +653,7 @@ export function buildSiteMap(inputs: SiteInputs) {
         { name: "list", param: "list", kind: "enum", values: values(findingsLists), default: findingsLists[0], description: "The default, open, is left out of the link." },
         { name: "repo", param: "repo", kind: "text", id: "repository", description: "A repository name." },
         { name: "finding", param: "finding", kind: "id", id: "finding_id", description: "Open one finding." },
-        { name: "tab", param: "tab", kind: "enum", values: values(findingTabs), default: findingTabs[0], description: "A finding's tab; needs finding. The default, overview, is left out." },
+        { name: "tab", param: "tab", kind: "enum", values: values(findingTabs), default: findingTabs[0], requires: [needs("finding")], description: "A finding's tab; needs finding. The default, overview, is left out." },
       ];
       for (const page of findingsPages.slice(1)) {
         const view = new URL(page.href!, origin).searchParams.get("view")!;
@@ -664,16 +668,17 @@ export function buildSiteMap(inputs: SiteInputs) {
       node.builder = "conversationRowURL, then the delegation explorer's parameters (delegationRouteValues, empty ones left out), then explorer or sessions.";
       node.options = [
         { name: "work_id", param: "{work_id}", kind: "id", id: "work_id", description: "The work item (workspace) in the path." },
-        ...readerParams.map(param => ({ name: param.name, param: param.name, kind: param.id ? "id" : param.name === "at" ? "datetime" : "text", ...param.id ? { id: param.id } : {}, description: param.description })),
+        ...readerParams.map(param => ({ name: param.name, param: param.name, kind: param.id ? "id" : param.name === "at" ? "datetime" : "text", ...param.id ? { id: param.id } : {},
+          ..."requires" in param ? { requires: param.requires.map(name => needs(name)) } : {}, ..."conflicts" in param ? { conflicts: [...param.conflicts] } : {}, description: param.description })),
         { name: "explorer", param: "explorer", kind: "enum", values: values(delegationTabs), default: delegationTabs[0], description: "How the delegation explorer shows sessions." },
-        { name: "sessions", param: "sessions", kind: "enum", values: values(["hidden"]), description: "Hide the delegation explorer." },
+        { name: "sessions", param: "sessions", kind: "enum", values: values(["hidden"]), conflicts: ["explorer"], description: "Hide the delegation explorer." },
         { name: "mode", param: "delegation_mode", kind: "enum", values: values(delegationModes), default: delegationModes[0], description: "Sessions as a hierarchy, or ranked by one metric." },
-        { name: "sort", param: "delegation_sort", kind: "text", default: defaultDelegationSort, description: "In rank mode, the metric id to rank by (the work's analysis lists them: tokens, cost, calls, errors …)." },
-        { name: "scope", param: "delegation_scope", kind: "enum", values: values(delegationScopes), default: delegationScopes[0], description: "In rank mode, the session's own metric (self) or with everything below it (all)." },
-        { name: "direction", param: "delegation_direction", kind: "enum", values: values(delegationDirections), default: delegationDirections[0], description: "In rank mode." },
+        { name: "sort", param: "delegation_sort", kind: "text", default: defaultDelegationSort, requires: [needs("mode", "rank")], description: "In rank mode, the metric id to rank by (the work's analysis lists them: tokens, cost, calls, errors …)." },
+        { name: "scope", param: "delegation_scope", kind: "enum", values: values(delegationScopes), default: delegationScopes[0], requires: [needs("mode", "rank")], description: "In rank mode, the session's own metric (self) or with everything below it (all)." },
+        { name: "direction", param: "delegation_direction", kind: "enum", values: values(delegationDirections), default: delegationDirections[0], requires: [needs("mode", "rank")], description: "In rank mode." },
         { name: "collapsed", param: "delegation_collapsed", kind: "text", description: "Comma-separated session ids to collapse, sorted." },
         { name: "session", param: "delegation_session", kind: "text", description: "The selected session id." },
-        { name: "range", param: "delegation_start", kind: "range", description: "A time range in epoch milliseconds: delegation_start and delegation_end, end after start." },
+        { name: "range", param: "delegation_start", end_param: "delegation_end", kind: "range", description: "A time range in epoch milliseconds: delegation_start and delegation_end, end after start." },
       ];
       const delegationParams = Object.keys(delegationRouteValues({ mode: "rank", sort: "", scope: "", direction: "", collapsed: [], selected: "", range: [0, 1] }));
       Object.assign(node, { delegation_params: delegationParams.filter(key => !["delegation_search", "delegation_matching"].includes(key)) });

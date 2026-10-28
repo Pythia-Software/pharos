@@ -149,6 +149,9 @@ An option has these keys:
 | `values` | Allowed values, with `label` and `description` |
 | `default` | The value the page assumes |
 | `id` | The `id_sources` entry an ID comes from |
+| `requires` | Options it needs: each `{option}` must be given, and each `{option, values}` must hold, or default to, one of `values` |
+| `conflicts` | Options a link cannot give with it |
+| `end_param` | For a `range`, the parameter holding its end |
 | `description` | What the option does |
 
 The kinds are:

@@ -53,9 +53,10 @@ export const idSources: Record<string, Array<{ tool: string; field: string }>> =
 
 // The work reader's parameters, in the order conversationRowURL writes them.
 // The shell reads them inline (ui.py: updateConversationURL, routeConversation).
+// requires and conflicts name the other parameters each one depends on.
 export const readerParams = [
   { name: "conversation", id: "conversation_id", description: "The conversation to open in the reader." },
-  { name: "message", id: "message_id", description: "A message to scroll to and highlight; needs conversation." },
-  { name: "call", id: "", description: "A tool call within that message to highlight; needs message." },
-  { name: "at", id: "", description: "An ISO time to scroll to when no message is given." },
+  { name: "message", id: "message_id", description: "A message to scroll to and highlight; needs conversation.", requires: ["conversation"] },
+  { name: "call", id: "", description: "A tool call within that message to highlight; needs message.", requires: ["message"] },
+  { name: "at", id: "", description: "An ISO time to scroll to when no message is given.", requires: ["conversation"], conflicts: ["message"] },
 ] as const;

@@ -215,6 +215,17 @@ test("every other page's link reads back through its page's reader", () => {
   for (const path of Object.keys(map.nodes)) if (!map.nodes[path].children || map.nodes[path].options?.length) assert.ok(paths.has(path) || path.startsWith("analyze/") && !path.startsWith("analyze/query"), `${path} has a link case`);
 });
 
+test("an option's requires and conflicts name its node's options and their values", () => {
+  for (const node of Object.values(map.nodes)) for (const option of node.options ?? []) {
+    const other = name => node.options.find(item => item.name === name);
+    for (const need of option.requires ?? []) {
+      assert.ok(other(need.option) && need.option !== option.name, `${node.path} ${option.name} requires ${need.option}`);
+      for (const value of need.values ?? []) assert.ok(other(need.option).values.some(choice => choice.value === value), `${node.path} ${option.name} requires ${need.option} ${value}`);
+    }
+    for (const name of option.conflicts ?? []) assert.ok(other(name) && name !== option.name, `${node.path} ${option.name} conflicts with ${name}`);
+  }
+});
+
 test("the site map leaves out legacy aliases, private and login parameters", () => {
   const text = JSON.stringify(map.nodes);
   for (const name of ["ask_chat", "\"token\"", "analyze_view", "machine_view", "tools_view"]) assert.ok(!text.includes(name), name);
