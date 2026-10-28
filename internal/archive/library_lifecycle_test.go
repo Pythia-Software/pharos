@@ -65,12 +65,8 @@ func TestLibraryRegistryAssignmentAndCopies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first == second || r.MCP != first {
-		t.Fatalf("default assignment changed: %+v", r)
-	}
-	r.Selected = second
-	if r.MCP != first {
-		t.Fatal("browsing changed MCP")
+	if first == second {
+		t.Fatalf("two libraries share an identity: %+v", r)
 	}
 	original, err := readLibraryDescriptor(a)
 	if err != nil {
@@ -483,19 +479,15 @@ func TestApplicationMCPConnectionAndLateResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// MCP answers for the open library; one whose service isn't running says so.
 	m.registry.Selected = second
+	m.registry.library(second).Name = "Archive"
+	m.children[first] = &applicationChild{done: make(chan struct{})}
 	request := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "search_work", "arguments": map[string]any{}}}
-	if _, err = m.mcp(context.Background(), request); err == nil || !strings.Contains(err.Error(), "MCP is attached") {
-		t.Fatal("wrong library was answered", err)
+	if _, err = m.mcp(context.Background(), request); err == nil || !strings.Contains(err.Error(), "Archive is offline") {
+		t.Fatal("MCP answered for a library other than the open one", err)
 	}
-	if _, err = m.mcp(context.Background(), request); err == nil || strings.Contains(err.Error(), "working with") {
-		t.Fatal("an offline selection was described as a connected library", err)
-	}
-	m.children[second] = &applicationChild{done: make(chan struct{})}
-	if _, err = m.mcp(context.Background(), request); err == nil || !strings.Contains(err.Error(), "working with") {
-		t.Fatal("a different connected library was not identified", err)
-	}
-	delete(m.children, second)
+	delete(m.children, first)
 	m.registry.Selected = first
 	started, finish := make(chan struct{}), make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -526,8 +518,50 @@ func TestApplicationMCPConnectionAndLateResponse(t *testing.T) {
 	}
 }
 
+func TestApplicationRemembersLibrarySummaries(t *testing.T) {
+	a, b := lifecycleLibraries(t)
+	application := filepath.Join(t.TempDir(), "Pharos.app")
+	m, err := newApplicationManager(t.Context(), application)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _ := m.registry.register(a, "Local")
+	second, _ := m.registry.register(b, "Archive")
+	m.registry.Selected = first
+	count := int64(42)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/library/summary" || r.Header.Get("Authorization") != "Bearer secret" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, map[string]any{"conversations": count}, 200)
+	}))
+	defer server.Close()
+	// Both services run; only the selected one is open now.
+	for _, id := range []string{first, second} {
+		m.children[id] = &applicationChild{done: make(chan struct{}), endpoint: applicationEndpoint{URL: server.URL, Token: "secret"}}
+	}
+	m.rememberSummaries()
+	local, archive := m.registry.library(first), m.registry.library(second)
+	if local.Conversations == nil || *local.Conversations != 42 || archive.Conversations == nil || *archive.Conversations != 42 {
+		t.Fatal("conversation counts were not remembered", local.Conversations, archive.Conversations)
+	}
+	if local.LastOpened == "" || archive.LastOpened != "" {
+		t.Fatal("only the open library is open now", local.LastOpened, archive.LastOpened)
+	}
+	if saved, err := loadInstallation(application); err != nil || saved.library(first).Conversations == nil {
+		t.Fatal("a changed count was not saved", err)
+	}
+	// During an operation the services are closing; nothing is asked.
+	count, m.busy = 7, true
+	m.rememberSummaries()
+	if *local.Conversations != 42 {
+		t.Fatal("a closing service was asked for its summary")
+	}
+}
+
 func TestApplicationSetupWithoutLibrary(t *testing.T) {
-	t.Run("switch and open preserve the MCP assignment", func(t *testing.T) {
+	t.Run("switch, open, create and rename move MCP with the selection", func(t *testing.T) {
 		a, b := lifecycleLibraries(t)
 		application := filepath.Join(t.TempDir(), "Pharos.app")
 		app, err := newApplicationManager(t.Context(), application)
@@ -552,6 +586,9 @@ func TestApplicationSetupWithoutLibrary(t *testing.T) {
 		if w := request("connect", map[string]any{"id": second}); w.Code != http.StatusOK || app.registry.Selected != second {
 			t.Fatal("switch failed", w.Body.String())
 		}
+		if app.registry.library(first).LastOpened == "" || app.registry.library(second).LastOpened != "" {
+			t.Fatal("switching away did not remember when the library was last open")
+		}
 		if w := request("connect", map[string]any{"id": "missing"}); w.Code == http.StatusOK || app.registry.Selected != second {
 			t.Fatal("failed switch lost the selected library", w.Body.String())
 		}
@@ -562,8 +599,17 @@ func TestApplicationSetupWithoutLibrary(t *testing.T) {
 			t.Fatal("creating another library failed", w.Body.String())
 		}
 		saved, err := loadInstallation(application)
-		if err != nil || saved.Selected != app.registry.Selected || saved.MCP != first {
-			t.Fatal("selection did not persist independently of MCP", saved, err)
+		if err != nil || saved.Selected != app.registry.Selected || saved.MCP != saved.Selected {
+			t.Fatal("MCP did not follow the persisted selection", saved, err)
+		}
+		if w := request("rename", map[string]any{"id": second, "name": " Old laptop "}); w.Code != http.StatusOK || app.registry.library(second).Name != "Old laptop" {
+			t.Fatal("rename failed", w.Body.String())
+		}
+		if d, err := readLibraryDescriptor(b); err != nil || d.Name != "Old laptop" {
+			t.Fatal("the new name did not travel with the library", d.Name, err)
+		}
+		if w := request("rename", map[string]any{"id": second, "name": "a/b"}); w.Code == http.StatusOK || app.registry.library(second).Name != "Old laptop" {
+			t.Fatal("an invalid name was accepted", w.Body.String())
 		}
 		app.busy = true
 		for _, action := range []string{"create", "open", "connect"} {
@@ -594,6 +640,14 @@ func TestApplicationSetupWithoutLibrary(t *testing.T) {
 		body := w.Body.String()
 		if w.Code != http.StatusOK || !strings.Contains(body, "window.pharosManagedLibrary=") || !strings.Contains(body, "/assets/managed-library.js") || !strings.Contains(body, `data-settings-route="/settings/libraries"`) || strings.Contains(body, "<script>bad()") {
 			t.Fatal("managed page omitted library controls or embedded an unsafe name", w.Code)
+		}
+		// With a library open, its Settings page holds the library controls.
+		w = httptest.NewRecorder()
+		r = httptest.NewRequest(http.MethodGet, "/app", nil)
+		r.Header.Set("Authorization", "Bearer "+app.token)
+		app.ServeHTTP(w, r)
+		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/settings/libraries" {
+			t.Fatal("the startup window opened over an open library", w.Code, w.Header().Get("Location"))
 		}
 		w = httptest.NewRecorder()
 		r = httptest.NewRequest(http.MethodGet, "/api/share?id=work", nil)
@@ -1690,7 +1744,7 @@ func TestApplicationReleasePreservesOtherLibraryAndLegacyMCPGate(t *testing.T) {
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/app/release-volume", strings.NewReader(`{"volume":"uuid:TEST-VOLUME"}`))
 	m.api(response, request)
-	if response.Code != 200 || m.registry.Selected != second || m.registry.MCP != first || m.suspended[second] || !m.suspended[first] {
+	if response.Code != 200 || m.registry.Selected != second || m.suspended[second] || !m.suspended[first] {
 		t.Fatal("volume release affected another library", response.Body.String())
 	}
 	if m.registry.DeliverySource != second || m.registry.DeliveryTarget != first {

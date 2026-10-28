@@ -1,7 +1,7 @@
 # Configuration
 
-The native app now opens **Libraries** for setup, library selection, recovery and
-per-application MCP assignment. See [Libraries and application setup](library-management.md)
+The native app now opens **Settings → Libraries** for library selection
+(which is also the library MCP answers for), transfers and recovery. See [Libraries and application setup](library-management.md)
 for those flows, independent app/library locations, and verified moves. The
 configuration and beside-app layouts below remain available for existing installs
 and explicit CLI use.
@@ -107,7 +107,7 @@ macos/install-library.sh /Volumes/euclid/Pharos
 
 With a downloaded release, install Pharos in Applications. Create the library
 on the drive from the setup guide (storage: an attached SSD), or from
-**Settings → Libraries → New library…**.
+**Settings → Libraries → Create a library…**.
 
 The script builds `Pharos.app` into the directory and runs
 `pharos init-library DIR` there unless `library.toml` already exists. A
@@ -1148,7 +1148,7 @@ the directory-copy guard intentionally refuses those copies. See
 
 Settings → MCP shows the local stdio command and configuration to copy into an
 agent client's MCP settings. **Managed Pharos.app installations now require the
-app to remain open and connected to their explicitly assigned MCP library.**
+app to remain open, with the library agents should search open in it.**
 Closing the window is fine; quitting the application makes its MCP tools report
 that Pharos is offline. Existing bundled `mcp` registrations follow this rule
 once their library is registered with the app. Reopening the app resumes the
@@ -1169,8 +1169,7 @@ claude mcp add pharos -s user -- /Applications/Pharos.app/Contents/MacOS/pharos 
 ```
 
 Updating the app in place keeps that path. The server forwards to the running
-app. Agents can read a library only while it is connected, assigned in
-**Library used by MCP**, and currently open in Pharos. After an app update, reconnect Pharos in each
+app. Agents can read a library only while it is the library open in Pharos. After an app update, reconnect Pharos in each
 agent (in Claude Code, `/mcp`).
 
 For an explicitly standalone, unbundled CLI install the command remains the

@@ -31,6 +31,18 @@ func (c *Catalog) HealthCounts(ctx context.Context) (map[string]any, error) {
 	})
 }
 
+// LibrarySummary is what the app remembers about a library while it is
+// closed (Settings → Libraries): its number of conversations.
+func (c *Catalog) LibrarySummary(ctx context.Context) (map[string]any, error) {
+	return cachedValue(ctx, c, "library:summary", func(ctx context.Context) (map[string]any, error) {
+		var conversations int64
+		if err := c.reader().QueryRowContext(ctx, "SELECT COUNT(*) FROM conversations").Scan(&conversations); err != nil {
+			return nil, err
+		}
+		return map[string]any{"conversations": conversations}, nil
+	})
+}
+
 // ensureMessageCount keeps the number of messages in catalog_counts, since
 // counting them reads an index of millions of entries: seconds on a cold
 // drive. Triggers keep it current, whichever build writes.

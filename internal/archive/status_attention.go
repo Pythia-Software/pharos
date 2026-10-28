@@ -250,7 +250,7 @@ func (s *Server) attention(ctx context.Context) []attentionItem {
 }
 
 // walPinDetail says how big the log is, for how long its checkpoint has
-// not advanced, and who holds it, when that is known.
+// not advanced, who holds it, when that is known, and where its report is.
 func walPinDetail(pin walPin, now time.Time) string {
 	detail := "Its change log has grown to " + humanBytes(pin.WALBytes) + " and has not been folded into the catalog for " +
 		humanDuration(now.Sub(pin.Since)) + ", which slows indexing and reading."
@@ -258,6 +258,9 @@ func walPinDetail(pin walPin, now time.Time) string {
 		detail += " A long read holds them back: " + pin.Holder + "."
 	} else {
 		detail += " Pharos could not tell which reader holds them back: " + pin.Holder + "."
+	}
+	if pin.Report != "" {
+		detail += " Details are in " + pin.Report + "."
 	}
 	return detail
 }

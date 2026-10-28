@@ -340,7 +340,7 @@
   "settings/libraries": {
    "path": "settings/libraries",
    "title": "Libraries",
-   "description": "Choose the library Pharos opens, or create a separate home for your history.",
+   "description": "A library is a folder holding your conversations, saved views and preferences. Pharos shows one library at a time.",
    "route": "/settings/libraries",
    "settings": "Only in the Pharos app, which manages its libraries."
   }

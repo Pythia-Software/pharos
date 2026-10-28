@@ -398,12 +398,24 @@ and after the lock probe; otherwise the process is named as possible; the writer
 a checkpoint, a recovery or a reader at the last frame are only mentioned.
 With no such outside reader it names this process when a slot is marked
 where the checkpoint stopped, "probably" until a second probe agrees, with
-its running operations that started before the stall, oldest first;
-otherwise the holder is unknown. The stall's start is tracked at any size
-(only the diagnosis waits for 1 GiB), and a check whose truncating pass
-reports no counts leaves it as it was. The diagnosis goes in
+its suspects: its reads on the catalog open since before the stall, then its
+running operations that started before it, each oldest first; otherwise the
+holder is unknown. The catalog's pools open connections through
+`catalogConnector` (`catalog_reads.go`), which notes on each connection when
+its current read began (its first query or BEGIN, until its last cursor
+closes outside a transaction or the transaction ends), the statement, the
+operation the context carried and the goroutine's stack; a COMMIT or
+ROLLBACK that fails leaves the read open, with its error. A read is named by
+pool, age, operation and its three innermost callers. The stall's start is
+tracked at any size (only the diagnosis waits for 1 GiB), and a check whose
+truncating pass reports no counts leaves it as it was. The diagnosis goes in
 the skipped operation's detail, one stderr line and attention rule 9
-(§7.3). It cancels nothing.
+(§7.3). Unless another process holds the log, the first diagnosis of a stall
+also writes a report to `logs/catalog-wal-pin-<time>-pid<pid>.txt` in the
+support directory (the last 20 are kept): the diagnosis, every open read on
+the catalog with its statement and stack, and every goroutine's stack. The
+service's stderr survives only as a tail in the app's memory. It cancels
+nothing.
 
 ### 3.5 E. Transitions
 
@@ -1261,7 +1273,7 @@ positives fixed in phase 0:
 | 6 | The latest local backup failed | error | Open Backups (`/settings/backups`) |
 | 7 | A scheduled cloud backup failed (the schedule has `failures > 0`) or the latest verification failed | error | Open Backups |
 | 8 | The library is unavailable, was disconnected, or setup is needed (native rules today) | error | as today |
-| 9 | The WAL is over 1 GiB and its checkpoint has stopped advancing: frames are left to copy and `nBackfill` did not move between two busy bound checks (a busy truncation alone, with every frame copied, is not a stall). The item says how big the log is and for how long it has not been folded in, and who holds them back when Pharos can tell (another process by pid and command, and what it holds; or this process, with its running operations that started before the stall); otherwise it says it could not tell. It clears once a checkpoint succeeds, the checkpoint advances, or the log is under 1 GiB. | warning | Open Capture & index |
+| 9 | The WAL is over 1 GiB and its checkpoint has stopped advancing: frames are left to copy and `nBackfill` did not move between two busy bound checks (a busy truncation alone, with every frame copied, is not a stall). The item says how big the log is and for how long it has not been folded in, and who holds them back when Pharos can tell (another process by pid and command, and what it holds; or this process, with its catalog reads and running operations open since before the stall); otherwise it says it could not tell. It names the stall's report file when one was written. It clears once a checkpoint succeeds, the checkpoint advances, or the log is under 1 GiB. | warning | Open Capture & index |
 
 Rule 4 is today's web rule (the native menu ignores interruptions). The
 first rule that applies sets the menu's single line; the snapshot lists all.
