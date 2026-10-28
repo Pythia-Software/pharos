@@ -876,8 +876,9 @@ func (c *Catalog) setFindingsPhase(phase string) {
 }
 
 // findingsAbortPublishWait bounds how long a stopped findings pass may
-// spend keeping the detector inputs it computed.
-var findingsAbortPublishWait = 10 * time.Second
+// spend keeping the detector inputs it computed: well inside the time a
+// release that begins meanwhile waits for workers.
+var findingsAbortPublishWait = 2 * time.Second
 
 // runFindingsPass measures the specs of every finding the user acted on,
 // discovers new candidates on a full pass, and stores the results.
@@ -947,19 +948,24 @@ func (c *Catalog) runFindingsPassWithFeatures(ctx context.Context, full, feature
 		return err
 	}
 	env.measuring, env.stored, env.featureCache = measuring, existing, features
-	committed := false
 	defer func() {
-		if committed || len(env.pendingFeatures) == 0 {
+		if len(env.pendingFeatures) == 0 {
 			return
 		}
-		// A pass that failed or was stopped keeps the detector inputs it
-		// computed, so the next one does not rebuild them: end the snapshot
-		// first, then publish (each publication checks the build it read).
-		// A stop has cancelled ctx; the publication gets a short while of
-		// its own.
+		// A pass that failed or was stopped, before or while it published,
+		// keeps the detector inputs it computed, so the next one does not
+		// rebuild them: end the snapshot first (a no-op once committed),
+		// then publish (each publication checks the build it read). A stop
+		// has cancelled ctx: a user's stop or the chain's gives the
+		// publication findingsAbortPublishWait of its own, well inside a
+		// release's wait for workers; the service stopping (a release, a
+		// quit) skips it, so nothing holds up the eject.
 		_ = snapshot.Rollback()
 		publish := ctx
 		if ctx.Err() != nil {
+			if c.serviceStopping() {
+				return
+			}
 			var cancel context.CancelFunc
 			publish, cancel = context.WithTimeout(context.WithoutCancel(ctx), findingsAbortPublishWait)
 			defer cancel()
@@ -1030,7 +1036,6 @@ func (c *Catalog) runFindingsPassWithFeatures(ctx context.Context, full, feature
 	if err := snapshot.Commit(); err != nil {
 		return err
 	}
-	committed = true
 	env.db = conn
 	reportWork(ctx, "saving findings", "finding", 0, len(kept))
 	c.setFindingsPhase("saving")

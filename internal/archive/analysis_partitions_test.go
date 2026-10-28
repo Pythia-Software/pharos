@@ -541,9 +541,10 @@ func TestFindingFeaturesPublishAfterTheSnapshotEnds(t *testing.T) {
 
 // A pass that fails or is stopped after its detectors built their inputs
 // still publishes them, after its snapshot ends, so the next pass reuses
-// them rather than rebuilding everything.
+// them rather than rebuilding everything; a stop because the service is
+// stopping (a release) skips that, so nothing holds up the eject.
 func TestFindingFeaturesSurviveAPassThatEndsEarly(t *testing.T) {
-	for _, ending := range []string{"failed", "stopped"} {
+	for _, ending := range []string{"failed", "stopped", "released"} {
 		t.Run(ending, func(t *testing.T) {
 			now := time.Date(2026, 9, 28, 15, 0, 0, 0, time.Local)
 			fixture := newFindingFixture(t, now)
@@ -553,10 +554,18 @@ func TestFindingFeaturesSurviveAPassThatEndsEarly(t *testing.T) {
 					{program: "sed", command: "sed -n '1,900p' main.go", resultTokens: 9000, carried: 90000}, {category: "edit", tool: "Edit", path: "main.go"},
 				}, 3, 0, 1000)
 			})
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
+			ctx, cancelCtx := context.WithCancel(t.Context())
+			defer cancelCtx()
+			cancel := cancelCtx
+			if ending == "released" {
+				releasing := false
+				registry := newOpRegistry("service")
+				registry.releasing = func() bool { return releasing }
+				override(t, &c.ops, registry)
+				cancel = func() { releasing = true; cancelCtx() }
+			}
 			last := findingDetector{"ends-early", func(*findingEnv) ([]*findingCandidate, error) {
-				if ending == "stopped" {
+				if ending != "failed" {
 					cancel()
 					return nil, nil
 				}
@@ -566,13 +575,60 @@ func TestFindingFeaturesSurviveAPassThatEndsEarly(t *testing.T) {
 			if err := c.RefreshFindings(ctx, true); err == nil {
 				t.Fatal("the pass did not end early")
 			}
-			if countRows(t, c, "SELECT COUNT(*) FROM finding_feature_partitions") == 0 {
+			kept := countRows(t, c, "SELECT COUNT(*) FROM finding_feature_partitions") > 0
+			if ending != "released" && !kept {
 				t.Fatal("the computed inputs were thrown away")
+			}
+			if ending == "released" && kept {
+				t.Fatal("a release waited for the computed inputs to be kept")
 			}
 			if countRows(t, c, "SELECT COUNT(*) FROM findings") != 0 {
 				t.Fatal("a pass that ended early stored findings")
 			}
 		})
+	}
+}
+
+// A stop while the pass waits to publish its inputs, after its snapshot
+// ended, still keeps them once the writer is free.
+func TestFindingFeaturesSurviveAStopWhileSaving(t *testing.T) {
+	now := time.Date(2026, 9, 28, 15, 0, 0, 0, time.Local)
+	fixture := newFindingFixture(t, now)
+	c := fixture.catalog
+	fixture.monthOf(now, func(day time.Time, index int) {
+		fixture.addConversation(day, "codex", []detectorCall{
+			{program: "sed", command: "sed -n '1,900p' main.go", resultTokens: 9000, carried: 90000}, {category: "edit", tool: "Edit", path: "main.go"},
+		}, 3, 0, 1000)
+	})
+	gate, err := c.acquireWriteGate(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := sync.OnceFunc(gate)
+	t.Cleanup(release)
+	ctx, stop := context.WithCancel(t.Context())
+	defer stop()
+	done := make(chan struct{})
+	go func() { _ = c.RefreshFindings(ctx, true); close(done) }()
+	t.Cleanup(func() { release(); <-done })
+	waitUntil(t, 30*time.Second, "the pass to wait to publish", func() bool {
+		_, phase := c.findingsRunning()
+		return phase == "saving" && c.writersWaiting()
+	})
+	stop()
+	// The stopped publication gives up; the pass's cleanup queues again.
+	waitUntil(t, 30*time.Second, "the cleanup to wait for the writer", func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+		}
+		return c.writersWaiting()
+	})
+	release()
+	<-done
+	if countRows(t, c, "SELECT COUNT(*) FROM finding_feature_partitions") == 0 {
+		t.Fatal("a stop while saving threw the computed inputs away")
 	}
 }
 
