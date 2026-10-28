@@ -500,10 +500,11 @@ and never open the catalog themselves, so they don't keep the drive busy (see
    - it closes the catalog, checkpointing its WAL, and exits.
 3. macOS ejects the drive, and Pharos stays open with its other libraries.
 
-If the release cannot finish within 7 seconds, Pharos keeps the library open and
-says "Pharos is finishing a write; try ejecting again in a moment."; the next
-attempt usually succeeds. A release waits while a library operation (a transfer,
-restore or delivery) is running.
+If the release cannot finish within 7 seconds, Pharos says "Pharos is finishing a
+write; try ejecting again in a moment." The library's service still stops, so
+the next attempt usually succeeds. Eject is refused while a library operation (a
+transfer, restore or delivery) is running. Pharos says it is finishing, and you
+can eject once the operation ends.
 
 Pharos also watches each library's volume, by UUID, through DiskArbitration. An
 eject from Finder or `diskutil eject` asks Pharos to release the library first.
@@ -1168,8 +1169,8 @@ claude mcp add pharos -s user -- /Applications/Pharos.app/Contents/MacOS/pharos 
 ```
 
 Updating the app in place keeps that path. The server forwards to the running
-app, so a library on a drive must be connected, and assigned in **Library used
-by MCP**, for agents to read it. After an app update, reconnect Pharos in each
+app. Agents can read a library only while it is connected, assigned in
+**Library used by MCP**, and currently open in Pharos. After an app update, reconnect Pharos in each
 agent (in Claude Code, `/mcp`).
 
 For an explicitly standalone, unbundled CLI install the command remains the

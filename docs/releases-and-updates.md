@@ -126,7 +126,8 @@ from **Settings → Libraries → Open a library…**:
 
 Agents' MCP servers run from the app in Applications as
 `pharos mcp-app --application /Applications/Pharos.app`, and answer for the
-library assigned in **Library used by MCP**. Quit Pharos and those clients
+library assigned in **Library used by MCP** while it is the library open in
+Pharos. Quit Pharos and those clients
 before replacing the app, then reconnect Pharos in each client.
 
 **Older portable installs** ran a copy of `Pharos.app` from the drive, next to
