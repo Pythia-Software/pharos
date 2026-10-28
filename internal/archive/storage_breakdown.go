@@ -17,7 +17,8 @@ import (
 // whole catalog (minutes on a large library), so those shares are estimated:
 // each Mac's capture of a source is divided among the conversations that Mac
 // saw in that source, and the catalog among all conversations, in proportion to
-// their message counts.
+// their message counts. The drive checks read the shares when they measure, so
+// the breakdown answers from memory and a sync does not make it wait.
 
 // storageShare is the message count of the conversations with one Mac, source
 // and repository (empty when the workspace has none).
@@ -36,46 +37,44 @@ type storageShares struct {
 }
 
 func (c *Catalog) storageShares(ctx context.Context) (storageShares, error) {
-	return cachedValue(ctx, c, "health:storage-shares", func(ctx context.Context) (storageShares, error) {
-		shares := storageShares{Hosts: map[string]string{}, Repositories: map[string]string{}}
-		read := func(statement string, into *[]storageShare) error {
-			rows, err := c.reader().QueryContext(ctx, statement)
-			if err != nil {
+	shares := storageShares{Hosts: map[string]string{}, Repositories: map[string]string{}}
+	read := func(statement string, into *[]storageShare) error {
+		rows, err := c.reader().QueryContext(ctx, statement)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var share storageShare
+			if err := rows.Scan(&share.Host, &share.Source, &share.Repository, &share.Messages); err != nil {
 				return err
 			}
-			defer rows.Close()
-			for rows.Next() {
-				var share storageShare
-				if err := rows.Scan(&share.Host, &share.Source, &share.Repository, &share.Messages); err != nil {
-					return err
-				}
-				*into = append(*into, share)
-			}
-			return rows.Err()
+			*into = append(*into, share)
 		}
-		// A sighting without a message count still holds something.
-		if err := read(`SELECT s.host_id,s.source_name,COALESCE(w.repository_id,''),SUM(MAX(COALESCE(s.messages,0),1))
-			FROM conversation_sightings s JOIN conversations c ON c.id=s.conversation_id JOIN workspaces w ON w.id=c.workspace_id
-			GROUP BY 1,2,3`, &shares.Originals); err != nil {
+		return rows.Err()
+	}
+	// A sighting without a message count still holds something.
+	if err := read(`SELECT s.host_id,s.source_name,COALESCE(w.repository_id,''),SUM(MAX(COALESCE(s.messages,0),1))
+		FROM conversation_sightings s JOIN conversations c ON c.id=s.conversation_id JOIN workspaces w ON w.id=c.workspace_id
+		GROUP BY 1,2,3`, &shares.Originals); err != nil {
+		return shares, err
+	}
+	if err := read(storageCatalogSharesSQL, &shares.Catalog); err != nil {
+		return shares, err
+	}
+	for statement, into := range map[string]map[string]string{
+		"SELECT id,label FROM hosts":               shares.Hosts,
+		"SELECT id,display_name FROM repositories": shares.Repositories,
+	} {
+		rows, err := queryMapsContext(ctx, c.reader(), statement)
+		if err != nil {
 			return shares, err
 		}
-		if err := read(storageCatalogSharesSQL, &shares.Catalog); err != nil {
-			return shares, err
+		for _, row := range rows {
+			into[firstString(row["id"])] = firstString(row["label"], row["display_name"])
 		}
-		for statement, into := range map[string]map[string]string{
-			"SELECT id,label FROM hosts":               shares.Hosts,
-			"SELECT id,display_name FROM repositories": shares.Repositories,
-		} {
-			rows, err := queryMapsContext(ctx, c.reader(), statement)
-			if err != nil {
-				return shares, err
-			}
-			for _, row := range rows {
-				into[firstString(row["id"])] = firstString(row["label"], row["display_name"])
-			}
-		}
-		return shares, nil
-	})
+	}
+	return shares, nil
 }
 
 // storageCatalogSharesSQL gives each conversation's catalog copy to the
@@ -293,25 +292,21 @@ func divideShares(bytes int64, shares []storageShare) []int64 {
 	return parts
 }
 
-// storageBreakdown answers from the drive checks' cached sizes; until they
-// are first measured it reports that it is measuring.
-func (s *Server) storageBreakdown(ctx context.Context) (map[string]any, error) {
+// storageBreakdown answers from the drive checks' cached sizes and shares;
+// until they are first measured it reports that it is measuring.
+func (s *Server) storageBreakdown() map[string]any {
 	s.driveHealth()
 	config := s.Config()
 	state := drives.peek(config)
 	if state == nil {
-		return map[string]any{"status": "measuring"}, nil
+		return map[string]any{"status": "measuring"}
 	}
-	shares, err := s.Catalog.storageShares(ctx)
-	if err != nil {
-		return nil, err
-	}
-	result := storageBreakdown(state.sizes, shares, currentHost().ID)
+	result := storageBreakdown(state.sizes, state.shares, currentHost().ID)
 	_, path := driveScope(config)
 	total, free := diskUsage(path)
 	result["status"] = "measured"
 	result["measured_at"] = state.checked.UTC().Format(time.RFC3339)
 	result["volume_name"] = volumeName(config.ArchiveRoot)
 	result["volume_total_bytes"], result["volume_free_bytes"] = total, free
-	return result, nil
+	return result
 }

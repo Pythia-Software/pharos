@@ -112,6 +112,8 @@ func TestRequestReadsDoNotWaitForTheCatalogWriter(t *testing.T) {
 		"INSERT OR IGNORE INTO tool_rollup_dirty SELECT id,'stale' FROM workspaces",
 		`INSERT INTO cloud_destinations(id,config_json,credential_json,imported_at) VALUES('cloud','{"name":"Backup"}','{}','2026-10-27')`,
 		`INSERT INTO cloud_backup_runs(id,destination_id,status_json,created_at) VALUES('lost-run','cloud','`+interrupted+`','2026-10-27')`)
+	quietDriveCache(t)
+	t.Cleanup(func() { quietDriveCache(t) })
 	server := testServer(t, config, catalog)
 
 	// Hold the writer as a sync does: SQLite's lock, from another connection,
@@ -206,6 +208,21 @@ func TestRequestReadsDoNotWaitForTheCatalogWriter(t *testing.T) {
 			t.Errorf("%s %s %.300s while the writer was held: %d: %.300s", request.method, request.path, request.body, w.Code, answer)
 		} else if request.path == "/api/cloud-backup" && !strings.Contains(answer, `"phase":"interrupted"`) {
 			t.Errorf("the Cloud page did not show the lost run as interrupted: %.500s", answer)
+		}
+	}
+
+	// The storage breakdown is measured meanwhile: its sizes and shares do not
+	// wait for the size history it records.
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		r := httptest.NewRequest(http.MethodGet, "/api/health/storage/breakdown", nil)
+		r.Header.Set("Authorization", "Bearer "+config.APIToken)
+		w := httptest.NewRecorder()
+		server.ServeHTTP(w, r)
+		if strings.Contains(w.Body.String(), `"status":"measured"`) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the storage breakdown was not measured while the writer was held: %d %.300s", w.Code, w.Body.String())
 		}
 	}
 
