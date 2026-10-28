@@ -209,6 +209,13 @@ func (s *labelingStream) observe(event map[string]any) {
 					s.Error += ": " + compactJSON(errs)
 				}
 				s.errorCode = s.Error
+				// Claude Code writes its own errors into the result text with
+				// an "API Error:" prefix (a policy block reads "API Error: ...
+				// violate our Usage Policy"): that text is the CLI's, not the
+				// model's, and counts as an error description.
+				if text := strings.TrimSpace(firstString(event["result"])); strings.HasPrefix(text, "API Error:") {
+					s.errorCode += " " + firstRunes(text, 500)
+				}
 				if text := firstString(event["result"]); text != "" {
 					s.Error += ": " + firstRunes(text, 500)
 				}
@@ -375,12 +382,14 @@ func labelingOpensWithRefusal(text string) bool {
 }
 
 // labelingRefusalError recognizes a provider or CLI error code or message
-// that is a policy refusal: explicit, word-bounded policy wording only
-// (Anthropic's "violate our Usage Policy", OpenAI's content-policy and
-// invalid-prompt codes). It is matched against labelingStream.errorCode,
+// that is a policy refusal: explicit, word-bounded policy or refusal
+// wording only (Anthropic's "violate our Usage Policy", OpenAI's
+// content-policy and invalid_prompt codes, an explicit "refusal" or
+// "refused"; labelingNetworkError is checked first, so "Connection
+// refused" is a failure). It is matched against labelingStream.errorCode,
 // never against echoed model or corpus text, and never matches connection
 // errors.
-var labelingRefusalError = regexp.MustCompile(`(?i)(\busage polic(y|ies)\b|\bcontent[_ ]policy\b|\bcontent[_ ]filter\b|\binvalid_prompt\b|\bpolicy[_ ]violation\b|\bsafety[_ ]system\b)`)
+var labelingRefusalError = regexp.MustCompile(`(?i)(\busage polic(y|ies)\b|\bcontent[_ ]policy\b|\bcontent[_ ]filter\b|\binvalid_prompt\b|\bpolicy[_ ]violation\b|\bsafety[_ ]system\b|\brefusal\b|\brefused\b)`)
 
 // labelingProcess is how one CLI process ended.
 type labelingProcess struct {

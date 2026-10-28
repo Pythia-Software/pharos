@@ -141,6 +141,10 @@ func labelingFakeCLI() int {
 			emit(map[string]any{"type": "turn.failed", "error": map[string]any{"message": "stream disconnected before completion"}})
 			return 1
 		}
+		if scenario == "policy" {
+			emit(map[string]any{"type": "turn.failed", "error": map[string]any{"code": "invalid_prompt", "message": "Invalid prompt: your prompt was flagged as potentially violating our usage policy."}})
+			return 1
+		}
 		if scenario == "conn-refused" {
 			emit(map[string]any{"type": "turn.failed", "error": map[string]any{"message": "tcp connect error: Connection refused (os error 61)"}})
 			return 1
@@ -214,6 +218,11 @@ func labelingFakeCLI() int {
 		// Prose that cuts off a JSON answer quoting a difficulty.
 		delete(result, "structured_output")
 		result["result"] = `{"annotations":[{"id":"i_a","evidence":[{"quote":"I can't get the build to`
+	case "policy":
+		// Claude Code's own error text for a policy block.
+		result["subtype"], result["is_error"] = "success", true
+		result["result"] = "API Error: Claude Code is unable to respond to this request, which appears to violate our Usage Policy (https://www.anthropic.com/legal/aup)."
+		delete(result, "structured_output")
 	case "conn-refused":
 		// A connection failure, with result text that merely mentions a refusal.
 		result["subtype"], result["is_error"] = "error_during_execution", true
@@ -1752,7 +1761,10 @@ func TestLabelingUnexplainedUsageHalts(t *testing.T) {
 	db := openFixtureLedger(t, dir)
 	attempt, _ := labelingAttemptRecord(db, "pilot:000001/1")
 	status, _ := labelingJobStatus(db, "pilot", labelingTestDay)
-	if attempt["usage_missing"] != int64(1) || !strings.Contains(compactJSON(attempt["problems"]), "usage_unexplained") || status["spend"].(labelingSpend).UnknownAttempts != 1 {
+	// The uncovered difference is bounded as exposure, under its own row.
+	spend := status["spend"].(labelingSpend)
+	unattributed := spend.PartialTokens["unattributed:claude-haiku-5-5 (estimated_upper_bound)"]
+	if !strings.Contains(compactJSON(attempt["problems"]), "usage_unexplained") || spend.EstimatedUsage <= 0 || unattributed["output_tokens"] != 1000 {
 		t.Fatalf("attempt %v, spend %+v", attempt, status["spend"])
 	}
 }
@@ -1766,5 +1778,133 @@ func TestLabelingJobRefusesOversizeItems(t *testing.T) {
 	}
 	if rows := labelingRows(t, openFixtureLedger(t, dir), `SELECT COUNT(*) n FROM jobs`); rows[0]["n"] != int64(0) {
 		t.Fatal("a job was created with items it cannot send")
+	}
+	// --skip-oversize creates it without them, recorded and reported.
+	opts.Spec.SkipOversize = true
+	if err := runLabelingJob(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	db := openFixtureLedger(t, dir)
+	status, _ := labelingJobStatus(db, "pilot", labelingTestDay)
+	coverage := status["coverage"].(map[string]any)
+	if coverage["blocked_oversize"].(int) == 0 || coverage["incomplete"] != true || !strings.Contains(labelingStatusLine(status), "job incomplete") {
+		t.Fatalf("coverage = %v", coverage)
+	}
+}
+
+func TestLabelingPolicyErrorsAreRefusals(t *testing.T) {
+	quickLabelingTimers(t)
+	for _, route := range []string{labelingRouteClaude, labelingRouteCodex} {
+		dir := writeLabelingFixture(t, labelingFixtureUnits())
+		cli, _, _ := fakeLabelingCLI(t, "policy")
+		opts := labelingTestOptions(dir, cli, io.Discard)
+		opts.Concurrency, opts.Spec.LimitItems = 1, 4
+		if route == labelingRouteCodex {
+			opts.Spec = labelingJobSpec{Route: labelingRouteCodex, Model: "gpt-6-luna", Effort: "high", LimitItems: 4}
+		}
+		if err := runLabelingJob(context.Background(), opts); err != nil {
+			t.Fatal(err)
+		}
+		db := openFixtureLedger(t, dir)
+		status, _ := labelingJobStatus(db, "pilot", labelingTestDay)
+		if got := requestStates(t, db); got != requestRefused || status["coverage"].(map[string]any)["refused_co_packed_blocked"] != 4 ||
+			!strings.Contains(labelingStatusLine(status), "co-packed items permanently blocked") {
+			t.Fatalf("%s: states %s, coverage %v", route, got, status["coverage"])
+		}
+	}
+}
+
+func TestLabelingRefusalsBlockOtherJobs(t *testing.T) {
+	quickLabelingTimers(t)
+	for _, scenario := range []string{"refusal", "suspect"} {
+		// Two jobs created before either runs: a refusal (or a suspicion) in
+		// one keeps the other from sending the same items.
+		dir := writeLabelingFixture(t, labelingFixtureUnits())
+		first, _, _ := fakeLabelingCLI(t, scenario+",ok")
+		a := labelingTestOptions(dir, first, io.Discard)
+		a.Job, a.Concurrency, a.Spec.LimitItems = "a", 1, 4
+		b := labelingTestOptions(dir, "unused", io.Discard)
+		b.Job, b.CreateOnly = "b", true
+		b.Spec = labelingJobSpec{Route: labelingRouteCodex, Model: "gpt-6-luna", Effort: "high", LimitItems: 4}
+		if err := runLabelingJob(context.Background(), b); err != nil {
+			t.Fatal(err)
+		}
+		if err := runLabelingJob(context.Background(), a); err != nil {
+			t.Fatal(err)
+		}
+		second, calls, _ := fakeLabelingCLI(t, "ok")
+		b.Create, b.CreateOnly, b.CLIPath = false, false, second
+		if err := runLabelingJob(context.Background(), b); err != nil {
+			t.Fatal(err)
+		}
+		db := openFixtureLedger(t, dir)
+		states := labelingRows(t, db, `SELECT state FROM requests WHERE job='b'`)
+		blocked := labelingRows(t, db, `SELECT COUNT(*) n FROM item_results WHERE job='b' AND outcome='refused_elsewhere'`)
+		if len(states) != 1 || states[0]["state"] != requestRefusedElsewhere || blocked[0]["n"] != int64(4) || fakeCalls(t, calls) != 0 {
+			t.Fatalf("%s: job b states %v, blocked %v, %d calls", scenario, states, blocked, fakeCalls(t, calls))
+		}
+		if scenario == "suspect" {
+			// Only the suspecting job re-sends them, on request.
+			if err := runLabelingCLI("", []string{"reconcile", "--dir", dir, "--job", "a", "--retry-suspected-refusals"}, io.Discard, io.Discard); err != nil {
+				t.Fatal(err)
+			}
+			a.Create = false
+			if err := runLabelingJob(context.Background(), a); err != nil {
+				t.Fatal(err)
+			}
+			if got := labelingRows(t, db, `SELECT state FROM requests WHERE job='a'`); got[0]["state"] != requestCompleted {
+				t.Fatalf("job a after retry = %v", got)
+			}
+		}
+	}
+	// A re-queue by reconcile drops items refused elsewhere meanwhile.
+	dir := writeLabelingFixture(t, labelingFixtureUnits())
+	hang, _, _ := fakeLabelingCLI(t, "hang")
+	b := labelingTestOptions(dir, hang, io.Discard)
+	b.Job, b.Concurrency, b.Timeout = "b", 1, 300*time.Millisecond
+	b.Spec = labelingJobSpec{Route: labelingRouteCodex, Model: "gpt-6-luna", Effort: "high", LimitItems: 4}
+	if err := runLabelingJob(context.Background(), b); err != nil {
+		t.Fatal(err)
+	}
+	refuse, _, _ := fakeLabelingCLI(t, "refusal")
+	a := labelingTestOptions(dir, refuse, io.Discard)
+	a.Job, a.Concurrency, a.Spec.LimitItems = "a", 1, 4
+	if err := runLabelingJob(context.Background(), a); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	if err := runLabelingCLI("", []string{"reconcile", "--dir", dir, "--job", "b", "--retry-unknown"}, &out, io.Discard); err != nil || !strings.Contains(out.String(), "4 of their items are blocked") {
+		t.Fatalf("reconcile = %v: %s", err, out.String())
+	}
+	if got := labelingRows(t, openFixtureLedger(t, dir), `SELECT state FROM requests WHERE job='b'`); got[0]["state"] != requestRefusedElsewhere {
+		t.Fatalf("job b = %v", got)
+	}
+}
+
+func TestLabelingRefusalsFollowTheSplitsLineage(t *testing.T) {
+	quickLabelingTimers(t)
+	old := writeLabelingFixture(t, labelingFixtureUnits())
+	cli, _, _ := fakeLabelingCLI(t, "refusal")
+	opts := labelingTestOptions(old, cli, io.Discard)
+	opts.Concurrency, opts.Spec.LimitItems = 1, 4
+	if err := runLabelingJob(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	// A re-prepared dataset that kept the old splits (--splits-from).
+	dir := writeLabelingFixture(t, labelingFixtureUnits())
+	manifest := map[string]any{"contracts": map[string]any{"units": labelingUnitsVersion}, "splits": map[string]any{"inherited_from": old}}
+	if err := durableJSON(filepath.Join(dir, labelingManifestFile), manifest); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	next := labelingTestOptions(dir, cli, &out)
+	next.CreateOnly = true
+	next.Spec = labelingJobSpec{Route: labelingRouteCodex, Model: "gpt-6-luna", Effort: "high", LimitItems: 4}
+	if err := runLabelingJob(context.Background(), next); err != nil {
+		t.Fatal(err)
+	}
+	hash, _ := labelingManifestHash(old)
+	if !strings.Contains(out.String(), `"refused_skipped": 4`) || !strings.Contains(out.String(), old) || !strings.Contains(out.String(), hash) {
+		t.Fatalf("lineage job: %s", out.String())
 	}
 }

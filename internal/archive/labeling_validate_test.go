@@ -42,14 +42,20 @@ func TestLabelingQuoteMapping(t *testing.T) {
 	if evidence := locateLabelingQuote(joined, "L", "lowor"); evidence.Status != "valid" || len(evidence.Occurrences[0].Source) != 2 {
 		t.Fatalf("contiguous pieces = %+v", evidence)
 	}
-	// A quote in target text and again inside a marker: valid, ambiguous,
-	// every occurrence recorded with its status.
+	// A quote in target text and again inside a marker: ambiguous_mixed,
+	// which supports nothing; every occurrence recorded with its status.
 	marker := "⟦quoted text, context only, 6 chars: \"fix it\"⟧"
 	text := "fix it " + marker
 	mixed := labelingItemSource{id: "i5", text: text, message: "fix it > fix it", markers: [][2]int{{7, len(text)}},
 		targets: []labelingTargetPiece{{start: 0, end: 7, visibleStart: 0, visibleEnd: 7}}}
 	evidence = locateLabelingQuote(mixed, "L", "fix it")
-	if evidence.Status != "valid" || !evidence.Ambiguous || len(evidence.Occurrences) != 2 || evidence.Occurrences[0].Status != "valid" || evidence.Occurrences[1].Status != "in_marker" {
+	if evidence.Status != "ambiguous_mixed" || !evidence.Ambiguous || len(evidence.Occurrences) != 2 || evidence.Occurrences[0].Status != "valid" || evidence.Occurrences[1].Status != "in_marker" {
 		t.Fatalf("mixed = %+v", evidence)
+	}
+	// The same holds for a quote also in the context.
+	context := labelingItemSource{id: "i6", text: "fix it", message: "fix it", context: "please fix it",
+		targets: []labelingTargetPiece{{start: 0, end: 6, visibleStart: 0, visibleEnd: 6}}}
+	if got := locateLabelingQuote(context, "L", "fix it").Status; got != "ambiguous_mixed" {
+		t.Fatalf("also in context = %s", got)
 	}
 }

@@ -82,6 +82,7 @@ type labelingRunner struct {
 	consecutiveRefusals          int
 	accepted                     map[string]bool
 	loopError                    error
+	refusals                     *labelingRefusals
 }
 
 func (r *labelingRunner) now() time.Time {
@@ -158,22 +159,11 @@ func runLabelingJob(ctx context.Context, opts labelingRunOptions) error {
 	}
 	defer db.Close()
 	if opts.Create {
-		refused := map[string]bool{}
-		for _, earlier := range opts.RefusalsFrom {
-			other, err := openLabelingDataset(earlier)
-			if err != nil {
-				return fmt.Errorf("--refusals-from: %w", err)
-			}
-			keys, err := labelingRefusalKeys(other)
-			other.Close()
-			if err != nil {
-				return err
-			}
-			for key := range keys {
-				refused[key] = true
-			}
+		sources, err := labelingRefusalSourcesFor(dir, opts.RefusalsFrom, "--refusals-from")
+		if err != nil {
+			return err
 		}
-		summary, err := createLabelingJob(ctx, db, opts.Job, opts.Spec, nil, "", refused)
+		summary, err := createLabelingJob(ctx, db, opts.Job, opts.Spec, nil, "", sources)
 		if err != nil {
 			return err
 		}
@@ -199,6 +189,24 @@ func runLabelingJob(ctx context.Context, opts labelingRunOptions) error {
 		return err
 	}
 	if err := verifyLabelingContract(db, job); err != nil {
+		return err
+	}
+	// A job created before refusal sources were recorded gets its dataset's
+	// lineage now.
+	var recorded sql.NullString
+	if err := db.QueryRow(`SELECT refusal_sources FROM jobs WHERE name=?`, job.Name).Scan(&recorded); err != nil {
+		return err
+	}
+	if !recorded.Valid {
+		sources, err := labelingRefusalSourcesFor(dir, nil, "")
+		if err != nil {
+			return err
+		}
+		if _, err := db.Exec(`UPDATE jobs SET refusal_sources=? WHERE name=?`, jsonText(sources), job.Name); err != nil {
+			return err
+		}
+	}
+	if r.refusals, err = jobLabelingRefusals(db, job.Name); err != nil {
 		return err
 	}
 	if err := r.prepareFiles(); err != nil {
@@ -405,7 +413,7 @@ func verifyLabelingContract(db *sql.DB, job labelingJob) error {
 	}
 	rows, err := db.Query(`SELECT i.item_id,i.contract_hash,u.sender_role,u.channel,u.context_prompt,u.context_excerpt,t.text FROM requests q
 		JOIN request_items i ON i.request_id=q.id LEFT JOIN items t ON t.id=i.item_id LEFT JOIN units u ON u.id=t.unit_id
-		WHERE q.job=? AND q.state IN ('pending','leased','stopped')`, job.Name)
+		WHERE q.job=? AND q.state IN ('pending','leased','stopped') AND i.blocked IS NULL`, job.Name)
 	if err != nil {
 		return err
 	}
@@ -684,7 +692,7 @@ type labelingAttemptInfo struct {
 
 // labelingRequestItems are a request's items in prompt order.
 func (r *labelingRunner) requestItems(request string) ([]string, map[string]string, error) {
-	rows, err := queryMaps(r.db, `SELECT item_id,contract_hash FROM request_items WHERE request_id=? ORDER BY position`, request)
+	rows, err := queryMaps(r.db, `SELECT item_id,contract_hash FROM request_items WHERE request_id=? AND blocked IS NULL ORDER BY position`, request)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -724,6 +732,26 @@ func (r *labelingRunner) attempt(ctx context.Context, request labelingPendingReq
 	if r.stopRequested(ctx) {
 		_, err := r.db.Exec(`UPDATE requests SET state='stopped',updated_at=? WHERE id=? AND state='leased'`, now(), request.id)
 		return err
+	}
+	// Items a refusal elsewhere now blocks leave the request before its
+	// prompt is built; a request left empty is not sent.
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	blocked, remaining, err := applyLabelingRefusals(tx, r.refusals, r.job.Name, request.id)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if blocked > 0 {
+		r.printf("%s %s: %d items not sent: blocked by a refusal elsewhere\n", r.job.Name, request.id, blocked)
+	}
+	if remaining == 0 {
+		return nil
 	}
 	ids, _, err := r.requestItems(request.id)
 	if err != nil {
@@ -780,7 +808,7 @@ func (r *labelingRunner) attempt(ctx context.Context, request labelingPendingReq
 		return err
 	}
 	defer stderr.Close()
-	tx, err := r.db.Begin()
+	tx, err = r.db.Begin()
 	if err != nil {
 		return err
 	}
@@ -797,6 +825,19 @@ func (r *labelingRunner) attempt(ctx context.Context, request labelingPendingReq
 	if stopFlag != 0 || stopping {
 		_, err := tx.Exec(`UPDATE requests SET state='stopped',updated_at=? WHERE id=? AND state='leased'`, now(), request.id)
 		if err != nil {
+			tx.Rollback()
+			return err
+		}
+		return tx.Commit()
+	}
+	// A refusal recorded while the prompt was built: the request goes back
+	// to pending without its blocked items (or stays unsent if none is
+	// left), in the same transaction that would have submitted it.
+	if late, _, err := applyLabelingRefusals(tx, r.refusals, r.job.Name, request.id); err != nil {
+		tx.Rollback()
+		return err
+	} else if late > 0 {
+		if _, err := tx.Exec(`UPDATE requests SET state='pending' WHERE id=? AND state='leased'`, request.id); err != nil {
 			tx.Rollback()
 			return err
 		}
@@ -881,6 +922,9 @@ const (
 // conservative upper bound (labelingUpperBoundCost): exposure, not known
 // spend, never $0.
 func labelingUsageCost(book priceBook, role, model, requested, day string, tokens map[string]int64, blocked, assumed bool) usageCost {
+	if strings.HasPrefix(model, labelingUnattributed) {
+		return labelingUpperBoundCost(book, strings.TrimPrefix(model, labelingUnattributed), day, tokens)
+	}
 	var cost usageCost
 	switch {
 	case blocked:
@@ -1019,12 +1063,6 @@ func labelingAttemptUsage(stream *labelingStream, requested, day string, book pr
 				matched = model
 			}
 		}
-		// The result's usage is the labeling call's: modelUsage must hold
-		// the labeling model, or that call's cost is unaccounted for.
-		explained := top == nil
-		for _, model := range models {
-			explained = explained || primary[model]
-		}
 		oneHour := top["cache_creation_1h_input_tokens"]
 		for _, model := range models {
 			counts := normalizeTokenCounts(stream.modelUsage[model])
@@ -1042,7 +1080,29 @@ func labelingAttemptUsage(stream *labelingStream, requested, day string, book pr
 				addCounts(model, "modelUsage", counts, false)
 			}
 		}
-		return rows, !explained
+		// The result's usage is the labeling call's: what modelUsage
+		// attributes to the labeling model must cover it. The rest is
+		// recorded as unattributed usage, bounded at the provider's highest
+		// rates (exposure), and the run halts.
+		if top != nil {
+			var input, output int64
+			for _, row := range rows {
+				if row.role == usagePrimary {
+					input += row.tokens["input_tokens"]
+					output += row.tokens["output_tokens"]
+				}
+			}
+			missingIn := max(int64(top["input_tokens"])-input, 0)
+			missingOut := max(int64(top["output_tokens"])-output, 0)
+			if missingIn > 0 || missingOut > 0 {
+				tokens := map[string]int64{"input_tokens": missingIn, "uncached_input_tokens": missingIn, "output_tokens": missingOut, "total_tokens": missingIn + missingOut}
+				cost := labelingUpperBoundCost(book, requested, day, tokens)
+				rows = append(rows, labelingUsageRow{model: labelingUnattributed + requested, source: "result usage modelUsage does not attribute to the labeling model",
+					role: usagePrimary, tokens: tokens, cost: cost})
+				return rows, true
+			}
+		}
+		return rows, false
 	}
 	if top == nil {
 		return rows, false
@@ -1054,6 +1114,10 @@ func labelingAttemptUsage(stream *labelingStream, requested, day string, book pr
 	addCounts(model, source, top, false)
 	return rows, false
 }
+
+// labelingUnattributed prefixes the usage row of result usage that
+// modelUsage does not attribute to the labeling model.
+const labelingUnattributed = "unattributed:"
 
 const labelingIncompleteSource = "(missing input or output counts)"
 
@@ -1084,7 +1148,7 @@ func (r *labelingRunner) repriceLabelingUsage(force bool) error {
 		var reported []string
 		json.Unmarshal([]byte(firstString(row["reported_models"])), &reported)
 		role := usageAuxiliary
-		if model == r.job.Model || containsString(reported, model) {
+		if model == r.job.Model || containsString(reported, model) || strings.HasPrefix(model, labelingUnattributed) {
 			role = usagePrimary
 		}
 		var tokens map[string]int64
@@ -1279,11 +1343,9 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 	for _, row := range usage {
 		usageMissing = usageMissing || row.incomplete
 	}
-	// Usage reported for the call but under no labeling model in modelUsage
-	// is unexplained: the attempt keeps its estimated exposure and the run
-	// halts.
+	// Usage reported for the call but not attributed to the labeling model
+	// is unexplained: it is bounded as exposure and the run halts.
 	if unexplained && !notSent {
-		usageMissing = true
 		problems = append(problems, "usage_unexplained")
 	}
 	// A successful terminal event without readable usage halts the run:
@@ -1328,7 +1390,7 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 		}
 		// New usage without a price of its own halts, except a served model
 		// the operator accepted knowing it is only bounded.
-		if row.cost.status == "partial" || row.cost.status == "unpriced" || row.cost.status == costUpperBound && !r.accepted[row.model] {
+		if row.cost.status == "partial" || row.cost.status == "unpriced" || row.cost.status == costUpperBound && !r.accepted[row.model] && !strings.HasPrefix(row.model, labelingUnattributed) {
 			unpriced = append(unpriced, row.model+" ("+row.cost.status+")")
 		}
 		if _, err := tx.Exec(`INSERT INTO usage(attempt_id,model,model_source,tokens,cost_usd,cost_status,priced_model,day,role) VALUES(?,?,?,?,?,?,?,?,?)`,

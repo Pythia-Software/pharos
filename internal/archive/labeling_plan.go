@@ -363,6 +363,18 @@ func planLabeling(ctx context.Context, opts labelingPlanOptions) (map[string]any
 	if opts.Effort != "high" {
 		assumptions = append(assumptions, fmt.Sprintf("Effort %s was not calibrated; the measurements are at effort high.", opts.Effort))
 	}
+	// Refusals already recorded in this dataset's jobs, and how many of the
+	// refused items were only packed with the refused material: they are
+	// blocked permanently all the same (no re-send path).
+	refusals := map[string]any{"refused_items": 0, "co_packed_blocked_items": 0, "suspected_items": 0}
+	if labelingHasLedger(db) {
+		var refused, coPacked, suspected int
+		db.QueryRow(`SELECT COUNT(DISTINCT item_id) FROM item_results WHERE outcome='refused'`).Scan(&refused)
+		db.QueryRow(`SELECT COUNT(DISTINCT item_id) FROM item_results WHERE outcome='refused' AND issues LIKE '%refused_copacked_unresolved%'`).Scan(&coPacked)
+		db.QueryRow(`SELECT COUNT(DISTINCT item_id) FROM item_results WHERE outcome='refusal_suspected'`).Scan(&suspected)
+		refusals = map[string]any{"refused_items": refused, "co_packed_blocked_items": coPacked, "suspected_items": suspected,
+			"note": "a new job selects none of these; co-packed items are blocked although the refusal may belong to a neighbour"}
+	}
 	selection := map[string]any{"cohorts": opts.Cohorts, "splits": opts.Splits, "limit_items": opts.LimitItems,
 		"include_duplicates": opts.IncludeDuplicates, "duplicate_items_skipped": duplicates, "max_per_text": opts.MaxPerText,
 		"repeated_text_items_skipped": repeatedText}
@@ -375,6 +387,6 @@ func planLabeling(ctx context.Context, opts labelingPlanOptions) (map[string]any
 		"tokens":      map[string]any{"input": int64(input), "output": int64(outputTokens)},
 		"price":       price,
 		"runtime":     map[string]any{"concurrency": opts.Concurrency, "serial_hours": serial / 3600, "hours": hours, "planning_high_hours": hours * 3},
-		"assumptions": assumptions,
+		"assumptions": assumptions, "refusals": refusals,
 	}, nil
 }

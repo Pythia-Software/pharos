@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS item_results(
   created_at TEXT NOT NULL, PRIMARY KEY(attempt_id, item_id));
 CREATE TABLE IF NOT EXISTS accepted_models(job TEXT NOT NULL, model TEXT NOT NULL, accepted_at TEXT NOT NULL, PRIMARY KEY(job, model));
 CREATE INDEX IF NOT EXISTS item_results_job_item_idx ON item_results(job, item_id);
+CREATE INDEX IF NOT EXISTS item_results_outcome_idx ON item_results(outcome);
 CREATE TABLE IF NOT EXISTS usage(
   attempt_id TEXT NOT NULL, model TEXT NOT NULL, model_source TEXT NOT NULL, tokens TEXT NOT NULL, cost_usd REAL, cost_status TEXT NOT NULL,
   priced_model TEXT, day TEXT NOT NULL, role TEXT, PRIMARY KEY(attempt_id, model));
@@ -76,6 +77,9 @@ const (
 	// refusal_suspected: refusal words in a reply that is not a clear
 	// refusal; re-sent only by reconcile --retry-suspected-refusals.
 	requestRefusalSuspected = "refusal_suspected"
+	// refused_elsewhere: every item of the request was blocked, before it
+	// was sent, by a refusal recorded elsewhere.
+	requestRefusedElsewhere = "refused_elsewhere"
 )
 
 // Served-model verification, per job, attempt and item result.
@@ -88,7 +92,7 @@ const (
 )
 
 var labelingRequestStates = []string{requestPending, requestLeased, requestSubmitted, requestCompleted, requestInvalid, requestRefused,
-	requestFailed, requestUnknown, requestHeld, requestRefusalSuspected, requestStopped}
+	requestFailed, requestUnknown, requestHeld, requestRefusalSuspected, requestRefusedElsewhere, requestStopped}
 
 var labelingJobName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
@@ -103,6 +107,10 @@ type labelingJobSpec struct {
 	ItemsPerRequest              int
 	MaxRequestTokens             float64
 	MaxRequestChars              int
+	// SkipOversize creates the job without items too large for one
+	// request: they are recorded as blocked_oversize and the job is
+	// incomplete. Without it, creation fails.
+	SkipOversize bool
 }
 
 type labelingJob struct {
@@ -143,6 +151,8 @@ var labelingLedgerColumns = []struct{ table, column, definition string }{
 	{"attempts", "cli_warnings", "TEXT"},
 	{"usage", "role", "TEXT"},
 	{"jobs", "stop_requested_at", "TEXT"},
+	{"jobs", "refusal_sources", "TEXT"},
+	{"request_items", "blocked", "TEXT"},
 }
 
 // labelingHasColumn lets read-only status read a ledger an older build
@@ -294,15 +304,16 @@ func selectLabelingItems(ctx context.Context, db *sql.DB, spec labelingJobSpec) 
 	return items, duplicates, repeated, nil
 }
 
-// labelingRefusalKeys lists a dataset's confirmed refusals, from every
-// job, as source message hash and target text hash.
+// labelingRefusalKeys lists a dataset's confirmed and suspected refusals,
+// from every job, as source message hash and target text hash: a new job
+// selects none of them.
 func labelingRefusalKeys(db *sql.DB) (map[string]bool, error) {
 	keys := map[string]bool{}
 	if !labelingHasLedger(db) {
 		return keys, nil
 	}
 	rows, err := queryMaps(db, `SELECT DISTINCT u.message_sha256||':'||i.target_hash key FROM item_results r JOIN items i ON i.id=r.item_id
-		JOIN units u ON u.id=i.unit_id WHERE r.outcome='refused'`)
+		JOIN units u ON u.id=i.unit_id WHERE r.outcome IN ('refused','refusal_suspected')`)
 	if err != nil {
 		return nil, err
 	}
@@ -325,9 +336,10 @@ var labelingImportHook = func() error { return nil }
 // createLabelingJob freezes a job's selection and packs it into pending
 // requests with phase 1's packer. Imported results (from an earlier
 // dataset) are written in the same transaction; their items are selected
-// but not sent. Every selected item ends up requested, imported or listed
-// as oversize, or nothing is written.
-func createLabelingJob(ctx context.Context, db *sql.DB, name string, spec labelingJobSpec, imports []labelingImported, importedFrom string, refusedElsewhere map[string]bool) (map[string]any, error) {
+// but not sent. Every selected item ends up requested, imported, skipped
+// for a refusal, or (with SkipOversize) blocked as oversize, or nothing is
+// written.
+func createLabelingJob(ctx context.Context, db *sql.DB, name string, spec labelingJobSpec, imports []labelingImported, importedFrom string, sources []labelingRefusalSource) (map[string]any, error) {
 	skip := map[string]bool{}
 	for _, imported := range imports {
 		skip[imported.result.ItemID] = true
@@ -367,16 +379,27 @@ func createLabelingJob(ctx context.Context, db *sql.DB, name string, spec labeli
 	if err != nil {
 		return nil, err
 	}
-	// A confirmed refusal is global and permanent: refused material is not
-	// sent again by any job, on any route, in this dataset or a later one
-	// (refusedElsewhere carries earlier datasets' refusals). Keyed by the
-	// source message and target text, so it survives re-preparation.
+	// Refusals are global and permanent (labeling_refusals.go): refused or
+	// suspected material is not selected by a new job, from this dataset or
+	// the datasets in sources (its --splits-from lineage, --refusals-from,
+	// the dataset imported from). Keyed by the source message and target
+	// text, so they survive re-preparation.
 	refused, err := labelingRefusalKeys(db)
 	if err != nil {
 		return nil, err
 	}
-	for key := range refusedElsewhere {
+	external, err := loadLabelingRefusals(sources)
+	if err != nil {
+		return nil, err
+	}
+	for key := range external.confirmed {
 		refused[key] = true
+	}
+	for key := range external.suspected {
+		refused[key] = true
+	}
+	if sources == nil {
+		sources = []labelingRefusalSource{}
 	}
 	send, refusedSkipped := []labelingSelectedItem{}, 0
 	for _, item := range items {
@@ -399,8 +422,8 @@ func createLabelingJob(ctx context.Context, db *sql.DB, name string, spec labeli
 		oversized = append(oversized, send[index].row.ID)
 	}
 	// A selected item that fits no request would never get an outcome.
-	if len(oversized) > 0 {
-		return nil, fmt.Errorf("%d selected items do not fit one request within --max-request-tokens/--max-request-chars: %s; raise the limits or leave them out (--item, --cohort), nothing was created",
+	if len(oversized) > 0 && !spec.SkipOversize {
+		return nil, fmt.Errorf("%d selected items do not fit one request within --max-request-tokens/--max-request-chars: %s; raise the limits, leave them out (--item, --cohort), or create the job without them (--skip-oversize); nothing was created",
 			len(oversized), strings.Join(oversized, ", "))
 	}
 	var manifestText string
@@ -415,8 +438,8 @@ func createLabelingJob(ctx context.Context, db *sql.DB, name string, spec labeli
 	}
 	selection := map[string]any{"cohorts": spec.Cohorts, "splits": spec.Splits, "items": spec.Items, "limit_items": spec.LimitItems,
 		"include_duplicates": spec.IncludeDuplicates, "duplicate_items_skipped": duplicates, "selected_items": len(items),
-		"imported_items": len(skip), "refused_skipped": refusedSkipped, "refusal_datasets": len(refusedElsewhere) > 0,
-		"max_per_text": spec.MaxPerText, "repeated_text_items_skipped": repeated, "one_item_per_family": true, "oversize_items": oversized, "requests": len(packed)}
+		"imported_items": len(skip), "refused_skipped": refusedSkipped, "refusal_sources": sources,
+		"max_per_text": spec.MaxPerText, "blocked_oversize": len(oversized), "incomplete": len(oversized) > 0, "repeated_text_items_skipped": repeated, "one_item_per_family": true, "oversize_items": oversized, "requests": len(packed)}
 	packing := map[string]any{"items_per_request": spec.ItemsPerRequest, "max_request_tokens": spec.MaxRequestTokens,
 		"max_request_chars": spec.MaxRequestChars, "overhead_tokens": calibration.overheadTokens, "output_tokens_per_item": calibration.outputItem,
 		"chars_per_token": labelingCharsPerToken, "calibration": calibration.source}
@@ -430,9 +453,9 @@ func createLabelingJob(ctx context.Context, db *sql.DB, name string, spec labeli
 		served = servedModelUnverified
 	}
 	if _, err := tx.Exec(`INSERT INTO jobs(name,created_at,route,model,effort,prompt_version,schema_version,schema_sha256,taxonomy_version,taxonomy_sha256,
-		dataset_contracts,selection,packing,imported_from,served_model,prompt_template_sha256,pricing_rule) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		dataset_contracts,selection,packing,imported_from,served_model,prompt_template_sha256,pricing_rule,refusal_sources) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		name, now(), spec.Route, spec.Model, spec.Effort, spec.Prompt, labelingSchemaVersion, hashBytes([]byte(schema)), labelingTaxonomyVersion,
-		hashBytes(labelingTaxonomy), compactJSON(manifest["contracts"]), compactJSON(selection), compactJSON(packing), nilIfEmpty(importedFrom), served, labelingPromptTemplateHash(spec.Prompt), labelingPricingRule); err != nil {
+		hashBytes(labelingTaxonomy), compactJSON(manifest["contracts"]), compactJSON(selection), compactJSON(packing), nilIfEmpty(importedFrom), served, labelingPromptTemplateHash(spec.Prompt), labelingPricingRule, jsonText(sources)); err != nil {
 		return nil, err
 	}
 	for position, request := range packed {
@@ -452,6 +475,15 @@ func createLabelingJob(ctx context.Context, db *sql.DB, name string, spec labeli
 				id, itemPosition, item.row.ID, labelingContractHash(spec.Prompt, item.row), item.tokens, item.chars); err != nil {
 				return nil, err
 			}
+		}
+	}
+	// Oversize items skipped on request keep a result saying so; the job is
+	// incomplete.
+	for _, item := range oversized {
+		result := labelingItemResult{ItemID: item, Outcome: itemBlockedOversize, Labels: []string{}, Uncertain: []string{}, Evidence: []labelingEvidence{},
+			Issues: []string{"blocked_oversize"}}
+		if err := insertLabelingItemResult(tx, "blocked-oversize:"+name, name, "", result, "", "", ""); err != nil {
+			return nil, err
 		}
 	}
 	if err := labelingImportHook(); err != nil {
@@ -718,7 +750,7 @@ func labelingJobStatus(db *sql.DB, name string, now time.Time) (map[string]any, 
 	status := map[string]any{"job": name, "route": job.Route, "model": job.Model, "effort": job.Effort, "prompt": job.Prompt, "cli_version": job.CLIVersion,
 		"requests": total, "request_states": states, "item_outcomes": outcomes, "selection": selection, "attempts": attempts,
 		"attempts_cleaned_up": cleaned, "attempts_recovered_from_stream": recovered, "spend": spend,
-		"refused_items_co_packed": coPacked, "cli_warnings": cliWarnings}
+		"refused_items_co_packed": coPacked, "cli_warnings": cliWarnings, "coverage": labelingCoverage(db, name, coPacked)}
 	if halted.Valid {
 		status["halted"] = halted.String
 	}
@@ -743,6 +775,21 @@ func labelingJobStatus(db *sql.DB, name string, now time.Time) (map[string]any, 
 	return status, nil
 }
 
+// labelingCoverage counts a job's selected items that will never be
+// labeled by it: refused items packed with others (permanently blocked
+// although the refusal may belong to a neighbour; no re-send path),
+// items a refusal elsewhere blocked, and items too large for a request.
+func labelingCoverage(db *sql.DB, job string, coPacked int) map[string]any {
+	count := func(outcome string) int {
+		var n int
+		db.QueryRow(`SELECT COUNT(DISTINCT item_id) FROM item_results WHERE job=? AND outcome=?`, job, outcome).Scan(&n)
+		return n
+	}
+	oversize := count(itemBlockedOversize)
+	return map[string]any{"refused_co_packed_blocked": coPacked, "refused_elsewhere": count(itemRefusedElsewhere),
+		"blocked_oversize": oversize, "incomplete": oversize > 0}
+}
+
 // labelingStatusLine is the one-line progress summary of a job.
 func labelingStatusLine(status map[string]any) string {
 	states := status["request_states"].(map[string]int)
@@ -765,6 +812,17 @@ func labelingStatusLine(status map[string]any) string {
 	}
 	if spend.UnpricedAttempts > 0 {
 		line += fmt.Sprintf(", %d attempts with unpriced usage", spend.UnpricedAttempts)
+	}
+	if coverage, ok := status["coverage"].(map[string]any); ok {
+		if n := coverage["refused_co_packed_blocked"].(int); n > 0 {
+			line += fmt.Sprintf("; coverage: %d co-packed items permanently blocked by a request's refusal", n)
+		}
+		if n := coverage["refused_elsewhere"].(int); n > 0 {
+			line += fmt.Sprintf("; %d items blocked by refusals elsewhere", n)
+		}
+		if n := coverage["blocked_oversize"].(int); n > 0 {
+			line += fmt.Sprintf("; %d items too large for a request (job incomplete)", n)
+		}
 	}
 	if warnings, ok := status["cli_warnings"].([]string); ok && len(warnings) > 0 {
 		line += "; CLI warnings: " + strings.Join(warnings, " | ")
@@ -857,20 +915,35 @@ func reconcileLabelingJob(db *sql.DB, name string, options labelingReconcileOpti
 		}
 		return nil
 	}
+	// Re-queueing never re-sends refused material: items a refusal elsewhere
+	// now blocks leave the request first.
+	refusals, err := jobLabelingRefusals(db, name)
+	if err != nil {
+		return err
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	blockedItems := 0
 	for _, id := range requeue {
 		if _, err := tx.Exec(`UPDATE requests SET state='pending',updated_at=?,note=? WHERE id=?`, now(), "re-queued by reconcile", id); err != nil {
 			return err
 		}
+		blocked, _, err := applyLabelingRefusals(tx, refusals, name, id)
+		if err != nil {
+			return err
+		}
+		blockedItems += blocked
 	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
 	fmt.Fprintf(w, "Re-queued %d requests; their earlier attempts stay in the ledger and in spend.\n", len(requeue))
+	if blockedItems > 0 {
+		fmt.Fprintf(w, "%d of their items are blocked by a refusal elsewhere and will not be sent.\n", blockedItems)
+	}
 	return nil
 }
 
@@ -975,12 +1048,13 @@ func importLabelingResults(ctx context.Context, dir, from, name string, w io.Wri
 		}
 		copies = append(copies, labelingImported{result: result, hash: hash, from: from + "#" + firstString(row["attempt_id"]), served: firstString(row["served_model"])})
 	}
-	// Every refusal in the earlier dataset, from any job, stays a refusal.
-	refusedBefore, err := labelingRefusalKeys(old)
+	// Every refusal in the earlier dataset (and its lineage), from any job,
+	// stays a refusal.
+	refusalSources, err := labelingRefusalSourcesFor(dir, []string{from}, "imported from")
 	if err != nil {
 		return err
 	}
-	summary, err := createLabelingJob(ctx, db, name, spec, copies, from, refusedBefore)
+	summary, err := createLabelingJob(ctx, db, name, spec, copies, from, refusalSources)
 	if err != nil {
 		return err
 	}

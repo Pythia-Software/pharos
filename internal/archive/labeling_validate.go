@@ -23,6 +23,12 @@ const (
 	itemHeld = "held"
 	// itemRefusalSuspected: the reply may have been a refusal.
 	itemRefusalSuspected = "refusal_suspected"
+	// itemRefusedElsewhere: not sent, because a refusal recorded in another
+	// job or dataset blocks this material.
+	itemRefusedElsewhere = "refused_elsewhere"
+	// itemBlockedOversize: too large for one request, left out of a job
+	// created with --skip-oversize.
+	itemBlockedOversize = "blocked_oversize"
 )
 
 // labelingTargetPiece is a target piece shown in the unit's visible text.
@@ -309,11 +315,17 @@ func locateLabelingQuote(item labelingItemSource, label, quote string) labelingE
 		offset = start + max(size, 1)
 	}
 	evidence.Ambiguous = len(evidence.Occurrences) > 1
-	valid := false
+	valid, elsewhere := false, false
 	for _, occurrence := range evidence.Occurrences {
 		valid = valid || occurrence.Status == "valid"
+		elsewhere = elsewhere || occurrence.Status != "valid"
 	}
 	switch {
+	case valid && (elsewhere || strings.Contains(item.context, quote)):
+		// The quote is also in a marker or the context: the response does
+		// not say which the teacher meant, so it supports nothing.
+		evidence.Status = "ambiguous_mixed"
+		evidence.Ambiguous = true
 	case valid:
 		evidence.Status = "valid"
 	case reasons["in_marker"]:
