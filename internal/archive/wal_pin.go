@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime/pprof"
 	"slices"
 	"strings"
 	"time"
@@ -142,10 +144,15 @@ type walPin struct {
 	Holder    string
 	Known     bool // Holder names who holds the log, not only what is running
 	Diagnosed time.Time
+	Report    string // the stall's report (writeWALPinReport), if one was written
 }
 
 func (p walPin) String() string {
-	return fmt.Sprintf("wal_bytes=%d frames_pending=%s stalled_since=%s holder=%s", p.WALBytes, formatCount(int(p.Pending)), p.Since.UTC().Format(time.RFC3339), p.Holder)
+	line := fmt.Sprintf("wal_bytes=%d frames_pending=%s stalled_since=%s holder=%s", p.WALBytes, formatCount(int(p.Pending)), p.Since.UTC().Format(time.RFC3339), p.Holder)
+	if p.Report != "" {
+		line += " report=" + p.Report
+	}
+	return line
 }
 
 // walStall is boundWAL's bookkeeping, guarded by walBound.mu.
@@ -158,6 +165,10 @@ type walStall struct {
 	// selfProbes counts probes in a row that found this process holding
 	// the log: it is named for certain only once two agree.
 	selfProbes int
+	// report is the file this stall's report went to; reported is set once
+	// it was attempted, so a failed write is not retried every minute.
+	report   string
+	reported bool
 }
 
 // noteWALBusy records a busy bound checkpoint of a WAL of walBytes whose
@@ -194,10 +205,12 @@ func (c *Catalog) noteWALBusy(walBytes, frames, backfilled int64, now time.Time)
 	}
 	pin := walPin{Since: stall.backfillSince, WALBytes: walBytes, Pending: pending}
 	diagnose := stall.diagnosedAt.IsZero() || now.Sub(stall.diagnosedAt) >= walPinDiagnoseEvery
+	other := false
 	if diagnose {
 		var self bool
 		stall.diagnosedAt = now
 		stall.holder, stall.known, self = c.walHolder(stall.backfillSince, now)
+		other = stall.known && !self
 		if self {
 			stall.selfProbes++
 		} else {
@@ -210,6 +223,13 @@ func (c *Catalog) noteWALBusy(walBytes, frames, backfilled int64, now time.Time)
 		}
 	}
 	pin.Diagnosed, pin.Holder, pin.Known = stall.diagnosedAt, stall.holder, stall.known
+	if diagnose && !other && !stall.reported {
+		// Once per stall that this process may hold: the stacks of its reads
+		// and goroutines are what names the code, and the stall can outlast
+		// the service's stderr.
+		stall.report, stall.reported = c.writeWALPinReport(pin, now), true
+	}
+	pin.Report = stall.report
 	if diagnose {
 		fmt.Fprintf(os.Stderr, "Catalog WAL pinned: catalog=%s pid=%d %s\n", c.Path, os.Getpid(), pin)
 	}
@@ -323,10 +343,14 @@ func (c *Catalog) walHolder(since, now time.Time) (string, bool, bool) {
 	return also(withSuspects(holder, "this process has been running since before the stall")), false, false
 }
 
-// walSuspects lists this process's running operations that started before
-// since, oldest first, by kind and age. Queued and blocked operations hold
-// no snapshot.
+// walSuspects lists this process's reads on the catalog open since before
+// since (catalogReads), then its running operations that started before it,
+// each oldest first. Queued and blocked operations hold no snapshot.
 func (c *Catalog) walSuspects(since, now time.Time) []string {
+	suspects := []string{}
+	for _, read := range openCatalogReads(c.Path, since) {
+		suspects = append(suspects, read.summary(now))
+	}
 	views := []opView{}
 	for _, op := range c.ops.running() {
 		view := op.view()
@@ -338,11 +362,73 @@ func (c *Catalog) walSuspects(since, now time.Time) []string {
 	slices.SortFunc(views, func(a, b opView) int {
 		return cmp.Or(a.Started.Compare(b.Started), strings.Compare(string(a.ID), string(b.ID)))
 	})
-	suspects := make([]string, 0, len(views))
 	for _, view := range views {
 		suspects = append(suspects, fmt.Sprintf("%s for %s", view.Spec.Kind, now.Sub(view.Started).Round(time.Second)))
 	}
 	return suspects
+}
+
+// openCatalogReads is catalogReads; tests whose times are made up replace
+// it, since any read open while they run would be a suspect.
+var openCatalogReads = catalogReads
+
+// walPinReportDir holds stall reports. The app keeps only the tail of the
+// service's stderr, in memory, so a report goes to a file of its own.
+func walPinReportDir() string {
+	return filepath.Join(pharosSupportDir(), "logs")
+}
+
+// walPinReportsKept bounds the reports kept; older ones are removed.
+var walPinReportsKept = 20
+
+const walPinReportPrefix = "catalog-wal-pin-"
+
+// writeWALPinReport writes the stall's diagnosis, this process's open reads
+// on the catalog with the stacks that began them, and every goroutine's
+// stack, then returns the file's path, or "" when it could not be written.
+func (c *Catalog) writeWALPinReport(pin walPin, now time.Time) string {
+	var b bytes.Buffer
+	fmt.Fprintf(&b, "Catalog WAL pinned\ncatalog: %s\npid: %d\ntime: %s\n%s\n\n", c.Path, os.Getpid(), now.UTC().Format(time.RFC3339), pin)
+	reads := catalogReads(c.Path, now)
+	fmt.Fprintf(&b, "Reads open on this catalog in this process, oldest first: %d. One begun before the stall (%s) can hold the log.\n\n", len(reads), pin.Since.UTC().Format(time.RFC3339))
+	for _, read := range reads {
+		fmt.Fprintf(&b, "%s\nbegan: %s", read.summary(now), read.Began.UTC().Format(time.RFC3339Nano))
+		if !read.Began.After(pin.Since) {
+			b.WriteString(" (before the stall)")
+		}
+		b.WriteString("\n")
+		if read.Statement != "" {
+			fmt.Fprintf(&b, "statement: %s\n", clipText(strings.Join(strings.Fields(read.Statement), " "), 2000))
+		}
+		fmt.Fprintf(&b, "%s\n", read.traceback())
+	}
+	b.WriteString("Goroutines:\n\n")
+	if err := pprof.Lookup("goroutine").WriteTo(&b, 2); err != nil {
+		fmt.Fprintf(&b, "(%v)\n", err)
+	}
+	dir := walPinReportDir()
+	path := filepath.Join(dir, fmt.Sprintf("%s%s-pid%d.txt", walPinReportPrefix, now.UTC().Format("20060102T150405.000Z"), os.Getpid()))
+	err := os.MkdirAll(dir, 0o700)
+	if err == nil {
+		err = os.WriteFile(path, b.Bytes(), 0o600)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Catalog WAL pinned: could not write the report: %v\n", err)
+		return ""
+	}
+	// Names start with the time, so the oldest sort first.
+	if entries, err := os.ReadDir(dir); err == nil {
+		reports := []string{}
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), walPinReportPrefix) {
+				reports = append(reports, entry.Name())
+			}
+		}
+		for _, name := range reports[:max(0, len(reports)-walPinReportsKept)] {
+			_ = os.Remove(filepath.Join(dir, name))
+		}
+	}
+	return path
 }
 
 // parseProcArgs reads kern.procargs2's layout: argc, the executable path,

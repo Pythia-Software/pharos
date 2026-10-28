@@ -112,10 +112,10 @@ test('Library settings opens inline forms and returns focus when cancelled', {sk
   await page.getByRole('link',{name:'Libraries',exact:true}).click();
   await page.locator('#library-settings-current h3').waitFor();
   await shot('libraries');
-  for(const kind of ['open','create']){
-    const button=page.locator(kind==='open'?'#library-settings-open':'#library-settings-new');
+  for(const kind of ['open','create','restore']){
+    const button=page.locator({open:'#library-settings-open',create:'#library-settings-new',restore:'#library-settings-restore'}[kind]);
     await button.click();
-    const input=page.locator(kind==='open'?'#library-settings-existing':'#library-settings-name');
+    const input=page.locator({open:'#library-settings-existing',create:'#library-settings-name',restore:'#library-settings-backup'}[kind]);
     assert.ok(await input.evaluate(el=>el===document.activeElement));
     const form=page.locator('#library-settings-'+kind+'-form');
     if(kind==='create'){
@@ -130,25 +130,55 @@ test('Library settings opens inline forms and returns focus when cancelled', {sk
   }
 });
 
-test('Library settings keeps transfer, delivery, restore and release reachable while connected', {skip}, async t => {
-  const {page,shot}=await open(t,{url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:settingsLocal,api:{
-    'GET /api/app/state':settingsState,
+test('Library settings starts transfers and releases, then the startup window returns there', {skip}, async t => {
+  await t.test('transfer', async t => {
+    const {page,calls,shot}=await open(t,{url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:settingsLocal,api:{
+      'GET /api/app/state':({state})=>state.transferred?{...settingsState,libraries:[{...settingsLocal,connected:false},settingsArchive],job:{state:'complete',phase:'Library operation completed and verified',updated_at:new Date().toISOString()}}:settingsState,
+      'POST /api/app/transfer':({state})=>{state.transferred=true;return {started:true}},
+      'POST /api/app/connect':{saved:true},
+    }});
+    await page.getByRole('heading',{name:'Copy or move history',exact:true}).click();await shot('transfer');
+    await page.getByRole('radio',{name:/^Move/}).check();
+    await page.getByRole('button',{name:'Move history',exact:true}).click();
+    await page.waitForURL(url=>url.pathname==='/settings/libraries'&&calls.some(call=>call.path==='/api/app/connect'));
+    assert.deepEqual(calls.filter(call=>call.method==='POST').map(call=>[call.path,call.body]),[['/api/app/transfer',{source:'local',target:'archive',move:true}],['/api/app/connect',{id:'local'}]]);
+  });
+  await t.test('release', async t => {
+    const {page,calls}=await open(t,{url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:settingsArchive,api:{
+      'GET /api/app/state':({state})=>({...settingsState,selected:'archive',libraries:[settingsLocal,{...settingsArchive,connected:!state.released}]}),
+      'POST /api/app/disconnect':({state})=>{state.released=true;return {saved:true}},
+    }});
+    await page.getByRole('button',{name:'Release for eject',exact:true}).click();
+    await page.locator('#notice').getByText('Library released',{exact:false}).waitFor();
+    assert.deepEqual(calls.find(call=>call.path==='/api/app/disconnect').body,{id:'archive'});
+    assert.ok(await page.getByRole('button',{name:'Reconnect to My archive',exact:true}).isVisible());
+  });
+});
+
+test('Library settings renames in place and opens delivery from its switch, keeping focus', {skip}, async t => {
+  const {page,calls}=await open(t,{url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:settingsLocal,api:{
+    'GET /api/app/state':({state})=>({...settingsState,libraries:[settingsLocal,{...settingsArchive,name:state.renamed||settingsArchive.name}]}),
+    'POST /api/app/rename':({body,state})=>{state.renamed=body.name;return {saved:true}},
   }});
-  const operations=page.getByRole('link',{name:'Transfer, delivery, restore and release →',exact:true});
-  await operations.scrollIntoViewIfNeeded();await shot('operations-link');
-  await operations.click();
-  await page.locator('#library-list .card').first().waitFor();
-  await page.getByText('Move or copy history between libraries',{exact:true}).click();
-  await page.getByRole('button',{name:'Start verified transfer',exact:true}).waitFor();
-  await page.getByText('Capture locally, transfer later',{exact:true}).click();
-  await page.getByRole('button',{name:'Enable automatic delivery',exact:true}).waitFor();
-  const release=page.getByRole('button',{name:'Release library',exact:true});
-  await release.focus();
-  assert.ok(await release.evaluate(el=>el===document.activeElement));
-  await shot('operations');
-  await page.getByRole('button',{name:'Restore a backup',exact:true}).click();
-  await page.locator('#backup').waitFor();
-  assert.ok(await page.locator('#flow-title').evaluate(el=>el===document.activeElement));
+  const rename=page.getByRole('button',{name:'Rename My archive',exact:true});
+  await rename.click();
+  const input=page.getByRole('textbox',{name:'Library name',exact:true});
+  assert.ok(await input.evaluate(el=>el===document.activeElement),'rename did not focus the name');
+  await page.keyboard.press('Escape');
+  assert.ok(await rename.evaluate(el=>el===document.activeElement),'cancelling rename lost focus');
+  await rename.click();
+  await input.fill('Archive drive');
+  await page.keyboard.press('Enter');
+  const renamed=page.getByRole('button',{name:'Rename Archive drive',exact:true});
+  await renamed.waitFor();
+  assert.ok(await renamed.evaluate(el=>el===document.activeElement),'saving a name lost focus');
+  assert.deepEqual(calls.find(call=>call.path==='/api/app/rename').body,{id:'archive',name:'Archive drive'});
+  const delivery=page.getByRole('switch',{name:'Capture here, deliver to a drive',exact:true});
+  assert.ok(!await page.locator('#library-settings-pending').isVisible(),'delivery starts expanded while off');
+  await delivery.click();
+  assert.equal(await delivery.getAttribute('aria-checked'),'true');
+  assert.ok(await page.locator('#library-settings-pending').evaluate(el=>el===document.activeElement),'opening delivery did not focus its first choice');
+  assert.ok(!calls.some(call=>call.path==='/api/app/delivery'),'opening delivery turned it on');
 });
 
 test('Library settings switches within Settings and opens the selected library', {skip}, async t => {

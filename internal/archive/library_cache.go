@@ -145,10 +145,7 @@ func (m *dataVersionMonitor) read(ctx context.Context, path string) (int64, erro
 		if path == "" {
 			return 0, errors.New("catalog has no file to monitor")
 		}
-		monitor, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String()+"?mode=ro&_pragma=busy_timeout(5000)")
-		if err != nil {
-			return 0, err
-		}
+		monitor := openCatalogDB(path, (&url.URL{Scheme: "file", Path: path}).String()+"?mode=ro&_pragma=busy_timeout(5000)", "version monitor")
 		conn, err := monitor.Conn(context.Background())
 		if err != nil {
 			monitor.Close()
