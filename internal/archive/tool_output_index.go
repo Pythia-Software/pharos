@@ -78,7 +78,7 @@ const (
 // rows of the index to check, or pages to merge, between these bounds.
 var (
 	toolOutputHold       = 250 * time.Millisecond
-	toolOutputScan       = batchBounds{least: 10, first: 200, most: 5000}
+	toolOutputScan       = batchBounds{least: 1, first: 200, most: 5000}
 	toolOutputMergePages = batchBounds{least: 16, first: 200, most: 4000}
 )
 
@@ -162,6 +162,20 @@ func (c *Catalog) removeToolOutputBatch(ctx context.Context, rows int) (more boo
 	return more, 0, err
 }
 
+// While postings are removed, FTS5 merges only in the migration's own
+// bounded steps. Each removal batch writes a segment of delete keys, and
+// FTS5's automerge and crisismerge would otherwise merge whole levels of the
+// index inside one batch: on a 94 GB catalog that held the writer for up to a
+// minute. So automerge is off and crisismerge is only a backstop, and every
+// removal batch is followed by an incremental merge of at most a few thousand
+// pages (toolOutputMigration.step). The merge loop that ends the migration
+// restores the policy Initialize sets, which also restores it on every open.
+// wordIndexMergePolicy keeps large bulk imports from spending most of their
+// time merging FTS segments inside individual message inserts (Initialize).
+const wordIndexMergePolicy = "INSERT INTO messages_fts(messages_fts,rank) VALUES('automerge',8);INSERT INTO messages_fts(messages_fts,rank) VALUES('crisismerge',32)"
+
+const removalMergePolicy = "INSERT INTO messages_fts(messages_fts,rank) VALUES('automerge',0);INSERT INTO messages_fts(messages_fts,rank) VALUES('crisismerge',500)"
+
 func removeToolOutput(ctx context.Context, tx *sql.Tx, scan int) (bool, error) {
 	var done string
 	if err := tx.QueryRowContext(ctx, "SELECT value FROM meta WHERE key=?", toolOutputRemovedKey).Scan(&done); err == nil {
@@ -186,6 +200,9 @@ func removeToolOutput(ctx context.Context, tx *sql.Tx, scan int) (bool, error) {
 		return false, err
 	}
 	if rows != "[]" {
+		if _, err := tx.ExecContext(ctx, removalMergePolicy); err != nil {
+			return false, err
+		}
 		// Removing postings reorders no remaining match, and every search
 		// already leaves tool output out of the word index, so open search
 		// cursors stay valid: keep the generation the mapping's delete
@@ -213,25 +230,29 @@ func removeToolOutput(ctx context.Context, tx *sql.Tx, scan int) (bool, error) {
 }
 
 // mergeWordIndexStep does one bounded step of merging the word index's
-// segments into one, which drops the removed postings, and reports whether
-// there is more to merge. A negative merge merges every segment, as optimize
-// does, but writes about that many pages a transaction; FTS5 changes at
-// least two rows when it did any work.
-func (c *Catalog) mergeWordIndexStep(ctx context.Context, pages int) (more bool, held time.Duration, err error) {
+// segments and reports whether there is more to merge. While removing, it
+// is an ordinary incremental merge, of levels with enough segments; finally
+// (all), a negative merge merges every segment into one, as optimize does,
+// which drops the removed postings. Either writes about that many pages a
+// transaction; FTS5 changes at least two rows when it did any work.
+func (c *Catalog) mergeWordIndexStep(ctx context.Context, pages int, all bool) (more bool, held time.Duration, err error) {
 	tx, finish, err := c.beginTrackedWrite(ctx, "word-index-merge")
 	if err != nil {
 		return false, 0, err
 	}
 	started := time.Now()
 	defer func() { _ = tx.Rollback(); finish(); held = time.Since(started) }()
-	more, err = mergeWordIndex(ctx, tx, pages)
+	more, err = mergeWordIndex(ctx, tx, pages, all)
 	if err == nil {
 		err = tx.Commit()
 	}
 	return more, 0, err
 }
 
-func mergeWordIndex(ctx context.Context, tx *sql.Tx, pages int) (bool, error) {
+func mergeWordIndex(ctx context.Context, tx *sql.Tx, pages int, all bool) (bool, error) {
+	if all {
+		pages = -pages
+	}
 	var done string
 	if err := tx.QueryRowContext(ctx, "SELECT value FROM meta WHERE key=?", toolOutputMergedKey).Scan(&done); err == nil {
 		return false, nil
@@ -242,21 +263,28 @@ func mergeWordIndex(ctx context.Context, tx *sql.Tx, pages int) (bool, error) {
 	if err := tx.QueryRowContext(ctx, "SELECT total_changes()").Scan(&before); err != nil {
 		return false, err
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO messages_fts(messages_fts,rank) VALUES('merge',?)", -pages); err != nil {
+	if _, err := tx.ExecContext(ctx, "INSERT INTO messages_fts(messages_fts,rank) VALUES('merge',?)", pages); err != nil {
 		return false, err
 	}
 	if err := tx.QueryRowContext(ctx, "SELECT total_changes()").Scan(&after); err != nil {
 		return false, err
 	}
-	if after-before >= 2 {
-		return true, nil
+	if after-before >= 2 || !all {
+		return after-before >= 2, nil
+	}
+	if _, err := tx.ExecContext(ctx, wordIndexMergePolicy); err != nil {
+		return false, err
 	}
 	_, err := tx.ExecContext(ctx, "INSERT OR REPLACE INTO meta(key,value) VALUES(?,'1')", toolOutputMergedKey)
 	return false, err
 }
 
-// toolOutputMigration is the migration's batch sizes.
-type toolOutputMigration struct{ removal, merge batchSizer }
+// toolOutputMigration is the migration's batch sizes, and whether the
+// last removal batch still needs its merge step.
+type toolOutputMigration struct {
+	removal, merge batchSizer
+	removed        bool
+}
 
 func newToolOutputMigration() *toolOutputMigration {
 	return &toolOutputMigration{removal: batchSizer{bounds: toolOutputScan}, merge: batchSizer{bounds: toolOutputMergePages}}
@@ -265,12 +293,19 @@ func newToolOutputMigration() *toolOutputMigration {
 // step is the migration's next step: a removal batch, then merge steps
 // once removal is done.
 func (m *toolOutputMigration) step(ctx context.Context, c *Catalog) (bool, error) {
+	if m.removed {
+		m.removed = false
+		_, held, err := c.mergeWordIndexStep(ctx, m.merge.next(), false)
+		m.merge.held(held)
+		return err == nil, err
+	}
 	more, held, err := c.removeToolOutputBatch(ctx, m.removal.next())
 	if err != nil || more {
 		m.removal.held(held)
+		m.removed = more
 		return more, err
 	}
-	more, held, err = c.mergeWordIndexStep(ctx, m.merge.next())
+	more, held, err = c.mergeWordIndexStep(ctx, m.merge.next(), true)
 	m.merge.held(held)
 	return more, err
 }

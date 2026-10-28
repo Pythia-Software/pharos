@@ -538,12 +538,28 @@ func TestToolOutputLeavesTheWordIndex(t *testing.T) {
 	if progress, err = c.toolOutputIndexProgress(t.Context()); err != nil || progress.Done != 3 {
 		t.Fatalf("progress after a batch: %+v %v", progress, err)
 	}
+	// Removal leaves merging to its own bounded steps, and the end of the
+	// migration restores the policy ingest uses.
+	automerge := func() string {
+		t.Helper()
+		var value string
+		if err := c.DB.QueryRow("SELECT v FROM messages_fts_config WHERE k='automerge'").Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	if got := automerge(); got != "0" {
+		t.Fatalf("automerge during removal = %s", got)
+	}
 	if got := searches(); got != "3 8 3" {
 		t.Fatalf("during removal: %s", got)
 	}
 	c.maintainToolOutputIndex(t.Context())
 	if progress, err = c.toolOutputIndexProgress(t.Context()); err != nil || !progress.Ready || !described()["tool_output_removal"].(toolOutputProgress).Ready {
 		t.Fatalf("progress after: %+v %v", progress, err)
+	}
+	if got := automerge(); got != "8" {
+		t.Fatalf("automerge after the migration = %s", got)
 	}
 	var postings, mapped int
 	if err := c.DB.QueryRow(`SELECT (SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'output'),(SELECT COUNT(*) FROM message_fts_rows)`).Scan(&postings, &mapped); err != nil || postings != 0 || mapped != 3 {

@@ -243,10 +243,7 @@ func (c *Catalog) Initialize() error {
 	}
 	// Keep large bulk imports from spending most of their time merging FTS
 	// segments inside individual message inserts. These settings persist in FTS5.
-	if _, err := c.DB.Exec("INSERT INTO messages_fts(messages_fts,rank) VALUES('automerge',8)"); err != nil {
-		return err
-	}
-	if _, err := c.DB.Exec("INSERT INTO messages_fts(messages_fts,rank) VALUES('crisismerge',32)"); err != nil {
+	if _, err := c.DB.Exec(wordIndexMergePolicy); err != nil {
 		return err
 	}
 	if _, err := c.DB.Exec(queryTableComputedDDL + ";" + qtQuerySnapshotsDDL); err != nil {
