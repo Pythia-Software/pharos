@@ -89,7 +89,7 @@ func (c *Catalog) searchEvidence(ctx context.Context, options SearchOptions) (ma
 		}
 		return evidence[id]
 	}
-	collect := func(query string, args []any, pick func(*searchEvidence) *searchMatches) error {
+	collect := func(ctx context.Context, query string, args []any, pick func(*searchEvidence) *searchMatches) error {
 		rows, err := queryMapsContext(ctx, c.reader(), query, args...)
 		if err != nil {
 			return err
@@ -109,20 +109,28 @@ func (c *Catalog) searchEvidence(ctx context.Context, options SearchOptions) (ma
 		return nil
 	}
 	// Old tool-output postings, until removed, are left out inside the window,
-	// so they cannot crowd out the matches that count.
-	postings := ""
-	if left, err := c.toolOutputPostingsLeft(ctx); err != nil {
-		return nil, err
-	} else if left {
-		postings = " AND NOT " + toolOutputPosting("messages_fts")
-	}
+	// so they cannot crowd out the matches that count; finding that window is
+	// bounded (toolOutputRankWindow), and a search it cuts short ranks fewer.
 	collectFTS := func(parsed string, pick func(*searchEvidence) *searchMatches) error {
-		return collect(`SELECT c.workspace_id,m.id message_id FROM
-			(SELECT message_id,rank FROM messages_fts WHERE messages_fts MATCH ?1`+postings+` AND rowid>=COALESCE(
-				(SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?1`+postings+` ORDER BY rowid DESC LIMIT 1 OFFSET ?3),0)
+		window, err := c.toolOutputRankWindow(ctx, parsed, recentMatches)
+		if err != nil {
+			return err
+		}
+		defer window.cancel()
+		inWindow := ` AND rowid>=COALESCE(
+				(SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?1 ORDER BY rowid DESC LIMIT 1 OFFSET ?3),0)`
+		if window.active {
+			inWindow = window.filter() + " AND ?3=?3"
+		}
+		err = collect(window.ctx, `SELECT c.workspace_id,m.id message_id FROM
+			(SELECT message_id,rank FROM messages_fts WHERE messages_fts MATCH ?1`+inWindow+`
 			ORDER BY rank LIMIT ?2) f
 			JOIN messages m ON m.id=f.message_id JOIN conversations c ON c.id=m.conversation_id WHERE `+wordIndexedKind("m.")+` ORDER BY f.rank`,
 			[]any{parsed, searchScan, recentMatches - 1}, pick)
+		if err != nil && window.active && window.ctx.Err() != nil && ctx.Err() == nil {
+			return nil
+		}
+		return err
 	}
 	// FTS5 ranks the matches itself, and only the best searchScan are joined
 	// to their workspaces: joining every match first read a messages row per
@@ -145,7 +153,7 @@ func (c *Catalog) searchEvidence(ctx context.Context, options SearchOptions) (ma
 		}
 	}
 	if terms, _ := substringTerms(wordQuery); options.Substring && len(terms) > 0 {
-		if err := collect(`SELECT c.workspace_id,m.id message_id FROM
+		if err := collect(ctx, `SELECT c.workspace_id,m.id message_id FROM
 			(SELECT rowid,rank FROM messages_trigram WHERE messages_trigram MATCH ?1 AND rowid>=COALESCE(
 				(SELECT rowid FROM messages_trigram WHERE messages_trigram MATCH ?1 ORDER BY rowid DESC LIMIT 1 OFFSET ?3),0)
 			ORDER BY rank LIMIT ?2) f

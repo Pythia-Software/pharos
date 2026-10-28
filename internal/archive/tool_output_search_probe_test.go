@@ -247,13 +247,29 @@ func TestToolOutputIndexMigration(t *testing.T) {
 	before := map[string]int64{}
 	if os.Getenv("PHAROS_MIGRATE_SKIP_BEFORE") == "" {
 		before = probeTableSizes(t, catalog)
+	}
+	// PHAROS_MIGRATE_COUNT counts the word index's rows by kind (slow).
+	if os.Getenv("PHAROS_MIGRATE_COUNT") != "" {
 		var mapped, toolResults int64
 		if err := catalog.DB.QueryRow(`SELECT COUNT(*),SUM(m.kind='tool_result') FROM message_fts_rows r JOIN messages m ON m.id=r.message_id`).Scan(&mapped, &toolResults); err != nil {
 			t.Fatal(err)
 		}
 		t.Logf("word index rows %d, of them tool results %d", mapped, toolResults)
 	}
-	execTx(t, catalog.DB, "DELETE FROM meta WHERE key IN ('message_fts_tool_output_removed','message_fts_tool_output_merged','message_fts_tool_output_cursor')")
+	execTx(t, catalog.DB, "DELETE FROM meta WHERE key IN ('message_fts_tool_output_removed','message_fts_tool_output_merged','message_fts_tool_output_cursor','message_fts_tool_output_end','message_fts_tool_output_merge_pages')")
+	// How long search_conversations takes for common words, which walk the
+	// most postings while removal runs.
+	timeSearches := func(when string) {
+		for _, word := range []string{"error", "test"} {
+			at := time.Now()
+			result, err := catalog.searchConversations(map[string]any{"query": word})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("search_conversations %q %s: %s, %d results, coverage %q", word, when, time.Since(at).Round(time.Millisecond), len(result["items"].([]map[string]any)), result["coverage"])
+		}
+	}
+	timeSearches("before removal")
 	migration := newToolOutputMigration()
 	var slowestRemoval, slowestTidy, slowestMerge time.Duration
 	started, batches := time.Now(), 0
@@ -276,6 +292,11 @@ func TestToolOutputIndexMigration(t *testing.T) {
 		if batches%500 == 0 {
 			t.Logf("  %d batches, %s, %d rows, %d pages", batches, time.Since(started).Round(time.Second), migration.removal.next(), migration.merge.next())
 		}
+		if batches == 2000 {
+			paused := time.Now()
+			timeSearches("mid-removal")
+			started = started.Add(time.Since(paused))
+		}
 	}
 	removal := time.Since(started)
 	t.Logf("removal: %s in %d batches, each with a merge step; slowest removal held the writer %s, slowest merge step %s", removal.Round(time.Second), batches, slowestRemoval.Round(time.Millisecond), slowestTidy.Round(time.Millisecond))
@@ -296,6 +317,7 @@ func TestToolOutputIndexMigration(t *testing.T) {
 	}
 	t.Logf("merge: %s in %d steps, slowest held the writer %s", time.Since(started).Round(time.Second), steps, slowestMerge.Round(time.Millisecond))
 	_ = catalog.Checkpoint()
+	timeSearches("after")
 	after := probeTableSizes(t, catalog)
 	for _, name := range append(wordIndexTables, "file", "freelist") {
 		t.Logf("| %s | %.2f | %.2f | %.2f |", name, float64(before[name])/1e9, float64(middle[name])/1e9, float64(after[name])/1e9)

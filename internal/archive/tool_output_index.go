@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"os"
 	"slices"
 	"time"
@@ -223,17 +224,16 @@ func removeToolOutput(ctx context.Context, tx *sql.Tx, scan int) (bool, error) {
 		return false, err
 	}
 	if !last.Valid {
-		// The merge loop may write about as many pages as the index has now.
+		// The merge loop's budget: index rows written or deleted, about two
+		// for each page rewritten, so this allows rewriting the index twice.
 		pages, err := wordIndexLeafPages(ctx, tx)
 		if err != nil {
 			return false, err
 		}
-		for _, statement := range []string{wordIndexMergePolicy, "INSERT INTO messages_fts(messages_fts,rank) VALUES('usermerge',2)"} {
-			if _, err := tx.ExecContext(ctx, statement); err != nil {
-				return false, err
-			}
+		if _, err := tx.ExecContext(ctx, wordIndexMergePolicy); err != nil {
+			return false, err
 		}
-		_, err = tx.ExecContext(ctx, "INSERT OR REPLACE INTO meta(key,value) VALUES(?,'1'),(?,?)", toolOutputRemovedKey, toolOutputMergeKey, fmt.Sprint(pages))
+		_, err = tx.ExecContext(ctx, "INSERT OR REPLACE INTO meta(key,value) VALUES(?,'1'),(?,?)", toolOutputRemovedKey, toolOutputMergeKey, fmt.Sprint(4*pages))
 		return false, err
 	}
 	if rows != "[]" {
@@ -263,26 +263,24 @@ func removeToolOutput(ctx context.Context, tx *sql.Tx, scan int) (bool, error) {
 		}
 		// Fuzzy cursors are different: their expansions come from the word
 		// index's vocabulary, and removal can drop a spelling found only in
-		// tool output. The next page could then expand to a spelling the
-		// first page left out (past the expansion limit) and skip its earlier
-		// matches, or, scoped, stop matching tool output the first page did.
-		// So fuzzy cursors expire across a removal batch, as across appends.
-		if _, err := tx.ExecContext(ctx, "UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_append_generation'"); err != nil {
-			return false, err
-		}
+		// tool output. A fuzzy cursor carries its expansions (SearchText), so
+		// only a page that would expand differently rejects it; removal moves
+		// no generation, and so never fails a page in flight.
 	}
 	_, err := tx.ExecContext(ctx, "INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", toolOutputCursorKey, fmt.Sprint(last.Int64))
 	return true, err
 }
 
-// mergeWordIndexStep does one bounded incremental merge of the word index
-// and reports whether there is more to merge. During removal (final false) it
-// follows each batch. Finally, it merges any level with two or more segments
-// (usermerge 2) until a step finds nothing to merge or the loop has written
-// about as many pages as the index had when removal ended. It never waits
-// for a single segment: a negative merge starts over whenever ingest adds a
-// segment, and so would not finish on a library that syncs. FTS5 changes at
-// least two rows when a merge did any work.
+// mergeWordIndexStep does one bounded step of merging the word index and
+// reports whether there is more to merge. During removal (final false) it is
+// an incremental merge after each batch. Finally, it is a negative merge,
+// which merges every segment into one, as optimize does, and so drops the
+// removed postings with the delete keys that cancel them; it stops when one
+// segment remains or the budget set when removal ended is spent. Ingest that
+// adds a segment restarts a negative merge, so the budget, counted in the
+// index rows each step actually wrote or deleted, also caps what restarts
+// cost on a library that syncs. FTS5 changes at least two rows when a merge
+// did any work.
 func (c *Catalog) mergeWordIndexStep(ctx context.Context, pages int, final bool) (more bool, held time.Duration, err error) {
 	tx, finish, err := c.beginTrackedWrite(ctx, "word-index-merge")
 	if err != nil {
@@ -309,6 +307,7 @@ func mergeWordIndex(ctx context.Context, tx *sql.Tx, pages int, final bool) (boo
 		if err := tx.QueryRowContext(ctx, "SELECT CAST(value AS INTEGER) FROM meta WHERE key=?", toolOutputMergeKey).Scan(&budget); err != nil && err != sql.ErrNoRows {
 			return false, err
 		}
+		pages = -pages
 	}
 	var before, after int64
 	if err := tx.QueryRowContext(ctx, "SELECT total_changes()").Scan(&before); err != nil {
@@ -320,22 +319,35 @@ func mergeWordIndex(ctx context.Context, tx *sql.Tx, pages int, final bool) (boo
 	if err := tx.QueryRowContext(ctx, "SELECT total_changes()").Scan(&after); err != nil {
 		return false, err
 	}
-	worked := after-before >= 2
+	worked := after - before
 	if !final {
-		return worked, nil
+		return worked >= 2, nil
 	}
-	left := budget.Int64 - int64(pages)
-	if worked && left > 0 {
+	segments, err := wordIndexSegments(ctx, tx)
+	if err != nil {
+		return false, err
+	}
+	left := budget.Int64 - worked
+	if worked >= 2 && segments > 1 && left > 0 {
 		_, err := tx.ExecContext(ctx, "UPDATE meta SET value=? WHERE key=?", fmt.Sprint(left), toolOutputMergeKey)
 		return true, err
 	}
-	for _, statement := range []string{"INSERT INTO messages_fts(messages_fts,rank) VALUES('usermerge',4)", "DELETE FROM meta WHERE key='" + toolOutputMergeKey + "'"} {
-		if _, err := tx.ExecContext(ctx, statement); err != nil {
-			return false, err
-		}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM meta WHERE key=?", toolOutputMergeKey); err != nil {
+		return false, err
 	}
-	_, err := tx.ExecContext(ctx, "INSERT OR REPLACE INTO meta(key,value) VALUES(?,'1')", toolOutputMergedKey)
+	_, err = tx.ExecContext(ctx, "INSERT OR REPLACE INTO meta(key,value) VALUES(?,'1')", toolOutputMergedKey)
 	return false, err
+}
+
+// wordIndexSegments is the number of the word index's segments, found the
+// same way: a seek to the first page of each.
+func wordIndexSegments(ctx context.Context, tx *sql.Tx) (int64, error) {
+	var segments int64
+	err := tx.QueryRowContext(ctx, `WITH RECURSIVE segment(id) AS (
+		SELECT (SELECT id>>37 FROM messages_fts_data WHERE id>=(1<<37) ORDER BY id LIMIT 1)
+		UNION ALL SELECT (SELECT id>>37 FROM messages_fts_data WHERE id>=((segment.id+1)<<37) ORDER BY id LIMIT 1) FROM segment WHERE segment.id IS NOT NULL)
+		SELECT COUNT(*) FROM segment WHERE segment.id IS NOT NULL`).Scan(&segments)
+	return segments, err
 }
 
 // wordIndexLeafPages is the leaf pages of the word index's segments. FTS5
@@ -359,6 +371,64 @@ func (c *Catalog) toolOutputPostingsLeft(ctx context.Context) (bool, error) {
 	var removed int
 	err := c.reader().QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM meta WHERE key=?)", toolOutputRemovedKey).Scan(&removed)
 	return removed == 0, err
+}
+
+// While old tool-output postings remain, a ranked search finds its window
+// of recent matches by walking at most toolOutputWalk of the newest postings
+// for the word, under toolOutputWalkTime: leaving tool output out costs a
+// lookup of each posting's message, and for a word common in tool output the
+// walk could otherwise pass hundreds of thousands of them.
+var (
+	toolOutputWalk     = 50_000
+	toolOutputWalkTime = 2 * time.Second
+)
+
+// toolOutputCut is what a ranked search says when that walk cut it short.
+const toolOutputCut = " Old tool-output postings are still being removed from the word index, so this search ranked fewer recent messages than usual."
+
+// rankWindow is a ranked search's window of recent matches while old
+// tool-output postings remain (active): postings from cutoff up that are not
+// tool output. cut says the walk or its deadline stopped before it found
+// recent matches enough. Run the ranking under ctx.
+type rankWindow struct {
+	active, cut bool
+	cutoff      int64
+	ctx         context.Context
+	cancel      context.CancelFunc
+}
+
+// filter is the SQL condition, on messages_fts, of postings in the window.
+func (w rankWindow) filter() string {
+	return " AND rowid>=" + fmt.Sprint(w.cutoff) + " AND NOT " + toolOutputPosting("messages_fts")
+}
+
+func (c *Catalog) toolOutputRankWindow(ctx context.Context, parsed string, recent int) (rankWindow, error) {
+	window := rankWindow{ctx: ctx, cancel: func() {}}
+	if left, err := c.toolOutputPostingsLeft(ctx); err != nil || !left {
+		return window, err
+	}
+	window.active = true
+	window.ctx, window.cancel = context.WithTimeout(ctx, toolOutputWalkTime)
+	var low, kept sql.NullInt64
+	var walked int
+	err := c.reader().QueryRowContext(window.ctx, `WITH walk AS (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ? ORDER BY rowid DESC LIMIT ?)
+		SELECT (SELECT MIN(rowid) FROM walk),(SELECT COUNT(*) FROM walk),
+		(SELECT walk.rowid FROM walk WHERE NOT `+toolOutputPosting("walk")+` ORDER BY walk.rowid DESC LIMIT 1 OFFSET ?)`,
+		parsed, toolOutputWalk, recent-1).Scan(&low, &walked, &kept)
+	switch {
+	case err != nil && window.ctx.Err() != nil && ctx.Err() == nil:
+		// Out of time: rank nothing, and say so.
+		window.cut, window.cutoff = true, math.MaxInt64
+		return window, nil
+	case err != nil:
+		window.cancel()
+		return window, err
+	case kept.Valid:
+		window.cutoff = kept.Int64
+	default:
+		window.cutoff, window.cut = low.Int64, walked == toolOutputWalk
+	}
+	return window, nil
 }
 
 // toolOutputPosting is the SQL predicate, on a messages_fts row, that it is
@@ -434,7 +504,7 @@ func (c *Catalog) maintainToolOutputIndex(ctx context.Context) {
 // output: its surface includes tool results and its roles and kinds do not
 // exclude them. Every writer stores tool output with role tool.
 func textSurfaceToolOutput(o TextSearchOptions) bool {
-	if o.Surface != "tools" && o.Surface != "all" || o.Roles != nil && !slices.Contains(o.Roles, "tool") {
+	if o.Surface != "tools" && o.Surface != "all" || len(o.Roles) > 0 && !slices.Contains(o.Roles, "tool") {
 		return false
 	}
 	return o.Kinds == nil || slices.Contains(o.Kinds, "all") || slices.Contains(o.Kinds, "tool_result")

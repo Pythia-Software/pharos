@@ -389,3 +389,49 @@ func TestTextSearchSparseRolesResumeRejectedPostings(t *testing.T) {
 		t.Fatalf("role pagination lost matches: %v %+v", ids, last)
 	}
 }
+
+// A scoped search's two streams resume after a time budget stops a page
+// anywhere: in the word-index stream, at the boundary, or in the scan of tool
+// output. Every match is returned once.
+func TestTextSearchScopedStreamsResumeAfterTimeBudget(t *testing.T) {
+	slowTest(t)
+	for stallAt := 1; stallAt <= 5; stallAt++ {
+		t.Run(fmt.Sprint(stallAt), func(t *testing.T) {
+			c := textFixture(t)
+			calls, stalled := 0, false
+			hookTextSearch(t, c, nil, func(ctx context.Context) error {
+				if calls++; calls == stallAt && !stalled {
+					stalled = true
+					<-ctx.Done()
+					return ctx.Err()
+				}
+				return nil
+			})
+			o := TextSearchOptions{Query: "timeout", Surface: "all", ConversationID: "c", TimeoutMS: 300}
+			seen, stops := []string{}, []string{}
+			for pages := 0; ; pages++ {
+				if pages > 10 {
+					t.Fatalf("no end: %v %v", seen, stops)
+				}
+				page, err := c.SearchText(t.Context(), o)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, item := range page.Items {
+					seen = append(seen, item.MessageID)
+				}
+				stops = append(stops, page.StopReason)
+				if page.Complete {
+					break
+				}
+				if page.NextCursor != "" {
+					o.Cursor = page.NextCursor
+				}
+			}
+			slices.Sort(seen)
+			if !slices.Equal(seen, []string{"a", "r", "t"}) || !stalled {
+				t.Fatalf("returned %v across %v (stalled %t)", seen, stops, stalled)
+			}
+		})
+	}
+}

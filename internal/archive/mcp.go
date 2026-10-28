@@ -176,7 +176,7 @@ func callMCPContext(ctx context.Context, catalog *Catalog, name string, args map
 		if metricCall(args) {
 			return catalog.queryStatistics(name, args)
 		}
-		return catalog.searchConversations(args)
+		return catalog.searchConversationsContext(ctx, args)
 	case "get_conversation_overview":
 		return catalog.conversationOverview(args)
 	case "search_conversation_passages":
@@ -213,6 +213,11 @@ func callMCPContext(ctx context.Context, catalog *Catalog, name string, args map
 		result["search_mode"] = "ranked_lexical_and_semantic"
 		if options.Query != "" {
 			result["coverage"] = toolOutputCoverage
+			// Library search results are cached, so whether this one's
+			// window was cut short is not known here: say it may be.
+			if left, err := catalog.toolOutputPostingsLeft(ctx); err == nil && left {
+				result["coverage"] = toolOutputCoverage + " Old tool-output postings are still being removed from the word index, so this search may rank fewer recent messages than usual."
+			}
 		}
 		return result, nil
 	case "get_work_detail":

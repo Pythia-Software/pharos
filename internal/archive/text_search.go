@@ -57,6 +57,12 @@ type TextSearchOptions struct {
 	// with one evidence item and an exact message count per workspace. Public
 	// message search retains its cursor, byte and candidate budgets.
 	workspaceRows bool
+	// bytesUsed is what earlier streams of this page verified: the page's
+	// byte budget counts them, though a message's own cap stays MaxBytes.
+	// continued says this stream follows a finished one on the same page, so
+	// a stop at its start still has a cursor to resume from.
+	bytesUsed int
+	continued bool
 }
 
 type textCapture struct {
@@ -108,6 +114,9 @@ type textSearchCursor struct {
 	Before      int64  `json:"b"`
 	Count       int    `json:"n"`
 	Skipped     int    `json:"s"`
+	// Phase is a scoped tool-output search's stream: 0 the word index for
+	// the indexed kinds, then 1 a scan of tool output (see tokenScan).
+	Phase int `json:"p,omitempty"`
 }
 
 var textSearchEpoch = fmt.Sprint(time.Now().UnixNano())
@@ -148,6 +157,16 @@ func (r *textSearchResult) stopPage(cursor textSearchCursor, before int64) {
 	r.NextCursor = ""
 	r.StopReason = "time_budget_no_progress"
 	r.StopMessage = "The time budget expired before a resumable position was reached. Narrow the search or increase the time budget and retry; this is not a complete result."
+}
+
+// stopPageAfter is stopPage for a stream that may continue a page whose
+// earlier stream made progress: that page can resume at this stream's start.
+func (r *textSearchResult) stopPageAfter(cursor textSearchCursor, before int64, continued bool) {
+	if continued && cursor.Before >= before {
+		r.NextCursor = encodeTextCursor(cursor)
+		return
+	}
+	r.stopPage(cursor, before)
 }
 func validateTextTree(n *textQuery, depth int, count *int) error {
 	if n == nil {
@@ -410,12 +429,13 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	ordered := node.needsOrderedVerifier()
 	scoped := o.ConversationID != "" || o.WorkspaceID != "" || (o.WorkspaceIDs != nil && len(o.WorkspaceIDs) <= 100)
 	// Tool output is not word-indexed (see wordIndexedKind). A scoped token
-	// search that can match it streams the scope's messages in rowid order:
-	// tool output by its stored text, every other kind only where the word
-	// index matched it in that scope (tokenScan), each checked with the
-	// index's own tokenizer. Library Find's workspace rows keep the word index
-	// unless one conversation bounds the scan, as does an unscoped search:
-	// both cover the indexed kinds and say so.
+	// search that can match it (tokenScan) runs two streams under one cursor:
+	// first the word index, in its own order and with its scope bounds, for
+	// every other kind; then the scope's tool output, read in rowid order and
+	// checked with the index's own tokenizer (scanTools). Library Find's
+	// workspace rows keep the word index alone unless one conversation bounds
+	// the scan, as does an unscoped search: both cover the indexed kinds and
+	// say so.
 	// Fuzzy expansion reads the word index's vocabulary, so it cannot reach a
 	// spelling found only in tool output.
 	toolOutput := !scan && !span && textSurfaceToolOutput(o)
@@ -428,9 +448,17 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 		}
 		result.Coverage += " " + toolOutputNotIndexed
 	}
+	phase := 0
 	if tokenScan {
-		result.Coverage += " Tool output is not word-indexed: this scoped search scanned the stored text of tool output in scope, and found other kinds through the word index."
+		result.Coverage += " Tool output is not word-indexed: this scoped search found other kinds through the word index, then scanned the stored text of tool output in scope."
+		if data, e := base64.RawURLEncoding.DecodeString(o.Cursor); e == nil && o.Cursor != "" {
+			var position textSearchCursor
+			if json.Unmarshal(data, &position) == nil {
+				phase = position.Phase
+			}
+		}
 	}
+	scanTools := tokenScan && phase == 1
 	result.Strategy = "word_index"
 	// Read IDs from the compact mapping. Fetching f.message_id makes FTS5
 	// read its stored content row, including large tool output. COALESCE
@@ -461,7 +489,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	key := "f.rowid"
 	match := "messages_fts MATCH ?"
 	arguments := []any{node.fts(strict || span)}
-	if scan || tokenScan {
+	if scan || scanTools {
 		result.Strategy = "scoped_scan"
 		from = "messages m"
 		hasDocuments = false
@@ -538,7 +566,17 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	identity.TimeoutMS = 0
 	identity.WorkspaceIDs = append([]string(nil), o.WorkspaceIDs...)
 	slices.Sort(identity.WorkspaceIDs)
-	digest := sha256.Sum256([]byte(c.Path + "\x00" + fmt.Sprint(o.WorkspaceIDs != nil) + "\x00" + result.Strategy + "\x00" + jsonText(identity)))
+	if tokenScan {
+		// Both streams of one search share its fingerprint.
+		result.Strategy = "scoped_scan"
+	}
+	// A fuzzy cursor carries its expansions: a page that would expand the
+	// query differently (the vocabulary changed) rejects it.
+	expansions := ""
+	if o.Fuzzy {
+		expansions = jsonText(result.Expansions)
+	}
+	digest := sha256.Sum256([]byte(c.Path + "\x00" + fmt.Sprint(o.WorkspaceIDs != nil) + "\x00" + result.Strategy + "\x00" + jsonText(identity) + "\x00" + expansions))
 	fingerprint := hex.EncodeToString(digest[:])
 	cursor := textSearchCursor{Version: 1, Fingerprint: fingerprint, Generation: generation, Before: math.MaxInt64}
 	if o.Cursor != "" {
@@ -546,7 +584,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 		if e != nil || len(data) > 4096 {
 			return result, fmt.Errorf("invalid search cursor")
 		}
-		if e = json.Unmarshal(data, &cursor); e != nil || cursor.Version != 1 || cursor.Fingerprint != fingerprint || cursor.Generation != generation || cursor.Before < 0 || cursor.Count < 0 || cursor.Skipped < 0 {
+		if e = json.Unmarshal(data, &cursor); e != nil || cursor.Version != 1 || cursor.Fingerprint != fingerprint || cursor.Generation != generation || cursor.Before < 0 || cursor.Count < 0 || cursor.Skipped < 0 || cursor.Phase != 0 && !scanTools {
 			return result, fmt.Errorf("search cursor expired or query changed; restart the search")
 		}
 	}
@@ -576,7 +614,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	// deadlines and candidate limits always leave resumable progress.
 	eligibleSQL := "1"
 	filterOptions := textFilterArgs(o)
-	if !scan && !tokenScan && o.Surface == "all" && len(o.Roles) > 0 {
+	if !scan && !scanTools && o.Surface == "all" && len(o.Roles) > 0 {
 		roles := make([]string, len(o.Roles))
 		for i, role := range o.Roles {
 			roles[i] = quoteSQLText(role)
@@ -651,18 +689,8 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 			}
 		}
 	}
-	if tokenScan {
-		// Only tool output is read whole; other kinds must be word-index
-		// matches within the scope's range of index rows.
-		scope, args := textScopeSQL(o)
-		var low, high sql.NullInt64
-		e = c.reader().QueryRowContext(ctx, `SELECT MIN(fr.fts_rowid),MAX(fr.fts_rowid) FROM messages m JOIN message_fts_rows fr ON fr.message_id=m.id WHERE `+scope, args...).Scan(&low, &high)
-		if e != nil {
-			return result, fmt.Errorf("scope planning exceeded its budget; narrow the workspace selection: %w", e)
-		}
-		clauses = append(clauses, `(NOT `+wordIndexedKind("m.")+` OR m.id IN (SELECT r.message_id FROM message_fts_rows r WHERE r.fts_rowid IN
-			(SELECT rowid FROM messages_fts WHERE messages_fts MATCH ? AND rowid BETWEEN ? AND ?)))`)
-		arguments = append(arguments, node.fts(strict), low.Int64, high.Int64)
+	if scanTools {
+		clauses = append(clauses, "NOT "+wordIndexedKind("m."))
 	}
 	if key == "f.rowid" && (o.ConversationID != "" || o.WorkspaceID != "" || (o.WorkspaceIDs != nil && len(o.WorkspaceIDs) <= 100)) {
 		scope, args := textScopeSQL(o)
@@ -674,8 +702,10 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 			boundsSQL = `SELECT MIN(fr.fts_rowid),MAX(fr.fts_rowid),count(*),count(fr.fts_rowid) FROM text_search_documents m LEFT JOIN message_fts_rows fr ON fr.message_id=m.message_id WHERE m.byte_length>0 AND ` + scope
 		}
 		e = c.reader().QueryRowContext(ctx, boundsSQL, args...).Scan(&low, &high, &total, &mapped)
-		if e != nil {
+		if e != nil && ctx.Err() != nil {
 			return result, fmt.Errorf("scope planning exceeded its budget; narrow the workspace selection: %w", e)
+		} else if e != nil {
+			return result, e
 		}
 		if total == mapped {
 			clauses = append(clauses, "f.rowid BETWEEN ? AND ?")
@@ -701,7 +731,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	}
 	selectSQL := fmt.Sprintf(`SELECT %s,m.id,m.conversation_id,c.workspace_id,w.title,c.provider,COALESCE(c.started_at,''),m.role,m.kind,COALESCE(m.created_at,''),m.content_hash,COALESCE(m.evidence_locator,''),COALESCE(m.reasoning_format,''),CASE WHEN (%s) THEN %s ELSE 0 END,CASE WHEN (%s) AND %s<=%d THEN m.text ELSE '' END AS search_body,%s%s
  FROM %s JOIN conversations c ON c.id=m.conversation_id JOIN workspaces w ON w.id=c.workspace_id WHERE %s ORDER BY %s DESC%s`, key, eligibleSQL, sizeSQL, eligibleSQL, sizeSQL, maxMessage, eligibleSQL, countSQL, from, strings.Join(clauses, " AND "), key, limitSQL)
-	indexedWorkspaces := o.workspaceRows && !scan && !tokenScan && !span && !strict && !ordered
+	indexedWorkspaces := o.workspaceRows && !scan && !scanTools && !span && !strict && !ordered
 	if o.workspaceRows {
 		// There is no message/candidate/byte batch controlling workspace
 		// membership. Let the request deadline bound execution, and withhold an
@@ -717,7 +747,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	// Spans need their original byte ranges and an independent tokenizer. This
 	// connection is never the catalog, so search cannot write library content.
 	var verifier *textVerifier
-	if !scan && (span || strict || ordered || tokenScan) {
+	if !scan && (span || strict || ordered || scanTools) {
 		verifier, e = newTextVerifier(ctx)
 		if e != nil {
 			return result, e
@@ -728,7 +758,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	if e != nil {
 		if ctx.Err() != nil && parent.Err() == nil {
 			result.StopReason = "time_budget"
-			result.stopPage(cursor, pageBefore)
+			result.stopPageAfter(cursor, pageBefore, o.continued)
 			return result, nil
 		}
 		return result, e
@@ -757,7 +787,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 			result.StopReason = "candidate_budget"
 			break
 		}
-		if !o.workspaceRows && eligible && size <= maxMessage && result.VerifiedBytes+size > o.MaxBytes {
+		if !o.workspaceRows && eligible && size <= maxMessage && o.bytesUsed+result.VerifiedBytes+size > o.MaxBytes {
 			result.StopReason = "byte_budget"
 			break
 		}
@@ -791,12 +821,12 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 				lo, hi = at[0], at[1]
 				item.Captures, item.CapturesClipped = textCaptures(verify, at, 0)
 			}
-		} else if tokenScan && !node.asciiCandidate(strings.ReplaceAll(body, "\ue000", "   ")) {
+		} else if scanTools && !node.asciiCandidate(strings.ReplaceAll(body, "\ue000", "   ")) {
 			// No index proved this message. Skip the tokenizer when the
 			// message cannot hold the positive words; the field barrier is
 			// not ASCII, and a space in its place only admits more.
 			ok = false
-		} else if !span && (strict || ordered || tokenScan) {
+		} else if !span && (strict || ordered || scanTools) {
 			lo, hi, ok, e = verifier.match(ctx, node, body, o.CaseSensitive, o.Separators)
 			if e != nil {
 				if ctx.Err() != nil {
@@ -906,7 +936,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 			result.StopReason = "complete"
 		}
 	} else {
-		result.stopPage(cursor, pageBefore)
+		result.stopPageAfter(cursor, pageBefore, o.continued)
 	}
 	// Detect writes that overlapped this page instead of mixing source versions.
 	// The check may use what is left of the search's budget, and at least
@@ -935,7 +965,67 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 			return result, fmt.Errorf("messages changed during search; restart the search")
 		}
 	}
+	if tokenScan && phase == 0 && result.Complete {
+		return c.continueWithToolOutput(parent, o, result, textSearchCursor{Version: 1, Fingerprint: fingerprint, Generation: generation,
+			Before: math.MaxInt64, Count: result.Count, Skipped: result.SkippedOversize, Phase: 1}, started)
+	}
 	return result, nil
+}
+
+// continueWithToolOutput follows a scoped search's finished word-index
+// stream with its tool-output stream: on the same page while the page and
+// its budgets have room, and otherwise through the cursor.
+func (c *Catalog) continueWithToolOutput(parent context.Context, o TextSearchOptions, first textSearchResult, next textSearchCursor, started time.Time) (textSearchResult, error) {
+	left := o.TimeoutMS - int(time.Since(started).Milliseconds())
+	stop := func(reason string) (textSearchResult, error) {
+		first.Complete, first.CountRelation, first.StopReason = false, "lower_bound", reason
+		first.NextCursor = encodeTextCursor(next)
+		return first, nil
+	}
+	if !o.workspaceRows {
+		switch {
+		case len(first.Items) >= o.Limit:
+			return stop("page_limit")
+		case first.Candidates >= o.MaxCandidates:
+			return stop("candidate_budget")
+		case first.VerifiedBytes >= o.MaxBytes:
+			return stop("byte_budget")
+		case left <= 0:
+			return stop("time_budget")
+		}
+		o.Limit -= len(first.Items)
+		o.MaxCandidates -= first.Candidates
+		o.bytesUsed = first.VerifiedBytes
+	}
+	// Finishing the word-index stream is progress: the tool-output stream's
+	// start is a cursor this page can always hand back.
+	o.continued = true
+	o.TimeoutMS = max(1, left)
+	o.Cursor = encodeTextCursor(next)
+	rest, err := c.SearchText(parent, o)
+	if err != nil {
+		return rest, err
+	}
+	for _, item := range rest.Items {
+		merged := false
+		if o.workspaceRows {
+			for i := range first.Items {
+				if first.Items[i].WorkspaceID == item.WorkspaceID {
+					first.Items[i].Count += item.Count
+					merged = true
+					break
+				}
+			}
+		}
+		if !merged {
+			first.Items = append(first.Items, item)
+		}
+	}
+	first.Count, first.SkippedOversize = rest.Count, rest.SkippedOversize
+	first.Candidates += rest.Candidates
+	first.VerifiedBytes += rest.VerifiedBytes
+	first.Complete, first.CountRelation, first.StopReason, first.StopMessage, first.NextCursor = rest.Complete, rest.CountRelation, rest.StopReason, rest.StopMessage, rest.NextCursor
+	return first, nil
 }
 
 // textScopeSQL is the predicate, on messages m, of a scoped search's

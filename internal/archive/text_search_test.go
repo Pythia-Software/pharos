@@ -459,6 +459,11 @@ func TestToolOutputLeavesTheWordIndex(t *testing.T) {
 	// output in c, requests in another workspace's conversation.
 	for i := range 8 {
 		conversation, kind, role, text := "c", "tool_result", "tool", fmt.Sprintf(`{"content":"quokka output %d"}`, i)
+		if i == 1 {
+			// A spelling only tool output holds, which removal drops from the
+			// vocabulary in its first batch.
+			text = `{"content":"quokka output quokkas"}`
+		}
 		if i%3 == 0 {
 			conversation, kind, role, text = "requests", "message", "user", fmt.Sprintf("quokka request %d", i)
 		}
@@ -523,6 +528,19 @@ func TestToolOutputLeavesTheWordIndex(t *testing.T) {
 	if got := searches(); got != want {
 		t.Fatalf("before removal: %s", got)
 	}
+	// Finding the window walks a bounded number of postings; one it cuts
+	// short says so.
+	func() {
+		override(t, &toolOutputWalk, 1)
+		short, err := c.searchConversations(map[string]any{"query": "quokka"})
+		if err != nil || !strings.Contains(firstString(short["coverage"]), "still being removed") || strings.Contains(jsonText(short), "message text") {
+			t.Fatalf("a walk cut short: %v %v", short, err)
+		}
+		toolOutputWalk = 50_000
+		if whole, err := c.searchConversations(map[string]any{"query": "quokka"}); err != nil || strings.Contains(firstString(whole["coverage"]), "still being removed") {
+			t.Fatalf("a whole walk: %v %v", whole, err)
+		}
+	}()
 	generation, err := c.textSearchGeneration(t.Context(), TextSearchOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -551,6 +569,17 @@ func TestToolOutputLeavesTheWordIndex(t *testing.T) {
 	if removal := described()["tool_output_removal"].(toolOutputProgress); removal.Ready {
 		t.Fatalf("capabilities call removal done: %+v", removal)
 	}
+	// Fuzzy cursors carry their expansions: across a removal batch, one
+	// whose expansions are unchanged continues, and one that expanded to a
+	// spelling only removed tool output held is rejected.
+	unchanged, err := c.SearchText(t.Context(), TextSearchOptions{Query: "request", Surface: "all", Fuzzy: true, Limit: 1})
+	if err != nil || unchanged.NextCursor == "" {
+		t.Fatalf("fuzzy first page: %+v %v", unchanged, err)
+	}
+	changed, err := c.SearchText(t.Context(), TextSearchOptions{Query: "quokka", Surface: "all", Fuzzy: true, Limit: 1})
+	if err != nil || changed.NextCursor == "" || !slices.Contains(changed.Expansions["quokka"], "quokkas") {
+		t.Fatalf("fuzzy first page: %+v %v", changed, err)
+	}
 	// One batch checks three rows and commits; the next resumes after them.
 	if more, _, err := c.removeToolOutputBatch(t.Context(), 3); err != nil || !more {
 		t.Fatalf("first batch: %v %v", more, err)
@@ -565,11 +594,11 @@ func TestToolOutputLeavesTheWordIndex(t *testing.T) {
 	if got := searches(); got != want {
 		t.Fatalf("during removal: %s", got)
 	}
-	// A fuzzy cursor expires across a removal batch: removal can take
-	// spellings out of the vocabulary its expansions came from.
-	fuzzy, err := c.SearchText(t.Context(), TextSearchOptions{Query: "quokka", Surface: "all", Fuzzy: true, Limit: 1})
-	if err != nil || fuzzy.NextCursor == "" {
-		t.Fatalf("fuzzy first page: %+v %v", fuzzy, err)
+	if next, err := c.SearchText(t.Context(), TextSearchOptions{Query: "request", Surface: "all", Fuzzy: true, Limit: 1, Cursor: unchanged.NextCursor}); err != nil || len(next.Items) != 1 {
+		t.Fatalf("an unchanged fuzzy cursor across removal: %+v %v", next, err)
+	}
+	if _, err := c.SearchText(t.Context(), TextSearchOptions{Query: "quokka", Surface: "all", Fuzzy: true, Limit: 1, Cursor: changed.NextCursor}); err == nil || !strings.Contains(err.Error(), "restart") {
+		t.Fatalf("a fuzzy cursor whose expansions changed: %v", err)
 	}
 	// Ingest goes on while removal runs, and between merge steps; the
 	// migration still finishes.
@@ -609,9 +638,6 @@ func TestToolOutputLeavesTheWordIndex(t *testing.T) {
 	}
 	if progress, err = c.toolOutputIndexProgress(t.Context()); err != nil || !progress.Ready || !described()["tool_output_removal"].(toolOutputProgress).Ready {
 		t.Fatalf("progress after: %+v %v", progress, err)
-	}
-	if _, err := c.SearchText(t.Context(), TextSearchOptions{Query: "quokka", Surface: "all", Fuzzy: true, Limit: 1, Cursor: fuzzy.NextCursor}); err == nil {
-		t.Fatal("a fuzzy cursor survived removal")
 	}
 	if result, err := c.SearchText(t.Context(), TextSearchOptions{Query: "wombat", Surface: "all"}); err != nil || len(result.Items) != ingested {
 		t.Fatalf("messages ingested during the migration: %d of %d, %v", len(result.Items), ingested, err)
@@ -1030,6 +1056,38 @@ func TestTextSearchQueries(t *testing.T) {
 	}
 	if _, err := c.SearchText(t.Context(), TextSearchOptions{Query: "secret", Surface: "tools", Kinds: []string{"tool_result"}, WorkspaceID: "w", workspaceRows: true}); err == nil || !strings.Contains(err.Error(), "not word-indexed") {
 		t.Fatalf("Find of tool output alone: %v", err)
+	}
+	// A scoped search runs the word index, then a scan of tool output, under
+	// one cursor: every page size and budget pages through the same matches
+	// once each, across the boundary between the two.
+	whole, err := c.SearchText(t.Context(), TextSearchOptions{Query: "timeout", Surface: "all", ConversationID: "c"})
+	if err != nil || !whole.Complete || !slices.Equal(resultIDs(whole), []string{"a", "r", "t"}) || whole.Count != 3 {
+		t.Fatalf("one page across both streams: %+v %v", whole, err)
+	}
+	for _, budget := range []TextSearchOptions{{Limit: 1}, {Limit: 2}, {MaxCandidates: 1}, {MaxBytes: 70}} {
+		o := budget
+		o.Query, o.Surface, o.ConversationID = "timeout", "all", "c"
+		seen, pages := []string{}, 0
+		for {
+			page, err := c.SearchText(t.Context(), o)
+			if err != nil {
+				t.Fatalf("%+v: %v", budget, err)
+			}
+			for _, item := range page.Items {
+				seen = append(seen, item.MessageID)
+			}
+			if pages++; page.NextCursor == "" || pages > 20 {
+				if !page.Complete || page.Count != 3 {
+					t.Fatalf("%+v: last page %+v", budget, page)
+				}
+				break
+			}
+			o.Cursor = page.NextCursor
+		}
+		slices.Sort(seen)
+		if !slices.Equal(seen, []string{"a", "r", "t"}) {
+			t.Fatalf("%+v paged %v", budget, seen)
+		}
 	}
 	// A scoped search reads only tool output whole: another kind it finds
 	// through the word index, so one with no posting is not read.
