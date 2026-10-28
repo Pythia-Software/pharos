@@ -35,6 +35,13 @@ type labelingCalibration struct {
 var labelingCalibrations = map[string]labelingCalibration{
 	"claude": {"claude-haiku-5-5, effort high (calibration.json haiku-high, measured 2026-10-27)", 3579.67 * 4, 1006.36, 16.96},
 	"codex":  {"gpt-6-luna, effort high (calibration.json luna-high, measured 2026-10-27)", 4027.74 * 4, 211.75, 10.14},
+	// From evidence/label-models/20261027/runs/repeat-flash-low-00..02 (3
+	// requests of 4 items, CLI usage equal to the native records in
+	// agy-native-ledger.json): input 17,639 / 17,656 / 19,330 tokens, output
+	// 717 / 718 / 1,231, wall 7.7 / 7.5 / 26.7 s. Overhead is batch 00's
+	// input less its items' text and context (1,090 tokens by the luna-high
+	// proxies of the same items, calibration.json compare-luna-high-00).
+	"agy": {"gemini-3.8-flash, effort low (repeat-flash-low-00..02, measured 2026-10-27)", 16549, 222.17, 13.98},
 }
 
 // labelingCharsPerToken converts item characters to tokens: 3.59 characters
@@ -223,7 +230,7 @@ func runLabelingPlan(args []string, stdout io.Writer) error {
 		return errors.New(labelingUsage)
 	}
 	if labelingCalibrations[opts.Route].source == "" {
-		return fmt.Errorf("unknown route %q: use claude or codex", opts.Route)
+		return fmt.Errorf("unknown route %q: use claude, codex or agy", opts.Route)
 	}
 	if opts.ItemsPerRequest < 1 || opts.MaxPerText < 0 || opts.MaxRequestTokens <= 0 || opts.MaxRequestChars < 0 || opts.Concurrency < 1 || opts.CharsPerToken <= 0 || opts.TokensPerMinute <= 0 {
 		return errors.New("--items-per-request, --max-request-tokens, --concurrency, --chars-per-token and --tokens-per-minute must be positive, and --max-request-chars not negative")

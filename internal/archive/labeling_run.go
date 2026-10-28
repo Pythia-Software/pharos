@@ -823,14 +823,23 @@ func (r *labelingRunner) attempt(ctx context.Context, request labelingPendingReq
 	if err != nil {
 		return err
 	}
+	// Antigravity takes the prompt as an argument, not on stdin.
+	stdin := prompt
+	if r.job.Route == labelingRouteAgy {
+		args = append(args, "--print-timeout", fmt.Sprintf("%ds", int(max(r.opts.Timeout-30*time.Second, 10*time.Second).Seconds())), "-p", prompt)
+		stdin = ""
+	}
+	promptHash := hashBytes([]byte(prompt))
 	recorded := make([]string, len(args))
 	for index, arg := range args {
 		recorded[index] = arg
-		if arg == r.schema {
+		switch {
+		case arg == r.schema:
 			recorded[index] = "<schema " + r.schemaPath() + ">"
+		case arg == prompt:
+			recorded[index] = "<prompt.txt sha256 " + promptHash + ">"
 		}
 	}
-	promptHash := hashBytes([]byte(prompt))
 	command := map[string]any{"cli": r.cliPath, "cli_version": r.cliVersion, "argv": recorded, "stdin": "prompt.txt sha256 " + promptHash,
 		"cwd": r.runner, "environment": "inherited from the runner, minus CLAUDECODE, CLAUDE_CODE_ENTRYPOINT and PHAROS_API_TOKEN; not recorded",
 		"session_id": session}
@@ -903,7 +912,7 @@ func (r *labelingRunner) attempt(ctx context.Context, request labelingPendingReq
 	}
 	stream := newLabelingStream(r.job.Route)
 	var mu sync.Mutex
-	process := runLabelingProcess(r.cliPath, args, r.runner, prompt, events, stderr, stream, &mu, r.opts.Timeout, r.hardStop, func(pid int) {
+	process := runLabelingProcess(r.cliPath, args, r.runner, stdin, events, stderr, stream, &mu, r.opts.Timeout, r.hardStop, func(pid int) {
 		r.db.Exec(`UPDATE attempts SET pid=?,process_start=? WHERE id=?`, pid, nilIfEmpty(labelingProcessStart(pid)), attempt.id)
 	})
 	return r.finalize(attempt, stream, &process, false)
@@ -1370,8 +1379,17 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 	// The served model must be exactly the requested one, or one the
 	// operator accepted. Codex names none, so its results are usable but
 	// unverified.
+	// Antigravity may report the model id it was given (model and effort
+	// joined): that is the requested model.
+	if cliModel := labelingCLIModel(r.job.Route, r.job.Model, r.job.Effort); cliModel != r.job.Model {
+		for index, model := range stream.Models {
+			if model == cliModel {
+				stream.Models[index] = r.job.Model
+			}
+		}
+	}
 	served := servedModelUnverified
-	if r.job.Route == labelingRouteClaude && len(stream.Models) > 0 {
+	if len(stream.Models) > 0 {
 		served = servedModelVerified
 	}
 	differs, unaccepted := []string{}, map[string]bool{}

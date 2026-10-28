@@ -24,7 +24,20 @@ import (
 const (
 	labelingRouteClaude = "claude"
 	labelingRouteCodex  = "codex"
+	// labelingRouteAgy is the Antigravity CLI (agy 1.4.8). Its model id is
+	// the model and effort joined ("gemini-3.8-flash-low"); the prompt is
+	// an argument (-p), as in the historical runner; it has no flag to
+	// keep a session from being saved.
+	labelingRouteAgy = "agy"
 )
+
+// labelingCLIModel is the model id a route's CLI is given.
+func labelingCLIModel(route, model, effort string) string {
+	if route == labelingRouteAgy {
+		return model + "-" + effort
+	}
+	return model
+}
 
 // labelingCodexDisabled are codex features that give the model tools or
 // actions: the historical runner's list (evidence/label-models/20261027/
@@ -64,8 +77,13 @@ func labelingCommand(route, model, effort, schemaText, schemaPath, answerPath, s
 			args = append(args, "--disable", feature)
 		}
 		return append(args, "-"), nil
+	case labelingRouteAgy:
+		// --print-timeout and the prompt (-p PROMPT, last) are added by the
+		// runner.
+		return []string{"--model", labelingCLIModel(route, model, effort), "--sandbox", "--disable-slash-commands", "--output-format", "stream-json",
+			"--json-schema", schemaPath}, nil
 	}
-	return nil, errors.New("unknown route " + route + ": use claude or codex")
+	return nil, errors.New("unknown route " + route + ": use claude, codex or agy")
 }
 
 // labelingStream accumulates what an attempt's event stream says. It reads
@@ -148,6 +166,18 @@ func (s *labelingStream) sanitize(event map[string]any) map[string]any {
 			return event
 		}
 		return pick(event, "type", "subtype")
+	}
+	if s.route == labelingRouteAgy {
+		switch firstString(event["event"]) {
+		case "init":
+			return pick(event, "event", "init", "conversation_id", "model")
+		case "step_update":
+			step := mapValueDefault(event["step_update"])
+			return map[string]any{"event": "step_update", "step_update": pick(step, "step_type", "state", "tool_name", "usage", "model", "duration_seconds")}
+		case "result":
+			return event
+		}
+		return pick(event, "event")
 	}
 	if item := mapValue(event["item"]); item != nil {
 		out := pick(event, "type")
@@ -240,6 +270,10 @@ func (s *labelingStream) observe(event map[string]any) {
 		}
 		return
 	}
+	if s.route == labelingRouteAgy {
+		s.observeAgy(event)
+		return
+	}
 	switch kind {
 	case "thread.started":
 		s.Started = true
@@ -275,6 +309,82 @@ func (s *labelingStream) observe(event map[string]any) {
 			s.Tools = append(s.Tools, map[string]any{"item_type": itemType, "id": id})
 		}
 	}
+}
+
+// observeAgy reads Antigravity events: init (the conversation), step
+// updates (any tool other than the structured finish is tool use), and the
+// result (status, structured_output, usage).
+func (s *labelingStream) observeAgy(event map[string]any) {
+	switch firstString(event["event"]) {
+	case "init":
+		s.Started = true
+		init := mapValueDefault(event["init"])
+		s.SessionID = defaultString(firstString(event["conversation_id"]), firstString(init["conversation_id"]))
+		s.model(defaultString(firstString(event["model"]), firstString(init["model"])))
+	case "step_update":
+		step := mapValueDefault(event["step_update"])
+		s.model(firstString(step["model"]))
+		// Steps seen in agy 1.4.8 for an annotation: user_input,
+		// agent_response, finish. Anything else, or any named tool other
+		// than finish, is tool use (the init event lists browser, shell and
+		// file tools as available).
+		stepType := strings.ToLower(firstString(step["step_type"]))
+		tool := firstString(step["tool_name"])
+		if tool == "" && stepType != "" && stepType != "user_input" && stepType != "agent_response" && stepType != "planner_response" && stepType != "finish" {
+			tool = stepType
+		}
+		if tool != "" && tool != "finish" {
+			key := tool + "/" + stepType
+			if !s.toolIDs[key] {
+				s.toolIDs[key] = true
+				s.Tools = append(s.Tools, map[string]any{"name": tool})
+			}
+		}
+	case "result":
+		result := mapValueDefault(event["result"])
+		s.Terminal = "result"
+		s.Started = true
+		s.model(firstString(result["model"]))
+		status := firstString(result["status"])
+		s.Failed = status != "SUCCESS"
+		if s.Failed {
+			s.Error = defaultString(status, "no status")
+			if text := firstString(result["error"]); text != "" {
+				s.Error += ": " + firstRunes(text, 500)
+			} else if errorValue := result["error"]; errorValue != nil {
+				s.Error += ": " + firstRunes(compactJSON(errorValue), 500)
+			}
+			s.errorCode = s.Error
+		}
+		if value, ok := result["structured_output"]; ok && value != nil {
+			s.structured, _ = json.Marshal(value)
+		}
+		s.text = firstString(result["response"])
+		s.usage = labelingAgyUsage(mapValue(result["usage"]))
+		if cost, ok := number(result["cost_usd"]); ok {
+			s.cliCost = &cost
+		}
+	}
+}
+
+// labelingAgyUsage maps Antigravity's usage counters to the standard
+// names: cached tokens are part of the input (as Gemini reports them), and
+// thinking tokens are added to output, which can only overstate a cost. A
+// usage whose input and output are both zero is no usage at all: the
+// attempt is then priced by estimate, never at $0.
+func labelingAgyUsage(usage map[string]any) map[string]any {
+	if usage == nil {
+		return nil
+	}
+	input, _ := number(usage["input_tokens"])
+	output, _ := number(usage["output_tokens"])
+	thinking, _ := number(usage["thinking_tokens"])
+	cached, _ := number(usage["cache_read_tokens"])
+	if input <= 0 && output <= 0 {
+		return nil
+	}
+	return map[string]any{"input_tokens": input, "output_tokens": output + thinking, "cached_input_tokens": cached,
+		"total_tokens": input + output + thinking}
 }
 
 // line handles one raw stdout line: it returns the sanitized event to
@@ -333,7 +443,7 @@ func replayLabelingStream(route, path string) (*labelingStream, error) {
 // structured_output (or its StructuredOutput call), Codex's last message
 // file or last agent message.
 func (s *labelingStream) output(answerPath string) json.RawMessage {
-	if s.route == labelingRouteClaude {
+	if s.route == labelingRouteClaude || s.route == labelingRouteAgy {
 		if len(s.structured) > 0 && string(s.structured) != "null" {
 			return s.structured
 		}

@@ -43,6 +43,9 @@ func labelingFakeCLI() int {
 	if len(args) > 0 && args[0] == "exec" {
 		route = labelingRouteCodex
 	}
+	if len(args) > 0 && args[0] == "--model" {
+		route = labelingRouteAgy
+	}
 	file, err := os.OpenFile(os.Getenv(labelingFakeCalls), os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return 2
@@ -55,6 +58,10 @@ func labelingFakeCLI() int {
 	scenarios := strings.Split(os.Getenv(labelingFakeEnv), ",")
 	scenario := scenarios[min(call, len(scenarios)-1)]
 	prompt, _ := io.ReadAll(os.Stdin)
+	if route == labelingRouteAgy {
+		// Antigravity takes the prompt as the -p argument.
+		prompt = []byte(args[len(args)-1])
+	}
 	recorded, _ := json.Marshal(map[string]any{"argv": args, "stdin": string(prompt)})
 	os.WriteFile(fmt.Sprintf("%s.%d", os.Getenv(labelingFakeArgs), call+1), recorded, 0o600)
 	flag := func(name string) string {
@@ -124,6 +131,24 @@ func labelingFakeCLI() int {
 	}
 	output := map[string]any{"annotations": annotations}
 	session := defaultString(flag("--session-id"), "fake-session")
+	if route == labelingRouteAgy {
+		emit(map[string]any{"event": "init", "init": map[string]any{"conversation_id": "conv-fake"}})
+		emit(map[string]any{"event": "step_update", "step_update": map[string]any{"step_type": "PLANNER_RESPONSE", "state": "DONE", "text": "PRIVATE THOUGHT"}})
+		if scenario == "tool" {
+			emit(map[string]any{"event": "step_update", "step_update": map[string]any{"step_type": "RUN_COMMAND", "state": "DONE", "tool_name": "run_command"}})
+		}
+		usage := map[string]any{"input_tokens": 17639, "output_tokens": 717, "thinking_tokens": 0, "cache_read_tokens": 0, "total_tokens": 18356}
+		if scenario == "zero-usage" {
+			usage = map[string]any{"input_tokens": 0, "output_tokens": 0, "thinking_tokens": 0, "cache_read_tokens": 0, "total_tokens": 0}
+		}
+		emit(map[string]any{"event": "step_update", "step_update": map[string]any{"step_type": "FINISH", "state": "DONE", "tool_name": "finish"}})
+		emit(map[string]any{"event": "result", "result": map[string]any{"status": "SUCCESS", "structured_output": output, "usage": usage}})
+		if scenario == "linger" {
+			signal.Ignore(syscall.SIGTERM)
+			time.Sleep(30 * time.Second)
+		}
+		return 0
+	}
 	if route == labelingRouteCodex {
 		answer, _ := json.Marshal(output)
 		emit(map[string]any{"type": "thread.started", "thread_id": "thread-fake"})
@@ -1958,5 +1983,66 @@ func TestLabelingRefusalRegistry(t *testing.T) {
 	}
 	if err := runLabelingJob(context.Background(), later); err == nil || !strings.Contains(err.Error(), "truncated or replaced") {
 		t.Fatalf("emptied registry = %v", err)
+	}
+}
+
+func TestLabelingRunThroughAntigravity(t *testing.T) {
+	quickLabelingTimers(t)
+	agy := func(scenario string) (string, *sql.DB, string, string) {
+		dir := writeLabelingFixture(t, labelingFixtureUnits())
+		cli, calls, last := fakeLabelingCLI(t, scenario)
+		opts := labelingTestOptions(dir, cli, io.Discard)
+		opts.Concurrency = 1
+		opts.Spec = labelingJobSpec{Route: labelingRouteAgy, Model: "gemini-3.8-flash", Effort: "low", LimitItems: 4}
+		err := runLabelingJob(context.Background(), opts)
+		if err != nil && !errors.Is(err, errLabelingHalted) {
+			t.Fatalf("%s: %v", scenario, err)
+		}
+		_ = calls
+		return dir, openFixtureLedger(t, dir), last, fmt.Sprint(err)
+	}
+	// Success: the prompt is the -p argument, the model id joins model and
+	// effort, the usage is priced as gemini-3.8-flash, the served model is
+	// unverified (none reported), and reasoning text is not saved.
+	dir, db, last, _ := agy("ok")
+	if got := requestStates(t, db); got != requestCompleted {
+		t.Fatalf("states %s", got)
+	}
+	var called struct{ Argv []string }
+	data, _ := os.ReadFile(last + ".1")
+	json.Unmarshal(data, &called)
+	joined := strings.Join(called.Argv, " ")
+	for _, want := range []string{"--model gemini-3.8-flash-low --sandbox --disable-slash-commands --output-format stream-json --json-schema " + filepath.Join(dir, "contracts"),
+		"--print-timeout 10s -p You are a text annotation service."} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("argv lacks %q: %.300s", want, joined)
+		}
+	}
+	usage := labelingRows(t, db, `SELECT model,cost_status,cost_usd,tokens FROM usage`)
+	attempt, _ := labelingAttemptRecord(db, "pilot:000001/1")
+	command, _ := os.ReadFile(filepath.Join(firstString(attempt["dir"]), "command.json"))
+	events, _ := os.ReadFile(filepath.Join(firstString(attempt["dir"]), "events.jsonl"))
+	if len(usage) != 1 || usage[0]["model"] != "gemini-3.8-flash" || usage[0]["cost_status"] != "priced" || usage[0]["cost_usd"].(float64) <= 0 ||
+		attempt["served_model"] != servedModelUnverified || attempt["session_id"] != "conv-fake" || strings.Contains(string(command), "annotation service") ||
+		strings.Contains(string(events), "PRIVATE THOUGHT") {
+		t.Fatalf("usage %v, attempt %v, command %s", usage, attempt, command)
+	}
+	// A lingering CLI is cleaned up; the result stands.
+	override(t, &labelingLingerGrace, 100*time.Millisecond)
+	_, db, _, _ = agy("linger")
+	attempt, _ = labelingAttemptRecord(db, "pilot:000001/1")
+	if requestStates(t, db) != requestCompleted || !strings.Contains(compactJSON(attempt["cleanup"]), "lingering") {
+		t.Fatalf("linger: %s, %v", requestStates(t, db), attempt["cleanup"])
+	}
+	// Zero usage is no usage: exposure, never $0, and the run halts.
+	_, db, _, halted := agy("zero-usage")
+	status, _ := labelingJobStatus(db, "pilot", labelingTestDay)
+	if !strings.Contains(halted, "without usage") || status["spend"].(labelingSpend).Known != 0 || status["spend"].(labelingSpend).UnknownExposure <= 0 {
+		t.Fatalf("zero usage: %s, spend %+v", halted, status["spend"])
+	}
+	// A tool step other than finish is tool use.
+	_, db, _, _ = agy("tool")
+	if got := requestStates(t, db); got != requestInvalid {
+		t.Fatalf("tool: %s", got)
 	}
 }

@@ -336,8 +336,8 @@ func createLabelingJob(ctx context.Context, db *sql.DB, name string, spec labeli
 	if !labelingJobName.MatchString(name) {
 		return nil, fmt.Errorf("job name %q: use letters, digits, '.', '_' and '-'", name)
 	}
-	if spec.Route != labelingRouteClaude && spec.Route != labelingRouteCodex {
-		return nil, fmt.Errorf("--route %q: use claude or codex", spec.Route)
+	if spec.Route != labelingRouteClaude && spec.Route != labelingRouteCodex && spec.Route != labelingRouteAgy {
+		return nil, fmt.Errorf("--route %q: use claude, codex or agy", spec.Route)
 	}
 	if spec.Model == "" || spec.Effort == "" {
 		return nil, errors.New("a new job needs --route, --model and --effort")

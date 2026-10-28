@@ -28,9 +28,9 @@ func (l *stringList) Set(value string) error { *l = append(*l, value); return ni
 
 const labelingUsage = `usage:
   pharos [--config PATH] labeling prepare --dir DIR [--fresh-days 14] [--limit-conversations N] [--conversation ID ...] [--splits-from OLD_DIR] --catalog COPY --snapshot-copy [--allow-stale-shm] [--replace] [--dry-run]
-  pharos labeling plan --dir DIR --route claude|codex --model M --effort E [--items-per-request 4] [--max-request-tokens 24000] [--max-request-chars N] [--include-duplicates] [--max-per-text N] [--concurrency 3] [--cohort C ...] [--split S ...] [--limit-items N]
+  pharos labeling plan --dir DIR --route claude|codex|agy --model M --effort E [--items-per-request 4] [--max-request-tokens 24000] [--max-request-chars N] [--include-duplicates] [--max-per-text N] [--concurrency 3] [--cohort C ...] [--split S ...] [--limit-items N]
   pharos labeling status --dir DIR [--job NAME [--json]]
-  pharos labeling run --dir DIR --job NAME [--create --route claude|codex --model M --effort E [--prompt V] [--cohort C ...] [--split S ...] [--item ID ...] [--limit-items N] [--items-per-request 4] [--max-request-tokens 24000] [--max-request-chars N] [--include-duplicates] [--max-per-text N] [--refusal-registry FILE] [--skip-oversize] [--create-only]] --max-usd X [--concurrency 3] [--timeout 330s] [--retry-invalid 1] [--max-consecutive-failures 3] [--allow-unpriced] [--accept-served-model MODEL]
+  pharos labeling run --dir DIR --job NAME [--create --route claude|codex|agy --model M --effort E [--prompt V] [--cohort C ...] [--split S ...] [--item ID ...] [--limit-items N] [--items-per-request 4] [--max-request-tokens 24000] [--max-request-chars N] [--include-duplicates] [--max-per-text N] [--refusal-registry FILE] [--skip-oversize] [--create-only]] --max-usd X [--concurrency 3] [--timeout 330s] [--retry-invalid 1] [--max-consecutive-failures 3] [--allow-unpriced] [--accept-served-model MODEL]
   pharos labeling stop --dir DIR --job NAME
   pharos labeling reconcile --dir DIR --job NAME [--retry-unknown] [--retry-failed] [--requeue-held] [--retry-suspected-refusals] [--retry-tool-use]
   pharos labeling import-results --dir DIR --from OLD_DIR --job NAME [--refusal-registry FILE]
@@ -128,7 +128,7 @@ func runLabelingRunCLI(args []string, stdout, stderr io.Writer) error {
 	flags.StringVar(&opts.Job, "job", "", "job name")
 	flags.BoolVar(&opts.Create, "create", false, "create the job, freezing its selection, then run it")
 	flags.BoolVar(&opts.CreateOnly, "create-only", false, "with --create: create and print the job without running it")
-	flags.StringVar(&opts.Spec.Route, "route", "", "claude or codex")
+	flags.StringVar(&opts.Spec.Route, "route", "", "claude, codex or agy")
 	flags.StringVar(&opts.Spec.Model, "model", "", "model")
 	flags.StringVar(&opts.Spec.Effort, "effort", "", "reasoning effort")
 	flags.StringVar(&opts.Spec.Prompt, "prompt", labelingPromptPieces, "prompt version: "+strings.Join(labelingPromptVersions, " or "))
