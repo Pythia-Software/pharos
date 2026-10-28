@@ -996,7 +996,7 @@ func (c *sourceCapture) copyOnce(item captureItem, previous *capturedFile) (*cap
 			os.Remove(temporary)
 			return nil, nil, err
 		}
-		entry.Previous = append(slices.Clone(entry.Previous), kept)
+		entry.Previous = append(withoutVersion(entry.Previous, kept.Captured), kept)
 		version = &kept
 	}
 	if err := os.Rename(temporary, destination); err != nil {

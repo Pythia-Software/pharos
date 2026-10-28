@@ -2102,3 +2102,13 @@ func TestDurableInputsIgnoreCompressionElsewhere(t *testing.T) {
 		t.Fatal("files-only inventory stamped with another entry's version", inventory.Version, err)
 	}
 }
+
+// loadManifestForTest loads a capture manifest or fails the test.
+func loadManifestForTest(t *testing.T, dir string) *captureManifest {
+	t.Helper()
+	manifest, err := loadCaptureManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return manifest
+}

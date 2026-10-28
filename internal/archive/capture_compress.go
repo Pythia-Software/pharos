@@ -354,8 +354,7 @@ func idleSnapshot(dir string, manifest *captureManifest, snapshot *capturedSnaps
 	}
 	if snapshot.MissingSince == "" {
 		run := manifest.LastRun
-		// A run that failed may never have reached this database.
-		if run == nil || run.FinishedAt == "" || len(run.Errors) > 0 {
+		if !lastRunSaw(run, snapshot.Path) {
 			return false
 		}
 		captured, ok := parseTime(snapshot.CapturedAt)

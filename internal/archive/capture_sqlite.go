@@ -45,6 +45,12 @@ func (c *sourceCapture) captureDatabases(items []captureItem, present map[string
 				// rather than decoded on every capture.
 				if c.source.Options["sqlite_record_capture"] == true && previous.Encoding != "" {
 					if err := c.restorePlainSnapshot(previous); err != nil {
+						// A full or failing drive stops the source, as
+						// snapshot() does, rather than decoding the rest.
+						var destination destinationError
+						if errors.As(err, &destination) {
+							return err
+						}
 						c.fail(item.path, err)
 						continue
 					}
@@ -226,7 +232,7 @@ func (c *sourceCapture) snapshot(item captureItem, rel string, state sqliteSourc
 			// Otherwise an interrupted rotation may already have replaced the
 			// latest, leaving its predecessor in history to adopt.
 			if err == nil {
-				snapshot.Generations = append([]capturedVersion{kept}, snapshot.Generations...)
+				snapshot.Generations = append([]capturedVersion{kept}, withoutVersion(snapshot.Generations, kept.Captured)...)
 			}
 		}
 	}

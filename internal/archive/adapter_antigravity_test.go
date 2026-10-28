@@ -866,7 +866,8 @@ func TestAntigravityIdleSnapshotsAreCompressed(t *testing.T) {
 	}
 	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
 	failed := readCaptureManifest(t, config, source.Name)
-	failed.LastRun.Errors = []captureError{{Path: "elsewhere", Error: "unreadable"}}
+	// The last capture failed on this database (and only on it).
+	failed.LastRun.Errors = []captureError{{Path: filepath.Join(dir, "conversations", antigravityRoot+".db"), Error: "unreadable"}}
 	if err := writeCaptureManifest(target.Dir, &failed); err != nil {
 		t.Fatal(err)
 	}
@@ -966,14 +967,25 @@ func TestAntigravityIdleSnapshotsAreCompressed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	planned := false
+	planned, pinnedCopy := false, false
 	for _, u := range plan.Units {
 		if u.Path == requests {
 			planned = u.Gap == "" && u.Version.Encoding == captureEncodingZstd && u.Version.SHA256 == snapshot.SHA256
 		}
+		// The pin's copy in history is listed, encoded, after its release:
+		// planned as a generation, never as an unrecognised orphan.
+		if u.Path == pin.Path {
+			pinnedCopy = u.Kind == "database" && u.Gap == "" && u.Version.Encoding == captureEncodingZstd && u.Version.SHA256 == snapshot.SHA256
+		}
+		if u.Kind == "orphan-native" {
+			t.Fatal("history planning found an orphan", u)
+		}
 	}
-	if !planned {
-		t.Fatal("history planning did not read the idle compressed snapshot")
+	if !planned || !pinnedCopy {
+		t.Fatal("history planning did not read the idle compressed snapshot and its pinned copy", planned, pinnedCopy)
+	}
+	if listed, ok := loadManifestForTest(t, target.Dir).version(pin.Path); !ok || listed.Encoding != captureEncodingZstd {
+		t.Fatal("the pinned copy is not listed in the manifest", listed)
 	}
 
 	// Turning on SQLite record capture, which exports every database on every
