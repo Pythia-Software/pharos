@@ -138,8 +138,8 @@ fixture case there.
    code units. Lone surrogates survive `JSON.parse`, and truncating a
    diagnostic can split a surrogate pair. Go strings are bytes, so measure the
    way JavaScript does.
-3. **Numbers.** Use `Math.round` semantics (half away from zero, with
-   negative halves rounding up), clamp to safe integers, and handle
+3. **Numbers.** Use `Math.round` semantics, which round halves toward
+   +Infinity (2.5 → 3, −2.5 → −2), not away from zero, clamp to safe integers, and handle
    `Infinity` and non-finite input as normalization does.
 4. **`String()` coercion.** Several checks convert a value with `String(x)`.
    Arrays join recursively, and plain objects become `"[object Object]"`.
