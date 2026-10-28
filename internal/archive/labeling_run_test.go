@@ -152,6 +152,7 @@ func labelingFakeCLI() int {
 		return 0
 	}
 	model := flag("--model")
+	fmt.Fprintf(os.Stderr, "[claude-code:unrecognized_model] {\"model\":%q}\nplain stderr line\n", model)
 	served := model
 	if scenario == "other-model" {
 		served = model + "-20261001"
@@ -165,11 +166,11 @@ func labelingFakeCLI() int {
 	case "mismatch-usage":
 		// modelUsage sums more than the result's usage, so no model matches it.
 		modelUsage[model] = map[string]any{"inputTokens": 2, "outputTokens": 1200, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 20000}
-		modelUsage["claude-haiku-4-5"] = map[string]any{"inputTokens": 500, "outputTokens": 30, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0}
+		modelUsage["claude-haiku-4-5-20251001"] = map[string]any{"inputTokens": 500, "outputTokens": 30, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0}
 	case "ambiguous-usage":
 		// Two models wrote to the cache; the one-hour writes cannot be assigned.
 		modelUsage[model] = map[string]any{"inputTokens": 2, "outputTokens": 1200, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 20000}
-		modelUsage["claude-haiku-4-5"] = map[string]any{"inputTokens": 500, "outputTokens": 30, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 3000}
+		modelUsage["claude-haiku-4-5-20251001"] = map[string]any{"inputTokens": 500, "outputTokens": 30, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 3000}
 	}
 	emit(map[string]any{"type": "system", "subtype": "init", "session_id": session, "model": served, "tools": []any{"StructuredOutput"}, "cwd": "/private/secret"})
 	if scenario == "init-hang" {
@@ -1257,10 +1258,33 @@ func TestLabelingRunUsageAndCodexOutcomes(t *testing.T) {
 	for _, row := range labelingRows(t, db, `SELECT * FROM usage`) {
 		usage[firstString(row["model"])] = row
 	}
-	main, auxiliary := usage["claude-haiku-5-5"], usage["claude-haiku-4-5"]
+	main, auxiliary := usage["claude-haiku-5-5"], usage["claude-haiku-4-5-20251001"]
 	if main == nil || auxiliary == nil || !strings.Contains(firstString(main["tokens"]), `"cache_creation_1h_input_tokens":15000`) ||
-		!strings.Contains(firstString(main["tokens"]), `"cache_creation_input_tokens":20000`) || !strings.Contains(firstString(main["model_source"]), "1h") {
+		!strings.Contains(firstString(main["tokens"]), `"cache_creation_input_tokens":20000`) || !strings.Contains(firstString(main["model_source"]), "1h") ||
+		main["role"] != usagePrimary || auxiliary["role"] != usageAuxiliary || auxiliary["cost_status"] != "priced" || auxiliary["priced_model"] != "claude-haiku-4-5" {
 		t.Fatalf("usage = %v", usage)
+	}
+	// The auxiliary call is visible in status, and so is the CLI's warning,
+	// once.
+	status, _ := labelingJobStatus(db, "pilot", labelingTestDay)
+	spend := status["spend"].(labelingSpend)
+	if spend.Auxiliary <= 0 || spend.AuxiliaryModels["claude-haiku-4-5-20251001"] != spend.Auxiliary || !strings.Contains(labelingStatusLine(status), "auxiliary models: claude-haiku-4-5-20251001") {
+		t.Fatalf("auxiliary spend = %+v", spend)
+	}
+	if warnings := status["cli_warnings"].([]string); len(warnings) != 1 || !strings.HasPrefix(warnings[0], "[claude-code:unrecognized_model]") {
+		t.Fatalf("cli warnings = %v", warnings)
+	}
+	// A ledger priced under an earlier rule (the pilot's: auxiliary usage
+	// unpriced, which halted it) is re-priced at the next run start, so it
+	// runs without --allow-unpriced.
+	execTx(t, db, `UPDATE usage SET cost_status='unpriced',cost_usd=NULL,priced_model=NULL,role=NULL WHERE model='claude-haiku-4-5-20251001'`, `UPDATE jobs SET pricing_rule=NULL`)
+	opts.Create, opts.AllowUnpriced = false, false
+	if err := runLabelingJob(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	if rows := labelingRows(t, db, `SELECT u.cost_status,u.role,(SELECT pricing_rule FROM jobs) rule FROM usage u WHERE model='claude-haiku-4-5-20251001'`); rows[0]["cost_status"] != "priced" ||
+		rows[0]["role"] != usageAuxiliary || rows[0]["rule"] != labelingPricingRule {
+		t.Fatalf("re-priced = %v", rows)
 	}
 	// Two cache writers and one-hour writes that cannot be assigned: every
 	// write is priced at the one-hour rate, marked assumed.
@@ -1414,5 +1438,19 @@ func TestLabelingImportIsAllOrNothing(t *testing.T) {
 	var out strings.Builder
 	if err := runLabelingCLI("", []string{"import-results", "--dir", dir, "--from", old, "--job", "pilot"}, &out, io.Discard); err != nil || !strings.Contains(out.String(), "Imported 6 usable results") {
 		t.Fatalf("import = %v: %s", err, out.String())
+	}
+}
+
+func TestLabelingClaudeArgvNamesTheSession(t *testing.T) {
+	args, err := labelingCommand(labelingRouteClaude, "claude-haiku-5-5", "high", "{}", "", "", "00000000-0000-4000-8000-000000000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, "\x00")
+	// Without a session name Claude Code makes a paid title-generation call.
+	for _, want := range []string{"--name\x00Pharos labeling", "--prompt-suggestions\x00false", "--no-session-persistence", "--tools\x00\x00"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("argv lacks %q: %q", want, args)
+		}
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -183,6 +184,20 @@ func runLabelingJob(ctx context.Context, opts labelingRunOptions) error {
 	}
 	if err := r.acceptServedModel(opts.AcceptServedModel); err != nil {
 		return err
+	}
+	if err := r.repriceLabelingUsage(opts.AcceptServedModel != ""); err != nil {
+		return err
+	}
+	// Attempts finished before CLI warnings were recorded get them from
+	// their saved stderr.
+	if earlier, err := queryMaps(db, `SELECT id,dir FROM attempts WHERE job=? AND state='finished' AND cli_warnings IS NULL`, job.Name); err != nil {
+		return err
+	} else {
+		for _, row := range earlier {
+			if _, err := db.Exec(`UPDATE attempts SET cli_warnings=? WHERE id=?`, jsonText(labelingCLIWarnings(filepath.Join(firstString(row["dir"]), "stderr.log"))), row["id"]); err != nil {
+				return err
+			}
+		}
 	}
 	settings := map[string]any{"max_usd": opts.MaxUSD, "concurrency": opts.Concurrency, "timeout_seconds": opts.Timeout.Seconds(),
 		"retry_invalid": opts.RetryInvalid, "allow_unpriced": opts.AllowUnpriced, "max_consecutive_failures": opts.MaxConsecutiveFailures,
@@ -761,9 +776,9 @@ func (r *labelingRunner) attempt(ctx context.Context, request labelingPendingReq
 
 // labelingUsageRow is one model's usage in an attempt, priced.
 type labelingUsageRow struct {
-	model, source string
-	tokens        map[string]int64
-	cost          usageCost
+	model, source, role string
+	tokens              map[string]int64
+	cost                usageCost
 }
 
 func labelingCostTokens(counts tokenCounts) map[string]int64 {
@@ -789,31 +804,65 @@ func labelingExactCost(book priceBook, model, day string, tokens map[string]int6
 	return book.cost(model, day, tokens)
 }
 
+// labelingPricingRule versions how usage is priced; a job priced under
+// another rule is re-priced from its stored tokens at the next run start.
+//
+// pricing-v2: the labeling model (the requested one, and any served model
+// the route reported) is priced only under its exact name, and a served
+// model nobody accepted not at all; auxiliary models (a CLI's own calls,
+// such as Claude Code's session titles) through the standard price-book
+// resolution (family and dated aliases), so a dated snapshot name prices
+// as its model.
+const labelingPricingRule = "pricing-v2"
+
+const (
+	usagePrimary   = "primary"
+	usageAuxiliary = "auxiliary"
+)
+
+// labelingUsageCost prices one usage row under labelingPricingRule.
+func labelingUsageCost(book priceBook, role, model, day string, tokens map[string]int64, blocked, assumed bool) usageCost {
+	cost := usageCost{status: "unpriced"}
+	switch {
+	case blocked:
+	case role == usageAuxiliary:
+		cost = book.cost(model, day, tokens)
+	default:
+		cost = labelingExactCost(book, model, day, tokens)
+	}
+	if assumed && cost.status == "priced" {
+		cost.status = "assumed"
+	}
+	return cost
+}
+
 // labelingAttemptUsage prices every model an attempt's terminal event
-// reports, auxiliary models included, each at its own exact rates on the
-// attempt's day. unpriced names served models nobody accepted: their usage
-// is recorded but never priced. Claude's modelUsage lacks cache-write
-// TTLs: the model whose counts equal the result's usage takes that usage
-// (with the TTL split); a single cache-writing model takes the result's
-// one-hour share; when the result reports one-hour writes that cannot be
-// assigned to one model, every other model's writes are priced at the
-// one-hour (higher) rate and marked assumed. Codex reports no model: its
-// usage is the requested model's.
-func labelingAttemptUsage(stream *labelingStream, requested, day string, book priceBook, unpriced map[string]bool) []labelingUsageRow {
+// reports, auxiliary models included, each at its own rates on the
+// attempt's day (labelingUsageCost). blocked names served models nobody
+// accepted: their usage is recorded but never priced. Claude's modelUsage
+// lacks cache-write TTLs: the model whose counts equal the result's usage
+// takes that usage (with the TTL split); a single cache-writing model takes
+// the result's one-hour share; when the result reports one-hour writes that
+// cannot be assigned to one model, every other model's writes are priced at
+// the one-hour (higher) rate and marked assumed. Codex reports no model:
+// its usage is the requested model's.
+func labelingAttemptUsage(stream *labelingStream, requested, day string, book priceBook, blocked map[string]bool) []labelingUsageRow {
 	rows := []labelingUsageRow{}
+	primary := map[string]bool{requested: true}
+	for _, model := range stream.Models {
+		primary[model] = true
+	}
 	addCounts := func(model, source string, counts tokenCounts, assumed bool) {
 		if counts == nil {
 			return
 		}
+		role := usageAuxiliary
+		if primary[model] {
+			role = usagePrimary
+		}
 		tokens := labelingCostTokens(counts)
-		cost := usageCost{status: "unpriced"}
-		if !unpriced[model] {
-			cost = labelingExactCost(book, model, day, tokens)
-		}
-		if assumed && cost.status == "priced" {
-			cost.status = "assumed"
-		}
-		rows = append(rows, labelingUsageRow{model: model, source: source, tokens: tokens, cost: cost})
+		rows = append(rows, labelingUsageRow{model: model, source: source, role: role, tokens: tokens,
+			cost: labelingUsageCost(book, role, model, day, tokens, blocked[model], assumed)})
 	}
 	top := normalizeTokenCounts(stream.usage)
 	if stream.route == labelingRouteClaude && len(stream.modelUsage) > 0 {
@@ -845,7 +894,7 @@ func labelingAttemptUsage(stream *labelingStream, requested, day string, book pr
 				addCounts(model, "modelUsage with the result's 1h cache-write share", counts, false)
 			case oneHour > 0 && counts["cache_creation_input_tokens"] > 0:
 				counts["cache_creation_1h_input_tokens"] = counts["cache_creation_input_tokens"]
-				addCounts(model, "modelUsage; cache writes of unknown TTL priced at the 1h rate", counts, true)
+				addCounts(model, labelingUnknownTTLSource, counts, true)
 			default:
 				addCounts(model, "modelUsage", counts, false)
 			}
@@ -861,6 +910,61 @@ func labelingAttemptUsage(stream *labelingStream, requested, day string, book pr
 	}
 	addCounts(model, source, top, false)
 	return rows
+}
+
+const labelingUnknownTTLSource = "modelUsage; cache writes of unknown TTL priced at the 1h rate"
+
+// repriceLabelingUsage prices every usage row of a job again from its
+// stored tokens under the current rule, when the job was priced under
+// another one or an operator accepted a served model.
+func (r *labelingRunner) repriceLabelingUsage(force bool) error {
+	var rule sql.NullString
+	if err := r.db.QueryRow(`SELECT pricing_rule FROM jobs WHERE name=?`, r.job.Name).Scan(&rule); err != nil {
+		return err
+	}
+	if rule.String == labelingPricingRule && !force {
+		return nil
+	}
+	rows, err := queryMaps(r.db, `SELECT u.attempt_id,u.model,u.model_source,u.tokens,u.day,a.reported_models FROM usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.job=?`, r.job.Name)
+	if err != nil {
+		return err
+	}
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, row := range rows {
+		model := firstString(row["model"])
+		var reported []string
+		json.Unmarshal([]byte(firstString(row["reported_models"])), &reported)
+		role := usageAuxiliary
+		if model == r.job.Model || containsString(reported, model) {
+			role = usagePrimary
+		}
+		var tokens map[string]int64
+		json.Unmarshal([]byte(firstString(row["tokens"])), &tokens)
+		blocked := role == usagePrimary && model != r.job.Model && !r.accepted[model]
+		cost := labelingUsageCost(r.book, role, model, firstString(row["day"]), tokens, blocked, firstString(row["model_source"]) == labelingUnknownTTLSource)
+		var value any
+		if cost.cost != nil {
+			value = *cost.cost
+		}
+		if _, err := tx.Exec(`UPDATE usage SET role=?,cost_usd=?,cost_status=?,priced_model=? WHERE attempt_id=? AND model=?`, role, value, cost.status,
+			nilIfEmpty(cost.pricedModel), row["attempt_id"], model); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`UPDATE jobs SET pricing_rule=? WHERE name=?`, labelingPricingRule, r.job.Name); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if len(rows) > 0 && rule.String != labelingPricingRule {
+		r.printf("%s: re-priced %d usage records under %s (was %s)\n", r.job.Name, len(rows), labelingPricingRule, defaultString(rule.String, "pricing-v1"))
+	}
+	return nil
 }
 
 // finalize settles one attempt from its stream: outcome, item results,
@@ -993,6 +1097,7 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 		}
 	}
 	usage := labelingAttemptUsage(stream, r.job.Model, attempt.day, r.book, unaccepted)
+	cliWarnings := labelingCLIWarnings(filepath.Join(attempt.dir, "stderr.log"))
 	// An attempt that may have reached the provider but reported no usage
 	// keeps its estimated exposure in spend.
 	usageMissing := !notSent && len(usage) == 0
@@ -1024,10 +1129,10 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 		toolEvents = []map[string]any{}
 	}
 	if _, err := tx.Exec(`UPDATE attempts SET state='finished',outcome=?,finished_at=?,session_id=COALESCE(?,session_id),reported_models=?,exit_code=?,terminal_event=?,
-		cleanup=?,tool_events=?,refusal=?,error=?,cli_cost_usd=?,duration_ms=?,problems=?,recovered=?,not_sent=?,served_model=?,receipt_error=?,usage_missing=? WHERE id=?`,
+		cleanup=?,tool_events=?,refusal=?,error=?,cli_cost_usd=?,duration_ms=?,problems=?,recovered=?,not_sent=?,served_model=?,receipt_error=?,usage_missing=?,cli_warnings=? WHERE id=?`,
 		outcome, now(), nilIfEmpty(stream.SessionID), jsonText(stream.Models), exit, nilIfEmpty(stream.Terminal), jsonText(cleanup), jsonText(toolEvents),
 		nilIfEmpty(stream.Refusal), nilIfEmpty(errorText), cliCost, process.Duration.Milliseconds(), jsonText(problems), recovered, notSent, served,
-		nilIfEmpty(process.ReceiptError), usageMissing, attempt.id); err != nil {
+		nilIfEmpty(process.ReceiptError), usageMissing, jsonText(cliWarnings), attempt.id); err != nil {
 		return err
 	}
 	unpriced := []string{}
@@ -1039,8 +1144,8 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 		if row.cost.status == "partial" || row.cost.status == "unpriced" {
 			unpriced = append(unpriced, row.model+" ("+row.cost.status+")")
 		}
-		if _, err := tx.Exec(`INSERT INTO usage(attempt_id,model,model_source,tokens,cost_usd,cost_status,priced_model,day) VALUES(?,?,?,?,?,?,?,?)`,
-			attempt.id, row.model, row.source, jsonText(row.tokens), cost, row.cost.status, nilIfEmpty(row.cost.pricedModel), attempt.day); err != nil {
+		if _, err := tx.Exec(`INSERT INTO usage(attempt_id,model,model_source,tokens,cost_usd,cost_status,priced_model,day,role) VALUES(?,?,?,?,?,?,?,?,?)`,
+			attempt.id, row.model, row.source, jsonText(row.tokens), cost, row.cost.status, nilIfEmpty(row.cost.pricedModel), attempt.day, row.role); err != nil {
 			return err
 		}
 	}
@@ -1115,6 +1220,30 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 	}
 	r.progress(attempt, outcome, usable, len(ids), len(retry))
 	return nil
+}
+
+// labelingCLIWarning matches a tagged CLI diagnostic line on stderr, such
+// as "[claude-code:unrecognized_model] {...}".
+var labelingCLIWarning = regexp.MustCompile(`^\[[a-z0-9_-]+:[a-z0-9_.-]+\].*`)
+
+// labelingCLIWarnings returns an attempt's distinct tagged stderr lines,
+// each cut to 300 characters, at most 20.
+func labelingCLIWarnings(path string) []string {
+	warnings := []string{}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return warnings
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if labelingCLIWarning.MatchString(line) {
+			line = firstRunes(line, 300)
+			if !containsString(warnings, line) && len(warnings) < 20 {
+				warnings = append(warnings, line)
+			}
+		}
+	}
+	return warnings
 }
 
 func exitCode(process *labelingProcess) any {

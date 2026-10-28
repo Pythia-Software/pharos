@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS jobs(
   name TEXT PRIMARY KEY, created_at TEXT NOT NULL, route TEXT NOT NULL, model TEXT NOT NULL, effort TEXT NOT NULL,
   prompt_version TEXT NOT NULL, prompt_template_sha256 TEXT NOT NULL, schema_version TEXT NOT NULL, schema_sha256 TEXT NOT NULL, taxonomy_version TEXT NOT NULL, taxonomy_sha256 TEXT NOT NULL,
   dataset_contracts TEXT NOT NULL, selection TEXT NOT NULL, packing TEXT NOT NULL, imported_from TEXT,
-  served_model TEXT NOT NULL, cli_path TEXT, cli_version TEXT, stop_requested INTEGER NOT NULL DEFAULT 0, run_started_at TEXT, run_settings TEXT, halted TEXT);
+  served_model TEXT NOT NULL, pricing_rule TEXT, cli_path TEXT, cli_version TEXT, stop_requested INTEGER NOT NULL DEFAULT 0, run_started_at TEXT, run_settings TEXT, halted TEXT);
 CREATE TABLE IF NOT EXISTS requests(
   id TEXT PRIMARY KEY, job TEXT NOT NULL, position INTEGER NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
   retry_of TEXT, items INTEGER NOT NULL, chars INTEGER NOT NULL, est_input_tokens REAL NOT NULL, est_output_tokens REAL NOT NULL,
@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS attempts(
   reported_models TEXT, pid INTEGER, exit_code INTEGER, terminal_event TEXT, cleanup TEXT, tool_events TEXT, refusal TEXT, error TEXT,
   cli_cost_usd REAL, duration_ms INTEGER, problems TEXT, recovered INTEGER NOT NULL DEFAULT 0,
   not_sent INTEGER NOT NULL DEFAULT 0, served_model TEXT, cli_version TEXT, process_start TEXT, receipt_error TEXT,
-  usage_missing INTEGER NOT NULL DEFAULT 0);
+  usage_missing INTEGER NOT NULL DEFAULT 0, cli_warnings TEXT);
 CREATE INDEX IF NOT EXISTS attempts_request_idx ON attempts(request_id, number);
 CREATE TABLE IF NOT EXISTS item_results(
   attempt_id TEXT NOT NULL, item_id TEXT NOT NULL, job TEXT NOT NULL, request_id TEXT, outcome TEXT NOT NULL,
@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS accepted_models(job TEXT NOT NULL, model TEXT NOT NUL
 CREATE INDEX IF NOT EXISTS item_results_job_item_idx ON item_results(job, item_id);
 CREATE TABLE IF NOT EXISTS usage(
   attempt_id TEXT NOT NULL, model TEXT NOT NULL, model_source TEXT NOT NULL, tokens TEXT NOT NULL, cost_usd REAL, cost_status TEXT NOT NULL,
-  priced_model TEXT, day TEXT NOT NULL, PRIMARY KEY(attempt_id, model));
+  priced_model TEXT, day TEXT NOT NULL, role TEXT, PRIMARY KEY(attempt_id, model));
 `
 
 // Request states. Every transition is one transaction; submitted is
@@ -124,7 +124,41 @@ func openLabelingLedger(dir string) (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := upgradeLabelingLedger(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return db, nil
+}
+
+// labelingLedgerColumns are columns added after a ledger may already have
+// been created (the pilot's); the ledger gains them in place.
+var labelingLedgerColumns = []struct{ table, column, definition string }{
+	{"jobs", "pricing_rule", "TEXT"},
+	{"attempts", "cli_warnings", "TEXT"},
+	{"usage", "role", "TEXT"},
+}
+
+// labelingHasColumn lets read-only status read a ledger an older build
+// created, before a writing command adds the column.
+func labelingHasColumn(db queryer, table, column string) bool {
+	rows, err := queryMaps(db, `SELECT COUNT(*) n FROM pragma_table_info(?) WHERE name=?`, table, column)
+	return err == nil && len(rows) == 1 && integer(rows[0]["n"]) > 0
+}
+
+func upgradeLabelingLedger(db *sql.DB) error {
+	for _, add := range labelingLedgerColumns {
+		var present int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?`, add.table, add.column).Scan(&present); err != nil {
+			return err
+		}
+		if present == 0 {
+			if _, err := db.Exec(`ALTER TABLE ` + add.table + ` ADD COLUMN ` + add.column + ` ` + add.definition); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // labelingHasLedger reports whether a dataset holds run tables, so status
@@ -346,9 +380,9 @@ func createLabelingJob(ctx context.Context, db *sql.DB, name string, spec labeli
 		served = servedModelUnverified
 	}
 	if _, err := tx.Exec(`INSERT INTO jobs(name,created_at,route,model,effort,prompt_version,schema_version,schema_sha256,taxonomy_version,taxonomy_sha256,
-		dataset_contracts,selection,packing,imported_from,served_model,prompt_template_sha256) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		dataset_contracts,selection,packing,imported_from,served_model,prompt_template_sha256,pricing_rule) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		name, now(), spec.Route, spec.Model, spec.Effort, spec.Prompt, labelingSchemaVersion, hashBytes([]byte(schema)), labelingTaxonomyVersion,
-		hashBytes(labelingTaxonomy), compactJSON(manifest["contracts"]), compactJSON(selection), compactJSON(packing), nilIfEmpty(importedFrom), served, labelingPromptTemplateHash(spec.Prompt)); err != nil {
+		hashBytes(labelingTaxonomy), compactJSON(manifest["contracts"]), compactJSON(selection), compactJSON(packing), nilIfEmpty(importedFrom), served, labelingPromptTemplateHash(spec.Prompt), labelingPricingRule); err != nil {
 		return nil, err
 	}
 	for position, request := range packed {
@@ -447,17 +481,21 @@ func labelingRequestEstimate(book priceBook, model, day string, input, output fl
 // with unknown outcome and of requests in flight, and what the CLIs said
 // they cost (non-authoritative).
 type labelingSpend struct {
-	Known             float64                     `json:"known_usd"`
-	PartialTokens     map[string]map[string]int64 `json:"partial_or_unpriced_tokens"`
-	UnpricedAttempts  int                         `json:"attempts_with_unpriced_usage"`
-	UnknownExposure   float64                     `json:"possibly_charged_exposure_usd"`
-	UnknownAttempts   int                         `json:"possibly_charged_attempts"`
-	InFlight          float64                     `json:"in_flight_estimate_usd"`
-	CLIReported       float64                     `json:"cli_reported_usd"`
-	CLIReportedNote   string                      `json:"cli_reported_note"`
-	EstimateDay       string                      `json:"estimate_day"`
-	EstimateUnpriced  bool                        `json:"estimate_unpriced,omitempty"`
-	CommittedEstimate float64                     `json:"committed_usd"`
+	Known            float64                     `json:"known_usd"`
+	PartialTokens    map[string]map[string]int64 `json:"partial_or_unpriced_tokens"`
+	UnpricedAttempts int                         `json:"attempts_with_unpriced_usage"`
+	UnknownExposure  float64                     `json:"possibly_charged_exposure_usd"`
+	UnknownAttempts  int                         `json:"possibly_charged_attempts"`
+	InFlight         float64                     `json:"in_flight_estimate_usd"`
+	CLIReported      float64                     `json:"cli_reported_usd"`
+	// Auxiliary is what models other than the labeling model cost (such
+	// as a CLI's housekeeping calls), by model; it is part of Known.
+	Auxiliary         float64            `json:"auxiliary_usd"`
+	AuxiliaryModels   map[string]float64 `json:"auxiliary_models"`
+	CLIReportedNote   string             `json:"cli_reported_note"`
+	EstimateDay       string             `json:"estimate_day"`
+	EstimateUnpriced  bool               `json:"estimate_unpriced,omitempty"`
+	CommittedEstimate float64            `json:"committed_usd"`
 }
 
 func computeLabelingSpend(db *sql.DB, job labelingJob, book priceBook, day string) (labelingSpend, error) {
@@ -475,6 +513,18 @@ func computeLabelingSpend(db *sql.DB, job labelingJob, book priceBook, day strin
 		return spend, err
 	}
 	spend.Known = known.Float64
+	spend.AuxiliaryModels = map[string]float64{}
+	auxiliary := []map[string]any{}
+	if labelingHasColumn(tx, "usage", "role") {
+		if auxiliary, err = queryMaps(tx, `SELECT u.model,SUM(COALESCE(u.cost_usd,0)) cost FROM usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.job=? AND u.role='auxiliary' GROUP BY u.model`, job.Name); err != nil {
+			return spend, err
+		}
+	}
+	for _, row := range auxiliary {
+		cost, _ := number(row["cost"])
+		spend.AuxiliaryModels[firstString(row["model"])] = cost
+		spend.Auxiliary += cost
+	}
 	rows, err := queryMaps(tx, `SELECT u.attempt_id,u.model,u.tokens,u.cost_status FROM usage u JOIN attempts a ON a.id=u.attempt_id
 		WHERE a.job=? AND u.cost_status IN ('partial','unpriced')`, job.Name)
 	if err != nil {
@@ -574,6 +624,26 @@ func labelingJobStatus(db *sql.DB, name string, now time.Time) (map[string]any, 
 	// may be innocent, but are not re-sent on this route.
 	var coPacked int
 	db.QueryRow(`SELECT COUNT(*) FROM item_results r JOIN requests q ON q.id=r.request_id WHERE r.job=? AND r.outcome='refused' AND q.items>1`, name).Scan(&coPacked)
+	// Distinct CLI warnings (stderr tags such as an unrecognized model),
+	// each shown once.
+	cliWarnings := []string{}
+	warned := map[string]bool{}
+	warningRows := []map[string]any{}
+	if labelingHasColumn(db, "attempts", "cli_warnings") {
+		if warningRows, err = queryMaps(db, `SELECT cli_warnings FROM attempts WHERE job=? AND cli_warnings IS NOT NULL AND cli_warnings<>'[]' ORDER BY submitted_at`, name); err != nil {
+			return nil, err
+		}
+	}
+	for _, row := range warningRows {
+		var list []string
+		json.Unmarshal([]byte(firstString(row["cli_warnings"])), &list)
+		for _, warning := range list {
+			if !warned[warning] {
+				warned[warning] = true
+				cliWarnings = append(cliWarnings, warning)
+			}
+		}
+	}
 	var cleaned, recovered int
 	db.QueryRow(`SELECT COUNT(*) FROM attempts WHERE job=? AND cleanup IS NOT NULL AND cleanup<>'[]'`, name).Scan(&cleaned)
 	db.QueryRow(`SELECT COUNT(*) FROM attempts WHERE job=? AND recovered=1`, name).Scan(&recovered)
@@ -588,7 +658,7 @@ func labelingJobStatus(db *sql.DB, name string, now time.Time) (map[string]any, 
 	status := map[string]any{"job": name, "route": job.Route, "model": job.Model, "effort": job.Effort, "prompt": job.Prompt, "cli_version": job.CLIVersion,
 		"requests": total, "request_states": states, "item_outcomes": outcomes, "selection": selection, "attempts": attempts,
 		"attempts_cleaned_up": cleaned, "attempts_recovered_from_stream": recovered, "spend": spend,
-		"refused_items_co_packed": coPacked}
+		"refused_items_co_packed": coPacked, "cli_warnings": cliWarnings}
 	if halted.Valid {
 		status["halted"] = halted.String
 	}
@@ -625,8 +695,19 @@ func labelingStatusLine(status map[string]any) string {
 	spend := status["spend"].(labelingSpend)
 	line := fmt.Sprintf("%s: %d requests (%s); known $%.4f, in flight ~$%.4f, possibly charged ~$%.4f (%d unknown or failed attempts without usage), CLI-reported $%.4f",
 		status["job"], status["requests"], strings.Join(parts, ", "), spend.Known, spend.InFlight, spend.UnknownExposure, spend.UnknownAttempts, spend.CLIReported)
+	if len(spend.AuxiliaryModels) > 0 {
+		names := []string{}
+		for model := range spend.AuxiliaryModels {
+			names = append(names, model)
+		}
+		sort.Strings(names)
+		line += fmt.Sprintf("; auxiliary models: %s $%.4f (in known)", strings.Join(names, ", "), spend.Auxiliary)
+	}
 	if spend.UnpricedAttempts > 0 {
 		line += fmt.Sprintf(", %d attempts with unpriced usage", spend.UnpricedAttempts)
+	}
+	if warnings, ok := status["cli_warnings"].([]string); ok && len(warnings) > 0 {
+		line += "; CLI warnings: " + strings.Join(warnings, " | ")
 	}
 	if rate, ok := status["requests_per_hour"].(float64); ok {
 		line += fmt.Sprintf("; %.1f requests/h, ETA %.1f h", rate, status["eta_hours"])

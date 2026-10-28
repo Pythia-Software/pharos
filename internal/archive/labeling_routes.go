@@ -45,7 +45,11 @@ func labelingCommand(route, model, effort, schemaText, schemaPath, answerPath, s
 	case labelingRouteClaude:
 		return []string{"-p", "--model", model, "--effort", effort, "--output-format", "stream-json", "--verbose",
 			"--json-schema", schemaText, "--tools", "", "--safe-mode", "--disable-slash-commands", "--no-chrome", "--strict-mcp-config",
-			"--permission-prompts", "none", "--permission-mode", "dontAsk", "--no-session-persistence", "--session-id", sessionID}, nil
+			"--permission-prompts", "none", "--permission-mode", "dontAsk", "--no-session-persistence", "--session-id", sessionID,
+			// A named session skips Claude Code's own title-generation call
+			// (an auxiliary claude-haiku-4-5 request of 5-7k input tokens,
+			// costlier than the labeling call in the 2026-10-27 pilot).
+			"--name", "Pharos labeling", "--prompt-suggestions", "false"}, nil
 	case labelingRouteCodex:
 		args := []string{"exec", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "--sandbox", "read-only",
 			"--model", model, "--config", `model_reasoning_effort="` + effort + `"`, "--config", "project_doc_max_bytes=0", "--color", "never",
