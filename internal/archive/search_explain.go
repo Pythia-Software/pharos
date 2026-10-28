@@ -109,27 +109,19 @@ func (c *Catalog) searchEvidence(ctx context.Context, options SearchOptions) (ma
 		return nil
 	}
 	// Old tool-output postings, until removed, are left out inside the window,
-	// so they cannot crowd out the matches that count; finding that window is
-	// bounded (toolOutputRankWindow), and a search it cuts short ranks fewer.
+	// so they cannot crowd out the matches that count (rankRecent). Every
+	// window of this search shares one walk deadline.
+	walk, cancel := context.WithTimeout(ctx, toolOutputWalkTime)
+	defer cancel()
 	collectFTS := func(parsed string, pick func(*searchEvidence) *searchMatches) error {
-		window, err := c.toolOutputRankWindow(ctx, parsed, recentMatches)
-		if err != nil {
-			return err
-		}
-		defer window.cancel()
-		inWindow := ` AND rowid>=COALESCE(
-				(SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?1 ORDER BY rowid DESC LIMIT 1 OFFSET ?3),0)`
-		if window.active {
-			inWindow = window.filter() + " AND ?3=?3"
-		}
-		err = collect(window.ctx, `SELECT c.workspace_id,m.id message_id FROM
-			(SELECT message_id,rank FROM messages_fts WHERE messages_fts MATCH ?1`+inWindow+`
+		_, err := c.rankRecent(ctx, walk, parsed, ` AND rowid>=COALESCE(
+				(SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?1 ORDER BY rowid DESC LIMIT 1 OFFSET ?3),0)`, func(run context.Context, window string) error {
+			return collect(run, `SELECT c.workspace_id,m.id message_id FROM
+			(SELECT message_id,rank FROM messages_fts WHERE messages_fts MATCH ?1`+window+` AND ?3=?3
 			ORDER BY rank LIMIT ?2) f
 			JOIN messages m ON m.id=f.message_id JOIN conversations c ON c.id=m.conversation_id WHERE `+wordIndexedKind("m.")+` ORDER BY f.rank`,
-			[]any{parsed, searchScan, recentMatches - 1}, pick)
-		if err != nil && window.active && window.ctx.Err() != nil && ctx.Err() == nil {
-			return nil
-		}
+				[]any{parsed, searchScan, recentMatches - 1}, pick)
+		})
 		return err
 	}
 	// FTS5 ranks the matches itself, and only the best searchScan are joined

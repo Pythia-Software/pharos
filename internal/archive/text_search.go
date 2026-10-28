@@ -965,7 +965,9 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 			return result, fmt.Errorf("messages changed during search; restart the search")
 		}
 	}
-	if tokenScan && phase == 0 && result.Complete {
+	// The word-index stream has run out, though it may have skipped
+	// oversized messages (counted in the cursor, so the end still says so).
+	if tokenScan && phase == 0 && (result.Complete || result.StopReason == "oversized_messages") {
 		return c.continueWithToolOutput(parent, o, result, textSearchCursor{Version: 1, Fingerprint: fingerprint, Generation: generation,
 			Before: math.MaxInt64, Count: result.Count, Skipped: result.SkippedOversize, Phase: 1}, started)
 	}
@@ -982,6 +984,11 @@ func (c *Catalog) continueWithToolOutput(parent context.Context, o TextSearchOpt
 		first.NextCursor = encodeTextCursor(next)
 		return first, nil
 	}
+	// Out of time, stop as the word-index stream would at its deadline,
+	// rather than start the scan with next to none.
+	if left < 50 {
+		return stop("time_budget")
+	}
 	if !o.workspaceRows {
 		switch {
 		case len(first.Items) >= o.Limit:
@@ -990,8 +997,6 @@ func (c *Catalog) continueWithToolOutput(parent context.Context, o TextSearchOpt
 			return stop("candidate_budget")
 		case first.VerifiedBytes >= o.MaxBytes:
 			return stop("byte_budget")
-		case left <= 0:
-			return stop("time_budget")
 		}
 		o.Limit -= len(first.Items)
 		o.MaxCandidates -= first.Candidates

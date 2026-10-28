@@ -435,3 +435,30 @@ func TestTextSearchScopedStreamsResumeAfterTimeBudget(t *testing.T) {
 		})
 	}
 }
+
+// A message the word-index stream skips as oversized still lets the
+// tool-output stream run: the skip is counted, and tool output is found.
+func TestTextSearchScopedStreamsCarryOversizedSkips(t *testing.T) {
+	c := textFixture(t)
+	tx := seedTx(t, c.DB)
+	call, _, err := upsertMessage(tx, "other", MessageRecord{NativeID: "big-call", Kind: "tool_call", Role: "assistant", Text: "zebra " + strings.Repeat("x", 400), Selected: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceMessageFTS(tx, call); err != nil {
+		t.Fatal(err)
+	}
+	output, _, err := upsertMessage(tx, "other", MessageRecord{NativeID: "small-output", Kind: "tool_result", Role: "tool", Text: "zebra seen", Selected: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitSeed(t, tx)
+	whole, err := c.SearchText(t.Context(), TextSearchOptions{Query: "zebra", Surface: "tools", ConversationID: "other"})
+	if err != nil || len(whole.Items) != 2 || !whole.Complete {
+		t.Fatalf("both streams: %+v %v", whole, err)
+	}
+	small, err := c.SearchText(t.Context(), TextSearchOptions{Query: "zebra", Surface: "tools", ConversationID: "other", MaxBytes: 100})
+	if err != nil || len(small.Items) != 1 || small.Items[0].MessageID != output || small.SkippedOversize != 1 || small.StopReason != "oversized_messages" || small.Complete {
+		t.Fatalf("an oversized tool call hid the tool output: %+v %v", small, err)
+	}
+}

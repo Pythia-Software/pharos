@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"math"
 	"os"
 	"slices"
 	"time"
@@ -93,7 +92,7 @@ const (
 var (
 	toolOutputHold       = 250 * time.Millisecond
 	toolOutputScan       = batchBounds{least: 1, first: 200, most: 5000}
-	toolOutputMergePages = batchBounds{least: 16, first: 200, most: 4000}
+	toolOutputMergePages = batchBounds{least: 16, first: 200, most: 2000}
 )
 
 type batchBounds struct{ least, first, most int }
@@ -386,49 +385,53 @@ var (
 // toolOutputCut is what a ranked search says when that walk cut it short.
 const toolOutputCut = " Old tool-output postings are still being removed from the word index, so this search ranked fewer recent messages than usual."
 
-// rankWindow is a ranked search's window of recent matches while old
-// tool-output postings remain (active): postings from cutoff up that are not
-// tool output. cut says the walk or its deadline stopped before it found
-// recent matches enough. Run the ranking under ctx.
-type rankWindow struct {
-	active, cut bool
-	cutoff      int64
-	ctx         context.Context
-	cancel      context.CancelFunc
-}
-
-// filter is the SQL condition, on messages_fts, of postings in the window.
-func (w rankWindow) filter() string {
-	return " AND rowid>=" + fmt.Sprint(w.cutoff) + " AND NOT " + toolOutputPosting("messages_fts")
-}
-
-func (c *Catalog) toolOutputRankWindow(ctx context.Context, parsed string, recent int) (rankWindow, error) {
-	window := rankWindow{ctx: ctx, cancel: func() {}}
-	if left, err := c.toolOutputPostingsLeft(ctx); err != nil || !left {
-		return window, err
+// rankRecent runs a ranked search's query over its window of recent
+// matches. run gets the SQL condition, on messages_fts after its MATCH, of
+// the postings in the window, and the context to run under. While old
+// tool-output postings remain, the window is the recentMatches most recent
+// postings that are not tool output, found by a walk bounded by
+// toolOutputWalk and by the search's walk deadline (one for the whole
+// search). If the walk is capped or out of time, or the ranking then is, it
+// falls back to plain, the window before this migration: the most recent
+// postings of any kind, ranked by FTS5 alone, with tool output left out only
+// after ranking. That ranks fewer matches, and cut says so.
+func (c *Catalog) rankRecent(parent, walk context.Context, parsed, plain string, run func(ctx context.Context, window string) error) (cut bool, err error) {
+	left, err := c.toolOutputPostingsLeft(parent)
+	if err != nil || !left {
+		if err != nil {
+			return false, err
+		}
+		return false, run(parent, plain)
 	}
-	window.active = true
-	window.ctx, window.cancel = context.WithTimeout(ctx, toolOutputWalkTime)
+	if cutoff, walked, err := c.toolOutputWalkCutoff(walk, parsed); err == nil && walked {
+		err = run(walk, " AND rowid>="+fmt.Sprint(cutoff)+" AND NOT "+toolOutputPosting("messages_fts"))
+		if err == nil || walk.Err() == nil || parent.Err() != nil {
+			return false, err
+		}
+	} else if err != nil && (walk.Err() == nil || parent.Err() != nil) {
+		return false, err
+	}
+	return true, run(parent, plain)
+}
+
+// toolOutputWalkCutoff walks the newest postings matching parsed, at most
+// toolOutputWalk of them, to the recentMatches-th that is not tool output.
+// walked is false when the walk was capped first.
+func (c *Catalog) toolOutputWalkCutoff(ctx context.Context, parsed string) (cutoff int64, walked bool, err error) {
 	var low, kept sql.NullInt64
-	var walked int
-	err := c.reader().QueryRowContext(window.ctx, `WITH walk AS (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ? ORDER BY rowid DESC LIMIT ?)
+	var count int
+	err = c.reader().QueryRowContext(ctx, `WITH walk AS (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ? ORDER BY rowid DESC LIMIT ?)
 		SELECT (SELECT MIN(rowid) FROM walk),(SELECT COUNT(*) FROM walk),
 		(SELECT walk.rowid FROM walk WHERE NOT `+toolOutputPosting("walk")+` ORDER BY walk.rowid DESC LIMIT 1 OFFSET ?)`,
-		parsed, toolOutputWalk, recent-1).Scan(&low, &walked, &kept)
+		parsed, toolOutputWalk, recentMatches-1).Scan(&low, &count, &kept)
 	switch {
-	case err != nil && window.ctx.Err() != nil && ctx.Err() == nil:
-		// Out of time: rank nothing, and say so.
-		window.cut, window.cutoff = true, math.MaxInt64
-		return window, nil
 	case err != nil:
-		window.cancel()
-		return window, err
+		return 0, false, err
 	case kept.Valid:
-		window.cutoff = kept.Int64
+		return kept.Int64, true, nil
 	default:
-		window.cutoff, window.cut = low.Int64, walked == toolOutputWalk
+		return low.Int64, count < toolOutputWalk, nil
 	}
-	return window, nil
 }
 
 // toolOutputPosting is the SQL predicate, on a messages_fts row, that it is

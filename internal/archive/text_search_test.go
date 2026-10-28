@@ -530,13 +530,25 @@ func TestToolOutputLeavesTheWordIndex(t *testing.T) {
 	}
 	// Finding the window walks a bounded number of postings; one it cuts
 	// short says so.
+	// A walk that is capped or out of time falls back to the window of the
+	// most recent postings of any kind: fewer matches, said so, but not none.
 	func() {
-		override(t, &toolOutputWalk, 1)
-		short, err := c.searchConversations(map[string]any{"query": "quokka"})
-		if err != nil || !strings.Contains(firstString(short["coverage"]), "still being removed") || strings.Contains(jsonText(short), "message text") {
-			t.Fatalf("a walk cut short: %v %v", short, err)
+		recent := recentMatches
+		recentMatches = 3
+		defer func() { recentMatches = recent }()
+		for _, cut := range []func(){func() { toolOutputWalk = 1 }, func() { toolOutputWalkTime = time.Nanosecond }} {
+			walk, walkTime := toolOutputWalk, toolOutputWalkTime
+			cut()
+			short, err := c.searchConversations(map[string]any{"query": "quokka"})
+			evidence, evidenceErr := c.searchEvidence(t.Context(), SearchOptions{Query: "quokka"})
+			toolOutputWalk, toolOutputWalkTime = walk, walkTime
+			if err != nil || !strings.Contains(firstString(short["coverage"]), "still being removed") || !strings.Contains(jsonText(short), "message text") {
+				t.Fatalf("a walk cut short: %v %v", short, err)
+			}
+			if evidenceErr != nil || evidence["w2"] == nil || evidence["w2"].text.count == 0 {
+				t.Fatalf("Library search after a walk cut short: %v %v", evidence, evidenceErr)
+			}
 		}
-		toolOutputWalk = 50_000
 		if whole, err := c.searchConversations(map[string]any{"query": "quokka"}); err != nil || strings.Contains(firstString(whole["coverage"]), "still being removed") {
 			t.Fatalf("a whole walk: %v %v", whole, err)
 		}

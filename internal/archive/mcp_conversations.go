@@ -58,30 +58,24 @@ func (c *Catalog) searchConversationsContext(ctx context.Context, args map[strin
 		// conversations. A snippet tokenizes its whole message, so only the
 		// page's cards get one (see conversationCards).
 		// Old tool-output postings, until removed, are left out inside the
-		// window, so they cannot crowd out the matches that count; finding
-		// that window is bounded (toolOutputRankWindow).
-		window, err := c.toolOutputRankWindow(ctx, parsed, recentMatches)
-		if err != nil {
-			return nil, err
-		}
-		defer window.cancel()
-		inWindow := ` AND rowid>=COALESCE(
-					(SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?1 ORDER BY rowid DESC LIMIT 1 OFFSET ?2),0)`
-		if window.active {
-			inWindow = window.filter()
-		}
-		rows, err := queryMapsContext(window.ctx, c.reader(), `SELECT m.conversation_id,f.message_id FROM
+		// window, so they cannot crowd out the matches that count (rankRecent).
+		walk, cancel := context.WithTimeout(ctx, toolOutputWalkTime)
+		defer cancel()
+		var rows []map[string]any
+		var err error
+		cut, err = c.rankRecent(ctx, walk, parsed, ` AND rowid>=COALESCE(
+					(SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?1 ORDER BY rowid DESC LIMIT 1 OFFSET ?2),0)`, func(ctx context.Context, window string) error {
+			var err error
+			rows, err = queryMapsContext(ctx, c.reader(), `SELECT m.conversation_id,f.message_id FROM
 			(SELECT message_id,rank FROM messages_fts
-				WHERE messages_fts MATCH ?1`+inWindow+`
+				WHERE messages_fts MATCH ?1`+window+`
 				ORDER BY rank LIMIT 500) f
 			JOIN messages m ON m.id=f.message_id WHERE `+wordIndexedKind("m.")+` AND ?2=?2 ORDER BY f.rank`, parsed, recentMatches-1)
-		if err != nil && window.active && window.ctx.Err() != nil && ctx.Err() == nil {
-			rows, err, window.cut = nil, nil, true
-		}
+			return err
+		})
 		if err != nil {
 			return nil, err
 		}
-		cut = window.cut
 		for _, row := range rows {
 			id := firstString(row["conversation_id"])
 			if _, exists := lexical[id]; !exists {
