@@ -243,6 +243,12 @@ func freezeManifestInputPolicy(ctx context.Context, target captureTarget, source
 		}
 		frozen.Snapshots = nil
 	}
+	// The inventory's version describes what it holds, not the source's
+	// other entries: compressing a snapshot generation or an earlier version
+	// must neither restamp nor re-identify an unchanged files-only revision.
+	if frozen.Version >= capturePlainManifestVersion {
+		frozen.Version = frozen.writerVersion()
+	}
 	identity := frozen
 	identity.UpdatedAt = ""
 	identity.LastDataAt = ""

@@ -381,9 +381,9 @@ func (a *antigravityAdapter) runLogsFor(ids map[string]bool) ([]string, error) {
 	for id := range ids {
 		if path, ok := transcripts[id]; ok && !named[id] {
 			started, err := a.files().antigravityStarted(path)
-			if err != nil {
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
 				return nil, err
-			}
+			} // a conversation deleted meanwhile has no start time, as in planParts
 			if log := launchingRunLog(logs, started); log != nil {
 				wanted[log] = true
 			}

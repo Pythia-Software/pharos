@@ -267,6 +267,21 @@ func (c compressCandidate) eligible(dir string, manifest *captureManifest, polic
 	return false
 }
 
+// lastRunSaw reports a finished last capture that did not fail on the source
+// file at path: one whose errors name other files only. An error naming no
+// file (the drive, the whole source) may have stopped it before path.
+func lastRunSaw(run *captureRunRecord, path string) bool {
+	if run == nil || run.FinishedAt == "" {
+		return false
+	}
+	for _, failure := range run.Errors {
+		if failure.Path == "" || failure.Path == path {
+			return false
+		}
+	}
+	return true
+}
+
 func pinnedOrUnknown(dir, rel string) bool {
 	pinned, err := pinnedPath(dir, rel)
 	return err != nil || pinned
@@ -287,7 +302,7 @@ func coldLatest(dir string, manifest *captureManifest, file *capturedFile, polic
 	}
 	if file.MissingSince == "" {
 		run := manifest.LastRun
-		if run == nil || run.FinishedAt == "" {
+		if !lastRunSaw(run, file.Path) {
 			return false
 		}
 		captured, ok := parseTime(file.CapturedAt)

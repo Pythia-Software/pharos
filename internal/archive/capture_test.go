@@ -1891,7 +1891,7 @@ func TestCaptureCompressesColdFiles(t *testing.T) {
 		t.Fatal("manifest with encoded files is not the version older builds refuse", manifest.Version)
 	}
 	// A build that reads only encoded generations (phase 1) refuses it.
-	captureManifestUnderstood = captureGenerationsVersion
+	override(t, &captureManifestUnderstood, captureGenerationsVersion)
 	_, err = loadCaptureManifest(target.Dir)
 	captureManifestUnderstood = captureManifestVersion
 	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("has version %d; this build understands up to %d", captureFilesVersion, captureGenerationsVersion)) {
@@ -2033,5 +2033,72 @@ func assertEncodedClaudeFixture(t *testing.T, root, host string) {
 	}
 	if checked < 2 {
 		t.Fatalf("copy holds %d encoded entries, want at least 2", checked)
+	}
+}
+
+// A capture's errors keep only the files they name from counting as seen
+// unchanged; an error naming no file keeps them all.
+func TestCaptureColdFilesNeedACleanLastRun(t *testing.T) {
+	policy := compressPolicy{afterDays: 14, now: time.Now(), indexed: func(string, string, int64, int64) bool { return true }}
+	file := &capturedFile{Path: "/p/a.jsonl", Captured: "files/p/a.jsonl", Size: 1 << 20, MTimeNS: 1, CapturedAt: "2026-09-01T00:00:00Z"}
+	for _, test := range []struct {
+		errors []captureError
+		want   bool
+	}{
+		{nil, true},
+		{[]captureError{{Path: "/p/other.jsonl", Error: "unreadable"}}, true},
+		{[]captureError{{Path: "/p/a.jsonl", Error: "unreadable"}}, false},
+		{[]captureError{{Error: "capture drive: device not configured"}}, false},
+	} {
+		manifest := &captureManifest{Source: captureSourceInfo{Name: "claude", Kind: "claude"}, Files: []*capturedFile{file},
+			LastRun: &captureRunRecord{StartedAt: "2026-09-02T00:00:00Z", FinishedAt: "2026-09-02T00:01:00Z", Errors: test.errors}}
+		if got := coldLatest(t.TempDir(), manifest, file, policy); got != test.want {
+			t.Errorf("last run errors %v: cold %v, want %v", test.errors, got, test.want)
+		}
+	}
+}
+
+// A durable files-only inventory is identified by what it holds: compressing
+// an earlier version of a file neither re-identifies nor restamps it.
+func TestDurableInputsIgnoreCompressionElsewhere(t *testing.T) {
+	useHost(t, "host-a")
+	override(t, &compressMinBytes, 1)
+	claude := filepath.Join(t.TempDir(), "claude")
+	lines := strings.Repeat(claudeLine("s", "u", strings.Repeat("text ", 40), "/proj", 1), 20)
+	writeSourceFile(t, filepath.Join(claude, "p", "s.jsonl"), lines)
+	source := SourceConfig{Name: "claude", Kind: "claude", Path: claude, Account: "local", Enabled: true, Options: map[string]any{"retained_input_capture": true}}
+	config := captureTestConfig(t, source)
+	runCapture(t, config)
+	writeSourceFile(t, filepath.Join(claude, "p", "s.jsonl"), claudeLine("s", "v", "rewritten", "/proj", 2))
+	runCapture(t, config)
+	target := captureTarget{Host: currentHost(), Source: "claude", Dir: capturedPath(config, "claude", "")}
+	freeze := func() {
+		t.Helper()
+		lock, err := lockCaptureTarget(t.Context(), target.Dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer releaseLockFile(lock)
+		input, err := freezeCaptureInput(t.Context(), target, source, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		input.Close()
+	}
+	freeze()
+	if err := compressSourceFiles(t.Context(), target, compressPolicy{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if manifest := readCaptureManifest(t, config, "claude"); manifest.Version != captureFilesVersion || manifest.Files[0].Previous[0].Encoding != captureEncodingZstd {
+		t.Fatal("fixture: the earlier version was not compressed")
+	}
+	freeze()
+	revisions, err := os.ReadDir(filepath.Join(target.Dir, "inputs"))
+	if err != nil || len(revisions) != 1 {
+		t.Fatalf("compressing an earlier version re-identified the inventory: %d revisions, %v", len(revisions), err)
+	}
+	inventory, err := loadCaptureManifest(filepath.Join(target.Dir, "inputs", revisions[0].Name()))
+	if err != nil || inventory.Version != capturePlainManifestVersion {
+		t.Fatal("files-only inventory stamped with another entry's version", inventory.Version, err)
 	}
 }
