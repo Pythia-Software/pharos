@@ -82,10 +82,7 @@ func readerDSN(path string) string {
 // openReader opens c's read pool. It is lazy: no connection opens until a
 // read, by which time the writer pool has put the catalog in WAL mode.
 func (c *Catalog) openReader() error {
-	db, err := sql.Open("sqlite", readerDSN(c.Path))
-	if err != nil {
-		return err
-	}
+	db := openCatalogDB(c.Path, readerDSN(c.Path), "reader")
 	db.SetMaxOpenConns(readerConns)
 	db.SetMaxIdleConns(readerConns)
 	c.reads = db

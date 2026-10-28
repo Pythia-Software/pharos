@@ -90,10 +90,7 @@ func openCatalog(path string, prepare func(*Catalog) error) (*Catalog, error) {
 	// SQLite PRAGMAs are connection-local. The DSN applies them to every pooled
 	// connection, so deleting a session always cascades its message links and
 	// every commit is durable (see catalogDSN).
-	db, err := sql.Open("sqlite", catalogDSN(path))
-	if err != nil {
-		return nil, err
-	}
+	db := openCatalogDB(path, catalogDSN(path), "catalog")
 	// SQLite serializes writes. A small pool still allows UI reads while a source
 	// snapshot is being parsed without creating unbounded lock contention.
 	db.SetMaxOpenConns(4)
