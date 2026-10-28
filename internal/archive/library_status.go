@@ -416,6 +416,17 @@ func (s *Server) libraryActivitiesProbing(probeLocks bool) []libraryActivity {
 			Progress: fraction(float64(progress.Done), float64(progress.Total)), Writes: true,
 			OnEject: "Stops between batches; it carries on when Pharos next opens the library."})
 	}
+	if progress, err := s.Catalog.toolOutputIndexProgress(context.Background()); err == nil && !progress.Ready {
+		activity := libraryActivity{Kind: "maintenance", Label: "Removing tool output from word search", ID: "word-index", Writes: true,
+			Detail:  "Compacting the word index",
+			OnEject: "Stops between batches; it carries on when Pharos next opens the library."}
+		if progress.Phase == "removing" {
+			activity.Work = &activityWork{Phase: "Removing tool output from word search", Unit: "index row", Done: float64(progress.Done), Total: float64(progress.Total)}
+			activity.Detail = fmt.Sprintf("%.0f%% of the word index checked", 100*float64(progress.Done)/float64(max(progress.Total, 1)))
+			activity.Progress = fraction(float64(progress.Done), float64(progress.Total))
+		}
+		activities = append(activities, activity)
+	}
 	// Only a refresh that has run for a while: an index's own writes are
 	// refreshed within seconds of each commit.
 	if s.Catalog.libraryCatchingUp() {

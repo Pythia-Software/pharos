@@ -408,6 +408,22 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	scan := node.Op == "literal" || node.Op == "regex"
 	strict := o.CaseSensitive || o.Separators
 	ordered := node.needsOrderedVerifier()
+	scoped := o.ConversationID != "" || o.WorkspaceID != "" || (o.WorkspaceIDs != nil && len(o.WorkspaceIDs) <= 100)
+	// Tool output is not word-indexed (see wordIndexedKind). A token search
+	// that can match it reads a scoped population's stored text instead, and
+	// verifies each message with the index's own tokenizer; an unscoped one
+	// covers only the indexed kinds, and says so.
+	toolOutput := !scan && !span && textSurfaceToolOutput(o)
+	tokenScan := toolOutput && scoped
+	if toolOutput && !scoped {
+		if unindexedOnly(o.Kinds) {
+			return result, fmt.Errorf("tool output (kind tool_result) is not word-indexed; add a conversation_id, workspace_id or up to 100 workspace_ids to scan its stored text")
+		}
+		result.Coverage += " " + toolOutputNotIndexed
+	}
+	if tokenScan {
+		result.Coverage += " Tool output is not word-indexed: this scoped search scanned the stored text of every message in scope, tool output included."
+	}
 	result.Strategy = "word_index"
 	// Read IDs from the compact mapping. Fetching f.message_id makes FTS5
 	// read its stored content row, including large tool output. COALESCE
@@ -438,14 +454,13 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	key := "f.rowid"
 	match := "messages_fts MATCH ?"
 	arguments := []any{node.fts(strict || span)}
-	if scan {
+	if scan || tokenScan {
 		result.Strategy = "scoped_scan"
 		from = "messages m"
 		hasDocuments = false
 		key = "m.rowid"
 		match = "1=1"
 		arguments = nil
-		scoped := o.ConversationID != "" || o.WorkspaceID != "" || (o.WorkspaceIDs != nil && len(o.WorkspaceIDs) <= 100)
 		ready, e := c.textSearchReady(ctx)
 		if e != nil {
 			return result, e
@@ -533,6 +548,11 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	pageStart := cursor
 	pageBefore := cursor.Before
 	clauses := []string{match, key + "<?", textSurfacePredicate(o.Surface)}
+	if key == "f.rowid" && textSurfaceToolOutput(o) {
+		// A catalog still removing its old tool-output postings answers as
+		// one that has.
+		clauses = append(clauses, wordIndexedKind("m."))
+	}
 	if emptySurface || (o.WorkspaceIDs != nil && len(o.WorkspaceIDs) == 0) {
 		clauses = append(clauses, "0=1")
 	}
@@ -549,7 +569,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	// deadlines and candidate limits always leave resumable progress.
 	eligibleSQL := "1"
 	filterOptions := textFilterArgs(o)
-	if !scan && o.Surface == "all" && len(o.Roles) > 0 {
+	if !scan && !tokenScan && o.Surface == "all" && len(o.Roles) > 0 {
 		roles := make([]string, len(o.Roles))
 		for i, role := range o.Roles {
 			roles[i] = quoteSQLText(role)
@@ -611,9 +631,10 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 		if ids != nil {
 			// A legacy mapping can be incomplete. Restrict FTS positions only
 			// when every eligible message has a mapping (or none are eligible).
+			// Tool output never has one (see wordIndexedKind).
 			var total, mapped int
 			var positions string
-			err = c.reader().QueryRowContext(ctx, `SELECT count(*),count(fr.fts_rowid),COALESCE(json_group_array(fr.fts_rowid),'[]') FROM messages m LEFT JOIN message_fts_rows fr ON fr.message_id=m.id WHERE m.rowid IN (SELECT value FROM json_each(?))`, jsonText(ids)).Scan(&total, &mapped, &positions)
+			err = c.reader().QueryRowContext(ctx, `SELECT count(*),count(fr.fts_rowid),COALESCE(json_group_array(fr.fts_rowid),'[]') FROM messages m LEFT JOIN message_fts_rows fr ON fr.message_id=m.id WHERE m.rowid IN (SELECT value FROM json_each(?)) AND `+wordIndexedKind("m."), jsonText(ids)).Scan(&total, &mapped, &positions)
 			if err != nil {
 				return result, err
 			}
@@ -637,7 +658,8 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 		}
 		var low, high sql.NullInt64
 		var total, mapped int
-		boundsSQL := `SELECT MIN(fr.fts_rowid),MAX(fr.fts_rowid),count(*),count(fr.fts_rowid) FROM messages m LEFT JOIN message_fts_rows fr ON fr.message_id=m.id WHERE length(CAST(m.text AS BLOB))>0 AND ` + scope
+		// Count only the kinds the word index holds: tool output has no row.
+		boundsSQL := `SELECT MIN(fr.fts_rowid),MAX(fr.fts_rowid),count(*),count(fr.fts_rowid) FROM messages m LEFT JOIN message_fts_rows fr ON fr.message_id=m.id WHERE length(CAST(m.text AS BLOB))>0 AND ` + wordIndexedKind("m.") + ` AND ` + scope
 		if ready && small {
 			boundsSQL = `SELECT MIN(fr.fts_rowid),MAX(fr.fts_rowid),count(*),count(fr.fts_rowid) FROM text_search_documents m LEFT JOIN message_fts_rows fr ON fr.message_id=m.message_id WHERE m.byte_length>0 AND ` + scope
 		}
@@ -669,7 +691,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	}
 	selectSQL := fmt.Sprintf(`SELECT %s,m.id,m.conversation_id,c.workspace_id,w.title,c.provider,COALESCE(c.started_at,''),m.role,m.kind,COALESCE(m.created_at,''),m.content_hash,COALESCE(m.evidence_locator,''),COALESCE(m.reasoning_format,''),CASE WHEN (%s) THEN %s ELSE 0 END,CASE WHEN (%s) AND %s<=%d THEN m.text ELSE '' END AS search_body,%s%s
  FROM %s JOIN conversations c ON c.id=m.conversation_id JOIN workspaces w ON w.id=c.workspace_id WHERE %s ORDER BY %s DESC%s`, key, eligibleSQL, sizeSQL, eligibleSQL, sizeSQL, maxMessage, eligibleSQL, countSQL, from, strings.Join(clauses, " AND "), key, limitSQL)
-	indexedWorkspaces := o.workspaceRows && !scan && !span && !strict && !ordered
+	indexedWorkspaces := o.workspaceRows && !scan && !tokenScan && !span && !strict && !ordered
 	if o.workspaceRows {
 		// There is no message/candidate/byte batch controlling workspace
 		// membership. Let the request deadline bound execution, and withhold an
@@ -685,7 +707,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	// Spans need their original byte ranges and an independent tokenizer. This
 	// connection is never the catalog, so search cannot write library content.
 	var verifier *textVerifier
-	if !scan && (span || strict || ordered) {
+	if !scan && (span || strict || ordered || tokenScan) {
 		verifier, e = newTextVerifier(ctx)
 		if e != nil {
 			return result, e
@@ -759,7 +781,12 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 				lo, hi = at[0], at[1]
 				item.Captures, item.CapturesClipped = textCaptures(verify, at, 0)
 			}
-		} else if !span && (strict || ordered) {
+		} else if tokenScan && !node.asciiCandidate(strings.ReplaceAll(body, "\ue000", "   ")) {
+			// No index proved this message. Skip the tokenizer when the
+			// message cannot hold the positive words; the field barrier is
+			// not ASCII, and a space in its place only admits more.
+			ok = false
+		} else if !span && (strict || ordered || tokenScan) {
 			lo, hi, ok, e = verifier.match(ctx, node, body, o.CaseSensitive, o.Separators)
 			if e != nil {
 				if ctx.Err() != nil {

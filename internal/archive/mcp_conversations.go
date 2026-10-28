@@ -19,6 +19,10 @@ func mcpBudget(args map[string]any, fallback int) int {
 // tokenization. Every tool also bounds the number and length of text fields.
 func fitConversationItems(result map[string]any, budget int) {
 	items, _ := result["items"].([]map[string]any)
+	if len(jsonText(result)) > budget*3 && result["coverage"] == toolOutputCoverage {
+		// The tool's description says the same; a match is worth more.
+		delete(result, "coverage")
+	}
 	if len(jsonText(result)) > budget*3 {
 		// Null fields carry nothing; shed them before shedding whole cards.
 		for _, item := range items {
@@ -54,7 +58,7 @@ func (c *Catalog) searchConversations(args map[string]any) (map[string]any, erro
 				WHERE messages_fts MATCH ?1 AND rowid>=COALESCE(
 					(SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?1 ORDER BY rowid DESC LIMIT 1 OFFSET ?2),0)
 				ORDER BY rank LIMIT 500) f
-			JOIN messages m ON m.id=f.message_id ORDER BY f.rank`, parsed, recentMatches-1)
+			JOIN messages m ON m.id=f.message_id WHERE `+wordIndexedKind("m.")+` ORDER BY f.rank`, parsed, recentMatches-1)
 		if err != nil {
 			return nil, err
 		}
@@ -193,6 +197,9 @@ func (c *Catalog) searchConversations(args map[string]any) (map[string]any, erro
 	}
 	result := map[string]any{"items": results[offset:end], "next_offset": nil, "total": total,
 		"freshness": map[string]any{"status": freshness["status"], "stale_sources": freshness["stale_sources"]}}
+	if query != "" {
+		result["coverage"] = toolOutputCoverage
+	}
 	if end < total {
 		result["next_offset"] = end
 	}
@@ -421,7 +428,7 @@ func (c *Catalog) conversationPassages(args map[string]any) (map[string]any, err
 	}
 	rows, err := queryMaps(c.DB, `SELECT m.id message_id,m.role,m.kind,m.source_order,f.snippet FROM
 		(SELECT message_id,snippet(messages_fts,1,'','',' … ',28) snippet,rank FROM messages_fts
-			WHERE messages_fts MATCH ? AND rowid BETWEEN ? AND ? AND message_id IN (SELECT id FROM messages WHERE conversation_id=?)
+			WHERE messages_fts MATCH ? AND rowid BETWEEN ? AND ? AND message_id IN (SELECT id FROM messages WHERE conversation_id=? AND `+wordIndexedKind("")+`)
 			ORDER BY rank LIMIT ?) f
 		JOIN messages m ON m.id=f.message_id ORDER BY f.rank`, ftsQuery(query), bounds[0]["low"], bounds[0]["high"], id, limit)
 	if err != nil {
@@ -432,7 +439,7 @@ func (c *Catalog) conversationPassages(args map[string]any) (map[string]any, err
 		items = append(items, map[string]any{"message_id": row["message_id"], "role": row["role"], "kind": row["kind"],
 			"source_order": row["source_order"], "snippet": clipText(lexicalSnippet(firstString(row["snippet"])), 260)})
 	}
-	result := map[string]any{"conversation_id": id, "items": items}
+	result := map[string]any{"conversation_id": id, "items": items, "coverage": toolOutputCoverage}
 	fitConversationItems(result, mcpBudget(args, 900))
 	return result, nil
 }

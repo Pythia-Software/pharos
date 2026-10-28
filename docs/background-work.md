@@ -331,7 +331,7 @@ Notes:
 ### 3.4 C. Continuous maintenance
 
 The loops started in `Serve` (`maintainLibrary`, `maintainSubstringIndex`,
-`maintainTextSearch`, `maintainToolSearch`, `maintainQueryTextIndexes`,
+`maintainToolOutputIndex`, `maintainTextSearch`, `maintainToolSearch`, `maintainQueryTextIndexes`,
 `keepWALSmall`, `automaticLoop`, `cloudScheduleLoop`, and the broker's
 `maintain`) are **daemons**, not operations: they are registered by name so
 the unregistered-work test can account for them, but they have no state,
@@ -345,6 +345,7 @@ operation.
 | `maintenance.parallelism` | Measure parallel work · Measuring parallel work | daemon pass | svc | D:w W:w | — | — | Stops; it carries on later. | record | never | bg |
 | `maintenance.cache-warm` | Warm page caches · Warming page caches | daemon pass | svc | D:r | — | — | Stops. | record | never | bg |
 | `maintenance.search.substring` | Build substring search · Building substring search | version, chained | svc | D:w W:w | search.substring | — | Stops between batches; it carries on when Pharos next opens the library. | batch | >30 s | bg |
+| `maintenance.search.tool-output` | Remove tool output from word search · Removing tool output from word search | version | svc | D:w W:w | search.words | — | Stops between batches; it carries on when Pharos next opens the library. | batch | >30 s | bg |
 | `maintenance.search.text` | Build text search · Building text search | version, chained | svc | D:w W:w | search.text | — | Stops between batches; it carries on later. | batch | >30 s | bg |
 | `maintenance.search.tools` | Build tool search · Building tool search | version, chained | svc | D:w W:w | search.tools | — | Stops between batches; it carries on later. | batch | >30 s | bg |
 | `maintenance.search.query` | Build Query Table text indexes · Building table search | version, chained | svc | D:w W:w | search.query | — | Stops between batches; it carries on later. | batch | >30 s | bg |
@@ -719,6 +720,7 @@ additive index, `operation_journal_kind (host_id, kind, started_at DESC)`.
 | `capt:<host>/<source>` | the source's `source_states.last_success_at` on that host (when its captures were last indexed) | `needs_index` from `capturedHosts`; count unknown | `indexing`, `capture-running` (a `capture.*` operation is the one catching up), `unreadable` (the capture root cannot be read: the rows last read, all `unknown`, or one `capt:*` row when none were read; a root that does not exist and never had captures has no rows), `not-indexed` (detail: `capturedHosts`' `index_reason`) | `index.captures`, `library.update`, `capture.*` |
 | `view` (Search view rows) | — | `COUNT(*)` of `workspace_library_dirty` (capped at 100,000), unit workspace | `refreshing`, `version` (`workspace_library_version`; count unknown), `stopped` (`libraryRefreshStopped`) | `maintenance.library-view` |
 | `search.substring` | — | conversations past `message_trigram_cursor` (counted only while not ready) | `building`, `version` | `maintenance.search.substring` |
+| `search.words` | — | `message_fts_tool_output_merged` unset: tool-output postings written before tool output left the word index are still being removed (past `message_fts_tool_output_cursor`) or merged away; count unknown | `building`, `version` | `maintenance.search.tool-output` |
 | `search.text` | — | `text_search_documents_version` not `1`; count unknown | `building`, `version` | `maintenance.search.text` |
 | `search.tools` | — | `tool_command_fts_version` not `1`; count unknown | `building`, `version` | `maintenance.search.tools` |
 | `search.query` | — | the three `*_ready` keys not at their index's version; count unknown | `building`, `version` | `maintenance.search.query` |

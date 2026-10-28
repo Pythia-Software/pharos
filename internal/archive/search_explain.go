@@ -112,7 +112,7 @@ func (c *Catalog) searchEvidence(ctx context.Context, options SearchOptions) (ma
 			(SELECT message_id,rank FROM messages_fts WHERE messages_fts MATCH ?1 AND rowid>=COALESCE(
 				(SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?1 ORDER BY rowid DESC LIMIT 1 OFFSET ?3),0)
 			ORDER BY rank LIMIT ?2) f
-			JOIN messages m ON m.id=f.message_id JOIN conversations c ON c.id=m.conversation_id ORDER BY f.rank`,
+			JOIN messages m ON m.id=f.message_id JOIN conversations c ON c.id=m.conversation_id WHERE `+wordIndexedKind("m.")+` ORDER BY f.rank`,
 			[]any{parsed, searchScan, recentMatches - 1}, pick)
 	}
 	// FTS5 ranks the matches itself, and only the best searchScan are joined

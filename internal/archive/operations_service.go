@@ -57,7 +57,7 @@ func (s *Server) begin(ctx context.Context, spec OperationSpec) (context.Context
 // daemonNames lists the service's loops that are daemons, not operations
 // (§3.4): they hold nothing and are never shown, and each pass that does real
 // work starts an operation. The unregistered-work test accounts for them.
-var daemonNames = []string{"maintainLibrary", "maintainSubstringIndex", "maintainTextSearch", "maintainToolSearch", "maintainQueryTextIndexes",
+var daemonNames = []string{"maintainLibrary", "maintainSubstringIndex", "maintainToolOutputIndex", "maintainTextSearch", "maintainToolSearch", "maintainQueryTextIndexes",
 	"keepWALSmall", "automaticLoop", "cloudScheduleLoop", "journalWriter", "leaseReconciler", "watchFeatureFlags"}
 
 // daemon runs a registered daemon loop in the background.

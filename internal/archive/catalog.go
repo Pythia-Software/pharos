@@ -435,6 +435,8 @@ func (c *Catalog) Initialize() error {
 	var ftsRowsVersion string
 	if err := c.DB.QueryRow("SELECT value FROM meta WHERE key='message_fts_rows_version'").Scan(&ftsRowsVersion); err == sql.ErrNoRows {
 		// Existing FTS rows need a one-time rowid lookup for bounded updates.
+		// It maps every row, tool output included: the tool-output removal
+		// (tool_output_index.go) finds the postings it deletes through it.
 		if _, err = c.DB.Exec(`INSERT OR REPLACE INTO message_fts_rows(message_id,fts_rowid)
 			SELECT message_id,rowid FROM messages_fts`); err != nil {
 			return err
@@ -454,6 +456,13 @@ func (c *Catalog) Initialize() error {
 	if _, err := c.DB.Exec(`INSERT OR IGNORE INTO meta(key,value) SELECT 'tool_command_fts_version','1'
 		WHERE NOT EXISTS(SELECT 1 FROM tool_calls)`); err != nil {
 		return err
+	}
+	// Nor has its word index any tool output to remove.
+	for _, key := range []string{toolOutputRemovedKey, toolOutputMergedKey} {
+		if _, err := c.DB.Exec(`INSERT OR IGNORE INTO meta(key,value) SELECT ?,'1'
+			WHERE NOT EXISTS(SELECT 1 FROM conversations)`, key); err != nil {
+			return err
+		}
 	}
 	var aliasesVersion string
 	if err := c.DB.QueryRow("SELECT value FROM meta WHERE key='declared_native_aliases_version'").Scan(&aliasesVersion); err == sql.ErrNoRows {
