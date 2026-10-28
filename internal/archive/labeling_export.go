@@ -155,16 +155,20 @@ type labelingExportTeacher struct {
 }
 
 type labelingExportReceipt struct {
-	RequestID     string                  `json:"request_id"`
-	AttemptID     string                  `json:"attempt_id"`
-	ImportedFrom  string                  `json:"imported_from"`
-	RequestState  string                  `json:"request_state"`
-	CostStatus    string                  `json:"cost_status"`
-	AttemptCost   *float64                `json:"attempt_cost_usd"`
-	RequestItems  int                     `json:"request_items"`
-	ContractHash  string                  `json:"contract_hash"`
-	History       []labelingExportAttempt `json:"history"`
-	RequestsTried []string                `json:"requests"`
+	RequestID    string   `json:"request_id"`
+	AttemptID    string   `json:"attempt_id"`
+	ImportedFrom string   `json:"imported_from"`
+	RequestState string   `json:"request_state"`
+	CostStatus   string   `json:"cost_status"`
+	AttemptCost  *float64 `json:"attempt_cost_usd"`
+	// AttemptEstimate is the estimate kept beside usage that could not be
+	// priced (pricing-v5: estimate_usd, never a cost), with its basis.
+	AttemptEstimate *float64                `json:"attempt_estimate_usd"`
+	EstimateBasis   []string                `json:"estimate_basis"`
+	RequestItems    int                     `json:"request_items"`
+	ContractHash    string                  `json:"contract_hash"`
+	History         []labelingExportAttempt `json:"history"`
+	RequestsTried   []string                `json:"requests"`
 }
 
 type labelingExportAttempt struct {
@@ -252,6 +256,8 @@ type labelingExportAttemptInfo struct {
 	cliVersion   string
 	costStatus   string
 	cost         *float64
+	estimate     *float64
+	basis        []string
 }
 
 // jsonlWriter writes JSON lines and hashes them as written.
@@ -627,7 +633,14 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 		json.Unmarshal([]byte(text(row, "problems")), &info.problems)
 		attempts[text(row, "id")] = info
 	}
-	usageRows, err := queryMapsContext(ctx, tx, `SELECT u.attempt_id,u.cost_usd,u.cost_status FROM usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.job=? ORDER BY u.attempt_id,u.model`, job)
+	// Ledgers from before pricing-v5 have no estimate columns; their
+	// unpriced usage may carry the older estimated_upper_bound status.
+	estimateColumns := "NULL estimate_usd,NULL estimate_basis"
+	if labelingHasColumn(tx, "usage", "estimate_usd") && labelingHasColumn(tx, "usage", "estimate_basis") {
+		estimateColumns = "u.estimate_usd,u.estimate_basis"
+	}
+	usageRows, err := queryMapsContext(ctx, tx, `SELECT u.attempt_id,u.cost_usd,u.cost_status,`+estimateColumns+` FROM usage u JOIN attempts a ON a.id=u.attempt_id
+		WHERE a.job=? ORDER BY u.attempt_id,u.model`, job)
 	if err != nil {
 		return nil, err
 	}
@@ -649,6 +662,16 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 				sum += *info.cost
 			}
 			info.cost = &sum
+		}
+		if estimate, ok := row["estimate_usd"].(float64); ok {
+			sum := estimate
+			if info.estimate != nil {
+				sum += *info.estimate
+			}
+			info.estimate = &sum
+		}
+		if basis := text(row, "estimate_basis"); basis != "" && !slices.Contains(info.basis, basis) {
+			info.basis = append(info.basis, basis)
 		}
 		if status := text(row, "cost_status"); statusRank(status) > statusRank(info.costStatus) {
 			info.costStatus = status
@@ -837,7 +860,7 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 		}
 		label := labelingExportLabel{ItemID: input.ItemID, UnitID: input.UnitID, Split: input.Split, Status: status, Outcome: "no_result",
 			Evidence: json.RawMessage("[]"), Issues: []string{}, Flags: []string{}, Teacher: teacher}
-		label.Receipt.History = []labelingExportAttempt{}
+		label.Receipt.History, label.Receipt.EstimateBasis = []labelingExportAttempt{}, []string{}
 		label.Receipt.RequestsTried = defaultSlice(itemRequests[input.ItemID])
 		if requests := itemRequests[input.ItemID]; len(requests) > 0 {
 			last := requests[len(requests)-1]
@@ -871,6 +894,7 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 			}
 			if info := attempts[result.attempt]; info != nil {
 				label.Receipt.CostStatus, label.Receipt.AttemptCost = info.costStatus, info.cost
+				label.Receipt.AttemptEstimate, label.Receipt.EstimateBasis = info.estimate, defaultSlice(info.basis)
 				if label.Receipt.CostStatus == "" {
 					label.Receipt.CostStatus = "no_usage"
 				}
@@ -1080,7 +1104,7 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 	json.Unmarshal([]byte(text(jobRow, "selection")), &selection)
 	open := map[string]int{}
 	for _, state := range []string{requestPending, requestLeased, requestSubmitted, requestHeld, requestRefusalSuspected, requestStopped,
-		requestUnknown, requestFailed} {
+		requestUnknown, requestFailed, requestWaitingSuspicion} {
 		if stateCounts[state] > 0 {
 			open["requests_"+state] = stateCounts[state]
 		}

@@ -135,6 +135,15 @@ func TestLabelingExport(t *testing.T) {
 	if err := insertLabelingItemResult(tx, "pilot:crafted/later", "pilot", "", empty(itemOf["m-o4"], itemRefused, "refused: later"), "hash", "", servedModelVerified); err != nil {
 		t.Fatal(err)
 	}
+	// The broad result's attempt has usage the price book could not price:
+	// an estimate beside it (pricing-v5), not a cost.
+	if _, err := tx.Exec(`INSERT INTO attempts(id,request_id,number,job,state,submitted_at,day,dir,prompt_sha256) VALUES('pilot:crafted/m-a1/a','pilot:crafted',1,'pilot','finished',?,?,'','')`,
+		now(), "2026-10-27"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(`INSERT INTO usage(attempt_id,model,model_source,tokens,cost_status,day,estimate_usd,estimate_basis) VALUES('pilot:crafted/m-a1/a','mystery','test','{}','unpriced','2026-10-27',0.25,'requested model rate')`); err != nil {
+		t.Fatal(err)
+	}
 	commitSeed(t, tx)
 	datasetBefore, _ := os.ReadFile(filepath.Join(dir, labelingDatasetFile))
 
@@ -280,6 +289,10 @@ func TestLabelingExport(t *testing.T) {
 	}
 	if open := heldOutManifest["job_wide"].(map[string]any)["open"].(map[string]any); open["items_unlabeled"] != float64(2) {
 		t.Errorf("open = %v", open)
+	}
+	if receipt := labels[itemOf["m-a1"]]["receipt"].(map[string]any); receipt["cost_status"] != "unpriced" || receipt["attempt_cost_usd"] != nil ||
+		receipt["attempt_estimate_usd"] != 0.25 || !slices.Equal(strs(receipt["estimate_basis"]), []string{"requested model rate"}) {
+		t.Errorf("receipt = %v", receipt)
 	}
 	// Masked: the unsupported label with its ancestors, the uncertain one,
 	// and every child of the returned broad parent.
@@ -505,6 +518,18 @@ func TestLabelingExport(t *testing.T) {
 	}
 	if unverified["job"] == nil || transformCounts(path) != 1 {
 		t.Errorf("transforms = %v", transformCounts(path))
+	}
+
+	// A request waiting on a suspicion keeps the job open; one whose items
+	// were all refused elsewhere is settled.
+	if _, err := db.Exec(`UPDATE requests SET state=CASE position WHEN 1 THEN 'waiting_suspicion' ELSE 'refused_elsewhere' END WHERE position IN (1,2)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, waiting, err := exportLabeling(context.Background(), dir, "pilot", filepath.Join(t.TempDir(), "waiting"), false, false); err != nil {
+		t.Fatal(err)
+	} else if reasons := waiting["job"].(map[string]any)["incomplete_reasons"].([]string); !slices.Contains(reasons, "requests_waiting_suspicion") ||
+		slices.Contains(reasons, "requests_refused_elsewhere") {
+		t.Errorf("reasons = %v", reasons)
 	}
 
 	// A job labeled under another taxonomy is not exported by this build.
