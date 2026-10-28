@@ -129,6 +129,11 @@ func labelingFakeCLI() int {
 		emit(map[string]any{"type": "thread.started", "thread_id": "thread-fake"})
 		emit(map[string]any{"type": "turn.started"})
 		emit(map[string]any{"type": "item.completed", "item": map[string]any{"id": "item_0", "type": "reasoning", "text": "PRIVATE THOUGHT"}})
+		if scenario == "answer-hang" {
+			os.WriteFile(flag("--output-last-message"), answer, 0o600)
+			time.Sleep(30 * time.Second)
+			return 0
+		}
 		if scenario == "failed" {
 			emit(map[string]any{"type": "turn.failed", "error": map[string]any{"message": "stream disconnected before completion"}})
 			return 1
@@ -153,7 +158,7 @@ func labelingFakeCLI() int {
 	}
 	usage := map[string]any{"input_tokens": 2, "cache_creation_input_tokens": 15000, "cache_read_input_tokens": 0, "output_tokens": 1000,
 		"cache_creation": map[string]any{"ephemeral_1h_input_tokens": 15000, "ephemeral_5m_input_tokens": 0}}
-	modelUsage := map[string]any{model: map[string]any{"inputTokens": 2, "outputTokens": 1000, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 15000, "costUSD": 0.01}}
+	modelUsage := map[string]any{served: map[string]any{"inputTokens": 2, "outputTokens": 1000, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 15000, "costUSD": 0.01}}
 	switch scenario {
 	case "unpriced":
 		modelUsage["claude-mystery-9"] = map[string]any{"inputTokens": 300, "outputTokens": 20, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0}
@@ -161,8 +166,16 @@ func labelingFakeCLI() int {
 		// modelUsage sums more than the result's usage, so no model matches it.
 		modelUsage[model] = map[string]any{"inputTokens": 2, "outputTokens": 1200, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 20000}
 		modelUsage["claude-haiku-4-5"] = map[string]any{"inputTokens": 500, "outputTokens": 30, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0}
+	case "ambiguous-usage":
+		// Two models wrote to the cache; the one-hour writes cannot be assigned.
+		modelUsage[model] = map[string]any{"inputTokens": 2, "outputTokens": 1200, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 20000}
+		modelUsage["claude-haiku-4-5"] = map[string]any{"inputTokens": 500, "outputTokens": 30, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 3000}
 	}
 	emit(map[string]any{"type": "system", "subtype": "init", "session_id": session, "model": served, "tools": []any{"StructuredOutput"}, "cwd": "/private/secret"})
+	if scenario == "init-hang" {
+		time.Sleep(30 * time.Second)
+		return 0
+	}
 	content := []any{map[string]any{"type": "thinking", "thinking": "PRIVATE THOUGHT", "signature": "sig"}}
 	if scenario == "tool" {
 		content = append(content, map[string]any{"type": "tool_use", "id": "tool-1", "name": "Bash", "input": map[string]any{"command": "ls"}})
@@ -179,6 +192,9 @@ func labelingFakeCLI() int {
 	case "failed":
 		result["subtype"], result["is_error"] = "error_during_execution", true
 		delete(result, "structured_output")
+	case "no-usage":
+		delete(result, "usage")
+		delete(result, "modelUsage")
 	case "auth":
 		result["subtype"], result["is_error"] = "success", true
 		result["result"] = "Invalid API key · Please run /login"
@@ -591,7 +607,8 @@ func TestLabelingRunValidatesEachItem(t *testing.T) {
 			results := itemOutcomes(t, db, "pilot:000001/1")
 			for id, want := range map[string]string{"i_a": "in_marker", "i_b": "in_context"} {
 				evidence := results[id]["evidence"].([]labelingEvidence)
-				if results[id]["outcome"] != itemEvidenceIssues || evidence[0].Status != want || !strings.Contains(firstString(results[id]["issues"]), "label_without_valid_evidence") {
+				if results[id]["outcome"] != itemEvidenceIssues || evidence[0].Status != want || !strings.Contains(firstString(results[id]["issues"]), "label_without_valid_evidence") ||
+					firstString(results[id]["labels_evidence"]) != `{"`+fakeLabel+`":"`+want+`"}` {
 					t.Fatalf("%s = %v", id, results[id])
 				}
 			}
@@ -663,13 +680,13 @@ func TestLabelingRunCleansUpWithoutResending(t *testing.T) {
 	if pid := int(integer(attempt["pid"])); syscall.Kill(-pid, 0) == nil {
 		t.Fatal("the CLI's process group survived")
 	}
-	// A hang ends unknown at the timeout and counts as possibly charged; a
-	// crash before any session event is failed, not sent, and costs
-	// nothing. Neither is re-sent until reconcile re-queues it explicitly.
+	// A hang ends unknown at the timeout, and so does a crash before any
+	// output: both count as possibly charged and are not re-sent until
+	// reconcile re-queues them explicitly.
 	for _, check := range []struct {
 		scenario, state, flag string
 		exposed               int
-	}{{"hang", requestUnknown, "--retry-unknown", 1}, {"crash-before", requestFailed, "--retry-failed", 0}} {
+	}{{"hang", requestUnknown, "--retry-unknown", 1}, {"crash-before", requestUnknown, "--retry-unknown", 1}} {
 		dir := writeLabelingFixture(t, labelingFixtureUnits())
 		cli, calls, _ := fakeLabelingCLI(t, check.scenario+",ok")
 		opts := labelingTestOptions(dir, cli, io.Discard)
@@ -963,8 +980,9 @@ func TestLabelingRunCircuitBreaker(t *testing.T) {
 		t.Fatalf("run = %v after %d calls", err, fakeCalls(t, calls))
 	}
 	db := openFixtureLedger(t, dir)
-	if rows := labelingRows(t, db, `SELECT COUNT(*) n FROM attempts WHERE not_sent=1 AND outcome='failed'`); rows[0]["n"] != int64(3) {
-		t.Fatalf("not-sent attempts = %v", rows)
+	// Once started, a CLI may have reached the provider: unknown, exposed.
+	if rows := labelingRows(t, db, `SELECT COUNT(*) n FROM attempts WHERE not_sent=0 AND usage_missing=1 AND outcome='unknown' AND problems LIKE '%no_stream_events%'`); rows[0]["n"] != int64(3) {
+		t.Fatalf("unknown attempts = %v", rows)
 	}
 	// An authentication error halts at once; the next run resumes.
 	dir = writeLabelingFixture(t, labelingFixtureUnits())
@@ -1003,6 +1021,224 @@ func TestLabelingRunHoldsAnotherServedModel(t *testing.T) {
 		!strings.Contains(firstString(results["i_a"]["issues"]), servedModelDiffers) || firstString(results["i_a"]["labels"]) == "[]" {
 		t.Fatalf("states %s, i_a %v", requestStates(t, db), results["i_a"])
 	}
+	// Its usage is recorded under the served name and stays unpriced: no
+	// family match lends it the requested model's rates.
+	if usage := labelingRows(t, db, `SELECT model,cost_status,cost_usd FROM usage`); len(usage) != 1 || usage[0]["model"] != "claude-haiku-5-5-20261001" ||
+		usage[0]["cost_status"] != "unpriced" || usage[0]["cost_usd"] != nil {
+		t.Fatalf("usage = %v", usage)
+	}
+	// The job does not run again until the operator decides.
+	opts.Create, opts.AllowUnpriced = false, true
+	if err := runLabelingJob(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "--accept-served-model") || fakeCalls(t, calls) != 1 {
+		t.Fatalf("rerun = %v after %d calls", err, fakeCalls(t, calls))
+	}
+	// Accepting the model releases the held items (issue kept) and admits
+	// later attempts it serves; the decision is in the ledger.
+	opts.AcceptServedModel = "claude-haiku-5-5-20261001"
+	if err := runLabelingJob(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	results = itemOutcomes(t, db, "pilot:000001/1")
+	later := itemOutcomes(t, db, "pilot:000002/1")
+	accepted := labelingRows(t, db, `SELECT model,accepted_at FROM accepted_models`)
+	if requestStates(t, db) != "completed,completed" || results["i_a"]["outcome"] != itemUsable || results["i_a"]["served_model"] != servedModelAccepted ||
+		!strings.Contains(firstString(results["i_a"]["issues"]), servedModelDiffers) || later["i_f"]["outcome"] != itemUsable || len(accepted) != 1 || accepted[0]["accepted_at"] == nil {
+		t.Fatalf("states %s, i_a %v, i_f %v, accepted %v", requestStates(t, db), results["i_a"], later["i_f"], accepted)
+	}
+	// Re-queueing is the other decision.
+	dir = writeLabelingFixture(t, labelingFixtureUnits())
+	cli, calls, _ = fakeLabelingCLI(t, "other-model,ok")
+	opts = labelingTestOptions(dir, cli, io.Discard)
+	opts.Concurrency, opts.Spec.LimitItems = 1, 4
+	runLabelingJob(context.Background(), opts)
+	if err := runLabelingCLI("", []string{"reconcile", "--dir", dir, "--job", "pilot", "--requeue-held"}, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	opts.Create, opts.AllowUnpriced = false, true
+	if err := runLabelingJob(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	if got := requestStates(t, openFixtureLedger(t, dir)); got != requestCompleted || fakeCalls(t, calls) != 2 {
+		t.Fatalf("after requeue: %s, %d calls", got, fakeCalls(t, calls))
+	}
+}
+
+func TestLabelingRunLedgerErrorLetsInFlightFinish(t *testing.T) {
+	quickLabelingTimers(t)
+	leases := 0
+	override(t, &labelingLeaseHook, func() error {
+		leases++
+		if leases == 3 {
+			return errors.New("disk I/O error")
+		}
+		return nil
+	})
+	dir := writeLabelingFixture(t, labelingFixtureUnits())
+	cli, calls, _ := fakeLabelingCLI(t, "slow")
+	opts := labelingTestOptions(dir, cli, io.Discard)
+	opts.Concurrency, opts.Spec.ItemsPerRequest = 3, 1
+	if err := runLabelingJob(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "disk I/O error") {
+		t.Fatalf("run = %v", err)
+	}
+	db := openFixtureLedger(t, dir)
+	if got := requestStates(t, db); got != "completed,completed,pending,pending,pending,pending" || fakeCalls(t, calls) != 2 {
+		t.Fatalf("states %s after %d calls", got, fakeCalls(t, calls))
+	}
+}
+
+func TestLabelingCodexAnswerWithoutTerminal(t *testing.T) {
+	quickLabelingTimers(t)
+	dir := writeLabelingFixture(t, labelingFixtureUnits())
+	cli, calls, _ := fakeLabelingCLI(t, "answer-hang")
+	opts := labelingTestOptions(dir, cli, io.Discard)
+	opts.Spec = labelingJobSpec{Route: labelingRouteCodex, Model: "gpt-6-luna", Effort: "high", LimitItems: 4}
+	opts.Timeout = 500 * time.Millisecond
+	if err := runLabelingJob(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	db := openFixtureLedger(t, dir)
+	attempt, _ := labelingAttemptRecord(db, "pilot:000001/1")
+	status, _ := labelingJobStatus(db, "pilot", labelingTestDay)
+	if requestStates(t, db) != requestCompleted || fakeCalls(t, calls) != 1 || !strings.Contains(compactJSON(attempt["problems"]), "answer_without_terminal") ||
+		attempt["usage_missing"] != int64(1) || status["spend"].(labelingSpend).UnknownAttempts != 1 {
+		t.Fatalf("states %s, attempt %v, spend %+v", requestStates(t, db), attempt, status["spend"])
+	}
+	var out strings.Builder
+	if err := runLabelingCLI("", []string{"reconcile", "--dir", dir, "--job", "pilot"}, &out, io.Discard); err != nil || !strings.Contains(out.String(), "pilot:000001/1 completed without usage") {
+		t.Fatalf("reconcile = %v: %s", err, out.String())
+	}
+}
+
+func TestLabelingRunWithoutUsageHalts(t *testing.T) {
+	quickLabelingTimers(t)
+	dir := writeLabelingFixture(t, labelingFixtureUnits())
+	cli, _, _ := fakeLabelingCLI(t, "no-usage")
+	opts := labelingTestOptions(dir, cli, io.Discard)
+	opts.Concurrency = 1
+	if err := runLabelingJob(context.Background(), opts); !errors.Is(err, errLabelingHalted) || !strings.Contains(err.Error(), "without usage") {
+		t.Fatalf("run = %v", err)
+	}
+	db := openFixtureLedger(t, dir)
+	status, _ := labelingJobStatus(db, "pilot", labelingTestDay)
+	if requestStates(t, db) != "completed,pending" || status["spend"].(labelingSpend).UnknownExposure <= 0 {
+		t.Fatalf("states %s, spend %+v", requestStates(t, db), status["spend"])
+	}
+}
+
+func TestLabelingRunnerDiesBeforeTheResult(t *testing.T) {
+	quickLabelingTimers(t)
+	dir := writeLabelingFixture(t, labelingFixtureUnits())
+	cli, calls, _ := fakeLabelingCLI(t, "init-hang")
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := exec.Command(binary, "-test.run=^TestLabelingHelperRunner$")
+	runner.Env = append(os.Environ(), testProcessEnv+"=1", "PHAROS_LABELING_HELPER_DIR="+dir, "PHAROS_LABELING_HELPER_CLI="+cli)
+	if err := runner.Start(); err != nil {
+		t.Fatal(err)
+	}
+	events := filepath.Join(dir, "attempts", "pilot", "000001", "1", "events.jsonl")
+	for deadline := time.Now().Add(20 * time.Second); ; {
+		if data, _ := os.ReadFile(events); strings.Contains(string(data), `"subtype":"init"`) {
+			break
+		}
+		if time.Now().After(deadline) {
+			runner.Process.Kill()
+			t.Fatal("the session never started")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	runner.Process.Kill()
+	runner.Wait()
+	opts := labelingTestOptions(dir, cli, io.Discard)
+	opts.Create = false
+	for run := 0; run < 2; run++ {
+		if err := runLabelingJob(context.Background(), opts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db := openFixtureLedger(t, dir)
+	attempt, _ := labelingAttemptRecord(db, "pilot:000001/1")
+	if requestStates(t, db) != requestUnknown || fakeCalls(t, calls) != 1 || attempt["recovered"] != int64(1) || attempt["usage_missing"] != int64(1) {
+		t.Fatalf("states %s after %d calls, attempt %v", requestStates(t, db), fakeCalls(t, calls), attempt)
+	}
+}
+
+func TestLabelingRefusalsAreNotResent(t *testing.T) {
+	quickLabelingTimers(t)
+	old := writeLabelingFixture(t, labelingFixtureUnits())
+	cli, calls, _ := fakeLabelingCLI(t, "refusal,ok")
+	opts := labelingTestOptions(old, cli, io.Discard)
+	opts.Concurrency = 1
+	if err := runLabelingJob(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	db := openFixtureLedger(t, old)
+	status, _ := labelingJobStatus(db, "pilot", labelingTestDay)
+	if status["refused_items_co_packed"] != 4 {
+		t.Fatalf("co-packed refusals = %v", status["refused_items_co_packed"])
+	}
+	// A second job on the same route skips the refused items.
+	second := labelingTestOptions(old, cli, io.Discard)
+	second.Job, second.CreateOnly = "again", true
+	var out strings.Builder
+	second.Out = &out
+	if err := runLabelingJob(context.Background(), second); err != nil || !strings.Contains(out.String(), `"refused_on_route_skipped": 4`) {
+		t.Fatalf("second job = %v: %s", err, out.String())
+	}
+	// A new snapshot imports the refusals as refusals; nothing is re-sent.
+	dir := writeLabelingFixture(t, labelingFixtureUnits())
+	out.Reset()
+	if err := runLabelingCLI("", []string{"import-results", "--dir", dir, "--from", old, "--job", "pilot"}, &out, io.Discard); err != nil || !strings.Contains(out.String(), "0 items left") {
+		t.Fatalf("import = %v: %s", err, out.String())
+	}
+	if rows := labelingRows(t, openFixtureLedger(t, dir), `SELECT COUNT(*) n FROM item_results WHERE outcome='refused'`); rows[0]["n"] != int64(4) || fakeCalls(t, calls) != 2 {
+		t.Fatalf("imported refusals = %v after %d calls", rows, fakeCalls(t, calls))
+	}
+}
+
+func TestLabelingResumeChecksTheContract(t *testing.T) {
+	quickLabelingTimers(t)
+	dir := writeLabelingFixture(t, labelingFixtureUnits())
+	cli, calls, _ := fakeLabelingCLI(t, "ok")
+	opts := labelingTestOptions(dir, cli, io.Discard)
+	opts.CreateOnly = true
+	if err := runLabelingJob(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	db := openFixtureLedger(t, dir)
+	opts.Create, opts.CreateOnly = false, false
+	execTx(t, db, `UPDATE jobs SET prompt_template_sha256='0000'`)
+	if err := runLabelingJob(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "different prompt") {
+		t.Fatalf("changed template = %v", err)
+	}
+	execTx(t, db, `UPDATE jobs SET prompt_template_sha256='`+labelingPromptTemplateHash(labelingPromptPieces)+`'`, `UPDATE items SET text='Please fix it now.' WHERE id='i_b'`)
+	if err := runLabelingJob(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "no longer match") || fakeCalls(t, calls) != 0 {
+		t.Fatalf("changed item = %v", err)
+	}
+}
+
+func TestLabelingStopBetweenLeaseAndSubmit(t *testing.T) {
+	quickLabelingTimers(t)
+	dir := writeLabelingFixture(t, labelingFixtureUnits())
+	open := labelingOpenReceipt
+	// The stop arrives after the request was leased and its files written.
+	override(t, &labelingOpenReceipt, func(path string) (labelingReceiptFile, error) {
+		if err := requestLabelingStop(dir, "pilot"); err != nil {
+			return nil, err
+		}
+		return open(path)
+	})
+	cli, calls, _ := fakeLabelingCLI(t, "ok")
+	opts := labelingTestOptions(dir, cli, io.Discard)
+	opts.Concurrency = 1
+	if err := runLabelingJob(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	if got := requestStates(t, openFixtureLedger(t, dir)); got != "stopped,pending" || fakeCalls(t, calls) != 0 {
+		t.Fatalf("states %s after %d calls", got, fakeCalls(t, calls))
+	}
 }
 
 func TestLabelingRunUsageAndCodexOutcomes(t *testing.T) {
@@ -1025,6 +1261,22 @@ func TestLabelingRunUsageAndCodexOutcomes(t *testing.T) {
 	if main == nil || auxiliary == nil || !strings.Contains(firstString(main["tokens"]), `"cache_creation_1h_input_tokens":15000`) ||
 		!strings.Contains(firstString(main["tokens"]), `"cache_creation_input_tokens":20000`) || !strings.Contains(firstString(main["model_source"]), "1h") {
 		t.Fatalf("usage = %v", usage)
+	}
+	// Two cache writers and one-hour writes that cannot be assigned: every
+	// write is priced at the one-hour rate, marked assumed.
+	dir = writeLabelingFixture(t, labelingFixtureUnits())
+	cli, _, _ = fakeLabelingCLI(t, "ambiguous-usage")
+	opts = labelingTestOptions(dir, cli, io.Discard)
+	opts.Spec.LimitItems = 4
+	if err := runLabelingJob(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range labelingRows(t, openFixtureLedger(t, dir), `SELECT * FROM usage`) {
+		var tokens map[string]int64
+		json.Unmarshal([]byte(firstString(row["tokens"])), &tokens)
+		if row["cost_status"] != "assumed" || tokens["cache_creation_1h_input_tokens"] != tokens["cache_creation_input_tokens"] || tokens["cache_creation_input_tokens"] == 0 {
+			t.Fatalf("ambiguous usage = %v", row)
+		}
 	}
 	// Codex: a failed turn after the session began is failed and possibly
 	// charged; a tool item invalidates; a missing last-message file falls
@@ -1114,6 +1366,14 @@ func TestLabelingCommandGuards(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "finite") {
 			t.Fatalf("--max-usd %s = %v", value, err)
 		}
+	}
+	// Only a CLI that cannot start is known not to have been sent.
+	missing := labelingTestOptions(writeLabelingFixture(t, labelingFixtureUnits()), filepath.Join(t.TempDir(), "no-such-cli"), io.Discard)
+	missing.Spec.LimitItems, missing.Concurrency = 4, 1
+	runLabelingJob(context.Background(), missing)
+	if rows := labelingRows(t, openFixtureLedger(t, missing.Dir), `SELECT outcome,not_sent,usage_missing FROM attempts`); len(rows) != 1 || rows[0]["outcome"] != requestFailed ||
+		rows[0]["not_sent"] != int64(1) || rows[0]["usage_missing"] != int64(0) {
+		t.Fatalf("missing CLI = %v", rows)
 	}
 	opts := labelingTestOptions(dir, "unused", io.Discard)
 	opts.MaxUSD = math.NaN()

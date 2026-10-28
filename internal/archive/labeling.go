@@ -30,9 +30,9 @@ const labelingUsage = `usage:
   pharos [--config PATH] labeling prepare --dir DIR [--fresh-days 14] [--limit-conversations N] [--conversation ID ...] [--splits-from OLD_DIR] --catalog COPY --snapshot-copy [--allow-stale-shm] [--replace] [--dry-run]
   pharos labeling plan --dir DIR --route claude|codex --model M --effort E [--items-per-request 4] [--max-request-tokens 24000] [--max-request-chars N] [--include-duplicates] [--concurrency 3] [--cohort C ...] [--split S ...] [--limit-items N]
   pharos labeling status --dir DIR [--job NAME [--json]]
-  pharos labeling run --dir DIR --job NAME [--create --route claude|codex --model M --effort E [--prompt V] [--cohort C ...] [--split S ...] [--item ID ...] [--limit-items N] [--items-per-request 4] [--max-request-tokens 24000] [--max-request-chars N] [--include-duplicates] [--create-only]] --max-usd X [--concurrency 3] [--timeout 330s] [--retry-invalid 1] [--max-consecutive-failures 3] [--allow-unpriced]
+  pharos labeling run --dir DIR --job NAME [--create --route claude|codex --model M --effort E [--prompt V] [--cohort C ...] [--split S ...] [--item ID ...] [--limit-items N] [--items-per-request 4] [--max-request-tokens 24000] [--max-request-chars N] [--include-duplicates] [--create-only]] --max-usd X [--concurrency 3] [--timeout 330s] [--retry-invalid 1] [--max-consecutive-failures 3] [--allow-unpriced] [--accept-served-model MODEL]
   pharos labeling stop --dir DIR --job NAME
-  pharos labeling reconcile --dir DIR --job NAME [--retry-unknown] [--retry-failed]
+  pharos labeling reconcile --dir DIR --job NAME [--retry-unknown] [--retry-failed] [--requeue-held]
   pharos labeling import-results --dir DIR --from OLD_DIR --job NAME`
 
 // runLabelingCLI runs the offline labeling commands. None of them opens the
@@ -74,7 +74,8 @@ func runLabelingCLI(configPath string, args []string, stdout, stderr io.Writer) 
 		job := flags.String("job", "", "labeling job")
 		from := flags.String("from", "", "earlier dataset whose job results to import")
 		retryUnknown := flags.Bool("retry-unknown", false, "re-queue requests whose outcome is unknown (they may have been charged)")
-		retryFailed := flags.Bool("retry-failed", false, "re-queue failed requests")
+		retryFailed := flags.Bool("retry-failed", false, "re-queue failed requests (they may have been charged)")
+		requeueHeld := flags.Bool("requeue-held", false, "re-queue requests held because another model answered")
 		if err := flags.Parse(args[1:]); err != nil || *dir == "" || *job == "" || flags.NArg() != 0 || (*from != "") != (args[0] == "import-results") {
 			return errors.New(labelingUsage)
 		}
@@ -86,7 +87,9 @@ func runLabelingCLI(configPath string, args []string, stdout, stderr io.Writer) 
 			fmt.Fprintf(stdout, "Asked the runner of %s to stop: it leases no more requests and lets in-flight attempts finish.\n", *job)
 			return nil
 		case "reconcile":
-			return withLabelingJobLock(*dir, *job, false, func(db *sql.DB) error { return reconcileLabelingJob(db, *job, *retryUnknown, *retryFailed, stdout) })
+			return withLabelingJobLock(*dir, *job, false, func(db *sql.DB) error {
+				return reconcileLabelingJob(db, *job, *retryUnknown, *retryFailed, *requeueHeld, stdout)
+			})
 		default:
 			return withLabelingJobLock(*dir, *job, true, func(*sql.DB) error {
 				return importLabelingResults(context.Background(), *dir, *from, *job, stdout)
@@ -123,6 +126,7 @@ func runLabelingRunCLI(args []string, stdout, stderr io.Writer) error {
 	flags.IntVar(&opts.RetryInvalid, "retry-invalid", 1, "re-send an invalid or missing item up to N more times")
 	flags.BoolVar(&opts.AllowUnpriced, "allow-unpriced", false, "run although some usage cannot be priced (its spend is then unbounded)")
 	flags.IntVar(&opts.MaxConsecutiveFailures, "max-consecutive-failures", 3, "halt after this many failed or unknown attempts in a row")
+	flags.StringVar(&opts.AcceptServedModel, "accept-served-model", "", "accept results served by this model instead of the requested one (recorded in the job)")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || opts.Dir == "" || opts.Job == "" || opts.CreateOnly && !opts.Create || opts.RetryInvalid < 0 || opts.MaxConsecutiveFailures < 1 {
 		return errors.New(labelingUsage)
 	}

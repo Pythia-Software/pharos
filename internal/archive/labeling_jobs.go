@@ -25,7 +25,7 @@ import (
 const labelingJobSQL = `
 CREATE TABLE IF NOT EXISTS jobs(
   name TEXT PRIMARY KEY, created_at TEXT NOT NULL, route TEXT NOT NULL, model TEXT NOT NULL, effort TEXT NOT NULL,
-  prompt_version TEXT NOT NULL, schema_version TEXT NOT NULL, schema_sha256 TEXT NOT NULL, taxonomy_version TEXT NOT NULL, taxonomy_sha256 TEXT NOT NULL,
+  prompt_version TEXT NOT NULL, prompt_template_sha256 TEXT NOT NULL, schema_version TEXT NOT NULL, schema_sha256 TEXT NOT NULL, taxonomy_version TEXT NOT NULL, taxonomy_sha256 TEXT NOT NULL,
   dataset_contracts TEXT NOT NULL, selection TEXT NOT NULL, packing TEXT NOT NULL, imported_from TEXT,
   served_model TEXT NOT NULL, cli_path TEXT, cli_version TEXT, stop_requested INTEGER NOT NULL DEFAULT 0, run_started_at TEXT, run_settings TEXT, halted TEXT);
 CREATE TABLE IF NOT EXISTS requests(
@@ -42,12 +42,15 @@ CREATE TABLE IF NOT EXISTS attempts(
   submitted_at TEXT NOT NULL, finished_at TEXT, day TEXT NOT NULL, dir TEXT NOT NULL, prompt_sha256 TEXT NOT NULL, session_id TEXT,
   reported_models TEXT, pid INTEGER, exit_code INTEGER, terminal_event TEXT, cleanup TEXT, tool_events TEXT, refusal TEXT, error TEXT,
   cli_cost_usd REAL, duration_ms INTEGER, problems TEXT, recovered INTEGER NOT NULL DEFAULT 0,
-  not_sent INTEGER NOT NULL DEFAULT 0, served_model TEXT, cli_version TEXT, process_start TEXT, receipt_error TEXT);
+  not_sent INTEGER NOT NULL DEFAULT 0, served_model TEXT, cli_version TEXT, process_start TEXT, receipt_error TEXT,
+  usage_missing INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS attempts_request_idx ON attempts(request_id, number);
 CREATE TABLE IF NOT EXISTS item_results(
   attempt_id TEXT NOT NULL, item_id TEXT NOT NULL, job TEXT NOT NULL, request_id TEXT, outcome TEXT NOT NULL,
   labels TEXT NOT NULL, uncertain_labels TEXT NOT NULL, evidence TEXT NOT NULL, need_context INTEGER, issues TEXT NOT NULL,
-  annotation TEXT, contract_hash TEXT NOT NULL, imported_from TEXT, served_model TEXT, created_at TEXT NOT NULL, PRIMARY KEY(attempt_id, item_id));
+  annotation TEXT, contract_hash TEXT NOT NULL, imported_from TEXT, served_model TEXT, labels_evidence TEXT NOT NULL DEFAULT '{}', held_outcome TEXT,
+  created_at TEXT NOT NULL, PRIMARY KEY(attempt_id, item_id));
+CREATE TABLE IF NOT EXISTS accepted_models(job TEXT NOT NULL, model TEXT NOT NULL, accepted_at TEXT NOT NULL, PRIMARY KEY(job, model));
 CREATE INDEX IF NOT EXISTS item_results_job_item_idx ON item_results(job, item_id);
 CREATE TABLE IF NOT EXISTS usage(
   attempt_id TEXT NOT NULL, model TEXT NOT NULL, model_source TEXT NOT NULL, tokens TEXT NOT NULL, cost_usd REAL, cost_status TEXT NOT NULL,
@@ -76,6 +79,8 @@ const (
 	servedModelVerified   = "verified"
 	servedModelUnverified = "served_model_unverified"
 	servedModelDiffers    = "served_model_differs"
+	// A served model that differs, accepted by the operator.
+	servedModelAccepted = "served_model_accepted"
 )
 
 var labelingRequestStates = []string{requestPending, requestLeased, requestSubmitted, requestCompleted, requestInvalid, requestRefused,
@@ -140,6 +145,16 @@ func loadLabelingJob(db *sql.DB, name string) (labelingJob, error) {
 	}
 	job.CLIVersion, job.CLIPath = version.String, path.String
 	return job, err
+}
+
+// labelingPromptTemplateHash identifies a prompt version's fixed text (the
+// prompt with no items), so a resumed job notices a changed build.
+func labelingPromptTemplateHash(version string) string {
+	prompt, err := buildLabelingPrompt(version, nil)
+	if err != nil {
+		return ""
+	}
+	return hashBytes([]byte(prompt))
 }
 
 // labelingContractHash identifies what the model saw for an item: prompt
@@ -276,9 +291,22 @@ func createLabelingJob(ctx context.Context, db *sql.DB, name string, spec labeli
 	if err != nil {
 		return nil, err
 	}
-	send := []labelingSelectedItem{}
+	// Refusals are never re-sent on the same route, by any job.
+	refusedRows, err := queryMaps(db, `SELECT DISTINCT r.item_id FROM item_results r JOIN jobs j ON j.name=r.job WHERE j.route=? AND r.outcome='refused'`, spec.Route)
+	if err != nil {
+		return nil, err
+	}
+	refused := map[string]bool{}
+	for _, row := range refusedRows {
+		refused[firstString(row["item_id"])] = true
+	}
+	send, refusedSkipped := []labelingSelectedItem{}, 0
 	for _, item := range items {
-		if !skip[item.row.ID] {
+		switch {
+		case skip[item.row.ID]:
+		case refused[item.row.ID]:
+			refusedSkipped++
+		default:
 			send = append(send, item)
 		}
 	}
@@ -304,7 +332,7 @@ func createLabelingJob(ctx context.Context, db *sql.DB, name string, spec labeli
 	}
 	selection := map[string]any{"cohorts": spec.Cohorts, "splits": spec.Splits, "items": spec.Items, "limit_items": spec.LimitItems,
 		"include_duplicates": spec.IncludeDuplicates, "duplicate_items_skipped": duplicates, "selected_items": len(items),
-		"imported_items": len(items) - len(send), "oversize_items": oversized, "requests": len(packed)}
+		"imported_items": len(skip), "refused_on_route_skipped": refusedSkipped, "oversize_items": oversized, "requests": len(packed)}
 	packing := map[string]any{"items_per_request": spec.ItemsPerRequest, "max_request_tokens": spec.MaxRequestTokens,
 		"max_request_chars": spec.MaxRequestChars, "overhead_tokens": calibration.overheadTokens, "output_tokens_per_item": calibration.outputItem,
 		"chars_per_token": labelingCharsPerToken, "calibration": calibration.source}
@@ -318,9 +346,9 @@ func createLabelingJob(ctx context.Context, db *sql.DB, name string, spec labeli
 		served = servedModelUnverified
 	}
 	if _, err := tx.Exec(`INSERT INTO jobs(name,created_at,route,model,effort,prompt_version,schema_version,schema_sha256,taxonomy_version,taxonomy_sha256,
-		dataset_contracts,selection,packing,imported_from,served_model) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		dataset_contracts,selection,packing,imported_from,served_model,prompt_template_sha256) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		name, now(), spec.Route, spec.Model, spec.Effort, spec.Prompt, labelingSchemaVersion, hashBytes([]byte(schema)), labelingTaxonomyVersion,
-		hashBytes(labelingTaxonomy), compactJSON(manifest["contracts"]), compactJSON(selection), compactJSON(packing), nilIfEmpty(importedFrom), served); err != nil {
+		hashBytes(labelingTaxonomy), compactJSON(manifest["contracts"]), compactJSON(selection), compactJSON(packing), nilIfEmpty(importedFrom), served, labelingPromptTemplateHash(spec.Prompt)); err != nil {
 		return nil, err
 	}
 	for position, request := range packed {
@@ -357,8 +385,9 @@ func createLabelingJob(ctx context.Context, db *sql.DB, name string, spec labeli
 	if err := tx.QueryRow(`SELECT COUNT(DISTINCT item_id) FROM item_results WHERE job=? AND imported_from IS NOT NULL`, name).Scan(&copied); err != nil {
 		return nil, err
 	}
-	if requested+copied+len(oversized) != len(items) {
-		return nil, fmt.Errorf("job %s: %d selected items but %d requested, %d imported and %d oversize; nothing was written", name, len(items), requested, copied, len(oversized))
+	if requested+copied+len(oversized)+refusedSkipped != len(items) {
+		return nil, fmt.Errorf("job %s: %d selected items but %d requested, %d imported, %d refused before and %d oversize; nothing was written",
+			name, len(items), requested, copied, refusedSkipped, len(oversized))
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -406,7 +435,7 @@ func labelingRetryRequest(tx *sql.Tx, job, retryOf string, items []string, outpu
 // labelingRequestEstimate prices a request's estimated tokens for the
 // ceiling: nil when the model has no price.
 func labelingRequestEstimate(book priceBook, model, day string, input, output float64) *float64 {
-	cost := book.cost(model, day, map[string]int64{"uncached_input_tokens": int64(math.Ceil(input)), "output_tokens": int64(math.Ceil(output))})
+	cost := labelingExactCost(book, model, day, map[string]int64{"uncached_input_tokens": int64(math.Ceil(input)), "output_tokens": int64(math.Ceil(output))})
 	if cost.status == "unpriced" || cost.cost == nil {
 		return nil
 	}
@@ -434,12 +463,19 @@ type labelingSpend struct {
 func computeLabelingSpend(db *sql.DB, job labelingJob, book priceBook, day string) (labelingSpend, error) {
 	spend := labelingSpend{PartialTokens: map[string]map[string]int64{}, EstimateDay: day,
 		CLIReportedNote: "the CLIs' own cost estimates, not authoritative: known spend is priced from usage with the Pharos price book"}
+	// One transaction: a request finishing between two reads can then be
+	// counted neither as known nor as in flight.
+	tx, err := db.Begin()
+	if err != nil {
+		return spend, err
+	}
+	defer tx.Rollback()
 	var known, reported sql.NullFloat64
-	if err := db.QueryRow(`SELECT SUM(u.cost_usd) FROM usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.job=?`, job.Name).Scan(&known); err != nil {
+	if err := tx.QueryRow(`SELECT SUM(u.cost_usd) FROM usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.job=?`, job.Name).Scan(&known); err != nil {
 		return spend, err
 	}
 	spend.Known = known.Float64
-	rows, err := queryMaps(db, `SELECT u.attempt_id,u.model,u.tokens,u.cost_status FROM usage u JOIN attempts a ON a.id=u.attempt_id
+	rows, err := queryMaps(tx, `SELECT u.attempt_id,u.model,u.tokens,u.cost_status FROM usage u JOIN attempts a ON a.id=u.attempt_id
 		WHERE a.job=? AND u.cost_status IN ('partial','unpriced')`, job.Name)
 	if err != nil {
 		return spend, err
@@ -472,20 +508,21 @@ func computeLabelingSpend(db *sql.DB, job labelingJob, book priceBook, day strin
 	}
 	var input, output sql.NullFloat64
 	// Attempts that may have been charged without reporting usage: unknown
-	// outcomes, and failures after the CLI began a session. They stay in
-	// the job's lifetime spend even when re-queued.
-	if err := db.QueryRow(`SELECT COUNT(*),SUM(r.est_input_tokens),SUM(r.est_output_tokens) FROM attempts a JOIN requests r ON r.id=a.request_id
-		WHERE a.job=? AND a.outcome IN ('unknown','failed') AND a.not_sent=0 AND NOT EXISTS(SELECT 1 FROM usage u WHERE u.attempt_id=a.id)`, job.Name).
+	// outcomes, failures after the CLI started, and results whose usage
+	// could not be read. They stay in the job's lifetime spend even when
+	// re-queued.
+	if err := tx.QueryRow(`SELECT COUNT(*),SUM(r.est_input_tokens),SUM(r.est_output_tokens) FROM attempts a JOIN requests r ON r.id=a.request_id
+		WHERE a.job=? AND a.usage_missing=1`, job.Name).
 		Scan(&spend.UnknownAttempts, &input, &output); err != nil {
 		return spend, err
 	}
 	spend.UnknownExposure = estimate(input.Float64, output.Float64)
-	if err := db.QueryRow(`SELECT SUM(est_input_tokens),SUM(est_output_tokens) FROM requests WHERE job=? AND state IN ('leased','submitted')`, job.Name).
+	if err := tx.QueryRow(`SELECT SUM(est_input_tokens),SUM(est_output_tokens) FROM requests WHERE job=? AND state IN ('leased','submitted')`, job.Name).
 		Scan(&input, &output); err != nil {
 		return spend, err
 	}
 	spend.InFlight = estimate(input.Float64, output.Float64)
-	db.QueryRow(`SELECT SUM(cli_cost_usd) FROM attempts WHERE job=?`, job.Name).Scan(&reported)
+	tx.QueryRow(`SELECT SUM(cli_cost_usd) FROM attempts WHERE job=?`, job.Name).Scan(&reported)
 	spend.CLIReported = reported.Float64
 	spend.CommittedEstimate = spend.Known + spend.UnknownExposure + spend.InFlight
 	return spend, nil
@@ -533,6 +570,10 @@ func labelingJobStatus(db *sql.DB, name string, now time.Time) (map[string]any, 
 	for _, row := range rows {
 		attempts[firstString(row["outcome"])] = int(integer(row["n"]))
 	}
+	// A whole-request refusal marks every item; those packed with others
+	// may be innocent, but are not re-sent on this route.
+	var coPacked int
+	db.QueryRow(`SELECT COUNT(*) FROM item_results r JOIN requests q ON q.id=r.request_id WHERE r.job=? AND r.outcome='refused' AND q.items>1`, name).Scan(&coPacked)
 	var cleaned, recovered int
 	db.QueryRow(`SELECT COUNT(*) FROM attempts WHERE job=? AND cleanup IS NOT NULL AND cleanup<>'[]'`, name).Scan(&cleaned)
 	db.QueryRow(`SELECT COUNT(*) FROM attempts WHERE job=? AND recovered=1`, name).Scan(&recovered)
@@ -546,7 +587,8 @@ func labelingJobStatus(db *sql.DB, name string, now time.Time) (map[string]any, 
 	}
 	status := map[string]any{"job": name, "route": job.Route, "model": job.Model, "effort": job.Effort, "prompt": job.Prompt, "cli_version": job.CLIVersion,
 		"requests": total, "request_states": states, "item_outcomes": outcomes, "selection": selection, "attempts": attempts,
-		"attempts_cleaned_up": cleaned, "attempts_recovered_from_stream": recovered, "spend": spend}
+		"attempts_cleaned_up": cleaned, "attempts_recovered_from_stream": recovered, "spend": spend,
+		"refused_items_co_packed": coPacked}
 	if halted.Valid {
 		status["halted"] = halted.String
 	}
@@ -619,31 +661,49 @@ func labelingJobsSummary(dir string, w io.Writer) error {
 // reconcileLabelingJob lists requests whose outcome needs a decision and,
 // when asked, re-queues unknown or failed ones. Nothing is re-queued
 // implicitly: an unknown request may have been charged.
-func reconcileLabelingJob(db *sql.DB, name string, retryUnknown, retryFailed bool, w io.Writer) error {
+func reconcileLabelingJob(db *sql.DB, name string, retryUnknown, retryFailed, requeueHeld bool, w io.Writer) error {
 	if _, err := loadLabelingJob(db, name); err != nil {
 		return err
 	}
-	rows, err := queryMaps(db, `SELECT r.id,r.state,r.attempts,a.id attempt,a.error,a.cleanup,a.exit_code,a.dir FROM requests r
-		LEFT JOIN attempts a ON a.request_id=r.id AND a.number=r.attempts WHERE r.job=? AND r.state IN ('unknown','failed','refused','invalid') ORDER BY r.position`, name)
+	rows, err := queryMaps(db, `SELECT r.id,r.state,r.attempts,a.id attempt,a.error,a.exit_code,a.dir,a.problems,a.usage_missing FROM requests r
+		LEFT JOIN attempts a ON a.request_id=r.id AND a.number=r.attempts WHERE r.job=? AND r.state IN ('unknown','failed','refused','invalid','held') ORDER BY r.position`, name)
 	if err != nil {
 		return err
 	}
+	// Attempts whose cost is only estimated, whatever their outcome: no
+	// usage was read (an answer saved without a terminal event, or a
+	// terminal event without usage).
+	estimated, err := queryMaps(db, `SELECT a.id,a.outcome,a.problems,a.dir FROM attempts a JOIN requests r ON r.id=a.request_id
+		WHERE a.job=? AND a.usage_missing=1 AND a.outcome NOT IN ('unknown','failed') ORDER BY r.position,a.number`, name)
+	if err != nil {
+		return err
+	}
+	for _, row := range estimated {
+		fmt.Fprintf(w, "%s %s without usage (cost estimated; problems %s; receipt %s)\n", row["id"], row["outcome"], firstString(row["problems"]), firstString(row["dir"]))
+	}
 	if len(rows) == 0 {
-		fmt.Fprintln(w, "No unknown, failed, refused or invalid requests.")
+		fmt.Fprintln(w, "No unknown, failed, refused, invalid or held requests.")
 		return nil
 	}
+	explain := map[string]string{"no_stream_events": "the CLI started but printed no event; it may still have reached the provider",
+		"answer_without_terminal": "an answer was saved without the turn's end; it was validated, its usage is unknown"}
 	requeue := []string{}
 	for _, row := range rows {
 		state := firstString(row["state"])
 		fmt.Fprintf(w, "%s %s after %d attempts (last %s, exit %v, error %q, receipt %s)\n", row["id"], state, integer(row["attempts"]),
 			row["attempt"], row["exit_code"], firstString(row["error"]), firstString(row["dir"]))
-		if state == requestUnknown && retryUnknown || state == requestFailed && retryFailed {
+		for key, text := range explain {
+			if strings.Contains(firstString(row["problems"]), key) {
+				fmt.Fprintf(w, "  %s: %s\n", key, text)
+			}
+		}
+		if state == requestUnknown && retryUnknown || state == requestFailed && retryFailed || state == requestHeld && requeueHeld {
 			requeue = append(requeue, firstString(row["id"]))
 		}
 	}
 	if len(requeue) == 0 {
-		if !retryUnknown && !retryFailed {
-			fmt.Fprintln(w, "Unknown requests may have been charged; re-queue them explicitly with --retry-unknown, failed ones with --retry-failed. Refused requests are never retried on the same route; invalid items are retried by the run's --retry-invalid.")
+		if !retryUnknown && !retryFailed && !requeueHeld {
+			fmt.Fprintln(w, "Unknown and failed requests may have been charged; re-queue them explicitly with --retry-unknown or --retry-failed, held ones with --requeue-held (or accept the model with run --accept-served-model). Refused requests are never retried on the same route; invalid items are retried by the run's --retry-invalid.")
 		}
 		return nil
 	}
@@ -699,9 +759,10 @@ func importLabelingResults(ctx context.Context, dir, from, name string, w io.Wri
 		Items: strs(selection["items"]), LimitItems: int(integer(selection["limit_items"])), IncludeDuplicates: selection["include_duplicates"] == true,
 		ItemsPerRequest: int(integer(packing["items_per_request"])), MaxRequestChars: int(integer(packing["max_request_chars"]))}
 	spec.MaxRequestTokens, _ = number(packing["max_request_tokens"])
-	// The latest usable result per item in the old job.
+	// The latest usable or refused result per item in the old job: a
+	// refusal is carried, so the same material is not sent again.
 	previous, err := queryMaps(old, `SELECT * FROM (SELECT r.*, ROW_NUMBER() OVER (PARTITION BY r.item_id ORDER BY r.created_at DESC, r.rowid DESC) k
-		FROM item_results r WHERE r.job=?) WHERE k=1 AND outcome IN ('usable','usable_with_evidence_issues')`, name)
+		FROM item_results r WHERE r.job=?) WHERE k=1 AND outcome IN ('usable','usable_with_evidence_issues','refused')`, name)
 	if err != nil {
 		return err
 	}
@@ -734,6 +795,13 @@ func importLabelingResults(ctx context.Context, dir, from, name string, w io.Wri
 		hash := labelingContractHash(prompt, item.row)
 		if hash != firstString(row["contract_hash"]) {
 			stale++
+			continue
+		}
+		if firstString(row["outcome"]) == itemRefused {
+			var issues []string
+			json.Unmarshal([]byte(firstString(row["issues"])), &issues)
+			refused := labelingItemResult{ItemID: id, Outcome: itemRefused, Labels: []string{}, Uncertain: []string{}, Evidence: []labelingEvidence{}, Issues: issues}
+			copies = append(copies, labelingImported{result: refused, hash: hash, from: from + "#" + firstString(row["attempt_id"]), served: firstString(row["served_model"])})
 			continue
 		}
 		var fields map[string]json.RawMessage
@@ -774,10 +842,14 @@ func insertLabelingItemResult(tx *sql.Tx, attempt, job, request string, result l
 	if len(result.Annotation) > 0 {
 		annotation = string(result.Annotation)
 	}
+	labelsEvidence := result.LabelsEvidence
+	if labelsEvidence == nil {
+		labelsEvidence = map[string]string{}
+	}
 	_, err := tx.Exec(`INSERT INTO item_results(attempt_id,item_id,job,request_id,outcome,labels,uncertain_labels,evidence,need_context,issues,annotation,
-		contract_hash,imported_from,served_model,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, attempt, result.ItemID, job, nilIfEmpty(request), result.Outcome,
-		jsonText(result.Labels), jsonText(result.Uncertain), jsonText(result.Evidence), need, jsonText(result.Issues), annotation, hash, nilIfEmpty(importedFrom),
-		nilIfEmpty(served), now())
+		contract_hash,imported_from,served_model,labels_evidence,held_outcome,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, attempt, result.ItemID, job,
+		nilIfEmpty(request), result.Outcome, jsonText(result.Labels), jsonText(result.Uncertain), jsonText(result.Evidence), need, jsonText(result.Issues), annotation,
+		hash, nilIfEmpty(importedFrom), nilIfEmpty(served), jsonText(labelsEvidence), nilIfEmpty(result.HeldOutcome), now())
 	return err
 }
 

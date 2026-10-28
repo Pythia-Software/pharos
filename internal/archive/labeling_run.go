@@ -45,6 +45,9 @@ type labelingRunOptions struct {
 	// MaxConsecutiveFailures halts the run after this many failed or
 	// unknown outcomes in a row (default 3).
 	MaxConsecutiveFailures int
+	// AcceptServedModel records the operator's decision to accept results
+	// served by this model instead of the requested one.
+	AcceptServedModel string
 	// CLIPath runs this executable for the route instead of the one on
 	// PATH; tests point it at a fake CLI.
 	CLIPath string
@@ -72,6 +75,8 @@ type labelingRunner struct {
 	finished                     int
 	cliVersion                   string
 	consecutiveFailures          int
+	accepted                     map[string]bool
+	loopError                    error
 }
 
 func (r *labelingRunner) now() time.Time {
@@ -170,7 +175,21 @@ func runLabelingJob(ctx context.Context, opts labelingRunOptions) error {
 	if r.schema, err = labelingSchemaJSON(); err != nil {
 		return err
 	}
+	if err := verifyLabelingContract(db, job); err != nil {
+		return err
+	}
 	if err := r.prepareFiles(); err != nil {
+		return err
+	}
+	if err := r.acceptServedModel(opts.AcceptServedModel); err != nil {
+		return err
+	}
+	settings := map[string]any{"max_usd": opts.MaxUSD, "concurrency": opts.Concurrency, "timeout_seconds": opts.Timeout.Seconds(),
+		"retry_invalid": opts.RetryInvalid, "allow_unpriced": opts.AllowUnpriced, "max_consecutive_failures": opts.MaxConsecutiveFailures,
+		"accept_served_model": opts.AcceptServedModel, "pid": os.Getpid(), "cli_path": r.cliPath, "cli_version": r.cliVersion}
+	// The previous halt is cleared before recovery, so a halt recovery
+	// raises is the one status shows.
+	if _, err := db.Exec(`UPDATE jobs SET stop_requested=0,halted=NULL,run_started_at=?,run_settings=? WHERE name=?`, now(), compactJSON(settings), job.Name); err != nil {
 		return err
 	}
 	if err := r.recover(); err != nil {
@@ -188,11 +207,29 @@ func runLabelingJob(ctx context.Context, opts labelingRunOptions) error {
 			return fmt.Errorf("job %s holds %d usage records the price book cannot price (see status --json); pass --allow-unpriced to continue", job.Name, unpriced)
 		}
 	}
-	settings := map[string]any{"max_usd": opts.MaxUSD, "concurrency": opts.Concurrency, "timeout_seconds": opts.Timeout.Seconds(),
-		"retry_invalid": opts.RetryInvalid, "allow_unpriced": opts.AllowUnpriced, "max_consecutive_failures": opts.MaxConsecutiveFailures,
-		"pid": os.Getpid(), "cli_path": r.cliPath, "cli_version": r.cliVersion}
-	if _, err := db.Exec(`UPDATE jobs SET stop_requested=0,halted=NULL,run_started_at=?,run_settings=? WHERE name=?`, now(), compactJSON(settings), job.Name); err != nil {
+	// Held results wait for the operator's decision.
+	held, err := queryMaps(db, `SELECT a.reported_models FROM requests q JOIN attempts a ON a.request_id=q.id AND a.number=q.attempts WHERE q.job=? AND q.state='held'`, job.Name)
+	if err != nil {
 		return err
+	}
+	if len(held) > 0 {
+		models := map[string]bool{}
+		for _, row := range held {
+			var reported []string
+			json.Unmarshal([]byte(firstString(row["reported_models"])), &reported)
+			for _, model := range reported {
+				if model != job.Model {
+					models[model] = true
+				}
+			}
+		}
+		names := []string{}
+		for model := range models {
+			names = append(names, model)
+		}
+		sort.Strings(names)
+		return fmt.Errorf("job %s has %d requests held because %s answered instead of %s; run with --accept-served-model MODEL to accept a model (its held results become usable), or re-queue them with labeling reconcile --requeue-held",
+			job.Name, len(held), strings.Join(names, ", "), job.Model)
 	}
 	if err := r.loop(ctx); err != nil {
 		return err
@@ -299,6 +336,127 @@ func (r *labelingRunner) recover() error {
 	return err
 }
 
+// labelingLeaseHook runs before each lease; tests make it fail.
+var labelingLeaseHook = func() error { return nil }
+
+// verifyLabelingContract refuses to resume a job whose frozen contract this
+// build or dataset no longer produces: the schema, taxonomy and prompt
+// template hashes stored at creation, and every unsent item's contract
+// hash.
+func verifyLabelingContract(db *sql.DB, job labelingJob) error {
+	schema, err := labelingSchemaJSON()
+	if err != nil {
+		return err
+	}
+	var schemaHash, taxonomyHash, templateHash string
+	if err := db.QueryRow(`SELECT schema_sha256,taxonomy_sha256,prompt_template_sha256 FROM jobs WHERE name=?`, job.Name).Scan(&schemaHash, &taxonomyHash, &templateHash); err != nil {
+		return err
+	}
+	for _, check := range []struct{ name, stored, current string }{{"schema", schemaHash, hashBytes([]byte(schema))},
+		{"taxonomy", taxonomyHash, hashBytes(labelingTaxonomy)}, {"prompt " + job.Prompt, templateHash, labelingPromptTemplateHash(job.Prompt)}} {
+		if check.stored != check.current {
+			return fmt.Errorf("job %s was created with a different %s (sha256 %.12s, this build has %.12s); its results would not be comparable. Run it with the build that created it, or create a new job",
+				job.Name, check.name, check.stored, check.current)
+		}
+	}
+	rows, err := db.Query(`SELECT i.item_id,i.contract_hash,u.sender_role,u.channel,u.context_prompt,u.context_excerpt,t.text FROM requests q
+		JOIN request_items i ON i.request_id=q.id LEFT JOIN items t ON t.id=i.item_id LEFT JOIN units u ON u.id=t.unit_id
+		WHERE q.job=? AND q.state IN ('pending','leased','stopped')`, job.Name)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	changed := []string{}
+	for rows.Next() {
+		var id, stored string
+		var sender, channel, context, text sql.NullString
+		var excerpt sql.NullBool
+		if err := rows.Scan(&id, &stored, &sender, &channel, &context, &excerpt, &text); err != nil {
+			return err
+		}
+		row := labelingPromptRow{ID: id, Sender: sender.String, Channel: channel.String, Context: context.String, Excerpt: excerpt.Bool, Text: text.String}
+		if !text.Valid || labelingContractHash(job.Prompt, row) != stored {
+			changed = append(changed, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(changed) > 0 {
+		return fmt.Errorf("job %s: %d unsent items no longer match the contract frozen at creation (first: %s); the dataset changed under the job. Create a new job (import-results keeps unchanged results)",
+			job.Name, len(changed), changed[0])
+	}
+	return nil
+}
+
+// acceptServedModel records the operator's acceptance of a served model,
+// loads every accepted model, and releases held requests whose differing
+// models are all accepted: their held items return to the outcome they
+// had, keeping the served_model_differs issue.
+func (r *labelingRunner) acceptServedModel(model string) error {
+	if model != "" {
+		if _, err := r.db.Exec(`INSERT OR IGNORE INTO accepted_models(job,model,accepted_at) VALUES(?,?,?)`, r.job.Name, model, now()); err != nil {
+			return err
+		}
+	}
+	rows, err := queryMaps(r.db, `SELECT model FROM accepted_models WHERE job=?`, r.job.Name)
+	if err != nil {
+		return err
+	}
+	r.accepted = map[string]bool{}
+	for _, row := range rows {
+		r.accepted[firstString(row["model"])] = true
+	}
+	held, err := queryMaps(r.db, `SELECT q.id,a.id attempt,a.reported_models FROM requests q JOIN attempts a ON a.request_id=q.id AND a.number=q.attempts
+		WHERE q.job=? AND q.state='held'`, r.job.Name)
+	if err != nil {
+		return err
+	}
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	released := 0
+	for _, row := range held {
+		var reported []string
+		json.Unmarshal([]byte(firstString(row["reported_models"])), &reported)
+		accepted := true
+		for _, served := range reported {
+			accepted = accepted && (served == r.job.Model || r.accepted[served])
+		}
+		if !accepted {
+			continue
+		}
+		if _, err := tx.Exec(`UPDATE item_results SET outcome=COALESCE(held_outcome,outcome),served_model=? WHERE attempt_id=? AND outcome='held'`,
+			servedModelAccepted, row["attempt"]); err != nil {
+			return err
+		}
+		var unusable int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM item_results WHERE attempt_id=? AND outcome NOT IN ('usable','usable_with_evidence_issues')`, row["attempt"]).Scan(&unusable); err != nil {
+			return err
+		}
+		state := requestCompleted
+		if unusable > 0 {
+			state = requestInvalid
+		}
+		if _, err := tx.Exec(`UPDATE requests SET state=?,updated_at=?,note=? WHERE id=?`, state, now(), "released: served model accepted", row["id"]); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE attempts SET served_model=? WHERE id=?`, servedModelAccepted, row["attempt"]); err != nil {
+			return err
+		}
+		released++
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if released > 0 {
+		r.printf("%s: released %d held requests: served model accepted\n", r.job.Name, released)
+	}
+	return nil
+}
+
 // labelingProcessStart identifies a running process by its start time, so a
 // reused pid is not mistaken for it. Empty when it does not run.
 func labelingProcessStart(pid int) string {
@@ -353,15 +511,10 @@ func (r *labelingRunner) loop(ctx context.Context) error {
 		r.mu.Unlock()
 		if !stopping && !halted && active < r.opts.Concurrency {
 			request, ok, err := r.next()
-			if err != nil {
-				return err
-			}
-			if ok {
-				leased, err := r.lease(request)
-				if err != nil {
-					return err
-				}
-				if leased {
+			if err == nil && ok {
+				var leased bool
+				leased, err = r.lease(request)
+				if err == nil && leased {
 					active++
 					go func() {
 						if err := r.attempt(ctx, request); err != nil {
@@ -370,6 +523,15 @@ func (r *labelingRunner) loop(ctx context.Context) error {
 						done <- struct{}{}
 					}()
 				}
+			}
+			// A ledger error stops leasing; attempts in flight still finish
+			// and are finalized before the error is returned.
+			if err != nil {
+				r.loopError = err
+				r.halt("ledger error: " + err.Error())
+				continue
+			}
+			if ok {
 				continue
 			}
 			if active == 0 {
@@ -377,7 +539,7 @@ func (r *labelingRunner) loop(ctx context.Context) error {
 			}
 		}
 		if active == 0 && (stopping || halted) {
-			return nil
+			return r.loopError
 		}
 		select {
 		case <-done:
@@ -417,6 +579,9 @@ func (r *labelingRunner) next() (labelingPendingRequest, bool, error) {
 // lease checks the ceiling, known spend plus the estimates of in-flight
 // requests, unknown outcomes and this request, then leases it.
 func (r *labelingRunner) lease(request labelingPendingRequest) (bool, error) {
+	if err := labelingLeaseHook(); err != nil {
+		return false, err
+	}
 	spend, err := computeLabelingSpend(r.db, r.job, r.book, r.day())
 	if err != nil {
 		return false, err
@@ -426,7 +591,7 @@ func (r *labelingRunner) lease(request labelingPendingRequest) (bool, error) {
 		next = *cost
 	}
 	if committed := spend.CommittedEstimate + next; committed > r.opts.MaxUSD {
-		r.halt(fmt.Sprintf("job lifetime spend ceiling: known $%.4f + in flight ~$%.4f + %d unknown or failed attempts without usage ~$%.4f (counted even after a retry: they may have been charged) + next request ~$%.4f exceeds --max-usd %.4f; to continue, run again with a higher --max-usd",
+		r.halt(fmt.Sprintf("job lifetime spend ceiling: known $%.4f + in flight ~$%.4f + %d attempts without usage (unknown, failed or unreported) ~$%.4f (counted even after a retry: they may have been charged) + next request ~$%.4f exceeds --max-usd %.4f; to continue, run again with a higher --max-usd",
 			spend.Known, spend.InFlight, spend.UnknownAttempts, spend.UnknownExposure, next, r.opts.MaxUSD))
 		return false, nil
 	}
@@ -556,6 +721,24 @@ func (r *labelingRunner) attempt(ctx context.Context, request labelingPendingReq
 	if err != nil {
 		return err
 	}
+	// A stop that arrived while the files were written still wins: the
+	// request is checked and marked submitted in one transaction.
+	var stopFlag int
+	if err := tx.QueryRow(`SELECT stop_requested FROM jobs WHERE name=?`, r.job.Name).Scan(&stopFlag); err != nil {
+		tx.Rollback()
+		return err
+	}
+	r.mu.Lock()
+	stopping := r.stopping
+	r.mu.Unlock()
+	if stopFlag != 0 || stopping {
+		_, err := tx.Exec(`UPDATE requests SET state='stopped',updated_at=? WHERE id=? AND state='leased'`, now(), request.id)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+		return tx.Commit()
+	}
 	if _, err := tx.Exec(`INSERT INTO attempts(id,request_id,number,job,state,submitted_at,day,dir,prompt_sha256,session_id,cli_version) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
 		attempt.id, request.id, number, r.job.Name, requestSubmitted, now(), attempt.day, attempt.dir, promptHash, session, r.cliVersion); err != nil {
 		tx.Rollback()
@@ -594,26 +777,53 @@ func labelingCostTokens(counts tokenCounts) map[string]int64 {
 	return tokens
 }
 
+// labelingExactCost prices usage only under the exact model string the
+// route reported: a priced model whose canonical name is that string. No
+// family normalization or alias maps a snapshot or variant name onto
+// another model's rates; such usage stays unpriced.
+func labelingExactCost(book priceBook, model, day string, tokens map[string]int64) usageCost {
+	interval := book.price(modelFamily(model), day)
+	if interval == nil || interval.model != model {
+		return usageCost{status: "unpriced"}
+	}
+	return book.cost(model, day, tokens)
+}
+
 // labelingAttemptUsage prices every model an attempt's terminal event
-// reports, auxiliary models included, each at its own rates on the
-// attempt's day. Claude's modelUsage lacks cache-write TTLs, so the model
-// whose counts equal the result's usage takes that usage (with the TTL
-// split). Codex reports no model: its usage is the requested model's.
-func labelingAttemptUsage(stream *labelingStream, requested, day string, book priceBook) []labelingUsageRow {
+// reports, auxiliary models included, each at its own exact rates on the
+// attempt's day. unpriced names served models nobody accepted: their usage
+// is recorded but never priced. Claude's modelUsage lacks cache-write
+// TTLs: the model whose counts equal the result's usage takes that usage
+// (with the TTL split); a single cache-writing model takes the result's
+// one-hour share; when the result reports one-hour writes that cannot be
+// assigned to one model, every other model's writes are priced at the
+// one-hour (higher) rate and marked assumed. Codex reports no model: its
+// usage is the requested model's.
+func labelingAttemptUsage(stream *labelingStream, requested, day string, book priceBook, unpriced map[string]bool) []labelingUsageRow {
 	rows := []labelingUsageRow{}
-	add := func(model, source string, usage map[string]any) {
-		counts := normalizeTokenCounts(usage)
+	addCounts := func(model, source string, counts tokenCounts, assumed bool) {
 		if counts == nil {
 			return
 		}
 		tokens := labelingCostTokens(counts)
-		rows = append(rows, labelingUsageRow{model: model, source: source, tokens: tokens, cost: book.cost(model, day, tokens)})
+		cost := usageCost{status: "unpriced"}
+		if !unpriced[model] {
+			cost = labelingExactCost(book, model, day, tokens)
+		}
+		if assumed && cost.status == "priced" {
+			cost.status = "assumed"
+		}
+		rows = append(rows, labelingUsageRow{model: model, source: source, tokens: tokens, cost: cost})
 	}
 	top := normalizeTokenCounts(stream.usage)
 	if stream.route == labelingRouteClaude && len(stream.modelUsage) > 0 {
 		models := make([]string, 0, len(stream.modelUsage))
+		writers := 0
 		for model := range stream.modelUsage {
 			models = append(models, model)
+			if counts := normalizeTokenCounts(stream.modelUsage[model]); counts != nil && counts["cache_creation_input_tokens"] > 0 {
+				writers++
+			}
 		}
 		sort.Strings(models)
 		matched := ""
@@ -623,37 +833,33 @@ func labelingAttemptUsage(stream *labelingStream, requested, day string, book pr
 				matched = model
 			}
 		}
-		// Without an exact match, the requested model's cache writes take
-		// the result's one-hour share (at most its own writes), so the TTL
-		// split is not lost to the cheaper 5-minute rate.
 		oneHour := top["cache_creation_1h_input_tokens"]
 		for _, model := range models {
-			usage := stream.modelUsage[model]
+			counts := normalizeTokenCounts(stream.modelUsage[model])
 			switch {
 			case model == matched:
-				add(model, "result usage", stream.usage)
-			case matched == "" && model == requested && oneHour > 0:
-				counts := normalizeTokenCounts(usage)
-				if counts == nil {
-					continue
-				}
+				addCounts(model, "result usage", top, false)
+			case counts == nil:
+			case oneHour > 0 && counts["cache_creation_input_tokens"] > 0 && matched == "" && writers == 1:
 				counts["cache_creation_1h_input_tokens"] = math.Min(oneHour, counts["cache_creation_input_tokens"])
-				tokens := labelingCostTokens(counts)
-				rows = append(rows, labelingUsageRow{model: model, source: "modelUsage with the result's 1h cache-write share", tokens: tokens, cost: book.cost(model, day, tokens)})
+				addCounts(model, "modelUsage with the result's 1h cache-write share", counts, false)
+			case oneHour > 0 && counts["cache_creation_input_tokens"] > 0:
+				counts["cache_creation_1h_input_tokens"] = counts["cache_creation_input_tokens"]
+				addCounts(model, "modelUsage; cache writes of unknown TTL priced at the 1h rate", counts, true)
 			default:
-				add(model, "modelUsage", usage)
+				addCounts(model, "modelUsage", counts, false)
 			}
 		}
 		return rows
 	}
-	if stream.usage == nil {
+	if top == nil {
 		return rows
 	}
 	model, source := requested, "requested model (the route reports none)"
 	if len(stream.Models) > 0 {
 		model, source = stream.Models[0], "reported model"
 	}
-	add(model, source, stream.usage)
+	addCounts(model, source, top, false)
 	return rows
 }
 
@@ -685,17 +891,41 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 	var results []labelingItemResult
 	problems := []string{}
 	notSent := false
-	exitedAlone := !recovered && !process.TimedOut && !process.Stopped
+	answer := ""
+	if r.job.Route == labelingRouteCodex {
+		answer = filepath.Join(attempt.dir, "answer.json")
+	}
+	validate := func(output json.RawMessage) {
+		var requestProblems []string
+		results, requestProblems = validateLabelingOutput(output, ordered, r.labels)
+		problems = append(problems, requestProblems...)
+		outcome = requestCompleted
+		for _, result := range results {
+			if result.Outcome != itemUsable && result.Outcome != itemEvidenceIssues {
+				outcome = requestInvalid
+			}
+		}
+		if len(requestProblems) > 0 {
+			outcome = requestInvalid
+		}
+	}
+	// Only a CLI that never started is known not to have been sent. Once it
+	// runs it may reach the provider before printing anything.
+	if stream.Terminal == "" && !stream.Started && process.StartError == "" {
+		problems = append(problems, "no_stream_events")
+	}
 	switch {
 	case process.StartError != "":
-		outcome, errorText, notSent = requestFailed, "the CLI did not start: "+process.StartError, true
+		outcome, errorText, notSent = requestFailed, "not_sent: the CLI did not start: "+process.StartError, true
 	case process.ReceiptError != "":
 		// Without a durable receipt the result cannot be audited or
 		// recovered: the attempt stays uncertain and the run halts.
 		outcome, errorText = requestUnknown, "the saved stream is not durable: "+process.ReceiptError
-	case stream.Terminal == "" && !stream.Started && exitedAlone:
-		// No session event at all: the CLI stopped before sending anything.
-		outcome, errorText, notSent = requestFailed, fmt.Sprintf("not_sent: the CLI exited (code %v) before starting a session", exitCode(process)), true
+	case stream.Terminal == "" && stream.output(answer) != nil && answer != "":
+		// Codex wrote its last message, but the turn's end (and usage)
+		// never arrived: the saved answer is the result; exposure stays.
+		problems = append(problems, "answer_without_terminal")
+		validate(stream.output(answer))
 	case stream.Terminal == "":
 		outcome = requestUnknown
 		switch {
@@ -716,10 +946,6 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 		outcome, results = requestInvalid, all(itemInvalid, "tool_use")
 		problems = append(problems, "tool_use")
 	default:
-		answer := ""
-		if r.job.Route == labelingRouteCodex {
-			answer = filepath.Join(attempt.dir, "answer.json")
-		}
 		output := stream.output(answer)
 		switch {
 		case output == nil && refusalText.MatchString(stream.text):
@@ -728,45 +954,53 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 			outcome, results = requestInvalid, all(itemInvalid, "no_structured_output")
 			problems = append(problems, "no_structured_output")
 		default:
-			var requestProblems []string
-			results, requestProblems = validateLabelingOutput(output, ordered, r.labels)
-			problems = append(problems, requestProblems...)
-			outcome = requestCompleted
-			for _, result := range results {
-				if result.Outcome != itemUsable && result.Outcome != itemEvidenceIssues {
-					outcome = requestInvalid
-				}
-			}
-			if len(problems) > 0 {
-				outcome = requestInvalid
-			}
+			validate(output)
 		}
 	}
-	usage := labelingAttemptUsage(stream, r.job.Model, attempt.day, r.book)
-	// The served model must be exactly the requested one. Codex names none,
-	// so its results are usable but unverified.
+	// The served model must be exactly the requested one, or one the
+	// operator accepted. Codex names none, so its results are usable but
+	// unverified.
 	served := servedModelUnverified
 	if r.job.Route == labelingRouteClaude && len(stream.Models) > 0 {
 		served = servedModelVerified
 	}
-	differs := []string{}
+	differs, unaccepted := []string{}, map[string]bool{}
 	for _, model := range stream.Models {
 		if model != r.job.Model {
 			differs = append(differs, model)
+			if !r.accepted[model] {
+				unaccepted[model] = true
+			}
 		}
 	}
 	if len(differs) > 0 {
-		served = servedModelDiffers
 		problems = append(problems, servedModelDiffers+":"+strings.Join(differs, ","))
+		served = servedModelAccepted
+		for index := range results {
+			results[index].Issues = appendUnique(results[index].Issues, servedModelDiffers)
+		}
+	}
+	if len(unaccepted) > 0 {
+		served = servedModelDiffers
 		if outcome == requestCompleted || outcome == requestInvalid {
 			outcome = requestHeld
 			for index := range results {
+				results[index].HeldOutcome = results[index].Outcome
 				if results[index].Outcome == itemUsable || results[index].Outcome == itemEvidenceIssues {
 					results[index].Outcome = itemHeld
 				}
-				results[index].Issues = appendUnique(results[index].Issues, servedModelDiffers)
 			}
 		}
+	}
+	usage := labelingAttemptUsage(stream, r.job.Model, attempt.day, r.book, unaccepted)
+	// An attempt that may have reached the provider but reported no usage
+	// keeps its estimated exposure in spend.
+	usageMissing := !notSent && len(usage) == 0
+	// A successful terminal event without readable usage halts the run:
+	// spend can no longer be known.
+	resultWithoutUsage := usageMissing && stream.Terminal != "" && !stream.Failed
+	if resultWithoutUsage {
+		problems = append(problems, "usage_missing")
 	}
 	tx, err := r.db.Begin()
 	if err != nil {
@@ -790,10 +1024,10 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 		toolEvents = []map[string]any{}
 	}
 	if _, err := tx.Exec(`UPDATE attempts SET state='finished',outcome=?,finished_at=?,session_id=COALESCE(?,session_id),reported_models=?,exit_code=?,terminal_event=?,
-		cleanup=?,tool_events=?,refusal=?,error=?,cli_cost_usd=?,duration_ms=?,problems=?,recovered=?,not_sent=?,served_model=?,receipt_error=? WHERE id=?`,
+		cleanup=?,tool_events=?,refusal=?,error=?,cli_cost_usd=?,duration_ms=?,problems=?,recovered=?,not_sent=?,served_model=?,receipt_error=?,usage_missing=? WHERE id=?`,
 		outcome, now(), nilIfEmpty(stream.SessionID), jsonText(stream.Models), exit, nilIfEmpty(stream.Terminal), jsonText(cleanup), jsonText(toolEvents),
 		nilIfEmpty(stream.Refusal), nilIfEmpty(errorText), cliCost, process.Duration.Milliseconds(), jsonText(problems), recovered, notSent, served,
-		nilIfEmpty(process.ReceiptError), attempt.id); err != nil {
+		nilIfEmpty(process.ReceiptError), usageMissing, attempt.id); err != nil {
 		return err
 	}
 	unpriced := []string{}
@@ -838,15 +1072,23 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 	r.mu.Lock()
 	r.finished++
 	r.mu.Unlock()
-	if len(unpriced) > 0 && !r.opts.AllowUnpriced {
-		r.halt("usage the price book cannot price: " + strings.Join(unpriced, ", ") + " (attempt " + attempt.id + "); pass --allow-unpriced to continue")
-	}
 	if process.ReceiptError != "" {
 		r.halt("attempt " + attempt.id + ": its saved stream is not durable (" + process.ReceiptError + "); it stays unknown; fix the storage and run again")
 	}
 	if outcome == requestHeld {
-		r.halt(fmt.Sprintf("attempt %s was answered by %s, not the requested %s; its results are held (not usable). Decide whether to accept that model before running again",
-			attempt.id, strings.Join(differs, ", "), r.job.Model))
+		names := []string{}
+		for model := range unaccepted {
+			names = append(names, model)
+		}
+		sort.Strings(names)
+		r.halt(fmt.Sprintf("attempt %s was answered by %s, not the requested %s; its results are held (not usable). Accept that model with --accept-served-model, or re-queue with reconcile --requeue-held",
+			attempt.id, strings.Join(names, ", "), r.job.Model))
+	}
+	if len(unpriced) > 0 && !r.opts.AllowUnpriced {
+		r.halt("usage the price book cannot price: " + strings.Join(unpriced, ", ") + " (attempt " + attempt.id + "); pass --allow-unpriced to continue")
+	}
+	if resultWithoutUsage {
+		r.halt("attempt " + attempt.id + " ended without usage the runner could read; its cost is estimated, not known. Review it (reconcile lists it) before running again")
 	}
 	if outcome == requestFailed && labelingAccountError.MatchString(errorText+" "+strings.Join(stream.Warnings, " ")) {
 		r.halt("attempt " + attempt.id + " failed with an authentication, rate-limit or quota error: " + firstRunes(errorText, 300))

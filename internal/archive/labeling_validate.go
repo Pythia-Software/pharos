@@ -65,6 +65,12 @@ type labelingItemResult struct {
 	Evidence    []labelingEvidence `json:"evidence"`
 	Issues      []string           `json:"issues"`
 	Annotation  json.RawMessage    `json:"annotation,omitempty"`
+	// LabelsEvidence is each accepted label's evidence: supported (a valid
+	// quote), or why not (in_marker, in_context, not_found, missing, ...).
+	// Only supported accepted labels are positives for training.
+	LabelsEvidence map[string]string `json:"labels_evidence"`
+	// HeldOutcome is the outcome a held item had before it was held.
+	HeldOutcome string `json:"held_outcome,omitempty"`
 }
 
 // validateLabelingOutput checks a structured response against the request's
@@ -233,12 +239,23 @@ func validateLabelingItem(item labelingItemSource, fields map[string]json.RawMes
 			result.Evidence = append(result.Evidence, evidence)
 		}
 	}
+	result.LabelsEvidence = map[string]string{}
 	for _, label := range result.Labels {
-		supported := false
+		status := "missing"
 		for _, evidence := range result.Evidence {
-			supported = supported || evidence.Label == label && evidence.Status == "valid"
+			if evidence.Label != label {
+				continue
+			}
+			if evidence.Status == "valid" {
+				status = "supported"
+				break
+			}
+			if status == "missing" {
+				status = evidence.Status
+			}
 		}
-		if !supported {
+		result.LabelsEvidence[label] = status
+		if status != "supported" {
 			evidenceIssue = true
 			result.Issues = appendUnique(result.Issues, "label_without_valid_evidence:"+label)
 		}
