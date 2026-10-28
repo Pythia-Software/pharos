@@ -177,52 +177,77 @@ func (c *Catalog) walPinned() *walPin {
 }
 
 // walHolder names who keeps the checkpoint from advancing, and whether it
-// could tell. Another process holding a read slot or the write or checkpoint
-// lock is named by pid and command. With none, this process holds it only
-// when a slot is marked where the checkpoint stopped (see blocking); then
-// its running operations that started before the stall are the suspects.
-// Otherwise the holder is unknown.
+// could tell. Only a read lock on a blocking slot (marked where the
+// checkpoint stopped, below the last frame) stops the copy: another process
+// holding one is the holder. With none, this process holds it when a slot is
+// blocking (POSIX locks never report the caller's own), and its running
+// operations that started before the stall are the suspects. Otherwise, or
+// when the probe fails, the holder is unknown and the suspects are listed
+// as context. Other locks (the writer, a checkpoint, a recovery, a reader at
+// the last frame) cannot stop the copy and are only mentioned.
 func (c *Catalog) walHolder(since, now time.Time) (string, bool) {
+	suspects := c.walSuspects(since, now)
+	withSuspects := func(holder, label string) string {
+		if len(suspects) > 0 {
+			holder += "; " + label + ": " + strings.Join(suspects, ", ")
+		}
+		return holder
+	}
 	probe, err := probeWAL(c.Path + "-shm")
 	if err != nil {
-		return "unknown (" + err.Error() + ")", false
+		return withSuspects("unknown ("+err.Error()+")", "this process has been running since before the stall"), false
 	}
-	others := []string{}
+	blocking := map[int]bool{}
+	if probe.HeaderErr == nil {
+		for _, slot := range probe.Header.blocking() {
+			blocking[slot] = true
+		}
+	}
+	holders, possible, context := []string{}, []string{}, []string{}
+	add := func(list *[]string, name string) {
+		if !slices.Contains(*list, name) {
+			*list = append(*list, name)
+		}
+	}
 	for _, lock := range probe.Locks {
 		name := fmt.Sprintf("pid %d", lock.PID)
 		if lock.Command != "" {
 			name += " (" + lock.Command + ")"
 		}
-		switch slot := lock.Byte - walReadLockByte; {
+		slot := lock.Byte - walReadLockByte
+		switch {
 		case lock.Byte == walWriteLockByte:
-			name += " writing"
+			add(&context, name+" writing")
 		case lock.Byte == walCheckpointByte:
-			name += " checkpointing"
-		case slot >= 0 && slot < walReadSlots && probe.HeaderErr == nil:
-			name += fmt.Sprintf(" reading up to frame %s of %s", formatCount(int(probe.Header.ReadMarks[slot])), formatCount(int(probe.Header.MxFrame)))
+			add(&context, name+" checkpointing")
+		case slot < 0 || slot >= walReadSlots:
+			add(&context, name+" recovering the log")
+		case probe.HeaderErr != nil:
+			add(&possible, name+" reading")
+		case blocking[slot]:
+			add(&holders, fmt.Sprintf("%s reading up to frame %s of %s", name, formatCount(int(probe.Header.ReadMarks[slot])), formatCount(int(probe.Header.MxFrame))))
 		default:
-			name += " reading"
-		}
-		if !slices.Contains(others, name) {
-			others = append(others, name)
+			add(&context, name+" reading")
 		}
 	}
-	if len(others) > 0 {
-		return "another process: " + strings.Join(others, ", "), true
-	}
-	suspects := c.walSuspects(since, now)
-	if probe.HeaderErr == nil && len(probe.Header.blocking()) > 0 {
-		holder := fmt.Sprintf("this process (pid %d)", os.Getpid())
-		if len(suspects) > 0 {
-			holder += "; running since before the stall: " + strings.Join(suspects, ", ")
+	also := func(holder string) string {
+		if len(context) > 0 {
+			holder += "; also open in " + strings.Join(context, ", ")
 		}
-		return holder, true
+		return holder
 	}
-	holder := "unknown (no other process holds the log, and no read slot is marked where the checkpoint stopped)"
-	if len(suspects) > 0 {
-		holder += "; this process has been running since before the stall: " + strings.Join(suspects, ", ")
+	switch {
+	case len(holders) > 0:
+		return also("another process: " + strings.Join(holders, ", ")), true
+	case len(blocking) > 0:
+		holder := withSuspects(fmt.Sprintf("this process (pid %d)", os.Getpid()), "running since before the stall")
+		return also(holder), true
+	case len(possible) > 0:
+		holder := "unknown (the wal-index header could not be read); possibly another process: " + strings.Join(possible, ", ")
+		return also(withSuspects(holder, "this process has been running since before the stall")), false
 	}
-	return holder, false
+	holder := "unknown (no read slot is marked where the checkpoint stopped)"
+	return also(withSuspects(holder, "this process has been running since before the stall")), false
 }
 
 // walSuspects lists this process's running operations that started before

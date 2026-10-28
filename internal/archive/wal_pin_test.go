@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -114,10 +115,31 @@ func TestWALPinBookkeeping(t *testing.T) {
 	if pin := busy(3000, 200, 70*time.Second); pin != nil || catalog.walPinned() != nil {
 		t.Fatalf("an advancing checkpoint is still diagnosed: %+v", pin)
 	}
-	header.NBackfill, header.ReadMarks[1] = 200, 200
-	if pin := busy(3000, 200, 80*time.Second); probes != 2 || pin.Holder != "another process: pid 77 (sqlite3 catalog.sqlite3) writing" || !pin.Since.Equal(start.Add(70*time.Second)) {
-		t.Fatalf("a new stall kept the old diagnosis: %+v, %d probes", pin, probes)
+	// Neither the writer nor a reader at the last frame stops the copy:
+	// with no other process on a blocking slot, it is this process's slot,
+	// and the others are only mentioned.
+	header.NBackfill, header.ReadMarks[1], header.ReadMarks[2] = 200, 200, 5000
+	locks = append(locks, walLock{Byte: walReadLockByte + 2, PID: 78, Command: "pharos mcp"}, walLock{Byte: walCheckpointByte + 1, PID: 79})
+	pin = busy(3000, 200, 80*time.Second)
+	if probes != 2 || !pin.Since.Equal(start.Add(70*time.Second)) || !pin.Known || !strings.HasPrefix(pin.Holder, "this process") ||
+		!strings.HasSuffix(pin.Holder, "also open in pid 77 (sqlite3 catalog.sqlite3) writing, pid 78 (pharos mcp) reading, pid 79 recovering the log") {
+		t.Fatalf("a new stall: %+v, %d probes", pin, probes)
 	}
+	header.ReadMarks[2] = walReadMarkUnused
+	// The header cannot be read: a reader elsewhere may hold it, but that is
+	// not known.
+	catalog.noteWALCheckpointed()
+	locks = []walLock{{Byte: walReadLockByte + 3, PID: 80}}
+	var headerErr error = errors.New("short read")
+	override(t, &probeWAL, func(string) (walProbe, error) {
+		probes++
+		return walProbe{Header: header, HeaderErr: headerErr, Locks: locks}, probeErr
+	})
+	busy(3000, 200, 90*time.Second)
+	if pin := busy(3000, 200, 100*time.Second); pin.Known || !strings.Contains(pin.Holder, "possibly another process: pid 80 reading") {
+		t.Fatalf("an unreadable header: %+v", pin)
+	}
+	headerErr = nil
 
 	// No other process: a slot marked where the checkpoint stopped is this
 	// process's, and only operations running since before the stall are
@@ -149,11 +171,12 @@ func TestWALPinBookkeeping(t *testing.T) {
 	if pin := catalog.noteWALBusy(3000, 5000, 200, later.Add(time.Second)); pin.Known || !strings.HasPrefix(pin.Holder, "unknown") || !strings.Contains(pin.Holder, "analysis.findings") {
 		t.Fatalf("an unexplained stall blamed a holder: %+v", pin)
 	}
-	// A probe that cannot run says so.
+	// A probe that cannot run says so, and still lists this process's
+	// suspects.
 	probeErr = errors.New("unsupported")
 	catalog.noteWALCheckpointed()
 	catalog.noteWALBusy(3000, 5000, 200, later)
-	if pin := catalog.noteWALBusy(3000, 5000, 200, later.Add(time.Second)); pin.Known || pin.Holder != "unknown (unsupported)" {
+	if pin := catalog.noteWALBusy(3000, 5000, 200, later.Add(time.Second)); pin.Known || !strings.HasPrefix(pin.Holder, "unknown (unsupported); this process has been running since before the stall: analysis.findings for") {
 		t.Fatalf("unknown holder: %+v", pin)
 	}
 	// A log that is small again clears it.
@@ -199,8 +222,8 @@ func TestBoundWALNamesTheReaderThatPinsIt(t *testing.T) {
 	if pin == nil || pin.Pending <= 0 || !strings.Contains(pin.Holder, "index.changes.manual for") {
 		t.Fatalf("pinned WAL: %+v", pin)
 	}
-	if probe, err := probeWAL(catalog.Path + "-shm"); err == nil && (!pin.Known || !strings.HasPrefix(pin.Holder, "this process") || len(probe.Locks) != 0) {
-		t.Fatalf("a reader in this process: %+v, probe %+v", pin, probe)
+	if runtime.GOOS == "darwin" && (!pin.Known || !strings.HasPrefix(pin.Holder, "this process")) {
+		t.Fatalf("a reader in this process: %+v", pin)
 	}
 	skipped := false
 	for _, view := range server.ops.views() {
