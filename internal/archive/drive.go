@@ -468,6 +468,18 @@ func (c *driveCache) store(config Config, state *driveState) {
 	}
 }
 
+// publish makes state the current one while its refresh is still running:
+// unlike store, it leaves refreshing set, so no other refresh starts until
+// this one finishes.
+func (c *driveCache) publish(config Config, state *driveState) {
+	key := driveKey(config)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.key == key {
+		c.state = state
+	}
+}
+
 // setGrowth replaces published with a copy carrying growth, unless a newer
 // state has replaced it. Readers may hold published, so it is not modified.
 func (c *driveCache) setGrowth(published *driveState, growth cloudGrowth) {
@@ -488,14 +500,10 @@ func (s *Server) driveHealth() map[string]any {
 	if refresh {
 		// A read that writes one library_size_history row (§3.4, hidden). The
 		// sizes are published before that write, which waits for the catalog
-		// writer: during a sync that can take minutes.
+		// writer: during a sync that can take minutes. The refresh stays in
+		// flight until the write lands, so polls meanwhile start no other.
 		s.start(OperationSpec{Kind: "drive.measure", Trigger: triggerRead}, func(ctx context.Context, op *Op) error {
-			stored := false
-			defer func() {
-				if !stored {
-					drives.store(config, nil)
-				}
-			}()
+			defer drives.store(config, nil)
 			fresh := collectDrive(ctx, config)
 			if ctx.Err() != nil {
 				return nil
@@ -507,8 +515,7 @@ func (s *Server) driveHealth() map[string]any {
 			if shares, err := s.Catalog.storageShares(ctx); err == nil {
 				fresh.shares = shares
 			}
-			drives.store(config, fresh)
-			stored = true
+			drives.publish(config, fresh)
 			drives.setGrowth(fresh, s.Catalog.recordCloudLibrarySize(ctx, config, fresh))
 			return nil
 		})
