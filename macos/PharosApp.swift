@@ -99,7 +99,7 @@ final class ArchiveService: ObservableObject {
 
     @Published var url: URL? {
         // A page error belongs to the service it came from.
-        didSet { if url != oldValue { pageError = nil } }
+        didSet { if url != oldValue { clearPageFailure() } }
     }
     // The broker keeps one URL while the selected library can change.
     @Published private(set) var libraryConnection: String?
@@ -115,9 +115,14 @@ final class ArchiveService: ObservableObject {
     var libraryOperation: String? { managedApplication ? currentManagedStatus.activeOperation : nil }
     var noLibrarySelected: Bool { managedApplication && currentManagedStatus.noLibrary }
     @Published var error: String?
-    /// Why the window's page could not load although the service started;
+    /// Why the window's page could not load although the service answers;
     /// View → Reload tries again.
     @Published var pageError: String?
+    /// The window's page could not load because the library's service does
+    /// not answer yet (it may be opening a large catalog); it reloads by
+    /// itself once the service answers.
+    @Published var pageWaiting = false
+    private var pageWatch = 0
     @Published var status = "Starting local archive…"
     @Published var disconnected: Disconnection?
     /// The Eject button's release and eject are under way.
@@ -349,7 +354,10 @@ final class ArchiveService: ObservableObject {
         return request
     }
 
-    /// Asks the service whether it answers, without the web view's cookies.
+    /// Asks the library's service whether it answers, without the web
+    /// view's cookies. In the managed app the request carries the selected
+    /// library (localRequest), so the broker passes it on to that library's
+    /// service rather than answering for itself.
     func checkReady(_ completion: @escaping (Bool) -> Void) {
         guard var request = localRequest("/api/ready") else { completion(false); return }
         request.timeoutInterval = 2
@@ -359,11 +367,43 @@ final class ArchiveService: ObservableObject {
         }.resume()
     }
 
+    /// The window's page did not load. While the service answers, that is an
+    /// error to show with Reload. While it does not, wait: check again after
+    /// 0.5 s, doubling up to every 10 s, and bring the page back (a new web
+    /// view loads it) once the service answers.
+    func pageFailed(_ reason: String, serviceAnswers: Bool) {
+        pageWatch += 1
+        if serviceAnswers {
+            pageWaiting = false
+            pageError = "\(reason)\n\nThe Pharos service is running, but the page still did not load. Choose View → Reload (⌘R) to try again."
+            return
+        }
+        pageError = nil
+        pageWaiting = true
+        watchForService(pageWatch, delay: 0.5)
+    }
+
+    private func watchForService(_ watch: Int, delay: Double) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.pageWatch == watch, self.pageWaiting, !self.shuttingDown else { return }
+            self.checkReady { ready in
+                guard self.pageWatch == watch, self.pageWaiting else { return }
+                if ready { self.clearPageFailure() } else { self.watchForService(watch, delay: min(delay * 2, 10)) }
+            }
+        }
+    }
+
+    private func clearPageFailure() {
+        pageWatch += 1
+        if pageError != nil { pageError = nil }
+        if pageWaiting { pageWaiting = false }
+    }
+
     /// View → Reload: reloads the page, or brings the web view back after a
     /// page that could not load.
     func reloadPage() {
-        if pageError != nil {
-            pageError = nil // a new web view loads the service's page
+        if pageError != nil || pageWaiting {
+            clearPageFailure() // a new web view loads the service's page
             return
         }
         guard let webView = menuBar.webView else { return }
@@ -1070,8 +1110,9 @@ struct ArchiveWebView: NSViewRepresentable {
         /// A page that did not load (the service was busy, e.g. folding a
         /// large catalog log at startup) or whose web process died would
         /// otherwise leave the window blank. While the service answers, load
-        /// it again after 0.5, 1, 2 and 4 s; then, or once the service does
-        /// not answer, show the error with Reload.
+        /// it again after 0.5, 1, 2 and 4 s, then show the error with Reload.
+        /// While it does not answer, the window waits for it and reloads by
+        /// itself (ArchiveService.pageFailed).
         private func loadFailed(_ webView: WKWebView, error: Error?) {
             let nsError = error as NSError?
             if let nsError {
@@ -1096,8 +1137,7 @@ struct ArchiveWebView: NSViewRepresentable {
                         webView.load(URLRequest(url: target))
                     }
                 } else {
-                    let state = ready ? "The Pharos service is running, but the page still did not load." : "The Pharos service is not answering; it may be busy opening the library."
-                    service.pageError = "\(reason)\n\n\(state) Choose View → Reload (⌘R) to try again."
+                    service.pageFailed(reason, serviceAnswers: ready)
                 }
             }
         }
@@ -1655,6 +1695,14 @@ struct PharosWindow: View {
             if let disconnection = service.disconnected {
                 LibraryDisconnectedView(disconnection: disconnection, ejecting: service.ejecting,
                                         reopen: service.reopen, eject: { service.ejectLibrary() })
+            }
+            else if service.pageWaiting, service.url != nil {
+                VStack(spacing: 16) {
+                    PharosBeacon()
+                    Text("Waiting for the library to answer… It may be busy opening a large catalog.")
+                        .opacity(0.8)
+                }
+                .harborBackdrop()
             }
             else if let pageError = service.pageError, service.url != nil {
                 ArchiveErrorView(message: pageError, title: "Pharos couldn’t load this page", retry: service.reloadPage)
