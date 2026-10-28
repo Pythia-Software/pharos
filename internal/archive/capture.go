@@ -850,9 +850,18 @@ func (c *sourceCapture) storedFile(f *capturedFile) capturedVersion {
 	return storedAs(filepath.Join(c.dir, filepath.FromSlash(f.Captured)), f.version())
 }
 
-// intactFile is intact for a latest file, at the size it is stored at.
+// intactFile is intact for a latest file, at the size it is stored at. An
+// encoded entry's file is opened (storedAs) only when it has the original
+// size, the one sign of a compression killed before its rename; otherwise
+// the stat alone decides.
 func (c *sourceCapture) intactFile(f *capturedFile) bool {
-	return c.intact(f.Captured, c.storedFile(f).storedSize(), f.MTimeNS)
+	size := f.storedSize()
+	if f.Encoding != "" {
+		if info, err := os.Stat(filepath.Join(c.dir, filepath.FromSlash(f.Captured))); err == nil && info.Size() == f.Size && f.Size != f.StoredSize {
+			size = c.storedFile(f).storedSize()
+		}
+	}
+	return c.intact(f.Captured, size, f.MTimeNS)
 }
 
 func (c *sourceCapture) ensureSpace(bytes int64) error {

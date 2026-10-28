@@ -274,6 +274,28 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertEncodedClaudeFixture(t, filepath.Join(recovered.CaptureRoot, ".imports", receipt.ID, "captures"), "host-a")
+
+		// A torn copy (a compressed file under an entry recording it
+		// uncompressed) is neither transferred nor recovered: readers that
+		// take the capture lock would trust the entry.
+		dir := capturedPath(a, "claude", "")
+		manifest, err := loadCaptureManifest(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, file := range manifest.Files {
+			file.Encoding, file.StoredSize = "", 0
+		}
+		if err = writeCaptureManifest(dir, manifest); err != nil {
+			t.Fatal(err)
+		}
+		_, other := lifecycleLibraries(t)
+		if _, err = TransferLibrary(t.Context(), a, other, false, nil); err == nil || !strings.Contains(err.Error(), "stored compressed but its manifest records it uncompressed") {
+			t.Fatal("transfer published a torn copy", err)
+		}
+		if _, err = RecoverLibrary(t.Context(), filepath.Dir(a.Path), filepath.Join(t.TempDir(), "torn"), nil); err == nil || !strings.Contains(err.Error(), "stored compressed but its manifest records it uncompressed") {
+			t.Fatal("recovery published a torn copy", err)
+		}
 	})
 	t.Run("legacy operational column order", func(t *testing.T) {
 		a, b := lifecycleLibraries(t)

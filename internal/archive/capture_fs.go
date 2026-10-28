@@ -235,8 +235,8 @@ func (v *captureView) materialize(ctx context.Context, rel string) (string, erro
 // process rather than on every plan. The first read is usually of the
 // uncompressed copy, before the file went cold.
 type headKey struct {
-	kind, original string
-	size, mtime    int64
+	kind, host, original string
+	size, mtime          int64
 }
 
 var (
@@ -254,11 +254,12 @@ func (s sourceFiles) cachedHead(kind, path string, read func() (any, error)) (an
 	if err != nil {
 		return read()
 	}
-	original := path
+	original, host := path, ""
 	if s.view != nil {
-		original = s.view.original(path)
+		// Two Macs' captures may name the same original path.
+		original, host = s.view.original(path), s.view.host.ID
 	}
-	key := headKey{kind: kind, original: original, size: info.Size(), mtime: info.ModTime().UnixNano()}
+	key := headKey{kind: kind, host: host, original: original, size: info.Size(), mtime: info.ModTime().UnixNano()}
 	headCacheMu.Lock()
 	value, ok := headCache[key]
 	headCacheMu.Unlock()

@@ -240,17 +240,20 @@ func antigravityStarted(path string) time.Time { return sourceFiles{}.antigravit
 // is read as its original bytes, and caches the time while the transcript is
 // unchanged: print-mode detection asks on every plan.
 func (s sourceFiles) antigravityStarted(path string) time.Time {
-	started, err := s.cachedHead("antigravity-started", path, func() (any, error) { return s.readAntigravityStarted(path), nil })
+	started, err := s.cachedHead("antigravity-started", path, func() (any, error) { return s.readAntigravityStarted(path) })
 	if err != nil {
-		return time.Time{}
+		return time.Time{} // not cached: the next plan reads it again
 	}
 	return started.(time.Time)
 }
 
-func (s sourceFiles) readAntigravityStarted(path string) time.Time {
+// readAntigravityStarted reports a failure to open or read (or decode) the
+// transcript as an error, so that it is not cached as "no start time"; the
+// zero time is an answer only once the lines it looks at were all read.
+func (s sourceFiles) readAntigravityStarted(path string) (time.Time, error) {
 	file, err := s.Open(path)
 	if err != nil {
-		return time.Time{}
+		return time.Time{}, err
 	}
 	defer file.Close()
 	reader := bufio.NewReader(file)
@@ -261,14 +264,16 @@ func (s sourceFiles) readAntigravityStarted(path string) time.Time {
 		}
 		if json.Unmarshal(line, &step) == nil && step.CreatedAt != "" {
 			if created, err := time.Parse(time.RFC3339Nano, step.CreatedAt); err == nil {
-				return created
+				return created, nil
 			}
 		}
-		if err != nil {
+		if err == io.EOF {
 			break
+		} else if err != nil {
+			return time.Time{}, err
 		}
 	}
-	return time.Time{}
+	return time.Time{}, nil
 }
 
 func readAntigravityRunLog(ctx context.Context, path string, buffer []byte) (antigravityRunLog, error) {

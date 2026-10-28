@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/binary"
@@ -15,6 +16,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 const (
@@ -487,7 +490,9 @@ func TestAntigravityPrintModeRunsAreHeadless(t *testing.T) {
 		t.Fatal(err)
 	}
 	for id, path := range plainTranscripts {
-		starts[id] = plain.files().readAntigravityStarted(path)
+		if starts[id], err = plain.files().readAntigravityStarted(path); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// The capture keeps source mtimes: make its copies cold by recording them
 	// in the manifest as the source's.
@@ -718,5 +723,59 @@ func TestAntigravityLogReaderHandlesChunkBoundariesAndLongLines(t *testing.T) {
 		if _, err := readAntigravityRunLog(ctx, path, make([]byte, 64*1024)); !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancelled log read did not stop: %v", err)
 		}
+	}
+}
+
+// A transcript's start time that could not be read (the file could not be
+// opened, or its encoded bytes not decoded) is not cached as "no start
+// time": print-mode attribution would be lost for the life of the process.
+func TestAntigravityStartTimeFailuresAreNotCached(t *testing.T) {
+	started := time.Date(2026, 9, 28, 14, 30, 2, 0, time.UTC)
+	content := []byte(antigravitySteps(map[string]any{"type": "USER_INPUT", "content": "hello", "created_at": started.Format(time.RFC3339)}))
+	dir := t.TempDir()
+
+	// Open failure: a live path that is not there yet.
+	live := filepath.Join(dir, "live", "transcript.jsonl")
+	if got := antigravityStarted(live); !got.IsZero() {
+		t.Fatal("start time of a missing transcript", got)
+	}
+	writeSourceFile(t, live, string(content))
+	if got := antigravityStarted(live); !got.Equal(started) {
+		t.Fatalf("start time after an open failure = %v, want %v", got, started)
+	}
+
+	// Decode failure: an encoded capture whose bytes do not decode, then the
+	// real encoding under the same name, size and mtime (the same cache key).
+	var encoded bytes.Buffer
+	writer, err := zstd.NewWriter(&encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer.Write(content)
+	writer.Close()
+	rel := "files/brain/x/transcript.jsonl"
+	file := filepath.Join(dir, "capture", filepath.FromSlash(rel))
+	corrupt := append([]byte{}, encoded.Bytes()...)
+	for i := len(zstdMagic) + 8; i < len(corrupt); i++ {
+		corrupt[i] ^= 0x5a
+	}
+	writeSourceFile(t, file, string(corrupt))
+	stamp := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(file, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	view := &captureView{host: Host{ID: "host-a"}, dir: filepath.Join(dir, "capture"), manifest: &captureManifest{Files: []*capturedFile{{Path: "/source/transcript.jsonl", Captured: rel, Size: int64(len(content)), Encoding: captureEncodingZstd, StoredSize: int64(encoded.Len())}}}}
+	files := sourceFiles{view: view}
+	if got := files.antigravityStarted(file); !got.IsZero() {
+		t.Fatal("start time from undecodable bytes", got)
+	}
+	if err := os.WriteFile(file, encoded.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(file, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	if got := files.antigravityStarted(file); !got.Equal(started) {
+		t.Fatalf("start time after a decode failure = %v, want %v", got, started)
 	}
 }

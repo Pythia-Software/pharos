@@ -124,8 +124,9 @@ func compressCaptures(ctx context.Context, config Config, catalog *Catalog, done
 			if current == "" {
 				return false
 			}
+			own, offHost := extractorVariants(current)
 			var found int
-			err := catalog.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM source_item_states WHERE host_id=? AND source_name=? AND item=? AND extractor=? AND size=? AND version=?", host.ID, source, item, current, size, version).Scan(&found)
+			err := catalog.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM source_item_states WHERE host_id=? AND source_name=? AND item=? AND extractor IN (?,?) AND size=? AND version=?", host.ID, source, item, own, offHost, size, version).Scan(&found)
 			return err == nil && found > 0
 		}
 	}
@@ -166,6 +167,20 @@ type compressPolicy struct {
 	// indexed reports that source_item_states holds this exact version of a
 	// part, so the next index will not read it; nil (no catalog) is never.
 	indexed func(source, item string, size, version int64) bool
+}
+
+// extractorVariants is an index version as this Mac's index records it and
+// as another Mac's index of the same capture does (with "@offhost", before
+// any "@generation:N"). Either one recording a part's exact size and version
+// means the next index will not read it: both run the same parser over the
+// same bytes, and only Git lookups differ.
+func extractorVariants(version string) (own, offHost string) {
+	head, generation := version, ""
+	if index := strings.Index(version, "@generation:"); index >= 0 {
+		head, generation = version[:index], version[index:]
+	}
+	head = strings.TrimSuffix(head, "@offhost")
+	return head + generation, head + "@offhost" + generation
 }
 
 // compressMinBytes is the smallest file worth compressing.

@@ -1862,6 +1862,20 @@ func TestCaptureCompressesColdFiles(t *testing.T) {
 		t.Fatal("compressed latest files recorded by an earlier extractor", done)
 	}
 	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+	// Another Mac's index of this capture records the same parts with
+	// "@offhost": the same bytes, so they count as indexed too.
+	if _, err := catalog.DB.Exec(`UPDATE source_item_states SET extractor=replace(extractor,'@generation:','@offhost@generation:') WHERE host_id='host-a' AND source_name='claude'`); err != nil {
+		t.Fatal(err)
+	}
+	for version, want := range map[string][2]string{
+		"claude:v17":                      {"claude:v17", "claude:v17@offhost"},
+		"claude:v17@offhost@generation:1": {"claude:v17@generation:1", "claude:v17@offhost@generation:1"},
+		"claude:v13-names@generation:2":   {"claude:v13-names@generation:2", "claude:v13-names@offhost@generation:2"},
+	} {
+		if own, offHost := extractorVariants(version); own != want[0] || offHost != want[1] {
+			t.Errorf("extractorVariants(%q) = %q, %q", version, own, offHost)
+		}
+	}
 	done := compressColdFiles(t, config, catalog)
 	if want := []string{"files/p/cold-a.jsonl", "files/p/cold-b.jsonl"}; jsonText(done) != jsonText(want) {
 		t.Fatalf("compressed %v, want %v", done, want)
