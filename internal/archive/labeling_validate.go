@@ -21,6 +21,8 @@ const (
 	// itemHeld: answered by a model other than the requested one; kept
 	// for an operator decision, never published by default.
 	itemHeld = "held"
+	// itemRefusalSuspected: the reply may have been a refusal.
+	itemRefusalSuspected = "refusal_suspected"
 )
 
 // labelingTargetPiece is a target piece shown in the unit's visible text.

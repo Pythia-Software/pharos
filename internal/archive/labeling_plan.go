@@ -46,9 +46,9 @@ const labelingCharsPerToken = 3.6
 
 // labelingPlanItem is one item as the plan sizes it.
 type labelingPlanItem struct {
-	id, cohort, split string
-	chars             int
-	tokens            float64
+	id, cohort, split, family string
+	chars                     int
+	tokens                    float64
 }
 
 // labelingItemTokens is a conservative input estimate for text: ASCII at
@@ -94,6 +94,70 @@ func packLabelingRequests(tokens []float64, chars []int, perRequest int, overhea
 	return requests, oversize
 }
 
+// labelingPackWindow bounds how far ahead the family-aware packer looks
+// for an item that may join the open request.
+const labelingPackWindow = 256
+
+// packLabelingFamilies packs like packLabelingRequests but never puts two
+// items of one family (so of one conversation) in a request: the teacher
+// must not see one conversation's later message beside an earlier one
+// under "INDEPENDENT ITEMS". Each request takes, in order, the first items
+// within labelingPackWindow of the oldest unpacked item that fit its caps
+// and add a new family; the rest wait for later requests.
+func packLabelingFamilies(tokens []float64, chars []int, families []string, perRequest int, overhead, budget float64, maxChars int) (requests [][]int, oversize []int) {
+	queue := []int{}
+	for index, size := range tokens {
+		if overhead+size > budget || maxChars > 0 && chars[index] > maxChars {
+			oversize = append(oversize, index)
+			continue
+		}
+		queue = append(queue, index)
+	}
+	taken := make([]bool, len(queue))
+	head := 0
+	for {
+		for head < len(queue) && taken[head] {
+			head++
+		}
+		if head == len(queue) {
+			return requests, oversize
+		}
+		current, seen := []int{}, map[string]bool{}
+		total, length, examined := overhead, 0, 0
+		for at := head; at < len(queue) && examined < labelingPackWindow && len(current) < perRequest; at++ {
+			if taken[at] {
+				continue
+			}
+			examined++
+			index := queue[at]
+			if seen[families[index]] || total+tokens[index] > budget || maxChars > 0 && length+chars[index] > maxChars {
+				continue
+			}
+			taken[at] = true
+			seen[families[index]] = true
+			current = append(current, index)
+			total += tokens[index]
+			length += chars[index]
+		}
+		requests = append(requests, current)
+	}
+}
+
+// labelingTextAllowed admits at most limit items per cohort and target
+// text, counting in item-ID order: IDs are hashes, so the kept items are a
+// deterministic choice spread across splits and time.
+func labelingTextAllowed(seen map[[2]string]int, cohort, hash string, limit int) bool {
+	if limit <= 0 {
+		return true
+	}
+	key := [2]string{cohort, hash}
+	if seen[key] >= limit {
+		return false
+	}
+	seen[key]++
+	return true
+}
+
 // embeddedPriceBook loads the price book from the pricing file built into
 // this executable, through the same tables and views a catalog syncs it
 // into, held in memory.
@@ -126,6 +190,7 @@ type labelingPlanOptions struct {
 	Concurrency, LimitItems          int
 	Cohorts, Splits                  []string
 	IncludeDuplicates                bool
+	MaxPerText                       int
 	OverheadTokens, OutputPerItem    float64
 	SecondsPerRequest, CharsPerToken float64
 	TokensPerMinute                  float64
@@ -145,6 +210,7 @@ func runLabelingPlan(args []string, stdout io.Writer) error {
 	flags.IntVar(&opts.Concurrency, "concurrency", 3, "concurrent requests")
 	flags.IntVar(&opts.LimitItems, "limit-items", 0, "plan only the first N selected items")
 	flags.BoolVar(&opts.IncludeDuplicates, "include-duplicates", false, "also plan delegation units that repeat a child's message")
+	flags.IntVar(&opts.MaxPerText, "max-per-text", 0, "at most N items with the same cohort and target text (0: no limit)")
 	var cohorts, splits stringList
 	flags.Var(&cohorts, "cohort", "plan only this cohort (repeatable)")
 	flags.Var(&splits, "split", "plan only this split (repeatable)")
@@ -159,7 +225,7 @@ func runLabelingPlan(args []string, stdout io.Writer) error {
 	if labelingCalibrations[opts.Route].source == "" {
 		return fmt.Errorf("unknown route %q: use claude or codex", opts.Route)
 	}
-	if opts.ItemsPerRequest < 1 || opts.MaxRequestTokens <= 0 || opts.MaxRequestChars < 0 || opts.Concurrency < 1 || opts.CharsPerToken <= 0 || opts.TokensPerMinute <= 0 {
+	if opts.ItemsPerRequest < 1 || opts.MaxPerText < 0 || opts.MaxRequestTokens <= 0 || opts.MaxRequestChars < 0 || opts.Concurrency < 1 || opts.CharsPerToken <= 0 || opts.TokensPerMinute <= 0 {
 		return errors.New("--items-per-request, --max-request-tokens, --concurrency, --chars-per-token and --tokens-per-minute must be positive, and --max-request-chars not negative")
 	}
 	opts.Cohorts, opts.Splits = cohorts, splits
@@ -201,18 +267,20 @@ func planLabeling(ctx context.Context, opts labelingPlanOptions) (map[string]any
 		return nil, err
 	}
 	defer db.Close()
-	rows, err := db.QueryContext(ctx, `SELECT i.id,u.cohort,COALESCE(u.split,''),i.chars,i.text,u.context_prompt,u.duplicate_of IS NOT NULL FROM items i JOIN units u ON u.id=i.unit_id ORDER BY i.id`)
+	rows, err := db.QueryContext(ctx, `SELECT i.id,u.cohort,COALESCE(u.split,''),i.chars,i.text,u.context_prompt,u.duplicate_of IS NOT NULL,
+		COALESCE(u.family_id,u.conversation_id),i.target_hash FROM items i JOIN units u ON u.id=i.unit_id ORDER BY i.id`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	items := []labelingPlanItem{}
-	duplicates := 0
+	duplicates, repeatedText := 0, 0
+	perText := map[[2]string]int{}
 	for rows.Next() {
 		var item labelingPlanItem
-		var text, context string
+		var text, context, hash string
 		var duplicate bool
-		if err := rows.Scan(&item.id, &item.cohort, &item.split, &item.chars, &text, &context, &duplicate); err != nil {
+		if err := rows.Scan(&item.id, &item.cohort, &item.split, &item.chars, &text, &context, &duplicate, &item.family, &hash); err != nil {
 			return nil, err
 		}
 		if len(opts.Cohorts) > 0 && !slices.Contains(opts.Cohorts, item.cohort) || len(opts.Splits) > 0 && !slices.Contains(opts.Splits, item.split) {
@@ -220,6 +288,10 @@ func planLabeling(ctx context.Context, opts labelingPlanOptions) (map[string]any
 		}
 		if duplicate && !opts.IncludeDuplicates {
 			duplicates++
+			continue
+		}
+		if !labelingTextAllowed(perText, item.cohort, hash, opts.MaxPerText) {
+			repeatedText++
 			continue
 		}
 		item.chars += utf8.RuneCountInString(context)
@@ -243,14 +315,16 @@ func planLabeling(ctx context.Context, opts labelingPlanOptions) (map[string]any
 	if opts.SecondsPerRequest > 0 {
 		seconds = opts.SecondsPerRequest
 	}
-	sizes, lengths := make([]float64, len(items)), make([]int, len(items))
+	sizes, lengths, families := make([]float64, len(items)), make([]int, len(items)), make([]string, len(items))
 	chars := 0
 	for index, item := range items {
 		sizes[index] = item.tokens
 		lengths[index] = item.chars
+		families[index] = item.family
 		chars += item.chars
 	}
-	requests, oversize := packLabelingRequests(sizes, lengths, opts.ItemsPerRequest, overhead, opts.MaxRequestTokens, opts.MaxRequestChars)
+	unseparated, _ := packLabelingRequests(sizes, lengths, opts.ItemsPerRequest, overhead, opts.MaxRequestTokens, opts.MaxRequestChars)
+	requests, oversize := packLabelingFamilies(sizes, lengths, families, opts.ItemsPerRequest, overhead, opts.MaxRequestTokens, opts.MaxRequestChars)
 	contentTokens := 0.0
 	for index, size := range sizes {
 		if !slices.Contains(oversize, index) {
@@ -290,10 +364,13 @@ func planLabeling(ctx context.Context, opts labelingPlanOptions) (map[string]any
 		assumptions = append(assumptions, fmt.Sprintf("Effort %s was not calibrated; the measurements are at effort high.", opts.Effort))
 	}
 	selection := map[string]any{"cohorts": opts.Cohorts, "splits": opts.Splits, "limit_items": opts.LimitItems,
-		"include_duplicates": opts.IncludeDuplicates, "duplicate_items_skipped": duplicates}
+		"include_duplicates": opts.IncludeDuplicates, "duplicate_items_skipped": duplicates, "max_per_text": opts.MaxPerText,
+		"repeated_text_items_skipped": repeatedText}
 	return map[string]any{
 		"dataset": opts.Dir, "route": opts.Route, "model": opts.Model, "effort": opts.Effort, "selection": selection,
 		"items": len(items) - len(oversize), "item_chars": chars, "requests": len(requests), "items_per_request": opts.ItemsPerRequest,
+		"packing": map[string]any{"one_item_per_family": true, "requests_without_family_separation": len(unseparated),
+			"added_requests": len(requests) - len(unseparated)},
 		"max_request_tokens": opts.MaxRequestTokens, "max_request_chars": opts.MaxRequestChars, "oversize_items": oversized,
 		"tokens":      map[string]any{"input": int64(input), "output": int64(outputTokens)},
 		"price":       price,

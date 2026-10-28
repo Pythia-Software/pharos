@@ -15,6 +15,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -72,6 +73,9 @@ const (
 	// held: a model other than the requested one answered; its results are
 	// kept, not published, and the run halts for a decision.
 	requestHeld = "held"
+	// refusal_suspected: refusal words in a reply that is not a clear
+	// refusal; re-sent only by reconcile --retry-suspected-refusals.
+	requestRefusalSuspected = "refusal_suspected"
 )
 
 // Served-model verification, per job, attempt and item result.
@@ -84,7 +88,7 @@ const (
 )
 
 var labelingRequestStates = []string{requestPending, requestLeased, requestSubmitted, requestCompleted, requestInvalid, requestRefused,
-	requestFailed, requestUnknown, requestHeld, requestStopped}
+	requestFailed, requestUnknown, requestHeld, requestRefusalSuspected, requestStopped}
 
 var labelingJobName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
@@ -95,9 +99,13 @@ type labelingJobSpec struct {
 	Items                        []string
 	LimitItems                   int
 	IncludeDuplicates            bool
-	ItemsPerRequest              int
-	MaxRequestTokens             float64
-	MaxRequestChars              int
+	MaxPerText                   int
+	// IncludeRefusedElsewhere selects items a route refused: by default no
+	// job sends refused material again, on any route.
+	IncludeRefusedElsewhere bool
+	ItemsPerRequest         int
+	MaxRequestTokens        float64
+	MaxRequestChars         int
 }
 
 type labelingJob struct {
@@ -137,6 +145,7 @@ var labelingLedgerColumns = []struct{ table, column, definition string }{
 	{"jobs", "pricing_rule", "TEXT"},
 	{"attempts", "cli_warnings", "TEXT"},
 	{"usage", "role", "TEXT"},
+	{"jobs", "stop_requested_at", "TEXT"},
 }
 
 // labelingHasColumn lets read-only status read a ledger an older build
@@ -184,40 +193,51 @@ func loadLabelingJob(db *sql.DB, name string) (labelingJob, error) {
 // labelingPromptTemplateHash identifies a prompt version's fixed text (the
 // prompt with no items), so a resumed job notices a changed build.
 func labelingPromptTemplateHash(version string) string {
+	if hash, ok := labelingTemplateHashes.Load(version); ok {
+		return hash.(string)
+	}
 	prompt, err := buildLabelingPrompt(version, nil)
 	if err != nil {
 		return ""
 	}
-	return hashBytes([]byte(prompt))
+	hash := hashBytes([]byte(prompt))
+	labelingTemplateHashes.Store(version, hash)
+	return hash
 }
+
+var labelingTemplateHashes sync.Map
+
+// labelingSchemaHash is the schema text's hash, computed once.
+var labelingSchemaHash = sync.OnceValue(func() string {
+	schema, _ := labelingSchemaJSON()
+	return hashBytes([]byte(schema))
+})
 
 // labelingContractHash identifies what the model saw for an item: prompt
 // version, taxonomy, schema, sender, channel, context and CURRENT_TEXT.
 // An item whose hash is unchanged in a later snapshot can keep its result.
 func labelingContractHash(promptVersion string, row labelingPromptRow) string {
-	schema, _ := labelingSchemaJSON()
-	return hashBytes([]byte(strings.Join([]string{promptVersion, labelingTaxonomyVersion, hashBytes(labelingTaxonomy), hashBytes([]byte(schema)),
+	return hashBytes([]byte(strings.Join([]string{promptVersion, labelingPromptTemplateHash(promptVersion), labelingTaxonomyVersion, hashBytes(labelingTaxonomy), labelingSchemaHash(),
 		row.Sender, row.Channel, row.Context, fmt.Sprint(row.Excerpt), row.Text}, "\x00")))
 }
 
 // labelingSelectedItem is one selected item with its prompt row.
 type labelingSelectedItem struct {
-	row            labelingPromptRow
-	cohort, split  string
-	chars          int
-	tokens         float64
-	duplicate      bool
-	contractHashes map[string]string
+	row                   labelingPromptRow
+	cohort, split, family string
+	chars                 int
+	tokens                float64
+	duplicate             bool
 }
 
 // selectLabelingItems applies a selection in item-id order, as planLabeling
 // does: cohorts, splits, an explicit item list, duplicate skipping and a
 // limit.
-func selectLabelingItems(ctx context.Context, db *sql.DB, spec labelingJobSpec) ([]labelingSelectedItem, int, error) {
+func selectLabelingItems(ctx context.Context, db *sql.DB, spec labelingJobSpec) ([]labelingSelectedItem, int, int, error) {
 	rows, err := db.QueryContext(ctx, `SELECT i.id,u.cohort,COALESCE(u.split,''),i.chars,i.text,u.context_prompt,u.context_excerpt,u.sender_role,u.channel,
-		u.duplicate_of IS NOT NULL FROM items i JOIN units u ON u.id=i.unit_id ORDER BY i.id`)
+		u.duplicate_of IS NOT NULL,COALESCE(u.family_id,u.conversation_id),i.target_hash FROM items i JOIN units u ON u.id=i.unit_id ORDER BY i.id`)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	defer rows.Close()
 	wanted := map[string]bool{}
@@ -225,12 +245,14 @@ func selectLabelingItems(ctx context.Context, db *sql.DB, spec labelingJobSpec) 
 		wanted[id] = true
 	}
 	items := []labelingSelectedItem{}
-	duplicates := 0
+	duplicates, repeated := 0, 0
+	perText := map[[2]string]int{}
 	for rows.Next() {
 		var item labelingSelectedItem
+		var hash string
 		if err := rows.Scan(&item.row.ID, &item.cohort, &item.split, &item.chars, &item.row.Text, &item.row.Context, &item.row.Excerpt,
-			&item.row.Sender, &item.row.Channel, &item.duplicate); err != nil {
-			return nil, 0, err
+			&item.row.Sender, &item.row.Channel, &item.duplicate, &item.family, &hash); err != nil {
+			return nil, 0, 0, err
 		}
 		if len(wanted) > 0 && !wanted[item.row.ID] {
 			continue
@@ -242,6 +264,10 @@ func selectLabelingItems(ctx context.Context, db *sql.DB, spec labelingJobSpec) 
 			duplicates++
 			continue
 		}
+		if !labelingTextAllowed(perText, item.cohort, hash, spec.MaxPerText) {
+			repeated++
+			continue
+		}
 		item.chars += utf8.RuneCountInString(item.row.Context)
 		item.tokens = labelingItemTokens(item.row.Text, labelingCharsPerToken) + labelingItemTokens(item.row.Context, labelingCharsPerToken)
 		items = append(items, item)
@@ -250,7 +276,7 @@ func selectLabelingItems(ctx context.Context, db *sql.DB, spec labelingJobSpec) 
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	if len(wanted) > 0 && len(items) < len(wanted) {
 		found := map[string]bool{}
@@ -264,10 +290,10 @@ func selectLabelingItems(ctx context.Context, db *sql.DB, spec labelingJobSpec) 
 			}
 		}
 		if len(missing) > 0 && spec.LimitItems == 0 {
-			return nil, 0, fmt.Errorf("items not in this dataset or outside the selection: %s", strings.Join(missing, ", "))
+			return nil, 0, 0, fmt.Errorf("items not in this dataset or outside the selection: %s", strings.Join(missing, ", "))
 		}
 	}
-	return items, duplicates, nil
+	return items, duplicates, repeated, nil
 }
 
 // labelingImported is a result copied from an earlier dataset's job.
@@ -321,18 +347,22 @@ func createLabelingJob(ctx context.Context, db *sql.DB, name string, spec labeli
 	if exists > 0 {
 		return nil, fmt.Errorf("job %q already exists; its selection is frozen (run it without --create, or choose another name)", name)
 	}
-	items, duplicates, err := selectLabelingItems(ctx, db, spec)
+	items, duplicates, repeated, err := selectLabelingItems(ctx, db, spec)
 	if err != nil {
 		return nil, err
 	}
-	// Refusals are never re-sent on the same route, by any job.
-	refusedRows, err := queryMaps(db, `SELECT DISTINCT r.item_id FROM item_results r JOIN jobs j ON j.name=r.job WHERE j.route=? AND r.outcome='refused'`, spec.Route)
-	if err != nil {
-		return nil, err
-	}
+	// Refused material is not sent again, on any route (switching routes
+	// must not bypass a provider's refusal), unless the operator decided
+	// otherwise; the decision is recorded in the job's selection.
 	refused := map[string]bool{}
-	for _, row := range refusedRows {
-		refused[firstString(row["item_id"])] = true
+	if !spec.IncludeRefusedElsewhere {
+		refusedRows, err := queryMaps(db, `SELECT DISTINCT item_id FROM item_results WHERE outcome='refused'`)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range refusedRows {
+			refused[firstString(row["item_id"])] = true
+		}
 	}
 	send, refusedSkipped := []labelingSelectedItem{}, 0
 	for _, item := range items {
@@ -345,11 +375,11 @@ func createLabelingJob(ctx context.Context, db *sql.DB, name string, spec labeli
 		}
 	}
 	calibration := labelingCalibrations[spec.Route]
-	sizes, lengths := make([]float64, len(send)), make([]int, len(send))
+	sizes, lengths, families := make([]float64, len(send)), make([]int, len(send)), make([]string, len(send))
 	for index, item := range send {
-		sizes[index], lengths[index] = item.tokens, item.chars
+		sizes[index], lengths[index], families[index] = item.tokens, item.chars, item.family
 	}
-	packed, oversize := packLabelingRequests(sizes, lengths, spec.ItemsPerRequest, calibration.overheadTokens, spec.MaxRequestTokens, spec.MaxRequestChars)
+	packed, oversize := packLabelingFamilies(sizes, lengths, families, spec.ItemsPerRequest, calibration.overheadTokens, spec.MaxRequestTokens, spec.MaxRequestChars)
 	oversized := []string{}
 	for _, index := range oversize {
 		oversized = append(oversized, send[index].row.ID)
@@ -366,7 +396,8 @@ func createLabelingJob(ctx context.Context, db *sql.DB, name string, spec labeli
 	}
 	selection := map[string]any{"cohorts": spec.Cohorts, "splits": spec.Splits, "items": spec.Items, "limit_items": spec.LimitItems,
 		"include_duplicates": spec.IncludeDuplicates, "duplicate_items_skipped": duplicates, "selected_items": len(items),
-		"imported_items": len(skip), "refused_on_route_skipped": refusedSkipped, "oversize_items": oversized, "requests": len(packed)}
+		"imported_items": len(skip), "refused_skipped": refusedSkipped, "include_refused_elsewhere": spec.IncludeRefusedElsewhere,
+		"max_per_text": spec.MaxPerText, "repeated_text_items_skipped": repeated, "one_item_per_family": true, "oversize_items": oversized, "requests": len(packed)}
 	packing := map[string]any{"items_per_request": spec.ItemsPerRequest, "max_request_tokens": spec.MaxRequestTokens,
 		"max_request_chars": spec.MaxRequestChars, "overhead_tokens": calibration.overheadTokens, "output_tokens_per_item": calibration.outputItem,
 		"chars_per_token": labelingCharsPerToken, "calibration": calibration.source}
@@ -488,6 +519,9 @@ type labelingSpend struct {
 	UnknownAttempts  int                         `json:"possibly_charged_attempts"`
 	InFlight         float64                     `json:"in_flight_estimate_usd"`
 	CLIReported      float64                     `json:"cli_reported_usd"`
+	// EstimatedUsage is the part of the exposure from usage with known
+	// tokens but no price of its own (a held or re-queued served model).
+	EstimatedUsage float64 `json:"estimated_usage_usd"`
 	// Auxiliary is what models other than the labeling model cost (such
 	// as a CLI's housekeeping calls), by model; it is part of Known.
 	Auxiliary         float64            `json:"auxiliary_usd"`
@@ -509,10 +543,17 @@ func computeLabelingSpend(db *sql.DB, job labelingJob, book priceBook, day strin
 	}
 	defer tx.Rollback()
 	var known, reported sql.NullFloat64
-	if err := tx.QueryRow(`SELECT SUM(u.cost_usd) FROM usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.job=?`, job.Name).Scan(&known); err != nil {
+	if err := tx.QueryRow(`SELECT SUM(u.cost_usd) FROM usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.job=? AND u.cost_status<>'estimated'`, job.Name).Scan(&known); err != nil {
 		return spend, err
 	}
 	spend.Known = known.Float64
+	// Usage of a served model that cannot be priced as itself: its known
+	// tokens at the requested model's rate, an estimate.
+	var estimated sql.NullFloat64
+	if err := tx.QueryRow(`SELECT SUM(u.cost_usd) FROM usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.job=? AND u.cost_status='estimated'`, job.Name).Scan(&estimated); err != nil {
+		return spend, err
+	}
+	spend.EstimatedUsage = estimated.Float64
 	spend.AuxiliaryModels = map[string]float64{}
 	auxiliary := []map[string]any{}
 	if labelingHasColumn(tx, "usage", "role") {
@@ -566,7 +607,7 @@ func computeLabelingSpend(db *sql.DB, job labelingJob, book priceBook, day strin
 		Scan(&spend.UnknownAttempts, &input, &output); err != nil {
 		return spend, err
 	}
-	spend.UnknownExposure = estimate(input.Float64, output.Float64)
+	spend.UnknownExposure = estimate(input.Float64, output.Float64) + spend.EstimatedUsage
 	if err := tx.QueryRow(`SELECT SUM(est_input_tokens),SUM(est_output_tokens) FROM requests WHERE job=? AND state IN ('leased','submitted')`, job.Name).
 		Scan(&input, &output); err != nil {
 		return spend, err
@@ -742,12 +783,17 @@ func labelingJobsSummary(dir string, w io.Writer) error {
 // reconcileLabelingJob lists requests whose outcome needs a decision and,
 // when asked, re-queues unknown or failed ones. Nothing is re-queued
 // implicitly: an unknown request may have been charged.
-func reconcileLabelingJob(db *sql.DB, name string, retryUnknown, retryFailed, requeueHeld bool, w io.Writer) error {
+// labelingReconcileOptions are the explicit re-queue decisions.
+type labelingReconcileOptions struct {
+	RetryUnknown, RetryFailed, RequeueHeld, RetrySuspectedRefusals, RetryToolUse bool
+}
+
+func reconcileLabelingJob(db *sql.DB, name string, options labelingReconcileOptions, w io.Writer) error {
 	if _, err := loadLabelingJob(db, name); err != nil {
 		return err
 	}
 	rows, err := queryMaps(db, `SELECT r.id,r.state,r.attempts,a.id attempt,a.error,a.exit_code,a.dir,a.problems,a.usage_missing FROM requests r
-		LEFT JOIN attempts a ON a.request_id=r.id AND a.number=r.attempts WHERE r.job=? AND r.state IN ('unknown','failed','refused','invalid','held') ORDER BY r.position`, name)
+		LEFT JOIN attempts a ON a.request_id=r.id AND a.number=r.attempts WHERE r.job=? AND r.state IN ('unknown','failed','refused','invalid','held','refusal_suspected') ORDER BY r.position`, name)
 	if err != nil {
 		return err
 	}
@@ -767,7 +813,9 @@ func reconcileLabelingJob(db *sql.DB, name string, retryUnknown, retryFailed, re
 		return nil
 	}
 	explain := map[string]string{"no_stream_events": "the CLI started but printed no event; it may still have reached the provider",
-		"answer_without_terminal": "an answer was saved without the turn's end; it was validated, its usage is unknown"}
+		"answer_without_terminal": "an answer was saved without the turn's end; it was validated, its usage is unknown",
+		"tool_use":                "the model used a tool; not re-sent unless --retry-tool-use",
+		"refusal_suspected":       "refusal words in a reply that was not a clear refusal; re-sent only with --retry-suspected-refusals"}
 	requeue := []string{}
 	for _, row := range rows {
 		state := firstString(row["state"])
@@ -778,13 +826,15 @@ func reconcileLabelingJob(db *sql.DB, name string, retryUnknown, retryFailed, re
 				fmt.Fprintf(w, "  %s: %s\n", key, text)
 			}
 		}
-		if state == requestUnknown && retryUnknown || state == requestFailed && retryFailed || state == requestHeld && requeueHeld {
+		toolUse := state == requestInvalid && strings.Contains(firstString(row["problems"]), "tool_use")
+		if state == requestUnknown && options.RetryUnknown || state == requestFailed && options.RetryFailed || state == requestHeld && options.RequeueHeld ||
+			state == requestRefusalSuspected && options.RetrySuspectedRefusals || toolUse && options.RetryToolUse {
 			requeue = append(requeue, firstString(row["id"]))
 		}
 	}
 	if len(requeue) == 0 {
-		if !retryUnknown && !retryFailed && !requeueHeld {
-			fmt.Fprintln(w, "Unknown and failed requests may have been charged; re-queue them explicitly with --retry-unknown or --retry-failed, held ones with --requeue-held (or accept the model with run --accept-served-model). Refused requests are never retried on the same route; invalid items are retried by the run's --retry-invalid.")
+		if options == (labelingReconcileOptions{}) {
+			fmt.Fprintln(w, "Unknown and failed requests may have been charged; re-queue them explicitly with --retry-unknown or --retry-failed, held ones with --requeue-held (or accept the model with run --accept-served-model), suspected refusals with --retry-suspected-refusals, tool-use attempts with --retry-tool-use. Refused requests are never re-sent by this tool, on any route (co-packed items included: re-sending them is an operator decision outside its defaults); invalid items are retried by the run's --retry-invalid.")
 		}
 		return nil
 	}
@@ -819,10 +869,18 @@ func importLabelingResults(ctx context.Context, dir, from, name string, w io.Wri
 	if !labelingHasLedger(old) {
 		return fmt.Errorf("%s has no labeling jobs", from)
 	}
-	var route, model, effort, prompt, selectionText, packingText string
-	if err := old.QueryRowContext(ctx, `SELECT route,model,effort,prompt_version,selection,packing FROM jobs WHERE name=?`, name).
-		Scan(&route, &model, &effort, &prompt, &selectionText, &packingText); err != nil {
+	var route, model, effort, prompt, selectionText, packingText, schemaHash, taxonomyHash string
+	var templateHash sql.NullString
+	if err := old.QueryRowContext(ctx, `SELECT route,model,effort,prompt_version,selection,packing,schema_sha256,taxonomy_sha256,prompt_template_sha256 FROM jobs WHERE name=?`, name).
+		Scan(&route, &model, &effort, &prompt, &selectionText, &packingText, &schemaHash, &taxonomyHash, &templateHash); err != nil {
 		return fmt.Errorf("job %q in %s: %w", name, from, err)
+	}
+	// Results are reusable only under the contract this build produces.
+	for _, check := range []struct{ name, stored, current string }{{"schema", schemaHash, labelingSchemaHash()},
+		{"taxonomy", taxonomyHash, hashBytes(labelingTaxonomy)}, {"prompt " + prompt, templateHash.String, labelingPromptTemplateHash(prompt)}} {
+		if check.stored != check.current {
+			return fmt.Errorf("job %s in %s was labeled with a different %s than this build produces; its results cannot be imported", name, from, check.name)
+		}
 	}
 	var selection, packing map[string]any
 	json.Unmarshal([]byte(selectionText), &selection)
@@ -838,7 +896,8 @@ func importLabelingResults(ctx context.Context, dir, from, name string, w io.Wri
 	}
 	spec := labelingJobSpec{Route: route, Model: model, Effort: effort, Prompt: prompt, Cohorts: strs(selection["cohorts"]), Splits: strs(selection["splits"]),
 		Items: strs(selection["items"]), LimitItems: int(integer(selection["limit_items"])), IncludeDuplicates: selection["include_duplicates"] == true,
-		ItemsPerRequest: int(integer(packing["items_per_request"])), MaxRequestChars: int(integer(packing["max_request_chars"]))}
+		ItemsPerRequest: int(integer(packing["items_per_request"])), MaxRequestChars: int(integer(packing["max_request_chars"])),
+		MaxPerText: int(integer(selection["max_per_text"])), IncludeRefusedElsewhere: selection["include_refused_elsewhere"] == true}
 	spec.MaxRequestTokens, _ = number(packing["max_request_tokens"])
 	// The latest usable or refused result per item in the old job: a
 	// refusal is carried, so the same material is not sent again.
@@ -852,7 +911,7 @@ func importLabelingResults(ctx context.Context, dir, from, name string, w io.Wri
 		return err
 	}
 	defer db.Close()
-	items, _, err := selectLabelingItems(ctx, db, spec)
+	items, _, _, err := selectLabelingItems(ctx, db, spec)
 	if err != nil {
 		return err
 	}

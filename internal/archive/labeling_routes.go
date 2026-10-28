@@ -26,10 +26,16 @@ const (
 	labelingRouteCodex  = "codex"
 )
 
-// labelingCodexDisabled are the codex features the historical runner turned
-// off (evidence/label-models/20261027/run_models.py), plus image generation.
+// labelingCodexDisabled are codex features that give the model tools or
+// actions: the historical runner's list (evidence/label-models/20261027/
+// run_models.py) plus the rest that `codex features list` of codex-cli
+// 0.155.0 shows enabled by default (image_generation, unified_exec,
+// view_image, tool_suggest, skill_search, sleep_tool, goals,
+// remote_plugin). Every name was confirmed in that listing. Web search is
+// a config key, not a feature: --config web_search="disabled".
 var labelingCodexDisabled = []string{"apps", "plugins", "shell_tool", "multi_agent", "browser_use", "browser_use_external",
-	"computer_use", "in_app_browser", "code_mode_host", "code_mode", "image_generation"}
+	"computer_use", "in_app_browser", "code_mode_host", "code_mode", "image_generation", "unified_exec", "view_image", "tool_suggest",
+	"skill_search", "sleep_tool", "goals", "remote_plugin"}
 
 // Process timing, overridable by tests: a lingering CLI gets SIGTERM this
 // long after its terminal event, and SIGKILL this long after SIGTERM.
@@ -52,7 +58,7 @@ func labelingCommand(route, model, effort, schemaText, schemaPath, answerPath, s
 			"--name", "Pharos labeling", "--prompt-suggestions", "false"}, nil
 	case labelingRouteCodex:
 		args := []string{"exec", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "--sandbox", "read-only",
-			"--model", model, "--config", `model_reasoning_effort="` + effort + `"`, "--config", "project_doc_max_bytes=0", "--color", "never",
+			"--model", model, "--config", `model_reasoning_effort="` + effort + `"`, "--config", "project_doc_max_bytes=0", "--config", `web_search="disabled"`, "--color", "never",
 			"--json", "--output-schema", schemaPath, "--output-last-message", answerPath}
 		for _, feature := range labelingCodexDisabled {
 			args = append(args, "--disable", feature)
@@ -340,8 +346,26 @@ func (s *labelingStream) output(answerPath string) json.RawMessage {
 // same way, so the run halts at once.
 var labelingAccountError = regexp.MustCompile(`(?i)(rate[ _-]?limit|too many requests|\b429\b|quota|usage limit|credit balance|billing|\b40[13]\b|unauthori[sz]ed|forbidden|authenticat|invalid (api|x-api)[ _-]?key|not logged in|log ?in again|/login|expired (token|session|credentials))`)
 
-// refusalText reports text that declines the task instead of answering.
+// refusalText finds refusal words anywhere; alone they only make a reply
+// suspected (an evidence quote may say "I can't get the build to pass").
 var refusalText = regexp.MustCompile(`(?i)\b(I can(no|')t|I cannot|I won'?t|I'm (not able|unable)|I am (not able|unable)|unable to (help|comply|assist)|I must decline)\b`)
+
+// labelingRefusalOpening is a reply that opens by declining.
+var labelingRefusalOpening = regexp.MustCompile(`(?i)^(sorry,? (but )?)?(I can(no|')t|I cannot|I won'?t|I'm (not able|unable)|I am (not able|unable)|I must decline|I'm sorry,? but)\b`)
+
+// labelingOpensWithRefusal reports a reply that is a refusal: not
+// JSON-like, and opening with a refusal phrase.
+func labelingOpensWithRefusal(text string) bool {
+	text = strings.TrimSpace(text)
+	if strings.HasPrefix(text, "{") || strings.HasPrefix(text, "[") || strings.Contains(text, `"annotations"`) {
+		return false
+	}
+	return labelingRefusalOpening.MatchString(text)
+}
+
+// labelingRefusalError recognizes a provider or CLI error that is a
+// refusal (a policy or safety block), not a failure.
+var labelingRefusalError = regexp.MustCompile(`(?i)(refus(al|ed)|content (policy|filter)|safety (system|filter|policy)|usage polic(y|ies)|flagged as)`)
 
 // labelingProcess is how one CLI process ended.
 type labelingProcess struct {

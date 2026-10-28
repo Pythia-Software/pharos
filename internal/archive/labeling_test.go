@@ -550,7 +550,11 @@ func TestLabelingPlanReadsOnlyTheDataset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan["items"] != 29 || plan["requests"] != 8 || plan["selection"].(map[string]any)["duplicate_items_skipped"] != 3 {
+	// The seeded conversations share few families; one item per family
+	// and request takes more requests than packing four at a time.
+	packing := plan["packing"].(map[string]any)
+	if plan["items"] != 29 || plan["requests"] != 24 || packing["requests_without_family_separation"] != 8 || packing["added_requests"] != 16 ||
+		plan["selection"].(map[string]any)["duplicate_items_skipped"] != 3 {
 		t.Fatalf("plan = %v items in %v requests", plan["items"], plan["requests"])
 	}
 	price := plan["price"].(map[string]any)

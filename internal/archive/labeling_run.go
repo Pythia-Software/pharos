@@ -126,6 +126,9 @@ func runLabelingJob(ctx context.Context, opts labelingRunOptions) error {
 	if opts.MaxConsecutiveFailures < 1 {
 		opts.MaxConsecutiveFailures = 3
 	}
+	// A stop requested from now on applies to this run, even while it is
+	// still starting.
+	startedAt := now()
 	if !opts.CreateOnly && (!(opts.MaxUSD > 0) || math.IsInf(opts.MaxUSD, 0)) {
 		return errors.New("--max-usd must be a positive, finite number of dollars: the job's lifetime spend ceiling")
 	}
@@ -182,6 +185,7 @@ func runLabelingJob(ctx context.Context, opts labelingRunOptions) error {
 	if err := r.prepareFiles(); err != nil {
 		return err
 	}
+	labelingStartupHook()
 	if err := r.acceptServedModel(opts.AcceptServedModel); err != nil {
 		return err
 	}
@@ -204,7 +208,8 @@ func runLabelingJob(ctx context.Context, opts labelingRunOptions) error {
 		"accept_served_model": opts.AcceptServedModel, "pid": os.Getpid(), "cli_path": r.cliPath, "cli_version": r.cliVersion}
 	// The previous halt is cleared before recovery, so a halt recovery
 	// raises is the one status shows.
-	if _, err := db.Exec(`UPDATE jobs SET stop_requested=0,halted=NULL,run_started_at=?,run_settings=? WHERE name=?`, now(), compactJSON(settings), job.Name); err != nil {
+	if _, err := db.Exec(`UPDATE jobs SET stop_requested=CASE WHEN stop_requested_at>=? THEN stop_requested ELSE 0 END,halted=NULL,run_started_at=?,run_settings=? WHERE name=?`,
+		startedAt, now(), compactJSON(settings), job.Name); err != nil {
 		return err
 	}
 	if err := r.recover(); err != nil {
@@ -351,6 +356,10 @@ func (r *labelingRunner) recover() error {
 	return err
 }
 
+// labelingStartupHook runs while a runner starts (after the CLI version
+// check); tests request a stop there.
+var labelingStartupHook = func() {}
+
 // labelingLeaseHook runs before each lease; tests make it fail.
 var labelingLeaseHook = func() error { return nil }
 
@@ -459,6 +468,25 @@ func (r *labelingRunner) acceptServedModel(model string) error {
 			return err
 		}
 		if _, err := tx.Exec(`UPDATE attempts SET served_model=? WHERE id=?`, servedModelAccepted, row["attempt"]); err != nil {
+			return err
+		}
+		// Invalid or missing items of the released attempt are retried as
+		// if it had just finished, in the same transaction.
+		retry := []string{}
+		failing, err := queryMaps(tx, `SELECT item_id FROM item_results WHERE attempt_id=? AND outcome IN ('invalid','missing') ORDER BY item_id`, row["attempt"])
+		if err != nil {
+			return err
+		}
+		for _, item := range failing {
+			var failures int
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM item_results WHERE job=? AND item_id=? AND outcome IN ('invalid','missing')`, r.job.Name, item["item_id"]).Scan(&failures); err != nil {
+				return err
+			}
+			if failures <= r.opts.RetryInvalid {
+				retry = append(retry, firstString(item["item_id"]))
+			}
+		}
+		if err := labelingRetryRequest(tx, r.job.Name, firstString(row["id"]), retry, r.calibration.outputItem); err != nil {
 			return err
 		}
 		released++
@@ -776,6 +804,7 @@ func (r *labelingRunner) attempt(ctx context.Context, request labelingPendingReq
 
 // labelingUsageRow is one model's usage in an attempt, priced.
 type labelingUsageRow struct {
+	incomplete          bool
 	model, source, role string
 	tokens              map[string]int64
 	cost                usageCost
@@ -807,13 +836,15 @@ func labelingExactCost(book priceBook, model, day string, tokens map[string]int6
 // labelingPricingRule versions how usage is priced; a job priced under
 // another rule is re-priced from its stored tokens at the next run start.
 //
+// pricing-v3: as v2, and a served model's usage that cannot be priced as
+// itself is an estimate at the requested model's rate (exposure).
 // pricing-v2: the labeling model (the requested one, and any served model
 // the route reported) is priced only under its exact name, and a served
 // model nobody accepted not at all; auxiliary models (a CLI's own calls,
 // such as Claude Code's session titles) through the standard price-book
 // resolution (family and dated aliases), so a dated snapshot name prices
 // as its model.
-const labelingPricingRule = "pricing-v2"
+const labelingPricingRule = "pricing-v3"
 
 const (
 	usagePrimary   = "primary"
@@ -821,14 +852,28 @@ const (
 )
 
 // labelingUsageCost prices one usage row under labelingPricingRule.
-func labelingUsageCost(book priceBook, role, model, day string, tokens map[string]int64, blocked, assumed bool) usageCost {
-	cost := usageCost{status: "unpriced"}
+// Usage of a served model other than the requested one is priced under its
+// exact name only when the operator accepted it and the price book has it;
+// otherwise (held, re-queued, or accepted but not in the book) its known
+// tokens are priced at the requested model's rate as an estimate (status
+// estimated): exposure, not known spend, and never $0.
+func labelingUsageCost(book priceBook, role, model, requested, day string, tokens map[string]int64, blocked, assumed bool) usageCost {
+	var cost usageCost
 	switch {
-	case blocked:
 	case role == usageAuxiliary:
 		cost = book.cost(model, day, tokens)
-	default:
+	case model == requested:
 		cost = labelingExactCost(book, model, day, tokens)
+	default:
+		cost = usageCost{status: "unpriced"}
+		if !blocked {
+			cost = labelingExactCost(book, model, day, tokens)
+		}
+		if cost.status == "unpriced" {
+			if estimate := labelingExactCost(book, requested, day, tokens); estimate.cost != nil && estimate.status != "unpriced" {
+				cost = usageCost{cost: estimate.cost, status: "estimated", pricedModel: requested}
+			}
+		}
 	}
 	if assumed && cost.status == "priced" {
 		cost.status = "assumed"
@@ -861,8 +906,18 @@ func labelingAttemptUsage(stream *labelingStream, requested, day string, book pr
 			role = usagePrimary
 		}
 		tokens := labelingCostTokens(counts)
+		// Usage without the input and output counts cannot be priced
+		// (a lone total_tokens would price as $0): partial, and the
+		// attempt keeps its estimated exposure.
+		_, hasInput := counts["input_tokens"]
+		_, hasOutput := counts["output_tokens"]
+		if !hasInput || !hasOutput {
+			rows = append(rows, labelingUsageRow{model: model, source: source + " (missing input or output counts)", role: role, tokens: tokens,
+				cost: usageCost{status: "partial"}, incomplete: true})
+			return
+		}
 		rows = append(rows, labelingUsageRow{model: model, source: source, role: role, tokens: tokens,
-			cost: labelingUsageCost(book, role, model, day, tokens, blocked[model], assumed)})
+			cost: labelingUsageCost(book, role, model, requested, day, tokens, blocked[model], assumed)})
 	}
 	top := normalizeTokenCounts(stream.usage)
 	if stream.route == labelingRouteClaude && len(stream.modelUsage) > 0 {
@@ -945,7 +1000,7 @@ func (r *labelingRunner) repriceLabelingUsage(force bool) error {
 		var tokens map[string]int64
 		json.Unmarshal([]byte(firstString(row["tokens"])), &tokens)
 		blocked := role == usagePrimary && model != r.job.Model && !r.accepted[model]
-		cost := labelingUsageCost(r.book, role, model, firstString(row["day"]), tokens, blocked, firstString(row["model_source"]) == labelingUnknownTTLSource)
+		cost := labelingUsageCost(r.book, role, model, r.job.Model, firstString(row["day"]), tokens, blocked, firstString(row["model_source"]) == labelingUnknownTTLSource)
 		var value any
 		if cost.cost != nil {
 			value = *cost.cost
@@ -1018,6 +1073,20 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 	if stream.Terminal == "" && !stream.Started && process.StartError == "" {
 		problems = append(problems, "no_stream_events")
 	}
+	// A refusal of a request of several items cannot be attributed to one
+	// of them: each is marked unresolved, and none is re-sent by default.
+	refuse := func(reason string) {
+		outcome, results = requestRefused, all(itemRefused, "refused: "+reason)
+		if len(ids) > 1 {
+			for index := range results {
+				results[index].Issues = append(results[index].Issues, "refused_copacked_unresolved")
+			}
+		}
+	}
+	answerOutput := json.RawMessage(nil)
+	if answer != "" {
+		answerOutput = stream.output(answer)
+	}
 	switch {
 	case process.StartError != "":
 		outcome, errorText, notSent = requestFailed, "not_sent: the CLI did not start: "+process.StartError, true
@@ -1025,11 +1094,19 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 		// Without a durable receipt the result cannot be audited or
 		// recovered: the attempt stays uncertain and the run halts.
 		outcome, errorText = requestUnknown, "the saved stream is not durable: "+process.ReceiptError
-	case stream.Terminal == "" && stream.output(answer) != nil && answer != "":
+	case stream.Refusal != "":
+		// A structured refusal stands even when no terminal event followed.
+		refuse(stream.Refusal)
+	case len(stream.Tools) > 0:
+		// Any tool use breaks the annotation-only contract, whatever else
+		// was saved; it is not re-sent automatically.
+		outcome, results = requestInvalid, all(itemInvalid, "tool_use")
+		problems = append(problems, "tool_use")
+	case stream.Terminal == "" && answerOutput != nil:
 		// Codex wrote its last message, but the turn's end (and usage)
 		// never arrived: the saved answer is the result; exposure stays.
 		problems = append(problems, "answer_without_terminal")
-		validate(stream.output(answer))
+		validate(answerOutput)
 	case stream.Terminal == "":
 		outcome = requestUnknown
 		switch {
@@ -1042,18 +1119,21 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 		default:
 			errorText = fmt.Sprintf("the CLI exited (code %v) without a terminal event", exitCode(process))
 		}
-	case stream.Refusal != "":
-		outcome, results = requestRefused, all(itemRefused, "refused: "+stream.Refusal)
+	case stream.Failed && labelingRefusalError.MatchString(stream.Error):
+		refuse("provider error: " + firstRunes(stream.Error, 200))
 	case stream.Failed:
 		outcome, errorText = requestFailed, stream.Error
-	case len(stream.Tools) > 0:
-		outcome, results = requestInvalid, all(itemInvalid, "tool_use")
-		problems = append(problems, "tool_use")
 	default:
 		output := stream.output(answer)
 		switch {
+		case output == nil && labelingOpensWithRefusal(stream.text):
+			refuse("reply instead of structured output")
 		case output == nil && refusalText.MatchString(stream.text):
-			outcome, results = requestRefused, all(itemRefused, "refused: text instead of structured output")
+			// Refusal words inside other text (a cut-off answer quoting
+			// "I can't ...") are only a suspicion: kept apart, re-sent only
+			// on the operator's request.
+			outcome, results = requestRefusalSuspected, all(itemRefusalSuspected, "refusal_suspected")
+			problems = append(problems, "refusal_suspected")
 		case output == nil:
 			outcome, results = requestInvalid, all(itemInvalid, "no_structured_output")
 			problems = append(problems, "no_structured_output")
@@ -1101,6 +1181,9 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 	// An attempt that may have reached the provider but reported no usage
 	// keeps its estimated exposure in spend.
 	usageMissing := !notSent && len(usage) == 0
+	for _, row := range usage {
+		usageMissing = usageMissing || row.incomplete
+	}
 	// A successful terminal event without readable usage halts the run:
 	// spend can no longer be known.
 	resultWithoutUsage := usageMissing && stream.Terminal != "" && !stream.Failed
@@ -1154,7 +1237,7 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 		if err := insertLabelingItemResult(tx, attempt.id, r.job.Name, attempt.request, result, hashes[result.ItemID], "", served); err != nil {
 			return err
 		}
-		if outcome != requestHeld && (result.Outcome == itemInvalid || result.Outcome == itemMissing) {
+		if outcome != requestHeld && !containsString(problems, "tool_use") && (result.Outcome == itemInvalid || result.Outcome == itemMissing) {
 			var failures int
 			if err := tx.QueryRow(`SELECT COUNT(*) FROM item_results WHERE job=? AND item_id=? AND outcome IN ('invalid','missing')`, r.job.Name, result.ItemID).
 				Scan(&failures); err != nil {
@@ -1287,6 +1370,11 @@ func (r *labelingRunner) progress(attempt labelingAttemptInfo, outcome string, u
 // requestLabelingStop asks a job's runner to stop: it leases nothing more
 // and lets in-flight attempts finish.
 func requestLabelingStop(dir, name string) error {
+	shared, err := fileLease(filepath.Join(dir, labelingLockFile), false)
+	if err != nil {
+		return fmt.Errorf("a labeling prepare is using %s", dir)
+	}
+	defer shared.Close()
 	if err := requireLabelingLedger(dir); err != nil {
 		return err
 	}
@@ -1295,7 +1383,7 @@ func requestLabelingStop(dir, name string) error {
 		return err
 	}
 	defer db.Close()
-	result, err := db.Exec(`UPDATE jobs SET stop_requested=1 WHERE name=?`, name)
+	result, err := db.Exec(`UPDATE jobs SET stop_requested=1,stop_requested_at=? WHERE name=?`, now(), name)
 	if err != nil {
 		return err
 	}
@@ -1330,6 +1418,11 @@ func withLabelingJobLock(dir, name string, create bool, fn func(db *sql.DB) erro
 	if err != nil {
 		return err
 	}
+	shared, err := fileLease(filepath.Join(dir, labelingLockFile), false)
+	if err != nil {
+		return fmt.Errorf("a labeling prepare is using %s", dir)
+	}
+	defer shared.Close()
 	lock, err := fileLease(filepath.Join(dir, ".run-"+name+".lock"), true)
 	if err != nil {
 		return fmt.Errorf("a runner is running job %s; stop it first", name)

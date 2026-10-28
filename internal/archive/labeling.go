@@ -28,11 +28,11 @@ func (l *stringList) Set(value string) error { *l = append(*l, value); return ni
 
 const labelingUsage = `usage:
   pharos [--config PATH] labeling prepare --dir DIR [--fresh-days 14] [--limit-conversations N] [--conversation ID ...] [--splits-from OLD_DIR] --catalog COPY --snapshot-copy [--allow-stale-shm] [--replace] [--dry-run]
-  pharos labeling plan --dir DIR --route claude|codex --model M --effort E [--items-per-request 4] [--max-request-tokens 24000] [--max-request-chars N] [--include-duplicates] [--concurrency 3] [--cohort C ...] [--split S ...] [--limit-items N]
+  pharos labeling plan --dir DIR --route claude|codex --model M --effort E [--items-per-request 4] [--max-request-tokens 24000] [--max-request-chars N] [--include-duplicates] [--max-per-text N] [--concurrency 3] [--cohort C ...] [--split S ...] [--limit-items N]
   pharos labeling status --dir DIR [--job NAME [--json]]
-  pharos labeling run --dir DIR --job NAME [--create --route claude|codex --model M --effort E [--prompt V] [--cohort C ...] [--split S ...] [--item ID ...] [--limit-items N] [--items-per-request 4] [--max-request-tokens 24000] [--max-request-chars N] [--include-duplicates] [--create-only]] --max-usd X [--concurrency 3] [--timeout 330s] [--retry-invalid 1] [--max-consecutive-failures 3] [--allow-unpriced] [--accept-served-model MODEL]
+  pharos labeling run --dir DIR --job NAME [--create --route claude|codex --model M --effort E [--prompt V] [--cohort C ...] [--split S ...] [--item ID ...] [--limit-items N] [--items-per-request 4] [--max-request-tokens 24000] [--max-request-chars N] [--include-duplicates] [--max-per-text N] [--include-refused-elsewhere] [--create-only]] --max-usd X [--concurrency 3] [--timeout 330s] [--retry-invalid 1] [--max-consecutive-failures 3] [--allow-unpriced] [--accept-served-model MODEL]
   pharos labeling stop --dir DIR --job NAME
-  pharos labeling reconcile --dir DIR --job NAME [--retry-unknown] [--retry-failed] [--requeue-held]
+  pharos labeling reconcile --dir DIR --job NAME [--retry-unknown] [--retry-failed] [--requeue-held] [--retry-suspected-refusals] [--retry-tool-use]
   pharos labeling import-results --dir DIR --from OLD_DIR --job NAME`
 
 // runLabelingCLI runs the offline labeling commands. None of them opens the
@@ -76,6 +76,8 @@ func runLabelingCLI(configPath string, args []string, stdout, stderr io.Writer) 
 		retryUnknown := flags.Bool("retry-unknown", false, "re-queue requests whose outcome is unknown (they may have been charged)")
 		retryFailed := flags.Bool("retry-failed", false, "re-queue failed requests (they may have been charged)")
 		requeueHeld := flags.Bool("requeue-held", false, "re-queue requests held because another model answered")
+		retrySuspected := flags.Bool("retry-suspected-refusals", false, "re-queue requests whose reply only looked like a refusal")
+		retryToolUse := flags.Bool("retry-tool-use", false, "re-queue requests whose attempt used a tool")
 		if err := flags.Parse(args[1:]); err != nil || *dir == "" || *job == "" || flags.NArg() != 0 || (*from != "") != (args[0] == "import-results") {
 			return errors.New(labelingUsage)
 		}
@@ -88,7 +90,8 @@ func runLabelingCLI(configPath string, args []string, stdout, stderr io.Writer) 
 			return nil
 		case "reconcile":
 			return withLabelingJobLock(*dir, *job, false, func(db *sql.DB) error {
-				return reconcileLabelingJob(db, *job, *retryUnknown, *retryFailed, *requeueHeld, stdout)
+				return reconcileLabelingJob(db, *job, labelingReconcileOptions{RetryUnknown: *retryUnknown, RetryFailed: *retryFailed,
+					RequeueHeld: *requeueHeld, RetrySuspectedRefusals: *retrySuspected, RetryToolUse: *retryToolUse}, stdout)
 			})
 		default:
 			return withLabelingJobLock(*dir, *job, true, func(*sql.DB) error {
@@ -120,6 +123,8 @@ func runLabelingRunCLI(args []string, stdout, stderr io.Writer) error {
 	flags.Float64Var(&opts.Spec.MaxRequestTokens, "max-request-tokens", 24000, "estimated input tokens per request, fixed overhead included")
 	flags.IntVar(&opts.Spec.MaxRequestChars, "max-request-chars", 0, "also cap the characters of item text and context per request (0: no cap)")
 	flags.BoolVar(&opts.Spec.IncludeDuplicates, "include-duplicates", false, "also label units that repeat another (delegation copies, later fork copies)")
+	flags.IntVar(&opts.Spec.MaxPerText, "max-per-text", 0, "at most N items with the same cohort and target text (0: no limit)")
+	flags.BoolVar(&opts.Spec.IncludeRefusedElsewhere, "include-refused-elsewhere", false, "also select items another route refused (recorded in the job)")
 	maxUSD := flags.String("max-usd", "", "the job's lifetime spend ceiling in USD, estimates of possibly charged attempts included (required to run)")
 	flags.IntVar(&opts.Concurrency, "concurrency", 3, "requests in flight")
 	flags.DurationVar(&opts.Timeout, "timeout", labelingAttemptTimeout, "an attempt without a terminal event by then is terminated and unknown")
@@ -127,7 +132,7 @@ func runLabelingRunCLI(args []string, stdout, stderr io.Writer) error {
 	flags.BoolVar(&opts.AllowUnpriced, "allow-unpriced", false, "run although some usage cannot be priced (its spend is then unbounded)")
 	flags.IntVar(&opts.MaxConsecutiveFailures, "max-consecutive-failures", 3, "halt after this many failed or unknown attempts in a row")
 	flags.StringVar(&opts.AcceptServedModel, "accept-served-model", "", "accept results served by this model instead of the requested one (recorded in the job)")
-	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || opts.Dir == "" || opts.Job == "" || opts.CreateOnly && !opts.Create || opts.RetryInvalid < 0 || opts.MaxConsecutiveFailures < 1 {
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || opts.Dir == "" || opts.Job == "" || opts.CreateOnly && !opts.Create || opts.RetryInvalid < 0 || opts.Spec.MaxPerText < 0 || opts.MaxConsecutiveFailures < 1 {
 		return errors.New(labelingUsage)
 	}
 	if *maxUSD == "" && !opts.CreateOnly {
