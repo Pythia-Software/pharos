@@ -12,7 +12,7 @@ import { decodeQueryStrict, EMPTY_QUERY } from "@pythia-software/query-table-cor
 import { assets } from "../helpers/classic-script.mjs";
 import map from "../../../../internal/archive/assets/site-map.json";
 import cases from "../../../../testdata/site-map-cases.json";
-import { cardURL, chartVerdict, dashboardURL, drawChart, judgeChart, settingsPages, siteSchemas, viewTitles, windowTerms } from "../../../src/site-map";
+import { cardURL, chartVerdict, dashboardURL, drawChart, judgeChart, readChart, viewChart, settingsPages, siteSchemas, viewTitles, windowTerms } from "../../../src/site-map";
 import { analysisCatalogs } from "../../../src/analysis-catalogs";
 import { dashboardDefaults } from "../../../src/dashboard-defaults";
 import { canonicalState, normalizeAnalysis, readAnalysisLink, validAnalysisState } from "../../../src/dashboard-analysis-model";
@@ -73,14 +73,21 @@ test("the site map's rules judge every dashboard case, partial charts included, 
     verdicts[item.verdict]++;
     const view = facts.views[merged(item.topic, item.chart).view ?? "trend"];
     if (view && view.keys.some(key => !(key in item.chart))) partial++;
-    // What the rules draw is what the page draws.
+    // What the rules draw is what the page draws, and keeping only the
+    // view's keys (what Go writes) changes neither the verdict nor the drawing.
     if (item.verdict !== "invalid") {
-      const drawn = drawChart(view, merged(item.topic, item.chart)), page = normalizeAnalysis(analysisCatalogs[item.topic], merged(item.topic, item.chart));
+      const kept = viewChart(item.topic, item.chart), viewDrawing = chart => plain(view.keys.map(key => normalizeAnalysis(analysisCatalogs[item.topic], merged(item.topic, chart))[key]));
+      assert.equal(chartVerdict(item.topic, kept), item.verdict, `${name} with only its view's keys`);
+      assert.deepEqual(viewDrawing(kept), viewDrawing(item.chart), `${name} draws the same with only its view's keys`);
+      const drawn = drawChart(view, readChart(facts, item.chart).merged), page = normalizeAnalysis(analysisCatalogs[item.topic], merged(item.topic, item.chart));
       for (const [key, value] of Object.entries(drawn)) assert.deepEqual(value, plain(page[key]), `${name} draws ${key}`);
     }
   }
   for (const verdict of Object.keys(verdicts)) assert.ok(verdicts[verdict] > 0, `some cases are ${verdict}`);
   assert.ok(partial > 1000, "the cases include partial charts");
+  // Charts the page writes itself carry keys their view does not draw.
+  for (const kind of ["switchView", "card"]) assert.ok(chartCases.some(item => item.written?.startsWith(kind) && item.verdict === "valid" && Object.keys(item.chart).some(key => !map.analyze.dashboards[item.topic].views[merged(item.topic, item.chart).view ?? "trend"].keys.includes(key) && key !== "selection")), `${kind} charts with keys their view does not draw`);
+  assert.equal(chartCases.filter(item => item.written?.startsWith("card")).length, map.cards.items.filter(card => card.chart).length, "every card's own chart");
   for (const topic of Object.keys(usageTopics)) assert.ok(chartCases.some(item => item.topic === topic && item.verdict === "valid" && item.url), topic);
   for (const [topic, facts] of Object.entries(map.analyze.dashboards)) for (const [name, view] of Object.entries(facts.views)) {
     assert.equal(judgeChart(facts, map.analyze.version, view.defaults), "valid", `${topic} ${name} defaults`);
@@ -127,7 +134,7 @@ test("the motivating example is a valid tokens dashboard", () => {
   assert.ok(map.op_sets[map.datasets.usage.fields.find(field => field.name === "model_family").ops].includes("contains"));
 });
 
-test("every card at every window rebuilds from the site map and opens its dashboard", () => {
+test("the sampled card links rebuild from the site map and open their dashboards", () => {
   const cards = new Map(map.cards.items.map(card => [card.id, card]));
   for (const item of cases.cards) {
     const card = cards.get(item.id), name = `${item.id} at ${item.days}`;
@@ -144,7 +151,8 @@ test("every card at every window rebuilds from the site map and opens its dashbo
     for (const [key, value] of Object.entries(card.state)) if (!(card.window?.chart_days ?? []).includes(key)) assert.deepEqual(plain(drawn[key]), value, `${name} draws ${key}`);
     assert.equal(chartVerdict(opened.workspace.topic, card.state), "valid", name);
   }
-  assert.equal(new Set(cases.cards.map(item => item.id)).size, map.cards.items.length, "every card has cases");
+  assert.equal(new Set(cases.cards.map(item => item.id)).size, map.cards.items.length, "every card has a case");
+  assert.ok(map.cards.items.some(card => card.window && cases.cards.filter(item => item.id === card.id).length === card.window.days.length), "some cards have every window");
 });
 
 test("every other page's link reads back through its page's reader", () => {

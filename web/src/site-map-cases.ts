@@ -1,7 +1,7 @@
 import { decodeQueryStrict, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisCatalogs } from "./analysis-catalogs";
-import { chartKeys, chartVerdict, canonicalChart, judgeChart, cardURL, compact, dashboardURL, dashboardWindows, datasetURL, enumerateView, siteSchemas, type SiteMap, type Verdict } from "./site-map";
-import type { AnalysisView } from "./dashboard-analysis-model";
+import { chartKeys, chartVerdict, canonicalChart, judgeChart, viewChart, cardURL, compact, dashboardURL, dashboardWindows, datasetURL, enumerateView, siteSchemas, type SiteMap, type Verdict } from "./site-map";
+import { normalizeAnalysis, switchView, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { usageDatasets, usageTopics, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { rollingWindowDays, type QueryDataset } from "./query-links";
 import { cardLibraryParams } from "./card-library-model";
@@ -44,7 +44,7 @@ function filterSets(dataset: QueryDataset): WhereTerm[][] {
   return sets;
 }
 
-type ChartCase = { topic: UsageTopic; view: string; partial?: true; chart: Record<string, unknown>; verdict: Verdict; filters?: WhereTerm[]; days?: number | null; url?: string; decoded?: Record<string, unknown> };
+type ChartCase = { topic: UsageTopic; view: string; partial?: true; written?: string; chart: Record<string, unknown>; verdict: Verdict; filters?: WhereTerm[]; days?: number | null; url?: string; decoded?: Record<string, unknown> };
 // Up to count items spread evenly over a list.
 const spread = <T,>(items: T[], count: number) => items.length <= count ? items : Array.from({ length: count }, (_, index) => items[Math.floor(index * items.length / count)]);
 
@@ -70,7 +70,7 @@ function chartCases(map: SiteMap): ChartCase[] {
       // option at each of its values, and the view's defaults less one key.
       const partial: Record<string, unknown>[] = [
         ...Object.entries(info.domains).flatMap(([option, values]) => values.map(value => ({ v: map.analyze.version, view, [option]: value }))),
-        ...Object.keys(info.numeric).filter(option => option !== "selection").map(option => ({ v: map.analyze.version, view, [option]: info.defaults[option] })),
+        ...Object.keys(info.numeric).filter(option => option !== "selection" && info.defaults[option] !== undefined).map(option => ({ v: map.analyze.version, view, [option]: info.defaults[option] })),
         // Without view, a chart takes the topic's; only that view's keys are in the map.
         ...Object.keys(info.defaults).filter(option => option !== "view" || (facts.merge_defaults.view ?? "trend") === view).map(option => Object.fromEntries(Object.entries(info.defaults).filter(([name]) => name !== option))),
       ];
@@ -91,6 +91,19 @@ function chartCases(map: SiteMap): ChartCase[] {
         cases.push({ topic, view, partial: true, chart, verdict: chartVerdict(topic, chart) });
         if (!index) cases.push({ topic, view, chart: { ...canonicalChart(info.defaults), ...change }, verdict: chartVerdict(topic, { ...canonicalChart(info.defaults), ...change }) });
       }
+    }
+    // Charts the page writes itself: after a view switch it saves the whole
+    // switched state over the current one (switchView, then persist), with
+    // keys the new view does not draw. And every card's own chart.
+    const catalog = analysisCatalogs[topic]!, merge = facts.merge_defaults as Record<string, unknown>;
+    for (const [from, info] of Object.entries(facts.views)) for (const to of Object.keys(facts.views)) {
+      const current = { ...merge, ...info.defaults } as AnalysisState;
+      const chart = { ...current, ...switchView(catalog, current, to as AnalysisView) } as Record<string, unknown>;
+      cases.push({ topic, view: to, written: `switchView ${from} to ${to}`, chart, verdict: chartVerdict(topic, chart) });
+    }
+    for (const card of map.cards.items.filter(card => card.page === `analyze/${topic}`)) {
+      const chart = card.chart as Record<string, unknown>;
+      cases.push({ topic, view: String(chart.view ?? merge.view ?? "trend"), written: `card ${card.id}`, chart, verdict: chartVerdict(topic, chart) });
     }
     // A view the catalog cannot show.
     for (const view of Object.keys(facts.unavailable_views ?? {})) {
@@ -183,7 +196,15 @@ function nodeCases(map: SiteMap) {
 export function buildSiteMapCases(map: SiteMap) {
   for (const topic of Object.keys(usageTopics)) if (!analysisCatalogs[topic]) throw new Error(`site map cases: no catalog for ${topic}`);
   const charts = chartCases(map);
-  for (const item of charts) if (judgeChart(map.analyze.dashboards[item.topic], map.analyze.version, item.chart) !== item.verdict) throw new Error(`site map cases: the rules misjudge ${item.topic} ${json(item.chart)}`);
+  for (const item of charts) {
+    const facts = map.analyze.dashboards[item.topic];
+    if (judgeChart(facts, map.analyze.version, item.chart) !== item.verdict) throw new Error(`site map cases: the rules misjudge ${item.topic} ${json(item.chart)}`);
+    if (item.verdict === "invalid") continue;
+    // Keeping only the view's keys changes neither the verdict nor the drawing.
+    const kept = viewChart(item.topic, item.chart), view = chartKeys[(item.chart.view ?? facts.merge_defaults.view ?? "trend") as AnalysisView];
+    const draw = (chart: Record<string, unknown>) => json(view.map(key => (normalizeAnalysis(analysisCatalogs[item.topic]!, { ...facts.merge_defaults, ...chart } as AnalysisState) as Record<string, unknown>)[key]));
+    if (chartVerdict(item.topic, kept) !== item.verdict || draw(kept) !== draw(item.chart)) throw new Error(`site map cases: ${item.topic} ${json(item.chart)} draws otherwise with only its view's keys`);
+  }
   return {
     version: map.version,
     about: "Cases for the site map, from web/src/site-map-cases.ts. analyze: by topic, charts with the page's verdict (valid; coercible: opens but draws other settings; invalid: rejected). Partial charts are merged over the topic's merge_defaults, as the page does. Some valid charts carry their link. cards: every card at one window, and some at every window. nodes: a link per page with the state its reader reads. decoded: each query token's state.",

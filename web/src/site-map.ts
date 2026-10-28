@@ -88,14 +88,23 @@ export type Verdict = "valid" | "invalid" | "coercible";
 // accepts it; a link before analysisVersion is migrated (readAnalysisLink),
 // one in older vocabulary is rewritten (canonicalState); then the page draws
 // normalizeAnalysis of it. A chart is valid when the page draws every
-// setting it names as given, coercible when it opens but draws another.
+// setting of its view that it names as given, coercible when it opens but
+// draws another. Keys the view does not draw (a Compare chart's period, as a
+// view switch writes them) are checked for validity but draw nothing.
 export function chartVerdict(topic: UsageTopic, chart: Record<string, unknown>): Verdict {
   const catalog = analysisCatalogs[topic] ?? fail(`no catalog for ${topic}`);
   const merged = { ...dashboardDefaults[topic], ...chart } as AnalysisState;
   if (!validAnalysisState(catalog, merged)) return "invalid";
   if (merged.v !== analysisVersion || json(canonicalState(catalog, merged)) !== json(merged)) return "coercible";
   const drawn = normalizeAnalysis(catalog, merged) as Record<string, unknown>;
-  return Object.keys(chart).every(key => json(drawn[key]) === json(chart[key])) ? "valid" : "coercible";
+  const keys = chartKeys[(merged.view ?? "trend") as AnalysisView];
+  return Object.keys(chart).filter(key => keys.includes(key)).every(key => json(drawn[key]) === json(chart[key])) ? "valid" : "coercible";
+}
+// A chart with only the keys its view draws (and a non-empty selection): what
+// Go writes. The generator checks that it draws as the whole chart does.
+export function viewChart(topic: UsageTopic, chart: Record<string, unknown>): Record<string, unknown> {
+  const view = (chart.view ?? dashboardDefaults[topic].view ?? "trend") as AnalysisView, selection = chart.selection as { values?: unknown[] } | undefined;
+  return Object.fromEntries(Object.entries(chart).filter(([key]) => chartKeys[view].includes(key) || key === "selection" && Boolean(selection?.values?.length)));
 }
 
 // The keys a canonical analyze_chart holds for each view, in order: the
@@ -201,8 +210,17 @@ export function drawChart(view: ViewRules, merged: Record<string, unknown>): Rec
   }
   return drawn;
 }
-export function judgeChart(facts: { merge_defaults: Record<string, unknown>; views: Record<string, ViewRules> }, version: number, chart: Record<string, unknown>): Verdict {
-  const merged = { ...facts.merge_defaults, ...chart }, view = facts.views[String(merged.view ?? "trend")];
+export type LegacyName = { key: string; value: unknown; set: Record<string, unknown> };
+type ChartFacts = { merge_defaults: Record<string, unknown>; legacy?: LegacyName[]; views: Record<string, ViewRules> };
+// A chart as the page reads it: over merge_defaults, with an older name read
+// as the current one (canonicalState).
+export function readChart(facts: ChartFacts, chart: Record<string, unknown>) {
+  const original = { ...facts.merge_defaults, ...chart }, renamed = (facts.legacy ?? []).filter(entry => json(original[entry.key]) === json(entry.value));
+  return { merged: Object.assign({}, original, ...renamed.map(entry => entry.set)) as Record<string, unknown>, renamed: renamed.length > 0 };
+}
+export function judgeChart(facts: ChartFacts, version: number, chart: Record<string, unknown>): Verdict {
+  // A renamed chart opens, but not as it was written.
+  const { merged, renamed } = readChart(facts, chart), view = facts.views[String(merged.view ?? "trend")];
   // A chart without v is an older link, which the page migrates.
   if (!view || merged.v !== undefined && merged.v !== version) return "invalid";
   for (const [name, value] of Object.entries(merged)) {
@@ -215,11 +233,12 @@ export function judgeChart(facts: { merge_defaults: Record<string, unknown>; vie
       if (typeof value !== "number" || value < range.min || range.max !== undefined && value > range.max || range.integer && !Number.isInteger(value)) return "invalid";
     } else if (view.domains[name]) {
       if (!view.domains[name].includes(value as Scalar)) return "invalid";
-    } else if (name in chart) return "invalid"; // Outside the map: a key the view does not hold.
+    }
+    // Keys the view neither draws nor checks, the page ignores.
   }
-  if (merged.v === undefined) return "coercible";
+  if (merged.v === undefined || renamed) return "coercible";
   const drawn = drawChart(view, merged);
-  return Object.keys(chart).every(name => !(name in drawn) || drawn[name] === chart[name]) ? "valid" : "coercible";
+  return Object.keys(chart).every(name => !view.keys.includes(name) || !(name in drawn) || drawn[name] === chart[name]) ? "valid" : "coercible";
 }
 
 // Every combination of a view's drawn options over its defaults, each
@@ -258,7 +277,11 @@ function viewFacts(topic: UsageTopic, view: AnalysisView, label: string): ViewFa
   const defaults = canonicalChart({ ...moved, v: analysisVersion, view, ...view === "trend" ? {} : { scale: moved.scale ?? "linear" } });
   if (chartVerdict(topic, defaults) !== "valid") fail(`${topic} ${view} defaults are not drawn as given: ${json(defaults)}`);
   const keys = chartKeys[view];
-  const domains: Record<string, Scalar[]> = Object.fromEntries(keys.filter(name => !["v", "view", ...numericKeys].includes(name)).map(option => [option, domainOf(topic, defaults, option)]));
+  // Every key validAnalysisState checks in this view, drawn or not: a value
+  // it would accept for no key means the view does not check that key.
+  const accepts = (name: string, value: unknown) => validAnalysisState(catalog, { ...merge, ...defaults, [name]: value } as AnalysisState);
+  const checked = (name: string) => !accepts(name, numericKeys.includes(name) ? "not a number" : "(no such value)");
+  const domains: Record<string, Scalar[]> = Object.fromEntries(allChartKeys.filter(name => !numericKeys.includes(name) && (keys.includes(name) || checked(name))).map(option => [option, domainOf(topic, defaults, option)]));
   const numeric = numericOptions(topic, view, defaults);
   const states = enumerateView(topic, view, defaults, domains).map(item => ({ ...item, merged: { ...merge, ...item.chart } as Record<string, unknown> }))
     .map(item => ({ ...item, drawn: item.verdict === "invalid" ? {} : normalizeAnalysis(catalog, item.merged as AnalysisState) as Record<string, unknown> }));
@@ -319,22 +342,41 @@ function integerRange(accepts: (value: number) => boolean, ceiling = Number.MAX_
   return { min, ...high === max ? {} : { max: high }, integer: !accepts(min + 0.5) };
 }
 const numericKeys = ["hours", "days", "rollingPeriods", "normPeriods", "seriesLimit", "minSamples"];
+const allChartKeys = [...new Set(Object.values(chartKeys).flat())].filter(name => name !== "v" && name !== "view");
 // The integer settings a view's chart holds, and the legend selection's size.
 function numericOptions(topic: UsageTopic, view: AnalysisView, base: Record<string, unknown>) {
   const catalog = analysisCatalogs[topic]!;
   const accepts = (key: string) => (value: unknown) => validAnalysisState(catalog, { ...dashboardDefaults[topic], ...base, [key]: value } as AnalysisState);
-  const options = Object.fromEntries(numericKeys.filter(key => chartKeys[view].includes(key)).map(key => [key, integerRange(accepts(key))]));
+  const options = Object.fromEntries(numericKeys.filter(key => chartKeys[view].includes(key) || !accepts(key)("not a number")).map(key => [key, integerRange(accepts(key))]));
   const selection = (count: number) => accepts("selection")({ values: Array.from({ length: count }, (_, index) => String(index)), excluded: false });
   return { ...options, selection: { max_values: integerRange(selection, 1_000_000).max ?? fail("a selection has no maximum") } };
 }
 
+// The older names a topic's catalog reads (its legacy mapping), probed with
+// the values the site's own links still carry (cards' charts) and the list
+// positions older metrics used. Other older vocabulary is outside the map.
+function legacyNames(topic: UsageTopic): { legacy?: LegacyName[] } {
+  const catalog = analysisCatalogs[topic]!, base = { ...dashboardDefaults[topic], v: analysisVersion } as Record<string, unknown>;
+  if (!catalog.legacy) return {};
+  const probes = new Map<string, unknown[]>();
+  const add = (key: string, value: unknown) => { if (!probes.has(key)) probes.set(key, []); if (!probes.get(key)!.some(item => json(item) === json(value))) probes.get(key)!.push(value); };
+  for (const recipe of queryRecipes) if (recipe.destination?.topic === topic) for (const [key, value] of Object.entries(recipe.destination.chart)) add(key, value);
+  for (let position = 0; position < Object.keys(catalog.measures).length; position++) add("metric", position);
+  const names: LegacyName[] = [];
+  for (const [key, values] of probes) for (const value of values) {
+    const state = { ...base, [key]: value }, read = catalog.legacy(state as AnalysisState) as Record<string, unknown>;
+    const set = Object.fromEntries(Object.keys({ ...state, ...read }).filter(name => json(read[name]) !== json(state[name])).map(name => [name, read[name]]));
+    if (Object.keys(set).length) names.push({ key, value, set });
+  }
+  return names.length ? { legacy: names } : {};
+}
 function dashboardFacts(topic: UsageTopic) {
   const catalog = analysisCatalogs[topic] ?? fail(`no catalog for ${topic}`);
   if (catalog.dataset !== usageTopicDatasets[topic]) fail(`${topic} draws ${catalog.dataset} but opens ${usageTopicDatasets[topic]}`);
   const views = Object.fromEntries(availableViews(catalog).map(([view, label]) => [view, viewFacts(topic, view, label)]));
   const unavailable = Object.fromEntries((["trend", "compare", "distribution", "scatter", "cycle"] as AnalysisView[]).flatMap(view => viewUnavailable(catalog, view) ? [[view, viewUnavailable(catalog, view)!]] : []));
   return {
-    dataset: catalog.dataset, time: catalog.time, merge_defaults: dashboardDefaults[topic],
+    dataset: catalog.dataset, time: catalog.time, merge_defaults: dashboardDefaults[topic], ...legacyNames(topic),
     defaults: canonicalChart(views[(dashboardDefaults[topic].view ?? "trend")].defaults),
     views, ...Object.keys(unavailable).length ? { unavailable_views: unavailable } : {},
     measures: Object.fromEntries(Object.entries(catalog.measures).map(([id, measure]) => [id, { label: measure.label, unit: measure.unit, kind: trendKind(measure), additive: measure.additive, per_record_value: Boolean(measure.value), note: measure.note }])),

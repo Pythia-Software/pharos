@@ -249,8 +249,15 @@ implementation:
 
 1. **Merge.** The merged chart is `{...merge_defaults, ...chart}`. Its view
    is `view`, or `"trend"` when the merge has none.
-   - A chart may name only `v`, `view`, `selection` and that view's `keys`.
-   - Any other key is outside the map, and Go rejects the chart.
+   - A merged value that `legacy` lists as an older name `{key, value, set}`
+     takes `set`, as `canonicalState` reads it. `readChart` does both steps.
+     The legacy list holds the older names the site's own card links still
+     use, plus the list positions older metrics used. Other older vocabulary
+     is outside the map.
+   - A chart may hold keys its view does not draw. The page writes such
+     charts itself: after a view switch it saves the whole switched state,
+     and some cards' own charts carry them (a Compare chart's `period`).
+     Their values are checked (step 2) but draw nothing.
    - A partial chart is fine: the merge fills it as the page does. This
      applies even when the result differs from the view's `defaults`. For
      example, Carbon's default split `type` is no breakdown outside the
@@ -262,8 +269,12 @@ implementation:
    - a numeric key is outside `numeric`;
    - `selection` is not `{values: [string…], excluded: bool}` within
      `max_values`.
-3. **Older link.** Otherwise, a chart without `v` is coercible: the page
-   migrates it as an older link.
+
+   `domains` and `numeric` cover every key `validAnalysisState` checks in
+   the view, drawn or not. A key the view does not check has neither, and is
+   ignored.
+3. **Older link.** Otherwise, a chart without `v`, or one with an older name,
+   is coercible: the page migrates or renames it.
 4. **Draw.** Apply each rule `{option, fill?, constraints, fallback?}` in
    order:
    - **Own value.** The option's own value is its merged value. A missing
@@ -282,8 +293,14 @@ implementation:
      `days` with `days` > 1.
    - **Unchanged options.** An option with no rule is drawn as its merged
      value.
-5. **Valid or coercible.** The chart is valid if every key it names is drawn
-   as given, and coercible otherwise.
+5. **Valid or coercible.** The chart is valid if every key it names among the
+   view's `keys` is drawn as given, and coercible otherwise.
+
+**Go writes only the view's keys** (`viewChart`): parsing accepts whatever
+the page accepts, and the canonical output drops keys the view does not draw.
+The generator checks every case that opens, the page's own switched states
+and every card's chart included. Dropping those keys changes neither the
+verdict nor any drawn setting of the view.
 
 The generator derives the domains and rules from the page's own functions;
 nothing in them is hand-written. It enumerates every combination of a view's
@@ -403,8 +420,8 @@ generator writes it.
 | Key | Contents |
 |---|---|
 | `example` | The motivating example, with its canonical URL |
-| `analyze` | By topic: a spread of each view's complete charts, plus partial charts (one option at each of its values, and each view's defaults less one key) and invalid ones. Each has the page's verdict. Some valid ones carry filters using several operators, a window, and the link |
-| `cards` | Every card at its first default window. Every window for the first card of each way a link takes its window: the page kind, Parallelism's ribbon, a chart that follows the window, filters or none, window terms on another field, a cover, the local calendar, and no window |
+| `analyze` | By topic: a spread of each view's complete charts, plus partial charts (one option at each of its values, and each view's defaults less one key), invalid ones, and charts the page writes itself (`written`: each view switch's saved state, and each card's own chart). Each has the page's verdict. Some valid ones carry filters using several operators, a window, and the link |
+| `cards` | A sample of card links. The generator itself checks every card at every window against `cardDestination`; the fixture carries a sample for Go: every card at its first default window. Every window for the first card of each way a link takes its window: the page kind, Parallelism's ribbon, a chart that follows the window, filters or none, window terms on another field, a cover, the local calendar, and no window |
 | `nodes` | A link per page, with the state the page's reader reads from it |
 
 Wherever a link carries query tokens, `decoded` holds their state. Compare
