@@ -636,6 +636,51 @@ func (d sqlDataset) Distinct(ctx context.Context, q queryer, fieldName, search s
 	return result, nil
 }
 
+// fieldFrequency is one value of a field and how many rows hold it.
+type fieldFrequency struct {
+	Value string `json:"value"`
+	Count int64  `json:"count"`
+}
+
+// FrequentValues lists a field's most frequent non-empty values, most
+// frequent first. A field the cube groups by is counted from the cube's
+// group counts, as Distinct reads its values there.
+func (d sqlDataset) FrequentValues(ctx context.Context, q queryer, fieldName string, limit int, schema querytable.Schema) ([]fieldFrequency, error) {
+	field, ok := schema.Fields[fieldName]
+	if !ok || !field.Filterable {
+		return nil, fmt.Errorf("unknown filter field %q", fieldName)
+	}
+	from, condition, count, args := d.from, " WHERE ", "COUNT(*)", []any{}
+	expression, grouped := d.cube.dimensionFor(fieldName)
+	if grouped {
+		from, count = d.cube.from, "SUM("+d.cube.count+")"
+	} else {
+		d = d.project([]string{fieldName})
+		var err error
+		if expression, err = d.expr(fieldName); err != nil {
+			return nil, err
+		}
+		where, whereArgs, err := d.where(nil, schema)
+		if err != nil {
+			return nil, err
+		}
+		from, args = d.from, whereArgs
+		if where != "" {
+			condition = where + " AND "
+		}
+	}
+	rows, err := queryMapsContext(ctx, q, fmt.Sprintf("SELECT CAST(%s AS TEXT) value, %s n %s%s%s IS NOT NULL AND %s <> '' GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT ?",
+		expression, count, from, condition, expression, expression), append(args, limit)...)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]fieldFrequency, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, fieldFrequency{Value: firstString(row["value"]), Count: integer(row["n"])})
+	}
+	return out, nil
+}
+
 // FieldStats reports each field's distinct non-null values, and the range of
 // number and datetime fields, over the whole dataset in one scan.
 func (d sqlDataset) FieldStats(ctx context.Context, q queryer, names []string, schema querytable.Schema) (map[string]querytable.FieldStat, error) {
