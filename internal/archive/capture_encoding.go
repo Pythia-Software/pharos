@@ -76,7 +76,7 @@ func (m *captureManifest) encodedVersions() bool {
 // without encoded entries stay readable by older builds.
 func (m *captureManifest) writerVersion() int {
 	if m.encodedVersions() {
-		return captureManifestVersion
+		return captureGenerationsVersion
 	}
 	return capturePlainManifestVersion
 }

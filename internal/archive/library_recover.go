@@ -295,9 +295,12 @@ func syncDirectory(path string) error {
 // Every manifest reference is part of the recovery contract, including old
 // file versions, database generations and nested immutable transfer inventories.
 //
-// validateCaptureEvidence checks a live tree, whose captures may be
+// validateCaptureEvidence checks a live tree in place, whose captures may be
 // compressed while it reads: a file compressed after its manifest was read
-// is accepted if it decodes to the recorded bytes (storedAsUnlocked).
+// is accepted if it decodes to the recorded bytes (storedAsUnlocked). It must
+// never validate a staged copy (a recovery or a transfer), which nothing
+// compresses: there that pair is a torn copy, and lock-taking readers of the
+// published copy would trust the entry. Use validateStagedCaptureEvidence.
 func validateCaptureEvidence(ctx context.Context, root string) error {
 	return validateCaptures(ctx, root, false)
 }

@@ -38,18 +38,22 @@ import (
 // interrupted run (error, kill, unplug) leaves the previous state valid and the
 // next run resumes from the last manifest checkpoint.
 const (
-	// captureManifestVersion is the newest manifest this build reads. A writer
-	// stamps it only when an entry is stored encoded (writerVersion);
-	// capturePlainManifestVersion otherwise, which older builds still read.
-	captureManifestVersion      = 6
+	// captureManifestVersion is the newest manifest this build reads. The
+	// version is per kind of encoded entry, so that a build refuses exactly
+	// the captures holding a kind it cannot read: a writer stamps the lowest
+	// version describing its encoded entries (writerVersion), and
+	// capturePlainManifestVersion when there are none.
+	captureManifestVersion      = captureGenerationsVersion
 	capturePlainManifestVersion = 5
-	captureManifestName         = "manifest.json"
-	captureHostName             = "host.json"
-	captureFilesDir             = "files"
-	captureHistoryDir           = "history"
-	captureTempSuffix           = ".pharos-tmp"
-	captureLockName             = ".capture.lock"
-	captureStampLayout          = "20060102T150405.000000000Z"
+	// captureGenerationsVersion: encoded snapshot generations.
+	captureGenerationsVersion = 6
+	captureManifestName       = "manifest.json"
+	captureHostName           = "host.json"
+	captureFilesDir           = "files"
+	captureHistoryDir         = "history"
+	captureTempSuffix         = ".pharos-tmp"
+	captureLockName           = ".capture.lock"
+	captureStampLayout        = "20060102T150405.000000000Z"
 )
 
 var (

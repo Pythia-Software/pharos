@@ -1423,7 +1423,7 @@ func TestCaptureCompressesIndexedUnpinnedGenerations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.Version != captureManifestVersion || encoded.Encoding != captureEncodingZstd || encoded.StoredSize != info.Size() || encoded.Size != generation.Size || encoded.Captured != generation.Captured || !zstdOnDisk(t, file) {
+	if after.Version != captureGenerationsVersion || encoded.Encoding != captureEncodingZstd || encoded.StoredSize != info.Size() || encoded.Size != generation.Size || encoded.Captured != generation.Captured || !zstdOnDisk(t, file) {
 		t.Fatalf("encoded generation: version %d, %+v (%d bytes on disk)", after.Version, encoded, info.Size())
 	}
 	if sum, size, err := fileSHA256(leased); err != nil || size != generation.Size || sum != encoded.SHA256 || zstdOnDisk(t, leased) {
@@ -1480,7 +1480,7 @@ func TestCaptureCompressesIndexedUnpinnedGenerations(t *testing.T) {
 	}
 	// A build that cannot decode refuses the capture instead of misreading it.
 	override(t, &captureManifestUnderstood, capturePlainManifestVersion)
-	if _, err := loadCaptureManifest(target.Dir); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("has version %d; this build understands up to %d", captureManifestVersion, capturePlainManifestVersion)) {
+	if _, err := loadCaptureManifest(target.Dir); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("has version %d; this build understands up to %d", captureGenerationsVersion, capturePlainManifestVersion)) {
 		t.Fatal("an older build accepted an encoded capture", err)
 	}
 	captureManifestUnderstood = captureManifestVersion

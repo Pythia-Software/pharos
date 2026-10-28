@@ -66,9 +66,15 @@ handoffs cite file and line for each.
    original size and with no zstd frame; readers read it as plain and the
    next pass corrects the entry. Readers holding the old inode through a
    `.reader-*` hard link keep reading the uncompressed bytes.
-5. **Older builds must not misread an encoded capture.** Bump the capture
-   manifest version, so that builds that do not know `encoding` refuse the
-   capture instead of handing zstd to SQLite.
+5. **Older builds must not misread an encoded capture.** The manifest
+   version is per kind of encoded entry, because a release may ship between
+   phases: 6 when encoded snapshot generations are present (phase 1), 7 when
+   an encoded latest or earlier plain file is (phase 2), 8 when an encoded
+   latest snapshot is (phase 3). A writer stamps the lowest version that
+   describes its encoded entries, and 5 when there are none, so captures
+   without encoded entries stay readable by older builds. A build reads up
+   to its own version and refuses the rest, instead of handing zstd to SQLite
+   or a parser.
 
 ## Phases
 
