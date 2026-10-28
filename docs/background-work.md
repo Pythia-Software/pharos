@@ -386,7 +386,12 @@ at once for a new one. It reads the -shm header and asks `F_GETLK` which
 other process holds the write, checkpoint or a read lock (macOS), using the
 descriptor SQLite already has open, so it opens and keeps nothing on the
 library's volume. Only another process's read lock on a slot marked where the
-checkpoint stopped (below the last frame) makes it the holder; the writer,
+checkpoint stopped (below the last frame) makes it the holder, or its lock
+on slot 0 while frames are left: such a reader started when the log was
+fully copied (just after a truncation) and reads the database alone, and
+no checkpoint copies anything until it ends. A lock is tied to a mark only
+if the header (both copies agreeing, checksum valid) reads the same before
+and after the lock probe; otherwise the process is named as possible; the writer,
 a checkpoint, a recovery or a reader at the last frame are only mentioned.
 With no such outside reader it names this process when a slot is marked
 where the checkpoint stopped, "probably" until a second probe agrees, with

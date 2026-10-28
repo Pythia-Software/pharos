@@ -65,6 +65,12 @@ func parseWALIndexHeader(b []byte) (walIndexHeader, error) {
 	if b[12] == 0 { // isInit
 		return h, errors.New("wal-index header is not initialized")
 	}
+	// A writer updates the two copies in turn, each with its checksum: a
+	// header read mid-update has copies that differ or a checksum that does
+	// not match.
+	if !bytes.Equal(b[:48], b[48:96]) || !walIndexChecksumOK(b[:48]) {
+		return h, errors.New("wal-index header was changing while it was read")
+	}
 	order := binary.NativeEndian
 	h.MxFrame = order.Uint32(b[16:])
 	h.NBackfill = order.Uint32(b[96:])
@@ -72,6 +78,18 @@ func parseWALIndexHeader(b []byte) (walIndexHeader, error) {
 		h.ReadMarks[i] = order.Uint32(b[100+4*i:])
 	}
 	return h, nil
+}
+
+// walIndexChecksumOK checks WalIndexHdr.aCksum (bytes 40..47) against
+// SQLite's walChecksumBytes over the first 40 bytes, in native byte order.
+func walIndexChecksumOK(hdr []byte) bool {
+	order := binary.NativeEndian
+	var s1, s2 uint32
+	for i := 0; i < 40; i += 8 {
+		s1 += order.Uint32(hdr[i:]) + s2
+		s2 += order.Uint32(hdr[i+4:]) + s1
+	}
+	return order.Uint32(hdr[40:]) == s1 && order.Uint32(hdr[44:]) == s2
 }
 
 // blocking lists the read slots whose mark is where the checkpoint stopped.
@@ -98,12 +116,22 @@ type walLock struct {
 	Command string
 }
 
-// walProbe is what probeWAL read: the header, and the locks other
-// processes hold (POSIX locks never report the caller's own).
+// walProbe is what probeWAL read: the header, the locks other processes
+// hold (POSIX locks never report the caller's own), and the header again
+// after the locks, so a lock is tied to a mark only if neither moved.
 type walProbe struct {
 	Header    walIndexHeader
 	HeaderErr error
 	Locks     []walLock
+	After     walIndexHeader
+	AfterErr  error
+}
+
+// steady reports that the header read after the locks agrees with the one
+// before on the last frame, the checkpoint's progress and slot's mark.
+func (p walProbe) steady(slot int) bool {
+	return p.HeaderErr == nil && p.AfterErr == nil && p.After.MxFrame == p.Header.MxFrame &&
+		p.After.NBackfill == p.Header.NBackfill && p.After.ReadMarks[slot] == p.Header.ReadMarks[slot]
 }
 
 // walPin is what is known about a checkpoint that stopped advancing.
@@ -203,8 +231,11 @@ func (c *Catalog) walPinned() *walPin {
 
 // walHolder names who keeps the checkpoint from advancing, and whether it
 // could tell. Only a read lock on a blocking slot (marked where the
-// checkpoint stopped, below the last frame) stops the copy: another process
-// holding one is the holder. With none, this process holds it when a slot is
+// checkpoint stopped, below the last frame) stops the copy, or a reader on
+// slot 0, which reads the database alone: it started while the log was
+// fully copied (just after a truncation, say), and a checkpoint copies
+// nothing while it reads. Another process holding one is the holder, if
+// the header read before and after its lock agrees; otherwise possibly. With none, this process holds it when a slot is
 // blocking (POSIX locks never report the caller's own), and its running
 // operations that started before the stall are the suspects. Otherwise, or
 // when the probe fails, the holder is unknown and the suspects are listed
@@ -250,8 +281,20 @@ func (c *Catalog) walHolder(since, now time.Time) (string, bool, bool) {
 			add(&context, name+" recovering the log")
 		case probe.HeaderErr != nil:
 			add(&possible, name+" reading")
+		case slot == 0 && probe.Header.NBackfill < probe.Header.MxFrame:
+			reading := fmt.Sprintf("%s reading the database since the log was last fully copied, at frame %s", name, formatCount(int(probe.Header.NBackfill)))
+			if probe.steady(slot) {
+				add(&holders, reading)
+			} else {
+				add(&possible, reading)
+			}
 		case blocking[slot]:
-			add(&holders, fmt.Sprintf("%s reading up to frame %s of %s", name, formatCount(int(probe.Header.ReadMarks[slot])), formatCount(int(probe.Header.MxFrame))))
+			reading := fmt.Sprintf("%s reading up to frame %s of %s", name, formatCount(int(probe.Header.ReadMarks[slot])), formatCount(int(probe.Header.MxFrame)))
+			if probe.steady(slot) {
+				add(&holders, reading)
+			} else {
+				add(&possible, reading)
+			}
 		default:
 			add(&context, name+" reading")
 		}
@@ -265,12 +308,16 @@ func (c *Catalog) walHolder(since, now time.Time) (string, bool, bool) {
 	switch {
 	case len(holders) > 0:
 		return also("another process: " + strings.Join(holders, ", ")), true, false
+	case len(possible) > 0:
+		why := "the wal-index changed while it was read"
+		if probe.HeaderErr != nil {
+			why = "the wal-index header could not be read"
+		}
+		holder := "unknown (" + why + "); possibly another process: " + strings.Join(possible, ", ")
+		return also(withSuspects(holder, "this process has been running since before the stall")), false, false
 	case len(blocking) > 0:
 		holder := withSuspects(fmt.Sprintf("this process (pid %d)", os.Getpid()), "running since before the stall")
 		return also(holder), true, true
-	case len(possible) > 0:
-		holder := "unknown (the wal-index header could not be read); possibly another process: " + strings.Join(possible, ", ")
-		return also(withSuspects(holder, "this process has been running since before the stall")), false, false
 	}
 	holder := "unknown (no read slot is marked where the checkpoint stopped)"
 	return also(withSuspects(holder, "this process has been running since before the stall")), false, false

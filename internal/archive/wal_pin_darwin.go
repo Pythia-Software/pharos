@@ -44,6 +44,11 @@ func probeWALShm(shm string) (walProbe, error) {
 		}
 		probe.Locks = append(probe.Locks, walLock{Byte: at, PID: pid, Command: commands[pid]})
 	}
+	if n, err := unix.Pread(fd, b, 0); err != nil || n < len(b) {
+		probe.AfterErr = errors.New("could not read the wal-index header")
+	} else {
+		probe.After, probe.AfterErr = parseWALIndexHeader(b)
+	}
 	// SQLite may have closed the descriptor meanwhile and the number been
 	// reused: then what was read is not the catalog's.
 	if again, err := shmDescriptor(shm); err != nil || again != fd {

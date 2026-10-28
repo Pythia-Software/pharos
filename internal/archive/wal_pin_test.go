@@ -14,11 +14,17 @@ import (
 func walIndexBytes(mxFrame, nBackfill uint32, marks [walReadSlots]uint32) []byte {
 	b := make([]byte, walIndexHeaderBytes)
 	order := binary.NativeEndian
-	for _, copyAt := range []int{0, 48} {
-		order.PutUint32(b[copyAt:], 3007000) // iVersion
-		b[copyAt+12] = 1                     // isInit
-		order.PutUint32(b[copyAt+16:], mxFrame)
+	order.PutUint32(b, 3007000) // iVersion
+	b[12] = 1                   // isInit
+	order.PutUint32(b[16:], mxFrame)
+	var s1, s2 uint32
+	for i := 0; i < 40; i += 8 {
+		s1 += order.Uint32(b[i:]) + s2
+		s2 += order.Uint32(b[i+4:]) + s1
 	}
+	order.PutUint32(b[40:], s1)
+	order.PutUint32(b[44:], s2)
+	copy(b[48:96], b[:48])
 	order.PutUint32(b[96:], nBackfill)
 	for i, mark := range marks {
 		order.PutUint32(b[100+4*i:], mark)
@@ -49,6 +55,18 @@ func TestWALIndexHeaderParse(t *testing.T) {
 	if _, err := parseWALIndexHeader(make([]byte, walIndexHeaderBytes)); err == nil {
 		t.Fatal("an uninitialized header parsed")
 	}
+	// A header caught mid-update: the copies differ, or the checksum fails.
+	changing := walIndexBytes(10, 5, [walReadSlots]uint32{})
+	changing[48+16]++
+	if _, err := parseWALIndexHeader(changing); err == nil {
+		t.Fatal("differing header copies parsed")
+	}
+	changing = walIndexBytes(10, 5, [walReadSlots]uint32{})
+	changing[16]++
+	changing[48+16]++
+	if _, err := parseWALIndexHeader(changing); err == nil {
+		t.Fatal("a header with a bad checksum parsed")
+	}
 }
 
 func TestProcArgsParse(t *testing.T) {
@@ -77,7 +95,7 @@ func TestWALPinBookkeeping(t *testing.T) {
 	var probeErr error
 	override(t, &probeWAL, func(string) (walProbe, error) {
 		probes++
-		return walProbe{Header: header, Locks: locks}, probeErr
+		return walProbe{Header: header, Locks: locks, After: header}, probeErr
 	})
 	start := time.Now()
 	catalog.wal.mu.Lock()
@@ -144,15 +162,34 @@ func TestWALPinBookkeeping(t *testing.T) {
 	catalog.noteWALCheckpointed()
 	locks = []walLock{{Byte: walReadLockByte + 3, PID: 80}}
 	var headerErr error = errors.New("short read")
+	after := func(h walIndexHeader) walIndexHeader { return h }
 	override(t, &probeWAL, func(string) (walProbe, error) {
 		probes++
-		return walProbe{Header: header, HeaderErr: headerErr, Locks: locks}, probeErr
+		return walProbe{Header: header, HeaderErr: headerErr, Locks: locks, After: after(header)}, probeErr
 	})
 	busy(3000, 200, 90*time.Second)
 	if pin := busy(3000, 200, 100*time.Second); pin.Known || !strings.Contains(pin.Holder, "possibly another process: pid 80 reading") {
 		t.Fatalf("an unreadable header: %+v", pin)
 	}
 	headerErr = nil
+	// Another process on slot 0 while frames are left: it started reading
+	// when the log was fully copied (just after a truncation), and nothing
+	// is copied while it reads.
+	catalog.noteWALCheckpointed()
+	locks = []walLock{{Byte: walReadLockByte, PID: 81, Command: "pharos labeling prepare --dry-run"}}
+	busy(3000, 200, 110*time.Second)
+	if pin := busy(3000, 200, 120*time.Second); !pin.Known || pin.Holder != "another process: pid 81 (pharos labeling prepare --dry-run) reading the database since the log was last fully copied, at frame 200" {
+		t.Fatalf("a slot 0 reader: %+v", pin)
+	}
+	// The header moved between the reads around the locks: the lock may
+	// belong to a reader that came after the one that stopped the copy.
+	after = func(h walIndexHeader) walIndexHeader { h.MxFrame++; return h }
+	catalog.noteWALCheckpointed()
+	busy(3000, 200, 130*time.Second)
+	if pin := busy(3000, 200, 140*time.Second); pin.Known || !strings.Contains(pin.Holder, "unknown (the wal-index changed while it was read); possibly another process: pid 81") {
+		t.Fatalf("an unsteady header: %+v", pin)
+	}
+	after = func(h walIndexHeader) walIndexHeader { return h }
 
 	// No other process: a slot marked where the checkpoint stopped is this
 	// process's, and only operations running since before the stall are
