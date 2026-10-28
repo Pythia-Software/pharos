@@ -721,6 +721,7 @@ func TestAskNativeContextNeverEntersGeneralArchive(t *testing.T) {
 		t.Fatalf("ordinary ingestion changed: %d %v", count, err)
 	}
 }
+
 // The picker answers from the models found in the background: enabling Ask
 // and starting the service discover them, and a stale list is refreshed
 // behind an answer from the old one, which a failed refresh keeps.
@@ -1139,11 +1140,20 @@ func TestAskSiteLinkDestinations(t *testing.T) {
 		"other site":        {"id": "", "url": "https://example.com/analyze"},
 		"both":              {"id": "analyze", "url": canonical},
 		"neither":           {"id": " ", "url": ""},
+		"unknown id":        {"id": "nope", "url": ""},
+		"long description":  {"id": "analyze", "url": "", "description": strings.Repeat("x", 1001)},
 	} {
-		destination["description"] = ""
+		if _, given := destination["description"]; !given {
+			destination["description"] = ""
+		}
 		override(t, &askRunCLI, reply(destination))
 		if answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC"); err == nil || !strings.HasSuffix(err.Error(), "try again") {
 			t.Errorf("%s: %+v accepted: %+v %v", name, destination, answer, err)
+		}
+		// Beside a destination Pharos can open, it is only left out.
+		override(t, &askRunCLI, reply(destination, map[string]string{"id": "", "url": canonical, "description": ""}))
+		if answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC"); err != nil || len(answer.Cards) != 1 || answer.Cards[0].Href != canonical || answer.Omitted != 1 {
+			t.Errorf("%s beside a valid link: %+v %v", name, answer, err)
 		}
 	}
 }
@@ -1227,5 +1237,15 @@ func TestAskOpusTokensQuestion(t *testing.T) {
 	askOK(t, s, "send", input)
 	if session, err = s.askSession(t.Context(), "chat-1"); err != nil || len(session.Conversation) != 2 || len(session.Conversation[1].Cards) != 1 || session.Conversation[1].Cards[0].Href != card.Href {
 		t.Fatalf("follow-up: %+v %v", session, err)
+	}
+	// A destination Pharos cannot open beside it is left out, and the saved
+	// turn says how many, so the page notes it and does not open the card.
+	override(t, &askRunCLI, func(context.Context, askProvider, askSelection, string) ([]byte, error) {
+		return askReply(card.ID, "nope"), nil
+	})
+	input["turnID"], input["prompt"] = "turn-3", "Open that or the other one"
+	askOK(t, s, "send", input)
+	if session, err = s.askSession(t.Context(), "chat-1"); err != nil || len(session.Conversation) != 3 || len(session.Conversation[2].Cards) != 1 || session.Conversation[2].Omitted != 1 || session.Conversation[1].Omitted != 0 {
+		t.Fatalf("omitted destination: %+v %v", session, err)
 	}
 }

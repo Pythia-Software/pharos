@@ -188,6 +188,7 @@
 #pharos-ask .pharos-send:disabled{filter:grayscale(1);opacity:.45;cursor:default}
 #pharos-ask .pharos-destinations{display:grid;gap:9px;margin-top:8px}
 #pharos-ask .pharos-results-label{font-size:13px;color:var(--pharos-ink);margin:0 0 4px}
+#pharos-ask .pharos-omitted{font-size:12px;color:var(--pharos-muted);margin:2px 0 0}
 #pharos-ask .pharos-destination{position:relative;display:flex;flex-direction:column;gap:3px;text-decoration:none;padding:13px 38px 14px 14px;border:1px solid var(--pharos-line);border-radius:9px;background:var(--pharos-panel);color:var(--pharos-ink);transition:transform 150ms ease}
 #pharos-ask .pharos-destination:hover{transform:translateY(-2px);border-color:var(--pharos-violet)}
 #pharos-ask .pharos-destination-kind{font-size:11px;color:var(--pharos-sea)}

@@ -29,18 +29,21 @@ type askCard struct {
 	Href        string `json:"href"`
 }
 type askTurn struct {
-	ID            string            `json:"id"`
-	Prompt        string            `json:"prompt"`
-	CLI           string            `json:"cli"`
-	Model         string            `json:"model"`
-	ModelLabel    string            `json:"modelLabel"`
-	Effort        string            `json:"effort"`
-	Status        string            `json:"status"`
-	Message       string            `json:"message"`
-	Reply         string            `json:"reply"`
-	ElapsedMs     int64             `json:"elapsedMs"`
-	StartedAt     int64             `json:"startedAt"`
-	Cards         []askCard         `json:"cards"`
+	ID         string    `json:"id"`
+	Prompt     string    `json:"prompt"`
+	CLI        string    `json:"cli"`
+	Model      string    `json:"model"`
+	ModelLabel string    `json:"modelLabel"`
+	Effort     string    `json:"effort"`
+	Status     string    `json:"status"`
+	Message    string    `json:"message"`
+	Reply      string    `json:"reply"`
+	ElapsedMs  int64     `json:"elapsedMs"`
+	StartedAt  int64     `json:"startedAt"`
+	Cards      []askCard `json:"cards"`
+	// Omitted counts destinations the agent returned that Pharos could not
+	// open; the page notes them and does not open a lone remaining card.
+	Omitted       int               `json:"omitted,omitempty"`
 	Clarification *askClarification `json:"clarification,omitempty"`
 }
 type askSession struct {
@@ -217,6 +220,7 @@ func (s *Server) askSessions(ctx context.Context, query string, offset int) ([]a
 	}
 	return result, rows.Err()
 }
+
 // Model discovery runs a CLI for up to 25 s, so the picker never waits for
 // it once a CLI's models are known: askProvider answers from memory and
 // refreshes a list older than askModelsTTL in the background. Enabling Ask
@@ -679,6 +683,7 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 		turn := &session.Conversation[len(session.Conversation)-1]
 		turn.ElapsedMs = time.Since(time.UnixMilli(turn.StartedAt)).Milliseconds()
 		turn.Message = ""
+		turn.Omitted = 0
 		if runErr != nil {
 			turn.Status = "error"
 			turn.Reply = runErr.Error()
@@ -691,6 +696,7 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			turn.Cards = result.Cards
+			turn.Omitted = result.Omitted
 			turn.Reply = result.Message
 			turn.Clarification = result.Clarification
 			turn.Status = "multiple"

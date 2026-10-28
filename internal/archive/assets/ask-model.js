@@ -43,8 +43,14 @@ function askRetryDraft({turns = [], draft = ''}) {
   }
   return notice+kept.join('\n\n');
 }
-function askShouldNavigate({cards = [], draft = '', enabled, regular, edited}) {
-  return enabled && !regular && !edited && draft.length === 0 && cards.length === 1;
+// A lone card opens itself, unless Pharos left out other destinations the
+// agent offered with it: then the agent meant a choice.
+function askShouldNavigate({cards = [], omitted = 0, draft = '', enabled, regular, edited}) {
+  return enabled && !regular && !edited && draft.length === 0 && cards.length === 1 && !omitted;
+}
+function askOmittedNote(omitted = 0) {
+  if (!omitted) return '';
+  return omitted === 1 ? 'One suggested view could not be opened, so it is left out.' : `${omitted} suggested views could not be opened, so they are left out.`;
 }
 function askChatURL(href, id) {
   const url = new URL(href);
