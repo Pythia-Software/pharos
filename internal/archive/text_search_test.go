@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -444,8 +445,8 @@ func TestMessageSearchUpgradeResumesAndPreservesEvidence(t *testing.T) {
 // cursor, then merges them away. Searches answer the same throughout.
 func TestToolOutputLeavesTheWordIndex(t *testing.T) {
 	c, _ := testCatalog(t)
-	override(t, &toolOutputScan, 3)
-	override(t, &toolOutputMergePages, 1)
+	override(t, &toolOutputScan, batchBounds{least: 1, first: 3, most: 3})
+	override(t, &toolOutputMergePages, batchBounds{least: 1, first: 1, most: 1})
 	tx := seedTx(t, c.DB)
 	if _, err := tx.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','claude','local','w','Legacy postings','2026-10-28');
 	 INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c','w','claude','local','c')`); err != nil {
@@ -527,7 +528,7 @@ func TestToolOutputLeavesTheWordIndex(t *testing.T) {
 		t.Fatalf("capabilities call removal done: %+v", removal)
 	}
 	// One batch checks three rows and commits; the next resumes after them.
-	if more, err := c.removeToolOutputBatch(t.Context()); err != nil || !more {
+	if more, _, err := c.removeToolOutputBatch(t.Context(), 3); err != nil || !more {
 		t.Fatalf("first batch: %v %v", more, err)
 	}
 	var left int
@@ -566,8 +567,19 @@ func TestToolOutputLeavesTheWordIndex(t *testing.T) {
 		t.Fatalf("removal changed messages: %v", err)
 	}
 	// Done stays done.
-	if more, err := c.toolOutputIndexStep(t.Context()); err != nil || more {
+	if more, err := newToolOutputMigration().step(t.Context(), c); err != nil || more {
 		t.Fatalf("finished migration ran again: %v %v", more, err)
+	}
+	// Batches shrink while they hold the writer too long and grow while
+	// they are quick, within their bounds.
+	sizer := batchSizer{bounds: batchBounds{least: 10, first: 40, most: 100}}
+	sizes := []int{sizer.next()}
+	for _, held := range []time.Duration{3 * toolOutputHold, 3 * toolOutputHold, 3 * toolOutputHold, toolOutputHold, 0, 0, 0, 0} {
+		sizer.held(held)
+		sizes = append(sizes, sizer.next())
+	}
+	if !slices.Equal(sizes, []int{40, 20, 10, 10, 10, 20, 40, 80, 100}) {
+		t.Fatalf("batch sizes %v", sizes)
 	}
 }
 

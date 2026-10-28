@@ -61,21 +61,52 @@ const toolOutputCoverage = "Tool output is not word-indexed or searched here; sc
 
 // A catalog written before tool output left the word index still holds its
 // postings. They are removed in the background, oldest first: each batch
-// deletes the tool results among the next toolOutputScan word-index rows, in
-// one short transaction that also records the last row it checked. Then a
-// merge loop rewrites the index without them, toolOutputMergePages pages a
-// step: a deleted posting frees its stored text at once but stays in the
-// index's segments until they are merged. The file shrinks only with VACUUM.
+// deletes the tool results among the next word-index rows, in one short
+// transaction that also records the last row it checked. Then a merge loop
+// rewrites the index without them: a deleted posting frees its stored text at
+// once but stays in the index's segments until they are merged. The file
+// shrinks only with VACUUM.
 const (
 	toolOutputCursorKey  = "message_fts_tool_output_cursor"
 	toolOutputRemovedKey = "message_fts_tool_output_removed"
 	toolOutputMergedKey  = "message_fts_tool_output_merged"
 )
 
+// A batch's cost is mostly the text of the tool output it deletes, which
+// FTS5 reads back and tokenizes, and that varies by orders of magnitude. So
+// batches are sized as they go to hold the writer about toolOutputHold:
+// rows of the index to check, or pages to merge, between these bounds.
 var (
-	toolOutputScan       = 2000
-	toolOutputMergePages = 2000
+	toolOutputHold       = 250 * time.Millisecond
+	toolOutputScan       = batchBounds{least: 10, first: 200, most: 5000}
+	toolOutputMergePages = batchBounds{least: 16, first: 200, most: 4000}
 )
+
+type batchBounds struct{ least, first, most int }
+
+// batchSizer sizes the next batch from how long the last one held the
+// writer: halved when it held it over twice toolOutputHold, doubled when
+// under half.
+type batchSizer struct {
+	bounds batchBounds
+	size   int
+}
+
+func (s *batchSizer) next() int {
+	if s.size == 0 {
+		s.size = s.bounds.first
+	}
+	return min(max(s.size, s.bounds.least), s.bounds.most)
+}
+
+func (s *batchSizer) held(d time.Duration) {
+	switch size := s.next(); {
+	case d > 2*toolOutputHold:
+		s.size = max(s.bounds.least, size/2)
+	case d < toolOutputHold/2:
+		s.size = min(s.bounds.most, size*2)
+	}
+}
 
 type toolOutputProgress struct {
 	// Ready is true once the postings are removed and the index merged.
@@ -114,14 +145,24 @@ func (c *Catalog) toolOutputIndexProgress(ctx context.Context) (toolOutputProgre
 	return progress, nil
 }
 
-// removeToolOutputBatch removes the tool results among the next batch of
-// word-index rows and reports whether any rows remain to check.
-func (c *Catalog) removeToolOutputBatch(ctx context.Context) (bool, error) {
+// removeToolOutputBatch removes the tool results among the next rows of the
+// word index, reports whether any rows remain to check, and how long it held
+// the writer.
+func (c *Catalog) removeToolOutputBatch(ctx context.Context, rows int) (more bool, held time.Duration, err error) {
 	tx, finish, err := c.beginTrackedWrite(ctx, "word-index-tool-output")
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
-	defer func() { _ = tx.Rollback(); finish() }()
+	started := time.Now()
+	defer func() { _ = tx.Rollback(); finish(); held = time.Since(started) }()
+	more, err = removeToolOutput(ctx, tx, rows)
+	if err == nil {
+		err = tx.Commit()
+	}
+	return more, 0, err
+}
+
+func removeToolOutput(ctx context.Context, tx *sql.Tx, scan int) (bool, error) {
 	var done string
 	if err := tx.QueryRowContext(ctx, "SELECT value FROM meta WHERE key=?", toolOutputRemovedKey).Scan(&done); err == nil {
 		return false, nil
@@ -137,14 +178,12 @@ func (c *Catalog) removeToolOutputBatch(ctx context.Context) (bool, error) {
 	if err := tx.QueryRowContext(ctx, `WITH scanned AS (SELECT fts_rowid,message_id FROM message_fts_rows WHERE fts_rowid>? ORDER BY fts_rowid LIMIT ?)
 		SELECT (SELECT MAX(fts_rowid) FROM scanned),
 		(SELECT json_group_array(s.fts_rowid) FROM scanned s JOIN messages m ON m.id=s.message_id WHERE NOT `+wordIndexedKind("m.")+`)`,
-		cursor, toolOutputScan).Scan(&last, &rows); err != nil {
+		cursor, scan).Scan(&last, &rows); err != nil {
 		return false, err
 	}
 	if !last.Valid {
-		if _, err := tx.ExecContext(ctx, "INSERT OR REPLACE INTO meta(key,value) VALUES(?,'1')", toolOutputRemovedKey); err != nil {
-			return false, err
-		}
-		return false, tx.Commit()
+		_, err := tx.ExecContext(ctx, "INSERT OR REPLACE INTO meta(key,value) VALUES(?,'1')", toolOutputRemovedKey)
+		return false, err
 	}
 	if rows != "[]" {
 		// Removing postings reorders no remaining match, and every search
@@ -169,23 +208,30 @@ func (c *Catalog) removeToolOutputBatch(ctx context.Context) (bool, error) {
 			}
 		}
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", toolOutputCursorKey, fmt.Sprint(last.Int64)); err != nil {
-		return false, err
-	}
-	return true, tx.Commit()
+	_, err := tx.ExecContext(ctx, "INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", toolOutputCursorKey, fmt.Sprint(last.Int64))
+	return true, err
 }
 
 // mergeWordIndexStep does one bounded step of merging the word index's
 // segments into one, which drops the removed postings, and reports whether
 // there is more to merge. A negative merge merges every segment, as optimize
-// does, but writes at most that many pages a transaction; FTS5 changes at
+// does, but writes about that many pages a transaction; FTS5 changes at
 // least two rows when it did any work.
-func (c *Catalog) mergeWordIndexStep(ctx context.Context) (bool, error) {
+func (c *Catalog) mergeWordIndexStep(ctx context.Context, pages int) (more bool, held time.Duration, err error) {
 	tx, finish, err := c.beginTrackedWrite(ctx, "word-index-merge")
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
-	defer func() { _ = tx.Rollback(); finish() }()
+	started := time.Now()
+	defer func() { _ = tx.Rollback(); finish(); held = time.Since(started) }()
+	more, err = mergeWordIndex(ctx, tx, pages)
+	if err == nil {
+		err = tx.Commit()
+	}
+	return more, 0, err
+}
+
+func mergeWordIndex(ctx context.Context, tx *sql.Tx, pages int) (bool, error) {
 	var done string
 	if err := tx.QueryRowContext(ctx, "SELECT value FROM meta WHERE key=?", toolOutputMergedKey).Scan(&done); err == nil {
 		return false, nil
@@ -196,29 +242,37 @@ func (c *Catalog) mergeWordIndexStep(ctx context.Context) (bool, error) {
 	if err := tx.QueryRowContext(ctx, "SELECT total_changes()").Scan(&before); err != nil {
 		return false, err
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO messages_fts(messages_fts,rank) VALUES('merge',?)", -toolOutputMergePages); err != nil {
+	if _, err := tx.ExecContext(ctx, "INSERT INTO messages_fts(messages_fts,rank) VALUES('merge',?)", -pages); err != nil {
 		return false, err
 	}
 	if err := tx.QueryRowContext(ctx, "SELECT total_changes()").Scan(&after); err != nil {
 		return false, err
 	}
-	more := after-before >= 2
-	if !more {
-		if _, err := tx.ExecContext(ctx, "INSERT OR REPLACE INTO meta(key,value) VALUES(?,'1')", toolOutputMergedKey); err != nil {
-			return false, err
-		}
+	if after-before >= 2 {
+		return true, nil
 	}
-	return more, tx.Commit()
+	_, err := tx.ExecContext(ctx, "INSERT OR REPLACE INTO meta(key,value) VALUES(?,'1')", toolOutputMergedKey)
+	return false, err
 }
 
-// toolOutputIndexStep is the migration's next step: a removal batch, then
-// merge steps once removal is done.
-func (c *Catalog) toolOutputIndexStep(ctx context.Context) (bool, error) {
-	more, err := c.removeToolOutputBatch(ctx)
+// toolOutputMigration is the migration's batch sizes.
+type toolOutputMigration struct{ removal, merge batchSizer }
+
+func newToolOutputMigration() *toolOutputMigration {
+	return &toolOutputMigration{removal: batchSizer{bounds: toolOutputScan}, merge: batchSizer{bounds: toolOutputMergePages}}
+}
+
+// step is the migration's next step: a removal batch, then merge steps
+// once removal is done.
+func (m *toolOutputMigration) step(ctx context.Context, c *Catalog) (bool, error) {
+	more, held, err := c.removeToolOutputBatch(ctx, m.removal.next())
 	if err != nil || more {
+		m.removal.held(held)
 		return more, err
 	}
-	return c.mergeWordIndexStep(ctx)
+	more, held, err = c.mergeWordIndexStep(ctx, m.merge.next())
+	m.merge.held(held)
+	return more, err
 }
 
 // maintainToolOutputIndex removes tool output from the word index of a
@@ -227,10 +281,11 @@ func (c *Catalog) maintainToolOutputIndex(ctx context.Context) {
 	// One operation for the whole migration, forgotten if there was none.
 	pass := c.beginPass(ctx, "maintenance.search.tool-output", triggerVersion)
 	defer func() { pass.end(nil) }()
+	migration := newToolOutputMigration()
 	for {
 		var more bool
 		var err error
-		pass.runIO(func() { more, err = c.toolOutputIndexStep(ctx) })
+		pass.runIO(func() { more, err = migration.step(ctx, c) })
 		if more {
 			pass.worked(1)
 		}
