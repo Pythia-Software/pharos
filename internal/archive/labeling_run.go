@@ -49,6 +49,9 @@ type labelingRunOptions struct {
 	// AcceptServedModel records the operator's decision to accept results
 	// served by this model instead of the requested one.
 	AcceptServedModel string
+	// RefusalsFrom are earlier datasets whose confirmed refusals a new
+	// job also skips.
+	RefusalsFrom []string
 	// CLIPath runs this executable for the route instead of the one on
 	// PATH; tests point it at a fake CLI.
 	CLIPath string
@@ -76,6 +79,7 @@ type labelingRunner struct {
 	finished                     int
 	cliVersion                   string
 	consecutiveFailures          int
+	consecutiveRefusals          int
 	accepted                     map[string]bool
 	loopError                    error
 }
@@ -154,7 +158,22 @@ func runLabelingJob(ctx context.Context, opts labelingRunOptions) error {
 	}
 	defer db.Close()
 	if opts.Create {
-		summary, err := createLabelingJob(ctx, db, opts.Job, opts.Spec, nil, "")
+		refused := map[string]bool{}
+		for _, earlier := range opts.RefusalsFrom {
+			other, err := openLabelingDataset(earlier)
+			if err != nil {
+				return fmt.Errorf("--refusals-from: %w", err)
+			}
+			keys, err := labelingRefusalKeys(other)
+			other.Close()
+			if err != nil {
+				return err
+			}
+			for key := range keys {
+				refused[key] = true
+			}
+		}
+		summary, err := createLabelingJob(ctx, db, opts.Job, opts.Spec, nil, "", refused)
 		if err != nil {
 			return err
 		}
@@ -215,16 +234,17 @@ func runLabelingJob(ctx context.Context, opts labelingRunOptions) error {
 	if err := r.recover(); err != nil {
 		return err
 	}
-	// Usage an earlier run could not price keeps blocking new requests
-	// until the operator allows it.
+	// Usage an earlier run could not price blocks new requests only when
+	// no exposure covers it: unpriced rows without an upper bound, and
+	// partial rows of an attempt whose estimate is not counted.
 	if !opts.AllowUnpriced {
 		var unpriced int
-		if err := db.QueryRow(`SELECT COUNT(*) FROM usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.job=? AND u.cost_status IN ('partial','unpriced')`,
+		if err := db.QueryRow(`SELECT COUNT(*) FROM usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.job=? AND (u.cost_status='unpriced' OR u.cost_status='partial' AND a.usage_missing=0)`,
 			job.Name).Scan(&unpriced); err != nil {
 			return err
 		}
 		if unpriced > 0 {
-			return fmt.Errorf("job %s holds %d usage records the price book cannot price (see status --json); pass --allow-unpriced to continue", job.Name, unpriced)
+			return fmt.Errorf("job %s holds %d usage records that can be neither priced nor bounded (see status --json); pass --allow-unpriced to continue", job.Name, unpriced)
 		}
 	}
 	// Held results wait for the operator's decision.
@@ -836,6 +856,8 @@ func labelingExactCost(book priceBook, model, day string, tokens map[string]int6
 // labelingPricingRule versions how usage is priced; a job priced under
 // another rule is re-priced from its stored tokens at the next run start.
 //
+// pricing-v4: usage that cannot be priced as itself is priced at the
+// provider's highest rates as an upper-bound estimate (exposure).
 // pricing-v3: as v2, and a served model's usage that cannot be priced as
 // itself is an estimate at the requested model's rate (exposure).
 // pricing-v2: the labeling model (the requested one, and any served model
@@ -844,41 +866,101 @@ func labelingExactCost(book priceBook, model, day string, tokens map[string]int6
 // such as Claude Code's session titles) through the standard price-book
 // resolution (family and dated aliases), so a dated snapshot name prices
 // as its model.
-const labelingPricingRule = "pricing-v3"
+const labelingPricingRule = "pricing-v4"
 
 const (
 	usagePrimary   = "primary"
 	usageAuxiliary = "auxiliary"
 )
 
-// labelingUsageCost prices one usage row under labelingPricingRule.
-// Usage of a served model other than the requested one is priced under its
-// exact name only when the operator accepted it and the price book has it;
-// otherwise (held, re-queued, or accepted but not in the book) its known
-// tokens are priced at the requested model's rate as an estimate (status
-// estimated): exposure, not known spend, and never $0.
+// labelingUsageCost prices one usage row under labelingPricingRule. A
+// served model other than the requested one is priced as itself only when
+// the operator accepted it and the price book has it. Usage that cannot be
+// priced as itself (a held or re-queued served model, an auxiliary model
+// the book cannot resolve, an unpriced requested model) is priced at a
+// conservative upper bound (labelingUpperBoundCost): exposure, not known
+// spend, never $0.
 func labelingUsageCost(book priceBook, role, model, requested, day string, tokens map[string]int64, blocked, assumed bool) usageCost {
 	var cost usageCost
 	switch {
+	case blocked:
+		cost = usageCost{status: "unpriced"}
 	case role == usageAuxiliary:
 		cost = book.cost(model, day, tokens)
-	case model == requested:
-		cost = labelingExactCost(book, model, day, tokens)
 	default:
-		cost = usageCost{status: "unpriced"}
-		if !blocked {
-			cost = labelingExactCost(book, model, day, tokens)
-		}
-		if cost.status == "unpriced" {
-			if estimate := labelingExactCost(book, requested, day, tokens); estimate.cost != nil && estimate.status != "unpriced" {
-				cost = usageCost{cost: estimate.cost, status: "estimated", pricedModel: requested}
-			}
-		}
+		cost = labelingExactCost(book, model, day, tokens)
+	}
+	if cost.status == "unpriced" || cost.cost == nil {
+		cost = labelingUpperBoundCost(book, model, day, tokens)
 	}
 	if assumed && cost.status == "priced" {
 		cost.status = "assumed"
 	}
 	return cost
+}
+
+// Usage cost statuses for estimates: exposure, not known spend.
+const (
+	costUpperBound = "estimated_upper_bound"
+)
+
+// labelingProvider infers a model's provider from its name.
+func labelingProvider(model string) string {
+	name := strings.ToLower(model)
+	switch {
+	case strings.HasPrefix(name, "claude") || strings.HasPrefix(name, "haiku") || strings.HasPrefix(name, "sonnet") || strings.HasPrefix(name, "opus") || strings.HasPrefix(name, "fable"):
+		return "anthropic"
+	case strings.HasPrefix(name, "gpt") || strings.HasPrefix(name, "codex") || regexp.MustCompile(`^o\d`).MatchString(name):
+		return "openai"
+	case strings.HasPrefix(name, "gemini"):
+		return "google"
+	}
+	return ""
+}
+
+// labelingUpperBoundCost prices tokens at the highest rate, per token
+// category, of any model of the same provider in the price book on that
+// day (a category no model prices takes the highest rate of any category).
+// Unpriced when the provider is unknown or has no priced model.
+func labelingUpperBoundCost(book priceBook, model, day string, tokens map[string]int64) usageCost {
+	provider := labelingProvider(model)
+	if provider == "" {
+		return usageCost{status: "unpriced"}
+	}
+	var highest [5]float64
+	found := false
+	for _, intervals := range book.prices {
+		for _, interval := range intervals {
+			if day < interval.from || interval.to != "" && day >= interval.to || labelingProvider(interval.model) != provider {
+				continue
+			}
+			for index, rate := range interval.rates {
+				if rate != nil && *rate > highest[index] {
+					highest[index] = *rate
+					found = true
+				}
+			}
+		}
+	}
+	if !found {
+		return usageCost{status: "unpriced"}
+	}
+	top := 0.0
+	for _, rate := range highest {
+		top = max(top, rate)
+	}
+	oneHour := tokens["cache_creation_1h_input_tokens"]
+	quantities := [5]int64{tokens["uncached_input_tokens"], tokens["cache_read_input_tokens"],
+		max(tokens["cache_creation_input_tokens"]-oneHour, 0), oneHour, tokens["output_tokens"]}
+	total := 0.0
+	for index, quantity := range quantities {
+		rate := highest[index]
+		if rate == 0 {
+			rate = top
+		}
+		total += float64(quantity) * rate / 1_000_000
+	}
+	return usageCost{cost: &total, status: costUpperBound, pricedModel: "upper bound: " + provider}
 }
 
 // labelingAttemptUsage prices every model an attempt's terminal event
@@ -891,8 +973,8 @@ func labelingUsageCost(book priceBook, role, model, requested, day string, token
 // cannot be assigned to one model, every other model's writes are priced at
 // the one-hour (higher) rate and marked assumed. Codex reports no model:
 // its usage is the requested model's.
-func labelingAttemptUsage(stream *labelingStream, requested, day string, book priceBook, blocked map[string]bool) []labelingUsageRow {
-	rows := []labelingUsageRow{}
+func labelingAttemptUsage(stream *labelingStream, requested, day string, book priceBook, blocked map[string]bool) (rows []labelingUsageRow, unexplained bool) {
+	rows = []labelingUsageRow{}
 	primary := map[string]bool{requested: true}
 	for _, model := range stream.Models {
 		primary[model] = true
@@ -912,7 +994,7 @@ func labelingAttemptUsage(stream *labelingStream, requested, day string, book pr
 		_, hasInput := counts["input_tokens"]
 		_, hasOutput := counts["output_tokens"]
 		if !hasInput || !hasOutput {
-			rows = append(rows, labelingUsageRow{model: model, source: source + " (missing input or output counts)", role: role, tokens: tokens,
+			rows = append(rows, labelingUsageRow{model: model, source: source + " " + labelingIncompleteSource, role: role, tokens: tokens,
 				cost: usageCost{status: "partial"}, incomplete: true})
 			return
 		}
@@ -937,6 +1019,12 @@ func labelingAttemptUsage(stream *labelingStream, requested, day string, book pr
 				matched = model
 			}
 		}
+		// The result's usage is the labeling call's: modelUsage must hold
+		// the labeling model, or that call's cost is unaccounted for.
+		explained := top == nil
+		for _, model := range models {
+			explained = explained || primary[model]
+		}
 		oneHour := top["cache_creation_1h_input_tokens"]
 		for _, model := range models {
 			counts := normalizeTokenCounts(stream.modelUsage[model])
@@ -954,18 +1042,20 @@ func labelingAttemptUsage(stream *labelingStream, requested, day string, book pr
 				addCounts(model, "modelUsage", counts, false)
 			}
 		}
-		return rows
+		return rows, !explained
 	}
 	if top == nil {
-		return rows
+		return rows, false
 	}
 	model, source := requested, "requested model (the route reports none)"
 	if len(stream.Models) > 0 {
 		model, source = stream.Models[0], "reported model"
 	}
 	addCounts(model, source, top, false)
-	return rows
+	return rows, false
 }
+
+const labelingIncompleteSource = "(missing input or output counts)"
 
 const labelingUnknownTTLSource = "modelUsage; cache writes of unknown TTL priced at the 1h rate"
 
@@ -1001,6 +1091,11 @@ func (r *labelingRunner) repriceLabelingUsage(force bool) error {
 		json.Unmarshal([]byte(firstString(row["tokens"])), &tokens)
 		blocked := role == usagePrimary && model != r.job.Model && !r.accepted[model]
 		cost := labelingUsageCost(r.book, role, model, r.job.Model, firstString(row["day"]), tokens, blocked, firstString(row["model_source"]) == labelingUnknownTTLSource)
+		// Counts that were incomplete stay incomplete: re-pricing never
+		// turns partial usage into priced usage.
+		if strings.Contains(firstString(row["model_source"]), labelingIncompleteSource) {
+			cost = usageCost{status: "partial"}
+		}
 		var value any
 		if cost.cost != nil {
 			value = *cost.cost
@@ -1119,7 +1214,7 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 		default:
 			errorText = fmt.Sprintf("the CLI exited (code %v) without a terminal event", exitCode(process))
 		}
-	case stream.Failed && labelingRefusalError.MatchString(stream.Error):
+	case stream.Failed && labelingRefusalError.MatchString(stream.errorCode) && !labelingNetworkError.MatchString(stream.errorCode):
 		refuse("provider error: " + firstRunes(stream.Error, 200))
 	case stream.Failed:
 		outcome, errorText = requestFailed, stream.Error
@@ -1176,13 +1271,20 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 			}
 		}
 	}
-	usage := labelingAttemptUsage(stream, r.job.Model, attempt.day, r.book, unaccepted)
+	usage, unexplained := labelingAttemptUsage(stream, r.job.Model, attempt.day, r.book, unaccepted)
 	cliWarnings := labelingCLIWarnings(filepath.Join(attempt.dir, "stderr.log"))
 	// An attempt that may have reached the provider but reported no usage
 	// keeps its estimated exposure in spend.
 	usageMissing := !notSent && len(usage) == 0
 	for _, row := range usage {
 		usageMissing = usageMissing || row.incomplete
+	}
+	// Usage reported for the call but under no labeling model in modelUsage
+	// is unexplained: the attempt keeps its estimated exposure and the run
+	// halts.
+	if unexplained && !notSent {
+		usageMissing = true
+		problems = append(problems, "usage_unexplained")
 	}
 	// A successful terminal event without readable usage halts the run:
 	// spend can no longer be known.
@@ -1224,7 +1326,9 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 		if row.cost.cost != nil {
 			cost = *row.cost.cost
 		}
-		if row.cost.status == "partial" || row.cost.status == "unpriced" {
+		// New usage without a price of its own halts, except a served model
+		// the operator accepted knowing it is only bounded.
+		if row.cost.status == "partial" || row.cost.status == "unpriced" || row.cost.status == costUpperBound && !r.accepted[row.model] {
 			unpriced = append(unpriced, row.model+" ("+row.cost.status+")")
 		}
 		if _, err := tx.Exec(`INSERT INTO usage(attempt_id,model,model_source,tokens,cost_usd,cost_status,priced_model,day,role) VALUES(?,?,?,?,?,?,?,?,?)`,
@@ -1275,11 +1379,17 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 	if len(unpriced) > 0 && !r.opts.AllowUnpriced {
 		r.halt("usage the price book cannot price: " + strings.Join(unpriced, ", ") + " (attempt " + attempt.id + "); pass --allow-unpriced to continue")
 	}
+	if unexplained {
+		r.halt("attempt " + attempt.id + " reported usage that modelUsage does not attribute to the labeling model; its cost is estimated, not known. Review it before running again")
+	}
 	if resultWithoutUsage {
 		r.halt("attempt " + attempt.id + " ended without usage the runner could read; its cost is estimated, not known. Review it (reconcile lists it) before running again")
 	}
 	if outcome == requestFailed && labelingAccountError.MatchString(errorText+" "+strings.Join(stream.Warnings, " ")) {
 		r.halt("attempt " + attempt.id + " failed with an authentication, rate-limit or quota error: " + firstRunes(errorText, 300))
+	}
+	if outcome == requestFailed && labelingNetworkError.MatchString(errorText+" "+strings.Join(stream.Warnings, " ")) {
+		r.halt("attempt " + attempt.id + " failed with a connection error: " + firstRunes(errorText, 300) + "; check the network before running again")
 	}
 	if !recovered {
 		r.mu.Lock()
@@ -1288,11 +1398,21 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 		} else {
 			r.consecutiveFailures = 0
 		}
-		failures := r.consecutiveFailures
+		// Refusals in a row point at the route or the prompt, not the
+		// items: they halt too, before a run refuses its way through a job.
+		if outcome == requestRefused {
+			r.consecutiveRefusals++
+		} else {
+			r.consecutiveRefusals = 0
+		}
+		failures, refusals := r.consecutiveFailures, r.consecutiveRefusals
 		r.mu.Unlock()
 		if failures >= r.opts.MaxConsecutiveFailures {
 			r.halt(fmt.Sprintf("%d consecutive attempts failed or ended unknown (last: %s); check the route (login, flags, quota) before running again",
 				failures, firstRunes(errorText, 300)))
+		}
+		if refusals >= r.opts.MaxConsecutiveFailures {
+			r.halt(fmt.Sprintf("%d consecutive requests were refused; review them (reconcile lists them) before running again", refusals))
 		}
 	}
 	usable := 0

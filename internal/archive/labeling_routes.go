@@ -86,11 +86,15 @@ type labelingStream struct {
 	// system/init, Codex thread.started): before it nothing was sent.
 	Started                bool `json:"started,omitempty"`
 	structured, structTool json.RawMessage
-	text                   string
-	usage                  map[string]any
-	modelUsage             map[string]map[string]any
-	cliCost                *float64
-	toolIDs                map[string]bool
+	// errorCode is the CLI's or provider's own error description (Claude's
+	// subtype and errors, Codex's failure message), never echoed model or
+	// corpus text: refusal errors are recognized only here.
+	errorCode  string
+	text       string
+	usage      map[string]any
+	modelUsage map[string]map[string]any
+	cliCost    *float64
+	toolIDs    map[string]bool
 }
 
 func newLabelingStream(route string) *labelingStream {
@@ -204,6 +208,7 @@ func (s *labelingStream) observe(event map[string]any) {
 				if errs, ok := event["errors"].([]any); ok && len(errs) > 0 {
 					s.Error += ": " + compactJSON(errs)
 				}
+				s.errorCode = s.Error
 				if text := firstString(event["result"]); text != "" {
 					s.Error += ": " + firstRunes(text, 500)
 				}
@@ -238,7 +243,9 @@ func (s *labelingStream) observe(event map[string]any) {
 	case "turn.failed":
 		s.Terminal, s.Failed = kind, true
 		s.usage = mapValue(event["usage"])
-		s.Error = defaultString(firstString(mapValueDefault(event["error"])["message"]), "turn failed")
+		failure := mapValueDefault(event["error"])
+		s.Error = defaultString(firstString(failure["message"]), "turn failed")
+		s.errorCode = strings.TrimSpace(firstString(failure["code"]) + " " + firstString(failure["type"]) + " " + s.Error)
 	case "error":
 		s.Warnings = append(s.Warnings, firstString(event["message"]))
 	}
@@ -346,6 +353,10 @@ func (s *labelingStream) output(answerPath string) json.RawMessage {
 // same way, so the run halts at once.
 var labelingAccountError = regexp.MustCompile(`(?i)(rate[ _-]?limit|too many requests|\b429\b|quota|usage limit|credit balance|billing|\b40[13]\b|unauthori[sz]ed|forbidden|authenticat|invalid (api|x-api)[ _-]?key|not logged in|log ?in again|/login|expired (token|session|credentials))`)
 
+// labelingNetworkError recognizes a connection failure: no request can
+// get through, so the run halts at once (and it is never a refusal).
+var labelingNetworkError = regexp.MustCompile(`(?i)(connection refused|\bECONNREFUSED\b|\bECONNRESET\b|\bENOTFOUND\b|\bETIMEDOUT\b|\bEAI_AGAIN\b|network is unreachable|could not resolve host|tcp connect error|dns error)`)
+
 // refusalText finds refusal words anywhere; alone they only make a reply
 // suspected (an evidence quote may say "I can't get the build to pass").
 var refusalText = regexp.MustCompile(`(?i)\b(I can(no|')t|I cannot|I won'?t|I'm (not able|unable)|I am (not able|unable)|unable to (help|comply|assist)|I must decline)\b`)
@@ -363,9 +374,13 @@ func labelingOpensWithRefusal(text string) bool {
 	return labelingRefusalOpening.MatchString(text)
 }
 
-// labelingRefusalError recognizes a provider or CLI error that is a
-// refusal (a policy or safety block), not a failure.
-var labelingRefusalError = regexp.MustCompile(`(?i)(refus(al|ed)|content (policy|filter)|safety (system|filter|policy)|usage polic(y|ies)|flagged as)`)
+// labelingRefusalError recognizes a provider or CLI error code or message
+// that is a policy refusal: explicit, word-bounded policy wording only
+// (Anthropic's "violate our Usage Policy", OpenAI's content-policy and
+// invalid-prompt codes). It is matched against labelingStream.errorCode,
+// never against echoed model or corpus text, and never matches connection
+// errors.
+var labelingRefusalError = regexp.MustCompile(`(?i)(\busage polic(y|ies)\b|\bcontent[_ ]policy\b|\bcontent[_ ]filter\b|\binvalid_prompt\b|\bpolicy[_ ]violation\b|\bsafety[_ ]system\b)`)
 
 // labelingProcess is how one CLI process ended.
 type labelingProcess struct {

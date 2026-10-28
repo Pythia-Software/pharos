@@ -30,7 +30,7 @@ const labelingUsage = `usage:
   pharos [--config PATH] labeling prepare --dir DIR [--fresh-days 14] [--limit-conversations N] [--conversation ID ...] [--splits-from OLD_DIR] --catalog COPY --snapshot-copy [--allow-stale-shm] [--replace] [--dry-run]
   pharos labeling plan --dir DIR --route claude|codex --model M --effort E [--items-per-request 4] [--max-request-tokens 24000] [--max-request-chars N] [--include-duplicates] [--max-per-text N] [--concurrency 3] [--cohort C ...] [--split S ...] [--limit-items N]
   pharos labeling status --dir DIR [--job NAME [--json]]
-  pharos labeling run --dir DIR --job NAME [--create --route claude|codex --model M --effort E [--prompt V] [--cohort C ...] [--split S ...] [--item ID ...] [--limit-items N] [--items-per-request 4] [--max-request-tokens 24000] [--max-request-chars N] [--include-duplicates] [--max-per-text N] [--include-refused-elsewhere] [--create-only]] --max-usd X [--concurrency 3] [--timeout 330s] [--retry-invalid 1] [--max-consecutive-failures 3] [--allow-unpriced] [--accept-served-model MODEL]
+  pharos labeling run --dir DIR --job NAME [--create --route claude|codex --model M --effort E [--prompt V] [--cohort C ...] [--split S ...] [--item ID ...] [--limit-items N] [--items-per-request 4] [--max-request-tokens 24000] [--max-request-chars N] [--include-duplicates] [--max-per-text N] [--refusals-from OLD_DIR ...] [--create-only]] --max-usd X [--concurrency 3] [--timeout 330s] [--retry-invalid 1] [--max-consecutive-failures 3] [--allow-unpriced] [--accept-served-model MODEL]
   pharos labeling stop --dir DIR --job NAME
   pharos labeling reconcile --dir DIR --job NAME [--retry-unknown] [--retry-failed] [--requeue-held] [--retry-suspected-refusals] [--retry-tool-use]
   pharos labeling import-results --dir DIR --from OLD_DIR --job NAME
@@ -135,7 +135,8 @@ func runLabelingRunCLI(args []string, stdout, stderr io.Writer) error {
 	flags.IntVar(&opts.Spec.MaxRequestChars, "max-request-chars", 0, "also cap the characters of item text and context per request (0: no cap)")
 	flags.BoolVar(&opts.Spec.IncludeDuplicates, "include-duplicates", false, "also label units that repeat another (delegation copies, later fork copies)")
 	flags.IntVar(&opts.Spec.MaxPerText, "max-per-text", 0, "at most N items with the same cohort and target text (0: no limit)")
-	flags.BoolVar(&opts.Spec.IncludeRefusedElsewhere, "include-refused-elsewhere", false, "also select items another route refused (recorded in the job)")
+	var refusalsFrom stringList
+	flags.Var(&refusalsFrom, "refusals-from", "with --create: also skip items an earlier dataset's jobs refused (repeatable)")
 	maxUSD := flags.String("max-usd", "", "the job's lifetime spend ceiling in USD, estimates of possibly charged attempts included (required to run)")
 	flags.IntVar(&opts.Concurrency, "concurrency", 3, "requests in flight")
 	flags.DurationVar(&opts.Timeout, "timeout", labelingAttemptTimeout, "an attempt without a terminal event by then is terminated and unknown")
@@ -157,6 +158,10 @@ func runLabelingRunCLI(args []string, stdout, stderr io.Writer) error {
 		opts.MaxUSD = value
 	}
 	opts.Spec.Cohorts, opts.Spec.Splits, opts.Spec.Items = cohorts, splits, items
+	for _, earlier := range refusalsFrom {
+		path, _ := filepath.Abs(expandPath(earlier))
+		opts.RefusalsFrom = append(opts.RefusalsFrom, path)
+	}
 	signals := make(chan os.Signal, 2)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)

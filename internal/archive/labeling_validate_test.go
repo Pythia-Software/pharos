@@ -30,4 +30,26 @@ func TestLabelingQuoteMapping(t *testing.T) {
 	if got := locateLabelingQuote(split, "L", "\xa9b").Status; got != "not_on_character_boundary" {
 		t.Fatalf("off boundary = %s", got)
 	}
+	// Pieces adjacent in the visible text but apart in the message (dropped
+	// text between them) cannot be quoted as one.
+	seam := labelingItemSource{id: "i3", text: "Helloworld", message: "Hello<x>world",
+		targets: []labelingTargetPiece{{start: 0, end: 5, visibleStart: 0, visibleEnd: 5}, {start: 8, end: 13, visibleStart: 5, visibleEnd: 10}}}
+	if got := locateLabelingQuote(seam, "L", "lowor").Status; got != "spans_pieces" {
+		t.Fatalf("across a seam = %s", got)
+	}
+	joined := labelingItemSource{id: "i4", text: "Helloworld", message: "Helloworld",
+		targets: []labelingTargetPiece{{start: 0, end: 5, visibleStart: 0, visibleEnd: 5}, {start: 5, end: 10, visibleStart: 5, visibleEnd: 10}}}
+	if evidence := locateLabelingQuote(joined, "L", "lowor"); evidence.Status != "valid" || len(evidence.Occurrences[0].Source) != 2 {
+		t.Fatalf("contiguous pieces = %+v", evidence)
+	}
+	// A quote in target text and again inside a marker: valid, ambiguous,
+	// every occurrence recorded with its status.
+	marker := "⟦quoted text, context only, 6 chars: \"fix it\"⟧"
+	text := "fix it " + marker
+	mixed := labelingItemSource{id: "i5", text: text, message: "fix it > fix it", markers: [][2]int{{7, len(text)}},
+		targets: []labelingTargetPiece{{start: 0, end: 7, visibleStart: 0, visibleEnd: 7}}}
+	evidence = locateLabelingQuote(mixed, "L", "fix it")
+	if evidence.Status != "valid" || !evidence.Ambiguous || len(evidence.Occurrences) != 2 || evidence.Occurrences[0].Status != "valid" || evidence.Occurrences[1].Status != "in_marker" {
+		t.Fatalf("mixed = %+v", evidence)
+	}
 }

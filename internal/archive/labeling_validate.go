@@ -45,8 +45,10 @@ type labelingEvidence struct {
 	Label  string `json:"label"`
 	Quote  string `json:"quote"`
 	Status string `json:"status"`
-	// Occurrences are the valid places of the quote: item-relative visible
-	// byte ranges and the original message bytes they came from.
+	// Occurrences are every place of the quote in the item text, each with
+	// its status; valid ones carry the original message bytes they came
+	// from. Ambiguous: the quote occurs more than once (in target text or
+	// a marker alike), so which one the model meant is not known.
 	Occurrences []labelingOccurrence `json:"occurrences,omitempty"`
 	Ambiguous   bool                 `json:"ambiguous,omitempty"`
 }
@@ -55,6 +57,9 @@ type labelingOccurrence struct {
 	ItemStart int              `json:"item_start"`
 	ItemEnd   int              `json:"item_end"`
 	Source    []map[string]any `json:"source"`
+	// Status is valid, or why this occurrence is not evidence (in_marker,
+	// outside_target, spans_pieces, ...). Source is set only when valid.
+	Status string `json:"status"`
 }
 
 // labelingItemResult is one item's validated annotation.
@@ -293,18 +298,24 @@ func locateLabelingQuote(item labelingItemSource, label, quote string) labelingE
 		}
 		start := offset + at
 		end := start + len(quote)
-		if source, reason := mapLabelingRange(item, start, end); reason == "" {
-			evidence.Occurrences = append(evidence.Occurrences, labelingOccurrence{ItemStart: start, ItemEnd: end, Source: source})
+		source, reason := mapLabelingRange(item, start, end)
+		if reason == "" {
+			evidence.Occurrences = append(evidence.Occurrences, labelingOccurrence{ItemStart: start, ItemEnd: end, Source: source, Status: "valid"})
 		} else {
+			evidence.Occurrences = append(evidence.Occurrences, labelingOccurrence{ItemStart: start, ItemEnd: end, Status: reason})
 			reasons[reason] = true
 		}
 		_, size := utf8.DecodeRuneInString(item.text[start:])
 		offset = start + max(size, 1)
 	}
+	evidence.Ambiguous = len(evidence.Occurrences) > 1
+	valid := false
+	for _, occurrence := range evidence.Occurrences {
+		valid = valid || occurrence.Status == "valid"
+	}
 	switch {
-	case len(evidence.Occurrences) > 0:
+	case valid:
 		evidence.Status = "valid"
-		evidence.Ambiguous = len(evidence.Occurrences) > 1
 	case reasons["in_marker"]:
 		evidence.Status = "in_marker"
 	case len(reasons) > 0:
@@ -337,12 +348,19 @@ func mapLabelingRange(item labelingItemSource, start, end int) ([]map[string]any
 	}
 	ranges := []map[string]any{}
 	at := start
+	previousEnd, previousTransformed := -1, false
 	for _, piece := range item.targets {
 		if piece.visibleEnd <= at || piece.visibleStart >= end {
 			continue
 		}
 		if piece.visibleStart > at {
 			return nil, "outside_target"
+		}
+		// Pieces adjacent in the visible text may be apart in the message
+		// (dropped text between them leaves no marker): a quote joining
+		// them would be a sentence the author never wrote.
+		if previousEnd >= 0 && (piece.transform != "" || previousTransformed || previousEnd != piece.start) {
+			return nil, "spans_pieces"
 		}
 		segmentEnd := min(end, piece.visibleEnd)
 		if piece.transform != "" {
@@ -356,6 +374,10 @@ func mapLabelingRange(item labelingItemSource, start, end int) ([]map[string]any
 				return nil, "not_on_character_boundary"
 			}
 			ranges = append(ranges, map[string]any{"start": from, "end": to})
+			previousEnd = to
+		}
+		if piece.transform != "" {
+			previousEnd, previousTransformed = piece.end, true
 		}
 		at = segmentEnd
 		if at >= end {

@@ -100,12 +100,9 @@ type labelingJobSpec struct {
 	LimitItems                   int
 	IncludeDuplicates            bool
 	MaxPerText                   int
-	// IncludeRefusedElsewhere selects items a route refused: by default no
-	// job sends refused material again, on any route.
-	IncludeRefusedElsewhere bool
-	ItemsPerRequest         int
-	MaxRequestTokens        float64
-	MaxRequestChars         int
+	ItemsPerRequest              int
+	MaxRequestTokens             float64
+	MaxRequestChars              int
 }
 
 type labelingJob struct {
@@ -223,11 +220,11 @@ func labelingContractHash(promptVersion string, row labelingPromptRow) string {
 
 // labelingSelectedItem is one selected item with its prompt row.
 type labelingSelectedItem struct {
-	row                   labelingPromptRow
-	cohort, split, family string
-	chars                 int
-	tokens                float64
-	duplicate             bool
+	row                               labelingPromptRow
+	cohort, split, family, refusalKey string
+	chars                             int
+	tokens                            float64
+	duplicate                         bool
 }
 
 // selectLabelingItems applies a selection in item-id order, as planLabeling
@@ -235,7 +232,7 @@ type labelingSelectedItem struct {
 // limit.
 func selectLabelingItems(ctx context.Context, db *sql.DB, spec labelingJobSpec) ([]labelingSelectedItem, int, int, error) {
 	rows, err := db.QueryContext(ctx, `SELECT i.id,u.cohort,COALESCE(u.split,''),i.chars,i.text,u.context_prompt,u.context_excerpt,u.sender_role,u.channel,
-		u.duplicate_of IS NOT NULL,COALESCE(u.family_id,u.conversation_id),i.target_hash FROM items i JOIN units u ON u.id=i.unit_id ORDER BY i.id`)
+		u.duplicate_of IS NOT NULL,COALESCE(u.family_id,u.conversation_id),i.target_hash,u.message_sha256 FROM items i JOIN units u ON u.id=i.unit_id ORDER BY i.id`)
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -249,11 +246,12 @@ func selectLabelingItems(ctx context.Context, db *sql.DB, spec labelingJobSpec) 
 	perText := map[[2]string]int{}
 	for rows.Next() {
 		var item labelingSelectedItem
-		var hash string
+		var hash, message string
 		if err := rows.Scan(&item.row.ID, &item.cohort, &item.split, &item.chars, &item.row.Text, &item.row.Context, &item.row.Excerpt,
-			&item.row.Sender, &item.row.Channel, &item.duplicate, &item.family, &hash); err != nil {
+			&item.row.Sender, &item.row.Channel, &item.duplicate, &item.family, &hash, &message); err != nil {
 			return nil, 0, 0, err
 		}
+		item.refusalKey = message + ":" + hash
 		if len(wanted) > 0 && !wanted[item.row.ID] {
 			continue
 		}
@@ -296,6 +294,24 @@ func selectLabelingItems(ctx context.Context, db *sql.DB, spec labelingJobSpec) 
 	return items, duplicates, repeated, nil
 }
 
+// labelingRefusalKeys lists a dataset's confirmed refusals, from every
+// job, as source message hash and target text hash.
+func labelingRefusalKeys(db *sql.DB) (map[string]bool, error) {
+	keys := map[string]bool{}
+	if !labelingHasLedger(db) {
+		return keys, nil
+	}
+	rows, err := queryMaps(db, `SELECT DISTINCT u.message_sha256||':'||i.target_hash key FROM item_results r JOIN items i ON i.id=r.item_id
+		JOIN units u ON u.id=i.unit_id WHERE r.outcome='refused'`)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		keys[firstString(row["key"])] = true
+	}
+	return keys, nil
+}
+
 // labelingImported is a result copied from an earlier dataset's job.
 type labelingImported struct {
 	result             labelingItemResult
@@ -311,7 +327,7 @@ var labelingImportHook = func() error { return nil }
 // dataset) are written in the same transaction; their items are selected
 // but not sent. Every selected item ends up requested, imported or listed
 // as oversize, or nothing is written.
-func createLabelingJob(ctx context.Context, db *sql.DB, name string, spec labelingJobSpec, imports []labelingImported, importedFrom string) (map[string]any, error) {
+func createLabelingJob(ctx context.Context, db *sql.DB, name string, spec labelingJobSpec, imports []labelingImported, importedFrom string, refusedElsewhere map[string]bool) (map[string]any, error) {
 	skip := map[string]bool{}
 	for _, imported := range imports {
 		skip[imported.result.ItemID] = true
@@ -351,24 +367,22 @@ func createLabelingJob(ctx context.Context, db *sql.DB, name string, spec labeli
 	if err != nil {
 		return nil, err
 	}
-	// Refused material is not sent again, on any route (switching routes
-	// must not bypass a provider's refusal), unless the operator decided
-	// otherwise; the decision is recorded in the job's selection.
-	refused := map[string]bool{}
-	if !spec.IncludeRefusedElsewhere {
-		refusedRows, err := queryMaps(db, `SELECT DISTINCT item_id FROM item_results WHERE outcome='refused'`)
-		if err != nil {
-			return nil, err
-		}
-		for _, row := range refusedRows {
-			refused[firstString(row["item_id"])] = true
-		}
+	// A confirmed refusal is global and permanent: refused material is not
+	// sent again by any job, on any route, in this dataset or a later one
+	// (refusedElsewhere carries earlier datasets' refusals). Keyed by the
+	// source message and target text, so it survives re-preparation.
+	refused, err := labelingRefusalKeys(db)
+	if err != nil {
+		return nil, err
+	}
+	for key := range refusedElsewhere {
+		refused[key] = true
 	}
 	send, refusedSkipped := []labelingSelectedItem{}, 0
 	for _, item := range items {
 		switch {
 		case skip[item.row.ID]:
-		case refused[item.row.ID]:
+		case refused[item.refusalKey]:
 			refusedSkipped++
 		default:
 			send = append(send, item)
@@ -384,6 +398,11 @@ func createLabelingJob(ctx context.Context, db *sql.DB, name string, spec labeli
 	for _, index := range oversize {
 		oversized = append(oversized, send[index].row.ID)
 	}
+	// A selected item that fits no request would never get an outcome.
+	if len(oversized) > 0 {
+		return nil, fmt.Errorf("%d selected items do not fit one request within --max-request-tokens/--max-request-chars: %s; raise the limits or leave them out (--item, --cohort), nothing was created",
+			len(oversized), strings.Join(oversized, ", "))
+	}
 	var manifestText string
 	if err := db.QueryRowContext(ctx, `SELECT value FROM meta WHERE key='manifest'`).Scan(&manifestText); err != nil {
 		return nil, fmt.Errorf("dataset manifest: %w", err)
@@ -396,7 +415,7 @@ func createLabelingJob(ctx context.Context, db *sql.DB, name string, spec labeli
 	}
 	selection := map[string]any{"cohorts": spec.Cohorts, "splits": spec.Splits, "items": spec.Items, "limit_items": spec.LimitItems,
 		"include_duplicates": spec.IncludeDuplicates, "duplicate_items_skipped": duplicates, "selected_items": len(items),
-		"imported_items": len(skip), "refused_skipped": refusedSkipped, "include_refused_elsewhere": spec.IncludeRefusedElsewhere,
+		"imported_items": len(skip), "refused_skipped": refusedSkipped, "refusal_datasets": len(refusedElsewhere) > 0,
 		"max_per_text": spec.MaxPerText, "repeated_text_items_skipped": repeated, "one_item_per_family": true, "oversize_items": oversized, "requests": len(packed)}
 	packing := map[string]any{"items_per_request": spec.ItemsPerRequest, "max_request_tokens": spec.MaxRequestTokens,
 		"max_request_chars": spec.MaxRequestChars, "overhead_tokens": calibration.overheadTokens, "output_tokens_per_item": calibration.outputItem,
@@ -543,14 +562,14 @@ func computeLabelingSpend(db *sql.DB, job labelingJob, book priceBook, day strin
 	}
 	defer tx.Rollback()
 	var known, reported sql.NullFloat64
-	if err := tx.QueryRow(`SELECT SUM(u.cost_usd) FROM usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.job=? AND u.cost_status<>'estimated'`, job.Name).Scan(&known); err != nil {
+	if err := tx.QueryRow(`SELECT SUM(u.cost_usd) FROM usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.job=? AND u.cost_status NOT IN ('estimated','estimated_upper_bound')`, job.Name).Scan(&known); err != nil {
 		return spend, err
 	}
 	spend.Known = known.Float64
 	// Usage of a served model that cannot be priced as itself: its known
 	// tokens at the requested model's rate, an estimate.
 	var estimated sql.NullFloat64
-	if err := tx.QueryRow(`SELECT SUM(u.cost_usd) FROM usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.job=? AND u.cost_status='estimated'`, job.Name).Scan(&estimated); err != nil {
+	if err := tx.QueryRow(`SELECT SUM(u.cost_usd) FROM usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.job=? AND u.cost_status IN ('estimated','estimated_upper_bound')`, job.Name).Scan(&estimated); err != nil {
 		return spend, err
 	}
 	spend.EstimatedUsage = estimated.Float64
@@ -567,7 +586,7 @@ func computeLabelingSpend(db *sql.DB, job labelingJob, book priceBook, day strin
 		spend.Auxiliary += cost
 	}
 	rows, err := queryMaps(tx, `SELECT u.attempt_id,u.model,u.tokens,u.cost_status FROM usage u JOIN attempts a ON a.id=u.attempt_id
-		WHERE a.job=? AND u.cost_status IN ('partial','unpriced')`, job.Name)
+		WHERE a.job=? AND u.cost_status IN ('partial','unpriced','estimated_upper_bound')`, job.Name)
 	if err != nil {
 		return spend, err
 	}
@@ -897,7 +916,7 @@ func importLabelingResults(ctx context.Context, dir, from, name string, w io.Wri
 	spec := labelingJobSpec{Route: route, Model: model, Effort: effort, Prompt: prompt, Cohorts: strs(selection["cohorts"]), Splits: strs(selection["splits"]),
 		Items: strs(selection["items"]), LimitItems: int(integer(selection["limit_items"])), IncludeDuplicates: selection["include_duplicates"] == true,
 		ItemsPerRequest: int(integer(packing["items_per_request"])), MaxRequestChars: int(integer(packing["max_request_chars"])),
-		MaxPerText: int(integer(selection["max_per_text"])), IncludeRefusedElsewhere: selection["include_refused_elsewhere"] == true}
+		MaxPerText: int(integer(selection["max_per_text"]))}
 	spec.MaxRequestTokens, _ = number(packing["max_request_tokens"])
 	// The latest usable or refused result per item in the old job: a
 	// refusal is carried, so the same material is not sent again.
@@ -956,7 +975,12 @@ func importLabelingResults(ctx context.Context, dir, from, name string, w io.Wri
 		}
 		copies = append(copies, labelingImported{result: result, hash: hash, from: from + "#" + firstString(row["attempt_id"]), served: firstString(row["served_model"])})
 	}
-	summary, err := createLabelingJob(ctx, db, name, spec, copies, from)
+	// Every refusal in the earlier dataset, from any job, stays a refusal.
+	refusedBefore, err := labelingRefusalKeys(old)
+	if err != nil {
+		return err
+	}
+	summary, err := createLabelingJob(ctx, db, name, spec, copies, from, refusedBefore)
 	if err != nil {
 		return err
 	}
