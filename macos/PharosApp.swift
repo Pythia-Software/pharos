@@ -102,7 +102,11 @@ final class ArchiveService: ObservableObject {
         didSet { if url != oldValue { clearPageFailure(); pageTarget = nil } }
     }
     // The broker keeps one URL while the selected library can change.
-    @Published private(set) var libraryConnection: String?
+    @Published private(set) var libraryConnection: String? {
+        // Another library, or this one connected or lost: a page failure
+        // belongs to the connection it happened on.
+        didSet { if libraryConnection != oldValue { clearPageFailure(); pageTarget = nil } }
+    }
     private var managedLibraryConnected = false
     private var managedSelectedLibrary = ""
     var hasConnectedLibrary: Bool { !managedApplication || managedLibraryConnected }
@@ -382,6 +386,9 @@ final class ArchiveService: ObservableObject {
             return
         }
         pageError = nil
+        // With no library connected the broker's own pages (the chooser, its
+        // status) are what the window shows; there is nothing to wait for.
+        guard hasConnectedLibrary else { pageWaiting = false; return }
         pageWaiting = true
         watchForService(pageWatch, delay: 0.5)
     }
@@ -389,6 +396,7 @@ final class ArchiveService: ObservableObject {
     private func watchForService(_ watch: Int, delay: Double) {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, self.pageWatch == watch, self.pageWaiting, !self.shuttingDown else { return }
+            guard self.hasConnectedLibrary else { self.clearPageFailure(); return }
             self.checkReady { ready in
                 guard self.pageWatch == watch, self.pageWaiting else { return }
                 if ready { self.clearPageFailure() } else { self.watchForService(watch, delay: min(delay * 2, 10)) }
@@ -1104,6 +1112,13 @@ struct ArchiveWebView: NSViewRepresentable {
 
         /// Failed loads in a row; a page that finishes resets it.
         private var failedLoads = 0
+        /// Bumped by every navigation that starts, so a scheduled retry never
+        /// replaces a newer one (a page opened from the menu meanwhile).
+        private var navigations = 0
+
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            navigations += 1
+        }
         static let loadRetries = 4
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -1134,18 +1149,25 @@ struct ArchiveWebView: NSViewRepresentable {
                 // WebKitErrorPlugInWillHandleLoad (204) is not a failure either.
                 if nsError.domain == "WebKitErrorDomain" && (nsError.code == 102 || nsError.code == 204) { return }
             }
-            let failing = nsError?.userInfo[NSURLErrorFailingURLErrorKey] as? URL
-            let target = failing.flatMap { isArchivePage($0) && $0.scheme != "about" ? $0 : nil } ?? webView.url ?? origin
+            // Retry only the service's own pages; a blob:, data: or about:
+            // navigation that failed falls back to the page shown.
+            let servicePage = { (url: URL?) -> URL? in
+                guard let url, url.scheme == "http" || url.scheme == "https",
+                      url.scheme == self.origin.scheme, url.host == self.origin.host, url.port == self.origin.port else { return nil }
+                return url
+            }
+            let target = servicePage(nsError?.userInfo[NSURLErrorFailingURLErrorKey] as? URL) ?? servicePage(webView.url) ?? origin
             failedLoads += 1
             let attempt = failedLoads
+            let navigation = navigations
             let reason = nsError?.localizedDescription ?? "The page stopped unexpectedly."
             guard let service else { return }
             service.checkReady { [weak self, weak webView] ready in
-                guard let self, let webView, self.failedLoads == attempt else { return }
+                guard let self, let webView, self.failedLoads == attempt, self.navigations == navigation else { return }
                 if ready && attempt <= Self.loadRetries {
                     let delay = 0.5 * pow(2, Double(attempt - 1))
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak webView] in
-                        guard let self, let webView, self.failedLoads == attempt else { return }
+                        guard let self, let webView, self.failedLoads == attempt, self.navigations == navigation else { return }
                         webView.load(URLRequest(url: target))
                     }
                 } else {
@@ -1708,7 +1730,7 @@ struct PharosWindow: View {
                 LibraryDisconnectedView(disconnection: disconnection, ejecting: service.ejecting,
                                         reopen: service.reopen, eject: { service.ejectLibrary() })
             }
-            else if service.pageWaiting, service.url != nil {
+            else if service.pageWaiting, service.url != nil, service.hasConnectedLibrary {
                 VStack(spacing: 16) {
                     PharosBeacon()
                     Text("Waiting for the library to answer… It may be busy opening a large catalog.")
