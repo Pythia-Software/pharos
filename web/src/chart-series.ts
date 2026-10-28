@@ -102,6 +102,13 @@ export function chartBucketsWithHistory(period: ChartPeriod, start: Date, end: D
 }
 
 export function rollingAverageBuckets(buckets: ChartBucket[], periods: number, grid?: { period: ChartPeriod; count?: number }): ChartBucket[] {
+  return rollingBuckets(buckets, periods, grid, "mean");
+}
+
+// A trailing window over the grid: its mean, or its total. Idle periods in
+// the window count as zero; a window reaching before the first bucket is
+// shorter, and windowSize says how long it is.
+export function rollingBuckets(buckets: ChartBucket[], periods: number, grid?: { period: ChartPeriod; count?: number }, op: "mean" | "sum" = "mean"): ChartBucket[] {
   if (!validRollingPeriods(periods) || periods < 2) return buckets;
   const totals = new Map<string, { sum: number; count: number }>();
   const parts = new Map<string, Map<string, { sum: number; count: number }>>();
@@ -125,11 +132,11 @@ export function rollingAverageBuckets(buckets: ChartBucket[], periods: number, g
     const at = indexOf(index);
     while (first < index && at - indexOf(first) >= periods) add(buckets[first++], -1);
     add(bucket, 1);
-    const size = Math.min(periods, at - indexOf(0) + 1);
+    const size = Math.min(periods, at - indexOf(0) + 1), divisor = op === "sum" ? 1 : size;
     return {
       ...bucket,
-      values: Object.fromEntries([...totals].map(([key, entry]) => [key, entry.sum / size])),
-      parts: parts.size ? Object.fromEntries([...parts].map(([key, entries]) => [key, [...entries].map(([name, entry]) => [name, entry.sum / size] as [string, number])])) : undefined,
+      values: Object.fromEntries([...totals].map(([key, entry]) => [key, entry.sum / divisor])),
+      parts: parts.size ? Object.fromEntries([...parts].map(([key, entries]) => [key, [...entries].map(([name, entry]) => [name, entry.sum / divisor] as [string, number])])) : undefined,
       detail: bucket.detail ? `This period: ${bucket.detail}` : undefined,
       windowSize: size,
     };

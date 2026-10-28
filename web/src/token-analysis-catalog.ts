@@ -1,5 +1,6 @@
 import type { WhereTerm } from "@pythia-software/query-table-core";
 import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-model";
+import { tokenTypes } from "./token-chart-request";
 
 // Tokens and Cost over the usage ledger. One record is one agent session's
 // usage of one model and effort on one recorded day.
@@ -30,6 +31,11 @@ const breakdowns: AnalysisCatalog["breakdowns"] = {
     ["model_effort", "Model + effort"], ["effort", "Effort"], ["repository_name", "Repository"], ["session_kind", "Root agent/subagent"], ["price_status", "Price status"],
   ] as const).map(([name, label]) => [name, { label, fields: [name] }])),
 };
+// Providers and agent kinds keep one color and place whatever the filters.
+breakdowns.provider.order = ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"];
+breakdowns.session_kind.order = ["root", "subagent"];
+breakdowns.session_kind.values = { root: "Root agent", subagent: "Sub-agent" };
+breakdowns.repository_name.empty = "No repository";
 
 const root = { provider: ["root_provider"], model_family: ["root_model_family"], provider_model: ["root_provider", "root_model_family"], effort: ["root_effort"], repository_name: ["root_repository_name"], channel: ["channel"], machine_id: ["machine_id"] };
 const present = (name: string): WhereTerm[] => [{ field: name, op: "is_not_null", value: "" }, { field: name, op: "!=", value: "" }];
@@ -46,8 +52,15 @@ export const tokenAnalysisCatalog: AnalysisCatalog = {
     delegated_run: { label: "Delegated run", plural: "Delegated runs", key: "delegated_session_id", where: [...present("delegated_session_id"), { field: "delegated_run_depth", op: ">", value: "0" }], breakdowns: root,
       note: "A delegated run is one delegated execution below a top-level conversation, nested and linked launches included, grouped by its top-level conversation’s provider, model, effort and repository." },
   },
+  // Token type splits a token total into its parts. Cost is priced per
+  // request, not per token type, so cost by type shows providers, as the
+  // Usage chart always has.
+  components: { type: { label: "Token type", measures: ["tokens"], parts: tokenTypes.map(type => ({ key: type.key, label: type.label, field: type.key, color: type.color, optional: type.key === "unclassified_tokens" })), fallback: "provider" } },
   cycle: { hour: "hour", weekday: "day" },
-  trend: { metrics: { tokens: { measure: "tokens", share: false }, cost: { measure: "cost", share: false }, percent: { measure: "tokens", share: true }, percent_cost: { measure: "cost", share: true } },
-    splits: ["type", "channel", "machine_id", "execution_machine_id", "provider", "model_family", "model_effort", "effort", "repository_name", "session_kind"], metric: "tokens", split: "model_family" },
+  // The hourly ledger answers hour; the others are recorded calendar dates.
+  periods: { hour: "hour", day: "day", week: "week", month: "month" },
+  trend: { metric: "tokens", split: "model_family" },
+  // The Usage chart's percentage metrics are a measure shown as shares.
+  legacy: state => state.metric === "percent" || state.metric === "percent_cost" ? { ...state, metric: state.metric === "percent" ? "tokens" : "cost", share: true } : state,
   scatter: ["tokens", "cost"],
 };
