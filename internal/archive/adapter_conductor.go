@@ -37,7 +37,7 @@ func (a *conductorAdapter) ExtractorVersion() string { return conductorExtractor
 func (a *conductorAdapter) partExtractor() string    { return conductorPartExtractor }
 
 func (a *conductorAdapter) Fingerprint() (string, error) {
-	fingerprint, err := pathFingerprint(a.config.Path, func(path string, entry os.DirEntry) bool {
+	fingerprint, err := a.files().pathFingerprint(a.config.Path, func(path string, entry os.DirEntry) bool {
 		name := strings.ToLower(entry.Name())
 		return strings.HasSuffix(name, ".db") || strings.Contains(name, ".sqlite") || strings.HasSuffix(name, "-wal")
 	})

@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -180,7 +181,7 @@ func (v *captureView) open(rel string) (*sourceFile, error) {
 	if !ok || v.decoded[rel] {
 		return &sourceFile{Reader: file, file: file, info: info}, nil
 	}
-	entry = storedAsFile(file, entry)
+	entry = storedAsUnlocked(file, entry)
 	switch entry.Encoding {
 	case "":
 		return &sourceFile{Reader: file, file: file, info: info}, nil
@@ -192,7 +193,9 @@ func (v *captureView) open(rel string) (*sourceFile, error) {
 	if capturedContentHook != nil {
 		capturedContentHook(file.Name())
 	}
-	decoder, err := newCaptureDecoder(bufio.NewReaderSize(file, 1<<20))
+	// 64 KiB: a reader of a header (a rollout's session_meta) decodes a block
+	// or two, not a megabyte; long reads stream through it just as well.
+	decoder, err := newCaptureDecoder(bufio.NewReaderSize(file, 64<<10))
 	if err != nil {
 		file.Close()
 		return nil, err
@@ -222,4 +225,55 @@ func (v *captureView) materialize(ctx context.Context, rel string) (string, erro
 	}
 	v.decoded[rel] = true
 	return file, nil
+}
+
+// Some plans read the head of a file that has not changed: Codex's
+// session_meta for a rollout only its session index names, an Antigravity
+// transcript's start time for print-mode detection. Those values are cached
+// by what the file stands for (its original path, size and mtime), so a
+// normal sync reads, and for an encoded file decodes, each head once per
+// process rather than on every plan. The first read is usually of the
+// uncompressed copy, before the file went cold.
+type headKey struct {
+	kind, original string
+	size, mtime    int64
+}
+
+var (
+	headCacheMu sync.Mutex
+	headCache   = map[headKey]any{}
+)
+
+// headCacheLimit bounds the cache; past it, the cache starts over.
+const headCacheLimit = 200_000
+
+// cachedHead returns read's value for path, from the cache while path's
+// size and mtime are unchanged.
+func (s sourceFiles) cachedHead(kind, path string, read func() (any, error)) (any, error) {
+	info, err := s.Stat(path)
+	if err != nil {
+		return read()
+	}
+	original := path
+	if s.view != nil {
+		original = s.view.original(path)
+	}
+	key := headKey{kind: kind, original: original, size: info.Size(), mtime: info.ModTime().UnixNano()}
+	headCacheMu.Lock()
+	value, ok := headCache[key]
+	headCacheMu.Unlock()
+	if ok {
+		return value, nil
+	}
+	value, err = read()
+	if err != nil {
+		return value, err
+	}
+	headCacheMu.Lock()
+	if len(headCache) >= headCacheLimit {
+		headCache = map[headKey]any{}
+	}
+	headCache[key] = value
+	headCacheMu.Unlock()
+	return value, nil
 }

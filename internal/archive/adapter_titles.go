@@ -238,6 +238,15 @@ func codexRolloutIdentity(path string) (string, error) {
 // codexRolloutIdentity reads only the rollout's header: for an encoded
 // rollout, the decoder stops after its first block.
 func (s sourceFiles) codexRolloutIdentity(path string) (string, error) {
+	// Cached while the rollout is unchanged (see cachedHead).
+	id, err := s.cachedHead("codex-rollout-identity", path, func() (any, error) { return s.readCodexRolloutIdentity(path) })
+	if err != nil {
+		return "", err
+	}
+	return id.(string), nil
+}
+
+func (s sourceFiles) readCodexRolloutIdentity(path string) (string, error) {
 	fallback := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	file, err := s.Open(path)
 	if os.IsNotExist(err) {

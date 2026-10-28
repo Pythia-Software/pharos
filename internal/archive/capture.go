@@ -779,7 +779,7 @@ func (c *sourceCapture) captureFiles(items []captureItem, present map[string]boo
 		previous := c.files[rel]
 		if previous != nil {
 			previous.MissingSince = ""
-			if previous.Path == item.path && (c.session.recoveryID == "" || previous.RecoveryID == c.session.recoveryID) && previous.Size == info.Size() && previous.MTimeNS == info.ModTime().UnixNano() && c.intact(previous.Captured, previous.storedSize(), previous.MTimeNS) {
+			if previous.Path == item.path && (c.session.recoveryID == "" || previous.RecoveryID == c.session.recoveryID) && previous.Size == info.Size() && previous.MTimeNS == info.ModTime().UnixNano() && c.intactFile(previous) {
 				unchanged := true
 				if c.verifyDelivery {
 					digest, err := captureDeliveryDigest(c.ctx, item.path)
@@ -841,6 +841,18 @@ func (c *sourceCapture) intact(rel string, size, mtimeNS int64) bool {
 	// mtime; APFS keeps nanoseconds and must match exactly.
 	coarse := actual%int64(time.Second) == 0 && max(actual-mtimeNS, mtimeNS-actual) < int64(2*time.Second)
 	return actual == mtimeNS || coarse
+}
+
+// storedFile is a latest file's entry as its copy is actually stored: an
+// entry a killed compression marked encoded before renaming its file is the
+// original bytes (storedAs).
+func (c *sourceCapture) storedFile(f *capturedFile) capturedVersion {
+	return storedAs(filepath.Join(c.dir, filepath.FromSlash(f.Captured)), f.version())
+}
+
+// intactFile is intact for a latest file, at the size it is stored at.
+func (c *sourceCapture) intactFile(f *capturedFile) bool {
+	return c.intact(f.Captured, c.storedFile(f).storedSize(), f.MTimeNS)
 }
 
 func (c *sourceCapture) ensureSpace(bytes int64) error {
@@ -907,7 +919,7 @@ func (c *sourceCapture) copyOnce(item captureItem, previous *capturedFile) (*cap
 	defer digest.close()
 	// Appending keeps the previous capture as a prefix; anything else is a
 	// rewrite, and the previous capture is kept rather than overwritten.
-	keep := previous != nil && previous.SHA256 != "" && c.intact(previous.Captured, previous.storedSize(), previous.MTimeNS)
+	keep := previous != nil && previous.SHA256 != "" && c.intactFile(previous)
 	rewritten := keep
 	copied := int64(0)
 	if keep && c.session.recoveryID == "" && previous.Size <= size {
@@ -952,7 +964,7 @@ func (c *sourceCapture) copyOnce(item captureItem, previous *capturedFile) (*cap
 		entry.Previous = previous.Previous
 	}
 	if rewritten {
-		kept, err := c.preserve(previous.version(), true) // an encoded copy moves to history encoded
+		kept, err := c.preserve(c.storedFile(previous), true) // an encoded copy moves to history encoded
 		if err != nil {
 			os.Remove(temporary)
 			return nil, nil, err

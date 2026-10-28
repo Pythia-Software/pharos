@@ -104,9 +104,28 @@ func compressCaptures(ctx context.Context, config Config, catalog *Catalog, done
 	}
 	policy := compressPolicy{afterDays: config.CaptureCompressAfterDays, now: time.Now()}
 	if catalog != nil {
+		// Recorded by the current extractor: after an extractor change the
+		// next index parses every part again, so nothing is cold until then.
+		extractors := map[string]string{}
+		extractor := func(source string) string {
+			if value, ok := extractors[source]; ok {
+				return value
+			}
+			value := ""
+			target := captureTarget{Host: host, Source: source, Dir: filepath.Join(config.CaptureRoot, host.ID, source)}
+			if adapter, _, _, err := openCaptureAdapter(target); err == nil {
+				value, _ = catalog.effectiveIndexVersion(host.ID, source, adapter)
+			}
+			extractors[source] = value
+			return value
+		}
 		policy.indexed = func(source, item string, size, version int64) bool {
+			current := extractor(source)
+			if current == "" {
+				return false
+			}
 			var found int
-			err := catalog.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM source_item_states WHERE host_id=? AND source_name=? AND item=? AND size=? AND version=?", host.ID, source, item, size, version).Scan(&found)
+			err := catalog.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM source_item_states WHERE host_id=? AND source_name=? AND item=? AND extractor=? AND size=? AND version=?", host.ID, source, item, current, size, version).Scan(&found)
 			return err == nil && found > 0
 		}
 	}

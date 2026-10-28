@@ -204,7 +204,7 @@ func (a *antigravityAdapter) printModeConversations(transcripts map[string]strin
 		if named[id] || !anyPrint {
 			continue
 		}
-		if log := launchingRunLog(logs, antigravityStarted(path)); log != nil && log.print {
+		if log := launchingRunLog(logs, a.files().antigravityStarted(path)); log != nil && log.print {
 			printed[id] = true
 		}
 	}
@@ -234,8 +234,21 @@ func launchingRunLog(logs []antigravityRunLog, started time.Time) *antigravityRu
 
 // antigravityStarted returns when a transcript's first dated step was
 // created, or the zero time.
-func antigravityStarted(path string) time.Time {
-	file, err := os.Open(path)
+func antigravityStarted(path string) time.Time { return sourceFiles{}.antigravityStarted(path) }
+
+// antigravityStarted reads through the capture view, so an encoded transcript
+// is read as its original bytes, and caches the time while the transcript is
+// unchanged: print-mode detection asks on every plan.
+func (s sourceFiles) antigravityStarted(path string) time.Time {
+	started, err := s.cachedHead("antigravity-started", path, func() (any, error) { return s.readAntigravityStarted(path), nil })
+	if err != nil {
+		return time.Time{}
+	}
+	return started.(time.Time)
+}
+
+func (s sourceFiles) readAntigravityStarted(path string) time.Time {
+	file, err := s.Open(path)
 	if err != nil {
 		return time.Time{}
 	}
@@ -339,7 +352,7 @@ func (a *antigravityAdapter) runLogsFor(ids map[string]bool) ([]string, error) {
 	}
 	for id := range ids {
 		if path, ok := transcripts[id]; ok && !named[id] {
-			if log := launchingRunLog(logs, antigravityStarted(path)); log != nil {
+			if log := launchingRunLog(logs, a.files().antigravityStarted(path)); log != nil {
 				wanted[log] = true
 			}
 		}
@@ -394,7 +407,8 @@ func (a *antigravityAdapter) Fingerprint() (string, error) {
 		files = append(files, database, database+"-wal")
 	}
 	for _, file := range files {
-		if info, err := os.Stat(file); err == nil {
+		// Through the capture view: an encoded transcript at its original size.
+		if info, err := a.files().Stat(file); err == nil {
 			relative, _ := filepath.Rel(a.config.Path, file)
 			rows = append(rows, fmt.Sprintf("%s:%d:%d", filepath.ToSlash(relative), info.Size(), info.ModTime().UnixNano()))
 		}

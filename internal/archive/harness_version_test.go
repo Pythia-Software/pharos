@@ -1,12 +1,17 @@
 package archive
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 func TestHarnessVersionsFromTranscripts(t *testing.T) {
@@ -295,5 +300,39 @@ func TestHarnessBackfillRetriesCustomCaptureRoot(t *testing.T) {
 	var harness, version string
 	if err := c.DB.QueryRow(`SELECT harness,harness_version_last FROM conversations WHERE id='c'`).Scan(&harness, &version); err != nil || harness != "codex/codex_exec" || version != "0.155.0" {
 		t.Fatalf("captured version = %q %q: %v", harness, version, err)
+	}
+
+	// A rollout stored compressed is streamed through its lease's capture
+	// view: read as its original bytes, and never decoded to disk.
+	var encoded bytes.Buffer
+	writer, err := zstd.NewWriter(&encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := `{"type":"session_meta","payload":{"originator":"codex_cli_rs","cli_version":"0.160.0"}}` + "\n" + strings.Repeat(`{"type":"event_msg"}`+"\n", 200)
+	writer.Write([]byte(original))
+	writer.Close()
+	if err := os.WriteFile(filepath.Join(dir, "files", "rollout-2.jsonl"), encoded.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte(original))
+	manifest.Version = captureManifestVersion
+	manifest.Files = append(manifest.Files, &capturedFile{Path: "/other-mac/rollout-2.jsonl", Captured: "files/rollout-2.jsonl", Size: int64(len(original)), SHA256: hex.EncodeToString(sum[:]), Encoding: captureEncodingZstd, StoredSize: int64(encoded.Len())})
+	if data, err = json.Marshal(manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, captureManifestName), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.DB.Exec(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,origin,origin_host_id) VALUES('d','wc','codex','local','d','/other-mac/rollout-2.jsonl','other-host')`); err != nil {
+		t.Fatal(err)
+	}
+	decodedOnDisk := 0
+	override(t, &materializeHook, func(string) { decodedOnDisk++ })
+	if err := c.backfillHarnessVersions(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DB.QueryRow(`SELECT harness,harness_version_last FROM conversations WHERE id='d'`).Scan(&harness, &version); err != nil || harness != "codex/codex_cli_rs" || version != "0.160.0" || decodedOnDisk != 0 {
+		t.Fatalf("compressed rollout version = %q %q (%d decoded copies): %v", harness, version, decodedOnDisk, err)
 	}
 }

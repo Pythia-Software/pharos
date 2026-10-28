@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -456,6 +457,80 @@ func TestAntigravityPrintModeRunsAreHeadless(t *testing.T) {
 	indexCaptures(t, other, config.CaptureRoot, "host-a")
 	if got := sender(other, antigravityRoot); got != "automation:agy-print" {
 		t.Fatalf("sender from a capture the CLI rotated its log out of = %q", got)
+	}
+
+	// Once the transcripts are cold and stored compressed, print-mode
+	// detection, which reads transcripts' start times on every plan, reads
+	// their original bytes, and a normal index decodes nothing.
+	override(t, &compressMinBytes, 1)
+	transcripts, _ := filepath.Glob(filepath.Join(config.CaptureRoot, "host-a", "antigravity-cli", "files", "brain", "*", filepath.FromSlash(antigravityLogs), "transcript*.jsonl"))
+	old := time.Now().AddDate(0, -1, 0)
+	for _, transcript := range transcripts {
+		if err := os.Chtimes(transcript, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lease := func() *antigravityAdapter {
+		t.Helper()
+		target := captureTarget{Host: currentHost(), Source: "antigravity-cli", Dir: filepath.Join(config.CaptureRoot, "host-a", "antigravity-cli")}
+		input, err := leaseCaptureForIndex(t.Context(), target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(input.Close)
+		return input.Adapter.(*antigravityAdapter)
+	}
+	plain := lease()
+	starts := map[string]time.Time{}
+	plainTranscripts, err := plain.transcripts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, path := range plainTranscripts {
+		starts[id] = plain.files().readAntigravityStarted(path)
+	}
+	// The capture keeps source mtimes: make its copies cold by recording them
+	// in the manifest as the source's.
+	manifest, err := loadCaptureManifest(filepath.Join(config.CaptureRoot, "host-a", "antigravity-cli"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range manifest.Files {
+		if slices.ContainsFunc(transcripts, func(path string) bool {
+			return strings.HasSuffix(path, filepath.FromSlash(strings.TrimPrefix(file.Captured, "files/")))
+		}) {
+			file.MTimeNS, file.MTime = old.UnixNano(), old.UTC().Format(time.RFC3339Nano)
+		}
+	}
+	if err = writeCaptureManifest(filepath.Join(config.CaptureRoot, "host-a", "antigravity-cli"), manifest); err != nil {
+		t.Fatal(err)
+	}
+	reindexed, _ := testCatalog(t)
+	indexCaptures(t, reindexed, config.CaptureRoot, "host-a")
+	compressed := 0
+	if err := compressCaptures(t.Context(), config, reindexed, func(compressedGeneration) { compressed++ }); err != nil || compressed == 0 {
+		t.Fatal("no cold transcript was compressed", compressed, err)
+	}
+	var decodes atomic.Int64
+	override(t, &capturedContentHook, func(string) { decodes.Add(1) })
+	indexCaptures(t, reindexed, config.CaptureRoot, "host-a")
+	if got := sender(reindexed, antigravityRoot); decodes.Load() != 0 || got != "automation:agy-print" {
+		t.Fatalf("normal index over compressed transcripts: %d decodes, sender %q", decodes.Load(), got)
+	}
+	// With nothing cached, the start times read from the encoded transcripts
+	// are the original ones.
+	headCacheMu.Lock()
+	headCache = map[headKey]any{}
+	headCacheMu.Unlock()
+	encoded := lease()
+	encodedTranscripts, err := encoded.transcripts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, path := range encodedTranscripts {
+		if got := encoded.files().antigravityStarted(path); !got.Equal(starts[id]) || got.IsZero() {
+			t.Fatalf("start of %s from its compressed transcript = %v, want %v", id, got, starts[id])
+		}
 	}
 }
 

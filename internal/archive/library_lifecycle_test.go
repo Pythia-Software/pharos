@@ -254,6 +254,27 @@ func TestLibraryTransferRetainedEvidence(t *testing.T) {
 }
 
 func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
+	t.Run("compressed captures", func(t *testing.T) {
+		useHost(t, "host-a")
+		a, b := lifecycleLibraries(t)
+		// A compressed latest transcript and earlier version travel as
+		// stored, validate in the destination and recover.
+		addEncodedClaudeFixture(t, &a)
+		receipt, err := TransferLibrary(t.Context(), a, b, false, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		imported := filepath.Join(b.CaptureRoot, ".imports", receipt.ID, "captures")
+		if err = validateCaptureEvidence(t.Context(), imported); err != nil {
+			t.Fatal(err)
+		}
+		assertEncodedClaudeFixture(t, imported, "host-a")
+		recovered, err := RecoverLibrary(t.Context(), filepath.Dir(b.Path), filepath.Join(t.TempDir(), "recovered"), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertEncodedClaudeFixture(t, filepath.Join(recovered.CaptureRoot, ".imports", receipt.ID, "captures"), "host-a")
+	})
 	t.Run("legacy operational column order", func(t *testing.T) {
 		a, b := lifecycleLibraries(t)
 		c := reopenCatalog(t, a.CatalogPath)

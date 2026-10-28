@@ -41,6 +41,9 @@ var errCapturedContentMismatch = errors.New("decoded capture does not match its 
 // streams the original bytes of an encoded entry).
 var capturedContentHook func(file string)
 
+// materializeHook counts decodes to disk in tests.
+var materializeHook func(dst string)
+
 // storedSize is the size of the file on disk: stored_size for an encoded
 // entry, the original size otherwise.
 func (v capturedVersion) storedSize() int64 {
@@ -320,6 +323,9 @@ func capturedSHA256(ctx context.Context, file, encoding string) (string, int64, 
 // encoded file. dst must be inside a reader lease, so that a crash leaves
 // nothing a capture would mistake for evidence.
 func materializeCaptured(ctx context.Context, src, dst string, v capturedVersion) error {
+	if materializeHook != nil {
+		materializeHook(dst)
+	}
 	content, err := openCapturedContent(src, v.Encoding)
 	if err != nil {
 		return err

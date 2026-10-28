@@ -268,7 +268,7 @@ func (a *tl1Adapter) Fingerprint() (string, error) {
 	}
 	rows := []string{}
 	collect := func(path string) {
-		if info, e := os.Stat(path); e == nil {
+		if info, e := a.files().Stat(path); e == nil {
 			rows = append(rows, fmt.Sprintf("%s:%d:%d", path, info.Size(), info.ModTime().UnixNano()))
 		}
 	}

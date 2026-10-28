@@ -195,7 +195,14 @@ func MakeAdapter(config SourceConfig) (Adapter, error) {
 }
 
 func pathFingerprint(root string, include func(string, os.DirEntry) bool) (string, error) {
-	info, err := os.Stat(root)
+	return sourceFiles{}.pathFingerprint(root, include)
+}
+
+// pathFingerprint takes sizes through the capture view, so storing a captured
+// file compressed changes neither the capture's fingerprint nor its agreement
+// with the live source's.
+func (s sourceFiles) pathFingerprint(root string, include func(string, os.DirEntry) bool) (string, error) {
+	info, err := s.Stat(root)
 	if err != nil {
 		return "", err
 	}
@@ -210,7 +217,7 @@ func pathFingerprint(root string, include func(string, os.DirEntry) bool) (strin
 			if entry.IsDir() || !include(path, entry) {
 				return nil
 			}
-			stat, e := entry.Info()
+			stat, e := s.Info(path, entry)
 			if e == nil {
 				relative, _ := filepath.Rel(root, path)
 				rows = append(rows, fmt.Sprintf("%s:%d:%d", relative, stat.Size(), stat.ModTime().UnixNano()))
@@ -320,7 +327,7 @@ const exportIndexVersion = "token-events-v5-origin"
 func (a *canonicalAdapter) indexVersion() string { return exportIndexVersion }
 
 func (a *canonicalAdapter) Fingerprint() (string, error) {
-	fingerprint, err := pathFingerprint(a.config.Path, func(path string, entry os.DirEntry) bool {
+	fingerprint, err := a.files().pathFingerprint(a.config.Path, func(path string, entry os.DirEntry) bool {
 		return strings.HasSuffix(strings.ToLower(entry.Name()), ".json")
 	})
 	return a.indexVersion() + ":" + fingerprint, err
@@ -490,7 +497,7 @@ type jsonlAdapter struct {
 var codexForkFilename = regexp.MustCompile(`([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})_([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl$`)
 
 func (a *jsonlAdapter) Fingerprint() (string, error) {
-	fingerprint, err := pathFingerprint(a.config.Path, func(path string, entry os.DirEntry) bool {
+	fingerprint, err := a.files().pathFingerprint(a.config.Path, func(path string, entry os.DirEntry) bool {
 		if strings.HasSuffix(strings.ToLower(entry.Name()), ".jsonl") && a.accept(path) {
 			return true
 		}

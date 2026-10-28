@@ -1580,6 +1580,43 @@ func TestCaptureCompressionSurvivesAKillAtEachStep(t *testing.T) {
 			}
 		})
 	}
+	// A cold latest file whose compression was killed between its manifest
+	// and its rename, then rewritten at the source and captured before any
+	// pass corrected the entry: the capture still sees its copy as intact, so
+	// the previous version is preserved rather than lost.
+	t.Run("cold file rewritten after a kill before the rename", func(t *testing.T) {
+		config, catalog, _, claude := coldFilesFixture(t)
+		before := manifestFile(t, readCaptureManifest(t, config, "claude"), "files/p/cold-a.jsonl")
+		override(t, &captureFault, func(at, rel string) error {
+			if at == "compress-rename" && rel == "files/p/cold-a.jsonl" {
+				panic("killed")
+			}
+			return nil
+		})
+		func() {
+			defer func() { _ = recover() }()
+			compressColdFiles(t, config, catalog)
+		}()
+		captureFault = nil
+		if entry := manifestFile(t, readCaptureManifest(t, config, "claude"), "files/p/cold-a.jsonl"); entry.Encoding != captureEncodingZstd || zstdOnDisk(t, capturedPath(config, "claude", entry.Captured)) {
+			t.Fatal("fixture: expected an entry marked encoded over the original bytes", entry)
+		}
+		writeSourceFile(t, filepath.Join(claude, "p", "cold-a.jsonl"), claudeLine("cold-a", "cold-a-rewritten", "rewritten", "/proj", 59))
+		if run := runCapture(t, config); !run.OK {
+			t.Fatal(run)
+		}
+		after := manifestFile(t, readCaptureManifest(t, config, "claude"), "files/p/cold-a.jsonl")
+		if after.Encoding != "" || len(after.Previous) != 1 || after.Previous[0].Size != before.Size {
+			t.Fatalf("rewrite after a killed compression: %+v", after)
+		}
+		previous := capturedPath(config, "claude", after.Previous[0].Captured)
+		if sum, size, err := fileSHA256(previous); err != nil || size != before.Size || sum != before.SHA256 {
+			t.Fatal("the previous version was not preserved", err)
+		}
+		if err := validateCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 // A pass remembers what it decided not to compress, so it does not read the
@@ -1788,6 +1825,24 @@ func TestCaptureCompressesColdFiles(t *testing.T) {
 		return value
 	}
 	delivered := fingerprint()
+	// The source fingerprint read through the capture matches the live
+	// source's, before and after compression.
+	sourceFingerprint := func() string {
+		t.Helper()
+		adapter, _, _, err := openCaptureAdapter(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		value, err := adapter.Fingerprint()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	live, err := (&jsonlAdapter{baseAdapter: baseAdapter{config: config.Sources[0]}, provider: "claude"}).Fingerprint()
+	if err != nil || sourceFingerprint() != live {
+		t.Fatal("capture fingerprint differs from the live source's before compression", err)
+	}
 
 	// Off, or without the index's record, nothing latest is compressed.
 	off := config
@@ -1798,6 +1853,15 @@ func TestCaptureCompressesColdFiles(t *testing.T) {
 	if done := compressColdFiles(t, config, nil); len(done) != 0 {
 		t.Fatal("compressed latest files the index has not recorded", done)
 	}
+	// After an extractor change the next index parses every part again, so
+	// nothing is cold until it has.
+	if err := catalog.advanceSyncGeneration(t.Context(), "host-a", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	if done := compressColdFiles(t, config, catalog); len(done) != 0 {
+		t.Fatal("compressed latest files recorded by an earlier extractor", done)
+	}
+	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
 	done := compressColdFiles(t, config, catalog)
 	if want := []string{"files/p/cold-a.jsonl", "files/p/cold-b.jsonl"}; jsonText(done) != jsonText(want) {
 		t.Fatalf("compressed %v, want %v", done, want)
@@ -1815,6 +1879,9 @@ func TestCaptureCompressesColdFiles(t *testing.T) {
 	// Delivery fingerprints come from the manifest's original-byte fields.
 	if fingerprint() != delivered {
 		t.Fatal("compression changed the delivery fingerprint")
+	}
+	if sourceFingerprint() != live {
+		t.Fatal("compression changed the capture's source fingerprint")
 	}
 	if err := validateCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
 		t.Fatal(err)
@@ -1884,5 +1951,66 @@ func TestCaptureCompressesOnlyAllowlistedLatestFiles(t *testing.T) {
 	manifest.RetainedInputCapture = true
 	if coldLatest(t.TempDir(), manifest, file, policy) {
 		t.Fatal("a retained-input source's latest file was eligible")
+	}
+}
+
+// addEncodedClaudeFixture adds a Claude source to config whose capture holds
+// an encoded latest transcript and an encoded earlier version, compressed as
+// a pass would once the index had recorded them. It returns the source.
+func addEncodedClaudeFixture(t *testing.T, config *Config) SourceConfig {
+	t.Helper()
+	override(t, &compressMinBytes, 1)
+	claude := filepath.Join(t.TempDir(), "claude")
+	lines := ""
+	for line := range 40 {
+		lines += claudeLine("kept", fmt.Sprintf("kept-%d", line), strings.Repeat("kept text ", 20), "/proj", line)
+	}
+	writeSourceFile(t, filepath.Join(claude, "p", "kept.jsonl"), lines)
+	writeSourceFile(t, filepath.Join(claude, "p", "rewritten.jsonl"), lines)
+	source := SourceConfig{Name: "claude", Kind: "claude", Path: claude, Account: "local", Enabled: true}
+	config.Sources = append(config.Sources, source)
+	only := *config
+	only.Sources = []SourceConfig{source}
+	runCapture(t, only)
+	writeSourceFile(t, filepath.Join(claude, "p", "rewritten.jsonl"), claudeLine("rewritten", "rewritten-1", "new", "/proj", 1))
+	runCapture(t, only)
+	runCapture(t, only)
+	target := captureTarget{Host: currentHost(), Source: "claude", Dir: capturedPath(only, "claude", "")}
+	policy := compressPolicy{afterDays: 1, now: time.Now(), indexed: func(string, string, int64, int64) bool { return true }}
+	if err := compressSourceFiles(t.Context(), target, policy, nil); err != nil {
+		t.Fatal(err)
+	}
+	manifest := readCaptureManifest(t, only, "claude")
+	kept, rewritten := manifestFile(t, manifest, "files/p/kept.jsonl"), manifestFile(t, manifest, "files/p/rewritten.jsonl")
+	if kept.Encoding != captureEncodingZstd || len(rewritten.Previous) != 1 || rewritten.Previous[0].Encoding != captureEncodingZstd {
+		t.Fatalf("fixture: kept %+v, rewritten %+v", kept, rewritten)
+	}
+	return source
+}
+
+// assertEncodedClaudeFixture checks a copy of that capture under root: the
+// entries are still encoded and decode to their recorded bytes.
+func assertEncodedClaudeFixture(t *testing.T, root, host string) {
+	t.Helper()
+	dir := filepath.Join(root, host, "claude")
+	manifest, err := loadCaptureManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := 0
+	for _, file := range manifest.Files {
+		for _, v := range append([]capturedVersion{file.version()}, file.Previous...) {
+			if v.Encoding == "" {
+				continue
+			}
+			sum, size, err := capturedSHA256(t.Context(), filepath.Join(dir, filepath.FromSlash(v.Captured)), v.Encoding)
+			if err != nil || size != v.Size || sum != v.SHA256 {
+				t.Fatalf("%s did not round-trip: %v", v.Captured, err)
+			}
+			checked++
+		}
+	}
+	if checked < 2 {
+		t.Fatalf("copy holds %d encoded entries, want at least 2", checked)
 	}
 }

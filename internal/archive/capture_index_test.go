@@ -1588,3 +1588,47 @@ func TestIndexEncodedTranscriptsDecodesOnlyWhatItParses(t *testing.T) {
 		t.Fatalf("index after a cold file changed: %+v, %d decodes", result, decodes.Load())
 	}
 }
+
+// A Codex rollout that only session_index.jsonl names has its header read on
+// every plan to match its session id. Stored compressed, that header is
+// decoded once per process (cached by the rollout's original path, size and
+// mtime), never its body.
+func TestIndexEncodedCodexRolloutHeadersAreCached(t *testing.T) {
+	useHost(t, "host-a")
+	override(t, &compressMinBytes, 1)
+	catalog, _ := testCatalog(t)
+	codex := filepath.Join(t.TempDir(), "codex")
+	id := "0199a1b2-c3d4-4e5f-8a9b-0123456789ab"
+	writeSourceFile(t, filepath.Join(codex, "sessions", "2026", "09", "01", "rollout-2026-09-01T00-00-00-"+id+".jsonl"), codexLines(id, 60))
+	writeSourceFile(t, filepath.Join(codex, "session_index.jsonl"), `{"id":"`+id+`","thread_name":"Named by the index","updated_at":"2026-09-01T00:00:00Z"}`+"\n")
+	config := captureTestConfig(t, SourceConfig{Name: "codex", Kind: "codex", Path: codex, Account: "local", Enabled: true})
+	runCapture(t, config)
+	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+	runCapture(t, config)
+	compressed := 0
+	if err := compressCaptures(t.Context(), config, catalog, func(compressedGeneration) { compressed++ }); err != nil || compressed != 1 {
+		t.Fatal("the cold rollout was not compressed", compressed, err)
+	}
+	var decodes atomic.Int64
+	override(t, &capturedContentHook, func(string) { decodes.Add(1) })
+	parses := countParses(t)
+	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+	if decodes.Load() != 0 || parses.Load() != 0 {
+		t.Fatalf("normal index: %d decodes, %d parses", decodes.Load(), parses.Load())
+	}
+	// With nothing cached (a new process), the header is decoded once, and
+	// the session keeps its indexed name.
+	headCacheMu.Lock()
+	headCache = map[headKey]any{}
+	headCacheMu.Unlock()
+	for range 2 {
+		indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+	}
+	var title string
+	if err := catalog.DB.QueryRow("SELECT w.title FROM workspaces w JOIN conversations c ON c.workspace_id=w.id WHERE c.native_id=?", id).Scan(&title); err != nil {
+		t.Fatal(err)
+	}
+	if decodes.Load() != 1 || parses.Load() != 0 || title != "Named by the index" {
+		t.Fatalf("index with a cold cache: %d decodes, %d parses, title %q", decodes.Load(), parses.Load(), title)
+	}
+}
