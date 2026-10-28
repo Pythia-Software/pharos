@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 )
 
 // retainedInput is also the execution plan's reader. Files in inputs/ are
@@ -171,6 +170,14 @@ func freezeManifestInputPolicy(ctx context.Context, target captureTarget, source
 	if err = json.Unmarshal(data, &frozen); err != nil {
 		return result, err
 	}
+	// An entry stored encoded is leased as stored and decoded only when a
+	// reader opens it (captureView.materialize). An entry a compression
+	// marked encoded before it was killed short of the rename is read as stored.
+	for _, snapshot := range frozen.Snapshots {
+		for i, generation := range snapshot.Generations {
+			snapshot.Generations[i] = storedAs(filepath.Join(target.Dir, filepath.FromSlash(generation.Captured)), generation)
+		}
+	}
 	unavailable := map[string]bool{}
 	if allowUnavailable {
 		check := func(rel string, size int64, hash string) {
@@ -189,7 +196,11 @@ func freezeManifestInputPolicy(ctx context.Context, target captureTarget, source
 		for _, snapshot := range frozen.Snapshots {
 			check(snapshot.Captured, snapshot.Size, "")
 			for _, generation := range snapshot.Generations {
-				check(generation.Captured, generation.Size, generation.SHA256)
+				size, hash := generation.Size, generation.SHA256
+				if generation.Encoding != "" {
+					size, hash = generation.StoredSize, ""
+				}
+				check(generation.Captured, size, hash)
 			}
 		}
 		if len(unavailable) > 0 {
@@ -233,21 +244,11 @@ func freezeManifestInputPolicy(ctx context.Context, target captureTarget, source
 			return result, err
 		}
 	} else {
-		dir, err = os.MkdirTemp(target.Dir, ".reader-*"+captureTempSuffix)
-		if err != nil {
+		var release func()
+		if dir, release, err = openReaderLease(target.Dir); err != nil {
 			return result, err
 		}
-		lease, err := os.OpenFile(filepath.Join(dir, ".reader.lock"), os.O_CREATE|os.O_RDWR, 0600)
-		if err != nil {
-			_ = os.RemoveAll(dir)
-			return result, err
-		}
-		if err = syscall.Flock(int(lease.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-			lease.Close()
-			_ = os.RemoveAll(dir)
-			return result, err
-		}
-		result.Close = func() { lease.Close(); _ = os.RemoveAll(dir) }
+		result.Close = release
 	}
 	fail := func(err error) (retainedInput, error) { result.Close(); return retainedInput{}, err }
 	link := func(rel string, size int64, hash string) error {
@@ -266,12 +267,19 @@ func freezeManifestInputPolicy(ctx context.Context, target captureTarget, source
 			return fail(err)
 		}
 		for _, generation := range s.Generations {
-			if err = link(generation.Captured, generation.Size, generation.SHA256); err != nil {
+			// An encoded file is linked as stored: its stored size, and its
+			// own bytes hashed if it must be copied.
+			size, hash := generation.Size, generation.SHA256
+			if generation.Encoding != "" {
+				size, hash = generation.StoredSize, ""
+			}
+			if err = link(generation.Captured, size, hash); err != nil {
 				return fail(err)
 			}
 		}
 	}
 	view := newCaptureView(target.Host, dir, &frozen)
+	view.lease = !durable
 	if len(frozen.Snapshots) == 0 {
 		view.evidenceRevision = revision
 		view.evidenceVolatile = !durable

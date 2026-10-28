@@ -390,7 +390,26 @@ func TestHistoryNativeSnapshotsDeletedSessionsAndPruning(t *testing.T) {
 	if run := runCapture(t, config); !run.OK {
 		t.Fatal(run)
 	}
+	// The deleted session survives only in a generation stored compressed:
+	// planning, pins, the rollback backup's check and the export all read its
+	// original bytes.
+	if done := compressGenerations(t, config); len(done) != 1 {
+		t.Fatal("generation was not compressed", done)
+	}
+	encoded := readCaptureManifest(t, config, "conductor").Snapshots[0].Generations[0]
 	j := prepareHistoryFixture(t, config, dest)
+	pinned := false
+	for _, pin := range j.Protected {
+		if pin.Path == encoded.Captured {
+			pinned = pin.Encoding == captureEncodingZstd && pin.SHA256 == encoded.SHA256 && pin.Size == encoded.Size && pin.ClosureBytes == encoded.StoredSize
+		}
+	}
+	if !pinned {
+		t.Fatal("compressed generation was not pinned by its original bytes", j.Protected)
+	}
+	if done := compressGenerations(t, config); len(done) != 0 {
+		t.Fatal("compression ran during a backfill's native pause", done)
+	}
 	// The native-only gate survives a restart and applies to manual capture.
 	c.setCaptureRoot(config.CaptureRoot)
 	if status := c.inputPreservationStatus(t.Context(), "host-a", "conductor"); status["pending_newer_inputs"] != true {

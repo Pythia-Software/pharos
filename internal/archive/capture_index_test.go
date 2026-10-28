@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -636,6 +637,38 @@ func TestCapturedPlanRefreshesWhenManifestChanges(t *testing.T) {
 }
 
 func TestIndexKeepsDeletedConductorSessionsFromUnindexedSnapshots(t *testing.T) {
+	// A generation stored compressed is salvaged as an uncompressed one is,
+	// decoded only into the index's reader lease, and only while the index
+	// still needs it.
+	t.Run("compressed-generation", func(t *testing.T) {
+		// As on exFAT, which has no exclusive rename: leases fall back to a
+		// checked rename, so compression and indexing still work there.
+		override(t, &renameExclusiveNative, func(string, string) error { return syscall.ENOTSUP })
+		config, target := compressionFixture(t)
+		catalog, _ := testCatalog(t)
+		if done := compressGenerations(t, config); len(done) != 1 {
+			t.Fatal("fixture generation was not compressed", done)
+		}
+		generation := readCaptureManifest(t, config, "conductor").Snapshots[0].Generations[0]
+		var decodes atomic.Int64
+		override(t, &capturedContentHook, func(string) { decodes.Add(1) })
+		for pass := range 2 {
+			result := catalog.IndexCapture(t.Context(), target, nil)
+			if result.Error != nil || len(result.UnavailableInputs) != 0 || conversationMessages(t, catalog, "conductor:old") != 2 || conversationMessages(t, catalog, "conductor:latest") != 1 {
+				t.Fatalf("pass %d over a compressed generation: %+v", pass, result)
+			}
+			if want := int64(1); decodes.Load() != want {
+				t.Fatalf("pass %d: %d decodes, want %d", pass, decodes.Load(), want)
+			}
+		}
+		if left := temporariesUnder(t, target.Dir); len(left) != 0 || !zstdOnDisk(t, capturedPath(config, "conductor", generation.Captured)) {
+			t.Fatal("index left decoded copies or changed the stored generation", left)
+		}
+		// A forced reindex reads every generation again.
+		if result := catalog.IndexCapture(withIngestMode(t.Context(), ingestMode{force: true}), target, nil); result.Error != nil || decodes.Load() != 2 {
+			t.Fatalf("forced reindex: %+v, %d decodes", result, decodes.Load())
+		}
+	})
 	for _, damage := range []string{"missing-generation", "resized-generation", "missing-latest"} {
 		t.Run(damage, func(t *testing.T) {
 			useHost(t, "host-a")

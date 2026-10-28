@@ -757,6 +757,17 @@ up a session deleted at the source, and where captures are indexed, a snapshot t
 not yet seen is kept longer (see [Indexing captures](#indexing-captures)). Raise
 it where the drive allows.
 
+Once the index has read a generation, the service stores it zstd-compressed
+under the same name, in the background every 15 minutes (about 9.5× smaller
+for Conductor; see [capture compression](capture-compression.md)). A pinned
+generation, one a history backfill has paused, and an unverified SQLite-record
+generation are left as they are. Readers that open a compressed generation
+(salvage during an index, a forced reindex, record exports, history backfill,
+verification) decode it into a temporary reader directory first, which needs
+its original size free on the drive. Each Mac compresses only its own
+captures. A capture with a compressed generation has manifest version 6, which
+builds before this change refuse rather than misread.
+
 **Low impact.** The capture's disk I/O runs in the utility I/O tier on its own
 thread, yielding to interactive work without the background tier's long stalls,
 while the service's other requests keep their priority. Copies stream through

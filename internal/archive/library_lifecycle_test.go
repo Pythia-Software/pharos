@@ -115,6 +115,38 @@ func TestLibraryTransferRetainedEvidence(t *testing.T) {
 	if run := runCapture(t, a); !run.OK {
 		t.Fatal(run)
 	}
+	// A superseded generation whose export is verified is stored compressed,
+	// and an operator pin holds it by its original bytes. Transfer copies it
+	// as stored; validation, recovery and the pin check decode it.
+	exec(addConductorSession("superseded", 1)...)
+	if run := runCapture(t, a); !run.OK {
+		t.Fatal(run)
+	}
+	if done := compressGenerations(t, a); len(done) != 1 {
+		t.Fatal("verified generation was not compressed", done)
+	}
+	generation := readCaptureManifest(t, a, source.Name).Snapshots[0].Generations[0]
+	pinTarget := captureTarget{Host: currentHost(), Source: source.Name, Dir: capturedPath(a, source.Name, "")}
+	pinLock, err := lockCaptureTarget(t.Context(), pinTarget.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinCapture, err := sourceCaptureForTarget(t.Context(), pinTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pin, err := pinCapture.pinVersion("operator", "transfer test", generation); err != nil || pin.Encoding != captureEncodingZstd || pin.SHA256 != generation.SHA256 {
+		t.Fatal("pin of a compressed generation", pin, err)
+	}
+	// Its export receipt still verifies: it names the original bytes' digest.
+	if _, verified := pinCapture.verifiedSnapshotReceipt(generation.Captured, generation.Captured); !verified {
+		t.Fatal("compression broke a verified export receipt")
+	}
+	releaseLockFile(pinLock)
+	// What a killed compression or reader leaves is not evidence; a transfer
+	// leaves it out, as local backup does.
+	writeSourceFile(t, filepath.Join(pinTarget.Dir, ".reader-abandoned"+captureTempSuffix, filepath.FromSlash(generation.Captured)), "decoded copy")
+	writeSourceFile(t, filepath.Join(pinTarget.Dir, filepath.FromSlash(generation.Captured))+captureTempSuffix, "half encoded")
 	c := reopenCatalog(t, a.CatalogPath)
 	c.setCaptureRoot(a.CaptureRoot)
 	recordTestReplay(t, a, source.Name, c)
@@ -165,6 +197,14 @@ func TestLibraryTransferRetainedEvidence(t *testing.T) {
 	imported := filepath.Join(b.CaptureRoot, ".imports", receipt.ID, "captures")
 	if err = validateCaptureEvidence(t.Context(), imported); err != nil {
 		t.Fatal("moved record closure is invalid", err)
+	}
+	moved, err := loadCaptureManifest(filepath.Join(imported, "host-a", source.Name))
+	if err != nil || len(moved.Snapshots) != 1 || len(moved.Snapshots[0].Generations) != 1 || jsonText(moved.Snapshots[0].Generations[0]) != jsonText(generation) ||
+		!zstdOnDisk(t, filepath.Join(imported, "host-a", source.Name, filepath.FromSlash(generation.Captured))) {
+		t.Fatal("transfer did not carry the compressed generation as stored", err)
+	}
+	if left := temporariesUnder(t, imported); len(left) != 0 {
+		t.Fatal("transfer copied temporaries", left)
 	}
 	recovered, err := RecoverLibrary(t.Context(), filepath.Dir(b.Path), filepath.Join(t.TempDir(), "recovered"), nil)
 	if err != nil {

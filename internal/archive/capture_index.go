@@ -33,9 +33,13 @@ type captureView struct {
 	evidenceRevision, evidenceIdentity string
 	evidenceVolatile                   bool
 	noLocalLookups                     bool
-	host                               Host
-	dir                                string // <capture_root>/<host-id>/<source>
-	manifest                           *captureManifest
+	// lease is set for a temporary reader directory, into which materialize
+	// may decode encoded entries; decoded lists those it has.
+	lease    bool
+	decoded  map[string]bool
+	host     Host
+	dir      string // <capture_root>/<host-id>/<source>
+	manifest *captureManifest
 	// mappings pair original paths with absolute captured paths.
 	mappings []capturePathMapping
 }
@@ -486,13 +490,27 @@ func (c *Catalog) indexGenerations(ctx context.Context, adapter Adapter, view *c
 				return err
 			}
 		}
+		// A generation older than every pending one only feeds handled, which
+		// nothing older needs: it is not opened (and so, if encoded, not decoded).
+		oldestPending := -1
+		for generationIndex, generation := range snapshot.Generations {
+			if force || !marker.has(snapshot.Path, generation.CapturedAt) {
+				oldestPending = generationIndex
+			}
+		}
 		reportWork(ctx, "indexing retained snapshots", "snapshot", 0, len(snapshot.Generations))
 		for generationIndex, generation := range snapshot.Generations { // newest first
 			file := filepath.Join(view.dir, filepath.FromSlash(generation.Captured))
-			if _, err := os.Stat(file); errors.Is(err, fs.ErrNotExist) {
-				marker.add(snapshot.Path, generation.CapturedAt) // gone: nothing left to take
+			if _, err := os.Stat(file); errors.Is(err, fs.ErrNotExist) || generationIndex > oldestPending {
+				marker.add(snapshot.Path, generation.CapturedAt) // gone, or already indexed: nothing left to take
 				reportWork(ctx, "indexing retained snapshots", "snapshot", generationIndex+1, len(snapshot.Generations))
 				continue
+			}
+			// SQLite cannot read an encoded generation: decode it into this
+			// reader's lease, at the same relative path.
+			file, err := view.materialize(ctx, generation.Captured)
+			if err != nil {
+				return err
 			}
 			ids, err := conductorSessionIDs(file)
 			if err != nil {
