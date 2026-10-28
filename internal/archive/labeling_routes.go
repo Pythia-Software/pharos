@@ -1,0 +1,520 @@
+package archive
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"errors"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+)
+
+// Routes run a labeling request through a model CLI as an annotation-only
+// worker: no tools, files, browser, MCP or delegation, untrusted corpus
+// text on stdin, an ephemeral session, an empty private working directory.
+// Each flag was checked against claude 2.1.288 and codex-cli 0.155.0 --help.
+const (
+	labelingRouteClaude = "claude"
+	labelingRouteCodex  = "codex"
+)
+
+// labelingCodexDisabled are the codex features the historical runner turned
+// off (evidence/label-models/20261027/run_models.py), plus image generation.
+var labelingCodexDisabled = []string{"apps", "plugins", "shell_tool", "multi_agent", "browser_use", "browser_use_external",
+	"computer_use", "in_app_browser", "code_mode_host", "code_mode", "image_generation"}
+
+// Process timing, overridable by tests: a lingering CLI gets SIGTERM this
+// long after its terminal event, and SIGKILL this long after SIGTERM.
+var (
+	labelingLingerGrace = 10 * time.Second
+	labelingKillGrace   = 5 * time.Second
+)
+
+// labelingCommand is the argv for one attempt (without the CLI path), and
+// the files the route reads or writes.
+func labelingCommand(route, model, effort, schemaText, schemaPath, answerPath, sessionID string) ([]string, error) {
+	switch route {
+	case labelingRouteClaude:
+		return []string{"-p", "--model", model, "--effort", effort, "--output-format", "stream-json", "--verbose",
+			"--json-schema", schemaText, "--tools", "", "--safe-mode", "--disable-slash-commands", "--no-chrome", "--strict-mcp-config",
+			"--permission-prompts", "none", "--permission-mode", "dontAsk", "--no-session-persistence", "--session-id", sessionID}, nil
+	case labelingRouteCodex:
+		args := []string{"exec", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "--sandbox", "read-only",
+			"--model", model, "--config", `model_reasoning_effort="` + effort + `"`, "--config", "project_doc_max_bytes=0", "--color", "never",
+			"--json", "--output-schema", schemaPath, "--output-last-message", answerPath}
+		for _, feature := range labelingCodexDisabled {
+			args = append(args, "--disable", feature)
+		}
+		return append(args, "-"), nil
+	}
+	return nil, errors.New("unknown route " + route + ": use claude or codex")
+}
+
+// labelingStream accumulates what an attempt's event stream says. It reads
+// sanitized events, so replaying a saved events.jsonl rebuilds the same
+// state the live run saw.
+type labelingStream struct {
+	route                  string
+	SessionID              string           `json:"session_id,omitempty"`
+	Models                 []string         `json:"reported_models,omitempty"`
+	Terminal               string           `json:"terminal_event,omitempty"`
+	Failed                 bool             `json:"failed,omitempty"`
+	Error                  string           `json:"error,omitempty"`
+	Refusal                string           `json:"refusal,omitempty"`
+	Tools                  []map[string]any `json:"tool_events,omitempty"`
+	Warnings               []string         `json:"warnings,omitempty"`
+	Unparsed               int              `json:"unparsed_lines,omitempty"`
+	structured, structTool json.RawMessage
+	text                   string
+	usage                  map[string]any
+	modelUsage             map[string]map[string]any
+	cliCost                *float64
+	toolIDs                map[string]bool
+}
+
+func newLabelingStream(route string) *labelingStream {
+	return &labelingStream{route: route, toolIDs: map[string]bool{}}
+}
+
+func (s *labelingStream) model(name string) {
+	if name != "" && !containsString(s.Models, name) {
+		s.Models = append(s.Models, name)
+	}
+}
+
+// sanitize keeps what the ledger needs from one raw event and drops private
+// reasoning text: Claude thinking blocks and Codex reasoning items keep
+// only their type and id. Usage is kept.
+func (s *labelingStream) sanitize(event map[string]any) map[string]any {
+	kind := firstString(event["type"])
+	if s.route == labelingRouteClaude {
+		switch kind {
+		case "system":
+			if event["subtype"] == "init" {
+				return pick(event, "type", "subtype", "session_id", "model", "tools", "mcp_servers", "claude_code_version", "permissionMode")
+			}
+			return pick(event, "type", "subtype", "session_id")
+		case "assistant", "user":
+			message := mapValueDefault(event["message"])
+			content := []any{}
+			if items, ok := message["content"].([]any); ok {
+				for _, raw := range items {
+					block := mapValueDefault(raw)
+					switch firstString(block["type"]) {
+					case "thinking", "redacted_thinking":
+						content = append(content, map[string]any{"type": block["type"]})
+					case "tool_result":
+						kept := pick(block, "type", "tool_use_id", "is_error")
+						if text, ok := block["content"].(string); ok && len(text) <= 500 {
+							kept["content"] = text
+						}
+						content = append(content, kept)
+					default:
+						content = append(content, block)
+					}
+				}
+			}
+			kept := pick(message, "id", "model", "role", "stop_reason", "usage")
+			kept["content"] = content
+			out := pick(event, "type", "session_id", "parent_tool_use_id")
+			out["message"] = kept
+			return out
+		case "result":
+			return event
+		}
+		return pick(event, "type", "subtype")
+	}
+	if item := mapValue(event["item"]); item != nil {
+		out := pick(event, "type")
+		switch firstString(item["type"]) {
+		case "reasoning":
+			out["item"] = pick(item, "id", "type")
+		case "agent_message":
+			out["item"] = pick(item, "id", "type", "text")
+		case "error":
+			out["item"] = pick(item, "id", "type", "message")
+		default:
+			out["item"] = pick(item, "id", "type", "status", "server", "tool", "name")
+		}
+		return out
+	}
+	return event
+}
+
+// observe updates the stream state from one sanitized event.
+func (s *labelingStream) observe(event map[string]any) {
+	kind := firstString(event["type"])
+	if s.route == labelingRouteClaude {
+		switch kind {
+		case "system":
+			if event["subtype"] == "init" {
+				s.SessionID = defaultString(firstString(event["session_id"]), s.SessionID)
+				s.model(firstString(event["model"]))
+			}
+		case "assistant":
+			message := mapValueDefault(event["message"])
+			s.model(firstString(message["model"]))
+			if message["stop_reason"] == "refusal" {
+				s.Refusal = "stop_reason refusal"
+			}
+			items, _ := message["content"].([]any)
+			for _, raw := range items {
+				block := mapValueDefault(raw)
+				if block["type"] != "tool_use" {
+					continue
+				}
+				if block["name"] == "StructuredOutput" {
+					s.structTool, _ = json.Marshal(block["input"])
+					continue
+				}
+				id := firstString(block["id"])
+				if id == "" || !s.toolIDs[id] {
+					s.toolIDs[id] = true
+					s.Tools = append(s.Tools, map[string]any{"name": block["name"], "id": id})
+				}
+			}
+		case "result":
+			s.Terminal = "result"
+			s.SessionID = defaultString(firstString(event["session_id"]), s.SessionID)
+			s.Failed = event["is_error"] == true || firstString(event["subtype"]) != "success"
+			if s.Failed {
+				s.Error = defaultString(firstString(event["subtype"]), "error")
+				if errs, ok := event["errors"].([]any); ok && len(errs) > 0 {
+					s.Error += ": " + compactJSON(errs)
+				}
+			}
+			if event["stop_reason"] == "refusal" {
+				s.Refusal = "stop_reason refusal"
+			}
+			if value, ok := event["structured_output"]; ok && value != nil {
+				s.structured, _ = json.Marshal(value)
+			}
+			s.text = firstString(event["result"])
+			s.usage = mapValue(event["usage"])
+			s.modelUsage = map[string]map[string]any{}
+			for model, usage := range mapValueDefault(event["modelUsage"]) {
+				if m := mapValue(usage); m != nil {
+					s.modelUsage[model] = m
+				}
+			}
+			if cost, ok := number(event["total_cost_usd"]); ok {
+				s.cliCost = &cost
+			}
+		}
+		return
+	}
+	switch kind {
+	case "thread.started":
+		s.SessionID = firstString(event["thread_id"])
+	case "turn.completed":
+		s.Terminal = kind
+		s.usage = mapValue(event["usage"])
+	case "turn.failed":
+		s.Terminal, s.Failed = kind, true
+		s.usage = mapValue(event["usage"])
+		s.Error = defaultString(firstString(mapValueDefault(event["error"])["message"]), "turn failed")
+	case "error":
+		s.Warnings = append(s.Warnings, firstString(event["message"]))
+	}
+	item := mapValue(event["item"])
+	if item == nil {
+		return
+	}
+	switch itemType := firstString(item["type"]); itemType {
+	case "agent_message":
+		if kind == "item.completed" {
+			s.text = firstString(item["text"])
+		}
+	case "reasoning":
+	case "error":
+		s.Warnings = append(s.Warnings, firstString(item["message"]))
+	default:
+		id := firstString(item["id"])
+		if id == "" || !s.toolIDs[id] {
+			s.toolIDs[id] = true
+			s.Tools = append(s.Tools, map[string]any{"item_type": itemType, "id": id})
+		}
+	}
+}
+
+// line handles one raw stdout line: it returns the sanitized event to
+// save, or nil for a line that is not a JSON object.
+func (s *labelingStream) line(raw []byte) []byte {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return nil
+	}
+	var event map[string]any
+	if err := json.Unmarshal(raw, &event); err != nil || event == nil {
+		s.Unparsed++
+		data, _ := json.Marshal(map[string]any{"type": "pharos.unparsed_line", "bytes": len(raw)})
+		return data
+	}
+	event = s.sanitize(event)
+	s.observe(event)
+	data, _ := json.Marshal(event)
+	return data
+}
+
+// replayLabelingStream rebuilds the state from a saved events.jsonl.
+func replayLabelingStream(route, path string) (*labelingStream, error) {
+	stream := newLabelingStream(route)
+	file, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return stream, nil
+		}
+		return nil, err
+	}
+	defer file.Close()
+	reader := bufio.NewReader(file)
+	for {
+		raw, err := reader.ReadBytes('\n')
+		if len(bytes.TrimSpace(raw)) > 0 {
+			var event map[string]any
+			if json.Unmarshal(raw, &event) == nil {
+				if event["type"] == "pharos.unparsed_line" {
+					stream.Unparsed++
+				} else {
+					stream.observe(event)
+				}
+			}
+		}
+		if err == io.EOF {
+			return stream, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+}
+
+// output returns the structured annotation: Claude's result
+// structured_output (or its StructuredOutput call), Codex's last message
+// file or last agent message.
+func (s *labelingStream) output(answerPath string) json.RawMessage {
+	if s.route == labelingRouteClaude {
+		if len(s.structured) > 0 && string(s.structured) != "null" {
+			return s.structured
+		}
+		if len(s.structTool) > 0 && string(s.structTool) != "null" {
+			return s.structTool
+		}
+		return nil
+	}
+	text := s.text
+	if answerPath != "" {
+		if data, err := os.ReadFile(answerPath); err == nil && len(bytes.TrimSpace(data)) > 0 {
+			text = string(data)
+		}
+	}
+	text = strings.TrimSpace(text)
+	if json.Valid([]byte(text)) && strings.HasPrefix(text, "{") {
+		return json.RawMessage(text)
+	}
+	return nil
+}
+
+// refusalText reports text that declines the task instead of answering.
+var refusalText = regexp.MustCompile(`(?i)\b(I can(no|')t|I cannot|I won'?t|I'm (not able|unable)|I am (not able|unable)|unable to (help|comply|assist)|I must decline)\b`)
+
+// labelingProcess is how one CLI process ended.
+type labelingProcess struct {
+	StartError string           `json:"start_error,omitempty"`
+	ExitCode   *int             `json:"exit_code,omitempty"`
+	TimedOut   bool             `json:"timed_out,omitempty"`
+	Stopped    bool             `json:"stopped,omitempty"`
+	Cleanup    []map[string]any `json:"cleanup,omitempty"`
+	PID        int              `json:"pid,omitempty"`
+	Duration   time.Duration    `json:"-"`
+}
+
+// cliEnvironment is the user's environment, so the CLI finds its login,
+// without variables that would make it act as a nested Claude Code or
+// reach Pharos's API, and with the binary's directory on PATH for native
+// launchers which locate node. Labeling records none of it.
+func cliEnvironment(path string) []string {
+	env := []string{}
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if key != "CLAUDECODE" && key != "CLAUDE_CODE_ENTRYPOINT" && key != "PHAROS_API_TOKEN" {
+			env = append(env, entry)
+		}
+	}
+	return append(env, "PATH="+filepath.Dir(path)+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// runLabelingProcess runs one CLI attempt: the prompt goes to stdin, every
+// stdout line is sanitized into events, and the process group is cleaned up
+// after a terminal event (labelingLingerGrace, SIGTERM, labelingKillGrace,
+// SIGKILL), on timeout or on a hard stop. started is called with the pid
+// once the process runs.
+func runLabelingProcess(path string, args []string, dir, prompt string, events, stderr *os.File, stream *labelingStream, mu *sync.Mutex,
+	timeout time.Duration, hardStop <-chan struct{}, started func(pid int)) (result labelingProcess) {
+	begin := time.Now()
+	defer func() { result.Duration = time.Since(begin) }()
+	stdoutR, stdoutW, err := os.Pipe()
+	if err != nil {
+		result.StartError = err.Error()
+		return result
+	}
+	stdinR, stdinW, err := os.Pipe()
+	if err != nil {
+		stdoutR.Close()
+		stdoutW.Close()
+		result.StartError = err.Error()
+		return result
+	}
+	cmd := exec.Command(path, args...)
+	cmd.Dir, cmd.Env = dir, cliEnvironment(path)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdinR, stdoutW, stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	err = cmd.Start()
+	stdoutW.Close()
+	stdinR.Close()
+	if err != nil {
+		stdoutR.Close()
+		stdinW.Close()
+		result.StartError = err.Error()
+		return result
+	}
+	pid := cmd.Process.Pid
+	result.PID = pid
+	if started != nil {
+		started(pid)
+	}
+	go func() {
+		io.WriteString(stdinW, prompt)
+		stdinW.Close()
+	}()
+	terminal := make(chan struct{})
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		reader := bufio.NewReaderSize(stdoutR, 1<<16)
+		signaled := false
+		for {
+			raw, err := reader.ReadBytes('\n')
+			if len(raw) > 0 {
+				mu.Lock()
+				saved := stream.line(raw)
+				isTerminal := stream.Terminal != ""
+				mu.Unlock()
+				if saved != nil {
+					events.Write(append(saved, '\n'))
+				}
+				if isTerminal && !signaled {
+					events.Sync()
+					signaled = true
+					close(terminal)
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	exited := make(chan struct{})
+	go func() {
+		cmd.Wait()
+		close(exited)
+	}()
+	signalGroup := func(signal syscall.Signal, reason string) {
+		if err := syscall.Kill(-pid, signal); err == nil || !errors.Is(err, syscall.ESRCH) {
+			result.Cleanup = append(result.Cleanup, map[string]any{"signal": signal.String(), "reason": reason,
+				"after_seconds": time.Since(begin).Seconds()})
+		}
+	}
+	timeoutTimer := time.NewTimer(timeout)
+	defer timeoutTimer.Stop()
+	var linger, kill <-chan time.Time
+	terminalWait := (<-chan struct{})(terminal)
+	terminalSeen, terminated := false, false
+	terminate := func(reason string) {
+		if terminated {
+			return
+		}
+		terminated = true
+		signalGroup(syscall.SIGTERM, reason)
+		kill = time.After(labelingKillGrace)
+	}
+wait:
+	for {
+		select {
+		case <-exited:
+			break wait
+		case <-terminalWait:
+			terminalWait = nil
+			terminalSeen = true
+			linger = time.After(labelingLingerGrace)
+		case <-linger:
+			terminate("lingering after its terminal event")
+		case <-timeoutTimer.C:
+			if !terminalSeen {
+				result.TimedOut = true
+				terminate("timeout without a terminal event")
+			}
+		case <-hardStop:
+			hardStop = nil
+			if !terminalSeen {
+				result.Stopped = true
+				terminate("stopped")
+			}
+		case <-kill:
+			signalGroup(syscall.SIGKILL, "still running after SIGTERM")
+			kill = nil
+		}
+	}
+	// Children that outlive the CLI are part of the attempt too.
+	if syscall.Kill(-pid, 0) == nil {
+		signalGroup(syscall.SIGTERM, "process group outlived the CLI")
+		deadline := time.Now().Add(labelingKillGrace)
+		for syscall.Kill(-pid, 0) == nil && time.Now().Before(deadline) {
+			time.Sleep(20 * time.Millisecond)
+		}
+		if syscall.Kill(-pid, 0) == nil {
+			signalGroup(syscall.SIGKILL, "process group still running after SIGTERM")
+		}
+	}
+	select {
+	case <-readerDone:
+	case <-time.After(2 * time.Second):
+		stdoutR.SetReadDeadline(time.Now())
+		<-readerDone
+	}
+	stdoutR.Close()
+	if cmd.ProcessState != nil {
+		code := cmd.ProcessState.ExitCode()
+		result.ExitCode = &code
+	}
+	return result
+}
+
+// labelingCLIVersion asks a CLI for its version once per job.
+func labelingCLIVersion(path string) string {
+	cmd := exec.Command(path, "--version")
+	cmd.Env = cliEnvironment(path)
+	cmd.Dir = os.TempDir()
+	done := make(chan struct{})
+	var output []byte
+	go func() {
+		output, _ = cmd.Output()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		if cmd.Process != nil {
+			cmd.Process.Kill()
+		}
+		<-done
+	}
+	return strings.TrimSpace(string(output))
+}

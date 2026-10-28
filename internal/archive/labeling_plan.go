@@ -190,7 +190,7 @@ func openLabelingDataset(dir string) (*sql.DB, error) {
 	if _, err := os.Stat(path); err != nil {
 		return nil, err
 	}
-	return sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String()+"?mode=ro&_pragma=query_only(1)")
+	return sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String()+"?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(10000)")
 }
 
 // planLabeling estimates a labeling run of a prepared dataset: requests,

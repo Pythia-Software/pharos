@@ -2,7 +2,7 @@
 
 `pharos labeling` prepares a library's conversation text for labeling by a large "teacher" model, offline, so the labels can later train a small local classifier. It is a deliberate command-line workflow: nothing runs when Pharos starts, captures, indexes or opens a page, and no command here writes the catalog.
 
-This page covers preparation, planning and status. Running a labeling job and exporting training data come later.
+This page covers preparation, planning, running labeling jobs and their status. Exporting training data comes later.
 
 ## Commands
 
@@ -11,12 +11,20 @@ pharos [--config PATH] labeling prepare --dir DIR [--catalog PATH] [--fresh-days
     [--limit-conversations N | --conversation ID ...] [--splits-from OLD_DIR] --catalog COPY --snapshot-copy [--allow-stale-shm] [--replace] [--dry-run]
 pharos labeling plan --dir DIR --route claude|codex --model M --effort E [--items-per-request 4] \
     [--max-request-tokens 24000] [--max-request-chars N] [--include-duplicates] [--concurrency 3] [--cohort C ...] [--split S ...] [--limit-items N]
-pharos labeling status --dir DIR
+pharos labeling status --dir DIR [--job NAME [--json]]
+pharos labeling run --dir DIR --job NAME [--create --route claude|codex --model M --effort E [--prompt VERSION] \
+    [--cohort C ...] [--split S ...] [--item ID ...] [--limit-items N] [--items-per-request 4] [--max-request-tokens 24000] \
+    [--max-request-chars N] [--include-duplicates] [--create-only]] --max-usd X [--concurrency 3] [--timeout 330s] \
+    [--retry-invalid 1] [--allow-unpriced]
+pharos labeling stop --dir DIR --job NAME
+pharos labeling reconcile --dir DIR --job NAME [--retry-unknown] [--retry-failed]
+pharos labeling import-results --dir DIR --from OLD_DIR --job NAME
 ```
 
 - **prepare** reads one snapshot of the catalog and writes a dataset to `DIR`. It reads only a backup copy of a catalog, named with `--catalog PATH --snapshot-copy`; it never reads a live catalog. `--limit-conversations N` prepares a fixed sample of N conversations (those whose works are not mirrors, in the order of the SHA-256 of their IDs); `--conversation` prepares named ones. Either restriction is recorded, and the manifest then calls the result a restricted sample, not the library. `--dry-run` computes the same manifest and prints it as JSON without creating or writing anything. `--splits-from` keeps the splits an earlier dataset gave its conversations (see below). Progress (phase, counts, elapsed time) goes to standard error.
 - **plan** reads only a prepared dataset and estimates a labeling run: how many requests, how many tokens, what it would cost, and how long it might take. It calls no model and writes nothing.
-- **status** prints a dataset's manifest summary, or says that preparation is incomplete.
+- **status** prints a dataset's manifest summary, or says that preparation is incomplete, and one line per labeling job. With `--job` it shows that job; `--json` prints everything (below).
+- **run**, **stop**, **reconcile** and **import-results** create and run labeling jobs: see [Running a labeling job](#running-a-labeling-job). `run` is the only command that calls a model, and it calls one only within its `--max-usd` ceiling.
 
 Choose a dataset directory outside the catalog folder, for example `<library>/labeling/<name>`. A dataset holds private conversation text: its files are created readable only by you (0600, directory 0700). `prepare` refuses a directory that is not empty unless `--replace` is given, and `--replace` removes only a dataset's own files; it refuses a dataset that holds any labeling job, request or attempt records, so paid results are never lost. One command at a time can prepare into a directory (`DIR/.lock`).
 
@@ -105,6 +113,69 @@ A family's ID can change when a new conversation links into it, and the fresh wi
 ## Planning
 
 `plan` skips delegation units that repeat a child's message (`duplicate_of`) and reports how many (`--include-duplicates` keeps them). It packs the selected items, in a fixed order, into requests of at most `--items-per-request` items whose estimated input, the fixed prompt overhead plus the items' text and context, stays within `--max-request-tokens` (24,000), and, when `--max-request-chars` is given, whose characters stay within it too. An item that does not fit even alone is never sent oversized: it is listed in `oversize_items` and the command fails (chunking keeps items far below this). It then estimates tokens from measurements of 18 four-item requests at effort high on 2026-10-27: per request, about 14,300 input tokens of prompt, taxonomy, schema and CLI framing for the `claude` route (Haiku 5.5) and 16,100 for `codex` (Luna), plus the items at 3.6 ASCII characters per token and half a token per UTF-8 byte of any other character (1.5 for a CJK character, 2 for an emoji), a conservative bound for dense scripts; per item, about 1,006 output tokens for Haiku and 212 for Luna, reasoning included. Each constant has a flag (`--overhead-tokens`, `--output-tokens-per-item`, `--seconds-per-request`, `--chars-per-token`). The cost is priced with the price book built into Pharos for the named model on the day of the plan, at standard rates without cache or batch discounts; a model the book has no confirmed price for is shown as unpriced, never guessed. Runtime is the largest of the measured request time (17 s for Haiku, 10 s for Luna) over `--concurrency`, the input over an assumed `--tokens-per-minute` (2 million) and the output over a fifth of that, plus 25%, with a planning high of three times that. The plan prints every assumption; effort levels other than high are flagged as uncalibrated.
+
+## Running a labeling job
+
+A job labels a frozen selection of a dataset's items through one route, model, effort and prompt version, and keeps its ledger in the dataset (`jobs`, `requests`, `request_items`, `attempts`, `item_results`, `usage`). Those tables are not part of a prepared dataset, so `prepare --replace` refuses a dataset that has them.
+
+```sh
+pharos labeling run --dir DIR --job pilot --create --route claude --model claude-haiku-5-5 --effort high \
+    --limit-items 200 --create-only                      # freeze and print the selection; no model call
+pharos labeling run --dir DIR --job pilot --max-usd 2    # label it, spending at most $2
+pharos labeling status --dir DIR --job pilot --json     # in another terminal
+pharos labeling stop --dir DIR --job pilot              # or Ctrl-C
+```
+
+**Creating.** `run --create` selects items as `plan` does (in item-ID order; `--cohort`, `--split`, `--item`, `--limit-items`; duplicates skipped unless `--include-duplicates`), packs them with the same packer and limits into numbered requests, and prints the selection. The selection never changes afterwards: a later `run` without `--create` continues the same requests. Items too large for one request are listed (`oversize_items`) and not sent. `--create-only` stops after printing. `--prompt` chooses the prompt version (below); the job records it with the schema, taxonomy and dataset contract versions, the CLI's path and version (asked once with `--version`).
+
+**Running.** Requests are sent in order, at most `--concurrency` (3) at a time. Each attempt gets a directory `DIR/attempts/JOB/NNNNNN/ATTEMPT/` (0700) holding `prompt.txt`, `command.json` (the argv with the schema replaced by a reference to `DIR/contracts/schema-….json`, the prompt by its SHA-256; the environment is inherited and not recorded), `events.jsonl` (the CLI's stream, written line by line as it arrives, with Claude thinking blocks and Codex reasoning items reduced to their type and ID; usage is kept), `stderr.log` and, for Codex, `answer.json`. The run prints one line per finished request: its outcome, request counts by state, known spend, unknown-outcome exposure, rate and ETA. It ends when no request is pending, when stopped, or when it halts (the ceiling, or unpriced usage), which exits with an error saying why.
+
+**States.** A request is `pending`, `leased` (chosen by the runner), `submitted`, then `completed`, `invalid`, `refused`, `failed` or `unknown`; `stopped` is a request leased but not yet sent when a stop came. Each transition is one SQLite transaction, and `submitted` (with the attempt row) is written before the CLI starts, so no request is ever sent unrecorded.
+
+- `completed`: a terminal event with structured output that passed validation for every item.
+- `invalid`: structured output that broke the contract (an extra, duplicate or missing ID, a bad field or label, no structured output) or any tool use. Items that were themselves valid keep their results.
+- `refused`: a refusal stop reason, or refusal text instead of structured output. Never retried on the same route.
+- `failed`: the CLI did not start, or reported an error as its terminal event.
+- `unknown`: no terminal event: a timeout (`--timeout`, 330 s), a crash, or a stop that had to terminate it. The provider may have charged for it.
+
+**Stopping and resuming.** `stop` (or SIGINT/SIGTERM) makes the runner lease nothing more and let in-flight attempts finish; after two minutes, or a second signal, they are terminated and become `unknown`. One runner runs a job at a time (`DIR/.run-JOB.lock`), and no runner runs while `prepare` holds the dataset. On start, a runner returns `leased` and `stopped` requests to `pending` and settles every `submitted` one from its saved stream: a terminal result there is validated and completed without sending it again (`recovered`), otherwise it is `unknown`. A CLI process an earlier runner left behind is killed first.
+
+**Lingering processes.** The CLI runs in its own process group, in an empty private directory (`DIR/runner`; a run refuses to start if anything is in it). After its terminal event a CLI that is still running gets SIGTERM after 10 s and SIGKILL 5 s later, as does anything left in its process group after it exits. This cleanup is recorded in the attempt (`cleanup`) and does not change the outcome: a result that arrived stands.
+
+**Retries.** Invalid or missing items are re-packed into a new request (`retry_of`) up to `--retry-invalid` (1) more times per item. `unknown` requests are never re-sent automatically, since they may have been charged: `reconcile` lists unknown, failed, refused and invalid requests with their receipts, and `--retry-unknown` or `--retry-failed` re-queues them explicitly. Their earlier attempts stay in the ledger and in spend.
+
+## Spend
+
+Every attempt's usage is stored per model, from the terminal event: for Claude each model in `modelUsage`, auxiliary models included (the one matching the result's `usage` takes that usage, which splits cache writes by TTL), and for Codex the turn's usage under the requested model, since Codex reports no model name. Tokens are normalized as everywhere in Pharos (`normalizeTokenCounts`: Claude's input excludes cache reads and writes, OpenAI's includes them; reasoning is part of output) and priced with the built-in price book for that model on the attempt's UTC day (`priceBook.cost`), with the status `priced`, `assumed`, `partial` or `unpriced` and the model priced. A served model name the job did not ask for is stored as reported and priced as itself, never at another model's rates; the attempt notes `served_model_differs`. Failed and invalid attempts count.
+
+The status shows, separately:
+
+- **known spend**: the sum of priced costs (a `partial` cost is a lower bound);
+- **partial or unpriced tokens**, by model: usage the price book cannot price, never treated as free;
+- **unknown-outcome exposure**: the estimated cost of `unknown` attempts without usage, from the plan's calibration;
+- **in flight**: the estimate of leased and submitted requests;
+- **CLI-reported cost**: what the CLIs said they cost, kept as evidence but not authoritative.
+
+`--max-usd` is required. Before each lease the runner adds known spend, the in-flight and unknown-outcome estimates and the next request's estimate; if that exceeds the ceiling it leases nothing more, lets in-flight attempts finish, and halts. A model the price book cannot price does not start, and usage it cannot price halts the run after that attempt, unless `--allow-unpriced` (its spend is then unbounded, and estimates count it as zero).
+
+## Validation (the publication contract)
+
+An exit code or a terminal success is not enough. Each attempt's structured output is checked against the request: exactly the expected IDs (missing, extra and duplicate IDs are named), the required fields and no others, field types, labels from the taxonomy, and no label both accepted and uncertain. Each evidence quote is looked for in the item's visible text (CURRENT_TEXT): every occurrence is mapped to byte ranges of the stored message, through the target pieces (a quote inside a marker, outside target pieces, or only in the context is not evidence), checked to be the same bytes on character boundaries; a transformed piece maps to its whole encoded range. A quote that occurs more than once records every occurrence and is `ambiguous`. An accepted label without valid evidence is flagged.
+
+Each item gets one outcome: `usable`, `usable_with_evidence_issues` (kept, with its issues listed), `invalid`, `missing` or `refused`. Only the first two are training rows. Uncertain labels are stored apart and are never accepted labels; an empty accepted set is a result, a missing item is not.
+
+## Prompts and routes
+
+`prompt-candidate-0.3-questions-short` reproduces the measured prompt byte for byte (experiment.py `prompt(rows, 'questions', 'short')`: definitions, the leaf-label question checklist, the items as JSON with their sender, channel, the last 600 characters of context and whether it was cut), and the schema is the measured `schema()` as the CLIs received it. `prompt-candidate-0.3-questions-short-pieces-v1`, the default, adds one sentence saying what `⟦…⟧` markers are and that evidence never comes from inside one. A job uses one version for all its items, so results stay comparable.
+
+- `claude`: `claude -p --model M --effort E --output-format stream-json --verbose --json-schema SCHEMA --tools "" --safe-mode --disable-slash-commands --no-chrome --strict-mcp-config --permission-prompts none --permission-mode dontAsk --no-session-persistence --session-id UUID`, the prompt on stdin. The terminal event is `result`; the annotation is its `structured_output`.
+- `codex`: `codex exec --ephemeral --ignore-user-config --ignore-rules --skip-git-repo-check --sandbox read-only --model M --config model_reasoning_effort="E" --config project_doc_max_bytes=0 --color never --json --output-schema FILE --output-last-message FILE` with apps, plugins, shell, multi-agent, browser, computer-use, code-mode and image-generation features disabled, the prompt on stdin (`-`). The terminal event is `turn.completed` or `turn.failed`; the annotation is the last-message file.
+
+Both run with the user's environment, so they use the CLI's own login; Pharos never reads, copies or records credentials. Sessions are not persisted, so labeling does not flood the captured library. Any tool event (other than Claude's `StructuredOutput`) makes the attempt invalid.
+
+## Reusing results across snapshots
+
+`import-results --dir NEW --from OLD --job NAME` creates job `NAME` in a newly prepared dataset with the old job's route, model, effort, prompt and selection, and copies the old job's usable results for items whose model-visible contract is unchanged: the hash of the prompt version, taxonomy, schema, sender, channel, context and CURRENT_TEXT. Their evidence is re-mapped to the new dataset's bytes. Every other selected item is packed as pending, for `run` to label.
 
 ## Known limits
 

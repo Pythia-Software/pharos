@@ -130,16 +130,7 @@ func (b *askOutput) Write(p []byte) (int, error) {
 func askCommand(ctx context.Context, path, dir string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Dir = dir
-	env := []string{}
-	for _, entry := range os.Environ() {
-		key, _, _ := strings.Cut(entry, "=")
-		if key != "CLAUDECODE" && key != "CLAUDE_CODE_ENTRYPOINT" && key != "PHAROS_API_TOKEN" {
-			env = append(env, entry)
-		}
-	}
-	// Include the binary's directory for native launchers which locate node.
-	env = append(env, "PATH="+filepath.Dir(path)+string(os.PathListSeparator)+os.Getenv("PATH"))
-	cmd.Env = env
+	cmd.Env = cliEnvironment(path)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {

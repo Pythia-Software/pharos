@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -27,7 +28,11 @@ func (l *stringList) Set(value string) error { *l = append(*l, value); return ni
 const labelingUsage = `usage:
   pharos [--config PATH] labeling prepare --dir DIR [--fresh-days 14] [--limit-conversations N] [--conversation ID ...] [--splits-from OLD_DIR] --catalog COPY --snapshot-copy [--allow-stale-shm] [--replace] [--dry-run]
   pharos labeling plan --dir DIR --route claude|codex --model M --effort E [--items-per-request 4] [--max-request-tokens 24000] [--max-request-chars N] [--include-duplicates] [--concurrency 3] [--cohort C ...] [--split S ...] [--limit-items N]
-  pharos labeling status --dir DIR`
+  pharos labeling status --dir DIR [--job NAME [--json]]
+  pharos labeling run --dir DIR --job NAME [--create --route claude|codex --model M --effort E [--prompt V] [--cohort C ...] [--split S ...] [--item ID ...] [--limit-items N] [--items-per-request 4] [--max-request-tokens 24000] [--max-request-chars N] [--include-duplicates] [--create-only]] --max-usd X [--concurrency 3] [--timeout 330s] [--retry-invalid 1] [--allow-unpriced]
+  pharos labeling stop --dir DIR --job NAME
+  pharos labeling reconcile --dir DIR --job NAME [--retry-unknown] [--retry-failed]
+  pharos labeling import-results --dir DIR --from OLD_DIR --job NAME`
 
 // runLabelingCLI runs the offline labeling commands. None of them opens the
 // catalog through OpenCatalog: prepare reads one read-only snapshot, and plan
@@ -44,12 +49,97 @@ func runLabelingCLI(configPath string, args []string, stdout, stderr io.Writer) 
 	case "status":
 		flags := flag.NewFlagSet("labeling status", flag.ContinueOnError)
 		dir := flags.String("dir", "", "dataset directory")
-		if err := flags.Parse(args[1:]); err != nil || *dir == "" || flags.NArg() != 0 {
+		job := flags.String("job", "", "show this labeling job")
+		asJSON := flags.Bool("json", false, "print the job's status as JSON")
+		if err := flags.Parse(args[1:]); err != nil || *dir == "" || flags.NArg() != 0 || *asJSON && *job == "" {
 			return errors.New(labelingUsage)
 		}
-		return labelingStatus(*dir, stdout)
+		if *job != "" {
+			return labelingStatusJSON(*dir, *job, *asJSON, stdout)
+		}
+		if err := labelingStatus(*dir, stdout); err != nil {
+			return err
+		}
+		if _, err := os.Stat(filepath.Join(*dir, labelingManifestFile)); err != nil {
+			return nil
+		}
+		return labelingJobsSummary(*dir, stdout)
+	case "run":
+		return runLabelingRunCLI(args[1:], stdout, stderr)
+	case "stop", "reconcile", "import-results":
+		flags := flag.NewFlagSet("labeling "+args[0], flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		dir := flags.String("dir", "", "dataset directory")
+		job := flags.String("job", "", "labeling job")
+		from := flags.String("from", "", "earlier dataset whose job results to import")
+		retryUnknown := flags.Bool("retry-unknown", false, "re-queue requests whose outcome is unknown (they may have been charged)")
+		retryFailed := flags.Bool("retry-failed", false, "re-queue failed requests")
+		if err := flags.Parse(args[1:]); err != nil || *dir == "" || *job == "" || flags.NArg() != 0 || (*from != "") != (args[0] == "import-results") {
+			return errors.New(labelingUsage)
+		}
+		switch args[0] {
+		case "stop":
+			if err := requestLabelingStop(*dir, *job); err != nil {
+				return err
+			}
+			fmt.Fprintf(stdout, "Asked the runner of %s to stop: it leases no more requests and lets in-flight attempts finish.\n", *job)
+			return nil
+		case "reconcile":
+			return withLabelingJobLock(*dir, *job, func(db *sql.DB) error { return reconcileLabelingJob(db, *job, *retryUnknown, *retryFailed, stdout) })
+		default:
+			return withLabelingJobLock(*dir, *job, func(*sql.DB) error {
+				return importLabelingResults(context.Background(), *dir, *from, *job, stdout)
+			})
+		}
 	}
 	return errors.New(labelingUsage)
+}
+
+func runLabelingRunCLI(args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("labeling run", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	opts := labelingRunOptions{Out: stdout}
+	flags.StringVar(&opts.Dir, "dir", "", "prepared dataset directory")
+	flags.StringVar(&opts.Job, "job", "", "job name")
+	flags.BoolVar(&opts.Create, "create", false, "create the job, freezing its selection, then run it")
+	flags.BoolVar(&opts.CreateOnly, "create-only", false, "with --create: create and print the job without running it")
+	flags.StringVar(&opts.Spec.Route, "route", "", "claude or codex")
+	flags.StringVar(&opts.Spec.Model, "model", "", "model")
+	flags.StringVar(&opts.Spec.Effort, "effort", "", "reasoning effort")
+	flags.StringVar(&opts.Spec.Prompt, "prompt", labelingPromptPieces, "prompt version: "+strings.Join(labelingPromptVersions, " or "))
+	var cohorts, splits, items stringList
+	flags.Var(&cohorts, "cohort", "label only this cohort (repeatable)")
+	flags.Var(&splits, "split", "label only this split (repeatable)")
+	flags.Var(&items, "item", "label only this item (repeatable)")
+	flags.IntVar(&opts.Spec.LimitItems, "limit-items", 0, "label only the first N selected items")
+	flags.IntVar(&opts.Spec.ItemsPerRequest, "items-per-request", 4, "items per request (4 was measured)")
+	flags.Float64Var(&opts.Spec.MaxRequestTokens, "max-request-tokens", 24000, "estimated input tokens per request, fixed overhead included")
+	flags.IntVar(&opts.Spec.MaxRequestChars, "max-request-chars", 0, "also cap the characters of item text and context per request (0: no cap)")
+	flags.BoolVar(&opts.Spec.IncludeDuplicates, "include-duplicates", false, "also label units that repeat another (delegation copies, later fork copies)")
+	maxUSD := flags.String("max-usd", "", "spend ceiling in USD (required to run)")
+	flags.IntVar(&opts.Concurrency, "concurrency", 3, "requests in flight")
+	flags.DurationVar(&opts.Timeout, "timeout", labelingAttemptTimeout, "an attempt without a terminal event by then is terminated and unknown")
+	flags.IntVar(&opts.RetryInvalid, "retry-invalid", 1, "re-send an invalid or missing item up to N more times")
+	flags.BoolVar(&opts.AllowUnpriced, "allow-unpriced", false, "run although some usage cannot be priced (its spend is then unbounded)")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || opts.Dir == "" || opts.Job == "" || opts.CreateOnly && !opts.Create || opts.RetryInvalid < 0 {
+		return errors.New(labelingUsage)
+	}
+	if *maxUSD == "" && !opts.CreateOnly {
+		return errors.New("labeling run needs --max-usd: the spend ceiling for this run")
+	}
+	if *maxUSD != "" {
+		value, err := strconv.ParseFloat(*maxUSD, 64)
+		if err != nil || value <= 0 {
+			return errors.New("--max-usd must be a positive number of dollars")
+		}
+		opts.MaxUSD = value
+	}
+	opts.Spec.Cohorts, opts.Spec.Splits, opts.Spec.Items = cohorts, splits, items
+	signals := make(chan os.Signal, 2)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	opts.Signals = signals
+	return runLabelingJob(context.Background(), opts)
 }
 
 func runLabelingPrepare(configPath string, args []string, stdout, stderr io.Writer) error {
