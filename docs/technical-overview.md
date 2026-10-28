@@ -12,6 +12,14 @@ private runtime credential. The broker owns the primary connection, explicit MCP
 assignment and verified library transfers. See [Libraries and application setup](library-management.md)
 and the [implementation design](onboarding-and-library-design.md).
 
+Startup keeps the native lighthouse visible until the first web page finishes
+loading or its navigation is cancelled or diverted to a download. Later reloads
+and navigations keep the current page visible without the startup overlay.
+The broker answering `/api/ready` alone does not mean its library is open.
+Catalog opens reuse a completed initialization for the same executable, schema,
+and Library projection, while still registering the current Mac. A new build or
+an older catalog runs the full migration and backfill pass before serving pages.
+
 Channel and Machine attribute work to its initiating conversation and device,
 including delegated usage. Execution machine records each session's placement
 separately. These dimensions are available across query tables, charts, cards,

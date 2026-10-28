@@ -17,10 +17,9 @@ import (
 	"time"
 )
 
-// Initialize migrates, backfills, and scans whole tables on every open, taking
-// the write lock. A query open (one per MCP tool call) skips it when this very
-// build has already fully initialized the catalog: every migration and
-// backfill it would run has then run.
+// Initialize migrates, backfills, and scans whole tables, taking the write
+// lock. Reopening with the same build skips that work once it has fully
+// initialized the catalog. A writable open still registers the current host.
 
 // initializedBuildKey names the meta row recording the last build whose
 // Initialize completed. Builds that predate it leave it unchanged, so their
@@ -152,9 +151,9 @@ const initializeLockName = ".initialize.lock"
 
 var errCatalogInitializing = errors.New("Pharos is upgrading this library's catalog; try again in a moment")
 
-// initializeLocked runs Initialize under the initialize lock. Unless wait, it
-// gives up after a moment with errCatalogInitializing, and skips Initialize
-// when whoever held the lock initialized the catalog for this build.
+// initializeLocked runs Initialize under the initialize lock, unless this
+// build already completed it. A service waits for an in-progress upgrade;
+// query opens give up after a moment and leave older schemas to the service.
 func (c *Catalog) initializeLocked(wait bool) error {
 	file, err := os.OpenFile(filepath.Join(filepath.Dir(c.Path), initializeLockName), os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
@@ -177,10 +176,15 @@ func (c *Catalog) initializeLocked(wait bool) error {
 			return err
 		}
 	}
-	if !wait {
-		if current, err := c.initializedByThisBuild(); err != nil || current {
-			return err
+	current, err := c.initializedByThisBuild()
+	if err != nil && (!wait || !errors.Is(err, errCatalogNeedsUpgrade)) {
+		return err
+	}
+	if current {
+		if wait {
+			return c.migrateHosts()
 		}
+		return nil
 	}
 	// Timed for the journal: the table it would go in is created by this
 	// very step, so the registry records it once one is attached (§3.5).
