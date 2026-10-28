@@ -81,9 +81,8 @@ type labelingUnit struct {
 	chunks, markers                                                             []labelingChunk
 	// droppedChunks counts chunks holding only markers, which become no item.
 	droppedChunks int
-	// hashes and long describe each item's target text (see labelingUnitStat).
+	// hashes are the items' normalized target-text hashes.
 	hashes []string
-	long   []bool
 }
 
 // labelingConversation is what preparation keeps of each conversation.
@@ -96,20 +95,9 @@ type labelingConversation struct {
 type labelingUnitStat struct {
 	conversation, cohort, provider, depth, length string
 	items                                         int
-	// hashes are the items' normalized target-text hashes; long reports
-	// whether each text has at least labelingDuplicateChars characters.
+	// hashes are the items' normalized target-text hashes.
 	hashes []string
-	long   []bool
 }
-
-// labelingDuplicateChars is the shortest normalized target text whose exact
-// repetition links families: shorter texts ("ok", "continue") recur by
-// chance, so their cross-split repeats are flagged instead.
-const labelingDuplicateChars = 40
-
-// labelingDuplicateLinkMax is the most conversations one identical text may
-// link into a family; a text in more is boilerplate.
-var labelingDuplicateLinkMax = 5
 
 // labelingPass holds the snapshot's shared inputs and the counts as
 // conversations are read.
@@ -120,9 +108,7 @@ type labelingPass struct {
 	// targetCache holds resolved target bytes of re-sent sources.
 	targetCache map[string][]bool
 	// automated marks conversations with a user message from automation.
-	automated map[string]bool
-	// frequent holds long target texts too common to link families.
-	frequent       map[string]bool
+	automated      map[string]bool
 	conversations  map[string]*labelingConversation
 	representative map[string]string
 	lineage        *usageConversationAttribution
@@ -160,10 +146,9 @@ type labelingChild struct {
 
 type labelingParentMessage struct{ id, key string }
 
-// itemTargetHash hashes an item's target text, without markers,
-// lowercased with whitespace collapsed, and reports whether that text has at
-// least labelingDuplicateChars characters.
-func itemTargetHash(visible string, chunk labelingChunk, markers []labelingChunk) (string, bool) {
+// itemTargetHash hashes an item's target text, without markers, lowercased
+// with whitespace collapsed.
+func itemTargetHash(visible string, chunk labelingChunk, markers []labelingChunk) string {
 	var target strings.Builder
 	at := chunk.Start
 	for _, marker := range markers {
@@ -177,7 +162,7 @@ func itemTargetHash(visible string, chunk labelingChunk, markers []labelingChunk
 	target.WriteString(visible[at:chunk.End])
 	normalized := strings.ToLower(normalizeSpace(target.String()))
 	sum := sha256.Sum256([]byte(normalized))
-	return hex.EncodeToString(sum[:16]), utf8.RuneCountInString(normalized) >= labelingDuplicateChars
+	return hex.EncodeToString(sum[:16])
 }
 
 // normalizeSpace collapses whitespace runs to one space.
@@ -358,7 +343,7 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 	snapshot["build"] = labelingBuild()
 
 	progress("reading works, identity links and lineage")
-	p := &labelingPass{tx: tx, reasoningStore: present["reasoning_extraction_state"], targetCache: map[string][]bool{}, automated: map[string]bool{}, frequent: map[string]bool{}, conversations: map[string]*labelingConversation{}, mainSession: map[string]string{}, sessionKind: map[string]string{},
+	p := &labelingPass{tx: tx, reasoningStore: present["reasoning_extraction_state"], targetCache: map[string][]bool{}, automated: map[string]bool{}, conversations: map[string]*labelingConversation{}, mainSession: map[string]string{}, sessionKind: map[string]string{},
 		childOwners: map[string]bool{}, current: map[string]bool{}, children: map[string]*labelingChild{}, parents: map[string][]labelingParentMessage{},
 		units:      map[[4]string]*[3]int{},
 		exclusions: map[[2]string]int{}, counters: map[string]int{}, firstAt: map[string]string{}}
@@ -578,32 +563,39 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 	manifest := p.manifest(opts, snapshot, selection, scope, families, duplicates)
 	splits := manifest["splits"].(map[string]any)
 	splits["inherited_from"], splits["assignment"] = nilIfEmpty(opts.SplitsFrom), inheritance
-	// Short identical texts are not linked; those landing in more than one
-	// split are flagged so evaluation can drop them.
+	// Identical target texts never link families (a stock reply would chain
+	// unrelated work). An item whose text recurs in another split is marked;
+	// a held-out item whose text also occurs in train is seen_in_train, which
+	// evaluation excludes (near-duplicate filtering).
 	splitsOf := map[string]map[string]bool{}
 	for _, stat := range p.stats {
-		for index, hash := range stat.hashes {
-			if !stat.long[index] || p.frequent[hash] {
-				if splitsOf[hash] == nil {
-					splitsOf[hash] = map[string]bool{}
-				}
-				splitsOf[hash][families[stat.conversation].split] = true
+		for _, hash := range stat.hashes {
+			if splitsOf[hash] == nil {
+				splitsOf[hash] = map[string]bool{}
 			}
+			splitsOf[hash][families[stat.conversation].split] = true
 		}
 	}
-	crossSplit := map[string]bool{}
-	crossItems := 0
+	crossSplit, seenInTrain := map[string]bool{}, map[string]bool{}
+	duplicateCounts := map[string]int{}
 	for _, stat := range p.stats {
-		for index, hash := range stat.hashes {
-			if (!stat.long[index] || p.frequent[hash]) && len(splitsOf[hash]) > 1 {
-				crossSplit[hash] = true
-				crossItems++
+		split := families[stat.conversation].split
+		for _, hash := range stat.hashes {
+			if len(splitsOf[hash]) < 2 {
+				continue
+			}
+			crossSplit[hash] = true
+			duplicateCounts["items"]++
+			if split != "train" && splitsOf[hash]["train"] {
+				seenInTrain[hash] = true
+				duplicateCounts["seen_in_train_"+split]++
 			}
 		}
 	}
-	splits["cross_split_duplicates"] = map[string]any{"texts": len(crossSplit), "items": crossItems, "min_linked_chars": labelingDuplicateChars,
-		"max_linked_conversations": labelingDuplicateLinkMax,
-		"note":                     "identical target texts that do not link families (shorter than min_linked_chars, or in more than max_linked_conversations conversations) and land in more than one split; their items are marked cross_split_duplicate for evaluation to drop"}
+	splits["cross_split_duplicates"] = map[string]any{"texts": len(crossSplit), "items": duplicateCounts["items"],
+		"seen_in_train": map[string]int{"dev": duplicateCounts["seen_in_train_dev"], "test": duplicateCounts["seen_in_train_test"],
+			"fresh": duplicateCounts["seen_in_train_fresh"], "quarantine": duplicateCounts["seen_in_train_quarantine"]},
+		"note": "items whose normalized target text occurs in more than one split are cross_split_duplicate; held-out items whose text also occurs in train are seen_in_train, which evaluation excludes"}
 	manifest["coverage"] = coverage
 	manifest["reasoning"] = map[string]any{
 		"extraction_version": reasoningExtractionVersion, "pending_conversations": p.counters["reasoning_pending_conversations"],
@@ -617,7 +609,7 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 		"question_form_actions": p.counters["actions_flattened_message"],
 	}
 	if p.writer != nil {
-		if err := p.writer.finish(families, crossSplit, manifest); err != nil {
+		if err := p.writer.finish(families, crossSplit, seenInTrain, manifest); err != nil {
 			return nil, err
 		}
 		p.writer = nil
@@ -1262,8 +1254,7 @@ func (p *labelingPass) record(conversation string, record labelingRecord, answer
 		unit.length = "long"
 	}
 	for _, chunk := range unit.chunks {
-		hash, long := itemTargetHash(unit.visible, chunk, unit.markers)
-		unit.hashes, unit.long = append(unit.hashes, hash), append(unit.long, long)
+		unit.hashes = append(unit.hashes, itemTargetHash(unit.visible, chunk, unit.markers))
 	}
 	return unit, "", "", nil
 }
@@ -1338,7 +1329,7 @@ func (p *labelingPass) addUnit(unit *labelingUnit) {
 	p.units[key][0]++
 	p.units[key][1] += len(unit.chunks)
 	p.units[key][2] += utf8.RuneCountInString(unit.visible)
-	p.stats = append(p.stats, labelingUnitStat{unit.conversation, unit.cohort, unit.provider, depth, unit.length, len(unit.chunks), unit.hashes, unit.long})
+	p.stats = append(p.stats, labelingUnitStat{unit.conversation, unit.cohort, unit.provider, depth, unit.length, len(unit.chunks), unit.hashes})
 }
 
 // labelingFamily is the family (splits-v1) a conversation belongs to.
@@ -1399,46 +1390,7 @@ func labelingFamilies(ids []string, p *labelingPass, sessions []map[string]any, 
 			}
 		}
 	}
-	// Identical target texts of some length are one example wherever they
-	// were sent (a repeated prompt, a template): their conversations are one
-	// family. Family sizes before these links are reported.
-	unitsBy := func() (int, int) {
-		sizes := map[string]int{}
-		for _, stat := range p.stats {
-			sizes[find(stat.conversation)]++
-		}
-		largest := 0
-		for _, size := range sizes {
-			largest = max(largest, size)
-		}
-		return len(sizes), largest
-	}
 	stats := map[string]int{}
-	stats["families_before_duplicate_links"], stats["largest_units_before_duplicate_links"] = unitsBy()
-	// A text repeated in many conversations is boilerplate (a canned prompt,
-	// a stock reply); linking through it chained half the library into one
-	// family, so such texts are flagged as cross-split duplicates instead.
-	holders := map[string][]string{}
-	for _, stat := range p.stats {
-		for index, hash := range stat.hashes {
-			if stat.long[index] && !slices.Contains(holders[hash], stat.conversation) && len(holders[hash]) <= labelingDuplicateLinkMax {
-				holders[hash] = append(holders[hash], stat.conversation)
-			}
-		}
-	}
-	for hash, conversations := range holders {
-		if len(conversations) > labelingDuplicateLinkMax {
-			p.frequent[hash] = true
-			stats["frequent_texts"]++
-			continue
-		}
-		for _, conversation := range conversations[1:] {
-			union(conversations[0], conversation)
-		}
-		if len(conversations) > 1 {
-			stats["linked_texts"]++
-		}
-	}
 	smallest, first, old := map[string]string{}, map[string]string{}, map[string]map[string]bool{}
 	oldBy := map[string]string{} // family root: split of its smallest previously assigned member
 	sorted := slices.Clone(ids)

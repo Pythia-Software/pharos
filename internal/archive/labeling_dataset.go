@@ -33,7 +33,7 @@ CREATE TABLE pieces(
 CREATE TABLE items(
   id TEXT PRIMARY KEY, unit_id TEXT NOT NULL, chunk_index INTEGER NOT NULL, chunk_count INTEGER NOT NULL,
   visible_start INTEGER NOT NULL, visible_end INTEGER NOT NULL, text TEXT NOT NULL, chars INTEGER NOT NULL, source_ranges TEXT NOT NULL,
-  target_hash TEXT NOT NULL, cross_split_duplicate INTEGER NOT NULL DEFAULT 0);
+  target_hash TEXT NOT NULL, cross_split_duplicate INTEGER NOT NULL DEFAULT 0, seen_in_train INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX items_hash_idx ON items(target_hash);
 CREATE INDEX items_unit_idx ON items(unit_id);
 CREATE TABLE sentences(
@@ -203,12 +203,7 @@ func (w *labelingWriter) duplicate(message, of, relation string) error {
 }
 
 // finish records families and splits, stores the manifest, and commits.
-func (w *labelingWriter) finish(families map[string]labelingFamily, crossSplit map[string]bool, manifest map[string]any) error {
-	for hash := range crossSplit {
-		if err := w.exec(`UPDATE items SET cross_split_duplicate=1 WHERE target_hash=?`, hash); err != nil {
-			return err
-		}
-	}
+func (w *labelingWriter) finish(families map[string]labelingFamily, crossSplit, seenInTrain map[string]bool, manifest map[string]any) error {
 	for conversation, family := range families {
 		if err := w.exec(`INSERT INTO families(conversation_id,family_id,split,first_at) VALUES(?,?,?,?)`, conversation, family.id, family.split, nilIfEmpty(family.first)); err != nil {
 			return err
@@ -216,6 +211,12 @@ func (w *labelingWriter) finish(families map[string]labelingFamily, crossSplit m
 	}
 	if err := w.exec(`UPDATE units SET family_id=f.family_id,split=f.split FROM families f WHERE f.conversation_id=units.conversation_id`); err != nil {
 		return err
+	}
+	for hash := range crossSplit {
+		if err := w.exec(`UPDATE items SET cross_split_duplicate=1,
+			seen_in_train=(?2 AND (SELECT split FROM units WHERE units.id=items.unit_id)<>'train') WHERE target_hash=?1`, hash, seenInTrain[hash]); err != nil {
+			return err
+		}
 	}
 	data, err := json.Marshal(manifest)
 	if err != nil {

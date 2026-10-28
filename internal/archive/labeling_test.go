@@ -278,11 +278,25 @@ func TestLabelingPrepareBuildsTheDatasetWithoutWritingTheCatalog(t *testing.T) {
 	if unverified := labelingRows(t, db, `SELECT p.status FROM pieces p JOIN units u ON u.id=p.unit_id WHERE u.message_id='m-n3' AND p.status='reused_unverified' AND p.role='context'`); len(unverified) == 0 {
 		t.Error("the re-sent log is not unverified context")
 	}
-	// Identical long automated prompts are one family; the sub-agent's
-	// exchange stays out of the main session's context.
-	if units["m-d1"]["family_id"] != units["m-d2"]["family_id"] {
-		t.Error("identical prompts are in different families")
+	// Identical prompts do not link families; their items are flagged when
+	// they span splits, and a held-out copy of a training text is seen_in_train.
+	if units["m-d1"]["family_id"] == units["m-d2"]["family_id"] {
+		t.Error("identical prompts were linked into one family")
 	}
+	daily := labelingRows(t, db, `SELECT i.target_hash,i.cross_split_duplicate,i.seen_in_train,u.split FROM items i JOIN units u ON u.id=i.unit_id
+		WHERE u.message_id IN ('m-d1','m-d2') ORDER BY u.message_id`)
+	if len(daily) != 2 || daily[0]["target_hash"] != daily[1]["target_hash"] {
+		t.Fatalf("daily items = %v", daily)
+	}
+	differ := daily[0]["split"] != daily[1]["split"]
+	for index, row := range daily {
+		other := daily[1-index]
+		seen := differ && row["split"] != "train" && other["split"] == "train"
+		if (integer(row["cross_split_duplicate"]) == 1) != differ || (integer(row["seen_in_train"]) == 1) != seen {
+			t.Errorf("duplicate flags %v (other %v)", row, other)
+		}
+	}
+	// The sub-agent's exchange stays out of the main session's context.
 	if firstString(units["m-sub2"]["context_text"]) != "Previous user request:\nCheck the CSS files for media queries" {
 		t.Errorf("sub-agent context = %q", units["m-sub2"]["context_text"])
 	}
@@ -591,12 +605,19 @@ func TestLabelingSplitsFromAnEarlierDataset(t *testing.T) {
 	if _, err := db.Exec(`UPDATE families SET split=CASE WHEN conversation_id='c-fork' THEN 'test' ELSE 'train' END WHERE conversation_id IN ('c-root','c-fork')`); err != nil {
 		t.Fatal(err)
 	}
+	// The identical daily prompt, once in train and once in test.
+	if _, err := db.Exec(`UPDATE families SET split=CASE WHEN conversation_id='c-daily1' THEN 'train' ELSE 'test' END WHERE conversation_id IN ('c-daily1','c-daily2')`); err != nil {
+		t.Fatal(err)
+	}
 	db.Close()
 	manifest, err = prepareLabeling(context.Background(), labelingPrepareOptions{CatalogPath: catalog.Path, Live: true, DryRun: true, FreshDays: 14, Now: now, SplitsFrom: first})
 	if err != nil {
 		t.Fatal(err)
 	}
 	splits = manifest["splits"].(map[string]any)
+	if seen := splits["cross_split_duplicates"].(map[string]any)["seen_in_train"].(map[string]int); seen["test"] != 1 {
+		t.Fatalf("seen in train = %v", seen)
+	}
 	if splits["assignment"].(map[string]int)["quarantined_conversations"] == 0 || splits["coverage"].(map[string]map[string]map[string]int)["cohort"]["human"]["quarantine"] == 0 {
 		t.Fatalf("conflicting splits = %v", splits)
 	}
@@ -707,21 +728,5 @@ func TestLabelingPrepareChoosesItsSourceExplicitly(t *testing.T) {
 	}
 	if _, err := prepareLabeling(context.Background(), labelingPrepareOptions{CatalogPath: catalog.Path, DryRun: true}); err == nil {
 		t.Fatal("prepared without choosing a copy or the live catalog")
-	}
-}
-
-func TestLabelingCommonTextsDoNotLinkFamilies(t *testing.T) {
-	catalog, _ := testCatalog(t)
-	seedLabelingCatalog(t, catalog)
-	// The daily prompt is in two conversations; with a limit of one it is
-	// boilerplate: flagged, not linked.
-	override(t, &labelingDuplicateLinkMax, 1)
-	manifest, err := prepareLabeling(context.Background(), labelingPrepareOptions{CatalogPath: catalog.Path, Live: true, DryRun: true, Conversations: []string{"c-daily1", "c-daily2"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	splits := manifest["splits"].(map[string]any)
-	if splits["assignment"].(map[string]int)["frequent_texts"] != 1 || splits["family_sizes"].(map[string]any)["families_with_units"] != 2 {
-		t.Fatalf("splits = %v", splits)
 	}
 }
