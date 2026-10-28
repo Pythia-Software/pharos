@@ -565,12 +565,13 @@ func TestAskModelCatalogs(t *testing.T) {
 	if len(agy) != 1 || len(agy[0].Efforts) != 3 {
 		t.Fatalf("agy: %+v", agy)
 	}
-	for _, card := range askSections {
+	for _, card := range askSections() {
 		if !askSafeURL(card.Href) {
 			t.Errorf("invalid section %s", card.ID)
 		}
-		if _, err := siteLinkFromURL(card.Href); err != nil {
-			t.Errorf("section %s is not a site map page: %v", card.ID, err)
+		// The same page reached by url gets the same kind.
+		if byURL, err := askSiteCard(card.Href); err != nil || byURL.Kind != card.Kind {
+			t.Errorf("section %s (%s) by url: %+v %v", card.ID, card.Kind, byURL, err)
 		}
 	}
 }
@@ -1144,6 +1145,37 @@ func TestAskSiteLinkDestinations(t *testing.T) {
 		if answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC"); err == nil || !strings.HasSuffix(err.Error(), "try again") {
 			t.Errorf("%s: %+v accepted: %+v %v", name, destination, answer, err)
 		}
+	}
+}
+
+// A prebuilt card's own link is a destination too: its card's title, and a
+// link that reads back as the same card.
+func TestAskCardLinkDestination(t *testing.T) {
+	s := askTestServer(t)
+	site, cases := testSiteMap(t), readSiteCases(t)
+	given := cases.Cards[0]
+	days := 0
+	if given.Days != nil {
+		days = *given.Days
+	}
+	override(t, &askRunCLI, func(context.Context, askProvider, askSelection, string) ([]byte, error) {
+		return []byte(jsonText(map[string]any{"message": "This card shows it.", "destinations": []map[string]string{{"id": "", "url": given.URL, "description": ""}}, "lookup": askLookup{Kind: "none"}, "clarification": nil})), nil
+	})
+	answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC")
+	if err != nil || len(answer.Cards) != 1 {
+		t.Fatalf("answer: %+v %v", answer, err)
+	}
+	card := answer.Cards[0]
+	want := site.cardText(site.cardByID[given.ID].Title, days)
+	if card.Title != want || card.Kind != "Analyze" {
+		t.Fatalf("card %+v, want title %q", card, want)
+	}
+	state, err := siteLinkFromURL(card.Href)
+	if err != nil || state.Card != given.ID || state.Days != days {
+		t.Fatalf("%s reads back as %+v, %v", card.Href, state, err)
+	}
+	if again, err := site.build(state); err != nil || again != card.Href {
+		t.Fatalf("%s rebuilds as %s, %v", card.Href, again, err)
 	}
 }
 

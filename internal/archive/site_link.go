@@ -1557,6 +1557,11 @@ func (site *siteMap) cardText(text string, days int) string {
 	if days == 0 {
 		return text
 	}
+	// The card library writes "the last 1 days"; a link's title and summary
+	// read as prose.
+	if days == 1 {
+		text = strings.ReplaceAll(text, "{days} days", "1 day")
+	}
 	for token, value := range site.Cards.TextWindows[strconv.Itoa(days)] {
 		text = strings.ReplaceAll(text, token, value)
 	}

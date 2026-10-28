@@ -432,7 +432,7 @@ skills: []
 plugins: []
 commandExecutionPolicy: off
 ---
-Use only the pharos-ask MCP server for archived work and the supplied JSON navigation context for destinations and private history. Do not use other MCP servers or native tools.
+Use only the pharos-ask MCP server, for archived work and for site links (browse_site, then site_link); take section ids and private history from the supplied JSON context. Do not use other MCP servers or native tools.
 `
 		if err := os.WriteFile(filepath.Join(agentDir, "pharos-navigation.md"), []byte(agent), 0600); err != nil {
 			return nil, err

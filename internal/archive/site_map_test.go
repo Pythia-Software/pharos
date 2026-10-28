@@ -370,6 +370,21 @@ func mustQuery(t *testing.T, query string) string {
 	return token
 }
 
+// A card's text at a one-day window reads "the last 1 day", not "1 days".
+func TestSiteLinkWritesACardsOneDayWindowInTheSingular(t *testing.T) {
+	site := testSiteMap(t)
+	result, err := site.linkTool(map[string]any{"card": "tool-failures", "days": float64(1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary := result["summary"].(string); summary != "Recorded error calls started in the last 1 day, split by tool." {
+		t.Errorf("summary %q", summary)
+	}
+	if week, _ := site.linkTool(map[string]any{"card": "tool-failures", "days": float64(7)}); week["summary"] != "Recorded error calls started in the last 7 days, split by tool." {
+		t.Errorf("7-day summary %q", week["summary"])
+	}
+}
+
 func TestSiteLinkChangesACardAsItsDashboardDoes(t *testing.T) {
 	site := testSiteMap(t)
 	card := site.cardByID["human-word-total"]

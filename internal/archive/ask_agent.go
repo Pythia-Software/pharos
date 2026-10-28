@@ -88,18 +88,32 @@ func askValidateClarification(c *askClarification) error {
 // askSections are the top-level pages the prompt lists by id, so that
 // trivial navigation needs no tool call. Anything more specific is a site map
 // link the agent builds with browse_site and site_link (askSiteCard).
-var askSections = []askCard{
-	{ID: "home", Title: "Home", Description: "Your collected views and starting points", Kind: "Home", Href: "/"},
-	{ID: "search", Title: "Search past work", Description: "Search conversation text, files, and workspaces", Kind: "Library", Href: "/library"},
-	{ID: "cards", Title: "Card Library", Description: "Browse all questions and analysis views", Kind: "Library", Href: "/cards"},
-	{ID: "analyze", Title: "Analyze your work", Description: "Usage, tokens, costs, human effort, concurrency, tools, and MCP calls", Kind: "Analyze", Href: "/analyze"},
-	{ID: "findings", Title: "Opportunities to improve", Description: "Recurring patterns, instructions and agent failures", Kind: "Findings", Href: "/findings"},
-	{ID: "tl1", Title: "TL1 runs", Description: "Task outcomes, configurations, reviews, and follow-ups", Kind: "TL1", Href: "/tl1"},
-	{ID: "settings", Title: "App preferences", Description: "Configure Pharos", Kind: "Settings", Href: "/settings/preferences"},
-	{ID: "sources", Title: "Conversation sources", Description: "Configure the sources Pharos indexes", Kind: "Settings", Href: "/settings/sources"},
-	{ID: "sync", Title: "Capture and index", Description: "Refresh sources, automatic schedules and sync history", Kind: "Settings", Href: "/settings/sync"},
-	{ID: "ask-settings", Title: "Ask Pharos settings", Description: "Enable Ask Pharos, choose its default model, and manage invitations", Kind: "Settings", Href: "/settings/ask"},
-}
+var askSections = sync.OnceValue(func() []askCard {
+	sections := []askCard{
+		{ID: "home", Title: "Home", Description: "Your collected views and starting points", Href: "/"},
+		{ID: "search", Title: "Search past work", Description: "Search conversation text, files, and workspaces", Href: "/library"},
+		{ID: "cards", Title: "Card Library", Description: "Browse all questions and analysis views", Href: "/cards"},
+		{ID: "analyze", Title: "Analyze your work", Description: "Usage, tokens, costs, human effort, concurrency, tools, and MCP calls", Href: "/analyze"},
+		{ID: "findings", Title: "Opportunities to improve", Description: "Recurring patterns, instructions and agent failures", Href: "/findings"},
+		{ID: "tl1", Title: "TL1 runs", Description: "Task outcomes, configurations, reviews, and follow-ups", Href: "/tl1"},
+		{ID: "settings", Title: "App preferences", Description: "Configure Pharos", Href: "/settings/preferences"},
+		{ID: "sources", Title: "Conversation sources", Description: "Configure the sources Pharos indexes", Href: "/settings/sources"},
+		{ID: "sync", Title: "Capture and index", Description: "Refresh sources, automatic schedules and sync history", Href: "/settings/sync"},
+		{ID: "ask-settings", Title: "Ask Pharos settings", Description: "Enable Ask Pharos, choose its default model, and manage invitations", Href: "/settings/ask"},
+	}
+	// A section's kind is its page's section, as it is for the same page
+	// reached by url (askSiteCard).
+	site, err := loadedSiteMap()
+	for i := range sections {
+		sections[i].Kind = "Pharos"
+		if err == nil {
+			if state, err := site.parseURL(sections[i].Href); err == nil {
+				sections[i].Kind = site.section(state.Page)
+			}
+		}
+	}
+	return sections
+})
 
 // askSiteCard reads a link the agent returned through site_link's {url}
 // path and returns the card for its canonical form: the rebuilt URL, the
@@ -163,7 +177,7 @@ func (s *Server) answerAsk(ctx context.Context, p askProvider, session askSessio
 	}
 	allowed := map[string]askCard{}
 	sections := []map[string]string{}
-	for _, card := range askSections {
+	for _, card := range askSections() {
 		allowed[card.ID] = card
 		sections = append(sections, map[string]string{"id": card.ID, "title": card.Title, "description": card.Description, "viewKey": askViewOf(card.Href).Key})
 	}
