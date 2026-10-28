@@ -3,7 +3,6 @@ package archive
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -91,10 +90,7 @@ func OpenCatalogForQuery(path string) (*Catalog, error) {
 	if _, err := os.Stat(path); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", catalogDSN(path))
-	if err != nil {
-		return nil, err
-	}
+	db := openCatalogDB(path, catalogDSN(path), "catalog")
 	db.SetMaxOpenConns(4)
 	db.SetMaxIdleConns(4)
 	catalog := &Catalog{Path: path, DB: db, queryOnly: true}
@@ -121,10 +117,7 @@ func openCatalogReadOnly(path string) (*Catalog, error) {
 	if _, err := os.Stat(path); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", readerDSN(path))
-	if err != nil {
-		return nil, err
-	}
+	db := openCatalogDB(path, readerDSN(path), "reader")
 	db.SetMaxOpenConns(4)
 	db.SetMaxIdleConns(4)
 	catalog := &Catalog{Path: path, DB: db, queryOnly: true, readOnly: true}
