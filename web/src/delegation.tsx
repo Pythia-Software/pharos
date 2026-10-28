@@ -3,6 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { createPortal } from "react-dom";
 import { preferences } from "./preferences";
 import { Icon } from "./icons";
+import { delegationRouteValues, readDelegationRoute, type DelegationRoute } from "./delegation-route";
 import "./delegation.css";
 
 // reader-model.js loads before the bundle and also supplies turn ages.
@@ -432,19 +433,13 @@ export function DelegationExplorer({
 }: Props) {
   const contentID = useId();
   const endpoint = `/api/work/${encodeURIComponent(workspace)}`;
-  const initial = new URLSearchParams(location.search);
-  const [open, setOpen] = useState(initial.get("sessions") !== "hidden");
-  const [tab, setTab] = useState(
-    initial.get("explorer") === "parallel" ? "parallel" : "table",
-  );
-  const [mode, setMode] = useState(
-    initial.get("delegation_mode") === "rank" ? "rank" : "hierarchy",
-  );
-  const [sort, setSort] = useState(initial.get("delegation_sort") || "tokens"),
-    [scope, setScope] = useState(initial.get("delegation_scope") || "all"),
-    [direction, setDirection] = useState(
-      initial.get("delegation_direction") || "desc",
-    );
+  const initial = readDelegationRoute(new URLSearchParams(location.search));
+  const [open, setOpen] = useState(initial.open);
+  const [tab, setTab] = useState<string>(initial.tab);
+  const [mode, setMode] = useState<DelegationRoute["mode"]>(initial.mode);
+  const [sort, setSort] = useState(initial.sort),
+    [scope, setScope] = useState(initial.scope),
+    [direction, setDirection] = useState(initial.direction);
   const [tint, setTint] = useState<Tint>(
     preferences().get("pharos-delegation-tint", "all"),
   );
@@ -463,34 +458,29 @@ export function DelegationExplorer({
       preferences().get("pharos-delegation-columns", defaultColumns),
     ),
   );
-  const [collapsed, setCollapsed] = useState<Set<string>>(
-    new Set(
-      (initial.get("delegation_collapsed") || "").split(",").filter(Boolean),
-    ),
-  );
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set(initial.collapsed));
   const [cursor, setCursor] = useState(""),
     [pages, setPages] = useState<string[]>([]);
   const [data, setData] = useState<Analysis | null>(null),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0),
-    [selected, setSelected] = useState(initial.get("delegation_session") || "");
+    [selected, setSelected] = useState(initial.selected);
   const [range, setRange] = useState<Range | null>(null);
   useEffect(() => {
     const restore = () => {
-      const params = new URLSearchParams(location.search);
-      setSelected(params.get("delegation_session") || "");
-      setTab(params.get("explorer") === "parallel" ? "parallel" : "table");
-      setOpen(params.get("sessions") !== "hidden");
-      setMode(params.get("delegation_mode") === "rank" ? "rank" : "hierarchy");
-      setSort(params.get("delegation_sort") || "tokens");
-      setScope(params.get("delegation_scope") || "all");
-      setDirection(params.get("delegation_direction") || "desc");
-      setCollapsed(new Set((params.get("delegation_collapsed") || "").split(",").filter(Boolean)));
+      const route = readDelegationRoute(new URLSearchParams(location.search));
+      setSelected(route.selected);
+      setTab(route.tab);
+      setOpen(route.open);
+      setMode(route.mode);
+      setSort(route.sort);
+      setScope(route.scope);
+      setDirection(route.direction);
+      setCollapsed(new Set(route.collapsed));
       setCursor("");
       setPages([]);
-      const from = Number(params.get("delegation_start")), to = Number(params.get("delegation_end"));
-      setRange(params.has("delegation_start") && to > from ? [from, to] : null);
+      setRange(route.range);
     };
     window.addEventListener("pharos:workspace-history", restore);
     return () => window.removeEventListener("pharos:workspace-history", restore);
@@ -522,14 +512,8 @@ export function DelegationExplorer({
                       body.start!,
                       Math.max(body.start! + 1, body.end!),
                     ];
-                    const from = Number(initial.get("delegation_start")),
-                      to = Number(initial.get("delegation_end"));
-                    return !data &&
-                      initial.has("delegation_start") &&
-                      Number.isFinite(from) &&
-                      Number.isFinite(to) &&
-                      to > from
-                      ? clampRange([from, to], full)
+                    return !data && initial.range && initial.range.every(Number.isFinite)
+                      ? clampRange(initial.range, full)
                       : full;
                   })()
                 : null,
@@ -566,20 +550,7 @@ export function DelegationExplorer({
   useEffect(() => {
     if (!data) return;
     const url = new URL(location.href);
-    const values: Record<string, string> = {
-      delegation_mode: mode,
-      delegation_sort: mode === "rank" ? sort : "",
-      delegation_scope: mode === "rank" ? scope : "",
-      delegation_direction: mode === "rank" ? direction : "",
-      delegation_search: "",
-      delegation_collapsed: [...collapsed].sort().join(","),
-      delegation_session: selected,
-      delegation_matching: "",
-    };
-    if (range) {
-      values.delegation_start = String(range[0]);
-      values.delegation_end = String(range[1]);
-    }
+    const values = delegationRouteValues({ mode, sort, scope, direction, collapsed: [...collapsed], selected, range });
     for (const [key, value] of Object.entries(values)) {
       if (value) url.searchParams.set(key, value);
       else url.searchParams.delete(key);
