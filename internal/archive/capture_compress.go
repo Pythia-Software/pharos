@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -24,8 +25,9 @@ import (
 // backfill, pins and transfer, all of which decode them first. Phase 2:
 // earlier versions of captured files, and cold latest transcripts that the
 // index has recorded and reads again only when they change; adapters read
-// them through the capture view (capture_fs.go). Each is stored
-// zstd-compressed under its own name.
+// them through the capture view (capture_fs.go). Phase 3: idle latest
+// database snapshots their adapter does not open on every index
+// (snapshotReader). Each is stored zstd-compressed under its own name.
 //
 // Order, for one file:
 //
@@ -103,6 +105,17 @@ func compressCaptures(ctx context.Context, config Config, catalog *Catalog, done
 		return nil
 	}
 	policy := compressPolicy{afterDays: config.CaptureCompressAfterDays, now: time.Now()}
+	adapters := map[string]Adapter{}
+	policy.readEveryIndex = func(source, rel string) bool {
+		target := captureTarget{Host: host, Source: source, Dir: filepath.Join(config.CaptureRoot, host.ID, source)}
+		adapter, ok := adapters[source]
+		if !ok {
+			adapter, _, _, _ = openCaptureAdapter(target)
+			adapters[source] = adapter
+		}
+		reader, ok := adapter.(snapshotReader)
+		return !ok || reader.readsEveryIndex(filepath.Join(target.Dir, filepath.FromSlash(rel)))
+	}
 	if catalog != nil {
 		// Recorded by the current extractor: after an extractor change the
 		// next index parses every part again, so nothing is cold until then.
@@ -118,6 +131,18 @@ func compressCaptures(ctx context.Context, config Config, catalog *Catalog, done
 			}
 			extractors[source] = value
 			return value
+		}
+		policy.indexCurrent = func(source string) bool {
+			current := extractor(source)
+			if current == "" {
+				return false
+			}
+			own, offHost := extractorVariants(current)
+			var recorded sql.NullString
+			if err := catalog.DB.QueryRowContext(ctx, "SELECT index_version FROM source_states WHERE host_id=? AND source_name=?", host.ID, source).Scan(&recorded); err != nil {
+				return false
+			}
+			return recorded.String == own || recorded.String == offHost
 		}
 		policy.indexed = func(source, item string, size, version int64) bool {
 			current := extractor(source)
@@ -167,6 +192,22 @@ type compressPolicy struct {
 	// indexed reports that source_item_states holds this exact version of a
 	// part, so the next index will not read it; nil (no catalog) is never.
 	indexed func(source, item string, size, version int64) bool
+	// readEveryIndex reports that the source's adapter opens the captured
+	// database at rel whenever its capture is indexed, changed or not
+	// (snapshotReader); nil keeps every latest snapshot uncompressed.
+	readEveryIndex func(source, rel string) bool
+	// indexCurrent reports that the source's last index ran the current
+	// index version (by this Mac or another), so the index will not read
+	// everything again; nil (no catalog) is never.
+	indexCurrent func(source string) bool
+}
+
+// snapshotReader is how an adapter says which of its captured databases its
+// index opens on every run, whether or not they changed: those must stay
+// uncompressed, or every index would decode them (phase 3). An adapter
+// without it is taken to read them all.
+type snapshotReader interface {
+	readsEveryIndex(path string) bool
 }
 
 // extractorVariants is an index version as this Mac's index records it and
@@ -201,6 +242,7 @@ type compressCandidate struct {
 func compressCandidates(manifest *captureManifest) []compressCandidate {
 	candidates := []compressCandidate{}
 	for _, snapshot := range manifest.Snapshots {
+		candidates = append(candidates, compressCandidate{kind: "snapshot", database: snapshot.Path, v: snapshot.version()})
 		for _, generation := range snapshot.Generations {
 			candidates = append(candidates, compressCandidate{kind: "generation", database: snapshot.Path, v: generation})
 		}
@@ -238,6 +280,14 @@ func (c compressCandidate) locate(manifest *captureManifest) (capturedVersion, f
 				}, true
 			}
 		}
+	case "snapshot":
+		for _, snapshot := range manifest.Snapshots {
+			if snapshot.Captured == c.v.Captured && snapshot.Path == c.database {
+				return snapshot.version(), func(encoding string, stored int64, hash string) {
+					snapshot.Encoding, snapshot.StoredSize, snapshot.SHA256 = encoding, stored, hash
+				}, true
+			}
+		}
 	}
 	return capturedVersion{}, nil, false
 }
@@ -263,6 +313,12 @@ func (c compressCandidate) eligible(dir string, manifest *captureManifest, polic
 			}
 		}
 		return file != nil && coldLatest(dir, manifest, file, policy)
+	case "snapshot":
+		for _, snapshot := range manifest.Snapshots {
+			if snapshot.Captured == c.v.Captured && snapshot.Path == c.database {
+				return idleSnapshot(dir, manifest, snapshot, policy)
+			}
+		}
 	}
 	return false
 }
@@ -280,6 +336,43 @@ func lastRunSaw(run *captureRunRecord, path string) bool {
 		}
 	}
 	return true
+}
+
+// idleSnapshot is whether a latest database snapshot is idle: its recorded
+// source state (database and WAL mtimes) is older than policy.afterDays, the
+// last capture found it unchanged (or it left its source), the index marker
+// covers it, it is not pinned, and its adapter does not open it on every
+// index (snapshotReader). SQLite-record sources are left out: their capture
+// exports the latest snapshot on every run.
+func idleSnapshot(dir string, manifest *captureManifest, snapshot *capturedSnapshot, policy compressPolicy) bool {
+	if policy.afterDays <= 0 || policy.readEveryIndex == nil || policy.indexCurrent == nil || manifest.SQLiteRecordCapture || snapshot.Encoding != "" || snapshot.Size < compressMinBytes {
+		return false
+	}
+	changed := snapshot.Source.version()
+	if changed <= 0 || time.Unix(0, changed).After(policy.now.AddDate(0, 0, -policy.afterDays)) {
+		return false
+	}
+	if snapshot.MissingSince == "" {
+		run := manifest.LastRun
+		if !lastRunSaw(run, snapshot.Path) {
+			return false
+		}
+		captured, ok := parseTime(snapshot.CapturedAt)
+		started, ok2 := parseTime(run.StartedAt)
+		if !ok || !ok2 || !captured.Before(started) {
+			return false // taken by the last capture: not yet seen unchanged
+		}
+	}
+	if marker := loadIndexMarker(dir); !marker.exists || !marker.has(snapshot.Path, snapshot.CapturedAt) {
+		return false
+	}
+	if pinnedOrUnknown(dir, snapshot.Captured) {
+		return false
+	}
+	if !policy.indexCurrent(manifest.Source.Name) {
+		return false // the next index reads every database again
+	}
+	return !policy.readEveryIndex(manifest.Source.Name, snapshot.Captured)
 }
 
 func pinnedOrUnknown(dir, rel string) bool {
@@ -577,6 +670,9 @@ func correctUnrenamedEntries(ctx context.Context, target captureTarget) error {
 			return stored, stored.Encoding != v.Encoding
 		}
 		for _, snapshot := range manifest.Snapshots {
+			if stored, changed := plain(snapshot.version()); changed {
+				snapshot.Encoding, snapshot.StoredSize, found = stored.Encoding, stored.StoredSize, true
+			}
 			for i, generation := range snapshot.Generations {
 				if stored, changed := plain(generation); changed {
 					snapshot.Generations[i], found = stored, true

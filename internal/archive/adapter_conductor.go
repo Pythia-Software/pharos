@@ -183,8 +183,16 @@ func openReadOnlySQLite(path string) (*sql.DB, error) {
 	return db, nil
 }
 
+// readsEveryIndex: Conductor keeps one database, which every plan reads to
+// list its sessions, and the generations' index diffs against it.
+func (a *conductorAdapter) readsEveryIndex(string) bool { return true }
+
 func (a *conductorAdapter) database(path string, selected map[string]bool, unchanged func([]sourcePart) bool, emit func(*WorkspaceRecord, []sourcePart) error) error {
-	db, err := openReadOnlySQLite(path)
+	readable, err := a.files().Database(path)
+	if err != nil {
+		return err
+	}
+	db, err := openReadOnlySQLite(readable)
 	if err != nil {
 		return err
 	}

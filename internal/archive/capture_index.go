@@ -484,9 +484,14 @@ func (c *Catalog) indexGenerations(ctx context.Context, adapter Adapter, view *c
 		handled := map[string]bool{}
 		latest := filepath.Join(view.dir, filepath.FromSlash(snapshot.Captured))
 		if _, err := os.Stat(latest); !errors.Is(err, fs.ErrNotExist) {
-			var err error
-			handled, err = conductorSessionIDs(latest)
+			// Through the view, as every database reader: Conductor declares
+			// its database read on every index, so it is not compressed, but
+			// a capture whose latest snapshot is still reads correctly.
+			readable, err := view.materialize(ctx, snapshot.Captured)
 			if err != nil {
+				return err
+			}
+			if handled, err = conductorSessionIDs(readable); err != nil {
 				return err
 			}
 		}
@@ -528,7 +533,7 @@ func (c *Catalog) indexGenerations(ctx context.Context, adapter Adapter, view *c
 				reportWork(ctx, "indexing retained snapshots", "snapshot", generationIndex+1, len(snapshot.Generations))
 				continue
 			}
-			older := &captureView{host: view.host, dir: view.dir, manifest: view.manifest, mappings: []capturePathMapping{{Original: snapshot.Path, Captured: file}}}
+			older := &captureView{host: view.host, dir: view.dir, manifest: view.manifest, lease: view.lease, decoded: view.decoded, mappings: []capturePathMapping{{Original: snapshot.Path, Captured: file}}}
 			config := conductor.config
 			config.Path = file
 			reader := &conductorAdapter{baseAdapter: baseAdapter{config: config, capability: conductor.capability, view: older}, selected: missing}

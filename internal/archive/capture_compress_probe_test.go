@@ -167,3 +167,66 @@ type countingWriter struct{ n int64 }
 func (c *countingWriter) Write(b []byte) (int, error) { c.n += int64(len(b)); return len(b), nil }
 
 func gb(n int64) float64 { return float64(n) / 1e9 }
+
+// TestCaptureCompressionIdleSnapshotProbe measures what phase 3 would save on
+// a plain file copy of one captured source (its directory, with manifest.json
+// and files/): the latest snapshots its adapter does not read on every index
+// (snapshotReader) and whose recorded source state is older than 14 days, at
+// zstd level 3. It reads the manifest and the snapshot bytes only; it opens
+// nothing with SQLite and writes nothing.
+//
+//	cp -Rc "<backup>/captures/<host>/antigravity-cli" /Volumes/euclid/.pharos-snapshot-sample/antigravity-cli
+//	PHAROS_COMPRESS_SNAPSHOT_SAMPLE=/Volumes/euclid/.pharos-snapshot-sample/antigravity-cli \
+//	  go test -tags probe ./internal/archive -run TestCaptureCompressionIdleSnapshotProbe -v -timeout 60m
+func TestCaptureCompressionIdleSnapshotProbe(t *testing.T) {
+	dir := os.Getenv("PHAROS_COMPRESS_SNAPSHOT_SAMPLE")
+	if dir == "" {
+		t.Skip("set PHAROS_COMPRESS_SNAPSHOT_SAMPLE to a copy of a captured source")
+	}
+	manifest, err := loadCaptureManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := captureTarget{Host: manifest.Host, Source: manifest.Source.Name, Dir: dir}
+	adapter, _, _, err := openCaptureAdapter(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, _ := adapter.(snapshotReader)
+	cold := time.Now().AddDate(0, 0, -14)
+	var all, idle, idleStored, everyIndex int64
+	var idleCount int
+	started := time.Now()
+	for _, snapshot := range manifest.Snapshots {
+		all += snapshot.Size
+		path := filepath.Join(dir, filepath.FromSlash(snapshot.Captured))
+		if reader == nil || reader.readsEveryIndex(path) {
+			everyIndex += snapshot.Size
+			continue
+		}
+		if changed := snapshot.Source.version(); changed <= 0 || !time.Unix(0, changed).Before(cold) {
+			continue
+		}
+		in, err := os.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var counter countingWriter
+		encoder, err := zstd.NewWriter(&counter, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(captureCompressLevel)), zstd.WithEncoderConcurrency(captureCompressThreads))
+		if err == nil {
+			_, err = io.Copy(encoder, in)
+		}
+		if err == nil {
+			err = encoder.Close()
+		}
+		in.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		idleCount++
+		idle += snapshot.Size
+		idleStored += counter.n
+	}
+	t.Logf("%s (%s): %d latest snapshots, %.2f GB; read every index %.2f GB; idle 14+ days %d snapshots %.2f GB -> %.2f GB (%.1fx), saving %.2f GB; %s",
+		manifest.Source.Name, manifest.Source.Kind, len(manifest.Snapshots), gb(all), gb(everyIndex), idleCount, gb(idle), gb(idleStored), float64(idle)/float64(max(idleStored, 1)), gb(idle-idleStored), time.Since(started).Round(time.Second))
+}

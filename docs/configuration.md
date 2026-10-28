@@ -787,6 +787,16 @@ reads; a normal index over unchanged files decodes nothing. A transcript that
 changes again is captured in full and uncompressed, and its compressed copy
 moves to `history/` if it was rewritten.
 
+Latest database snapshots are compressed the same way once idle: their source
+database has not changed for `capture_compress_after_days`, the last capture
+found them unchanged, and the index has read them. A database the source's
+index opens on every run stays uncompressed: Conductor's, Codex's naming
+databases, Antigravity's summaries and TL1's installation databases. In
+practice that leaves Antigravity's per-conversation request databases, which
+an index reads only to parse their conversation, decoding them into its
+temporary reader directory. A database that changes again is captured afresh,
+uncompressed.
+
 **Low impact.** The capture's disk I/O runs in the utility I/O tier on its own
 thread, yielding to interactive work without the background tier's long stalls,
 while the service's other requests keep their priority. Copies stream through

@@ -22,6 +22,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -972,6 +973,29 @@ func (s *recordStore) exportSQLite(file, original, entity string, state sqliteSo
 	return ref, err
 }
 
+// verifiedObjects are record objects this process has read back whole
+// (walkObject checks length and digest), by path.
+var verifiedObjects sync.Map
+
+// storedObject reports that ref's object is stored and intact, reading it
+// back the first time this process sees it.
+func (s *recordStore) storedObject(ref recordObject) bool {
+	path := s.objectPath(ref.Hash)
+	if _, ok := verifiedObjects.Load(path); ok {
+		if _, err := os.Stat(path); err == nil {
+			return true
+		}
+	}
+	if _, err := os.Stat(path); err != nil {
+		return false
+	}
+	if s.walkObject(ref, func(io.Reader) error { return nil }) != nil {
+		return false
+	}
+	verifiedObjects.Store(path, true)
+	return true
+}
+
 func (s *recordStore) dependencies() ([]recordDependency, error) {
 	if s.c.recordDependenciesLoaded {
 		return s.c.recordDependencies, nil
@@ -986,6 +1010,16 @@ func (s *recordStore) dependencies() ([]recordDependency, error) {
 		// Hashes and the stored object describe the original bytes.
 		file := filepath.Join(s.c.dir, filepath.FromSlash(f.Captured))
 		encoding := s.c.encodingOf(f.Captured)
+		// An encoded file is unchanged since it was compressed, when its
+		// digest was verified by decoding: once its object is stored, it is
+		// not decoded again on every capture.
+		if encoding != "" && f.SHA256 != "" {
+			ref := recordObject{Hash: f.SHA256, Length: f.Size, Encoding: "gzip"}
+			if s.storedObject(ref) {
+				deps = append(deps, recordDependency{Path: f.Path, Object: &ref, State: "retained", MTimeNS: f.MTimeNS, MissingSince: f.MissingSince})
+				continue
+			}
+		}
 		h, size, e := capturedSHA256(s.c.ctx, file, encoding)
 		if e != nil || h != f.SHA256 || size != f.Size {
 			return nil, errors.New("retained dependency changed or is unreadable")

@@ -1196,7 +1196,18 @@ func (s *Server) verifyAllInputs(ctx context.Context, runID string, progress fun
 			continue
 		}
 		for _, snapshot := range manifest.Snapshots {
-			handled, err := conductorSessionIDsContext(ctx, filepath.Join(view.dir, filepath.FromSlash(snapshot.Captured)))
+			// Leased (and decoded if stored encoded) like the generations.
+			latest, _, releaseLatest, err := leaseCapturedVersion(ctx, target, snapshot.Captured)
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) || errors.Is(err, errCaptureBusy) {
+					summary.Deferred++
+				} else {
+					summary.Errors++
+				}
+				continue
+			}
+			handled, err := conductorSessionIDsContext(ctx, latest)
+			releaseLatest()
 			if err != nil {
 				summary.Errors++
 				continue

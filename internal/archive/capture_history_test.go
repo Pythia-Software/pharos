@@ -1228,4 +1228,32 @@ func TestHistoryBackfillsCompressedFiles(t *testing.T) {
 	if j, err = runHistory(t.Context(), config, j.ID); err != nil || j.State != "exported" {
 		t.Fatal("backfill over compressed files", j.State, err)
 	}
+	// The pin of the compressed latest transcript copied it into history:
+	// that copy is listed, encoded, so planning again (the pins released or
+	// not) finds no orphan to reconcile.
+	copies := 0
+	for _, pin := range j.Protected {
+		if pin.Encoding != captureEncodingZstd || !strings.HasPrefix(pin.Path, captureHistoryDir+"/") {
+			continue
+		}
+		copies++
+		if v, ok := loadManifestForTest(t, filepath.Join(config.CaptureRoot, "host-a", "claude")).version(pin.Path); !ok || v.Encoding != captureEncodingZstd || v.SHA256 != pin.SHA256 {
+			t.Fatal("a pinned compressed copy is not listed", pin.Path)
+		}
+	}
+	if copies == 0 {
+		t.Fatal("fixture: no pinned compressed copy")
+	}
+	if err := releasePreservationOwner(filepath.Join(config.CaptureRoot, "host-a", "claude"), j.ID); err != nil {
+		t.Fatal(err)
+	}
+	again, err := planHistory(t.Context(), config, historyScope{Host: "host-a", Source: "claude"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range again.Units {
+		if u.Kind == "orphan-native" || u.Gap != "" && u.Kind == "file" {
+			t.Fatal("planning after the backfill found an unrecognised copy", u)
+		}
+	}
 }

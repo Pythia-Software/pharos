@@ -285,8 +285,12 @@ func (c *sourceCapture) pinVersion(owner, purpose string, v capturedVersion, dep
 		}
 		v.SHA256 = digest
 		v.Encoding = encoding
+		latest := v.Captured
 		v, err = c.pinHistoryVersion(v)
 		if err != nil {
+			return preservationPin{}, err
+		}
+		if err = c.recordPinnedCopy(latest, v); err != nil {
 			return preservationPin{}, err
 		}
 	}
@@ -478,6 +482,80 @@ func checkNativeSnapshotPause(dir string) error {
 		return errNativeSnapshotPaused
 	}
 	return nil
+}
+
+// recordPinnedCopy lists in the manifest the history copy a pin made of an
+// encoded latest file or snapshot, as an earlier version or a generation with
+// its encoding, stored size and digest. Unlisted, it would be an orphan
+// whose raw bytes no planner recognises, and the manifest's version could
+// fall below the one that describes it. A plain copy needs no entry: its
+// bytes are the original's. Listed last, it changes no retention order; the
+// next rotation of the same capture lands on the same name, and is not
+// listed twice.
+func (c *sourceCapture) recordPinnedCopy(latest string, v capturedVersion) error {
+	if v.Encoding == "" {
+		return nil
+	}
+	info, err := os.Stat(filepath.Join(c.dir, filepath.FromSlash(v.Captured)))
+	if err != nil {
+		return err
+	}
+	v.StoredSize = info.Size()
+	listed := false
+	if snapshot := c.snapshots[latest]; snapshot != nil {
+		v.Source = &snapshot.Source
+		snapshot.Generations, listed = insertGeneration(snapshot.Generations, v)
+	} else if file := c.files[latest]; file != nil {
+		v.Source = nil
+		file.Previous, listed = appendVersion(file.Previous, v)
+	}
+	if !listed {
+		return nil
+	}
+	return writeCaptureManifest(c.dir, c.manifest)
+}
+
+// appendVersion appends v unless versions already names its path.
+func appendVersion(versions []capturedVersion, v capturedVersion) ([]capturedVersion, bool) {
+	for _, existing := range versions {
+		if existing.Captured == v.Captured {
+			return versions, false
+		}
+	}
+	return append(versions, v), true
+}
+
+// insertGeneration lists v among generations, which are newest first, where
+// its captured_at places it (a pinned latest snapshot's copy is the newest),
+// unless they already name its path. Retention runs only after a rotation,
+// which lists the same name in the same place, so the order costs nothing.
+func insertGeneration(generations []capturedVersion, v capturedVersion) ([]capturedVersion, bool) {
+	for _, existing := range generations {
+		if existing.Captured == v.Captured {
+			return generations, false
+		}
+	}
+	at, _ := parseTime(v.CapturedAt)
+	index := len(generations)
+	for i, existing := range generations {
+		if captured, ok := parseTime(existing.CapturedAt); ok && captured.Before(at) {
+			index = i
+			break
+		}
+	}
+	return slices.Insert(slices.Clone(generations), index, v), true
+}
+
+// withoutVersion drops the entries naming path (a pinned copy that a
+// rotation now lists in its own place).
+func withoutVersion(versions []capturedVersion, path string) []capturedVersion {
+	kept := versions[:0:0]
+	for _, version := range versions {
+		if version.Captured != path {
+			kept = append(kept, version)
+		}
+	}
+	return kept
 }
 
 // Pinning cannot rename the latest input out from under its manifest on a

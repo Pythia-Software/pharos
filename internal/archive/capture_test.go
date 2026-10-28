@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -20,6 +22,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 func captureTestConfig(t *testing.T, sources ...SourceConfig) Config {
@@ -2100,5 +2104,110 @@ func TestDurableInputsIgnoreCompressionElsewhere(t *testing.T) {
 	inventory, err := loadCaptureManifest(filepath.Join(target.Dir, "inputs", revisions[0].Name()))
 	if err != nil || inventory.Version != capturePlainManifestVersion {
 		t.Fatal("files-only inventory stamped with another entry's version", inventory.Version, err)
+	}
+}
+
+// loadManifestForTest loads a capture manifest or fails the test.
+func loadManifestForTest(t *testing.T, dir string) *captureManifest {
+	t.Helper()
+	manifest, err := loadCaptureManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return manifest
+}
+
+// Rotation never leaves the bytes it supersedes linked nowhere: a file
+// already at the history name is kept only if it holds those bytes (a pin's
+// copy); anything else is moved aside, kept as evidence that planning reads
+// as an ordinary orphan, and capture keeps working.
+func TestCapturePreserveVerifiesWhatIsAlreadyAtTheName(t *testing.T) {
+	var encoded bytes.Buffer
+	writer, err := zstd.NewWriter(&encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer.Write([]byte(strings.Repeat("not this database ", 50)))
+	writer.Close()
+	for _, test := range []struct {
+		name     string
+		junk     func(size int64) []byte
+		noLinks  bool
+		keepsPin bool
+	}{
+		{name: "wrong-size junk", junk: func(int64) []byte { return []byte("junk") }},
+		{name: "same-size junk", junk: func(size int64) []byte { return make([]byte, size) }},
+		{name: "zstd with the wrong digest", junk: func(int64) []byte { return encoded.Bytes() }},
+		{name: "wrong-size junk without hard links", junk: func(int64) []byte { return []byte("junk") }, noLinks: true},
+		{name: "a pin's copy without hard links", noLinks: true, keepsPin: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			useHost(t, "host-a")
+			_, config := testCatalog(t)
+			config.CaptureRoot = filepath.Join(t.TempDir(), "captures")
+			dir := filepath.Join(t.TempDir(), "conductor")
+			exec := conductorFixture(t, dir)
+			exec(addConductorSession("first", 1)...)
+			config.Sources = []SourceConfig{{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true}}
+			runCapture(t, config)
+			latest := readCaptureManifest(t, config, "conductor").Snapshots[0]
+			original, size, err := fileSHA256(capturedPath(config, "conductor", latest.Captured))
+			if err != nil {
+				t.Fatal(err)
+			}
+			stamp, _ := time.Parse(time.RFC3339Nano, latest.CapturedAt)
+			name := path.Join(captureHistoryDir, stamp.UTC().Format(captureStampLayout), "conductor.db")
+			at := capturedPath(config, "conductor", name)
+			var junk []byte
+			if test.keepsPin {
+				// A copy made where hard links are unavailable: same bytes,
+				// another inode.
+				if junk, err = os.ReadFile(capturedPath(config, "conductor", latest.Captured)); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				junk = test.junk(size)
+			}
+			writeSourceFile(t, at, string(junk))
+			before, _ := os.Stat(at)
+			if test.noLinks {
+				override(t, &historyLinkFile, func(string, string) error { return errors.New("operation not supported") })
+			}
+			exec(addConductorSession("second", 1)...)
+			if run := runCapture(t, config); !run.OK {
+				t.Fatal(run)
+			}
+			generation := readCaptureManifest(t, config, "conductor").Snapshots[0].Generations[0]
+			if sum, n, err := fileSHA256(at); generation.Captured != name || generation.Encoding != "" || err != nil || n != size || sum != original {
+				t.Fatalf("the superseded snapshot did not survive at %s: %+v", name, generation)
+			}
+			conflict := at + ".conflict-1"
+			if test.keepsPin {
+				if after, _ := os.Stat(at); !os.SameFile(before, after) {
+					t.Fatal("rotation replaced a pin's copy")
+				}
+				if _, err := os.Stat(conflict); !os.IsNotExist(err) {
+					t.Fatal("a matching copy was moved aside", err)
+				}
+			} else if kept, err := os.ReadFile(conflict); err != nil || string(kept) != string(junk) {
+				t.Fatal("what was at the name was not kept aside", err)
+			}
+			if err := validateCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
+				t.Fatal(err)
+			}
+			plan, err := planHistory(t.Context(), config, historyScope{Host: "host-a", Source: "conductor"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, u := range plan.Units {
+				if u.Gap != "" && u.Path != "" {
+					t.Fatal("planning found a failing unit", u)
+				}
+			}
+			exec(addConductorSession("third", 1)...)
+			if run := runCapture(t, config); !run.OK {
+				t.Fatal("a later capture failed", run)
+			}
+		})
 	}
 }

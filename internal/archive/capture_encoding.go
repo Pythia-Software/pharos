@@ -74,6 +74,9 @@ func (m *captureManifest) writerVersion() int {
 		}
 	}
 	for _, snapshot := range m.Snapshots {
+		if snapshot.Encoding != "" {
+			version = max(version, captureSnapshotsVersion)
+		}
 		for _, generation := range snapshot.Generations {
 			if generation.Encoding != "" {
 				version = max(version, captureGenerationsVersion)
@@ -104,7 +107,7 @@ func (m *captureManifest) version(rel string) (*capturedVersion, bool) {
 }
 
 // entry is any captured file at rel that may be stored encoded: a latest
-// file, an earlier version or a snapshot generation.
+// file or snapshot, an earlier version or a snapshot generation.
 func (m *captureManifest) entry(rel string) (capturedVersion, bool) {
 	if v, ok := m.version(rel); ok {
 		return *v, true
@@ -112,6 +115,11 @@ func (m *captureManifest) entry(rel string) (capturedVersion, bool) {
 	for _, file := range m.Files {
 		if file.Captured == rel {
 			return file.version(), true
+		}
+	}
+	for _, snapshot := range m.Snapshots {
+		if snapshot.Captured == rel {
+			return snapshot.version(), true
 		}
 	}
 	return capturedVersion{}, false
@@ -130,6 +138,10 @@ func (c *sourceCapture) encodingOf(rel string) string {
 func (c *sourceCapture) storedVersion(rel string) (capturedVersion, bool) {
 	var found *capturedVersion
 	for _, snapshot := range c.snapshots {
+		if snapshot.Captured == rel {
+			v := snapshot.version()
+			found = &v
+		}
 		for i := range snapshot.Generations {
 			if snapshot.Generations[i].Captured == rel {
 				found = &snapshot.Generations[i]
@@ -153,10 +165,40 @@ func (c *sourceCapture) storedVersion(rel string) (capturedVersion, bool) {
 		}
 	}
 	if found == nil {
+		// A pin of a latest file or snapshot links it into history under a
+		// name the manifest does not list; the pin records how it is stored.
+		if v, ok := pinnedVersion(c.dir, rel); ok {
+			found = &v
+		}
+	}
+	if found == nil {
 		return capturedVersion{}, false
 	}
 	v := storedAs(filepath.Join(c.dir, filepath.FromSlash(rel)), *found)
 	return v, v.Encoding != ""
+}
+
+// pinnedVersion is the history file rel as a pin describes it: its original
+// size and digest, and its encoding.
+func pinnedVersion(dir, rel string) (capturedVersion, bool) {
+	if !strings.HasPrefix(rel, captureHistoryDir+"/") {
+		return capturedVersion{}, false
+	}
+	pins, err := loadPreservationPins(dir)
+	if err != nil {
+		return capturedVersion{}, false
+	}
+	for _, pin := range pins.Pins {
+		if pin.Path != rel || pin.Encoding == "" {
+			continue
+		}
+		info, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel)))
+		if err != nil {
+			return capturedVersion{}, false
+		}
+		return capturedVersion{Captured: rel, Size: pin.Size, SHA256: pin.SHA256, Encoding: pin.Encoding, StoredSize: info.Size()}, true
+	}
+	return capturedVersion{}, false
 }
 
 // storedAs is v as its file is actually stored. Compression commits the
@@ -198,6 +240,41 @@ func storedAsFile(f *os.File, v capturedVersion) capturedVersion {
 	}
 	v.Encoding, v.StoredSize = "", 0
 	return v
+}
+
+// describeStored is v as the file at path stores it, whichever way v says:
+// a zstd frame smaller than the original size is encoded (checked by decoding
+// against v's digest when one is recorded), the original size without one is
+// plain. Anything else is left as v says, for validation to report.
+func describeStored(ctx context.Context, path string, v capturedVersion) (capturedVersion, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return v, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return v, err
+	}
+	head := make([]byte, len(zstdMagic))
+	n, _ := f.ReadAt(head, 0)
+	zstdFrame := n == len(head) && bytes.Equal(head, zstdMagic)
+	switch {
+	case zstdFrame && info.Size() < v.Size:
+		if v.SHA256 != "" {
+			digest, size, err := capturedSHA256File(ctx, f, captureEncodingZstd)
+			if err != nil {
+				return v, err
+			}
+			if size != v.Size || digest != v.SHA256 {
+				return v, fmt.Errorf("%w: %s", errCapturedContentMismatch, path)
+			}
+		}
+		v.Encoding, v.StoredSize = captureEncodingZstd, info.Size()
+	case !zstdFrame && info.Size() == v.Size:
+		v.Encoding, v.StoredSize = "", 0
+	}
+	return v, nil
 }
 
 // storedAsUnlocked is storedAsFile for a reader that holds no capture lock
@@ -509,12 +586,12 @@ func leaseCapturedVersion(ctx context.Context, target captureTarget, rel string)
 		releaseLockFile(lock)
 		return "", "", nil, err
 	}
-	entry, ok := manifest.version(rel)
+	entry, ok := manifest.entry(rel)
 	if !ok {
 		releaseLockFile(lock)
 		return "", "", nil, fmt.Errorf("%s: %w", rel, os.ErrNotExist)
 	}
-	v := storedAs(filepath.Join(target.Dir, filepath.FromSlash(rel)), *entry)
+	v := storedAs(filepath.Join(target.Dir, filepath.FromSlash(rel)), entry)
 	if leaseDir, release, err = openReaderLease(target.Dir); err != nil {
 		releaseLockFile(lock)
 		return "", "", nil, err

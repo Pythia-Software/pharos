@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -43,20 +44,23 @@ const (
 	// the captures holding a kind it cannot read: a writer stamps the lowest
 	// version describing its encoded entries (writerVersion), and
 	// capturePlainManifestVersion when there are none.
-	captureManifestVersion      = captureFilesVersion
+	captureManifestVersion      = captureSnapshotsVersion
 	capturePlainManifestVersion = 5
 	// captureGenerationsVersion: encoded snapshot generations.
 	captureGenerationsVersion = 6
 	// captureFilesVersion: an encoded latest or earlier plain file, which
 	// adapters read through the capture view (phase 2).
 	captureFilesVersion = 7
-	captureManifestName = "manifest.json"
-	captureHostName     = "host.json"
-	captureFilesDir     = "files"
-	captureHistoryDir   = "history"
-	captureTempSuffix   = ".pharos-tmp"
-	captureLockName     = ".capture.lock"
-	captureStampLayout  = "20060102T150405.000000000Z"
+	// captureSnapshotsVersion: an encoded latest database snapshot, which
+	// database readers decode through the capture view (phase 3).
+	captureSnapshotsVersion = 8
+	captureManifestName     = "manifest.json"
+	captureHostName         = "host.json"
+	captureFilesDir         = "files"
+	captureHistoryDir       = "history"
+	captureTempSuffix       = ".pharos-tmp"
+	captureLockName         = ".capture.lock"
+	captureStampLayout      = "20060102T150405.000000000Z"
 )
 
 var (
@@ -171,6 +175,18 @@ type capturedSnapshot struct {
 	Source          sqliteSourceState `json:"source"`
 	MissingSince    string            `json:"missing_since,omitempty"`
 	Generations     []capturedVersion `json:"generations,omitempty"`
+	// An idle latest snapshot may be stored encoded (phase 3); SHA256, of
+	// the original bytes, is recorded when it is.
+	SHA256     string `json:"sha256,omitempty"`
+	Encoding   string `json:"encoding,omitempty"`
+	StoredSize int64  `json:"stored_size,omitempty"`
+}
+
+// version is the latest snapshot as a capturedVersion; MTimeNS is the
+// captured copy's mtime.
+func (s *capturedSnapshot) version() capturedVersion {
+	source := s.Source
+	return capturedVersion{Captured: s.Captured, Size: s.Size, MTimeNS: s.CapturedMTimeNS, SHA256: s.SHA256, CapturedAt: s.CapturedAt, Source: &source, Encoding: s.Encoding, StoredSize: s.StoredSize}
 }
 
 type sqliteSourceState struct {
@@ -981,7 +997,7 @@ func (c *sourceCapture) copyOnce(item captureItem, previous *capturedFile) (*cap
 			os.Remove(temporary)
 			return nil, nil, err
 		}
-		entry.Previous = append(slices.Clone(entry.Previous), kept)
+		entry.Previous = append(withoutVersion(entry.Previous, kept.Captured), kept)
 		version = &kept
 	}
 	if err := os.Rename(temporary, destination); err != nil {
@@ -1067,18 +1083,25 @@ func (c *sourceCapture) preserve(version capturedVersion, present bool) (capture
 	rel := path.Join(captureHistoryDir, stamp, strings.TrimPrefix(version.Captured, captureFilesDir+"/"))
 	from := filepath.Join(c.dir, filepath.FromSlash(version.Captured))
 	to := filepath.Join(c.dir, filepath.FromSlash(rel))
+	described := false
 	if present {
 		if err := os.MkdirAll(filepath.Dir(to), 0o700); err != nil {
 			return version, toDestination(err)
 		}
-		if err := os.Link(from, to); err != nil && !errors.Is(err, fs.ErrExist) {
-			if err := os.Rename(from, to); err != nil {
-				return version, toDestination(err)
-			}
+		var err error
+		if version, described, err = c.placeVersion(from, to, version); err != nil {
+			return version, err
 		}
 	}
-	if _, err := os.Stat(to); err != nil {
+	stored, err := os.Stat(to)
+	if err != nil {
 		return version, toDestination(err)
+	}
+	// Adopting what an interrupted rotation left: describe the bytes there.
+	if current, err := os.Stat(from); !described && (err != nil || !os.SameFile(current, stored)) {
+		if version, err = describeStored(c.ctx, to, version); err != nil {
+			return version, err
+		}
 	}
 	if err := c.carrySQLiteExportReceipt(version.Captured, rel); err != nil {
 		return version, err
@@ -1086,6 +1109,117 @@ func (c *sourceCapture) preserve(version capturedVersion, present bool) (capture
 	version.Captured = rel
 	version.SupersededAt = now()
 	return version, nil
+}
+
+// historyLinkFile links a superseded copy into history; tests replace it to
+// act as a volume without hard links.
+var historyLinkFile = os.Link
+
+// placeVersion puts the copy at from under the history name to: a hard link,
+// or on a volume without them an exclusive rename. A file already at to is
+// kept only if it holds the same bytes (a pin's copy, or what an interrupted
+// rotation linked), described as it is stored there; anything else is moved
+// aside (see conflictName) and from placed normally, so the bytes being
+// superseded are never left linked nowhere.
+func (c *sourceCapture) placeVersion(from, to string, version capturedVersion) (capturedVersion, bool, error) {
+	place := func() error {
+		err := historyLinkFile(from, to)
+		if err == nil || errors.Is(err, fs.ErrExist) {
+			return err
+		}
+		// No hard links (exFAT): move it, never over what is there.
+		return renameExclusive(from, to)
+	}
+	err := place()
+	if err == nil {
+		return version, false, nil
+	}
+	if !errors.Is(err, fs.ErrExist) {
+		return version, false, toDestination(err)
+	}
+	existing, err := os.Stat(to)
+	if err != nil {
+		return version, false, toDestination(err)
+	}
+	if current, err := os.Stat(from); err == nil && os.SameFile(current, existing) {
+		return version, false, nil
+	}
+	if matched, ok, err := c.sameContent(from, to, version); err != nil {
+		return version, false, err
+	} else if ok {
+		return matched, true, nil
+	}
+	aside, err := conflictName(to)
+	if err != nil {
+		return version, false, toDestination(err)
+	}
+	if err = os.Rename(to, aside); err != nil {
+		return version, false, toDestination(err)
+	}
+	if err = place(); err != nil {
+		return version, false, toDestination(err)
+	}
+	return version, false, nil
+}
+
+// sameContent reports whether the file at to holds the original bytes of
+// version, whichever way it is stored (plain, or a zstd frame decoded), by
+// digest against version's recorded one or, without one, the copy at from.
+// It returns version as to stores it.
+func (c *sourceCapture) sameContent(from, to string, version capturedVersion) (capturedVersion, bool, error) {
+	expected := version.SHA256
+	if expected == "" {
+		digest, size, err := capturedSHA256(c.ctx, from, version.Encoding)
+		if err != nil {
+			return version, false, err
+		}
+		if size != version.Size {
+			return version, false, nil
+		}
+		expected = digest
+	}
+	f, err := os.Open(to)
+	if err != nil {
+		return version, false, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return version, false, err
+	}
+	encoding := ""
+	head := make([]byte, len(zstdMagic))
+	if n, _ := f.ReadAt(head, 0); n == len(head) && bytes.Equal(head, zstdMagic) && info.Size() < version.Size {
+		encoding = captureEncodingZstd
+	}
+	digest, size, err := capturedSHA256File(c.ctx, f, encoding)
+	if err != nil && c.ctx.Err() != nil {
+		return version, false, err
+	}
+	if err != nil || size != version.Size || digest != expected {
+		return version, false, nil
+	}
+	version.Encoding, version.StoredSize = encoding, 0
+	if encoding != "" {
+		version.StoredSize = info.Size()
+	}
+	return version, true, nil
+}
+
+// conflictName is a free name beside to for a file that was at to but does
+// not hold the bytes to names: <name>.conflict-<n>. It stays in history as
+// unlisted evidence; planning sees it as an ordinary orphan, and no capture
+// sweep matches it.
+func conflictName(to string) (string, error) {
+	for n := 1; n < 1000; n++ {
+		candidate := fmt.Sprintf("%s.conflict-%d", to, n)
+		if _, err := os.Lstat(candidate); errors.Is(err, fs.ErrNotExist) {
+			return candidate, nil
+		} else if err != nil {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("%s: too many conflicting copies", to)
 }
 
 func (c *sourceCapture) markMissing(present map[string]bool) {
