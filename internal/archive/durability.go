@@ -197,8 +197,10 @@ func (c *Catalog) boundWAL(ctx context.Context, limit int64) {
 func (c *Catalog) boundWALAt(ctx context.Context, limit int64, priority string) {
 	if info, err := os.Stat(c.Path + "-wal"); err != nil || info.Size() <= limit {
 		// Another checkpoint (after a run, another process's) folded it in.
-		if c.wal.pin.Load() != nil && c.wal.mu.TryLock() {
-			c.noteWALCheckpointed()
+		if c.wal.mu.TryLock() {
+			if c.wal.pin.Load() != nil || !c.wal.stall.backfillSince.IsZero() {
+				c.noteWALCheckpointed()
+			}
 			c.wal.mu.Unlock()
 		}
 		return

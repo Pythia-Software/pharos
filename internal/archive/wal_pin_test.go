@@ -87,16 +87,22 @@ func TestWALPinBookkeeping(t *testing.T) {
 		return catalog.noteWALBusy(size, 5000, backfilled, start.Add(at))
 	}
 
-	if pin := busy(999, 100, 0); pin != nil || probes != 0 {
+	// A stall under the threshold is tracked but not diagnosed; once the
+	// log crosses it, the stall dates from when the checkpoint stopped.
+	busy(999, 100, -time.Hour)
+	if pin := busy(999, 100, -time.Minute); pin != nil || probes != 0 || catalog.walPinned() != nil {
 		t.Fatalf("a WAL under the threshold was diagnosed: %+v", pin)
 	}
-	if pin := busy(2000, 100, 0); pin != nil || catalog.walPinned() != nil {
-		t.Fatalf("one busy check is not a stall: %+v", pin)
+	if pin := busy(2000, 100, 0); pin == nil || !pin.Since.Equal(start.Add(-time.Hour)) {
+		t.Fatalf("a stall that began under the threshold: %+v", pin)
 	}
 	if pin := catalog.noteWALBusy(2000, 5000, 5000, start); pin != nil || catalog.walPinned() != nil {
 		t.Fatalf("a log whose frames were all copied is not stalled: %+v", pin)
 	}
-	busy(2000, 100, 0)
+	probes = 0
+	if pin := busy(2000, 100, 0); pin != nil || catalog.walPinned() != nil {
+		t.Fatalf("one busy check is not a stall: %+v", pin)
+	}
 	pin := busy(2000, 100, 30*time.Second)
 	if pin == nil || probes != 1 || pin.Pending != 4900 || !pin.Since.Equal(start) || !pin.Known ||
 		pin.Holder != "another process: pid 4242 (pharos labeling prepare --dry-run) reading up to frame 100 of 5,000" {
@@ -104,6 +110,11 @@ func TestWALPinBookkeeping(t *testing.T) {
 	}
 	if !strings.Contains(pin.String(), "frames_pending=4,900") {
 		t.Fatalf("log line: %s", pin)
+	}
+	// A check whose truncating pass reported no counts (it did not get the
+	// checkpoint lock) changes nothing.
+	if pin := catalog.noteWALBusy(2000, -1, -1, start.Add(45*time.Second)); pin == nil || !pin.Since.Equal(start) || catalog.walPinned() == nil || probes != 1 {
+		t.Fatalf("unknown counts cleared the stall: %+v", pin)
 	}
 	// Within a minute: the size updates, the probe does not run again.
 	if pin := busy(3000, 100, 60*time.Second); probes != 1 || pin.WALBytes != 3000 || !pin.Since.Equal(start) {
@@ -121,7 +132,9 @@ func TestWALPinBookkeeping(t *testing.T) {
 	header.NBackfill, header.ReadMarks[1], header.ReadMarks[2] = 200, 200, 5000
 	locks = append(locks, walLock{Byte: walReadLockByte + 2, PID: 78, Command: "pharos mcp"}, walLock{Byte: walCheckpointByte + 1, PID: 79})
 	pin = busy(3000, 200, 80*time.Second)
-	if probes != 2 || !pin.Since.Equal(start.Add(70*time.Second)) || !pin.Known || !strings.HasPrefix(pin.Holder, "this process") ||
+	// One probe names this process only probably: the slot's reader may
+	// just have ended.
+	if probes != 2 || !pin.Since.Equal(start.Add(70*time.Second)) || pin.Known || !strings.HasPrefix(pin.Holder, "probably this process") ||
 		!strings.HasSuffix(pin.Holder, "also open in pid 77 (sqlite3 catalog.sqlite3) writing, pid 78 (pharos mcp) reading, pid 79 recovering the log") {
 		t.Fatalf("a new stall: %+v, %d probes", pin, probes)
 	}
@@ -152,7 +165,11 @@ func TestWALPinBookkeeping(t *testing.T) {
 	catalog.noteWALCheckpointed()
 	later := time.Now().Add(time.Hour)
 	catalog.noteWALBusy(3000, 5000, 200, later)
-	pin = catalog.noteWALBusy(3000, 5000, 200, later.Add(time.Second))
+	if pin := catalog.noteWALBusy(3000, 5000, 200, later.Add(time.Second)); pin.Known || !strings.HasPrefix(pin.Holder, "probably this process") {
+		t.Fatalf("one probe: %+v", pin)
+	}
+	// A second probe agrees: now it is this process.
+	pin = catalog.noteWALBusy(3000, 5000, 200, later.Add(time.Minute+time.Second))
 	if !pin.Known || !strings.HasPrefix(pin.Holder, "this process") || !strings.Contains(pin.Holder, "analysis.findings for") || strings.Contains(pin.Holder, "index.changes.manual") {
 		t.Fatalf("this process's suspects: %+v", pin)
 	}
@@ -218,6 +235,8 @@ func TestBoundWALNamesTheReaderThatPinsIt(t *testing.T) {
 		t.Fatalf("one busy check is a stall: %+v", pin)
 	}
 	check()
+	override(t, &walPinDiagnoseEvery, 0)
+	check() // a second probe confirms a holder in this process
 	pin := catalog.walPinned()
 	if pin == nil || pin.Pending <= 0 || !strings.Contains(pin.Holder, "index.changes.manual for") {
 		t.Fatalf("pinned WAL: %+v", pin)

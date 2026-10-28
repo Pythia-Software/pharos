@@ -121,7 +121,7 @@ func TestWALPinLeavesNoDescriptorAfterClose(t *testing.T) {
 		catalog.wal.retryAt = time.Time{}
 		catalog.boundWALAt(t.Context(), -1, priorityBackground)
 	}
-	if pin := catalog.walPinned(); pin == nil || !pin.Known {
+	if pin := catalog.walPinned(); pin == nil {
 		t.Fatalf("no diagnosis: %+v", pin)
 	}
 	if after := open(); after != before {

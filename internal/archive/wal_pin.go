@@ -127,18 +127,28 @@ type walStall struct {
 	diagnosedAt   time.Time
 	holder        string
 	known         bool
+	// selfProbes counts probes in a row that found this process holding
+	// the log: it is named for certain only once two agree.
+	selfProbes int
 }
 
 // noteWALBusy records a busy bound checkpoint of a WAL of walBytes whose
 // truncating pass reported frames in the log and backfilled of them copied
-// (-1 when unknown). It returns the diagnosis of a stall once the WAL is over
-// walPinBytes; the probe and the log line run at most once per
-// walPinDiagnoseEvery during one stall. Call it with c.wal.mu held.
+// (-1 when unknown). The checkpoint's progress is tracked at any size, so a
+// stall's start is when the checkpoint stopped, not when the log crossed
+// walPinBytes; only the diagnosis waits for that size. The probe and the
+// log line run at most once per walPinDiagnoseEvery during one stall. Call
+// it with c.wal.mu held.
 func (c *Catalog) noteWALBusy(walBytes, frames, backfilled int64, now time.Time) *walPin {
+	if frames < 0 || backfilled < 0 {
+		// The truncating pass did not get the checkpoint lock (another
+		// connection was checkpointing) and reported nothing: no evidence
+		// either way, so the bookkeeping stays as it is.
+		return c.walPinned()
+	}
 	pending := frames - backfilled
-	if walBytes < walPinBytes || frames < 0 || backfilled < 0 || pending <= 0 {
-		// Small, unknown, or everything copied and only the restart of the
-		// log was refused: not a stall.
+	if pending <= 0 {
+		// Everything was copied; only the restart of the log was refused.
 		c.noteWALCheckpointed()
 		return nil
 	}
@@ -150,11 +160,26 @@ func (c *Catalog) noteWALBusy(walBytes, frames, backfilled int64, now time.Time)
 		stall.backfill, stall.backfillSince = backfilled, now
 		return nil
 	}
+	if walBytes < walPinBytes {
+		c.wal.pin.Store(nil)
+		return nil
+	}
 	pin := walPin{Since: stall.backfillSince, WALBytes: walBytes, Pending: pending}
 	diagnose := stall.diagnosedAt.IsZero() || now.Sub(stall.diagnosedAt) >= walPinDiagnoseEvery
 	if diagnose {
+		var self bool
 		stall.diagnosedAt = now
-		stall.holder, stall.known = c.walHolder(stall.backfillSince, now)
+		stall.holder, stall.known, self = c.walHolder(stall.backfillSince, now)
+		if self {
+			stall.selfProbes++
+		} else {
+			stall.selfProbes = 0
+		}
+		if self && stall.selfProbes < 2 {
+			// The blocking slot's reader may have just ended, or the slot
+			// kept a mark nobody holds: say so until a later probe agrees.
+			stall.holder, stall.known = "probably "+stall.holder, false
+		}
 	}
 	pin.Diagnosed, pin.Holder, pin.Known = stall.diagnosedAt, stall.holder, stall.known
 	if diagnose {
@@ -164,8 +189,8 @@ func (c *Catalog) noteWALBusy(walBytes, frames, backfilled int64, now time.Time)
 	return &pin
 }
 
-// noteWALCheckpointed clears the diagnosis: a checkpoint succeeded, the
-// log is small again, or the checkpoint advanced.
+// noteWALCheckpointed clears the diagnosis and the stall: a checkpoint
+// succeeded, the log is small again, or the checkpoint advanced.
 func (c *Catalog) noteWALCheckpointed() {
 	c.wal.stall = walStall{}
 	c.wal.pin.Store(nil)
@@ -185,7 +210,8 @@ func (c *Catalog) walPinned() *walPin {
 // when the probe fails, the holder is unknown and the suspects are listed
 // as context. Other locks (the writer, a checkpoint, a recovery, a reader at
 // the last frame) cannot stop the copy and are only mentioned.
-func (c *Catalog) walHolder(since, now time.Time) (string, bool) {
+// self reports that the holder named is this process.
+func (c *Catalog) walHolder(since, now time.Time) (string, bool, bool) {
 	suspects := c.walSuspects(since, now)
 	withSuspects := func(holder, label string) string {
 		if len(suspects) > 0 {
@@ -195,7 +221,7 @@ func (c *Catalog) walHolder(since, now time.Time) (string, bool) {
 	}
 	probe, err := probeWAL(c.Path + "-shm")
 	if err != nil {
-		return withSuspects("unknown ("+err.Error()+")", "this process has been running since before the stall"), false
+		return withSuspects("unknown ("+err.Error()+")", "this process has been running since before the stall"), false, false
 	}
 	blocking := map[int]bool{}
 	if probe.HeaderErr == nil {
@@ -238,16 +264,16 @@ func (c *Catalog) walHolder(since, now time.Time) (string, bool) {
 	}
 	switch {
 	case len(holders) > 0:
-		return also("another process: " + strings.Join(holders, ", ")), true
+		return also("another process: " + strings.Join(holders, ", ")), true, false
 	case len(blocking) > 0:
 		holder := withSuspects(fmt.Sprintf("this process (pid %d)", os.Getpid()), "running since before the stall")
-		return also(holder), true
+		return also(holder), true, true
 	case len(possible) > 0:
 		holder := "unknown (the wal-index header could not be read); possibly another process: " + strings.Join(possible, ", ")
-		return also(withSuspects(holder, "this process has been running since before the stall")), false
+		return also(withSuspects(holder, "this process has been running since before the stall")), false, false
 	}
 	holder := "unknown (no read slot is marked where the checkpoint stopped)"
-	return also(withSuspects(holder, "this process has been running since before the stall")), false
+	return also(withSuspects(holder, "this process has been running since before the stall")), false, false
 }
 
 // walSuspects lists this process's running operations that started before
