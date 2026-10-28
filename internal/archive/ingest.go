@@ -2080,7 +2080,15 @@ func (c *Catalog) ReconcileIdentities() (int, error) {
 	return c.ReconcileIdentitiesContext(context.Background())
 }
 
-func (c *Catalog) ReconcileIdentitiesContext(ctx context.Context) (int, error) {
+func (c *Catalog) ReconcileIdentitiesContext(ctx context.Context) (links int, err error) {
+	err = c.completeStage(ctx, "identities", func() error {
+		links, err = c.reconcileIdentities(ctx)
+		return err
+	})
+	return links, err
+}
+
+func (c *Catalog) reconcileIdentities(ctx context.Context) (int, error) {
 	if err := c.reconcileHistoryLinks(ctx); err != nil {
 		return 0, err
 	}

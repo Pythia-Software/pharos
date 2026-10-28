@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -448,6 +449,75 @@ func TestMCPArchiveStatusEmptyAndCurrent(t *testing.T) {
 	result = auditCall(t, catalog, "get_archive_status", map[string]any{"stale_only": true})
 	if result["status"] != "current" || integer(result["total"]) != 0 {
 		t.Fatalf("current sources not recognized: %#v", result)
+	}
+}
+
+// get_archive_status adds the freshness ledger: every domain with its state
+// and reason, and the operations open in the journal that affect them, so an
+// agent can tell "behind because indexing runs now" from "behind because it
+// is broken". A row of a process that has exited is not running work. A
+// budget too small for the ledger leaves it out rather than failing.
+func TestMCPArchiveStatusListsDomainsAndRunningWork(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	host := currentHost().ID
+	execTx(t, catalog.DB,
+		// One conversation: findings have inputs to be behind on.
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','codex','local','w','Work','2026-10-27')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c','w','codex','local','c')`,
+		"INSERT INTO source_states(host_id,source_name,kind,capability,coverage,last_attempt_at,last_success_at,updated_at) VALUES("+sqlQuote(host)+",'codex','codex','read','complete',"+sqlQuote(now())+","+sqlQuote(now())+","+sqlQuote(now())+")",
+		"INSERT INTO sync_deferred(name,generation,completed_generation,changed_at) VALUES('findings',3,1,"+sqlQuote(now())+")",
+		fmt.Sprintf(`INSERT INTO operation_journal(id,root_id,kind,trigger,host_id,process,pid,instance,state,started_at,updated_at,detail_json)
+			VALUES('op-live','op-live','index.changes.manual','user',%s,'service',%d,'svc','running',%s,%s,'{}')`, sqlQuote(host), os.Getpid(), sqlQuote(now()), sqlQuote(now())),
+		fmt.Sprintf(`INSERT INTO operation_journal(id,root_id,kind,trigger,host_id,process,pid,instance,state,started_at,updated_at,detail_json)
+			VALUES('op-dead','op-dead','analysis.authorship','read',%s,'service',%d,'gone','running',%s,%s,'{}')`, sqlQuote(host), 1<<22-1, sqlQuote(now()), sqlQuote(now())),
+		// A live PID that started after the row: another process reused it.
+		fmt.Sprintf(`INSERT INTO operation_journal(id,root_id,kind,trigger,host_id,process,pid,instance,state,started_at,updated_at,detail_json)
+			VALUES('op-reused','op-reused','analysis.tools','read',%s,'service',%d,'old','running','2001-01-01T00:00:00Z','2001-01-01T00:00:00Z','{}')`, sqlQuote(host), os.Getpid()))
+	result := auditCall(t, catalog, "get_archive_status", map[string]any{"max_output_tokens": 4000})
+	if result["status"] != "current" || integer(result["total"]) != 1 {
+		t.Fatalf("the older fields are unchanged: %#v", result)
+	}
+	domains := map[string]map[string]any{}
+	for _, domain := range result["domains"].([]map[string]any) {
+		domains[firstString(domain["domain"])] = domain
+	}
+	// Indexed a minute ago, scheduled indexing off: unknown, and the open
+	// index is catching it up.
+	if codex := domains["conv:codex"]; codex["state"] != freshUnknown || codex["reason"] != "indexing" || codex["catching_up"] != "op-live" || codex["as_of"] == nil {
+		t.Fatalf("conv:codex: %#v", codex)
+	}
+	if findings := domains["findings"]; findings["state"] != freshBehind || findings["reason"] != "running" || findings["catching_up"] != "op-live" {
+		t.Fatalf("findings are behind and the open manual index catches them up: %#v", findings)
+	}
+	running := result["running"].([]map[string]any)
+	if len(running) != 1 || running[0]["id"] != "op-live" || !slices.Contains(running[0]["domains"].([]string), "findings") {
+		t.Fatalf("running lists the live operation and the domains it affects, not the dead or reused one: %#v", running)
+	}
+	// The ledger is additive: at the default budget, with enough sources to
+	// fill a page, the items, next_offset and truncated are those of the
+	// page without it.
+	statements := []string{}
+	for index := range 40 {
+		statements = append(statements, fmt.Sprintf("INSERT INTO source_states(host_id,source_name,kind,capability,coverage,last_attempt_at,last_success_at,updated_at) VALUES(%s,'source-%02d-with-a-longer-name','codex','read','partial',%s,%s,%s)",
+			sqlQuote(host), index, sqlQuote(now()), sqlQuote(now()), sqlQuote(now())))
+	}
+	execTx(t, catalog.DB, statements...)
+	for _, args := range []map[string]any{{}, {"max_output_tokens": 450}, {"offset": 3}} {
+		with := auditCall(t, catalog, "get_archive_status", args)
+		override(t, &archiveStatusLedger, false)
+		without := auditCall(t, catalog, "get_archive_status", args)
+		archiveStatusLedger = true
+		if len(with["items"].([]map[string]any)) != len(without["items"].([]map[string]any)) || with["next_offset"] != without["next_offset"] || with["truncated"] != without["truncated"] {
+			t.Fatalf("%v: the ledger changed the page: %d items, next %v, truncated %v; without it %d, %v, %v", args, len(with["items"].([]map[string]any)), with["next_offset"], with["truncated"],
+				len(without["items"].([]map[string]any)), without["next_offset"], without["truncated"])
+		}
+		if without["truncated"] != true && len(args) == 0 {
+			t.Fatal("the fixture must fill the default page")
+		}
+		budget := mcpBudget(args, 1800)
+		if len(jsonText(with)) > budget*3 {
+			t.Fatalf("%v: the page with the ledger is over its budget: %d > %d", args, len(jsonText(with)), budget*3)
+		}
 	}
 }
 

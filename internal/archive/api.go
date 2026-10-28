@@ -88,6 +88,8 @@ type Server struct {
 	// captureProbe caches the status path's capture-lock probe for polled
 	// operation snapshots.
 	captureProbe captureProbe
+	// freshFiles caches the freshness ledger's file-derived inputs.
+	freshFiles freshnessFileCache
 }
 
 func NewServer(config Config, catalog *Catalog) *Server {
@@ -159,6 +161,7 @@ func (s *Server) Serve() error {
 	s.daemon("automaticLoop", s.automaticLoop)
 	s.daemon("cloudScheduleLoop", s.cloudScheduleLoop)
 	s.refreshGitInBackground(true)
+	s.countUpgradeInBackground()
 	return s.serveUntilStopped(server, listener)
 }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

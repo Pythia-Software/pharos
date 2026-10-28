@@ -476,6 +476,8 @@ func (s *Server) finishDeferredSyncPhases(ctx context.Context, forceFindings boo
 			return err
 		}
 	}
+	// The freshness ledger's upgrade count (§5), cheap next to the chain.
+	s.Catalog.storeUpgradeCount(ctx)
 	return nil
 }
 

@@ -13,8 +13,8 @@ import (
 
 // GET /api/status is the status snapshot of this library
 // (docs/background-work.md §7.1): the drive and the eject verdict, the
-// top-level operation tree, the attention list, and placeholders for
-// freshness (phase 3) and resources (phase 4). GET /api/status/stream sends
+// top-level operation tree, the attention list, the freshness ledger
+// (phase 3), and a placeholder for resources (phase 4). GET /api/status/stream sends
 // the same document as server-sent events. Both run whatever the feature
 // flag says (§9); only the surfaces that render them are gated.
 //
@@ -37,7 +37,7 @@ var statusKeepalive = 15 * time.Second
 // statusDocument builds the snapshot. fresh runs the release path's full
 // lock check (?fresh=1); everything else is polled.
 func (s *Server) statusDocument(ctx context.Context, fresh bool) map[string]any {
-	document := s.operationsDocumentChecked(ctx, fresh)
+	document, views := s.operationsDocumentViews(ctx, fresh)
 	// Journal history is the operations endpoint's; the panel needs only
 	// whether rows were dropped.
 	if journal, ok := document["journal"].(map[string]any); ok {
@@ -51,8 +51,11 @@ func (s *Server) statusDocument(ctx context.Context, fresh bool) map[string]any 
 		library["path"] = libraryDir(config)
 	}
 	document["attention"] = s.attention(ctx)
-	// Stable keys, filled by later phases.
-	document["freshness"] = nil
+	// The freshness ledger (§5), and its one-line summary for the panel.
+	freshness := s.freshness(ctx, views, fresh)
+	document["freshness"] = freshness
+	document["freshness_summary"] = summarizeFreshness(freshness)
+	// A stable key, filled by phase 4.
 	document["resources"] = nil
 	document["features"] = map[string]any{"unified_activity": s.Catalog.unifiedActivity(ctx)}
 	return document

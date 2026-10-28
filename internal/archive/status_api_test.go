@@ -41,8 +41,8 @@ func getStatus(t *testing.T, server *Server, path string) statusSnapshot {
 }
 
 // The status snapshot (§7.1) composes the drive, the verdict, the top-level
-// operations and the attention list, with stable null placeholders for
-// freshness and resources. A cloud upload is a batch writer: safe to eject
+// operations, the attention list and the freshness ledger, with a stable
+// null placeholder for resources. A cloud upload is a batch writer: safe to eject
 // after its current unit. A Terminal command's lease makes the drive busy and
 // lists its work, which Pharos cannot stop.
 func TestStatusSnapshotComposesVerdictOperationsAndPlaceholders(t *testing.T) {
@@ -50,10 +50,14 @@ func TestStatusSnapshotComposesVerdictOperationsAndPlaceholders(t *testing.T) {
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
 	idle := getStatus(t, server, "/api/status")
-	for _, key := range []string{"freshness", "resources"} {
-		if value, ok := idle.raw[key]; !ok || value != nil {
-			t.Fatalf("%s must be present and null until its phase: %#v", key, idle.raw[key])
-		}
+	if value, ok := idle.raw["resources"]; !ok || value != nil {
+		t.Fatalf("resources must be present and null until its phase: %#v", idle.raw["resources"])
+	}
+	if rows, ok := idle.raw["freshness"].([]any); !ok || len(rows) == 0 {
+		t.Fatalf("freshness lists the ledger's domains (§5): %#v", idle.raw["freshness"])
+	}
+	if summary, ok := idle.raw["freshness_summary"].(map[string]any); !ok || len(summary["groups"].([]any)) == 0 {
+		t.Fatalf("freshness_summary groups them for the panel: %#v", idle.raw["freshness_summary"])
 	}
 	if idle.Eject.Verdict != verdictSafe || idle.Eject.Checked != "polled" || len(idle.Operations) != 0 || len(idle.Attention) != 0 {
 		t.Fatalf("an idle library: %+v %#v %#v", idle.Eject, idle.Operations, idle.Attention)

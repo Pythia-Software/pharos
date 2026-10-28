@@ -293,6 +293,14 @@ func (s *Server) operationsDocument(ctx context.Context) map[string]any {
 // operationsDocumentChecked builds the snapshot; fresh (?fresh=1, the
 // release path) runs the full lock check.
 func (s *Server) operationsDocumentChecked(ctx context.Context, fresh bool) map[string]any {
+	document, _ := s.operationsDocumentViews(ctx, fresh)
+	return document
+}
+
+// operationsDocumentViews is operationsDocumentChecked with the operations
+// it read (this service's and other processes'), for the status snapshot's
+// freshness ledger.
+func (s *Server) operationsDocumentViews(ctx context.Context, fresh bool) (map[string]any, []opView) {
 	at := time.Now()
 	revision := s.ops.currentRevision()
 	in, views := s.ejectInputs(ctx, fresh)
@@ -330,7 +338,7 @@ func (s *Server) operationsDocumentChecked(ctx context.Context, fresh bool) map[
 	host := currentHost()
 	return map[string]any{"version": 1, "revision": revision, "generated_at": formatTime(at), "host": map[string]any{"id": host.ID, "label": host.Label},
 		"library": library, "eject": verdict, "operations": operations, "attention": []any{}, "freshness": []any{}, "resources": nil,
-		"journal": map[string]any{"dropped": s.journal.droppedRounds(), "recent": recent}}
+		"journal": map[string]any{"dropped": s.journal.droppedRounds(), "recent": recent}}, views
 }
 
 // operationsETag changes whenever the document may: the registry's revision

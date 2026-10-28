@@ -6,10 +6,11 @@
 // library.js's drive panel runs as before.
 //
 // The panel answers, in this order: is it safe to eject; is the data
-// current (phase 3; omitted while the snapshot says null); is Pharos busy
-// on this Mac (phase 4; likewise); what is running, one line per top-level
-// operation; then "Show all" for the operation tree, the other libraries,
-// and what needs attention. Every sentence comes from the server; this file
+// current (the freshness ledger's summary groups; omitted while the
+// snapshot has none); is Pharos busy on this Mac (phase 4; omitted while
+// null); what is running, one line per top-level operation; then "Show all"
+// for the operation tree and each data domain, the other libraries, and
+// what needs attention. Every sentence comes from the server; this file
 // formats numbers and durations only. Explanations are in tooltips.
 //
 // panelModel and chipModel are pure, for web/tests/unit/page/status-panel.test.mjs.
@@ -31,6 +32,9 @@
 .pharos-status-tree{margin:8px 0 0;padding-left:16px}
 .pharos-status-tree ul{padding-left:16px}
 .pharos-status-tree li{margin:3px 0;overflow-wrap:anywhere}
+.pharos-status-domains{margin-top:10px;border-top:1px solid var(--line,#ddd);padding-top:8px}
+.pharos-status-data{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;line-clamp:1;overflow:hidden;overflow-wrap:normal}
+@media (max-width:600px){.pharos-status-data{-webkit-line-clamp:2;line-clamp:2}}
 .pharos-status-panel details>summary{cursor:pointer}
 .pharos-status-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
 .pharos-status-panel .pharos-panel-head{flex-wrap:wrap}`;
@@ -56,7 +60,54 @@
     return `${amount.toFixed(amount < 10 && power ? 1 : 0)} ${units[power]}`;
   };
   const count = value => Math.round(Number(value) || 0).toLocaleString('en-US');
-  const unitName = (unit, amount) => `${unit}${amount === 1 ? '' : 's'}`;
+  const unitName = (unit, amount) => amount === 1 ? unit : /(s|x|ch|sh)$/.test(unit) ? `${unit}es` : `${unit}s`;
+  // How long ago a time was: "just now", "4 min ago", "3 h ago", "2 d ago".
+  function ago(value, now = Date.now()) {
+    const seconds = Math.max(0, (now - Date.parse(value)) / 1000);
+    if (!Number.isFinite(seconds)) return '';
+    if (seconds < 60) return 'just now';
+    if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
+    if (seconds < 86400 * 2) return `${Math.floor(seconds / 3600)} h ago`;
+    return `${Math.floor(seconds / 86400)} d ago`;
+  }
+  // An age without "ago", for "behind 3 h".
+  const span = (value, now = Date.now()) => {
+    const text = ago(value, now);
+    return text === 'just now' ? '<1 min' : text.replace(/ ago$/, '');
+  };
+
+  // The Data row and its detail (docs/background-work.md §5): the page
+  // groups that are stale (backups and planned runs are not), each "Label
+  // short-state" ("Analyses waits for
+  // manual index", "Findings behind 3 h"), or "All current · checked 2 min
+  // ago"; the longer words are the tooltip. Under Show all, one line per
+  // domain. The server says every word; this adds ages and counts. Null
+  // until the snapshot has a ledger.
+  function dataModel(library, now = Date.now()) {
+    if (!Array.isArray(library?.freshness)) return null;
+    const summary = library.freshness_summary || {};
+    const shown = (Array.isArray(summary.groups) ? summary.groups : []).filter(group => group.shown);
+    const line = shown.map(group => ({group: group.group, state: group.state, label: group.label,
+      text: `${group.short || group.state}${group.short_age && group.as_of ? ` ${span(group.as_of, now)}` : ''}`,
+      tooltip: [group.text, group.as_of ? `${group.as_of_label || ''} ${ago(group.as_of, now)}`.trim() : '', group.tooltip].filter(Boolean).join('\n')}));
+    if (!line.length && summary.all_current && summary.text) {
+      line.push({group: 'all', state: 'current', label: '',
+        text: [summary.text, summary.checked_at ? `${summary.checked_label || ''} ${ago(summary.checked_at, now)}`.trim() : ''].filter(Boolean).join(' · '), tooltip: ''});
+      // Planned runs, muted: "Findings updates tomorrow".
+      for (const group of summary.groups || []) if (group.muted) {
+        line.push({group: group.group, state: group.state, label: group.label, text: group.short || '', tooltip: [group.text, group.tooltip].filter(Boolean).join('\n'), muted: true});
+      }
+    }
+    const domains = library.freshness.map(row => {
+      const behind = row.behind || {};
+      const amount = behind.count > 0 && behind.unit ? `${count(behind.count)} ${unitName(behind.unit, behind.count)}` : '';
+      const reason = row.reason?.text ? (row.catching_up_label ? `${row.reason.text} (${row.catching_up_label})` : row.reason.detail ? `${row.reason.text} (${row.reason.detail})` : row.reason.text) : '';
+      return {domain: row.domain, group: row.group, state: behind.state, label: row.label,
+        text: [row.state_label, reason, amount].filter(Boolean).join(' · ') + (row.as_of ? ` · ${ago(row.as_of, now)}` : ''),
+        tooltip: [row.next].filter(Boolean).join('\n')};
+    });
+    return {line, domains};
+  }
   // A step's measured progress: "812 MB of 2 GB", "42 of 100 conversations".
   function stepAmount(step) {
     if (!step?.unit || !(step.total > 0)) return '';
@@ -145,8 +196,8 @@
       where: [LOCATIONS[drive.location] || (drive.ejectable ? 'Drive' : ''), library.library?.path].filter(Boolean).join(' · '),
       verdict: {verdict: eject.verdict || 'unsafe', text, dot: VERDICT_DOT[eject.verdict] ?? 'bad', checked: eject.checked || null,
         tooltip: [eject.summary !== text ? eject.summary : '', ...(eject.blockers || []).map(blocker => [blocker.label, blocker.on_eject].filter(Boolean).join(': '))].filter(Boolean).join('\n')},
-      // Phases 3 and 4 fill these; a null keeps the row out.
-      freshness: library.freshness ?? null,
+      // A null keeps the row out (phase 4 fills load).
+      freshness: dataModel(library),
       load: library.resources ?? null,
       others: (view.others || []).map(other => {
         const first = (other.operations || []).find(running);
@@ -385,7 +436,22 @@
     verdict.append(node('span', 'pharos-dot' + (model.verdict.dot ? ` ${model.verdict.dot}` : '')), node('span', '', model.verdict.text));
     if (model.verdict.tooltip) verdict.title = model.verdict.tooltip;
     row('eject', 'Eject', verdict);
-    if (model.freshness) row('data', 'Data', node('span', '', freshnessText(model.freshness)));
+    if (model.freshness?.line.length) {
+      // One line (two on a narrow screen); the rest is in the tooltip and
+      // under Show all.
+      const data = node('span', 'pharos-status-data');
+      for (const [index, group] of model.freshness.line.entries()) {
+        const item = node('span', group.muted ? 'pharos-sub' : '');
+        item.dataset.key = `data:${group.group}`;
+        item.append(index ? ' · ' : '');
+        if (group.label) item.append(node('strong', '', group.label), ' ');
+        item.append(group.text);
+        if (group.tooltip) item.title = group.tooltip;
+        data.append(item);
+      }
+      data.title = model.freshness.line.map(group => [group.label, group.text].filter(Boolean).join(' ') + (group.tooltip ? `\n${group.tooltip}` : '')).join('\n\n');
+      row('data', 'Data', data);
+    }
     if (model.load) row('load', 'Load', node('span', '', loadText(model.load)));
     appendWork(content, rows, model);
     if (model.others.length) {
@@ -429,7 +495,8 @@
       rows.append(term, detail);
     }
     if (rows.childElementCount) content.append(rows);
-    if (!model.moreCount && !model.finished) return;
+    const domains = model.freshness?.domains || [];
+    if (!model.moreCount && !model.finished && !domains.length) return;
     const details = node('details', 'pharos-status-all');
     details.dataset.key = 'show-all';
     if (showAll) details.open = true;
@@ -439,10 +506,24 @@
     details.append(summary);
     if (model.tree.length) details.append(treeList(model.tree));
     if (model.finished) details.append(node('div', 'pharos-sub pharos-status-finished', `${model.finished} finished`));
+    if (domains.length) details.append(dataList(domains));
     content.append(details);
   }
 
-  const freshnessText = value => Array.isArray(value) ? value.map(row => row.label || row.domain).filter(Boolean).join(' · ') : '';
+  // Show all's per-domain detail.
+  function dataList(domains) {
+    const list = node('ul', 'pharos-status-tree pharos-status-domains');
+    list.dataset.key = 'domains';
+    list.setAttribute('aria-label', 'Data');
+    for (const domain of domains) {
+      const entry = node('li', domain.state === 'current' ? 'pharos-sub' : '');
+      entry.dataset.key = `domain:${domain.domain}`;
+      entry.append(node('strong', '', domain.label), ` · ${domain.text}`);
+      if (domain.tooltip) entry.title = domain.tooltip;
+      list.append(entry);
+    }
+    return list;
+  }
   const loadText = value => [Number.isFinite(value?.cpu_percent) ? `${Math.round(value.cpu_percent)}% of one core` : '', Number.isFinite(value?.memory_bytes) ? size(value.memory_bytes) : ''].filter(Boolean).join(' · ');
 
   function treeList(items) {
@@ -571,7 +652,7 @@
   window.pharosStatusPanel = {
     open, close, toggle, render, renderHeader,
     // Pure helpers, for web/tests/unit/page/status-panel.test.mjs.
-    panelModel, chipModel, operationLine, lineText, treeNode, currentOperations, settleVerdict, ejectDecision, indexBusy, stepAmount,
+    panelModel, chipModel, operationLine, lineText, treeNode, currentOperations, settleVerdict, ejectDecision, indexBusy, stepAmount, dataModel, ago, span,
   };
   if (enabled()) activate();
 })();
