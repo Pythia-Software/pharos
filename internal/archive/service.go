@@ -40,6 +40,8 @@ type lifecycle struct {
 	once     sync.Once
 	closed   chan struct{} // closed once the catalog is
 	closeErr error
+	// release is the library.release operation of the stop in progress.
+	release *Op
 
 	// listening runs once Serve has bound its port.
 	listening func()
@@ -132,14 +134,25 @@ func (s *Server) beginStop() {
 
 // stop stops the service and closes the catalog, waiting at most timeout. A
 // stop that times out carries on; a later call waits for it again.
-func (s *Server) stop(timeout time.Duration) error {
+func (s *Server) stop(timeout time.Duration) error { return s.stopFor(triggerUser, timeout) }
+
+// stopFor is stop, recording what asked for it: user (a release before an
+// eject, a quit or a switch through the API), signal (SIGTERM or SIGINT, as
+// the broker sends when it stops a library), parent-exited, or error (the
+// listener failed). Only the first stop's trigger is recorded.
+func (s *Server) stopFor(trigger string, timeout time.Duration) error {
 	s.life.once.Do(func() {
+		started := time.Now()
+		_, s.life.release = s.begin(context.Background(), OperationSpec{Kind: "library.release", Trigger: trigger})
 		s.beginStop()
 		go func() {
 			defer s.exitOnFault()
 			debug.SetPanicOnFault(true)
 			s.life.requests.Wait()
 			s.life.workers.Wait()
+			// The journal's final round, before the catalog closes (§6.2).
+			s.life.release.Finish(nil)
+			_ = s.journal.flush(flushBudget(started, timeout, time.Now()))
 			s.life.closeErr = s.Catalog.Close()
 			s.life.mu.Lock()
 			released := s.life.released
@@ -188,7 +201,7 @@ func (s *Server) serveUntilStopped(server *http.Server, listener net.Listener) e
 	var err error
 	select {
 	case err = <-served:
-		_ = s.stop(stopTimeout)
+		_ = s.stopFor(triggerError, stopTimeout)
 	case <-s.life.closed:
 	case <-signals:
 		// A second signal, or a stop that never finishes, still ends the process.
@@ -200,10 +213,10 @@ func (s *Server) serveUntilStopped(server *http.Server, listener net.Listener) e
 			fmt.Fprintln(os.Stderr, "Pharos: exiting without closing the catalog")
 			os.Exit(1)
 		}()
-		err = s.stop(stopTimeout)
+		err = s.stopFor(triggerSignal, stopTimeout)
 	case <-parentGone(s.life.ctx, parent, time.Second):
 		fmt.Fprintln(os.Stderr, "Pharos: the app that started this service exited; stopping.")
-		err = s.stop(stopTimeout)
+		err = s.stopFor(triggerParentExited, stopTimeout)
 	case <-driveGone(s.life.ctx, dir, time.Second):
 		// Nothing can reach a drive that is gone, and closing the catalog would
 		// touch its mapped index (see exitOnFault), so exit without it.

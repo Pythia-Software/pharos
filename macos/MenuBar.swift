@@ -75,8 +75,34 @@ struct ManagedLibraryStatus: Equatable {
     /// or one it is too busy to report: creating a library holds the lock
     /// /api/app/state waits for.
     var operation: String?
+    /// A broker operation /api/app/operations reports running. That endpoint
+    /// never waits on the broker's lock, so it can say a library is being
+    /// created (or opened, moved, restored) while /api/app/state waits.
+    var brokerOperation: String?
 
-    var noLibrary: Bool { known && !selectedAvailable && operation == nil }
+    var noLibrary: Bool { known && !selectedAvailable && operation == nil && brokerOperation == nil }
+    /// What the menu says the broker is doing: what it reports running, or
+    /// what /api/app/state implies.
+    var activeOperation: String? { brokerOperation ?? operation }
+
+    /// The running broker operations of a /api/app/operations document, each
+    /// as its current step or the kind's verb; nil if it is not one.
+    static func runningBrokerOperations(_ document: [String: Any]) -> [String]? {
+        guard let app = document["app"] as? [String: Any], let operations = app["operations"] as? [[String: Any]] else { return nil }
+        let ended: Set<String> = ["succeeded", "failed", "cancelled", "interrupted", "skipped"]
+        return operations.compactMap { operation in
+            guard let state = operation["state"] as? String, !ended.contains(state) else { return nil }
+            let step = (operation["step"] as? [String: Any])?["name"] as? String
+            return step.flatMap { $0.isEmpty ? nil : $0 } ?? operation["verb"] as? String ?? operation["label"] as? String ?? unanswered
+        }
+    }
+
+    /// This status with the broker's running operations.
+    func withBrokerOperations(_ running: [String]) -> ManagedLibraryStatus {
+        var status = self
+        status.brokerOperation = running.first
+        return status
+    }
 
     /// A successful answer; nil if it is not a state document.
     static func answered(_ state: [String: Any]) -> ManagedLibraryStatus? {

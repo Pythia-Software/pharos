@@ -522,9 +522,13 @@ func runLibraryRecoverCLI(args []string) error {
 	if *backup == "" || *destination == "" {
 		return fmt.Errorf("usage: pharos library-recover --backup DIR --to NEW_DIR")
 	}
-	config, err := RecoverLibrary(context.Background(), *backup, *destination, func(s string) { fmt.Fprintln(os.Stderr, s) })
-	if err != nil {
-		return err
-	}
-	return printJSON(map[string]any{"config": config.Path, "capture_enabled": false})
+	// The destination is new, so no library's service can see it; the
+	// broker lists it from the app's lease directory (§6.5).
+	return runCLIOperationIn([]string{appLeaseDir()}, []string{expandPath(*destination)}, "library-recover", OperationSpec{Kind: "library.recover"}, func(ctx context.Context, op *Op) error {
+		config, err := RecoverLibrary(ctx, *backup, *destination, func(s string) { fmt.Fprintln(os.Stderr, s); op.Step(s, "", -1) })
+		if err != nil {
+			return err
+		}
+		return printJSON(map[string]any{"config": config.Path, "capture_enabled": false})
+	})
 }

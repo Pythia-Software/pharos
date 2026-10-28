@@ -470,13 +470,15 @@ func (s *Server) driveHealth() map[string]any {
 	config := s.Config()
 	state, refresh := drives.cached(config)
 	if refresh {
-		s.spawn(func(ctx context.Context) {
+		// A read that writes one library_size_history row (§3.4, hidden).
+		s.start(OperationSpec{Kind: "drive.measure", Trigger: triggerRead}, func(ctx context.Context, op *Op) error {
 			var fresh *driveState
 			defer func() { drives.store(config, fresh) }()
 			if state := collectDrive(ctx, config); ctx.Err() == nil {
 				state.growth = s.Catalog.recordCloudLibrarySize(ctx, config, state)
 				fresh = state
 			}
+			return nil
 		})
 	}
 	if state == nil {

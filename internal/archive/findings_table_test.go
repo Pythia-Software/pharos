@@ -142,7 +142,7 @@ func TestFindingsQueryTableEmpty(t *testing.T) {
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
 	spawned := false
-	catalog.background = func(func(context.Context)) bool { spawned = true; return true }
+	catalog.background = func(OperationSpec, func(context.Context, *Op) error) bool { spawned = true; return true }
 	w := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/findings/rows-v2",
 		qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id", "state"}, Limit: 10}})
 	var result struct {

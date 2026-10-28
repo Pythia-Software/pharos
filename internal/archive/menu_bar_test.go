@@ -237,9 +237,9 @@ func TestMenuBarUsageMatchesRollingSummary(t *testing.T) {
 	catalog, config := testCatalog(t)
 	ingestUsageFixture(t, catalog)
 	catalog.now = func() time.Time { return time.Date(2026, 9, 21, 2, 15, 0, 0, time.UTC) }
-	catalog.background = func(func(context.Context)) bool { return false }
+	catalog.background = func(OperationSpec, func(context.Context, *Op) error) bool { return false }
 	server := testServer(t, config, catalog)
-	catalog.background = func(func(context.Context)) bool { return false }
+	catalog.background = func(OperationSpec, func(context.Context, *Op) error) bool { return false }
 	summary, err := catalog.UsageSummary(t.Context())
 	if err != nil {
 		t.Fatal(err)

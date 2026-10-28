@@ -192,7 +192,7 @@ func (c *sourceCapture) pinReader(refs []recordObject) (func(), error) {
 			lease.Close()
 			lock, err := lockCaptureTarget(context.Background(), c.dir)
 			if err == nil {
-				defer lock.Close()
+				defer releaseLockFile(lock)
 				err = releasePreservationOwner(c.dir, owner)
 			}
 			if err == nil {
@@ -376,6 +376,7 @@ func lockCaptureTarget(ctx context.Context, dir string) (*os.File, error) {
 		}
 		return nil, err
 	}
+	opFrom(ctx).holdLock(f)
 	return f, nil
 }
 
@@ -385,19 +386,26 @@ func lockCaptureTarget(ctx context.Context, dir string) (*os.File, error) {
 // looking stuck; cancelling ctx (Stop, or a release) ends the wait.
 func waitCaptureLock(ctx context.Context, host string, acquire func() (*os.File, error)) (*os.File, error) {
 	waiting := false
+	op := opFrom(ctx)
 	for {
 		lock, err := acquire()
 		if !errors.Is(err, errCaptureBusy) || modeOf(ctx).automatic {
+			if waiting {
+				op.Unblock()
+			}
 			return lock, err
 		}
 		if !waiting {
 			waiting = true
 			reportWork(ctx, captureWaitPhase(host), "", 0, -1)
+			// After the report, which mirrors a new step into op.
+			op.Block("capture-running", "the capture on "+defaultString(host, "another Mac"))
 		}
 		timer := time.NewTimer(100 * time.Millisecond)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
+			op.Unblock()
 			return nil, ctx.Err()
 		case <-timer.C:
 		}
@@ -424,6 +432,7 @@ func beginInputCapture(ctx context.Context, config Config) (*captureSession, err
 		if err != nil {
 			return nil, err
 		}
+		opFrom(ctx).holdLock(session.lock)
 		return session.lock, nil
 	})
 	return session, err

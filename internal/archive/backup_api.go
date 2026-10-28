@@ -117,7 +117,8 @@ func (s *Server) startBackup(w http.ResponseWriter, body map[string]any) {
 		writeError(w, err, http.StatusConflict)
 		return
 	}
-	s.spawn(func(context.Context) {
+	_, handle := s.begin(s.life.ctx, OperationSpec{Kind: "backup.local", Subject: started.Destination, Trigger: triggerUser, Legacy: started.ID})
+	s.launch(handle, func(context.Context, *Op) error {
 		defer cancel()
 		run := started
 		defer func() {
@@ -128,7 +129,38 @@ func (s *Server) startBackup(w http.ResponseWriter, body map[string]any) {
 			}
 			s.backups.update(run, true)
 		}()
-		run = job.Run(ctx, func(progress BackupRun) { s.backups.update(progress, false) })
+		run = job.Run(ctx, func(progress BackupRun) {
+			s.backups.update(progress, false)
+			mirrorBackup(handle, progress)
+		})
+		return backupOutcome(ctx, run)
 	})
 	writeJSON(w, map[string]any{"ok": true, "run": started}, http.StatusAccepted)
+}
+
+// mirrorBackup follows a backup's progress: its phase and bytes, and the
+// wait for a capture as a block.
+func mirrorBackup(op *Op, run BackupRun) {
+	if run.Phase == "waiting for a capture to finish" {
+		op.Block("capture-running", "a capture on this Mac")
+		return
+	}
+	op.Unblock()
+	op.progress(defaultString(run.Phase, "starting"), "", "byte", float64(run.BytesCopied), float64(run.BytesTotal), run.BytesTotal > 0)
+}
+
+// backupOutcome is a finished backup's result for its operation: a partial
+// backup succeeded with what it could copy, a cancelled one ends from its
+// context (a user stop or a release).
+func backupOutcome(ctx context.Context, run BackupRun) error {
+	switch run.State {
+	case "cancelled":
+		return defaultError(ctx.Err(), errors.New("backup cancelled"))
+	case "failed":
+		if len(run.Errors) > 0 {
+			return errors.New(run.Errors[0].Error)
+		}
+		return errors.New("backup failed")
+	}
+	return nil
 }

@@ -2,6 +2,7 @@ package archive
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -264,9 +265,21 @@ func (m *mcpServer) direct(config Config, request map[string]any) (response map[
 		return nil, errLibraryReleased
 	}
 	var lease *os.File
+	// ops is the call's operation lease (§6.5): taken before the catalog
+	// opens and ended after it closes, so a service on this Mac sees the
+	// call's Initialize, its history store and the close's checkpoint. A
+	// call that cannot take it still answers, read-only: it opens the catalog
+	// without Initialize, stores no history and never checkpoints.
+	var ops *cliOperations
+	readOnly := false
+	var op *Op
 	defer func() {
 		if lease != nil {
 			lease.Close()
+		}
+		if ops != nil {
+			op.Finish(err)
+			ops.close()
 		}
 	}()
 	if _, e := os.Stat(config.CatalogPath); e == nil {
@@ -275,6 +288,9 @@ func (m *mcpServer) direct(config Config, request map[string]any) (response map[
 		}
 		if _, e = os.Stat(pendingDeliveryPath(config)); e == nil {
 			return nil, fmt.Errorf("this library is finishing a verified move; resume it in Pharos")
+		}
+		if ops, op, e = beginMCPCallLease(config); e != nil {
+			readOnly = true
 		}
 	}
 	defer debug.SetPanicOnFault(debug.SetPanicOnFault(true))
@@ -287,7 +303,12 @@ func (m *mcpServer) direct(config Config, request map[string]any) (response map[
 			response, err = nil, libraryFault(config.CatalogPath, value)
 		}
 	}()
-	catalog, err := OpenCatalogForQuery(config.CatalogPath)
+	var catalog *Catalog
+	if readOnly {
+		catalog, err = openCatalogReadOnly(config.CatalogPath)
+	} else {
+		catalog, err = OpenCatalogForQuery(config.CatalogPath)
+	}
 	if errors.Is(err, os.ErrNotExist) {
 		if config.Library {
 			m.verified = ""
@@ -295,7 +316,14 @@ func (m *mcpServer) direct(config Config, request map[string]any) (response map[
 		}
 		// Only a library refuses to start a missing catalog (see checkLibrary).
 		if err = config.EnsureDirs(); err == nil {
-			catalog, err = OpenCatalog(config.CatalogPath)
+			// Creating a catalog writes, so it needs the lease. A call holds
+			// at most one: one taken above stays.
+			if ops == nil {
+				ops, op, err = beginMCPCallLease(config)
+			}
+			if err == nil {
+				catalog, err = OpenCatalog(config.CatalogPath)
+			}
 		}
 	}
 	if err != nil {
@@ -303,15 +331,36 @@ func (m *mcpServer) direct(config Config, request map[string]any) (response map[
 	}
 	catalog.setCaptureRoot(config.CaptureRoot)
 	response = m.answer(catalog, request)
-	held := lease
-	lease = nil
+	held, heldOps, heldOp := lease, ops, op
+	lease, ops = nil, nil
 	m.release = func() {
-		catalog.closeQuery()
+		closeCatalog := func() {
+			catalog.closeQuery()
+			heldOp.Finish(nil)
+		}
+		if heldOps == nil {
+			closeCatalog()
+		} else {
+			heldOps.closeWith(closeCatalog)
+		}
 		if held != nil {
 			held.Close()
 		}
 	}
 	return response, nil
+}
+
+// beginMCPCallLease takes a direct MCP call's operation lease beside the
+// catalog. It names no host: looking this Mac up can wait for ioreg, and a
+// lease counts for the eject verdict by its flock alone, which only a
+// process on this Mac can hold. It is not fsynced while live (§6.5).
+func beginMCPCallLease(config Config) (*cliOperations, *Op, error) {
+	ops, err := beginCLIOperationsAs("", []string{leaseDirs(config)[0]}, nil, nil, "mcp", "maintenance.mcp-history", "catalog.initialize")
+	if err != nil {
+		return nil, nil, err
+	}
+	_, op := ops.begin(context.Background(), OperationSpec{Kind: "maintenance.mcp-history", Trigger: triggerRead})
+	return ops, op, nil
 }
 
 func libraryFault(catalogPath string, value any) error {

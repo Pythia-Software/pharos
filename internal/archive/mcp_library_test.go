@@ -975,3 +975,72 @@ func TestMCPStatusRunsTheLibrarysOwnApp(t *testing.T) {
 		t.Fatalf("command line %q %v", line, err)
 	}
 }
+
+// A direct call (no service answering) holds an operation lease from before
+// it opens the catalog until after it closes: its Initialize, its queued
+// history and the close's checkpoint all write the library (§6.5). Without
+// the lease it still answers, but writes nothing.
+func TestDirectMCPCallHoldsAnOperationLease(t *testing.T) {
+	config := testLibrary(t, filepath.Join(t.TempDir(), "Pharos"))
+	server := newMCPServer(config.Path)
+	server.identity = testIdentity
+	verdict := func() ejectVerdict {
+		return computeEjectVerdict(verdictInput{fresh: true, leases: probeLeases(leaseDirs(config))})
+	}
+	response := server.handle(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": map[string]any{"name": "search_work", "arguments": map[string]any{}}})
+	if text, isError := toolTextOf(response); isError {
+		t.Fatal(text)
+	}
+	// Answered, with the history not yet stored and the catalog still open.
+	if v := verdict(); v.Verdict != verdictBusy || len(v.Blockers) != 1 || v.Blockers[0].Kind != "maintenance.mcp-history" {
+		t.Fatalf("a direct call's open catalog does not keep the drive busy: %+v", v)
+	}
+	server.afterAnswer(nil)
+	if v := verdict(); v.Verdict != verdictSafe {
+		t.Fatalf("the lease outlived the call: %+v", v)
+	}
+	if count := mcpCalls(t, reopenCatalog(t, config.CatalogPath)); count != 1 {
+		t.Fatalf("stored %d calls", count)
+	}
+
+	// Looking this Mac up can hang (ioreg); the lease does not wait for it.
+	previous := currentHost
+	hanging := make(chan struct{})
+	currentHost = func() Host {
+		<-hanging
+		return previous()
+	}
+	started := time.Now()
+	response = server.handle(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+		"params": map[string]any{"name": "list_repositories", "arguments": map[string]any{}}})
+	took := time.Since(started)
+	busy := computeEjectVerdict(verdictInput{fresh: true, leases: probeLeases(leaseDirs(config))})
+	currentHost = previous
+	close(hanging)
+	if text, isError := toolTextOf(response); isError || took > 2*time.Second {
+		t.Fatalf("a direct call while the host lookup hangs: %v, %s", took, text)
+	}
+	if busy.Verdict != verdictBusy {
+		t.Fatalf("a lease written without the host does not keep the drive busy: %+v", busy)
+	}
+	server.afterAnswer(nil)
+
+	// A call that cannot take its lease still answers, read-only: it stores
+	// no history.
+	if err := os.RemoveAll(leaseDirs(config)[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(leaseDirs(config)[0], []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	response = server.handle(map[string]any{"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+		"params": map[string]any{"name": "search_work", "arguments": map[string]any{}}})
+	if text, isError := toolTextOf(response); isError {
+		t.Fatalf("a call without its lease failed: %s", text)
+	}
+	server.afterAnswer(nil)
+	if count := mcpCalls(t, reopenCatalog(t, config.CatalogPath)); count != 2 {
+		t.Fatalf("a call without its lease stored history: %d calls", count)
+	}
+}

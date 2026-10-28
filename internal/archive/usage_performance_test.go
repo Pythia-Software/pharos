@@ -475,7 +475,7 @@ func TestUsagePerformanceServer(t *testing.T) {
 	c := usagePerformanceCatalog(t)
 	usagePerformanceDay(t, c)
 	s := testServer(t, Config{Host: "127.0.0.1", APIToken: "usage-probe"}, c)
-	c.background = func(func(context.Context)) bool { return false }
+	c.background = func(OperationSpec, func(context.Context, *Op) error) bool { return false }
 	defer s.life.cancel()
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if assets := os.Getenv("PHAROS_USAGE_ASSETS"); assets != "" {

@@ -109,6 +109,7 @@ var errCheckpointBusy = errors.New("catalog checkpoint incomplete: the WAL is st
 // second if a reader of an older snapshot or another writer is still active.
 // Readers are never blocked.
 func (c *Catalog) Checkpoint() error {
+	cliWriteCheck("checkpoint")
 	// Don't wait indefinitely for a pooled connection either, e.g. in Close
 	// while long queries still hold every connection.
 	acquire, cancel := context.WithTimeout(context.Background(), time.Duration(checkpointWaitMS)*time.Millisecond)
@@ -162,9 +163,17 @@ func (c *Catalog) boundWAL(limit int64) {
 	if time.Now().Before(c.wal.retryAt) {
 		return
 	}
-	if err := c.Checkpoint(); err != nil {
+	// Only a check that runs a checkpoint is an operation (§3.4).
+	_, op := c.beginOp(context.Background(), OperationSpec{Kind: "maintenance.checkpoint", Variant: "bound", Trigger: triggerSchedule})
+	err := c.Checkpoint()
+	if err != nil {
 		c.wal.retryAt = time.Now().Add(walRetryDelay)
 	}
+	if errors.Is(err, errCheckpointBusy) {
+		op.Skip("catalog-busy")
+		return
+	}
+	op.Finish(err)
 }
 
 // keepWALSmall bounds the WAL between syncs and while other processes write.

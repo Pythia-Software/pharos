@@ -270,7 +270,7 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 				original := view.original(unit.Reader.Config().Path)
 				rel, err := filepath.Rel(view.dir, unit.Reader.Config().Path)
 				if err != nil {
-					lock.Close()
+					releaseLockFile(lock)
 					result.Detail = err.Error()
 					return
 				}
@@ -283,7 +283,7 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 				manifest = &selected
 			}
 			input, err := freezeManifestInput(ctx, captureTarget{Host: view.host, Source: manifest.Source.Name, Dir: view.dir}, SourceConfig{}, len(manifest.Snapshots) == 0 && manifest.RetainedInputCapture, manifest)
-			lock.Close()
+			releaseLockFile(lock)
 			if err != nil {
 				result.Detail = err.Error()
 				return
@@ -1001,9 +1001,15 @@ func (s *Server) startVerification(w http.ResponseWriter, r *http.Request, body 
 		writeError(w, errors.New("a capture or index is already running"), 409)
 		return
 	}
-	run := s.startRunNamed("verification", nil)
+	variant := "sample"
+	if boolValue(body, "all", false) {
+		variant = "all"
+	}
+	_, handle := s.begin(s.life.ctx, OperationSpec{Kind: "index.verify", Variant: variant, Trigger: triggerUser})
+	run := s.startRunFor(handle, "verification", nil)
 	ctx, end := s.beginIngest(run.ID)
-	if !s.spawn(func(context.Context) {
+	ctx = withOp(ctx, handle)
+	if !s.launch(handle, func(context.Context, *Op) error {
 		defer s.ingestMu.Unlock()
 		defer end()
 		result := auditResult{}
@@ -1035,6 +1041,7 @@ func (s *Server) startVerification(w http.ResponseWriter, r *http.Request, body 
 			run.CompletedAt = now()
 			run.Error = nilIfEmpty(result.Detail)
 		})
+		return nil
 	}) {
 		end()
 		s.ingestMu.Unlock()

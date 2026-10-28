@@ -161,15 +161,19 @@ func (t *partTracker) flush(c *Catalog) error {
 		return nil
 	}
 	// Runs after a cancellation too: the parts were parsed and are current.
-	tx, err := c.beginWrite(context.Background())
+	// Through the writer gate, so the journal's lane yields to it (§6.2).
+	tx, finish, err := c.beginTrackedWrite(context.Background(), "part-states")
 	if err != nil {
 		return err
 	}
 	if err := t.record(tx, nil); err != nil {
 		tx.Rollback()
+		finish()
 		return err
 	}
-	if err := tx.Commit(); err != nil {
+	err = tx.Commit()
+	finish()
+	if err != nil {
 		return err
 	}
 	c.boundWAL(walSizeLimit)

@@ -41,6 +41,18 @@ func (m *applicationManager) startOperation(w http.ResponseWriter, r *http.Reque
 		writeError(w, err, 400)
 		return
 	}
+	// Registered before the services stop, so the lock-free snapshot shows
+	// it from the start.
+	var op *Op
+	if recovering {
+		op = m.operations.begin(OperationSpec{Kind: "library.recover", Trigger: triggerUser})
+	} else {
+		variant := "copy"
+		if body["move"] == true {
+			variant = "move"
+		}
+		op = m.operations.begin(OperationSpec{Kind: "library.transfer", Variant: variant, Trigger: triggerUser}, firstString(body["source"]), firstString(body["target"]))
+	}
 	m.busy = true
 	m.generation++
 	for id := range m.children {
@@ -48,10 +60,11 @@ func (m *applicationManager) startOperation(w http.ResponseWriter, r *http.Reque
 	}
 	m.mu.Unlock()
 	m.reportJob("running", "Preparing library operation")
-	go func() {
+	op.Step("Preparing library operation", "", -1)
+	m.operations.launch(op, func(op *Op) error {
 		defer m.operationMu.Unlock()
-		defer func() { m.mu.Lock(); m.busy = false; m.mu.Unlock() }()
-		progress := func(s string) { m.reportJob("running", s) }
+		defer func() { m.mu.Lock(); m.busy = false; m.publishLocked(); m.mu.Unlock() }()
+		progress := func(s string) { m.reportJob("running", s); op.Step(s, "", -1) }
 		if recovering {
 			var config Config
 			config, err = RecoverLibrary(m.ctx, firstString(body["backup"]), firstString(body["path"]), progress)
@@ -74,7 +87,8 @@ func (m *applicationManager) startOperation(w http.ResponseWriter, r *http.Reque
 		} else {
 			m.reportJob("complete", "Library operation completed and verified")
 		}
-	}()
+		return err
+	})
 	writeJSON(w, map[string]any{"started": true}, http.StatusAccepted)
 }
 
@@ -103,21 +117,27 @@ func (m *applicationManager) deliveryCycle(sourceID, targetID string) {
 	if m.suspended[targetID] {
 		targetErr = fmt.Errorf("archive is released; pending history stays local until its drive returns")
 	}
+	deliver := m.operations.begin(OperationSpec{Kind: "library.deliver", Trigger: triggerSchedule}, sourceID, targetID)
+	defer func() { deliver.Finish(err) }()
 	m.busy = true
 	m.generation++
 	m.stopChildLocked(sourceID)
 	m.stopChildLocked(targetID)
 	m.mu.Unlock()
-	defer func() { m.mu.Lock(); m.busy = false; m.mu.Unlock() }()
-	progress := func(s string) { m.reportJob("running", s) }
+	defer func() { m.mu.Lock(); m.busy = false; m.publishLocked(); m.mu.Unlock() }()
+	progress := func(s string) { m.reportJob("running", s); deliver.Step(s, "", -1) }
 	if _, e := os.Stat(pendingDeliveryPath(source)); os.IsNotExist(e) {
 		progress("Capturing approved sources into the pending library")
+		_, capture := deliver.Child(OperationSpec{Kind: "library.deliver.capture", Libraries: []string{sourceID}, Trigger: triggerChained})
 		err = capturePendingLibrary(m.ctx, source)
+		capture.Finish(err)
 	}
 	if err == nil {
 		err = targetErr
 		if err == nil {
-			_, err = TransferLibrary(m.ctx, source, target, true, progress)
+			_, move := deliver.Child(OperationSpec{Kind: "library.transfer", Variant: "move", Libraries: []string{sourceID, targetID}, Trigger: triggerChained})
+			_, err = TransferLibrary(m.ctx, source, target, true, func(s string) { progress(s); move.Step(s, "", -1) })
+			move.Finish(err)
 		}
 	}
 	if err != nil {

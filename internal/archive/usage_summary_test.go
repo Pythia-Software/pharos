@@ -46,7 +46,7 @@ func TestUsageSummaryWindows(t *testing.T) {
 	now := time.Date(2026, 9, 21, 2, 15, 0, 0, time.UTC)
 	catalog.now = func() time.Time { return now }
 	// Keep the authorship rebuild from replacing the rows below.
-	catalog.background = func(func(context.Context)) bool { return false }
+	catalog.background = func(OperationSpec, func(context.Context, *Op) error) bool { return false }
 	for _, message := range []struct {
 		id     string
 		sentAt time.Time
@@ -89,7 +89,7 @@ func TestUsageSummaryWindows(t *testing.T) {
 
 func TestUsageSummaryLedgerMatchesUsagePage(t *testing.T) {
 	catalog, _ := testCatalog(t)
-	catalog.background = func(func(context.Context)) bool { return false }
+	catalog.background = func(OperationSpec, func(context.Context, *Op) error) bool { return false }
 	for _, item := range []struct {
 		id, source, model string
 		total             int64
@@ -172,7 +172,7 @@ func TestUsageSummaryLedgerMatchesUsagePage(t *testing.T) {
 
 func TestUsageSummaryEmptyAndCanceled(t *testing.T) {
 	catalog, _ := testCatalog(t)
-	catalog.background = func(func(context.Context)) bool { return false }
+	catalog.background = func(OperationSpec, func(context.Context, *Op) error) bool { return false }
 	summary, err := catalog.UsageSummary(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -191,7 +191,7 @@ func TestUsageSummaryEmptyAndCanceled(t *testing.T) {
 
 func BenchmarkUsageSummary(b *testing.B) {
 	catalog, _ := testCatalog(b)
-	catalog.background = func(func(context.Context)) bool { return false }
+	catalog.background = func(OperationSpec, func(context.Context, *Op) error) bool { return false }
 	catalog.now = func() time.Time { return time.Date(2026, 9, 21, 2, 15, 0, 0, time.UTC) }
 	// Approximately the real catalog's 46,500 hourly ledger entries, with
 	// workspace text large enough to reveal accidental full-record reads.

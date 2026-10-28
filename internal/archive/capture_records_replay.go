@@ -529,13 +529,13 @@ func openSQLiteReplay(ctx context.Context, target captureTarget) (*sqliteReplayA
 	}
 	c, e := sourceCaptureForTarget(ctx, target)
 	if e != nil {
-		lock.Close()
+		releaseLockFile(lock)
 		return nil, nil, e
 	}
 	s := newRecordStore(c)
 	revs, e := s.revisions()
 	if e != nil || len(revs) == 0 {
-		lock.Close()
+		releaseLockFile(lock)
 		return nil, nil, e
 	}
 	allRefs := []recordObject{}
@@ -547,10 +547,10 @@ func openSQLiteReplay(ctx context.Context, target captureTarget) (*sqliteReplayA
 	}
 	close, e := c.pinReader(allRefs)
 	if e != nil {
-		lock.Close()
+		releaseLockFile(lock)
 		return nil, nil, e
 	}
-	lock.Close()
+	releaseLockFile(lock)
 	config := c.source
 	config.Path = target.Dir
 	adapter := &sqliteReplayAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only", view: newCaptureView(target.Host, target.Dir, c.manifest)}, store: s, revisions: revs}

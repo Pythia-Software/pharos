@@ -37,6 +37,7 @@ type applicationChild struct {
 	endpoint applicationEndpoint
 	cmd      *exec.Cmd
 	done     chan struct{}
+	started  time.Time
 }
 
 type applicationManager struct {
@@ -56,6 +57,15 @@ type applicationManager struct {
 	released    bool
 	suspended   map[string]bool
 	missing     map[string]bool
+	// operations is the broker's registry (operation_broker.go), readable
+	// without mu.
+	operations *brokerOperations
+	// starts counts each library's service starts, so a later one is a
+	// respawn; startTrigger overrides the trigger of the next.
+	starts map[string]int
+	// leaseDirCache maps a library configuration to its lease directories.
+	leaseDirCache map[string][]string
+	startTrigger  string
 }
 
 func applicationRuntimePath(id string) string {
@@ -72,8 +82,11 @@ func newApplicationManager(ctx context.Context, application string) (*applicatio
 	if r.Selected == "" && r.library(r.MCP) != nil {
 		r.Selected = r.MCP
 	}
-	return &applicationManager{registry: r, id: installationID(application), token: randomToken(), children: map[string]*applicationChild{}, suspended: map[string]bool{}, missing: map[string]bool{}, ctx: ctx,
-		client: &http.Client{Timeout: 2 * time.Minute, Transport: &http.Transport{Proxy: nil}}}, nil
+	m := &applicationManager{registry: r, id: installationID(application), token: randomToken(), children: map[string]*applicationChild{}, suspended: map[string]bool{}, missing: map[string]bool{}, ctx: ctx,
+		client: &http.Client{Timeout: 2 * time.Minute, Transport: &http.Transport{Proxy: nil}}, starts: map[string]int{}, leaseDirCache: map[string][]string{}}
+	m.operations = newBrokerOperations(brokerOperationsPath(m.id))
+	m.publishLocked()
+	return m, nil
 }
 
 func runApplicationCLI(args []string) error {
@@ -159,6 +172,7 @@ func runApplicationCLI(args []string) error {
 			}
 		}()
 	}
+	m.operations.start(ctx)
 	go m.maintain()
 	err = server.Serve(listener)
 	// Operations use this context and must reach their cancellation boundary
@@ -210,13 +224,31 @@ func (m *applicationManager) childLocked(id string) (*applicationChild, error) {
 	if d.ID != l.ID || d.Instance != l.Instance {
 		return nil, fmt.Errorf("the selected library was restored or replaced; recover or register it explicitly")
 	}
+	trigger := m.startTrigger
+	if trigger == "" {
+		trigger = triggerStartup
+		if m.starts[id] > 0 {
+			trigger = triggerRespawn
+		}
+	}
+	m.starts[id]++
+	start := m.operations.begin(OperationSpec{Kind: "service.start", Trigger: trigger}, id)
+	child, err := m.startChildLocked(id, l, config, start)
+	start.Finish(err)
+	m.publishLocked()
+	return child, err
+}
+
+// startChildLocked starts library l's service and waits for it to answer.
+func (m *applicationManager) startChildLocked(id string, l *registeredLibrary, config Config, start *Op) (*applicationChild, error) {
+	start.Step("Start the library's service", "", -1)
 	path := filepath.Join(filepath.Dir(installationPath(m.id)), "service-"+l.ID+".json")
 	_ = os.Remove(path)
 	cmd := exec.Command(runningExecutable(), "--config", config.Path, "serve", "--dynamic", "--endpoint", path, "--application", m.registry.Application)
 	cmd.Env = append(os.Environ(), parentEnv+"="+strconv.Itoa(os.Getpid()))
 	cmd.Stderr = os.Stderr
 	c := &applicationChild{cmd: cmd, done: make(chan struct{})}
-	if err = cmd.Start(); err != nil {
+	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
 	go func() { _ = cmd.Wait(); close(c.done) }()
@@ -250,11 +282,21 @@ func (m *applicationManager) childLocked(id string) (*applicationChild, error) {
 			}
 			response.Body.Close()
 			if response.StatusCode == http.StatusOK {
+				c.started = time.Now()
 				m.children[id] = c
 				return c, nil
 			}
 		}
 	}
+}
+
+// childIDsLocked lists the libraries whose services are running.
+func (m *applicationManager) childIDsLocked() []string {
+	ids := []string{}
+	for id := range m.children {
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 func (m *applicationManager) stopChildLocked(id string) {
@@ -268,6 +310,7 @@ func (m *applicationManager) stopChildLocked(id string) {
 		delete(m.children, id)
 	case <-time.After(stopTimeout):
 	}
+	m.publishLocked()
 }
 
 func (m *applicationManager) authorized(r *http.Request) bool {
@@ -299,6 +342,11 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"ready": true}, http.StatusOK)
 		return
 	}
+	// Never takes m.mu, which create and child starts hold for minutes.
+	if r.URL.Path == "/api/app/operations" && r.Method == http.MethodGet {
+		writeJSON(w, m.operations.document(r.Context(), r.URL.Query().Get("libraries") != "0"), http.StatusOK)
+		return
+	}
 	if r.Method == "POST" && !sameOrigin(r) {
 		writeError(w, fmt.Errorf("request origin does not match this app"), http.StatusForbidden)
 		return
@@ -310,6 +358,8 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		defer m.operationMu.Unlock()
 		m.mu.Lock()
+		release := m.operations.begin(OperationSpec{Kind: "library.release", Trigger: triggerUser}, m.childIDsLocked()...)
+		defer func() { release.Finish(nil) }()
 		m.released = true
 		m.generation++
 		for id := range m.children {
@@ -586,7 +636,11 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 		defer m.operationMu.Unlock()
 		m.mu.Lock()
 		defer m.mu.Unlock()
+		defer m.publishLocked()
 		volume := firstString(body["volume"])
+		release := m.operations.begin(OperationSpec{Kind: "library.release", Subject: volume, Trigger: triggerDevice}, m.childIDsLocked()...)
+		var releaseErr error
+		defer func() { release.Finish(releaseErr) }()
 		if volume == "" {
 			writeError(w, fmt.Errorf("missing volume identity"), 400)
 			return
@@ -603,7 +657,8 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 				m.suspended[l.ID] = true
 				m.stopChildLocked(l.ID)
 				if m.children[l.ID] != nil {
-					writeError(w, fmt.Errorf("library is still closing; retry eject shortly"), 503)
+					releaseErr = fmt.Errorf("library is still closing; retry eject shortly")
+					writeError(w, releaseErr, 503)
 					return
 				}
 			}
@@ -616,6 +671,7 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	defer m.publishLocked()
 	if m.busy && (r.URL.Path == "/api/app/create" || r.URL.Path == "/api/app/open" || r.URL.Path == "/api/app/connect") {
 		writeError(w, fmt.Errorf("wait for the current library operation to finish"), http.StatusConflict)
 		return
@@ -663,8 +719,10 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 			err = fmt.Errorf("choose a library folder outside the application bundle")
 			break
 		}
+		create := m.operations.begin(OperationSpec{Kind: "library.create", Subject: name, Trigger: triggerUser})
 		var config Config
 		config, err = InitLibrary(path, libraryVolumeIdentity)
+		create.Finish(err)
 		if err != nil {
 			break
 		}
@@ -706,7 +764,9 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 	case "/api/app/connect":
 		id := firstString(body["id"])
 		delete(m.suspended, id)
+		m.startTrigger = triggerUser
 		_, err = m.childLocked(id)
+		m.startTrigger = ""
 		if err == nil {
 			m.registry.Selected = id
 			m.generation++
@@ -886,6 +946,7 @@ func (m *applicationManager) maintain() {
 			if selected != "" {
 				_, _ = m.childLocked(selected)
 			}
+			m.publishLocked()
 			source, target := m.registry.DeliverySource, m.registry.DeliveryTarget
 			m.mu.Unlock()
 			if source != "" && target != "" {

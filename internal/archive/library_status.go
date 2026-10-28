@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -129,14 +130,18 @@ func (t *backgroundTasks) gitProgress() *activityWork {
 // completed.
 func (s *Server) refreshGitInBackground(backfill bool) {
 	reason := "after the last index"
+	// The one-time backfill at startup is a Git lookup; after a legacy source
+	// sync it is the Git, tools and findings refresh (§3.3).
+	spec := OperationSpec{Kind: "analysis.refresh", Trigger: triggerChained}
 	if backfill {
 		reason = "first scan of this catalog"
+		spec = OperationSpec{Kind: "analysis.git", Variant: "backfill", Trigger: triggerStartup}
 	}
 	s.tasks.addGit(1, reason)
-	started := s.spawn(func(ctx context.Context) {
+	started := s.start(spec, func(ctx context.Context, op *Op) error {
 		defer s.tasks.addGit(-1, "")
 		_, since, _ := s.tasks.gitRunning()
-		meter := &runWorkMeter{server: s, runID: "git:" + since, kind: "git", model: "analysis-v1:git", publish: s.tasks.setGitWork}
+		meter := &runWorkMeter{server: s, runID: "git:" + since, kind: "git", model: "analysis-v1:git", publish: func(w activityWork) { s.tasks.setGitWork(w); op.mirrorWork(w) }}
 		defer func() { meter.release(ctx.Err() == nil) }()
 		ctx = withWorkProgress(ctx, meter.report)
 		meter.report(activityWork{Phase: "waiting for Git refresh"})
@@ -144,18 +149,20 @@ func (s *Server) refreshGitInBackground(backfill bool) {
 		if backfill {
 			refresh, name = s.Catalog.backfillMainIntegrations, "backfill"
 		}
-		if err := refresh(ctx); err != nil && ctx.Err() == nil {
-			fmt.Fprintf(os.Stderr, "Git integration %s: %v\n", name, err)
+		failure := refresh(ctx)
+		if failure != nil && ctx.Err() == nil {
+			fmt.Fprintf(os.Stderr, "Git integration %s: %v\n", name, failure)
 		}
 		meter.finish(ctx.Err() == nil)
 		if backfill {
-			return
+			return failure
 		}
 		meter.model = "analysis-v1:tools"
 		meter.report(activityWork{Phase: "refreshing tools"})
 		// Rebuild the Tools rollup now rather than on the next page view.
 		if err := s.Catalog.ensureToolRollup(ctx); err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Tool rollup: %v\n", err)
+			failure = errors.Join(failure, err)
 		}
 		meter.finish(ctx.Err() == nil)
 		meter.model = "analysis-v1:findings"
@@ -164,7 +171,9 @@ func (s *Server) refreshGitInBackground(backfill bool) {
 		// and between them only the findings being measured.
 		if err := s.Catalog.RefreshFindings(ctx, false); err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Findings: %v\n", err)
+			failure = errors.Join(failure, err)
 		}
+		return failure
 	})
 	if !started {
 		s.tasks.addGit(-1, "")
@@ -231,7 +240,13 @@ func fraction(done, total float64) *float64 {
 }
 
 // libraryActivities lists what is running now.
-func (s *Server) libraryActivities() []libraryActivity {
+func (s *Server) libraryActivities() []libraryActivity { return s.libraryActivitiesProbing(true) }
+
+// libraryActivitiesProbing is libraryActivities; without probeLocks it skips
+// the capture lock probe (captureActive), so a shadow read never takes a lock
+// a capture might be about to take: it reuses the last probe's result if one
+// is under captureProbeReuse old, and otherwise leaves it out.
+func (s *Server) libraryActivitiesProbing(probeLocks bool) []libraryActivity {
 	activities := []libraryActivity{}
 	s.runsMu.RLock()
 	for _, run := range s.runs {
@@ -323,7 +338,7 @@ func (s *Server) libraryActivities() []libraryActivity {
 			Work: work, StartedAt: run.StartedAt, Writes: true,
 			OnEject: "Stops between files; the next capture resumes it, and what was captured stays valid."})
 	}
-	if !serviceCapture && s.captureActive() {
+	if !serviceCapture && s.otherCaptureActive(probeLocks) {
 		activities = append(activities, libraryActivity{Kind: "capture-other", Label: "Capture by another process",
 			Detail: "Another process on this Mac, such as pharos capture, is capturing into the library.", Writes: true,
 			OnEject: "Pharos cannot stop it: wait for it to finish, or stop it, before ejecting; until then it keeps the drive busy."})
@@ -466,4 +481,32 @@ func (s *Server) libraryStatus() map[string]any {
 		"unplug":          unplugAdvice(drive, activities),
 		"library_refresh": refresh,
 	}
+}
+
+// captureProbeReuse is how long a polled read may reuse the last probe of
+// this Mac's capture lock.
+var captureProbeReuse = 5 * time.Second
+
+// captureProbe is the last result of captureActive's lock probe, taken on
+// the status path.
+type captureProbe struct {
+	mu   sync.Mutex
+	at   time.Time
+	held bool
+}
+
+// otherCaptureActive reports a capture by another process holding this
+// Mac's capture lock: probed now (captureActive) when probe, else the last
+// probe's result if it is recent, else false.
+func (s *Server) otherCaptureActive(probe bool) bool {
+	if probe {
+		held := s.captureActive()
+		s.captureProbe.mu.Lock()
+		s.captureProbe.at, s.captureProbe.held = time.Now(), held
+		s.captureProbe.mu.Unlock()
+		return held
+	}
+	s.captureProbe.mu.Lock()
+	defer s.captureProbe.mu.Unlock()
+	return s.captureProbe.held && time.Since(s.captureProbe.at) < captureProbeReuse
 }

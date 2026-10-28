@@ -74,6 +74,10 @@ func (s *Server) stopIngest() bool {
 
 // runIndexCLI: pharos index [--host ID | --all-hosts] [SOURCE ...]
 func runIndexCLI(config Config, catalog *Catalog, args []string) error {
+	return runIndexCLIContext(context.Background(), config, catalog, args)
+}
+
+func runIndexCLIContext(ctx context.Context, config Config, catalog *Catalog, args []string) error {
 	flags := flag.NewFlagSet("index", flag.ContinueOnError)
 	host := flags.String("host", "", "index this host's captures (default: this Mac's)")
 	all := flags.Bool("all-hosts", false, "index every captured host")
@@ -91,7 +95,7 @@ func runIndexCLI(config Config, catalog *Catalog, args []string) error {
 	if err != nil {
 		return err
 	}
-	results, links, err := catalog.indexCaptureTargets(context.Background(), targets, func(target captureTarget, result IngestResult, elapsed time.Duration) {
+	results, links, err := catalog.indexCaptureTargets(ctx, targets, func(target captureTarget, result IngestResult, elapsed time.Duration) {
 		fmt.Fprintf(os.Stderr, "%s: %d workspaces written, %d parts parsed, %d unchanged in %.1fs; error: %v\n", target.label(),
 			result.Workspaces, result.Parsed, result.Unchanged, elapsed.Seconds(), result.Error)
 	})
@@ -161,9 +165,11 @@ func (s *Server) startIndex(w http.ResponseWriter, body map[string]any) {
 	for _, target := range targets {
 		labels = append(labels, target.label())
 	}
-	run := s.startRunNamed(indexRunKind, labels)
+	_, handle := s.begin(s.life.ctx, OperationSpec{Kind: "index.captures", Trigger: triggerUser})
+	run := s.startRunFor(handle, indexRunKind, labels)
 	ctx, end := s.beginIngest(run.ID)
-	started := s.spawn(func(lifecycleCtx context.Context) {
+	ctx = withOp(ctx, handle)
+	started := s.launch(handle, func(lifecycleCtx context.Context, op *Op) error {
 		needsUpgrade := autoUpgrade
 		if autoUpgrade {
 			if steps, err := s.Catalog.UpgradeSteps(lifecycleCtx); err == nil {
@@ -177,10 +183,14 @@ func (s *Server) startIndex(w http.ResponseWriter, body map[string]any) {
 		}()
 		completed := slices.ContainsFunc(s.indexRuns(), func(indexed SyncRun) bool { return indexed.ID == run.ID && indexed.State == "complete" })
 		if needsUpgrade && completed && lifecycleCtx.Err() == nil {
-			if err := s.Catalog.RunUpgrade(lifecycleCtx, nil); err != nil && lifecycleCtx.Err() == nil {
+			upgradeCtx, upgrade := op.Child(OperationSpec{Kind: "library.upgrade", Trigger: triggerChained})
+			err := s.Catalog.RunUpgrade(upgradeCtx, nil)
+			upgrade.Finish(err)
+			if err != nil && lifecycleCtx.Err() == nil {
 				fmt.Fprintf(os.Stderr, "Library upgrade after indexing: %v\n", err)
 			}
 		}
+		return nil
 	})
 	if !started {
 		// A stop began after this request was admitted.
@@ -311,7 +321,7 @@ func (s *Server) indexTargets(ctx context.Context, runID string, targets []captu
 	if serviceUp {
 		// A user stop cancels ingestion, not reconciliation of committed data.
 		// The service lifetime still cancels this work for release/eject.
-		finishCtx := withOperationForecast(withWorkProgress(s.life.ctx, workMeter.report), op)
+		finishCtx := withOp(withOperationForecast(withWorkProgress(s.life.ctx, workMeter.report), op), opFrom(ctx))
 		// The operation includes the required derived work. Run it through the
 		// same coordinator as manual incremental indexing, so completion and its
 		// forecast cover Git, tools, authorship and findings as well.

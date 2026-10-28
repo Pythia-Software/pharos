@@ -238,6 +238,18 @@ final class MenuFixture: URLProtocol {
         precondition(failed.current(pendingFor: nil) == failed)
         precondition(none.current(pendingFor: 3) == none && none.current(pendingFor: 7).operation == ManagedLibraryStatus.unanswered)
         precondition(recovering.unansweredRequest().operation == "Restoring the backup")
+        // /api/app/operations answers while /api/app/state waits on a create:
+        // its running operation keeps the menu from saying no library.
+        let creating = ["app": ["operations": [["state": "running", "verb": "Creating the library", "label": "Create a library"],
+                                               ["state": "succeeded", "verb": "Opening the library"]]]]
+        precondition(ManagedLibraryStatus.runningBrokerOperations(creating) == ["Creating the library"])
+        precondition(ManagedLibraryStatus.runningBrokerOperations(["error": "x"]) == nil, "Not an operations document")
+        let moving = ["app": ["operations": [["state": "running", "verb": "Copying the library", "step": ["name": "Copying conversations"]]]]]
+        precondition(ManagedLibraryStatus.runningBrokerOperations(moving) == ["Copying conversations"])
+        let whileCreating = none.withBrokerOperations(["Creating the library"])
+        precondition(!whileCreating.noLibrary && whileCreating.activeOperation == "Creating the library")
+        precondition(whileCreating.withBrokerOperations([]).noLibrary, "Once it ends, no library again")
+        precondition(recovering.withBrokerOperations([]).activeOperation == "Restoring the backup", "An older broker's job still counts")
         let font = NSFont.menuFont(ofSize: 13)
         for text in [String(repeating: "conversation/", count: 20), "👩🏽‍💻 日本語の会話を読み込み、ライブラリのインデックスを更新しています。"] {
             let wrapped = MenuBarController.wrappedMenuTitle(text, width: 160, font: font)

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -157,6 +158,9 @@ func TestRequestReadsDoNotWaitForTheCatalogWriter(t *testing.T) {
 		{"GET", "/api/cloud-backup", ""}, {"GET", "/api/cloud-backup", ""}, {"GET", "/api/mcp/calls", ""}, {"GET", "/api/search?q=parser", ""},
 		{"POST", "/api/search/text", `{"query":"parser"}`}, {"GET", "/api/work/" + workspace, ""}, {"GET", "/api/findings", ""},
 		{"GET", "/api/tl1", ""}, {"GET", "/api/preferences", ""}, {"GET", "/api/sync/status", ""},
+		// The operations snapshot reads the registry and the journal, which
+		// the low-priority lane writes (§6.2).
+		{"GET", "/api/operations", ""},
 	}
 	for _, dataset := range []string{"library", "usage", "tools", "tool_calls", "writing", "writing_messages", "parallelism",
 		"conversation_activity", "activity", "mcp_calls", "skill_usages", "tl1_attempts", "findings"} {
@@ -200,6 +204,15 @@ func TestRequestReadsDoNotWaitForTheCatalogWriter(t *testing.T) {
 			t.Errorf("%s %s %.300s while the writer was held: %d: %.300s", request.method, request.path, request.body, w.Code, answer)
 		} else if request.path == "/api/cloud-backup" && !strings.Contains(answer, `"phase":"interrupted"`) {
 			t.Errorf("the Cloud page did not show the lost run as interrupted: %.500s", answer)
+		}
+	}
+
+	// Meanwhile those background writes are hidden operations that keep the
+	// drive from being safe to eject.
+	verdict := server.ejectVerdictNow(ctx, false)
+	for _, kind := range []string{"cloud.reconcile", "maintenance.mcp-history"} {
+		if verdict.Verdict == verdictSafe || !slices.ContainsFunc(verdict.Blockers, func(b ejectBlocker) bool { return b.Kind == kind }) {
+			t.Errorf("%s waiting for the writer does not count for the verdict: %+v", kind, verdict)
 		}
 	}
 

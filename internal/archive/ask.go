@@ -628,7 +628,13 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Ask Pharos: saving chat %s failed; retrying: %v\n", session.ID, err)
 			}
-			if !s.spawn(func(life context.Context) { s.retryFinishedAsk(life, session.ID) }) {
+			// Ask is out of status scope (§1), but this save writes the
+			// catalog after its request has ended, so it is a hidden
+			// operation that an eject waits for.
+			if !s.start(OperationSpec{Kind: "ask.save", Trigger: triggerUser}, func(life context.Context, _ *Op) error {
+				s.retryFinishedAsk(life, session.ID)
+				return nil
+			}) {
 				s.dropFinishedAsk(session.ID)
 			}
 		}

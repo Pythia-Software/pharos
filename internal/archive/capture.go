@@ -280,6 +280,7 @@ func Capture(ctx context.Context, config Config, sources []SourceConfig, progres
 		return CaptureSummary{}, err
 	}
 	defer session.Close()
+	opFrom(ctx).holdLock(session.lock)
 	return session.Run(ctx, sources, progress), nil
 }
 
@@ -345,7 +346,7 @@ func beginCapture(config Config) (*captureSession, error) {
 }
 
 // Close releases the capture lock.
-func (s *captureSession) Close() error { return s.lock.Close() }
+func (s *captureSession) Close() error { return releaseLockFile(s.lock) }
 
 func (s *captureSession) Run(ctx context.Context, sources []SourceConfig, progress func(CaptureSourceResult)) CaptureSummary {
 	summary := CaptureSummary{Host: s.host, Root: s.hostDir, StartedAt: now(), Errors: []captureError{}, Sources: []CaptureSourceResult{}}

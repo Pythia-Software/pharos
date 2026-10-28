@@ -167,7 +167,7 @@ func (c *Catalog) harnessSourcePath(ctx context.Context, origin, host, provider 
 				continue
 			}
 			manifest, err := loadCaptureManifest(dir)
-			lock.Close()
+			releaseLockFile(lock)
 			if err != nil {
 				cache.failures[host] = err
 				continue
@@ -186,7 +186,7 @@ func (c *Catalog) harnessSourcePath(ctx context.Context, origin, host, provider 
 		}
 		only := &captureManifest{Version: captureManifestVersion, Host: retained.host, Source: captureSourceInfo{Name: retained.source.Name, Kind: provider, Path: origin, Account: retained.source.Account}, Files: []*capturedFile{retained.file}, PathMap: []capturePathMapping{{Original: origin, Captured: retained.file.Captured}}}
 		input, err := freezeManifestInput(ctx, captureTarget{Host: retained.host, Source: retained.source.Name, Dir: retained.dir}, SourceConfig{}, false, only)
-		lock.Close()
+		releaseLockFile(lock)
 		if err == nil {
 			cache.leases = append(cache.leases, input.Close)
 			cache.paths[host][origin] = input.Adapter.Config().Path

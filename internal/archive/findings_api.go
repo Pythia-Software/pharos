@@ -78,10 +78,12 @@ func (s *Server) postFindings(w http.ResponseWriter, r *http.Request, body map[s
 		err := s.Catalog.MarkFindingsSeen(ctx)
 		writeResult(w, map[string]any{"ok": err == nil}, err)
 	case path == "refresh":
-		started := s.spawn(func(ctx context.Context) {
-			if err := s.Catalog.RefreshFindings(ctx, true); err != nil && ctx.Err() == nil {
+		started := s.start(OperationSpec{Kind: "analysis.findings", Trigger: triggerUser, Priority: priorityForeground}, func(ctx context.Context, op *Op) error {
+			err := s.Catalog.RefreshFindings(withWorkProgress(ctx, op.mirrorWork), true)
+			if err != nil && ctx.Err() == nil {
 				fmt.Fprintf(os.Stderr, "Findings: %v\n", err)
 			}
+			return err
 		})
 		if !started {
 			writeJSON(w, map[string]any{"error": "Pharos is stopping"}, http.StatusServiceUnavailable)
