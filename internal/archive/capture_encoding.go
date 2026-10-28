@@ -137,28 +137,61 @@ func (c *sourceCapture) storedVersion(rel string) (capturedVersion, bool) {
 // file is always smaller). That file is read as it is; the next compression
 // pass corrects the entry. Any other mismatch is left for the caller to
 // reject.
+//
+// A reader that holds no capture lock classifies and reads one open handle
+// (storedAsFile), so a compression renaming over the name in between cannot
+// make it read zstd as plain.
 func storedAs(file string, v capturedVersion) capturedVersion {
 	if v.Encoding == "" {
 		return v
 	}
-	info, err := os.Stat(file)
-	if err != nil || !info.Mode().IsRegular() || info.Size() != v.Size || info.Size() == v.StoredSize || zstdHeader(file) {
+	f, err := os.Open(file)
+	if err != nil {
+		return v
+	}
+	defer f.Close()
+	return storedAsFile(f, v)
+}
+
+// storedAsFile is storedAs for an open file.
+func storedAsFile(f *os.File, v capturedVersion) capturedVersion {
+	if v.Encoding == "" {
+		return v
+	}
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() != v.Size || info.Size() == v.StoredSize {
+		return v
+	}
+	head := make([]byte, len(zstdMagic))
+	if n, err := f.ReadAt(head, 0); n == len(head) && (err == nil || err == io.EOF) && bytes.Equal(head, zstdMagic) {
 		return v
 	}
 	v.Encoding, v.StoredSize = "", 0
 	return v
 }
 
-// zstdHeader reports whether file opens with a zstd frame.
-func zstdHeader(file string) bool {
-	f, err := os.Open(file)
-	if err != nil {
-		return false
+// capturedSHA256File hashes the original bytes of an open captured file
+// stored with encoding, reading it from its start.
+func capturedSHA256File(ctx context.Context, f *os.File, encoding string) (string, int64, error) {
+	var r io.Reader = io.NewSectionReader(f, 0, 1<<62)
+	switch encoding {
+	case "":
+	case captureEncodingZstd:
+		if capturedContentHook != nil {
+			capturedContentHook(f.Name())
+		}
+		decoder, err := newCaptureDecoder(bufio.NewReaderSize(r, 1<<20))
+		if err != nil {
+			return "", 0, err
+		}
+		defer decoder.Close()
+		r = decoder
+	default:
+		return "", 0, fmt.Errorf("%s has unsupported capture encoding %q; upgrade Pharos", f.Name(), encoding)
 	}
-	defer f.Close()
-	head := make([]byte, len(zstdMagic))
-	_, err = io.ReadFull(f, head)
-	return err == nil && bytes.Equal(head, zstdMagic)
+	digest := newRecordHash()
+	n, err := io.Copy(digest, &recordCountReader{r: r, ctx: ctx})
+	return hex.EncodeToString(digest.Sum(nil)), n, err
 }
 
 func newCaptureDecoder(r io.Reader) (*zstd.Decoder, error) {
@@ -312,13 +345,24 @@ func lockedLease(dir string) (string, *os.File, error) {
 		_ = os.RemoveAll(staged)
 		return "", nil, err
 	}
-	lease := filepath.Join(dir, ".reader-"+strings.TrimPrefix(filepath.Base(staged), leaseStagingPrefix))
-	if err = os.Rename(staged, lease); err != nil {
-		lock.Close()
-		_ = os.RemoveAll(staged)
-		return "", nil, err
+	// Published exclusively: the staged name is unique among .lease-*, not
+	// among .reader-*, so a clash takes a fresh name instead of replacing a
+	// lease another reader holds.
+	for attempt := 0; ; attempt++ {
+		lease := filepath.Join(dir, ".reader-"+strings.TrimPrefix(filepath.Base(staged), leaseStagingPrefix))
+		if attempt > 0 {
+			lease = filepath.Join(dir, ".reader-"+randomToken()+captureTempSuffix)
+		}
+		err = renameExclusive(staged, lease)
+		if err == nil {
+			return lease, lock, nil
+		}
+		if !errors.Is(err, os.ErrExist) && !errors.Is(err, syscall.ENOTEMPTY) || attempt >= 8 {
+			lock.Close()
+			_ = os.RemoveAll(staged)
+			return "", nil, err
+		}
 	}
-	return lease, lock, nil
 }
 
 // sweepAbandonedLeases removes the reader leases no process holds under
@@ -399,8 +443,9 @@ func leaseDecoded(ctx context.Context, dir string, v capturedVersion) (file, lea
 // lock: under the lock it reads the current entry rel and links its file into
 // a new reader lease, so neither a compression nor pruning can change what it
 // reads; then, without the lock, it decodes an encoded file in the lease.
+// It does not wait: a running capture makes it return errCaptureBusy.
 func leaseCapturedVersion(ctx context.Context, target captureTarget, rel string) (file, leaseDir string, release func(), err error) {
-	lock, err := lockCaptureReader(ctx, target)
+	lock, err := lockCaptureTarget(ctx, target.Dir)
 	if err != nil {
 		return "", "", nil, err
 	}

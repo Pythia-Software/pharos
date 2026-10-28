@@ -256,7 +256,9 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 	}
 	if unit.Reader != nil && unit.Record == nil {
 		view := captureViewOf(unit.Reader)
-		if view != nil && view.evidenceRevision == "" && view.recordRevision == nil {
+		// A view over a reader lease already reads immutable links; only a
+		// view over the capture directory itself is locked and frozen here.
+		if view != nil && !view.lease && view.evidenceRevision == "" && view.recordRevision == nil {
 			lock, err := lockCaptureTarget(ctx, view.dir)
 			if err != nil {
 				result.Outcome, result.Detail = "deferred", err.Error()
@@ -1208,7 +1210,7 @@ func (s *Server) verifyAllInputs(ctx context.Context, runID string, progress fun
 				// encoded one is decoded in that lease, removed after the check.
 				file, dir, release, err := leaseCapturedVersion(ctx, target, generation.Captured)
 				if err != nil {
-					if errors.Is(err, os.ErrNotExist) {
+					if errors.Is(err, os.ErrNotExist) || errors.Is(err, errCaptureBusy) {
 						summary.Deferred++
 					} else {
 						summary.Errors++
@@ -1235,7 +1237,7 @@ func (s *Server) verifyAllInputs(ctx context.Context, runID string, progress fun
 					if len(missing) == 0 {
 						return
 					}
-					older := &captureView{host: view.host, dir: dir, manifest: manifest, mappings: []capturePathMapping{{Original: snapshot.Path, Captured: file}}}
+					older := &captureView{host: view.host, dir: dir, lease: true, decoded: map[string]bool{generation.Captured: true}, manifest: manifest, mappings: []capturePathMapping{{Original: snapshot.Path, Captured: file}}}
 					config := conductor.config
 					config.Path = file
 					reader := &conductorAdapter{baseAdapter: baseAdapter{config: config, capability: conductor.capability, view: older}, selected: missing}

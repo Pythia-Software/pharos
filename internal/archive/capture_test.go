@@ -1606,3 +1606,66 @@ func TestCaptureCompressionRemembersWhatItLeft(t *testing.T) {
 		t.Fatalf("second pass read settled generations again: %v, %+v, %d encodes", err, done, encodes)
 	}
 }
+
+// A SQLite-record generation waits for its export receipt without being read
+// again each pass, while a receipt that does not verify (perhaps a passing
+// failure) is retried a bounded number of times.
+func TestCaptureCompressionWaitsForVerifiedRecordExports(t *testing.T) {
+	setup := func(t *testing.T) (Config, capturedVersion, string) {
+		t.Helper()
+		useHost(t, "host-a")
+		dir := filepath.Join(t.TempDir(), "conductor")
+		exec := conductorFixture(t, dir)
+		config := captureTestConfig(t, SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": true}})
+		exec(addConductorSession("a", 1)...)
+		runCapture(t, config)
+		exec(addConductorSession("b", 1)...)
+		runCapture(t, config)
+		generation := readCaptureManifest(t, config, "conductor").Snapshots[0].Generations[0]
+		receipt := capturedPath(config, "conductor", filepath.Join(recordDir, "receipts", hashBytes([]byte(generation.Captured))+".json"))
+		if _, err := os.Stat(receipt); err != nil {
+			t.Fatal("fixture generation has no export receipt", err)
+		}
+		return config, generation, receipt
+	}
+	pass := func(t *testing.T, config Config) (int, error) {
+		t.Helper()
+		compressed := 0
+		err := compressCaptures(t.Context(), config, func(compressedGeneration) { compressed++ })
+		return compressed, err
+	}
+	t.Run("no receipt yet", func(t *testing.T) {
+		config, generation, receipt := setup(t)
+		valid := readText(t, receipt)
+		if err := os.Remove(receipt); err != nil {
+			t.Fatal(err)
+		}
+		if n, err := pass(t, config); n != 0 || err != nil {
+			t.Fatal("generation without a receipt:", n, err)
+		}
+		target := capturedPath(config, "conductor", "")
+		if !loadCompressionOutcomes(target).settled(target, generation) {
+			t.Fatal("a generation awaiting its receipt is read again every pass")
+		}
+		writeSourceFile(t, receipt, valid)
+		if n, err := pass(t, config); n != 1 || err != nil {
+			t.Fatal("generation whose receipt appeared:", n, err)
+		}
+	})
+	t.Run("receipt that does not verify", func(t *testing.T) {
+		config, generation, receipt := setup(t)
+		writeSourceFile(t, receipt, `{"version":1}`)
+		target := capturedPath(config, "conductor", "")
+		for attempt := 1; attempt <= captureCompressAttempts; attempt++ {
+			if n, err := pass(t, config); n != 0 || err == nil || !strings.Contains(err.Error(), "does not verify") {
+				t.Fatal("attempt", attempt, n, err)
+			}
+			if got := loadCompressionOutcomes(target).Entries[generation.Captured]; got.Outcome != "failed" || got.Failures != attempt {
+				t.Fatalf("attempt %d recorded %+v", attempt, got)
+			}
+		}
+		if n, err := pass(t, config); n != 0 || err != nil {
+			t.Fatal("unverifiable receipt retried past its attempts:", n, err)
+		}
+	})
+}

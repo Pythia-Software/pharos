@@ -194,10 +194,17 @@ func planHistory(ctx context.Context, config Config, scope historyScope) (histor
 				listed[v.Captured] = true
 				// The digest and size of the original bytes, decoded when stored
 				// encoded (an entry a killed compression marked encoded before
-				// renaming its file is read as stored; see storedAs).
-				v = storedAs(filepath.Join(dir, filepath.FromSlash(v.Captured)), v)
+				// renaming its file is read as stored; see storedAs). Planning
+				// takes no capture lock, so one handle is classified and read.
+				var hash string
+				var size int64
+				f, err := os.Open(filepath.Join(dir, filepath.FromSlash(v.Captured)))
+				if err == nil {
+					v = storedAsFile(f, v)
+					hash, size, err = capturedSHA256File(ctx, f, v.Encoding)
+					f.Close()
+				}
 				u := historyUnit{Kind: kind, Host: m.Host.ID, Source: m.Source.Name, Original: original, Path: v.Captured, Version: v}
-				hash, size, err := capturedSHA256(ctx, filepath.Join(dir, filepath.FromSlash(v.Captured)), v.Encoding)
 				if err != nil {
 					u.Gap = "unreadable retained input: " + err.Error()
 				} else if size != v.Size || v.SHA256 != "" && hash != v.SHA256 {

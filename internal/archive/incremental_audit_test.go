@@ -65,6 +65,10 @@ func TestVerificationIncludesDeletedConductorSessionsFromOlderCaptures(t *testin
 		if left := temporariesUnder(t, capturedPath(config, "conductor", "")); len(left) != 0 {
 			t.Error("verification left decoded copies", left)
 		}
+		// The capture lock lives beside the host's sources, never in one.
+		if _, err := os.Stat(capturedPath(config, "conductor", captureLockName)); !os.IsNotExist(err) {
+			t.Error("verification locked a capture lock inside a source directory", err)
+		}
 	}()
 	config.Sources = nil
 	server := testServer(t, config, catalog)

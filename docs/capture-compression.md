@@ -91,6 +91,10 @@ Each phase ships as one PR.
    a digest mismatch, repeated verification failures, an unverified record
    export) in the source's `compression.json`, so it does not read them
    again every pass.
+
+   Follow-up: on a volume without hard links (exFAT), verify-all's lease of
+   a generation falls back to copying it, and does so while holding the
+   host's capture lock; move that copy out from under the lock.
 2. **Cold files** ([handoff](handoffs/capture-compression-2-cold-files.md)). Compress superseded plain-file versions, and latest files
    whose source has not changed for a configurable period (14 days, say).
    Capture always rewrites a changed file in full (`copyOnce`), so a cold

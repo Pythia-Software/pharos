@@ -217,9 +217,14 @@ func compressGeneration(ctx context.Context, target captureTarget, manifest *cap
 			return 0, err
 		}
 		if _, verified := c.verifiedSnapshotReceipt(rel, rel); !verified {
-			// Checked again only once the receipt changes.
-			outcomes.unverified(target.Dir, generation)
-			return 0, nil
+			if receiptStamp(target.Dir, rel) == -1 {
+				// No export yet: checked again once a receipt appears.
+				outcomes.unverified(target.Dir, generation)
+				return 0, nil
+			}
+			// A receipt that does not verify may be a passing failure (a
+			// timeout, a read error): retried like a failed verification.
+			return 0, fmt.Errorf("%w: %s: its SQLite export receipt does not verify", errCompressVerify, rel)
 		}
 	}
 	source, err := os.Open(file)
@@ -422,8 +427,8 @@ type compressionOutcome struct {
 	Size       int64  `json:"size"`
 	// Outcome is incompressible, mismatch (the bytes disagree with the
 	// manifest's digest), failed (verification; Failures counts), or
-	// unverified (a SQLite-record export not yet verified; ReceiptNS is its
-	// receipt's mtime then, -1 for none).
+	// unverified (a SQLite-record generation with no export receipt yet;
+	// ReceiptNS is -1). A receipt that does not verify counts as failed.
 	Outcome   string `json:"outcome"`
 	Failures  int    `json:"failures,omitempty"`
 	ReceiptNS int64  `json:"receipt_mtime_ns,omitempty"`
@@ -462,7 +467,8 @@ func (o *compressionOutcomes) settled(dir string, generation capturedVersion) bo
 	case entry.Outcome == "failed":
 		return entry.Failures >= captureCompressAttempts
 	case entry.Outcome == "unverified":
-		return receiptStamp(dir, generation.Captured) == entry.ReceiptNS
+		// Settled only while there is still no receipt to verify.
+		return entry.ReceiptNS == -1 && receiptStamp(dir, generation.Captured) == -1
 	}
 	return true
 }
