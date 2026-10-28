@@ -100,11 +100,18 @@ export function chartVerdict(topic: UsageTopic, chart: Record<string, unknown>):
   const keys = chartKeys[(merged.view ?? "trend") as AnalysisView];
   return Object.keys(chart).filter(key => keys.includes(key)).every(key => json(drawn[key]) === json(chart[key])) ? "valid" : "coercible";
 }
-// A chart with only the keys its view draws (and a non-empty selection): what
-// Go writes. The generator checks that it draws as the whole chart does.
+// What Go writes for a chart: its older names read as current ones (as
+// readChart reads them), then only the keys its view draws and a non-empty
+// selection. The keys the merge adds are left to the page, which adds them
+// again; writing them would turn a valid partial chart coercible where the
+// page moves one. The generator checks that it draws as the whole chart does.
+const legacyByTopic = new Map<UsageTopic, LegacyName[]>();
 export function viewChart(topic: UsageTopic, chart: Record<string, unknown>): Record<string, unknown> {
-  const view = (chart.view ?? dashboardDefaults[topic].view ?? "trend") as AnalysisView, selection = chart.selection as { values?: unknown[] } | undefined;
-  return Object.fromEntries(Object.entries(chart).filter(([key]) => chartKeys[view].includes(key) || key === "selection" && Boolean(selection?.values?.length)));
+  if (!legacyByTopic.has(topic)) legacyByTopic.set(topic, legacyNames(topic).legacy ?? []);
+  const merged = { ...dashboardDefaults[topic], ...chart } as Record<string, unknown>;
+  const current = Object.assign({}, chart, ...legacyByTopic.get(topic)!.filter(entry => json(merged[entry.key]) === json(entry.value)).map(entry => entry.set)) as Record<string, unknown>;
+  const view = (current.view ?? dashboardDefaults[topic].view ?? "trend") as AnalysisView, selection = current.selection as { values?: unknown[] } | undefined;
+  return Object.fromEntries(Object.entries(current).filter(([key]) => chartKeys[view].includes(key) || key === "selection" && Boolean(selection?.values?.length)));
 }
 
 // The keys a canonical analyze_chart holds for each view, in order: the

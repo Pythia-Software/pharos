@@ -77,13 +77,24 @@ test("the site map's rules judge every dashboard case, partial charts included, 
     // view's keys (what Go writes) changes neither the verdict nor the drawing.
     if (item.verdict !== "invalid") {
       const kept = viewChart(item.topic, item.chart), viewDrawing = chart => plain(view.keys.map(key => normalizeAnalysis(analysisCatalogs[item.topic], merged(item.topic, chart))[key]));
-      assert.equal(chartVerdict(item.topic, kept), item.verdict, `${name} with only its view's keys`);
+      const renamed = readChart(facts, item.chart).renamed;
+      assert.equal(readChart(facts, kept).renamed, false, `${name} is written in current names`);
+      if (renamed) assert.notEqual(chartVerdict(item.topic, kept), "invalid", name); else assert.equal(chartVerdict(item.topic, kept), item.verdict, `${name} with only its view's keys`);
       assert.deepEqual(viewDrawing(kept), viewDrawing(item.chart), `${name} draws the same with only its view's keys`);
       const drawn = drawChart(view, readChart(facts, item.chart).merged), page = normalizeAnalysis(analysisCatalogs[item.topic], merged(item.topic, item.chart));
       for (const [key, value] of Object.entries(drawn)) assert.deepEqual(value, plain(page[key]), `${name} draws ${key}`);
     }
   }
   for (const verdict of Object.keys(verdicts)) assert.ok(verdicts[verdict] > 0, `some cases are ${verdict}`);
+  // Canonical charts (every link the cases carry, cards' states, view defaults) are valid, never merely coercible.
+  const canonical = [...chartCases.filter(item => item.url), cases.example].map(item => [item.topic, item.chart])
+    .concat(map.cards.items.filter(card => card.state).map(card => [card.page.split("/")[1], card.state]))
+    .concat(Object.entries(map.analyze.dashboards).flatMap(([topic, facts]) => Object.values(facts.views).map(view => [topic, view.defaults])));
+  for (const [topic, chart] of canonical) assert.equal(judgeChart(map.analyze.dashboards[topic], map.analyze.version, chart), "valid", `${topic} ${JSON.stringify(chart)}`);
+  for (const card of map.cards.items.filter(card => card.chart)) {
+    const topic = card.page.split("/")[1], kept = viewChart(topic, card.chart);
+    assert.equal(readChart(map.analyze.dashboards[topic], kept).renamed, false, `${card.id} is written in current names`);
+  }
   assert.ok(partial > 1000, "the cases include partial charts");
   // Charts the page writes itself carry keys their view does not draw.
   for (const kind of ["switchView", "card"]) assert.ok(chartCases.some(item => item.written?.startsWith(kind) && item.verdict === "valid" && Object.keys(item.chart).some(key => !map.analyze.dashboards[item.topic].views[merged(item.topic, item.chart).view ?? "trend"].keys.includes(key) && key !== "selection")), `${kind} charts with keys their view does not draw`);

@@ -1,6 +1,6 @@
 import { decodeQueryStrict, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisCatalogs } from "./analysis-catalogs";
-import { chartKeys, chartVerdict, canonicalChart, judgeChart, viewChart, cardURL, compact, dashboardURL, dashboardWindows, datasetURL, enumerateView, siteSchemas, type SiteMap, type Verdict } from "./site-map";
+import { chartKeys, chartVerdict, canonicalChart, judgeChart, readChart, viewChart, cardURL, compact, dashboardURL, dashboardWindows, datasetURL, enumerateView, siteSchemas, type SiteMap, type Verdict } from "./site-map";
 import { normalizeAnalysis, switchView, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { usageDatasets, usageTopics, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { rollingWindowDays, type QueryDataset } from "./query-links";
@@ -203,8 +203,16 @@ export function buildSiteMapCases(map: SiteMap) {
     // Keeping only the view's keys changes neither the verdict nor the drawing.
     const kept = viewChart(item.topic, item.chart), view = chartKeys[(item.chart.view ?? facts.merge_defaults.view ?? "trend") as AnalysisView];
     const draw = (chart: Record<string, unknown>) => json(view.map(key => (normalizeAnalysis(analysisCatalogs[item.topic]!, { ...facts.merge_defaults, ...chart } as AnalysisState) as Record<string, unknown>)[key]));
-    if (chartVerdict(item.topic, kept) !== item.verdict || draw(kept) !== draw(item.chart)) throw new Error(`site map cases: ${item.topic} ${json(item.chart)} draws otherwise with only its view's keys`);
+    // A chart with an older name is written in current names, and opens.
+    const renamed = readChart(facts, item.chart).renamed, verdict = chartVerdict(item.topic, kept);
+    if ((renamed ? verdict === "invalid" : verdict !== item.verdict) || draw(kept) !== draw(item.chart)) throw new Error(`site map cases: ${item.topic} ${json(item.chart)} draws otherwise with only its view's keys`);
+    if (readChart(facts, kept).renamed) throw new Error(`site map cases: ${item.topic} ${json(kept)} keeps an older name`);
   }
+  // Canonical charts are valid, never merely coercible.
+  const canonical = [...charts.filter(item => item.url).map(item => [item.topic, item.chart] as const), ["tokens", motivatingExample(map).chart] as const,
+    ...map.cards.items.filter(card => card.state).map(card => [card.page.split("/")[1], card.state!] as const),
+    ...Object.entries(map.analyze.dashboards).flatMap(([topic, facts]) => Object.values(facts.views).map(view => [topic, view.defaults] as const))];
+  for (const [topic, chart] of canonical) if (chartVerdict(topic as UsageTopic, chart) !== "valid") throw new Error(`site map cases: canonical ${topic} ${json(chart)} is not valid`);
   return {
     version: map.version,
     about: "Cases for the site map, from web/src/site-map-cases.ts. analyze: by topic, charts with the page's verdict (valid; coercible: opens but draws other settings; invalid: rejected). Partial charts are merged over the topic's merge_defaults, as the page does. Some valid charts carry their link. cards: every card at one window, and some at every window. nodes: a link per page with the state its reader reads. decoded: each query token's state.",

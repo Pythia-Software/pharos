@@ -296,11 +296,28 @@ implementation:
 5. **Valid or coercible.** The chart is valid if every key it names among the
    view's `keys` is drawn as given, and coercible otherwise.
 
-**Go writes only the view's keys** (`viewChart`): parsing accepts whatever
-the page accepts, and the canonical output drops keys the view does not draw.
-The generator checks every case that opens, the page's own switched states
-and every card's chart included. Dropping those keys changes neither the
-verdict nor any drawn setting of the view.
+**Go writes current names and only the view's keys** (`viewChart`):
+parsing accepts whatever the page accepts. To write a chart, Go:
+1. reads it with `readChart`, so older names become current ones (a card's
+   `metric: "percent"` becomes `tokens` with `share: true`);
+2. keeps the chart's own keys that the view draws, and a non-empty selection.
+
+It does not write the keys the merge adds. The page adds them again, and
+writing them would make some valid partial charts coercible: in Tokens'
+Compare, `{unit: "agent_session"}` is valid, but with the merged
+`split: "model_family"` written out the page would move the split.
+
+The generator checks every case that opens, including the page's own
+switched states and every card's chart. Writing the chart this way changes no
+drawn setting of the view. It changes no verdict, except that a chart with an
+older name becomes valid. Every canonical chart in the cases is valid: every
+link, each card's `state`, and each view's defaults.
+
+**The trade-off:** the page keeps the trend's own settings (`rollingPeriods`,
+`period`, `norm` …) in the chart while another view is showing, and returns
+to them when the reader chooses Over time again. A Go-written non-trend link
+drops them, so the same drawing opens, but choosing Over time from it starts
+from the topic's defaults rather than the trend the link was copied from.
 
 The generator derives the domains and rules from the page's own functions;
 nothing in them is hand-written. It enumerates every combination of a view's
