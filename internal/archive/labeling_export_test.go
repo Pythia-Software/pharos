@@ -116,7 +116,7 @@ func TestLabelingExport(t *testing.T) {
 		{"m-o5", nil, ""},
 		{"m-o1", []labelingItemResult{empty(itemOf["m-o1"], itemRefusalSuspected, "refusal_suspected")}, servedModelVerified},
 		{"m-o6", []labelingItemResult{empty(itemOf["m-o6"], itemInvalid, "unknown_label")}, servedModelVerified},
-		{"m-f3-2", []labelingItemResult{empty(itemOf["m-f3-2"], "refused_elsewhere")}, servedModelVerified},
+		{"m-f3-2", []labelingItemResult{empty(itemOf["m-f3-2"], itemRefusedElsewhere, "blocked_by_refusal_key")}, servedModelVerified},
 		{"m-f4-2", []labelingItemResult{empty(itemOf["m-f4-2"], "blocked_oversize")}, servedModelVerified},
 		{"m-sub1", []labelingItemResult{mixed}, servedModelVerified},
 	}
@@ -245,7 +245,7 @@ func TestLabelingExport(t *testing.T) {
 
 	// Each outcome keeps its status; only usable rows have labels.
 	for message, want := range map[string]string{"m-h1": "refused", "m-h2": exportToolUse, "m-h3": itemMissing, "m-a1": exportUsable, "m-o3": exportNeedContext,
-		"m-c2": itemHeld, "m-o5": exportUnlabeled, "m-o1": itemRefusalSuspected, "m-o4": exportUsable, "m-sub2": exportUsable,
+		"m-c2": itemHeld, "m-o5": exportUnlabeled, "m-o1": exportUnlabeled, "m-o4": exportUsable, "m-sub2": exportUsable,
 		"m-o6": itemInvalid, "m-f3-2": "refused_elsewhere", "m-f4-2": "blocked_oversize", "m-sub1": exportUsable} {
 		row := labels[itemOf[message]]
 		if row["status"] != want {
@@ -264,6 +264,22 @@ func TestLabelingExport(t *testing.T) {
 	}
 	if row := labels[itemOf["m-sub1"]]; len(strs(row["labels"])) != 0 || row["unsupported_labels"].(map[string]any)[fakeLabel] != "ambiguous_mixed" {
 		t.Errorf("ambiguous_mixed row = %v", row)
+	}
+	// Rows without labels say why; a suspected refusal is held, not labeled.
+	for message, want := range map[string]string{"m-f3-2": "blocked_by_refusal_key", "m-o1": "refusal suspected: held for review, not yet labeled",
+		"m-o5": "no result yet; request completed"} {
+		if got := labels[itemOf[message]]["reason"]; got != want {
+			t.Errorf("%s reason = %v, want %s", message, got, want)
+		}
+	}
+	// Open items make the job incomplete; the reasons are named, their
+	// counts (which span held-out items) are in the held-out manifest.
+	job := manifest["job"].(map[string]any)
+	if job["complete"] != false || !slices.Equal(strs(job["incomplete_reasons"]), []string{"items_blocked_oversize", "items_unlabeled"}) || job["request_states"] != nil {
+		t.Errorf("job = %v", job)
+	}
+	if open := heldOutManifest["job_wide"].(map[string]any)["open"].(map[string]any); open["items_unlabeled"] != float64(2) {
+		t.Errorf("open = %v", open)
 	}
 	// Masked: the unsupported label with its ancestors, the uncertain one,
 	// and every child of the returned broad parent.
@@ -329,8 +345,21 @@ func TestLabelingExport(t *testing.T) {
 			}
 		}
 	}
-	if transforms := manifest["transforms"].(map[string]any); transformed == 0 || transforms["unverified"] != float64(0) {
-		t.Errorf("transformed ranges %d, manifest %v", transformed, transforms)
+	transformCounts := func(path string) float64 {
+		total := 0.0
+		for _, name := range []string{exportManifest, exportHeldOutManifest} {
+			var side map[string]any
+			data, _ := os.ReadFile(filepath.Join(path, name))
+			json.Unmarshal(data, &side)
+			total += side["transforms"].(map[string]any)["unverified"].(float64)
+			if side["transforms"].(map[string]any)["verified"].(float64)+side["transforms"].(map[string]any)["unverified"].(float64) > float64(transformed) {
+				t.Errorf("%s counts more transforms than exist", name)
+			}
+		}
+		return total
+	}
+	if transformed == 0 || transformCounts(out) != 0 {
+		t.Errorf("transformed ranges %d", transformed)
 	}
 
 	// The chunked long message is merged, flagged and held out with its split.
@@ -381,7 +410,7 @@ func TestLabelingExport(t *testing.T) {
 	}
 
 	// The same dataset and job export to the same bytes.
-	again, _, err := exportLabeling(context.Background(), dir, "pilot", filepath.Join(t.TempDir(), "again"), false)
+	again, _, err := exportLabeling(context.Background(), dir, "pilot", filepath.Join(t.TempDir(), "again"), false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,14 +421,14 @@ func TestLabelingExport(t *testing.T) {
 			t.Fatalf("%s differs between exports", name)
 		}
 	}
-	if same, _, err := exportLabeling(context.Background(), dir, "pilot", "", false); err != nil || same != out {
+	if same, _, err := exportLabeling(context.Background(), dir, "pilot", "", false, false); err != nil || same != out {
 		t.Fatalf("re-export to %s: %v", same, err)
 	}
 	// An identical export in place is accepted; a different one is not.
-	if same, _, err := exportLabeling(context.Background(), dir, "pilot", again, false); err != nil || same != again {
+	if same, _, err := exportLabeling(context.Background(), dir, "pilot", again, false, false); err != nil || same != again {
 		t.Fatalf("re-export to %s: %v", same, err)
 	}
-	if _, _, err := exportLabeling(context.Background(), dir, "pilot", filepath.Dir(out), false); err == nil {
+	if _, _, err := exportLabeling(context.Background(), dir, "pilot", filepath.Dir(out), false, false); err == nil {
 		t.Fatal("exported into a directory holding other files")
 	}
 
@@ -407,11 +436,24 @@ func TestLabelingExport(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(again, exportInputs), []byte("truncated"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := exportLabeling(context.Background(), dir, "pilot", again, false); err == nil || !strings.Contains(err.Error(), "damaged") {
+	if _, _, err := exportLabeling(context.Background(), dir, "pilot", again, false, false); err == nil || !strings.Contains(err.Error(), "damaged") {
 		t.Fatalf("damaged export accepted: %v", err)
 	}
-	if _, _, err := exportLabeling(context.Background(), dir, "pilot", again, true); err != nil {
+	// Files the old manifest does not list are not deleted without asking.
+	if err := os.WriteFile(filepath.Join(again, "smoke-model.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	if _, _, err := exportLabeling(context.Background(), dir, "pilot", again, true, false); err == nil || !strings.Contains(err.Error(), "smoke-model.json") {
+		t.Fatalf("replace over an unlisted file: %v", err)
+	}
+	if _, _, err := exportLabeling(context.Background(), dir, "pilot", again, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(again, "smoke-model.json")); !os.IsNotExist(err) {
+		t.Fatal("--force-replace kept the unlisted file")
+	}
+	if leftovers, _ := filepath.Glob(filepath.Join(filepath.Dir(again), ".export-*")); len(leftovers) != 0 {
+		t.Fatalf("replace left %v", leftovers)
 	}
 	if data, _ := os.ReadFile(filepath.Join(again, exportInputs)); !bytes.Equal(data, inputData) {
 		t.Fatal("--replace did not rewrite the damaged export")
@@ -422,7 +464,7 @@ func TestLabelingExport(t *testing.T) {
 	chunks := labelingRows(t, db, `SELECT i.id FROM items i JOIN units u ON u.id=i.unit_id WHERE u.message_id='m-n2' ORDER BY i.chunk_index`)
 	mergedStatus := func(name string) string {
 		t.Helper()
-		path, _, err := exportLabeling(context.Background(), dir, "pilot", filepath.Join(t.TempDir(), name), false)
+		path, _, err := exportLabeling(context.Background(), dir, "pilot", filepath.Join(t.TempDir(), name), false, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -447,7 +489,7 @@ func TestLabelingExport(t *testing.T) {
 	if _, err := db.Exec(`UPDATE units SET message_text=REPLACE(message_text,'Find the CSS','Gind the CSS') WHERE message_id='m-del'`); err != nil {
 		t.Fatal(err)
 	}
-	path, unverified, err := exportLabeling(context.Background(), dir, "pilot", filepath.Join(t.TempDir(), "transform"), false)
+	path, unverified, err := exportLabeling(context.Background(), dir, "pilot", filepath.Join(t.TempDir(), "transform"), false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,18 +503,29 @@ func TestLabelingExport(t *testing.T) {
 			t.Errorf("m-del = %v", row)
 		}
 	}
-	if unverified["transforms"].(map[string]int)["unverified"] != 1 {
-		t.Errorf("transforms = %v", unverified["transforms"])
+	if unverified["job"] == nil || transformCounts(path) != 1 {
+		t.Errorf("transforms = %v", transformCounts(path))
+	}
+
+	// A job labeled under another taxonomy is not exported by this build.
+	if _, err := db.Exec(`UPDATE jobs SET taxonomy_sha256='0000' WHERE name='pilot'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := exportLabeling(context.Background(), dir, "pilot", filepath.Join(t.TempDir(), "taxonomy"), false, false); err == nil || !strings.Contains(err.Error(), "taxonomy") {
+		t.Fatalf("other taxonomy exported: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE jobs SET taxonomy_sha256=? WHERE name='pilot'`, hashBytes(labelingTaxonomy)); err != nil {
+		t.Fatal(err)
 	}
 
 	// Evidence that is not the item's bytes stops the export.
 	if _, err := db.Exec(`UPDATE item_results SET evidence=REPLACE(evidence,'"item_start":0','"item_start":1') WHERE item_id=?`, itemOf["m-a1"]); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := exportLabeling(context.Background(), dir, "pilot", filepath.Join(t.TempDir(), "bad"), false); err == nil || !strings.Contains(err.Error(), "evidence") {
+	if _, _, err := exportLabeling(context.Background(), dir, "pilot", filepath.Join(t.TempDir(), "bad"), false, false); err == nil || !strings.Contains(err.Error(), "evidence") {
 		t.Fatalf("corrupt evidence exported: %v", err)
 	}
-	if _, _, err := exportLabeling(context.Background(), dir, "nope", filepath.Join(t.TempDir(), "none"), false); err == nil {
+	if _, _, err := exportLabeling(context.Background(), dir, "nope", filepath.Join(t.TempDir(), "none"), false, false); err == nil {
 		t.Fatal("an unknown job exported")
 	}
 }

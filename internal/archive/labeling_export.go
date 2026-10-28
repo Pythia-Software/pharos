@@ -123,6 +123,10 @@ type labelingExportLabel struct {
 	NeedContext  *bool    `json:"need_context"`
 	// Returned is what the teacher returned for a row that is not usable.
 	Returned *labelingExportReturned `json:"returned"`
+	// Reason says why a row carries no labels: the result's issues (for
+	// refused_elsewhere, the refusal that blocked it), or the state of the
+	// request an unlabeled item waits in.
+	Reason string `json:"reason"`
 	// Evidence is as the ledger stored it (quotes, statuses, occurrences).
 	Evidence json.RawMessage       `json:"evidence"`
 	Issues   []string              `json:"issues"`
@@ -375,6 +379,10 @@ func labelingExportStatus(result *labelingExportResult) string {
 		return exportUsable
 	case result.outcome == itemInvalid && slices.Contains(result.issues, "tool_use"):
 		return exportToolUse
+	case result.outcome == itemRefusalSuspected:
+		// A suspected refusal is held for review, not settled: the item is
+		// not labeled yet.
+		return exportUnlabeled
 	}
 	return result.outcome
 }
@@ -384,7 +392,7 @@ func labelingExportStatus(result *labelingExportResult) string {
 // transaction and writes nothing but the export. An identical, intact
 // export already at the target is kept; replace rewrites a damaged or
 // different export there.
-func exportLabeling(ctx context.Context, dir, job, out string, replace bool) (string, map[string]any, error) {
+func exportLabeling(ctx context.Context, dir, job, out string, replace, force bool) (string, map[string]any, error) {
 	if !labelingJobName.MatchString(job) {
 		return "", nil, fmt.Errorf("job name %q: use letters, digits, '.', '_' and '-'", job)
 	}
@@ -448,9 +456,30 @@ func exportLabeling(ctx context.Context, dir, job, out string, replace bool) (st
 		if !replace {
 			return "", nil, fmt.Errorf("%s %s; pass --replace to rewrite it, or choose another --out", out, problem)
 		}
-		if err := os.RemoveAll(out); err != nil {
+		var old map[string]any
+		json.Unmarshal(existing, &old)
+		if extra := labelingExportExtraFiles(out, old); len(extra) > 0 && !force {
+			return "", nil, fmt.Errorf("%s holds files its export manifest does not list (%s); move them, or pass --force-replace to delete them too",
+				out, strings.Join(extra, ", "))
+		}
+		// The old export is set aside, the new one renamed into place, and
+		// only then is the old one deleted, so a failure leaves one intact.
+		aside, err := os.MkdirTemp(parent, ".export-old-")
+		if err != nil {
 			return "", nil, err
 		}
+		os.Remove(aside)
+		if err := os.Rename(out, aside); err != nil {
+			return "", nil, err
+		}
+		if err := os.Rename(temporary, out); err != nil {
+			if restore := os.Rename(aside, out); restore != nil {
+				return "", nil, fmt.Errorf("%v; the previous export is at %s", err, aside)
+			}
+			return "", nil, err
+		}
+		syncDir(parent)
+		return out, manifest, os.RemoveAll(aside)
 	}
 	if entries, err := os.ReadDir(out); err == nil {
 		if len(entries) > 0 {
@@ -463,11 +492,26 @@ func exportLabeling(ctx context.Context, dir, job, out string, replace bool) (st
 	if err := os.Rename(temporary, out); err != nil {
 		return "", nil, err
 	}
-	if handle, err := os.Open(parent); err == nil {
-		handle.Sync()
-		handle.Close()
-	}
+	syncDir(parent)
 	return out, manifest, nil
+}
+
+// labelingExportExtraFiles lists entries of an export directory that its
+// manifest does not account for.
+func labelingExportExtraFiles(dir string, manifest map[string]any) []string {
+	listed := map[string]bool{exportManifest: true}
+	files, _ := manifest["files"].(map[string]any)
+	for name := range files {
+		listed[name] = true
+	}
+	extra := []string{}
+	entries, _ := os.ReadDir(dir)
+	for _, entry := range entries {
+		if !listed[entry.Name()] {
+			extra = append(extra, entry.Name())
+		}
+	}
+	return extra
 }
 
 // labelingExportIntact checks every file an export's manifest lists
@@ -514,6 +558,12 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 	text := func(row map[string]any, key string) string {
 		value, _ := row[key].(string)
 		return value
+	}
+	// Ancestors, masks and support come from this build's taxonomy: a job
+	// labeled under another one cannot be exported by this build.
+	if stored := text(jobRow, "taxonomy_sha256"); stored != hashBytes(labelingTaxonomy) {
+		return nil, fmt.Errorf("job %s was labeled with taxonomy %s (sha256 %s), but this build has %s (sha256 %s); export it with the build that labeled it",
+			job, text(jobRow, "taxonomy_version"), firstRunes(stored, 12), labelingTaxonomyVersion, firstRunes(hashBytes(labelingTaxonomy), 12))
 	}
 	var datasetManifest map[string]any
 	if err := json.Unmarshal(datasetManifestBytes, &datasetManifest); err != nil {
@@ -706,7 +756,7 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 		return heldOut
 	}
 	familySplits := map[string]map[string]bool{}
-	transforms := map[string]int{"verified": 0, "unverified": 0}
+	allStatuses := map[string]int{}
 	merges := map[string]*labelingExportUnit{}
 	itemsWritten := 0
 
@@ -774,7 +824,7 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 			}
 		}
 		unverified := 0
-		if prov.SourceRanges, unverified, err = labelingExportSourceRanges(input.ItemID, sourceRanges, message, visible, visibleStart, visibleEnd, prov.Pieces, transforms); err != nil {
+		if prov.SourceRanges, unverified, err = labelingExportSourceRanges(input.ItemID, sourceRanges, message, visible, visibleStart, visibleEnd, prov.Pieces, side(input.Split).transforms); err != nil {
 			return nil, err
 		}
 
@@ -852,8 +902,19 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 				label.MaskedLabels = labelingMaskedLabels(label.Labels, label.UncertainLabels, sortedKeys(label.UnsupportedLabels), parents, children)
 			} else {
 				label.Returned = &labelingExportReturned{Labels: defaultSlice(result.labels), UncertainLabels: defaultSlice(result.uncertain)}
+				label.Reason = strings.Join(result.issues, "; ")
+				if status == exportTransformUnverified {
+					label.Reason = "a decoded piece does not match its encoded source bytes"
+				}
+				if result.outcome == itemRefusalSuspected {
+					label.Reason = "refusal suspected: held for review, not yet labeled"
+				}
 			}
 		}
+		if result == nil {
+			label.Reason = "no result yet; request " + defaultString(label.Receipt.RequestState, "none")
+		}
+		allStatuses[status]++
 		aggregates := side(input.Split)
 		aggregates.splits[input.Split] = true
 		for _, flag := range label.Flags {
@@ -1007,7 +1068,45 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 	for key, value := range heldOut.json(taxonomyOrder) {
 		heldOutManifest[key] = value
 	}
-	heldOutData, err := json.MarshalIndent(heldOutManifest, "", "  ")
+	var heldOutData []byte
+	taxonomy := []map[string]any{}
+	for _, id := range taxonomyOrder {
+		taxonomy = append(taxonomy, map[string]any{"id": id, "parent": parents[id]})
+	}
+	// The job is complete only when every request is settled and every item
+	// has a result. The reasons name what is open; their counts, which span
+	// held-out items, are in the held-out manifest.
+	var selection map[string]any
+	json.Unmarshal([]byte(text(jobRow, "selection")), &selection)
+	open := map[string]int{}
+	for _, state := range []string{requestPending, requestLeased, requestSubmitted, requestHeld, requestRefusalSuspected, requestStopped,
+		requestUnknown, requestFailed} {
+		if stateCounts[state] > 0 {
+			open["requests_"+state] = stateCounts[state]
+		}
+	}
+	for state, n := range stateCounts {
+		known := false
+		for _, terminal := range []string{requestCompleted, requestInvalid, requestRefused, requestRefusedElsewhere} {
+			known = known || state == terminal
+		}
+		if !known && open["requests_"+state] == 0 {
+			open["requests_"+state] = n
+		}
+	}
+	for _, status := range []string{exportUnlabeled, itemBlockedOversize} {
+		if allStatuses[status] > 0 {
+			open["items_"+status] = allStatuses[status]
+		}
+	}
+	if selection["incomplete"] == true && open["items_"+itemBlockedOversize] == 0 {
+		open["selection_incomplete"] = 1
+	}
+	reasons := sortedKeys(open)
+	complete := len(reasons) == 0
+	heldOutManifest["job_wide"] = map[string]any{"note": "Job-wide counts, held-out items included.", "request_states": stateCounts,
+		"open": open, "selection": selection}
+	heldOutData, err = json.MarshalIndent(heldOutManifest, "", "  ")
 	if err != nil {
 		return nil, err
 	}
@@ -1018,18 +1117,6 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 	heldOutSum := sha256.Sum256(heldOutData)
 	files[exportHeldOutManifest] = map[string]any{"sha256": hex.EncodeToString(heldOutSum[:]), "bytes": len(heldOutData)}
 	fmt.Fprintf(digest, "%s %x\n", exportHeldOutManifest, heldOutSum)
-	taxonomy := []map[string]any{}
-	for _, id := range taxonomyOrder {
-		taxonomy = append(taxonomy, map[string]any{"id": id, "parent": parents[id]})
-	}
-	var selection any
-	json.Unmarshal([]byte(text(jobRow, "selection")), &selection)
-	complete := true
-	for state := range stateCounts {
-		if state == requestPending || state == requestLeased || state == requestSubmitted {
-			complete = false
-		}
-	}
 	exportID := hex.EncodeToString(digest.Sum(nil))[:16]
 	manifest := map[string]any{
 		"export_version": labelingExportVersion,
@@ -1041,8 +1128,7 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 		"job": map[string]any{"name": job, "route": teacher.Route, "model": teacher.Model, "effort": teacher.Effort, "served_model": teacher.ServedModel,
 			"prompt_version": teacher.PromptVersion, "prompt_template_sha256": text(jobRow, "prompt_template_sha256"), "schema_version": teacher.SchemaVersion,
 			"schema_sha256": text(jobRow, "schema_sha256"), "taxonomy_version": teacher.TaxonomyVersion, "taxonomy_sha256": text(jobRow, "taxonomy_sha256"),
-			"created_at": text(jobRow, "created_at"), "pricing_rule": text(jobRow, "pricing_rule"), "selection": selection, "request_states": stateCounts,
-			"complete": complete},
+			"created_at": text(jobRow, "created_at"), "pricing_rule": text(jobRow, "pricing_rule"), "complete": complete, "incomplete_reasons": reasons},
 		"contracts": map[string]any{"export": labelingExportVersion, "chunk_merge": labelingMergeVersion, "units": labelingUnitsVersion,
 			"chunking": labelingChunkVersion, "splits": labelingSplitsVersion, "sentences": labelingSentenceVersion, "transform": feedbackJSONTransform},
 		"files":                      files,
@@ -1052,7 +1138,6 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 		"heldout_splits":             sortedKeys(heldOut.splits),
 		"items":                      itemsWritten,
 		"families_in_several_splits": spanning,
-		"transforms":                 transforms,
 		"taxonomy":                   taxonomy,
 		"aggregates": "Counts, label support, strata, coverage, flags, families and chunked units below cover the training splits (train, dev) only; " +
 			"the held-out splits' are in heldout-manifest.json.",
@@ -1099,12 +1184,14 @@ type labelingExportAggregates struct {
 	families     map[string][]string
 	chunked      map[string]int
 	splits       map[string]bool
+	transforms   map[string]int
 }
 
 func newLabelingExportAggregates() *labelingExportAggregates {
 	return &labelingExportAggregates{labelSupport: map[string]map[string]map[string]int{}, counts: map[string]map[string]map[string]int{},
 		strata: map[string]map[string]int{}, flags: map[string]int{}, coverage: map[string]int{}, families: map[string][]string{},
-		chunked: map[string]int{"units": 0, exportUsable: 0, exportNeedContext: 0, exportPartial: 0}, splits: map[string]bool{}}
+		chunked: map[string]int{"units": 0, exportUsable: 0, exportNeedContext: 0, exportPartial: 0}, splits: map[string]bool{},
+		transforms: map[string]int{"verified": 0, "unverified": 0}}
 }
 
 func (a *labelingExportAggregates) support(label, split, kind string) {
@@ -1156,7 +1243,7 @@ func (a *labelingExportAggregates) json(labels []string) map[string]any {
 	return map[string]any{"splits": sortedKeys(a.splits), "counts": a.counts, "label_support": a.labelSupport, "strata": a.strata, "flags": a.flags,
 		"coverage": map[string]any{"not_labeled_by_status": a.coverage, "note": "Items present without labels, by status. refused_copacked_unresolved " +
 			"counts refused items packed with others: the refusal may belong to a neighbour, yet they stay blocked on every route."},
-		"families_by_split": families, "chunked_units": a.chunked}
+		"families_by_split": families, "chunked_units": a.chunked, "transforms": a.transforms}
 }
 
 // labelingMaskedLabels lists the labels a row says nothing about:
@@ -1332,8 +1419,8 @@ func labelingCheckEvidence(item, text string, raw json.RawMessage) error {
 }
 
 // runLabelingExport is the export command.
-func runLabelingExport(dir, job, out string, replace bool, stdout io.Writer) error {
-	path, manifest, err := exportLabeling(context.Background(), dir, job, out, replace)
+func runLabelingExport(dir, job, out string, replace, force bool, stdout io.Writer) error {
+	path, manifest, err := exportLabeling(context.Background(), dir, job, out, replace, force)
 	if err != nil {
 		return err
 	}
@@ -1351,7 +1438,7 @@ func runLabelingExport(dir, job, out string, replace bool, stdout io.Writer) err
 		fmt.Fprintf(stdout, "Held-out items: %v (their aggregates are in %s)\n", toInt64(manifest["items"])-int64(training), exportHeldOutManifest)
 	}
 	if job, _ := manifest["job"].(map[string]any); job != nil && job["complete"] == false {
-		fmt.Fprintln(stdout, "The job still has pending or in-flight requests: their items are exported as unlabeled.")
+		fmt.Fprintf(stdout, "The job is not complete (%s): items without a settled result are exported as unlabeled.\n", strings.Join(job["incomplete_reasons"].([]string), ", "))
 	}
 	return nil
 }
