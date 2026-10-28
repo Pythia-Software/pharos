@@ -1,6 +1,6 @@
 import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, isFilterable, loadSchema, opsForField, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisCatalogs } from "./analysis-catalogs";
-import { analysisCycles, analysisReductions, analysisVersion, analysisViews, availableViews, canonicalState, compareModes, cycleUnavailable, noSplit, normalizeAnalysis, records, rollingOps, switchView, trendKind, validAnalysisState, viewUnavailable, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { analysisCycles, analysisDefaults, analysisReductions, analysisVersion, analysisViews, availableViews, canonicalState, compareModes, cycleUnavailable, noSplit, normalizeAnalysis, records, rollingOps, switchView, trendKind, validAnalysisState, viewUnavailable, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { dashboardDefaults } from "./dashboard-defaults";
 import { chartPeriods } from "./chart-period";
 import { chartDisplays } from "./chart-series";
@@ -117,28 +117,43 @@ export function canonicalChart(defaults: Record<string, unknown>, change: Record
   return chart;
 }
 
-// The options a view's validity depends on, enumerated. multiple_periods is
-// derived: period hours with hours > 1, or days with days > 1.
-const enumerated: Record<AnalysisView, string[]> = {
-  trend: ["metric", "split", "share", "display", "rollingOp", "period", "multiple_periods", "norm"],
-  compare: ["unit", "metric", "split", "reduce", "compareAs"],
-  distribution: ["unit", "metric", "split"],
-  scatter: ["unit", "metric", "metricY", "split"],
-  cycle: ["unit", "metric", "split", "cycle", "reduce"],
-};
-// Each constraint limits one option's values given others'. A chart is
-// drawn as given exactly when every option's value is allowed by every
-// constraint on it; the generator checks that over every combination.
-const constraintShapes: Record<AnalysisView, Array<[string, string[]]>> = {
-  trend: [["metric", []], ["split", ["metric"]], ["share", ["metric"]], ["share", ["split"]], ["display", ["metric"]], ["rollingOp", ["metric"]], ["period", []], ["multiple_periods", ["metric"]], ["multiple_periods", ["period"]], ["norm", ["display"]], ["norm", ["share"]], ["norm", ["metric", "split"]]],
-  compare: [["unit", []], ["metric", []], ["split", ["unit"]], ["reduce", ["unit", "metric"]], ["compareAs", ["split"]], ["compareAs", ["unit", "metric", "reduce"]]],
-  distribution: [["unit", []], ["metric", ["unit"]], ["split", ["unit"]]],
-  scatter: [["unit", []], ["metric", []], ["metricY", ["metric"]], ["split", ["unit"]]],
-  cycle: [["unit", []], ["split", []], ["metric", []], ["cycle", []], ["reduce", ["metric"]]],
-};
+// ----- How a dashboard draws a chart -------------------------------------------
+//
+// The page opens a link's chart over the topic's defaults (merge_defaults:
+// dashboardDefaults) and draws normalizeAnalysis of that merge. The map holds
+// how each option is drawn as a rule, applied in order:
+// - its merged value stays when every constraint allows it, given other
+//   options' values;
+// - otherwise it becomes the fallback for its context;
+// - an option the merge leaves out takes the rule's fill first, or goes
+//   straight to the fallback when the fill is "(fallback)".
+// A given option's value is its drawn value when its rule comes earlier, its
+// merged value (or "(absent)") otherwise. multiple_periods is derived from the
+// merge over fill_defaults: period hours with hours > 1, or days with
+// days > 1; "self" is the option's own merged value.
+// The generator enumerates every combination of option values, absent ones
+// included, and checks that the rules reproduce the page's drawing and
+// verdict on each.
+
+export const absent = "(absent)", viaFallback = "(fallback)";
 type Scalar = string | number | boolean;
-type Constraint = { option: string; given: string[]; allowed: unknown };
-const multiple = (state: Record<string, unknown>) => state.period === "hours" && Number(state.hours) > 1 || state.period === "days" && Number(state.days) > 1;
+type Rule = { option: string; fill?: Scalar; constraints: Array<{ given: string[]; allowed: unknown }>; fallback?: { given: string[]; values: unknown } };
+type Shape = { option: string; constraints: string[][]; fallback: string[] };
+const shape = (option: string, constraints: string[][], fallback: string[] = []): Shape => ({ option, constraints, fallback });
+const drawShapes: Record<AnalysisView, Shape[]> = {
+  trend: [shape("metric", [[]]), shape("split", [["metric"]], ["metric", "self"]), shape("share", [["metric"], ["split"]]), shape("display", [["metric"]]),
+    shape("rollingOp", [["metric"]]), shape("period", [["metric", "multiple_periods"]], ["metric", "multiple_periods", "self"]), shape("norm", [["display"], ["share"], ["metric", "split"]])],
+  compare: [shape("unit", [[]]), shape("metric", [[]]), shape("split", [["unit"]]), shape("reduce", [["unit", "metric"]], ["unit", "metric"]), shape("compareAs", [["split"], ["unit", "metric", "reduce"]])],
+  distribution: [shape("unit", [["metric"]], ["metric"]), shape("metric", [["unit"]], ["unit"]), shape("split", [["unit"]])],
+  scatter: [shape("unit", [[]]), shape("metric", [[]]), shape("metricY", [["metric"]], ["metric"]), shape("split", [["unit"]])],
+  cycle: [shape("unit", [[]]), shape("split", [[]]), shape("metric", [[]]), shape("cycle", [[]], ["self"]), shape("reduce", [["metric"]], ["metric", "self"])],
+};
+// The defaults normalizeAnalysis fills multiple_periods' inputs with.
+export const fillDefaults: Record<string, unknown> = { period: analysisDefaults.period, hours: analysisDefaults.hours, days: analysisDefaults.days };
+const multiple = (merged: Record<string, unknown>) => {
+  const state = { ...fillDefaults, ...merged };
+  return state.period === "hours" && Number(state.hours) > 1 || state.period === "days" && Number(state.days) > 1;
+};
 
 function candidates(catalog: AnalysisCatalog, option: string): Scalar[] {
   const measures = Object.keys(catalog.measures);
@@ -153,80 +168,142 @@ function candidates(catalog: AnalysisCatalog, option: string): Scalar[] {
     case "display": return [...chartDisplays];
     case "rollingOp": return [...rollingOps];
     case "scale": case "scaleY": return [...chartScales];
-    case "share": case "norm": case "completePeriods": case "multiple_periods": return [false, true];
+    case "share": case "norm": case "completePeriods": return [false, true];
     default: return fail(`no candidates for ${option}`);
   }
 }
 // Values validAnalysisState accepts for one option, the rest as defaults.
 function domainOf(topic: UsageTopic, base: Record<string, unknown>, option: string): Scalar[] {
   const catalog = analysisCatalogs[topic]!;
-  if (option === "multiple_periods") return [false, true];
   return candidates(catalog, option).filter(value => validAnalysisState(catalog, { ...dashboardDefaults[topic], ...base, [option]: value } as AnalysisState));
 }
-// A state with an enumerated assignment, or undefined when the assignment
-// cannot be stated (several periods of a period that has no count).
-function assign(base: Record<string, unknown>, values: Record<string, Scalar>): Record<string, unknown> | undefined {
-  const { multiple_periods: several, ...rest } = values, state = { ...base, ...rest };
-  if (several === undefined) return state;
-  if (several && state.period !== "hours" && state.period !== "days") return;
-  if (state.period === "hours") state.hours = several ? Math.max(2, Number(base.hours) || 2) : 1;
-  if (state.period === "days") state.days = several ? Math.max(2, Number(base.days) || 2) : 1;
-  return state;
-}
-function* combinations(options: string[], domains: Record<string, Scalar[]>, prefix: Record<string, Scalar> = {}): Generator<Record<string, Scalar>> {
-  if (!options.length) { yield prefix; return; }
-  const [first, ...rest] = options;
-  for (const value of domains[first]) yield* combinations(rest, domains, { ...prefix, [first]: value });
-}
-const nest = (allowed: Record<string, unknown>, keys: string[], value: Scalar) => {
-  let node = allowed as Record<string, unknown>;
-  keys.slice(0, -1).forEach(key => { node = (node[key] ??= {}) as Record<string, unknown>; });
-  const last = keys.at(-1)!, leaf = (node[last] ??= []) as Scalar[];
-  if (!leaf.includes(value)) leaf.push(value);
+const key = (value: unknown) => value === undefined ? absent : String(value);
+const nest = (table: Record<string, unknown>, keys: string[], leaf: (node: unknown) => unknown) => {
+  let node = table;
+  keys.slice(0, -1).forEach(name => { node = (node[name] ??= {}) as Record<string, unknown>; });
+  node[keys.at(-1)!] = leaf(node[keys.at(-1)!]);
 };
-export function allowedValues(constraint: Constraint, state: Record<string, unknown>): Scalar[] | undefined {
-  let node = constraint.allowed as unknown;
-  for (const option of constraint.given) node = (node as Record<string, unknown> | undefined)?.[String(state[option])];
-  return node as Scalar[] | undefined;
-}
-// An option's value for a constraint: the derived one for multiple_periods.
-export const optionValue = (state: Record<string, unknown>, option: string) => option === "multiple_periods" ? multiple(state) : state[option];
-export const satisfies = (constraints: Constraint[], state: Record<string, unknown>) => constraints.every(constraint => allowedValues(constraint, state)?.includes(optionValue(state, constraint.option) as Scalar) ?? false);
+const lookup = (table: unknown, keys: string[]) => keys.reduce<unknown>((node, name) => (node as Record<string, unknown> | undefined)?.[name], table);
 
-// Every combination of a view's enumerated options over its defaults, with
-// the page's verdict on it.
-export function enumerateView(topic: UsageTopic, view: AnalysisView, defaults: Record<string, unknown>, domains: Record<string, Scalar[]>) {
-  const verdicts: Array<{ state: Record<string, unknown>; valid: boolean }> = [];
-  for (const values of combinations(enumerated[view], domains)) {
-    const state = assign(defaults, values);
-    if (!state) continue;
-    const verdict = chartVerdict(topic, state);
-    if (verdict === "invalid") fail(`${topic} ${view}: ${json(values)} is invalid although each option is in its domain`);
-    verdicts.push({ state, valid: verdict === "valid" });
+// The verdict and drawing a Go reader reaches from the map alone: the
+// reference for docs/site-map.md's rule.
+export type ViewRules = { keys: string[]; domains: Record<string, Scalar[]>; numeric: Record<string, { min: number; max?: number; integer: boolean } | { max_values: number }>; rules: Rule[] };
+export function drawChart(view: ViewRules, merged: Record<string, unknown>): Record<string, unknown> {
+  const drawn: Record<string, unknown> = {};
+  const value = (name: string, self: unknown) => name === "self" ? key(self) : name === "multiple_periods" ? key(multiple(merged)) : key(name in drawn ? drawn[name] : merged[name]);
+  for (const rule of view.rules) {
+    let own: unknown = merged[rule.option];
+    const fallback = () => rule.fallback ? rule.fallback.given.length ? lookup(rule.fallback.values, rule.fallback.given.map(name => value(name, own))) : rule.fallback.values : undefined;
+    if (own === undefined && rule.fill === viaFallback) { drawn[rule.option] = fallback(); continue; }
+    if (own === undefined) own = rule.fill;
+    const allowed = rule.constraints.every(constraint => (lookup(constraint.allowed, constraint.given.map(name => value(name, own))) as Scalar[] | undefined)?.includes(own as Scalar) ?? false);
+    drawn[rule.option] = allowed ? own : fallback();
   }
-  return verdicts;
+  return drawn;
 }
-type ViewFacts = { label: string; keys: string[]; defaults: Record<string, unknown>; domains: Record<string, Scalar[]>; numeric: ReturnType<typeof numericOptions>; constraints: Constraint[] };
+export function judgeChart(facts: { merge_defaults: Record<string, unknown>; views: Record<string, ViewRules> }, version: number, chart: Record<string, unknown>): Verdict {
+  const merged = { ...facts.merge_defaults, ...chart }, view = facts.views[String(merged.view ?? "trend")];
+  // A chart without v is an older link, which the page migrates.
+  if (!view || merged.v !== undefined && merged.v !== version) return "invalid";
+  for (const [name, value] of Object.entries(merged)) {
+    if (name === "v" || name === "view") continue;
+    const range = view.numeric[name];
+    if (name === "selection") {
+      const selection = value as { values?: unknown; excluded?: unknown };
+      if (!selection || typeof selection.excluded !== "boolean" || !Array.isArray(selection.values) || selection.values.length > (range as { max_values: number }).max_values || selection.values.some(item => typeof item !== "string")) return "invalid";
+    } else if (range && "min" in range) {
+      if (typeof value !== "number" || value < range.min || range.max !== undefined && value > range.max || range.integer && !Number.isInteger(value)) return "invalid";
+    } else if (view.domains[name]) {
+      if (!view.domains[name].includes(value as Scalar)) return "invalid";
+    } else if (name in chart) return "invalid"; // Outside the map: a key the view does not hold.
+  }
+  if (merged.v === undefined) return "coercible";
+  const drawn = drawChart(view, merged);
+  return Object.keys(chart).every(name => !(name in drawn) || drawn[name] === chart[name]) ? "valid" : "coercible";
+}
+
+// Every combination of a view's drawn options over its defaults, each
+// option also left out where the topic's defaults do not set it.
+export function enumerateView(topic: UsageTopic, view: AnalysisView, defaults: Record<string, unknown>, domains: Record<string, Scalar[]>) {
+  const options = drawShapes[view].map(rule => rule.option), merge = dashboardDefaults[topic] as Record<string, unknown>;
+  const base = Object.fromEntries(Object.entries(defaults).filter(([name]) => !options.includes(name)));
+  const choices: Array<[string, Array<Scalar | undefined>]> = options.map(option => [option, [...domains[option], ...option in merge ? [] : [undefined]]]);
+  if (view === "trend") choices.push(["multiple_periods", [false, true]]);
+  const states: Array<{ chart: Record<string, unknown>; verdict: Verdict }> = [];
+  const walk = (index: number, chart: Record<string, unknown>) => {
+    if (index === choices.length) {
+      const { multiple_periods: several, ...rest } = chart, state = { ...rest };
+      if (several !== undefined) {
+        const period = (state.period ?? merge.period ?? fillDefaults.period) as string;
+        if (several && period !== "hours" && period !== "days") return;
+        if (period === "hours") state.hours = several ? Math.max(2, Number(base.hours) || 2) : 1;
+        if (period === "days") state.days = several ? Math.max(2, Number(base.days) || 2) : 1;
+      }
+      states.push({ chart: state, verdict: chartVerdict(topic, state) });
+      return;
+    }
+    const [option, values] = choices[index];
+    for (const value of values) walk(index + 1, value === undefined ? chart : { ...chart, [option]: value });
+  };
+  walk(0, base);
+  return states;
+}
+
+type ViewFacts = ViewRules & { label: string; defaults: Record<string, unknown> };
 function viewFacts(topic: UsageTopic, view: AnalysisView, label: string): ViewFacts {
-  const catalog = analysisCatalogs[topic]!;
-  const start = { ...dashboardDefaults[topic], v: analysisVersion } as AnalysisState;
+  const catalog = analysisCatalogs[topic]!, merge = dashboardDefaults[topic] as Record<string, unknown>;
+  const start = { ...merge, v: analysisVersion } as AnalysisState;
   const moved = normalizeAnalysis(catalog, switchView(catalog, normalizeAnalysis(catalog, start), view)) as Record<string, unknown>;
   // Outside the trend a missing scale draws linear, as normalizedDashboardChart reads it.
   const defaults = canonicalChart({ ...moved, v: analysisVersion, view, ...view === "trend" ? {} : { scale: moved.scale ?? "linear" } });
   if (chartVerdict(topic, defaults) !== "valid") fail(`${topic} ${view} defaults are not drawn as given: ${json(defaults)}`);
-  const keys = chartKeys[view], options = enumerated[view];
-  const domains: Record<string, Scalar[]> = Object.fromEntries([...new Set([...options, ...keys.filter(key => !["v", "view", ...numericKeys].includes(key))])]
-    .map(option => [option, domainOf(topic, defaults, option)]));
-  const verdicts = enumerateView(topic, view, defaults, domains);
-  const constraints: Constraint[] = constraintShapes[view].map(([option, given]) => {
-    const allowed: Record<string, unknown> = {};
-    for (const { state, valid } of verdicts) if (valid) nest(allowed, ["values", ...given.map(key => String(optionValue(state, key)))], optionValue(state, option) as Scalar);
-    return { option, given, allowed: allowed.values ?? [] };
-  });
-  // Keep a constraint only where it removes something.
-  const needed = constraints.filter(constraint => verdicts.some(({ state }) => !(allowedValues(constraint, state)?.includes(optionValue(state, constraint.option) as Scalar) ?? false)));
-  for (const { state, valid } of verdicts) if (satisfies(needed, state) !== valid) fail(`${topic} ${view}: the constraint tables misjudge ${json(state)} (page: ${valid ? "valid" : "coercible"})`);
-  return { label, keys, defaults, domains, numeric: numericOptions(topic, view, defaults), constraints: needed };
+  const keys = chartKeys[view];
+  const domains: Record<string, Scalar[]> = Object.fromEntries(keys.filter(name => !["v", "view", ...numericKeys].includes(name)).map(option => [option, domainOf(topic, defaults, option)]));
+  const numeric = numericOptions(topic, view, defaults);
+  const states = enumerateView(topic, view, defaults, domains).map(item => ({ ...item, merged: { ...merge, ...item.chart } as Record<string, unknown> }))
+    .map(item => ({ ...item, drawn: item.verdict === "invalid" ? {} : normalizeAnalysis(catalog, item.merged as AnalysisState) as Record<string, unknown> }));
+  const drawing = states.filter(item => item.verdict !== "invalid");
+  // Each rule from the drawings: what stays, what replaces it, and the fill.
+  const rules: Rule[] = [];
+  for (const { option, constraints: givens, fallback: fallbackGiven } of drawShapes[view]) {
+    const context = (item: typeof drawing[number], name: string) => name === "self" ? key(item.merged[option]) : name === "multiple_periods" ? key(multiple(item.merged)) : key(rules.some(rule => rule.option === name) ? item.drawn[name] : item.merged[name]);
+    const allowed = givens.map(() => ({} as Record<string, unknown>)), fallbacks: Record<string, unknown> = {};
+    let coerced = false;
+    for (const item of drawing) {
+      const own = item.merged[option], drawn = item.drawn[option];
+      if (own === undefined) continue;
+      if (drawn === own) givens.forEach((given, index) => nest(allowed[index], ["all", ...given.map(name => context(item, name))], leaf => (leaf as Scalar[] | undefined)?.includes(own as Scalar) ? leaf : [...(leaf as Scalar[] ?? []), own]));
+      else {
+        coerced = true;
+        const path = ["all", ...fallbackGiven.map(name => context(item, name))], before = lookup(fallbacks, path);
+        if (before !== undefined && before !== drawn) fail(`${topic} ${view}: ${option}'s fallback depends on more than ${fallbackGiven.join(", ")}`);
+        nest(fallbacks, path, () => drawn);
+      }
+    }
+    const rule: Rule = { option, constraints: givens.map((given, index) => ({ given, allowed: allowed[index].all ?? [] })), ...coerced ? { fallback: { given: fallbackGiven, values: fallbacks.all } } : {} };
+    rules.push(rule);
+    // Keep a constraint only where it removes something.
+    rule.constraints = rule.constraints.filter(constraint => drawing.some(item => item.merged[option] !== undefined && !((lookup(constraint.allowed, constraint.given.map(name => context(item, name))) as Scalar[] | undefined)?.includes(item.merged[option] as Scalar) ?? false)));
+    // The fill: a value that, put in place of a missing one, draws as the page does.
+    const missing = drawing.filter(item => item.merged[option] === undefined);
+    if (missing.length) {
+      const draws = (fill: Scalar) => missing.every(item => json(drawChart({ keys, domains, numeric, rules: [...rules.slice(0, -1), { ...rule, fill }] }, item.merged)[option]) === json(item.drawn[option]));
+      rule.fill = [...domains[option], viaFallback].find(draws) ?? fail(`${topic} ${view}: no fill draws a missing ${option} as the page does`);
+    }
+  }
+  // A rule that never changes its option says nothing.
+  const facts: ViewFacts = { label, keys, defaults, domains, numeric, rules: rules.filter(rule => rule.constraints.length || rule.fallback || rule.fill !== undefined) };
+  for (const item of states) {
+    const verdict = judgeChart({ merge_defaults: merge, views: { [view]: facts } }, analysisVersion, item.chart);
+    if (verdict !== item.verdict) fail(`${topic} ${view}: the rules judge ${json(item.chart)} ${verdict}, the page ${item.verdict}`);
+    if (item.verdict === "invalid") continue;
+    const drawn = drawChart(facts, item.merged);
+    for (const { option } of rules) {
+      const value = option in drawn ? drawn[option] : item.merged[option];
+      if (json(value) !== json(item.drawn[option])) fail(`${topic} ${view}: the rules draw ${option} of ${json(item.chart)} as ${json(value)}, the page as ${json(item.drawn[option])}`);
+    }
+  }
+  return facts;
 }
 
 // The integer range validAnalysisState accepts for one setting.
@@ -257,7 +334,7 @@ function dashboardFacts(topic: UsageTopic) {
   const views = Object.fromEntries(availableViews(catalog).map(([view, label]) => [view, viewFacts(topic, view, label)]));
   const unavailable = Object.fromEntries((["trend", "compare", "distribution", "scatter", "cycle"] as AnalysisView[]).flatMap(view => viewUnavailable(catalog, view) ? [[view, viewUnavailable(catalog, view)!]] : []));
   return {
-    dataset: catalog.dataset, time: catalog.time,
+    dataset: catalog.dataset, time: catalog.time, merge_defaults: dashboardDefaults[topic],
     defaults: canonicalChart(views[(dashboardDefaults[topic].view ?? "trend")].defaults),
     views, ...Object.keys(unavailable).length ? { unavailable_views: unavailable } : {},
     measures: Object.fromEntries(Object.entries(catalog.measures).map(([id, measure]) => [id, { label: measure.label, unit: measure.unit, kind: trendKind(measure), additive: measure.additive, per_record_value: Boolean(measure.value), note: measure.note }])),
@@ -569,7 +646,7 @@ export function buildSiteMap(inputs: SiteInputs) {
     excluded: { legacy_routes: legacyRoutes, params: ["ask_chat", "token", "fresh", "q_* snapshot references (@id)"] },
     windows: { days: rollingWindowDays, dashboard: dashboardWindows, analyze_days: analyzeDays, analyze_days_default: readUsageWorkspace(new URLSearchParams()).days, labels: optionLabels.window, tables: windowTables, ...windowTemplates() },
     analyze: {
-      version: analysisVersion, labels: { view: optionLabels.view, reduce: optionLabels.reduce },
+      version: analysisVersion, fill_defaults: fillDefaults, absent, fallback: viaFallback, labels: { view: optionLabels.view, reduce: optionLabels.reduce },
       options: { period: Object.keys(chartPeriods), display: chartDisplays, scale: chartScales, rollingOp: rollingOps, compareAs: compareModes, cycle: analysisCycles, split_none: noSplit, unit_records: records },
       dashboards,
     },

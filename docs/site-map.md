@@ -103,9 +103,10 @@ by the local calendar carry the UTC time zone.
 
 The generator checks itself, and fails rather than writing a map that
 disagrees with the page:
-- **Constraint tables.** It runs the page's verdict over every combination
-  of each view's enumerated options, then checks that the tables reproduce
-  every verdict.
+- **Drawing rules.** It runs the page over every combination of each view's
+  drawn options, missing ones included, then checks that the rules reproduce
+  every verdict and every drawn value. It also checks every case in the
+  cases file.
 - **Card templates.** It rebuilds each card's URL from its template at every
   window, and compares it with `cardDestination`'s.
 - **Window templates.** It rebuilds the window terms and the Parallelism
@@ -203,13 +204,16 @@ dataset's `window_field`. All time appends no terms.
 ### `analyze`
 
 `analyze.version` is the `v` every canonical chart carries. `labels` and
-`options` list the shared values, such as periods and scales.
+`options` list the shared values, such as periods and scales. `fill_defaults`
+are the values `normalizeAnalysis` fills a missing period, hours and days
+with. `absent` and `fallback` are the markers the rules use.
 
 `analyze.dashboards.<topic>` describes one dashboard:
 
 | Key | Meaning |
 |---|---|
 | `dataset`, `time` | The dataset, and the fields that hold its range |
+| `merge_defaults` | The chart the page merges a link's chart over (`dashboardDefaults`). Every verdict runs over this merge |
 | `measures` | Label, unit, kind (`additive`, `ratio`, `count` or `level`), whether it has a per-record value, and a note |
 | `breakdowns` | Label and fields |
 | `components` | Splits of a measure into parts: which measures each splits, and its fallback |
@@ -225,9 +229,9 @@ dataset's `window_field`. All time appends no terms.
 |---|---|
 | `keys` | The keys of a canonical chart for the view, in order |
 | `defaults` | The view's canonical default chart |
-| `domains` | For each enumerated option, the values the page accepts |
+| `domains` | For each non-numeric key, the values the page accepts |
 | `numeric` | Integer ranges (`min`, optional `max`, `integer`) and the legend selection's `max_values` |
-| `constraints` | Which combinations the page draws as given |
+| `rules` | How the page draws each option of the merged chart, in order |
 
 #### Valid combinations
 
@@ -239,39 +243,69 @@ draw. The map records three verdicts:
 - **coercible**: the page opens the chart but draws other settings;
 - **invalid**: the page rejects the chart.
 
-The map holds the verdict as **per-option domains plus constraint tables**:
+The map holds the verdict as **per-option domains plus drawing rules**.
+`judgeChart` and `drawChart` in `site-map.ts` are the reference
+implementation:
 
-1. The chart is invalid if any of these holds:
-   - `v` is not `analyze.version`;
-   - `view` is not in `views`;
-   - an enumerated key's value is outside `domains`;
+1. **Merge.** The merged chart is `{...merge_defaults, ...chart}`. Its view
+   is `view`, or `"trend"` when the merge has none.
+   - A chart may name only `v`, `view`, `selection` and that view's `keys`.
+   - Any other key is outside the map, and Go rejects the chart.
+   - A partial chart is fine: the merge fills it as the page does. This
+     applies even when the result differs from the view's `defaults`. For
+     example, Carbon's default split `type` is no breakdown outside the
+     trend, so a Compare chart without `split` is invalid.
+2. **Invalid.** The chart is invalid if any of these holds:
+   - `v` is present and is not `analyze.version`;
+   - the view is not in `views`;
+   - a merged key that has a domain holds a value outside it;
    - a numeric key is outside `numeric`;
    - `selection` is not `{values: [string…], excluded: bool}` within
      `max_values`.
-2. Otherwise, fill the chart's missing keys from the view's `defaults`. Then
-   check each constraint `{option, given, allowed}`. Walk `allowed` by the
-   string values of the `given` options, in order, to reach a list. The
-   option's value must be in that list.
-   - A missing branch means no value is allowed.
-   - `multiple_periods` is derived: true when `period` is `hours` with
-     `hours` > 1, or `days` with `days` > 1.
-3. The chart is valid if every constraint allows it, and coercible otherwise.
+3. **Older link.** Otherwise, a chart without `v` is coercible: the page
+   migrates it as an older link.
+4. **Draw.** Apply each rule `{option, fill?, constraints, fallback?}` in
+   order:
+   - **Own value.** The option's own value is its merged value. A missing
+     value takes `fill`; a `fill` of `"(fallback)"` goes straight to the
+     fallback.
+   - **Constraints.** For each constraint `{given, allowed}`, walk `allowed`
+     by the `given` options' values, as strings, to reach a list. A missing
+     branch allows nothing.
+   - **Result.** The option is drawn as its own value if every list holds
+     it. Otherwise it is drawn as the fallback: walk `fallback.values` by
+     `fallback.given`, or take `values` itself when `given` is empty.
+   - **Given values.** A given option's value is its drawn value when its
+     rule came earlier, and its merged value (or `"(absent)"`) otherwise.
+     `self` is the option's own merged value. `multiple_periods` is true when
+     the merge over `fill_defaults` has `period` `hours` with `hours` > 1, or
+     `days` with `days` > 1.
+   - **Unchanged options.** An option with no rule is drawn as its merged
+     value.
+5. **Valid or coercible.** The chart is valid if every key it names is drawn
+   as given, and coercible otherwise.
 
-The generator derives the tables from the page's own functions. They are not
-hand-written.
+The generator derives the domains and rules from the page's own functions;
+nothing in them is hand-written. It enumerates every combination of a view's
+drawn options, each also left out where `merge_defaults` does not set it. For
+each combination it checks that the rules give the page's verdict and draw
+every option as `normalizeAnalysis` does.
 
 Why this representation:
-- **It factorizes.** The page checks each option's domain on its own, and
-  coerces each setting based on only a few others. A full matrix of every
-  combination would run to tens of thousands of rows per topic. A
-  constraint conditioned on one or two options stays small.
-- **Go can explain an error.** The tables list each option's allowed values
-  in context, so Go can name the valid choices.
-- **It is checked, not assumed.** The generator verifies that the
-  conjunction of constraints is exact over every enumerated combination. A
-  future rule that does not factorize this way fails the generator, rather
-  than producing a wrong map. The constraint shapes are in
-  `constraintShapes` in `site-map.ts`.
+- **It factorizes.** The page checks each option's domain on its own. It
+  then moves each setting on the basis of a few others, in a fixed order. A
+  full matrix of every combination would run to tens of thousands of rows
+  per topic. Rules conditioned on one or two options stay small.
+- **Go can explain an error.** The rules list each option's allowed values
+  in context, so Go can name the valid choices. They also give the setting
+  the page will draw instead, so a summary can say what the page shows.
+- **Partial charts are judged exactly.** The rules run over the same merge
+  the page performs, missing options included, so an agent's partial
+  override gets the page's verdict. Checking the result against a complete
+  chart would not.
+- **It is checked, not assumed.** A future page rule that does not factorize
+  this way fails the generator, rather than producing a wrong map. The rule
+  shapes are `drawShapes` in `site-map.ts`.
 
 #### Canonical dashboard links
 
@@ -350,7 +384,14 @@ card library leaves them out. Each card has:
 
 A card with a `period` (current or all time) has no window and one link.
 
-A card's link keeps `card_*` parameters and its source query. A link that
+A card's link keeps `card_*` parameters and its source query
+(`q_<dataset>`), which the dashboard reads:
+- the card's details link (`cardDetailsURL`, `usageWorkspaceURL`);
+- the way back from them (`usageDashboardReturn`);
+- a window change (`updateQueryWindowURL` rebuilds `analyze_filters` from it).
+
+That query is most of the map's size. It is stored once per card, as the
+state with Query Table's defaults left out. A link that
 changes any part of a card is a plain dashboard link built from the card's
 `state`, `filters` and the new options.
 
@@ -362,8 +403,8 @@ generator writes it.
 | Key | Contents |
 |---|---|
 | `example` | The motivating example, with its canonical URL |
-| `analyze` | A spread of each topic's and view's charts. Each has the page's verdict; each valid one has filters using several operators, a window, and the link |
-| `cards` | Every card at every window, with its link |
+| `analyze` | By topic: a spread of each view's complete charts, plus partial charts (one option at each of its values, and each view's defaults less one key) and invalid ones. Each has the page's verdict. Some valid ones carry filters using several operators, a window, and the link |
+| `cards` | Every card at its first default window. Every window for the first card of each way a link takes its window: the page kind, Parallelism's ribbon, a chart that follows the window, filters or none, window terms on another field, a cover, the local calendar, and no window |
 | `nodes` | A link per page, with the state the page's reader reads from it |
 
 Wherever a link carries query tokens, `decoded` holds their state. Compare

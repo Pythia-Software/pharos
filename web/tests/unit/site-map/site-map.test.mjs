@@ -12,7 +12,7 @@ import { decodeQueryStrict, EMPTY_QUERY } from "@pythia-software/query-table-cor
 import { assets } from "../helpers/classic-script.mjs";
 import map from "../../../../internal/archive/assets/site-map.json";
 import cases from "../../../../testdata/site-map-cases.json";
-import { allowedValues, cardURL, chartVerdict, dashboardURL, optionValue, settingsPages, siteSchemas, viewTitles, windowTerms } from "../../../src/site-map";
+import { cardURL, chartVerdict, dashboardURL, drawChart, judgeChart, settingsPages, siteSchemas, viewTitles, windowTerms } from "../../../src/site-map";
 import { analysisCatalogs } from "../../../src/analysis-catalogs";
 import { dashboardDefaults } from "../../../src/dashboard-defaults";
 import { canonicalState, normalizeAnalysis, readAnalysisLink, validAnalysisState } from "../../../src/dashboard-analysis-model";
@@ -40,6 +40,8 @@ test("the site map's routes are the ones the server and the page shell serve", (
   // The shell's own lists.
   const shellRoutes = JSON.parse(/const ROUTES=new Set\((\[[^\]]*\])\)/.exec(ui)[1].replaceAll("'", "\""));
   for (const name of shellRoutes) assert.ok(served.has(`/${name}`), `ROUTES has ${name}`);
+  // And the shell routes every top-level page; / is home, and work pages route by prefix.
+  for (const node of Object.values(map.nodes).filter(node => !node.path.includes("/") && node.route !== "/" && !node.route.includes("{"))) assert.ok(shellRoutes.includes(node.route.slice(1)), `ROUTES lacks ${node.route}`);
   const tl1 = JSON.parse(/const TL1_PAGES=new Set\((\[[^\]]*\])\)/.exec(ui)[1].replaceAll("'", "\""));
   assert.deepEqual(tl1, Object.values(map.nodes).filter(node => node.path.startsWith("tl1")).map(node => node.route));
   const settings = settingsPages(ui, readFileSync(join(assets, "managed-library.html"), "utf8"));
@@ -57,38 +59,34 @@ test("ID sources are registered MCP tools, and the reader's parameters are the s
   }
 });
 
-// The verdict a Go reader would reach from the site map alone.
-function judge(topic, chart) {
-  const facts = map.analyze.dashboards[topic], view = facts.views[chart.view];
-  if (!view || chart.v !== map.analyze.version) return "invalid";
-  for (const [key, value] of Object.entries(chart)) {
-    if (key === "v" || key === "view") continue;
-    if (key === "selection") {
-      if (!value || typeof value.excluded !== "boolean" || !Array.isArray(value.values) || value.values.length > view.numeric.selection.max_values || value.values.some(item => typeof item !== "string")) return "invalid";
-      continue;
-    }
-    const range = view.numeric[key];
-    if (range) { if (typeof value !== "number" || value < range.min || range.max !== undefined && value > range.max || range.integer && !Number.isInteger(value)) return "invalid"; continue; }
-    if (!view.domains[key]?.includes(value)) return "invalid";
-  }
-  const state = { ...view.defaults, ...chart };
-  return view.constraints.every(constraint => allowedValues(constraint, state)?.includes(optionValue(state, constraint.option))) ? "valid" : "coercible";
-}
+// Every dashboard case with its topic.
+const chartCases = Object.entries(cases.analyze).flatMap(([topic, items]) => items.map(item => ({ ...item, topic })));
+const merged = (topic, chart) => ({ ...map.analyze.dashboards[topic].merge_defaults, ...chart });
 
-test("the site map's tables decide every dashboard case as the page does", () => {
+test("the site map's rules judge every dashboard case, partial charts included, as the page does", () => {
   const verdicts = { valid: 0, coercible: 0, invalid: 0 };
-  for (const item of cases.analyze) {
-    assert.equal(chartVerdict(item.topic, item.chart), item.verdict, `${item.topic} ${JSON.stringify(item.chart)}`);
-    assert.equal(judge(item.topic, item.chart), item.verdict, `${item.topic} ${JSON.stringify(item.chart)}`);
+  let partial = 0;
+  for (const item of chartCases) {
+    const name = `${item.topic} ${JSON.stringify(item.chart)}`, facts = map.analyze.dashboards[item.topic];
+    assert.equal(chartVerdict(item.topic, item.chart), item.verdict, name);
+    assert.equal(judgeChart(facts, map.analyze.version, item.chart), item.verdict, name);
     verdicts[item.verdict]++;
+    const view = facts.views[merged(item.topic, item.chart).view ?? "trend"];
+    if (view && view.keys.some(key => !(key in item.chart))) partial++;
+    // What the rules draw is what the page draws.
+    if (item.verdict !== "invalid") {
+      const drawn = drawChart(view, merged(item.topic, item.chart)), page = normalizeAnalysis(analysisCatalogs[item.topic], merged(item.topic, item.chart));
+      for (const [key, value] of Object.entries(drawn)) assert.deepEqual(value, plain(page[key]), `${name} draws ${key}`);
+    }
   }
   for (const verdict of Object.keys(verdicts)) assert.ok(verdicts[verdict] > 0, `some cases are ${verdict}`);
-  for (const topic of Object.keys(usageTopics)) assert.ok(cases.analyze.some(item => item.topic === topic && item.verdict === "valid"), topic);
+  assert.ok(partial > 1000, "the cases include partial charts");
+  for (const topic of Object.keys(usageTopics)) assert.ok(chartCases.some(item => item.topic === topic && item.verdict === "valid" && item.url), topic);
   for (const [topic, facts] of Object.entries(map.analyze.dashboards)) for (const [name, view] of Object.entries(facts.views)) {
-    assert.equal(judge(topic, view.defaults), "valid", `${topic} ${name} defaults`);
-    for (const constraint of view.constraints) {
+    assert.equal(judgeChart(facts, map.analyze.version, view.defaults), "valid", `${topic} ${name} defaults`);
+    for (const rule of view.rules) for (const constraint of rule.constraints) {
       const leaves = constraint.given.reduce(nodes => nodes.flatMap(node => Object.values(node)), [constraint.allowed]);
-      for (const leaf of leaves) for (const value of leaf) assert.ok(view.domains[constraint.option].includes(value), `${topic} ${name} ${constraint.option} allows ${value}`);
+      for (const leaf of leaves) for (const value of leaf) assert.ok(view.domains[rule.option].includes(value), `${topic} ${name} ${rule.option} allows ${value}`);
     }
   }
 });
@@ -102,7 +100,7 @@ function openDashboard(url) {
 }
 
 test("every valid dashboard link reads back as the state that built it", () => {
-  for (const item of [...cases.analyze.filter(item => item.verdict === "valid"), cases.example]) {
+  for (const item of [...chartCases.filter(item => item.url), cases.example]) {
     const opened = openDashboard(item.url), name = `${item.topic} ${item.url}`;
     assert.equal(opened.workspace.topic, item.topic, name);
     assert.equal(opened.workspace.dataset, map.analyze.dashboards[item.topic].dataset, name);
