@@ -84,6 +84,8 @@ type labelingRunner struct {
 	loopError                    error
 	registry                     string
 	registrySeen                 int
+	// env is added to each CLI attempt's environment (agy's private HOME).
+	env []string
 }
 
 func (r *labelingRunner) now() time.Time {
@@ -331,6 +333,18 @@ func (r *labelingRunner) prepareFiles() error {
 		return err
 	} else if len(entries) > 0 {
 		return fmt.Errorf("the runner directory %s is not empty (a CLI wrote files there); inspect and remove them before running", r.runner)
+	}
+	if r.job.Route == labelingRouteAgy {
+		home, err := labelingAgyHome(r.dir, os.Getenv("HOME"))
+		if err != nil {
+			return err
+		}
+		if listed, err := labelingAgyMCPServers(r.cliPath, home); err != nil {
+			return err
+		} else if listed != "" {
+			return fmt.Errorf("agy would still start MCP servers with HOME=%s; refusing to run:\n%s", home, listed)
+		}
+		r.env = []string{"HOME=" + home}
 	}
 	contracts := filepath.Join(r.dir, "contracts")
 	if err := os.MkdirAll(contracts, 0o700); err != nil {
@@ -912,7 +926,7 @@ func (r *labelingRunner) attempt(ctx context.Context, request labelingPendingReq
 	}
 	stream := newLabelingStream(r.job.Route)
 	var mu sync.Mutex
-	process := runLabelingProcess(r.cliPath, args, r.runner, stdin, events, stderr, stream, &mu, r.opts.Timeout, r.hardStop, func(pid int) {
+	process := runLabelingProcess(r.cliPath, args, r.env, r.runner, stdin, events, stderr, stream, &mu, r.opts.Timeout, r.hardStop, func(pid int) {
 		r.db.Exec(`UPDATE attempts SET pid=?,process_start=? WHERE id=?`, pid, nilIfEmpty(labelingProcessStart(pid)), attempt.id)
 	})
 	return r.finalize(attempt, stream, &process, false)

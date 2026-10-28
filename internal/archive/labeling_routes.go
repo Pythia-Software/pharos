@@ -541,7 +541,7 @@ func cliEnvironment(path string) []string {
 // after a terminal event (labelingLingerGrace, SIGTERM, labelingKillGrace,
 // SIGKILL), on timeout or on a hard stop. started is called with the pid
 // once the process runs.
-func runLabelingProcess(path string, args []string, dir, prompt string, events labelingReceipt, stderr *os.File, stream *labelingStream, mu *sync.Mutex,
+func runLabelingProcess(path string, args, env []string, dir, prompt string, events labelingReceipt, stderr *os.File, stream *labelingStream, mu *sync.Mutex,
 	timeout time.Duration, hardStop <-chan struct{}, started func(pid int)) (result labelingProcess) {
 	begin := time.Now()
 	defer func() { result.Duration = time.Since(begin) }()
@@ -558,7 +558,7 @@ func runLabelingProcess(path string, args []string, dir, prompt string, events l
 		return result
 	}
 	cmd := exec.Command(path, args...)
-	cmd.Dir, cmd.Env = dir, cliEnvironment(path)
+	cmd.Dir, cmd.Env = dir, append(cliEnvironment(path), env...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdinR, stdoutW, stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	err = cmd.Start()
@@ -694,6 +694,58 @@ wait:
 		result.ExitCode = &code
 	}
 	return result
+}
+
+// agy has no per-run switch for MCP servers: every run starts the servers in
+// ~/.gemini/config/mcp_config.json (the user's interactive setup, such as
+// Pharos's own MCP server on the live catalog). Labeling workers need no
+// tools, so they run with HOME set to a private home whose MCP configuration
+// is empty and whose only other content is a link to the CLI's own login.
+// Conversations are then saved there, not under the user's ~/.gemini.
+var labelingAgyLogin = filepath.Join(".gemini", "antigravity-cli", "antigravity-oauth-token")
+
+func labelingAgyHome(datasetDir, userHome string) (string, error) {
+	home := filepath.Join(datasetDir, "agy-home")
+	config := filepath.Join(home, ".gemini", "config")
+	if err := os.MkdirAll(config, 0o700); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(config, "mcp_config.json"), []byte(`{"mcpServers":{}}`+"\n"), 0o600); err != nil {
+		return "", err
+	}
+	// Plugins can declare MCP servers too; the private home has none.
+	if err := os.RemoveAll(filepath.Join(config, "plugins")); err != nil {
+		return "", err
+	}
+	login, link := filepath.Join(userHome, labelingAgyLogin), filepath.Join(home, labelingAgyLogin)
+	if _, err := os.Stat(login); err != nil {
+		return "", fmt.Errorf("agy login %s: %w (log in with agy first)", login, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
+		return "", err
+	}
+	if target, err := os.Readlink(link); err != nil || target != login {
+		os.Remove(link)
+		if err := os.Symlink(login, link); err != nil {
+			return "", err
+		}
+	}
+	return home, nil
+}
+
+// labelingAgyMCPServers lists the MCP servers agy would start with HOME set
+// to home, so a run can refuse to start any.
+func labelingAgyMCPServers(path, home string) (string, error) {
+	cmd := exec.Command(path, "mcp", "list")
+	cmd.Env, cmd.Dir = append(cliEnvironment(path), "HOME="+home), os.TempDir()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("agy mcp list: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	if listed := strings.TrimSpace(string(output)); listed != "No MCP servers configured." {
+		return listed, nil
+	}
+	return "", nil
 }
 
 // labelingCLIVersion asks a CLI for its version once per job.

@@ -39,6 +39,21 @@ func labelingFakeCLI() int {
 		fmt.Println("9.9.9 (fake)")
 		return 0
 	}
+	if len(args) == 2 && args[0] == "mcp" && args[1] == "list" {
+		// Like agy: the servers in $HOME/.gemini/config/mcp_config.json.
+		var config struct {
+			MCPServers map[string]any `json:"mcpServers"`
+		}
+		data, _ := os.ReadFile(filepath.Join(os.Getenv("HOME"), ".gemini", "config", "mcp_config.json"))
+		json.Unmarshal(data, &config)
+		if len(config.MCPServers) == 0 {
+			fmt.Println("No MCP servers configured.")
+		}
+		for name := range config.MCPServers {
+			fmt.Println(name + "  stdio  enabled")
+		}
+		return 0
+	}
 	route := labelingRouteClaude
 	if len(args) > 0 && args[0] == "exec" {
 		route = labelingRouteCodex
@@ -62,7 +77,7 @@ func labelingFakeCLI() int {
 		// Antigravity takes the prompt as the -p argument.
 		prompt = []byte(args[len(args)-1])
 	}
-	recorded, _ := json.Marshal(map[string]any{"argv": args, "stdin": string(prompt)})
+	recorded, _ := json.Marshal(map[string]any{"argv": args, "stdin": string(prompt), "home": os.Getenv("HOME")})
 	os.WriteFile(fmt.Sprintf("%s.%d", os.Getenv(labelingFakeArgs), call+1), recorded, 0o600)
 	flag := func(name string) string {
 		for index, arg := range args {
@@ -2040,6 +2055,18 @@ func TestLabelingRefusalRegistry(t *testing.T) {
 
 func TestLabelingRunThroughAntigravity(t *testing.T) {
 	quickLabelingTimers(t)
+	// The user's agy setup starts Pharos's MCP server on every run; workers
+	// must not, and must leave that setup alone.
+	userHome := t.TempDir()
+	global := filepath.Join(userHome, ".gemini", "config", "mcp_config.json")
+	login := filepath.Join(userHome, labelingAgyLogin)
+	for path, content := range map[string]string{global: `{"mcpServers":{"pharos":{"command":"pharos","args":["mcp"]}}}`, login: "login"} {
+		os.MkdirAll(filepath.Dir(path), 0o700)
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", userHome)
 	agy := func(scenario string) (string, *sql.DB, string, string) {
 		dir := writeLabelingFixture(t, labelingFixtureUnits())
 		cli, calls, last := fakeLabelingCLI(t, scenario)
@@ -2060,9 +2087,19 @@ func TestLabelingRunThroughAntigravity(t *testing.T) {
 	if got := requestStates(t, db); got != requestCompleted {
 		t.Fatalf("states %s", got)
 	}
-	var called struct{ Argv []string }
+	var called struct {
+		Argv []string
+		Home string
+	}
 	data, _ := os.ReadFile(last + ".1")
 	json.Unmarshal(data, &called)
+	private := filepath.Join(dir, "agy-home")
+	config, _ := os.ReadFile(filepath.Join(private, ".gemini", "config", "mcp_config.json"))
+	linked, _ := os.Readlink(filepath.Join(private, labelingAgyLogin))
+	unchanged, _ := os.ReadFile(global)
+	if called.Home != private || strings.TrimSpace(string(config)) != `{"mcpServers":{}}` || linked != login || !strings.Contains(string(unchanged), "pharos") {
+		t.Fatalf("worker HOME %q, private config %s, login link %q, global config %s", called.Home, config, linked, unchanged)
+	}
 	joined := strings.Join(called.Argv, " ")
 	for _, want := range []string{"--model gemini-3.8-flash-low --sandbox --disable-slash-commands --output-format stream-json --json-schema " + filepath.Join(dir, "contracts"),
 		"--print-timeout 10s -p You are a text annotation service."} {
@@ -2096,5 +2133,24 @@ func TestLabelingRunThroughAntigravity(t *testing.T) {
 	_, db, _, _ = agy("tool")
 	if got := requestStates(t, db); got != requestInvalid {
 		t.Fatalf("tool: %s", got)
+	}
+	// If agy would still list an MCP server (here a fake whose listing
+	// ignores HOME), the run refuses before sending anything.
+	cli, calls, _ := fakeLabelingCLI(t, "ok")
+	stubborn := filepath.Join(t.TempDir(), "agy")
+	os.WriteFile(stubborn, []byte("#!/bin/sh\nif [ \"$1\" = mcp ]; then echo 'pharos  stdio  enabled'; exit 0; fi\nexec '"+cli+"' \"$@\"\n"), 0o755)
+	dir = writeLabelingFixture(t, labelingFixtureUnits())
+	opts := labelingTestOptions(dir, stubborn, io.Discard)
+	opts.Spec = labelingJobSpec{Route: labelingRouteAgy, Model: "gemini-3.8-flash", Effort: "low", LimitItems: 4}
+	if err := runLabelingJob(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "MCP servers") || fakeCalls(t, calls) != 0 {
+		t.Fatalf("stubborn MCP: %v, %d calls", err, fakeCalls(t, calls))
+	}
+	// Without the CLI's login there is nothing to link.
+	os.Remove(login)
+	dir = writeLabelingFixture(t, labelingFixtureUnits())
+	opts = labelingTestOptions(dir, cli, io.Discard)
+	opts.Spec = labelingJobSpec{Route: labelingRouteAgy, Model: "gemini-3.8-flash", Effort: "low", LimitItems: 4}
+	if err := runLabelingJob(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "agy login") {
+		t.Fatalf("missing login: %v", err)
 	}
 }
