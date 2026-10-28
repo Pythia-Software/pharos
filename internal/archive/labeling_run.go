@@ -49,9 +49,9 @@ type labelingRunOptions struct {
 	// AcceptServedModel records the operator's decision to accept results
 	// served by this model instead of the requested one.
 	AcceptServedModel string
-	// RefusalsFrom are earlier datasets whose confirmed refusals a new
-	// job also skips.
-	RefusalsFrom []string
+	// RefusalRegistry is the library-wide refusal registry a new job uses
+	// (default: labeling-refusals.jsonl beside the dataset directory).
+	RefusalRegistry string
 	// CLIPath runs this executable for the route instead of the one on
 	// PATH; tests point it at a fake CLI.
 	CLIPath string
@@ -82,7 +82,8 @@ type labelingRunner struct {
 	consecutiveRefusals          int
 	accepted                     map[string]bool
 	loopError                    error
-	refusals                     *labelingRefusals
+	registry                     string
+	registrySeen                 int
 }
 
 func (r *labelingRunner) now() time.Time {
@@ -159,11 +160,11 @@ func runLabelingJob(ctx context.Context, opts labelingRunOptions) error {
 	}
 	defer db.Close()
 	if opts.Create {
-		sources, err := labelingRefusalSourcesFor(dir, opts.RefusalsFrom, "--refusals-from")
-		if err != nil {
-			return err
+		registry := opts.RefusalRegistry
+		if registry == "" {
+			registry = labelingDefaultRegistry(dir)
 		}
-		summary, err := createLabelingJob(ctx, db, opts.Job, opts.Spec, nil, "", sources)
+		summary, err := createLabelingJob(ctx, db, opts.Job, opts.Spec, nil, "", registry, nil)
 		if err != nil {
 			return err
 		}
@@ -191,22 +192,22 @@ func runLabelingJob(ctx context.Context, opts labelingRunOptions) error {
 	if err := verifyLabelingContract(db, job); err != nil {
 		return err
 	}
-	// A job created before refusal sources were recorded gets its dataset's
-	// lineage now.
-	var recorded sql.NullString
-	if err := db.QueryRow(`SELECT refusal_sources FROM jobs WHERE name=?`, job.Name).Scan(&recorded); err != nil {
+	// The job's refusal registry (recorded at creation; a job from before
+	// it gets the default now), read once here so a broken one stops the
+	// run before anything is sent.
+	var registry sql.NullString
+	var seen sql.NullInt64
+	if err := db.QueryRow(`SELECT refusal_registry,registry_entries FROM jobs WHERE name=?`, job.Name).Scan(&registry, &seen); err != nil {
 		return err
 	}
-	if !recorded.Valid {
-		sources, err := labelingRefusalSourcesFor(dir, nil, "")
-		if err != nil {
-			return err
-		}
-		if _, err := db.Exec(`UPDATE jobs SET refusal_sources=? WHERE name=?`, jsonText(sources), job.Name); err != nil {
+	r.registry, r.registrySeen = registry.String, int(seen.Int64)
+	if r.registry == "" {
+		r.registry = labelingDefaultRegistry(dir)
+		if _, err := db.Exec(`UPDATE jobs SET refusal_registry=? WHERE name=?`, r.registry, job.Name); err != nil {
 			return err
 		}
 	}
-	if r.refusals, err = jobLabelingRefusals(db, job.Name); err != nil {
+	if _, err := r.refusalCheck(true); err != nil {
 		return err
 	}
 	if err := r.prepareFiles(); err != nil {
@@ -242,18 +243,26 @@ func runLabelingJob(ctx context.Context, opts labelingRunOptions) error {
 	if err := r.recover(); err != nil {
 		return err
 	}
-	// Usage an earlier run could not price blocks new requests only when
-	// no exposure covers it: unpriced rows without an upper bound, and
-	// partial rows of an attempt whose estimate is not counted.
-	if !opts.AllowUnpriced {
-		var unpriced int
-		if err := db.QueryRow(`SELECT COUNT(*) FROM usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.job=? AND (u.cost_status='unpriced' OR u.cost_status='partial' AND a.usage_missing=0)`,
-			job.Name).Scan(&unpriced); err != nil {
+	// Unpriced usage (an unknown auxiliary model, unattributed usage: an
+	// upper bound is only an estimate, not the model's price) blocks new
+	// requests until an explicit decision: --allow-unpriced, recorded with
+	// its time, covers what was recorded before it. A served model other
+	// than the requested one is governed by its hold (--accept-served-model
+	// or reconcile --requeue-held); partial usage of an exposed attempt is
+	// covered by its estimate.
+	if opts.AllowUnpriced {
+		if _, err := db.Exec(`INSERT INTO decisions(job,kind,value,decided_at) VALUES(?,?,?,?)`, job.Name, "allow_unpriced", "", now()); err != nil {
 			return err
 		}
-		if unpriced > 0 {
-			return fmt.Errorf("job %s holds %d usage records that can be neither priced nor bounded (see status --json); pass --allow-unpriced to continue", job.Name, unpriced)
-		}
+	}
+	var unpriced int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.job=?
+		AND (u.cost_status='unpriced' AND NOT (u.role='primary' AND u.model<>? AND u.model NOT LIKE 'unattributed:%') OR u.cost_status='partial' AND a.usage_missing=0)
+		AND a.finished_at > COALESCE((SELECT MAX(decided_at) FROM decisions WHERE job=? AND kind='allow_unpriced'),'')`, job.Name, job.Model, job.Name).Scan(&unpriced); err != nil {
+		return err
+	}
+	if unpriced > 0 {
+		return fmt.Errorf("job %s holds %d usage records with no price of their own (upper-bound estimates at most, see status --json); decide explicitly: --allow-unpriced records that decision and continues", job.Name, unpriced)
 	}
 	// Held results wait for the operator's decision.
 	held, err := queryMaps(db, `SELECT a.reported_models FROM requests q JOIN attempts a ON a.request_id=q.id AND a.number=q.attempts WHERE q.job=? AND q.state='held'`, job.Name)
@@ -345,7 +354,7 @@ func (r *labelingRunner) schemaPath() string {
 // return to pending; a submitted attempt is re-read from its saved stream,
 // completed from a terminal result there (never re-sent) or else unknown.
 func (r *labelingRunner) recover() error {
-	if _, err := r.db.Exec(`UPDATE requests SET state='pending',updated_at=? WHERE job=? AND state IN ('leased','stopped')`, now(), r.job.Name); err != nil {
+	if _, err := r.db.Exec(`UPDATE requests SET state='pending',updated_at=? WHERE job=? AND state IN ('leased','stopped','waiting_suspicion')`, now(), r.job.Name); err != nil {
 		return err
 	}
 	rows, err := queryMaps(r.db, `SELECT a.id,a.request_id,a.number,a.dir,a.day,a.pid,a.process_start FROM attempts a JOIN requests r ON r.id=a.request_id
@@ -382,6 +391,29 @@ func (r *labelingRunner) recover() error {
 	// transaction writes both), but would otherwise wait forever.
 	_, err = r.db.Exec(`UPDATE requests SET state='unknown',note='submitted without an attempt record' WHERE job=? AND state='submitted'`, r.job.Name)
 	return err
+}
+
+// refusalCheck reads the registry fresh (it is small). A registry that
+// cannot be read, does not parse, or holds fewer entries than the job saw
+// before is an error: the run stops rather than send refused material.
+func (r *labelingRunner) refusalCheck(persist bool) (*labelingRefusalCheck, error) {
+	r.mu.Lock()
+	seen := r.registrySeen
+	r.mu.Unlock()
+	check, err := loadLabelingRefusalCheck(r.registry, &seen)
+	if err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	if seen > r.registrySeen {
+		r.registrySeen = seen
+	}
+	r.mu.Unlock()
+	// Persisted outside transactions only (one connection).
+	if persist {
+		r.db.Exec(`UPDATE jobs SET registry_entries=MAX(COALESCE(registry_entries,0),?) WHERE name=?`, seen, r.job.Name)
+	}
+	return check, nil
 }
 
 // labelingStartupHook runs while a runner starts (after the CLI version
@@ -735,11 +767,15 @@ func (r *labelingRunner) attempt(ctx context.Context, request labelingPendingReq
 	}
 	// Items a refusal elsewhere now blocks leave the request before its
 	// prompt is built; a request left empty is not sent.
+	check, err := r.refusalCheck(true)
+	if err != nil {
+		return err
+	}
 	tx, err := r.db.Begin()
 	if err != nil {
 		return err
 	}
-	blocked, remaining, err := applyLabelingRefusals(tx, r.refusals, r.job.Name, request.id)
+	blocked, remaining, held, err := applyLabelingRefusals(tx, check, r.job.Name, request.id)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -748,9 +784,12 @@ func (r *labelingRunner) attempt(ctx context.Context, request labelingPendingReq
 		return err
 	}
 	if blocked > 0 {
-		r.printf("%s %s: %d items not sent: blocked by a refusal elsewhere\n", r.job.Name, request.id, blocked)
+		r.printf("%s %s: %d items not sent: blocked by a refusal\n", r.job.Name, request.id, blocked)
 	}
-	if remaining == 0 {
+	if held {
+		r.printf("%s %s: held: an item is a suspected refusal in another job\n", r.job.Name, request.id)
+	}
+	if remaining == 0 || held {
 		return nil
 	}
 	ids, _, err := r.requestItems(request.id)
@@ -833,9 +872,16 @@ func (r *labelingRunner) attempt(ctx context.Context, request labelingPendingReq
 	// A refusal recorded while the prompt was built: the request goes back
 	// to pending without its blocked items (or stays unsent if none is
 	// left), in the same transaction that would have submitted it.
-	if late, _, err := applyLabelingRefusals(tx, r.refusals, r.job.Name, request.id); err != nil {
+	check, err = r.refusalCheck(false)
+	if err != nil {
 		tx.Rollback()
 		return err
+	}
+	if late, _, lateHeld, err := applyLabelingRefusals(tx, check, r.job.Name, request.id); err != nil {
+		tx.Rollback()
+		return err
+	} else if lateHeld {
+		return tx.Commit()
 	} else if late > 0 {
 		if _, err := tx.Exec(`UPDATE requests SET state='pending' WHERE id=? AND state='leased'`, request.id); err != nil {
 			tx.Rollback()
@@ -897,6 +943,8 @@ func labelingExactCost(book priceBook, model, day string, tokens map[string]int6
 // labelingPricingRule versions how usage is priced; a job priced under
 // another rule is re-priced from its stored tokens at the next run start.
 //
+// pricing-v5: an upper bound is stored as an estimate beside an unpriced
+// row (estimate_usd, estimate_basis), not as its cost.
 // pricing-v4: usage that cannot be priced as itself is priced at the
 // provider's highest rates as an upper-bound estimate (exposure).
 // pricing-v3: as v2, and a served model's usage that cannot be priced as
@@ -907,7 +955,7 @@ func labelingExactCost(book priceBook, model, day string, tokens map[string]int6
 // such as Claude Code's session titles) through the standard price-book
 // resolution (family and dated aliases), so a dated snapshot name prices
 // as its model.
-const labelingPricingRule = "pricing-v4"
+const labelingPricingRule = "pricing-v5"
 
 const (
 	usagePrimary   = "primary"
@@ -947,6 +995,28 @@ func labelingUsageCost(book priceBook, role, model, requested, day string, token
 const (
 	costUpperBound = "estimated_upper_bound"
 )
+
+// labelingStoredUsageCost is how a usage row stores its cost: an upper
+// bound is not a price, so the row is unpriced and the bound is kept apart
+// as an estimate (exposure).
+type labelingStoredUsageCost struct {
+	cost, estimate     any
+	status             string
+	pricedModel, basis any
+}
+
+func labelingStoredCost(cost usageCost) labelingStoredUsageCost {
+	stored := labelingStoredUsageCost{status: cost.status, pricedModel: nilIfEmpty(cost.pricedModel)}
+	if cost.cost == nil {
+		return stored
+	}
+	if cost.status == costUpperBound {
+		stored.status, stored.pricedModel, stored.estimate, stored.basis = "unpriced", nil, *cost.cost, cost.pricedModel
+		return stored
+	}
+	stored.cost = *cost.cost
+	return stored
+}
 
 // labelingProvider infers a model's provider from its name.
 func labelingProvider(model string) string {
@@ -1160,12 +1230,9 @@ func (r *labelingRunner) repriceLabelingUsage(force bool) error {
 		if strings.Contains(firstString(row["model_source"]), labelingIncompleteSource) {
 			cost = usageCost{status: "partial"}
 		}
-		var value any
-		if cost.cost != nil {
-			value = *cost.cost
-		}
-		if _, err := tx.Exec(`UPDATE usage SET role=?,cost_usd=?,cost_status=?,priced_model=? WHERE attempt_id=? AND model=?`, role, value, cost.status,
-			nilIfEmpty(cost.pricedModel), row["attempt_id"], model); err != nil {
+		stored := labelingStoredCost(cost)
+		if _, err := tx.Exec(`UPDATE usage SET role=?,cost_usd=?,cost_status=?,priced_model=?,estimate_usd=?,estimate_basis=? WHERE attempt_id=? AND model=?`, role,
+			stored.cost, stored.status, stored.pricedModel, stored.estimate, stored.basis, row["attempt_id"], model); err != nil {
 			return err
 		}
 	}
@@ -1354,6 +1421,20 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 	if resultWithoutUsage {
 		problems = append(problems, "usage_missing")
 	}
+	// A refusal of a request of one item is pinned to that item: its content
+	// goes into the refusal registry, durably, before the ledger records it.
+	if outcome == requestRefused && len(ids) == 1 {
+		rows, err := queryMaps(r.db, `SELECT u.message_sha256||':'||i.target_hash key FROM items i JOIN units u ON u.id=i.unit_id WHERE i.id=?`, ids[0])
+		if err != nil || len(rows) == 0 {
+			return errors.Join(err, fmt.Errorf("item %s is not in the dataset", ids[0]))
+		}
+		manifest, _ := labelingManifestHash(r.dir)
+		entry := labelingRefusalEntry{Key: firstString(rows[0]["key"]), Dataset: r.dir, Manifest: manifest, Job: r.job.Name, Item: ids[0],
+			Attempt: attempt.id, RecordedAt: now()}
+		if err := appendLabelingRegistry(r.registry, []labelingRefusalEntry{entry}); err != nil {
+			return err
+		}
+	}
 	tx, err := r.db.Begin()
 	if err != nil {
 		return err
@@ -1384,17 +1465,14 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 	}
 	unpriced := []string{}
 	for _, row := range usage {
-		var cost any
-		if row.cost.cost != nil {
-			cost = *row.cost.cost
-		}
 		// New usage without a price of its own halts, except a served model
 		// the operator accepted knowing it is only bounded.
 		if row.cost.status == "partial" || row.cost.status == "unpriced" || row.cost.status == costUpperBound && !r.accepted[row.model] && !strings.HasPrefix(row.model, labelingUnattributed) {
 			unpriced = append(unpriced, row.model+" ("+row.cost.status+")")
 		}
-		if _, err := tx.Exec(`INSERT INTO usage(attempt_id,model,model_source,tokens,cost_usd,cost_status,priced_model,day,role) VALUES(?,?,?,?,?,?,?,?,?)`,
-			attempt.id, row.model, row.source, jsonText(row.tokens), cost, row.cost.status, nilIfEmpty(row.cost.pricedModel), attempt.day, row.role); err != nil {
+		stored := labelingStoredCost(row.cost)
+		if _, err := tx.Exec(`INSERT INTO usage(attempt_id,model,model_source,tokens,cost_usd,cost_status,priced_model,day,role,estimate_usd,estimate_basis) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+			attempt.id, row.model, row.source, jsonText(row.tokens), stored.cost, stored.status, stored.pricedModel, attempt.day, row.role, stored.estimate, stored.basis); err != nil {
 			return err
 		}
 	}

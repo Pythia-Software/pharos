@@ -30,10 +30,10 @@ const labelingUsage = `usage:
   pharos [--config PATH] labeling prepare --dir DIR [--fresh-days 14] [--limit-conversations N] [--conversation ID ...] [--splits-from OLD_DIR] --catalog COPY --snapshot-copy [--allow-stale-shm] [--replace] [--dry-run]
   pharos labeling plan --dir DIR --route claude|codex --model M --effort E [--items-per-request 4] [--max-request-tokens 24000] [--max-request-chars N] [--include-duplicates] [--max-per-text N] [--concurrency 3] [--cohort C ...] [--split S ...] [--limit-items N]
   pharos labeling status --dir DIR [--job NAME [--json]]
-  pharos labeling run --dir DIR --job NAME [--create --route claude|codex --model M --effort E [--prompt V] [--cohort C ...] [--split S ...] [--item ID ...] [--limit-items N] [--items-per-request 4] [--max-request-tokens 24000] [--max-request-chars N] [--include-duplicates] [--max-per-text N] [--refusals-from OLD_DIR ...] [--skip-oversize] [--create-only]] --max-usd X [--concurrency 3] [--timeout 330s] [--retry-invalid 1] [--max-consecutive-failures 3] [--allow-unpriced] [--accept-served-model MODEL]
+  pharos labeling run --dir DIR --job NAME [--create --route claude|codex --model M --effort E [--prompt V] [--cohort C ...] [--split S ...] [--item ID ...] [--limit-items N] [--items-per-request 4] [--max-request-tokens 24000] [--max-request-chars N] [--include-duplicates] [--max-per-text N] [--refusal-registry FILE] [--skip-oversize] [--create-only]] --max-usd X [--concurrency 3] [--timeout 330s] [--retry-invalid 1] [--max-consecutive-failures 3] [--allow-unpriced] [--accept-served-model MODEL]
   pharos labeling stop --dir DIR --job NAME
   pharos labeling reconcile --dir DIR --job NAME [--retry-unknown] [--retry-failed] [--requeue-held] [--retry-suspected-refusals] [--retry-tool-use]
-  pharos labeling import-results --dir DIR --from OLD_DIR --job NAME
+  pharos labeling import-results --dir DIR --from OLD_DIR --job NAME [--refusal-registry FILE]
   pharos labeling export --dir DIR --job NAME [--out DIR] [--replace [--force-replace]]`
 
 // runLabelingCLI runs the offline labeling commands. None of them opens the
@@ -91,6 +91,7 @@ func runLabelingCLI(configPath string, args []string, stdout, stderr io.Writer) 
 		requeueHeld := flags.Bool("requeue-held", false, "re-queue requests held because another model answered")
 		retrySuspected := flags.Bool("retry-suspected-refusals", false, "re-queue requests whose reply only looked like a refusal")
 		retryToolUse := flags.Bool("retry-tool-use", false, "re-queue requests whose attempt used a tool")
+		registry := flags.String("refusal-registry", "", "import-results: the refusal registry the new job uses (default: labeling-refusals.jsonl beside the dataset directory)")
 		if err := flags.Parse(args[1:]); err != nil || *dir == "" || *job == "" || flags.NArg() != 0 || (*from != "") != (args[0] == "import-results") {
 			return errors.New(labelingUsage)
 		}
@@ -104,11 +105,15 @@ func runLabelingCLI(configPath string, args []string, stdout, stderr io.Writer) 
 		case "reconcile":
 			return withLabelingJobLock(*dir, *job, false, func(db *sql.DB) error {
 				return reconcileLabelingJob(db, *job, labelingReconcileOptions{RetryUnknown: *retryUnknown, RetryFailed: *retryFailed,
-					RequeueHeld: *requeueHeld, RetrySuspectedRefusals: *retrySuspected, RetryToolUse: *retryToolUse}, stdout)
+					RequeueHeld: *requeueHeld, RetrySuspectedRefusals: *retrySuspected, RetryToolUse: *retryToolUse, Dir: *dir}, stdout)
 			})
 		default:
 			return withLabelingJobLock(*dir, *job, true, func(*sql.DB) error {
-				return importLabelingResults(context.Background(), *dir, *from, *job, stdout)
+				path := ""
+				if *registry != "" {
+					path, _ = filepath.Abs(expandPath(*registry))
+				}
+				return importLabelingResults(context.Background(), *dir, *from, *job, path, stdout)
 			})
 		}
 	}
@@ -137,14 +142,13 @@ func runLabelingRunCLI(args []string, stdout, stderr io.Writer) error {
 	flags.IntVar(&opts.Spec.MaxRequestChars, "max-request-chars", 0, "also cap the characters of item text and context per request (0: no cap)")
 	flags.BoolVar(&opts.Spec.IncludeDuplicates, "include-duplicates", false, "also label units that repeat another (delegation copies, later fork copies)")
 	flags.IntVar(&opts.Spec.MaxPerText, "max-per-text", 0, "at most N items with the same cohort and target text (0: no limit)")
-	var refusalsFrom stringList
-	flags.Var(&refusalsFrom, "refusals-from", "with --create: also honour the refusals of this earlier dataset and its lineage (repeatable; the --splits-from lineage is automatic)")
+	registry := flags.String("refusal-registry", "", "with --create: the library-wide refusal registry (default: labeling-refusals.jsonl beside the dataset directory); recorded in the job")
 	flags.BoolVar(&opts.Spec.SkipOversize, "skip-oversize", false, "with --create: leave items too large for one request out (recorded as blocked_oversize; the job is incomplete) instead of failing")
 	maxUSD := flags.String("max-usd", "", "the job's lifetime spend ceiling in USD, estimates of possibly charged attempts included (required to run)")
 	flags.IntVar(&opts.Concurrency, "concurrency", 3, "requests in flight")
 	flags.DurationVar(&opts.Timeout, "timeout", labelingAttemptTimeout, "an attempt without a terminal event by then is terminated and unknown")
 	flags.IntVar(&opts.RetryInvalid, "retry-invalid", 1, "re-send an invalid or missing item up to N more times")
-	flags.BoolVar(&opts.AllowUnpriced, "allow-unpriced", false, "run although some usage cannot be priced (its spend is then unbounded)")
+	flags.BoolVar(&opts.AllowUnpriced, "allow-unpriced", false, "run although some usage cannot be priced (its spend is then unbounded); recorded in the job as a decision")
 	flags.IntVar(&opts.MaxConsecutiveFailures, "max-consecutive-failures", 3, "halt after this many failed or unknown attempts in a row")
 	flags.StringVar(&opts.AcceptServedModel, "accept-served-model", "", "accept results served by this model instead of the requested one (recorded in the job)")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || opts.Dir == "" || opts.Job == "" || opts.CreateOnly && !opts.Create || opts.RetryInvalid < 0 || opts.Spec.MaxPerText < 0 || opts.MaxConsecutiveFailures < 1 {
@@ -161,9 +165,8 @@ func runLabelingRunCLI(args []string, stdout, stderr io.Writer) error {
 		opts.MaxUSD = value
 	}
 	opts.Spec.Cohorts, opts.Spec.Splits, opts.Spec.Items = cohorts, splits, items
-	for _, earlier := range refusalsFrom {
-		path, _ := filepath.Abs(expandPath(earlier))
-		opts.RefusalsFrom = append(opts.RefusalsFrom, path)
+	if *registry != "" {
+		opts.RefusalRegistry, _ = filepath.Abs(expandPath(*registry))
 	}
 	signals := make(chan os.Signal, 2)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)

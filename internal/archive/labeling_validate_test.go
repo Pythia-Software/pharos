@@ -52,10 +52,11 @@ func TestLabelingQuoteMapping(t *testing.T) {
 	if evidence.Status != "ambiguous_mixed" || !evidence.Ambiguous || len(evidence.Occurrences) != 2 || evidence.Occurrences[0].Status != "valid" || evidence.Occurrences[1].Status != "in_marker" {
 		t.Fatalf("mixed = %+v", evidence)
 	}
-	// The same holds for a quote also in the context.
 	context := labelingItemSource{id: "i6", text: "fix it", message: "fix it", context: "please fix it",
 		targets: []labelingTargetPiece{{start: 0, end: 6, visibleStart: 0, visibleEnd: 6}}}
-	if got := locateLabelingQuote(context, "L", "fix it").Status; got != "ambiguous_mixed" {
-		t.Fatalf("also in context = %s", got)
+	// A quote also in the preceding context stays evidence (the prompt
+	// shows context apart from CURRENT_TEXT); it is flagged and counted.
+	if got := locateLabelingQuote(context, "L", "fix it"); got.Status != "valid" || !got.EchoesContext {
+		t.Fatalf("also in context = %+v", got)
 	}
 }

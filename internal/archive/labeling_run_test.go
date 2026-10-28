@@ -884,13 +884,22 @@ func TestLabelingRunSpendLimits(t *testing.T) {
 	if got := requestStates(t, db); got != "completed,pending" || fakeCalls(t, calls) != 1 {
 		t.Fatalf("states %s", got)
 	}
-	opts.Create, opts.AllowUnpriced = false, true
+	// An upper bound is only an estimate: the job stays halted until the
+	// operator decides, and the decision is recorded.
+	opts.Create = false
+	if err := runLabelingJob(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "no price of their own") || fakeCalls(t, calls) != 1 {
+		t.Fatalf("restart without a decision = %v", err)
+	}
+	opts.AllowUnpriced = true
 	if err := runLabelingJob(context.Background(), opts); err != nil {
 		t.Fatal(err)
 	}
+	if rows := labelingRows(t, db, `SELECT kind,decided_at FROM decisions`); len(rows) != 1 || rows[0]["kind"] != "allow_unpriced" || rows[0]["decided_at"] == nil {
+		t.Fatalf("decisions = %v", rows)
+	}
 	status, _ := labelingJobStatus(db, "pilot", labelingTestDay)
 	spend := status["spend"].(labelingSpend)
-	if requestStates(t, db) != "completed,completed" || spend.UnpricedAttempts != 2 || spend.PartialTokens["claude-mystery-9 (estimated_upper_bound)"]["output_tokens"] != 40 ||
+	if requestStates(t, db) != "completed,completed" || spend.UnpricedAttempts != 2 || spend.PartialTokens["claude-mystery-9 (unpriced)"]["output_tokens"] != 40 ||
 		spend.EstimatedUsage <= 0 {
 		t.Fatalf("spend = %+v", spend)
 	}
@@ -1073,8 +1082,8 @@ func TestLabelingRunHoldsAnotherServedModel(t *testing.T) {
 	// Its usage is recorded under the served name; no family match lends it
 	// the requested model's price: it is bounded at the provider's highest
 	// rates.
-	if usage := labelingRows(t, db, `SELECT model,cost_status,cost_usd,priced_model FROM usage`); len(usage) != 1 || usage[0]["model"] != "claude-haiku-5-5-20261001" ||
-		usage[0]["cost_status"] != costUpperBound || usage[0]["priced_model"] != "upper bound: anthropic" || usage[0]["cost_usd"].(float64) <= 0 {
+	if usage := labelingRows(t, db, `SELECT model,cost_status,cost_usd,estimate_usd,estimate_basis FROM usage`); len(usage) != 1 || usage[0]["model"] != "claude-haiku-5-5-20261001" ||
+		usage[0]["cost_status"] != "unpriced" || usage[0]["cost_usd"] != nil || usage[0]["estimate_basis"] != "upper bound: anthropic" || usage[0]["estimate_usd"].(float64) <= 0 {
 		t.Fatalf("usage = %v", usage)
 	}
 	// Estimated, it is exposure, not known spend, and never $0.
@@ -1466,7 +1475,7 @@ func TestLabelingCommandGuards(t *testing.T) {
 		t.Fatalf("unpriced = %v", err)
 	}
 	opts.Create = false
-	if err := runLabelingJob(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "neither priced nor bounded") || fakeCalls(t, calls) != 1 {
+	if err := runLabelingJob(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "no price of their own") || fakeCalls(t, calls) != 1 {
 		t.Fatalf("resume without --allow-unpriced = %v after %d calls", err, fakeCalls(t, calls))
 	}
 }
@@ -1576,8 +1585,8 @@ func TestLabelingRefusalSignals(t *testing.T) {
 	if got := requestStates(t, db); got != requestRefused || !strings.Contains(firstString(results["i_a"]["issues"]), "refused_copacked_unresolved") {
 		t.Fatalf("states %s, i_a %v", got, results["i_a"])
 	}
-	// Confirmed refusals are global and permanent: a codex job skips them,
-	// and so does a job in a newly prepared dataset that names this one.
+	// A co-packed refusal blocks its items by ID in this dataset: a codex
+	// job skips them, each with a refused_elsewhere result.
 	var out strings.Builder
 	other := labelingTestOptions(dir, cli, &out)
 	other.Job, other.CreateOnly = "codex", true
@@ -1585,13 +1594,13 @@ func TestLabelingRefusalSignals(t *testing.T) {
 	if err := runLabelingJob(context.Background(), other); err != nil || !strings.Contains(out.String(), `"refused_skipped": 4`) {
 		t.Fatalf("codex job = %v: %s", err, out.String())
 	}
-	fresh := writeLabelingFixture(t, labelingFixtureUnits())
-	out.Reset()
-	other = labelingTestOptions(fresh, cli, &out)
-	other.CreateOnly, other.RefusalsFrom = true, []string{dir}
-	other.Spec.LimitItems = 4
-	if err := runLabelingJob(context.Background(), other); err != nil || !strings.Contains(out.String(), `"refused_skipped": 4`) {
-		t.Fatalf("new dataset = %v: %s", err, out.String())
+	if rows := labelingRows(t, db, `SELECT COUNT(*) n FROM item_results WHERE job='codex' AND outcome='refused_elsewhere' AND labels='[]'`); rows[0]["n"] != int64(4) {
+		t.Fatalf("skipped items without a result: %v", rows)
+	}
+	// It is not pinned to one item, so its content goes nowhere: a new
+	// dataset sharing the registry selects the same texts.
+	if _, entries, err := readLabelingRegistry(labelingDefaultRegistry(dir)); err != nil || entries != 0 {
+		t.Fatalf("registry = %d entries, %v", entries, err)
 	}
 }
 
@@ -1654,7 +1663,7 @@ func TestLabelingIncompleteUsageHalts(t *testing.T) {
 	// the next run.
 	execTx(t, db, `UPDATE jobs SET pricing_rule=NULL`)
 	opts.Create = false
-	if err := runLabelingJob(context.Background(), opts); !errors.Is(err, errLabelingHalted) || strings.Contains(err.Error(), "neither priced") {
+	if err := runLabelingJob(context.Background(), opts); !errors.Is(err, errLabelingHalted) || strings.Contains(err.Error(), "no price of their own") {
 		t.Fatalf("rerun = %v", err)
 	}
 	if rows := labelingRows(t, db, `SELECT cost_status FROM usage WHERE attempt_id='pilot:000001/1'`); rows[0]["cost_status"] != "partial" {
@@ -1763,7 +1772,7 @@ func TestLabelingUnexplainedUsageHalts(t *testing.T) {
 	status, _ := labelingJobStatus(db, "pilot", labelingTestDay)
 	// The uncovered difference is bounded as exposure, under its own row.
 	spend := status["spend"].(labelingSpend)
-	unattributed := spend.PartialTokens["unattributed:claude-haiku-5-5 (estimated_upper_bound)"]
+	unattributed := spend.PartialTokens["unattributed:claude-haiku-5-5 (unpriced)"]
 	if !strings.Contains(compactJSON(attempt["problems"]), "usage_unexplained") || spend.EstimatedUsage <= 0 || unattributed["output_tokens"] != 1000 {
 		t.Fatalf("attempt %v, spend %+v", attempt, status["spend"])
 	}
@@ -1840,11 +1849,18 @@ func TestLabelingRefusalsBlockOtherJobs(t *testing.T) {
 		db := openFixtureLedger(t, dir)
 		states := labelingRows(t, db, `SELECT state FROM requests WHERE job='b'`)
 		blocked := labelingRows(t, db, `SELECT COUNT(*) n FROM item_results WHERE job='b' AND outcome='refused_elsewhere'`)
-		if len(states) != 1 || states[0]["state"] != requestRefusedElsewhere || blocked[0]["n"] != int64(4) || fakeCalls(t, calls) != 0 {
+		// A refusal removes the items for good; a suspicion only holds the
+		// request.
+		wantState, wantBlocked := requestRefusedElsewhere, int64(4)
+		if scenario == "suspect" {
+			wantState, wantBlocked = requestWaitingSuspicion, 0
+		}
+		if len(states) != 1 || states[0]["state"] != wantState || blocked[0]["n"] != wantBlocked || fakeCalls(t, calls) != 0 {
 			t.Fatalf("%s: job b states %v, blocked %v, %d calls", scenario, states, blocked, fakeCalls(t, calls))
 		}
 		if scenario == "suspect" {
-			// Only the suspecting job re-sends them, on request.
+			// Only the suspecting job re-sends them, on request; once it
+			// resolves the suspicion, the held request goes out.
 			if err := runLabelingCLI("", []string{"reconcile", "--dir", dir, "--job", "a", "--retry-suspected-refusals"}, io.Discard, io.Discard); err != nil {
 				t.Fatal(err)
 			}
@@ -1854,6 +1870,12 @@ func TestLabelingRefusalsBlockOtherJobs(t *testing.T) {
 			}
 			if got := labelingRows(t, db, `SELECT state FROM requests WHERE job='a'`); got[0]["state"] != requestCompleted {
 				t.Fatalf("job a after retry = %v", got)
+			}
+			if err := runLabelingJob(context.Background(), b); err != nil {
+				t.Fatal(err)
+			}
+			if got := labelingRows(t, db, `SELECT state FROM requests WHERE job='b'`); got[0]["state"] != requestCompleted || fakeCalls(t, calls) != 1 {
+				t.Fatalf("job b after the suspicion cleared = %v, %d calls", got, fakeCalls(t, calls))
 			}
 		}
 	}
@@ -1881,30 +1903,60 @@ func TestLabelingRefusalsBlockOtherJobs(t *testing.T) {
 	}
 }
 
-func TestLabelingRefusalsFollowTheSplitsLineage(t *testing.T) {
+func TestLabelingRefusalRegistry(t *testing.T) {
 	quickLabelingTimers(t)
-	old := writeLabelingFixture(t, labelingFixtureUnits())
-	cli, _, _ := fakeLabelingCLI(t, "refusal")
-	opts := labelingTestOptions(old, cli, io.Discard)
-	opts.Concurrency, opts.Spec.LimitItems = 1, 4
-	if err := runLabelingJob(context.Background(), opts); err != nil {
+	registry := filepath.Join(t.TempDir(), "labeling-refusals.jsonl")
+	// Dataset B's job is created first; dataset A then refuses one item
+	// alone: a pinned refusal, written to the shared registry.
+	b := writeLabelingFixture(t, labelingFixtureUnits())
+	okCLI, calls, _ := fakeLabelingCLI(t, "ok")
+	later := labelingTestOptions(b, okCLI, io.Discard)
+	later.CreateOnly, later.RefusalRegistry, later.Spec.LimitItems = true, registry, 4
+	if err := runLabelingJob(context.Background(), later); err != nil {
 		t.Fatal(err)
 	}
-	// A re-prepared dataset that kept the old splits (--splits-from).
-	dir := writeLabelingFixture(t, labelingFixtureUnits())
-	manifest := map[string]any{"contracts": map[string]any{"units": labelingUnitsVersion}, "splits": map[string]any{"inherited_from": old}}
-	if err := durableJSON(filepath.Join(dir, labelingManifestFile), manifest); err != nil {
+	a := writeLabelingFixture(t, labelingFixtureUnits())
+	refuse, _, _ := fakeLabelingCLI(t, "refusal")
+	first := labelingTestOptions(a, refuse, io.Discard)
+	first.RefusalRegistry, first.Concurrency = registry, 1
+	first.Spec.ItemsPerRequest, first.Spec.LimitItems = 1, 1
+	if err := runLabelingJob(context.Background(), first); err != nil {
 		t.Fatal(err)
 	}
+	keys, entries, err := readLabelingRegistry(registry)
+	if err != nil || entries != 1 || len(keys) != 1 {
+		t.Fatalf("registry = %v, %d, %v", keys, entries, err)
+	}
+	// B's pending request loses that item before it is sent; the rest go.
+	later.Create, later.CreateOnly = false, false
+	if err := runLabelingJob(context.Background(), later); err != nil {
+		t.Fatal(err)
+	}
+	db := openFixtureLedger(t, b)
+	blocked := labelingRows(t, db, `SELECT item_id FROM item_results WHERE outcome='refused_elsewhere'`)
+	if len(blocked) != 1 || blocked[0]["item_id"] != "i_a" || requestStates(t, db) != requestCompleted || fakeCalls(t, calls) != 1 {
+		t.Fatalf("blocked %v, states %s, %d calls", blocked, requestStates(t, db), fakeCalls(t, calls))
+	}
+	// A new job anywhere that uses the registry skips the content.
 	var out strings.Builder
-	next := labelingTestOptions(dir, cli, &out)
-	next.CreateOnly = true
-	next.Spec = labelingJobSpec{Route: labelingRouteCodex, Model: "gpt-6-luna", Effort: "high", LimitItems: 4}
-	if err := runLabelingJob(context.Background(), next); err != nil {
+	fresh := labelingTestOptions(writeLabelingFixture(t, labelingFixtureUnits()), okCLI, &out)
+	fresh.CreateOnly, fresh.RefusalRegistry = true, registry
+	fresh.Spec = labelingJobSpec{Route: labelingRouteCodex, Model: "gpt-6-luna", Effort: "high", LimitItems: 4}
+	if err := runLabelingJob(context.Background(), fresh); err != nil || !strings.Contains(out.String(), `"refused_skipped": 1`) {
+		t.Fatalf("fresh job = %v: %s", err, out.String())
+	}
+	// A registry that does not parse, or shrank, stops the run.
+	data, _ := os.ReadFile(registry)
+	if err := os.WriteFile(registry, append(data, []byte("{broken\n")...), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	hash, _ := labelingManifestHash(old)
-	if !strings.Contains(out.String(), `"refused_skipped": 4`) || !strings.Contains(out.String(), old) || !strings.Contains(out.String(), hash) {
-		t.Fatalf("lineage job: %s", out.String())
+	if err := runLabelingJob(context.Background(), later); err == nil || !strings.Contains(err.Error(), "does not parse") {
+		t.Fatalf("broken registry = %v", err)
+	}
+	if err := os.WriteFile(registry, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runLabelingJob(context.Background(), later); err == nil || !strings.Contains(err.Error(), "truncated or replaced") {
+		t.Fatalf("emptied registry = %v", err)
 	}
 }

@@ -57,6 +57,9 @@ type labelingEvidence struct {
 	// a marker alike), so which one the model meant is not known.
 	Occurrences []labelingOccurrence `json:"occurrences,omitempty"`
 	Ambiguous   bool                 `json:"ambiguous,omitempty"`
+	// EchoesContext: a valid quote that also occurs in the preceding
+	// context.
+	EchoesContext bool `json:"echoes_context,omitempty"`
 }
 
 type labelingOccurrence struct {
@@ -321,13 +324,18 @@ func locateLabelingQuote(item labelingItemSource, label, quote string) labelingE
 		elsewhere = elsewhere || occurrence.Status != "valid"
 	}
 	switch {
-	case valid && (elsewhere || strings.Contains(item.context, quote)):
-		// The quote is also in a marker or the context: the response does
-		// not say which the teacher meant, so it supports nothing.
+	case valid && elsewhere:
+		// The quote is also in a marker (or elsewhere outside target text)
+		// of CURRENT_TEXT: the response does not say which the teacher
+		// meant, so it supports nothing.
 		evidence.Status = "ambiguous_mixed"
 		evidence.Ambiguous = true
 	case valid:
 		evidence.Status = "valid"
+		// The prompt shows the preceding context apart from CURRENT_TEXT, so
+		// a quote that also occurs there still supports the label; it is
+		// flagged and counted (quote_echoes_context).
+		evidence.EchoesContext = strings.Contains(item.context, quote)
 	case reasons["in_marker"]:
 		evidence.Status = "in_marker"
 	case len(reasons) > 0:
