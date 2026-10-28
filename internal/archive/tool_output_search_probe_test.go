@@ -201,34 +201,46 @@ func TestToolOutputIndexMigration(t *testing.T) {
 	}
 	execTx(t, catalog.DB, "DELETE FROM meta WHERE key IN ('message_fts_tool_output_removed','message_fts_tool_output_merged','message_fts_tool_output_cursor')")
 	migration := newToolOutputMigration()
-	timed := func(step func(context.Context) (bool, time.Duration, error), sizer *batchSizer) (time.Duration, int, time.Duration) {
-		started, steps, slowest := time.Now(), 0, time.Duration(0)
-		for {
-			more, held, err := step(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
-			sizer.held(held)
-			slowest = max(slowest, held)
-			if !more {
-				return time.Since(started), steps, slowest
-			}
-			steps++
-			if steps%500 == 0 {
-				t.Logf("  %d steps, %s, batch %d", steps, time.Since(started).Round(time.Second), sizer.next())
-			}
+	var slowestRemoval, slowestTidy, slowestMerge time.Duration
+	started, batches := time.Now(), 0
+	for more := true; more; batches++ {
+		var held time.Duration
+		var err error
+		if more, held, err = catalog.removeToolOutputBatch(ctx, migration.removal.next()); err != nil {
+			t.Fatal(err)
+		}
+		migration.removal.held(held)
+		slowestRemoval = max(slowestRemoval, held)
+		if !more {
+			break
+		}
+		if _, held, err = catalog.mergeWordIndexStep(ctx, migration.merge.next(), false); err != nil {
+			t.Fatal(err)
+		}
+		migration.merge.held(held)
+		slowestTidy = max(slowestTidy, held)
+		if batches%500 == 0 {
+			t.Logf("  %d batches, %s, %d rows, %d pages", batches, time.Since(started).Round(time.Second), migration.removal.next(), migration.merge.next())
 		}
 	}
-	removal, batches, slowestBatch := timed(func(ctx context.Context) (bool, time.Duration, error) {
-		return catalog.removeToolOutputBatch(ctx, migration.removal.next())
-	}, &migration.removal)
-	t.Logf("removal: %s in %d batches, slowest held the writer %s", removal.Round(time.Second), batches, slowestBatch.Round(time.Millisecond))
+	removal := time.Since(started)
+	t.Logf("removal: %s in %d batches, each with a merge step; slowest removal held the writer %s, slowest merge step %s", removal.Round(time.Second), batches, slowestRemoval.Round(time.Millisecond), slowestTidy.Round(time.Millisecond))
 	_ = catalog.Checkpoint()
 	middle := probeTableSizes(t, catalog)
-	merge, steps, slowestStep := timed(func(ctx context.Context) (bool, time.Duration, error) {
-		return catalog.mergeWordIndexStep(ctx, migration.merge.next())
-	}, &migration.merge)
-	t.Logf("merge: %s in %d steps, slowest held the writer %s", merge.Round(time.Second), steps, slowestStep.Round(time.Millisecond))
+	started, steps := time.Now(), 0
+	for more := true; more; steps++ {
+		var held time.Duration
+		var err error
+		if more, held, err = catalog.mergeWordIndexStep(ctx, migration.merge.next(), true); err != nil {
+			t.Fatal(err)
+		}
+		migration.merge.held(held)
+		slowestMerge = max(slowestMerge, held)
+		if steps%500 == 0 {
+			t.Logf("  %d merge steps, %s, %d pages", steps, time.Since(started).Round(time.Second), migration.merge.next())
+		}
+	}
+	t.Logf("merge: %s in %d steps, slowest held the writer %s", time.Since(started).Round(time.Second), steps, slowestMerge.Round(time.Millisecond))
 	_ = catalog.Checkpoint()
 	after := probeTableSizes(t, catalog)
 	for _, name := range append(wordIndexTables, "file", "freelist") {
