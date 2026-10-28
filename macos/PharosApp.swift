@@ -97,9 +97,16 @@ final class ArchiveService: ObservableObject {
         var note: String? = nil
     }
 
-    @Published var url: URL?
+    @Published var url: URL? {
+        // A page error belongs to the service it came from.
+        didSet { if url != oldValue { clearPageFailure(); pageTarget = nil } }
+    }
     // The broker keeps one URL while the selected library can change.
-    @Published private(set) var libraryConnection: String?
+    @Published private(set) var libraryConnection: String? {
+        // Another library, or this one connected or lost: a page failure
+        // belongs to the connection it happened on.
+        didSet { if libraryConnection != oldValue { clearPageFailure(); pageTarget = nil } }
+    }
     private var managedLibraryConnected = false
     private var managedSelectedLibrary = ""
     var hasConnectedLibrary: Bool { !managedApplication || managedLibraryConnected }
@@ -112,6 +119,16 @@ final class ArchiveService: ObservableObject {
     var libraryOperation: String? { managedApplication ? currentManagedStatus.activeOperation : nil }
     var noLibrarySelected: Bool { managedApplication && currentManagedStatus.noLibrary }
     @Published var error: String?
+    /// Why the window's page could not load although the service answers;
+    /// View → Reload tries again.
+    @Published var pageError: String?
+    /// The window's page could not load because the library's service does
+    /// not answer yet (it may be opening a large catalog); it reloads by
+    /// itself once the service answers.
+    @Published var pageWaiting = false
+    private var pageWatch = 0
+    /// The page that failed, which the web view loads when it comes back.
+    private var pageTarget: URL?
     @Published var status = "Starting local archive…"
     @Published var disconnected: Disconnection?
     /// The Eject button's release and eject are under way.
@@ -341,6 +358,74 @@ final class ArchiveService: ObservableObject {
         }
         if method == "POST" { request.httpBody = Data("{}".utf8); request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         return request
+    }
+
+    /// Asks the library's service whether it answers, without the web
+    /// view's cookies. In the managed app the request carries the selected
+    /// library (localRequest), so the broker passes it on to that library's
+    /// service rather than answering for itself.
+    func checkReady(_ completion: @escaping (Bool) -> Void) {
+        guard var request = localRequest("/api/ready") else { completion(false); return }
+        // With no library connected the window shows the broker's own pages
+        // (the chooser, its status): then the broker is what must answer.
+        if !hasConnectedLibrary { request.setValue(nil, forHTTPHeaderField: "X-Pharos-Library") }
+        request.timeoutInterval = 2
+        URLSession.shared.dataTask(with: request) { _, response, _ in
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            DispatchQueue.main.async { completion((200..<300).contains(code)) }
+        }.resume()
+    }
+
+    /// The window's page did not load. While the service answers, that is an
+    /// error to show with Reload. While it does not, wait: check again after
+    /// 0.5 s, doubling up to every 10 s, and bring the page back (a new web
+    /// view loads it) once the service answers.
+    func pageFailed(_ reason: String, serviceAnswers: Bool, target: URL) {
+        pageWatch += 1
+        pageTarget = target
+        if serviceAnswers {
+            pageWaiting = false
+            pageError = "\(reason)\n\nThe Pharos service is running, but the page still did not load. Choose View → Reload (⌘R) to try again."
+            return
+        }
+        pageError = nil
+        pageWaiting = true
+        watchForService(pageWatch, delay: 0.5)
+    }
+
+    private func watchForService(_ watch: Int, delay: Double) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.pageWatch == watch, self.pageWaiting, !self.shuttingDown else { return }
+            self.checkReady { ready in
+                guard self.pageWatch == watch, self.pageWaiting else { return }
+                if ready { self.clearPageFailure() } else { self.watchForService(watch, delay: min(delay * 2, 10)) }
+            }
+        }
+    }
+
+    /// The page a new web view should load: the one that failed, if it is
+    /// this service's, else the service's own.
+    func takePageTarget() -> URL? {
+        defer { pageTarget = nil }
+        guard let target = pageTarget, let url, target.scheme == url.scheme, target.host == url.host, target.port == url.port else { return url }
+        return target
+    }
+
+    private func clearPageFailure() {
+        pageWatch += 1
+        if pageError != nil { pageError = nil }
+        if pageWaiting { pageWaiting = false }
+    }
+
+    /// View → Reload: reloads the page, or brings the web view back after a
+    /// page that could not load.
+    func reloadPage() {
+        if pageError != nil || pageWaiting {
+            clearPageFailure() // a new web view loads the service's page
+            return
+        }
+        guard let webView = menuBar.webView else { return }
+        if webView.url == nil, let url { webView.load(URLRequest(url: url)) } else { webView.reload() }
     }
 
     var canSetUpHere: Bool {
@@ -1024,7 +1109,96 @@ struct ArchiveWebView: NSViewRepresentable {
             webView?.evaluateJavaScript("document.documentElement.classList.toggle('pharos-fullscreen', \(fullScreen))")
         }
 
+        /// Failed loads in a row; a page that finishes resets it.
+        private var failedLoads = 0
+        /// Bumped by every navigation that starts, so a scheduled retry never
+        /// replaces a newer one (a page opened from the menu meanwhile).
+        private var navigations = 0
+
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            navigations += 1
+        }
+        static let loadRetries = 4
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            loadFailed(webView, error: error)
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            if Self.ignorable(error) || repeatedFailure(webView, reason: (error as NSError).localizedDescription) { return }
+            loadFailed(webView, error: error)
+        }
+
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            if repeatedFailure(webView, reason: "The page stopped unexpectedly.") { return }
+            loadFailed(webView, error: nil)
+        }
+
+        /// Errors that are not failures: another navigation replaced this one
+        /// (cancelled), WebKitErrorFrameLoadInterruptedByPolicyChange (102: a
+        /// download, or a link the policy opened elsewhere), and
+        /// WebKitErrorPlugInWillHandleLoad (204).
+        static func ignorable(_ error: Error) -> Bool {
+            let nsError = error as NSError
+            if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled { return true }
+            return nsError.domain == "WebKitErrorDomain" && (nsError.code == 102 || nsError.code == 204)
+        }
+
+        /// Failures of a page that had loaded (its web process ended, or it
+        /// failed after it committed), over the last minute. A page that
+        /// loads and then fails again each time would otherwise reload
+        /// forever, since a load that finishes resets failedLoads; only time
+        /// resets this.
+        private var lateFailures: [Date] = []
+
+        private func repeatedFailure(_ webView: WKWebView, reason: String) -> Bool {
+            let now = Date()
+            lateFailures = lateFailures.filter { now.timeIntervalSince($0) < 60 } + [now]
+            guard lateFailures.count >= 3, let service else { return false }
+            lateFailures = []
+            failedLoads += 1 // drop any retry still scheduled
+            service.pageFailed("\(reason) It failed three times within a minute.", serviceAnswers: true, target: webView.url ?? origin)
+            return true
+        }
+
+        /// A page that did not load (the service was busy, e.g. folding a
+        /// large catalog log at startup) or whose web process died would
+        /// otherwise leave the window blank. While the service answers, load
+        /// it again after 0.5, 1, 2 and 4 s, then show the error with Reload.
+        /// While it does not answer, the window waits for it and reloads by
+        /// itself (ArchiveService.pageFailed).
+        private func loadFailed(_ webView: WKWebView, error: Error?) {
+            let nsError = error as NSError?
+            if let error, Self.ignorable(error) { return }
+            // Retry only the service's own pages; a blob:, data: or about:
+            // navigation that failed falls back to the page shown.
+            let servicePage = { (url: URL?) -> URL? in
+                guard let url, url.scheme == "http" || url.scheme == "https",
+                      url.scheme == self.origin.scheme, url.host == self.origin.host, url.port == self.origin.port else { return nil }
+                return url
+            }
+            let target = servicePage(nsError?.userInfo[NSURLErrorFailingURLErrorKey] as? URL) ?? servicePage(webView.url) ?? origin
+            failedLoads += 1
+            let attempt = failedLoads
+            let navigation = navigations
+            let reason = nsError?.localizedDescription ?? "The page stopped unexpectedly."
+            guard let service else { return }
+            service.checkReady { [weak self, weak webView] ready in
+                guard let self, let webView, self.failedLoads == attempt, self.navigations == navigation else { return }
+                if ready && attempt <= Self.loadRetries {
+                    let delay = 0.5 * pow(2, Double(attempt - 1))
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak webView] in
+                        guard let self, let webView, self.failedLoads == attempt, self.navigations == navigation else { return }
+                        webView.load(URLRequest(url: target))
+                    }
+                } else {
+                    service.pageFailed(reason, serviceAnswers: ready, target: target)
+                }
+            }
+        }
+
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            failedLoads = 0
             setFullScreenClass(webView.window?.styleMask.contains(.fullScreen) == true)
             service?.menuBar.navigationFinished()
             publishedUpdateState = nil
@@ -1285,7 +1459,7 @@ struct ArchiveWebView: NSViewRepresentable {
         if view.responds(to: NSSelectorFromString("setDrawsBackground:")) {
             view.setValue(false, forKey: "drawsBackground")
         }
-        view.load(URLRequest(url: url))
+        view.load(URLRequest(url: service.takePageTarget() ?? url))
         return view
     }
     func updateNSView(_ view: ArchiveWKWebView, context: Context) {
@@ -1398,6 +1572,8 @@ struct PharosBeacon: View {
 
 struct ArchiveErrorView: View {
     let message: String
+    var title = "Pharos couldn’t start"
+    var retry: (() -> Void)? = nil
     @State private var copied = false
 
     var body: some View {
@@ -1405,7 +1581,7 @@ struct ArchiveErrorView: View {
             Image(nsImage: NSApp.applicationIconImage)
                 .resizable()
                 .frame(width: 88, height: 88)
-            Text("Pharos couldn’t start")
+            Text(title)
                 .font(.title2.weight(.semibold))
             ScrollView {
                 Text(message)
@@ -1417,16 +1593,26 @@ struct ArchiveErrorView: View {
             .padding(12)
             .background(.black.opacity(0.22))
             .clipShape(RoundedRectangle(cornerRadius: 8))
-            Button {
-                let pasteboard = NSPasteboard.general
-                pasteboard.clearContents()
-                copied = pasteboard.setString(message, forType: .string)
-            } label: {
-                Label(copied ? "Copied" : "Copy Error", systemImage: copied ? "checkmark" : "doc.on.doc")
-                    .foregroundStyle(Harbor.sea)
+            HStack(spacing: 12) {
+                if let retry {
+                    Button(action: retry) {
+                        Label("Reload", systemImage: "arrow.clockwise")
+                            .foregroundStyle(Harbor.sea)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Harbor.brass)
+                }
+                Button {
+                    let pasteboard = NSPasteboard.general
+                    pasteboard.clearContents()
+                    copied = pasteboard.setString(message, forType: .string)
+                } label: {
+                    Label(copied ? "Copied" : "Copy Error", systemImage: copied ? "checkmark" : "doc.on.doc")
+                        .foregroundStyle(Harbor.sea)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Harbor.brass)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(Harbor.brass)
         }
         .harborBackdrop()
         .onChange(of: message) { _, _ in copied = false }
@@ -1565,6 +1751,17 @@ struct PharosWindow: View {
                 LibraryDisconnectedView(disconnection: disconnection, ejecting: service.ejecting,
                                         reopen: service.reopen, eject: { service.ejectLibrary() })
             }
+            else if service.pageWaiting, service.url != nil {
+                VStack(spacing: 16) {
+                    PharosBeacon()
+                    Text(service.hasConnectedLibrary ? "Waiting for the library to answer… It may be busy opening a large catalog." : "Waiting for Pharos to answer…")
+                        .opacity(0.8)
+                }
+                .harborBackdrop()
+            }
+            else if let pageError = service.pageError, service.url != nil {
+                ArchiveErrorView(message: pageError, title: "Pharos couldn’t load this page", retry: service.reloadPage)
+            }
             else if let url = service.url { ArchiveWebView(url: url, service: service, updates: updates).ignoresSafeArea() }
             else if service.setupNeeded { FirstRunView(service: service) }
             else if let error = service.error { ArchiveErrorView(message: error) }
@@ -1590,6 +1787,19 @@ struct PharosWindow: View {
     }
 }
 
+/// View → Reload (⌘R): reloads the window's page, also after one that
+/// could not load.
+struct ViewCommands: Commands {
+    let service: ArchiveService
+    var body: some Commands {
+        CommandGroup(before: .toolbar) {
+            Button("Reload") { service.reloadPage() }
+                .keyboardShortcut("r", modifiers: .command)
+            Divider()
+        }
+    }
+}
+
 #if !PHAROS_NATIVE_TEST
 @main struct PharosApp: App {
     @NSApplicationDelegateAdaptor(PharosDelegate.self) private var delegate
@@ -1599,7 +1809,10 @@ struct PharosWindow: View {
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1180, height: 780)
-        .commands { UpdateCommands(updates: delegate.updates) }
+        .commands {
+            UpdateCommands(updates: delegate.updates)
+            ViewCommands(service: delegate.service)
+        }
     }
 }
 #endif

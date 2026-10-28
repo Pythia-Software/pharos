@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -483,6 +485,193 @@ func TestFindingFeaturesOnlyRewriteChangedConversations(t *testing.T) {
 	}
 }
 
+// The pass reads in one snapshot and publishes its feature partitions only
+// after that snapshot ends, so a busy writer (an index commits per record)
+// never keeps the snapshot, and the WAL behind it, open.
+func TestFindingFeaturesPublishAfterTheSnapshotEnds(t *testing.T) {
+	now := time.Date(2026, 9, 28, 15, 0, 0, 0, time.Local)
+	fixture := newFindingFixture(t, now)
+	c := fixture.catalog
+	fixture.monthOf(now, func(day time.Time, index int) {
+		fixture.addConversation(day, "codex", []detectorCall{
+			{program: "sed", command: "sed -n '1,900p' main.go", resultTokens: 9000, carried: 90000}, {category: "edit", tool: "Edit", path: "main.go"},
+		}, 3, 0, 1000)
+	})
+	gate, err := c.acquireWriteGate(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := sync.OnceFunc(gate)
+	t.Cleanup(release)
+	var passErr error
+	done := make(chan struct{})
+	go func() { passErr = c.RefreshFindings(context.Background(), true); close(done) }()
+	t.Cleanup(func() { release(); <-done })
+	waitUntil(t, 30*time.Second, "the pass to reach its save step", func() bool {
+		_, phase := c.findingsRunning()
+		return phase == "saving" && c.writersWaiting()
+	})
+	if countRows(t, c, "SELECT COUNT(*) FROM finding_feature_partitions") != 0 {
+		t.Fatal("feature partitions were published before the writer was free")
+	}
+	release()
+	if <-done; passErr != nil {
+		t.Fatal(passErr)
+	}
+	if countRows(t, c, "SELECT COUNT(*) FROM finding_feature_partitions") == 0 {
+		t.Fatal("feature partitions were not published")
+	}
+	// What the pass published after its snapshot is what publishing each
+	// feature at once (outside a shared snapshot, as before) stores.
+	published := featurePartitionDump(t, c)
+	execTx(t, c.DB, "DELETE FROM finding_feature_partitions", "DELETE FROM finding_feature_builds")
+	c.findings.featureMu.Lock()
+	c.findings.featureInputs = nil
+	c.findings.featureMu.Unlock()
+	env, err := c.loadFindingEnv(t.Context(), c.DB, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.featureCache = true
+	for _, detector := range findingDetectors {
+		if _, err := detector.run(env); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(env.pendingFeatures) != 0 {
+		t.Fatal("a pass outside a shared snapshot deferred its publication")
+	}
+	if immediate := featurePartitionDump(t, c); !reflect.DeepEqual(published, immediate) {
+		t.Fatalf("deferred publication differs from immediate: %d vs %d rows", len(published), len(immediate))
+	}
+	incremental := canonicalFindings(t, c)
+	c.findings.featureMu.Lock()
+	c.findings.featureInputs = nil // Read back what was published.
+	c.findings.featureMu.Unlock()
+	if err := c.RefreshFindings(t.Context(), true); err != nil {
+		t.Fatal(err)
+	}
+	if !same(incremental, canonicalFindings(t, c)) {
+		t.Fatal("findings from published partitions differ")
+	}
+	if err := c.runFindingsPassReference(t.Context(), true); err != nil {
+		t.Fatal(err)
+	}
+	if !same(incremental, canonicalFindings(t, c)) {
+		t.Fatal("deferred publication differs from reference")
+	}
+}
+
+// featurePartitionDump is every published feature partition and build.
+func featurePartitionDump(t *testing.T, c *Catalog) []string {
+	t.Helper()
+	rows, err := queryMaps(c.DB, `SELECT feature,conversation_id,revision,rows_json FROM finding_feature_partitions
+ UNION ALL SELECT feature,'build','',version FROM finding_feature_builds ORDER BY 1,2`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dump := make([]string, 0, len(rows))
+	for _, row := range rows {
+		dump = append(dump, jsonText(row))
+	}
+	return dump
+}
+
+// A pass that fails or is stopped after its detectors built their inputs
+// still publishes them, after its snapshot ends, so the next pass reuses
+// them rather than rebuilding everything; a stop because the service is
+// stopping (a release) skips that, so nothing holds up the eject.
+func TestFindingFeaturesSurviveAPassThatEndsEarly(t *testing.T) {
+	for _, ending := range []string{"failed", "stopped", "released"} {
+		t.Run(ending, func(t *testing.T) {
+			now := time.Date(2026, 9, 28, 15, 0, 0, 0, time.Local)
+			fixture := newFindingFixture(t, now)
+			c := fixture.catalog
+			fixture.monthOf(now, func(day time.Time, index int) {
+				fixture.addConversation(day, "codex", []detectorCall{
+					{program: "sed", command: "sed -n '1,900p' main.go", resultTokens: 9000, carried: 90000}, {category: "edit", tool: "Edit", path: "main.go"},
+				}, 3, 0, 1000)
+			})
+			ctx, cancelCtx := context.WithCancel(t.Context())
+			defer cancelCtx()
+			cancel := cancelCtx
+			if ending == "released" {
+				releasing := false
+				registry := newOpRegistry("service")
+				registry.releasing = func() bool { return releasing }
+				override(t, &c.ops, registry)
+				cancel = func() { releasing = true; cancelCtx() }
+			}
+			last := findingDetector{"ends-early", func(*findingEnv) ([]*findingCandidate, error) {
+				if ending != "failed" {
+					cancel()
+					return nil, nil
+				}
+				return nil, errors.New("detector failed")
+			}}
+			override(t, &findingDetectors, append(slices.Clone(findingDetectors), last))
+			if err := c.RefreshFindings(ctx, true); err == nil {
+				t.Fatal("the pass did not end early")
+			}
+			kept := countRows(t, c, "SELECT COUNT(*) FROM finding_feature_partitions") > 0
+			if ending != "released" && !kept {
+				t.Fatal("the computed inputs were thrown away")
+			}
+			if ending == "released" && kept {
+				t.Fatal("a release waited for the computed inputs to be kept")
+			}
+			if countRows(t, c, "SELECT COUNT(*) FROM findings") != 0 {
+				t.Fatal("a pass that ended early stored findings")
+			}
+		})
+	}
+}
+
+// A stop while the pass waits to publish its inputs, after its snapshot
+// ended, still keeps them once the writer is free.
+func TestFindingFeaturesSurviveAStopWhileSaving(t *testing.T) {
+	// The cleanup's own wait must outlast this test's scheduling, not 2 s.
+	override(t, &findingsAbortPublishWait, 30*time.Second)
+	now := time.Date(2026, 9, 28, 15, 0, 0, 0, time.Local)
+	fixture := newFindingFixture(t, now)
+	c := fixture.catalog
+	fixture.monthOf(now, func(day time.Time, index int) {
+		fixture.addConversation(day, "codex", []detectorCall{
+			{program: "sed", command: "sed -n '1,900p' main.go", resultTokens: 9000, carried: 90000}, {category: "edit", tool: "Edit", path: "main.go"},
+		}, 3, 0, 1000)
+	})
+	gate, err := c.acquireWriteGate(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := sync.OnceFunc(gate)
+	t.Cleanup(release)
+	ctx, stop := context.WithCancel(t.Context())
+	defer stop()
+	done := make(chan struct{})
+	go func() { _ = c.RefreshFindings(ctx, true); close(done) }()
+	t.Cleanup(func() { release(); <-done })
+	waitUntil(t, 30*time.Second, "the pass to wait to publish", func() bool {
+		_, phase := c.findingsRunning()
+		return phase == "saving" && c.writersWaiting()
+	})
+	stop()
+	// The stopped publication gives up; the pass's cleanup queues again.
+	waitUntil(t, 30*time.Second, "the cleanup to wait for the writer", func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+		}
+		return c.writersWaiting()
+	})
+	release()
+	<-done
+	if countRows(t, c, "SELECT COUNT(*) FROM finding_feature_partitions") == 0 {
+		t.Fatal("a stop while saving threw the computed inputs away")
+	}
+}
+
 func TestFindingFeatureCorruptionRecovers(t *testing.T) {
 	now := time.Date(2026, 9, 28, 15, 0, 0, 0, time.Local)
 	fixture := newFindingFixture(t, now)
@@ -546,7 +735,13 @@ func TestFindingFeaturesRetainConcurrentInputRevision(t *testing.T) {
 	if len(rows) != 1 || integer(rows[0]["result_tokens"]) != 9000 {
 		t.Fatalf("mixed snapshot: %v", rows)
 	}
+	if countRows(t, c, "SELECT COUNT(*) FROM finding_feature_partitions WHERE feature='snapshot-test'") != 0 {
+		t.Fatal("published inside the pass's snapshot")
+	}
 	if err := snapshot.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.publishFindingFeatures(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if countRows(t, c, `SELECT COUNT(*) FROM finding_tool_revisions r JOIN finding_feature_partitions p USING(conversation_id)

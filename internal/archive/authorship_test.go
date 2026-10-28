@@ -439,6 +439,89 @@ func TestAuthorshipRebuildsAfterIndex(t *testing.T) {
 	catalog.authorship.lastError = ""
 	catalog.ensureAuthorship()
 	check("a page with older rules", 4, true)
+	started[3](context.Background())
+	check("after the page's rebuild", 4, false)
+
+	// While this process indexes, a rebuild a page started does not start
+	// again for what the index wrote meanwhile: the index rebuilds at its end.
+	if _, err := catalog.DB.Exec("UPDATE meta SET value='1/authorship-v0' WHERE key='authorship_generation'"); err != nil {
+		t.Fatal(err)
+	}
+	catalog.ingestStarted()
+	catalog.ensureAuthorship()
+	check("a page with older rules during an index", 5, true)
+	if err := bumpToolLedgerGeneration(catalog.DB); err != nil {
+		t.Fatal(err)
+	}
+	started[4](context.Background())
+	check("the page's rebuild during an index", 5, false)
+	if !catalog.ensureAuthorship() {
+		t.Fatal("the ledger should lag the index")
+	}
+	check("a page during the index", 5, false)
+	// The index's analysis chain still follows up on its own rebuild.
+	chain := context.Background()
+	catalog.refreshAuthorshipInContext(chain)
+	check("the index's chain", 6, true)
+	if err := bumpToolLedgerGeneration(catalog.DB); err != nil {
+		t.Fatal(err)
+	}
+	started[5](chain)
+	check("the chain's follow-up", 7, true)
+	started[6](chain)
+	check("after the chain", 7, false)
+	if err := bumpToolLedgerGeneration(catalog.DB); err != nil {
+		t.Fatal(err)
+	}
+	// The page's rebuild skipped its follow-up, so the index's end runs it
+	// (here the chain's rebuild left it current only until the last bump).
+	catalog.ingestEnded(false)
+	check("the index's end", 8, true)
+	if catalog.authorship.deferred.Load() {
+		t.Fatal("the deferred follow-up stayed deferred after it ran")
+	}
+	started[7](context.Background())
+	check("after that refresh", 8, false)
+
+	// A scheduled index runs no analysis chain: a page's rebuild that
+	// skipped its follow-up during it runs one once the index ends, and
+	// only once.
+	if _, err := catalog.DB.Exec("UPDATE meta SET value='1/authorship-v0' WHERE key='authorship_generation'"); err != nil {
+		t.Fatal(err)
+	}
+	catalog.ingestStarted()
+	catalog.ensureAuthorship()
+	check("a page during a scheduled index", 9, true)
+	if err := bumpToolLedgerGeneration(catalog.DB); err != nil {
+		t.Fatal(err)
+	}
+	started[8](context.Background())
+	check("the page's rebuild skipped its follow-up", 9, false)
+	if !catalog.authorship.deferred.Load() {
+		t.Fatal("the skipped follow-up was not deferred")
+	}
+	// A stopped index, or one the service's stop ended, starts nothing and
+	// keeps the follow-up for later.
+	catalog.ingestEnded(true)
+	check("a stopped index ended", 9, false)
+	catalog.ingestStarted()
+	registry := catalog.ops
+	stopping := newOpRegistry("service")
+	stopping.releasing = func() bool { return true }
+	catalog.ops = stopping
+	catalog.ingestEnded(false)
+	check("an index ended by the service stopping", 9, false)
+	catalog.ops = registry
+	if !catalog.authorship.deferred.Load() {
+		t.Fatal("a stop dropped the deferred follow-up")
+	}
+	catalog.ingestStarted()
+	catalog.ingestEnded(false)
+	check("the next index that ends normally", 10, true)
+	started[9](context.Background())
+	catalog.ingestStarted()
+	catalog.ingestEnded(false)
+	check("a later index with nothing deferred", 10, false)
 }
 
 func TestAuthorshipManualRefreshHonorsRunCancellation(t *testing.T) {

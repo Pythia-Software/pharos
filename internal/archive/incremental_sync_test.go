@@ -202,6 +202,43 @@ func stableCodexSource(t *testing.T, count int) SourceConfig {
 	return SourceConfig{Name: "codex", Kind: "codex", Path: path, Account: "local", Enabled: true}
 }
 
+// A rebuild a page started before an index does not follow up while the
+// index runs, so the index's own authorship stage starts the rebuild that
+// brings the ledger current, rather than failing on the page's stale one.
+func TestManualSyncRebuildsAuthorshipAfterAPageRebuild(t *testing.T) {
+	server := automaticTestServer(t, stableCodexSource(t, 1))
+	start := server.Catalog.background
+	var page func(context.Context, *Op) error
+	server.Catalog.background = func(spec OperationSpec, work func(context.Context, *Op) error) bool {
+		if page == nil {
+			page = work
+			return true
+		}
+		return start(spec, work)
+	}
+	if !server.Catalog.ensureAuthorship() || page == nil {
+		t.Fatal("a page did not start a rebuild of the missing ledger")
+	}
+	done := make(chan bool)
+	go func() { done <- server.runManualSync(server.life.ctx, syncSettings{Interval: 60}) }()
+	waitUntil(t, 30*time.Second, "the index's authorship stage", func() bool {
+		return slices.ContainsFunc(server.ops.running(), func(op *Op) bool { return op.spec.Kind == "analysis.authorship" })
+	})
+	// The page's rebuild ends during the index, for the inputs before it.
+	if err := page(server.life.ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !<-done {
+		t.Fatal("manual sync not admitted")
+	}
+	if server.runs[0].State != "complete" {
+		t.Fatalf("index after a page's rebuild: %+v", server.runs[0])
+	}
+	if server.Catalog.ensureAuthorship() {
+		t.Fatal("the index left authorship stale")
+	}
+}
+
 func automaticTestServer(t *testing.T, source SourceConfig) *Server {
 	t.Helper()
 	catalog, config := testCatalog(t)

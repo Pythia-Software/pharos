@@ -342,7 +342,10 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, fmt.Errorf("open Pharos to connect to this application"), http.StatusUnauthorized)
 		return
 	}
-	if r.URL.Path == "/api/ready" {
+	// The broker answers for itself; a request scoped to a library (the
+	// app's window asking whether its page can load) goes on to that
+	// library's service, below.
+	if r.URL.Path == "/api/ready" && r.Header.Get("X-Pharos-Library") == "" {
 		writeJSON(w, map[string]any{"ready": true}, http.StatusOK)
 		return
 	}

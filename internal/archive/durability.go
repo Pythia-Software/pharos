@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -151,16 +152,28 @@ func (c *Catalog) checkpointWith(passive func(func())) error {
 		return err
 	}
 	if busy != 0 {
-		return errCheckpointBusy
+		return &checkpointBusyError{frames: int64(logFrames), backfilled: int64(checkpointed)}
 	}
 	return nil
 }
+
+// checkpointBusyError is errCheckpointBusy with what the truncating pass
+// reported: the frames in the log (mxFrame) and how many of them are in
+// the database (nBackfill); -1 when unknown.
+type checkpointBusyError struct{ frames, backfilled int64 }
+
+func (e *checkpointBusyError) Error() string        { return errCheckpointBusy.Error() }
+func (e *checkpointBusyError) Is(target error) bool { return target == errCheckpointBusy }
 
 // walBound lets one goroutine at a time checkpoint an oversized WAL and backs
 // off after readers kept a checkpoint from finishing.
 type walBound struct {
 	mu      sync.Mutex
 	retryAt time.Time
+	// stall is the busy checkpoint's diagnosis bookkeeping (wal_pin.go);
+	// pin its result, read by the attention list without mu.
+	stall walStall
+	pin   atomic.Pointer[walPin]
 }
 
 // boundWAL checkpoints once the WAL outgrows limit. An automatic checkpoint
@@ -183,6 +196,13 @@ func (c *Catalog) boundWAL(ctx context.Context, limit int64) {
 // carries no operation.
 func (c *Catalog) boundWALAt(ctx context.Context, limit int64, priority string) {
 	if info, err := os.Stat(c.Path + "-wal"); err != nil || info.Size() <= limit {
+		// Another checkpoint (after a run, another process's) folded it in.
+		if c.wal.mu.TryLock() {
+			if c.wal.pin.Load() != nil || !c.wal.stall.backfillSince.IsZero() {
+				c.noteWALCheckpointed()
+			}
+			c.wal.mu.Unlock()
+		}
 		return
 	}
 	if !c.wal.mu.TryLock() {
@@ -210,9 +230,24 @@ func (c *Catalog) boundWALAt(ctx context.Context, limit int64, priority string) 
 	err := c.checkpointWith(op.RunIO)
 	if err != nil {
 		c.wal.retryAt = time.Now().Add(walRetryDelay)
+	} else {
+		c.noteWALCheckpointed()
 	}
 	if errors.Is(err, errCheckpointBusy) {
-		op.Skip("catalog-busy")
+		// A reader or a writer kept the checkpoint from finishing. A large
+		// log whose checkpoint stops advancing is diagnosed (wal_pin.go).
+		detail := ""
+		frames, backfilled := int64(-1), int64(-1)
+		var counts *checkpointBusyError
+		if errors.As(err, &counts) {
+			frames, backfilled = counts.frames, counts.backfilled
+		}
+		if info, statErr := os.Stat(c.Path + "-wal"); statErr == nil {
+			if pin := c.noteWALBusy(info.Size(), frames, backfilled, c.clock()); pin != nil {
+				detail = pin.String()
+			}
+		}
+		op.SkipWith("catalog-busy", detail)
 		return
 	}
 	op.Finish(err)

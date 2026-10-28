@@ -32,7 +32,7 @@ type ingestStopper struct {
 func (s *Server) beginIngest(runID string) (context.Context, func()) {
 	ctx, cancel := context.WithCancel(s.life.ctx)
 	s.Catalog.projectionBatches.Add(1)
-	s.Catalog.ingestRuns.Add(1)
+	s.Catalog.ingestStarted()
 	s.ingestStop.mu.Lock()
 	s.ingestStop.runID, s.ingestStop.cancel = runID, cancel
 	s.ingestStop.mu.Unlock()
@@ -40,8 +40,10 @@ func (s *Server) beginIngest(runID string) (context.Context, func()) {
 		s.ingestStop.mu.Lock()
 		s.ingestStop.runID, s.ingestStop.cancel = "", nil
 		s.ingestStop.mu.Unlock()
+		// Stopped by the user or a release, not by this end's own cancel.
+		stopped := ctx.Err() != nil
 		cancel()
-		s.Catalog.ingestRuns.Add(-1)
+		s.Catalog.ingestEnded(stopped)
 		s.Catalog.projectionBatches.Add(-1)
 	}
 }

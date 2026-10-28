@@ -93,6 +93,12 @@ func (s *Server) releasing() bool {
 	return s.life.ctx.Err() != nil
 }
 
+// serviceStopping reports that the service this catalog serves is
+// stopping (a release, a quit): optional work then gives way.
+func (c *Catalog) serviceStopping() bool {
+	return c != nil && c.ops != nil && c.ops.releasing != nil && c.ops.releasing()
+}
+
 // beginOp registers an operation for Catalog-level work, as a child of the
 // operation ctx carries if any. Without a registry (a catalog opened by
 // tests or a read-only command) it returns ctx and a nil handle, which

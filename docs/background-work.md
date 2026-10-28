@@ -377,6 +377,31 @@ background operations, and no request waits for one. Ask Pharos stays out of sco
 save of a finished answer, which writes the catalog after its request has
 ended, is registered.
 
+**A pinned WAL.** A bound checkpoint that a reader or the writer keeps
+busy ends `skipped(catalog-busy)`. Once the WAL is over `walPinBytes`
+(1 GiB) and the truncating pass reports frames left to copy at the same
+`nBackfill` as the previous busy check, the checkpoint has stalled, and the
+skip diagnoses it (`wal_pin.go`), at most once a minute per stall and again
+at once for a new one. It reads the -shm header and asks `F_GETLK` which
+other process holds the write, checkpoint or a read lock (macOS), using the
+descriptor SQLite already has open, so it opens and keeps nothing on the
+library's volume. Only another process's read lock on a slot marked where the
+checkpoint stopped (below the last frame) makes it the holder, or its lock
+on slot 0 while frames are left: such a reader started when the log was
+fully copied (just after a truncation) and reads the database alone, and
+no checkpoint copies anything until it ends. A lock is tied to a mark only
+if the header (both copies agreeing, checksum valid) reads the same before
+and after the lock probe; otherwise the process is named as possible; the writer,
+a checkpoint, a recovery or a reader at the last frame are only mentioned.
+With no such outside reader it names this process when a slot is marked
+where the checkpoint stopped, "probably" until a second probe agrees, with
+its running operations that started before the stall, oldest first;
+otherwise the holder is unknown. The stall's start is tracked at any size
+(only the diagnosis waits for 1 GiB), and a check whose truncating pass
+reports no counts leaves it as it was. The diagnosis goes in
+the skipped operation's detail, one stderr line and attention rule 9
+(§7.3). It cancels nothing.
+
 ### 3.5 E. Transitions
 
 | Kind | Label · verb | Trigger | Proc | Holds | Affects | Stop | On stop or eject | Latency | Journal | Pri |
@@ -1233,11 +1258,12 @@ positives fixed in phase 0:
 | 6 | The latest local backup failed | error | Open Backups (`/settings/backups`) |
 | 7 | A scheduled cloud backup failed (the schedule has `failures > 0`) or the latest verification failed | error | Open Backups |
 | 8 | The library is unavailable, was disconnected, or setup is needed (native rules today) | error | as today |
+| 9 | The WAL is over 1 GiB and its checkpoint has stopped advancing: frames are left to copy and `nBackfill` did not move between two busy bound checks (a busy truncation alone, with every frame copied, is not a stall). The item says how big the log is and for how long it has not been folded in, and who holds them back when Pharos can tell (another process by pid and command, and what it holds; or this process, with its running operations that started before the stall); otherwise it says it could not tell. It clears once a checkpoint succeeds, the checkpoint advances, or the log is under 1 GiB. | warning | Open Capture & index |
 
 Rule 4 is today's web rule (the native menu ignores interruptions). The
 first rule that applies sets the menu's single line; the snapshot lists all.
 
-Phase 2 (`status_attention.go`): rules 1–7 are the service's, each item
+Phase 2 (`status_attention.go`): rules 1–7 and 9 are the service's, each item
 `{id, rule, severity, title, detail, action: {label, path}}`; rules 3 and 4
 are left out while an index or capture runs, as the web rule does, and
 read the journal's latest ended top-level index row as well as this

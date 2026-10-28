@@ -269,6 +269,9 @@ type findingEnv struct {
 	cachedCalls    []callGroup
 	featureCache   bool
 	cachedPrompts  map[string]string
+	// pendingFeatures holds feature partitions computed inside the pass's
+	// snapshot, published once it ends (publishFindingFeatures).
+	pendingFeatures []findingFeaturePublication
 }
 
 // callGroup is one conversation's calls of one tool and program.
@@ -872,6 +875,11 @@ func (c *Catalog) setFindingsPhase(phase string) {
 	c.findings.mu.Unlock()
 }
 
+// findingsAbortPublishWait bounds how long a stopped findings pass may
+// spend keeping the detector inputs it computed: well inside the time a
+// release that begins meanwhile waits for workers.
+var findingsAbortPublishWait = 2 * time.Second
+
 // runFindingsPass measures the specs of every finding the user acted on,
 // discovers new candidates on a full pass, and stores the results.
 func (c *Catalog) runFindingsPass(ctx context.Context, full bool) error {
@@ -940,6 +948,32 @@ func (c *Catalog) runFindingsPassWithFeatures(ctx context.Context, full, feature
 		return err
 	}
 	env.measuring, env.stored, env.featureCache = measuring, existing, features
+	defer func() {
+		if len(env.pendingFeatures) == 0 {
+			return
+		}
+		// A pass that failed or was stopped, before or while it published,
+		// keeps the detector inputs it computed, so the next one does not
+		// rebuild them: end the snapshot first (a no-op once committed),
+		// then publish (each publication checks the build it read). A stop
+		// has cancelled ctx: a user's stop or the chain's gives the
+		// publication findingsAbortPublishWait of its own, well inside a
+		// release's wait for workers; the service stopping (a release, a
+		// quit) skips it, so nothing holds up the eject.
+		_ = snapshot.Rollback()
+		publish := ctx
+		if ctx.Err() != nil {
+			if c.serviceStopping() {
+				return
+			}
+			var cancel context.CancelFunc
+			publish, cancel = context.WithTimeout(context.WithoutCancel(ctx), findingsAbortPublishWait)
+			defer cancel()
+		}
+		if err := env.publishFindingFeatures(publish); err != nil {
+			fmt.Fprintf(os.Stderr, "Findings: could not keep the inputs of a pass that ended early: %v\n", err)
+		}
+	}()
 	candidates := []*findingCandidate{}
 	detectors := []findingDetector{}
 	for _, detector := range findingDetectors {
@@ -1005,6 +1039,9 @@ func (c *Catalog) runFindingsPassWithFeatures(ctx context.Context, full, feature
 	env.db = conn
 	reportWork(ctx, "saving findings", "finding", 0, len(kept))
 	c.setFindingsPhase("saving")
+	if err := env.publishFindingFeatures(ctx); err != nil {
+		return err
+	}
 	if err := c.storeFindings(ctx, env, kept, existing, states, retired, full); err != nil {
 		return err
 	}

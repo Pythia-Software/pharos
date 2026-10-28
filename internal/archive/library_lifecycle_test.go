@@ -602,6 +602,24 @@ func TestApplicationSetupWithoutLibrary(t *testing.T) {
 		if w.Code != http.StatusOK || w.Body.String() != appHTML() {
 			t.Fatal("HTML exports received this Mac's library controls or metadata")
 		}
+		// Readiness: the broker's own, or, scoped to the library, its
+		// service's (the app's window asks before reloading a failed page).
+		ready := func(scope string) string {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodGet, "/api/ready", nil)
+			r.Header.Set("Authorization", "Bearer "+app.token)
+			if scope != "" {
+				r.Header.Set("X-Pharos-Library", scope)
+			}
+			app.ServeHTTP(w, r)
+			return w.Body.String()
+		}
+		if body := ready(""); !strings.Contains(body, `"ready":true`) {
+			t.Fatalf("broker readiness: %s", body)
+		}
+		if body := ready(id); body != appHTML() {
+			t.Fatalf("library readiness did not reach its service: %s", body)
+		}
 	})
 	t.Run("unavailable initial library leaves chooser available", func(t *testing.T) {
 		for _, kind := range []string{"missing", "newer"} {
