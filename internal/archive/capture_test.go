@@ -1277,3 +1277,218 @@ func TestFreezeRetainedCopyFailureDoesNotPublish(t *testing.T) {
 		})
 	}
 }
+
+// compressGenerations runs one compression pass over this Mac's captures.
+func compressGenerations(t *testing.T, config Config) []compressedGeneration {
+	t.Helper()
+	var done []compressedGeneration
+	if err := compressCaptures(t.Context(), config, func(generation compressedGeneration) { done = append(done, generation) }); err != nil {
+		t.Fatal(err)
+	}
+	return done
+}
+
+// zstdOnDisk reports whether a file holds a zstd frame rather than its
+// original bytes.
+func zstdOnDisk(t *testing.T, file string) bool {
+	t.Helper()
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.HasPrefix(string(data), string(zstdMagic))
+}
+
+// compressionFixture is a Conductor capture with one superseded generation
+// holding a session deleted at the source ("old", 2 messages) beside the
+// latest snapshot ("latest", 1 message).
+func compressionFixture(t *testing.T) (Config, captureTarget) {
+	t.Helper()
+	useHost(t, "host-a")
+	dir := filepath.Join(t.TempDir(), "conductor")
+	exec := conductorFixture(t, dir)
+	config := captureTestConfig(t, SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true})
+	exec(addConductorSession("old", 2)...)
+	runCapture(t, config)
+	exec("DELETE FROM session_messages", "DELETE FROM sessions")
+	exec(addConductorSession("latest", 1)...)
+	runCapture(t, config)
+	if len(readCaptureManifest(t, config, "conductor").Snapshots[0].Generations) != 1 {
+		t.Fatal("fixture needs one retained generation")
+	}
+	return config, captureTarget{Host: currentHost(), Source: "conductor", Dir: capturedPath(config, "conductor", "")}
+}
+
+func temporariesUnder(t *testing.T, dir string) []string {
+	t.Helper()
+	found := []string{}
+	_ = filepath.WalkDir(dir, func(file string, entry os.DirEntry, err error) error {
+		if err == nil && strings.HasSuffix(entry.Name(), captureTempSuffix) {
+			found = append(found, file)
+		}
+		return nil
+	})
+	return found
+}
+
+func TestCaptureCompressesIndexedUnpinnedGenerations(t *testing.T) {
+	config, target := compressionFixture(t)
+	manifest := readCaptureManifest(t, config, "conductor")
+	snapshot := manifest.Snapshots[0]
+	generation := snapshot.Generations[0]
+	file := capturedPath(config, "conductor", generation.Captured)
+
+	// The index still needs a generation its marker lacks.
+	marker := loadIndexMarker(target.Dir)
+	marker.add(snapshot.Path, snapshot.CapturedAt)
+	if err := marker.save(target.Dir, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if done := compressGenerations(t, config); len(done) != 0 {
+		t.Fatal("compressed a generation the index has not read", done)
+	}
+	marker = loadIndexMarker(target.Dir)
+	marker.add(snapshot.Path, generation.CapturedAt)
+	if err := marker.save(target.Dir, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	// A pin holds exact bytes.
+	lock, err := lockCaptureTarget(t.Context(), target.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := sourceCaptureForTarget(t.Context(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.pinVersion("job", "test", generation); err != nil {
+		t.Fatal(err)
+	}
+	releaseLockFile(lock)
+	if done := compressGenerations(t, config); len(done) != 0 {
+		t.Fatal("compressed a pinned generation", done)
+	}
+	if err = releasePreservationOwner(target.Dir, "job"); err != nil {
+		t.Fatal(err)
+	}
+	// A reader leased before compression keeps the original bytes.
+	input, err := leaseCaptureForIndex(t.Context(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	leased := filepath.Join(captureViewOf(input.Adapter).dir, filepath.FromSlash(generation.Captured))
+	before := measureCaptures(t.Context(), config.CaptureRoot)
+
+	done := compressGenerations(t, config)
+	if len(done) != 1 || done[0].Path != generation.Captured || done[0].Stored >= generation.Size {
+		t.Fatalf("compression pass: %+v", done)
+	}
+	after := readCaptureManifest(t, config, "conductor")
+	encoded := after.Snapshots[0].Generations[0]
+	info, err := os.Stat(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Version != captureManifestVersion || encoded.Encoding != captureEncodingZstd || encoded.StoredSize != info.Size() || encoded.Size != generation.Size || encoded.Captured != generation.Captured || !zstdOnDisk(t, file) {
+		t.Fatalf("encoded generation: version %d, %+v (%d bytes on disk)", after.Version, encoded, info.Size())
+	}
+	if sum, size, err := fileSHA256(leased); err != nil || size != generation.Size || sum != encoded.SHA256 || zstdOnDisk(t, leased) {
+		t.Fatal("a reader's lease stopped reading the original bytes", err)
+	}
+	// The Storage section's history is what is on disk: the encoded size.
+	history := func(sizes []captureSize) int64 {
+		for _, size := range sizes {
+			if size.Source == "conductor" {
+				return size.History
+			}
+		}
+		return -1
+	}
+	if history(before) != generation.Size || history(measureCaptures(t.Context(), config.CaptureRoot)) != encoded.StoredSize {
+		t.Fatalf("storage did not shrink: %+v", measureCaptures(t.Context(), config.CaptureRoot))
+	}
+	if left := temporariesUnder(t, target.Dir); len(left) != 1 { // only the reader's lease
+		t.Fatal("compression left temporaries", left)
+	}
+	if done := compressGenerations(t, config); len(done) != 0 {
+		t.Fatal("compressed a generation twice", done)
+	}
+	// A build that cannot decode refuses the capture instead of misreading it.
+	override(t, &captureManifestUnderstood, capturePlainManifestVersion)
+	if _, err := loadCaptureManifest(target.Dir); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("has version %d; this build understands up to %d", captureManifestVersion, capturePlainManifestVersion)) {
+		t.Fatal("an older build accepted an encoded capture", err)
+	}
+	captureManifestUnderstood = captureManifestVersion
+	// Retention prunes the encoded generation by name; with no encoded entry
+	// left, the manifest is readable by older builds again.
+	db := openWritableSQLite(t, filepath.Join(config.Sources[0].Path, "conductor.db"))
+	execSQL(t, db, "DELETE FROM sessions")
+	if run := runCapture(t, config); !run.OK {
+		t.Fatal(run)
+	}
+	rotated := readCaptureManifest(t, config, "conductor")
+	if rotated.Version != capturePlainManifestVersion || len(rotated.Snapshots[0].Generations) != 1 || rotated.Snapshots[0].Generations[0].Encoding != "" {
+		t.Fatalf("after rotation: version %d, %+v", rotated.Version, rotated.Snapshots[0].Generations)
+	}
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Fatal("indexed encoded generation was not pruned", err)
+	}
+}
+
+// A kill at each step of the compression order leaves a capture that
+// validates and indexes, and the next pass finishes the job.
+func TestCaptureCompressionSurvivesAKillAtEachStep(t *testing.T) {
+	for _, stage := range []string{"compress-encode", "compress-verify", "compress-rename", "compress-manifest"} {
+		t.Run(stage, func(t *testing.T) {
+			config, target := compressionFixture(t)
+			catalog, _ := testCatalog(t)
+			generation := readCaptureManifest(t, config, "conductor").Snapshots[0].Generations[0]
+			override(t, &captureFault, func(at, rel string) error {
+				if at == stage {
+					panic("killed")
+				}
+				return nil
+			})
+			func() {
+				defer func() {
+					if recover() == nil {
+						t.Fatal("the injected kill did not happen")
+					}
+				}()
+				compressGenerations(t, config)
+			}()
+			captureFault = nil
+			if err := validateCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
+				t.Fatal("killed compression left an invalid capture", err)
+			}
+			result := catalog.IndexCapture(t.Context(), target, nil)
+			if result.Error != nil || len(result.UnavailableInputs) != 0 || conversationMessages(t, catalog, "conductor:old") != 2 || conversationMessages(t, catalog, "conductor:latest") != 1 {
+				t.Fatalf("index after a killed compression: %+v", result)
+			}
+			if stage == "compress-encode" || stage == "compress-verify" {
+				// The next capture sweeps the half-done encoding, never adopting it.
+				if left := temporariesUnder(t, target.Dir); len(left) != 1 {
+					t.Fatal("expected the killed encoding's temporary", left)
+				}
+				if run := runCapture(t, config); !run.OK {
+					t.Fatal(run)
+				}
+				if left := temporariesUnder(t, target.Dir); len(left) != 0 || jsonText(readCaptureManifest(t, config, "conductor").Snapshots[0].Generations[0]) != jsonText(generation) {
+					t.Fatal("capture adopted or kept a killed encoding", left)
+				}
+			}
+			compressGenerations(t, config)
+			encoded := readCaptureManifest(t, config, "conductor").Snapshots[0].Generations[0]
+			if encoded.Encoding != captureEncodingZstd || encoded.Size != generation.Size || encoded.SHA256 == "" || !zstdOnDisk(t, capturedPath(config, "conductor", generation.Captured)) {
+				t.Fatalf("next pass did not finish: %+v", encoded)
+			}
+			if left := temporariesUnder(t, target.Dir); len(left) != 0 {
+				t.Fatal("temporaries left", left)
+			}
+			if err := validateCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

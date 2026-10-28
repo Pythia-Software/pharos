@@ -32,8 +32,12 @@ type preservationPin struct {
 	Path         string   `json:"path"`
 	SHA256       string   `json:"sha256"`
 	Size         int64    `json:"size"`
-	CreatedAt    string   `json:"created_at"`
-	ReleasedAt   string   `json:"released_at,omitempty"`
+	// Encoding is how the pinned file is stored; SHA256 and Size describe its
+	// original bytes, so a check decodes it (capturedSHA256). Compression
+	// never rewrites a pinned file, so this holds for the pin's lifetime.
+	Encoding   string `json:"encoding,omitempty"`
+	CreatedAt  string `json:"created_at"`
+	ReleasedAt string `json:"released_at,omitempty"`
 }
 type preservationPins struct {
 	pendingReaders []string
@@ -284,15 +288,24 @@ func (c *sourceCapture) pinVersion(owner, purpose string, v capturedVersion, dep
 	if !safeRetainedPath(v.Captured) {
 		return preservationPin{}, errors.New("pin input is not immutable")
 	}
-	digest, size, err := fileSHA256Context(c.ctx, filepath.Join(c.dir, filepath.FromSlash(v.Captured)))
+	// How the input is stored comes from this writer's inventory, not the
+	// caller: a plan made before a compression still pins the right bytes.
+	file := filepath.Join(c.dir, filepath.FromSlash(v.Captured))
+	encoding := c.encodingOf(v.Captured)
+	digest, size, err := capturedSHA256(c.ctx, file, encoding)
 	if err != nil {
 		return preservationPin{}, err
 	}
 	if size != v.Size || v.SHA256 != "" && digest != v.SHA256 {
 		return preservationPin{}, errors.New("pin input changed; reconcile inventory")
 	}
-	pin := preservationPin{ID: hashBytes([]byte(owner + "\x00" + v.Captured + "\x00" + digest)), Owner: owner, Purpose: purpose, Path: v.Captured, SHA256: digest, Size: size, CreatedAt: now(), ReaderLease: c.readerLease}
-	pin.ClosureBytes = size
+	stored, err := os.Stat(file)
+	if err != nil {
+		return preservationPin{}, err
+	}
+	pin := preservationPin{ID: hashBytes([]byte(owner + "\x00" + v.Captured + "\x00" + digest)), Owner: owner, Purpose: purpose, Path: v.Captured, SHA256: digest, Size: size, Encoding: encoding, CreatedAt: now(), ReaderLease: c.readerLease}
+	// The closure is what the pin keeps on disk.
+	pin.ClosureBytes = stored.Size()
 	seen := map[string]bool{v.Captured: true}
 	for _, dependency := range dependencies {
 		if seen[dependency] {
@@ -441,10 +454,10 @@ func beginInputCapture(ctx context.Context, config Config) (*captureSession, err
 // Reader/job bookkeeping must not claim a new capture observation or overwrite
 // its last-run diagnostics. Only the writer compatibility version changes.
 func (c *sourceCapture) upgradePreservationWriter() error {
-	if c.manifest.Version >= captureManifestVersion {
+	if c.manifest.Version >= c.manifest.writerVersion() {
 		return nil
 	}
-	c.manifest.Version = captureManifestVersion
+	c.manifest.Version = c.manifest.writerVersion()
 	data, e := json.Marshal(c.manifest)
 	if e != nil {
 		return e

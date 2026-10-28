@@ -38,14 +38,18 @@ import (
 // interrupted run (error, kill, unplug) leaves the previous state valid and the
 // next run resumes from the last manifest checkpoint.
 const (
-	captureManifestVersion = 5
-	captureManifestName    = "manifest.json"
-	captureHostName        = "host.json"
-	captureFilesDir        = "files"
-	captureHistoryDir      = "history"
-	captureTempSuffix      = ".pharos-tmp"
-	captureLockName        = ".capture.lock"
-	captureStampLayout     = "20060102T150405.000000000Z"
+	// captureManifestVersion is the newest manifest this build reads. A writer
+	// stamps it only when an entry is stored encoded (writerVersion);
+	// capturePlainManifestVersion otherwise, which older builds still read.
+	captureManifestVersion      = 6
+	capturePlainManifestVersion = 5
+	captureManifestName         = "manifest.json"
+	captureHostName             = "host.json"
+	captureFilesDir             = "files"
+	captureHistoryDir           = "history"
+	captureTempSuffix           = ".pharos-tmp"
+	captureLockName             = ".capture.lock"
+	captureStampLayout          = "20060102T150405.000000000Z"
 )
 
 var (
@@ -57,6 +61,9 @@ var (
 	// captureFault injects failures in tests; a returned error acts like the
 	// capture drive failing at that point.
 	captureFault func(stage, rel string) error
+	// captureManifestUnderstood is the newest manifest version loading
+	// accepts; tests lower it to stand in for an older build.
+	captureManifestUnderstood = captureManifestVersion
 
 	errCaptureBusy          = errors.New("another capture is already running for this host")
 	errCaptureSourceChanged = errors.New("source file shrank while it was being copied")
@@ -126,6 +133,11 @@ type capturedVersion struct {
 	SupersededAt string `json:"superseded_at"`
 	// Source is a database snapshot's source state, which dates its content.
 	Source *sqliteSourceState `json:"source,omitempty"`
+	// Encoding is how the file is stored ("zstd", or empty for the original
+	// bytes); StoredSize is then its size on disk. Size, SHA256 and the mtimes
+	// always describe the original bytes (docs/capture-compression.md).
+	Encoding   string `json:"encoding,omitempty"`
+	StoredSize int64  `json:"stored_size,omitempty"`
 }
 
 // capturedSnapshot is a consistent copy of a SQLite database made with the
@@ -614,8 +626,8 @@ func loadCaptureManifest(dir string) (*captureManifest, error) {
 	if err := json.Unmarshal(data, manifest); err != nil {
 		return nil, fmt.Errorf("capture manifest %s is unreadable: %w", file, err)
 	}
-	if manifest.Version > captureManifestVersion {
-		return nil, fmt.Errorf("capture manifest %s has version %d; this build understands up to %d", file, manifest.Version, captureManifestVersion)
+	if manifest.Version > captureManifestUnderstood {
+		return nil, fmt.Errorf("capture manifest %s has version %d; this build understands up to %d", file, manifest.Version, captureManifestUnderstood)
 	}
 	if bad := manifest.unsafePath(); bad != "" {
 		return nil, fmt.Errorf("capture manifest %s names %q, outside its capture directory", file, bad)
@@ -683,7 +695,6 @@ func (m *captureManifest) lastCapturedDataAt() string {
 // every file fsynced before it durable, which is why files need only fsync.
 func (c *sourceCapture) commit(final bool) error {
 	m := c.manifest
-	m.Version = captureManifestVersion
 	m.SQLiteRecordCapture = c.source.Options["sqlite_record_capture"] == true
 	m.RetainedInputCapture = retainedAcquisitionEnabled(c.source)
 	m.Host = c.session.host
@@ -691,6 +702,7 @@ func (c *sourceCapture) commit(final bool) error {
 	m.UpdatedAt = now()
 	m.Files = sortedCaptures(c.files)
 	m.Snapshots = sortedCaptures(c.snapshots)
+	m.Version = m.writerVersion()
 	m.LastDataAt = m.lastCapturedDataAt()
 	record := c.result.clone().captureRunRecord
 	if final {

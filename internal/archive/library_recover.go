@@ -377,8 +377,24 @@ func validateCaptureEvidence(ctx context.Context, root string) error {
 				return err
 			}
 			for _, generation := range snapshot.Generations {
-				if err = verify(generation.Captured, generation.Size, generation.SHA256); err != nil {
+				// An encoded generation must be its stored size on disk and
+				// decode to the original size and digest. A compression killed
+				// before its manifest committed left one the manifest does not
+				// yet describe; it is checked the same way.
+				generation = adoptEncoded(filepath.Join(dir, filepath.FromSlash(generation.Captured)), generation)
+				if generation.Encoding == "" {
+					if err = verify(generation.Captured, generation.Size, generation.SHA256); err != nil {
+						return err
+					}
+					continue
+				}
+				if err = verify(generation.Captured, generation.StoredSize, ""); err != nil {
 					return err
+				}
+				file := filepath.Join(dir, filepath.FromSlash(generation.Captured))
+				digest, size, err := capturedSHA256(ctx, file, generation.Encoding)
+				if err != nil || size != generation.Size || generation.SHA256 != "" && digest != generation.SHA256 {
+					return fmt.Errorf("captured evidence failed verification: %s", file)
 				}
 			}
 		}
@@ -402,7 +418,7 @@ func validateRetainedRecords(ctx context.Context, dir string, manifest *captureM
 		if pin.ReleasedAt != "" {
 			continue
 		}
-		digest, size, err := fileDigestContext(ctx, filepath.Join(dir, filepath.FromSlash(pin.Path)))
+		digest, size, err := capturedSHA256(ctx, filepath.Join(dir, filepath.FromSlash(pin.Path)), pin.Encoding)
 		if err != nil {
 			return err
 		}

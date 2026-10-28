@@ -695,6 +695,19 @@ func (s *recordStore) table(tx *sql.Tx, name, where, order string, args []any) (
 // exportSQLite reads exactly one consistent transaction. Selection is used
 // only by the Conductor fast path; unknown tables are covered by full scans.
 func (s *recordStore) exportSQLite(file, original, entity string, state sqliteSourceState, selected string, dependencies []recordDependency) (recordObject, error) {
+	// input is the captured file the revision names; file is what SQLite
+	// opens, a decoded copy in a reader lease when the input is stored encoded.
+	input := file
+	if rel, err := filepath.Rel(s.c.dir, file); err == nil && strings.HasPrefix(file, s.c.dir+string(filepath.Separator)) {
+		if version, ok := s.c.storedVersion(filepath.ToSlash(rel)); ok {
+			decoded, _, release, err := leaseDecoded(s.c.ctx, s.c.dir, version)
+			if err != nil {
+				return recordObject{}, err
+			}
+			defer release()
+			file = decoded
+		}
+	}
 	ctx, cancel := context.WithTimeout(s.c.ctx, s.budget.Timeout)
 	defer cancel()
 	oldCtx := s.c.ctx
@@ -764,7 +777,7 @@ func (s *recordStore) exportSQLite(file, original, entity string, state sqliteSo
 	if e != nil {
 		return recordObject{}, e
 	}
-	if !strings.HasPrefix(file, s.c.dir+string(filepath.Separator)) {
+	if !strings.HasPrefix(input, s.c.dir+string(filepath.Separator)) {
 		state, e = sqliteDependencyState(file)
 		if e != nil {
 			return recordObject{}, e
@@ -945,9 +958,10 @@ func (s *recordStore) exportSQLite(file, original, entity string, state sqliteSo
 	if before != after && len(dependencies) > 0 {
 		return recordObject{}, errors.New("SQLite source moved during acquisition; retry required")
 	}
-	if strings.HasPrefix(file, s.c.dir+string(filepath.Separator)) {
-		rel, _ := filepath.Rel(s.c.dir, file)
+	if strings.HasPrefix(input, s.c.dir+string(filepath.Separator)) {
+		rel, _ := filepath.Rel(s.c.dir, input)
 		v.Input = filepath.ToSlash(rel)
+		// The decoded copy's digest: the original bytes the manifest describes.
 		v.InputHash, _, e = fileSHA256Context(s.c.ctx, file)
 		if e != nil {
 			return recordObject{}, e
@@ -1070,7 +1084,7 @@ func (c *sourceCapture) verifiedSnapshotReceipt(receiptInput, retainedInput stri
 	}
 	ctx, cancel := context.WithTimeout(c.ctx, recordRunTimeout)
 	defer cancel()
-	h, _, e := fileSHA256Context(ctx, filepath.Join(c.dir, filepath.FromSlash(retainedInput)))
+	h, _, e := capturedSHA256(ctx, filepath.Join(c.dir, filepath.FromSlash(retainedInput)), c.encodingOf(retainedInput))
 	if e != nil || h != receipt.InputHash {
 		return receipt, false
 	}

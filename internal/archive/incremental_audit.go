@@ -1203,8 +1203,9 @@ func (s *Server) verifyAllInputs(ctx context.Context, runID string, progress fun
 				if ctx.Err() != nil {
 					break
 				}
-				file := filepath.Join(view.dir, filepath.FromSlash(generation.Captured))
-				ids, err := conductorSessionIDsContext(ctx, file)
+				// An encoded generation is decoded into a reader lease of its
+				// own for this check, and the lease removed after it.
+				file, dir, release, err := leaseDecoded(ctx, view.dir, generation)
 				if err != nil {
 					if errors.Is(err, os.ErrNotExist) {
 						summary.Deferred++
@@ -1213,20 +1214,32 @@ func (s *Server) verifyAllInputs(ctx context.Context, runID string, progress fun
 					}
 					continue
 				}
-				missing := map[string]bool{}
-				for id := range ids {
-					if !handled[id] {
-						missing[id], handled[id] = true, true
+				func() {
+					defer release()
+					ids, err := conductorSessionIDsContext(ctx, file)
+					if err != nil {
+						if errors.Is(err, os.ErrNotExist) {
+							summary.Deferred++
+						} else {
+							summary.Errors++
+						}
+						return
 					}
-				}
-				if len(missing) == 0 {
-					continue
-				}
-				older := &captureView{host: view.host, dir: view.dir, manifest: manifest, mappings: []capturePathMapping{{Original: snapshot.Path, Captured: file}}}
-				config := conductor.config
-				config.Path = file
-				reader := &conductorAdapter{baseAdapter: baseAdapter{config: config, capability: conductor.capability, view: older}, selected: missing}
-				visit(reader, target.Host.ID)
+					missing := map[string]bool{}
+					for id := range ids {
+						if !handled[id] {
+							missing[id], handled[id] = true, true
+						}
+					}
+					if len(missing) == 0 {
+						return
+					}
+					older := &captureView{host: view.host, dir: dir, manifest: manifest, mappings: []capturePathMapping{{Original: snapshot.Path, Captured: file}}}
+					config := conductor.config
+					config.Path = file
+					reader := &conductorAdapter{baseAdapter: baseAdapter{config: config, capability: conductor.capability, view: older}, selected: missing}
+					visit(reader, target.Host.ID)
+				}()
 			}
 		}
 	}
