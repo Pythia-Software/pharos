@@ -200,9 +200,9 @@ type findingFeaturePublication struct {
 
 // publishFindingFeatures publishes what featureRows computed inside the
 // pass's shared snapshot. Call it only after that snapshot has ended.
-func (env *findingEnv) publishFindingFeatures() error {
+func (env *findingEnv) publishFindingFeatures(ctx context.Context) error {
 	for len(env.pendingFeatures) > 0 {
-		if err := env.catalog.publishFindingFeature(env.ctx, env.pendingFeatures[0]); err != nil {
+		if err := env.catalog.publishFindingFeature(ctx, env.pendingFeatures[0]); err != nil {
 			return err
 		}
 		env.pendingFeatures = env.pendingFeatures[1:]

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -538,6 +539,43 @@ func TestFindingFeaturesPublishAfterTheSnapshotEnds(t *testing.T) {
 	}
 }
 
+// A pass that fails or is stopped after its detectors built their inputs
+// still publishes them, after its snapshot ends, so the next pass reuses
+// them rather than rebuilding everything.
+func TestFindingFeaturesSurviveAPassThatEndsEarly(t *testing.T) {
+	for _, ending := range []string{"failed", "stopped"} {
+		t.Run(ending, func(t *testing.T) {
+			now := time.Date(2026, 9, 28, 15, 0, 0, 0, time.Local)
+			fixture := newFindingFixture(t, now)
+			c := fixture.catalog
+			fixture.monthOf(now, func(day time.Time, index int) {
+				fixture.addConversation(day, "codex", []detectorCall{
+					{program: "sed", command: "sed -n '1,900p' main.go", resultTokens: 9000, carried: 90000}, {category: "edit", tool: "Edit", path: "main.go"},
+				}, 3, 0, 1000)
+			})
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			last := findingDetector{"ends-early", func(*findingEnv) ([]*findingCandidate, error) {
+				if ending == "stopped" {
+					cancel()
+					return nil, nil
+				}
+				return nil, errors.New("detector failed")
+			}}
+			override(t, &findingDetectors, append(slices.Clone(findingDetectors), last))
+			if err := c.RefreshFindings(ctx, true); err == nil {
+				t.Fatal("the pass did not end early")
+			}
+			if countRows(t, c, "SELECT COUNT(*) FROM finding_feature_partitions") == 0 {
+				t.Fatal("the computed inputs were thrown away")
+			}
+			if countRows(t, c, "SELECT COUNT(*) FROM findings") != 0 {
+				t.Fatal("a pass that ended early stored findings")
+			}
+		})
+	}
+}
+
 func TestFindingFeatureCorruptionRecovers(t *testing.T) {
 	now := time.Date(2026, 9, 28, 15, 0, 0, 0, time.Local)
 	fixture := newFindingFixture(t, now)
@@ -607,7 +645,7 @@ func TestFindingFeaturesRetainConcurrentInputRevision(t *testing.T) {
 	if err := snapshot.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	if err := env.publishFindingFeatures(); err != nil {
+	if err := env.publishFindingFeatures(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if countRows(t, c, `SELECT COUNT(*) FROM finding_tool_revisions r JOIN finding_feature_partitions p USING(conversation_id)
