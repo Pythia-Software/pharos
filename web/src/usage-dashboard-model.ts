@@ -1,5 +1,6 @@
 import { EMPTY_QUERY, decodeQueryStrict, inspectBucketQuery, type AggregationClause, type QueryState, type SummaryColumn, type CellDisplay, type WhereTerm, type OrderByClause } from "@pythia-software/query-table-core";
-import type { UsageDataset, UsageTopic } from "./usage-workspace-model";
+import { readUsageWorkspace, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
+import { withTimeRange } from "./chart-range";
 import type { ConcurrencySelection } from "./concurrency";
 import { localDay } from "./chart-period";
 import { shiftCalendarDay } from "./concurrency-settings";
@@ -12,6 +13,27 @@ export function readDashboardQuery(params: URLSearchParams, fallback: QueryState
     if (query && !query.grouping) return { query, error: "" };
   } catch { /* A broken filter link must not broaden the requested population. */ }
   return { query: fallback, error: "This dashboard link has invalid filters. Open the legacy view or choose another dashboard." };
+}
+
+// A dashboard link as the page opens it: its chart over the dashboard's
+// defaults, if valid, and its filters, or the range analyze_days names
+// (readUsageWorkspace) without them. migrate reads an older link's state and
+// population (readAnalysisLink); migrated says the link must be rewritten.
+export function readDashboardLink<T extends object>(params: URLSearchParams, defaults: T, valid: (value: T) => boolean, time: { first: string; last: string }, migrate?: (view: T, where: WhereTerm[]) => { state: T; where: WhereTerm[] }, now = new Date()) {
+  let view = defaults, error = "";
+  if (params.has("analyze_chart")) {
+    try {
+      const saved = JSON.parse(params.get("analyze_chart")!);
+      if (!saved || typeof saved !== "object" || Array.isArray(saved)) throw new Error();
+      const candidate = { ...defaults, ...saved };
+      if (valid(candidate)) view = candidate; else throw new Error();
+    }
+    catch { error = "This dashboard link has invalid chart settings. Choose another dashboard to reset it."; }
+  }
+  const from = new Date(now); from.setHours(0, 0, 0, 0); from.setDate(from.getDate() - readUsageWorkspace(params).days + 1);
+  const restored = readDashboardQuery(params, { ...EMPTY_QUERY, where: withTimeRange([], time, from) });
+  const read = migrate && !error && !restored.error ? migrate(view, restored.query.where) : { state: view, where: restored.query.where };
+  return { view: read.state, where: read.where, error: error || restored.error, migrated: read.where !== restored.query.where || read.state !== view };
 }
 
 // Materialize the graph's dimensions as result rows. Its filters belong to

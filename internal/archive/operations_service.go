@@ -58,7 +58,7 @@ func (s *Server) begin(ctx context.Context, spec OperationSpec) (context.Context
 // (§3.4): they hold nothing and are never shown, and each pass that does real
 // work starts an operation. The unregistered-work test accounts for them.
 var daemonNames = []string{"maintainLibrary", "maintainSubstringIndex", "maintainToolOutputIndex", "maintainTextSearch", "maintainToolSearch", "maintainQueryTextIndexes",
-	"keepWALSmall", "automaticLoop", "cloudScheduleLoop", "journalWriter", "leaseReconciler", "watchFeatureFlags"}
+	"keepWALSmall", "automaticLoop", "cloudScheduleLoop", "journalWriter", "leaseReconciler", "watchFeatureFlags", "compressCaptures"}
 
 // daemon runs a registered daemon loop in the background.
 func (s *Server) daemon(name string, loop func(ctx context.Context)) bool {

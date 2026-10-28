@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { FieldSchema, MetricDisplay } from "@pythia-software/query-table-core";
 import { clearPreviewCache, instantiateRecipe, suggestionWindowLabel, type QueryPreview, type QueryRecipe, type QuerySuggestion } from "./curiosity-data";
-import { availableChartKinds, cardCoverGroupLimit, cardDatasets, cardTemplates, coverChoices, decodeCover, saveCardTemplate } from "./card-library-model";
+import { availableChartKinds, cardCoverGroupLimit, cardDatasets, cardLibraryParams, cardSorts, cardTemplates, cardTopicAll, coverChoices, decodeCover, saveCardTemplate } from "./card-library-model";
+export { cardLibraryParams } from "./card-library-model";
 import { cardKind, defaultCardCover } from "./card-cover";
 import { cardLoadingPresentation } from "./card-loading-model";
 import { queryCategories, type QueryCategory } from "./query-categories";
@@ -20,7 +21,6 @@ import "./card-library.css";
 // tabs, filters and edit mode otherwise follow the library preferences.
 export const CARD_LIBRARY_VIEW_KEY = "pharos-home-card-library-v1";
 export type CardLibraryView = { topic?: string; filters?: boolean; edit?: boolean };
-export const cardLibraryParams = ["card_search", "card_data", "card_topic", "card_kind", "card_sort"];
 // A lazy page can first mount after navigation, rather than during startup.
 const openedOnCardLibrary = location.pathname === "/cards";
 export const isCardLibraryLink = (search = location.search) => new URLSearchParams(search).get("cards") === "library";
@@ -80,7 +80,7 @@ export function CardLibraryPage({ schemas }: { schemas: Record<QueryDataset, Fie
   </div>;
 }
 
-const ALL = "all";
+const ALL = cardTopicAll;
 const chartNames: Partial<Record<MetricDisplay["kind"], string>> = { auto: "Automatic", list: "Ranked bars", table: "Table", "bar-horizontal": "Horizontal bars", "bar-vertical": "Columns", line: "Line", pie: "Pie", donut: "Donut", value: "Single value", histogram: "Histogram", box: "Box plot", scatter: "Scatter plot" };
 // "Card defaults" honour a template that pins a single lookback.
 const cardDays = (recipe: QueryRecipe, days: number | "default") => days !== "default" ? days : recipe.days?.length === 1 ? recipe.days[0] : 7;
@@ -221,7 +221,7 @@ function CardLibrary({ schemas, active, prewarm, generation, collected, message,
       }} /></label>
       <label>Data source<select aria-label="Data source" value={dataset} onChange={event => filter(setDataset)(event.target.value)}><option value="">All data</option>{Object.entries(cardDatasets).filter(([key]) => recipes.some(recipe => recipe.dataset === key)).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
       <label>Card kind<select aria-label="Card kind" value={kind} onChange={event => filter(setKind)(event.target.value)}><option value="">All kinds</option>{[...new Set(recipes.map(cardKind))].sort().map(kind => <option key={kind}>{kind}</option>)}</select></label>
-      <label>Sort by<select aria-label="Sort by" value={sort} onChange={event => filter(setSort)(event.target.value)}><option value="topic">Topic</option><option value="data">Data source</option><option value="kind">Card kind</option><option value="title">Title</option></select></label>
+      <label>Sort by<select aria-label="Sort by" value={sort} onChange={event => filter(setSort)(event.target.value)}>{cardSorts.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       <label>Preview window<select aria-label="Preview window" value={days} onChange={event => setDays(event.target.value === "default" ? "default" : Number(event.target.value))}><option value="default">Card defaults</option>{[1, 7, 30, 90].map(days => <option key={days} value={days}>Past {days === 1 ? "24 hours" : `${days} days`}</option>)}</select></label>
     </div> : null}
     <div ref={tabs} className="card-library-tabs" role="tablist" aria-label="Card topics" onKeyDown={event => {

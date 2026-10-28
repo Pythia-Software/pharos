@@ -303,6 +303,85 @@ func (m *applicationManager) childIDsLocked() []string {
 	return ids
 }
 
+func validLibraryName(name string) error {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\\x00") || len(name) > 160 {
+		return fmt.Errorf("choose a library name without path separators")
+	}
+	return nil
+}
+
+// selectLocked opens id in Pharos (and so for MCP), and remembers when the
+// library it replaces was last open.
+func (m *applicationManager) selectLocked(id string) {
+	if previous := m.registry.library(m.registry.Selected); previous != nil && previous.ID != id {
+		previous.LastOpened = now()
+	}
+	m.registry.Selected = id
+	m.generation++
+}
+
+// applicationSummaryInterval is how often the app asks each open library's
+// service how many conversations it holds, to show once the library closes.
+var applicationSummaryInterval = time.Minute
+
+// rememberSummaries records each running library's conversation count, and
+// that the selected one is open now. It saves only a changed count.
+func (m *applicationManager) rememberSummaries() {
+	m.mu.Lock()
+	children := map[string]*applicationChild{}
+	for id, c := range m.children {
+		if !m.busy && m.runningLocked(id) {
+			children[id] = c
+		}
+	}
+	m.mu.Unlock()
+	for id, c := range children {
+		ctx, cancel := context.WithTimeout(m.ctx, 10*time.Second)
+		request, _ := http.NewRequestWithContext(ctx, "GET", c.endpoint.URL+"/api/library/summary", nil)
+		request.Header.Set("Authorization", "Bearer "+c.endpoint.Token)
+		var summary struct {
+			Conversations *int64 `json:"conversations"`
+		}
+		response, err := m.client.Do(request)
+		if err == nil {
+			if response.StatusCode == http.StatusOK {
+				err = json.NewDecoder(response.Body).Decode(&summary)
+			}
+			response.Body.Close()
+		}
+		cancel()
+		if err != nil || summary.Conversations == nil {
+			continue
+		}
+		m.mu.Lock()
+		if l := m.registry.library(id); l != nil && m.children[id] == c {
+			changed := l.Conversations == nil || *l.Conversations != *summary.Conversations
+			l.Conversations = summary.Conversations
+			if id == m.registry.Selected {
+				l.LastOpened = now()
+			}
+			if changed {
+				_ = m.registry.save()
+			}
+		}
+		m.mu.Unlock()
+	}
+}
+
+// runningLocked reports whether id's service is up, without starting it.
+func (m *applicationManager) runningLocked(id string) bool {
+	c := m.children[id]
+	if c == nil {
+		return false
+	}
+	select {
+	case <-c.done:
+		return false
+	default:
+		return true
+	}
+}
+
 func (m *applicationManager) stopChildLocked(id string) {
 	c := m.children[id]
 	if c == nil {
@@ -412,6 +491,18 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path == "/app" || r.URL.Path == "/app/" {
+		// Setup and the chooser are for when no library is open. Once one
+		// is, its Settings → Libraries holds every library control. A child
+		// start holds m.mu for minutes; the page doesn't wait for it.
+		open := false
+		if m.mu.TryLock() {
+			open = !m.busy && m.runningLocked(m.registry.Selected)
+			m.mu.Unlock()
+		}
+		if open {
+			http.Redirect(w, r, "/settings/libraries", http.StatusSeeOther)
+			return
+		}
 		writeHTML(w, applicationHTML())
 		return
 	}
@@ -484,43 +575,25 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (m *applicationManager) mcp(ctx context.Context, request map[string]any) (map[string]any, error) {
 	m.mu.Lock()
-	assigned := m.registry.library(m.registry.MCP)
-	if assigned == nil {
+	// Agents search the library open in Pharos, whichever it is.
+	open := m.registry.library(m.registry.Selected)
+	if open == nil {
 		m.mu.Unlock()
-		return nil, fmt.Errorf("open a library in Pharos to assign MCP")
+		return nil, fmt.Errorf("no library is open; open one in Pharos")
 	}
-	if m.suspended[assigned.ID] || m.released || m.busy {
+	if m.suspended[open.ID] || m.released || m.busy {
 		m.mu.Unlock()
-		return nil, fmt.Errorf("the assigned MCP library is released or temporarily unavailable; reconnect it in Pharos after its current operation finishes")
+		return nil, fmt.Errorf("%s is released or temporarily unavailable; reopen it in Pharos after its current operation finishes", open.Name)
 	}
-	if m.registry.Selected != assigned.ID {
-		name := assigned.Name
-		active := m.registry.library(m.registry.Selected)
-		child := m.children[m.registry.Selected]
-		connected := active != nil && child != nil && !m.suspended[m.registry.Selected] && !m.released
-		if connected {
-			select {
-			case <-child.done:
-				connected = false
-			default:
-			}
-		}
-		if !connected {
-			m.mu.Unlock()
-			return nil, fmt.Errorf("no library is connected. MCP is attached to %s; connect to it in Pharos", name)
-		}
-		m.mu.Unlock()
-		return nil, fmt.Errorf("Pharos is working with %s right now. MCP is attached to %s. Connect to %s or explicitly change its assignment in MCP settings", active.Name, name, name)
-	}
-	c := m.children[assigned.ID]
+	c := m.children[open.ID]
 	if c == nil {
 		m.mu.Unlock()
-		return nil, fmt.Errorf("the assigned MCP library is offline; connect to it in Pharos")
+		return nil, fmt.Errorf("%s is offline; open it in Pharos", open.Name)
 	}
 	select {
 	case <-c.done:
 		m.mu.Unlock()
-		return nil, fmt.Errorf("the assigned MCP library is disconnected; reopen it in Pharos")
+		return nil, fmt.Errorf("%s is disconnected; reopen it in Pharos", open.Name)
 	default:
 	}
 	generation := m.generation
@@ -536,11 +609,11 @@ func (m *applicationManager) mcp(ctx context.Context, request map[string]any) (m
 	post.Header.Set(mcpCatalogHeader, endpoint.Catalog)
 	response, err := m.client.Do(post)
 	if err != nil {
-		return nil, fmt.Errorf("the assigned MCP library is offline: %w", err)
+		return nil, fmt.Errorf("the open library is offline: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != 200 {
-		return nil, fmt.Errorf("the assigned MCP library is unavailable (%s)", response.Status)
+		return nil, fmt.Errorf("the open library is unavailable (%s)", response.Status)
 	}
 	var answer map[string]any
 	if err = json.NewDecoder(response.Body).Decode(&answer); err != nil {
@@ -548,8 +621,8 @@ func (m *applicationManager) mcp(ctx context.Context, request map[string]any) (m
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if generation != m.generation || m.children[m.registry.MCP] != c {
-		return nil, fmt.Errorf("Pharos changed its library connection while this request ran; retry after connecting to the assigned MCP library")
+	if generation != m.generation || m.children[m.registry.Selected] != c {
+		return nil, fmt.Errorf("Pharos changed libraries while this request ran; retry")
 	}
 	select {
 	case <-c.done:
@@ -601,13 +674,16 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 					connected = true
 				}
 			}
-			entry := map[string]any{"id": l.ID, "name": l.Name, "config": l.Config, "available": err == nil, "connected": connected && m.registry.Selected == l.ID, "recovery_point": l.RecoveryPoint}
+			entry := map[string]any{"id": l.ID, "name": l.Name, "config": l.Config, "available": err == nil, "connected": connected && m.registry.Selected == l.ID, "recovery_point": l.RecoveryPoint, "last_opened": l.LastOpened}
+			if l.Conversations != nil {
+				entry["conversations"] = *l.Conversations
+			}
 			if err != nil {
 				entry["error"] = err.Error()
 			}
 			libraries = append(libraries, entry)
 		}
-		state := map[string]any{"libraries": libraries, "selected": m.registry.Selected, "generation": m.generation, "mcp": m.registry.MCP, "application": m.registry.Application, "installation": m.id, "delivery_source": m.registry.DeliverySource, "delivery_target": m.registry.DeliveryTarget, "busy": m.busy}
+		state := map[string]any{"libraries": libraries, "selected": m.registry.Selected, "generation": m.generation, "mcp": m.registry.Selected, "application": m.registry.Application, "installation": m.id, "delivery_source": m.registry.DeliverySource, "delivery_target": m.registry.DeliveryTarget, "busy": m.busy}
 		state["local_library_parent"] = filepath.Join(pharosSupportDir(), "Libraries")
 		m.mu.Unlock()
 		m.jobMu.Lock()
@@ -695,8 +771,7 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/api/app/create":
 		name := strings.TrimSpace(firstString(body["name"]))
-		if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\\x00") || len(name) > 160 {
-			err = fmt.Errorf("choose a library name without path separators")
+		if err = validLibraryName(name); err != nil {
 			break
 		}
 		path := firstString(body["path"])
@@ -753,8 +828,7 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 		var id string
 		id, err = m.registry.register(config, name)
 		if err == nil {
-			m.registry.Selected = id
-			m.generation++
+			m.selectLocked(id)
 		}
 	case "/api/app/open":
 		path := expandPath(firstString(body["path"]))
@@ -773,8 +847,7 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 		var id string
 		id, err = m.registry.register(config, firstString(body["name"]))
 		if err == nil {
-			m.registry.Selected = id
-			m.generation++
+			m.selectLocked(id)
 		}
 	case "/api/app/connect":
 		id := firstString(body["id"])
@@ -783,8 +856,7 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 		_, err = m.childLocked(id)
 		m.startTrigger = ""
 		if err == nil {
-			m.registry.Selected = id
-			m.generation++
+			m.selectLocked(id)
 		}
 	case "/api/app/disconnect":
 		id := firstString(body["id"])
@@ -799,13 +871,28 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 		}
 		m.generation++
 		m.suspended[id] = true
-	case "/api/app/mcp-library":
-		id := firstString(body["id"])
-		if m.registry.library(id) == nil {
+		if l := m.registry.library(id); l != nil {
+			l.LastOpened = now()
+		}
+	case "/api/app/rename":
+		l := m.registry.library(firstString(body["id"]))
+		name := strings.TrimSpace(firstString(body["name"]))
+		if l == nil {
 			err = fmt.Errorf("choose a registered library")
 			break
 		}
-		m.registry.MCP = id
+		if err = validLibraryName(name); err != nil {
+			break
+		}
+		l.Name = name
+		// The name travels with the library when its folder is reachable;
+		// otherwise only this Mac's list changes until it is renamed there.
+		if config, e := l.load(); e == nil {
+			if d, e := readLibraryDescriptor(config); e == nil && d.ID == l.ID {
+				d.Name = name
+				err = durableJSON(descriptorPath(config), d)
+			}
+		}
 		m.generation++
 	case "/api/app/delivery":
 		a, b := firstString(body["source"]), firstString(body["target"])
@@ -938,7 +1025,7 @@ func managedApplicationForConfig(executable string, config Config) string {
 func (m *applicationManager) maintain() {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
-	lastDelivery := time.Time{}
+	lastDelivery, lastSummary := time.Time{}, time.Time{}
 	wasPresent := false
 	for {
 		select {
@@ -964,6 +1051,10 @@ func (m *applicationManager) maintain() {
 			m.publishLocked()
 			source, target := m.registry.DeliverySource, m.registry.DeliveryTarget
 			m.mu.Unlock()
+			if time.Since(lastSummary) >= applicationSummaryInterval {
+				m.rememberSummaries()
+				lastSummary = time.Now()
+			}
 			if source != "" && target != "" {
 				m.mu.Lock()
 				l := m.registry.library(target)

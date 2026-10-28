@@ -169,6 +169,7 @@ func (s *Server) Serve() error {
 	s.daemon("automaticLoop", s.automaticLoop)
 	s.daemon("cloudScheduleLoop", s.cloudScheduleLoop)
 	s.daemon("watchFeatureFlags", s.Catalog.watchFeatureFlags)
+	s.daemon("compressCaptures", s.compressCapturesLoop)
 	s.refreshGitInBackground(true)
 	s.countUpgradeInBackground()
 	s.warmAskModelsOnStart()
@@ -486,6 +487,9 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/health/counts":
 		value, err := s.Catalog.HealthCounts(r.Context())
 		writeResult(w, value, err)
+	case path == "/api/library/summary":
+		value, err := s.Catalog.LibrarySummary(r.Context())
+		writeResult(w, value, err)
 	case path == "/api/health/pricing":
 		value, err := s.Catalog.PricingHealth(r.Context())
 		writeResult(w, value, err)
@@ -495,8 +499,7 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/health/storage":
 		writeJSON(w, merge(storage(s.Config()), map[string]any{"index_bytes": s.Catalog.indexBytes()}), 200)
 	case path == "/api/health/storage/breakdown":
-		value, err := s.storageBreakdown(r.Context())
-		writeResult(w, value, err)
+		writeJSON(w, s.storageBreakdown(), 200)
 	case path == "/api/health/freshness":
 		writeJSON(w, merge(s.Catalog.Freshness(), map[string]any{"sync_active": s.syncActive()}), 200)
 	case path == "/api/authorship":

@@ -390,7 +390,26 @@ func TestHistoryNativeSnapshotsDeletedSessionsAndPruning(t *testing.T) {
 	if run := runCapture(t, config); !run.OK {
 		t.Fatal(run)
 	}
+	// The deleted session survives only in a generation stored compressed:
+	// planning, pins, the rollback backup's check and the export all read its
+	// original bytes.
+	if done := compressGenerations(t, config); len(done) != 1 {
+		t.Fatal("generation was not compressed", done)
+	}
+	encoded := readCaptureManifest(t, config, "conductor").Snapshots[0].Generations[0]
 	j := prepareHistoryFixture(t, config, dest)
+	pinned := false
+	for _, pin := range j.Protected {
+		if pin.Path == encoded.Captured {
+			pinned = pin.Encoding == captureEncodingZstd && pin.SHA256 == encoded.SHA256 && pin.Size == encoded.Size && pin.ClosureBytes == encoded.StoredSize
+		}
+	}
+	if !pinned {
+		t.Fatal("compressed generation was not pinned by its original bytes", j.Protected)
+	}
+	if done := compressGenerations(t, config); len(done) != 0 {
+		t.Fatal("compression ran during a backfill's native pause", done)
+	}
 	// The native-only gate survives a restart and applies to manual capture.
 	c.setCaptureRoot(config.CaptureRoot)
 	if status := c.inputPreservationStatus(t.Context(), "host-a", "conductor"); status["pending_newer_inputs"] != true {
@@ -1151,5 +1170,90 @@ func TestHistoryRecoveryConflictsRespectSourceScope(t *testing.T) {
 				t.Fatalf("matching conflict was given implicit authority: %v", err)
 			}
 		})
+	}
+}
+
+// History backfill reads compressed latest files and earlier versions by
+// their original bytes: planning, pins, the rollback backup's check and the
+// raw export all decode them.
+func TestHistoryBackfillsCompressedFiles(t *testing.T) {
+	c, config, dest := historyFixture(t)
+	override(t, &compressMinBytes, 1)
+	claude := filepath.Join(t.TempDir(), "claude")
+	lines := ""
+	for line := range 30 {
+		lines += claudeLine("kept", fmt.Sprintf("kept-%d", line), strings.Repeat("retained text ", 20), "/proj", line)
+	}
+	writeSourceFile(t, filepath.Join(claude, "p", "kept.jsonl"), lines)
+	writeSourceFile(t, filepath.Join(claude, "p", "rewritten.jsonl"), lines)
+	config.Sources = []SourceConfig{{Name: "claude", Kind: "claude", Path: claude, Account: "local", Enabled: true}}
+	runCapture(t, config)
+	writeSourceFile(t, filepath.Join(claude, "p", "rewritten.jsonl"), claudeLine("rewritten", "r-1", "new", "/proj", 1))
+	runCapture(t, config)
+	indexCaptures(t, c, config.CaptureRoot, "host-a")
+	runCapture(t, config)
+	compressed := 0
+	if err := compressCaptures(t.Context(), config, c, func(compressedGeneration) { compressed++ }); err != nil || compressed != 2 {
+		t.Fatal("fixture: expected the cold latest file and the superseded version compressed", compressed, err)
+	}
+	p, err := planHistory(t.Context(), config, historyScope{Host: "host-a", Source: "claude"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := 0
+	for _, u := range p.Units {
+		if u.Kind == "file" && u.Gap != "" {
+			t.Fatal("compressed file planned as a gap", u)
+		}
+		if u.Version.Encoding != "" {
+			encoded++
+		}
+	}
+	if encoded != 2 {
+		t.Fatal("plan did not see both compressed files", encoded)
+	}
+	j, err := prepareHistory(t.Context(), config, p, dest, 128<<20, 128<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned := 0
+	for _, pin := range j.Protected {
+		if pin.Encoding == captureEncodingZstd {
+			pinned++
+		}
+	}
+	if pinned != 2 {
+		t.Fatal("pins do not record the compressed inputs' encoding", j.Protected)
+	}
+	if j, err = runHistory(t.Context(), config, j.ID); err != nil || j.State != "exported" {
+		t.Fatal("backfill over compressed files", j.State, err)
+	}
+	// The pin of the compressed latest transcript copied it into history:
+	// that copy is listed, encoded, so planning again (the pins released or
+	// not) finds no orphan to reconcile.
+	copies := 0
+	for _, pin := range j.Protected {
+		if pin.Encoding != captureEncodingZstd || !strings.HasPrefix(pin.Path, captureHistoryDir+"/") {
+			continue
+		}
+		copies++
+		if v, ok := loadManifestForTest(t, filepath.Join(config.CaptureRoot, "host-a", "claude")).version(pin.Path); !ok || v.Encoding != captureEncodingZstd || v.SHA256 != pin.SHA256 {
+			t.Fatal("a pinned compressed copy is not listed", pin.Path)
+		}
+	}
+	if copies == 0 {
+		t.Fatal("fixture: no pinned compressed copy")
+	}
+	if err := releasePreservationOwner(filepath.Join(config.CaptureRoot, "host-a", "claude"), j.ID); err != nil {
+		t.Fatal(err)
+	}
+	again, err := planHistory(t.Context(), config, historyScope{Host: "host-a", Source: "claude"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range again.Units {
+		if u.Kind == "orphan-native" || u.Gap != "" && u.Kind == "file" {
+			t.Fatal("planning after the backfill found an unrecognised copy", u)
+		}
 	}
 }

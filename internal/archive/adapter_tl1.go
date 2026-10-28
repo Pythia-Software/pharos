@@ -268,7 +268,7 @@ func (a *tl1Adapter) Fingerprint() (string, error) {
 	}
 	rows := []string{}
 	collect := func(path string) {
-		if info, e := os.Stat(path); e == nil {
+		if info, e := a.files().Stat(path); e == nil {
 			rows = append(rows, fmt.Sprintf("%s:%d:%d", path, info.Size(), info.ModTime().UnixNano()))
 		}
 	}
@@ -329,9 +329,18 @@ func tl1Select(q queryer, table string, wanted []string, suffix string) ([]map[s
 	return queryMaps(q, "SELECT "+strings.Join(columns, ",")+` FROM "`+table+`"`+suffix)
 }
 
+// readsEveryIndex: TL1's index reads every installation's database whenever
+// any of its inputs changes, so an idle installation would be decoded with
+// each change of another.
+func (a *tl1Adapter) readsEveryIndex(string) bool { return true }
+
 func (a *tl1Adapter) database(installation tl1Installation, emit func(WorkspaceRecord) error) (tl1Snapshot, error) {
 	snapshot := tl1Snapshot{Installation: a.recorded(installation), Account: a.config.Account}
-	db, err := openReadOnlySQLite(installation.Database)
+	readable, err := a.files().Database(installation.Database)
+	if err != nil {
+		return snapshot, err
+	}
+	db, err := openReadOnlySQLite(readable)
 	if err != nil {
 		return snapshot, err
 	}
@@ -707,7 +716,7 @@ func (a *tl1Adapter) transcript(installation tl1Installation, taskID string, att
 		return ConversationRecord{}, false, nil
 	}
 	path := filepath.Join(installation.Transcripts, taskID, filename)
-	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+	if info, err := a.files().Stat(path); err != nil || !info.Mode().IsRegular() {
 		return ConversationRecord{}, false, nil
 	}
 	provider := "claude"
@@ -716,8 +725,8 @@ func (a *tl1Adapter) transcript(installation tl1Installation, taskID string, att
 	}
 	model := firstString(attempt["model"])
 	var source ConversationRecord
-	if provider == "codex" && codexExecTranscript(path) {
-		conversation, ok, err := parseCodexExec(path, a.original(path), recordedEffort(attempt))
+	if provider == "codex" && a.files().codexExecTranscript(path) {
+		conversation, ok, err := a.files().parseCodexExec(path, a.original(path), recordedEffort(attempt))
 		if err != nil || !ok {
 			return ConversationRecord{}, false, err
 		}
@@ -758,8 +767,10 @@ func (a *tl1Adapter) transcript(installation tl1Installation, taskID string, att
 
 // codexExecTranscript reports whether path holds `codex exec --json` events
 // (thread.started/item.completed/turn.completed) rather than a rollout file.
-func codexExecTranscript(path string) bool {
-	file, err := os.Open(path)
+func codexExecTranscript(path string) bool { return sourceFiles{}.codexExecTranscript(path) }
+
+func (s sourceFiles) codexExecTranscript(path string) bool {
+	file, err := s.Open(path)
 	if err != nil {
 		return false
 	}
@@ -778,7 +789,12 @@ func codexExecTranscript(path string) bool {
 // token accounting through its raw event. origin is the path the file stands
 // for (see baseAdapter.original), which its origin and evidence locators name.
 func parseCodexExec(path, origin string, initialEffort ...string) (ConversationRecord, bool, error) {
-	file, err := os.Open(path)
+	return sourceFiles{}.parseCodexExec(path, origin, initialEffort...)
+}
+
+// parseCodexExec reads through the capture view, as jsonlAdapter.parseFile.
+func (s sourceFiles) parseCodexExec(path, origin string, initialEffort ...string) (ConversationRecord, bool, error) {
+	file, err := s.Open(path)
 	if err != nil {
 		return ConversationRecord{}, false, nil
 	}
@@ -970,14 +986,14 @@ func (a *tl1Adapter) attemptRow(installation tl1Installation, task, attempt map[
 	transcripts := attemptTranscripts(attempt, summaries, files)
 	var conversation any
 	for _, name := range transcripts {
-		if _, err := os.Stat(filepath.Join(installation.Transcripts, firstString(task["task_id"]), name)); err == nil {
+		if _, err := a.files().Stat(filepath.Join(installation.Transcripts, firstString(task["task_id"]), name)); err == nil {
 			conversation = tl1ConversationNativeID(installation.ID, attemptID, name)
 			break
 		}
 	}
 	var logTail any
 	if errorText != "" {
-		logTail = nilIfEmpty(tl1LogTail(installation, firstString(task["task_id"]), attempt, files))
+		logTail = nilIfEmpty(a.files().tl1LogTail(installation, firstString(task["task_id"]), attempt, files))
 	}
 	return map[string]any{
 		"installation_id": installation.ID, "attempt_id": attemptID, "task_id": task["task_id"], "attempt_number": attempt["attempt_number"],
@@ -998,7 +1014,7 @@ var tl1ScriptLogs = []string{"script.stderr.log", "script.log", "script.stdout.l
 
 // tl1LogTail keeps the end of a failed procedural attempt's script output:
 // stderr when it has content, otherwise the combined log.
-func tl1LogTail(installation tl1Installation, taskID string, attempt map[string]any, files []string) string {
+func (s sourceFiles) tl1LogTail(installation tl1Installation, taskID string, attempt map[string]any, files []string) string {
 	if installation.Transcripts == "" {
 		return ""
 	}
@@ -1008,7 +1024,7 @@ func tl1LogTail(installation tl1Installation, taskID string, attempt map[string]
 			if name != prefix+suffix {
 				continue
 			}
-			if text := strings.TrimSpace(readTail(filepath.Join(installation.Transcripts, taskID, name), 2048)); text != "" {
+			if text := strings.TrimSpace(s.readTail(filepath.Join(installation.Transcripts, taskID, name), 2048)); text != "" {
 				return text
 			}
 		}
@@ -1016,19 +1032,9 @@ func tl1LogTail(installation tl1Installation, taskID string, attempt map[string]
 	return ""
 }
 
-func readTail(path string, limit int64) string {
-	file, err := os.Open(path)
+func (s sourceFiles) readTail(path string, limit int64) string {
+	buffer, err := s.Tail(path, limit)
 	if err != nil {
-		return ""
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return ""
-	}
-	offset := max(info.Size()-limit, 0)
-	buffer := make([]byte, info.Size()-offset)
-	if _, err := file.ReadAt(buffer, offset); err != nil && err != io.EOF {
 		return ""
 	}
 	return strings.ToValidUTF8(string(buffer), "")

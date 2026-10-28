@@ -73,8 +73,7 @@ func (m *applicationManager) startOperation(w http.ResponseWriter, r *http.Reque
 				var id string
 				id, err = m.registry.register(config, "")
 				if err == nil {
-					m.registry.Selected = id
-					m.generation++
+					m.selectLocked(id)
 					err = m.registry.save()
 				}
 				m.mu.Unlock()

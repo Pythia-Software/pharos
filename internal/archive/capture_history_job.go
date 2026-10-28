@@ -326,7 +326,7 @@ func (j *historyJob) rollback(ctx context.Context, config Config) error {
 		if !ok {
 			continue
 		}
-		hash, size, e := fileSHA256Context(ctx, filepath.Join(captures, u.Host, u.Source, filepath.FromSlash(pin.Path)))
+		hash, size, e := capturedSHA256(ctx, filepath.Join(captures, u.Host, u.Source, filepath.FromSlash(pin.Path)), pin.Encoding)
 		if e != nil || hash != pin.SHA256 || size != pin.Size {
 			return errors.New("rollback backup does not verify a selected pinned input")
 		}
@@ -424,7 +424,7 @@ func (j *historyJob) verifyReceipt(ctx context.Context, u historyUnit, r history
 			return errors.New("unresolved historical view identity/closure")
 		}
 		for _, f := range m.Files {
-			hash, size, e := fileSHA256Context(ctx, filepath.Join(dir, filepath.FromSlash(f.Captured)))
+			hash, size, e := capturedSHA256(ctx, filepath.Join(dir, filepath.FromSlash(f.Captured)), f.Encoding)
 			if e != nil {
 				return e
 			}
@@ -642,7 +642,7 @@ func (j *historyJob) exportUnit(ctx context.Context, u historyUnit) (historyRece
 			return r, 0, errors.New("historical parsing inventory changed")
 		}
 		for _, f := range m.Files {
-			hash, size, e := fileSHA256Context(ctx, filepath.Join(inputDir, filepath.FromSlash(f.Captured)))
+			hash, size, e := capturedSHA256(ctx, filepath.Join(inputDir, filepath.FromSlash(f.Captured)), f.Encoding)
 			if e != nil || hash != f.SHA256 || size != f.Size {
 				return r, 0, errors.New("historical view dependency failed verification")
 			}
@@ -656,7 +656,7 @@ func (j *historyJob) exportUnit(ctx context.Context, u historyUnit) (historyRece
 			return r, 0, errors.New("input is not protected")
 		}
 		file := filepath.Join(dir, filepath.FromSlash(pin.Path))
-		hash, size, e := fileSHA256Context(ctx, file)
+		hash, size, e := capturedSHA256(ctx, file, pin.Encoding)
 		if e != nil || hash != pin.SHA256 || size != pin.Size {
 			return r, 0, errors.New("pinned input changed or drive unavailable")
 		}
@@ -705,7 +705,7 @@ func (j *historyJob) exportUnit(ctx context.Context, u historyUnit) (historyRece
 			r.Tier = "partial"
 			r.Gap = "native SQLite rows/bytes pinned; historical database/file group unresolved"
 		} else {
-			f, e := os.Open(file)
+			f, e := openCapturedContent(file, pin.Encoding)
 			if e != nil {
 				return r, 0, e
 			}

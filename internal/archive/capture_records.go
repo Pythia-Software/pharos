@@ -22,6 +22,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -695,6 +696,19 @@ func (s *recordStore) table(tx *sql.Tx, name, where, order string, args []any) (
 // exportSQLite reads exactly one consistent transaction. Selection is used
 // only by the Conductor fast path; unknown tables are covered by full scans.
 func (s *recordStore) exportSQLite(file, original, entity string, state sqliteSourceState, selected string, dependencies []recordDependency) (recordObject, error) {
+	// input is the captured file the revision names; file is what SQLite
+	// opens, a decoded copy in a reader lease when the input is stored encoded.
+	input := file
+	if rel, err := filepath.Rel(s.c.dir, file); err == nil && strings.HasPrefix(file, s.c.dir+string(filepath.Separator)) {
+		if version, ok := s.c.storedVersion(filepath.ToSlash(rel)); ok {
+			decoded, _, release, err := leaseDecoded(s.c.ctx, s.c.dir, version)
+			if err != nil {
+				return recordObject{}, err
+			}
+			defer release()
+			file = decoded
+		}
+	}
 	ctx, cancel := context.WithTimeout(s.c.ctx, s.budget.Timeout)
 	defer cancel()
 	oldCtx := s.c.ctx
@@ -764,7 +778,7 @@ func (s *recordStore) exportSQLite(file, original, entity string, state sqliteSo
 	if e != nil {
 		return recordObject{}, e
 	}
-	if !strings.HasPrefix(file, s.c.dir+string(filepath.Separator)) {
+	if !strings.HasPrefix(input, s.c.dir+string(filepath.Separator)) {
 		state, e = sqliteDependencyState(file)
 		if e != nil {
 			return recordObject{}, e
@@ -945,9 +959,10 @@ func (s *recordStore) exportSQLite(file, original, entity string, state sqliteSo
 	if before != after && len(dependencies) > 0 {
 		return recordObject{}, errors.New("SQLite source moved during acquisition; retry required")
 	}
-	if strings.HasPrefix(file, s.c.dir+string(filepath.Separator)) {
-		rel, _ := filepath.Rel(s.c.dir, file)
+	if strings.HasPrefix(input, s.c.dir+string(filepath.Separator)) {
+		rel, _ := filepath.Rel(s.c.dir, input)
 		v.Input = filepath.ToSlash(rel)
+		// The decoded copy's digest: the original bytes the manifest describes.
 		v.InputHash, _, e = fileSHA256Context(s.c.ctx, file)
 		if e != nil {
 			return recordObject{}, e
@@ -956,6 +971,29 @@ func (s *recordStore) exportSQLite(file, original, entity string, state sqliteSo
 	ref, err := s.publish(&v)
 	finished = err == nil
 	return ref, err
+}
+
+// verifiedObjects are record objects this process has read back whole
+// (walkObject checks length and digest), by path.
+var verifiedObjects sync.Map
+
+// storedObject reports that ref's object is stored and intact, reading it
+// back the first time this process sees it.
+func (s *recordStore) storedObject(ref recordObject) bool {
+	path := s.objectPath(ref.Hash)
+	if _, ok := verifiedObjects.Load(path); ok {
+		if _, err := os.Stat(path); err == nil {
+			return true
+		}
+	}
+	if _, err := os.Stat(path); err != nil {
+		return false
+	}
+	if s.walkObject(ref, func(io.Reader) error { return nil }) != nil {
+		return false
+	}
+	verifiedObjects.Store(path, true)
+	return true
 }
 
 func (s *recordStore) dependencies() ([]recordDependency, error) {
@@ -969,12 +1007,24 @@ func (s *recordStore) dependencies() ([]recordDependency, error) {
 			deps = append(deps, cached)
 			continue
 		}
+		// Hashes and the stored object describe the original bytes.
 		file := filepath.Join(s.c.dir, filepath.FromSlash(f.Captured))
-		h, size, e := fileSHA256Context(s.c.ctx, file)
+		encoding := s.c.encodingOf(f.Captured)
+		// An encoded file is unchanged since it was compressed, when its
+		// digest was verified by decoding: once its object is stored, it is
+		// not decoded again on every capture.
+		if encoding != "" && f.SHA256 != "" {
+			ref := recordObject{Hash: f.SHA256, Length: f.Size, Encoding: "gzip"}
+			if s.storedObject(ref) {
+				deps = append(deps, recordDependency{Path: f.Path, Object: &ref, State: "retained", MTimeNS: f.MTimeNS, MissingSince: f.MissingSince})
+				continue
+			}
+		}
+		h, size, e := capturedSHA256(s.c.ctx, file, encoding)
 		if e != nil || h != f.SHA256 || size != f.Size {
 			return nil, errors.New("retained dependency changed or is unreadable")
 		}
-		r, e := os.Open(file)
+		r, e := openCapturedContent(file, encoding)
 		if e != nil {
 			return nil, e
 		}
@@ -1070,7 +1120,7 @@ func (c *sourceCapture) verifiedSnapshotReceipt(receiptInput, retainedInput stri
 	}
 	ctx, cancel := context.WithTimeout(c.ctx, recordRunTimeout)
 	defer cancel()
-	h, _, e := fileSHA256Context(ctx, filepath.Join(c.dir, filepath.FromSlash(retainedInput)))
+	h, _, e := capturedSHA256(ctx, filepath.Join(c.dir, filepath.FromSlash(retainedInput)), c.encodingOf(retainedInput))
 	if e != nil || h != receipt.InputHash {
 		return receipt, false
 	}

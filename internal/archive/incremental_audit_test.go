@@ -67,6 +67,20 @@ func TestVerificationIncludesDeletedConductorSessionsFromOlderCaptures(t *testin
 	execute("DELETE FROM session_messages WHERE session_id='deleted'", "DELETE FROM sessions WHERE id='deleted'", "UPDATE session_messages SET content='newest evidence' WHERE id='current-m0'")
 	runCapture(t, config)
 	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+	// The older capture is stored compressed once indexed; verification
+	// decodes it into a reader lease of its own and removes that afterwards.
+	if done := compressGenerations(t, config); len(done) != 1 {
+		t.Fatal("indexed generation was not compressed", done)
+	}
+	defer func() {
+		if left := temporariesUnder(t, capturedPath(config, "conductor", "")); len(left) != 0 {
+			t.Error("verification left decoded copies", left)
+		}
+		// The capture lock lives beside the host's sources, never in one.
+		if _, err := os.Stat(capturedPath(config, "conductor", captureLockName)); !os.IsNotExist(err) {
+			t.Error("verification locked a capture lock inside a source directory", err)
+		}
+	}()
 	config.Sources = nil
 	server := testServer(t, config, catalog)
 	t.Cleanup(func() { server.stop(5 * time.Second) })

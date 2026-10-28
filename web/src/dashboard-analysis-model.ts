@@ -131,7 +131,11 @@ export type AnalysisCatalog = {
   scatter: [string, string];
 };
 
-export type RollingOp = "mean" | "sum";
+export const rollingOps = ["mean", "sum"] as const;
+export type RollingOp = typeof rollingOps[number];
+// How Compare draws its groups, and the cycles a cycle view folds.
+export const compareModes = ["bars", "share"] as const;
+export const analysisCycles: readonly CalendarCycle[] = ["weekday", "hour"];
 // The analyze_chart format. Version 2 keeps a legend selection in the state
 // (selection) and leaves where to the population; an unversioned link may
 // hold the selection as a filter (readAnalysisLink).
@@ -153,7 +157,7 @@ export const records = "records", noSplit = "none";
 export const analysisViews: Array<[AnalysisView, string]> = [["trend", "Over time"], ["compare", "Compare groups"], ["distribution", "Distribution"], ["scatter", "Two measures"], ["cycle", "Hour / weekday cycle"]];
 export const analysisReductions: Array<[AnalysisReduce, string]> = [["total", "Total"], ["mean", "Mean per unit"], ["median", "Median per unit"], ["max", "Largest unit"], ["count", "Number of units"]];
 export const sampleThresholds = [0, 2, 3, 5, 10, 20, 50, 100];
-const analysisDefaults = { unit: records, reduce: "total", compareAs: "bars", minSamples: 0, scaleY: "linear", cycle: "weekday",
+export const analysisDefaults = { unit: records, reduce: "total", compareAs: "bars", minSamples: 0, scaleY: "linear", cycle: "weekday",
   period: "day", hours: 6, days: 3, rollingPeriods: 0, rollingOp: "mean", display: "interval", share: false, completePeriods: false, norm: false, normPeriods: 30, seriesLimit: 15 } as const;
 // Groups drawn are fixed per display. The trend's seriesLimit is its own.
 const barsShown = 12, slicesShown = 8;
@@ -229,7 +233,7 @@ export function validAnalysisState(catalog: AnalysisCatalog, input: AnalysisStat
     && [state.hours, state.days].every(value => value === undefined || validPeriodCount(value))
     && (state.rollingPeriods === undefined || validRollingPeriods(state.rollingPeriods))
     && validChartDisplay(state.display) && (state.scale === undefined || validChartScale(state.scale)) && validChartPresentation(state)
-    && (state.rollingOp === undefined || oneOf(state.rollingOp, ["mean", "sum"]))
+    && (state.rollingOp === undefined || oneOf(state.rollingOp, rollingOps))
     && [state.share, state.completePeriods, state.norm].every(value => value === undefined || typeof value === "boolean")
     && (state.normPeriods === undefined || Number.isInteger(state.normPeriods) && state.normPeriods >= 1 && state.normPeriods <= 1000);
   if (!trendFields || state.v !== undefined && state.v !== analysisVersion) return false;
@@ -240,10 +244,10 @@ export function validAnalysisState(catalog: AnalysisCatalog, input: AnalysisStat
     && has(catalog.measures, state.metric) && (state.metricY === undefined || has(catalog.measures, state.metricY))
     && (state.split === noSplit || has(catalog.breakdowns, state.split))
     && (state.reduce === undefined || oneOf(state.reduce, analysisReductions.map(([reduce]) => reduce)))
-    && (state.compareAs === undefined || oneOf(state.compareAs, ["bars", "share"]))
+    && (state.compareAs === undefined || oneOf(state.compareAs, compareModes))
     && (state.minSamples === undefined || Number.isInteger(state.minSamples) && state.minSamples >= 0 && state.minSamples <= 1_000_000)
-    && (state.scaleY === undefined || oneOf(state.scaleY, ["linear", "logarithmic", "half"]))
-    && (state.cycle === undefined || oneOf(state.cycle, ["weekday", "hour"]));
+    && (state.scaleY === undefined || validChartScale(state.scaleY))
+    && (state.cycle === undefined || oneOf(state.cycle, analysisCycles));
 }
 
 export const shareable = (catalog: AnalysisCatalog, state: ResolvedAnalysis) => state.view === "compare" && state.split !== noSplit
@@ -367,7 +371,7 @@ function normalizeTrend<T extends AnalysisState>(catalog: AnalysisCatalog, next:
   // The trend's scale, resolved once for the control and the chart: a state
   // without one draws the old trend charts' default, the linear + log split.
   if (!validChartScale(next.scale)) next.scale = defaultChartScale;
-  if (!oneOf(next.rollingOp, ["mean", "sum"])) next.rollingOp = "mean";
+  if (!oneOf(next.rollingOp, rollingOps)) next.rollingOp = "mean";
   let limits = trendLimits(catalog, next);
   if (next.share && limits.share) next.share = false;
   if (next.display === "cumulative" && limits.cumulative) next.display = "interval";

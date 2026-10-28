@@ -65,6 +65,11 @@ type writingTable struct {
 // the date), and must not be modified.
 func (c *Catalog) writingData(ctx context.Context) ([]map[string]any, map[string]map[string]*writingDay, error) {
 	c.ensureAuthorship()
+	return c.cachedWritingData(ctx)
+}
+
+// cachedWritingData is writingData without bringing authorship up to date.
+func (c *Catalog) cachedWritingData(ctx context.Context) ([]map[string]any, map[string]map[string]*writingDay, error) {
 	table, err := cachedValue(ctx, c, "writing:"+c.clock().Format("2006-01-02"), c.computeWritingData)
 	return table.rows, table.daily, err
 }

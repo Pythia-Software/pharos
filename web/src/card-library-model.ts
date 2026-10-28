@@ -7,6 +7,11 @@ import { validChartScale } from "./chart-scale";
 
 export const CARD_TEMPLATES_KEY = "pharos-card-templates-v1";
 export const cardDatasets: Record<string, string> = { conversation_activity: "Conversation input/output", usage: "Token usage", library: "Workspaces", tool_calls: "Tool calls", skill_usages: "Skills", writing_messages: "Human messages", tl1_attempts: "TL1 attempts", mcp_calls: "MCP responses", parallelism: "Parallel agents", findings: "Findings" };
+// The Card Library's address: its search, data source, topic tab
+// (card_topic=all is the All tab), card kind and sort.
+export const cardLibraryParams = ["card_search", "card_data", "card_topic", "card_kind", "card_sort"];
+export const cardTopicAll = "all";
+export const cardSorts = [["topic", "Topic"], ["data", "Data source"], ["kind", "Card kind"], ["title", "Title"]] as const;
 export type CardTemplateEdit = { title: string; description: string; days: number; cover?: CardCover };
 function overrides(): Record<string, CardTemplateEdit> {
   const value = preferences().get<unknown>(CARD_TEMPLATES_KEY, {});

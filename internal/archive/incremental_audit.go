@@ -256,7 +256,9 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 	}
 	if unit.Reader != nil && unit.Record == nil {
 		view := captureViewOf(unit.Reader)
-		if view != nil && view.evidenceRevision == "" && view.recordRevision == nil {
+		// A view over a reader lease already reads immutable links; only a
+		// view over the capture directory itself is locked and frozen here.
+		if view != nil && !view.lease && view.evidenceRevision == "" && view.recordRevision == nil {
 			lock, err := lockCaptureTarget(ctx, view.dir)
 			if err != nil {
 				result.Outcome, result.Detail = "deferred", err.Error()
@@ -1197,7 +1199,18 @@ func (s *Server) verifyAllInputs(ctx context.Context, runID string, progress fun
 			continue
 		}
 		for _, snapshot := range manifest.Snapshots {
-			handled, err := conductorSessionIDsContext(ctx, filepath.Join(view.dir, filepath.FromSlash(snapshot.Captured)))
+			// Leased (and decoded if stored encoded) like the generations.
+			latest, _, releaseLatest, err := leaseCapturedVersion(ctx, target, snapshot.Captured)
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) || errors.Is(err, errCaptureBusy) {
+					summary.Deferred++
+				} else {
+					summary.Errors++
+				}
+				continue
+			}
+			handled, err := conductorSessionIDsContext(ctx, latest)
+			releaseLatest()
 			if err != nil {
 				summary.Errors++
 				continue
@@ -1206,30 +1219,44 @@ func (s *Server) verifyAllInputs(ctx context.Context, runID string, progress fun
 				if ctx.Err() != nil {
 					break
 				}
-				file := filepath.Join(view.dir, filepath.FromSlash(generation.Captured))
-				ids, err := conductorSessionIDsContext(ctx, file)
+				// Each generation is leased under the capture lock, so a
+				// compression or pruning cannot change it while it is read; an
+				// encoded one is decoded in that lease, removed after the check.
+				file, dir, release, err := leaseCapturedVersion(ctx, target, generation.Captured)
 				if err != nil {
-					if errors.Is(err, os.ErrNotExist) {
+					if errors.Is(err, os.ErrNotExist) || errors.Is(err, errCaptureBusy) {
 						summary.Deferred++
 					} else {
 						summary.Errors++
 					}
 					continue
 				}
-				missing := map[string]bool{}
-				for id := range ids {
-					if !handled[id] {
-						missing[id], handled[id] = true, true
+				func() {
+					defer release()
+					ids, err := conductorSessionIDsContext(ctx, file)
+					if err != nil {
+						if errors.Is(err, os.ErrNotExist) {
+							summary.Deferred++
+						} else {
+							summary.Errors++
+						}
+						return
 					}
-				}
-				if len(missing) == 0 {
-					continue
-				}
-				older := &captureView{host: view.host, dir: view.dir, manifest: manifest, mappings: []capturePathMapping{{Original: snapshot.Path, Captured: file}}}
-				config := conductor.config
-				config.Path = file
-				reader := &conductorAdapter{baseAdapter: baseAdapter{config: config, capability: conductor.capability, view: older}, selected: missing}
-				visit(reader, target.Host.ID)
+					missing := map[string]bool{}
+					for id := range ids {
+						if !handled[id] {
+							missing[id], handled[id] = true, true
+						}
+					}
+					if len(missing) == 0 {
+						return
+					}
+					older := &captureView{host: view.host, dir: dir, lease: true, decoded: map[string]bool{generation.Captured: true}, manifest: manifest, mappings: []capturePathMapping{{Original: snapshot.Path, Captured: file}}}
+					config := conductor.config
+					config.Path = file
+					reader := &conductorAdapter{baseAdapter: baseAdapter{config: config, capability: conductor.capability, view: older}, selected: missing}
+					visit(reader, target.Host.ID)
+				}()
 			}
 		}
 	}

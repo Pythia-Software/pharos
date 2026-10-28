@@ -238,6 +238,18 @@ func TestToolCallCubeAnswersLikeTheCalls(t *testing.T) {
 				t.Fatalf("distinct %s %q: cube %v, calls %v", field, search, got, want)
 			}
 		}
+		// browse_site's most frequent values count the cube's groups.
+		got, err := toolCallDataset.FrequentValues(ctx, catalog.DB, field, 50, schema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := direct.FrequentValues(ctx, catalog.DB, field, 50, schema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !same(got, want) || field == "tool_name" && (len(got) < 2 || got[0].Count < got[len(got)-1].Count) {
+			t.Fatalf("frequent %s: cube %v, calls %v", field, got, want)
+		}
 	}
 	names := []string{}
 	for name := range schema.Fields {
