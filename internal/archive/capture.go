@@ -171,6 +171,18 @@ type capturedSnapshot struct {
 	Source          sqliteSourceState `json:"source"`
 	MissingSince    string            `json:"missing_since,omitempty"`
 	Generations     []capturedVersion `json:"generations,omitempty"`
+	// An idle latest snapshot may be stored encoded (phase 3); SHA256, of
+	// the original bytes, is recorded when it is.
+	SHA256     string `json:"sha256,omitempty"`
+	Encoding   string `json:"encoding,omitempty"`
+	StoredSize int64  `json:"stored_size,omitempty"`
+}
+
+// version is the latest snapshot as a capturedVersion; MTimeNS is the
+// captured copy's mtime.
+func (s *capturedSnapshot) version() capturedVersion {
+	source := s.Source
+	return capturedVersion{Captured: s.Captured, Size: s.Size, MTimeNS: s.CapturedMTimeNS, SHA256: s.SHA256, CapturedAt: s.CapturedAt, Source: &source, Encoding: s.Encoding, StoredSize: s.StoredSize}
 }
 
 type sqliteSourceState struct {

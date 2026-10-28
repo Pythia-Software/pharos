@@ -329,9 +329,18 @@ func tl1Select(q queryer, table string, wanted []string, suffix string) ([]map[s
 	return queryMaps(q, "SELECT "+strings.Join(columns, ",")+` FROM "`+table+`"`+suffix)
 }
 
+// readsEveryIndex: TL1's index reads every installation's database whenever
+// any of its inputs changes, so an idle installation would be decoded with
+// each change of another.
+func (a *tl1Adapter) readsEveryIndex(string) bool { return true }
+
 func (a *tl1Adapter) database(installation tl1Installation, emit func(WorkspaceRecord) error) (tl1Snapshot, error) {
 	snapshot := tl1Snapshot{Installation: a.recorded(installation), Account: a.config.Account}
-	db, err := openReadOnlySQLite(installation.Database)
+	readable, err := a.files().Database(installation.Database)
+	if err != nil {
+		return snapshot, err
+	}
+	db, err := openReadOnlySQLite(readable)
 	if err != nil {
 		return snapshot, err
 	}

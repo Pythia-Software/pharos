@@ -359,29 +359,6 @@ func validateCaptures(ctx context.Context, root string, staged bool) error {
 		if err = validateRetainedRecords(ctx, dir, manifest); err != nil {
 			return fmt.Errorf("retained records in %s: %w", dir, err)
 		}
-		verify := func(rel string, size int64, checksum string) error {
-			if !filepath.IsLocal(rel) || rel == "." || strings.Contains(rel, "\\") {
-				return fmt.Errorf("unsafe captured evidence path: %q", rel)
-			}
-			file := filepath.Join(dir, filepath.FromSlash(rel))
-			info, err := os.Lstat(file)
-			if err != nil {
-				return fmt.Errorf("missing captured evidence %s: %w", file, err)
-			}
-			if !info.Mode().IsRegular() || info.Size() != size {
-				return fmt.Errorf("captured evidence failed verification: %s", file)
-			}
-			if checksum != "" {
-				digest, _, err := fileDigestContext(ctx, file)
-				if err != nil {
-					return err
-				}
-				if digest != checksum {
-					return fmt.Errorf("captured evidence failed verification: %s", file)
-				}
-			}
-			return nil
-		}
 		// A file stored encoded must be its stored size on disk and decode to
 		// the original size and digest. A compression killed between its
 		// manifest and its rename left an entry marked encoded over the
@@ -434,7 +411,7 @@ func validateCaptures(ctx context.Context, root string, staged bool) error {
 			}
 		}
 		for _, snapshot := range manifest.Snapshots {
-			if err = verify(snapshot.Captured, snapshot.Size, ""); err != nil {
+			if err = verifyStored(snapshot.version()); err != nil {
 				return err
 			}
 			for _, generation := range snapshot.Generations {

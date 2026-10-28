@@ -203,6 +203,20 @@ func (v *captureView) open(rel string) (*sourceFile, error) {
 	return &sourceFile{Reader: decoder, file: file, decoder: decoder, info: originalInfo{FileInfo: info, size: entry.Size}}, nil
 }
 
+// Database is a path at which SQLite can open path: the path itself for a
+// live source or a plain capture, or for an encoded snapshot its decoded copy
+// in the reader's lease (materialize).
+func (s sourceFiles) Database(path string) (string, error) {
+	if s.view == nil {
+		return path, nil
+	}
+	rel, ok := s.view.rel(path)
+	if !ok {
+		return path, nil
+	}
+	return s.view.materialize(s.ctx, rel)
+}
+
 // materialize returns a path at which the captured entry rel can be opened
 // by path (SQLite, ReadAt): the leased file, or for an encoded entry its
 // decoded copy, which replaces the lease's link at the same relative path so
@@ -211,7 +225,8 @@ func (v *captureView) open(rel string) (*sourceFile, error) {
 func (v *captureView) materialize(ctx context.Context, rel string) (string, error) {
 	file := filepath.Join(v.dir, filepath.FromSlash(rel))
 	entry, ok := v.manifest.entry(rel)
-	if !ok || entry.Encoding == "" || v.decoded[rel] {
+	if !ok || entry.Encoding == "" || v.decoded[rel] || storedAs(file, entry).Encoding == "" {
+		// Plain, or already decoded here (by another view of this lease).
 		return file, nil
 	}
 	if !v.lease {

@@ -74,6 +74,9 @@ func (m *captureManifest) writerVersion() int {
 		}
 	}
 	for _, snapshot := range m.Snapshots {
+		if snapshot.Encoding != "" {
+			return true
+		}
 		for _, generation := range snapshot.Generations {
 			if generation.Encoding != "" {
 				version = max(version, captureGenerationsVersion)
@@ -104,7 +107,7 @@ func (m *captureManifest) version(rel string) (*capturedVersion, bool) {
 }
 
 // entry is any captured file at rel that may be stored encoded: a latest
-// file, an earlier version or a snapshot generation.
+// file or snapshot, an earlier version or a snapshot generation.
 func (m *captureManifest) entry(rel string) (capturedVersion, bool) {
 	if v, ok := m.version(rel); ok {
 		return *v, true
@@ -112,6 +115,11 @@ func (m *captureManifest) entry(rel string) (capturedVersion, bool) {
 	for _, file := range m.Files {
 		if file.Captured == rel {
 			return file.version(), true
+		}
+	}
+	for _, snapshot := range m.Snapshots {
+		if snapshot.Captured == rel {
+			return snapshot.version(), true
 		}
 	}
 	return capturedVersion{}, false
@@ -130,6 +138,10 @@ func (c *sourceCapture) encodingOf(rel string) string {
 func (c *sourceCapture) storedVersion(rel string) (capturedVersion, bool) {
 	var found *capturedVersion
 	for _, snapshot := range c.snapshots {
+		if snapshot.Captured == rel {
+			v := snapshot.version()
+			found = &v
+		}
 		for i := range snapshot.Generations {
 			if snapshot.Generations[i].Captured == rel {
 				found = &snapshot.Generations[i]

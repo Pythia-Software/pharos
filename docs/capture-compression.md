@@ -122,10 +122,24 @@ Each phase ships as one PR.
    and a rewritten one keeps its encoded copy in `history/`. On a sample of
    the production captures this saves about 9 GB now (Codex 3.7×, Claude
    3.3×), rising as files go cold.
-3. **Idle latest snapshots** ([handoff](handoffs/capture-compression-3-idle-snapshots.md)). Antigravity-CLI keeps a database per
-   conversation, and most are idle. Compress latest snapshots whose source
-   has not changed for the same period. Keep Conductor's latest snapshot
-   uncompressed: every index of Conductor reads it. This saves about 3 GB.
+3. **Idle latest snapshots** ([handoff](handoffs/capture-compression-3-idle-snapshots.md)).
+   Compress latest SQLite snapshots whose recorded source state (database
+   and WAL mtimes) is older than `capture_compress_after_days`, that the
+   last capture found unchanged, that the index marker covers, and that the
+   source's adapter does not open on every index. Each adapter declares the
+   last (`snapshotReader`): Conductor's one database (every plan lists its
+   sessions), Codex's naming databases (`state_*.sqlite`), Antigravity's
+   summaries database, and TL1's installation databases (its index reads
+   all of them whenever any input changes) stay uncompressed. So in practice
+   this compresses Antigravity's per-conversation request databases, which
+   are read only when their conversation is parsed. SQLite-record sources
+   are left out: their capture exports the latest snapshot on every run.
+   Readers open an encoded snapshot through the capture view, which decodes
+   it into the reader's lease; a normal sync decodes none. When the source
+   changes again, capture takes a new, uncompressed snapshot and the encoded
+   one moves into `history/` as it is. On a sample of the production
+   Antigravity capture this saves about 1.1 GB now (3.5×); the Air's idle
+   Conductor snapshot is not compressed.
 
 Phase 1 and 2 together take the originals from ~67 GB to ~34 GB. The rest is
 dominated by Conductor's latest 14.5 GB snapshot. Shrinking that is the job

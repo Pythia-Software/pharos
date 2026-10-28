@@ -538,6 +538,12 @@ func (a *jsonlAdapter) Discover(emit func(WorkspaceRecord) error) error {
 
 func (a *jsonlAdapter) partExtractor() string { return a.provider + ":" + jsonlExtractor }
 
+// readsEveryIndex: every Codex plan reads the naming databases (state_*.sqlite)
+// for thread names; Claude captures no database.
+func (a *jsonlAdapter) readsEveryIndex(path string) bool {
+	return a.provider == "codex" && codexStateName(filepath.Base(path))
+}
+
 func (a *jsonlAdapter) transcriptInfo(path string, entry os.DirEntry, walkErr error) (fs.FileInfo, error) {
 	if err := a.context().Err(); err != nil {
 		return nil, err

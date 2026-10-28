@@ -184,6 +184,12 @@ func freezeManifestInputPolicy(ctx context.Context, target captureTarget, source
 			f.Encoding, f.StoredSize = stored.Encoding, stored.StoredSize
 		}
 	}
+	for _, s := range frozen.Snapshots {
+		if s.Encoding != "" {
+			stored := storedAs(filepath.Join(target.Dir, filepath.FromSlash(s.Captured)), s.version())
+			s.Encoding, s.StoredSize = stored.Encoding, stored.StoredSize
+		}
+	}
 	// stored is what is on disk: an encoded file is linked (and, without
 	// hard links, copied and hashed) as stored, never decoded here.
 	stored := func(size int64, hash, encoding string, storedSize int64) (int64, string) {
@@ -208,7 +214,7 @@ func freezeManifestInputPolicy(ctx context.Context, target captureTarget, source
 			check(file.Captured, file.storedSize(), file.SHA256)
 		}
 		for _, snapshot := range frozen.Snapshots {
-			check(snapshot.Captured, snapshot.Size, "")
+			check(snapshot.Captured, snapshot.version().storedSize(), "")
 			for _, generation := range snapshot.Generations {
 				size, hash := stored(generation.Size, generation.SHA256, generation.Encoding, generation.StoredSize)
 				check(generation.Captured, size, hash)
@@ -281,7 +287,7 @@ func freezeManifestInputPolicy(ctx context.Context, target captureTarget, source
 		}
 	}
 	for _, s := range frozen.Snapshots {
-		if err = link(s.Captured, s.Size, ""); err != nil {
+		if err = link(s.Captured, s.version().storedSize(), ""); err != nil {
 			return fail(err)
 		}
 		for _, generation := range s.Generations {

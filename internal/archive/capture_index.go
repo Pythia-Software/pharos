@@ -528,7 +528,7 @@ func (c *Catalog) indexGenerations(ctx context.Context, adapter Adapter, view *c
 				reportWork(ctx, "indexing retained snapshots", "snapshot", generationIndex+1, len(snapshot.Generations))
 				continue
 			}
-			older := &captureView{host: view.host, dir: view.dir, manifest: view.manifest, mappings: []capturePathMapping{{Original: snapshot.Path, Captured: file}}}
+			older := &captureView{host: view.host, dir: view.dir, manifest: view.manifest, lease: view.lease, decoded: view.decoded, mappings: []capturePathMapping{{Original: snapshot.Path, Captured: file}}}
 			config := conductor.config
 			config.Path = file
 			reader := &conductorAdapter{baseAdapter: baseAdapter{config: config, capability: conductor.capability, view: older}, selected: missing}

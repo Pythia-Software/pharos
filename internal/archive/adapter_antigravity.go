@@ -52,6 +52,13 @@ const (
 
 func (a *antigravityAdapter) partExtractor() string { return antigravityExtractor }
 
+// readsEveryIndex: every plan reads the summaries database (titles, parents,
+// print mode); a conversation's requests database is read only when that
+// conversation is parsed.
+func (a *antigravityAdapter) readsEveryIndex(path string) bool {
+	return filepath.Clean(path) == filepath.Join(a.config.Path, antigravitySummaries)
+}
+
 // antigravityDataDir reports whether dir looks like an Antigravity app's data
 // directory: it has a brain folder of conversations.
 func antigravityDataDir(dir string) bool {
@@ -481,7 +488,11 @@ func (a *antigravityAdapter) summaries(ids map[string]string) (map[string]antigr
 	summaries := map[string]antigravitySummary{}
 	path := filepath.Join(a.config.Path, antigravitySummaries)
 	if _, err := os.Stat(path); err == nil {
-		if db, err := openReadOnlySQLite(path); err == nil {
+		readable, err := a.files().Database(path)
+		if err != nil {
+			return nil, err
+		}
+		if db, err := openReadOnlySQLite(readable); err == nil {
 			rows, err := queryMapsContext(a.context(), db, "SELECT * FROM conversation_summaries")
 			db.Close()
 			if err != nil {

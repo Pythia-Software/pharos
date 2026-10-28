@@ -217,7 +217,7 @@ func planHistory(ctx context.Context, config Config, scope historyScope) (histor
 				return add(u)
 			}
 			for _, s := range m.Snapshots {
-				for _, v := range append([]capturedVersion{{Captured: s.Captured, Size: s.Size, Source: &s.Source, CapturedAt: s.CapturedAt}}, s.Generations...) {
+				for _, v := range append([]capturedVersion{s.version()}, s.Generations...) {
 					if e = addNative("database", s.Path, v); e != nil {
 						return p, e
 					}
