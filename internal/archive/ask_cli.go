@@ -32,7 +32,7 @@ type askModel struct {
 	Default  bool              `json:"default"`
 }
 type askProvider struct {
-	discoveredAt     time.Time
+	checkedAt        time.Time
 	recordSession    func(context.Context, string) error
 	ID               string        `json:"id"`
 	Models           []askModel    `json:"models"`

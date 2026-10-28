@@ -353,6 +353,7 @@ operation.
 | `maintenance.origins` | Publish conversation origins · Publishing conversation origins | daemon pass (`maintainLibrary`: every pass while no ingest runs, at most once a minute during one); the end of each ingest and the Tools rollup publish them as part of their own operation | svc | D:w W:w | — | — | Stops; it publishes them on its next pass. | batch | never | bg |
 | `maintenance.mcp-history` | Store MCP call history · Storing MCP call history | read (an MCP call through the service queues its record; one background writer stores the queue, so no request waits for the writer; a direct MCP call stores its own record when it closes the catalog, after its answer is out) | svc, mcp | D:w W:w | — | — | Stops; closing the catalog stores what is still queued. | record | never | bg |
 | `ask.save` | Save an Ask Pharos answer · Saving an Ask Pharos answer | user (a finished Ask turn whose save missed its deadline is retried in the background for up to 5 min) | svc | D:w W:w | — | — | Stops retrying; an answer not yet saved is lost, as when the service stops. | record | never | bg |
+| `ask.models` | Check Ask Pharos models · Checking Ask Pharos models | read (the model picker asks for a CLI whose list is missing or over an hour old; it answers from the old list meanwhile), user (enabling Ask Pharos), startup (Ask Pharos enabled) | svc (+ the AI CLI) | — (subprocess only) | — | — | Stops. | record | never | bg |
 | `drive.measure` | Check the drive · Checking the drive | read (`GET /api/health/drive`, 5 min cache) | svc (+`diskutil`) | D:w W:w (one `library_size_history` row) | — | — | Stops. | record | never | bg |
 
 **Daemon passes.** A pass's operation is registered before the pass runs,
@@ -371,11 +372,13 @@ sees it) but journaled only past 1 s. The same pattern applies to every
 called. `drive.measure`, `maintenance.origins`, `maintenance.mcp-history`,
 `ask.save` and `cloud.reconcile` (§3.6) are
 listed only so the unregistered-work test passes and eject sees them; they
-are D-family and hidden from surfaces. Requests never write: the writes
+are D-family and hidden from surfaces. `ask.models` is hidden too, and holds
+nothing. Requests never write: the writes
 they used to make (origins, MCP history, interrupted cloud runs) are these
 background operations, and no request waits for one. Ask Pharos stays out of scope (§1): only the background
 save of a finished answer, which writes the catalog after its request has
-ended, is registered.
+ended, and model discovery, which runs a CLI after its request has ended,
+are registered.
 
 **A pinned WAL.** A bound checkpoint that a reader or the writer keeps
 busy ends `skipped(catalog-busy)`. Once the WAL is over `walPinBytes`
@@ -1140,7 +1143,7 @@ recent rows and `freshness: []`; it has no stream. `GET /api/status?fresh=1`
   terminal, plus those that ended in the last 10 minutes, newest first.
   `children` holds running children; `children_count` all of them. Daemons
   and kinds marked hidden (`drive.measure`, `maintenance.origins`,
-  `maintenance.mcp-history`, `ask.save`, `cloud.reconcile`,
+  `maintenance.mcp-history`, `ask.save`, `ask.models`, `cloud.reconcile`,
   `maintenance.cache-warm`) are omitted but still count for the verdict.
 - A tentative daemon pass (§3.4) is not listed and not journaled; it
   counts for the verdict only. The ETag covers the listed operations, the

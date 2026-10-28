@@ -64,11 +64,19 @@ type askActive struct {
 	done   chan struct{}
 }
 type askState struct {
-	discovering map[string]context.CancelFunc
+	discovering map[string]*askDiscovery
 	mu          sync.Mutex
 	active      map[string]askActive
 	models      map[string]askProvider
 	saving      map[string]*askSaving
+}
+
+// askDiscovery is one CLI's model discovery, running in the background. done
+// closes once its result is in s.ask.models, or err says why it is not.
+type askDiscovery struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+	err    error
 }
 
 // askSaving is a finished answer that its chat has not saved yet. Until it is
@@ -209,6 +217,15 @@ func (s *Server) askSessions(ctx context.Context, query string, offset int) ([]a
 	}
 	return result, rows.Err()
 }
+// Model discovery runs a CLI for up to 25 s, so the picker never waits for
+// it once a CLI's models are known: askProvider answers from memory and
+// refreshes a list older than askModelsTTL in the background. Enabling Ask
+// Pharos, and starting the service with it enabled, discover every installed
+// CLI's models ahead of the first question.
+var askModelsTTL = time.Hour
+
+// askProvider returns name's models, waiting for discovery only when none are
+// known yet. The caller holds s.ask.mu, which this releases while it waits.
 func (s *Server) askProvider(ctx context.Context, name string) (askProvider, error) {
 	config, err := s.askSettings(ctx)
 	if err != nil {
@@ -221,45 +238,114 @@ func (s *Server) askProvider(ctx context.Context, name string) (askProvider, err
 		if p.ID != name {
 			continue
 		}
-		if cached, ok := s.ask.models[name]; ok && cached.path == p.path && time.Since(cached.discoveredAt) < 5*time.Minute {
+		if cached, ok := s.ask.models[name]; ok && cached.path == p.path {
+			if time.Since(cached.checkedAt) >= askModelsTTL {
+				s.discoverAskModels(p, triggerRead)
+			}
 			return cached, nil
 		}
-		discoveryCtx, cancel := context.WithCancel(ctx)
-		key := randomToken()
-		if s.ask.discovering == nil {
-			s.ask.discovering = map[string]context.CancelFunc{}
+		d := s.discoverAskModels(p, triggerRead)
+		if d == nil {
+			return p, errServiceStopping
 		}
-		s.ask.discovering[key] = cancel
 		s.ask.mu.Unlock()
-		models, discoveryErr := askDiscoverModels(discoveryCtx, p)
-		cancel()
+		select {
+		case <-d.done:
+		case <-ctx.Done():
+		}
 		s.ask.mu.Lock()
-		delete(s.ask.discovering, key)
-		p.Models, err = models, discoveryErr
-		config, settingsErr := s.askSettings(ctx)
-		if settingsErr != nil {
-			return p, settingsErr
+		if ctx.Err() != nil {
+			return p, ctx.Err()
 		}
-		if !config.Enabled {
-			return p, fmt.Errorf("Ask Pharos was disabled")
+		if d.err != nil {
+			return p, d.err
 		}
+		if cached, ok := s.ask.models[name]; ok {
+			return cached, nil
+		}
+		return p, fmt.Errorf("Ask Pharos was disabled")
+	}
+	return askProvider{}, fmt.Errorf("%s is no longer available on this Mac", name)
+}
 
+// warmAskModels discovers the models of every installed CLI whose list is
+// missing or stale. The caller holds s.ask.mu and has checked that Ask
+// Pharos is enabled.
+func (s *Server) warmAskModels(trigger string) {
+	for _, p := range askInstalled() {
+		if cached, ok := s.ask.models[p.ID]; !ok || cached.path != p.path || time.Since(cached.checkedAt) >= askModelsTTL {
+			s.discoverAskModels(p, trigger)
+		}
+	}
+}
+
+// warmAskModelsOnStart warms the model lists when the service starts with Ask
+// Pharos enabled.
+func (s *Server) warmAskModelsOnStart() {
+	if config, err := s.askSettings(s.life.ctx); err == nil && config.Enabled {
+		s.ask.mu.Lock()
+		defer s.ask.mu.Unlock()
+		s.warmAskModels(triggerStartup)
+	}
+}
+
+// discoverAskModels starts p's model discovery, or returns the one already
+// running; nil means the service is stopping. A failed refresh keeps the
+// models found before, and waits askModelsTTL before trying again. The
+// caller holds s.ask.mu.
+func (s *Server) discoverAskModels(p askProvider, trigger string) *askDiscovery {
+	if d := s.ask.discovering[p.ID]; d != nil {
+		return d
+	}
+	ctx, cancel := context.WithCancel(s.life.ctx)
+	d := &askDiscovery{cancel: cancel, done: make(chan struct{})}
+	// Ask is out of status scope (§1), but discovery runs a CLI after its
+	// request has ended, so it is a hidden operation.
+	started := s.start(OperationSpec{Kind: "ask.models", Subject: p.ID, Trigger: trigger}, func(life context.Context, _ *Op) error {
+		defer context.AfterFunc(life, cancel)()
+		models, err := askDiscoverModels(ctx, p)
+		s.ask.mu.Lock()
+		defer s.ask.mu.Unlock()
+		defer close(d.done)
+		defer cancel()
+		if s.ask.discovering[p.ID] == d {
+			delete(s.ask.discovering, p.ID)
+		}
+		cached, known := s.ask.models[p.ID]
+		switch {
+		case ctx.Err() != nil:
+			d.err = fmt.Errorf("Ask Pharos was disabled")
+			return nil
+		case err == nil && len(models) == 0:
+			err = fmt.Errorf("%s returned no available models; update and authenticate it", p.ID)
+		}
 		if err != nil {
-			return p, err
+			d.err = err
+			if known && cached.path == p.path {
+				cached.checkedAt = time.Now()
+				s.ask.models[p.ID] = cached
+			}
+			return nil
 		}
-		if len(p.Models) == 0 {
-			return p, fmt.Errorf("%s returned no available models; update and authenticate it", name)
-		}
+		p.Models = models
+		p.checkedAt = time.Now()
+		selection := askDefaultSelection(p)
+		p.DefaultSelection = &selection
 		if s.ask.models == nil {
 			s.ask.models = map[string]askProvider{}
 		}
-		p.discoveredAt = time.Now()
-		selection := askDefaultSelection(p)
-		p.DefaultSelection = &selection
-		s.ask.models[name] = p
-		return p, nil
+		s.ask.models[p.ID] = p
+		return nil
+	})
+	if !started {
+		cancel()
+		return nil
 	}
-	return askProvider{}, fmt.Errorf("%s is no longer available on this Mac", name)
+	if s.ask.discovering == nil {
+		s.ask.discovering = map[string]*askDiscovery{}
+	}
+	s.ask.discovering[p.ID] = d
+	return d
 }
 func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
@@ -344,9 +430,11 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 				active.cancel()
 			}
 			s.ask.models = nil
-			for _, cancel := range s.ask.discovering {
-				cancel()
+			for _, d := range s.ask.discovering {
+				d.cancel()
 			}
+		} else if body["enabled"] == true {
+			s.warmAskModels(triggerUser)
 		}
 		writeJSON(w, settings, 200)
 	case "/api/ask/models":

@@ -170,6 +170,7 @@ func (s *Server) Serve() error {
 	s.daemon("watchFeatureFlags", s.Catalog.watchFeatureFlags)
 	s.refreshGitInBackground(true)
 	s.countUpgradeInBackground()
+	s.warmAskModelsOnStart()
 	return s.serveUntilStopped(server, listener)
 }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
