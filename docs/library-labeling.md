@@ -2,7 +2,7 @@
 
 `pharos labeling` prepares a library's conversation text for labeling by a large "teacher" model, offline, so the labels can later train a small local classifier. It is a deliberate command-line workflow: nothing runs when Pharos starts, captures, indexes or opens a page, and no command here writes the catalog.
 
-This page covers preparation, planning, running labeling jobs and their status. Exporting training data comes later.
+This page covers preparation, planning, running labeling jobs and their status, exporting training data, and the smoke check of that export.
 
 ## Commands
 
@@ -19,12 +19,15 @@ pharos labeling run --dir DIR --job NAME [--create --route claude|codex --model 
 pharos labeling stop --dir DIR --job NAME
 pharos labeling reconcile --dir DIR --job NAME [--retry-unknown] [--retry-failed]
 pharos labeling import-results --dir DIR --from OLD_DIR --job NAME
+pharos labeling export --dir DIR --job NAME [--out DIR]
+python3 tools/labeling_smoke.py EXPORT_DIR [--out model.json] [--report report.json]
 ```
 
 - **prepare** reads one snapshot of the catalog and writes a dataset to `DIR`. It reads only a backup copy of a catalog, named with `--catalog PATH --snapshot-copy`; it never reads a live catalog. `--limit-conversations N` prepares a fixed sample of N conversations (those whose works are not mirrors, in the order of the SHA-256 of their IDs); `--conversation` prepares named ones. Either restriction is recorded, and the manifest then calls the result a restricted sample, not the library. `--dry-run` computes the same manifest and prints it as JSON without creating or writing anything. `--splits-from` keeps the splits an earlier dataset gave its conversations (see below). Progress (phase, counts, elapsed time) goes to standard error.
 - **plan** reads only a prepared dataset and estimates a labeling run: how many requests, how many tokens, what it would cost, and how long it might take. It calls no model and writes nothing.
 - **status** prints a dataset's manifest summary, or says that preparation is incomplete, and one line per labeling job. With `--job` it shows that job; `--json` prints everything (below).
 - **run**, **stop**, **reconcile** and **import-results** create and run labeling jobs: see [Running a labeling job](#running-a-labeling-job). `run` is the only command that calls a model, and it calls one only within its `--max-usd` ceiling.
+- **export** writes one job's results as training files: see [Training export](#training-export-labeling-export-v1). It reads the dataset in one read-only transaction and writes only the export.
 
 Choose a dataset directory outside the catalog folder, for example `<library>/labeling/<name>`. A dataset holds private conversation text: its files are created readable only by you (0600, directory 0700). `prepare` refuses a directory that is not empty unless `--replace` is given, and `--replace` removes only a dataset's own files; it refuses a dataset that holds any labeling job, request or attempt records, so paid results are never lost. One command at a time can prepare into a directory (`DIR/.lock`).
 
@@ -188,10 +191,60 @@ Both run with the user's environment, so they use the CLI's own login; Pharos ne
 
 `import-results --dir NEW --from OLD --job NAME` refuses a job labeled under a schema, taxonomy or prompt template this build does not produce, and otherwise creates job `NAME`, in one transaction with its requests and imported results (every selected item is requested, imported or listed as oversize, or nothing is written), in a newly prepared dataset with the old job's route, model, effort, prompt and selection, and copies the old job's usable and refused results for items whose model-visible contract is unchanged: the hash of the prompt version, taxonomy, schema, sender, channel, context and CURRENT_TEXT. Their evidence is re-mapped to the new dataset's bytes. Every other selected item is packed as pending, for `run` to label.
 
+## Training export (`labeling-export-v1`)
+
+`export --dir DIR --job NAME` writes the job's items to `DIR/exports/EXPORT_ID/` (or `--out DIR`, which must not exist or be empty). It takes the dataset's shared lock (no `prepare` runs meanwhile), reads everything in one read-only transaction, writes into a temporary directory beside the target and renames it into place, so a reader never sees half an export. Files are 0600 in a 0700 directory: they hold conversation text. The export is deterministic: the same dataset and ledger give the same bytes (rows in item-ID or unit-ID order, JSON with sorted keys, no timestamps of its own), and `EXPORT_ID` is derived from the files' SHA-256 hashes, so exporting again is a no-op. A job still running is exported as it stands: its in-flight items are `unlabeled` and the manifest's `job.complete` is false. Because the exports directory is not part of a dataset, `prepare --replace` refuses a dataset that has one.
+
+The items are every item the job requested or holds a result for (imported results included). Each appears once in each per-item file:
+
+| File | One row per | Holds |
+|---|---|---|
+| `inputs.jsonl` | item | only what a student sees at inference time |
+| `provenance.jsonl` | item | where the item came from; no labels |
+| `labels.jsonl` | item in `train` or `dev` | the teacher's result |
+| `labels-heldout.jsonl` | item in `test`, `fresh`, `quarantine` or without a split (`unassigned`) | the teacher's result |
+| `unit-labels.jsonl`, `unit-labels-heldout.jsonl` | chunked unit, by its split | the chunks' merged labels |
+| `export-manifest.json` | | versions, counts, support, hashes, rules |
+
+**`inputs.jsonl`**: `item_id`, `dataset_id` (the first 16 hex digits of the dataset manifest's SHA-256), `units_version`, `unit_id`, `split`, `cohort`, `actor_kind`, `sender` (the role the prompt names), `provider`, `kind`, `channel`, `reasoning_format`, `depth` (null if unresolved), `text` (the model-visible CURRENT_TEXT, markers included), `context` (the PREVIOUS_CONTEXT the teacher saw: the last 600 characters), `context_excerpt` (whether that cut removed anything), `chunk_index`, `chunk_count`, `chars`. Nothing else: no labels, teacher identity, evidence, rationale, outcome, family, duplicate or leakage marks, and no later message (context is built only from earlier ones). The split is derived from family IDs and time, never from labels.
+
+**`labels.jsonl` / `labels-heldout.jsonl`**: `item_id`, `unit_id`, `split`, and
+
+- `status`: `usable`, `need_context`, `refused`, `refusal_suspected`, `invalid`, `tool_use` (an invalid result because a tool was used), `missing`, `held` or `unlabeled` (requested, no result yet: pending, unknown, failed or stopped). Only `usable` rows are training rows. `outcome` is the ledger's item outcome (`usable_with_evidence_issues` is exported as `usable`, its unsupported labels set apart) or `no_result`.
+- `labels`: the positives, accepted labels whose evidence is `supported` (a valid quote inside a target piece), leaves or broad parents exactly as returned. `unsupported_labels` maps other accepted labels to their evidence status (`in_marker`, `in_context`, `not_found`, `missing`, …): not positives, not negatives. `uncertain_labels`: not positives, not negatives. `implied_ancestors`: the positives' ancestors, listed apart; a child implies its parent, but a parent never implies a child, so a broad parent is not a positive for its children. These four are `null` unless the status is `usable`: a refused, invalid, missing, held, need-context or unlabeled item is present with its status and never an all-negative row. What the teacher returned for such a row (for example a held or need-context result) is under `returned`.
+- `need_context`, `evidence` (each quote with its validation status and occurrences: `item_start`/`item_end` byte offsets into the item text and the original message ranges), `issues` (the validation issues), and `flags`: `refused_copacked_unresolved`, `served_model_differs`, `served_model_unverified` (every Codex result), `served_model_accepted`, `answer_without_terminal`, `usage_missing`, `imported`.
+- `teacher`: job, route, model, effort, served-model status of the job, CLI version of the attempt, prompt, schema and taxonomy versions.
+- `receipt`: the result's `request_id`, `attempt_id`, `imported_from`, `request_state`, `request_items`, `contract_hash`, the attempt's `cost_status` (the worst of its usage rows: `priced`, `assumed`, `estimated`, `partial`, `unpriced`; `no_usage`; `imported`) and `attempt_cost_usd` (the whole request's cost, shared by its items), the requests the item was in, and `history`: every result the job holds for the item (attempt, request, outcome, time). When an item has several results (retries, imports), the authoritative one is the latest usable result, else the latest result of any outcome.
+
+**`provenance.jsonl`**: `item_id`, `unit_id`, `split`, `family_id`, the source `message_id`, `conversation_id`, `canonical_conversation_id`, `workspace_id`, `root_conversation_id`, `run_id`, `session_id`, `session_role`, `depth_status`, `created_at`, `content_hash`, `message_sha256`, `authorship_reason`, `length_bucket`, `target_hash`, `duplicate_of` and `duplicate_relation` (delegation copies, later fork copies: drop them to count a text once), `cross_split_duplicate`, `seen_in_train`, `common_short_text`, `visible_range` (the item's bytes in the unit's visible text), `markers` (item-relative byte ranges of `⟦…⟧` markers), `source_ranges`, the unit's `pieces` (role, status, category, reason, original and visible byte ranges, transform, re-use source), its `sentences` (`sentences-v1`, original byte ranges), the message's `actions` (question forms and tool-result answers) and `context_refs`. A literal source range is `{start, end, item_start, item_end, sha256}`: bytes `start..end` of the stored message equal bytes `item_start..item_end` of the item text, whose SHA-256 is given (the export checks the equality before writing; the message itself is not exported, since its other pieces may be secrets or pasted material). A transformed range (`json-string-v1`: a feedback comment or delegation payload shown decoded) is `{start, end, transform, item_start, item_end, source_sha256, piece_sha256, whole_piece, transform_verified}`: the encoded bytes of the message map to the whole decoded piece, never to offsets inside it. Text that was not valid UTF-8 never reaches an export: `prepare` excludes such messages (`invalid_utf8`), and export refuses any item, context or evidence that is not valid UTF-8 or whose offsets do not fall on character boundaries, rather than replacing bytes.
+
+**`unit-labels*.jsonl`**: for each chunked unit with an item in the job: `unit_id`, `split`, `chunking_version`, `merge_version` (`chunk-union-v1`), `unvalidated_merge: true`, `chunk_count`, `chunks` (item, index, status, labels) and, when every chunk is in the job and usable, `status: usable` with the union of the chunks' positives, their unsupported and uncertain labels minus the positives, implied ancestors and whether any chunk needed context; otherwise `status: partial` and null labels. The merge has not been validated against labels of whole long messages: negation, permission scope and references can cross a chunk boundary.
+
+**`export-manifest.json`**: `export_version`, `export_id`, a population statement, the dataset (ID, manifest hash, population, snapshot, contracts), the job (route, model, effort, served-model status, prompt, schema and taxonomy versions and hashes, selection, request states, `complete`), the contract versions, `files` (SHA-256, rows and bytes of each data file), `training_files` and `heldout_files`, `training_splits` and `heldout_splits`, `items`, `counts` (items by split, cohort, provider, depth, length bucket and ledger outcome, each by status), `label_support` (for every taxonomy label, zero-support labels included, per split: `positive`, `unsupported`, `uncertain` and `implied` counts over usable rows), `strata` (per split: duplicates, `seen_in_train`, `common_short_text`, `cross_split_duplicate`), `families` (families per split and how many span splits: 0 by construction), `chunked_units`, `flags`, `transforms` (verified and unverified decodings), the `taxonomy` (each label's parent) and the `rules` in prose.
+
+### Consuming an export
+
+A training project needs no Pharos code: JSON lines and the manifest are enough.
+
+1. Check the files against the manifest's hashes.
+2. For training, read `inputs.jsonl`, `provenance.jsonl` and `labels.jsonl` (and `unit-labels.jsonl` for whole long messages) only. Train on `train`, tune on `dev`. Never open the `-heldout` files until final evaluation.
+3. Use rows whose `status` is `usable`. For each label, a row is positive when the label is in `labels`; it says nothing (exclude it for that label) when the label is uncertain, unsupported, an implied ancestor, or a child of a broad parent in `labels`; otherwise it is negative. Whether an implied ancestor should count as a positive for the parent's own classifier is the training project's choice; the export keeps them apart so it can make it.
+4. Drop rows with `duplicate_of`. Splits follow families (`family_id`), so a parent and child, a fork, a mirror or copied text never straddle train and test; quarantine is neither.
+5. Evaluate on `test` and `fresh` from `labels-heldout.jsonl`, excluding `seen_in_train` rows (their text of 40 or more characters also occurs in train) and reporting `common_short_text` rows ("continue", "yes") as their own stratum. Report support per label: rare labels need targeted review, not a score.
+
+The labels are a teacher model's provisional labels, not reviewed truth, and the export describes the job's selection, not the library.
+
+### Smoke check and Go parity
+
+`python3 tools/labeling_smoke.py EXPORT_DIR [--out model.json] [--report report.json]` (Python 3 standard library only) is a smoke check of the export and the training path, not a quality claim. It verifies the manifest and every file hash, that inputs carry only student fields, that each item has one label row in the file its split belongs to and that only usable rows have labels, and round-trips every byte range (source ranges against their SHA-256, markers, evidence quotes) as strict UTF-8. It then fits a one-vs-rest logistic regression (SGD, 8 epochs, learning rate 0.5, L2 1e-4, seed 20261027) on hashed character n-grams: code points 2 to 4, A-Z lowercased and nothing else (so Turkish İ stays İ), each n-gram's UTF-8 bytes hashed with FNV-1a 64 into 2^18 buckets, counts L2-normalized. It trains on usable `train` rows of `labels.jsonl` with the rule above; the held-out files are opened only by the evaluation, after training (a unit test fails training if it opens one). It evaluates on `test` and `fresh` per label (support, precision, recall, F1 at 0.5; labels with fewer than 3 positives are reported as unsupported, not scored; micro and macro over scored labels), overall, for `common_short_text` and for the rest, and writes the model (featurizer spec, bias and sparse weights per label) and a report. Below 200 train rows or 50 evaluation rows it says the data is too small to mean anything, and still runs every structural check.
+
+`internal/archive/labeling_smoke_model.go` loads that model in Go (refusing any other featurizer) and scores text with the same featurizer. `testdata/labeling-parity.json` holds invented strings (combining marks, astral emoji, ZWJ sequences, flags and variation selectors, Hebrew and Arabic with RLM, Turkish İ/ı, CRLF, tabs, NBSP, non-ASCII capitals, CJK, a `⟦…⟧` marker, U+2028/2029, empty and one-character text), a tiny model, FNV-1a reference values, and the feature indices, values and scores Python computes; the Go and Python tests both check them (indices and values exactly, scores within 1e-9). A student that tokenizes, normalizes or lowercases differently must prove its own parity the same way before a long training run.
+
 ## Known limits
 
 - Human pieces inherit the classifier's limits: typed text is an estimate, and prose written elsewhere and pasted without cues still counts as typed.
 - Embedded sub-agent sessions are identified by the session ownership the catalog records; a sub-agent prompt stored as a user message outside such a session is treated as the classifier treats it.
+- The chunk merge (`chunk-union-v1`) is unvalidated, and export does not merge need-context or partially labeled units.
 - Re-sent text whose copied passage occurs in its source more than once with different attributions is unverified context, and so is any re-sent text from an embedded sub-agent's prompt.
 - Delegation duplicates are found only through a recorded delegation-to-child link (results through the delegation's call ID).
 - Inherited history is recognized by identical text only; a fork that reformats its copy is not recognized.

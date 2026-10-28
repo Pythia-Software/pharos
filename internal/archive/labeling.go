@@ -33,7 +33,8 @@ const labelingUsage = `usage:
   pharos labeling run --dir DIR --job NAME [--create --route claude|codex --model M --effort E [--prompt V] [--cohort C ...] [--split S ...] [--item ID ...] [--limit-items N] [--items-per-request 4] [--max-request-tokens 24000] [--max-request-chars N] [--include-duplicates] [--max-per-text N] [--include-refused-elsewhere] [--create-only]] --max-usd X [--concurrency 3] [--timeout 330s] [--retry-invalid 1] [--max-consecutive-failures 3] [--allow-unpriced] [--accept-served-model MODEL]
   pharos labeling stop --dir DIR --job NAME
   pharos labeling reconcile --dir DIR --job NAME [--retry-unknown] [--retry-failed] [--requeue-held] [--retry-suspected-refusals] [--retry-tool-use]
-  pharos labeling import-results --dir DIR --from OLD_DIR --job NAME`
+  pharos labeling import-results --dir DIR --from OLD_DIR --job NAME
+  pharos labeling export --dir DIR --job NAME [--out DIR]`
 
 // runLabelingCLI runs the offline labeling commands. None of them opens the
 // catalog through OpenCatalog: prepare reads one read-only snapshot, and plan
@@ -67,6 +68,16 @@ func runLabelingCLI(configPath string, args []string, stdout, stderr io.Writer) 
 		return labelingJobsSummary(*dir, stdout)
 	case "run":
 		return runLabelingRunCLI(args[1:], stdout, stderr)
+	case "export":
+		flags := flag.NewFlagSet("labeling export", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		dir := flags.String("dir", "", "dataset directory")
+		job := flags.String("job", "", "labeling job to export")
+		out := flags.String("out", "", "export directory (default DIR/exports/EXPORT_ID)")
+		if err := flags.Parse(args[1:]); err != nil || *dir == "" || *job == "" || flags.NArg() != 0 {
+			return errors.New(labelingUsage)
+		}
+		return runLabelingExport(*dir, *job, *out, stdout)
 	case "stop", "reconcile", "import-results":
 		flags := flag.NewFlagSet("labeling "+args[0], flag.ContinueOnError)
 		flags.SetOutput(stderr)
