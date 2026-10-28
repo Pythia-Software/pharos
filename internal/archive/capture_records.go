@@ -983,12 +983,14 @@ func (s *recordStore) dependencies() ([]recordDependency, error) {
 			deps = append(deps, cached)
 			continue
 		}
+		// Hashes and the stored object describe the original bytes.
 		file := filepath.Join(s.c.dir, filepath.FromSlash(f.Captured))
-		h, size, e := fileSHA256Context(s.c.ctx, file)
+		encoding := s.c.encodingOf(f.Captured)
+		h, size, e := capturedSHA256(s.c.ctx, file, encoding)
 		if e != nil || h != f.SHA256 || size != f.Size {
 			return nil, errors.New("retained dependency changed or is unreadable")
 		}
-		r, e := os.Open(file)
+		r, e := openCapturedContent(file, encoding)
 		if e != nil {
 			return nil, e
 		}

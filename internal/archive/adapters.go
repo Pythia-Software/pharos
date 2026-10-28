@@ -273,7 +273,12 @@ func readJSON(path string) (any, error) {
 
 // readJSONVersion also reports the version (mtime) of the file it read.
 func readJSONVersion(path string) (any, int64, error) {
-	file, err := os.Open(path)
+	return sourceFiles{}.ReadJSONVersion(path)
+}
+
+// ReadJSONVersion is readJSONVersion through the capture view.
+func (s sourceFiles) ReadJSONVersion(path string) (any, int64, error) {
+	file, err := s.Open(path)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -539,7 +544,9 @@ func (a *jsonlAdapter) transcriptInfo(path string, entry os.DirEntry, walkErr er
 	if entry.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".jsonl") || !a.accept(path) {
 		return nil, nil
 	}
-	info, err := entry.Info()
+	// Through the capture view: an encoded transcript plans at its original
+	// size without being read.
+	info, err := a.files().Info(path, entry)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -668,7 +675,7 @@ func (a *jsonlAdapter) parse(path string) (WorkspaceRecord, bool, error) {
 // present when it was opened, so a log appended meanwhile, or a capture
 // replaced meanwhile, is parsed again next time rather than taken as current.
 func (a *jsonlAdapter) parseFile(path string) (WorkspaceRecord, sourcePart, bool, error) {
-	file, err := os.Open(path)
+	file, err := a.files().Open(path)
 	if err != nil {
 		return WorkspaceRecord{}, sourcePart{}, false, nil
 	}

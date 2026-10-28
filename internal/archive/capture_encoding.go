@@ -50,10 +50,16 @@ func (v capturedVersion) storedSize() int64 {
 	return v.Size
 }
 
+// storedSize is the size of the latest file on disk.
+func (f *capturedFile) storedSize() int64 { return f.version().storedSize() }
+
 // encodedVersions reports whether any entry of m is stored encoded; only then
 // does a writer stamp the version older builds refuse.
 func (m *captureManifest) encodedVersions() bool {
 	for _, file := range m.Files {
+		if file.Encoding != "" {
+			return true
+		}
 		for _, version := range file.Previous {
 			if version.Encoding != "" {
 				return true
@@ -72,7 +78,7 @@ func (m *captureManifest) encodedVersions() bool {
 
 // writerVersion is the manifest version a writer stamps: the newest when an
 // entry is encoded, so a build that cannot decode refuses the capture rather
-// than hand zstd to SQLite, and the previous one otherwise, so libraries
+// than hand zstd to a reader, and the previous one otherwise, so libraries
 // without encoded entries stay readable by older builds.
 func (m *captureManifest) writerVersion() int {
 	if m.encodedVersions() {
@@ -101,6 +107,20 @@ func (m *captureManifest) version(rel string) (*capturedVersion, bool) {
 	return nil, false
 }
 
+// entry is any captured file at rel that may be stored encoded: a latest
+// file, an earlier version or a snapshot generation.
+func (m *captureManifest) entry(rel string) (capturedVersion, bool) {
+	if v, ok := m.version(rel); ok {
+		return *v, true
+	}
+	for _, file := range m.Files {
+		if file.Captured == rel {
+			return file.version(), true
+		}
+	}
+	return capturedVersion{}, false
+}
+
 // encodingOf is how rel is stored ("" for the original bytes), from the
 // inventory this writer holds; see storedVersion.
 func (c *sourceCapture) encodingOf(rel string) string {
@@ -108,8 +128,9 @@ func (c *sourceCapture) encodingOf(rel string) string {
 	return v.Encoding
 }
 
-// storedVersion is the superseded entry captured at rel when it is stored
-// encoded, from this writer's inventory (see storedAs).
+// storedVersion is the entry captured at rel when it is stored encoded, from
+// this writer's inventory (its working maps, then its manifest; see
+// storedAs).
 func (c *sourceCapture) storedVersion(rel string) (capturedVersion, bool) {
 	var found *capturedVersion
 	for _, snapshot := range c.snapshots {
@@ -119,8 +140,21 @@ func (c *sourceCapture) storedVersion(rel string) (capturedVersion, bool) {
 			}
 		}
 	}
+	for _, file := range c.files {
+		if file.Captured == rel {
+			v := file.version()
+			found = &v
+		}
+		for i := range file.Previous {
+			if file.Previous[i].Captured == rel {
+				found = &file.Previous[i]
+			}
+		}
+	}
 	if found == nil && c.manifest != nil {
-		found, _ = c.manifest.version(rel)
+		if v, ok := c.manifest.entry(rel); ok {
+			found = &v
+		}
 	}
 	if found == nil {
 		return capturedVersion{}, false
@@ -504,39 +538,4 @@ func leaseCapturedVersion(ctx context.Context, target captureTarget, rel string)
 		}
 	}
 	return file, leaseDir, release, nil
-}
-
-// materialize returns a path at which the captured entry rel can be opened
-// by path (SQLite, ReadAt): the leased file, or for an encoded entry its
-// decoded copy, which replaces the lease's link at the same relative path so
-// that every path translation of the view still holds. Only a reader lease's
-// view decodes; a view over the capture directory itself never writes there.
-func (v *captureView) materialize(ctx context.Context, rel string) (string, error) {
-	file := filepath.Join(v.dir, filepath.FromSlash(rel))
-	entry, ok := v.manifest.version(rel)
-	if !ok || entry.Encoding == "" || v.decoded[rel] {
-		return file, nil
-	}
-	if !v.lease {
-		return "", fmt.Errorf("%s is stored %s-encoded and this reader holds no lease to decode it into", rel, entry.Encoding)
-	}
-	if err := materializeCaptured(ctx, file, file, *entry); err != nil {
-		return "", err
-	}
-	if v.decoded == nil {
-		v.decoded = map[string]bool{}
-	}
-	v.decoded[rel] = true
-	return file, nil
-}
-
-// open streams the original bytes of the captured entry rel for a reader that
-// only reads forward; nothing is written.
-func (v *captureView) open(rel string) (io.ReadCloser, error) {
-	file := filepath.Join(v.dir, filepath.FromSlash(rel))
-	encoding := ""
-	if entry, ok := v.manifest.version(rel); ok && !v.decoded[rel] {
-		encoding = entry.Encoding
-	}
-	return openCapturedContent(file, encoding)
 }

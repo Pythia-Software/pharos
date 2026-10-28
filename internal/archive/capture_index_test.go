@@ -1544,3 +1544,47 @@ func TestSourcePlanBoundsDiscoveryAndRechecksReadVersions(t *testing.T) {
 		t.Fatalf("later input was lost: %+v", result)
 	}
 }
+
+// Cold transcripts stored compressed index as uncompressed ones do: a normal
+// index over them decodes nothing, a forced reindex decodes them and builds
+// the same catalog as an uncompressed capture, and a file that changes again
+// is parsed from its new, uncompressed copy.
+func TestIndexEncodedTranscriptsDecodesOnlyWhatItParses(t *testing.T) {
+	config, catalog, target, claude := coldFilesFixture(t)
+	messages := func(c *Catalog) string {
+		t.Helper()
+		rows, err := queryMaps(c.DB, "SELECT c.native_id,m.role,m.text,m.created_at FROM messages m JOIN conversations c ON c.id=m.conversation_id ORDER BY c.native_id,m.created_at,m.text")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return jsonText(rows)
+	}
+	uncompressed := messages(catalog)
+	if done := compressColdFiles(t, config, catalog); len(done) != 2 {
+		t.Fatal("fixture transcripts were not compressed", done)
+	}
+	var decodes atomic.Int64
+	override(t, &capturedContentHook, func(string) { decodes.Add(1) })
+	parses := countParses(t)
+	if result := catalog.IndexCapture(t.Context(), target, nil); result.Error != nil || decodes.Load() != 0 || parses.Load() != 0 {
+		t.Fatalf("normal index over unchanged cold files: %+v, %d decodes, %d parses", result, decodes.Load(), parses.Load())
+	}
+	forced, _ := testCatalog(t)
+	if result := forced.IndexCapture(withIngestMode(t.Context(), ingestMode{force: true}), target, nil); result.Error != nil || decodes.Load() != 2 {
+		t.Fatalf("forced reindex: %+v, %d decodes", result, decodes.Load())
+	}
+	if got := messages(forced); got != uncompressed {
+		t.Fatalf("forced reindex of compressed transcripts differs:\n%s\nwant\n%s", got, uncompressed)
+	}
+	if left := temporariesUnder(t, target.Dir); len(left) != 0 {
+		t.Fatal("indexing left decoded copies", left)
+	}
+	appendSourceFile(t, filepath.Join(claude, "p", "cold-a.jsonl"), claudeLine("cold-a", "cold-a-new", "more", "/proj", 59))
+	if run := runCapture(t, config); !run.OK {
+		t.Fatal(run)
+	}
+	decodes.Store(0)
+	if result := catalog.IndexCapture(t.Context(), target, nil); result.Error != nil || decodes.Load() != 0 || conversationMessages(t, catalog, "cold-a") != 41 {
+		t.Fatalf("index after a cold file changed: %+v, %d decodes", result, decodes.Load())
+	}
+}

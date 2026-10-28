@@ -13,6 +13,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -1314,7 +1316,7 @@ func TestFreezeRetainedCopyFailureDoesNotPublish(t *testing.T) {
 func compressGenerations(t *testing.T, config Config) []compressedGeneration {
 	t.Helper()
 	var done []compressedGeneration
-	if err := compressCaptures(t.Context(), config, func(generation compressedGeneration) { done = append(done, generation) }); err != nil {
+	if err := compressCaptures(t.Context(), config, nil, func(generation compressedGeneration) { done = append(done, generation) }); err != nil {
 		t.Fatal(err)
 	}
 	return done
@@ -1625,7 +1627,7 @@ func TestCaptureCompressionRemembersWhatItLeft(t *testing.T) {
 		return nil
 	})
 	var done []compressedGeneration
-	err = compressCaptures(t.Context(), config, func(g compressedGeneration) { done = append(done, g) })
+	err = compressCaptures(t.Context(), config, nil, func(g compressedGeneration) { done = append(done, g) })
 	if err == nil || !strings.Contains(err.Error(), "does not match its manifest digest") || len(done) != 1 || done[0].Path != generations[2].Captured || encodes != 3 {
 		t.Fatalf("first pass: %v, compressed %+v, %d encodes", err, done, encodes)
 	}
@@ -1634,7 +1636,7 @@ func TestCaptureCompressionRemembersWhatItLeft(t *testing.T) {
 		t.Fatalf("outcomes: %+v", outcomes.Entries)
 	}
 	done = nil
-	if err = compressCaptures(t.Context(), config, func(g compressedGeneration) { done = append(done, g) }); err != nil || len(done) != 0 || encodes != 3 {
+	if err = compressCaptures(t.Context(), config, nil, func(g compressedGeneration) { done = append(done, g) }); err != nil || len(done) != 0 || encodes != 3 {
 		t.Fatalf("second pass read settled generations again: %v, %+v, %d encodes", err, done, encodes)
 	}
 }
@@ -1663,7 +1665,7 @@ func TestCaptureCompressionWaitsForVerifiedRecordExports(t *testing.T) {
 	pass := func(t *testing.T, config Config) (int, error) {
 		t.Helper()
 		compressed := 0
-		err := compressCaptures(t.Context(), config, func(compressedGeneration) { compressed++ })
+		err := compressCaptures(t.Context(), config, nil, func(compressedGeneration) { compressed++ })
 		return compressed, err
 	}
 	t.Run("no receipt yet", func(t *testing.T) {
@@ -1726,4 +1728,161 @@ func TestCaptureCompressionWaitsForVerifiedRecordExports(t *testing.T) {
 			t.Fatal("a replaced receipt with the same mtime was not tried again:", n, err)
 		}
 	})
+}
+
+// coldFilesFixture is a Claude capture, seen unchanged by a second capture
+// and indexed, whose transcripts are cold except recent.jsonl.
+func coldFilesFixture(t *testing.T) (Config, *Catalog, captureTarget, string) {
+	t.Helper()
+	useHost(t, "host-a")
+	override(t, &compressMinBytes, 1)
+	catalog, _ := testCatalog(t)
+	claude := filepath.Join(t.TempDir(), "claude")
+	for index, name := range []string{"cold-a", "cold-b"} {
+		lines := ""
+		for line := range 40 {
+			lines += claudeLine(name, fmt.Sprintf("%s-%d", name, line), strings.Repeat("compressible text ", 20), "/proj", index*40+line%60)
+		}
+		writeSourceFile(t, filepath.Join(claude, "p", name+".jsonl"), lines)
+	}
+	writeSourceFile(t, filepath.Join(claude, "p", "recent.jsonl"), claudeLine("recent", "recent-1", strings.Repeat("recent text ", 20), "/proj", 1))
+	recent := time.Now()
+	if err := os.Chtimes(filepath.Join(claude, "p", "recent.jsonl"), recent, recent); err != nil {
+		t.Fatal(err)
+	}
+	writeSourceFile(t, filepath.Join(claude, "p", "sessions-index.json"), `{"entries":[]}`)
+	config := captureTestConfig(t, SourceConfig{Name: "claude", Kind: "claude", Path: claude, Account: "local", Enabled: true})
+	runCapture(t, config)
+	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+	// The second capture finds the transcripts unchanged.
+	runCapture(t, config)
+	return config, catalog, captureTarget{Host: currentHost(), Source: "claude", Dir: capturedPath(config, "claude", "")}, claude
+}
+
+func compressColdFiles(t *testing.T, config Config, catalog *Catalog) []string {
+	t.Helper()
+	compressed := []string{}
+	if err := compressCaptures(t.Context(), config, catalog, func(g compressedGeneration) { compressed = append(compressed, g.Path) }); err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(compressed)
+	return compressed
+}
+
+func TestCaptureCompressesColdFiles(t *testing.T) {
+	config, catalog, target, claude := coldFilesFixture(t)
+	plan, err := planCapture(config.Sources[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint := func() string {
+		t.Helper()
+		c, err := sourceCaptureForTarget(t.Context(), target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		value, err := captureDeliveryFingerprint(t.Context(), config.Sources[0], plan, c)
+		if err != nil || value == "" {
+			t.Fatal("delivery fingerprint", value, err)
+		}
+		return value
+	}
+	delivered := fingerprint()
+
+	// Off, or without the index's record, nothing latest is compressed.
+	off := config
+	off.CaptureCompressAfterDays = 0
+	if done := compressColdFiles(t, off, catalog); len(done) != 0 {
+		t.Fatal("compressed latest files with capture_compress_after_days = 0", done)
+	}
+	if done := compressColdFiles(t, config, nil); len(done) != 0 {
+		t.Fatal("compressed latest files the index has not recorded", done)
+	}
+	done := compressColdFiles(t, config, catalog)
+	if want := []string{"files/p/cold-a.jsonl", "files/p/cold-b.jsonl"}; jsonText(done) != jsonText(want) {
+		t.Fatalf("compressed %v, want %v", done, want)
+	}
+	manifest := readCaptureManifest(t, config, "claude")
+	for _, file := range manifest.Files {
+		encoded := file.Encoding == captureEncodingZstd
+		if encoded != slices.Contains(done, file.Captured) || encoded && (!zstdOnDisk(t, capturedPath(config, "claude", file.Captured)) || file.StoredSize >= file.Size) {
+			t.Fatalf("%s stored as %q (%d of %d bytes)", file.Captured, file.Encoding, file.StoredSize, file.Size)
+		}
+	}
+	if manifest.Version != captureManifestVersion {
+		t.Fatal("manifest with encoded files is not the version older builds refuse", manifest.Version)
+	}
+	// Delivery fingerprints come from the manifest's original-byte fields.
+	if fingerprint() != delivered {
+		t.Fatal("compression changed the delivery fingerprint")
+	}
+	if err := validateCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
+		t.Fatal(err)
+	}
+	// An unchanged source leaves the encoded copies alone: they are intact by
+	// their stored size.
+	if result := captureResult(t, runCapture(t, config), "claude"); result.FilesCopied != 0 || result.FilesUnchanged != 4 {
+		t.Fatalf("capture over unchanged cold files: %+v", result)
+	}
+	// A cold file that changes again is recopied in full and uncompressed;
+	// a rewritten one keeps its encoded copy in history.
+	appendSourceFile(t, filepath.Join(claude, "p", "cold-a.jsonl"), claudeLine("cold-a", "cold-a-new", "more", "/proj", 59))
+	writeSourceFile(t, filepath.Join(claude, "p", "cold-b.jsonl"), claudeLine("cold-b", "cold-b-new", "rewritten", "/proj", 59))
+	writeSourceFile(t, filepath.Join(claude, "p", "recent.jsonl"), claudeLine("recent", "recent-2", strings.Repeat("rewritten recent ", 20), "/proj", 2))
+	if run := runCapture(t, config); !run.OK {
+		t.Fatal(run)
+	}
+	manifest = readCaptureManifest(t, config, "claude")
+	a, b, recent := manifestFile(t, manifest, "files/p/cold-a.jsonl"), manifestFile(t, manifest, "files/p/cold-b.jsonl"), manifestFile(t, manifest, "files/p/recent.jsonl")
+	if a.Encoding != "" || b.Encoding != "" || len(a.Previous) != 0 || len(b.Previous) != 1 || b.Previous[0].Encoding != captureEncodingZstd || len(recent.Previous) != 1 || recent.Previous[0].Encoding != "" {
+		t.Fatalf("after changes: a %+v, b %+v, recent %+v", a, b, recent)
+	}
+	if err := validateCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
+		t.Fatal(err)
+	}
+	// Superseded versions are cold by definition, whatever their age.
+	if done := compressColdFiles(t, config, nil); jsonText(done) != jsonText([]string{recent.Previous[0].Captured}) {
+		t.Fatal("superseded version compression:", done)
+	}
+	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+	if conversationMessages(t, catalog, "cold-a") != 41 || conversationMessages(t, catalog, "recent") == 0 {
+		t.Fatal("index after cold files changed", conversationMessages(t, catalog, "cold-a"))
+	}
+}
+
+// Only transcripts the index parses when they themselves change are stored
+// encoded; files every plan reads stay plain.
+func TestCaptureCompressesOnlyAllowlistedLatestFiles(t *testing.T) {
+	for _, test := range []struct {
+		kind, rel string
+		want      bool
+	}{
+		{"claude", "files/p/session.jsonl", true},
+		{"claude", "files/p/sessions-index.json", false},
+		{"codex", "files/sessions/2026/09/01/rollout-2026-09-01T00-00-00-x.jsonl", true},
+		{"codex", "files/session_index.jsonl", false},
+		{"codex", "files/history.jsonl", false},
+		{"antigravity", "files/brain/x/.system_generated/logs/transcript_full.jsonl", true},
+		{"antigravity", "files/annotations/x.pbtxt", false},
+		{"antigravity", "files/cli-logs/cli-1.log", false},
+		{"tl1", "files/transcripts/task/1-claude.jsonl", false},
+		{"conductor", "files/conductor.db", false},
+		{"claude", "history/20260901T000000.000000000Z/p/session.jsonl", false},
+	} {
+		if got := compressibleLatest(test.kind, test.rel); got != test.want {
+			t.Errorf("%s %s: %v, want %v", test.kind, test.rel, got, test.want)
+		}
+	}
+	// Retained-input sources keep the original inode in their durable
+	// revisions, so compressing their latest files would save nothing.
+	file := &capturedFile{Path: "/p/a.jsonl", Captured: "files/p/a.jsonl", Size: 1 << 20, MTimeNS: 1, CapturedAt: "2026-09-01T00:00:00Z", MissingSince: "2026-09-02T00:00:00Z"}
+	policy := compressPolicy{afterDays: 14, now: time.Now(), indexed: func(string, string, int64, int64) bool { return true }}
+	manifest := &captureManifest{Source: captureSourceInfo{Name: "claude", Kind: "claude"}, Files: []*capturedFile{file}}
+	if !coldLatest(t.TempDir(), manifest, file, policy) {
+		t.Fatal("a cold, indexed transcript was not eligible")
+	}
+	manifest.RetainedInputCapture = true
+	if coldLatest(t.TempDir(), manifest, file, policy) {
+		t.Fatal("a retained-input source's latest file was eligible")
+	}
 }

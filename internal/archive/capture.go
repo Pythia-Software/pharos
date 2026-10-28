@@ -123,6 +123,16 @@ type capturedFile struct {
 	CapturedAt   string            `json:"captured_at"`
 	MissingSince string            `json:"missing_since,omitempty"`
 	Previous     []capturedVersion `json:"previous,omitempty"`
+	// Encoding and StoredSize are as for capturedVersion: a cold latest file
+	// may be stored encoded (docs/capture-compression.md, phase 2).
+	Encoding   string `json:"encoding,omitempty"`
+	StoredSize int64  `json:"stored_size,omitempty"`
+}
+
+// version is the file's latest capture as a capturedVersion, the shape the
+// encoding helpers and pins work with.
+func (f *capturedFile) version() capturedVersion {
+	return capturedVersion{Captured: f.Captured, Size: f.Size, MTimeNS: f.MTimeNS, ObservedNS: f.ObservedNS, SHA256: f.SHA256, CapturedAt: f.CapturedAt, Encoding: f.Encoding, StoredSize: f.StoredSize}
 }
 
 // capturedVersion is a superseded capture kept under history/: a file whose
@@ -769,7 +779,7 @@ func (c *sourceCapture) captureFiles(items []captureItem, present map[string]boo
 		previous := c.files[rel]
 		if previous != nil {
 			previous.MissingSince = ""
-			if previous.Path == item.path && (c.session.recoveryID == "" || previous.RecoveryID == c.session.recoveryID) && previous.Size == info.Size() && previous.MTimeNS == info.ModTime().UnixNano() && c.intact(previous.Captured, previous.Size, previous.MTimeNS) {
+			if previous.Path == item.path && (c.session.recoveryID == "" || previous.RecoveryID == c.session.recoveryID) && previous.Size == info.Size() && previous.MTimeNS == info.ModTime().UnixNano() && c.intact(previous.Captured, previous.storedSize(), previous.MTimeNS) {
 				unchanged := true
 				if c.verifyDelivery {
 					digest, err := captureDeliveryDigest(c.ctx, item.path)
@@ -897,7 +907,7 @@ func (c *sourceCapture) copyOnce(item captureItem, previous *capturedFile) (*cap
 	defer digest.close()
 	// Appending keeps the previous capture as a prefix; anything else is a
 	// rewrite, and the previous capture is kept rather than overwritten.
-	keep := previous != nil && previous.SHA256 != "" && c.intact(previous.Captured, previous.Size, previous.MTimeNS)
+	keep := previous != nil && previous.SHA256 != "" && c.intact(previous.Captured, previous.storedSize(), previous.MTimeNS)
 	rewritten := keep
 	copied := int64(0)
 	if keep && c.session.recoveryID == "" && previous.Size <= size {
@@ -942,7 +952,7 @@ func (c *sourceCapture) copyOnce(item captureItem, previous *capturedFile) (*cap
 		entry.Previous = previous.Previous
 	}
 	if rewritten {
-		kept, err := c.preserve(capturedVersion{Captured: previous.Captured, Size: previous.Size, MTimeNS: previous.MTimeNS, ObservedNS: previous.ObservedNS, SHA256: previous.SHA256, CapturedAt: previous.CapturedAt}, true)
+		kept, err := c.preserve(previous.version(), true) // an encoded copy moves to history encoded
 		if err != nil {
 			os.Remove(temporary)
 			return nil, nil, err

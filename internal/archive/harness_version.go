@@ -189,8 +189,15 @@ func (c *Catalog) harnessSourcePath(ctx context.Context, origin, host, provider 
 		releaseLockFile(lock)
 		if err == nil {
 			cache.leases = append(cache.leases, input.Close)
-			cache.paths[host][origin] = input.Adapter.Config().Path
-			return cache.paths[host][origin], nil
+			// Its readers open the path: an encoded file is decoded into the
+			// lease first (a one-time enrichment, not every sync).
+			path, err := captureViewOf(input.Adapter).materialize(ctx, retained.file.Captured)
+			if err != nil {
+				cache.failures[host] = err
+				return "", err
+			}
+			cache.paths[host][origin] = path
+			return path, nil
 		}
 		cache.failures[host] = err
 	}

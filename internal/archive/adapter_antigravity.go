@@ -77,7 +77,7 @@ func (a *antigravityAdapter) transcripts() (map[string]string, error) {
 		}
 		logs := filepath.Join(brain, entry.Name(), filepath.FromSlash(antigravityLogs))
 		for _, name := range []string{"transcript_full.jsonl", "transcript.jsonl"} {
-			if info, err := os.Stat(filepath.Join(logs, name)); err == nil && info.Mode().IsRegular() {
+			if info, err := a.files().Stat(filepath.Join(logs, name)); err == nil && info.Mode().IsRegular() {
 				found[entry.Name()] = filepath.Join(logs, name)
 				break
 			}
@@ -562,7 +562,7 @@ groupsLoop:
 		})
 		parts := []sourcePart{}
 		for _, id := range ids {
-			if info, err := os.Stat(transcripts[id]); err == nil {
+			if info, err := a.files().Stat(transcripts[id]); err == nil {
 				parts = append(parts, sourcePart{item: a.original(transcripts[id]), size: info.Size(), version: info.ModTime().UnixNano(), signal: summaries[id].signal()})
 			} else {
 				if !errors.Is(err, os.ErrNotExist) {
@@ -632,7 +632,7 @@ func (a *antigravityAdapter) readPlannedGroup(rootID string, ids []string, parts
 		}
 		for _, transcript := range transcripts {
 			if a.original(transcript) == part.item {
-				info, err := os.Stat(transcript)
+				info, err := a.files().Stat(transcript)
 				if err != nil {
 					if !errors.Is(err, os.ErrNotExist) {
 						return fmt.Errorf("stat group %s after parse: %w", rootID, err)
@@ -700,7 +700,7 @@ func (a *antigravityAdapter) requestsPart(id string) (sourcePart, bool, error) {
 }
 
 func (a *antigravityAdapter) parseFile(id, path string, summary antigravitySummary) (WorkspaceRecord, sourcePart, error) {
-	file, err := os.Open(path)
+	file, err := a.files().Open(path)
 	if err != nil {
 		return WorkspaceRecord{}, sourcePart{}, err
 	}

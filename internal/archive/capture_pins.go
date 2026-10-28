@@ -271,8 +271,12 @@ func (c *sourceCapture) pinVersion(owner, purpose string, v capturedVersion, dep
 	if err != nil {
 		return preservationPin{}, err
 	}
+	// How the input is stored comes from this writer's inventory, not the
+	// caller: a plan made before a compression still pins the right bytes. A
+	// latest file keeps its encoding when its pin links it into history.
+	encoding := c.encodingOf(v.Captured)
 	if strings.HasPrefix(v.Captured, "files/") {
-		digest, size, err := fileSHA256Context(c.ctx, filepath.Join(c.dir, filepath.FromSlash(v.Captured)))
+		digest, size, err := capturedSHA256(c.ctx, filepath.Join(c.dir, filepath.FromSlash(v.Captured)), encoding)
 		if err != nil {
 			return preservationPin{}, err
 		}
@@ -280,6 +284,7 @@ func (c *sourceCapture) pinVersion(owner, purpose string, v capturedVersion, dep
 			return preservationPin{}, errors.New("latest pin input changed; reconcile inventory")
 		}
 		v.SHA256 = digest
+		v.Encoding = encoding
 		v, err = c.pinHistoryVersion(v)
 		if err != nil {
 			return preservationPin{}, err
@@ -288,10 +293,7 @@ func (c *sourceCapture) pinVersion(owner, purpose string, v capturedVersion, dep
 	if !safeRetainedPath(v.Captured) {
 		return preservationPin{}, errors.New("pin input is not immutable")
 	}
-	// How the input is stored comes from this writer's inventory, not the
-	// caller: a plan made before a compression still pins the right bytes.
 	file := filepath.Join(c.dir, filepath.FromSlash(v.Captured))
-	encoding := c.encodingOf(v.Captured)
 	digest, size, err := capturedSHA256(c.ctx, file, encoding)
 	if err != nil {
 		return preservationPin{}, err
@@ -521,7 +523,7 @@ func (c *sourceCapture) pinHistoryVersion(v capturedVersion) (capturedVersion, e
 			return v, e
 		}
 	}
-	hash, size, e := fileSHA256Context(c.ctx, to)
+	hash, size, e := capturedSHA256(c.ctx, to, v.Encoding)
 	if e != nil {
 		return v, e
 	}

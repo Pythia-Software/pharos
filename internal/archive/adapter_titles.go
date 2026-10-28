@@ -87,8 +87,8 @@ func (a *jsonlAdapter) codexNames() (map[string]transcriptName, error) {
 		return names, err
 	}
 	index := filepath.Join(a.config.Path, "session_index.jsonl")
-	if info, err := os.Stat(index); err == nil && info.Mode().IsRegular() {
-		file, err := os.Open(index)
+	if info, err := a.files().Stat(index); err == nil && info.Mode().IsRegular() {
+		file, err := a.files().Open(index)
 		if err != nil {
 			return nil, err
 		}
@@ -192,7 +192,7 @@ func (a *jsonlAdapter) transcriptNames(roots []string) (map[string]transcriptNam
 					continue
 				}
 			}
-			id, err := codexRolloutIdentity(path)
+			id, err := a.files().codexRolloutIdentity(path)
 			if err != nil {
 				return nil, err
 			}
@@ -209,7 +209,7 @@ func (a *jsonlAdapter) transcriptNames(roots []string) (map[string]transcriptNam
 		if !seen {
 			names = map[string]transcriptName{}
 			index := filepath.Join(dir, "sessions-index.json")
-			raw, version, err := readJSONVersion(index)
+			raw, version, err := a.files().ReadJSONVersion(index)
 			// The index is optional. A partial write or unreadable index must
 			// not prevent this directory (or its siblings) using transcripts.
 			// Its next successful read supplies a new incremental name signal.
@@ -232,8 +232,14 @@ func (a *jsonlAdapter) transcriptNames(roots []string) (map[string]transcriptNam
 }
 
 func codexRolloutIdentity(path string) (string, error) {
+	return sourceFiles{}.codexRolloutIdentity(path)
+}
+
+// codexRolloutIdentity reads only the rollout's header: for an encoded
+// rollout, the decoder stops after its first block.
+func (s sourceFiles) codexRolloutIdentity(path string) (string, error) {
 	fallback := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	file, err := os.Open(path)
+	file, err := s.Open(path)
 	if os.IsNotExist(err) {
 		return fallback, nil
 	}

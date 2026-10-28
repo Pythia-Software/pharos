@@ -243,6 +243,17 @@ func TestAntigravityIngestIsIncrementalAndCaptured(t *testing.T) {
 	catalog, config := testCatalog(t)
 	config.CaptureRoot = filepath.Join(t.TempDir(), "captures")
 	dir := antigravityFixture(t)
+	// Transcripts last written a month ago are cold (compressed below).
+	transcripts, _ := filepath.Glob(filepath.Join(dir, "brain", "*", filepath.FromSlash(antigravityLogs), "transcript*.jsonl"))
+	if len(transcripts) == 0 {
+		t.Fatal("fixture has no transcripts")
+	}
+	for _, transcript := range transcripts {
+		old := time.Now().AddDate(0, -1, 0)
+		if err := os.Chtimes(transcript, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
 	source := SourceConfig{Name: "antigravity-cli", Kind: "antigravity", Path: dir, Account: "local", Enabled: true}
 	config.Sources = []SourceConfig{source}
 	parses := countParses(t)
@@ -290,6 +301,28 @@ func TestAntigravityIngestIsIncrementalAndCaptured(t *testing.T) {
 	}
 	if a, b := countRows(t, catalog, "SELECT COUNT(*) FROM messages"), countRows(t, other, "SELECT COUNT(*) FROM messages"); a != b || a == 0 {
 		t.Fatalf("messages live %d, from capture %d", a, b)
+	}
+
+	// Cold transcripts the index recorded are stored compressed; another
+	// index of them, forced, reads them through the capture view.
+	override(t, &compressMinBytes, 1)
+	runCapture(t, config)
+	compressed := 0
+	if err := compressCaptures(t.Context(), config, other, func(compressedGeneration) { compressed++ }); err != nil || compressed == 0 {
+		t.Fatalf("compressed %d of %d transcripts: %v", compressed, len(transcripts), err)
+	}
+	forced, _ := testCatalog(t)
+	targets, err := captureTargets(config.CaptureRoot, []string{"host-a"}, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range targets {
+		if result := forced.IndexCapture(withIngestMode(t.Context(), ingestMode{force: true}), target, nil); result.Error != nil {
+			t.Fatal(result.Error)
+		}
+	}
+	if a, b := countRows(t, catalog, "SELECT COUNT(*) FROM messages"), countRows(t, forced, "SELECT COUNT(*) FROM messages"); a != b {
+		t.Fatalf("messages live %d, from compressed capture %d", a, b)
 	}
 }
 
