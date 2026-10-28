@@ -34,7 +34,7 @@ const labelingUsage = `usage:
   pharos labeling stop --dir DIR --job NAME
   pharos labeling reconcile --dir DIR --job NAME [--retry-unknown] [--retry-failed] [--requeue-held] [--retry-suspected-refusals] [--retry-tool-use]
   pharos labeling import-results --dir DIR --from OLD_DIR --job NAME
-  pharos labeling export --dir DIR --job NAME [--out DIR]`
+  pharos labeling export --dir DIR --job NAME [--out DIR] [--replace]`
 
 // runLabelingCLI runs the offline labeling commands. None of them opens the
 // catalog through OpenCatalog: prepare reads one read-only snapshot, and plan
@@ -74,10 +74,11 @@ func runLabelingCLI(configPath string, args []string, stdout, stderr io.Writer) 
 		dir := flags.String("dir", "", "dataset directory")
 		job := flags.String("job", "", "labeling job to export")
 		out := flags.String("out", "", "export directory (default DIR/exports/EXPORT_ID)")
+		replace := flags.Bool("replace", false, "rewrite a damaged or different export at the target")
 		if err := flags.Parse(args[1:]); err != nil || *dir == "" || *job == "" || flags.NArg() != 0 {
 			return errors.New(labelingUsage)
 		}
-		return runLabelingExport(*dir, *job, *out, stdout)
+		return runLabelingExport(*dir, *job, *out, *replace, stdout)
 	case "stop", "reconcile", "import-results":
 		flags := flag.NewFlagSet("labeling "+args[0], flag.ContinueOnError)
 		flags.SetOutput(stderr)

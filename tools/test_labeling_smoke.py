@@ -40,6 +40,29 @@ def implied(labels):
     return sorted(out)
 
 
+def masked(labels, uncertain=(), unsupported=()):
+    """The export's masked_labels rule, for invented rows."""
+    parents = {node["id"]: node["parent"] for node in TAXONOMY}
+
+    def descendants(label):
+        return {node["id"] for node in TAXONOMY if label in lineage(node["id"])[1:]}
+
+    def lineage(label):
+        out = [label]
+        while parents[out[-1]]:
+            out.append(parents[out[-1]])
+        return out
+
+    out = set()
+    for label in list(uncertain) + list(unsupported):
+        out |= set(lineage(label)) | descendants(label)
+    for label in labels:
+        out |= descendants(label)
+    for label in labels:
+        out -= set(lineage(label))
+    return sorted(out)
+
+
 def item(number, split, text, labels=None, status="usable", uncertain=(), unsupported=None, seen_in_train=False,
          duplicate_of="", short=False, quote=None):
     """An invented item: its input, provenance and label rows."""
@@ -66,6 +89,7 @@ def item(number, split, text, labels=None, status="usable", uncertain=(), unsupp
         "label": {"item_id": item_id, "unit_id": "u_%03d" % number, "split": split, "status": status, "outcome": "usable" if usable else status,
                   "labels": labels if usable else None, "uncertain_labels": list(uncertain) if usable else None,
                   "unsupported_labels": (unsupported or {}) if usable else None, "implied_ancestors": implied(labels) if usable else None,
+                  "masked_labels": masked(labels, uncertain, unsupported or {}) if usable else None,
                   "need_context": False, "returned": None if usable else {"labels": labels, "uncertain_labels": []},
                   "evidence": evidence, "issues": [], "flags": []},
     }
@@ -122,6 +146,9 @@ def write_export(directory, items, units=(), tamper=None):
         data = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows).encode("utf-8")
         (directory / name).write_bytes(data)
         manifest_files[name] = {"sha256": hashlib.sha256(data).hexdigest(), "rows": len(rows), "bytes": len(data)}
+    heldout = json.dumps({"label_support": {}}).encode("utf-8")
+    (directory / smoke.HELDOUT_MANIFEST).write_bytes(heldout)
+    manifest_files[smoke.HELDOUT_MANIFEST] = {"sha256": hashlib.sha256(heldout).hexdigest(), "bytes": len(heldout)}
     manifest = {"export_version": smoke.EXPORT_VERSION, "export_id": "e_test", "files": manifest_files, "taxonomy": TAXONOMY}
     (directory / smoke.MANIFEST).write_text(json.dumps(manifest))
     return directory
@@ -232,7 +259,9 @@ class ExportCheckTests(unittest.TestCase):
         self.assertEqual(test["all"]["rows"], 4)
         self.assertTrue(test["all"]["labels"][INVESTIGATE]["scored"])
         self.assertEqual(test["all"]["labels"][INVESTIGATE]["support"], 3)
-        # Two positives cannot be scored.
+        # Every taxonomy label is reported, zero-support ones unscored.
+        self.assertEqual(set(test["all"]["labels"]), {node["id"] for node in TAXONOMY})
+        self.assertEqual(test["all"]["labels"]["P.request.work.verify"], {"support": 0, "scored": False, "reason": "fewer than 3 positives"})
         self.assertEqual(test["common_short_text"]["rows"], 1)
         self.assertEqual(set(report["evaluation"]), {"test", "fresh"})
         with contextlib.redirect_stdout(io.StringIO()) as out:
@@ -251,7 +280,7 @@ class ExportCheckTests(unittest.TestCase):
         real_open = builtins.open
 
         def guarded(path, *args, **kwargs):
-            if os.path.basename(str(path)) in (smoke.LABELS_HELDOUT, smoke.UNITS_HELDOUT):
+            if os.path.basename(str(path)) in smoke.HELDOUT_FILES:
                 raise AssertionError("training opened %s" % path)
             return real_open(path, *args, **kwargs)
 
@@ -262,17 +291,25 @@ class ExportCheckTests(unittest.TestCase):
         self.assertEqual(smoke.train(str(export), manifest), model)
 
     def test_rows_without_a_say_are_not_negatives(self):
-        parents = {node["id"]: node["parent"] for node in TAXONOMY}
-        row = {"labels": [WORK], "uncertain_labels": [FINDING], "unsupported_labels": {"C.report": "in_marker"}, "implied_ancestors": implied([WORK])}
-        self.assertEqual(smoke.label_target(row, WORK, parents), 1)
-        self.assertIsNone(smoke.label_target(row, FINDING, parents))
-        self.assertIsNone(smoke.label_target(row, "C.report", parents))
+        row = {"labels": [WORK], "uncertain_labels": [FINDING], "unsupported_labels": {"C.report": "in_marker"}, "implied_ancestors": implied([WORK]),
+               "masked_labels": masked([WORK], [FINDING], ["C.report"])}
+        self.assertEqual(row["masked_labels"], ["C", "C.report", FINDING, INVESTIGATE, "P.request.work.verify"])
+        self.assertEqual(smoke.label_target(row, WORK), 1)
         # Ancestors of a positive are positives for their own classifier.
-        self.assertEqual(smoke.label_target(row, "P.request", parents), 1)
-        self.assertEqual(smoke.label_target(row, "P", parents), 1)
+        self.assertEqual(smoke.label_target(row, "P.request"), 1)
+        self.assertEqual(smoke.label_target(row, "P"), 1)
+        # Uncertain and unsupported labels and their relatives say nothing:
+        # C is implied by the uncertain finding, so it is no negative.
+        for label in (FINDING, "C.report", "C"):
+            self.assertIsNone(smoke.label_target(row, label), label)
         # A broad parent is not a positive, nor a negative, for its children.
-        self.assertIsNone(smoke.label_target(row, INVESTIGATE, parents))
-        self.assertEqual(smoke.label_target(row, "C", parents), 0)
+        self.assertIsNone(smoke.label_target(row, INVESTIGATE))
+        # An uncertain leaf masks its parents; an unrelated label is negative.
+        leaf = {"labels": [], "uncertain_labels": [INVESTIGATE], "unsupported_labels": {}, "implied_ancestors": [],
+                "masked_labels": masked([], [INVESTIGATE])}
+        self.assertEqual(leaf["masked_labels"], ["P", "P.request", WORK, INVESTIGATE])
+        self.assertIsNone(smoke.label_target(leaf, WORK))
+        self.assertEqual(smoke.label_target(leaf, FINDING), 0)
 
     def test_rejects_a_changed_file(self):
         export = write_export(self.path, invented_items())
@@ -315,6 +352,12 @@ class ExportCheckTests(unittest.TestCase):
 
         with self.assertRaisesRegex(smoke.ExportError, "must not see"):
             smoke.verify_export(str(write_export(self.path, invented_items(), tamper=label_in_input)))
+
+        def unmasked(files):
+            files[smoke.LABELS][0]["masked_labels"] = None
+
+        with self.assertRaisesRegex(smoke.ExportError, "status usable"):
+            smoke.verify_export(str(write_export(self.path, invented_items(), tamper=unmasked)))
 
         def refused_as_negative(files):
             row = next(row for row in files[smoke.LABELS] if row["status"] == "refused")

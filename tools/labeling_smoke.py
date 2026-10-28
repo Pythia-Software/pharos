@@ -38,6 +38,8 @@ LABELS_HELDOUT = "labels-heldout.jsonl"
 UNITS = "unit-labels.jsonl"
 UNITS_HELDOUT = "unit-labels-heldout.jsonl"
 MANIFEST = "export-manifest.json"
+HELDOUT_MANIFEST = "heldout-manifest.json"
+HELDOUT_FILES = (LABELS_HELDOUT, UNITS_HELDOUT, HELDOUT_MANIFEST)
 DATA_FILES = (INPUTS, PROVENANCE, LABELS, LABELS_HELDOUT, UNITS, UNITS_HELDOUT)
 TRAINING_SPLITS = ("train", "dev")
 USABLE = "usable"
@@ -195,7 +197,7 @@ def verify_export(export_dir):
     range against its text. Returns a summary; raises ExportError."""
     manifest = load_manifest(export_dir)
     files = manifest.get("files", {})
-    for name in DATA_FILES:
+    for name in DATA_FILES + (HELDOUT_MANIFEST,):
         if name not in files:
             raise ExportError("the manifest lists no %s" % name)
     for name, expected in sorted(files.items()):
@@ -206,7 +208,7 @@ def verify_export(export_dir):
             raise ExportError("cannot read %s: %s" % (name, error))
         if sha256(data) != expected["sha256"] or len(data) != expected["bytes"]:
             raise ExportError("%s does not match the manifest's hash" % name)
-        if data.count(b"\n") != expected["rows"]:
+        if "rows" in expected and data.count(b"\n") != expected["rows"]:
             raise ExportError("%s has %d rows, the manifest says %d" % (name, data.count(b"\n"), expected["rows"]))
 
     inputs = read_jsonl(os.path.join(export_dir, INPUTS))
@@ -265,7 +267,7 @@ def verify_export(export_dir):
             if (allowed is not None) != in_training:
                 raise ExportError("%s holds item %s of split %s" % (name, item, row["split"]))
             usable = row["status"] in LABELED
-            if usable != isinstance(row["labels"], list) or (row["labels"] is None) != (row["implied_ancestors"] is None):
+            if usable != isinstance(row["labels"], list) or any((row["labels"] is None) != (row[key] is None) for key in ("implied_ancestors", "masked_labels")):
                 raise ExportError("%s: item %s has status %s but labels %r" % (name, item, row["status"], row["labels"]))
             for evidence in row["evidence"]:
                 for occurrence in evidence.get("occurrences") or []:
@@ -285,31 +287,16 @@ def verify_export(export_dir):
 # ---------------------------------------------------------------- training
 
 
-def taxonomy_parents(manifest):
-    return {node["id"]: node["parent"] for node in manifest["taxonomy"]}
-
-
-def ancestors(label, parents):
-    out = []
-    parent = parents.get(label, "")
-    while parent:
-        out.append(parent)
-        parent = parents.get(parent, "")
-    return out
-
-
-def label_target(row, label, parents):
+def label_target(row, label):
     """1 or 0 for a labeled row, None when the row says nothing about label.
-    A positive's ancestors are positives (ancestors are implied). Uncertain
-    and unsupported labels say nothing, nor do the children of a returned
-    broad parent: its subtype was left open, so they are neither."""
+    A positive's ancestors are positives (ancestors are implied). The export
+    lists in masked_labels what says nothing: uncertain and unsupported
+    labels with their ancestors and descendants, and the children of a
+    returned broad parent (its subtype was left open)."""
     if label in row["labels"] or label in row["implied_ancestors"]:
         return 1
-    if label in row["uncertain_labels"] or label in row["unsupported_labels"]:
+    if label in row["masked_labels"]:
         return None
-    for ancestor in ancestors(label, parents):
-        if ancestor in row["labels"]:
-            return None
     return 0
 
 
@@ -347,14 +334,13 @@ def train(export_dir, manifest, include_need_context=False):
     """Fits the model on the train split's usable rows of labels.jsonl (and
     its usable_need_context rows if asked)."""
     rows, skipped, left_out = examples(export_dir, LABELS, ("train",), False, include_need_context)
-    parents = taxonomy_parents(manifest)
     feats = [features(row["text"]) for row in rows]
     model = {"format": MODEL_FORMAT, "featurizer": dict(FEATURIZER), "threshold": THRESHOLD, "training": dict(TRAINING),
              "export_id": manifest["export_id"], "train_rows": len(rows), "train_skipped": skipped, "need_context_left_out": left_out,
              "include_need_context": include_need_context, "labels": [], "untrained_labels": []}
     for node in manifest["taxonomy"]:
         label = node["id"]
-        data = [(f, label_target(row, label, parents)) for f, row in zip(feats, rows)]
+        data = [(f, label_target(row, label)) for f, row in zip(feats, rows)]
         data = [(f, y) for f, y in data if y is not None]
         positives = sum(y for _, y in data)
         if positives == 0 or positives == len(data):
@@ -381,7 +367,7 @@ def train(export_dir, manifest, include_need_context=False):
 # -------------------------------------------------------------- evaluation
 
 
-def metrics(rows, model, parents, labels):
+def metrics(rows, model, labels):
     scored = {}
     entries = {entry["label"]: entry for entry in model["labels"]}
     weights = {label: {bucket: w for bucket, w in entry["weights"]} for label, entry in entries.items()}
@@ -390,7 +376,7 @@ def metrics(rows, model, parents, labels):
     for label in labels:
         tp = fp = fn = support = 0
         for f, row in zip(feats, rows):
-            y = label_target(row, label, parents)
+            y = label_target(row, label)
             if y is None:
                 continue
             p = 0.0
@@ -401,8 +387,6 @@ def metrics(rows, model, parents, labels):
             tp += int(predicted and y == 1)
             fp += int(predicted and y == 0)
             fn += int(not predicted and y == 1)
-        if support == 0 and tp + fp == 0:
-            continue
         if support < MIN_EVAL_POSITIVES:
             per_label[label] = {"support": support, "scored": False, "reason": "fewer than %d positives" % MIN_EVAL_POSITIVES}
             continue
@@ -429,7 +413,6 @@ def metrics(rows, model, parents, labels):
 def evaluate(export_dir, manifest, model, include_need_context=False):
     """Scores the held-out test and fresh splits, without seen_in_train rows,
     with common_short_text reported as its own stratum."""
-    parents = taxonomy_parents(manifest)
     labels = [node["id"] for node in manifest["taxonomy"]]
     report = {}
     for split in EVALUATION_SPLITS:
@@ -438,8 +421,8 @@ def evaluate(export_dir, manifest, model, include_need_context=False):
             continue
         short = [row for row in rows if row["common_short_text"]]
         other = [row for row in rows if not row["common_short_text"]]
-        report[split] = {"skipped": skipped, "all": metrics(rows, model, parents, labels),
-                         "common_short_text": metrics(short, model, parents, labels), "other": metrics(other, model, parents, labels)}
+        report[split] = {"skipped": skipped, "all": metrics(rows, model, labels),
+                         "common_short_text": metrics(short, model, labels), "other": metrics(other, model, labels)}
     return report
 
 

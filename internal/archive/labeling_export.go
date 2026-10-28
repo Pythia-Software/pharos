@@ -36,12 +36,15 @@ const (
 // trainer decides); every other status keeps the teacher's reply apart
 // (returned) and is never a negative.
 const (
-	exportUsable            = "usable"
-	exportNeedContext       = "usable_need_context"
-	exportToolUse           = "tool_use"
-	exportUnlabeled         = "unlabeled"
-	exportPartial           = "partial"
-	labelingSplitUnassigned = "unassigned"
+	exportUsable      = "usable"
+	exportNeedContext = "usable_need_context"
+	exportToolUse     = "tool_use"
+	exportUnlabeled   = "unlabeled"
+	exportPartial     = "partial"
+	// exportTransformUnverified: a decoded piece of the item could not be
+	// matched to its encoded source bytes; its labels are not published.
+	exportTransformUnverified = "transform_unverified"
+	labelingSplitUnassigned   = "unassigned"
 )
 
 // The export's files. Labels of held-out splits are in the -heldout files.
@@ -53,6 +56,9 @@ const (
 	exportUnits         = "unit-labels.jsonl"
 	exportUnitsHeldOut  = "unit-labels-heldout.jsonl"
 	exportManifest      = "export-manifest.json"
+	// exportHeldOutManifest holds the held-out splits' aggregates (label
+	// support, outcomes, strata), so the manifest a trainer reads has none.
+	exportHeldOutManifest = "heldout-manifest.json"
 )
 
 var labelingExportFiles = []string{exportInputs, exportProvenance, exportLabels, exportLabelsHeldOut, exportUnits, exportUnitsHeldOut}
@@ -108,7 +114,13 @@ type labelingExportLabel struct {
 	// ImpliedAncestors are the ancestors of the positives, apart: a child
 	// implies its parent, a parent never implies a child.
 	ImpliedAncestors []string `json:"implied_ancestors"`
-	NeedContext      *bool    `json:"need_context"`
+	// MaskedLabels say nothing for this row (neither positive nor
+	// negative): uncertain and unsupported labels with their ancestors and
+	// descendants, and the descendants of a positive (a returned broad
+	// parent leaves its subtype open), less the positives and their
+	// ancestors.
+	MaskedLabels []string `json:"masked_labels"`
+	NeedContext  *bool    `json:"need_context"`
 	// Returned is what the teacher returned for a row that is not usable.
 	Returned *labelingExportReturned `json:"returned"`
 	// Evidence is as the ledger stored it (quotes, statuses, occurrences).
@@ -209,6 +221,7 @@ type labelingExportUnit struct {
 	UnsupportedLabels []string                  `json:"unsupported_labels"`
 	UncertainLabels   []string                  `json:"uncertain_labels"`
 	ImpliedAncestors  []string                  `json:"implied_ancestors"`
+	MaskedLabels      []string                  `json:"masked_labels"`
 	NeedContext       *bool                     `json:"need_context"`
 	Chunks            []labelingExportUnitChunk `json:"chunks"`
 }
@@ -368,8 +381,10 @@ func labelingExportStatus(result *labelingExportResult) string {
 
 // exportLabeling writes a training export of one job and returns its
 // directory and manifest. It reads the dataset in one read-only
-// transaction and writes nothing but the export.
-func exportLabeling(ctx context.Context, dir, job, out string) (string, map[string]any, error) {
+// transaction and writes nothing but the export. An identical, intact
+// export already at the target is kept; replace rewrites a damaged or
+// different export there.
+func exportLabeling(ctx context.Context, dir, job, out string, replace bool) (string, map[string]any, error) {
 	if !labelingJobName.MatchString(job) {
 		return "", nil, fmt.Errorf("job name %q: use letters, digits, '.', '_' and '-'", job)
 	}
@@ -424,10 +439,18 @@ func exportLabeling(ctx context.Context, dir, job, out string) (string, map[stri
 	}
 	if existing, err := os.ReadFile(filepath.Join(out, exportManifest)); err == nil {
 		written, _ := os.ReadFile(filepath.Join(temporary, exportManifest))
+		problem := "holds a different export"
 		if string(existing) == string(written) {
-			return out, manifest, nil
+			if problem = labelingExportIntact(out, manifest); problem == "" {
+				return out, manifest, nil
+			}
 		}
-		return "", nil, fmt.Errorf("%s already holds a different export; choose another --out", out)
+		if !replace {
+			return "", nil, fmt.Errorf("%s %s; pass --replace to rewrite it, or choose another --out", out, problem)
+		}
+		if err := os.RemoveAll(out); err != nil {
+			return "", nil, err
+		}
 	}
 	if entries, err := os.ReadDir(out); err == nil {
 		if len(entries) > 0 {
@@ -445,6 +468,36 @@ func exportLabeling(ctx context.Context, dir, job, out string) (string, map[stri
 		handle.Close()
 	}
 	return out, manifest, nil
+}
+
+// labelingExportIntact checks every file an export's manifest lists
+// against its hash and size; it returns what is wrong, or "".
+func labelingExportIntact(dir string, manifest map[string]any) string {
+	files, _ := manifest["files"].(map[string]any)
+	for _, name := range sortedKeys(files) {
+		entry, _ := files[name].(map[string]any)
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			return "has an export whose " + name + " is missing"
+		}
+		sum := sha256.Sum256(data)
+		if hex.EncodeToString(sum[:]) != entry["sha256"] || int64(len(data)) != toInt64(entry["bytes"]) {
+			return "has an export whose " + name + " does not match its manifest (damaged)"
+		}
+	}
+	return ""
+}
+
+func toInt64(value any) int64 {
+	switch v := value.(type) {
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case float64:
+		return int64(v)
+	}
+	return -1
 }
 
 // writeLabelingExport writes the export's files into dir from one read
@@ -528,7 +581,13 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 	if err != nil {
 		return nil, err
 	}
-	statusRank := map[string]int{"priced": 1, "assumed": 2, "estimated": 3, "estimated_upper_bound": 4, "partial": 5, "unpriced": 6}
+	// An unknown (newer) cost status ranks worst, so it is never hidden.
+	statusRank := func(status string) int {
+		if rank, ok := map[string]int{"": 0, "priced": 1, "assumed": 2, "estimated": 3, "estimated_upper_bound": 4, "partial": 5, "unpriced": 6}[status]; ok {
+			return rank
+		}
+		return 7
+	}
 	for _, row := range usageRows {
 		info := attempts[text(row, "attempt_id")]
 		if info == nil {
@@ -541,7 +600,7 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 			}
 			info.cost = &sum
 		}
-		if status := text(row, "cost_status"); statusRank[status] > statusRank[info.costStatus] || statusRank[status] == 0 && info.costStatus == "" {
+		if status := text(row, "cost_status"); statusRank(status) > statusRank(info.costStatus) {
 			info.costStatus = status
 		}
 	}
@@ -631,39 +690,21 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 		}
 	}()
 
-	// Counts for the manifest.
-	labelSupport := map[string]map[string]map[string]int{}
-	for _, label := range taxonomyOrder {
-		labelSupport[label] = map[string]map[string]int{}
+	// Aggregates for the manifests: training splits in the export manifest,
+	// held-out splits in the held-out manifest.
+	children := map[string][]string{}
+	for _, id := range taxonomyOrder {
+		if parents[id] != "" {
+			children[parents[id]] = append(children[parents[id]], id)
+		}
 	}
-	support := func(label, split, kind string) {
-		if labelSupport[label] == nil {
-			labelSupport[label] = map[string]map[string]int{}
+	training, heldOut := newLabelingExportAggregates(), newLabelingExportAggregates()
+	side := func(split string) *labelingExportAggregates {
+		if labelingTrainingSplit(split) {
+			return training
 		}
-		if labelSupport[label][split] == nil {
-			labelSupport[label][split] = labelingSupportZero()
-		}
-		labelSupport[label][split][kind]++
+		return heldOut
 	}
-	splitsSeen := map[string]bool{}
-	byDimension := map[string]map[string]map[string]int{}
-	count := func(dimension, value, status string) {
-		if byDimension[dimension] == nil {
-			byDimension[dimension] = map[string]map[string]int{}
-		}
-		if byDimension[dimension][value] == nil {
-			byDimension[dimension][value] = map[string]int{}
-		}
-		byDimension[dimension][value][status]++
-	}
-	strata := map[string]map[string]int{}
-	stratum := func(split, name string) {
-		if strata[split] == nil {
-			strata[split] = map[string]int{"duplicates": 0, "seen_in_train": 0, "common_short_text": 0, "cross_split_duplicate": 0}
-		}
-		strata[split][name]++
-	}
-	flagCounts := map[string]int{}
 	familySplits := map[string]map[string]bool{}
 	transforms := map[string]int{"verified": 0, "unverified": 0}
 	merges := map[string]*labelingExportUnit{}
@@ -732,7 +773,8 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 				prov.Markers = append(prov.Markers, [2]int{max(marker[0], visibleStart) - visibleStart, min(marker[1], visibleEnd) - visibleStart})
 			}
 		}
-		if prov.SourceRanges, err = labelingExportSourceRanges(input.ItemID, sourceRanges, message, visible, visibleStart, visibleEnd, prov.Pieces, transforms); err != nil {
+		unverified := 0
+		if prov.SourceRanges, unverified, err = labelingExportSourceRanges(input.ItemID, sourceRanges, message, visible, visibleStart, visibleEnd, prov.Pieces, transforms); err != nil {
 			return nil, err
 		}
 
@@ -740,6 +782,9 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 		history := results[input.ItemID]
 		result := labelingAuthoritative(history)
 		status := labelingExportStatus(result)
+		if unverified > 0 && labelingExportLabeled(status) {
+			status = exportTransformUnverified
+		}
 		label := labelingExportLabel{ItemID: input.ItemID, UnitID: input.UnitID, Split: input.Split, Status: status, Outcome: "no_result",
 			Evidence: json.RawMessage("[]"), Issues: []string{}, Flags: []string{}, Teacher: teacher}
 		label.Receipt.History = []labelingExportAttempt{}
@@ -804,56 +849,48 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 				sort.Strings(label.Labels)
 				sort.Strings(label.UncertainLabels)
 				label.ImpliedAncestors = labelingAncestors(label.Labels, parents)
+				label.MaskedLabels = labelingMaskedLabels(label.Labels, label.UncertainLabels, sortedKeys(label.UnsupportedLabels), parents, children)
 			} else {
 				label.Returned = &labelingExportReturned{Labels: defaultSlice(result.labels), UncertainLabels: defaultSlice(result.uncertain)}
 			}
 		}
+		aggregates := side(input.Split)
+		aggregates.splits[input.Split] = true
 		for _, flag := range label.Flags {
-			flagCounts[flag]++
+			aggregates.flags[flag]++
 		}
-		splitsSeen[input.Split] = true
+		if !labelingExportLabeled(status) {
+			aggregates.coverage[status]++
+			if slices.Contains(label.Flags, "refused_copacked_unresolved") {
+				aggregates.coverage["refused_copacked_unresolved"]++
+			}
+		}
 		if labelingExportLabeled(status) {
 			prefix := ""
 			if status == exportNeedContext {
 				prefix = "need_context_"
 			}
-			for _, value := range label.Labels {
-				support(value, input.Split, prefix+"positive")
-			}
-			for value := range label.UnsupportedLabels {
-				support(value, input.Split, prefix+"unsupported")
-			}
-			for _, value := range label.UncertainLabels {
-				support(value, input.Split, prefix+"uncertain")
-			}
-			for _, value := range label.ImpliedAncestors {
-				support(value, input.Split, prefix+"implied")
+			for kind, values := range map[string][]string{"positive": label.Labels, "unsupported": sortedKeys(label.UnsupportedLabels),
+				"uncertain": label.UncertainLabels, "implied": label.ImpliedAncestors, "masked": label.MaskedLabels} {
+				for _, value := range values {
+					aggregates.support(value, input.Split, prefix+kind)
+				}
 			}
 		}
 		depthKey := "unresolved"
 		if input.Depth != nil {
 			depthKey = fmt.Sprint(*input.Depth)
 		}
-		count("split", input.Split, status)
-		count("cohort", input.Cohort, status)
-		count("provider", input.Provider, status)
-		count("depth", depthKey, status)
-		count("length_bucket", prov.LengthBucket, status)
-		count("outcome", label.Outcome, status)
-		if strata[input.Split] == nil {
-			strata[input.Split] = map[string]int{"duplicates": 0, "seen_in_train": 0, "common_short_text": 0, "cross_split_duplicate": 0}
+		for dimension, value := range map[string]string{"split": input.Split, "cohort": input.Cohort, "provider": input.Provider, "depth": depthKey,
+			"length_bucket": prov.LengthBucket, "outcome": label.Outcome} {
+			aggregates.count(dimension, value, status)
 		}
-		if prov.DuplicateOf != "" {
-			stratum(input.Split, "duplicates")
-		}
-		if prov.SeenInTrain {
-			stratum(input.Split, "seen_in_train")
-		}
-		if prov.CommonShortText {
-			stratum(input.Split, "common_short_text")
-		}
-		if prov.CrossSplitDuplicate {
-			stratum(input.Split, "cross_split_duplicate")
+		aggregates.stratum(input.Split, "")
+		for name, marked := range map[string]bool{"duplicates": prov.DuplicateOf != "", "seen_in_train": prov.SeenInTrain,
+			"common_short_text": prov.CommonShortText, "cross_split_duplicate": prov.CrossSplitDuplicate} {
+			if marked {
+				aggregates.stratum(input.Split, name)
+			}
 		}
 		family := defaultString(prov.FamilyID, "conversation:"+prov.ConversationID)
 		if familySplits[family] == nil {
@@ -891,10 +928,10 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 
 	// Chunked units: union of the chunks' labels, usable only when every
 	// chunk is.
-	chunked := map[string]int{"units": 0, exportUsable: 0, exportNeedContext: 0, exportPartial: 0}
 	for _, unit := range sortedKeys(merges) {
 		merge := merges[unit]
 		sort.Slice(merge.Chunks, func(i, j int) bool { return merge.Chunks[i].Index < merge.Chunks[j].Index })
+		chunked := side(merge.Split).chunked
 		chunked["units"]++
 		complete := len(merge.Chunks) == merge.ChunkCount
 		for _, chunk := range merge.Chunks {
@@ -926,6 +963,7 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 			}
 			merge.Labels, merge.UnsupportedLabels, merge.UncertainLabels = sortedKeys(positives), sortedKeys(unsupported), sortedKeys(uncertain)
 			merge.ImpliedAncestors = labelingAncestors(merge.Labels, parents)
+			merge.MaskedLabels = labelingMaskedLabels(merge.Labels, merge.UncertainLabels, merge.UnsupportedLabels, parents, children)
 			merge.NeedContext = &need
 			if need {
 				merge.Status = exportNeedContext
@@ -952,34 +990,38 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 		files[name] = map[string]any{"sha256": sum, "rows": writer.rows, "bytes": writer.bytes}
 		fmt.Fprintf(digest, "%s %s\n", name, sum)
 	}
-	for _, label := range labelSupport {
-		for split := range splitsSeen {
-			if label[split] == nil {
-				label[split] = labelingSupportZero()
-			}
-		}
-	}
-	familiesBySplit := map[string]int{}
 	spanning := 0
-	for _, splits := range familySplits {
+	for family, splits := range familySplits {
 		if len(splits) > 1 {
 			spanning++
 		}
 		for split := range splits {
-			familiesBySplit[split]++
+			side(split).families[split] = append(side(split).families[split], family)
 		}
 	}
+	heldOutManifest := map[string]any{
+		"export_version": labelingExportVersion,
+		"statement": "Aggregates of the held-out splits (test, fresh, quarantine, unassigned). Kept out of export-manifest.json so a trainer reading " +
+			"that manifest learns nothing about held-out labels; open this only for final evaluation.",
+	}
+	for key, value := range heldOut.json(taxonomyOrder) {
+		heldOutManifest[key] = value
+	}
+	heldOutData, err := json.MarshalIndent(heldOutManifest, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	heldOutData = append(heldOutData, '\n')
+	if err := writeFileAtomic(filepath.Join(dir, exportHeldOutManifest), heldOutData, 0o600); err != nil {
+		return nil, err
+	}
+	heldOutSum := sha256.Sum256(heldOutData)
+	files[exportHeldOutManifest] = map[string]any{"sha256": hex.EncodeToString(heldOutSum[:]), "bytes": len(heldOutData)}
+	fmt.Fprintf(digest, "%s %x\n", exportHeldOutManifest, heldOutSum)
 	taxonomy := []map[string]any{}
 	for _, id := range taxonomyOrder {
 		taxonomy = append(taxonomy, map[string]any{"id": id, "parent": parents[id]})
 	}
-	heldOut := []string{}
-	for split := range splitsSeen {
-		if !labelingTrainingSplit(split) {
-			heldOut = append(heldOut, split)
-		}
-	}
-	sort.Strings(heldOut)
 	var selection any
 	json.Unmarshal([]byte(text(jobRow, "selection")), &selection)
 	complete := true
@@ -1003,28 +1045,26 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 			"complete": complete},
 		"contracts": map[string]any{"export": labelingExportVersion, "chunk_merge": labelingMergeVersion, "units": labelingUnitsVersion,
 			"chunking": labelingChunkVersion, "splits": labelingSplitsVersion, "sentences": labelingSentenceVersion, "transform": feedbackJSONTransform},
-		"files":           files,
-		"training_files":  []string{exportLabels, exportUnits},
-		"heldout_files":   []string{exportLabelsHeldOut, exportUnitsHeldOut},
-		"training_splits": []string{"dev", "train"},
-		"heldout_splits":  heldOut,
-		"items":           itemsWritten,
-		"counts":          byDimension,
-		"label_support":   labelSupport,
-		"strata":          strata,
-		"families":        map[string]any{"by_split": familiesBySplit, "in_several_splits": spanning},
-		"chunked_units":   chunked,
-		"flags":           flagCounts,
-		"transforms":      transforms,
-		"taxonomy":        taxonomy,
+		"files":                      files,
+		"training_files":             []string{exportLabels, exportUnits},
+		"heldout_files":              []string{exportLabelsHeldOut, exportUnitsHeldOut, exportHeldOutManifest},
+		"training_splits":            []string{"dev", "train"},
+		"heldout_splits":             sortedKeys(heldOut.splits),
+		"items":                      itemsWritten,
+		"families_in_several_splits": spanning,
+		"transforms":                 transforms,
+		"taxonomy":                   taxonomy,
+		"aggregates": "Counts, label support, strata, coverage, flags, families and chunked units below cover the training splits (train, dev) only; " +
+			"the held-out splits' are in heldout-manifest.json.",
 		"rules": []string{
 			"Rows with status usable carry labels; so do usable_need_context rows (the teacher said preceding context mattered), kept apart: excluding them " +
 				"biases training away from short replies, including them trains on labels the teacher was unsure of. Every other status (refused, " +
-				"refusal_suspected, invalid, tool_use, missing, held, unlabeled) is present with its status and null labels; the teacher's reply, if any, is " +
-				"under returned. None is an all-negative row.",
-			"labels are the positives: accepted labels with supported evidence, leaves or broad parents as returned. unsupported_labels and uncertain_labels are " +
-				"neither positive nor negative. implied_ancestors are the positives' ancestors, listed apart: they are positives for the ancestor's own " +
-				"classifier (ancestors are implied). A returned broad parent is never a positive for its children, and its children say nothing for that row.",
+				"refusal_suspected, invalid, tool_use, missing, held, transform_unverified, unlabeled, and any newer ledger outcome) is present with its " +
+				"status and null labels; the teacher's reply, if any, is under returned. None is an all-negative row.",
+			"Per label, a labeled row is positive when the label is in labels or implied_ancestors (ancestors are implied); says nothing (neither positive " +
+				"nor negative) when it is in masked_labels; and is negative otherwise. labels are accepted labels with supported evidence, leaves or broad " +
+				"parents as returned. masked_labels are the uncertain and unsupported labels with all their ancestors and descendants, and every descendant " +
+				"of a positive (a returned broad parent leaves its subtype open), less the positives and their ancestors.",
 			"Labels of the training splits (train, dev) are in labels.jsonl and unit-labels.jsonl; all other splits' in the -heldout files. inputs.jsonl and " +
 				"provenance.jsonl hold no labels.",
 			"Families never span splits (except quarantine, which is neither training nor evaluation); family_id lets a trainer check. Drop rows with " +
@@ -1036,6 +1076,9 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 				"message, whose bytes are not exported: sha256 lets a reader check a literal range, and a json-string-v1 range is a whole decoded piece.",
 		},
 	}
+	for key, value := range training.json(taxonomyOrder) {
+		manifest[key] = value
+	}
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return nil, err
@@ -1044,6 +1087,108 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 		return nil, err
 	}
 	return manifest, nil
+}
+
+// labelingExportAggregates are one side's (training or held-out) counts.
+type labelingExportAggregates struct {
+	labelSupport map[string]map[string]map[string]int
+	counts       map[string]map[string]map[string]int
+	strata       map[string]map[string]int
+	flags        map[string]int
+	coverage     map[string]int
+	families     map[string][]string
+	chunked      map[string]int
+	splits       map[string]bool
+}
+
+func newLabelingExportAggregates() *labelingExportAggregates {
+	return &labelingExportAggregates{labelSupport: map[string]map[string]map[string]int{}, counts: map[string]map[string]map[string]int{},
+		strata: map[string]map[string]int{}, flags: map[string]int{}, coverage: map[string]int{}, families: map[string][]string{},
+		chunked: map[string]int{"units": 0, exportUsable: 0, exportNeedContext: 0, exportPartial: 0}, splits: map[string]bool{}}
+}
+
+func (a *labelingExportAggregates) support(label, split, kind string) {
+	if a.labelSupport[label] == nil {
+		a.labelSupport[label] = map[string]map[string]int{}
+	}
+	if a.labelSupport[label][split] == nil {
+		a.labelSupport[label][split] = labelingSupportZero()
+	}
+	a.labelSupport[label][split][kind]++
+}
+
+func (a *labelingExportAggregates) count(dimension, value, status string) {
+	if a.counts[dimension] == nil {
+		a.counts[dimension] = map[string]map[string]int{}
+	}
+	if a.counts[dimension][value] == nil {
+		a.counts[dimension][value] = map[string]int{}
+	}
+	a.counts[dimension][value][status]++
+}
+
+// stratum counts a mark in a split; "" only makes sure the split appears.
+func (a *labelingExportAggregates) stratum(split, name string) {
+	if a.strata[split] == nil {
+		a.strata[split] = map[string]int{"duplicates": 0, "seen_in_train": 0, "common_short_text": 0, "cross_split_duplicate": 0}
+	}
+	if name != "" {
+		a.strata[split][name]++
+	}
+}
+
+// json returns the aggregates with every taxonomy label in every split.
+func (a *labelingExportAggregates) json(labels []string) map[string]any {
+	for _, label := range labels {
+		for split := range a.splits {
+			if a.labelSupport[label] == nil {
+				a.labelSupport[label] = map[string]map[string]int{}
+			}
+			if a.labelSupport[label][split] == nil {
+				a.labelSupport[label][split] = labelingSupportZero()
+			}
+		}
+	}
+	families := map[string]int{}
+	for split, members := range a.families {
+		families[split] = len(members)
+	}
+	return map[string]any{"splits": sortedKeys(a.splits), "counts": a.counts, "label_support": a.labelSupport, "strata": a.strata, "flags": a.flags,
+		"coverage": map[string]any{"not_labeled_by_status": a.coverage, "note": "Items present without labels, by status. refused_copacked_unresolved " +
+			"counts refused items packed with others: the refusal may belong to a neighbour, yet they stay blocked on every route."},
+		"families_by_split": families, "chunked_units": a.chunked}
+}
+
+// labelingMaskedLabels lists the labels a row says nothing about:
+// uncertain and unsupported labels with their ancestors and descendants,
+// and every descendant of a positive, less the positives and their
+// ancestors.
+func labelingMaskedLabels(positives, uncertain, unsupported []string, parents map[string]string, children map[string][]string) []string {
+	masked := map[string]bool{}
+	var descend func(label string)
+	descend = func(label string) {
+		for _, child := range children[label] {
+			masked[child] = true
+			descend(child)
+		}
+	}
+	for _, label := range append(slices.Clone(uncertain), unsupported...) {
+		masked[label] = true
+		for parent := parents[label]; parent != ""; parent = parents[parent] {
+			masked[parent] = true
+		}
+		descend(label)
+	}
+	for _, label := range positives {
+		descend(label)
+	}
+	for _, label := range positives {
+		delete(masked, label)
+		for parent := parents[label]; parent != ""; parent = parents[parent] {
+			delete(masked, parent)
+		}
+	}
+	return sortedKeys(masked)
 }
 
 // labelingExportLabeled reports whether a status's rows carry labels.
@@ -1055,7 +1200,7 @@ func labelingExportLabeled(status string) bool {
 func labelingSupportZero() map[string]int {
 	counts := map[string]int{}
 	for _, prefix := range []string{"", "need_context_"} {
-		for _, kind := range []string{"positive", "unsupported", "uncertain", "implied"} {
+		for _, kind := range []string{"positive", "unsupported", "uncertain", "implied", "masked"} {
 			counts[prefix+kind] = 0
 		}
 	}
@@ -1114,21 +1259,22 @@ func labelingExportGroup(ctx context.Context, tx *sql.Tx, statement string, keys
 // byte offsets and checks them: a literal range must be the same bytes in
 // the stored message and the item, on character boundaries; a transformed
 // piece must decode to what the unit shows.
-func labelingExportSourceRanges(item, stored, message, visible string, visibleStart, visibleEnd int, pieces []map[string]any, transforms map[string]int) ([]map[string]any, error) {
+func labelingExportSourceRanges(item, stored, message, visible string, visibleStart, visibleEnd int, pieces []map[string]any, transforms map[string]int) ([]map[string]any, int, error) {
 	var ranges []map[string]any
 	if err := json.Unmarshal([]byte(defaultString(stored, "[]")), &ranges); err != nil {
-		return nil, fmt.Errorf("item %s source ranges: %w", item, err)
+		return nil, 0, fmt.Errorf("item %s source ranges: %w", item, err)
 	}
+	unverified := 0
 	out := []map[string]any{}
 	for _, source := range ranges {
 		start, end := int(integer(source["start"])), int(integer(source["end"]))
 		if start < 0 || end < start || end > len(message) {
-			return nil, fmt.Errorf("item %s: source range %d..%d outside its message", item, start, end)
+			return nil, 0, fmt.Errorf("item %s: source range %d..%d outside its message", item, start, end)
 		}
 		original := message[start:end]
 		if transform, _ := source["transform"].(string); transform != "" {
 			if transform != feedbackJSONTransform {
-				return nil, fmt.Errorf("item %s: unknown transform %s", item, transform)
+				return nil, 0, fmt.Errorf("item %s: unknown transform %s", item, transform)
 			}
 			pieceStart, pieceEnd := -1, -1
 			for _, piece := range pieces {
@@ -1137,14 +1283,16 @@ func labelingExportSourceRanges(item, stored, message, visible string, visibleSt
 				}
 			}
 			if pieceStart < 0 || pieceEnd > len(visible) || pieceEnd <= visibleStart || pieceStart >= visibleEnd {
-				return nil, fmt.Errorf("item %s: transformed range %d..%d has no visible piece in the item", item, start, end)
+				return nil, 0, fmt.Errorf("item %s: transformed range %d..%d has no visible piece in the item", item, start, end)
 			}
 			var decoded string
-			verified := json.Unmarshal([]byte(`"`+original+`"`), &decoded) == nil && strings.Contains(decoded, visible[pieceStart:pieceEnd])
+			// The encoded bytes must decode to exactly the piece shown.
+			verified := json.Unmarshal([]byte(`"`+original+`"`), &decoded) == nil && decoded != "" && decoded == visible[pieceStart:pieceEnd]
 			if verified {
 				transforms["verified"]++
 			} else {
 				transforms["unverified"]++
+				unverified++
 			}
 			from, to := max(pieceStart, visibleStart)-visibleStart, min(pieceEnd, visibleEnd)-visibleStart
 			out = append(out, map[string]any{"start": start, "end": end, "transform": transform, "item_start": from, "item_end": to,
@@ -1154,15 +1302,15 @@ func labelingExportSourceRanges(item, stored, message, visible string, visibleSt
 		}
 		from, to := int(integer(source["visible_start"]))-visibleStart, int(integer(source["visible_end"]))-visibleStart
 		if from < 0 || to < from || to > visibleEnd-visibleStart {
-			return nil, fmt.Errorf("item %s: source range %d..%d maps outside the item", item, start, end)
+			return nil, 0, fmt.Errorf("item %s: source range %d..%d maps outside the item", item, start, end)
 		}
 		shown := visible[visibleStart+from : visibleStart+to]
 		if original != shown || !utf8.ValidString(original) {
-			return nil, fmt.Errorf("item %s: bytes %d..%d of its message are not the item's bytes %d..%d", item, start, end, from, to)
+			return nil, 0, fmt.Errorf("item %s: bytes %d..%d of its message are not the item's bytes %d..%d", item, start, end, from, to)
 		}
 		out = append(out, map[string]any{"start": start, "end": end, "item_start": from, "item_end": to, "sha256": hashBytes([]byte(original))})
 	}
-	return out, nil
+	return out, unverified, nil
 }
 
 // labelingCheckEvidence checks that every evidence occurrence is its quote's
@@ -1184,21 +1332,23 @@ func labelingCheckEvidence(item, text string, raw json.RawMessage) error {
 }
 
 // runLabelingExport is the export command.
-func runLabelingExport(dir, job, out string, stdout io.Writer) error {
-	path, manifest, err := exportLabeling(context.Background(), dir, job, out)
+func runLabelingExport(dir, job, out string, replace bool, stdout io.Writer) error {
+	path, manifest, err := exportLabeling(context.Background(), dir, job, out, replace)
 	if err != nil {
 		return err
 	}
 	counts, _ := manifest["counts"].(map[string]map[string]map[string]int)
 	fmt.Fprintf(stdout, "Exported %v items of job %s to %s\n", manifest["items"], job, path)
 	if counts != nil {
-		statuses := map[string]int{}
+		statuses, training := map[string]int{}, 0
 		for _, perStatus := range counts["split"] {
 			for status, n := range perStatus {
 				statuses[status] += n
+				training += n
 			}
 		}
-		fmt.Fprintf(stdout, "By status: %s\nBy split: %s\n", compactJSON(statuses), compactJSON(counts["split"]))
+		fmt.Fprintf(stdout, "Training splits by status: %s\nBy split: %s\n", compactJSON(statuses), compactJSON(counts["split"]))
+		fmt.Fprintf(stdout, "Held-out items: %v (their aggregates are in %s)\n", toInt64(manifest["items"])-int64(training), exportHeldOutManifest)
 	}
 	if job, _ := manifest["job"].(map[string]any); job != nil && job["complete"] == false {
 		fmt.Fprintln(stdout, "The job still has pending or in-flight requests: their items are exported as unlabeled.")
