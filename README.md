@@ -47,16 +47,16 @@ On macOS 14 or later, you can install Pharos without building it:
 
 1. Open **[GitHub Releases](https://github.com/Pythia-Software/pharos/releases)**,
    select the **latest release**, and download its Pharos **`.dmg`** under Assets.
-2. Open the disk image and drag `Pharos.app` to a new `Pharos` folder on your
-   SSD for a portable library, or to Applications for an install on this Mac.
-3. Open the copied app. Choose **Create Library Beside App** for the SSD, or
-   **Set Up on This Mac** for Applications, then approve the macOS access prompts.
+2. Open the disk image and drag `Pharos.app` to Applications.
+3. Open Pharos from Applications and approve the macOS access prompts. The setup
+   guide asks where your library lives: **On this Mac**, or a folder on an
+   attached SSD if you work across several Macs.
 
-The disk image includes illustrated instructions for both paths and for later
-updates. With an Applications install, Pharos keeps its data in
-`~/Library/Application Support/Pharos`, outside Applications. See [releases and
-updates](docs/releases-and-updates.md) for more detail. If no release is listed
-yet, use the source instructions below.
+Pharos.app runs from Applications. A library is a separate folder, on this Mac
+or on a drive. Add, open or switch libraries later in **Settings → Libraries**.
+Libraries on this Mac live under `~/Library/Application Support/Pharos/Libraries/`.
+See [releases and updates](docs/releases-and-updates.md) for more detail. If no
+release is listed yet, use the source instructions below.
 
 ## Getting Started from Source Code
 

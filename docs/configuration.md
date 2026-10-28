@@ -87,28 +87,27 @@ change or reset the layout.
 
 ## Portable library
 
-A portable library keeps Pharos and everything it has indexed in one directory,
-typically on an external drive that moves between Macs:
+A portable library keeps everything Pharos has indexed in one directory,
+typically on an external drive that moves between Macs. Pharos.app itself runs
+from Applications. The drive holds only the library:
 
 ```text
 /Volumes/euclid/Pharos/
-  Pharos.app
   library.toml             # relative paths resolve against this directory
   catalog/catalog.sqlite3
   preserved/               # archive_root
   staging/
 ```
 
-Create or upgrade one with:
+From a source checkout (development builds), create or upgrade one with:
 
 ```sh
 macos/install-library.sh /Volumes/euclid/Pharos
 ```
 
-For a downloaded release, make the folder, drag `Pharos.app` from the disk
-image into it, open it, and choose **Create Library Beside App**. The first-run
-screen offers this only when the app is in a writable folder outside
-Applications.
+With a downloaded release, install Pharos in Applications. Create the library
+on the drive from the setup guide (storage: an attached SSD), or from
+**Settings → Libraries → New library…**.
 
 The script builds `Pharos.app` into the directory and runs
 `pharos init-library DIR` there unless `library.toml` already exists. A
@@ -116,8 +115,8 @@ rerun replaces only the app; the configuration and catalog are left alone. It
 refuses while any process from that app bundle is running (the app, its service,
 or an MCP server an agent client started), because replacing a running
 executable can kill it mid-write, and when the directory's parent does not
-exist, which usually means its drive is not mounted. The app itself normally runs from a copy on
-each Mac (see [Running from an external drive](#running-from-an-external-drive)),
+exist, which usually means its drive is not mounted. Pharos.app itself normally
+runs from Applications (see [Running from an external drive](#running-from-an-external-drive)),
 which a reinstall does not disturb; quit it to pick up the new build.
 
 `init-library` never overwrites an existing `library.toml`. It creates the
@@ -482,48 +481,49 @@ successful index, even if the browser closes.
 
 ## Running from an external drive
 
-A library's `Pharos.app` runs from its drive, and so do the service it starts
-and the MCP servers agent clients start from it (see [MCP access](#mcp-access)).
-The drive holds the library, so none of them is any use without it. Code
-running from a drive keeps it busy, so the drive cannot be ejected while any of
-them runs, and pulling the drive stops them the next time they page.
+Pharos.app runs from Applications; a drive holds only a library folder. The app's
+broker (`pharos app`) starts one service per connected library, from the app in
+Applications. That service keeps the library's catalog open, so the drive is
+busy while it runs. Agents' MCP servers (`pharos mcp-app`) forward to the broker
+and never open the catalog themselves, so they don't keep the drive busy (see
+[MCP access](#mcp-access)).
 
-An app without `library.toml` beside it, such as `dist/Pharos.app` or one in
-Applications, serves this Mac's own configuration instead.
+**Ejecting.**
+1. **Eject in Pharos** (native menu or drive panel) first saves the open UI
+   session.
+2. It then asks the broker to release the library's volume
+   (`POST /api/app/release-volume`). The broker stops that library's service as a
+   release:
+   - the service refuses new requests;
+   - it stops a running index between workspaces (the next index resumes it);
+   - it lets requests in flight finish;
+   - it closes the catalog, checkpointing its WAL, and exits.
+3. macOS ejects the drive, and Pharos stays open with its other libraries.
 
-**Ejecting.** The app's native eject handler asks the service to release the library
-(`POST /api/release`): the service refuses new requests, stops a running sync
-between workspaces (the next sync resumes it), lets requests in flight finish,
-closes the catalog (checkpointing its WAL), answers, and exits. If the release
-cannot finish within 7 seconds, Pharos keeps running and says "Pharos is
-finishing a write; try ejecting again in a moment."; the service still stops,
-so the next attempt succeeds. A release the service refuses outright leaves
-Pharos running as it was. Once the library is released, Pharos stops every
-other process running from its app (agents' MCP servers, or a `pharos` command
-run from the drive; SIGTERM, then SIGKILL after 3 seconds), quits, and a shell
-it leaves behind runs `diskutil eject` on the drive once it has exited. If
-something else keeps the drive busy, an alert shows what `diskutil` said.
+If the release cannot finish within 7 seconds, Pharos keeps the library open and
+says "Pharos is finishing a write; try ejecting again in a moment."; the next
+attempt usually succeeds. A release waits while a library operation (a transfer,
+restore or delivery) is running.
 
-Pharos also watches the library's volume, by UUID, through DiskArbitration.
-Ejecting from Finder or with `diskutil eject` while Pharos runs is refused with
-"Pharos is running from euclid. Use Eject in Pharos, or quit Pharos, to eject
-it." Quitting a library's Pharos.app stops its service the same way as a release
-and stops agents' MCP servers running from that app (SIGTERM, then SIGKILL after
-3 seconds). This cleanup targets the `mcp` command; the service keeps its
-graceful shutdown so it can finish a write. Quit leaves the drive mounted; eject
-it in Finder afterward. Quitting a per-user install, such as one in
-Applications, leaves agents' MCP servers running so they can keep answering
-without the app.
+Pharos also watches each library's volume, by UUID, through DiskArbitration. An
+eject from Finder or `diskutil eject` asks Pharos to release the library first.
+The eject is approved once the release succeeds; otherwise it is refused with
+"Pharos could not release this library yet: …". Quitting Pharos stops every
+library's service the same way. Agents' MCP tools then report that Pharos is
+offline until it is reopened.
 
 **Unplugging without ejecting.** The service notices within about a second that
 the catalog's directory is gone, or that SQLite's memory-mapped index has
-faulted, and exits with "the library's drive disappeared … Reconnect the drive
-to continue" without touching the catalog again. Every commit is atomic and
-flushed to the drive, so at most the workspace being indexed is lost, and the
-next sync indexes it again. Pharos itself runs from the drive, so it usually
-stops too; if it keeps running, the window shows the disconnected state, and
-when the same volume mounts again, even at another mount point such as
-`/Volumes/euclid 1`, the app restarts the service and reloads.
+faulted. It exits with "the library's drive disappeared … Reconnect the drive to
+continue", without touching the catalog again. Every commit is atomic and flushed
+to the drive, so at most the workspace being indexed is lost, and the next index
+indexes it again. Pharos keeps running and shows the library as disconnected.
+When the same volume mounts again, even at another mount point such as
+`/Volumes/euclid 1`, the broker restarts its service within a few seconds.
+
+Older portable installs ran a copy of Pharos.app from the drive itself. Ejecting
+then quit the whole app. See [migrating older portable
+installs](releases-and-updates.md) to move to an Applications install.
 
 **Stopping the service.** SIGTERM and SIGINT stop `serve` the same way as a
 release, within 7 seconds (a second signal exits at once); the app sends
@@ -1155,19 +1155,28 @@ last selected library; browsing a different library does not change MCP's
 assignment. The current managed registration uses `mcp-app --application APP`.
 See [MCP and the primary connection](library-management.md#mcp-and-the-primary-connection).
 
-For an explicitly standalone, unbundled CLI install the command remains the
-configured `executable` with `--config PATH mcp`. Older portable installations
-used the bundled executable, which finds `library.toml` beside its app:
+With Pharos in Applications, the registration is:
 
 ```json
-{"mcpServers": {"pharos": {"command": "/Volumes/euclid/Pharos/Pharos.app/Contents/MacOS/pharos", "args": ["mcp"]}}}
+{"mcpServers": {"pharos": {"command": "/Applications/Pharos.app/Contents/MacOS/pharos", "args": ["mcp-app", "--application", "/Applications/Pharos.app"]}}}
 ```
 
-Updating the app in place keeps that path. The server runs from the drive, so
-the drive has to be connected for agents to use it; Eject in Pharos stops these
-servers (see [Running from an external drive](#running-from-an-external-drive)),
-and agent clients do not restart them by themselves, so reconnect Pharos in the
-agent once the drive is back (in Claude Code, `/mcp`). MCP is enabled by default for existing installations;
+In Claude Code:
+
+```sh
+claude mcp add pharos -s user -- /Applications/Pharos.app/Contents/MacOS/pharos mcp-app --application /Applications/Pharos.app
+```
+
+Updating the app in place keeps that path. The server forwards to the running
+app, so a library on a drive must be connected, and assigned in **Library used
+by MCP**, for agents to read it. After an app update, reconnect Pharos in each
+agent (in Claude Code, `/mcp`).
+
+For an explicitly standalone, unbundled CLI install the command remains the
+configured `executable` with `--config PATH mcp`. Older portable installations
+registered the drive's own copy, `/Volumes/<drive>/Pharos/Pharos.app/Contents/MacOS/pharos mcp`.
+Re-register those with the command above. An outdated drive copy refuses newer
+catalogs. MCP is enabled by default for existing installations;
 the Settings → MCP switch stores its state in the catalog so it takes effect for both
 new and already running MCP processes. Enabling access does not start a network
 listener or configure an agent client automatically. After enabling it,

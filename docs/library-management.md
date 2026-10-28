@@ -1,7 +1,7 @@
 # Libraries and application setup
 
-Pharos.app can run from Applications or from an SSD. Its library is a separate
-folder. The native app opens the standard Pharos header and Home view. First
+Pharos.app runs from Applications. Each library is a separate folder, on this
+Mac or on a drive. The native app opens the standard Pharos header and Home view. First
 launch introduces Pharos and guides new setup one decision at a time. Existing
 history and backup recovery are separate branches. If no library is connected,
 the startup dialog offers registered locations and recovery.

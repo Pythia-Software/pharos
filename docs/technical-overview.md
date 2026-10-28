@@ -320,7 +320,7 @@ by Finder, building, and opening the app:
 
 Use `./launch.sh --no-open` to initialize and build without opening the app.
 
-The SwiftUI wrapper starts the loopback-only Go service embedded beside it and presents its authenticated interface in WebKit. The catalog, configuration, staging data, and preserved archive remain outside the app bundle.
+The SwiftUI wrapper runs from Applications. It starts the application broker (`pharos app`), which starts one loopback-only Go service per connected library, and presents the selected library's authenticated interface in WebKit. Libraries (catalog, configuration, staging data and preserved archive) are separate folders on this Mac or on a drive, outside the app bundle.
 
 ### Code signing
 
