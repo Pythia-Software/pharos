@@ -133,7 +133,14 @@ func openLabelingLedger(dir string) (*sql.DB, error) {
 		return nil, fmt.Errorf("%s has no complete prepared dataset (no %s); run labeling prepare", dir, labelingManifestFile)
 	}
 	path := filepath.Join(dir, labelingDatasetFile)
-	db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String()+"?_pragma=busy_timeout(10000)&_pragma=synchronous(FULL)")
+	// Several runners (one per job) can share a dataset. WAL lets their
+	// readers proceed beside a writer, and immediate transactions take the
+	// write lock up front: a deferred transaction that read before another
+	// runner committed could not upgrade (SQLITE_BUSY_SNAPSHOT), whatever the
+	// busy timeout. A finished dataset leaves prepare in rollback-journal mode;
+	// the first ledger writer switches it.
+	db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String()+
+		"?_pragma=busy_timeout(60000)&_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)&_txlock=immediate")
 	if err != nil {
 		return nil, err
 	}

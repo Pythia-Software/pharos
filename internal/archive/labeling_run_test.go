@@ -1848,6 +1848,58 @@ func TestLabelingPolicyErrorsAreRefusals(t *testing.T) {
 	}
 }
 
+// Two runners share a dataset, each with its own connection: one reads in a
+// transaction while the other commits, then writes. A deferred transaction
+// could not upgrade after the other's commit; this one waits instead.
+func TestLabelingLedgerSharedByRunners(t *testing.T) {
+	dir := writeLabelingFixture(t, labelingFixtureUnits())
+	a, b := openFixtureLedger(t, dir), openFixtureLedger(t, dir)
+	var mode string
+	if err := a.QueryRow(`PRAGMA journal_mode`).Scan(&mode); err != nil || mode != "wal" {
+		t.Fatalf("journal_mode = %q, %v", mode, err)
+	}
+	if _, err := a.Exec(`CREATE TABLE shared(n INTEGER)`); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := a.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM shared`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	other := make(chan error, 1)
+	go func() {
+		_, err := b.Exec(`INSERT INTO shared VALUES(2)`)
+		other <- err
+	}()
+	// Without the write lock the other runner commits at once; give it the
+	// chance, so the upgrade below would meet its commit.
+	var otherErr error
+	otherDone := false
+	select {
+	case otherErr = <-other:
+		otherDone = true
+	case <-time.After(200 * time.Millisecond):
+	}
+	if _, err := tx.Exec(`INSERT INTO shared VALUES(1)`); err != nil {
+		t.Fatalf("write after the other runner's: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if !otherDone {
+		otherErr = <-other
+	}
+	if otherErr != nil {
+		t.Fatalf("other runner: %v", otherErr)
+	}
+	if err := a.QueryRow(`SELECT COUNT(*) FROM shared`).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("rows = %d, %v", n, err)
+	}
+}
+
 func TestLabelingRefusalsBlockOtherJobs(t *testing.T) {
 	quickLabelingTimers(t)
 	for _, scenario := range []string{"refusal", "suspect"} {
