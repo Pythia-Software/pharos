@@ -136,9 +136,10 @@ Each phase ships as one PR.
    are left out: their capture exports the latest snapshot on every run, so
    turning record capture on restores a compressed one to its original
    bytes once. A snapshot is also skipped while its source's index version
-   is not current or after a capture that failed. A pin links a compressed
-   snapshot into history under a name the manifest does not list; readers
-   take its encoding from the pin.
+   is not current or after a capture that failed. A pin of a compressed
+   latest snapshot (or file) links it into history, and that copy is listed
+   in the manifest as a generation (or earlier version) with its encoding,
+   so readers and the version gate see it like any other entry.
    Readers open an encoded snapshot through the capture view, which decodes
    it into the reader's lease; a normal sync decodes none. When the source
    changes again, capture takes a new, uncompressed snapshot and the encoded
@@ -146,9 +147,20 @@ Each phase ships as one PR.
    Antigravity capture this saves about 1.1 GB now (3.5×); the Air's idle
    Conductor snapshot is not compressed.
 
-Phase 1 and 2 together take the originals from ~67 GB to ~34 GB. The rest is
-dominated by Conductor's latest 14.5 GB snapshot. Shrinking that is the job
-of SQLite row evidence (`docs/sqlite-records.md`), not compression.
+Measured on copies of the production captures, and since each Mac compresses
+only its own captures, on the Studio:
+
+- phase 1 compresses about 17.6 GB of snapshot generations, about 6.8×
+  (measured on Conductor's), saving about 15 GB;
+- phase 2 saves about 9.2 GB now (Codex 3.7×, Claude 3.3×), rising as more
+  files go cold;
+- phase 3 saves about 1.1 GB (Antigravity's request databases, 3.5×).
+
+That is about 25 GB of the Studio's captures now. The Air's captures (about
+3.9 GB of Conductor generation and 3.8 GB of Codex) shrink when the Air next
+holds the library. What remains is dominated by Conductor's latest 14.5 GB
+snapshot, which every index reads. Shrinking that is the job of SQLite row
+evidence (`docs/sqlite-records.md`), not compression.
 
 Local backups copy the encoded files as they are. Cloud backups recompress
 the whole tree at level 3; they could store already-compressed entries
