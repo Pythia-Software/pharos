@@ -140,6 +140,8 @@ var operationKinds = []operationKind{
 		OnEject: "Stops; closing the catalog stores what is still queued.", Latency: "record", Journal: journalNever, Priority: priorityBackground, Hidden: true},
 	{Kind: "ask.save", Label: "Save an Ask Pharos answer", Verb: "Saving an Ask Pharos answer", Holds: "D:w W:w", Affects: "—",
 		OnEject: "Stops retrying; an answer not yet saved is lost, as when the service stops.", Latency: "record", Journal: journalNever, Priority: priorityBackground, Hidden: true},
+	{Kind: "ask.models", Label: "Check Ask Pharos models", Verb: "Checking Ask Pharos models", Holds: "—", Affects: "—",
+		OnEject: "Stops.", Latency: "record", Journal: journalNever, Priority: priorityBackground, Hidden: true},
 	{Kind: "drive.measure", Label: "Check the drive", Verb: "Checking the drive", Holds: "D:w W:w", Affects: "—",
 		OnEject: "Stops.", Latency: "record", Journal: journalNever, Priority: priorityBackground, Hidden: true},
 

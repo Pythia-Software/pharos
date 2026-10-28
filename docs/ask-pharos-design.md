@@ -181,8 +181,13 @@ and common macOS installation directories; it never executes the CLI. After
 opt-in, model discovery uses Codex's app-server `model/list`, Claude's SDK
 initialization response, or `agy models`. Actual model/effort values come from
 those responses. Antigravity's advertised model variants become model and effort
-choices. Model discovery makes no inference request. Discovery errors preserve
-ordinary search and explain that the CLI may need updating or authentication.
+choices. Model discovery makes no inference request. It runs in the
+background: enabling Ask Pharos, or starting the service with it enabled,
+discovers every installed CLI's models, and the picker answers from that
+in-memory list, refreshing one over an hour old behind the answer. Only a CLI
+with no list yet waits for discovery. A failed refresh keeps the previous
+list. Discovery errors preserve ordinary search and explain that the CLI may
+need updating or authentication.
 
 Each question uses noninteractive structured output, a disposable working
 directory, bounded output and a three-minute deadline. Cancellation stops the

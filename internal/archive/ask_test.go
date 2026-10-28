@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -715,9 +716,100 @@ func TestAskNativeContextNeverEntersGeneralArchive(t *testing.T) {
 		t.Fatalf("ordinary ingestion changed: %d %v", count, err)
 	}
 }
+// The picker answers from the models found in the background: enabling Ask
+// and starting the service discover them, and a stale list is refreshed
+// behind an answer from the old one, which a failed refresh keeps.
+func TestAskModelsRefreshInBackground(t *testing.T) {
+	s := askTestServer(t)
+	var calls atomic.Int32
+	entered, gate := make(chan struct{}), make(chan error)
+	override(t, &askDiscoverModels, func(ctx context.Context, p askProvider) ([]askModel, error) {
+		n := calls.Add(1)
+		if n > 1 {
+			entered <- struct{}{}
+			if err := <-gate; err != nil {
+				return nil, err
+			}
+		}
+		return []askModel{{ID: fmt.Sprintf("model-%d", n), Label: "Model", Efforts: []string{"Default"}, Default: true}}, nil
+	})
+	refreshing := func() {
+		t.Helper()
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("no refresh started")
+		}
+	}
+	settle := func(s *Server) {
+		t.Helper()
+		s.ask.mu.Lock()
+		d := s.ask.discovering["Codex"]
+		s.ask.mu.Unlock()
+		if d == nil {
+			return
+		}
+		select {
+		case <-d.done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("discovery did not finish")
+		}
+	}
+	models := func() string {
+		t.Helper()
+		r := askCall(t, s, http.MethodGet, "models?provider=Codex", nil)
+		if r.Code != 200 {
+			t.Fatalf("models: %d %s", r.Code, r.Body.String())
+		}
+		var p askProvider
+		if err := json.Unmarshal(r.Body.Bytes(), &p); err != nil || len(p.Models) != 1 {
+			t.Fatalf("models: %s %v", r.Body.String(), err)
+		}
+		return p.Models[0].ID
+	}
+	age := func(by time.Duration) {
+		s.ask.mu.Lock()
+		defer s.ask.mu.Unlock()
+		cached := s.ask.models["Codex"]
+		cached.checkedAt = cached.checkedAt.Add(-by)
+		s.ask.models["Codex"] = cached
+	}
+	askEnable(t, s)
+	settle(s)
+	if got := models(); got != "model-1" || calls.Load() != 1 {
+		t.Fatalf("enabling did not discover models ahead of the picker: %s after %d discoveries", got, calls.Load())
+	}
+	age(askModelsTTL)
+	if got := models(); got != "model-1" {
+		t.Fatalf("a stale list was not answered at once: %s", got)
+	}
+	refreshing()
+	gate <- nil
+	settle(s)
+	if got := models(); got != "model-2" {
+		t.Fatalf("refresh did not replace the list: %s", got)
+	}
+	age(askModelsTTL)
+	models()
+	refreshing()
+	gate <- fmt.Errorf("not authenticated")
+	settle(s)
+	if got := models(); got != "model-2" || calls.Load() != 3 {
+		t.Fatalf("a failed refresh lost the list or retried at once: %s after %d discoveries", got, calls.Load())
+	}
+	restarted := testServer(t, s.Config(), s.Catalog)
+	restarted.warmAskModelsOnStart()
+	refreshing()
+	gate <- nil
+	settle(restarted)
+	restarted.ask.mu.Lock()
+	defer restarted.ask.mu.Unlock()
+	if got := restarted.ask.models["Codex"].Models; len(got) != 1 || got[0].ID != "model-4" {
+		t.Fatalf("starting with Ask enabled did not discover models: %+v", got)
+	}
+}
 func TestAskDisableInterruptsModelDiscovery(t *testing.T) {
 	s := askTestServer(t)
-	askEnable(t, s)
 	started := make(chan struct{})
 	done := make(chan *httptest.ResponseRecorder, 1)
 	override(t, &askDiscoverModels, func(ctx context.Context, p askProvider) ([]askModel, error) {
@@ -725,6 +817,7 @@ func TestAskDisableInterruptsModelDiscovery(t *testing.T) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	})
+	askEnable(t, s)
 	go func() { done <- askCall(t, s, http.MethodGet, "models?provider=Codex", nil) }()
 	select {
 	case <-started:

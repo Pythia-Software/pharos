@@ -730,6 +730,15 @@ window.initPharosAsk = function(root) {
   product.querySelectorAll('[data-picker]').forEach(button => button.addEventListener('click',() => showPickerPage(button.dataset.picker)));
   find('.pharos-picker-back').addEventListener('click',() => {const previous = pickerPage;showPickerPage(null,false);find('[data-picker="' + previous + '"]').focus();});
   listen(document,'pointerdown',event => {if(!find('.pharos-picker-anchor').contains(event.target))closePicker();});
+  // Known issue (seen in the 0.7.6 app, cleared by relaunching): pressing a
+  // picker row closed the menu instead of opening its page. WebKit does not
+  // focus a clicked button; it moves focus to the nearest focusable ancestor.
+  // If any ancestor of the anchor is focusable (any tabindex; e.g. <main> or
+  // #homePage), relatedTarget is that ancestor, so this handler closes the
+  // picker on press. A WebKit browser test with tabindex=-1 on <main>
+  // reproduces it. What made the ancestor focusable was not found. Likely fix:
+  // also ignore a relatedTarget that contains the anchor. The history popover
+  // below has the same pattern.
   find('.pharos-picker-anchor').addEventListener('focusout',event => {if(event.relatedTarget && !find('.pharos-picker-anchor').contains(event.relatedTarget))closePicker();});
   product.addEventListener('keydown',event => {if(event.key === 'Escape' && !picker.hidden){event.preventDefault();closePicker(true);}});
   historyTrigger.addEventListener('click',()=>{if(chatHistory.hidden)openHistory();else closeHistory();});
