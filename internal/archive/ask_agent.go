@@ -44,6 +44,8 @@ type askAnswer struct {
 	Message       string
 	Cards         []askCard
 	Clarification *askClarification
+	// Omitted counts destinations Pharos could not open and left out.
+	Omitted int
 }
 
 // askMCPExecutable runs the CLI's MCP server. It is this service's own binary,
@@ -152,6 +154,32 @@ func askDestinationError(err error) error {
 	return fmt.Errorf("the agent suggested a link Pharos cannot open (%s); try again", strings.ToValidUTF8(reason, ""))
 }
 
+// askDestination resolves one returned destination: a section, lookup or
+// earlier id from allowed, or a site link (askSiteCard), with the agent's
+// description when it gave one.
+func askDestination(allowed map[string]askCard, rawID, rawURL, description string) (askCard, error) {
+	id, link := strings.TrimSpace(rawID), strings.TrimSpace(rawURL)
+	if (id == "") == (link == "") {
+		return askCard{}, fmt.Errorf("the agent returned a destination without exactly one of an id and a url; try again")
+	}
+	if len(description) > 1000 {
+		return askCard{}, fmt.Errorf("destination description was too long")
+	}
+	card, ok := allowed[id]
+	if link != "" {
+		var err error
+		if card, err = askSiteCard(link); err != nil {
+			return askCard{}, askDestinationError(err)
+		}
+	} else if !ok {
+		return askCard{}, fmt.Errorf("the agent suggested an unknown destination; try again")
+	}
+	if strings.TrimSpace(description) != "" {
+		card.Description = description
+	}
+	return card, nil
+}
+
 func (s *Server) answerAsk(ctx context.Context, p askProvider, session askSession, zone string) (askAnswer, error) {
 	enabled, err := s.Catalog.MCPEnabled()
 	if err != nil {
@@ -256,31 +284,28 @@ You have a private Pharos interface through lookup. Choose kind "visits" to sear
 		if len(answer.Message) > 8000 || len(response.Destinations) > 3 {
 			return askAnswer{}, fmt.Errorf("the agent response was too large")
 		}
+		// One destination Pharos cannot open costs only that destination: the
+		// others are still the agent's answer. A response with none left asks
+		// for a retry, naming the first problem.
 		seen := map[string]bool{}
+		var refused error
 		for _, choice := range response.Destinations {
-			id, link := strings.TrimSpace(choice.ID), strings.TrimSpace(choice.URL)
-			if (id == "") == (link == "") {
-				return askAnswer{}, fmt.Errorf("the agent returned a destination without exactly one of an id and a url; try again")
-			}
-			card, ok := allowed[id]
-			if link != "" {
-				if card, err = askSiteCard(link); err != nil {
-					return askAnswer{}, askDestinationError(err)
+			card, err := askDestination(allowed, choice.ID, choice.URL, choice.Description)
+			if err != nil {
+				answer.Omitted++
+				if refused == nil {
+					refused = err
 				}
-			} else if !ok {
-				return askAnswer{}, fmt.Errorf("the agent suggested an unknown destination; try again")
+				continue
 			}
 			if seen[card.ID] {
 				continue
 			}
 			seen[card.ID] = true
-			if len(choice.Description) > 1000 {
-				return askAnswer{}, fmt.Errorf("destination description was too long")
-			}
-			if strings.TrimSpace(choice.Description) != "" {
-				card.Description = choice.Description
-			}
 			answer.Cards = append(answer.Cards, card)
+		}
+		if len(answer.Cards) == 0 && refused != nil {
+			return askAnswer{}, refused
 		}
 		if strings.TrimSpace(answer.Message) == "" && len(answer.Cards) == 0 {
 			return askAnswer{}, fmt.Errorf("the agent returned an empty response; try again")

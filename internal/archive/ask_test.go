@@ -1145,6 +1145,11 @@ func TestAskSiteLinkDestinations(t *testing.T) {
 		if answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC"); err == nil || !strings.HasSuffix(err.Error(), "try again") {
 			t.Errorf("%s: %+v accepted: %+v %v", name, destination, answer, err)
 		}
+		// Beside a destination Pharos can open, it is only left out.
+		override(t, &askRunCLI, reply(destination, map[string]string{"id": "", "url": canonical, "description": ""}))
+		if answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC"); err != nil || len(answer.Cards) != 1 || answer.Cards[0].Href != canonical || answer.Omitted != 1 {
+			t.Errorf("%s beside a valid link: %+v %v", name, answer, err)
+		}
 	}
 }
 

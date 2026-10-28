@@ -70,7 +70,8 @@ earlier messages preserves the scroll position and offers a “Latest reply” b
 Responses can contain one or several destination cards with descriptive titles
 and explanations. A response with exactly one destination opens it immediately,
 including when the user phrases the request as a question. Multiple matches remain
-choices. Typing a follow-up while waiting or changing to ordinary search suppresses
+choices, and so does a lone card left after Pharos dropped others the agent
+offered beside it. Typing a follow-up while waiting or changing to ordinary search suppresses
 automatic navigation. Validate destinations through Pharos's own routing and URL
 builders.
 
@@ -248,7 +249,11 @@ rebuilds it, and the card uses the rebuilt canonical URL, the generated
 title, and the generated summary unless the agent's description is
 non-empty. Its kind is the page's section. Anything else, including other
 origins, unknown parameters, charts the page would coerce, and `ask_chat`
-links, fails the request with a retryable error. A card's id is derived from
+links, is left out of the answer, as is an unknown id, a destination without
+exactly one of `id` and `url`, or an over-long description. The turn records
+how many were left out (`omitted`) and the reply says so. Only a response
+whose every destination was left out fails the request, with a retryable
+error naming the first problem. A card's id is derived from
 its canonical URL, so the same link in another parameter order is one card,
 and a follow-up can name an earlier card by id. Saved chats keep the
 canonical URL. This build does not generate arbitrary Query Table SQL: query
