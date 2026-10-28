@@ -393,7 +393,7 @@ func validateCaptureEvidence(ctx context.Context, root string) error {
 				if err != nil {
 					return fmt.Errorf("missing captured evidence %s: %w", file, err)
 				}
-				generation = storedAsFile(f, generation)
+				generation = storedAsUnlocked(f, generation)
 				info, err := f.Stat()
 				stored := generation.Size
 				if generation.Encoding != "" {

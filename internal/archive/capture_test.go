@@ -1428,6 +1428,18 @@ func TestCaptureCompressesIndexedUnpinnedGenerations(t *testing.T) {
 	if sum, size, err := fileSHA256(leased); err != nil || size != generation.Size || sum != encoded.SHA256 || zstdOnDisk(t, leased) {
 		t.Fatal("a reader's lease stopped reading the original bytes", err)
 	}
+	// A lock-free reader that read the manifest before the compression still
+	// reads the original bytes from the file under its stale, plain entry.
+	if f, err := os.Open(file); err != nil {
+		t.Fatal(err)
+	} else {
+		stale := storedAsUnlocked(f, generation)
+		sum, size, err := capturedSHA256File(t.Context(), f, stale.Encoding)
+		f.Close()
+		if stale.Encoding != captureEncodingZstd || err != nil || size != generation.Size || sum != encoded.SHA256 {
+			t.Fatal("a stale plain entry read the compressed file as plain", stale, err)
+		}
+	}
 	// The Storage section's history is what is on disk: the encoded size.
 	history := func(sizes []captureSize) int64 {
 		for _, size := range sizes {
@@ -1654,8 +1666,19 @@ func TestCaptureCompressionWaitsForVerifiedRecordExports(t *testing.T) {
 	})
 	t.Run("receipt that does not verify", func(t *testing.T) {
 		config, generation, receipt := setup(t)
+		valid := readText(t, receipt)
 		writeSourceFile(t, receipt, `{"version":1}`)
 		target := capturedPath(config, "conductor", "")
+		defer func() {
+			if t.Failed() {
+				return
+			}
+			// A new receipt that verifies is a new chance.
+			writeSourceFile(t, receipt, valid)
+			if n, err := pass(t, config); n != 1 || err != nil {
+				t.Fatal("generation whose receipt was replaced by one that verifies:", n, err)
+			}
+		}()
 		for attempt := 1; attempt <= captureCompressAttempts; attempt++ {
 			if n, err := pass(t, config); n != 0 || err == nil || !strings.Contains(err.Error(), "does not verify") {
 				t.Fatal("attempt", attempt, n, err)

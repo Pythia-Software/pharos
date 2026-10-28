@@ -170,6 +170,28 @@ func storedAsFile(f *os.File, v capturedVersion) capturedVersion {
 	return v
 }
 
+// storedAsUnlocked is storedAsFile for a reader that holds no capture lock
+// and read the manifest some time before opening f: a compression may have
+// committed and renamed since, leaving a plain entry over an encoded file.
+// A file smaller than the entry's size that opens with a zstd frame is read
+// as encoded; the caller accepts it only if it decodes to the entry's size
+// (and digest, when known), so nothing is trusted on the header alone.
+func storedAsUnlocked(f *os.File, v capturedVersion) capturedVersion {
+	v = storedAsFile(f, v)
+	if v.Encoding != "" {
+		return v
+	}
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() >= v.Size {
+		return v
+	}
+	head := make([]byte, len(zstdMagic))
+	if n, err := f.ReadAt(head, 0); n == len(head) && (err == nil || err == io.EOF) && bytes.Equal(head, zstdMagic) {
+		v.Encoding, v.StoredSize = captureEncodingZstd, info.Size()
+	}
+	return v
+}
+
 // capturedSHA256File hashes the original bytes of an open captured file
 // stored with encoding, reading it from its start.
 func capturedSHA256File(ctx context.Context, f *os.File, encoding string) (string, int64, error) {

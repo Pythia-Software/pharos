@@ -165,7 +165,7 @@ func compressSourceGenerations(ctx context.Context, target captureTarget, done f
 				outcomes.record(generation, "mismatch", err.Error())
 				failures = append(failures, err)
 			case errors.Is(err, errCompressVerify):
-				outcomes.failed(generation, err.Error())
+				outcomes.failed(target.Dir, generation, err.Error())
 				failures = append(failures, err)
 			case ctx.Err() != nil:
 				return ctx.Err()
@@ -428,7 +428,9 @@ type compressionOutcome struct {
 	// Outcome is incompressible, mismatch (the bytes disagree with the
 	// manifest's digest), failed (verification; Failures counts), or
 	// unverified (a SQLite-record generation with no export receipt yet;
-	// ReceiptNS is -1). A receipt that does not verify counts as failed.
+	// ReceiptNS is -1). A receipt that does not verify counts as failed; a
+	// failed entry records the receipt's mtime (-1 for none) and is tried again
+	// once it changes.
 	Outcome   string `json:"outcome"`
 	Failures  int    `json:"failures,omitempty"`
 	ReceiptNS int64  `json:"receipt_mtime_ns,omitempty"`
@@ -465,7 +467,8 @@ func (o *compressionOutcomes) settled(dir string, generation capturedVersion) bo
 	case !ok:
 		return false
 	case entry.Outcome == "failed":
-		return entry.Failures >= captureCompressAttempts
+		// A new export receipt is a new chance (it may verify now).
+		return entry.Failures >= captureCompressAttempts && receiptStamp(dir, generation.Captured) == entry.ReceiptNS
 	case entry.Outcome == "unverified":
 		// Settled only while there is still no receipt to verify.
 		return entry.ReceiptNS == -1 && receiptStamp(dir, generation.Captured) == -1
@@ -480,15 +483,18 @@ func (o *compressionOutcomes) record(generation capturedVersion, outcome, detail
 	o.modified = true
 }
 
-func (o *compressionOutcomes) failed(generation capturedVersion, detail string) {
+// failed counts a failed verification, afresh once the generation's export
+// receipt changes.
+func (o *compressionOutcomes) failed(dir string, generation capturedVersion, detail string) {
+	stamp := receiptStamp(dir, generation.Captured)
 	entry, ok := o.lookup(generation)
 	failures := 1
-	if ok && entry.Outcome == "failed" {
+	if ok && entry.Outcome == "failed" && entry.ReceiptNS == stamp {
 		failures = entry.Failures + 1
 	}
 	o.record(generation, "failed", detail)
 	entry = o.Entries[generation.Captured]
-	entry.Failures = failures
+	entry.Failures, entry.ReceiptNS = failures, stamp
 	o.Entries[generation.Captured] = entry
 }
 

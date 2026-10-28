@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -640,6 +641,9 @@ func TestIndexKeepsDeletedConductorSessionsFromUnindexedSnapshots(t *testing.T) 
 	// decoded only into the index's reader lease, and only while the index
 	// still needs it.
 	t.Run("compressed-generation", func(t *testing.T) {
+		// As on exFAT, which has no exclusive rename: leases fall back to a
+		// checked rename, so compression and indexing still work there.
+		override(t, &renameExclusiveNative, func(string, string) error { return syscall.ENOTSUP })
 		config, target := compressionFixture(t)
 		catalog, _ := testCatalog(t)
 		if done := compressGenerations(t, config); len(done) != 1 {

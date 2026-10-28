@@ -200,7 +200,7 @@ func planHistory(ctx context.Context, config Config, scope historyScope) (histor
 				var size int64
 				f, err := os.Open(filepath.Join(dir, filepath.FromSlash(v.Captured)))
 				if err == nil {
-					v = storedAsFile(f, v)
+					v = storedAsUnlocked(f, v)
 					hash, size, err = capturedSHA256File(ctx, f, v.Encoding)
 					f.Close()
 				}
