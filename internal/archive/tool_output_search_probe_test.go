@@ -1,16 +1,19 @@
 //go:build probe
 
 // Measures what leaving tool output out of the word index costs, on a scratch
-// copy of a real catalog. Never point these at a live catalog: both open it
-// through OpenCatalog, which upgrades and writes it. Probes build only with
-// the probe tag, so they stay out of go test ./...
+// copy of a real catalog. Both open it through OpenCatalog, which upgrades
+// and writes it, so they refuse a catalog outside PHAROS_PROBE_SCRATCH, a
+// scratch directory the caller names; that directory may be neither a backup
+// nor a library, and on the euclid drive (any path under /Volumes/euclid,
+// compared ignoring case) nothing else is accepted. Probes build only with the
+// probe tag, so they stay out of go test ./...
 //
 // Replay real MCP search calls (exported from a catalog's mcp_calls as a JSON
 // array of {id, tool_name, arguments_json}) and record each call's result
 // identities, total, and the kinds of the matched messages, a JSON line each
 // (PHAROS_REPLAY_SHARD=i/n splits the calls across processes):
 //
-//	PHAROS_REPLAY_CATALOG=/scratch/catalog.sqlite3 PHAROS_REPLAY_CALLS=calls.json \
+//	PHAROS_PROBE_SCRATCH=/scratch PHAROS_REPLAY_CATALOG=/scratch/catalog.sqlite3 PHAROS_REPLAY_CALLS=calls.json \
 //	  PHAROS_REPLAY_OUT=before.json go test -tags probe -run TestToolOutputSearchReplay -v ./internal/archive
 //
 // Run it before and after the migration and compare the two outputs. With
@@ -20,7 +23,7 @@
 //
 // Time the migration (the tool-result deletes and the merge loop separately):
 //
-//	PHAROS_MIGRATE_CATALOG=/scratch/catalog.sqlite3 \
+//	PHAROS_PROBE_SCRATCH=/scratch PHAROS_MIGRATE_CATALOG=/scratch/catalog.sqlite3 \
 //	  go test -tags probe -run TestToolOutputIndexMigration -v -timeout 600m ./internal/archive
 
 package archive
@@ -41,12 +44,8 @@ func probeScratchCatalog(t *testing.T, variable string) *Catalog {
 	if path == "" {
 		t.Skip("set " + variable + " to a scratch copy of a catalog")
 	}
-	path, err := filepath.EvalSymlinks(path)
-	if err != nil {
+	if err := probeScratchPath(os.Getenv("PHAROS_PROBE_SCRATCH"), path); err != nil {
 		t.Fatal(err)
-	}
-	if filepath.Dir(filepath.Dir(path)) == "/Volumes/euclid/Pharos" {
-		t.Fatal("use a scratch copy, not the live catalog")
 	}
 	started := time.Now()
 	catalog, err := OpenCatalog(path)
@@ -56,6 +55,61 @@ func probeScratchCatalog(t *testing.T, variable string) *Catalog {
 	t.Cleanup(func() { catalog.Close() })
 	t.Logf("opened (and upgraded) in %s", time.Since(started).Round(time.Millisecond))
 	return catalog
+}
+
+// probeScratchPath refuses a catalog that is not inside scratch, and a
+// scratch directory that is a backup or a library.
+func probeScratchPath(scratch, path string) error {
+	if scratch == "" {
+		return fmt.Errorf("set PHAROS_PROBE_SCRATCH to the scratch directory holding the copy")
+	}
+	resolve := func(value string) (string, error) {
+		absolute, err := filepath.Abs(value)
+		if err != nil {
+			return "", err
+		}
+		resolved, err := filepath.EvalSymlinks(absolute)
+		return strings.ToLower(filepath.Clean(resolved)), err
+	}
+	scratch, err := resolve(scratch)
+	if err != nil {
+		return err
+	}
+	path, err = resolve(path)
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(path, scratch+string(filepath.Separator)) {
+		return fmt.Errorf("%s is not inside the scratch directory %s", path, scratch)
+	}
+	if parts := strings.Split(scratch, string(filepath.Separator)); len(parts) <= 3 && strings.HasPrefix(scratch, "/volumes/") {
+		return fmt.Errorf("the scratch directory %s is a whole drive", scratch)
+	}
+	for _, part := range strings.Split(path, string(filepath.Separator)) {
+		if strings.Contains(part, "backup") || part == "pharos" {
+			return fmt.Errorf("%s looks like a backup or a library; copy the catalog to a scratch directory", path)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(scratch, libraryConfigName)); err == nil {
+		return fmt.Errorf("the scratch directory %s holds a library", scratch)
+	}
+	return nil
+}
+
+func TestProbeScratchPathGuard(t *testing.T) {
+	scratch := t.TempDir()
+	if err := os.WriteFile(filepath.Join(scratch, "catalog.sqlite3"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := probeScratchPath(scratch, filepath.Join(scratch, "catalog.sqlite3")); err != nil {
+		t.Fatal(err)
+	}
+	for _, refused := range [][2]string{{"", filepath.Join(scratch, "catalog.sqlite3")}, {scratch, "/Volumes/euclid/Pharos/catalog/catalog.sqlite3"},
+		{scratch, "/Volumes/Euclid/pharos/catalog/catalog.sqlite3"}, {"/Volumes/euclid", "/Volumes/euclid/Pharos Backup Tuesday October 27th 7AM/catalog/catalog.sqlite3"}} {
+		if probeScratchPath(refused[0], refused[1]) == nil {
+			t.Errorf("accepted %q in %q", refused[1], refused[0])
+		}
+	}
 }
 
 func TestToolOutputSearchReplay(t *testing.T) {

@@ -17,9 +17,16 @@ import (
 // search_text scans it for a conversation or a few workspaces.
 //
 // Every writer of messages_fts selects through wordIndexedKind, and every read
-// of messages_fts that could reach tool output filters by it too, so a catalog
-// that has not finished removing its old tool-result postings searches the
-// same population as one that has.
+// of messages_fts that could reach tool output filters out tool results. Reads
+// that rank only a window of recent postings (search_conversations, Library
+// search evidence) filter inside the window while old postings remain
+// (toolOutputPostingsLeft), so a catalog still removing them searches the same
+// population as one that has.
+//
+// An older Pharos that opens the library and ingests writes tool-output
+// postings again, and once the removal here is done nothing removes them:
+// every search filters them out, so they cost only index size. That is
+// accepted rather than rescanning the index after every open.
 const unindexedKinds = "'tool_result'"
 
 // wordIndexedKind is the SQL predicate, on the messages alias (with its dot,
@@ -62,14 +69,20 @@ const toolOutputCoverage = "Tool output is not word-indexed or searched here; sc
 // A catalog written before tool output left the word index still holds its
 // postings. They are removed in the background, oldest first: each batch
 // deletes the tool results among the next word-index rows, in one short
-// transaction that also records the last row it checked. Then a merge loop
-// rewrites the index without them: a deleted posting frees its stored text at
-// once but stays in the index's segments until they are merged. The file
+// transaction that also records the last row it checked. A deleted posting
+// frees its stored text at once but leaves delete keys in the index's
+// segments until they are merged, so a bounded merge loop follows. The file
 // shrinks only with VACUUM.
 const (
 	toolOutputCursorKey  = "message_fts_tool_output_cursor"
 	toolOutputRemovedKey = "message_fts_tool_output_removed"
 	toolOutputMergedKey  = "message_fts_tool_output_merged"
+	// toolOutputEndKey is the last word-index row when removal began: rows
+	// after it were written by this writer, which never indexes tool output,
+	// so removal ends there however fast ingest adds rows.
+	toolOutputEndKey = "message_fts_tool_output_end"
+	// toolOutputMergeKey is the pages the merge loop may still write.
+	toolOutputMergeKey = "message_fts_tool_output_merge_pages"
 )
 
 // A batch's cost is mostly the text of the tool output it deletes, which
@@ -123,8 +136,9 @@ type toolOutputProgress struct {
 // toolOutputIndexProgress reads meta and, while removing, one index lookup.
 func (c *Catalog) toolOutputIndexProgress(ctx context.Context) (toolOutputProgress, error) {
 	var removed, merged, cursor sql.NullString
-	err := c.reader().QueryRowContext(ctx, `SELECT (SELECT value FROM meta WHERE key=?),(SELECT value FROM meta WHERE key=?),(SELECT value FROM meta WHERE key=?)`,
-		toolOutputRemovedKey, toolOutputMergedKey, toolOutputCursorKey).Scan(&removed, &merged, &cursor)
+	var end sql.NullInt64
+	err := c.reader().QueryRowContext(ctx, `SELECT (SELECT value FROM meta WHERE key=?),(SELECT value FROM meta WHERE key=?),(SELECT value FROM meta WHERE key=?),(SELECT CAST(value AS INTEGER) FROM meta WHERE key=?)`,
+		toolOutputRemovedKey, toolOutputMergedKey, toolOutputCursorKey, toolOutputEndKey).Scan(&removed, &merged, &cursor, &end)
 	if err != nil {
 		return toolOutputProgress{}, err
 	}
@@ -135,9 +149,11 @@ func (c *Catalog) toolOutputIndexProgress(ctx context.Context) (toolOutputProgre
 		return toolOutputProgress{Phase: "merging"}, nil
 	}
 	progress := toolOutputProgress{Phase: "removing"}
-	var high sql.NullInt64
-	if err := c.reader().QueryRowContext(ctx, `SELECT MAX(fts_rowid) FROM message_fts_rows`).Scan(&high); err != nil {
-		return toolOutputProgress{}, err
+	high := end
+	if !high.Valid {
+		if err := c.reader().QueryRowContext(ctx, `SELECT MAX(fts_rowid) FROM message_fts_rows`).Scan(&high); err != nil {
+			return toolOutputProgress{}, err
+		}
 	}
 	var at int64
 	fmt.Sscan(cursor.String, &at)
@@ -168,8 +184,10 @@ func (c *Catalog) removeToolOutputBatch(ctx context.Context, rows int) (more boo
 // index inside one batch: on a 94 GB catalog that held the writer for up to a
 // minute. So automerge is off and crisismerge is only a backstop, and every
 // removal batch is followed by an incremental merge of at most a few thousand
-// pages (toolOutputMigration.step). The merge loop that ends the migration
-// restores the policy Initialize sets, which also restores it on every open.
+// pages (toolOutputMigration.step). The batch that finds nothing left to
+// remove restores the policy Initialize sets (as does every open), before the
+// merge loop, so that ingest during the merge loop merges as it always does.
+//
 // wordIndexMergePolicy keeps large bulk imports from spending most of their
 // time merging FTS segments inside individual message inserts (Initialize).
 const wordIndexMergePolicy = "INSERT INTO messages_fts(messages_fts,rank) VALUES('automerge',8);INSERT INTO messages_fts(messages_fts,rank) VALUES('crisismerge',32)"
@@ -184,19 +202,38 @@ func removeToolOutput(ctx context.Context, tx *sql.Tx, scan int) (bool, error) {
 		return false, err
 	}
 	var cursor int64
-	if err := tx.QueryRowContext(ctx, "SELECT COALESCE((SELECT CAST(value AS INTEGER) FROM meta WHERE key=?),0)", toolOutputCursorKey).Scan(&cursor); err != nil {
+	var end sql.NullInt64
+	if err := tx.QueryRowContext(ctx, "SELECT COALESCE((SELECT CAST(value AS INTEGER) FROM meta WHERE key=?),0),(SELECT CAST(value AS INTEGER) FROM meta WHERE key=?)", toolOutputCursorKey, toolOutputEndKey).Scan(&cursor, &end); err != nil {
 		return false, err
+	}
+	if !end.Valid {
+		if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(fts_rowid),0) FROM message_fts_rows").Scan(&end); err != nil {
+			return false, err
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", toolOutputEndKey, fmt.Sprint(end.Int64)); err != nil {
+			return false, err
+		}
 	}
 	var last sql.NullInt64
 	var rows string
-	if err := tx.QueryRowContext(ctx, `WITH scanned AS (SELECT fts_rowid,message_id FROM message_fts_rows WHERE fts_rowid>? ORDER BY fts_rowid LIMIT ?)
+	if err := tx.QueryRowContext(ctx, `WITH scanned AS (SELECT fts_rowid,message_id FROM message_fts_rows WHERE fts_rowid>? AND fts_rowid<=? ORDER BY fts_rowid LIMIT ?)
 		SELECT (SELECT MAX(fts_rowid) FROM scanned),
 		(SELECT json_group_array(s.fts_rowid) FROM scanned s JOIN messages m ON m.id=s.message_id WHERE NOT `+wordIndexedKind("m.")+`)`,
-		cursor, scan).Scan(&last, &rows); err != nil {
+		cursor, end.Int64, scan).Scan(&last, &rows); err != nil {
 		return false, err
 	}
 	if !last.Valid {
-		_, err := tx.ExecContext(ctx, "INSERT OR REPLACE INTO meta(key,value) VALUES(?,'1')", toolOutputRemovedKey)
+		// The merge loop may write about as many pages as the index has now.
+		pages, err := wordIndexLeafPages(ctx, tx)
+		if err != nil {
+			return false, err
+		}
+		for _, statement := range []string{wordIndexMergePolicy, "INSERT INTO messages_fts(messages_fts,rank) VALUES('usermerge',2)"} {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return false, err
+			}
+		}
+		_, err = tx.ExecContext(ctx, "INSERT OR REPLACE INTO meta(key,value) VALUES(?,'1'),(?,?)", toolOutputRemovedKey, toolOutputMergeKey, fmt.Sprint(pages))
 		return false, err
 	}
 	if rows != "[]" {
@@ -224,40 +261,54 @@ func removeToolOutput(ctx context.Context, tx *sql.Tx, scan int) (bool, error) {
 				return false, err
 			}
 		}
+		// Fuzzy cursors are different: their expansions come from the word
+		// index's vocabulary, and removal can drop a spelling found only in
+		// tool output. The next page could then expand to a spelling the
+		// first page left out (past the expansion limit) and skip its earlier
+		// matches, or, scoped, stop matching tool output the first page did.
+		// So fuzzy cursors expire across a removal batch, as across appends.
+		if _, err := tx.ExecContext(ctx, "UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_append_generation'"); err != nil {
+			return false, err
+		}
 	}
 	_, err := tx.ExecContext(ctx, "INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", toolOutputCursorKey, fmt.Sprint(last.Int64))
 	return true, err
 }
 
-// mergeWordIndexStep does one bounded step of merging the word index's
-// segments and reports whether there is more to merge. While removing, it
-// is an ordinary incremental merge, of levels with enough segments; finally
-// (all), a negative merge merges every segment into one, as optimize does,
-// which drops the removed postings. Either writes about that many pages a
-// transaction; FTS5 changes at least two rows when it did any work.
-func (c *Catalog) mergeWordIndexStep(ctx context.Context, pages int, all bool) (more bool, held time.Duration, err error) {
+// mergeWordIndexStep does one bounded incremental merge of the word index
+// and reports whether there is more to merge. During removal (final false) it
+// follows each batch. Finally, it merges any level with two or more segments
+// (usermerge 2) until a step finds nothing to merge or the loop has written
+// about as many pages as the index had when removal ended. It never waits
+// for a single segment: a negative merge starts over whenever ingest adds a
+// segment, and so would not finish on a library that syncs. FTS5 changes at
+// least two rows when a merge did any work.
+func (c *Catalog) mergeWordIndexStep(ctx context.Context, pages int, final bool) (more bool, held time.Duration, err error) {
 	tx, finish, err := c.beginTrackedWrite(ctx, "word-index-merge")
 	if err != nil {
 		return false, 0, err
 	}
 	started := time.Now()
 	defer func() { _ = tx.Rollback(); finish(); held = time.Since(started) }()
-	more, err = mergeWordIndex(ctx, tx, pages, all)
+	more, err = mergeWordIndex(ctx, tx, pages, final)
 	if err == nil {
 		err = tx.Commit()
 	}
 	return more, 0, err
 }
 
-func mergeWordIndex(ctx context.Context, tx *sql.Tx, pages int, all bool) (bool, error) {
-	if all {
-		pages = -pages
-	}
-	var done string
-	if err := tx.QueryRowContext(ctx, "SELECT value FROM meta WHERE key=?", toolOutputMergedKey).Scan(&done); err == nil {
-		return false, nil
-	} else if err != sql.ErrNoRows {
-		return false, err
+func mergeWordIndex(ctx context.Context, tx *sql.Tx, pages int, final bool) (bool, error) {
+	var budget sql.NullInt64
+	if final {
+		var done string
+		if err := tx.QueryRowContext(ctx, "SELECT value FROM meta WHERE key=?", toolOutputMergedKey).Scan(&done); err == nil {
+			return false, nil
+		} else if err != sql.ErrNoRows {
+			return false, err
+		}
+		if err := tx.QueryRowContext(ctx, "SELECT CAST(value AS INTEGER) FROM meta WHERE key=?", toolOutputMergeKey).Scan(&budget); err != nil && err != sql.ErrNoRows {
+			return false, err
+		}
 	}
 	var before, after int64
 	if err := tx.QueryRowContext(ctx, "SELECT total_changes()").Scan(&before); err != nil {
@@ -269,14 +320,51 @@ func mergeWordIndex(ctx context.Context, tx *sql.Tx, pages int, all bool) (bool,
 	if err := tx.QueryRowContext(ctx, "SELECT total_changes()").Scan(&after); err != nil {
 		return false, err
 	}
-	if after-before >= 2 || !all {
-		return after-before >= 2, nil
+	worked := after-before >= 2
+	if !final {
+		return worked, nil
 	}
-	if _, err := tx.ExecContext(ctx, wordIndexMergePolicy); err != nil {
-		return false, err
+	left := budget.Int64 - int64(pages)
+	if worked && left > 0 {
+		_, err := tx.ExecContext(ctx, "UPDATE meta SET value=? WHERE key=?", fmt.Sprint(left), toolOutputMergeKey)
+		return true, err
+	}
+	for _, statement := range []string{"INSERT INTO messages_fts(messages_fts,rank) VALUES('usermerge',4)", "DELETE FROM meta WHERE key='" + toolOutputMergeKey + "'"} {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return false, err
+		}
 	}
 	_, err := tx.ExecContext(ctx, "INSERT OR REPLACE INTO meta(key,value) VALUES(?,'1')", toolOutputMergedKey)
 	return false, err
+}
+
+// wordIndexLeafPages is the leaf pages of the word index's segments. FTS5
+// numbers a segment's leaves (segment id << 37) + page, so this seeks to each
+// segment's first and last leaf rather than reading the index.
+func wordIndexLeafPages(ctx context.Context, tx *sql.Tx) (int64, error) {
+	var pages int64
+	err := tx.QueryRowContext(ctx, `WITH RECURSIVE segment(id) AS (
+		SELECT (SELECT id>>37 FROM messages_fts_data WHERE id>=(1<<37) ORDER BY id LIMIT 1)
+		UNION ALL SELECT (SELECT id>>37 FROM messages_fts_data WHERE id>=((segment.id+1)<<37) ORDER BY id LIMIT 1) FROM segment WHERE segment.id IS NOT NULL)
+		SELECT COALESCE(SUM((SELECT MAX(id) FROM messages_fts_data WHERE id BETWEEN segment.id<<37 AND (segment.id<<37)+2147483647)-(segment.id<<37)),0)
+		FROM segment WHERE segment.id IS NOT NULL`).Scan(&pages)
+	return pages, err
+}
+
+// toolOutputPostingsLeft is whether old tool-output postings may remain in
+// the word index: until removal finishes. A read that ranks a window of
+// recent postings filters them inside the window only then, since the filter
+// costs a lookup per posting.
+func (c *Catalog) toolOutputPostingsLeft(ctx context.Context) (bool, error) {
+	var removed int
+	err := c.reader().QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM meta WHERE key=?)", toolOutputRemovedKey).Scan(&removed)
+	return removed == 0, err
+}
+
+// toolOutputPosting is the SQL predicate, on a messages_fts row, that it is
+// an old tool-output posting.
+func toolOutputPosting(fts string) string {
+	return `EXISTS(SELECT 1 FROM message_fts_rows tr JOIN messages tm ON tm.id=tr.message_id WHERE tr.fts_rowid=` + fts + `.rowid AND NOT ` + wordIndexedKind("tm.") + `)`
 }
 
 // toolOutputMigration is the migration's batch sizes, and whether the
@@ -343,9 +431,10 @@ func (c *Catalog) maintainToolOutputIndex(ctx context.Context) {
 }
 
 // textSurfaceToolOutput is whether a search_text request can match tool
-// output: its surface includes tool results and its kinds do not exclude them.
+// output: its surface includes tool results and its roles and kinds do not
+// exclude them. Every writer stores tool output with role tool.
 func textSurfaceToolOutput(o TextSearchOptions) bool {
-	if o.Surface != "tools" && o.Surface != "all" {
+	if o.Surface != "tools" && o.Surface != "all" || o.Roles != nil && !slices.Contains(o.Roles, "tool") {
 		return false
 	}
 	return o.Kinds == nil || slices.Contains(o.Kinds, "all") || slices.Contains(o.Kinds, "tool_result")

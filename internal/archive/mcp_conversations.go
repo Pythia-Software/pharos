@@ -53,10 +53,18 @@ func (c *Catalog) searchConversations(args map[string]any) (map[string]any, erro
 		// most recent matches itself, and only the best 500 are joined to their
 		// conversations. A snippet tokenizes its whole message, so only the
 		// page's cards get one (see conversationCards).
+		// Old tool-output postings, until removed, are left out inside the
+		// window, so they cannot crowd out the matches that count.
+		postings := ""
+		if left, err := c.toolOutputPostingsLeft(ctx); err != nil {
+			return nil, err
+		} else if left {
+			postings = " AND NOT " + toolOutputPosting("messages_fts")
+		}
 		rows, err := queryMaps(c.DB, `SELECT m.conversation_id,f.message_id FROM
 			(SELECT message_id,rank FROM messages_fts
-				WHERE messages_fts MATCH ?1 AND rowid>=COALESCE(
-					(SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?1 ORDER BY rowid DESC LIMIT 1 OFFSET ?2),0)
+				WHERE messages_fts MATCH ?1`+postings+` AND rowid>=COALESCE(
+					(SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?1`+postings+` ORDER BY rowid DESC LIMIT 1 OFFSET ?2),0)
 				ORDER BY rank LIMIT 500) f
 			JOIN messages m ON m.id=f.message_id WHERE `+wordIndexedKind("m.")+` ORDER BY f.rank`, parsed, recentMatches-1)
 		if err != nil {

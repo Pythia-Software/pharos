@@ -409,20 +409,27 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	strict := o.CaseSensitive || o.Separators
 	ordered := node.needsOrderedVerifier()
 	scoped := o.ConversationID != "" || o.WorkspaceID != "" || (o.WorkspaceIDs != nil && len(o.WorkspaceIDs) <= 100)
-	// Tool output is not word-indexed (see wordIndexedKind). A token search
-	// that can match it reads a scoped population's stored text instead, and
-	// verifies each message with the index's own tokenizer; an unscoped one
-	// covers only the indexed kinds, and says so.
+	// Tool output is not word-indexed (see wordIndexedKind). A scoped token
+	// search that can match it streams the scope's messages in rowid order:
+	// tool output by its stored text, every other kind only where the word
+	// index matched it in that scope (tokenScan), each checked with the
+	// index's own tokenizer. Library Find's workspace rows keep the word index
+	// unless one conversation bounds the scan, as does an unscoped search:
+	// both cover the indexed kinds and say so.
+	// Fuzzy expansion reads the word index's vocabulary, so it cannot reach a
+	// spelling found only in tool output.
 	toolOutput := !scan && !span && textSurfaceToolOutput(o)
-	tokenScan := toolOutput && scoped
-	if toolOutput && !scoped {
-		if unindexedOnly(o.Kinds) {
+	tokenScan := toolOutput && scoped && (!o.workspaceRows || o.ConversationID != "")
+	if toolOutput && !tokenScan {
+		if unindexedOnly(o.Kinds) && o.workspaceRows {
+			return result, fmt.Errorf("tool output (kind tool_result) is not word-indexed, so Find across workspaces cannot search it; search a conversation's text instead")
+		} else if unindexedOnly(o.Kinds) {
 			return result, fmt.Errorf("tool output (kind tool_result) is not word-indexed; add a conversation_id, workspace_id or up to 100 workspace_ids to scan its stored text")
 		}
 		result.Coverage += " " + toolOutputNotIndexed
 	}
 	if tokenScan {
-		result.Coverage += " Tool output is not word-indexed: this scoped search scanned the stored text of every message in scope, tool output included."
+		result.Coverage += " Tool output is not word-indexed: this scoped search scanned the stored text of tool output in scope, and found other kinds through the word index."
 	}
 	result.Strategy = "word_index"
 	// Read IDs from the compact mapping. Fetching f.message_id makes FTS5
@@ -644,18 +651,21 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 			}
 		}
 	}
-	if key == "f.rowid" && (o.ConversationID != "" || o.WorkspaceID != "" || (o.WorkspaceIDs != nil && len(o.WorkspaceIDs) <= 100)) {
-		scope, args := "", []any{}
-		if o.ConversationID != "" {
-			scope = "m.conversation_id=?"
-			args = []any{o.ConversationID}
-		} else if o.WorkspaceID != "" {
-			scope = "m.conversation_id IN (SELECT id FROM conversations WHERE workspace_id=?)"
-			args = []any{o.WorkspaceID}
-		} else {
-			scope = "m.conversation_id IN (SELECT id FROM conversations WHERE workspace_id IN (SELECT value FROM json_each(?)))"
-			args = []any{jsonText(o.WorkspaceIDs)}
+	if tokenScan {
+		// Only tool output is read whole; other kinds must be word-index
+		// matches within the scope's range of index rows.
+		scope, args := textScopeSQL(o)
+		var low, high sql.NullInt64
+		e = c.reader().QueryRowContext(ctx, `SELECT MIN(fr.fts_rowid),MAX(fr.fts_rowid) FROM messages m JOIN message_fts_rows fr ON fr.message_id=m.id WHERE `+scope, args...).Scan(&low, &high)
+		if e != nil {
+			return result, fmt.Errorf("scope planning exceeded its budget; narrow the workspace selection: %w", e)
 		}
+		clauses = append(clauses, `(NOT `+wordIndexedKind("m.")+` OR m.id IN (SELECT r.message_id FROM message_fts_rows r WHERE r.fts_rowid IN
+			(SELECT rowid FROM messages_fts WHERE messages_fts MATCH ? AND rowid BETWEEN ? AND ?)))`)
+		arguments = append(arguments, node.fts(strict), low.Int64, high.Int64)
+	}
+	if key == "f.rowid" && (o.ConversationID != "" || o.WorkspaceID != "" || (o.WorkspaceIDs != nil && len(o.WorkspaceIDs) <= 100)) {
+		scope, args := textScopeSQL(o)
 		var low, high sql.NullInt64
 		var total, mapped int
 		// Count only the kinds the word index holds: tool output has no row.
@@ -926,6 +936,19 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 		}
 	}
 	return result, nil
+}
+
+// textScopeSQL is the predicate, on messages m, of a scoped search's
+// conversation, workspace or workspaces.
+func textScopeSQL(o TextSearchOptions) (string, []any) {
+	switch {
+	case o.ConversationID != "":
+		return "m.conversation_id=?", []any{o.ConversationID}
+	case o.WorkspaceID != "":
+		return "m.conversation_id IN (SELECT id FROM conversations WHERE workspace_id=?)", []any{o.WorkspaceID}
+	default:
+		return "m.conversation_id IN (SELECT id FROM conversations WHERE workspace_id IN (SELECT value FROM json_each(?)))", []any{jsonText(o.WorkspaceIDs)}
+	}
 }
 
 // textSearchCheckTimeout is the least time the overlap check after each page
