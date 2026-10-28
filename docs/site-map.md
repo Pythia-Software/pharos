@@ -38,13 +38,10 @@ under `example`.
    legacy form. Pharos uses the published release and keeps no copy of the
    format.
    See [the handoff](handoffs/query-table-go-link-codec.md).
-3. **MCP tools.** The general Pharos MCP server gains:
-   - `browse_site({path?, query?})` lists one level of the map.
-   - `site_link({page, options?, filters?, days?, card?})` validates choices
-     against the map. It returns `{url, title, summary}`, and its errors list
-     the valid choices.
-   - Go parses a site URL back into the same state and rebuilds it
-     canonically. Parsing and building must round-trip.
+3. **MCP tools.** The general Pharos MCP server has `browse_site` and
+   `site_link` (see [MCP tools](#mcp-tools)). Go parses a site URL back into
+   the same state (`siteLinkFromURL`) and rebuilds it canonically. Parsing
+   and building round-trip.
 4. **Ask integration.** A destination may be a URL. Pharos accepts it only
    when it parses, and replaces it with the canonical URL. Private page
    visits and Ask chats stay on the private lookup protocol, and `ask_chat`
@@ -431,6 +428,129 @@ That query is most of the map's size. It is stored once per card, as the
 state with Query Table's defaults left out. A link that
 changes any part of a card is a plain dashboard link built from the card's
 `state`, `filters` and the new options.
+
+## MCP tools
+
+`internal/archive/site_map.go` loads the map and judges charts by its rules,
+`site_link.go` builds and parses links, and `site_tools.go` serves both tools
+on the general MCP server.
+
+### `browse_site({path?, query?, limit?, offset?, max_output_tokens?})`
+
+It lists one level of the map, as a CLI's nested `--help` does. With no path
+it lists the top-level pages. Each answer's `items` are the paths to browse
+next:
+
+| Path | Answer |
+|---|---|
+| a node, such as `analyze/tokens` | Title, description, route, options in plain terms (values with labels, default, `needs …` and `not with …` from `requires` and `conflicts`, and the MCP tools an ID comes from), and its children. A dashboard adds `<node>/chart` and a dataset page `<node>/filters` |
+| `<node>/chart` | The dashboard's views and default chart, and the views it cannot show |
+| `<node>/chart/<view>` | Each setting of the view: values with labels, default, numeric range, and the constraints its rules impose, such as `type only with metric tokens` |
+| `<node>/chart/<view>/<setting>` | One setting in detail: measure units and notes, and what the page draws outside its constraints |
+| `<node>/filters` | The dataset's filterable fields |
+| `<node>/filters/<field>` | The field's operators, value format, and its values: an enum's own, or for text up to 50 of the most frequent current values |
+| `cards` | Every card, under `cards/<id>`: its chart, filters and windows |
+
+`query` keeps the list items whose text contains it. Lists page with `limit`
+(50 by default) and `offset`, and an answer sheds items from the end to fit
+`max_output_tokens` (3,000 by default, as three bytes a token), giving
+`next_offset`.
+
+A text field's frequent values come from one bounded read with a deadline
+(`siteValuesDeadline`, 1.5 s). SQL datasets group on the reader, counting a
+tool-call field the cube groups by from the cube's group counts. Other
+datasets count the rows the catalog already holds for the page; the Library
+lists none. The read never prepares a derived table, so it never writes. A
+read past the deadline lists no values and says so.
+
+### `site_link({page?, card?, options?, filters?, days?})` or `site_link({url})`
+
+It returns `{url, title, summary, arguments}`:
+- `summary` is one sentence generated from the state, from the drawn chart
+  where the page moves a setting the link leaves out. The design's example
+  reads "Tokens per day by model, 7-day rolling mean, where provider is
+  claude and model contains opus, last 30 days."
+- `arguments` are the `site_link` arguments that give the same link, for an
+  agent to change one and ask again.
+- `note` repeats a page's `settings`.
+
+Arguments:
+- On a dashboard, `options` are one view's chart settings, with `view` naming
+  it. Go adds `v`, reads older names as current ones, and keeps the view's
+  keys (`viewChart`). The chart must be **valid**; a coercible one is an error
+  that names the setting, what the page would draw instead, and the values
+  the setting may take given the others.
+- On other pages, `options` are the node's options by name. A text search's
+  `text` is the words, or a list of rules `{kind, text, other?, distance?,
+  exclude?}`. A range is `[start, end]`.
+- `filters` are where terms. Each field must be filterable on the page's
+  dataset, with an operator from its `op_sets` and a value of its type:
+  - numbers parse;
+  - times are ISO, or relative such as `-30d` and `+0s`;
+  - an enum's `=` and `!=` take one of its values.
+- `days` is one of the page's windows, or `"all"`. Without it a page has no
+  window.
+- `card` alone gives the card's own link, at its first default window unless
+  `days` names another. With options or filters it is a plain dashboard link
+  from the card's `state` and `filters`; what the arguments give replaces
+  them. A card that opens a query table can only change `days`.
+
+Every error names the argument at fault (`options.split`, `filters[1].op`,
+`days`) and lists the valid choices.
+
+`site_link({url})` reads a link with `siteLinkFromURL` and returns its
+canonical form, with `canonical` saying whether the link already was. It
+rejects:
+- another origin than a loopback host, a fragment, a legacy alias, or a
+  repeated parameter;
+- `excluded.params` (`ask_chat`, `token`, `fresh`), and snapshot references
+  (`q_*=@…`);
+- a parameter the page does not take;
+- a query token that carries more than where terms over the page's base
+  query;
+- window parameters that disagree with the where terms, or an `analyze_days`
+  or Parallelism ribbon other than the window's;
+- a chart the page rejects, or coerces, except one in older names, which
+  opens as its current chart;
+- a `text_builder` with settings beyond its rules and scope;
+- option values, `requires` and `conflicts` the map does not allow.
+
+A card's own link parses as `{card, days}`: the link, compared parameter by
+parameter, must be the card's at one of its windows. Links with `card_id`
+name their card; the others are compared with each card whose link has the
+same path and parameters.
+
+### Canonical links in Go
+
+Go writes parameters in order, encoded as `URLSearchParams` encodes them
+(`siteParams`): space as `+`, `*` kept and `~` encoded. Building is
+deterministic, and parsing a Go link rebuilds it byte for byte. Go's links
+can differ from the page's in four ways, none of which the page reads:
+- query token bytes, since deflate output differs;
+- the position of a node's `fixed` parameters, which Go writes in the map's
+  order;
+- the Library's window parameters, which Go writes in `queryURL`'s order;
+- the work page's `explorer` and `sessions`, which Go writes in the map's
+  option order, before the delegation explorer's parameters.
+
+A query table without filters or a window is the bare page, with no query
+token. The Library always writes its table query.
+
+The map names some parameters only in prose, and Go names them as
+constants:
+- a dashboard's `analyze_days`;
+- a query table's `window_mode`, `window_days`, `window_field` and
+  `window_dataset`.
+
+A text search numbers its rules after `rule_template`'s id: `rule-1`,
+`rule-2` and so on.
+
+Tests (`site_map_test.go`, `site_tools_test.go`):
+- **Cases.** Every case in `testdata/site-map-cases.json` matches: each
+  chart's verdict, each link (tokens compared decoded), and parse and build
+  round trips, through `arguments` too.
+- **Pages.** Browsing from the top reaches every page `isUIPage` serves. The
+  test reads that list from `isUIPage`'s source.
 
 ## Cases
 

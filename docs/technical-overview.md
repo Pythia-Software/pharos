@@ -255,6 +255,15 @@ finding's extracted facts kept apart from its evidence handles, which are
 labeled as untrusted transcript content. Neither changes a finding's state; only
 copying a prompt in Pharos starts a measurement.
 
+`browse_site` and `site_link` find and build links to the web UI's pages
+from the [site map](site-map.md). `browse_site` lists one level of it at a
+time: pages, a dashboard's views and settings, filterable fields with their
+operators and most frequent values, and cards. `site_link` checks a page,
+options, filters and window against the map and returns the canonical link,
+a title, and a one-sentence summary of what the page shows. Its errors name
+the argument and list the valid choices. Given a link, it returns the
+canonical form or says why the map cannot express it.
+
 The existing `search_work`, `get_work_detail`, `get_conversation_excerpt`,
 `get_change_set`, `trace`, `query_metrics`, and `get_receipt` tools remain
 available. `get_conversation_excerpt` is a compatibility alias for bounded
