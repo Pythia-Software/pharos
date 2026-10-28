@@ -29,7 +29,7 @@ CREATE TABLE units(
 CREATE TABLE pieces(
   unit_id TEXT NOT NULL, position INTEGER NOT NULL, role TEXT NOT NULL, status TEXT NOT NULL, category TEXT, reason TEXT,
   start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL, visible_start INTEGER, visible_end INTEGER, transform TEXT,
-  source_conversation_id TEXT, source_message_id TEXT, PRIMARY KEY(unit_id, position)) WITHOUT ROWID;
+  source_conversation_id TEXT, source_message_id TEXT, source_start INTEGER, source_end INTEGER, PRIMARY KEY(unit_id, position)) WITHOUT ROWID;
 CREATE TABLE items(
   id TEXT PRIMARY KEY, unit_id TEXT NOT NULL, chunk_index INTEGER NOT NULL, chunk_count INTEGER NOT NULL,
   visible_start INTEGER NOT NULL, visible_end INTEGER NOT NULL, text TEXT NOT NULL, chars INTEGER NOT NULL, source_ranges TEXT NOT NULL,
@@ -116,9 +116,13 @@ func (w *labelingWriter) unit(unit *labelingUnit) error {
 		if piece.VisibleStart >= 0 {
 			visibleStart, visibleEnd = piece.VisibleStart, piece.VisibleEnd
 		}
-		if err := w.exec(`INSERT INTO pieces(unit_id,position,role,status,category,reason,start_byte,end_byte,visible_start,visible_end,transform,source_conversation_id,source_message_id)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, unit.id, position, piece.Role, piece.Status, nilIfEmpty(piece.Category), nilIfEmpty(piece.Reason), piece.Start, piece.End,
-			visibleStart, visibleEnd, nilIfEmpty(piece.Transform), nilIfEmpty(piece.SourceConversation), nilIfEmpty(piece.SourceMessage)); err != nil {
+		var sourceStart, sourceEnd any
+		if piece.SourceEnd > 0 {
+			sourceStart, sourceEnd = piece.SourceStart, piece.SourceEnd
+		}
+		if err := w.exec(`INSERT INTO pieces(unit_id,position,role,status,category,reason,start_byte,end_byte,visible_start,visible_end,transform,source_conversation_id,source_message_id,
+			source_start,source_end) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, unit.id, position, piece.Role, piece.Status, nilIfEmpty(piece.Category), nilIfEmpty(piece.Reason), piece.Start, piece.End,
+			visibleStart, visibleEnd, nilIfEmpty(piece.Transform), nilIfEmpty(piece.SourceConversation), nilIfEmpty(piece.SourceMessage), sourceStart, sourceEnd); err != nil {
 			return err
 		}
 	}

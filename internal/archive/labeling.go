@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"syscall"
@@ -24,7 +25,7 @@ func (l *stringList) String() string         { return strings.Join(*l, ",") }
 func (l *stringList) Set(value string) error { *l = append(*l, value); return nil }
 
 const labelingUsage = `usage:
-  pharos [--config PATH] labeling prepare --dir DIR [--catalog PATH] [--fresh-days 14] [--limit-conversations N] [--conversation ID ...] [--splits-from OLD_DIR] (--snapshot-copy | --live) [--replace] [--dry-run]
+  pharos [--config PATH] labeling prepare --dir DIR [--fresh-days 14] [--limit-conversations N] [--conversation ID ...] [--splits-from OLD_DIR] --catalog COPY --snapshot-copy [--allow-stale-shm] [--replace] [--dry-run]
   pharos labeling plan --dir DIR --route claude|codex --model M --effort E [--items-per-request 4] [--max-request-chars N] [--concurrency 3] [--cohort C ...] [--split S ...] [--limit-items N]
   pharos labeling status --dir DIR`
 
@@ -63,49 +64,27 @@ func runLabelingPrepare(configPath string, args []string, stdout, stderr io.Writ
 	replace := flags.Bool("replace", false, "replace a dataset already in DIR")
 	splitsFrom := flags.String("splits-from", "", "keep the splits an earlier dataset gave its conversations")
 	dryRun := flags.Bool("dry-run", false, "print the manifest counts without writing anything")
-	snapshotCopy := flags.Bool("snapshot-copy", false, "--catalog names a static copy (a backup): read it immutably")
-	live := flags.Bool("live", false, "read a live catalog; its read transaction holds back Pharos's checkpoints while preparation runs")
+	snapshotCopy := flags.Bool("snapshot-copy", false, "--catalog names a static copy (a backup): read it immutably (required)")
+	allowStaleShm := flags.Bool("allow-stale-shm", false, "accept a non-empty -shm beside the copy, for a copy you know nothing has open")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || (*dir == "" && !*dryRun) || *freshDays < 0 || *limit < 0 {
 		return errors.New(labelingUsage)
 	}
 	if *limit > 0 && len(conversations) > 0 {
 		return errors.New("use --limit-conversations or --conversation, not both")
 	}
-	switch {
-	case *snapshotCopy && *live:
-		return errors.New("use --snapshot-copy or --live, not both")
-	case !*snapshotCopy && !*live:
-		return errors.New("prepare from a backup copy of the catalog: --catalog PATH --snapshot-copy (Pharos's backup makes one). " +
-			"Reading the live catalog holds a read transaction that blocks Pharos's checkpoints for the whole preparation; if you must, pass --live")
-	case *snapshotCopy && *catalogPath == "":
-		return errors.New("--snapshot-copy needs --catalog naming the copy")
-	case *snapshotCopy:
-		// Immutable reads of a file another process writes return garbage:
-		// a copy must not be the library's own catalog.
-		if config, err := LoadConfig(configPath); err == nil {
-			copied, errCopy := os.Stat(expandPath(*catalogPath))
-			configured, errConfigured := os.Stat(config.CatalogPath)
-			if errCopy == nil && errConfigured == nil && os.SameFile(copied, configured) {
-				return fmt.Errorf("%s is the configured library's live catalog, not a copy; use --live, or prepare from a backup", *catalogPath)
-			}
-		}
+	// A read transaction on a live catalog blocks Pharos's checkpoints for
+	// the whole preparation, so the command reads only backup copies.
+	if !*snapshotCopy || *catalogPath == "" {
+		return errors.New("prepare reads a backup copy of the catalog: --catalog PATH --snapshot-copy (Pharos's backup makes one); it never reads a live catalog")
 	}
-	if *catalogPath == "" {
-		config, err := LoadConfig(configPath)
-		if err != nil {
-			return err
+	// Immutable reads of a file another process writes are unsound: a copy
+	// must not be the library's own catalog.
+	if config, err := LoadConfig(configPath); err == nil {
+		copied, errCopy := os.Stat(expandPath(*catalogPath))
+		configured, errConfigured := os.Stat(config.CatalogPath)
+		if errCopy == nil && errConfigured == nil && os.SameFile(copied, configured) {
+			return fmt.Errorf("%s is the configured library's live catalog, not a copy; prepare from a backup", *catalogPath)
 		}
-		if err := config.checkLibrary(volumeIdentity); err != nil {
-			return err
-		}
-		use, err := labelingLibraryLease(config, *dryRun)
-		if err != nil {
-			return err
-		}
-		if use != nil {
-			defer use.Close()
-		}
-		*catalogPath = config.CatalogPath
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -115,7 +94,7 @@ func runLabelingPrepare(configPath string, args []string, stdout, stderr io.Writ
 	}
 	*catalogPath, _ = filepath.Abs(expandPath(*catalogPath))
 	opts := labelingPrepareOptions{Dir: *dir, CatalogPath: *catalogPath, FreshDays: *freshDays, Limit: *limit, Conversations: conversations,
-		DryRun: *dryRun, SnapshotCopy: *snapshotCopy, Live: *live, Progress: stderr}
+		DryRun: *dryRun, SnapshotCopy: true, AllowStaleShm: *allowStaleShm, Progress: stderr}
 	if *splitsFrom != "" {
 		opts.SplitsFrom, _ = filepath.Abs(expandPath(*splitsFrom))
 	}
@@ -133,28 +112,6 @@ func runLabelingPrepare(configPath string, args []string, stdout, stderr io.Writ
 	fmt.Fprintln(stdout, manifest["population"])
 	fmt.Fprintf(stdout, "Wrote %s\n", filepath.Join(opts.Dir, labelingManifestFile))
 	return nil
-}
-
-// labelingLibraryLease takes a shared lease on the library, like other
-// readers, so a library move waits for preparation. A dry run writes nothing:
-// it leases only an existing lock file and never creates one.
-func labelingLibraryLease(config Config, dryRun bool) (*os.File, error) {
-	path := libraryUseLock(config)
-	if !dryRun {
-		return fileLease(path, false)
-	}
-	file, err := os.Open(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
-		file.Close()
-		return nil, fmt.Errorf("Pharos is using this library; close its active operation and retry: %w", err)
-	}
-	return file, nil
 }
 
 func writeLabelingJSON(w io.Writer, value any) error {
@@ -202,10 +159,10 @@ func prepareLabelingDataset(ctx context.Context, opts labelingPrepareOptions, re
 		return nil, fmt.Errorf("%s holds files a dataset does not (%s); move them or choose another directory", opts.Dir, strings.Join(others, ", "))
 	}
 	if replace {
-		if runs, err := labelingRunRows(filepath.Join(opts.Dir, labelingDatasetFile)); err != nil {
+		if foreign, err := labelingForeignTables(filepath.Join(opts.Dir, labelingDatasetFile)); err != nil {
 			return nil, err
-		} else if runs > 0 {
-			return nil, fmt.Errorf("%s holds %d labeling job, request or attempt records; replacing it would lose paid results. Prepare into a new directory", opts.Dir, runs)
+		} else if len(foreign) > 0 {
+			return nil, fmt.Errorf("%s holds tables preparation does not create (%s), such as a labeling run's paid results; prepare into a new directory", opts.Dir, strings.Join(foreign, ", "))
 		}
 	}
 	// Earlier splits are read before a replacement removes their dataset.
@@ -241,35 +198,33 @@ func prepareLabelingDataset(ctx context.Context, opts labelingPrepareOptions, re
 	return manifest, os.Remove(marker)
 }
 
-// labelingRunTables hold a labeling run's paid work (phase 2).
-var labelingRunTables = []string{"jobs", "requests", "attempts", "annotations", "usage"}
-
-// labelingRunRows counts the rows of a dataset's run tables, if any.
-func labelingRunRows(path string) (int, error) {
+// labelingForeignTables lists a dataset's tables that preparation does not
+// create: a later phase's run ledger (jobs, requests, attempts, receipts),
+// whatever it is named. Replacing such a dataset would lose paid work.
+func labelingForeignTables(path string) ([]string, error) {
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		return 0, nil
+		return nil, nil
+	}
+	own := map[string]bool{}
+	for _, match := range regexp.MustCompile(`CREATE TABLE ([a-z_]+)`).FindAllStringSubmatch(labelingDatasetSQL, -1) {
+		own[match[1]] = true
 	}
 	db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String()+"?mode=ro")
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	defer db.Close()
-	total := 0
-	for _, table := range labelingRunTables {
-		var exists int
-		if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&exists); err != nil {
-			return 0, err
-		}
-		if exists == 0 {
-			continue
-		}
-		var rows int
-		if err := db.QueryRow(`SELECT COUNT(*) FROM "` + table + `"`).Scan(&rows); err != nil {
-			return 0, err
-		}
-		total += rows
+	rows, err := queryMaps(db, `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
+	if err != nil {
+		return nil, err
 	}
-	return total, nil
+	foreign := []string{}
+	for _, row := range rows {
+		if name := firstString(row["name"]); !own[name] {
+			foreign = append(foreign, name)
+		}
+	}
+	return foreign, nil
 }
 
 // labelingStatus summarizes a dataset directory.

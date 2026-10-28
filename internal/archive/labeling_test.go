@@ -45,6 +45,9 @@ func seedLabelingCatalog(t *testing.T, catalog *Catalog) {
 		{"c-other", "ws-other", "claude", "", "2026-09-03T12:00:00.000Z", 0},
 		{"c-new", "ws-new", "codex", "", "2026-10-20T12:00:00.000Z", 0},
 		{"c-fork", "ws-main", "codex", "c-root", "2026-09-02T12:00:00.000Z", 0},
+		{"c-fork2", "ws-main", "codex", "c-root", "2026-09-02T12:01:00.000Z", 0},
+		{"c-fork3", "ws-main", "codex", "c-root", "", 0},
+		{"c-fork4", "ws-main", "codex", "c-root", "2026-09-02T00:00:00.000Z", 0},
 		{"c-late", "ws-late", "claude", "", "2026-10-21T12:00:00.000Z", 0},
 		{"c-daily1", "ws-daily1", "claude", "", "2026-09-05T12:00:00.000Z", 0},
 		{"c-daily2", "ws-daily2", "claude", "", "2026-09-06T12:00:00.000Z", 0},
@@ -69,6 +72,7 @@ func seedLabelingCatalog(t *testing.T, catalog *Catalog) {
 			id, conversation, id, role, kind, text, "hash-"+id, created, selected, extra["sender"], order, extra["call"])
 	}
 	at := func(day, minute int) string { return fmt.Sprintf("2026-09-%02dT12:%02d:00.000Z", day, minute) }
+	subPrompt := "Check the CSS files for media queries that hide the export button on small screens please"
 	message("m-h1", "c-root", "user", "message", "<system-reminder>\nBe brief.\n</system-reminder>\n"+request, at(1, 0), map[string]any{"sender": "account:me"})
 	message("m-a1", "c-root", "assistant", "message", "I will look into the export button.", at(1, 1), nil)
 	message("m-think", "c-root", "assistant", "thinking", "Maybe a media query hides it.", at(1, 2), nil)
@@ -84,7 +88,7 @@ func seedLabelingCatalog(t *testing.T, catalog *Catalog) {
 	message("m-harness-only", "c-root", "user", "message", "<system-reminder>\nOnly harness.\n</system-reminder>", at(1, 9), map[string]any{"sender": "automation:codex-exec"})
 	message("m-bad", "c-root", "assistant", "message", "broken \xff\xfe bytes", at(1, 9), nil)
 	// An embedded sub-agent's exchange: its own context, not the main session's.
-	message("m-sub1", "c-root", "user", "message", "Check the CSS files for media queries", at(1, 9), nil)
+	message("m-sub1", "c-root", "user", "message", subPrompt, at(1, 9), nil)
 	message("m-sub2", "c-root", "assistant", "message", "Checked: one media query hides it.", at(1, 9), nil)
 	message("m-a2", "c-root", "assistant", "message", "Done: the rule was removed.", at(1, 10), nil)
 	message("m-h3", "c-root", "user", "message", "continue", at(1, 11), nil)
@@ -96,7 +100,7 @@ func seedLabelingCatalog(t *testing.T, catalog *Catalog) {
 	message("m-mirror", "c-mirror", "user", "message", request, at(1, 0), nil)
 	message("m-o1", "c-other", "user", "message", request, at(3, 0), nil)
 	message("m-ask", "c-other", "assistant", "tool_call", `{"tool":"AskUserQuestion","input":{"questions":[{"question":"Which mode?","options":[{"label":"Records"},{"label":"Text"}]}]}}`, at(3, 1), map[string]any{"call": "call-3"})
-	message("m-ask-result", "c-other", "tool", "tool_result", `{"content":"Records","tool":"AskUserQuestion"}`, at(3, 2), map[string]any{"call": "call-3"})
+	message("m-ask-result", "c-other", "tool", "tool_result", `{"content":"User has answered your questions: \"Which mode?\"=\"Records\". You can now continue.","tool":"AskUserQuestion"}`, at(3, 2), map[string]any{"call": "call-3"})
 	message("m-o2", "c-other", "user", "message", "Which mode?\nRecords", at(3, 3), nil)
 	message("m-ask2", "c-other", "assistant", "tool_call", `{"tool":"AskUserQuestion","input":{"questions":[{"question":"Ship it?","options":[{"label":"Yes"},{"label":"No"}]}]}}`, at(3, 4), map[string]any{"call": "call-4"})
 	message("m-ask2-result", "c-other", "tool", "tool_result", `{"content":"User has answered your questions: \"Ship it?\"=\"Yes\". You can now continue with the user's answers in mind.","tool":"AskUserQuestion"}`, at(3, 5), map[string]any{"call": "call-4"})
@@ -113,6 +117,8 @@ func seedLabelingCatalog(t *testing.T, catalog *Catalog) {
 	// becomes the person's words.
 	message("m-n3", "c-late", "user", "message", panicLog, "2026-10-21T12:00:00.000Z", nil)
 	message("m-n4", "c-late", "user", "message", claim, "2026-10-21T12:10:00.000Z", nil)
+	// A person re-sends a sub-agent's prompt: it stays the agent's text.
+	message("m-o7", "c-other", "user", "message", subPrompt+"\n\nthanks", at(3, 20), nil)
 	daily := "Summarize yesterday's merged pull requests for the team channel"
 	message("m-d1", "c-daily1", "user", "message", daily, at(5, 0), map[string]any{"sender": "automation:claude-sdk-cli"})
 	message("m-d2", "c-daily2", "user", "message", daily, at(6, 0), map[string]any{"sender": "automation:claude-sdk-cli"})
@@ -124,6 +130,17 @@ func seedLabelingCatalog(t *testing.T, catalog *Catalog) {
 	message("m-fork-1", "c-fork", "user", "message", "<system-reminder>\nBe brief.\n</system-reminder>\n"+request, at(1, 0), nil)
 	message("m-fork-2", "c-fork", "assistant", "message", "I will look into the export button.", at(1, 1), nil)
 	message("m-fork-3", "c-fork", "user", "message", "continue", at(2, 1), nil)
+	// A fork taken from an earlier point that lacks one of the parent's
+	// records; the person then types what the parent later had.
+	message("m-f2-1", "c-fork2", "user", "message", "<system-reminder>\nBe brief.\n</system-reminder>\n"+request, at(1, 0), nil)
+	message("m-f2-2", "c-fork2", "user", "message", "?", at(1, 8), nil)
+	message("m-f2-3", "c-fork2", "user", "message", "continue", at(2, 2), nil)
+	// Without times, the copy is found in order.
+	message("m-f3-1", "c-fork3", "user", "message", "<system-reminder>\nBe brief.\n</system-reminder>\n"+request, at(1, 0), nil)
+	message("m-f3-2", "c-fork3", "user", "message", "Another idea entirely", at(2, 3), nil)
+	// A catalog that stamps copies when it forks: found in order, too.
+	message("m-f4-1", "c-fork4", "user", "message", "<system-reminder>\nBe brief.\n</system-reminder>\n"+request, at(2, 5), nil)
+	message("m-f4-2", "c-fork4", "user", "message", "Fresh question here", at(2, 6), nil)
 	exec(`INSERT INTO tool_calls(id,workspace_id,conversation_id,call_id,call_message_id,result_message_id,sequence,provider,kind,tool_name,tool_category,status,started_at,ended_at)
 		VALUES('t-ask','ws-other','c-other','call-3','m-ask','m-ask-result',1,'claude','tool','AskUserQuestion','user','ok',?,?)`, at(3, 1), at(3, 2))
 	exec(`INSERT INTO tool_calls(id,workspace_id,conversation_id,call_id,call_message_id,result_message_id,sequence,provider,kind,tool_name,tool_category,status,started_at,ended_at)
@@ -222,7 +239,7 @@ func TestLabelingPrepareBuildsTheDatasetWithoutWritingTheCatalog(t *testing.T) {
 		"m-h2": "human", "m-auto": "agent_in_user_role", "m-a2": "agent_reply", "m-c1": "agent_in_user_role", "m-c2": "agent_reply",
 		"m-o1": "human", "m-n1": "human", "m-n2": "human", "m-o3": "agent_reply", "m-fork-3": "human", "m-h3": "human",
 		"m-sub1": "agent_in_user_role", "m-sub2": "agent_reply", "m-o4": "human", "m-o5": "agent_reply", "m-o6": "human", "m-n3": "human",
-		"m-d1": "agent_in_user_role", "m-d2": "agent_in_user_role",
+		"m-d1": "agent_in_user_role", "m-d2": "agent_in_user_role", "m-f2-3": "human", "m-f3-2": "human", "m-f4-2": "human", "m-o7": "human",
 	}
 	for message, cohort := range want {
 		if units[message]["cohort"] != cohort {
@@ -297,8 +314,26 @@ func TestLabelingPrepareBuildsTheDatasetWithoutWritingTheCatalog(t *testing.T) {
 		}
 	}
 	// The sub-agent's exchange stays out of the main session's context.
-	if firstString(units["m-sub2"]["context_text"]) != "Previous user request:\nCheck the CSS files for media queries" {
+	if firstString(units["m-sub2"]["context_text"]) != "Previous user request:\nCheck the CSS files for media queries that hide the export button on small screens please" {
 		t.Errorf("sub-agent context = %q", units["m-sub2"]["context_text"])
+	}
+	// Mirrors share the root's family; a delegation shows its decoded prompt;
+	// a re-sent sub-agent prompt is not the person's.
+	families := map[string]string{}
+	for _, row := range labelingRows(t, db, `SELECT conversation_id,family_id FROM families`) {
+		families[firstString(row["conversation_id"])] = firstString(row["family_id"])
+	}
+	if families["c-mirror"] == "" || families["c-mirror"] != families["c-root"] {
+		t.Errorf("mirror family %q, root %q", families["c-mirror"], families["c-root"])
+	}
+	if units["m-del"]["visible_text"] != "Find the CSS rule that hides the export button" {
+		t.Errorf("delegation visible = %q", units["m-del"]["visible_text"])
+	}
+	if visible := firstString(units["m-o7"]["visible_text"]); !strings.Contains(visible, "re-sent text of unverified origin") || !strings.HasSuffix(visible, "thanks") {
+		t.Errorf("re-sent sub-agent prompt = %q", visible)
+	}
+	if dropped := stored["actions"].(map[string]any)["duplicates_dropped"]; dropped != 1.0 {
+		t.Errorf("duplicate actions dropped = %v", dropped)
 	}
 	// Secrets never reach visible text.
 	if visible := firstString(units["m-o3"]["visible_text"]); strings.Contains(visible, "abcd1234") || !strings.Contains(visible, "⟦excluded: redacted secret") {
@@ -339,7 +374,8 @@ func TestLabelingPrepareBuildsTheDatasetWithoutWritingTheCatalog(t *testing.T) {
 	for _, row := range labelingRows(t, db, `SELECT message_id,COALESCE(duplicate_of,'') duplicate_of FROM exclusions`) {
 		duplicates[firstString(row["message_id"])] = firstString(row["duplicate_of"])
 	}
-	if duplicates["m-fork-1"] != "m-h1" || duplicates["m-fork-2"] != "m-a1" {
+	if duplicates["m-fork-1"] != "m-h1" || duplicates["m-fork-2"] != "m-a1" || duplicates["m-f2-1"] != "m-h1" || duplicates["m-f2-2"] != "m-h2" ||
+		duplicates["m-f3-1"] != "m-h1" || duplicates["m-f4-1"] != "m-h1" {
 		t.Errorf("inherited history = %v", duplicates)
 	}
 	for message, reason := range map[string]string{"m-branch": "unselected_branch", "m-untimed": "authorship_missing", "m-o2": "action_only",
@@ -354,8 +390,8 @@ func TestLabelingPrepareBuildsTheDatasetWithoutWritingTheCatalog(t *testing.T) {
 		row := row.(map[string]any)
 		counted[firstString(row["reason"])] += int(row["records"].(float64))
 	}
-	for reason, count := range map[string]int{"mirrored_work": 1, "reasoning_unavailable": 1, "kind_tool_call": 4, "kind_tool_result": 1, "human_answer_in_tool_result": 1,
-		"tool_result_answer": 1, "tool_result_answer_unverified": 1, "inherited_history": 2, "unselected_branch": 3} {
+	for reason, count := range map[string]int{"mirrored_work": 1, "reasoning_unavailable": 1, "kind_tool_call": 4, "kind_tool_result": 1,
+		"tool_result_answer": 2, "tool_result_answer_unverified": 1, "inherited_history": 6, "unselected_branch": 3} {
 		if counted[reason] != count {
 			t.Errorf("%s counted %d, want %d (%v)", reason, counted[reason], count, counted)
 		}
@@ -497,11 +533,11 @@ func TestLabelingPlanReadsOnlyTheDataset(t *testing.T) {
 	}
 	today := time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC)
 	plan, err := planLabeling(context.Background(), labelingPlanOptions{Dir: dir, Route: "claude", Model: "claude-haiku-5-5", Effort: "high",
-		ItemsPerRequest: 4, MaxRequestChars: 12000, Concurrency: 3, CharsPerToken: labelingCharsPerToken, TokensPerMinute: 2_000_000, Today: today})
+		ItemsPerRequest: 4, MaxRequestTokens: 24000, Concurrency: 3, CharsPerToken: labelingCharsPerToken, TokensPerMinute: 2_000_000, Today: today})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan["items"] != 23 || plan["requests"] != 6 || plan["selection"].(map[string]any)["duplicate_items_skipped"] != 2 {
+	if plan["items"] != 27 || plan["requests"] != 7 || plan["selection"].(map[string]any)["duplicate_items_skipped"] != 2 {
 		t.Fatalf("plan = %v items in %v requests", plan["items"], plan["requests"])
 	}
 	price := plan["price"].(map[string]any)
@@ -509,18 +545,18 @@ func TestLabelingPlanReadsOnlyTheDataset(t *testing.T) {
 		t.Fatalf("price = %v", price)
 	}
 	luna, err := planLabeling(context.Background(), labelingPlanOptions{Dir: dir, Route: "codex", Model: "gpt-6-luna", Effort: "medium", Cohorts: []string{"human"},
-		ItemsPerRequest: 4, MaxRequestChars: 12000, Concurrency: 3, CharsPerToken: labelingCharsPerToken, TokensPerMinute: 2_000_000, Today: today})
-	if err != nil || luna["items"] != 11 || luna["price"].(map[string]any)["status"] != "priced" {
+		ItemsPerRequest: 4, MaxRequestTokens: 24000, Concurrency: 3, CharsPerToken: labelingCharsPerToken, TokensPerMinute: 2_000_000, Today: today})
+	if err != nil || luna["items"] != 15 || luna["price"].(map[string]any)["status"] != "priced" {
 		t.Fatalf("luna plan = %v, %v", luna, err)
 	}
 	unknown, err := planLabeling(context.Background(), labelingPlanOptions{Dir: dir, Route: "codex", Model: "made-up-model", Effort: "high",
-		ItemsPerRequest: 4, MaxRequestChars: 12000, Concurrency: 3, CharsPerToken: labelingCharsPerToken, TokensPerMinute: 2_000_000, Today: today})
+		ItemsPerRequest: 4, MaxRequestTokens: 24000, Concurrency: 3, CharsPerToken: labelingCharsPerToken, TokensPerMinute: 2_000_000, Today: today})
 	if err != nil || unknown["price"].(map[string]any)["status"] != "unpriced" || unknown["price"].(map[string]any)["cost_usd"] != nil {
 		t.Fatalf("unpriced plan = %v, %v", unknown["price"], err)
 	}
 	all, err := planLabeling(context.Background(), labelingPlanOptions{Dir: dir, Route: "claude", Model: "claude-haiku-5-5", Effort: "high", IncludeDuplicates: true,
-		ItemsPerRequest: 4, MaxRequestChars: 12000, Concurrency: 3, CharsPerToken: labelingCharsPerToken, TokensPerMinute: 2_000_000, Today: today})
-	if err != nil || all["items"] != 25 {
+		ItemsPerRequest: 4, MaxRequestTokens: 24000, Concurrency: 3, CharsPerToken: labelingCharsPerToken, TokensPerMinute: 2_000_000, Today: today})
+	if err != nil || all["items"] != 29 {
 		t.Fatalf("with duplicates = %v items, %v", all["items"], err)
 	}
 	if _, err := os.Stat(started); !os.IsNotExist(err) {
@@ -533,7 +569,7 @@ func TestLabelingPlanReadsOnlyTheDataset(t *testing.T) {
 
 func TestLabelingSnapshotRefusesWrites(t *testing.T) {
 	catalog, _ := testCatalog(t)
-	db, tx, _, err := openLabelingSnapshot(context.Background(), catalog.Path, false)
+	db, tx, _, err := openLabelingSnapshot(context.Background(), catalog.Path, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -542,25 +578,6 @@ func TestLabelingSnapshotRefusesWrites(t *testing.T) {
 	if _, err := tx.Exec(`INSERT INTO meta(key,value) VALUES('labeling-test','x')`); err == nil {
 		t.Fatal("the snapshot connection wrote the catalog")
 	}
-}
-
-func TestLabelingDryRunLeasesWithoutCreatingTheLock(t *testing.T) {
-	config := testConfig(t)
-	lock := libraryUseLock(config)
-	if lease, err := labelingLibraryLease(config, true); err != nil || lease != nil {
-		t.Fatalf("lease = %v, %v", lease, err)
-	}
-	if _, err := os.Stat(lock); !os.IsNotExist(err) {
-		t.Fatal("a dry run created the library lock file")
-	}
-	if err := os.WriteFile(lock, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	lease, err := labelingLibraryLease(config, true)
-	if err != nil || lease == nil {
-		t.Fatalf("existing lock = %v, %v", lease, err)
-	}
-	lease.Close()
 }
 
 func TestLabelingLineageUsesDerivedLaunches(t *testing.T) {
@@ -676,6 +693,25 @@ func TestLabelingPreparesAnOlderSnapshotCopy(t *testing.T) {
 			t.Fatalf("reading the copy created %s", suffix)
 		}
 	}
+	// A non-empty -shm may mean something has the file open.
+	if err := os.WriteFile(backup+"-shm", []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prepareLabeling(context.Background(), labelingPrepareOptions{CatalogPath: backup, SnapshotCopy: true, DryRun: true}); err == nil || !strings.Contains(err.Error(), "-shm") {
+		t.Fatalf("copy with a -shm = %v", err)
+	}
+	if _, err := prepareLabeling(context.Background(), labelingPrepareOptions{CatalogPath: backup, SnapshotCopy: true, AllowStaleShm: true, DryRun: true}); err != nil {
+		t.Fatalf("stale -shm allowed = %v", err)
+	}
+	// A library's catalog folder, with Pharos's lock files, is never read.
+	if err := os.WriteFile(filepath.Join(filepath.Dir(backup), ".pharos-use.lock"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prepareLabeling(context.Background(), labelingPrepareOptions{CatalogPath: backup, SnapshotCopy: true, AllowStaleShm: true, DryRun: true}); err == nil || !strings.Contains(err.Error(), "lock") {
+		t.Fatalf("catalog beside a lock = %v", err)
+	}
+	os.Remove(filepath.Join(filepath.Dir(backup), ".pharos-use.lock"))
+	os.Remove(backup + "-shm")
 	// A copy with a non-empty WAL is not complete.
 	if err := os.WriteFile(backup+"-wal", []byte("pending"), 0o600); err != nil {
 		t.Fatal(err)
@@ -701,7 +737,7 @@ func TestLabelingReplaceKeepsPaidWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.Close()
-	if _, err := prepareLabelingDataset(context.Background(), opts, true); err == nil || !strings.Contains(err.Error(), "paid results") {
+	if _, err := prepareLabelingDataset(context.Background(), opts, true); err == nil || !strings.Contains(err.Error(), "attempts") {
 		t.Fatalf("replaced a dataset with attempts: %v", err)
 	}
 }
@@ -719,6 +755,9 @@ func TestLabelingPrepareChoosesItsSourceExplicitly(t *testing.T) {
 	}
 	if err := run("--catalog", catalog.Path); err == nil || !strings.Contains(err.Error(), "--snapshot-copy") {
 		t.Fatalf("no source flag = %v", err)
+	}
+	if err := run("--live"); err == nil {
+		t.Fatal("--live is accepted")
 	}
 	if err := run("--snapshot-copy"); err == nil || !strings.Contains(err.Error(), "--catalog") {
 		t.Fatalf("snapshot copy without a path = %v", err)

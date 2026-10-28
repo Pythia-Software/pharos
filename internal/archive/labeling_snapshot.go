@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -136,10 +137,16 @@ func labelingCompatibility(ctx context.Context, tx *sql.Tx) ([]string, map[strin
 // (copy is set: a backup nothing writes) is opened immutable, which reads no
 // WAL and touches no -shm; it is refused while a non-empty WAL beside it
 // means the copy is not complete in its main file.
-func openLabelingSnapshot(ctx context.Context, path string, copy bool) (*sql.DB, *sql.Tx, map[string]any, error) {
+func openLabelingSnapshot(ctx context.Context, path string, copy, allowStaleShm bool) (*sql.DB, *sql.Tx, map[string]any, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, nil, nil, err
+	}
+	// A library's catalog folder holds Pharos's lock files; a backup's does not.
+	for _, lock := range []string{".pharos-service.lock", ".pharos-use.lock"} {
+		if _, err := os.Stat(filepath.Join(filepath.Dir(path), lock)); err == nil {
+			return nil, nil, nil, fmt.Errorf("%s sits beside %s, so it is a library's live catalog; prepare from a backup copy", path, lock)
+		}
 	}
 	access := map[string]any{"mode": "live", "uri": "mode=ro, query_only, one read transaction on one connection"}
 	query := "?mode=ro&_pragma=busy_timeout(10000)&_pragma=query_only(1)"
@@ -147,8 +154,12 @@ func openLabelingSnapshot(ctx context.Context, path string, copy bool) (*sql.DB,
 		if wal, err := os.Stat(path + "-wal"); err == nil && wal.Size() > 0 {
 			return nil, nil, nil, fmt.Errorf("%s has a %d-byte write-ahead log, so it is not a complete static copy; use a checkpointed backup", path, wal.Size())
 		}
+		// An open WAL database always has a -shm; a copy's is stale at best.
+		if shm, err := os.Stat(path + "-shm"); err == nil && shm.Size() > 0 && !allowStaleShm {
+			return nil, nil, nil, fmt.Errorf("%s has a %d-byte -shm, so something may have it open; if you know nothing does (a stale file from the backup), pass --allow-stale-shm", path, shm.Size())
+		}
 		query = "?mode=ro&immutable=1&_pragma=query_only(1)"
-		access = map[string]any{"mode": "snapshot_copy", "uri": "mode=ro, immutable=1, query_only, one connection", "path": path,
+		access = map[string]any{"mode": "snapshot_copy", "uri": "mode=ro, immutable=1, query_only, one connection", "path": path, "allow_stale_shm": allowStaleShm,
 			"bytes": info.Size(), "modified_at": formatTime(info.ModTime().Truncate(time.Millisecond))}
 	}
 	db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String()+query)

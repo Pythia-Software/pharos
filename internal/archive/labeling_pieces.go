@@ -15,7 +15,7 @@ import (
 const (
 	labelingUnitsVersion    = "labeling-units-v1"
 	humanPiecesVersion      = "human-pieces-v1"
-	labelingContextVersion  = "context-v1"
+	labelingContextVersion  = "context-v2"
 	labelingChunkVersion    = "chunking-v1"
 	labelingSplitsVersion   = "splits-v1"
 	labelingSentenceVersion = "sentences-v1"
@@ -56,6 +56,9 @@ type labelingPiece struct {
 	VisibleStart, VisibleEnd          int
 	Transform                         string
 	SourceConversation, SourceMessage string
+	// SourceStart and SourceEnd are the byte range a re-sent piece matched
+	// in its source message (SourceEnd 0 when there is none).
+	SourceStart, SourceEnd int
 }
 
 // humanUnit is human-pieces-v1 applied to one message: its pieces in order,
@@ -318,7 +321,8 @@ func renderPieces(text string, pieces []labelingPiece) humanUnit {
 		groups := [][]int{}
 		for _, index := range run {
 			piece := pieces[index]
-			if strings.TrimSpace(text[piece.Start:piece.End]) == "" {
+			// A stored envelope (a delegation's JSON) is never shown or marked.
+			if strings.TrimSpace(text[piece.Start:piece.End]) == "" || piece.Category == "envelope" {
 				continue
 			}
 			if leading && piece.Category == spanHarness && leadingHarnessReasons[piece.Reason] {
@@ -635,8 +639,10 @@ var labelingSecrets = []struct {
 	{regexp.MustCompile(`(?i)([?&](?:token|api_key|access_token|key)=)[^\s&#"<>]+`), "${1}[REDACTED_TOKEN]"},
 }
 
-// labelingContext builds context-v1, the measured construction: the previous
-// human unit's last 1,400 and the previous agent reply's last 800 characters
+// labelingContext builds context-v2: the measured construction, except that
+// the previous request is the previous request unit, a person's or an
+// agent's (the historical extractor used human typed text only): its last
+// 1,400 and the previous agent reply's last 800 characters
 // under fixed headings, stripped, redacted and capped at its first 2,200
 // characters; a prompt shows its last 600 (excerpt reports that it cut).
 // Characters are code points, as in the Python that defined it.

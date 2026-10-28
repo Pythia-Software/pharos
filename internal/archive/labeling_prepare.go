@@ -47,9 +47,10 @@ type labelingPrepareOptions struct {
 	FreshDays, Limit int
 	Conversations    []string
 	DryRun           bool
-	// SnapshotCopy reads a static copy (a backup) immutably; Live reads a
-	// live catalog in one read transaction. One of them is required.
-	SnapshotCopy, Live bool
+	// SnapshotCopy reads a static copy (a backup) immutably; AllowStaleShm
+	// accepts a non-empty -shm beside it. Live reads a live catalog in one
+	// read transaction: tests only, the command never does.
+	SnapshotCopy, AllowStaleShm, Live bool
 	// SplitsFrom is an earlier dataset whose split assignments are kept;
 	// splits holds them, loaded before a replacement removes that dataset.
 	SplitsFrom string
@@ -108,7 +109,11 @@ type labelingPass struct {
 	// targetCache holds resolved target bytes of re-sent sources.
 	targetCache map[string][]bool
 	// automated marks conversations with a user message from automation.
-	automated      map[string]bool
+	automated map[string]bool
+	// pending holds a conversation's actions until it is read; unparsedActor
+	// is who would have answered each unparsed question-tool result.
+	pending        []labelingPendingAction
+	unparsedActor  map[string]string
 	conversations  map[string]*labelingConversation
 	representative map[string]string
 	lineage        *usageConversationAttribution
@@ -144,7 +149,7 @@ type labelingChild struct {
 	firstID, lastID string
 }
 
-type labelingParentMessage struct{ id, key string }
+type labelingParentMessage struct{ id, key, createdAt string }
 
 // itemTargetHash hashes an item's target text, without markers, lowercased
 // with whitespace collapsed.
@@ -251,6 +256,58 @@ func delegationPayload(text string) string {
 	return text
 }
 
+// delegationString is the prompt a delegation sent, or the content its
+// result returned, when it is one JSON string in the stored envelope.
+func delegationString(text string) (string, bool) {
+	var envelope map[string]any
+	if json.Unmarshal([]byte(text), &envelope) != nil {
+		return "", false
+	}
+	if input := mapValue(envelope["input"]); input != nil {
+		for _, key := range []string{"prompt", "message", "task", "instructions"} {
+			if value, ok := input[key].(string); ok && strings.TrimSpace(value) != "" {
+				return value, true
+			}
+		}
+		return "", false
+	}
+	switch content := envelope["content"].(type) {
+	case string:
+		return content, strings.TrimSpace(content) != ""
+	case []any:
+		if len(content) == 1 {
+			value, ok := mapValue(content[0])["text"].(string)
+			return value, ok && strings.TrimSpace(value) != ""
+		}
+	}
+	return "", false
+}
+
+// delegationPieces makes a delegation's prompt (or a result's content) the
+// target, as a json-string-v1 piece over its encoded bytes in the stored
+// envelope, shown decoded; the envelope around it is dropped silently. It
+// reports false when the payload is not one string found in the text.
+func delegationPieces(text, status string) ([]labelingPiece, bool) {
+	payload, ok := delegationString(text)
+	if !ok {
+		return nil, false
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return nil, false
+	}
+	at := strings.Index(text, string(encoded))
+	if at < 0 {
+		return nil, false
+	}
+	start, end := at+1, at+len(encoded)-1
+	return []labelingPiece{
+		{Role: pieceDropped, Status: "envelope", Category: "envelope", Start: 0, End: start},
+		{Role: pieceTarget, Status: status, Start: start, End: end, Transform: feedbackJSONTransform},
+		{Role: pieceDropped, Status: "envelope", Category: "envelope", Start: end, End: len(text)},
+	}, true
+}
+
 // labelingCandidate is the cohort family a record could join, or "" for a
 // kind or role that never becomes a unit.
 func labelingCandidate(record labelingRecord) string {
@@ -304,7 +361,7 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 	if opts.SnapshotCopy == opts.Live {
 		return nil, errors.New("prepare reads either a snapshot copy or, explicitly, a live catalog")
 	}
-	db, tx, access, err := openLabelingSnapshot(ctx, opts.CatalogPath, opts.SnapshotCopy)
+	db, tx, access, err := openLabelingSnapshot(ctx, opts.CatalogPath, opts.SnapshotCopy, opts.AllowStaleShm)
 	if err != nil {
 		return nil, fmt.Errorf("open catalog read-only: %w", err)
 	}
@@ -343,7 +400,7 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 	snapshot["build"] = labelingBuild()
 
 	progress("reading works, identity links and lineage")
-	p := &labelingPass{tx: tx, reasoningStore: present["reasoning_extraction_state"], targetCache: map[string][]bool{}, automated: map[string]bool{}, conversations: map[string]*labelingConversation{}, mainSession: map[string]string{}, sessionKind: map[string]string{},
+	p := &labelingPass{tx: tx, reasoningStore: present["reasoning_extraction_state"], targetCache: map[string][]bool{}, automated: map[string]bool{}, unparsedActor: map[string]string{}, conversations: map[string]*labelingConversation{}, mainSession: map[string]string{}, sessionKind: map[string]string{},
 		childOwners: map[string]bool{}, current: map[string]bool{}, children: map[string]*labelingChild{}, parents: map[string][]labelingParentMessage{},
 		units:      map[[4]string]*[3]int{},
 		exclusions: map[[2]string]int{}, counters: map[string]int{}, firstAt: map[string]string{}}
@@ -697,11 +754,11 @@ func (p *labelingPass) conversation(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	inherited, prefix, err := p.inheritedHistory(ctx, info, records)
+	inherited, copied, err := p.inheritedHistory(ctx, info, records)
 	if err != nil {
 		return err
 	}
-	// context-v1, per agent session (the main session, or each embedded
+	// context-v2, per agent session (the main session, or each embedded
 	// sub-agent session): the previous request unit's visible text (a
 	// person's or an agent's) and the previous selected agent reply, even an
 	// excluded one.
@@ -711,7 +768,7 @@ func (p *labelingPass) conversation(ctx context.Context, id string) error {
 	}
 	priors := map[string]*prior{}
 	calls := map[string]string{} // call ID: the delegation message that made it
-	for position, record := range records {
+	for _, record := range records {
 		if record.kind == "delegation" && record.callID != "" {
 			calls[record.callID] = record.id
 		}
@@ -729,7 +786,7 @@ func (p *labelingPass) conversation(ctx context.Context, id string) error {
 		}
 		var unit *labelingUnit
 		reason, detail, duplicate := "", "", ""
-		if position < prefix {
+		if copied[record.id] {
 			reason, detail, duplicate = "inherited_history", "copied from the parent conversation before the fork", inherited[record.id]
 		} else {
 			p.rememberChildText(id, record)
@@ -777,46 +834,138 @@ func (p *labelingPass) conversation(ctx context.Context, id string) error {
 			state.assistant, state.assistantRef = record.text.String, map[string]any{"message": record.id}
 		}
 	}
-	return nil
+	return p.flushActions()
 }
 
 // inheritedHistory finds the records a forked conversation copied from its
-// parent. It walks the child's text records alongside the parent's selected
-// text records, in order, while each repeats the next parent record (same
-// role, same text), and stops at the first difference. It returns the parent
-// message each copy repeats, and the number of leading records (text or not)
-// that belong to the copied prefix.
-func (p *labelingPass) inheritedHistory(ctx context.Context, info *labelingConversation, records []labelingRecord) (map[string]string, int, error) {
-	inherited := map[string]string{}
+// parent. Copies keep their original send times, so when the fork's start
+// and the records' times are known, every selected record sent before the
+// start is a copy and none sent at or after it is; each copied text record
+// is matched to the parent record it repeats (same role, same text), in
+// order where possible. Without times it walks the child's selected text
+// records alongside the parent's, in order, and stops at the first
+// difference. It returns the parent message each copy repeats and the
+// records that belong to the copy.
+func (p *labelingPass) inheritedHistory(ctx context.Context, info *labelingConversation, records []labelingRecord) (map[string]string, map[string]bool, error) {
+	inherited, copied := map[string]string{}, map[string]bool{}
 	if info.parent == "" || p.conversations[info.parent] == nil {
-		return inherited, 0, nil
+		return inherited, copied, nil
 	}
 	history, cached := p.parents[info.parent]
 	if !cached {
 		parentRecords, err := readLabelingRecords(ctx, p.tx, info.parent)
 		if err != nil {
-			return nil, 0, err
+			return nil, nil, err
 		}
 		for _, record := range parentRecords {
 			if record.selected && record.text.Valid && strings.TrimSpace(record.text.String) != "" {
-				history = append(history, labelingParentMessage{record.id, record.role + "\x00" + textKey(record.text.String)})
+				history = append(history, labelingParentMessage{record.id, record.role + "\x00" + textKey(record.text.String), record.createdAt})
 			}
 		}
 		p.parents[info.parent] = history
 	}
-	next, prefix := 0, 0
-	for position, record := range records {
-		if !record.text.Valid || strings.TrimSpace(record.text.String) == "" {
+	text := func(record labelingRecord) bool {
+		return record.selected && record.text.Valid && strings.TrimSpace(record.text.String) != ""
+	}
+	p.counters["child_conversations"]++
+	// Evidence for the rule below: how the times of an in-order copy relate
+	// to the parent's and to the child's start.
+	for next, index := 0, 0; index < len(records); index++ {
+		record := records[index]
+		if !text(record) {
 			continue
 		}
 		if next >= len(history) || history[next].key != record.role+"\x00"+textKey(record.text.String) {
 			break
 		}
-		inherited[record.id] = history[next].id
+		switch {
+		case record.createdAt == history[next].createdAt:
+			p.counters["fork_copy_time:same_as_parent"]++
+		case record.createdAt < history[next].createdAt:
+			p.counters["fork_copy_time:before_parent"]++
+		default:
+			p.counters["fork_copy_time:after_parent"]++
+		}
+		if info.started != "" && record.createdAt < info.started {
+			p.counters["fork_copy_time:before_child_start"]++
+		} else {
+			p.counters["fork_copy_time:at_or_after_child_start"]++
+		}
 		next++
-		prefix = position + 1
 	}
-	return inherited, prefix, nil
+	inOrder := func() {
+		next, last := 0, -1
+		for index, record := range records {
+			if !text(record) {
+				continue
+			}
+			if next >= len(history) || history[next].key != record.role+"\x00"+textKey(record.text.String) {
+				break
+			}
+			inherited[record.id] = history[next].id
+			next++
+			last = index
+		}
+		// The copy is every selected record up to its last matched text.
+		for index, record := range records[:last+1] {
+			if record.selected {
+				copied[records[index].id] = true
+			}
+		}
+	}
+	timed := info.started != ""
+	for _, record := range records {
+		timed = timed && (!record.selected || record.createdAt != "")
+	}
+	if !timed {
+		p.counters["forks_without_times"]++
+		inOrder()
+		return inherited, copied, nil
+	}
+	next, unmatched := 0, 0
+	for _, record := range records {
+		if !record.selected || record.createdAt >= info.started {
+			continue
+		}
+		copied[record.id] = true
+		p.counters["records_before_child_start:"+info.provider]++
+		if !text(record) {
+			continue
+		}
+		key := record.role + "\x00" + textKey(record.text.String)
+		match := -1
+		for index := next; index < len(history) && match < 0; index++ {
+			if history[index].key == key {
+				match = index
+			}
+		}
+		for index := 0; index < len(history) && match < 0; index++ {
+			if history[index].key == key {
+				match = index
+			}
+		}
+		if match < 0 {
+			unmatched++
+			continue
+		}
+		inherited[record.id] = history[match].id
+		next = match + 1
+	}
+	// Records before the start that repeat none of the parent's are clock
+	// skew, not a copy: such a catalog stamps copies when it forks, so only
+	// the in-order walk can find them.
+	if len(inherited) == 0 {
+		inherited, copied = map[string]string{}, map[string]bool{}
+		p.counters["forks_restamped"]++
+		inOrder()
+		return inherited, copied, nil
+	}
+	p.counters["forks_with_original_times"]++
+	if unmatched > 0 {
+		p.counters["forks_with_unmatched_copies"]++
+		p.counters["fork_unmatched_copies"] += unmatched
+	}
+	return inherited, copied, nil
 }
 
 // labelingAnswer is a structured answer to a question an agent asked: a
@@ -856,6 +1005,11 @@ func (p *labelingPass) toolResultAnswers(ctx context.Context, conversation strin
 			}
 			if len(parsed) == 0 {
 				p.counters["unparsed_answer_shape:"+questionAnswerShape(asString(call["call_text"]), asString(call["result_text"]))]++
+				actor := "unknown"
+				if interactive {
+					actor = "human"
+				}
+				p.unparsedActor[firstString(call["result_message_id"])] = actor
 			}
 			for index := range parsed {
 				parsed[index].questionConversation, parsed[index].questionMessage = conversation, firstString(call["call_message_id"])
@@ -1142,7 +1296,8 @@ func (p *labelingPass) record(conversation string, record labelingRecord, answer
 	case !record.selected:
 		return nil, "unselected_branch", "", nil
 	case asked && len(parsed) == 0:
-		return nil, "human_answer_in_tool_result", "a person's answer that reached the agent only as a tool result, not parsed", nil
+		p.counters["unparsed_answer_actor:"+p.unparsedActor[record.id]]++
+		return nil, "question_tool_result_unparsed", "a question tool's result whose answer could not be read (often none: accepted-only or an error)", nil
 	case asked:
 		if err := p.actions(record.id, conversation, parsed); err != nil {
 			return nil, "", "", err
@@ -1215,7 +1370,16 @@ func (p *labelingPass) record(conversation string, record labelingRecord, answer
 		status := map[string]string{"agent_reply": "agent_text", "delegation": "delegation_text", "thinking": "thinking_text"}[candidate]
 		start := len(text) - len(strings.TrimLeft(text, " \t\r\n"))
 		end := len(strings.TrimRight(text, " \t\r\n"))
-		pieces, _, secrets := cleanPieces(text, []labelingPiece{{Role: pieceTarget, Status: status, Start: start, End: end}})
+		raw := []labelingPiece{{Role: pieceTarget, Status: status, Start: start, End: end}}
+		if candidate == "delegation" {
+			if payload, ok := delegationPieces(text, status); ok {
+				raw = payload
+				p.counters["delegation_payload_decoded"]++
+			} else {
+				p.counters["delegation_payload_raw"]++
+			}
+		}
+		pieces, _, secrets := cleanPieces(text, raw)
 		rendered = renderPieces(text, pieces)
 		rendered.Secrets = secrets
 		if candidate == "thinking" {
@@ -1260,16 +1424,49 @@ func (p *labelingPass) record(conversation string, record labelingRecord, answer
 }
 
 // actions records answers as actions of the message that submitted them.
+// actions queues answers as actions of the message that submitted them;
+// flushActions records a conversation's queue.
 func (p *labelingPass) actions(message, conversation string, answers []labelingAnswer) error {
-	for position, answer := range answers {
-		p.counters["actions_"+answer.source]++
-		p.counters["action_status:"+answer.status]++
+	for _, answer := range answers {
+		p.pending = append(p.pending, labelingPendingAction{message, conversation, answer})
+	}
+	return nil
+}
+
+type labelingPendingAction struct {
+	message, conversation string
+	answer                labelingAnswer
+}
+
+// flushActions records the queued actions once each: an answer recorded both
+// as a flattened message and as the question tool's result (same asking
+// call, same question) keeps the flattened form, which has byte ranges.
+func (p *labelingPass) flushActions() error {
+	key := func(action labelingPendingAction) string {
+		return action.answer.questionMessage + "\x00" + action.answer.question
+	}
+	flattened := map[string]bool{}
+	for _, action := range p.pending {
+		if action.answer.source == "flattened_message" && action.answer.questionMessage != "" {
+			flattened[key(action)] = true
+		}
+	}
+	positions := map[string]int{}
+	for _, action := range p.pending {
+		if action.answer.source != "flattened_message" && flattened[key(action)] {
+			p.counters["duplicate_actions"]++
+			continue
+		}
+		p.counters["actions_"+action.answer.source]++
+		p.counters["action_status:"+action.answer.status]++
 		if p.writer != nil {
-			if err := p.writer.action(message, conversation, position, answer); err != nil {
+			if err := p.writer.action(action.message, action.conversation, positions[action.message], action.answer); err != nil {
 				return err
 			}
 		}
+		positions[action.message]++
 	}
+	p.pending = p.pending[:0]
 	return nil
 }
 
@@ -1335,10 +1532,10 @@ func (p *labelingPass) addUnit(unit *labelingUnit) {
 // labelingFamily is the family (splits-v1) a conversation belongs to.
 type labelingFamily struct{ id, split, first string }
 
-// labelingCopyLinkBytes is the shortest copied span that links two
-// conversations into one family: shorter reuse (a repeated instruction) would
-// chain unrelated work together.
-var labelingCopyLinkBytes = 200
+// labelingCopyLinkBytes is the shortest re-sent or quoted span, with a
+// recorded source, that links two conversations into one family. Repeated
+// lines and templates never link.
+var labelingCopyLinkBytes = 0
 
 // labelingFamilies groups conversations that share text or execution, so a
 // split never separates them: mirrors and aliases, roots and runs, parents,
@@ -1400,9 +1597,10 @@ func labelingFamilies(ids []string, p *labelingPass, sessions []map[string]any, 
 		if smallest[root] == "" {
 			smallest[root] = id
 		}
-		at := p.conversations[id].started
+		// The family's first message, not when a session was opened.
+		at := p.firstAt[id]
 		if at == "" {
-			at = p.firstAt[id]
+			at = p.conversations[id].started
 		}
 		if at != "" && (first[root] == "" || at < first[root]) {
 			first[root] = at
@@ -1574,11 +1772,18 @@ func (p *labelingPass) manifest(opts labelingPrepareOptions, snapshot, selection
 		"exclusions": exclusions, "excluded_records": excluded,
 		"duplicates": map[string]any{"delegation": duplicates["delegation"], "delegation_result": duplicates["delegation_result"],
 			"inherited_history": p.exclusionTotal("inherited_history"), "result_records": p.exclusionTotal("result_record"),
+			"forks": map[string]any{"child_conversations": p.counters["child_conversations"], "without_times": p.counters["forks_without_times"],
+				"records_before_start":        p.prefixed("records_before_child_start:"),
+				"forks_with_unmatched_copies": p.counters["forks_with_unmatched_copies"], "unmatched_copies": p.counters["fork_unmatched_copies"],
+				"with_original_times": p.counters["forks_with_original_times"], "restamped_or_no_copy": p.counters["forks_restamped"],
+				"in_order_copy_times": p.prefixed("fork_copy_time:")},
 			"note": "delegation units that repeat a child's message (equal or containing, whitespace-normalized) are kept with duplicate_of set; inherited history is excluded"},
-		"invalid_utf8": p.exclusionTotal("invalid_utf8"),
+		"invalid_utf8":       p.exclusionTotal("invalid_utf8"),
+		"delegation_payload": map[string]any{"transform": feedbackJSONTransform, "decoded": p.counters["delegation_payload_decoded"], "raw": p.counters["delegation_payload_raw"]},
 		"actions": map[string]any{"question_forms": p.counters["actions_flattened_message"], "tool_results": p.counters["actions_tool_result"],
 			"by_status":             p.prefixed("action_status:"),
-			"unparsed_tool_results": p.exclusionTotal("human_answer_in_tool_result"), "unparsed_shapes": p.prefixed("unparsed_answer_shape:")},
+			"unparsed_tool_results": p.exclusionTotal("question_tool_result_unparsed"), "unparsed_by_actor": p.prefixed("unparsed_answer_actor:"),
+			"duplicates_dropped": p.counters["duplicate_actions"], "unparsed_shapes": p.prefixed("unparsed_answer_shape:")},
 		"redacted_secrets":          p.counters["redacted_secrets"],
 		"unrecognized_harness_tags": p.counters["unrecognized_harness_tags"],
 		"marker_only_chunks":        p.counters["marker_only_chunks"],
@@ -1600,9 +1805,27 @@ func (p *labelingPass) reuseFrom(text string, piece labelingPiece, visiting map[
 	}
 	value := text[piece.Start:piece.End]
 	core := strings.TrimSpace(value)
-	at := strings.Index(source.Input.Text, core)
 	targets := p.sourceTargets(piece.SourceMessage, visiting)
-	if core == "" || at < 0 || targets == nil {
+	if core == "" || targets == nil {
+		return nil
+	}
+	// The copied text may occur in the source more than once; when the
+	// occurrences were attributed differently, which was copied is unknown.
+	at := -1
+	for offset := 0; ; {
+		found := strings.Index(source.Input.Text[offset:], core)
+		if found < 0 {
+			break
+		}
+		found += offset
+		if at < 0 {
+			at = found
+		} else if !slices.Equal(targets[at:at+len(core)], targets[found:found+len(core)]) {
+			return nil
+		}
+		offset = found + 1
+	}
+	if at < 0 {
 		return nil
 	}
 	offset := piece.Start + strings.Index(value, core)
@@ -1610,6 +1833,7 @@ func (p *labelingPass) reuseFrom(text string, piece labelingPiece, visiting map[
 	add := func(start, end int, target bool) {
 		part := piece
 		part.Start, part.End = start, end
+		part.SourceStart, part.SourceEnd = at, at+len(core)
 		if !target {
 			part.Role, part.Status = pieceContext, "reused_unverified"
 		}
@@ -1636,6 +1860,19 @@ func (p *labelingPass) reuseFrom(text string, piece labelingPiece, visiting map[
 	return parts
 }
 
+// messageSessionKind is the kind of the embedded agent session a message
+// belongs to, if any: an embedded sub-agent's prompt is never the person's.
+func (p *labelingPass) messageSessionKind(id string) string {
+	if p.tx == nil {
+		return ""
+	}
+	var session sql.NullString
+	if err := p.tx.QueryRow(`SELECT MIN(agent_session_id) FROM agent_session_messages WHERE message_id=?`, id).Scan(&session); err != nil {
+		return ""
+	}
+	return p.sessionKind[session.String]
+}
+
 // sourceTargets marks, byte by byte, which text of a user message is target
 // under human-pieces-v1, resolving its own re-sent pieces in turn. It returns
 // nil for a message without classification, an automated one, or a cycle.
@@ -1644,7 +1881,7 @@ func (p *labelingPass) sourceTargets(id string, visiting map[string]bool) []bool
 		return mask
 	}
 	result := p.authorship[id]
-	if result == nil || visiting[id] || len(result.Spans) == 0 || result.Spans[0].Category == spanAutomated {
+	if result == nil || visiting[id] || len(result.Spans) == 0 || result.Spans[0].Category == spanAutomated || p.messageSessionKind(id) == "subagent" {
 		return nil
 	}
 	visiting[id] = true

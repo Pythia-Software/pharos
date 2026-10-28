@@ -346,13 +346,34 @@ func TestLabelingTaxonomyIsTheMeasuredFile(t *testing.T) {
 }
 
 func TestPackLabelingRequests(t *testing.T) {
-	sizes := []int{100, 200, 300, 400, 500, 9000, 50, 4000, 4000, 4000}
-	got := packLabelingRequests(sizes, 4, 8000)
-	if want := "[[0 1 2 3] [4] [5] [6 7] [8 9]]"; fmt.Sprint(got) != want {
-		t.Fatalf("requests = %v, want %s", got, want)
+	// Overhead 1,000 tokens, budget 3,000: items may add 2,000 per request.
+	sizes := []float64{100, 200, 300, 400, 500, 2500, 50, 1000, 1000, 1000}
+	got, oversize := packLabelingRequests(sizes, 4, 1000, 3000)
+	if want := "[[0 1 2 3] [4 6 7] [8 9]]"; fmt.Sprint(got) != want || fmt.Sprint(oversize) != "[5]" {
+		t.Fatalf("requests = %v (oversize %v), want %s and [5]", got, oversize, want)
 	}
-	if got := packLabelingRequests(sizes, 2, 1_000_000); len(got) != 5 || len(got[0]) != 2 {
+	if got, _ := packLabelingRequests(sizes, 2, 0, 1_000_000); len(got) != 5 || len(got[0]) != 2 {
 		t.Fatalf("two per request = %v", got)
+	}
+}
+
+func TestReuseNeedsOneAttributionInItsSource(t *testing.T) {
+	phrase := "please rerun the whole migration against staging and compare every row count"
+	source := phrase + "\n\n" + phrase
+	p := &labelingPass{targetCache: map[string][]bool{}, sessionKind: map[string]string{}, authorship: map[string]*authorResult{
+		"source": {Input: authorInput{ID: "source", Text: source}, Spans: []authorSpan{
+			{Start: 0, End: len(phrase) + 2, Category: spanQuoted, Reason: "Quoted with >"},
+			{Start: len(phrase) + 2, End: len(source), Category: spanTyped}}},
+	}}
+	piece := labelingPiece{Role: pieceTarget, Status: "reused_own_message", Start: 0, End: len(phrase), SourceMessage: "source"}
+	if parts := p.reusePieces(phrase, piece); parts != nil {
+		t.Fatalf("a phrase quoted once and typed once resolved as %+v", parts)
+	}
+	p.authorship["source"].Spans = []authorSpan{{Start: 0, End: len(source), Category: spanTyped}}
+	p.targetCache = map[string][]bool{}
+	parts := p.reusePieces(phrase, piece)
+	if len(parts) != 1 || parts[0].Role != pieceTarget || parts[0].SourceStart != 0 || parts[0].SourceEnd != len(phrase) {
+		t.Fatalf("typed twice = %+v", parts)
 	}
 }
 

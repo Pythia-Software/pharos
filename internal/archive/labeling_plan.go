@@ -51,15 +51,20 @@ type labelingPlanItem struct {
 }
 
 // packLabelingRequests groups items, in the order given, into requests of
-// at most perRequest items whose characters total at most maxChars. An item
-// larger than maxChars is sent alone. It returns item indexes per request.
-func packLabelingRequests(chars []int, perRequest, maxChars int) [][]int {
-	requests := [][]int{}
-	current, total := []int{}, 0
-	for index, size := range chars {
-		if len(current) > 0 && (len(current) >= perRequest || total+size > maxChars) {
+// at most perRequest items whose estimated input, the fixed overhead plus
+// the items' tokens, stays within budget. An item that does not fit even
+// alone is returned in oversize and placed in no request: a request is never
+// silently larger than the budget.
+func packLabelingRequests(tokens []float64, perRequest int, overhead, budget float64) (requests [][]int, oversize []int) {
+	current, total := []int{}, overhead
+	for index, size := range tokens {
+		if overhead+size > budget {
+			oversize = append(oversize, index)
+			continue
+		}
+		if len(current) > 0 && (len(current) >= perRequest || total+size > budget) {
 			requests = append(requests, current)
-			current, total = []int{}, 0
+			current, total = []int{}, overhead
 		}
 		current = append(current, index)
 		total += size
@@ -67,7 +72,7 @@ func packLabelingRequests(chars []int, perRequest, maxChars int) [][]int {
 	if len(current) > 0 {
 		requests = append(requests, current)
 	}
-	return requests
+	return requests, oversize
 }
 
 // embeddedPriceBook loads the price book from the pricing file built into
@@ -96,7 +101,8 @@ func embeddedPriceBook(ctx context.Context, today time.Time) (priceBook, error) 
 
 type labelingPlanOptions struct {
 	Dir, Route, Model, Effort        string
-	ItemsPerRequest, MaxRequestChars int
+	ItemsPerRequest                  int
+	MaxRequestTokens                 float64
 	Concurrency, LimitItems          int
 	Cohorts, Splits                  []string
 	IncludeDuplicates                bool
@@ -114,7 +120,7 @@ func runLabelingPlan(args []string, stdout io.Writer) error {
 	flags.StringVar(&opts.Model, "model", "", "model the route will run, priced with the built-in price book")
 	flags.StringVar(&opts.Effort, "effort", "", "reasoning effort")
 	flags.IntVar(&opts.ItemsPerRequest, "items-per-request", 4, "items per request (4 was measured)")
-	flags.IntVar(&opts.MaxRequestChars, "max-request-chars", 12000, "characters of item text and context per request; a larger item goes alone")
+	flags.Float64Var(&opts.MaxRequestTokens, "max-request-tokens", 24000, "estimated input tokens per request, fixed overhead included")
 	flags.IntVar(&opts.Concurrency, "concurrency", 3, "concurrent requests")
 	flags.IntVar(&opts.LimitItems, "limit-items", 0, "plan only the first N selected items")
 	flags.BoolVar(&opts.IncludeDuplicates, "include-duplicates", false, "also plan delegation units that repeat a child's message")
@@ -132,7 +138,7 @@ func runLabelingPlan(args []string, stdout io.Writer) error {
 	if labelingCalibrations[opts.Route].source == "" {
 		return fmt.Errorf("unknown route %q: use claude or codex", opts.Route)
 	}
-	if opts.ItemsPerRequest < 1 || opts.MaxRequestChars < 1 || opts.Concurrency < 1 || opts.CharsPerToken <= 0 || opts.TokensPerMinute <= 0 {
+	if opts.ItemsPerRequest < 1 || opts.MaxRequestTokens <= 0 || opts.Concurrency < 1 || opts.CharsPerToken <= 0 || opts.TokensPerMinute <= 0 {
 		return errors.New("items per request, request characters, concurrency, characters per token and tokens per minute must be positive")
 	}
 	opts.Cohorts, opts.Splits = cohorts, splits
@@ -140,7 +146,13 @@ func runLabelingPlan(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	return writeLabelingJSON(stdout, plan)
+	if err := writeLabelingJSON(stdout, plan); err != nil {
+		return err
+	}
+	if oversize := plan["oversize_items"].([]string); len(oversize) > 0 {
+		return fmt.Errorf("%d items do not fit one request within --max-request-tokens (listed as oversize_items); none was planned oversized", len(oversize))
+	}
+	return nil
 }
 
 // openLabelingDataset opens a prepared dataset read-only. It refuses one
@@ -209,21 +221,20 @@ func planLabeling(ctx context.Context, opts labelingPlanOptions) (map[string]any
 	if opts.SecondsPerRequest > 0 {
 		seconds = opts.SecondsPerRequest
 	}
-	sizes := make([]int, len(items))
+	sizes := make([]float64, len(items))
 	chars := 0
 	for index, item := range items {
-		sizes[index] = item.chars
+		sizes[index] = float64(item.chars) / opts.CharsPerToken
 		chars += item.chars
 	}
-	requests := packLabelingRequests(sizes, opts.ItemsPerRequest, opts.MaxRequestChars)
-	alone := 0
-	for _, request := range requests {
-		if len(request) == 1 && sizes[request[0]] > opts.MaxRequestChars {
-			alone++
-		}
+	requests, oversize := packLabelingRequests(sizes, opts.ItemsPerRequest, overhead, opts.MaxRequestTokens)
+	oversized := []string{}
+	for _, index := range oversize {
+		oversized = append(oversized, items[index].id)
+		chars -= items[index].chars
 	}
 	input := float64(len(requests))*overhead + float64(chars)/opts.CharsPerToken
-	outputTokens := float64(len(items)) * output
+	outputTokens := float64(len(items)-len(oversize)) * output
 	day := opts.Today.Format("2006-01-02")
 	book, err := embeddedPriceBook(ctx, opts.Today)
 	if err != nil {
@@ -253,8 +264,8 @@ func planLabeling(ctx context.Context, opts labelingPlanOptions) (map[string]any
 		"include_duplicates": opts.IncludeDuplicates, "duplicate_items_skipped": duplicates}
 	return map[string]any{
 		"dataset": opts.Dir, "route": opts.Route, "model": opts.Model, "effort": opts.Effort, "selection": selection,
-		"items": len(items), "item_chars": chars, "requests": len(requests), "items_per_request": opts.ItemsPerRequest,
-		"max_request_chars": opts.MaxRequestChars, "oversize_requests": alone,
+		"items": len(items) - len(oversize), "item_chars": chars, "requests": len(requests), "items_per_request": opts.ItemsPerRequest,
+		"max_request_tokens": opts.MaxRequestTokens, "oversize_items": oversized,
 		"tokens":      map[string]any{"input": int64(input), "output": int64(outputTokens)},
 		"price":       price,
 		"runtime":     map[string]any{"concurrency": opts.Concurrency, "serial_hours": serial / 3600, "hours": hours, "planning_high_hours": hours * 3},
