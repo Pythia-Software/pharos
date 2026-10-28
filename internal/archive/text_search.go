@@ -1011,6 +1011,15 @@ func (c *Catalog) continueWithToolOutput(parent context.Context, o TextSearchOpt
 	if err != nil {
 		return rest, err
 	}
+	// A tool-output stream that asks for the same request again (its page
+	// withheld, or no progress) would have the caller repeat the word-index
+	// matches this page already confirmed: hand those back alone, with the
+	// tool-output stream's start as the cursor.
+	if rest.StopReason == "consistency_check_timeout" || rest.StopReason == "time_budget_no_progress" {
+		page, err := stop("time_budget")
+		page.StopMessage = "The tool-output part of this page did not finish in time; continue from next_cursor."
+		return page, err
+	}
 	for _, item := range rest.Items {
 		merged := false
 		if o.workspaceRows {

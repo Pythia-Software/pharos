@@ -462,3 +462,33 @@ func TestTextSearchScopedStreamsCarryOversizedSkips(t *testing.T) {
 		t.Fatalf("an oversized tool call hid the tool output: %+v %v", small, err)
 	}
 }
+
+// When the tool-output stream's page cannot be confirmed, the page keeps the
+// word-index matches it confirmed and continues from the tool-output stream:
+// following its cursor returns each match once.
+func TestTextSearchScopedStreamsKeepConfirmedMatches(t *testing.T) {
+	slowTest(t)
+	override(t, &textSearchCheckTimeout, 20*time.Millisecond)
+	c := textFixture(t)
+	reads, stall := 0, true
+	hookTextSearchGeneration(t, c, func(ctx context.Context) error {
+		// Before and after each stream's page: the fourth is the check
+		// after the tool-output stream's.
+		if reads++; reads == 4 && stall {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		return nil
+	})
+	o := TextSearchOptions{Query: "timeout", Surface: "all", ConversationID: "c", TimeoutMS: 300}
+	first, err := c.SearchText(t.Context(), o)
+	if err != nil || first.Complete || first.NextCursor == "" || !slices.Equal(resultIDs(first), []string{"a", "r"}) || first.Count != 2 {
+		t.Fatalf("withheld tool-output page: %+v %v", first, err)
+	}
+	stall = false
+	o.Cursor = first.NextCursor
+	rest, err := c.SearchText(t.Context(), o)
+	if err != nil || !rest.Complete || !slices.Equal(resultIDs(rest), []string{"t"}) || rest.Count != 3 {
+		t.Fatalf("continued page: %+v %v", rest, err)
+	}
+}

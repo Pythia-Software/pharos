@@ -68,6 +68,18 @@ export const scopes = [
   { id: "automated", label: "Automatically inserted text", description: "Only spans classified as automated content.", surface: "automated" },
   { id: "attachment", label: "Attachment text", description: "Only spans classified as attachment content inside retained messages.", surface: "attachment" },
 ] as const;
+// textScopeNote is the editor's note on what a search's scope leaves out:
+// "scan" when a literal/regex search across instructions or tools needs a
+// conversation or at most 100 workspaces; "tool-output" when a word search
+// could match tool output (surface tools/all, roles absent or including
+// tool) but no conversation bounds a scan of it, so it leaves tool output out.
+export function textScopeNote(draft: TextSearchDraft): "scan" | "tool-output" | null {
+  const literal = draft.editor === "visual" ? draft.match !== "rules" : ["literal", "regex"].includes(draft.mode);
+  if (!["all", "tools"].includes(draft.scope.surface)) return null;
+  if (literal) return !draft.scope.conversation_id && !draft.scope.workspace_id ? "scan" : null;
+  const toolRole = draft.scope.roles.length === 0 || draft.scope.roles.includes("tool");
+  return toolRole && !draft.scope.conversation_id ? "tool-output" : null;
+}
 export function scopeChoice(scope: TextScope) { return scopes.find(s => s.surface === scope.surface && scope.kinds.length === 0 && scope.roles.join(",") === ("role" in s ? s.role : "")); }
 export function chooseScope(scope: TextScope, id: string): TextScope { const choice = scopes.find(s => s.id === id); return choice ? { ...scope, surface: choice.surface, roles: "role" in choice ? [choice.role] : [], kinds: [] } : scope; }
 export const sourceLabel = (value: string) => ({ claude: "Claude", codex: "Codex", chatgpt: "ChatGPT", conductor: "Conductor", antigravity: "Antigravity", canonical: "Imported archive", tl1: "TL1", "tl1-export": "TL1 export" }[value] ?? value);
