@@ -27,8 +27,7 @@ under `example`.
 ## Pieces
 
 1. **The site map (this document).** `web/generate-site-map.mjs` bundles
-   `web/src/site-map.ts` with esbuild and writes the file, as
-   `generate-ask-destinations.mjs` does for Ask's destinations.
+   `web/src/site-map.ts` with esbuild and writes the file.
    `npm --prefix web run check-site-map` fails when the file is stale, and
    `npm run check` runs it. The map is data, not an algorithm. It lists what
    exists and which combinations are valid, so Go never re-derives

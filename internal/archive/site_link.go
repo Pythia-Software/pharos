@@ -1541,6 +1541,18 @@ func (site *siteMap) title(state siteState) string {
 	return node.Title
 }
 
+// section names the top-level page a page sits under, such as Analyze for
+// analyze/tokens.
+func (site *siteMap) section(page string) string {
+	top, _, _ := strings.Cut(page, "/")
+	node := site.Nodes[top]
+	if node == nil {
+		return "Pharos"
+	}
+	title, _, _ := strings.Cut(node.Title, " · ")
+	return title
+}
+
 func (site *siteMap) cardText(text string, days int) string {
 	if days == 0 {
 		return text

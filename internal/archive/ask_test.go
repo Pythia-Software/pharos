@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -212,7 +213,7 @@ func TestAskConversationPersistenceAndSelection(t *testing.T) {
 			t.Error("passed service token to CLI")
 		}
 		var response askAgentResponse
-		_ = json.Unmarshal(askReply("slow-commands", "findings"), &response)
+		_ = json.Unmarshal(askReply("tl1", "findings"), &response)
 		response.Message = fmt.Sprintf("Navigation reply %d", calls)
 		return []byte(jsonText(response)), nil
 	})
@@ -345,6 +346,10 @@ func TestAskPrivateVisitsAndChats(t *testing.T) {
 	}
 	if strings.Contains(jsonText(result), secret) {
 		t.Fatal("retention did not remove old visit")
+	}
+	// The agent compares browse_site's pages with the site map pages seen.
+	if pages := result.(map[string]any)["seenPages"].([]string); !slices.Contains(pages, "findings") {
+		t.Fatalf("seen pages %v", pages)
 	}
 	// No visit metadata enters indexed messages or generic UI preferences.
 	var count int
@@ -560,13 +565,12 @@ func TestAskModelCatalogs(t *testing.T) {
 	if len(agy) != 1 || len(agy[0].Efforts) != 3 {
 		t.Fatalf("agy: %+v", agy)
 	}
-	cards, err := askDestinations()
-	if err != nil || len(cards) < 20 {
-		t.Fatalf("catalog: %d %v", len(cards), err)
-	}
-	for _, card := range cards {
+	for _, card := range askSections {
 		if !askSafeURL(card.Href) {
-			t.Errorf("invalid destination %s", card.ID)
+			t.Errorf("invalid section %s", card.ID)
+		}
+		if _, err := siteLinkFromURL(card.Href); err != nil {
+			t.Errorf("section %s is not a site map page: %v", card.ID, err)
 		}
 	}
 }
@@ -1079,5 +1083,117 @@ func TestAskViewIdentityRetainsQueryState(t *testing.T) {
 	}
 	if askViewKey("/analyze?repo=pharos") == askViewKey("/analyze?repo=other") {
 		t.Fatal("different filters became the same visited view")
+	}
+}
+
+// A destination is a section or lookup id, or a link the site map reads back:
+// the card carries the canonical link, its title and its summary.
+func TestAskSiteLinkDestinations(t *testing.T) {
+	s := askTestServer(t)
+	site, cases := testSiteMap(t), readSiteCases(t)
+	example, _ := url.Parse(cases.Example.URL)
+	state, err := siteLinkFromURL(cases.Example.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := site.build(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := func(destinations ...map[string]string) func(context.Context, askProvider, askSelection, string) ([]byte, error) {
+		return func(context.Context, askProvider, askSelection, string) ([]byte, error) {
+			return []byte(jsonText(map[string]any{"message": "This view shows it.", "destinations": destinations, "lookup": askLookup{Kind: "none"}, "clarification": nil})), nil
+		}
+	}
+	// The same link in another parameter order, or on this computer's origin,
+	// is the same card.
+	for _, given := range []string{cases.Example.URL, example.Path + "?" + example.Query().Encode(), "http://127.0.0.1:8765" + cases.Example.URL} {
+		override(t, &askRunCLI, reply(map[string]string{"id": "", "url": given, "description": ""}, map[string]string{"id": "", "url": canonical, "description": "The same view again."}))
+		answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC")
+		if err != nil {
+			t.Fatalf("%s: %v", given, err)
+		}
+		if len(answer.Cards) != 1 {
+			t.Fatalf("%s: the same view twice gave %d cards", given, len(answer.Cards))
+		}
+		card := answer.Cards[0]
+		if card.Href != canonical || card.Title != site.title(state) || card.Description != site.summary(state) || card.Kind != "Analyze" || !askSafeURL(card.Href) {
+			t.Fatalf("%s: card %+v, want %s", given, card, canonical)
+		}
+	}
+	override(t, &askRunCLI, reply(map[string]string{"id": "", "url": canonical, "description": "Opus tokens by model."}))
+	if answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC"); err != nil || answer.Cards[0].Description != "Opus tokens by model." {
+		t.Fatalf("the agent's description was not kept: %+v %v", answer, err)
+	}
+	with := func(change func(url.Values)) string {
+		values := example.Query()
+		change(values)
+		return example.Path + "?" + values.Encode()
+	}
+	for name, destination := range map[string]map[string]string{
+		"malformed URL":     {"id": "", "url": "/analyze?analyze_mode=%zz"},
+		"unknown parameter": {"id": "", "url": with(func(v url.Values) { v.Set("colour", "red") })},
+		"coercible state":   {"id": "", "url": with(func(v url.Values) { v.Set("analyze_chart", `{"v":2,"view":"trend","metric":"cost","split":"type"}`) })},
+		"Ask chat":          {"id": "", "url": "/?ask_chat=chat-1"},
+		"other site":        {"id": "", "url": "https://example.com/analyze"},
+		"both":              {"id": "analyze", "url": canonical},
+		"neither":           {"id": " ", "url": ""},
+	} {
+		destination["description"] = ""
+		override(t, &askRunCLI, reply(destination))
+		if answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC"); err == nil || !strings.HasSuffix(err.Error(), "try again") {
+			t.Errorf("%s: %+v accepted: %+v %v", name, destination, answer, err)
+		}
+	}
+}
+
+// The motivating question, through the send endpoint: an agent that builds
+// the view with site_link and returns its url opens that one view. The fake
+// agent proves the wiring, not a model's judgement.
+func TestAskOpusTokensQuestion(t *testing.T) {
+	s := askTestServer(t)
+	askEnable(t, s)
+	link := ""
+	override(t, &askRunCLI, func(ctx context.Context, p askProvider, sel askSelection, prompt string) ([]byte, error) {
+		if !strings.Contains(prompt, "browse_site and site_link") || strings.Contains(prompt, `"slow-commands"`) {
+			t.Error("the prompt does not send the agent to the site tools, or still lists every card")
+		}
+		value, _, err := callSiteMCP(ctx, s.Catalog, "site_link", map[string]any{
+			"page":    "analyze/tokens",
+			"options": map[string]any{"view": "trend", "metric": "tokens", "split": "model_family", "rollingPeriods": 7},
+			"filters": []any{map[string]any{"field": "provider", "op": "=", "value": "claude"}, map[string]any{"field": "model_family", "op": "contains", "value": "opus"}},
+			"days":    30,
+		})
+		if err != nil {
+			return nil, err
+		}
+		link = value.(map[string]any)["url"].(string)
+		return []byte(jsonText(map[string]any{"message": "Opus-class tokens per day by model.", "destinations": []map[string]string{{"id": "", "url": link, "description": ""}}, "lookup": askLookup{Kind: "none"}, "clarification": nil})), nil
+	})
+	input := askInput()
+	input["prompt"] = "How many tokens have I used per day through Anthropic Opus-class models? Show me a 7-day trailing average, grouped by model."
+	askOK(t, s, "send", input)
+	session, err := s.askSession(t.Context(), "chat-1")
+	if err != nil || len(session.Conversation) != 1 || session.Conversation[0].Status != "single" || len(session.Conversation[0].Cards) != 1 {
+		t.Fatalf("answer: %+v %v", session, err)
+	}
+	// site_link names only the chart settings given; the page draws them as
+	// the example's whole chart (TestSiteLinkBuildsTheMotivatingExample).
+	card := session.Conversation[0].Cards[0]
+	if card.Href != link {
+		t.Fatalf("card link %s, want %s", card.Href, link)
+	}
+	if card.Title != "Tokens and Cost · Over time" || card.Kind != "Analyze" || card.Description != "Tokens per day by model, 7-day rolling mean, where provider is claude and model contains opus, last 30 days." {
+		t.Fatalf("card %+v", card)
+	}
+	// A follow-up can name the saved card by its id, and the saved chat keeps
+	// the canonical link.
+	override(t, &askRunCLI, func(context.Context, askProvider, askSelection, string) ([]byte, error) {
+		return askReply(card.ID), nil
+	})
+	input["turnID"], input["prompt"] = "turn-2", "Open that again"
+	askOK(t, s, "send", input)
+	if session, err = s.askSession(t.Context(), "chat-1"); err != nil || len(session.Conversation) != 2 || len(session.Conversation[1].Cards) != 1 || session.Conversation[1].Cards[0].Href != card.Href {
+		t.Fatalf("follow-up: %+v %v", session, err)
 	}
 }

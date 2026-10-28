@@ -885,8 +885,10 @@ func (s *Server) startAsk(ctx context.Context, body map[string]any) (askSession,
 	return session, p, runCtx, finalCancel, nil
 }
 
-// Only local UI routes can enter visit history. Agent responses use known IDs,
-// never model-provided URLs. Reject encoded traversal, credentials and controls.
+// Only local UI routes can enter visit history or a card. An agent's URL
+// becomes a card only as the canonical link the site map rebuilds from it
+// (askSiteCard), which must pass this too. Reject encoded traversal,
+// credentials and controls.
 func askSafeURL(raw string) bool {
 	if len(raw) > 16000 || !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") || strings.ContainsAny(raw, "\\\r\n\x00") {
 		return false
