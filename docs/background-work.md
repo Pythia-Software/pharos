@@ -377,14 +377,20 @@ background operations, and no request waits for one. Ask Pharos stays out of sco
 save of a finished answer, which writes the catalog after its request has
 ended, is registered.
 
-**A pinned WAL.** A bound checkpoint that a reader keeps busy ends
-`skipped(catalog-busy)`. Once the WAL is over `walPinBytes` (1 GiB) the skip
-also diagnoses (`wal_pin.go`), at most once a minute: it reads the -shm
-header (`mxFrame`, `nBackfill`, the read marks), asks `F_GETLK` which other
-process holds each pinning read slot (macOS), and otherwise names this
-process with its operations that were running before the checkpoint stopped
-advancing, oldest first. The diagnosis goes in the skipped operation's
-detail, one stderr line and attention rule 9 (§7.3). It cancels nothing.
+**A pinned WAL.** A bound checkpoint that a reader or the writer keeps
+busy ends `skipped(catalog-busy)`. Once the WAL is over `walPinBytes`
+(1 GiB) and the truncating pass reports frames left to copy at the same
+`nBackfill` as the previous busy check, the checkpoint has stalled, and the
+skip diagnoses it (`wal_pin.go`), at most once a minute per stall and again
+at once for a new one. It reads the -shm header and asks `F_GETLK` which
+other process holds the write, checkpoint or a read lock (macOS), using the
+descriptor SQLite already has open, so it opens and keeps nothing on the
+library's volume. With no other holder it names this process only when a
+read slot is marked where the checkpoint stopped (a checkpoint moves every
+unheld slot's mark), with its running operations that started before the
+stall, oldest first; otherwise the holder is unknown. The diagnosis goes in
+the skipped operation's detail, one stderr line and attention rule 9
+(§7.3). It cancels nothing.
 
 ### 3.5 E. Transitions
 
@@ -1242,7 +1248,7 @@ positives fixed in phase 0:
 | 6 | The latest local backup failed | error | Open Backups (`/settings/backups`) |
 | 7 | A scheduled cloud backup failed (the schedule has `failures > 0`) or the latest verification failed | error | Open Backups |
 | 8 | The library is unavailable, was disconnected, or setup is needed (native rules today) | error | as today |
-| 9 | The WAL is over 1 GiB and a bound checkpoint is busy: a reader's snapshot keeps it from folding in recent changes. The item says how big the log is, since when the checkpoint has not advanced, and who holds it (another process by pid and command, or this process and its operations that were running before the stall). It clears once a checkpoint succeeds. | warning | Open Capture & index |
+| 9 | The WAL is over 1 GiB and its checkpoint has stopped advancing: frames are left to copy and `nBackfill` did not move between two busy bound checks (a busy truncation alone, with every frame copied, is not a stall). The item says how big the log is, how many changes wait and since when, and who holds them back when Pharos can tell (another process by pid and command, and what it holds; or this process, with its running operations that started before the stall); otherwise it says it could not tell. It clears once a checkpoint succeeds, the checkpoint advances, or the log is under 1 GiB. | warning | Open Capture & index |
 
 Rule 4 is today's web rule (the native menu ignores interruptions). The
 first rule that applies sets the menu's single line; the snapshot lists all.

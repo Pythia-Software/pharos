@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -71,10 +72,66 @@ func TestWALPinNamesAnotherProcess(t *testing.T) {
 		t.Fatal("the helper did not start reading")
 	}
 	writeRows(t, catalog.DB, "after-")
-	catalog.boundWALAt(t.Context(), -1, priorityBackground)
+	for range 2 { // a stall is the checkpoint not advancing between two checks
+		catalog.wal.retryAt = time.Time{}
+		catalog.boundWALAt(t.Context(), -1, priorityBackground)
+	}
 	pin := catalog.walPinned()
 	want := fmt.Sprintf("another process: pid %d (", helper.Process.Pid)
-	if pin == nil || !strings.HasPrefix(pin.Holder, want) || !strings.Contains(pin.Holder, "TestWALReaderHelperProcess") {
+	if pin == nil || !pin.Known || !strings.HasPrefix(pin.Holder, want) || !strings.Contains(pin.Holder, "TestWALReaderHelperProcess") || !strings.Contains(pin.Holder, "reading up to frame") {
 		t.Fatalf("pinned by the helper: %+v", pin)
+	}
+}
+
+// The probe borrows SQLite's descriptor of the -shm file and opens none of
+// its own, so once the catalog closes, this process holds nothing on the
+// library's volume.
+func TestWALPinLeavesNoDescriptorAfterClose(t *testing.T) {
+	useDurableCatalog(t)
+	override(t, &checkpointWaitMS, 50)
+	override(t, &walPinBytes, 1)
+	catalog, _ := testCatalog(t)
+	shm := catalog.Path + "-shm"
+	writeRows(t, catalog.DB, "before-")
+	reader, err := catalog.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := reader.QueryRow("SELECT COUNT(*) FROM meta").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	writeRows(t, catalog.DB, "after-")
+	open := func() int {
+		var want syscall.Stat_t
+		if syscall.Stat(shm, &want) != nil {
+			return 0
+		}
+		n := 0
+		for _, fd := range openDescriptors() {
+			var st syscall.Stat_t
+			if syscall.Fstat(fd, &st) == nil && st.Dev == want.Dev && st.Ino == want.Ino {
+				n++
+			}
+		}
+		return n
+	}
+	before := open()
+	for range 2 {
+		catalog.wal.retryAt = time.Time{}
+		catalog.boundWALAt(t.Context(), -1, priorityBackground)
+	}
+	if pin := catalog.walPinned(); pin == nil || !pin.Known {
+		t.Fatalf("no diagnosis: %+v", pin)
+	}
+	if after := open(); after != before {
+		t.Fatalf("the diagnosis changed the descriptors open on the -shm file: %d before, %d after", before, after)
+	}
+	reader.Rollback()
+	if err := catalog.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if n := open(); n != 0 {
+		t.Fatalf("%d descriptors of the -shm file are open after Close", n)
 	}
 }

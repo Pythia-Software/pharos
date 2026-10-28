@@ -299,7 +299,7 @@ func TestAttentionListsWhatTheUserCanActOn(t *testing.T) {
 	}
 
 	// Rule 9: a reader keeps the checkpoint from folding in a large WAL.
-	catalog.wal.pin.Store(&walPin{Since: time.Now().Add(-3 * time.Hour), WALBytes: 14 << 30, Pending: 3_400_000, Holder: "pid 4242 (pharos labeling prepare --dry-run)"})
+	catalog.wal.pin.Store(&walPin{Since: time.Now().Add(-3 * time.Hour), WALBytes: 14 << 30, Pending: 3_400_000, Holder: "another process: pid 4242 (pharos labeling prepare --dry-run) reading up to frame 1,045 of 3,401,045", Known: true})
 	item := rules()["wal-pinned"]
 	if item.Severity != "warning" || item.Rule != 9 || !strings.Contains(item.Detail, "15.0 GB") || !strings.Contains(item.Detail, "3 hours") || !strings.Contains(item.Detail, "pharos labeling prepare") {
 		t.Fatalf("a pinned WAL: %+v", item)

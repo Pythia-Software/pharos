@@ -33,10 +33,14 @@ func TestWALIndexHeaderParse(t *testing.T) {
 	if header.MxFrame != 3_400_000 || header.NBackfill != 1045 || header.ReadMarks[1] != 1045 || header.ReadMarks[2] != walReadMarkUnused {
 		t.Fatalf("header: %+v", header)
 	}
-	// Slot 0 reads the database alone, an unused slot pins nothing, and a
-	// reader at the last frame keeps nothing from the checkpoint.
-	if got := header.pinning(); len(got) != 2 || got[0] != 1 || got[1] != 4 {
-		t.Fatalf("pinning slots: %v", got)
+	// Only a slot marked where the checkpoint stopped is blocking it; slot 0
+	// reads the database alone.
+	if got := header.blocking(); len(got) != 1 || got[0] != 1 {
+		t.Fatalf("blocking slots: %v", got)
+	}
+	header.NBackfill = header.MxFrame
+	if got := header.blocking(); len(got) != 0 {
+		t.Fatalf("a fully copied log has blocking slots: %v", got)
 	}
 	if _, err := parseWALIndexHeader(make([]byte, 100)); err == nil {
 		t.Fatal("a short header parsed")
@@ -57,77 +61,111 @@ func TestProcArgsParse(t *testing.T) {
 	}
 }
 
-// A busy bound checkpoint of a large WAL says how far the checkpoint got,
-// since when, and who holds it; the probe runs at most once a minute, the
-// stall restarts when the checkpoint advances, and a success clears it.
+// A busy checkpoint of a large WAL is a stall only when frames are left and
+// the checkpoint did not advance between two checks; the probe runs at most
+// once a minute during one stall, again at once for a new one, and the
+// diagnosis clears when the checkpoint advances, the log is small, or
+// everything was copied.
 func TestWALPinBookkeeping(t *testing.T) {
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
 	override(t, &walPinBytes, 1000)
 	header := walIndexHeader{MxFrame: 5000, NBackfill: 100, ReadMarks: [walReadSlots]uint32{0, 100, walReadMarkUnused, walReadMarkUnused, walReadMarkUnused}}
-	override(t, &readWALIndex, func(string) (walIndexHeader, error) { return header, nil })
 	probes := 0
-	readers := []walReader{{Slot: 1, PID: 4242, Command: "pharos labeling prepare --dry-run"}}
-	override(t, &probeWALReaders, func(_ string, slots []int) ([]walReader, error) {
+	locks := []walLock{{Byte: walReadLockByte + 1, PID: 4242, Command: "pharos labeling prepare --dry-run"}}
+	var probeErr error
+	override(t, &probeWAL, func(string) (walProbe, error) {
 		probes++
-		if len(slots) != 1 || slots[0] != 1 {
-			t.Errorf("probed slots %v, want the pinning one", slots)
-		}
-		return readers, nil
+		return walProbe{Header: header, Locks: locks}, probeErr
 	})
 	start := time.Now()
 	catalog.wal.mu.Lock()
 	defer catalog.wal.mu.Unlock()
+	busy := func(size, backfilled int64, at time.Duration) *walPin {
+		t.Helper()
+		return catalog.noteWALBusy(size, 5000, backfilled, start.Add(at))
+	}
 
-	if pin := catalog.noteWALBusy(999, start); pin != nil || catalog.walPinned() != nil || probes != 0 {
+	if pin := busy(999, 100, 0); pin != nil || probes != 0 {
 		t.Fatalf("a WAL under the threshold was diagnosed: %+v", pin)
 	}
-	pin := catalog.noteWALBusy(2000, start)
-	if pin == nil || probes != 1 || pin.Pending != 4900 || !pin.Since.Equal(start) || !strings.Contains(pin.Holder, "pid 4242 (pharos labeling prepare --dry-run)") {
+	if pin := busy(2000, 100, 0); pin != nil || catalog.walPinned() != nil {
+		t.Fatalf("one busy check is not a stall: %+v", pin)
+	}
+	if pin := catalog.noteWALBusy(2000, 5000, 5000, start); pin != nil || catalog.walPinned() != nil {
+		t.Fatalf("a log whose frames were all copied is not stalled: %+v", pin)
+	}
+	busy(2000, 100, 0)
+	pin := busy(2000, 100, 30*time.Second)
+	if pin == nil || probes != 1 || pin.Pending != 4900 || !pin.Since.Equal(start) || !pin.Known ||
+		pin.Holder != "another process: pid 4242 (pharos labeling prepare --dry-run) reading up to frame 100 of 5,000" {
 		t.Fatalf("first diagnosis: %+v, %d probes", pin, probes)
 	}
 	if !strings.Contains(pin.String(), "frames_pending=4,900") {
 		t.Fatalf("log line: %s", pin)
 	}
 	// Within a minute: the size updates, the probe does not run again.
-	if pin := catalog.noteWALBusy(3000, start.Add(30*time.Second)); probes != 1 || pin.WALBytes != 3000 || pin.Holder == "" || !pin.Since.Equal(start) {
+	if pin := busy(3000, 100, 60*time.Second); probes != 1 || pin.WALBytes != 3000 || !pin.Since.Equal(start) {
 		t.Fatalf("rate limit: %+v, %d probes", pin, probes)
 	}
-	// No other process holds the slot: it is this process, and its
-	// operations already running when the stall began are the suspects.
-	readers = nil
+	// The checkpoint advanced: the old holder is dropped, and the next stall
+	// is probed at once.
+	locks = []walLock{{Byte: walWriteLockByte, PID: 77, Command: "sqlite3 catalog.sqlite3"}}
+	if pin := busy(3000, 200, 70*time.Second); pin != nil || catalog.walPinned() != nil {
+		t.Fatalf("an advancing checkpoint is still diagnosed: %+v", pin)
+	}
+	header.NBackfill, header.ReadMarks[1] = 200, 200
+	if pin := busy(3000, 200, 80*time.Second); probes != 2 || pin.Holder != "another process: pid 77 (sqlite3 catalog.sqlite3) writing" || !pin.Since.Equal(start.Add(70*time.Second)) {
+		t.Fatalf("a new stall kept the old diagnosis: %+v, %d probes", pin, probes)
+	}
+
+	// No other process: a slot marked where the checkpoint stopped is this
+	// process's, and only operations running since before the stall are
+	// suspects.
+	locks = nil
+	_, queued := server.begin(context.Background(), OperationSpec{Kind: "index.changes.manual", Trigger: triggerUser, Queued: true})
+	defer queued.Finish(nil)
 	_, old := server.begin(context.Background(), OperationSpec{Kind: "analysis.findings", Trigger: triggerUser})
 	defer old.Finish(nil)
-	pin = catalog.noteWALBusy(4000, start.Add(61*time.Second))
-	if probes != 2 || !strings.HasPrefix(pin.Holder, "this process") || strings.Contains(pin.Holder, "analysis.findings") {
-		t.Fatalf("an operation that began after the stall is a suspect: %+v", pin)
-	}
-	later := start.Add(time.Hour)
-	header.NBackfill = 200 // the checkpoint advanced: the stall starts again
-	pin = catalog.noteWALBusy(4000, later.Add(time.Hour))
-	if !pin.Since.Equal(later.Add(time.Hour)) || pin.Pending != 4800 {
-		t.Fatalf("an advancing checkpoint is still stalled since %s: %+v", start, pin)
-	}
-	catalog.wal.stall.backfillSince, catalog.wal.stall.diagnosedAt = later, time.Time{}
-	pin = catalog.noteWALBusy(4000, later.Add(2*time.Hour))
-	if !strings.Contains(pin.Holder, "analysis.findings for") {
+	catalog.noteWALCheckpointed()
+	later := time.Now().Add(time.Hour)
+	catalog.noteWALBusy(3000, 5000, 200, later)
+	pin = catalog.noteWALBusy(3000, 5000, 200, later.Add(time.Second))
+	if !pin.Known || !strings.HasPrefix(pin.Holder, "this process") || !strings.Contains(pin.Holder, "analysis.findings for") || strings.Contains(pin.Holder, "index.changes.manual") {
 		t.Fatalf("this process's suspects: %+v", pin)
 	}
-	// A probe that cannot run says so rather than blame this process.
-	override(t, &probeWALReaders, func(string, []int) ([]walReader, error) { return nil, errors.New("unsupported") })
-	catalog.wal.stall.diagnosedAt = time.Time{}
-	if pin := catalog.noteWALBusy(4000, later.Add(3*time.Hour)); !strings.HasPrefix(pin.Holder, "a reader in this or another process") {
+	// An operation that began after the stall is no suspect.
+	catalog.noteWALCheckpointed()
+	early := start.Add(-time.Hour)
+	catalog.noteWALBusy(3000, 5000, 200, early)
+	if pin := catalog.noteWALBusy(3000, 5000, 200, early.Add(time.Second)); strings.Contains(pin.Holder, "analysis.findings") {
+		t.Fatalf("an operation that began after the stall is a suspect: %+v", pin)
+	}
+	// No slot is marked where the checkpoint stopped (only the restart was
+	// refused, or the marks moved): unknown, not this process.
+	header.ReadMarks[1] = 4000
+	catalog.noteWALCheckpointed()
+	catalog.noteWALBusy(3000, 5000, 200, later)
+	if pin := catalog.noteWALBusy(3000, 5000, 200, later.Add(time.Second)); pin.Known || !strings.HasPrefix(pin.Holder, "unknown") || !strings.Contains(pin.Holder, "analysis.findings") {
+		t.Fatalf("an unexplained stall blamed a holder: %+v", pin)
+	}
+	// A probe that cannot run says so.
+	probeErr = errors.New("unsupported")
+	catalog.noteWALCheckpointed()
+	catalog.noteWALBusy(3000, 5000, 200, later)
+	if pin := catalog.noteWALBusy(3000, 5000, 200, later.Add(time.Second)); pin.Known || pin.Holder != "unknown (unsupported)" {
 		t.Fatalf("unknown holder: %+v", pin)
 	}
-	catalog.noteWALCheckpointed()
-	if catalog.walPinned() != nil {
-		t.Fatal("a checkpoint did not clear the diagnosis")
+	// A log that is small again clears it.
+	if pin := catalog.noteWALBusy(500, 5000, 200, later.Add(2*time.Second)); pin != nil || catalog.walPinned() != nil {
+		t.Fatal("a small log kept the diagnosis")
 	}
 }
 
 // End to end in one process: a read snapshot on another connection keeps
-// the bound checkpoint busy; the skipped checkpoint carries the diagnosis,
-// naming this process; the next checkpoint after the reader ends clears it.
+// the bound checkpoint from advancing; the second busy check diagnoses it,
+// the skipped checkpoint carries the diagnosis, and the next checkpoint
+// after the reader ends clears it.
 func TestBoundWALNamesTheReaderThatPinsIt(t *testing.T) {
 	useDurableCatalog(t)
 	override(t, &checkpointWaitMS, 50)
@@ -148,13 +186,21 @@ func TestBoundWALNamesTheReaderThatPinsIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeRows(t, catalog.DB, "after-")
-	catalog.boundWALAt(context.Background(), -1, priorityBackground)
+	check := func() {
+		catalog.wal.retryAt = time.Time{}
+		catalog.boundWALAt(context.Background(), -1, priorityBackground)
+	}
+	check()
+	if pin := catalog.walPinned(); pin != nil {
+		t.Fatalf("one busy check is a stall: %+v", pin)
+	}
+	check()
 	pin := catalog.walPinned()
-	if pin == nil || pin.Pending <= 0 || !strings.HasPrefix(pin.Holder, "this process") && !strings.HasPrefix(pin.Holder, "a reader in this or another process") {
+	if pin == nil || pin.Pending <= 0 || !strings.Contains(pin.Holder, "index.changes.manual for") {
 		t.Fatalf("pinned WAL: %+v", pin)
 	}
-	if !strings.Contains(pin.Holder, "index.changes.manual for") {
-		t.Fatalf("the running index is not a suspect: %+v", pin)
+	if probe, err := probeWAL(catalog.Path + "-shm"); err == nil && (!pin.Known || !strings.HasPrefix(pin.Holder, "this process") || len(probe.Locks) != 0) {
+		t.Fatalf("a reader in this process: %+v, probe %+v", pin, probe)
 	}
 	skipped := false
 	for _, view := range server.ops.views() {
@@ -163,12 +209,11 @@ func TestBoundWALNamesTheReaderThatPinsIt(t *testing.T) {
 	if !skipped {
 		t.Fatal("the skipped checkpoint has no diagnosis")
 	}
-	if item := firstItem(server.attention(context.Background()), "wal-pinned"); item == nil || item.Severity != "warning" || !strings.Contains(item.Detail, "this process") {
+	if item := firstItem(server.attention(context.Background()), "wal-pinned"); item == nil || item.Severity != "warning" || !strings.Contains(item.Detail, "index.changes.manual") {
 		t.Fatalf("attention: %+v", item)
 	}
 	reader.Rollback()
-	catalog.wal.retryAt = time.Time{}
-	catalog.boundWALAt(context.Background(), -1, priorityBackground)
+	check()
 	if catalog.walPinned() != nil {
 		t.Fatal("a successful checkpoint left the diagnosis")
 	}

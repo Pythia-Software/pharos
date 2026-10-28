@@ -152,10 +152,18 @@ func (c *Catalog) checkpointWith(passive func(func())) error {
 		return err
 	}
 	if busy != 0 {
-		return errCheckpointBusy
+		return &checkpointBusyError{frames: int64(logFrames), backfilled: int64(checkpointed)}
 	}
 	return nil
 }
+
+// checkpointBusyError is errCheckpointBusy with what the truncating pass
+// reported: the frames in the log (mxFrame) and how many of them are in
+// the database (nBackfill); -1 when unknown.
+type checkpointBusyError struct{ frames, backfilled int64 }
+
+func (e *checkpointBusyError) Error() string        { return errCheckpointBusy.Error() }
+func (e *checkpointBusyError) Is(target error) bool { return target == errCheckpointBusy }
 
 // walBound lets one goroutine at a time checkpoint an oversized WAL and backs
 // off after readers kept a checkpoint from finishing.
@@ -224,11 +232,16 @@ func (c *Catalog) boundWALAt(ctx context.Context, limit int64, priority string) 
 		c.noteWALCheckpointed()
 	}
 	if errors.Is(err, errCheckpointBusy) {
-		// A reader keeps the checkpoint from advancing. Past walPinBytes,
-		// say who (wal_pin.go).
+		// A reader or a writer kept the checkpoint from finishing. A large
+		// log whose checkpoint stops advancing is diagnosed (wal_pin.go).
 		detail := ""
+		frames, backfilled := int64(-1), int64(-1)
+		var counts *checkpointBusyError
+		if errors.As(err, &counts) {
+			frames, backfilled = counts.frames, counts.backfilled
+		}
 		if info, statErr := os.Stat(c.Path + "-wal"); statErr == nil {
-			if pin := c.noteWALBusy(info.Size(), c.clock()); pin != nil {
+			if pin := c.noteWALBusy(info.Size(), frames, backfilled, c.clock()); pin != nil {
 				detail = pin.String()
 			}
 		}

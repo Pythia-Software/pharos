@@ -9,7 +9,6 @@ import (
 	"os"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -18,34 +17,39 @@ import (
 // findings pass waiting on the writer, another process reading the live
 // catalog) stops it there: the WAL grows by everything written meanwhile,
 // and every page fetch searches a wal-index that grows with it. boundWAL
-// cannot fix that, so once the WAL is large and the checkpoint stays busy it
-// says who holds it: the snapshot's process, and for this process its
-// running operations that started before the stall. It cancels nothing.
+// cannot fix that, so once the WAL is large and its checkpoint has stopped
+// advancing it says who holds it. It cancels nothing.
+//
+// A busy truncating checkpoint alone is not a stall: it is also busy when
+// every frame was copied but a reader or the writer kept it from restarting
+// the log. A stall is frames left to copy and nBackfill unchanged across two
+// busy checks in a row (boundWAL retries every walRetryDelay).
 
 var (
-	// walPinBytes is the WAL size from which a busy bound checkpoint is
+	// walPinBytes is the WAL size from which a stalled checkpoint is
 	// diagnosed. Tests lower it.
 	walPinBytes int64 = 1 << 30
 	// walPinDiagnoseEvery bounds how often the lock probe and the log line
-	// run while the stall lasts.
+	// run while one stall lasts.
 	walPinDiagnoseEvery = time.Minute
-	// readWALIndex and probeWALReaders read the -shm file; tests replace
-	// them.
-	readWALIndex    = readWALIndexHeader
-	probeWALReaders = walReadLockHolders
+	// probeWAL reads the -shm header and its locks; tests replace it.
+	probeWAL = probeWALShm
 )
 
 // The wal-index header at the start of <catalog>-shm (SQLite's wal.c): two
 // copies of WalIndexHdr (48 bytes each), then WalCkptInfo, all in native
 // byte order. WalIndexHdr.mxFrame is the last valid frame; nBackfill is how
 // far checkpoints have copied; aReadMark[i] is the frame a reader holding
-// read lock i reads up to. The read locks are bytes of the -shm file:
-// WALINDEX_LOCK_OFFSET (120) + WAL_READ_LOCK(i) (3+i).
+// read lock i reads up to. The locks are bytes of the -shm file from
+// WALINDEX_LOCK_OFFSET (120): the write lock, the checkpoint lock, the
+// recovery lock, then read lock i at 123+i.
 const (
 	walIndexHeaderBytes = 136
 	walReadSlots        = 5
 	walReadMarkUnused   = 0xffffffff
-	walReadLockByte     = 120 + 3
+	walWriteLockByte    = 120
+	walCheckpointByte   = 121
+	walReadLockByte     = 123
 )
 
 type walIndexHeader struct {
@@ -70,120 +74,89 @@ func parseWALIndexHeader(b []byte) (walIndexHeader, error) {
 	return h, nil
 }
 
-// pinning lists the read slots whose mark is below the last frame: a reader
-// holding one keeps the checkpoint from passing its mark. Slot 0 reads the
-// database alone and never pins frames.
-func (h walIndexHeader) pinning() []int {
+// blocking lists the read slots whose mark is where the checkpoint stopped.
+// A checkpoint moves every unheld slot's mark past what it copies, so after
+// one, a slot still marked at nBackfill (below the last frame) is held by
+// the reader that stopped it.
+func (h walIndexHeader) blocking() []int {
 	slots := []int{}
+	if h.NBackfill >= h.MxFrame {
+		return slots
+	}
 	for i := 1; i < walReadSlots; i++ {
-		if mark := h.ReadMarks[i]; mark != walReadMarkUnused && mark < h.MxFrame {
+		if h.ReadMarks[i] == h.NBackfill {
 			slots = append(slots, i)
 		}
 	}
 	return slots
 }
 
-// walShmFiles keeps one descriptor per -shm file open for the life of the
-// process. Closing any descriptor of a file drops every POSIX lock this
-// process holds on it, SQLite's read locks included, so these are never
-// closed. A file replaced since (the last connection deleted it, the
-// library reopened) gets a new descriptor; the old one stays open.
-var walShmFiles struct {
-	mu      sync.Mutex
-	files   map[string]*os.File
-	retired []*os.File
-}
-
-func openWALShm(path string) (*os.File, error) {
-	walShmFiles.mu.Lock()
-	defer walShmFiles.mu.Unlock()
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, err
-	}
-	if file := walShmFiles.files[path]; file != nil {
-		if open, err := file.Stat(); err == nil && os.SameFile(open, info) {
-			return file, nil
-		}
-		walShmFiles.retired = append(walShmFiles.retired, file)
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	if walShmFiles.files == nil {
-		walShmFiles.files = map[string]*os.File{}
-	}
-	walShmFiles.files[path] = file
-	return file, nil
-}
-
-func readWALIndexHeader(shm string) (walIndexHeader, error) {
-	file, err := openWALShm(shm)
-	if err != nil {
-		return walIndexHeader{}, err
-	}
-	b := make([]byte, walIndexHeaderBytes)
-	if _, err := file.ReadAt(b, 0); err != nil {
-		return walIndexHeader{}, err
-	}
-	return parseWALIndexHeader(b)
-}
-
-// walReader is another process holding a read slot.
-type walReader struct {
-	Slot    int
+// walLock is a lock another process holds on a byte of the -shm file.
+type walLock struct {
+	Byte    int
 	PID     int
 	Command string
 }
 
-// walPin is what is known about a checkpoint that cannot advance.
+// walProbe is what probeWAL read: the header, and the locks other
+// processes hold (POSIX locks never report the caller's own).
+type walProbe struct {
+	Header    walIndexHeader
+	HeaderErr error
+	Locks     []walLock
+}
+
+// walPin is what is known about a checkpoint that stopped advancing.
 type walPin struct {
-	Since     time.Time // when the checkpoint last advanced, as far as this process saw
+	Since     time.Time // the first busy check that saw the checkpoint at this frame
 	WALBytes  int64
-	Pending   int64 // frames not yet checkpointed; -1 when the header could not be read
+	Pending   int64 // frames not yet copied into the database
 	Holder    string
+	Known     bool // Holder names who holds the log, not only what is running
 	Diagnosed time.Time
 }
 
 func (p walPin) String() string {
-	pending := "unknown"
-	if p.Pending >= 0 {
-		pending = formatCount(int(p.Pending))
-	}
-	return fmt.Sprintf("wal_bytes=%d frames_pending=%s stalled_since=%s holder=%s", p.WALBytes, pending, p.Since.UTC().Format(time.RFC3339), p.Holder)
+	return fmt.Sprintf("wal_bytes=%d frames_pending=%s stalled_since=%s holder=%s", p.WALBytes, formatCount(int(p.Pending)), p.Since.UTC().Format(time.RFC3339), p.Holder)
 }
 
 // walStall is boundWAL's bookkeeping, guarded by walBound.mu.
 type walStall struct {
-	backfill      uint32
+	backfill      int64
 	backfillSince time.Time
 	diagnosedAt   time.Time
 	holder        string
+	known         bool
 }
 
-// noteWALBusy records a busy bound checkpoint of a WAL of walBytes at now,
-// and returns the diagnosis once the WAL is over walPinBytes. The lock
-// probe and the log line run at most once per walPinDiagnoseEvery. Call it
-// with c.wal.mu held.
-func (c *Catalog) noteWALBusy(walBytes int64, now time.Time) *walPin {
-	if walBytes < walPinBytes {
+// noteWALBusy records a busy bound checkpoint of a WAL of walBytes whose
+// truncating pass reported frames in the log and backfilled of them copied
+// (-1 when unknown). It returns the diagnosis of a stall once the WAL is over
+// walPinBytes; the probe and the log line run at most once per
+// walPinDiagnoseEvery during one stall. Call it with c.wal.mu held.
+func (c *Catalog) noteWALBusy(walBytes, frames, backfilled int64, now time.Time) *walPin {
+	pending := frames - backfilled
+	if walBytes < walPinBytes || frames < 0 || backfilled < 0 || pending <= 0 {
+		// Small, unknown, or everything copied and only the restart of the
+		// log was refused: not a stall.
+		c.noteWALCheckpointed()
 		return nil
 	}
 	stall := &c.wal.stall
-	header, headerErr := readWALIndex(c.Path + "-shm")
-	if stall.backfillSince.IsZero() || headerErr == nil && header.NBackfill != stall.backfill {
-		stall.backfill, stall.backfillSince = header.NBackfill, now
+	if stall.backfillSince.IsZero() || backfilled != stall.backfill {
+		// First sight, or the checkpoint advanced: a new stall, if any,
+		// starts here, and whoever held the old one may be gone.
+		c.noteWALCheckpointed()
+		stall.backfill, stall.backfillSince = backfilled, now
+		return nil
 	}
-	pin := walPin{Since: stall.backfillSince, WALBytes: walBytes, Pending: -1}
-	if headerErr == nil {
-		pin.Pending = int64(header.MxFrame) - int64(header.NBackfill)
-	}
+	pin := walPin{Since: stall.backfillSince, WALBytes: walBytes, Pending: pending}
 	diagnose := stall.diagnosedAt.IsZero() || now.Sub(stall.diagnosedAt) >= walPinDiagnoseEvery
 	if diagnose {
-		stall.diagnosedAt, stall.holder = now, c.walHolder(header, headerErr, stall.backfillSince, now)
+		stall.diagnosedAt = now
+		stall.holder, stall.known = c.walHolder(stall.backfillSince, now)
 	}
-	pin.Diagnosed, pin.Holder = stall.diagnosedAt, stall.holder
+	pin.Diagnosed, pin.Holder, pin.Known = stall.diagnosedAt, stall.holder, stall.known
 	if diagnose {
 		fmt.Fprintf(os.Stderr, "Catalog WAL pinned: catalog=%s pid=%d %s\n", c.Path, os.Getpid(), pin)
 	}
@@ -191,7 +164,8 @@ func (c *Catalog) noteWALBusy(walBytes int64, now time.Time) *walPin {
 	return &pin
 }
 
-// noteWALCheckpointed clears the diagnosis once a checkpoint succeeds.
+// noteWALCheckpointed clears the diagnosis: a checkpoint succeeded, the
+// log is small again, or the checkpoint advanced.
 func (c *Catalog) noteWALCheckpointed() {
 	c.wal.stall = walStall{}
 	c.wal.pin.Store(nil)
@@ -202,53 +176,63 @@ func (c *Catalog) walPinned() *walPin {
 	return c.wal.pin.Load()
 }
 
-// walHolder names who keeps the checkpoint from advancing: other processes
-// holding a pinning read slot, by pid and command, or else this process and
-// its operations that were already running when the stall began.
-func (c *Catalog) walHolder(header walIndexHeader, headerErr error, since, now time.Time) string {
-	slots := header.pinning()
-	if headerErr != nil || len(slots) == 0 {
-		// Without marks, or when the checkpoint is only kept from restarting
-		// the log, any reader counts.
-		slots = []int{0, 1, 2, 3, 4}
+// walHolder names who keeps the checkpoint from advancing, and whether it
+// could tell. Another process holding a read slot or the write or checkpoint
+// lock is named by pid and command. With none, this process holds it only
+// when a slot is marked where the checkpoint stopped (see blocking); then
+// its running operations that started before the stall are the suspects.
+// Otherwise the holder is unknown.
+func (c *Catalog) walHolder(since, now time.Time) (string, bool) {
+	probe, err := probeWAL(c.Path + "-shm")
+	if err != nil {
+		return "unknown (" + err.Error() + ")", false
 	}
-	readers, probeErr := probeWALReaders(c.Path+"-shm", slots)
 	others := []string{}
-	seen := map[int]bool{}
-	for _, reader := range readers {
-		if seen[reader.PID] {
-			continue
+	for _, lock := range probe.Locks {
+		name := fmt.Sprintf("pid %d", lock.PID)
+		if lock.Command != "" {
+			name += " (" + lock.Command + ")"
 		}
-		seen[reader.PID] = true
-		name := fmt.Sprintf("pid %d", reader.PID)
-		if reader.Command != "" {
-			name += " (" + reader.Command + ")"
+		switch slot := lock.Byte - walReadLockByte; {
+		case lock.Byte == walWriteLockByte:
+			name += " writing"
+		case lock.Byte == walCheckpointByte:
+			name += " checkpointing"
+		case slot >= 0 && slot < walReadSlots && probe.HeaderErr == nil:
+			name += fmt.Sprintf(" reading up to frame %s of %s", formatCount(int(probe.Header.ReadMarks[slot])), formatCount(int(probe.Header.MxFrame)))
+		default:
+			name += " reading"
 		}
-		others = append(others, name)
+		if !slices.Contains(others, name) {
+			others = append(others, name)
+		}
 	}
 	if len(others) > 0 {
-		return "another process: " + strings.Join(others, ", ")
+		return "another process: " + strings.Join(others, ", "), true
 	}
 	suspects := c.walSuspects(since, now)
-	// POSIX locks never conflict with their own process, so a pinning slot
-	// no other process holds is held by this one.
-	holder := fmt.Sprintf("this process (pid %d)", os.Getpid())
-	if probeErr != nil {
-		holder = "a reader in this or another process (" + probeErr.Error() + ")"
+	if probe.HeaderErr == nil && len(probe.Header.blocking()) > 0 {
+		holder := fmt.Sprintf("this process (pid %d)", os.Getpid())
+		if len(suspects) > 0 {
+			holder += "; running since before the stall: " + strings.Join(suspects, ", ")
+		}
+		return holder, true
 	}
+	holder := "unknown (no other process holds the log, and no read slot is marked where the checkpoint stopped)"
 	if len(suspects) > 0 {
-		holder += "; running since before the stall: " + strings.Join(suspects, ", ")
+		holder += "; this process has been running since before the stall: " + strings.Join(suspects, ", ")
 	}
-	return holder
+	return holder, false
 }
 
 // walSuspects lists this process's running operations that started before
-// since, oldest first, by kind and age.
+// since, oldest first, by kind and age. Queued and blocked operations hold
+// no snapshot.
 func (c *Catalog) walSuspects(since, now time.Time) []string {
 	views := []opView{}
 	for _, op := range c.ops.running() {
 		view := op.view()
-		if view.Spec.Kind == "maintenance.checkpoint" || view.Started.After(since) {
+		if view.State != opRunning && view.State != opStopping || view.Spec.Kind == "maintenance.checkpoint" || view.Started.After(since) {
 			continue
 		}
 		views = append(views, view)

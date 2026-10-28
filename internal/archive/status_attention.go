@@ -240,8 +240,8 @@ func (s *Server) attention(ctx context.Context) []attentionItem {
 		}
 	}
 
-	// 9. A reader keeps the catalog's checkpoint from advancing while the
-	// WAL grows (wal_pin.go).
+	// 9. The catalog's checkpoint has stopped advancing while a large WAL
+	// grows (wal_pin.go).
 	if pin := s.Catalog.walPinned(); pin != nil {
 		items = append(items, attentionItem{ID: "wal-pinned", Rule: 9, Severity: "warning", Title: "The catalog can't fold in recent changes",
 			Detail: walPinDetail(*pin, s.Catalog.clock()), Action: openCaptureAndIndex})
@@ -249,15 +249,15 @@ func (s *Server) attention(ctx context.Context) []attentionItem {
 	return items
 }
 
-// walPinDetail says how big the log is, since when, and who holds it.
+// walPinDetail says how big the log is, for how long its checkpoint has
+// not advanced, and who holds it, when that is known.
 func walPinDetail(pin walPin, now time.Time) string {
-	detail := "Its change log has grown to " + humanBytes(pin.WALBytes)
-	if pin.Pending > 0 {
-		detail += " (" + formatCount(int(pin.Pending)) + " changes not yet folded in)"
-	}
-	detail += " and has not shrunk for " + humanDuration(now.Sub(pin.Since)) + ", which slows indexing and reading."
-	if pin.Holder != "" {
-		detail += " A long read holds it open: " + pin.Holder + "."
+	detail := "Its change log has grown to " + humanBytes(pin.WALBytes) + ", and " + formatCount(int(pin.Pending)) +
+		" changes have waited " + humanDuration(now.Sub(pin.Since)) + " to be folded in, which slows indexing and reading."
+	if pin.Known {
+		detail += " A long read holds them back: " + pin.Holder + "."
+	} else {
+		detail += " Pharos could not tell which reader holds them back: " + pin.Holder + "."
 	}
 	return detail
 }
