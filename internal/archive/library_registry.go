@@ -43,16 +43,22 @@ type registeredLibrary struct {
 	Config   string `json:"config"`
 	Volume   string `json:"volume,omitempty"`
 	Relative string `json:"relative,omitempty"`
+	// What Settings → Libraries says about a library that isn't open: when
+	// it last was, and how many conversations it held then.
+	LastOpened    string `json:"last_opened,omitempty"`
+	Conversations *int64 `json:"conversations,omitempty"`
 }
 
 type installationRegistry struct {
-	Version        int                 `json:"version"`
-	Application    string              `json:"application"`
-	Libraries      []registeredLibrary `json:"libraries"`
-	MCP            string              `json:"mcp_library"`
-	Selected       string              `json:"selected_library"`
-	DeliverySource string              `json:"delivery_source,omitempty"`
-	DeliveryTarget string              `json:"delivery_target,omitempty"`
+	Version     int                 `json:"version"`
+	Application string              `json:"application"`
+	Libraries   []registeredLibrary `json:"libraries"`
+	// MCP answers for the selected library. Earlier builds kept a separate
+	// assignment here; save keeps it equal to the selection for them.
+	MCP            string `json:"mcp_library"`
+	Selected       string `json:"selected_library"`
+	DeliverySource string `json:"delivery_source,omitempty"`
+	DeliveryTarget string `json:"delivery_target,omitempty"`
 }
 
 // fileLease is deliberately separate from SQLite's short transaction locks:
@@ -259,6 +265,9 @@ func (l *registeredLibrary) rememberLocation(config Config) {
 }
 
 func (r *installationRegistry) save() error {
+	if r.Selected != "" {
+		r.MCP = r.Selected
+	}
 	return durableJSON(installationPath(installationID(r.Application)), r)
 }
 
