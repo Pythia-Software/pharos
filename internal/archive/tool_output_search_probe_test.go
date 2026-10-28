@@ -7,7 +7,8 @@
 //
 // Replay real MCP search calls (exported from a catalog's mcp_calls as a JSON
 // array of {id, tool_name, arguments_json}) and record each call's result
-// identities, total, and the kinds of the matched messages:
+// identities, total, and the kinds of the matched messages, a JSON line each
+// (PHAROS_REPLAY_SHARD=i/n splits the calls across processes):
 //
 //	PHAROS_REPLAY_CATALOG=/scratch/catalog.sqlite3 PHAROS_REPLAY_CALLS=calls.json \
 //	  PHAROS_REPLAY_OUT=before.json go test -tags probe -run TestToolOutputSearchReplay -v ./internal/archive
@@ -27,8 +28,10 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -79,8 +82,32 @@ func TestToolOutputSearchReplay(t *testing.T) {
 		ByKind  map[string]int64 `json:"by_kind,omitempty"`
 		Elapsed int64            `json:"elapsed_ms"`
 	}
-	outcomes := []outcome{}
+	// Each outcome is a JSON line, so a stopped replay resumes; a shard i/n
+	// replays the calls whose id is i modulo n, into its own file.
+	out := os.Getenv("PHAROS_REPLAY_OUT")
+	shard, shards := int64(0), int64(1)
+	if value := os.Getenv("PHAROS_REPLAY_SHARD"); value != "" {
+		fmt.Sscanf(value, "%d/%d", &shard, &shards)
+		out += fmt.Sprintf(".%d", shard)
+	}
+	done := map[int64]bool{}
+	if previous, err := os.ReadFile(out); err == nil {
+		for _, line := range strings.Split(strings.TrimSpace(string(previous)), "\n") {
+			var recorded outcome
+			if json.Unmarshal([]byte(line), &recorded) == nil {
+				done[recorded.ID] = true
+			}
+		}
+	}
+	file, err := os.OpenFile(out, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
 	for _, call := range calls {
+		if done[call.ID] || call.ID%shards != shard {
+			continue
+		}
 		var args map[string]any
 		if err := json.Unmarshal([]byte(call.Arguments), &args); err != nil {
 			t.Fatal(err)
@@ -90,7 +117,7 @@ func TestToolOutputSearchReplay(t *testing.T) {
 		result := outcome{ID: call.ID, Tool: call.Tool, Items: []string{}, Kinds: map[string]int{}, Elapsed: time.Since(started).Milliseconds()}
 		if err != nil {
 			result.Error = err.Error()
-			outcomes = append(outcomes, result)
+			fmt.Fprintln(file, jsonText(result))
 			continue
 		}
 		var generic map[string]any
@@ -129,11 +156,8 @@ func TestToolOutputSearchReplay(t *testing.T) {
 				}
 			}
 		}
-		outcomes = append(outcomes, result)
+		fmt.Fprintln(file, jsonText(result))
 		t.Logf("%d %s: %v items=%d %dms %s", call.ID, call.Tool, result.Total, len(result.Items), result.Elapsed, result.Error)
-	}
-	if err := os.WriteFile(os.Getenv("PHAROS_REPLAY_OUT"), []byte(jsonText(outcomes)), 0o644); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -165,37 +189,46 @@ func probeTableSizes(t *testing.T, catalog *Catalog) map[string]int64 {
 func TestToolOutputIndexMigration(t *testing.T) {
 	catalog := probeScratchCatalog(t, "PHAROS_MIGRATE_CATALOG")
 	ctx := context.Background()
-	before := probeTableSizes(t, catalog)
-	var mapped, toolResults int64
-	if err := catalog.DB.QueryRow(`SELECT COUNT(*),SUM(m.kind='tool_result') FROM message_fts_rows r JOIN messages m ON m.id=r.message_id`).Scan(&mapped, &toolResults); err != nil {
-		t.Fatal(err)
+	// PHAROS_MIGRATE_SKIP_BEFORE skips the first measurements, for a rerun.
+	before := map[string]int64{}
+	if os.Getenv("PHAROS_MIGRATE_SKIP_BEFORE") == "" {
+		before = probeTableSizes(t, catalog)
+		var mapped, toolResults int64
+		if err := catalog.DB.QueryRow(`SELECT COUNT(*),SUM(m.kind='tool_result') FROM message_fts_rows r JOIN messages m ON m.id=r.message_id`).Scan(&mapped, &toolResults); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("word index rows %d, of them tool results %d", mapped, toolResults)
 	}
-	t.Logf("word index rows %d, of them tool results %d", mapped, toolResults)
 	execTx(t, catalog.DB, "DELETE FROM meta WHERE key IN ('message_fts_tool_output_removed','message_fts_tool_output_merged','message_fts_tool_output_cursor')")
-	timed := func(step func(context.Context) (bool, error)) (time.Duration, int, time.Duration) {
+	migration := newToolOutputMigration()
+	timed := func(step func(context.Context) (bool, time.Duration, error), sizer *batchSizer) (time.Duration, int, time.Duration) {
 		started, steps, slowest := time.Now(), 0, time.Duration(0)
 		for {
-			at := time.Now()
-			more, err := step(ctx)
+			more, held, err := step(ctx)
 			if err != nil {
 				t.Fatal(err)
 			}
-			slowest = max(slowest, time.Since(at))
+			sizer.held(held)
+			slowest = max(slowest, held)
 			if !more {
 				return time.Since(started), steps, slowest
 			}
 			steps++
 			if steps%500 == 0 {
-				t.Logf("  %d steps, %s", steps, time.Since(started).Round(time.Second))
+				t.Logf("  %d steps, %s, batch %d", steps, time.Since(started).Round(time.Second), sizer.next())
 			}
 		}
 	}
-	removal, batches, slowestBatch := timed(catalog.removeToolOutputBatch)
-	t.Logf("removal: %s in %d batches of %d rows, slowest %s", removal.Round(time.Second), batches, toolOutputScan, slowestBatch.Round(time.Millisecond))
+	removal, batches, slowestBatch := timed(func(ctx context.Context) (bool, time.Duration, error) {
+		return catalog.removeToolOutputBatch(ctx, migration.removal.next())
+	}, &migration.removal)
+	t.Logf("removal: %s in %d batches, slowest held the writer %s", removal.Round(time.Second), batches, slowestBatch.Round(time.Millisecond))
 	_ = catalog.Checkpoint()
 	middle := probeTableSizes(t, catalog)
-	merge, steps, slowestStep := timed(catalog.mergeWordIndexStep)
-	t.Logf("merge: %s in %d steps of %d pages, slowest %s", merge.Round(time.Second), steps, toolOutputMergePages, slowestStep.Round(time.Millisecond))
+	merge, steps, slowestStep := timed(func(ctx context.Context) (bool, time.Duration, error) {
+		return catalog.mergeWordIndexStep(ctx, migration.merge.next())
+	}, &migration.merge)
+	t.Logf("merge: %s in %d steps, slowest held the writer %s", merge.Round(time.Second), steps, slowestStep.Round(time.Millisecond))
 	_ = catalog.Checkpoint()
 	after := probeTableSizes(t, catalog)
 	for _, name := range append(wordIndexTables, "file", "freelist") {
