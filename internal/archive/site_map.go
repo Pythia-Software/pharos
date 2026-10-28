@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -967,6 +968,26 @@ func sameSiteParams(a, b url.Values) bool {
 		}
 	}
 	return true
+}
+
+// sameSiteParamsExcept is sameSiteParams over the parameters other than
+// skip, which both links must still carry.
+func sameSiteParamsExcept(a, b url.Values, skip []string) bool {
+	trim := func(values url.Values) url.Values {
+		out := url.Values{}
+		for key, value := range values {
+			if !slices.Contains(skip, key) {
+				out[key] = value
+			}
+		}
+		return out
+	}
+	for _, key := range skip {
+		if !a.Has(key) || !b.Has(key) {
+			return false
+		}
+	}
+	return sameSiteParams(trim(a), trim(b))
 }
 
 func sameParamValue(key, a, b string) bool {

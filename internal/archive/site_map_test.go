@@ -125,6 +125,10 @@ func roundTrip(t *testing.T, site *siteMap, name, link string) siteState {
 	if rebuilt, _ := site.build(again); rebuilt != built {
 		t.Errorf("%s: not canonical:\n%s\n%s", name, built, rebuilt)
 	}
+	// The page's link is already canonical, compared decoded.
+	if result, err := site.linkTool(map[string]any{"url": link}); err != nil || result["canonical"] != true {
+		t.Errorf("%s: canonical %v, %v", name, result["canonical"], err)
+	}
 	// site_link's arguments for the link give the link again.
 	args := linkArgs(t, compactJSON(site.arguments(state)))
 	if result, err := site.linkTool(args); err != nil || result["url"] != built {
@@ -364,4 +368,90 @@ func mustQuery(t *testing.T, query string) string {
 		t.Fatal(err)
 	}
 	return token
+}
+
+func TestSiteLinkChangesACardAsItsDashboardDoes(t *testing.T) {
+	site := testSiteMap(t)
+	card := site.cardByID["human-word-total"]
+	if card == nil || card.Window == nil || !slices.Contains(card.Window.ChartDays, "rollingPeriods") {
+		t.Fatal("human-word-total no longer follows its window with rollingPeriods")
+	}
+	own, err := site.linkTool(map[string]any{"card": "human-word-total", "days": float64(30)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := site.linkTool(linkArgs(t, `{"card": "human-word-total", "days": 30, "options": {"scale": "logarithmic"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := site.parseURL(changed["url"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The chart keeps the window's rolling sum, and takes the change.
+	chart := state.Chart.toMap()
+	if !state.Changed || state.Card != "human-word-total" || state.Days != 30 || chart["rollingPeriods"] != float64(30) || chart["scale"] != "logarithmic" {
+		t.Fatalf("changed card reads as %+v %s", state, compactJSON(chart))
+	}
+	// An explicit setting wins over the window's.
+	explicit, err := site.linkTool(linkArgs(t, `{"card": "human-word-total", "days": 30, "options": {"rollingPeriods": 7}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state, _ := site.parseURL(explicit["url"].(string)); state.Chart.toMap()["rollingPeriods"] != float64(7) {
+		t.Errorf("explicit rollingPeriods: %s", compactJSON(state.Chart))
+	}
+	// As the page writes it: the card's link with only the chart changed,
+	// its filters and window terms on sent_at kept.
+	ownURL, _ := url.Parse(own["url"].(string))
+	changedURL, _ := url.Parse(changed["url"].(string))
+	if !sameSiteParamsExcept(ownURL.Query(), changedURL.Query(), []string{"analyze_chart"}) {
+		t.Errorf("a chart change changed more than analyze_chart:\n%s\n%s", ownURL, changedURL)
+	}
+	filtered, err := site.linkTool(linkArgs(t, `{"card": "human-word-total", "days": 7, "filters": [{"field": "repository_name", "op": "contains", "value": "pharos"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	filteredURL, _ := url.Parse(filtered["url"].(string))
+	where, err := qt.DecodeQueryLink(filteredURL.Query().Get("analyze_filters"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `[{"field":"repository_name","op":"contains","value":"pharos"},{"field":"sent_at","op":">=","value":"-7d"},{"field":"sent_at","op":"<","value":"+0s"}]`; compactJSON(where.Where) != want {
+		t.Errorf("filters with the card's window: %s", compactJSON(where.Where))
+	}
+	// A link the dashboard wrote after the same change reads as the same
+	// changed card, already canonical.
+	values := ownURL.Query()
+	written := card.Chart.clone()
+	written.set("rollingPeriods", 30)
+	written.set("scale", "logarithmic")
+	text, _ := written.MarshalJSON()
+	values.Set("analyze_chart", string(text))
+	page, err := site.linkTool(map[string]any{"url": ownURL.Path + "?" + values.Encode()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read, _ := site.parseURL(page["url"].(string)); !read.Changed || read.Days != 30 || read.Chart.toMap()["scale"] != "logarithmic" {
+		t.Errorf("page-written change reads as %+v", read)
+	}
+	if again, err := site.linkTool(linkArgs(t, compactJSON(page["arguments"]))); err != nil || again["url"] != page["url"] {
+		t.Errorf("arguments %s give %v, %v", compactJSON(page["arguments"]), again["url"], err)
+	}
+	// A card that opens a query table changes only its window.
+	if _, err := site.linkTool(linkArgs(t, `{"card": "findings-open", "options": {"view": "trend"}}`)); err == nil || !strings.Contains(err.Error(), "only change days") {
+		t.Errorf("query-table card with options: %v", err)
+	}
+}
+
+func TestSiteLinkTakesAnOutputBudget(t *testing.T) {
+	site := testSiteMap(t)
+	if _, err := site.linkTool(linkArgs(t, `{"page": "findings", "max_output_tokens": 300}`)); err != nil {
+		t.Fatal(err)
+	}
+	_, err := site.linkTool(linkArgs(t, `{"page": "nowhere", "max_output_tokens": 200}`))
+	var linkErr *siteLinkError
+	if !errors.As(err, &linkErr) || len(err.Error()) > 600 || !strings.Contains(err.Error(), "more") {
+		t.Errorf("bounded error: %d bytes: %v", len(fmt.Sprint(err)), err)
+	}
 }

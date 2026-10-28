@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"sort"
 	"strings"
@@ -27,12 +28,13 @@ var siteMCPTools = []map[string]any{
 			"max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
 	{"name": "site_link", "description": "Build a link to a Pharos page from the choices browse_site lists, and check it: returns {url, title, summary}, where summary says in one sentence what the page will show. page is a path from browse_site. On a dashboard (analyze/<topic>), options are the chart's settings for one view, such as {view: \"trend\", metric: \"tokens\", split: \"model_family\", rollingPeriods: 7}; settings left out take the dashboard's defaults. filters are where terms on the page's dataset, such as [{field: \"provider\", op: \"=\", value: \"claude\"}, {field: \"model_family\", op: \"contains\", value: \"opus\"}], with {any: [terms]} for an OR group. days is the rolling window (\"all\" for all time; no window when left out). card starts from a prebuilt card: alone it gives the card's own link, and options, filters or days change it. An error names the argument at fault and lists the valid choices; correct it and call again. Given {url} alone, it checks a Pharos link and returns its canonical form and arguments, or says why the link cannot be expressed.",
 		"inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{
-			"page":    map[string]any{"type": "string", "description": "A page path from browse_site, such as analyze/tokens, analyze/query/usage, findings or work."},
-			"card":    map[string]any{"type": "string", "description": "A card id from browse_site's cards list."},
-			"options": map[string]any{"type": "object", "description": "The page's options by name, or on a dashboard the chart's settings (browse <page>/chart/<view>)."},
-			"filters": map[string]any{"type": "array", "description": "Where terms {field, op, value?, negated?}, or {any: [terms]}; browse <page>/filters for fields and operators. Times take ISO values or relative ones such as -30d.", "items": map[string]any{"type": "object"}},
-			"days":    map[string]any{"description": "The rolling window in days, one of the page's windows, or \"all\" for all time.", "anyOf": []any{map[string]any{"type": "integer"}, map[string]any{"type": "string", "enum": []string{"all"}}}},
-			"url":     map[string]any{"type": "string", "description": "A Pharos link to check and make canonical, given alone."}}}},
+			"max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000, "description": "Bounds an error's list of choices; a link itself is small."},
+			"page":              map[string]any{"type": "string", "description": "A page path from browse_site, such as analyze/tokens, analyze/query/usage, findings or work."},
+			"card":              map[string]any{"type": "string", "description": "A card id from browse_site's cards list."},
+			"options":           map[string]any{"type": "object", "description": "The page's options by name, or on a dashboard the chart's settings (browse <page>/chart/<view>)."},
+			"filters":           map[string]any{"type": "array", "description": "Where terms {field, op, value?, negated?}, or {any: [terms]}; browse <page>/filters for fields and operators. Times take ISO values or relative ones such as -30d.", "items": map[string]any{"type": "object"}},
+			"days":              map[string]any{"description": "The rolling window in days, one of the page's windows, or \"all\" for all time.", "anyOf": []any{map[string]any{"type": "integer"}, map[string]any{"type": "string", "enum": []string{"all"}}}},
+			"url":               map[string]any{"type": "string", "description": "A Pharos link to check and make canonical, given alone."}}}},
 }
 
 func init() { mcpTools = append(mcpTools, siteMCPTools...) }
@@ -56,21 +58,46 @@ func callSiteMCP(ctx context.Context, catalog *Catalog, name string, args map[st
 
 func (site *siteMap) linkTool(args map[string]any) (map[string]any, error) {
 	state, err := site.linkFromArgs(args)
-	if err != nil {
-		return nil, err
+	if err == nil {
+		var link string
+		if link, err = site.build(state); err == nil {
+			return site.linkResult(args, state, link), nil
+		}
 	}
-	link, err := site.build(state)
-	if err != nil {
-		return nil, err
+	return nil, boundChoices(err, mcpBudget(args, 1000))
+}
+
+// boundChoices sheds an error's choices from the end until it fits the
+// output budget, saying how many it left out.
+func boundChoices(err error, budget int) error {
+	var linkErr *siteLinkError
+	if !errors.As(err, &linkErr) || len(linkErr.Error()) <= budget*3 {
+		return err
 	}
+	bounded := *linkErr
+	all := linkErr.Choices
+	for keep := len(all) - 1; keep >= 0 && len(bounded.Error()) > budget*3; keep-- {
+		bounded.Choices = append(append([]string{}, all[:keep]...), fmt.Sprintf("… %d more", len(all)-keep))
+	}
+	return &bounded
+}
+
+func (site *siteMap) linkResult(args map[string]any, state siteState, link string) map[string]any {
 	result := map[string]any{"url": link, "title": site.title(state), "summary": site.summary(state), "arguments": site.arguments(state)}
+	// canonical: the given link already is the canonical one, comparing the
+	// path and each parameter, query tokens by decoded state and JSON by value
+	// (parameter order, deflate bytes and JSON spacing do not count). It is
+	// false when reading the link changed something: older names, chart keys
+	// its view does not draw, a default written out, or an unsorted value.
 	if raw, ok := args["url"].(string); ok {
-		result["canonical"] = raw == link
+		given, _ := url.Parse(strings.TrimSpace(raw))
+		built, _ := url.Parse(link)
+		result["canonical"] = given != nil && given.Path == built.Path && sameSiteParams(given.Query(), built.Query())
 	}
 	if node := site.Nodes[state.Page]; node.Settings != "" {
 		result["note"] = node.Settings
 	}
-	return result, nil
+	return result
 }
 
 // ----- browse_site -----------------------------------------------------------------
@@ -339,7 +366,11 @@ func (site *siteMap) browseCard(card *siteCard) map[string]any {
 		}
 		result["chart"] = chart
 		result["filters"] = card.Filters
-		result["changes"] = "site_link({card, options, filters, days}) starts from this chart and these filters; what you give replaces them."
+		window := "it covers a fixed period"
+		if card.Window != nil {
+			window = "its window terms on " + card.Window.Field
+		}
+		result["changes"] = fmt.Sprintf("site_link({card, options, filters, days}) changes the card as its dashboard does: options change this chart, filters replace these, and days picks one of the card's windows. The link keeps the card's other parameters and %s, as the page keeps them when a reader changes the chart or window.", window)
 	} else {
 		result["changes"] = "Only days can change: the card opens a full query table."
 	}
@@ -413,10 +444,11 @@ func (site *siteMap) browseField(ctx context.Context, catalog *Catalog, node *si
 	return result, nil
 }
 
-// frequentFieldValues counts a field's most frequent current values with
-// one bounded read: SQL datasets on the reader, others from the rows the
-// catalog already holds for the page. A read that misses the deadline
-// returns none and says so.
+// frequentFieldValues counts a field's most frequent current values without
+// computing anything a page has not: SQL datasets in one bounded read on the
+// reader, others only from rows the catalog already holds warm (warmOnly). It
+// never prepares a derived table or starts a rebuild, so it never writes. A
+// read past the deadline, or rows not yet computed, list none and say so.
 func (c *Catalog) frequentFieldValues(parent context.Context, dataset, field string) ([]fieldFrequency, string) {
 	if c == nil {
 		return nil, "No catalog is open, so there are no current values."
@@ -442,9 +474,23 @@ func (c *Catalog) frequentFieldValues(parent context.Context, dataset, field str
 		}
 		return values, frequentNote(len(values))
 	}
-	rows, ok, err := c.datasetRows(ctx, dataset, libraryFields{field: true})
-	if !ok {
+	var rows []map[string]any
+	var err error
+	cold := warmOnly(ctx)
+	switch dataset {
+	case "usage", "conversation_activity", "tl1_attempts", "parallelism":
+		rows, _, err = c.datasetRows(cold, dataset, libraryFields{field: true})
+	case "writing":
+		// Without ensureAuthorship, which may start a rebuild.
+		rows, _, err = c.cachedWritingData(cold)
+	case "mcp_calls":
+		// A bounded read of the call history, at most its retained calls.
+		rows, err = c.mcpQueryRows(ctx)
+	default:
 		return nil, "Current values are not listed for this dataset; for repositories, list_repositories gives the names."
+	}
+	if errors.Is(err, errDerivedCold) {
+		return nil, "This library has not computed these rows since it last changed, so no values are listed yet; opening the page computes them. Filter with contains instead."
 	}
 	if err != nil {
 		if ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) {

@@ -23,6 +23,11 @@ type siteState struct {
 	Page string
 	// Card is set for a card's own link, which keeps the card's parameters.
 	Card string
+	// Changed marks a card link whose chart and filters are Chart and
+	// Filters rather than the card's own, as the page writes it when a reader
+	// changes them on the card's dashboard. The card's other parameters and
+	// its window terms stay.
+	Changed bool
 	// Options are a page's options by name: strings, true for a boolean,
 	// [start, end] for a range, and []siteTextRule for a text search.
 	Options map[string]any
@@ -135,6 +140,9 @@ func (site *siteMap) build(state siteState) (string, error) {
 		card := site.cardByID[state.Card]
 		if card == nil {
 			return "", linkError("card", fmt.Sprintf("%q is not a card", state.Card))
+		}
+		if state.Changed {
+			return site.changedCardURL(node, card, state)
 		}
 		return site.cardURL(card, state.Days)
 	}
@@ -387,19 +395,76 @@ func (site *siteMap) cardURL(card *siteCard, days int) (string, error) {
 	return siteURL(card.URL.Path, params), nil
 }
 
+// changedCardURL is a card's link with another chart or filters, as the
+// page writes it when a reader changes them on the card's dashboard: only
+// analyze_chart and analyze_filters change, and the filters keep the card's
+// window terms (updateQueryWindowURL keeps them too when the window changes).
+func (site *siteMap) changedCardURL(node *siteNode, card *siteCard, state siteState) (string, error) {
+	link, err := site.cardURL(card, state.Days)
+	if err != nil {
+		return "", err
+	}
+	parsed, _ := url.Parse(link)
+	chartParam, whereParam := site.option(node, "chart").Param, site.optionOfKind(node, "where").Param
+	chart, err := state.Chart.MarshalJSON()
+	if err != nil {
+		return "", err
+	}
+	token, err := site.queryToken(nil, append(append([]qt.WhereTerm{}, state.Filters...), site.cardWindowTerms(card, state.Days)...))
+	if err != nil {
+		return "", linkError("filters", err.Error())
+	}
+	var params siteParams
+	for _, pair := range strings.Split(parsed.RawQuery, "&") {
+		key, value, _ := strings.Cut(pair, "=")
+		name, _ := url.QueryUnescape(key)
+		switch name {
+		case chartParam:
+			params.add(name, string(chart))
+		case whereParam:
+			params.add(name, token)
+		default:
+			text, _ := url.QueryUnescape(value)
+			params.add(name, text)
+		}
+	}
+	return siteURL(parsed.Path, params), nil
+}
+
+func (site *siteMap) cardWindowTerms(card *siteCard, days int) []qt.WhereTerm {
+	if days == 0 || card.Window == nil {
+		return nil
+	}
+	return site.fillTerms(card.Window.Terms, days, nil)
+}
+
+// cardChartBase is the chart a changed card starts from: the card's own
+// chart, as its dashboard holds it, with the settings that follow the window
+// (chart_days) at the window. Written in current names, it draws as the
+// card's state does.
+func cardChartBase(card *siteCard, days int) map[string]any {
+	base := card.Chart.toMap()
+	if card.Window != nil && days > 0 {
+		for _, key := range card.Window.ChartDays {
+			base[key] = float64(days)
+		}
+	}
+	return base
+}
+
 // ----- From site_link's arguments ------------------------------------------------
 
 // linkFromArgs reads site_link's arguments into a state, checking each
 // against the site map.
 func (site *siteMap) linkFromArgs(args map[string]any) (siteState, error) {
 	for key := range args {
-		if !slices.Contains([]string{"page", "card", "options", "filters", "days", "url"}, key) {
+		if !slices.Contains([]string{"page", "card", "options", "filters", "days", "url", "max_output_tokens"}, key) {
 			return siteState{}, linkError(key, "is not an argument of site_link.", "page", "card", "options", "filters", "days", "url")
 		}
 	}
 	if raw, ok := args["url"]; ok {
 		text, _ := raw.(string)
-		if len(args) > 1 {
+		if _, budget := args["max_output_tokens"]; len(args) > 1 && !(budget && len(args) == 2) {
 			return siteState{}, linkError("url", "is given alone; the other arguments describe a new link instead.")
 		}
 		return site.parseURL(text)
@@ -449,10 +514,27 @@ func (site *siteMap) linkFromArgs(args map[string]any) (siteState, error) {
 		if card.State == nil {
 			return siteState{}, linkError("card", fmt.Sprintf("card %s opens %s; a link that changes it can only change days. Build a link to that page instead.", card.ID, card.Page))
 		}
-		base = card.State
+		if card.Window != nil && !slices.Contains(card.Window.Days, days) {
+			return siteState{}, linkError("days", fmt.Sprintf("%d is not a window of card %s.", days, card.ID), intStrings(card.Window.Days)...)
+		}
+		if card.Window == nil && days != 0 {
+			return siteState{}, linkError("days", fmt.Sprintf("card %s has no window.", card.ID))
+		}
 		if !filtersGiven {
 			filters = card.Filters
 		}
+		node := site.Nodes[page]
+		chart, err := site.argChart(node, cardChartBase(card, days), options)
+		if err != nil {
+			return siteState{}, err
+		}
+		state := siteState{Page: page, Card: card.ID, Changed: true, Chart: chart, Filters: filters, Days: days}
+		if len(state.Filters) > 0 {
+			if err := site.checkFilters(node, state.Filters, "filters"); err != nil {
+				return siteState{}, err
+			}
+		}
+		return state, nil
 	}
 	if page == "" {
 		return siteState{}, linkError("page", "is required: a page path from browse_site.", site.pagePaths()...)
@@ -1165,26 +1247,9 @@ func (site *siteMap) parseDashboard(node *siteNode, values url.Values, consumed 
 	state := siteState{Page: node.Path}
 	chartParam := site.option(node, "chart").Param
 	consumed[chartParam] = true
-	// Without a chart the page opens its defaults, as a current chart.
-	chart := map[string]any{"v": float64(site.Analyze.Version)}
-	if text := values.Get(chartParam); values.Has(chartParam) {
-		chart = map[string]any{}
-		if err := json.Unmarshal([]byte(text), &chart); err != nil || chart == nil {
-			return siteState{}, linkError("url", chartParam+" is not a JSON object.")
-		}
-	}
-	verdict, _ := site.judge(dashboard, chart)
-	written := dashboard.viewChart(chart)
-	if _, renamed := dashboard.readChart(chart); verdict == verdictValid || verdict == verdictCoercible && renamed && chart["v"] != nil {
-		if again, _ := site.judge(dashboard, written.toMap()); again == verdictValid {
-			verdict = verdictValid
-		}
-	}
-	if verdict != verdictValid {
-		if err := site.checkChart(node, chart, "url "+chartParam+"."); err != nil {
-			return siteState{}, err
-		}
-		return siteState{}, linkError("url", chartParam+" is not drawn as given.")
+	written, err := site.readURLChart(node, values, chartParam)
+	if err != nil {
+		return siteState{}, err
 	}
 	state.Chart = written
 	whereParam := site.optionOfKind(node, "where").Param
@@ -1215,6 +1280,34 @@ func (site *siteMap) parseDashboard(node *siteNode, values url.Values, consumed 
 		}
 	}
 	return state, nil
+}
+
+// readURLChart reads a link's chart: one the page draws as given, written
+// in current names with only its view's keys.
+func (site *siteMap) readURLChart(node *siteNode, values url.Values, chartParam string) (orderedObject, error) {
+	dashboard := site.Analyze.Dashboards[node.Dashboard]
+	// Without a chart the page opens its defaults, as a current chart.
+	chart := map[string]any{"v": float64(site.Analyze.Version)}
+	if text := values.Get(chartParam); values.Has(chartParam) {
+		chart = map[string]any{}
+		if err := json.Unmarshal([]byte(text), &chart); err != nil || chart == nil {
+			return orderedObject{}, linkError("url", chartParam+" is not a JSON object.")
+		}
+	}
+	verdict, _ := site.judge(dashboard, chart)
+	written := dashboard.viewChart(chart)
+	if _, renamed := dashboard.readChart(chart); verdict == verdictValid || verdict == verdictCoercible && renamed && chart["v"] != nil {
+		if again, _ := site.judge(dashboard, written.toMap()); again == verdictValid {
+			verdict = verdictValid
+		}
+	}
+	if verdict != verdictValid {
+		if err := site.checkChart(node, chart, "url "+chartParam+"."); err != nil {
+			return orderedObject{}, err
+		}
+		return orderedObject{}, linkError("url", chartParam+" is not drawn as given.")
+	}
+	return written, nil
 }
 
 func (site *siteMap) parsePage(node *siteNode, values url.Values, pathValues map[string]string, consumed map[string]bool) (siteState, error) {
@@ -1370,12 +1463,44 @@ func (site *siteMap) parseCard(path string, values url.Values) (siteState, error
 		if card.Window != nil {
 			windows = card.Window.Days
 		}
+		node := site.Nodes[card.Page]
+		var changeable []string
+		if card.State != nil && node.Dashboard != "" {
+			changeable = []string{site.option(node, "chart").Param, site.optionOfKind(node, "where").Param}
+		}
 		for _, days := range windows {
 			built, _ := site.cardURL(card, days)
 			expected, _ := url.Parse(built)
-			if expected.Path == path && sameSiteParams(values, expected.Query()) {
+			if expected.Path != path {
+				continue
+			}
+			want := expected.Query()
+			if sameSiteParams(values, want) {
 				return siteState{Page: card.Page, Card: card.ID, Days: days}, nil
 			}
+			if changeable == nil || !sameSiteParamsExcept(values, want, changeable) {
+				continue
+			}
+			// The card with another chart or filters, as its dashboard writes it.
+			chart, err := site.readURLChart(node, values, changeable[0])
+			if err != nil {
+				return siteState{}, err
+			}
+			where, err := site.whereOnly(changeable[1], values.Get(changeable[1]), nil)
+			if err != nil {
+				return siteState{}, err
+			}
+			terms := site.cardWindowTerms(card, days)
+			if len(where) < len(terms) || compactJSON(where[len(where)-len(terms):]) != compactJSON(terms) {
+				return siteState{}, linkError("url", fmt.Sprintf("%s no longer ends with card %s's window terms for %d days, which a site link cannot express.", changeable[1], card.ID, days))
+			}
+			filters := where[:len(where)-len(terms)]
+			if len(filters) > 0 {
+				if err := site.checkFilters(node, filters, "url filters"); err != nil {
+					return siteState{}, err
+				}
+			}
+			return siteState{Page: card.Page, Card: card.ID, Changed: true, Chart: chart, Filters: filters, Days: days}, nil
 		}
 	}
 	if len(candidates) == 1 {
@@ -1417,7 +1542,7 @@ func (site *siteMap) cardText(text string, days int) string {
 // summary is one plain sentence of what the link shows.
 func (site *siteMap) summary(state siteState) string {
 	node := site.Nodes[state.Page]
-	if state.Card != "" {
+	if state.Card != "" && !state.Changed {
 		card := site.cardByID[state.Card]
 		return sentence(site.cardText(card.Description, state.Days))
 	}
@@ -1448,7 +1573,9 @@ func (site *siteMap) summary(state siteState) string {
 		parts = append(parts, "where "+site.filterPhrase(site.Datasets[node.Dataset], state.Filters))
 	}
 	if site.optionOfKind(node, "window") != nil {
-		if state.Days > 0 {
+		if state.Changed && state.Days > 0 {
+			parts = append(parts, fmt.Sprintf("last %s of %s, as the card counts its window", site.Windows.Labels[strconv.Itoa(state.Days)], site.cardByID[state.Card].Window.Field))
+		} else if state.Days > 0 {
 			label := site.Windows.Labels[strconv.Itoa(state.Days)]
 			if label == "" {
 				label = strconv.Itoa(state.Days) + " days"
@@ -1676,6 +1803,17 @@ func (site *siteMap) arguments(state siteState) map[string]any {
 		if state.Days > 0 {
 			out["days"] = state.Days
 		}
+		if !state.Changed {
+			return out
+		}
+		options := map[string]any{}
+		for key, value := range state.Chart.toMap() {
+			if key != "v" {
+				options[key] = value
+			}
+		}
+		out["options"] = options
+		out["filters"] = append([]qt.WhereTerm{}, state.Filters...)
 		return out
 	}
 	options := map[string]any{}

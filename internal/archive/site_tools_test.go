@@ -3,12 +3,14 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // servedPages reads the paths isUIPage serves from its source, so the test
@@ -169,10 +171,45 @@ func TestBrowseSiteListsAFieldsMostFrequentValues(t *testing.T) {
 	if !strings.Contains(compactJSON(value["items"]), `"claude"`) {
 		t.Errorf("provider values %v", value["items"])
 	}
-	override(t, &siteValuesDeadline, 0)
+}
+
+// Frequent values come only from rows already computed: a cold or
+// in-flight derived value lists none at once, starts nothing, and never
+// waits for a build.
+func TestBrowseSiteFrequentValuesNeverComputeDerivedRows(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	release, started := make(chan struct{}), make(chan struct{})
+	go func() {
+		_, _ = cachedValue(context.Background(), catalog, "site-test", func(context.Context) (int, error) {
+			close(started)
+			<-release
+			return 1, nil
+		})
+	}()
+	<-started
+	defer close(release)
+	begun := time.Now()
+	if _, err := catalog.derivedValue(warmOnly(context.Background()), "site-test", func(context.Context) (any, error) { t.Error("computed"); return nil, nil }, true); !errors.Is(err, errDerivedCold) {
+		t.Fatalf("warm-only read of a building value: %v", err)
+	}
+	value, _ := browseText(t, catalog, map[string]any{"path": "analyze/tokens/filters/model_family"})
+	if len(value["items"].([]any)) != 0 || !strings.Contains(value["values"].(string), "not computed") || time.Since(begun) > time.Second {
+		t.Errorf("cold usage: %v after %s", value, time.Since(begun))
+	}
+	catalog.derived.mu.Lock()
+	for key := range catalog.derived.entries {
+		if key != "site-test" {
+			t.Errorf("browse_site started computing %s", key)
+		}
+	}
+	catalog.derived.mu.Unlock()
+	// Once the page has computed the rows, they are counted.
+	if _, _, err := catalog.datasetRows(context.Background(), "usage", libraryFields{"model_family": true}); err != nil {
+		t.Fatal(err)
+	}
 	value, _ = browseText(t, catalog, map[string]any{"path": "analyze/tokens/filters/model_family"})
-	if len(value["items"].([]any)) != 0 || !strings.Contains(value["values"].(string), "longer than") {
-		t.Errorf("past the deadline: %v", value)
+	if strings.Contains(value["values"].(string), "not computed") {
+		t.Errorf("warm usage: %v", value)
 	}
 }
 

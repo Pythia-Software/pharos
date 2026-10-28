@@ -456,14 +456,26 @@ next:
 `max_output_tokens` (3,000 by default, as three bytes a token), giving
 `next_offset`.
 
-A text field's frequent values come from one bounded read with a deadline
-(`siteValuesDeadline`, 1.5 s). SQL datasets group on the reader, counting a
-tool-call field the cube groups by from the cube's group counts. Other
-datasets count the rows the catalog already holds for the page; the Library
-lists none. The read never prepares a derived table, so it never writes. A
-read past the deadline lists no values and says so.
+A text field's frequent values never compute anything a page has not, so
+browsing never blocks on, starts or writes a derived build:
+- SQL datasets group in one read on the reader, bounded by a deadline
+  (`siteValuesDeadline`, 1.5 s). A tool-call field the cube groups by is
+  counted from the cube's group counts. The read does not bring the tool
+  rollup or authorship up to date first.
+- MCP calls are counted from the call history, one bounded read.
+- Other datasets are counted only from rows already in the derived cache
+  (`warmOnly`). A value not yet computed, or still being computed, lists no
+  values and says they are not available yet; opening the page computes
+  them. Writing does not run `ensureAuthorship`.
+- The Library and Findings list none.
 
-### `site_link({page?, card?, options?, filters?, days?})` or `site_link({url})`
+A read past the deadline lists no values and says so.
+
+### `site_link({page?, card?, options?, filters?, days?, max_output_tokens?})` or `site_link({url})`
+
+Unknown arguments are an error; the schema says `additionalProperties: false`.
+`max_output_tokens` (1,000 by default) bounds an error's list of choices,
+which then ends with "… N more".
 
 It returns `{url, title, summary, arguments}`:
 - `summary` is one sentence generated from the state, from the drawn chart
@@ -491,15 +503,31 @@ Arguments:
 - `days` is one of the page's windows, or `"all"`. Without it a page has no
   window.
 - `card` alone gives the card's own link, at its first default window unless
-  `days` names another. With options or filters it is a plain dashboard link
-  from the card's `state` and `filters`; what the arguments give replaces
-  them. A card that opens a query table can only change `days`.
+  `days` names another of the card's windows. With options or filters it is
+  the card changed as its dashboard changes it. When a reader changes the
+  chart or filters there, the page rewrites only `analyze_chart` and
+  `analyze_filters`. A changed window (`updateQueryWindowURL`) keeps the
+  card's own window terms. So Go:
+  - keeps the card's other parameters (`card_*`, its source query, its
+    window parameters);
+  - starts the chart from the card's `chart`, with its `chart_days` set to
+    the window unless `options` set them, then the `options` over it,
+    written in current names with the view's keys;
+  - writes the filters (the card's, or the given ones, which replace them)
+    followed by the card's window `terms`.
+
+  A card that opens a query table can only change `days`.
 
 Every error names the argument at fault (`options.split`, `filters[1].op`,
 `days`) and lists the valid choices.
 
 `site_link({url})` reads a link with `siteLinkFromURL` and returns its
-canonical form, with `canonical` saying whether the link already was. It
+canonical form. `canonical` is true when the given link already is that
+form, comparing the path and each parameter: query tokens by decoded state,
+JSON parameters by value, others as text. Parameter order, deflate bytes and
+JSON spacing do not count. It is false when reading the link changed
+something: older names, chart keys the view does not draw, or a default
+written out. Every link it accepts draws as its canonical form does. It
 rejects:
 - another origin than a loopback host, a fragment, a legacy alias, or a
   repeated parameter;
@@ -516,9 +544,11 @@ rejects:
 - option values, `requires` and `conflicts` the map does not allow.
 
 A card's own link parses as `{card, days}`: the link, compared parameter by
-parameter, must be the card's at one of its windows. Links with `card_id`
-name their card; the others are compared with each card whose link has the
-same path and parameters.
+parameter, must be the card's at one of its windows. A link that differs
+only in `analyze_chart` and `analyze_filters` is the card changed on its
+dashboard. Its chart must be drawn as given, and its filters must end with
+the card's window terms. Links with `card_id` name their card; the others
+are compared with each card whose link has the same path and parameters.
 
 ### Canonical links in Go
 
