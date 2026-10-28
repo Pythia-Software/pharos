@@ -1040,7 +1040,7 @@ func TransferLibrary(ctx context.Context, source, target Config, move bool, prog
 		}
 		receipt.Files = append(receipt.Files, files...)
 	}
-	if err = validateCaptureEvidence(ctx, filepath.Join(dir, "captures")); err != nil {
+	if err = validateStagedCaptureEvidence(ctx, filepath.Join(dir, "captures")); err != nil {
 		return receipt, fmt.Errorf("verify retained source evidence: %w", err)
 	}
 	// Content-addressed transfer IDs make retries and repeated copies reuse the

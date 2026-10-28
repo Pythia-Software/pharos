@@ -217,7 +217,7 @@ func compressGeneration(ctx context.Context, target captureTarget, manifest *cap
 			return 0, err
 		}
 		if _, verified := c.verifiedSnapshotReceipt(rel, rel); !verified {
-			if receiptStamp(target.Dir, rel) == -1 {
+			if receiptStamp(target.Dir, rel) == noReceipt {
 				// No export yet: checked again once a receipt appears.
 				outcomes.unverified(target.Dir, generation)
 				return 0, nil
@@ -428,14 +428,14 @@ type compressionOutcome struct {
 	// Outcome is incompressible, mismatch (the bytes disagree with the
 	// manifest's digest), failed (verification; Failures counts), or
 	// unverified (a SQLite-record generation with no export receipt yet;
-	// ReceiptNS is -1). A receipt that does not verify counts as failed; a
-	// failed entry records the receipt's mtime (-1 for none) and is tried again
-	// once it changes.
-	Outcome   string `json:"outcome"`
-	Failures  int    `json:"failures,omitempty"`
-	ReceiptNS int64  `json:"receipt_mtime_ns,omitempty"`
-	Detail    string `json:"detail,omitempty"`
-	At        string `json:"at"`
+	// Receipt is "none"). A receipt that does not verify counts as failed; a
+	// failed entry records the receipt's digest ("none" without one) and is
+	// tried again once it changes: digests, since HFS+ mtimes are whole seconds.
+	Outcome  string `json:"outcome"`
+	Failures int    `json:"failures,omitempty"`
+	Receipt  string `json:"receipt_sha256,omitempty"`
+	Detail   string `json:"detail,omitempty"`
+	At       string `json:"at"`
 }
 
 type compressionOutcomes struct {
@@ -468,10 +468,10 @@ func (o *compressionOutcomes) settled(dir string, generation capturedVersion) bo
 		return false
 	case entry.Outcome == "failed":
 		// A new export receipt is a new chance (it may verify now).
-		return entry.Failures >= captureCompressAttempts && receiptStamp(dir, generation.Captured) == entry.ReceiptNS
+		return entry.Failures >= captureCompressAttempts && receiptStamp(dir, generation.Captured) == entry.Receipt
 	case entry.Outcome == "unverified":
 		// Settled only while there is still no receipt to verify.
-		return entry.ReceiptNS == -1 && receiptStamp(dir, generation.Captured) == -1
+		return entry.Receipt == noReceipt && receiptStamp(dir, generation.Captured) == noReceipt
 	}
 	return true
 }
@@ -489,30 +489,34 @@ func (o *compressionOutcomes) failed(dir string, generation capturedVersion, det
 	stamp := receiptStamp(dir, generation.Captured)
 	entry, ok := o.lookup(generation)
 	failures := 1
-	if ok && entry.Outcome == "failed" && entry.ReceiptNS == stamp {
+	if ok && entry.Outcome == "failed" && entry.Receipt == stamp {
 		failures = entry.Failures + 1
 	}
 	o.record(generation, "failed", detail)
 	entry = o.Entries[generation.Captured]
-	entry.Failures, entry.ReceiptNS = failures, stamp
+	entry.Failures, entry.Receipt = failures, stamp
 	o.Entries[generation.Captured] = entry
 }
 
 func (o *compressionOutcomes) unverified(dir string, generation capturedVersion) {
 	o.record(generation, "unverified", "")
 	entry := o.Entries[generation.Captured]
-	entry.ReceiptNS = receiptStamp(dir, generation.Captured)
+	entry.Receipt = receiptStamp(dir, generation.Captured)
 	o.Entries[generation.Captured] = entry
 }
 
-// receiptStamp is the mtime of rel's SQLite export receipt, -1 without one.
-func receiptStamp(dir, rel string) int64 {
-	info, err := os.Stat(filepath.Join(dir, recordDir, "receipts", hashBytes([]byte(rel))+".json"))
+// receiptStamp identifies rel's SQLite export receipt by its digest, noReceipt
+// without one.
+func receiptStamp(dir, rel string) string {
+	data, err := os.ReadFile(filepath.Join(dir, recordDir, "receipts", hashBytes([]byte(rel))+".json"))
 	if err != nil {
-		return -1
+		return noReceipt
 	}
-	return info.ModTime().UnixNano()
+	return hashBytes(data)
 }
+
+// noReceipt stands for a generation without an export receipt.
+const noReceipt = "none"
 
 // save keeps only the generations the manifest still names.
 func (o *compressionOutcomes) save(dir string, manifest *captureManifest) error {

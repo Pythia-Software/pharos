@@ -1411,6 +1411,7 @@ func TestCaptureCompressesIndexedUnpinnedGenerations(t *testing.T) {
 	defer input.Close()
 	leased := filepath.Join(captureViewOf(input.Adapter).dir, filepath.FromSlash(generation.Captured))
 	before := measureCaptures(t.Context(), config.CaptureRoot)
+	plainManifest := readText(t, filepath.Join(target.Dir, captureManifestName))
 
 	done := compressGenerations(t, config)
 	if len(done) != 1 || done[0].Path != generation.Captured || done[0].Stored >= generation.Size {
@@ -1439,6 +1440,25 @@ func TestCaptureCompressesIndexedUnpinnedGenerations(t *testing.T) {
 		if stale.Encoding != captureEncodingZstd || err != nil || size != generation.Size || sum != encoded.SHA256 {
 			t.Fatal("a stale plain entry read the compressed file as plain", stale, err)
 		}
+	}
+	// The same pair in a whole tree: a live tree validates (a compression may
+	// land while it is read); a staged copy (recovery, transfer) is torn, and
+	// is refused rather than published to readers that trust the entry.
+	encodedManifest := readText(t, filepath.Join(target.Dir, captureManifestName))
+	if err := os.WriteFile(filepath.Join(target.Dir, captureManifestName), []byte(plainManifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
+		t.Fatal("live validation refused a compression that landed after its manifest read", err)
+	}
+	if err := validateStagedCaptureEvidence(t.Context(), config.CaptureRoot); err == nil || !strings.Contains(err.Error(), "stored compressed but its manifest records it uncompressed") {
+		t.Fatal("staged validation accepted a torn copy", err)
+	}
+	if err := os.WriteFile(filepath.Join(target.Dir, captureManifestName), []byte(encodedManifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateStagedCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
+		t.Fatal(err)
 	}
 	// The Storage section's history is what is on disk: the encoded size.
 	history := func(sizes []captureSize) int64 {
@@ -1689,6 +1709,21 @@ func TestCaptureCompressionWaitsForVerifiedRecordExports(t *testing.T) {
 		}
 		if n, err := pass(t, config); n != 0 || err != nil {
 			t.Fatal("unverifiable receipt retried past its attempts:", n, err)
+		}
+		// A different receipt within the same mtime second (HFS+) is still a
+		// new receipt: identified by content, not mtime.
+		info, err := os.Stat(receipt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(receipt, []byte(`{"version":1,"input":"other"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err = os.Chtimes(receipt, info.ModTime(), info.ModTime()); err != nil {
+			t.Fatal(err)
+		}
+		if n, err := pass(t, config); n != 0 || err == nil {
+			t.Fatal("a replaced receipt with the same mtime was not tried again:", n, err)
 		}
 	})
 }

@@ -267,7 +267,7 @@ func RecoverLibrary(ctx context.Context, backup, destination string, progress fu
 	if err = durableJSON(descriptorPath(config), descriptor); err != nil {
 		return Config{}, err
 	}
-	if err = validateCaptureEvidence(ctx, config.CaptureRoot); err != nil {
+	if err = validateStagedCaptureEvidence(ctx, config.CaptureRoot); err != nil {
 		return Config{}, err
 	}
 	report("Validating recovered history and publishing candidate")
@@ -294,7 +294,24 @@ func syncDirectory(path string) error {
 
 // Every manifest reference is part of the recovery contract, including old
 // file versions, database generations and nested immutable transfer inventories.
+//
+// validateCaptureEvidence checks a live tree, whose captures may be
+// compressed while it reads: a file compressed after its manifest was read
+// is accepted if it decodes to the recorded bytes (storedAsUnlocked).
 func validateCaptureEvidence(ctx context.Context, root string) error {
+	return validateCaptures(ctx, root, false)
+}
+
+// validateStagedCaptureEvidence checks a staged copy (a recovery or a
+// transfer) before it is published. Nothing compresses a staged copy, so a
+// compressed file under an entry recording it uncompressed is a torn copy:
+// rejected, since every reader that takes the capture lock trusts the entry
+// and would hand the compressed bytes to SQLite or a parser.
+func validateStagedCaptureEvidence(ctx context.Context, root string) error {
+	return validateCaptures(ctx, root, true)
+}
+
+func validateCaptures(ctx context.Context, root string, staged bool) error {
 	return filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -393,7 +410,12 @@ func validateCaptureEvidence(ctx context.Context, root string) error {
 				if err != nil {
 					return fmt.Errorf("missing captured evidence %s: %w", file, err)
 				}
+				recorded := storedAsFile(f, generation)
 				generation = storedAsUnlocked(f, generation)
+				if staged && generation.Encoding != recorded.Encoding {
+					f.Close()
+					return fmt.Errorf("captured evidence %s is stored compressed but its manifest records it uncompressed; copy the capture again", file)
+				}
 				info, err := f.Stat()
 				stored := generation.Size
 				if generation.Encoding != "" {
