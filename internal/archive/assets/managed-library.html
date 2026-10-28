@@ -1,45 +1,98 @@
-    <section id="librarySettings" class="settings-section" data-settings-route="/settings/libraries" data-page-title="Libraries" data-page-description="Choose the library Pharos opens, or create a separate home for your history." aria-labelledby="settingsPageHeading" hidden>
+    <section id="librarySettings" class="settings-section" data-settings-route="/settings/libraries" data-page-title="Libraries" data-page-description="A library is a folder holding your conversations, saved views and preferences. Pharos shows one library at a time." aria-labelledby="settingsPageHeading" hidden>
       <p id="library-settings-status" role="status" aria-live="polite"></p>
-      <div id="library-settings-current"></div>
-      <div class="library-settings-actions" aria-label="Library actions">
-        <button id="library-settings-open" type="button" aria-expanded="false" aria-controls="library-settings-open-form">Open a library…</button>
-        <button id="library-settings-new" type="button" aria-expanded="false" aria-controls="library-settings-create-form">New library…</button>
-      </div>
-      <form id="library-settings-open-form" class="library-settings-card library-settings-form" hidden>
-        <h3>Open an existing library</h3>
-        <p class="muted">Choose a Pharos library folder, or paste the path to its library.toml file.</p>
-        <fieldset>
-          <label for="library-settings-existing">Library folder or configuration file</label>
-          <div class="library-settings-folder"><input id="library-settings-existing" autocomplete="off" spellcheck="false" required><button type="button" data-library-pick="library-settings-existing">Choose folder…</button></div>
-          <div class="library-settings-actions"><button type="submit">Open and switch</button><button type="button" data-library-cancel="open">Cancel</button></div>
-        </fieldset>
-      </form>
-      <form id="library-settings-create-form" class="library-settings-card library-settings-form" hidden>
-        <h3>Create a library</h3>
-        <p class="muted">Keep a separate collection of history, saved views, and preferences on this Mac or an attached drive.</p>
-        <fieldset>
-          <label for="library-settings-name">Library name</label>
-          <input id="library-settings-name" maxlength="160" autocomplete="off" required>
-          <label for="library-settings-storage">Store the library</label>
-          <select id="library-settings-storage"><option value="mac">On this Mac</option><option value="ssd">On an external drive</option></select>
-          <label for="library-settings-parent">Parent folder</label>
-          <div class="library-settings-folder"><input id="library-settings-parent" autocomplete="off" spellcheck="false" aria-describedby="library-settings-folder-note"><button type="button" data-library-pick="library-settings-parent">Choose folder…</button></div>
-          <p id="library-settings-folder-note" class="muted">Pharos creates a new folder with the library’s name inside this folder.</p>
-          <div class="library-settings-destination"><span class="muted">New library folder</span><output id="library-settings-destination" for="library-settings-name library-settings-parent"></output></div>
-          <p class="muted">After creation, choose which sources to add in Settings → Sources.</p>
-          <div class="library-settings-actions"><button type="submit">Create and switch</button><button type="button" data-library-cancel="create">Cancel</button></div>
-        </fieldset>
-      </form>
-      <div class="library-settings-card">
-        <h3>Library operations</h3>
-        <p class="muted">Move or copy history, configure local capture and later delivery, restore a backup, or release the connected library before ejecting its drive.</p>
-        <a href="/app">Transfer, delivery, restore and release →</a>
-      </div>
-      <h3 class="library-settings-list-heading">Other libraries on this Mac</h3>
-      <p class="muted">Switching changes the library you browse. Each library keeps its own source choices and saved views.</p>
-      <div id="library-settings-list"></div>
-      <details class="library-settings-card library-settings-mcp"><summary>Library used by MCP</summary>
-        <p class="muted">Switching libraries keeps this assignment. Agents can use Pharos when you are browsing the assigned library.</p>
-        <form id="library-settings-mcp-form"><fieldset><label for="library-settings-mcp">Assigned library</label><select id="library-settings-mcp"></select><div class="library-settings-actions"><button type="submit">Save MCP assignment</button><a href="/settings/mcp">Agent connections →</a></div></fieldset></form>
+      <p id="library-settings-job" role="status" aria-live="polite" hidden></p>
+      <section class="library-settings-group" aria-labelledby="library-settings-current-heading">
+        <h2 id="library-settings-current-heading">Connected library</h2>
+        <p class="muted">The library you’re browsing. Agents using Pharos through MCP search this library too, so switching libraries switches theirs.</p>
+        <div id="library-settings-current"></div>
+      </section>
+      <section class="library-settings-group" aria-labelledby="library-settings-list-heading">
+        <h2 id="library-settings-list-heading">Your other libraries</h2>
+        <p class="muted">Each library keeps its own sources, saved views and preferences.</p>
+        <div id="library-settings-list" class="library-settings-grid"></div>
+        <div class="library-settings-actions" aria-label="Add a library">
+          <button id="library-settings-new" type="button" aria-expanded="false" aria-controls="library-settings-create-form">Create a library…</button>
+          <button id="library-settings-open" type="button" aria-expanded="false" aria-controls="library-settings-open-form">Add an existing library…</button>
+          <button id="library-settings-restore" type="button" aria-expanded="false" aria-controls="library-settings-restore-form">Restore from a backup…</button>
+        </div>
+        <form id="library-settings-create-form" class="library-settings-card library-settings-form" hidden>
+          <h3>Create a library</h3>
+          <p class="muted">Start an empty library on this Mac or an attached drive. You choose which conversations it captures next.</p>
+          <fieldset>
+            <label for="library-settings-name">Name</label>
+            <input id="library-settings-name" maxlength="160" autocomplete="off" required>
+            <label for="library-settings-storage">Keep it</label>
+            <select id="library-settings-storage"><option value="mac">On this Mac</option><option value="ssd">On an external drive</option></select>
+            <label for="library-settings-parent">Inside this folder</label>
+            <div class="library-settings-folder"><input id="library-settings-parent" autocomplete="off" spellcheck="false" aria-describedby="library-settings-folder-note"><button type="button" data-library-pick="library-settings-parent">Choose folder…</button></div>
+            <p id="library-settings-folder-note" class="muted">Pharos creates a folder with the library’s name here.</p>
+            <div class="library-settings-destination"><span class="muted">New library folder</span><output id="library-settings-destination" for="library-settings-name library-settings-parent"></output></div>
+            <div class="library-settings-actions"><button class="primary" type="submit">Create and switch</button><button type="button" data-library-cancel="create">Cancel</button></div>
+          </fieldset>
+        </form>
+        <form id="library-settings-open-form" class="library-settings-card library-settings-form" hidden>
+          <h3>Add an existing library</h3>
+          <p class="muted">Choose a library folder Pharos doesn’t list yet, such as one on a drive from another Mac. Pharos adds it to your libraries and switches to it.</p>
+          <fieldset>
+            <label for="library-settings-existing">Library folder or its library.toml file</label>
+            <div class="library-settings-folder"><input id="library-settings-existing" autocomplete="off" spellcheck="false" required><button type="button" data-library-pick="library-settings-existing">Choose folder…</button></div>
+            <div class="library-settings-actions"><button class="primary" type="submit">Add and switch</button><button type="button" data-library-cancel="open">Cancel</button></div>
+          </fieldset>
+        </form>
+        <form id="library-settings-restore-form" class="library-settings-card library-settings-form" hidden>
+          <h3>Restore from a backup</h3>
+          <p class="muted">Pharos builds and verifies a new library from a backup or a copied library folder. The backup and your other libraries are left unchanged, and capture starts paused so you can check the result.</p>
+          <fieldset>
+            <label for="library-settings-backup">Backup folder</label>
+            <div class="library-settings-folder"><input id="library-settings-backup" autocomplete="off" spellcheck="false" required><button type="button" data-library-pick="library-settings-backup">Choose folder…</button></div>
+            <label for="library-settings-recover-path">New library folder</label>
+            <div class="library-settings-folder"><input id="library-settings-recover-path" autocomplete="off" spellcheck="false" required aria-describedby="library-settings-recover-note"><button type="button" data-library-pick="library-settings-recover-path">Choose parent folder…</button></div>
+            <p id="library-settings-recover-note" class="muted">Choose a folder that doesn’t exist yet. For a cloud backup, first download it from Settings → Backups.</p>
+            <div class="library-settings-actions"><button class="primary" type="submit">Restore and verify</button><button type="button" data-library-cancel="restore">Cancel</button></div>
+          </fieldset>
+        </form>
+      </section>
+      <section class="library-settings-group" aria-labelledby="library-settings-between-heading">
+        <h2 id="library-settings-between-heading">Between libraries</h2>
+        <p id="library-settings-between-empty" class="muted">Add a second library to copy history between libraries or deliver it from this Mac to a drive.</p>
+        <details id="library-settings-transfer-panel" class="library-settings-card library-settings-panel">
+          <summary><span><h3>Copy or move history</h3><span class="muted">Bring conversations from one library into another, for example to combine two Macs’ history.</span></span><svg class="app-icon library-settings-chevron" viewBox="0 0 24 24" aria-hidden="true"><use href="#ph-icon-chevron-down"/></svg></summary>
+          <form id="library-settings-transfer-form" class="library-settings-form">
+            <fieldset>
+              <div class="library-settings-pair">
+                <div><label for="library-settings-from">From</label><select id="library-settings-from"></select></div>
+                <div><label for="library-settings-to">Into</label><select id="library-settings-to"></select></div>
+              </div>
+              <div class="library-settings-choices" role="radiogroup" aria-label="After verification">
+                <label><input type="radio" name="library-settings-mode" value="copy" checked><span><strong>Copy</strong><span class="muted">Keep the history in both libraries.</span></span></label>
+                <label><input type="radio" name="library-settings-mode" value="move"><span><strong>Move</strong><span class="muted">Remove it from the first library once the copy is verified.</span></span></label>
+              </div>
+              <p class="muted">Pharos verifies everything at the destination; saved views and preferences stay with each library. Both libraries close while this runs, and Pharos reopens this library when it finishes.</p>
+              <div class="library-settings-actions"><button id="library-settings-transfer" class="primary" type="submit">Copy history</button></div>
+            </fieldset>
+          </form>
+        </details>
+        <div id="library-settings-delivery-panel" class="library-settings-card library-settings-panel">
+          <div class="library-settings-panel-head">
+            <div><h3 id="library-settings-delivery-title">Capture here, deliver to a drive</h3><span id="library-settings-delivery-summary" class="muted"></span></div>
+            <button id="library-settings-delivery-toggle" class="toggle" type="button" role="switch" aria-checked="false" aria-labelledby="library-settings-delivery-title" aria-describedby="library-settings-delivery-summary" aria-controls="library-settings-delivery-form"></button>
+          </div>
+          <form id="library-settings-delivery-form" class="library-settings-form" hidden>
+            <p class="muted">For an archive on an external drive. While the drive is away, Pharos keeps capturing into a library on this Mac; when the drive returns, it moves that history into the archive and empties the local library.</p>
+            <fieldset>
+              <div class="library-settings-pair">
+                <div><label for="library-settings-pending">Capture into</label><select id="library-settings-pending"></select></div>
+                <div><label for="library-settings-archive">Deliver to</label><select id="library-settings-archive"></select></div>
+              </div>
+              <p class="muted">Choose sources in the capturing library first. Source access is never copied between libraries.</p>
+              <div class="library-settings-actions"><button id="library-settings-delivery" class="primary" type="submit">Start delivery</button></div>
+            </fieldset>
+          </form>
+        </div>
+      </section>
+      <details class="library-settings-about">
+        <summary>Where Pharos.app runs</summary>
+        <p class="muted">Run Pharos from Applications to capture whenever this Mac is on. Or keep Pharos.app on a drive and open that copy on each Mac; nothing captures while that drive is unplugged. To move the app, quit it, drag Pharos.app in Finder, then reopen it.</p>
+        <p id="library-settings-application" class="library-settings-path"></p>
       </details>
     </section>

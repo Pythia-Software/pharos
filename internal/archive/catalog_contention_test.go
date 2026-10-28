@@ -149,7 +149,7 @@ func TestRequestReadsDoNotWaitForTheCatalogWriter(t *testing.T) {
 	rows := `{"version":2,"profile":"qt-sqlite-v1","limit":5}`
 	count := `{"version":2,"profile":"qt-sqlite-v1","limit":5,"metrics":[{"id":"n","op":"count"}]}`
 	requests := []struct{ method, path, body string }{
-		{"GET", "/api/health/counts", ""}, {"GET", "/api/health/pricing", ""}, {"GET", "/api/health/freshness", ""},
+		{"GET", "/api/health/counts", ""}, {"GET", "/api/health/pricing", ""}, {"GET", "/api/health/freshness", ""}, {"GET", "/api/library/summary", ""},
 		{"GET", "/api/authorship", ""}, {"GET", "/api/pricing", ""}, {"GET", "/api/origins", ""},
 		{"GET", "/api/usage/history", ""}, {"GET", "/api/usage/parallelism", ""}, {"GET", "/api/usage/summary", ""},
 		{"GET", "/api/menu-bar/usage", ""}, {"GET", "/api/tools/status", ""}, {"GET", "/api/sources", ""},

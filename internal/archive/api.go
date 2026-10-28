@@ -485,6 +485,9 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/health/counts":
 		value, err := s.Catalog.HealthCounts(r.Context())
 		writeResult(w, value, err)
+	case path == "/api/library/summary":
+		value, err := s.Catalog.LibrarySummary(r.Context())
+		writeResult(w, value, err)
 	case path == "/api/health/pricing":
 		value, err := s.Catalog.PricingHealth(r.Context())
 		writeResult(w, value, err)
