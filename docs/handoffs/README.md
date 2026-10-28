@@ -15,6 +15,7 @@ tests.
 | Handoff | Problem |
 |---|---|
 | [machine-time-all-time-cpu.md](machine-time-all-time-cpu.md) | Machine Time's all-time view may take twice the CPU the legacy route did; confirm or fix |
+| [usage-v3-hour-grouping.md](usage-v3-hour-grouping.md) | `/query-v3` groups usage by `hour` over daily records, where it is null; only `/metrics` reads the hourly ledger |
 | [query-table-schema-reload.md](query-table-schema-reload.md) | Every staged Query Table request makes its connection re-parse the whole catalog schema twice, adding about 6 ms of CPU |
 
 ## Upstream Query Table
@@ -25,6 +26,17 @@ The current standalone assignment is
 V3/V2 reduction cost gaps and let computed previews use modern transports.
 It includes the 0.9.3 baseline, complete reproduction context and acceptance
 criteria, and can be sent directly to the Query Table team.
+
+[`query-table-dashboard-views.md`](query-table-dashboard-views.md) is a
+standalone assignment against 0.9.5 from the dashboard analysis views. It
+asks for:
+- chart group labels that fit instead of clipping their start;
+- marks coloured by their whole group key;
+- hour-of-day and weekday grouping with per-occurrence statistics and
+  drill-down;
+- a minimum count over distinct values.
+
+It can be sent directly to the Query Table team.
 
 The [manual-interventions audit and upstream handoff](query-table-manual-interventions.md)
 records the previous patches and source snapshots, the 0.9.3 response, and the

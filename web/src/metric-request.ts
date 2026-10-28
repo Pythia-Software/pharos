@@ -1,4 +1,4 @@
-import { EMPTY_QUERY, toMetricQuery, toQueryRequestV3, type AggregationClause, type ComputedExecution, type FieldSchema, type MetricQuery, type QueryCapabilitiesV3, type WhereTerm } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, toMetricQuery, toQueryRequestV3, type AggregationClause, type ComputedExecution, type FieldSchema, type MetricQuery, type QueryCapabilitiesV3, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { queryRequest, QueryRequestError } from "./query-request";
 
 // Charts and cards outside a table ask the server for metrics directly: a
@@ -6,7 +6,7 @@ import { queryRequest, QueryRequestError } from "./query-request";
 // sends. The server returns every group of a metric or that metric's error.
 
 export type MetricBucket = { keys: unknown[]; value: unknown; count?: number; error?: string };
-export type MetricResult = { id: string; buckets: MetricBucket[]; error?: string; groupCount?: number; processedRows?: number };
+export type MetricResult = { id: string; buckets: MetricBucket[]; error?: string; groupCount?: number; processedRows?: number; hiddenGroups?: number; coverage?: "exact" | "partial"; other?: MetricBucket };
 export type MetricResponse = { metrics?: MetricResult[] };
 
 // The adapter's per-metric message when a metric has more groups than its
@@ -59,9 +59,15 @@ export async function postMetrics(dataset: string, schema: FieldSchema<any>, whe
 // to ten million matching rows and allows more groups than /metrics: slower,
 // but it answers what /metrics refuses for its budgets.
 export async function postQueryV3Metrics(dataset: string, schema: FieldSchema<any>, where: WhereTerm[], clauses: AggregationClause[], signal?: AbortSignal): Promise<MetricResult[]> {
+  return postQueryStateMetrics(dataset, schema, { ...EMPTY_QUERY, where, aggregations: clauses }, signal);
+}
+
+// postQueryStateMetrics runs a query's metrics through /query-v3, including
+// metrics over a grouping stage, which /metrics cannot express.
+export async function postQueryStateMetrics(dataset: string, schema: FieldSchema<any>, query: QueryState, signal?: AbortSignal): Promise<MetricResult[]> {
   const handshake = await queryRequest<{ queryCapabilities?: QueryCapabilitiesV3; computedExecution?: ComputedExecution }>(`/api/query/${dataset}/capabilities`, { signal });
   if (handshake.queryCapabilities?.version !== 3) throw new MetricRequestError("This server cannot run the query with a larger budget.");
-  const request = toQueryRequestV3({ ...EMPTY_QUERY, where, aggregations: clauses }, schema, handshake.queryCapabilities, handshake.computedExecution, { rows: false });
+  const request = toQueryRequestV3(query, schema, handshake.queryCapabilities, handshake.computedExecution, { rows: false });
   if (request.diagnostics?.length) throw new MetricRequestError(request.diagnostics.join(" "));
-  return metricResults(await post<MetricResponse>(`/api/query/${dataset}/query-v3`, request, signal), clauses);
+  return metricResults(await post<MetricResponse>(`/api/query/${dataset}/query-v3`, request, signal), query.aggregations ?? []);
 }

@@ -213,6 +213,13 @@ const ROUTES = [
   })),
   { name: "Analyze relative query previews", url: `/analyze?${new URLSearchParams({ analyze_topic: "tokens", analyze_filters: encodeQuery({ ...EMPTY_QUERY, where: [{ field: "first_usage_at", op: ">=", value: "-30d" }, { field: "first_usage_at", op: "<", value: "+0s" }, { field: "provider", op: "=", value: "codex" }] }) })}`, ready: ".usage-query-destinations" },
   { name: "Analyze workspace cumulative", url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify({ display: "cumulative", period: "days", days: 3, split: "model_family", metric: "percent_cost" }))}`, ready: ".usage-dashboard .usage-chart-lines" },
+  ...Object.entries({
+    compare: { view: "compare", metric: "cost", split: "provider_model", compareAs: "share" },
+    distribution: { view: "distribution", unit: "conversation", metric: "cost", split: "model_family", minSamples: 2 },
+    scatter: { view: "scatter", unit: "conversation", metric: "tokens", metricY: "cost", split: "provider", scale: "logarithmic", scaleY: "logarithmic" },
+    cycle: { view: "cycle", cycle: "hour", metric: "tokens", split: "none" },
+  }).map(([view, chart]) => ({ name: `Tokens and Cost ${view} view`, url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify(chart))}`, ready: '.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations',
+    check: async page => assert.equal(await page.locator(".usage-analysis-dashboard [role=alert]").count(), 0, "the analysis reports an error") })),
   { name: "Analyze cumulative human", url: `/analyze?analyze_topic=human&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20}))}`, ready: ".usage-dashboard .usage-chart-lines" },
   { name: "Analyze cumulative skills", url: `/analyze?analyze_topic=skills&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20}))}`, ready: ".usage-dashboard .usage-chart-lines" },
   { name: "Analyze cumulative time", url: `/analyze?analyze_topic=time&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20}))}`, ready: ".usage-dashboard .usage-chart-lines" },
@@ -349,6 +356,10 @@ const WIDTHS = [{ width: 1440, height: 900 }, { width: 1280, height: 720 }, { wi
 // problems match here is marked todo with the bug, so the suite stays honest;
 // any other problem still fails it.
 const KNOWN = [{
+  bug: "Query Table 0.9.5 box and horizontal-bar charts reserve a fixed label margin, so long group labels are cut off; docs/handoffs/query-table-dashboard-views.md (request 1)",
+  when: route => route.name.startsWith("Tokens and Cost distribution"),
+  match: /chart label ".*" cut off by svg .* in div\.qt-metric/,
+}, {
   bug: "Query Table 0.9.5 fit-to-screen can clip native Detail and JSON buttons at phone widths; docs/handoffs/query-table-fit-screen-controls.md",
   when: (route, viewport) => route.fitTable && viewport.width < 641,
   match: /a control is cut off where nothing scrolls: button\.qt-(?:link-btn\.qt-item-detail-button|json-preview)/,

@@ -165,7 +165,7 @@ function inspect({ wide, extraContainers, slack }) {
 
 // `wide`: Query Table tables may be wider than main, which then scrolls them
 // sideways under a fixed header by design. `slack`: subpixel rounding.
-const options = { wide: ".qt-table", extraContainers: ".turn, .tool-event, .subagent-run, .chat-bubble, [role=dialog], dialog", slack: 1 };
+const options = { wide: ".qt-table", extraContainers: ".turn, .tool-event, .subagent-run, .chat-bubble, .qt-metric, [role=dialog], dialog", slack: 1 };
 
 export function layoutProblems(page) {
   return page.evaluate(inspect, options);
