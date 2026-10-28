@@ -124,9 +124,11 @@ test("in the app the store reads the broker's document: the selected library, th
       { id: "a", name: "Euclid", selected: true, connected: true, eject: { verdict: "busy", summary: "broker" }, snapshot: { eject: { verdict: "safe" }, operations: [] } },
       { id: "b", name: "Archive", selected: false, connected: true, eject: { verdict: "safe" }, snapshot: { operations: [{ id: "x", state: "running" }] } },
     ],
-    app: { operations: [] }, attention: [{ id: "backup-failed", library: "b" }],
+    app: { operations: [] }, attention: [{ id: "backup-failed", library: "b" }], resources: { label: "Machine line" },
   }, { managed: true });
   assert.equal(view.library.eject.verdict, "busy", "the broker's verdict adds its own operations");
+  assert.equal(view.resources.label, "Machine line", "the Load row counts every Pharos process on this Mac");
+  assert.equal(normalize({ resources: { label: "Library line" } }).resources, null, "unmanaged, the library's own snapshot has them");
   assert.equal(view.others.length, 1);
   assert.equal(view.others[0].name, "Archive");
   assert.equal(view.attention.length, 1);

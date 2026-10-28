@@ -385,7 +385,10 @@ func (s *Server) finishDeferredSyncPhases(ctx context.Context, forceFindings boo
 	var stage *Op
 	invoke := func(name string, work func() error) error {
 		_, stage = chain.childFrom(ctx, OperationSpec{Kind: "analysis." + name, Trigger: triggerChained})
-		err := measure(name, work)
+		// A background stage (Git, tools, authorship, findings) runs at its
+		// priority class; foreground ones as they are.
+		var err error
+		stage.RunIO(func() { err = measure(name, work) })
 		stage.Finish(err)
 		return err
 	}
@@ -554,7 +557,7 @@ func (c *Catalog) repairRetained(ctx context.Context, job string, names []string
 		}); err != nil {
 			return err
 		}
-		c.boundWAL(walSizeLimit)
+		c.boundWAL(ctx, walSizeLimit)
 		if progress != nil {
 			progress(index+1, len(workspaces))
 		}

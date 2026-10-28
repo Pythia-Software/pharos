@@ -100,6 +100,8 @@ func (m *applicationManager) deliveryCycle(sourceID, targetID string) {
 		return
 	}
 	defer m.operationMu.Unlock()
+	// Whether delivery's IO runs at the utility tier is the flag's (§10).
+	m.operations.refreshFlag(m.ctx)
 	m.mu.Lock()
 	a, b := m.registry.library(sourceID), m.registry.library(targetID)
 	if a == nil || b == nil || m.released || m.suspended[sourceID] {
@@ -129,14 +131,18 @@ func (m *applicationManager) deliveryCycle(sourceID, targetID string) {
 	if _, e := os.Stat(pendingDeliveryPath(source)); os.IsNotExist(e) {
 		progress("Capturing approved sources into the pending library")
 		_, capture := deliver.Child(OperationSpec{Kind: "library.deliver.capture", Libraries: []string{sourceID}, Trigger: triggerChained})
-		err = capturePendingLibrary(m.ctx, source)
+		// Delivery is background: with the flag on, its IO runs at the
+		// utility tier (§10), as the move's below does.
+		deliver.RunIO(func() { err = capturePendingLibrary(m.ctx, source) })
 		capture.Finish(err)
 	}
 	if err == nil {
 		err = targetErr
 		if err == nil {
 			_, move := deliver.Child(OperationSpec{Kind: "library.transfer", Variant: "move", Libraries: []string{sourceID, targetID}, Trigger: triggerChained})
-			_, err = TransferLibrary(m.ctx, source, target, true, func(s string) { progress(s); move.Step(s, "", -1) })
+			deliver.RunIO(func() {
+				_, err = TransferLibrary(m.ctx, source, target, true, func(s string) { progress(s); move.Step(s, "", -1) })
+			})
 			move.Finish(err)
 		}
 	}

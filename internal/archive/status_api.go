@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -14,7 +15,7 @@ import (
 // GET /api/status is the status snapshot of this library
 // (docs/background-work.md §7.1): the drive and the eject verdict, the
 // top-level operation tree, the attention list, the freshness ledger
-// (phase 3), and a placeholder for resources (phase 4). GET /api/status/stream sends
+// (phase 3), and the CPU and memory of its Pharos processes (phase 4). GET /api/status/stream sends
 // the same document as server-sent events. Both run whatever the feature
 // flag says (§9); only the surfaces that render them are gated.
 //
@@ -30,6 +31,11 @@ var statusCoalesce = 500 * time.Millisecond
 // leases, the attention list and the verdict's lock evidence change without
 // one.
 var statusRecheck = 2 * time.Second
+
+// statusResourcesRefresh is how often a stream sends a document whose only
+// change is its resources: every event carries the latest, and while
+// nothing else changes the Load row is at most this old.
+var statusResourcesRefresh = 5 * time.Second
 
 // statusKeepalive is the interval of a stream's comment line.
 var statusKeepalive = 15 * time.Second
@@ -55,8 +61,10 @@ func (s *Server) statusDocument(ctx context.Context, fresh bool) map[string]any 
 	freshness := s.freshness(ctx, views, fresh)
 	document["freshness"] = freshness
 	document["freshness_summary"] = summarizeFreshness(freshness)
-	// A stable key, filled by phase 4.
-	document["resources"] = nil
+	// CPU and memory of this library's Pharos processes on this Mac (§10).
+	document["resources"] = s.serviceResources()
+	// The words over Show all's two parts: the operations, and the domains.
+	document["headings"] = map[string]any{"work": "Work", "data": "Data"}
 	document["features"] = map[string]any{"unified_activity": s.Catalog.unifiedActivity(ctx)}
 	return document
 }
@@ -64,7 +72,9 @@ func (s *Server) statusDocument(ctx context.Context, fresh bool) map[string]any 
 // statusTag identifies a document's content apart from when it was made:
 // equal tags mean nothing a surface shows has changed. Every generated_at,
 // nested ones included (each child snapshot in the broker's document has
-// its own), is left out.
+// its own), and every resources object (§10), is left out: CPU and memory
+// change with every reading, and would make an idle library's stream send
+// every recheck. Streams send them apart (statusResourcesRefresh).
 func statusTag(document map[string]any) string {
 	data, _ := json.Marshal(document)
 	var content any
@@ -78,6 +88,7 @@ func withoutGeneratedAt(value any) any {
 	switch value := value.(type) {
 	case map[string]any:
 		delete(value, "generated_at")
+		delete(value, "resources")
 		for key, item := range value {
 			value[key] = withoutGeneratedAt(item)
 		}
@@ -293,16 +304,18 @@ func streamStatus(w http.ResponseWriter, r *http.Request, changes <-chan struct{
 	header.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	ctx := r.Context()
-	sent := ""
+	sent, sentData, sentAt := "", []byte(nil), time.Time{}
 	send := func() bool {
 		frame := next(ctx)
 		if ctx.Err() != nil {
 			return false
 		}
-		if frame.tag == sent {
+		// Unchanged content: sent again only for newer resources, and not
+		// more often than statusResourcesRefresh.
+		if frame.tag == sent && (bytes.Equal(frame.data, sentData) || time.Since(sentAt) < statusResourcesRefresh) {
 			return true
 		}
-		sent = frame.tag
+		sent, sentData, sentAt = frame.tag, frame.data, time.Now()
 		if _, err := fmt.Fprintf(w, "event: snapshot\nid: %s\ndata: %s\n\n", frame.tag, frame.data); err != nil {
 			return false
 		}

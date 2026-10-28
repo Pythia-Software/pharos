@@ -326,7 +326,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 			tracker = mode.plan.tracker
 		}
 		if tracker == nil {
-			tracker, err = c.newPartTracker(host, config.Name, partial, captureViewOf(adapter))
+			tracker, err = c.newPartTracker(ctx, host, config.Name, partial, captureViewOf(adapter))
 		}
 		if err != nil {
 			return err
@@ -382,7 +382,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 				return err
 			}
 			if updated {
-				c.boundWAL(walSizeLimit)
+				c.boundWAL(ctx, walSizeLimit)
 				result.SkippedCurrent++
 				return nil
 			}
@@ -470,7 +470,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 			result.Older++
 			return nil
 		}
-		c.boundWAL(walSizeLimit)
+		c.boundWAL(ctx, walSizeLimit)
 		if copied {
 			result.SkippedCurrent++
 			return nil
@@ -657,7 +657,7 @@ func (c *Catalog) IngestExisting(adapter Adapter, progress ProgressFunc) IngestR
 		if commitErr != nil {
 			return commitErr
 		}
-		c.boundWAL(walSizeLimit)
+		c.boundWAL(context.Background(), walSizeLimit)
 		result.Workspaces++
 		result.Conversations += conversations
 		result.Messages += messages

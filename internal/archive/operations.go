@@ -323,6 +323,10 @@ type opRegistry struct {
 	// one, ended operations need not wait to be written before they are
 	// forgotten.
 	journaled bool
+	// lowerIO reports whether background-priority operations run their IO
+	// at the utility tier (§10): the unified activity flag. Nil leaves IO
+	// policy as it was before the flag existed.
+	lowerIO func() bool
 }
 
 func newOpRegistry(process string) *opRegistry {
@@ -597,6 +601,31 @@ func (op *Op) lock() bool {
 func (op *Op) unlock(boundary bool) {
 	op.reg.changedLocked(op, boundary)
 	op.reg.mu.Unlock()
+}
+
+// utilityIO runs op's fn with the calling thread's disk IO in the utility
+// tier; tests replace it to see which operations' bodies it wraps.
+var utilityIO = func(_ *Op, fn func()) { withCaptureIOPolicy(fn) }
+
+// RunIO runs fn, an IO-heavy part of op's work, at op's priority class
+// (§10). With the unified activity flag on, a background operation's fn runs
+// with its thread's disk IO at utility (runtime.LockOSThread for fn's
+// duration, as capture copies do); a foreground one, or any operation with
+// the flag off, runs fn unchanged. The policy is per thread: goroutines fn
+// starts run at the default tier, so callers wrap the loop that does the IO
+// on its own goroutine. Safe on a nil handle, which runs fn as is.
+func (op *Op) RunIO(fn func()) {
+	if !op.lowersIO() {
+		fn()
+		return
+	}
+	utilityIO(op, fn)
+}
+
+// lowersIO reports whether RunIO lowers op's IO. The priority is fixed at
+// registration, so it needs no lock.
+func (op *Op) lowersIO() bool {
+	return op != nil && op.reg != nil && op.spec.Priority == priorityBackground && op.reg.lowerIO != nil && op.reg.lowerIO()
 }
 
 // Run moves a queued operation to running; the first Step implies it.

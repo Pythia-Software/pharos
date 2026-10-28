@@ -109,6 +109,18 @@ var errCheckpointBusy = errors.New("catalog checkpoint incomplete: the WAL is st
 // second if a reader of an older snapshot or another writer is still active.
 // Readers are never blocked.
 func (c *Catalog) Checkpoint() error {
+	return c.checkpointWith(nil)
+}
+
+// checkpointTruncating runs just before the truncating pass; tests replace
+// it to see under which IO policy that pass runs.
+var checkpointTruncating = func() {}
+
+// checkpointWith is Checkpoint with passive, when set, wrapping the
+// passive pass only: the WAL bound runs that bulk copy, which takes no
+// writer lock, at its operation's priority class (§10). The truncating
+// pass holds writers off, so it always runs at the default tier.
+func (c *Catalog) checkpointWith(passive func(func())) error {
 	cliWriteCheck("checkpoint")
 	// Don't wait indefinitely for a pooled connection either, e.g. in Close
 	// while long queries still hold every connection.
@@ -122,7 +134,11 @@ func (c *Catalog) Checkpoint() error {
 	ctx := context.Background()
 	// A passive pass copies what it can without the write lock, so the
 	// truncating pass below holds writers off only briefly.
-	if _, err := conn.ExecContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)"); err != nil {
+	if passive == nil {
+		passive = func(fn func()) { fn() }
+	}
+	passive(func() { _, err = conn.ExecContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)") })
+	if err != nil {
 		return err
 	}
 	if _, err := conn.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout=%d", checkpointWaitMS)); err != nil {
@@ -130,6 +146,7 @@ func (c *Catalog) Checkpoint() error {
 	}
 	defer conn.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout=%d", busyTimeoutMS))
 	var busy, logFrames, checkpointed int
+	checkpointTruncating()
 	if err := conn.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logFrames, &checkpointed); err != nil {
 		return err
 	}
@@ -152,7 +169,19 @@ type walBound struct {
 // log grows by everything a sync writes: reads slow down searching it, and an
 // unclean exit leaves all of it to replay on the next open. Syncs call this
 // between transactions, where the writer does not contend for its own lock.
-func (c *Catalog) boundWAL(limit int64) {
+//
+// The checkpoint's operation is a child of the operation ctx carries, so its
+// priority class (§10) is its caller's: a manual index, a capture or a
+// release waits for it and keeps the default IO tier. A caller with no
+// operation is waiting for it too (a close, a repair), so it is foreground;
+// only keepWALSmall's own ticker runs it as a background root.
+func (c *Catalog) boundWAL(ctx context.Context, limit int64) {
+	c.boundWALAt(ctx, limit, priorityForeground)
+}
+
+// boundWALAt is boundWAL; priority is the class of a checkpoint whose ctx
+// carries no operation.
+func (c *Catalog) boundWALAt(ctx context.Context, limit int64, priority string) {
 	if info, err := os.Stat(c.Path + "-wal"); err != nil || info.Size() <= limit {
 		return
 	}
@@ -164,8 +193,21 @@ func (c *Catalog) boundWAL(limit int64) {
 		return
 	}
 	// Only a check that runs a checkpoint is an operation (§3.4).
-	_, op := c.beginOp(context.Background(), OperationSpec{Kind: "maintenance.checkpoint", Variant: "bound", Trigger: triggerSchedule})
-	err := c.Checkpoint()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	spec := OperationSpec{Kind: "maintenance.checkpoint", Variant: "bound", Trigger: triggerSchedule}
+	if opFrom(ctx) == nil {
+		spec.Priority = priority
+	} else {
+		spec.Trigger = triggerChained
+	}
+	// Not cancelled with its caller: a checkpoint is short and not
+	// interruptible.
+	_, op := c.beginOp(context.WithoutCancel(ctx), spec)
+	// Only the passive pass at the operation's class; the truncating pass,
+	// which blocks writers, at the default tier.
+	err := c.checkpointWith(op.RunIO)
 	if err != nil {
 		c.wal.retryAt = time.Now().Add(walRetryDelay)
 	}
@@ -185,7 +227,7 @@ func (c *Catalog) keepWALSmall(ctx context.Context, every time.Duration, limit i
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			c.boundWAL(limit)
+			c.boundWALAt(context.Background(), limit, priorityBackground)
 		}
 	}
 }

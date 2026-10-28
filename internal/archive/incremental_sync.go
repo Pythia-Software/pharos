@@ -316,7 +316,9 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 			workMeter.report(activityWork{Phase: phase, Source: source.Name})
 		}
 		if p.err == nil {
-			s.prepareSyncSource(ctx, source, p)
+			// Discovery walks the source: an automatic run's walks run at
+			// its priority class (Op.RunIO), a manual run's as they are.
+			handle.RunIO(func() { s.prepareSyncSource(ctx, source, p) })
 		}
 		if p.err != nil {
 			continue
@@ -413,21 +415,24 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 			}
 		}, written: func(id string) { changedWorkspaces[id] = true }}
 		baseW, baseC, baseM := totals(results)
-		result := s.Catalog.IngestContext(withIngestMode(ctx, mode), adapter, func(phase string, w, c, m, skipped, processed int) {
-			s.updateRun(run.ID, func(run *SyncRun) {
-				run.Phase = phase
-				run.Workspaces = baseW + w
-				run.Conversations = baseC + c
-				run.Messages = baseM + m
-				run.InputsChecked = checked
+		var result IngestResult
+		handle.RunIO(func() {
+			result = s.Catalog.IngestContext(withIngestMode(ctx, mode), adapter, func(phase string, w, c, m, skipped, processed int) {
+				s.updateRun(run.ID, func(run *SyncRun) {
+					run.Phase = phase
+					run.Workspaces = baseW + w
+					run.Conversations = baseC + c
+					run.Messages = baseM + m
+					run.InputsChecked = checked
+				})
+				work := activityWork{Phase: phase, Source: source.Name}
+				if plan != nil && phase == "indexing" {
+					work = plan.work(phase, source.Name, model, processed)
+					work.Kind = "incremental"
+				}
+				work.Next = "Refresh the Library view and verify changed inputs"
+				workMeter.report(work)
 			})
-			work := activityWork{Phase: phase, Source: source.Name}
-			if plan != nil && phase == "indexing" {
-				work = plan.work(phase, source.Name, model, processed)
-				work.Kind = "incremental"
-			}
-			work.Next = "Refresh the Library view and verify changed inputs"
-			workMeter.report(work)
 		})
 		op.end("source:"+source.Name, result.Error == nil && ctx.Err() == nil)
 		results = append(results, result)
@@ -465,7 +470,9 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 			ids = append(ids, id)
 		}
 		slices.Sort(ids)
-		if err := s.Catalog.refreshLibraryWorkspaces(ctx, ids); err != nil {
+		var err error
+		handle.RunIO(func() { err = s.Catalog.refreshLibraryWorkspaces(ctx, ids) })
+		if err != nil {
 			failure = err.Error()
 		}
 		meter.endPhaseWork(phase, workMeter.finish(ctx.Err() == nil))
@@ -478,7 +485,7 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 		workMeter.model = "analysis-v1:audit"
 		workMeter.report(activityWork{Phase: "verifying", Unit: "input", TotalKnown: true, Total: float64(min(1, len(pool.units)))})
 		op.begin("audit")
-		audit = s.Catalog.auditPool(ctx, pool, run.ID)
+		handle.RunIO(func() { audit = s.Catalog.auditPool(ctx, pool, run.ID) })
 		op.end("audit", ctx.Err() == nil && audit.Outcome != "read_error")
 		if audit.Outcome == "passed" {
 			workMeter.report(activityWork{Phase: "verifying", Unit: "input", TotalKnown: true, Done: 1, Total: 1})
@@ -595,7 +602,7 @@ func (c *Catalog) sourceChanges(ctx context.Context, source SourceConfig) source
 			err = errors.New("this source has no bounded change discovery")
 		} else {
 			var tracker *partTracker
-			tracker, err = c.newPartTracker(currentHost().ID, source.Name, partial, nil)
+			tracker, err = c.newPartTracker(ctx, currentHost().ID, source.Name, partial, nil)
 			if err == nil {
 				err = partial.discoverParts(func(parts []sourcePart) bool {
 					report.Units++

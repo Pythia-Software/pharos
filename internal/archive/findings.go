@@ -848,9 +848,9 @@ func (c *Catalog) RefreshFindings(ctx context.Context, force bool) error {
 // refreshFindingsInBackground runs RefreshFindings on the catalog's
 // background executor.
 // It is started by GET /api/findings before findings exist, a read that
-// starts a write (§1).
+// starts a write (§1): the page waits for it, so it is foreground (§10).
 func (c *Catalog) refreshFindingsInBackground(force bool) {
-	c.startBackground(OperationSpec{Kind: "analysis.findings", Trigger: triggerRead}, func(ctx context.Context, op *Op) error {
+	c.startBackground(OperationSpec{Kind: "analysis.findings", Trigger: triggerRead, Priority: priorityForeground}, func(ctx context.Context, op *Op) error {
 		err := c.RefreshFindings(withWorkProgress(ctx, op.mirrorWork), force)
 		if err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Findings: %v\n", err)

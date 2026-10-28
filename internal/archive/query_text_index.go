@@ -165,7 +165,9 @@ func (c *Catalog) maintainQueryTextIndexes(ctx context.Context) {
 	defer func() { pass.end(nil) }()
 	for _, index := range []queryTextIndex{humanQueryText, toolQueryText, toolQueryFacts} {
 		for {
-			more, err := c.indexQueryTextBatch(ctx, index)
+			var more bool
+			var err error
+			pass.runIO(func() { more, err = c.indexQueryTextBatch(ctx, index) })
 			if more {
 				pass.worked(1)
 			}

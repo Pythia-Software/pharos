@@ -34,8 +34,8 @@ func (s *Server) launch(op *Op, work func(ctx context.Context, op *Op) error) bo
 	return false
 }
 
-// runOperation runs work and finishes op with its result. A panic fails the
-// operation and is raised again.
+// runOperation runs work at op's priority class (Op.RunIO) and finishes op
+// with its result. A panic fails the operation and is raised again.
 func runOperation(op *Op, work func(ctx context.Context, op *Op) error) {
 	defer func() {
 		if value := recover(); value != nil {
@@ -43,7 +43,9 @@ func runOperation(op *Op, work func(ctx context.Context, op *Op) error) {
 			panic(value)
 		}
 	}()
-	op.Finish(work(op.Context(), op))
+	var err error
+	op.RunIO(func() { err = work(op.Context(), op) })
+	op.Finish(err)
 }
 
 // begin registers an operation that runs on the caller's goroutine (an HTTP
@@ -56,7 +58,7 @@ func (s *Server) begin(ctx context.Context, spec OperationSpec) (context.Context
 // (§3.4): they hold nothing and are never shown, and each pass that does real
 // work starts an operation. The unregistered-work test accounts for them.
 var daemonNames = []string{"maintainLibrary", "maintainSubstringIndex", "maintainTextSearch", "maintainToolSearch", "maintainQueryTextIndexes",
-	"keepWALSmall", "automaticLoop", "cloudScheduleLoop", "journalWriter", "leaseReconciler"}
+	"keepWALSmall", "automaticLoop", "cloudScheduleLoop", "journalWriter", "leaseReconciler", "watchFeatureFlags"}
 
 // daemon runs a registered daemon loop in the background.
 func (s *Server) daemon(name string, loop func(ctx context.Context)) bool {
@@ -162,6 +164,16 @@ func (p *daemonPass) end(err error) {
 		return
 	}
 	p.op.Finish(err)
+}
+
+// runIO runs one batch of the pass at its operation's priority class
+// (Op.RunIO); without an operation it runs fn as is.
+func (p *daemonPass) runIO(fn func()) {
+	if p == nil {
+		fn()
+		return
+	}
+	p.op.RunIO(fn)
 }
 
 // active reports a pass with an operation open.

@@ -39,7 +39,7 @@
   function normalize(document, {managed = false} = {}) {
     if (!document || typeof document !== 'object') return null;
     if (!managed || !Array.isArray(document.libraries)) {
-      return {library: document, others: [], app: null, appOperations: [], attention: Array.isArray(document.attention) ? document.attention : [], service: null};
+      return {library: document, others: [], app: null, appOperations: [], attention: Array.isArray(document.attention) ? document.attention : [], service: null, resources: null};
     }
     const selected = document.libraries.find(entry => entry.selected) || null;
     const library = selected?.snapshot ? {...selected.snapshot, eject: selected.eject || selected.snapshot.eject} : null;
@@ -53,6 +53,8 @@
     }
     return {library, others, app: document.app || null, appOperations: selected ? appRunning.filter(operation => touches(operation, selected.id)) : [],
       attention: Array.isArray(document.attention) ? document.attention : [],
+      // Every Pharos process on this Mac, for the Load row.
+      resources: document.resources || null,
       service: selected ? {id: selected.id, name: selected.name, state: selected.service?.state || null, stateLabel: selected.state_label || null, connected: Boolean(selected.connected), error: selected.error || null, eject: selected.eject || null} : null};
   }
 

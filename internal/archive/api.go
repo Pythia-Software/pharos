@@ -90,6 +90,9 @@ type Server struct {
 	captureProbe captureProbe
 	// freshFiles caches the freshness ledger's file-derived inputs.
 	freshFiles freshnessFileCache
+	// resources samples this process and its library's other Pharos
+	// processes for the status snapshot (resources.go).
+	resources *resourceSampler
 }
 
 func NewServer(config Config, catalog *Catalog) *Server {
@@ -97,10 +100,14 @@ func NewServer(config Config, catalog *Catalog) *Server {
 	server.life.init()
 	server.ops = newOpRegistry("service")
 	server.ops.releasing = server.releasing
+	server.resources = newResourceSampler()
 	if catalog != nil {
 		server.ingestMu.path = catalog.Path
 		catalog.background = server.start
 		catalog.ops = server.ops
+		// Background work's IO follows the flag (§10); off, it is as before.
+		// From memory only: work never waits on a reader for the flag.
+		server.ops.lowerIO = catalog.unifiedActivityNow
 		server.journal = newJournalWriter(catalog, server.ops)
 		catalog.recordInitialize(server.ops, triggerStartup)
 		server.leases.dirs = func() []string { return leaseDirs(server.Config()) }
@@ -160,6 +167,7 @@ func (s *Server) Serve() error {
 	s.daemon("keepWALSmall", func(ctx context.Context) { s.Catalog.keepWALSmall(ctx, 10*time.Second, walSizeLimit) })
 	s.daemon("automaticLoop", s.automaticLoop)
 	s.daemon("cloudScheduleLoop", s.cloudScheduleLoop)
+	s.daemon("watchFeatureFlags", s.Catalog.watchFeatureFlags)
 	s.refreshGitInBackground(true)
 	s.countUpgradeInBackground()
 	return s.serveUntilStopped(server, listener)

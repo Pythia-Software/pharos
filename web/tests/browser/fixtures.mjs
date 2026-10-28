@@ -246,10 +246,18 @@ const busySummary = { all_current: false, checked_at: null, groups: [
   { group: "search", label: "Search", state: "behind", short: "updating", short_age: false, text: "catching up", as_of: null, as_of_label: "", catching_up: "op-view", shown: true },
   { group: "backups", label: "Backups", state: "behind", short: "behind", short_age: true, text: "behind, updates with the next scheduled cloud backup", as_of: iso(9 * day), as_of_label: "last current", catching_up: null, shown: false, muted: false },
 ] };
+// Resources as a service reports them (§10): itself and a Terminal command.
+const statusResources = (label, processes) => ({ cpu_percent: 3, memory_bytes: 340e6, sampled_at: iso(0), basis: "proc_pid_rusage", approximate: false, label, processes });
+const idleResources = statusResources("Pharos is using under 1% of one core · 180 MB", [
+  { pid: 4120, role: "service", cpu_percent: 0, memory_bytes: 180e6, sampled_at: iso(0), basis: "proc_pid_rusage", text: "Library service · under 1% of one core · 180 MB" }]);
+const busyResources = statusResources("Pharos is using ~45% of one core · 1.2 GB", [
+  { pid: 4120, role: "service", cpu_percent: 38, memory_bytes: 1.1e9, sampled_at: iso(0), basis: "proc_pid_rusage", text: "Library service · ~38% of one core · 1.1 GB" },
+  { pid: 5150, role: "cli:capture", cpu_percent: 7, memory_bytes: 64e6, sampled_at: iso(0), basis: "proc_pid_rusage", text: "pharos capture (Terminal) · ~7% of one core · 64 MB" }]);
+const statusHeadings = { work: "Work", data: "Data" };
 export const idleStatus = {
   version: 1, revision: 1, generated_at: iso(0), host: { id: "test-mac", label: "This Mac" }, library: statusLibrary,
   eject: { verdict: "safe", eta_seconds: null, checked: "polled", blockers: [], headline: "Safe to eject; checked again on eject", summary: "Nothing Pharos can see is writing to the library. Pharos checks everything again when you eject." },
-  operations: [], attention: [], freshness: idleLedger, freshness_summary: idleSummary, resources: null, features: { unified_activity: true }, journal: { dropped: 0 },
+  operations: [], attention: [], freshness: idleLedger, freshness_summary: idleSummary, resources: idleResources, headings: statusHeadings, features: { unified_activity: true }, journal: { dropped: 0 },
 };
 const statusOperation = (id, changes) => ({
   id, kind: "index.changes.manual", variant: null, subject: null, label: "Index changes", verb: "Indexing changes", state: "running", state_label: "Indexing changes",
@@ -269,7 +277,7 @@ export const busyStatus = {
     statusOperation("op-backup", { kind: "backup.local", label: "Back up", state: "blocked", state_label: "Waiting", priority: "background", stoppable: true, stop: { method: "POST", path: "/api/operations/stop", body: { id: "op-backup" } }, detail: "Waiting for a capture to finish" }),
     statusOperation("op-old", { kind: "analysis.findings", label: "Update findings", state: "succeeded", state_label: "Done", stoppable: false, stop: undefined, ended_at: iso(60000) }),
   ],
-  freshness: busyLedger, freshness_summary: busySummary,
+  freshness: busyLedger, freshness_summary: busySummary, resources: busyResources,
   attention: [{ id: "backup-failed", rule: 6, severity: "error", title: "The last backup failed", detail: "The destination drive is full: /Volumes/Backup Drive With A Long Name/Pharos Backup", action: { label: "Open Backups", path: "/settings/backups" } }],
 };
 // The broker's document, with two other libraries. A broker operation
@@ -289,6 +297,11 @@ export const managedStatus = snapshot => ({
   app: { operations: [statusOperation("op-copy", { kind: "library.transfer", label: "Copy library", state_label: "Copying the library", process: "broker", stoppable: false, stop: undefined,
     libraries: ["local", "archive"], step: { index: 2, count: 3, name: "Verified copy", unit: "byte", done: 4e9, total: 1e10, fraction: 0.4 } })], update: null },
   attention: snapshot.attention,
+  // Every Pharos process on this Mac: the app, both open libraries' services.
+  resources: statusResources("Pharos is using ~62% of one core · 1.6 GB", [
+    { pid: 4000, role: "broker", cpu_percent: 12, memory_bytes: 90e6, sampled_at: iso(0), basis: "proc_pid_rusage", text: "Pharos app · ~12% of one core · 90 MB" },
+    ...snapshot.resources.processes.map(process => ({ ...process, library: "local" })),
+    { pid: 4300, role: "service", library: "archive", cpu_percent: 5, memory_bytes: 210e6, sampled_at: iso(0), basis: "proc_pid_rusage", text: "Library service (Archive) · ~5% of one core · 210 MB" }]),
 });
 
 export const defaultApi = {

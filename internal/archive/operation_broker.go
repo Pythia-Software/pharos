@@ -87,6 +87,51 @@ type brokerOperations struct {
 	// unavailable counts, per library, the documents in a row that found it
 	// unreachable or not open (rule 8).
 	unavailable map[string]int
+	// resources samples the broker, each library's service and the
+	// Terminal commands writing them, for /api/app/status (§10).
+	resources *resourceSampler
+	// flag is the unified activity flag as the selected library's service
+	// last reported it (features.unified_activity), which decides whether
+	// broker operations lower their IO (§10). The broker has no catalog of
+	// its own to read it from.
+	flag brokerFlag
+}
+
+// brokerFlag is the flag of one library, the selected one: another
+// selection clears it, and a service that cannot confirm it makes it off.
+type brokerFlag struct {
+	mu      sync.Mutex
+	library string
+	on      bool
+}
+
+func (f *brokerFlag) lowerIO() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.on
+}
+
+// selected starts over for library when the selection changed.
+func (f *brokerFlag) selected(library string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.library != library {
+		f.library, f.on = library, false
+	}
+}
+
+// note records library's flag, from its status snapshot (nil when its
+// service did not answer: off). A library no longer selected is ignored.
+func (f *brokerFlag) note(library string, snapshot map[string]any) {
+	on := false
+	if features, ok := snapshot["features"].(map[string]any); ok {
+		on, _ = features["unified_activity"].(bool)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.library == library {
+		f.on = on
+	}
 }
 
 func brokerOperationsPath(installation string) string {
@@ -96,8 +141,10 @@ func brokerOperationsPath(installation string) string {
 // newBrokerOperations loads the state file: operations an earlier broker
 // left running become interrupted.
 func newBrokerOperations(path string) *brokerOperations {
-	b := &brokerOperations{reg: newOpRegistry("broker"), path: path, client: &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{Proxy: nil}}}
+	b := &brokerOperations{reg: newOpRegistry("broker"), path: path, client: &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{Proxy: nil}},
+		resources: newResourceSampler()}
 	b.reg.wake = make(chan struct{}, 1)
+	b.reg.lowerIO = b.flag.lowerIO
 	// Ended operations stay listed (and in the state file) until newer ones
 	// push them out, not for the service's ten minutes.
 	b.reg.keepEnded = 30 * 24 * time.Hour
@@ -227,6 +274,13 @@ func (b *brokerOperations) publish(libraries []brokerLibrary) {
 	b.libraries = libraries
 	b.published++
 	b.mu.Unlock()
+	selected := ""
+	for _, library := range libraries {
+		if library.Selected {
+			selected = library.ID
+		}
+	}
+	b.flag.selected(selected)
 }
 
 // publishLocked publishes m's libraries and children; m.mu is held.
@@ -353,6 +407,29 @@ func (b *brokerOperations) start(ctx context.Context) <-chan struct{} {
 	return done
 }
 
+// refreshFlag asks the selected library's service for its status snapshot
+// (its shared document, cheap) and records the flag, before broker work
+// whose IO it decides: a delivery stops the services it would ask later.
+// Without an answer (no service, or it failed) the flag is off.
+func (b *brokerOperations) refreshFlag(ctx context.Context) {
+	if b == nil || ctx == nil {
+		return
+	}
+	b.mu.Lock()
+	libraries := slices.Clone(b.libraries)
+	b.mu.Unlock()
+	for _, library := range libraries {
+		if !library.Selected {
+			continue
+		}
+		var snapshot map[string]any
+		if library.Child != nil {
+			snapshot, _ = b.fetchServiceOperations(ctx, b.client, *library.Child, "/api/status")
+		}
+		b.flag.note(library.ID, snapshot)
+	}
+}
+
 // fetchServiceOperations asks a library's service for its snapshot at path
 // (/api/operations, or /api/status for the status document).
 func (b *brokerOperations) fetchServiceOperations(ctx context.Context, client *http.Client, endpoint applicationEndpoint, path string) (map[string]any, error) {
@@ -419,6 +496,10 @@ func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool,
 	wait.Wait()
 	cutoff := time.Now().Add(-10 * time.Minute)
 	appLeases := probeLeases([]string{appLeaseDir()})
+	// The status document carries resources (§10); the operations document
+	// and the eject check do not.
+	withResources := withLibraries && !fresh && strings.HasPrefix(path, "/api/status")
+	sampled := []resourceProcess{{PID: os.Getpid(), Role: "broker", OwnOnly: true}}
 	entries := []map[string]any{}
 	for index, library := range libraries {
 		service := map[string]any{"state": "stopped", "pid": nil, "started_at": nil, "restarts_10m": 0}
@@ -473,9 +554,30 @@ func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool,
 		if snapshots[index] != nil {
 			snapshot = snapshots[index]
 		}
-		entries = append(entries, map[string]any{"id": library.ID, "name": library.Name, "selected": library.Selected,
+		// Only the status snapshot carries the flag; the operations
+		// document does not.
+		if library.Selected && strings.HasPrefix(path, "/api/status") {
+			b.flag.note(library.ID, snapshots[index])
+		}
+		entry := map[string]any{"id": library.ID, "name": library.Name, "selected": library.Selected,
 			"connected": library.Child != nil && failures[index] == nil, "service": service, "snapshot": snapshot,
-			"eject": verdict, "error": errorText})
+			"eject": verdict, "error": errorText}
+		if withResources {
+			// The broker reads the service itself, so a service too busy
+			// to answer is still measured, and the Terminal commands its
+			// snapshot names (or, without one, the leases read above).
+			processes := []resourceProcess{}
+			if library.Child != nil {
+				processes = append(processes, resourceProcess{PID: library.Child.PID, Role: "service", Library: library.ID, LibraryName: library.Name})
+			}
+			if snapshots[index] != nil {
+				processes = append(processes, snapshotProcesses(snapshots[index], library.ID, library.Name)...)
+			}
+			processes = append(processes, leaseProcesses(leases, library.ID, library.Name)...)
+			entry["resources"] = processes
+			sampled = append(sampled, processes...)
+		}
+		entries = append(entries, entry)
 	}
 	app := []map[string]any{}
 	for _, record := range records {
@@ -506,8 +608,37 @@ func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool,
 		entry["detail"] = "In another process (" + strings.Replace(probe.Info.Process, "cli:", "pharos ", 1) + ")"
 		app = append(app, entry)
 	}
-	return map[string]any{"version": 1, "revision": b.reg.currentRevision(), "generated_at": now(), "libraries": entries,
+	document := map[string]any{"version": 1, "revision": b.reg.currentRevision(), "generated_at": now(), "libraries": entries,
 		"app": map[string]any{"operations": app, "update": nil}, "attention": []any{}}
+	if withResources {
+		sampled = append(sampled, leaseProcesses(appLeases, "", "")...)
+		document["resources"] = b.libraryResources(entries, sampled)
+	}
+	return document
+}
+
+// libraryResources reads every process once and fills each library entry's
+// resources (its service and the Terminal commands writing it) from the
+// same readings; it returns the machine's total: the broker, every library's
+// processes and the app-level Terminal commands, each process counted once.
+func (b *brokerOperations) libraryResources(entries []map[string]any, processes []resourceProcess) *resourceSummary {
+	readings := b.resources.sample(processes)
+	byPID := map[int]resourceReading{}
+	for _, reading := range readings {
+		byPID[reading.PID] = reading
+	}
+	for _, entry := range entries {
+		asked, _ := entry["resources"].([]resourceProcess)
+		own := []resourceReading{}
+		for _, process := range asked {
+			if reading, ok := byPID[process.PID]; ok && !slices.ContainsFunc(own, func(r resourceReading) bool { return r.PID == process.PID }) {
+				own = append(own, reading)
+			}
+		}
+		name, _ := entry["name"].(string)
+		entry["resources"] = summarizeResources(defaultString(name, "This library"), own)
+	}
+	return summarizeResources("Pharos", readings)
 }
 
 // cleanDeadLeases deletes the unheld leases in dir: app-level commands (a

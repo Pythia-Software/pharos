@@ -5,10 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -41,8 +44,8 @@ func getStatus(t *testing.T, server *Server, path string) statusSnapshot {
 }
 
 // The status snapshot (§7.1) composes the drive, the verdict, the top-level
-// operations, the attention list and the freshness ledger, with a stable
-// null placeholder for resources. A cloud upload is a batch writer: safe to eject
+// operations, the attention list, the freshness ledger and the resources of
+// its processes. A cloud upload is a batch writer: safe to eject
 // after its current unit. A Terminal command's lease makes the drive busy and
 // lists its work, which Pharos cannot stop.
 func TestStatusSnapshotComposesVerdictOperationsAndPlaceholders(t *testing.T) {
@@ -50,8 +53,26 @@ func TestStatusSnapshotComposesVerdictOperationsAndPlaceholders(t *testing.T) {
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
 	idle := getStatus(t, server, "/api/status")
-	if value, ok := idle.raw["resources"]; !ok || value != nil {
-		t.Fatalf("resources must be present and null until its phase: %#v", idle.raw["resources"])
+	// Resources (§10): this service, read by the kernel, with the server's
+	// Load line; CPU from the second reading on.
+	override(t, &resourceSampleInterval, 0)
+	resources, _ := idle.raw["resources"].(map[string]any)
+	processes, _ := resources["processes"].([]any)
+	if len(processes) != 1 || processes[0].(map[string]any)["pid"] != float64(os.Getpid()) || processes[0].(map[string]any)["role"] != "service" ||
+		!(resources["memory_bytes"].(float64) > 0) || resources["basis"] != resourceBasis || resources["sampled_at"] == nil ||
+		!strings.HasPrefix(firstString(resources["label"]), "Pharos is using ") {
+		t.Fatalf("the snapshot carries this service's resources: %#v", idle.raw["resources"])
+	}
+	// The next computed document (the hub reuses one for statusCoalesce).
+	var again map[string]any
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline) && again["cpu_percent"] == nil; {
+		again = getStatus(t, server, "/api/status").raw["resources"].(map[string]any)
+	}
+	if again["cpu_percent"] == nil {
+		t.Fatalf("a second reading gives CPU: %#v", again)
+	}
+	if headings, _ := idle.raw["headings"].(map[string]any); headings["work"] != "Work" || headings["data"] != "Data" {
+		t.Fatalf("Show all's headings are the server's: %#v", idle.raw["headings"])
 	}
 	if rows, ok := idle.raw["freshness"].([]any); !ok || len(rows) == 0 {
 		t.Fatalf("freshness lists the ledger's domains (§5): %#v", idle.raw["freshness"])
@@ -122,6 +143,33 @@ func TestStatusSnapshotComposesVerdictOperationsAndPlaceholders(t *testing.T) {
 		t.Fatalf("the Terminal capture is listed and cannot be stopped from Pharos: %#v", cli.Operations)
 	}
 	lease.release()
+	// A Terminal command in its own process counts in the library's
+	// resources through its lease; one on another Mac (a shared drive) does
+	// not.
+	command := exec.Command("sleep", "30")
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { command.Process.Kill(); command.Wait() }()
+	ingest, err := acquireProcessLease(leaseDirs(config)[0], leaseInfo{Instance: "cli-ingest", PID: command.Process.Pid, HostID: currentHost().ID, Process: "cli:ingest",
+		Kinds: []string{"ingest.cli"}, StartedAt: now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ingest.release()
+	elsewhere, err := acquireProcessLease(leaseDirs(config)[0], leaseInfo{Instance: "cli-elsewhere", PID: os.Getppid(), HostID: "another-mac", Process: "cli:ingest",
+		Kinds: []string{"ingest.cli"}, StartedAt: now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer elsewhere.release()
+	roles := map[float64]string{}
+	for _, process := range getStatus(t, server, "/api/status?fresh=1").raw["resources"].(map[string]any)["processes"].([]any) {
+		roles[process.(map[string]any)["pid"].(float64)] = firstString(process.(map[string]any)["role"])
+	}
+	if want := map[float64]string{float64(os.Getpid()): "service", float64(command.Process.Pid): "cli:ingest"}; runtime.GOOS == "darwin" && !maps.Equal(roles, want) {
+		t.Fatalf("resources list the service and this Mac's Terminal command: %v", roles)
+	}
 	upload.Finish(nil)
 }
 
@@ -783,5 +831,110 @@ func TestBrokerProxyStreamsTheStatusStream(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("the proxied stream held back its first event")
 		}
+	}
+}
+
+// The broker's status document carries resources (§10): it reads itself,
+// each library's service (by its PID, answering or not) and the Terminal
+// commands the service's snapshot names, each library's from the same
+// readings, and the machine's total counts each process once. The
+// operations document and the eject check carry none.
+func TestBrokerStatusCarriesResources(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("reading other processes needs proc_pid_rusage")
+	}
+	sleeper := func() int {
+		command := exec.Command("sleep", "30")
+		if err := command.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { command.Process.Kill(); command.Wait() })
+		return command.Process.Pid
+	}
+	servicePID, commandPID, stuckPID := sleeper(), sleeper(), sleeper()
+	answering := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"version": 1, "operations": []any{}, "eject": computeEjectVerdict(verdictInput{}), "attention": []any{},
+			"resources": map[string]any{"processes": []map[string]any{{"pid": servicePID, "role": "service"}, {"pid": commandPID, "role": "cli:ingest"}}}}, http.StatusOK)
+	}))
+	defer answering.Close()
+	stuck := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "busy", http.StatusServiceUnavailable) }))
+	defer stuck.Close()
+	broker := newBrokerOperations(filepath.Join(t.TempDir(), "operations.json"))
+	broker.publish([]brokerLibrary{
+		{ID: "lib-a", Name: "Euclid", Selected: true, Child: &applicationEndpoint{URL: answering.URL, Token: "t", PID: servicePID}, ChildStarted: time.Now()},
+		{ID: "lib-b", Name: "Archive", Child: &applicationEndpoint{URL: stuck.URL, Token: "t", PID: stuckPID}, ChildStarted: time.Now()},
+		{ID: "lib-c", Name: "Closed"},
+	})
+	pids := func(summary any) []int {
+		t.Helper()
+		resources, ok := summary.(*resourceSummary)
+		if !ok || resources == nil {
+			return nil
+		}
+		found := []int{}
+		for _, reading := range resources.Processes {
+			found = append(found, reading.PID)
+		}
+		return found
+	}
+	document := broker.statusDocument(context.Background())
+	if got, want := pids(document["resources"]), []int{os.Getpid(), servicePID, commandPID, stuckPID}; !slices.Equal(got, want) {
+		t.Fatalf("the machine's total: %v, want %v", got, want)
+	}
+	if total := document["resources"].(*resourceSummary); !strings.HasPrefix(total.Label, "Pharos is using ") || total.MemoryBytes == 0 {
+		t.Fatalf("the total's line: %+v", total)
+	}
+	entries := document["libraries"].([]map[string]any)
+	if got := pids(entries[0]["resources"]); !slices.Equal(got, []int{servicePID, commandPID}) {
+		t.Fatalf("Euclid's processes: %v", got)
+	}
+	if got := pids(entries[1]["resources"]); !slices.Equal(got, []int{stuckPID}) || !strings.HasPrefix(entries[1]["resources"].(*resourceSummary).Label, "Archive is using ") {
+		t.Fatalf("a service that does not answer is still measured: %v", entries[1]["resources"])
+	}
+	if summary := entries[2]["resources"].(*resourceSummary); summary != nil {
+		t.Fatalf("a library with no process has no resources: %+v", summary)
+	}
+	if _, ok := broker.document(context.Background(), true)["resources"]; ok {
+		t.Fatal("the operations document carries no resources")
+	}
+	if _, ok := broker.statusDocumentChecked(context.Background(), true)["resources"]; ok {
+		t.Fatal("the eject check carries no resources")
+	}
+}
+
+// Resources are left out of change detection (§10): a document whose only
+// change is its CPU or memory keeps its tag, so polls get 304 and an idle
+// stream stays quiet; a stream still sends the latest resources, at most
+// once per statusResourcesRefresh.
+func TestStatusResourcesDoNotChangeTheTag(t *testing.T) {
+	document := func(cpu float64) map[string]any {
+		return map[string]any{"eject": map[string]any{"verdict": "safe"}, "resources": map[string]any{"cpu_percent": cpu, "sampled_at": now()},
+			"libraries": []any{map[string]any{"resources": map[string]any{"cpu_percent": cpu}}}}
+	}
+	if statusTag(document(1)) != statusTag(document(40)) {
+		t.Fatal("resources changed the tag")
+	}
+	if statusTag(document(1)) == statusTag(map[string]any{"eject": map[string]any{"verdict": "busy"}}) {
+		t.Fatal("content no longer changes the tag")
+	}
+	stream := func(refresh time.Duration) int {
+		t.Helper()
+		override(t, &statusResourcesRefresh, refresh)
+		ctx, cancel := context.WithTimeout(context.Background(), 450*time.Millisecond)
+		defer cancel()
+		request := httptest.NewRequest(http.MethodGet, "/api/status/stream", nil).WithContext(ctx)
+		recorder := httptest.NewRecorder()
+		var computed atomic.Int64
+		streamStatus(recorder, request, nil, 10*time.Millisecond, func(context.Context) statusFrame {
+			data, _ := json.Marshal(document(float64(computed.Add(1))))
+			return statusFrame{tag: statusTag(document(0)), data: data}
+		})
+		return strings.Count(recorder.Body.String(), "event: snapshot")
+	}
+	if sent := stream(time.Hour); sent != 1 {
+		t.Fatalf("an unchanged document with new resources was sent %d times inside the refresh", sent)
+	}
+	if sent := stream(150 * time.Millisecond); sent < 2 || sent > 4 {
+		t.Fatalf("resources-only refreshes over 450 ms at 150 ms: %d events", sent)
 	}
 }
