@@ -5,7 +5,7 @@ import { changeState, normalizeAnalysis, ratioPart, rollingSumUnit, trendAdjustm
 import { trendNote, trendPeriodCount, trendQuery, trendSeries, trendTitle } from "./dashboard-trend-model";
 import type { LocalRows } from "./analysis-request";
 import { StackedColumns, pickRange, timeBounds, withTimeRange, type FilterChange } from "./usage-chart";
-import { readSlice, updateSlice, withSlice, type LegendAction } from "./chart-selection";
+import { updateSlice, type LegendAction } from "./chart-selection";
 import { dashboardChartURL } from "./dashboard-chart-links";
 import type { ChartInspectionRange } from "./chart-inspection";
 import type { ChartSeries } from "./chart-series";
@@ -37,17 +37,18 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
   const result = useAnalysisResult(dataset, schema, trend.query, local);
   const labels = useMemo(() => optionLabels(schema.fields), [schema]);
   const label = (field: string, value: unknown) => isOriginDimension(field) ? originLabel(field, value) : labels.get(field)?.get(String(value)) ?? String(value);
-  const built = useMemo(() => trendSeries(catalog, view, trend, result.results, { where, label }),
+  const built = useMemo(() => trendSeries(catalog, view, trend, result.results, { label }),
     [result.results, originRevision, JSON.stringify(view), JSON.stringify(trend.range), JSON.stringify(where)]);
   useUsageChartPalette(trend.slice ?? null, built.series);
   // Save what was asked for; only drawing and querying normalize, so a
   // setting a measure cannot use returns with one that can.
   const set = (change: Partial<AnalysisState>) => onChange(changeState(catalog, state, change) as Partial<T>);
 
+  // A legend selection is the view's own: it chooses which series are
+  // drawn, never the population (docs/dashboard-analysis.md).
   function select(key: string | null, action: LegendAction) {
     const value = key === null ? undefined : built.series.find(item => item.key === key)?.value;
-    if (trend.slice) onFilter(current => withSlice(current, trend.slice!, updateSlice(readSlice(current, trend.slice!), value || null, action)));
-    else set({ selection: updateSlice(view.selection ?? { values: [], excluded: false }, value ?? "", action) });
+    set({ selection: updateSlice(view.selection ?? { values: [], excluded: false }, value ?? "", action) });
   }
   const share = view.share, ratio = measure.format.kind === "percent";
   const amount = (value: number) => share ? percent(value) : ratio ? percent(100 * value) : format(value, measure);
@@ -55,19 +56,20 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
   const kind = trendKind(measure);
   // Drill-downs open the records behind a point: the dashboard's filters,
   // the measure's population, the series, and the point's window.
+  const translate = catalog.executable && ((terms: WhereTerm[]) => catalog.executable!(terms, Date.now()));
   const href = (range: ChartInspectionRange, item: ChartSeries) => {
     const base = [...range.rolling ? trend.requested : where, ...trend.records];
     const components = catalog.components?.[view.split];
-    if (components) return dashboardChartURL({ dataset, where: base, time: catalog.time, range, series: item, fields: [components.parts.find(part => part.key === item.key)?.field ?? measure.field ?? ""], current: new URLSearchParams(location.search) });
+    if (components) return dashboardChartURL({ dataset, where: base, time: catalog.time, range, series: item, fields: [components.parts.find(part => part.key === item.key)?.field ?? measure.field ?? ""], current: new URLSearchParams(location.search), translate });
     const fields = kind === "ratio" ? [ratioPart(measure.ratio![1]).field] : measure.op === "sum" && measure.field ? [measure.field] : [];
     if (breakdown && breakdown.fields.length > 1) {
       // A combined group is several equalities; Other has no single filter.
       if (item.value === undefined) return;
       const values = JSON.parse(item.value) as unknown[];
       const terms: WhereTerm[] = breakdown.fields.map((field, index) => values[index] === null || values[index] === undefined || values[index] === "" ? { field, op: "is_null", value: "" } : { field, op: "=", value: String(values[index]) });
-      return dashboardChartURL({ dataset, where: [...base, ...terms], time: catalog.time, range, series: item, fields, current: new URLSearchParams(location.search) });
+      return dashboardChartURL({ dataset, where: [...base, ...terms], time: catalog.time, range, series: item, fields, current: new URLSearchParams(location.search), translate });
     }
-    return dashboardChartURL({ dataset, where: base, time: catalog.time, range, series: item, split: trend.slice ?? null, fields, current: new URLSearchParams(location.search) });
+    return dashboardChartURL({ dataset, where: base, time: catalog.time, range, series: item, split: trend.slice ?? null, fields, current: new URLSearchParams(location.search), translate });
   };
   const adjustments = trendAdjustments(catalog, { ...state, view: "trend" });
   if (view.norm && !result.loading && built.normPoints !== undefined && built.normPoints < view.normPeriods) adjustments.push(built.normPoints

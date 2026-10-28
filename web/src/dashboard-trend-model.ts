@@ -3,7 +3,7 @@ import { earliestKey, nextPeriod, parseDay, periodBuckets, periodKey, periodLabe
 import { chartSpan, smoothingWhere, timeBounds, widenStart, withEnd, withStart } from "./chart-range";
 import { otherSeriesColor } from "./chart-colors";
 import { chartBucketsWithHistory, cumulativeBuckets, foldSeries, rollingBuckets, shareBuckets, type ChartBucket, type ChartSeries } from "./chart-series";
-import { isSliceTerm, readSlice } from "./chart-selection";
+import { withSlice } from "./chart-selection";
 import { aggregate, completeStart, periodField, measureExpression, noSplit, normalizeAnalysis, ratioPart, rollingSumUnit, trendKind, unique, type AnalysisCatalog, type AnalysisState, type ResolvedAnalysis } from "./dashboard-analysis-model";
 
 // Over time, driven by a catalog: any measure, over its own population, by
@@ -20,15 +20,15 @@ export type TrendQuery = {
   // What "View supporting query" opens: the dashboard's filters and the
   // measure's population, with the same interval clauses.
   supporting: QueryState;
-  // The chart's range before smoothing widens it, and after. A legend
-  // selection on a breakdown field is left out of both, so its alternatives
-  // stay in the key.
+  // The chart's range before smoothing widens it, and after. Both are the
+  // population: a legend selection is the state's own, so every series
+  // stays in the key.
   range: WhereTerm[]; requested: WhereTerm[];
   // The measure's and breakdown's implied populations, and for a distinct
   // count the records holding a value: what a drill-down adds to open only
   // the records behind a point.
   population: WhereTerm[]; records: WhereTerm[];
-  // The breakdown field whose legend selection filters the dashboard.
+  // A single-field breakdown's field: a series' drill-down filters on it.
   slice?: string;
   // The norm's points: the periods from normFrom up to, not including, the
   // latest one (normTo).
@@ -42,8 +42,8 @@ export function trendQuery(catalog: AnalysisCatalog, input: AnalysisState, where
   const breakdown = catalog.breakdowns[state.split], components = catalog.components?.[state.split];
   const count = trendPeriodCount(state), field = catalog.periods[periodField(state.period)]!, cumulative = state.display === "cumulative";
   const slice = breakdown?.fields.length === 1 ? breakdown.fields[0] : undefined;
-  const chartWhere = slice ? where.filter(term => !isSliceTerm(term, slice)) : where;
-  const range = state.completePeriods ? completeStart(chartWhere, catalog.time, zone, now, periodField(state.period)) : chartWhere;
+  const range = state.completePeriods ? completeStart(where, catalog.time, zone, now, periodField(state.period)) : where;
+  const run = (terms: WhereTerm[]) => catalog.executable ? catalog.executable(terms, now) : terms;
   // The norm averages a fixed number of points before the latest, whatever
   // the range, so the query reaches back for them (and their windows).
   let normFrom: Date | undefined, normTo: Date | undefined;
@@ -62,20 +62,21 @@ export function trendQuery(catalog: AnalysisCatalog, input: AnalysisState, where
     : [{ id: "trend", ...aggregate(measure), groupBy, label: measure.label }];
   const supporting = measure.ratio ? [{ id: "trend:ratio", op: "sum" as const, expression: measureExpression(measure), groupBy, label: measure.label }, ...clauses] : clauses;
   // The supporting query covers what is drawn: with whole periods, from the
-  // rounded start to the end of the last whole period. It keeps the user's
-  // filters, a legend selection included.
-  let shown = where;
+  // rounded start to the end of the last whole period, and a single-field
+  // breakdown's legend selection as a filter on its field.
+  const chosen = slice && state.selection?.values.length ? withSlice([], slice, { values: state.selection.values.map(value => value || null), excluded: state.selection.excluded }) : [];
+  let shown = [...where, ...chosen];
   if (state.completePeriods) {
     // From the first drawn bucket: a custom multi-day or multi-hour bucket
     // starting before the rounded start is not drawn.
     const bounds = timeBounds(range, catalog.time, now), end = periodStart(new Date(Math.min(bounds.to?.getTime() ?? now, now)), state.period, count);
     let first = bounds.from && periodStart(bounds.from, state.period, count);
     if (first && bounds.from && first < bounds.from) { first = new Date(first); nextPeriod(first, state.period, count); }
-    shown = withEnd(first ? withStart(where, catalog.time, first) : where, catalog.time, end);
+    shown = withEnd(first ? withStart(shown, catalog.time, first) : shown, catalog.time, end);
   }
   return {
-    query: { ...EMPTY_QUERY, where: unique([...requested, ...population]), aggregations: clauses },
-    supporting: { ...EMPTY_QUERY, where: unique([...shown, ...population]), aggregations: supporting },
+    query: { ...EMPTY_QUERY, where: run(unique([...requested, ...population])), aggregations: clauses },
+    supporting: { ...EMPTY_QUERY, where: run(unique([...shown, ...population])), aggregations: supporting },
     range, requested, population, slice, normFrom, normTo,
     records: unique([...population, ...trendKind(measure) === "count" && measure.field ? [{ field: measure.field, op: "is_not_null" as const, value: "" }, { field: measure.field, op: "!=" as const, value: "" }] : []]),
   };
@@ -101,8 +102,8 @@ const total = "total";
 // Interval amounts in, drawable series out. Order matters and follows the
 // cards: smooth (or accumulate) amounts first, then divide a ratio's pooled
 // parts or take shares, so a busy day keeps its weight.
-export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, trend: TrendQuery, results: AggregationResultEntry[], { where, now = Date.now(), label = (_field, value) => String(value) }: {
-  where: WhereTerm[]; now?: number; label?: (field: string, value: unknown) => string;
+export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, trend: TrendQuery, results: AggregationResultEntry[], { now = Date.now(), label = (_field, value) => String(value) }: {
+  now?: number; label?: (field: string, value: unknown) => string;
 }): TrendSeries {
   const state = normalizeAnalysis(catalog, { ...input, view: "trend" }), measure = catalog.measures[state.metric], kind = trendKind(measure);
   const breakdown = catalog.breakdowns[state.split], components = catalog.components?.[state.split];
@@ -140,10 +141,10 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
   const name = (bucketKeys: unknown[]) => !breakdown ? total : breakdown.fields.length === 1 ? String(bucketKeys[0] ?? "") : JSON.stringify(bucketKeys);
   const rows = (id: string): Rows => result(id).map(bucket => [plotted(bucket.keys[0]), name(bucket.keys.slice(1)), Number(bucket.value) || 0]);
   const byKey = (buckets: ChartBucket[]) => new Map(buckets.map(bucket => [bucket.key, bucket]));
-  const valueLabel = (field: string, value: unknown) => value === null || value === undefined || value === "" ? breakdown?.empty ?? "Unknown" : breakdown?.values?.[String(value)] ?? label(field, value);
+  const valueLabel = (field: string, value: unknown) => value === null || value === undefined || value === "" ? breakdown?.empty ?? "Unknown" : breakdown?.values?.[String(value)] ?? catalog.labels?.[field]?.(String(value)) ?? label(field, value);
   const seriesLabel = (text: string) => breakdown!.fields.length === 1 ? valueLabel(breakdown!.fields[0], text) : (JSON.parse(text) as unknown[]).map((value, index) => valueLabel(breakdown!.fields[index], value)).join(" · ");
-  const chosen = trend.slice ? readSlice(where, trend.slice) : state.selection ?? { values: [], excluded: false };
-  const picked = chosen.values.map(value => value ?? "");
+  const chosen = state.selection ?? { values: [], excluded: false };
+  const picked = chosen.values;
 
   let series: ChartSeries[];
   if (components) {
@@ -169,6 +170,9 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
     const limit = Math.min(bounds.to?.getTime() ?? now, now);
     const drawnKeys = new Set(weighted.filter(bucket => !bucket.history && (!state.completePeriods || (() => { const next = new Date(bucket.date); nextPeriod(next, state.period, count); return next.getTime() <= limit; })())).map(bucket => bucket.key));
     series = foldSeries(weights.filter(([key]) => drawnKeys.has(key)), byKey(weighted), seriesLabel, breakdown.order, picked, state.seriesLimit, breakdown.fields.length === 1 ? breakdown.fields[0] : state.split);
+    // Series are keyed by their raw values; a label two of them share (Agent
+    // Time's command:foo and tool:foo) names the value too.
+    series = series.map(item => item.value !== undefined && series.some(other => other !== item && other.label === item.label) ? { ...item, label: `${item.label} (${item.value})` } : item);
     const shown = new Set(series.flatMap(item => item.value === undefined ? [] : [item.value]));
     const assign = (entries: Rows, buckets: ChartBucket[]) => {
       const targets = byKey(buckets);
@@ -248,6 +252,8 @@ export function trendNote(catalog: AnalysisCatalog, input: AnalysisState): strin
   const unit = periodLabel(state.period, trendPeriodCount(state)), window = `${state.rollingPeriods} ${state.rollingPeriods === 1 ? unit : `${unit}s`}`;
   const rolling = state.display !== "cumulative" && state.rollingPeriods > 1, parts = [measure.note];
   if (catalog.components?.[state.split]) parts.push(`${catalog.components[state.split].label} splits each ${unit}'s ${measure.label.toLowerCase()} into its parts.`);
+  if (catalog.breakdowns[state.split]?.note) parts.push(catalog.breakdowns[state.split].note!);
+  if (catalog.rangeNote) parts.push(catalog.rangeNote);
   const part = (index: 0 | 1) => { const { op, field } = ratioPart(measure.ratio![index]); return `${op === "sum" ? "summed" : "the count of"} ${field.replaceAll("_", " ")}`; };
   if (kind === "ratio") parts.push(`Each point pools its records: ${part(0)} divided by ${part(1)}, never an average of ratios.`);
   if (kind === "count") parts.push(`Distinct ${measure.unit} are counted in each ${unit}.${state.split === noSplit ? "" : ` One active in several groups counts in each, so groups do not add up, and Other is not drawn.`}`);

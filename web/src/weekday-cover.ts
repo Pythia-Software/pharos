@@ -68,12 +68,12 @@ export function weekdayMetric(clause: AggregationClause, result: AggregationResu
     if (term.op === "<=") to = Math.min(to, value + 1);
     if (term.op === "=") { from = Math.max(from, value); to = Math.min(to, value + 1); }
   }
-  const daily = new Map(result.buckets.map(bucket => [metricDateTime(String(bucket.keys[0]), zone), bucket]));
   // Native reductions fill internal gaps. Extend to the saved window's edges
   // so a quiet first/last week receives the same weight as every other week.
-  if (!Number.isFinite(from)) from = Math.min(...daily.keys());
+  const frame = cycleFrame("timestamp", result.buckets.map(bucket => bucket.keys[0]), { from: Number.isFinite(from) ? from : undefined, to }, zone);
+  const daily = new Map(result.buckets.map(bucket => [frame.time(bucket.keys[0]), bucket]));
   let observations = 0;
-  const samples = Number.isFinite(from) ? cycleSamples("weekday", from, to, zone, start => {
+  const samples = Number.isFinite(frame.from) ? cycleSamples("weekday", frame.from, frame.to, frame.zone, start => {
     const bucket = daily.get(start);
     observations += bucket?.count ?? 0;
     return bucket?.value ?? (idleIsZero(clause) ? 0 : null);
@@ -84,6 +84,34 @@ export function weekdayMetric(clause: AggregationClause, result: AggregationResu
 }
 
 export type CalendarCycle = "weekday" | "hour";
+// How a cycle's keys name their slots:
+// - recorded-date: a calendar date the recording Mac assigned in its own time
+//   zone, such as the usage ledger's day. The dashboard does not know that
+//   zone, but a date's weekday is the same in every zone, so dates fold as
+//   dates (in UTC).
+// - instant: a UTC instant, such as the usage ledger's hour, placed at the
+//   viewer's local hour.
+// - timestamp: a native dateGrouping of a datetime field, by day in the
+//   viewer's zone (keys are local dates) or by UTC hour (keys are instants).
+export type CycleKeyKind = "recorded-date" | "instant" | "timestamp";
+export type CycleKey = { kind: CycleKeyKind; field: string };
+
+// The zone a cycle folds in, its complete range, and each key's slot start:
+// one rule for the dashboards' cycle and the weekday cards. Recorded dates
+// count only whole dates in the viewer's range: from the first date starting
+// at or after its start, to the viewer's date of its end, so the current day
+// is left out. Instants and timestamps keep the bounds; cycleSamples visits
+// only the slots that fit inside them. Without a start, the earliest key
+// starts the range.
+export function cycleFrame(kind: CycleKeyKind, keys: unknown[], bounds: { from?: number; to: number }, zone: string) {
+  const fold = kind === "recorded-date" ? "UTC" : zone;
+  const time = (key: unknown) => key === null || key === undefined || key === "" ? NaN : kind === "instant" ? Date.parse(String(key)) : metricDateTime(String(key), fold);
+  const local = (instant: number) => metricDateTime(new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(instant), "UTC");
+  const date = (instant: number) => local(instant) + (instant > metricDateFloor(instant, "day", zone) ? 86_400_000 : 0);
+  const times = keys.map(time).filter(Number.isFinite);
+  const from = bounds.from === undefined ? Math.min(...times) : kind === "recorded-date" ? date(bounds.from) : bounds.from;
+  return { zone: fold, time, from, to: kind === "recorded-date" ? local(bounds.to) : bounds.to };
+}
 // Counts and sums of an idle day or hour are zero, as is a sum whose only
 // inputs were missing (unpriced cost adds nothing). A ratio or average of
 // nothing has no value.

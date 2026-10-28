@@ -4,26 +4,6 @@ import type { ConcurrencySelection } from "./concurrency";
 import { localDay } from "./chart-period";
 import { shiftCalendarDay } from "./concurrency-settings";
 
-export type RecordDashboardTopic = Extract<UsageTopic, "skills" | "time">;
-type Measure = { label: string; op: AggregationClause["op"]; field?: string; expression?: string; unit: string; divisor?: number };
-type DashboardSpec = { dataset: UsageDataset; time: string; measures: Measure[]; splits: Array<[string, string]>; note: string };
-export const recordDashboards: Record<RecordDashboardTopic, DashboardSpec> = {
-  time: { dataset: "tool_calls", time: "started_at", measures: [
-    { label: "Recorded tool time", op: "sum", field: "duration_ms", unit: "hours", divisor: 3_600_000 },
-    { label: "Tool calls", op: "count", unit: "calls" },
-  ], splits: [["activity", "Activity"], ["tool_category", "Tool category"], ["provider", "Provider"], ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"], ["repository_name", "Repository"]], note: "Recorded durations can overlap and may include approval waits. Their sum is tool time, not elapsed wall time. Use the legacy view for command-family comparisons and timelines." },
-  skills: { dataset: "skill_usages", time: "created_at", measures: [
-    { label: "Evidence records", op: "count", unit: "records" },
-    { label: "Retained body volume", op: "sum", expression: "SUM(IF([content_bytes]>0,[content_bytes],0))", unit: "bytes" },
-  ], splits: [["skill_name", "Skill"], ["evidence_type", "Evidence type"], ["provider", "Provider"], ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"], ["repository_name", "Repository"], ["status", "Status"]], note: "These are observed invocations, file loads, and harness-reported loads. A load does not prove a skill was followed. Body volume sums known positive recorded sizes, including repeated loads." },
-
-};
-
-export function recordDashboardMetric(topic: RecordDashboardTopic, metric: number, period: string, split: string): AggregationClause {
-  const spec = recordDashboards[topic], measure = spec.measures[metric] ?? spec.measures[0];
-  return { id: "usage_dashboard", op: measure.op, ...(measure.field ? { field: measure.field } : {}), ...(measure.expression ? { expression: measure.expression } : {}), groupBy: [period, split], label: measure.label };
-}
-
 export function readDashboardQuery(params: URLSearchParams, fallback: QueryState): { query: QueryState; error: string } {
   const token = params.get("analyze_filters");
   if (!token) return { query: fallback, error: "" };
@@ -117,15 +97,4 @@ export function toolDashboardWhere(where: WhereTerm[], bounds: { from?: Date; to
     ...start ? [{ field: "day", op: "matches_regex" as const, value: dayBoundaryPattern(start, "after") }] : [],
     { field: "day", op: "matches_regex", value: dayBoundaryPattern(end, "before") }];
   return [...kept, days.length === 1 ? days[0] : days.length ? { any: days } : { field: "day", op: "=", value: "No days in selected range" }];
-}
-
-// A cumulative point includes the full selected range through its interval.
-// Inspect the non-time group, retaining the source dates and other filters,
-// then cap its calendar key at this point (day, week, or month).
-export function inspectDashboardBucket(query: QueryState, bucket: Parameters<typeof inspectBucketQuery>[1], clause: AggregationClause, schema: Parameters<typeof inspectBucketQuery>[3], cumulative = false): QueryState | null {
-  if (!cumulative) return inspectBucketQuery(query, bucket, clause, schema);
-  const [period, ...groupBy] = clause.groupBy ?? [];
-  if (!period || bucket.keys[0] == null) return null;
-  const records = inspectBucketQuery(query, { ...bucket, keys: bucket.keys.slice(1) }, { ...clause, groupBy }, schema);
-  return records ? { ...records, where: [...records.where, { field: period, op: "<=", value: String(bucket.keys[0]) }] } : null;
 }

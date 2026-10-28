@@ -186,14 +186,15 @@ test("a pooled ratio trend: cache-read share by model over 7 days, never an aver
 // latest. The dashboard opens on the "Last 30 days" preset mid-afternoon, so
 // it draws fewer whole days than the card's 31 endpoints; the points it draws
 // and its norm must still be the card's.
-for (const [name, filter] of [["all usage", []], ["one provider, selected in the legend", [{ field: "provider", op: "=", value: "codex" }]]]) test(`a trailing-window card: daily tokens, 7-day mean over complete days, with its norm (${name})`, () => {
+const codex = [{ field: "provider", op: "=", value: "codex" }];
+for (const [name, filter, selected] of [["all usage", [], false], ["one provider, selected in the legend", codex, true], ["one provider as the population", codex, false]]) test(`a trailing-window card: daily tokens, 7-day mean over complete days, with its norm (${name})`, () => {
   const afternoon = new Date(now); afternoon.setHours(14, 0, 0, 0);
   const at = afternoon.getTime() < now ? afternoon.getTime() + 86400000 : afternoon.getTime();
   const trend = { value: { op: "sum", field: "total_tokens" }, perDay: true, lookback: 7, completeDays: true, valueLabel: "tokens a day", pointValueLabel: "tokens a day", sample: "records", detail: "" };
   const { days, ends } = cardTrendDays(7, true, at);
   const card = buildCardTrend(trend, 7, cardTrendQueries(filter, trend, days).map(query => core.evaluateMetrics(rows, query, schema, { now: at }).metrics), at).study;
-  const where = [...withTimeRange([], usageTime, undefined, undefined, "30d"), ...filter];
-  const state = { metric: "tokens", split: filter.length ? "provider" : "none", period: "day", hours: 6, days: 3, rollingPeriods: 7, rollingOp: "mean", completePeriods: true, norm: true };
+  const where = [...withTimeRange([], usageTime, undefined, undefined, "30d"), ...selected ? [] : filter];
+  const state = { metric: "tokens", split: filter.length ? "provider" : "none", period: "day", hours: 6, days: 3, rollingPeriods: 7, rollingOp: "mean", completePeriods: true, norm: true, ...selected ? { selection: { values: ["codex"], excluded: false } } : {} };
   const query = trendQuery(tokenAnalysisSource, state, where, { now: at });
   const built = trendSeries(tokenAnalysisSource, state, query, core.evaluateMetrics(rows, query.query, schema, { now: at }).metrics, { where, now: at });
   assert.deepEqual(built.buckets.map(bucket => bucket.key), ends.slice(2), "29 whole days through yesterday: the partial first day is left out");

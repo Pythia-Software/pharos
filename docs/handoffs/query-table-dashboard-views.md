@@ -23,7 +23,9 @@ nearest honest behaviour, states the limitation in the UI, and asks here.
 
 All four Pharos npm packages and the Go module pin **0.9.5**, unmodified.
 
-The requests are in priority order. Each one can ship on its own.
+The requests are in priority order. Each one can ship on its own. Requests 5
+to 7 came from moving the Tools, Pharos MCP, Agent Time and Skills dashboards
+onto the analysis model.
 
 ---
 
@@ -166,6 +168,77 @@ groups before `groupLimit` and reports them in `hiddenGroups`, exactly as
 - `/metrics`, `/query-v3` and the in-process evaluators agree.
 - `metricPopulationError` reports when a host lacks support, as it does for
   `minCount` today.
+
+---
+
+## 5. A minimum over a summed field (lower priority)
+
+**Problem.** Some datasets are rollups: one row of Pharos's `tools` dataset
+holds one day's calls of one tool group, so `minCount` counts daily
+summaries, not calls. A card that hides tools with fewer than ten calls
+needs a minimum on `SUM(call_count)`. Pharos expresses it today with a
+grouping stage (one grouped row per tool holding its measure and its calls,
+filtered by `HAVING calls >= 10`) and a group-stage clause over those rows.
+That works, but the clause cannot report the groups the filter removed, so
+the dashboard cannot say how many tools it hid.
+
+**Request.** Let a minimum count a summed field:
+`minCount: { min: number; sum: string }` (or `minSum: { field, min }`),
+removing groups before `groupLimit` and reporting them in `hiddenGroups`,
+as `minCount` does. Request 4's distinct form could share the shape:
+`{ min, distinct: field }`.
+
+**Acceptance.**
+- A failure rate grouped by `tool_name` with `{ min: 10, sum: "call_count" }`
+  hides a tool whose rows hold 9 calls and keeps one with 3 rows holding 12.
+- `hiddenGroups` reports the hidden groups, and the kept groups' values are
+  unchanged.
+- `/metrics`, `/query-v3` and the in-process evaluators agree.
+
+---
+
+## 6. Calendar keys in a grouping stage (lower priority)
+
+**Problem.** A clause can group a datetime field by calendar interval with
+`dateGrouping`, but a grouping stage's `keys` cannot. Pharos's weekday and
+hour profiles of timestamped records (Pharos MCP requests, tool calls, skill
+evidence) fold daily or hourly clause totals. Their "View supporting query"
+link should open those daily totals as grouped rows, as it does for datasets
+with a stored day, but can only open the records.
+
+**Request.** Allow a grouping key with a calendar interval, such as
+`keys: [{ field: "called_at", interval: "day", timeZone }]` or a
+`dateGrouping` on the grouping stage, producing one grouped row per
+interval with the interval's start as its key, in the given zone.
+
+**Acceptance.**
+- Grouping requests by `called_at` per local day in `America/Denver`
+  produces one row per local date, keyed by its local midnight, with the
+  same totals as the equivalent `dateGrouping` clause.
+- Group filters, ordering and drill-down (`inspectBucketQuery` on a grouped
+  row) select exactly that interval's records.
+
+---
+
+## 7. Disjunctions of conjunctions in `where` (lower priority)
+
+**Problem.** `where` is an AND of terms, each a clause or an OR of clauses.
+A legend selection of combined groups, such as the provider + model pairs
+(claude, opus) and (codex, gpt-5), is an OR of ANDs. Pharos expands it into
+the equivalent AND of ORs, one OR per choice of a field from each pair, which
+grows as fields^pairs. Past 64 terms Pharos stops filtering and draws the
+selected groups from the groups returned, so one beyond the group limit is
+missing.
+
+**Request.** Allow a term that is an OR of conjunctions:
+`{ any: [{ all: [clause, clause] }, { all: [clause, clause] }] }`, on
+`/metrics`, `/query-v3` (source and group filters) and in-process.
+
+**Acceptance.**
+- Ten included (provider, model) pairs filter in one term, and the result
+  equals the union of the ten pairs' records.
+- A group filter on grouped rows accepts the same term.
+- `decodeQueryStrict` round-trips it.
 
 ---
 
