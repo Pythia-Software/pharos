@@ -51,14 +51,14 @@ def item(number, split, text, labels=None, status="usable", uncertain=(), unsupp
         start = data.index(quote.encode("utf-8"))
         evidence.append({"label": labels[0] if labels else FINDING, "quote": quote, "status": "valid",
                          "occurrences": [{"item_start": start, "item_end": start + len(quote.encode("utf-8")), "source": []}]})
-    usable = status == "usable"
+    usable = status in ("usable", "usable_need_context")
     return {
         "input": {"item_id": item_id, "dataset_id": "d", "units_version": "labeling-units-v1", "unit_id": "u_%03d" % number, "split": split,
                   "cohort": "human", "actor_kind": "human", "sender": "user", "provider": "claude", "kind": "message", "channel": "unspecified",
                   "reasoning_format": None, "depth": 0, "text": text, "context": "", "context_excerpt": False, "chunk_index": 0,
                   "chunk_count": 1, "chars": len(text)},
         "provenance": {"item_id": item_id, "unit_id": "u_%03d" % number, "split": split, "family_id": "f_%03d" % number,
-                       "duplicate_of": duplicate_of, "seen_in_train": seen_in_train, "common_short_text": short, "cross_split_duplicate": False,
+                       "duplicate_of": duplicate_of, "length_bucket": "short", "seen_in_train": seen_in_train, "common_short_text": short, "cross_split_duplicate": False,
                        "visible_range": [0, len(data)],
                        "source_ranges": [{"start": 10, "end": 10 + len(data), "item_start": 0, "item_end": len(data),
                                           "sha256": hashlib.sha256(data).hexdigest()}],
@@ -85,7 +85,7 @@ def invented_items():
             number += 1
             items.append(item(number, "train", text + " " + "y" * index, [FINDING]))
     # Rows that must never become negatives.
-    for status in ("refused", "invalid", "missing", "need_context", "held", "unlabeled"):
+    for status in ("refused", "invalid", "missing", "usable_need_context", "held", "unlabeled"):
         number += 1
         items.append(item(number, "train", "please investigate the refusal " + status, [INVESTIGATE], status=status))
     number += 1
@@ -217,10 +217,13 @@ class ExportCheckTests(unittest.TestCase):
         report, model = self.run_smoke(export)
         self.assertEqual(report["checked"]["items"], len(invented_items()))
         self.assertEqual(report["checked"]["evidence_occurrences"], 12)
-        # 24 usable train rows: refused, invalid, missing, need_context, held,
-        # unlabeled and the duplicate are not rows; dev is not trained on.
+        # 24 usable train rows: refused, invalid, missing, held, unlabeled,
+        # the duplicate and (by default) the need-context row are not rows;
+        # dev is not trained on.
         self.assertEqual(report["train_rows"], 24)
-        self.assertEqual(report["train_skipped"], {"not_usable": 6, "duplicate": 1, "seen_in_train": 0})
+        self.assertEqual(report["train_skipped"], {"not_usable": 5, "need_context": 1, "duplicate": 1, "seen_in_train": 0})
+        self.assertEqual(report["need_context_left_out"], {"by_cohort": {"human": 1}, "by_length_bucket": {"short": 1}})
+        self.assertIn("usable_need_context", " ".join(report["warnings"]))
         self.assertIn("too small to train meaningfully", " ".join(report["warnings"]))
         self.assertTrue(report["statement"].startswith("Smoke check"))
         self.assertEqual(model["featurizer"], smoke.FEATURIZER)
@@ -236,6 +239,11 @@ class ExportCheckTests(unittest.TestCase):
             self.assertEqual(smoke.main([str(export), "--out", str(self.path / "m2.json")]), 0)
         self.assertIn("Smoke check, not a quality claim.", out.getvalue())
         self.assertEqual(json.loads((self.path / "m2.json").read_text()), model, "training is not deterministic")
+        with contextlib.redirect_stdout(io.StringIO()):
+            smoke.main([str(export), "--out", str(self.path / "m3.json"), "--include-need-context"])
+        included = json.loads((self.path / "m3.report.json").read_text())
+        self.assertEqual(included["train_rows"], 25)
+        self.assertEqual(included["train_skipped"]["need_context"], 0)
 
     def test_training_never_reads_held_out_labels(self):
         export = write_export(self.path, invented_items())
@@ -259,7 +267,9 @@ class ExportCheckTests(unittest.TestCase):
         self.assertEqual(smoke.label_target(row, WORK, parents), 1)
         self.assertIsNone(smoke.label_target(row, FINDING, parents))
         self.assertIsNone(smoke.label_target(row, "C.report", parents))
-        self.assertIsNone(smoke.label_target(row, "P.request", parents))
+        # Ancestors of a positive are positives for their own classifier.
+        self.assertEqual(smoke.label_target(row, "P.request", parents), 1)
+        self.assertEqual(smoke.label_target(row, "P", parents), 1)
         # A broad parent is not a positive, nor a negative, for its children.
         self.assertIsNone(smoke.label_target(row, INVESTIGATE, parents))
         self.assertEqual(smoke.label_target(row, "C", parents), 0)

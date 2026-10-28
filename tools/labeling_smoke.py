@@ -5,7 +5,8 @@
 
 It checks the export manifest and file hashes and round-trips every byte
 range to its text, fits a hashed character n-gram one-vs-rest logistic
-regression on the train split's usable rows only, evaluates it on the test
+regression on the train split's usable rows only (usable_need_context rows
+too with --include-need-context), evaluates it on the test
 and fresh splits, and writes the model (featurizer spec and weights) and a
 report. It is a smoke check of the export and the downstream path, not a
 claim about the quality a student model can reach.
@@ -39,6 +40,9 @@ UNITS_HELDOUT = "unit-labels-heldout.jsonl"
 MANIFEST = "export-manifest.json"
 DATA_FILES = (INPUTS, PROVENANCE, LABELS, LABELS_HELDOUT, UNITS, UNITS_HELDOUT)
 TRAINING_SPLITS = ("train", "dev")
+USABLE = "usable"
+USABLE_NEED_CONTEXT = "usable_need_context"
+LABELED = (USABLE, USABLE_NEED_CONTEXT)
 EVALUATION_SPLITS = ("test", "fresh")
 
 # The student-visible fields of inputs.jsonl; anything else is a leak.
@@ -260,7 +264,7 @@ def verify_export(export_dir):
             in_training = row["split"] in TRAINING_SPLITS
             if (allowed is not None) != in_training:
                 raise ExportError("%s holds item %s of split %s" % (name, item, row["split"]))
-            usable = row["status"] == "usable"
+            usable = row["status"] in LABELED
             if usable != isinstance(row["labels"], list) or (row["labels"] is None) != (row["implied_ancestors"] is None):
                 raise ExportError("%s: item %s has status %s but labels %r" % (name, item, row["status"], row["labels"]))
             for evidence in row["evidence"]:
@@ -295,12 +299,13 @@ def ancestors(label, parents):
 
 
 def label_target(row, label, parents):
-    """1 or 0 for a usable row, None when the row says nothing about label:
-    uncertain, unsupported, an implied ancestor, or a child of a returned
-    broad parent (its subtype was left open)."""
-    if label in row["labels"]:
+    """1 or 0 for a labeled row, None when the row says nothing about label.
+    A positive's ancestors are positives (ancestors are implied). Uncertain
+    and unsupported labels say nothing, nor do the children of a returned
+    broad parent: its subtype was left open, so they are neither."""
+    if label in row["labels"] or label in row["implied_ancestors"]:
         return 1
-    if label in row["uncertain_labels"] or label in row["unsupported_labels"] or label in row["implied_ancestors"]:
+    if label in row["uncertain_labels"] or label in row["unsupported_labels"]:
         return None
     for ancestor in ancestors(label, parents):
         if ancestor in row["labels"]:
@@ -308,36 +313,45 @@ def label_target(row, label, parents):
     return 0
 
 
-def examples(export_dir, labels_file, splits, exclude_seen_in_train):
-    """Usable rows of labels_file in the given splits, with their text and
-    strata, delegation and fork copies dropped. Reads inputs.jsonl,
-    provenance.jsonl and labels_file only."""
+def examples(export_dir, labels_file, splits, exclude_seen_in_train, include_need_context=False):
+    """Usable rows of labels_file in the given splits (and usable_need_context
+    rows if asked), with their text and strata, delegation and fork copies
+    dropped. Reads inputs.jsonl, provenance.jsonl and labels_file only.
+    Returns the rows, skip counts, and the cohorts and length buckets of the
+    need-context rows left out."""
     provenance = {row["item_id"]: row for row in read_jsonl(os.path.join(export_dir, PROVENANCE))}
-    texts = {row["item_id"]: row["text"] for row in read_jsonl(os.path.join(export_dir, INPUTS))}
-    rows, skipped = [], {"not_usable": 0, "duplicate": 0, "seen_in_train": 0}
+    inputs = {row["item_id"]: row for row in read_jsonl(os.path.join(export_dir, INPUTS))}
+    rows, skipped = [], {"not_usable": 0, "need_context": 0, "duplicate": 0, "seen_in_train": 0}
+    left_out = {"by_cohort": {}, "by_length_bucket": {}}
     for row in read_jsonl(os.path.join(export_dir, labels_file)):
         if row["split"] not in splits:
             continue
         origin = provenance[row["item_id"]]
-        if row["status"] != "usable":
+        if row["status"] == USABLE_NEED_CONTEXT and not include_need_context:
+            skipped["need_context"] += 1
+            for key, value in (("by_cohort", inputs[row["item_id"]]["cohort"]), ("by_length_bucket", origin["length_bucket"])):
+                left_out[key][value] = left_out[key].get(value, 0) + 1
+        elif row["status"] not in LABELED:
             skipped["not_usable"] += 1
         elif origin["duplicate_of"]:
             skipped["duplicate"] += 1
         elif exclude_seen_in_train and origin["seen_in_train"]:
             skipped["seen_in_train"] += 1
         else:
-            rows.append(dict(row, text=texts[row["item_id"]], common_short_text=origin["common_short_text"]))
+            rows.append(dict(row, text=inputs[row["item_id"]]["text"], common_short_text=origin["common_short_text"]))
     rows.sort(key=lambda row: row["item_id"])
-    return rows, skipped
+    return rows, skipped, left_out
 
 
-def train(export_dir, manifest):
-    """Fits the model on the train split's usable rows of labels.jsonl."""
-    rows, skipped = examples(export_dir, LABELS, ("train",), False)
+def train(export_dir, manifest, include_need_context=False):
+    """Fits the model on the train split's usable rows of labels.jsonl (and
+    its usable_need_context rows if asked)."""
+    rows, skipped, left_out = examples(export_dir, LABELS, ("train",), False, include_need_context)
     parents = taxonomy_parents(manifest)
     feats = [features(row["text"]) for row in rows]
     model = {"format": MODEL_FORMAT, "featurizer": dict(FEATURIZER), "threshold": THRESHOLD, "training": dict(TRAINING),
-             "export_id": manifest["export_id"], "train_rows": len(rows), "train_skipped": skipped, "labels": [], "untrained_labels": []}
+             "export_id": manifest["export_id"], "train_rows": len(rows), "train_skipped": skipped, "need_context_left_out": left_out,
+             "include_need_context": include_need_context, "labels": [], "untrained_labels": []}
     for node in manifest["taxonomy"]:
         label = node["id"]
         data = [(f, label_target(row, label, parents)) for f, row in zip(feats, rows)]
@@ -412,14 +426,14 @@ def metrics(rows, model, parents, labels):
     }
 
 
-def evaluate(export_dir, manifest, model):
+def evaluate(export_dir, manifest, model, include_need_context=False):
     """Scores the held-out test and fresh splits, without seen_in_train rows,
     with common_short_text reported as its own stratum."""
     parents = taxonomy_parents(manifest)
     labels = [node["id"] for node in manifest["taxonomy"]]
     report = {}
     for split in EVALUATION_SPLITS:
-        rows, skipped = examples(export_dir, LABELS_HELDOUT, (split,), True)
+        rows, skipped, _ = examples(export_dir, LABELS_HELDOUT, (split,), True, include_need_context)
         if not rows and not any(skipped.values()):
             continue
         short = [row for row in rows if row["common_short_text"]]
@@ -432,12 +446,17 @@ def evaluate(export_dir, manifest, model):
 # -------------------------------------------------------------------- main
 
 
-def run(export_dir, out, report_path):
+def run(export_dir, out, report_path, include_need_context=False):
     verified = verify_export(export_dir)
     manifest = verified["manifest"]
-    model = train(export_dir, manifest)
-    evaluation = evaluate(export_dir, manifest, model)
+    model = train(export_dir, manifest, include_need_context)
+    evaluation = evaluate(export_dir, manifest, model, include_need_context)
     warnings = []
+    if model["train_skipped"]["need_context"]:
+        warnings.append("left out %d usable_need_context train rows (cohorts %s, lengths %s); this biases training away from short replies "
+                        "(--include-need-context keeps them)" % (model["train_skipped"]["need_context"],
+                                                                  json.dumps(model["need_context_left_out"]["by_cohort"], sort_keys=True),
+                                                                  json.dumps(model["need_context_left_out"]["by_length_bucket"], sort_keys=True)))
     if model["train_rows"] < MEANINGFUL_TRAIN_ROWS:
         warnings.append("only %d usable train rows: too small to train meaningfully; the numbers below say nothing about quality" % model["train_rows"])
     for split in EVALUATION_SPLITS:
@@ -451,6 +470,8 @@ def run(export_dir, out, report_path):
         "checked": verified["checked"],
         "train_rows": model["train_rows"],
         "train_skipped": model["train_skipped"],
+        "include_need_context": include_need_context,
+        "need_context_left_out": model["need_context_left_out"],
         "trained_labels": len(model["labels"]),
         "untrained_labels": len(model["untrained_labels"]),
         "evaluation": evaluation,
@@ -492,10 +513,12 @@ def main(argv=None):
     parser.add_argument("export_dir")
     parser.add_argument("--out", default="labeling-smoke-model.json", help="model JSON to write")
     parser.add_argument("--report", help="report JSON to write (default: beside the model, .report.json)")
+    parser.add_argument("--include-need-context", action="store_true",
+                        help="also train and evaluate on usable_need_context rows (left out by default)")
     args = parser.parse_args(argv)
     report_path = args.report or (args.out[:-5] if args.out.endswith(".json") else args.out) + ".report.json"
     try:
-        report = run(args.export_dir, args.out, report_path)
+        report = run(args.export_dir, args.out, report_path, args.include_need_context)
     except ExportError as error:
         print("Export check failed: %s" % error, file=sys.stderr)
         return 1

@@ -31,11 +31,13 @@ const (
 	labelingExportsDir   = "exports"
 )
 
-// Export statuses. Only usable rows carry positives; every other status
-// keeps the teacher's reply apart (returned) and is never a negative.
+// Export statuses. Usable rows carry labels, and so do usable rows whose
+// teacher said it needed more context (usable_need_context, kept apart so a
+// trainer decides); every other status keeps the teacher's reply apart
+// (returned) and is never a negative.
 const (
 	exportUsable            = "usable"
-	exportNeedContext       = "need_context"
+	exportNeedContext       = "usable_need_context"
 	exportToolUse           = "tool_use"
 	exportUnlabeled         = "unlabeled"
 	exportPartial           = "partial"
@@ -90,12 +92,14 @@ type labelingExportLabel struct {
 	ItemID string `json:"item_id"`
 	UnitID string `json:"unit_id"`
 	Split  string `json:"split"`
-	// Status is usable, need_context, refused, refusal_suspected, invalid,
-	// tool_use, missing, held or unlabeled. Only usable rows train.
+	// Status is usable, usable_need_context, refused, refusal_suspected,
+	// invalid, tool_use, missing, held or unlabeled. Only the first two
+	// carry labels.
 	Status  string `json:"status"`
 	Outcome string `json:"outcome"`
 	// Labels are the positives: accepted labels (leaves, or broad parents
-	// as returned) with supported evidence. Null unless usable.
+	// as returned) with supported evidence. Null unless usable or
+	// usable_need_context.
 	Labels []string `json:"labels"`
 	// UnsupportedLabels are accepted labels without valid evidence (label:
 	// evidence status): neither positive nor negative.
@@ -637,7 +641,7 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 			labelSupport[label] = map[string]map[string]int{}
 		}
 		if labelSupport[label][split] == nil {
-			labelSupport[label][split] = map[string]int{"positive": 0, "unsupported": 0, "uncertain": 0, "implied": 0}
+			labelSupport[label][split] = labelingSupportZero()
 		}
 		labelSupport[label][split][kind]++
 	}
@@ -788,7 +792,7 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 				label.Receipt.CostStatus = "imported"
 			}
 			label.Flags = sortedKeys(flags)
-			if status == exportUsable {
+			if labelingExportLabeled(status) {
 				label.Labels, label.UnsupportedLabels, label.UncertainLabels = []string{}, map[string]string{}, defaultSlice(result.uncertain)
 				for _, accepted := range result.labels {
 					if evidence := result.labelsEvidence[accepted]; evidence == "supported" {
@@ -808,18 +812,22 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 			flagCounts[flag]++
 		}
 		splitsSeen[input.Split] = true
-		if status == exportUsable {
+		if labelingExportLabeled(status) {
+			prefix := ""
+			if status == exportNeedContext {
+				prefix = "need_context_"
+			}
 			for _, value := range label.Labels {
-				support(value, input.Split, "positive")
+				support(value, input.Split, prefix+"positive")
 			}
 			for value := range label.UnsupportedLabels {
-				support(value, input.Split, "unsupported")
+				support(value, input.Split, prefix+"unsupported")
 			}
 			for _, value := range label.UncertainLabels {
-				support(value, input.Split, "uncertain")
+				support(value, input.Split, prefix+"uncertain")
 			}
 			for _, value := range label.ImpliedAncestors {
-				support(value, input.Split, "implied")
+				support(value, input.Split, prefix+"implied")
 			}
 		}
 		depthKey := "unresolved"
@@ -883,14 +891,14 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 
 	// Chunked units: union of the chunks' labels, usable only when every
 	// chunk is.
-	chunked := map[string]int{"units": 0, "usable": 0, "partial": 0}
+	chunked := map[string]int{"units": 0, exportUsable: 0, exportNeedContext: 0, exportPartial: 0}
 	for _, unit := range sortedKeys(merges) {
 		merge := merges[unit]
 		sort.Slice(merge.Chunks, func(i, j int) bool { return merge.Chunks[i].Index < merge.Chunks[j].Index })
 		chunked["units"]++
 		complete := len(merge.Chunks) == merge.ChunkCount
 		for _, chunk := range merge.Chunks {
-			complete = complete && chunk.Status == exportUsable
+			complete = complete && labelingExportLabeled(chunk.Status)
 		}
 		merge.Status = exportPartial
 		if complete {
@@ -919,6 +927,9 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 			merge.Labels, merge.UnsupportedLabels, merge.UncertainLabels = sortedKeys(positives), sortedKeys(unsupported), sortedKeys(uncertain)
 			merge.ImpliedAncestors = labelingAncestors(merge.Labels, parents)
 			merge.NeedContext = &need
+			if need {
+				merge.Status = exportNeedContext
+			}
 		}
 		chunked[merge.Status]++
 		file := exportUnits
@@ -944,7 +955,7 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 	for _, label := range labelSupport {
 		for split := range splitsSeen {
 			if label[split] == nil {
-				label[split] = map[string]int{"positive": 0, "unsupported": 0, "uncertain": 0, "implied": 0}
+				label[split] = labelingSupportZero()
 			}
 		}
 	}
@@ -1007,16 +1018,20 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 		"transforms":      transforms,
 		"taxonomy":        taxonomy,
 		"rules": []string{
-			"Only status usable rows train. Every other status (need_context, refused, refusal_suspected, invalid, tool_use, missing, held, unlabeled) is present " +
-				"with its status and null labels; the teacher's reply, if any, is under returned. None is an all-negative row.",
+			"Rows with status usable carry labels; so do usable_need_context rows (the teacher said preceding context mattered), kept apart: excluding them " +
+				"biases training away from short replies, including them trains on labels the teacher was unsure of. Every other status (refused, " +
+				"refusal_suspected, invalid, tool_use, missing, held, unlabeled) is present with its status and null labels; the teacher's reply, if any, is " +
+				"under returned. None is an all-negative row.",
 			"labels are the positives: accepted labels with supported evidence, leaves or broad parents as returned. unsupported_labels and uncertain_labels are " +
-				"neither positive nor negative. implied_ancestors are the positives' ancestors, listed apart; a parent label is never a positive for its children.",
+				"neither positive nor negative. implied_ancestors are the positives' ancestors, listed apart: they are positives for the ancestor's own " +
+				"classifier (ancestors are implied). A returned broad parent is never a positive for its children, and its children say nothing for that row.",
 			"Labels of the training splits (train, dev) are in labels.jsonl and unit-labels.jsonl; all other splits' in the -heldout files. inputs.jsonl and " +
 				"provenance.jsonl hold no labels.",
 			"Families never span splits (except quarantine, which is neither training nor evaluation); family_id lets a trainer check. Drop rows with " +
 				"duplicate_of (delegation copies, later fork copies) to avoid counting one text twice. Exclude seen_in_train rows from evaluation and report " +
 				"common_short_text as its own stratum.",
-			"Chunked units: each chunk is a row; unit-labels files hold a union merge flagged unvalidated_merge, usable only when every chunk is usable.",
+			"Chunked units: each chunk is a row; unit-labels files hold a union merge flagged unvalidated_merge, labeled only when every chunk is " +
+				"(usable_need_context when any chunk is).",
 			"Byte offsets (item_start/item_end, visible_range, markers) are into the UTF-8 bytes of the item text; source ranges (start/end) into the stored " +
 				"message, whose bytes are not exported: sha256 lets a reader check a literal range, and a json-string-v1 range is a whole decoded piece.",
 		},
@@ -1029,6 +1044,22 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 		return nil, err
 	}
 	return manifest, nil
+}
+
+// labelingExportLabeled reports whether a status's rows carry labels.
+func labelingExportLabeled(status string) bool {
+	return status == exportUsable || status == exportNeedContext
+}
+
+// labelingSupportZero is one split's support counts before counting.
+func labelingSupportZero() map[string]int {
+	counts := map[string]int{}
+	for _, prefix := range []string{"", "need_context_"} {
+		for _, kind := range []string{"positive", "unsupported", "uncertain", "implied"} {
+			counts[prefix+kind] = 0
+		}
+	}
+	return counts
 }
 
 func defaultSlice[T any](values []T) []T {

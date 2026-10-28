@@ -91,10 +91,12 @@ func TestLabelingExport(t *testing.T) {
 	broad := labelingItemResult{ItemID: itemOf["m-a1"], Outcome: itemEvidenceIssues, Labels: []string{"P.request.work", "C.report.finding"},
 		Uncertain: []string{"P.request.work.investigate"}, NeedContext: &no, Issues: []string{"label_without_valid_evidence"},
 		Evidence: []labelingEvidence{{Label: "P.request.work", Quote: quote, Status: "valid", Occurrences: []labelingOccurrence{{ItemStart: 0, ItemEnd: len(quote),
-			Source: []map[string]any{{"start": 0, "end": len(quote)}}}}}, {Label: "C.report.finding", Quote: "nowhere", Status: "not_found"}},
+			Source: []map[string]any{{"start": 0, "end": len(quote)}}}}}, {Label: "C.report.finding", Quote: "nowhere", Status: "not_found"},
+			// A rejected occurrence: where the quote is, why it is not evidence.
+			{Label: "C.report.finding", Quote: quote, Status: "outside_target", Occurrences: []labelingOccurrence{{ItemStart: 0, ItemEnd: len(quote), Status: "outside_target"}}}},
 		LabelsEvidence: map[string]string{"P.request.work": "supported", "C.report.finding": "not_found"}}
 	needs := empty(itemOf["m-o3"], itemUsable)
-	needs.NeedContext = &yes
+	needs.NeedContext, needs.Labels, needs.LabelsEvidence = &yes, []string{fakeLabel}, map[string]string{fakeLabel: "supported"}
 	held := empty(itemOf["m-c2"], itemHeld, servedModelDiffers)
 	held.Labels, held.HeldOutcome = []string{fakeLabel}, itemUsable
 	crafted := []struct {
@@ -222,7 +224,7 @@ func TestLabelingExport(t *testing.T) {
 		if row["status"] != want {
 			t.Errorf("%s: status %v, want %s", message, row["status"], want)
 		}
-		if (want == exportUsable) != (row["labels"] != nil) || (want == exportUsable) != (row["implied_ancestors"] != nil) {
+		if labelingExportLabeled(want) != (row["labels"] != nil) || labelingExportLabeled(want) != (row["implied_ancestors"] != nil) {
 			t.Errorf("%s (%s): labels %v", message, want, row["labels"])
 		}
 	}
@@ -232,6 +234,13 @@ func TestLabelingExport(t *testing.T) {
 	if row := labels[itemOf["m-c2"]]; !slices.Equal(strs(row["returned"].(map[string]any)["labels"]), []string{fakeLabel}) ||
 		!slices.Contains(strs(row["flags"]), servedModelDiffers) {
 		t.Errorf("held row = %v", row)
+	}
+	// A need-context result keeps its labels, apart from usable ones.
+	if row := labels[itemOf["m-o3"]]; !slices.Equal(strs(row["labels"]), []string{fakeLabel}) || row["returned"] != nil || row["need_context"] != true {
+		t.Errorf("need-context row = %v", row)
+	}
+	if support := manifest["label_support"].(map[string]any)[fakeLabel].(map[string]any)[labels[itemOf["m-o3"]]["split"].(string)].(map[string]any); support["need_context_positive"] != float64(1) {
+		t.Errorf("need-context support = %v", support)
 	}
 	if history := labels[itemOf["m-h3"]]["receipt"].(map[string]any)["history"].([]any); len(history) != 2 {
 		t.Errorf("history = %v", history)
@@ -248,6 +257,11 @@ func TestLabelingExport(t *testing.T) {
 		!slices.Equal(strs(broadRow["uncertain_labels"]), []string{"P.request.work.investigate"}) ||
 		!slices.Contains(strs(broadRow["flags"]), servedModelUnverified) {
 		t.Errorf("broad row = %v", broadRow)
+	}
+	// Evidence is exported as stored, rejected occurrences included; the
+	// label they belong to is not a positive.
+	if evidence := compactJSON(broadRow["evidence"]); !strings.Contains(evidence, `{"item_end":11,"item_start":0,"source":null,"status":"outside_target"}`) {
+		t.Errorf("evidence = %s", evidence)
 	}
 
 	// Provenance: duplicates, families and round-tripped ranges.
