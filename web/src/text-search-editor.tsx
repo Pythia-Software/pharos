@@ -411,7 +411,8 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
       <div className="text-editor-messages">
         {textKind ? <>
           {issueList.filter(issue => issue.id === "text").map(issue => <p className="text-editor-error" key={issue.id}>{issue.message}</p>)}
-          {(draft.editor === "visual" ? draft.match !== "rules" : ["literal", "regex"].includes(draft.mode)) && ["all", "tools"].includes(draft.scope.surface) && !draft.scope.conversation_id && !draft.scope.workspace_id ? <p className="text-editor-scope-note">For this search across instructions or tools, add a Conversation ID filter or use workspace properties to select at most 100 workspaces.</p> : null}
+          {(draft.editor === "visual" ? draft.match !== "rules" : ["literal", "regex"].includes(draft.mode)) && ["all", "tools"].includes(draft.scope.surface) && !draft.scope.conversation_id && !draft.scope.workspace_id ? <p className="text-editor-scope-note">For this search across instructions or tools, add a Conversation ID filter or use workspace properties to select at most 100 workspaces.</p>
+            : ["all", "tools"].includes(draft.scope.surface) && draft.scope.roles.length === 0 && !draft.scope.conversation_id && !draft.scope.workspace_id ? <p className="text-editor-scope-note">Tool output is not word-indexed. To search it, add a Conversation ID filter or use workspace properties to select at most 100 workspaces.</p> : null}
           {error ? <div className="text-editor-error text-editor-alert" role="alert"><strong>Search not applied.</strong> {error} {active ? "Your previous results are still shown." : "No search has been applied."}</div> : null}
         </> : null}
         {filterError ? <p role="alert" className="text-editor-error">{filterError}</p> : null}
