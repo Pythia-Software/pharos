@@ -139,6 +139,11 @@ func (c *sourceCapture) restorePlainSnapshot(s *capturedSnapshot) error {
 		s.Encoding, s.StoredSize = "", 0
 		return nil
 	}
+	if captureFault != nil {
+		if err := captureFault("restore-plain", s.Captured); err != nil {
+			return toDestination(err)
+		}
+	}
 	if err := c.ensureSpace(v.Size); err != nil {
 		return err
 	}

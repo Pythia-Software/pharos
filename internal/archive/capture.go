@@ -1092,8 +1092,18 @@ func (c *sourceCapture) preserve(version capturedVersion, present bool) (capture
 			}
 		}
 	}
-	if _, err := os.Stat(to); err != nil {
+	stored, err := os.Stat(to)
+	if err != nil {
 		return version, toDestination(err)
+	}
+	// The name may already hold another inode: a pin's copy, or what an
+	// interrupted rotation left. Describe the bytes actually there, which
+	// may be stored differently from the copy being superseded (a pinned
+	// compressed snapshot whose latest copy was since restored to plain).
+	if current, err := os.Stat(from); err != nil || !os.SameFile(current, stored) {
+		if version, err = describeStored(c.ctx, to, version); err != nil {
+			return version, err
+		}
 	}
 	if err := c.carrySQLiteExportReceipt(version.Captured, rel); err != nil {
 		return version, err

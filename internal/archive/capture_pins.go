@@ -504,7 +504,7 @@ func (c *sourceCapture) recordPinnedCopy(latest string, v capturedVersion) error
 	listed := false
 	if snapshot := c.snapshots[latest]; snapshot != nil {
 		v.Source = &snapshot.Source
-		snapshot.Generations, listed = appendVersion(snapshot.Generations, v)
+		snapshot.Generations, listed = insertGeneration(snapshot.Generations, v)
 	} else if file := c.files[latest]; file != nil {
 		v.Source = nil
 		file.Previous, listed = appendVersion(file.Previous, v)
@@ -523,6 +523,27 @@ func appendVersion(versions []capturedVersion, v capturedVersion) ([]capturedVer
 		}
 	}
 	return append(versions, v), true
+}
+
+// insertGeneration lists v among generations, which are newest first, where
+// its captured_at places it (a pinned latest snapshot's copy is the newest),
+// unless they already name its path. Retention runs only after a rotation,
+// which lists the same name in the same place, so the order costs nothing.
+func insertGeneration(generations []capturedVersion, v capturedVersion) ([]capturedVersion, bool) {
+	for _, existing := range generations {
+		if existing.Captured == v.Captured {
+			return generations, false
+		}
+	}
+	at, _ := parseTime(v.CapturedAt)
+	index := len(generations)
+	for i, existing := range generations {
+		if captured, ok := parseTime(existing.CapturedAt); ok && captured.Before(at) {
+			index = i
+			break
+		}
+	}
+	return slices.Insert(slices.Clone(generations), index, v), true
 }
 
 // withoutVersion drops the entries naming path (a pinned copy that a

@@ -242,6 +242,41 @@ func storedAsFile(f *os.File, v capturedVersion) capturedVersion {
 	return v
 }
 
+// describeStored is v as the file at path stores it, whichever way v says:
+// a zstd frame smaller than the original size is encoded (checked by decoding
+// against v's digest when one is recorded), the original size without one is
+// plain. Anything else is left as v says, for validation to report.
+func describeStored(ctx context.Context, path string, v capturedVersion) (capturedVersion, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return v, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return v, err
+	}
+	head := make([]byte, len(zstdMagic))
+	n, _ := f.ReadAt(head, 0)
+	zstdFrame := n == len(head) && bytes.Equal(head, zstdMagic)
+	switch {
+	case zstdFrame && info.Size() < v.Size:
+		if v.SHA256 != "" {
+			digest, size, err := capturedSHA256File(ctx, f, captureEncodingZstd)
+			if err != nil {
+				return v, err
+			}
+			if size != v.Size || digest != v.SHA256 {
+				return v, fmt.Errorf("%w: %s", errCapturedContentMismatch, path)
+			}
+		}
+		v.Encoding, v.StoredSize = captureEncodingZstd, info.Size()
+	case !zstdFrame && info.Size() == v.Size:
+		v.Encoding, v.StoredSize = "", 0
+	}
+	return v, nil
+}
+
 // storedAsUnlocked is storedAsFile for a reader that holds no capture lock
 // and read the manifest some time before opening f: a compression may have
 // committed and renamed since, leaving a plain entry over an encoded file.
