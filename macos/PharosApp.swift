@@ -103,6 +103,14 @@ final class ArchiveService: ObservableObject {
     private var managedLibraryConnected = false
     private var managedSelectedLibrary = ""
     var hasConnectedLibrary: Bool { !managedApplication || managedLibraryConnected }
+    // What the broker last said (see ManagedLibraryStatus in MenuBar.swift).
+    private var managedStatus = ManagedLibraryStatus()
+    private var managedStateRequestedAt = Date.distantPast
+    private var currentManagedStatus: ManagedLibraryStatus {
+        managedStatus.current(pendingFor: managedLibraryStateTask == nil ? nil : Date().timeIntervalSince(managedStateRequestedAt))
+    }
+    var libraryOperation: String? { managedApplication ? currentManagedStatus.operation : nil }
+    var noLibrarySelected: Bool { managedApplication && currentManagedStatus.noLibrary }
     @Published var error: String?
     @Published var status = "Starting local archive…"
     @Published var disconnected: Disconnection?
@@ -248,16 +256,25 @@ final class ArchiveService: ObservableObject {
         guard managedApplication, !shuttingDown else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in self?.watchManagedLibraries() }
         guard managedLibraryStateTask == nil, let request = localRequest("/api/app/state"), let broker = lock.withLock({ endpoint }) else { return }
-        managedLibraryStateTask = URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+        managedStateRequestedAt = Date()
+        managedLibraryStateTask = URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            let timedOut = (error as? URLError)?.code == .timedOut
             let state = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.managedLibraryStateTask = nil
-                guard !self.shuttingDown, self.lock.withLock({ self.endpoint?.url == broker.url }),
-                      let state, let libraries = state["libraries"] as? [[String: Any]] else { return }
-                let selected = state["selected"] as? String ?? ""
+                guard !self.shuttingDown, self.lock.withLock({ self.endpoint?.url == broker.url }) else { return }
+                guard let state, let status = ManagedLibraryStatus.answered(state), let libraries = state["libraries"] as? [[String: Any]] else {
+                    // A timeout means the broker may be holding its lock for a
+                    // library operation; keep saying so until it answers.
+                    // Other failures keep the last answer.
+                    self.managedStatus = self.managedStatus.failedRequest(timedOut: timedOut)
+                    return
+                }
+                self.managedStatus = status
+                let selected = status.selected
                 let generation = (state["generation"] as? NSNumber)?.stringValue ?? "0"
-                let connected = libraries.contains { $0["id"] as? String == selected && $0["connected"] as? Bool == true }
+                let connected = status.connected
                 self.managedLibraryConnected = connected
                 self.managedSelectedLibrary = selected
                 let connection = "\(selected):\(generation):\(connected)"

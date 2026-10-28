@@ -524,9 +524,16 @@ The upgrade runs these steps in order, as one background job:
    `AGENTS.md`, memory) and skills each Claude Code or Codex conversation
    loaded. A conversation whose transcript is gone from this Mac and the
    library's captures is marked unavailable rather than read again.
-5. **Rebuild the tool ledger** with error signatures, test failures, and
+5. **Index saved reasoning**: extract saved thinking and reasoning summaries
+   from retained messages, so the reasoning search target finds them.
+6. **Repair message search**: restore proven Claude parent/child links, make
+   delivered sub-agent reports readable, and repair phrase matching in
+   retained tool and context text.
+7. **Rebuild the tool ledger** with error signatures, test failures, and
    repository-relative paths. This is the longest step.
-6. **Rebuild the Tools rollup**, so the first visit to Tools doesn't wait.
+
+Only steps with pending work run. After them, the job rebuilds the Tools
+rollup, so the first visit to Tools doesn't wait.
 
 Repositories merge first because the tool ledger and the loaded-instructions
 record store repository-relative paths. Every step reads the catalog's

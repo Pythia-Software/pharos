@@ -585,7 +585,9 @@ progress is, and the next run redoes it.
   and `on_eject` (what a release does to it). Kinds: `sync` and `index` (runs),
   `capture` (by the service), `capture-other` (another process on this Mac,
   such as `pharos capture`, holds the capture lock; Pharos cannot stop it,
-  and it keeps the drive busy), `backup` (reads the library, writes elsewhere),
+  and it keeps the drive busy), `backup` (a local backup, which also writes the library's `backups.json`,
+  or a cloud upload, verification or destination test, which stage files on
+  the drive),
   `git` (the main-branch merge lookup that follows a sync or an index, or the
   first scan of a catalog), and `maintenance` (among others, Library view rows
   still to be indexed, listed once that has run for 15 seconds: those an
@@ -603,17 +605,19 @@ progress is, and the next run redoes it.
 
 The header shows the drive's name and a status dot: green when idle, brass
 and pulsing while work runs, and red and pulsing when something needs
-attention (a failed index, or an index verification mismatch). The header
+attention (a failed or interrupted index, or an index verification mismatch;
+an index that left sources to the next run because a capture was using them
+is not a failure). The header
 shows no other alert; its panel lists what needs attention, each with a
 button to deal with it, then every current activity and the latest index
-result this session. Running now shows two right-aligned timing lines beside each activity:
-`Started Xm ago` and `Estimated complete in Xm`. The estimate uses the median
-of up to 10 recent successful runs of that activity on this
-Mac. Capture, index (including Index changes), backup, and post-index Git timings are saved in the
-catalog across restarts. Without history or a known start time, the panel says
-the estimate is unavailable; an overdue estimate says the work is taking
-longer than past runs. A multi-stage Capture & index estimates the current step,
-not later steps that have not started.
+result this session. Each activity shows an **Overall** line, a time
+fraction of its whole-operation forecast when one exists (else
+"Calculating…"), and a **Step N/M** line with the measured fraction of the
+current stage and its own time left; **Details** shows elapsed time and how
+each estimate was made. Stage estimates blend the live pace with past runs
+of the same stage on this Mac; the whole-operation forecast predicts each
+remaining step from that step's history and is withheld until every
+remaining step has some. See [Progress and time estimates](progress-estimates.md).
 
 **Stopping Library view indexing.** `POST /api/library/refresh/stop`
 (the **Stop** beside "Indexing the Library view" in the drive panel) stops
@@ -627,8 +631,9 @@ backlog. It stays stopped, and off the list of running work, until
 
 In the app, the drive panel's title has **⏏ Eject** at its right when the
 library is on a drive that can be ejected. With nothing running it ejects at
-once; otherwise it first lists the work an eject stops (each resumes the next
-time it runs) and asks to **Stop and eject**. It goes through the app's eject
+once; otherwise it first lists the work an eject stops, with what stopping
+each one does (an index resumes on its next run; a cloud upload starts over),
+and asks to **Stop and eject**. It goes through the app's eject
 handler (above), so it stops agents' Pharos MCP servers too; a reason Pharos
 kept the library shows under the title. A plain browser cannot eject and shows
 no button: quit the library's Pharos.app, which stops its service and MCP servers,

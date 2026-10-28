@@ -1238,6 +1238,33 @@ func TestStoppingAnIndexKeepsWhatItWrote(t *testing.T) {
 	if call(http.MethodPost, "/api/index/cancel", "")["stopped"] != false {
 		t.Fatal("a stop with nothing running reported stopping something")
 	}
+	// An index that meets a running capture says it is waiting for it, and
+	// Stop ends the wait.
+	held, err := beginCapture(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call(http.MethodPost, "/api/index", `{}`)
+	waiting := func() bool {
+		activities, _ := call(http.MethodGet, "/api/library/status", "")["activities"].([]any)
+		for _, activity := range activities {
+			work, _ := activity.(map[string]any)["work"].(map[string]any)
+			if work["phase"] == captureWaitPhase(currentHost().Label) {
+				return true
+			}
+		}
+		return false
+	}
+	for deadline := time.Now().Add(10 * time.Second); !waiting(); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the index did not report its wait for the capture")
+		}
+	}
+	call(http.MethodPost, "/api/index/cancel", "")
+	if run := finished(); run["state"] != "interrupted" || run["workspaces"] != float64(0) {
+		t.Fatalf("a stopped wait: %#v", run)
+	}
+	held.Close()
 	var parses atomic.Int64
 	parseHook = func(string) {
 		if parses.Add(1) == 3 {

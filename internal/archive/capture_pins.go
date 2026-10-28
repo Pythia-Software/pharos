@@ -379,11 +379,20 @@ func lockCaptureTarget(ctx context.Context, dir string) (*os.File, error) {
 	return f, nil
 }
 
-func waitCaptureLock(ctx context.Context, acquire func() (*os.File, error)) (*os.File, error) {
+// waitCaptureLock retries acquire while a capture holds the lock, until ctx
+// ends; automatic runs do not wait. A wait reports its phase, naming the Mac
+// whose capture holds the lock, so a run that waits says so instead of
+// looking stuck; cancelling ctx (Stop, or a release) ends the wait.
+func waitCaptureLock(ctx context.Context, host string, acquire func() (*os.File, error)) (*os.File, error) {
+	waiting := false
 	for {
 		lock, err := acquire()
 		if !errors.Is(err, errCaptureBusy) || modeOf(ctx).automatic {
 			return lock, err
+		}
+		if !waiting {
+			waiting = true
+			reportWork(ctx, captureWaitPhase(host), "", 0, -1)
 		}
 		timer := time.NewTimer(100 * time.Millisecond)
 		select {
@@ -395,13 +404,18 @@ func waitCaptureLock(ctx context.Context, acquire func() (*os.File, error)) (*os
 	}
 }
 
-func lockCaptureReader(ctx context.Context, dir string) (*os.File, error) {
-	return waitCaptureLock(ctx, func() (*os.File, error) { return lockCaptureTarget(ctx, dir) })
+// captureWaitPhase is the phase of work waiting for host's capture.
+func captureWaitPhase(host string) string {
+	return "waiting for the capture on " + defaultString(host, "another Mac") + " to finish"
+}
+
+func lockCaptureReader(ctx context.Context, target captureTarget) (*os.File, error) {
+	return waitCaptureLock(ctx, defaultString(target.Host.Label, target.Host.ID), func() (*os.File, error) { return lockCaptureTarget(ctx, target.Dir) })
 }
 
 func beginInputCapture(ctx context.Context, config Config) (*captureSession, error) {
 	var session *captureSession
-	_, err := waitCaptureLock(ctx, func() (*os.File, error) {
+	_, err := waitCaptureLock(ctx, currentHost().Label, func() (*os.File, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}

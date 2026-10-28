@@ -37,13 +37,17 @@ type libraryActivity struct {
 	Detail string `json:"detail,omitempty"`
 	// Progress is the measured fraction of Work's current stage, not of the
 	// whole operation. nil means no trustworthy denominator is available.
-	Progress              *float64          `json:"progress"`
-	StartedAt             string            `json:"started_at,omitempty"`
-	EstimatedCompletionAt string            `json:"estimated_completion_at,omitempty"`
-	Work                  *activityWork     `json:"work,omitempty"`
-	Estimate              *activityEstimate `json:"estimate,omitempty"`
-	// Writes is true for work that writes to the library's drive; a backup
-	// only reads it.
+	Progress              *float64 `json:"progress"`
+	StartedAt             string   `json:"started_at,omitempty"`
+	EstimatedCompletionAt string   `json:"estimated_completion_at,omitempty"`
+	// EstimatedCompletionScope says what EstimatedCompletionAt is the end of:
+	// "operation" for the whole-operation forecast, "stage" for the midpoint
+	// of the current stage's range. Empty when there is no estimate.
+	EstimatedCompletionScope string            `json:"estimated_completion_scope,omitempty"`
+	Work                     *activityWork     `json:"work,omitempty"`
+	Estimate                 *activityEstimate `json:"estimate,omitempty"`
+	// Writes is true for work that writes to the library's drive. Every
+	// activity listed today does (a backup writes backups.json there).
 	Writes bool `json:"writes"`
 	// OnEject says what a release before an eject does to it.
 	OnEject string `json:"on_eject"`
@@ -327,9 +331,15 @@ func (s *Server) libraryActivities() []libraryActivity {
 	if active, runs := s.backups.status(); active && len(runs) > 0 {
 		run := runs[0]
 		detail := fmt.Sprintf("To %s · %s · %s copied", run.Destination, defaultString(run.Phase, "starting"), humanBytes(run.BytesCopied))
+		// A backup mostly reads the library, but it writes the library's
+		// backups.json (its id on the first backup, and each finished
+		// backup), so it writes to the drive.
 		activities = append(activities, libraryActivity{ID: run.ID, Kind: "backup", Label: "Backing up", Detail: detail, StartedAt: run.StartedAt,
-			Work:    &activityWork{Phase: run.Phase, Unit: "byte", Done: float64(run.BytesCopied)},
+			Work: &activityWork{Phase: run.Phase, Unit: "byte", Done: float64(run.BytesCopied)}, Writes: true,
 			OnEject: "Stops; the next backup carries on from what was copied."})
+	}
+	if job := s.cloud.job(); job != nil {
+		activities = append(activities, cloudActivity(job))
 	}
 	if running, since, reason := s.tasks.gitRunning(); running {
 		activities = append(activities, libraryActivity{Kind: "git", Label: "Looking up merges in Git", Detail: "Main-branch merges of indexed work, " + reason,
@@ -424,7 +434,7 @@ func unplugAdvice(drive libraryDrive, activities []libraryActivity) map[string]a
 	case len(writing) == 0:
 		unplug["summary"] = fmt.Sprintf("%s is reading the library. Eject %s before unplugging it: Pharos stops the work at a safe point and closes the library first, or refuses the eject and says why.", activities[0].Label, drive.Name)
 	default:
-		unplug["summary"] = fmt.Sprintf("%s: writing to %s now; unplugging it would lose that work. Eject it instead: Pharos stops its own work at a safe point (the next run resumes it) and closes the library first, or refuses and says why.", strings.Join(writing, ", "), drive.Name)
+		unplug["summary"] = fmt.Sprintf("%s: writing to %s now; unplugging it would lose that work. Eject it instead: Pharos stops its own work at a safe point and closes the library first, or refuses and says why; each activity's on_eject says what stopping it does.", strings.Join(writing, ", "), drive.Name)
 		if slices.ContainsFunc(activities, func(activity libraryActivity) bool { return activity.Kind == "capture-other" }) {
 			unplug["summary"] = unplug["summary"].(string) + " A capture by another process keeps the drive busy until it finishes; Pharos cannot stop it."
 		}

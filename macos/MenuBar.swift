@@ -59,6 +59,58 @@ struct MenuBarPreferences {
     subscript(_ key: String) -> Bool { values[key] == true }
 }
 
+/// What the broker's /api/app/state says about the selected library and any
+/// library operation, as the native menu shows it. Pure, for the harness.
+struct ManagedLibraryStatus: Equatable {
+    static let unanswered = "Finishing a library operation…"
+    /// Whether the broker has answered at least once.
+    var known = false
+    var selected = ""
+    /// The selected library's service is up.
+    var connected = false
+    /// A library is selected and available. One whose service is not up
+    /// (starting, respawning, stopped for a delivery) is still a library.
+    var selectedAvailable = false
+    /// A library operation the broker reports (recover, transfer, delivery),
+    /// or one it is too busy to report: creating a library holds the lock
+    /// /api/app/state waits for.
+    var operation: String?
+
+    var noLibrary: Bool { known && !selectedAvailable && operation == nil }
+
+    /// A successful answer; nil if it is not a state document.
+    static func answered(_ state: [String: Any]) -> ManagedLibraryStatus? {
+        guard let libraries = state["libraries"] as? [[String: Any]] else { return nil }
+        let selected = state["selected"] as? String ?? ""
+        let entry = selected.isEmpty ? nil : libraries.first { $0["id"] as? String == selected }
+        let job = state["job"] as? [String: Any]
+        let running = job?["state"] as? String == "running"
+        let operating = state["busy"] as? Bool == true || running
+        return ManagedLibraryStatus(known: true, selected: selected, connected: entry?["connected"] as? Bool == true,
+            selectedAvailable: entry?["available"] as? Bool == true,
+            operation: operating ? ((running ? job?["phase"] as? String : nil) ?? unanswered) : nil)
+    }
+
+    /// A request that failed. Only a timeout suggests the broker is holding
+    /// its lock for a library operation; a connection or parse error keeps
+    /// the last answer.
+    func failedRequest(timedOut: Bool) -> ManagedLibraryStatus { timedOut ? unansweredRequest() : self }
+
+    /// A request the broker did not answer in time: assume it is busy until a
+    /// successful answer says nothing is running.
+    func unansweredRequest() -> ManagedLibraryStatus {
+        var status = self
+        status.operation = status.operation ?? Self.unanswered
+        return status
+    }
+
+    /// What to show while a request has been waiting pendingFor seconds.
+    func current(pendingFor: TimeInterval?) -> ManagedLibraryStatus {
+        if let pendingFor, pendingFor > 6 { return unansweredRequest() }
+        return self
+    }
+}
+
 // The template lighthouse and colored dot are separate views, so macOS can
 // tint the mark for its menu bar appearance without tinting the status dot.
 final class MenuBarDot: NSView {
@@ -225,7 +277,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         row("cost", "Estimated API cost", path: "/analyze?analyze_topic=tokens")
         row("carbon", "Estimated CO₂e", path: "/analyze?analyze_topic=carbon")
         row("usage-note", "Loading usage…")
-        row("backup", "Last backup", path: "/settings")
+        row("backup", "Last backup", path: "/settings/backups")
         row("space", "Library size", path: "/settings")
         row("free", "Calculating free space…")
         row("search", "Search conversations…", path: "/library")
@@ -378,13 +430,22 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         var problem = actionError ?? service.error ?? service.setupError ?? statusError ?? nonempty(snapshot["error"])
         if let disconnected = service.disconnected, disconnected.state != .finishing { problem = disconnected.note ?? "Library unavailable: \(disconnected.volume)" }
         if service.setupNeeded && !service.settingUp { problem = problem ?? "Set up Pharos to connect a library." }
-        let busy = service.ejecting || service.settingUp || service.disconnected?.state == .finishing || service.url == nil || !activities.isEmpty || indexing || snapshot["library"] == nil
+        // The managed app with no library selected (or the selected one
+        // unavailable) has nothing to poll, so its snapshot stays empty: that
+        // is idle, not a check in progress. A selected library whose service
+        // is not up yet (starting, respawning, stopped by a delivery) is work.
+        let noLibrary = service.url != nil && service.noLibrarySelected && !service.ejecting && !service.settingUp && service.disconnected?.state != .finishing
+        let busy = service.ejecting || service.settingUp || service.disconnected?.state == .finishing || service.url == nil || !activities.isEmpty || indexing || (snapshot["library"] == nil && !noLibrary)
         let title: String
         let detail: String
         if let problem {
             title = "Pharos · Needs attention"
             detail = String(problem.split(separator: "\n").first ?? "Unknown error")
             dot.color = .systemRed
+        } else if noLibrary {
+            title = "Pharos · No library connected"
+            detail = ""
+            dot.color = .systemGray
         } else if busy {
             title = "Pharos · Working"
             if service.ejecting || service.disconnected?.state == .finishing { detail = "Releasing the library for eject…" }
@@ -393,10 +454,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 var parts = [activity["label"] as? String ?? "Working"]
                 if let progress = activity["progress"] as? Double { parts.append("stage \(Int(progress * 100))%") }
                 if let completion = Self.date(activity["estimated_completion_at"]), completion > Date() {
-                    parts.append("about \(max(1, Int(ceil(completion.timeIntervalSinceNow / 60)))) min for this stage")
+                    // A whole-operation forecast covers the run; otherwise the estimate is the stage's.
+                    let minutes = max(1, Int(ceil(completion.timeIntervalSinceNow / 60)))
+                    parts.append(activity["estimated_completion_scope"] as? String == "operation" ? "about \(minutes) min left" : "about \(minutes) min for this stage")
                 }
                 detail = parts.joined(separator: " · ")
-            } else { detail = indexing ? "Starting indexing…" : "Checking the library…" }
+            } else if let operation = service.libraryOperation { detail = operation }
+            else { detail = indexing ? "Starting indexing…" : !service.hasConnectedLibrary ? "Waiting for the library…" : "Checking the library…" }
             dot.color = .systemYellow
         } else {
             title = "Pharos · Idle"
@@ -434,7 +498,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         setRowTitle("eject", "Eject \(drive["name"] as? String ?? "library")…")
         rows["eject"]?.isEnabled = ejectable && !service.ejecting && service.url != nil
         rows["finder"]?.isEnabled = libraryDirectory != nil
-        rows["index"]?.isEnabled = service.url != nil && !service.ejecting && !indexing && !activities.contains { ["sync", "index", "capture", "capture-other", "maintenance"].contains($0["kind"] as? String ?? "") }
+        rows["index"]?.isEnabled = service.url != nil && service.hasConnectedLibrary && !service.ejecting && !indexing && !activities.contains { ["sync", "index", "capture", "capture-other", "maintenance"].contains($0["kind"] as? String ?? "") }
         for key in ["words", "tokens", "carbon", "cost", "backup", "space"] { rows[key]?.isEnabled = service.url != nil }
         layoutMenuText()
         menu.update()

@@ -125,7 +125,7 @@ test("a run's sources come from its record, else from its results and per-source
 });
 
 test('run history queries use measured values across the entire retained history', () => {
-  const records = Array.from({ length: 7 }, (_, index) => ({ run_id: `run-${index}`, state: index === 2 ? 'failed' : 'complete',
+  const records = Array.from({ length: 7 }, (_, index) => ({ run_id: `run-${index}`, state: index === 2 ? 'failed' : index === 3 ? 'deferred' : 'complete',
     finished_at: new Date(reference - index * 60000).toISOString(), seconds: [2, 100, 12, 1, 6, 60, 9][index], cpu_seconds: index,
     conversations: index, messages_in_changed_groups: index * 10, rss_observed_peak_bytes: 1048576 * (index + 1), sources: ['codex'] }));
   const { history } = syncTables({ history: records });
@@ -135,6 +135,8 @@ test('run history queries use measured values across the entire retained history
   assert.equal(result.total, 4);
   assert.deepEqual(result.rows.map(row => row.id), ['run-1', 'run-5']);
   assert.equal(history.rows[2].result, 'Failed');
+  // A run that left sources to the next one because a capture held them is not a failure.
+  assert.equal(history.rows[3].result, 'Capture was running');
   assert.equal(history.rows[5].cpu_seconds, 5);
   const recent = applyQuery(history.rows, { ...EMPTY_QUERY, where: [{ field: 'finished_at', op: '>=', value: new Date(reference - 60000).toISOString() }] }, history.schema);
   assert.deepEqual(recent.rows.map(row => row.id).sort(), ['run-0', 'run-1']);
@@ -173,14 +175,14 @@ test('diagnostic queries preserve separate numeric distributions and incomplete 
 });
 
 test('run detail queries distinguish unknown work totals and forecasts from measured zeroes', () => {
-  const tables = runTables({ source_results: [{ source: 'codex', yielded: true }, { source: 'claude', error: 'Unavailable' }],
+  const tables = runTables({ source_results: [{ source: 'codex', yielded: true }, { source: 'claude', error: 'Unavailable' }, { source: 'gemini', pending: true, deferred: true }],
     phases: [{ name: 'audit', seconds: 3, work: [
       { phase: 'discover', unit: 'group', done: 0, total: 0, total_known: true, seconds: 0, features: { load_one_minute: 0 } },
       { phase: 'index', unit: 'byte', done: 1024, total: 0, features: { bytes: 1024, bytes_basis: 'message_text' } },
     ] }], forecasts: [{ reason: 'launch', estimate: { predicted_steps: 0, remaining_steps: 3 } },
       { reason: 'discovered', estimate: { point_seconds: 10, low_seconds: 0, high_seconds: 15 }, actual_remaining_seconds: 0 },
       { reason: 'checkpoint', estimate: { point_seconds: 10 }, actual_remaining_seconds: 12 }] });
-  assert.deepEqual(tables.sourceResults.rows.map(row => row.status), ['Partial', 'Failed']);
+  assert.deepEqual(tables.sourceResults.rows.map(row => row.status), ['Partial', 'Failed', 'Capture was running']);
   assert.equal(tables.phases.rows[0].name, 'Verification');
   assert.equal(tables.stages.rows[0].total, 0);
   assert.equal(tables.stages.rows[0].load_one_minute, 0);
