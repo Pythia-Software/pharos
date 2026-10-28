@@ -879,15 +879,17 @@ test("Card Library restores saved covers while fresh queries are pending", { ski
   assert.deepEqual(app.problems(), []);
 });
 
-const cardDestinations = JSON.parse(readFileSync(new URL('../../../internal/archive/assets/ask-destinations.json', import.meta.url), 'utf8'));
+// Card links as the site map cases hold them: each card at its first default
+// window, and some at every window. Open the 7-day one where there is one.
+const cardLinks = JSON.parse(readFileSync(new URL('../../../testdata/site-map-cases.json', import.meta.url), 'utf8')).cards;
 
 // Card analyses use their own source grain and shared cover renderer. The
 // model/unit suite owns mathematical parity; the browser checks accessibility
 // of navigation and that every chart family fits the available viewport.
 for (const id of ['human-words', 'cost-repos', 'machine-time', 'skill-evidence', 'tool-failure-rates', 'mcp-response-size', 'carbon-trend', 'parallel-days', 'machine-latency-trend', 'session-input-output', 'human-message-lengths', 'writing-hours']) {
   for (const width of [1504, 390, 320]) test(`Expanded card ${id} fits at ${width}px`, { skip }, async t => {
-    const item = cardDestinations.find(card => card.id === id);
-    const app = await open(t, { url: item.href, viewport: { width, height: 933 }, ready: '.card-analysis' });
+    const item = cardLinks.find(card => card.id === id && card.days === 7) ?? cardLinks.find(card => card.id === id);
+    const app = await open(t, { url: item.url, viewport: { width, height: 933 }, ready: '.card-analysis' });
     const { page } = app;
     await app.settled();
     assert.equal(await page.getByRole('alert').count(), 0, 'the matching analysis is available');
