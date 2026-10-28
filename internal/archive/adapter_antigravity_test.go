@@ -533,7 +533,7 @@ func TestAntigravityPrintModeRunsAreHeadless(t *testing.T) {
 		t.Fatal(err)
 	}
 	for id, path := range encodedTranscripts {
-		if got := encoded.files().antigravityStarted(path); !got.Equal(starts[id]) || got.IsZero() {
+		if got, err := encoded.files().antigravityStarted(path); err != nil || !got.Equal(starts[id]) || got.IsZero() {
 			t.Fatalf("start of %s from its compressed transcript = %v, want %v", id, got, starts[id])
 		}
 	}
@@ -734,14 +734,52 @@ func TestAntigravityStartTimeFailuresAreNotCached(t *testing.T) {
 	content := []byte(antigravitySteps(map[string]any{"type": "USER_INPUT", "content": "hello", "created_at": started.Format(time.RFC3339)}))
 	dir := t.TempDir()
 
-	// Open failure: a live path that is not there yet.
+	// Open failure: a transcript that stats (so it has a cache key) but
+	// cannot be opened, then can, unchanged.
 	live := filepath.Join(dir, "live", "transcript.jsonl")
-	if got := antigravityStarted(live); !got.IsZero() {
-		t.Fatal("start time of a missing transcript", got)
-	}
 	writeSourceFile(t, live, string(content))
-	if got := antigravityStarted(live); !got.Equal(started) {
-		t.Fatalf("start time after an open failure = %v, want %v", got, started)
+	if err := os.Chmod(live, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(live, 0o600) })
+	if got, err := (sourceFiles{}).antigravityStarted(live); err == nil || !got.IsZero() {
+		t.Fatal("start time of a transcript that cannot be opened", got, err)
+	}
+	if err := os.Chmod(live, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := (sourceFiles{}).antigravityStarted(live); err != nil || !got.Equal(started) {
+		t.Fatalf("start time after an open failure = %v (%v), want %v", got, err, started)
+	}
+
+	// A plan whose print-mode detection cannot read a conversation's start
+	// time leaves that group undiscovered, with an error, rather than
+	// discovering it as an interactive run.
+	source := antigravityFixture(t)
+	probePut(t, filepath.Join(source, "log", "cli-20260928_080412.log"), "I0928 08:03:00.100000 1 printmode.go:181] Print mode: starting (promptLength=13)\n")
+	adapter := &antigravityAdapter{baseAdapter: baseAdapter{config: SourceConfig{Name: "antigravity-cli", Kind: "antigravity", Path: source}}}
+	transcripts, err := adapter.transcripts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unreadable := transcripts[antigravityOther]
+	if err := os.Chmod(unreadable, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(unreadable, 0o600) })
+	plan, err := adapter.planParts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.discoveryError == nil || !strings.Contains(plan.discoveryError.Error(), "start time") {
+		t.Fatal("unreadable start time did not fail its group's discovery", plan.discoveryError)
+	}
+	for _, group := range plan.groups {
+		for _, part := range group.parts {
+			if part.item == unreadable {
+				t.Fatal("the group whose start time is unreadable was planned")
+			}
+		}
 	}
 
 	// Decode failure: an encoded capture whose bytes do not decode, then the
@@ -766,8 +804,8 @@ func TestAntigravityStartTimeFailuresAreNotCached(t *testing.T) {
 	}
 	view := &captureView{host: Host{ID: "host-a"}, dir: filepath.Join(dir, "capture"), manifest: &captureManifest{Files: []*capturedFile{{Path: "/source/transcript.jsonl", Captured: rel, Size: int64(len(content)), Encoding: captureEncodingZstd, StoredSize: int64(encoded.Len())}}}}
 	files := sourceFiles{view: view}
-	if got := files.antigravityStarted(file); !got.IsZero() {
-		t.Fatal("start time from undecodable bytes", got)
+	if got, err := files.antigravityStarted(file); err == nil || !got.IsZero() {
+		t.Fatal("start time from undecodable bytes", got, err)
 	}
 	if err := os.WriteFile(file, encoded.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
@@ -775,7 +813,7 @@ func TestAntigravityStartTimeFailuresAreNotCached(t *testing.T) {
 	if err := os.Chtimes(file, stamp, stamp); err != nil {
 		t.Fatal(err)
 	}
-	if got := files.antigravityStarted(file); !got.Equal(started) {
+	if got, _ := files.antigravityStarted(file); !got.Equal(started) {
 		t.Fatalf("start time after a decode failure = %v, want %v", got, started)
 	}
 }

@@ -1887,8 +1887,15 @@ func TestCaptureCompressesColdFiles(t *testing.T) {
 			t.Fatalf("%s stored as %q (%d of %d bytes)", file.Captured, file.Encoding, file.StoredSize, file.Size)
 		}
 	}
-	if manifest.Version != captureManifestVersion {
+	if manifest.Version != captureFilesVersion {
 		t.Fatal("manifest with encoded files is not the version older builds refuse", manifest.Version)
+	}
+	// A build that reads only encoded generations (phase 1) refuses it.
+	captureManifestUnderstood = captureGenerationsVersion
+	_, err = loadCaptureManifest(target.Dir)
+	captureManifestUnderstood = captureManifestVersion
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("has version %d; this build understands up to %d", captureFilesVersion, captureGenerationsVersion)) {
+		t.Fatal("a generations-only build accepted encoded latest files", err)
 	}
 	// Delivery fingerprints come from the manifest's original-byte fields.
 	if fingerprint() != delivered {

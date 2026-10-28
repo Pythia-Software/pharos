@@ -172,8 +172,11 @@ type compressPolicy struct {
 // extractorVariants is an index version as this Mac's index records it and
 // as another Mac's index of the same capture does (with "@offhost", before
 // any "@generation:N"). Either one recording a part's exact size and version
-// means the next index will not read it: both run the same parser over the
-// same bytes, and only Git lookups differ.
+// makes the file cold: both ran the same parser over the same bytes. An
+// "@offhost" record alone does not stop this Mac's own index of the capture
+// from parsing the file once more (its tracker matches extractors exactly,
+// to fill in what only this Mac's Git checkouts know), which then decodes it
+// once; most files another Mac indexed are never indexed here again.
 func extractorVariants(version string) (own, offHost string) {
 	head, generation := version, ""
 	if index := strings.Index(version, "@generation:"); index >= 0 {

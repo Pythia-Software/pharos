@@ -56,38 +56,31 @@ func (v capturedVersion) storedSize() int64 {
 // storedSize is the size of the latest file on disk.
 func (f *capturedFile) storedSize() int64 { return f.version().storedSize() }
 
-// encodedVersions reports whether any entry of m is stored encoded; only then
-// does a writer stamp the version older builds refuse.
-func (m *captureManifest) encodedVersions() bool {
+// writerVersion is the manifest version a writer stamps: the lowest that
+// describes its encoded entries, so that exactly the builds that cannot read
+// one of them refuse the capture rather than hand zstd to a reader, and
+// capturePlainManifestVersion when there are none, so captures without
+// encoded entries stay readable by older builds.
+func (m *captureManifest) writerVersion() int {
+	version := capturePlainManifestVersion
 	for _, file := range m.Files {
 		if file.Encoding != "" {
-			return true
+			version = max(version, captureFilesVersion)
 		}
-		for _, version := range file.Previous {
-			if version.Encoding != "" {
-				return true
+		for _, previous := range file.Previous {
+			if previous.Encoding != "" {
+				version = max(version, captureFilesVersion)
 			}
 		}
 	}
 	for _, snapshot := range m.Snapshots {
 		for _, generation := range snapshot.Generations {
 			if generation.Encoding != "" {
-				return true
+				version = max(version, captureGenerationsVersion)
 			}
 		}
 	}
-	return false
-}
-
-// writerVersion is the manifest version a writer stamps: the newest when an
-// entry is encoded, so a build that cannot decode refuses the capture rather
-// than hand zstd to a reader, and the previous one otherwise, so libraries
-// without encoded entries stay readable by older builds.
-func (m *captureManifest) writerVersion() int {
-	if m.encodedVersions() {
-		return captureGenerationsVersion
-	}
-	return capturePlainManifestVersion
+	return version
 }
 
 // version finds the superseded entry (a snapshot generation or an earlier
