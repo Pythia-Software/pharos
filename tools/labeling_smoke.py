@@ -14,10 +14,10 @@ claim about the quality a student model can reach.
 Python 3 standard library only, so a training project can copy it without
 Pharos. See docs/library-labeling.md.
 
-The three steps are separate on purpose: verify_export reads every file to
-check structure, train reads only inputs.jsonl, provenance.jsonl and
-labels.jsonl (never a held-out file), and only evaluate reads
-labels-heldout.jsonl.
+The steps are separate on purpose: verify_training checks the manifest and
+the training files without opening a held-out file, train reads only
+inputs.jsonl, provenance.jsonl and labels.jsonl, and only after training do
+verify_heldout and evaluate open the held-out files.
 """
 
 import argparse
@@ -192,24 +192,63 @@ def sha256(data):
 # ------------------------------------------------------------ verification
 
 
-def verify_export(export_dir):
-    """Checks file hashes, row counts, held-out separation and every byte
-    range against its text. Returns a summary; raises ExportError."""
+def check_file(export_dir, name, expected):
+    """Checks one file against its manifest entry (hash, bytes, rows)."""
+    try:
+        with open(os.path.join(export_dir, name), "rb") as handle:
+            data = handle.read()
+    except OSError as error:
+        raise ExportError("cannot read %s: %s" % (name, error))
+    if sha256(data) != expected["sha256"] or len(data) != expected["bytes"]:
+        raise ExportError("%s does not match the manifest's hash" % name)
+    if "rows" in expected and data.count(b"\n") != expected["rows"]:
+        raise ExportError("%s has %d rows, the manifest says %d" % (name, data.count(b"\n"), expected["rows"]))
+
+
+def check_label_rows(export_dir, name, allowed, texts, splits, seen, checked):
+    """Checks the rows of one labels file: known, unrepeated items of the
+    file's splits, labels only on usable rows, and evidence ranges."""
+    for row in read_jsonl(os.path.join(export_dir, name)):
+        item = row["item_id"]
+        if item not in texts or item in seen:
+            raise ExportError("%s: item %s is unknown or repeated" % (name, item))
+        seen.add(item)
+        if row["split"] != splits[item]:
+            raise ExportError("%s: item %s split %s, inputs say %s" % (name, item, row["split"], splits[item]))
+        in_training = row["split"] in TRAINING_SPLITS
+        if (allowed is not None) != in_training:
+            raise ExportError("%s holds item %s of split %s" % (name, item, row["split"]))
+        usable = row["status"] in LABELED
+        if usable != isinstance(row["labels"], list) or any((row["labels"] is None) != (row[key] is None) for key in ("implied_ancestors", "masked_labels")):
+            raise ExportError("%s: item %s has status %s but labels %r" % (name, item, row["status"], row["labels"]))
+        for evidence in row["evidence"]:
+            for occurrence in evidence.get("occurrences") or []:
+                quote = slice_text(texts[item], occurrence["item_start"], occurrence["item_end"], "item %s evidence" % item)
+                if quote != evidence["quote"]:
+                    raise ExportError("item %s: evidence %r is %r at its range" % (item, evidence["quote"], quote))
+                checked["evidence_occurrences"] += 1
+
+
+def check_unit_rows(export_dir, name, training):
+    for row in read_jsonl(os.path.join(export_dir, name)):
+        if (row["split"] in TRAINING_SPLITS) != training or not row.get("unvalidated_merge"):
+            raise ExportError("%s: unit %s (split %s) is in the wrong file or not flagged" % (name, row["unit_id"], row["split"]))
+
+
+def verify_training(export_dir):
+    """Checks what training reads, without opening a held-out file: the
+    manifest, the hashes of the training files, row counts, every byte
+    range against its text, and that the training labels hold only
+    training splits. Returns the state verify_heldout continues from;
+    raises ExportError."""
     manifest = load_manifest(export_dir)
     files = manifest.get("files", {})
     for name in DATA_FILES + (HELDOUT_MANIFEST,):
         if name not in files:
             raise ExportError("the manifest lists no %s" % name)
     for name, expected in sorted(files.items()):
-        try:
-            with open(os.path.join(export_dir, name), "rb") as handle:
-                data = handle.read()
-        except OSError as error:
-            raise ExportError("cannot read %s: %s" % (name, error))
-        if sha256(data) != expected["sha256"] or len(data) != expected["bytes"]:
-            raise ExportError("%s does not match the manifest's hash" % name)
-        if "rows" in expected and data.count(b"\n") != expected["rows"]:
-            raise ExportError("%s has %d rows, the manifest says %d" % (name, data.count(b"\n"), expected["rows"]))
+        if name not in HELDOUT_FILES:
+            check_file(export_dir, name, expected)
 
     inputs = read_jsonl(os.path.join(export_dir, INPUTS))
     texts, splits, order = {}, {}, []
@@ -255,33 +294,32 @@ def verify_export(export_dir):
             checked["markers"] += 1
 
     seen = set()
-    for name, allowed in ((LABELS, TRAINING_SPLITS), (LABELS_HELDOUT, None)):
-        for row in read_jsonl(os.path.join(export_dir, name)):
-            item = row["item_id"]
-            if item not in texts or item in seen:
-                raise ExportError("%s: item %s is unknown or repeated" % (name, item))
-            seen.add(item)
-            if row["split"] != splits[item]:
-                raise ExportError("%s: item %s split %s, inputs say %s" % (name, item, row["split"], splits[item]))
-            in_training = row["split"] in TRAINING_SPLITS
-            if (allowed is not None) != in_training:
-                raise ExportError("%s holds item %s of split %s" % (name, item, row["split"]))
-            usable = row["status"] in LABELED
-            if usable != isinstance(row["labels"], list) or any((row["labels"] is None) != (row[key] is None) for key in ("implied_ancestors", "masked_labels")):
-                raise ExportError("%s: item %s has status %s but labels %r" % (name, item, row["status"], row["labels"]))
-            for evidence in row["evidence"]:
-                for occurrence in evidence.get("occurrences") or []:
-                    quote = slice_text(texts[item], occurrence["item_start"], occurrence["item_end"], "item %s evidence" % item)
-                    if quote != evidence["quote"]:
-                        raise ExportError("item %s: evidence %r is %r at its range" % (item, evidence["quote"], quote))
-                    checked["evidence_occurrences"] += 1
+    check_label_rows(export_dir, LABELS, TRAINING_SPLITS, texts, splits, seen, checked)
+    check_unit_rows(export_dir, UNITS, True)
+    return {"manifest": manifest, "checked": checked, "texts": texts, "splits": splits, "seen": seen}
+
+
+def verify_heldout(export_dir, verified):
+    """Checks the held-out files after training: their hashes, that they
+    hold only held-out splits, their byte ranges, and that the two labels
+    files together cover every item. Raises ExportError."""
+    files = verified["manifest"]["files"]
+    for name in HELDOUT_FILES:
+        check_file(export_dir, name, files[name])
+    texts, seen = verified["texts"], verified["seen"]
+    check_label_rows(export_dir, LABELS_HELDOUT, None, texts, verified["splits"], seen, verified["checked"])
     if seen != set(texts):
         raise ExportError("labels files miss %d items of inputs.jsonl" % len(set(texts) - seen))
-    for name, training in ((UNITS, True), (UNITS_HELDOUT, False)):
-        for row in read_jsonl(os.path.join(export_dir, name)):
-            if (row["split"] in TRAINING_SPLITS) != training or not row.get("unvalidated_merge"):
-                raise ExportError("%s: unit %s (split %s) is in the wrong file or not flagged" % (name, row["unit_id"], row["split"]))
-    return {"manifest": manifest, "checked": checked}
+    check_unit_rows(export_dir, UNITS_HELDOUT, False)
+
+
+def verify_export(export_dir):
+    """Checks file hashes, row counts, held-out separation and every byte
+    range against its text: verify_training, then verify_heldout. Returns a
+    summary; raises ExportError."""
+    verified = verify_training(export_dir)
+    verify_heldout(export_dir, verified)
+    return {"manifest": verified["manifest"], "checked": verified["checked"]}
 
 
 # ---------------------------------------------------------------- training
@@ -430,9 +468,11 @@ def evaluate(export_dir, manifest, model, include_need_context=False):
 
 
 def run(export_dir, out, report_path, include_need_context=False):
-    verified = verify_export(export_dir)
+    # Held-out files are opened only after the model is trained.
+    verified = verify_training(export_dir)
     manifest = verified["manifest"]
     model = train(export_dir, manifest, include_need_context)
+    verify_heldout(export_dir, verified)
     evaluation = evaluate(export_dir, manifest, model, include_need_context)
     warnings = []
     if model["train_skipped"]["need_context"]:

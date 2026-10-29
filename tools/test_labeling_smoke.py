@@ -276,19 +276,38 @@ class ExportCheckTests(unittest.TestCase):
 
     def test_training_never_reads_held_out_labels(self):
         export = write_export(self.path, invented_items())
-        manifest = smoke.verify_export(str(export))["manifest"]
-        real_open = builtins.open
+        real_open, real_train = builtins.open, smoke.train
+        trained = []
+        opened = []
 
         def guarded(path, *args, **kwargs):
             if os.path.basename(str(path)) in smoke.HELDOUT_FILES:
-                raise AssertionError("training opened %s" % path)
+                if not trained:
+                    raise AssertionError("opened %s before training finished" % path)
+                opened.append(os.path.basename(str(path)))
             return real_open(path, *args, **kwargs)
 
-        with mock.patch("builtins.open", guarded):
-            model = smoke.train(str(export), manifest)
-        # Different held-out labels give the same model.
+        def train(*args, **kwargs):
+            model = real_train(*args, **kwargs)
+            trained.append(model)
+            return model
+
+        # The whole run: checks and training open no held-out file; the
+        # held-out checks and the evaluation open them afterwards.
+        with mock.patch("builtins.open", guarded), mock.patch.object(smoke, "train", train):
+            report, model = self.run_smoke(export)
+        self.assertEqual(len(trained), 1)
+        self.assertEqual(set(opened), set(smoke.HELDOUT_FILES))
+        self.assertEqual(set(report["evaluation"]), {"test", "fresh"})
+        # Different held-out labels give the same model; the held-out check
+        # then refuses the export.
+        manifest = smoke.verify_training(str(export))["manifest"]
         (export / smoke.LABELS_HELDOUT).write_text("not even json\n")
-        self.assertEqual(smoke.train(str(export), manifest), model)
+        trained.clear()
+        with mock.patch("builtins.open", guarded):
+            self.assertEqual(smoke.train(str(export), manifest), model)
+        with self.assertRaisesRegex(smoke.ExportError, "hash"):
+            smoke.run(str(export), str(self.path / "m4.json"), str(self.path / "r4.json"))
 
     def test_rows_without_a_say_are_not_negatives(self):
         row = {"labels": [WORK], "uncertain_labels": [FINDING], "unsupported_labels": {"C.report": "in_marker"}, "implied_ancestors": implied([WORK]),
