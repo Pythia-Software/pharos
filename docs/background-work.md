@@ -457,6 +457,7 @@ Notes:
 | `cloud.restore` | Restore from the cloud (Terminal) · Restoring | cli (`cloud-restore`) | cli | — (a new location; out of scope) | — | — | **Out of status scope.** It restores to a new location, often on a Mac with no library or Pharos configuration (`cloud_cli.go`), so there is no library whose status could show it. It takes no lease and writes no journal. | — | never | fg |
 | `library.transfer` (variants `copy`, `move`) | Copy library / Move library · Copying the library | user (Libraries page), cli (`library-transfer`) | brk, cli | O:w D(source):w D(target):w | (target) conv:\* | — | Not stoppable; eject of either drive must wait. | none | always (broker registry) | fg |
 | `library.recover` | Restore a backup · Restoring a backup | user, cli (`library-recover`) | brk, cli | O:w D(target):w | (target) all | — | Not stoppable; eject must wait. | none | always (broker registry) | fg |
+| `library.compact` | Compact the catalog · Compacting the catalog | user (Library health → Storage) | brk | O:w D(target):w | — | — | Not stoppable; eject must wait. Quitting Pharos stops it and keeps the original catalog. | none | always (broker registry) | fg |
 | `library.deliver` | Deliver captured history · Delivering history | schedule (every 5 min while a pair is set), device (target attached) | brk | O:w M:w D(source):w D(target):w (`M` while stopping children) | (target) conv:\* | — | Not stoppable; it stops both libraries' services first (§4.4). | none | always (broker registry) | bg |
 | `library.deliver.capture` | Capture into the pending library · Capturing pending history | stage of `library.deliver` | brk | D(source):w | — | — | As its parent. | none | step | bg |
 | `library.adopt` | Move this Mac's archive into a library · Moving the archive | onboarding, cli | cli, svc | D(source):w D(target):w | all | — | Not stoppable. | none | always | fg |
@@ -1597,7 +1598,11 @@ against current code before starting it.
   contract's rollout. Once the flag defaults on and has been stable, remove
   the run-record progress fields, the `detail` strings, client grouping by
   label, the duplicate pollers and the three older freshness rules (§5).
-- **SQLite maintenance as operation kinds.** Add automatic `VACUUM`, a
-  periodic `ANALYZE` refresh (statistics are currently built only when
-  missing) and FTS `optimize`, each a registered, background-priority kind
-  under §3.
+- **SQLite maintenance as operation kinds.** A periodic `ANALYZE` refresh
+  (statistics are currently built only when missing), as a registered,
+  background-priority kind under §3. `VACUUM` stays manual
+  (`library.compact`, [Library management](library-management.md#compact-the-catalog)):
+  automatically it would close the library for an hour or more, and SQLite
+  reuses free pages anyway. A full FTS `optimize` rewrites the whole index
+  through the WAL in one transaction; bounded merges after bulk reindexing,
+  as `maintenance.search.tool-output` runs, do the same work in steps.

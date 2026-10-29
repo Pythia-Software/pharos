@@ -266,6 +266,44 @@ migration or transfer. This implementation advances the catalog writer guard to
 version 5 also protects pending-file observations and retention. App rollback
 does not roll a library back.
 
+## Compact the catalog
+
+Deleting data, such as removing tool output from the word index, leaves free
+pages inside the catalog. SQLite reuses them as the library grows, but the file,
+and every backup of it, stays the same size. Library health's **Storage** shows
+the catalog's free space, and once it is at least 1 GB and a tenth of the
+catalog it offers **Compact catalog**.
+
+Compacting (`library.compact`, `catalog_compact.go`) runs in the app, like a
+transfer:
+
+1. Every library's service stops, and the library's use lock is taken
+   exclusively. While the service is stopped, an agent's Pharos MCP call opens
+   the catalog itself under that lock for the call alone, so compacting waits
+   a few seconds for one to end; a Terminal command holds it until it
+   finishes, and compacting refuses until then. MCP calls made while it
+   compacts fail and say the library is in use.
+2. The WAL is folded in, and `VACUUM INTO` writes a compacted copy beside the
+   catalog (`catalog.sqlite3.compacting`). It needs the catalog's size less
+   its free space, plus a tenth and a gigabyte, free on the drive, and checks
+   for that first.
+3. The copy is flushed to the drive and checked: `quick_check`, the schema, every
+   table's row count, and the rowids of tables without an `INTEGER PRIMARY
+   KEY`, which `VACUUM` may renumber but `tool_command_fts` and
+   `text_search_documents` depend on.
+4. Only then does it replace the catalog with one rename. A link to the old file
+   is kept until the new one opens in WAL mode, and put back if it does not.
+
+On a scratch copy of a 122 GB catalog it took 43 minutes: 6 to record what the
+catalog holds, 19 to write the copy, 17 to check it.
+
+A failure or a quit at any step leaves the original catalog as it was. What a
+compaction killed part way leaves beside the catalog (the unfinished copy, or
+the link to the replaced catalog) is removed the next time the library's
+service starts. The startup window shows
+the progress and reopens the library afterwards. The next backup copies the
+whole catalog again.
+
 ## CLI operations
 
 These operations use the same verification and library ownership boundary as the

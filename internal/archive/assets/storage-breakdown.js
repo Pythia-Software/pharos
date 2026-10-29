@@ -29,7 +29,10 @@
 .storage-row-bar{display:flex;gap:2px;height:8px}
 .storage-row-bar span{height:100%;border-radius:2px}
 .storage-note{margin-top:10px}
-@media(max-width:500px){.storage-table .storage-split{display:none}.storage-table .storage-name{width:45%}.storage-table .num{width:25%}.storage-breakdown{padding:14px}}
+.storage-compact{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 16px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line,#ddd);font-size:var(--fs-md,13px)}
+.storage-compact p{flex:1 1 320px;margin:0}
+.storage-compact-actions{display:flex;flex-wrap:wrap;gap:8px}
+@media(max-width:500px){.storage-legend li{white-space:normal}.storage-table .storage-split{display:none}.storage-table .storage-name{width:45%}.storage-table .num{width:25%}.storage-breakdown{padding:14px}}
 `;
   const SOURCES = {claude: 'Claude Code', codex: 'Codex', conductor: 'Conductor', tl1: 'TL1', antigravity: 'Antigravity', 'antigravity-cli': 'Antigravity CLI'};
   const VIEWS = [['machines', 'By Mac'], ['sources', 'By source'], ['repositories', 'By repository']];
@@ -39,12 +42,17 @@
     originals_history: 'color-mix(in srgb,var(--storage-originals) 55%,var(--panel,#fff))',
     originals_other: 'color-mix(in srgb,var(--storage-originals) 30%,var(--panel,#fff))',
     catalog_database: 'var(--storage-catalog)',
+    catalog_free: 'color-mix(in srgb,var(--storage-catalog) 18%,var(--panel,#fff))',
     catalog_log: 'color-mix(in srgb,var(--storage-catalog) 55%,var(--panel,#fff))',
     catalog_sidecar: 'color-mix(in srgb,var(--storage-catalog) 30%,var(--panel,#fff))',
     preserved: 'var(--storage-other)',
     other: 'color-mix(in srgb,var(--storage-other) 45%,var(--panel,#fff))',
   };
-  let view = 'machines';
+  // Compacting is offered once the catalog's free space is worth rewriting
+  // it, which takes about 45 minutes for 100 GB: a gigabyte, and a tenth of
+  // the catalog.
+  const COMPACT_MIN_BYTES = 2 ** 30, COMPACT_MIN_SHARE = 0.1;
+  let view = 'machines', confirming = false;
 
   function percent(part, total) {
     if (!total) return '0%';
@@ -67,7 +75,11 @@
       row.originalsWidth = largest ? row.originals / largest * 100 : 0;
       row.catalogWidth = largest ? row.catalog / largest * 100 : 0;
     }
-    return {total, parts, rows, free: data?.volume_free_bytes, volume: data?.volume_name || 'the library drive'};
+    const catalogFree = Number(data?.catalog_free_bytes) || 0;
+    const catalog = parts.filter(part => part.key === 'catalog_database' || part.key === 'catalog_free').reduce((sum, part) => sum + part.bytes, 0);
+    const compactable = catalogFree >= COMPACT_MIN_BYTES && catalogFree >= catalog * COMPACT_MIN_SHARE;
+    return {total, parts, rows, free: data?.volume_free_bytes, volume: data?.volume_name || 'the library drive',
+      catalogFree, compactable, compactNeeds: Number(data?.compact_needs_bytes) || 0};
   }
 
   function node(tag, className, text) {
@@ -114,6 +126,46 @@
     return element;
   }
 
+  // The offer to compact the catalog, and its confirmation. Compacting closes
+  // the library, so it needs the app (window.pharosManagedLibrary) and goes to
+  // the startup window, which shows its progress and reopens the library.
+  function compact(root, data, shown, bytes) {
+    const panel = node('div', 'storage-compact'), actions = node('div', 'storage-compact-actions');
+    const library = window.pharosManagedLibrary;
+    if (!confirming) {
+      panel.append(node('p', '', `${bytes(shown.catalogFree)} of the catalog is free space left by deleted data. Pharos reuses it as the library grows; compacting gives it back to ${shown.volume} now.`));
+      const start = node('button', '', 'Compact catalog…');
+      start.type = 'button';
+      start.onclick = () => { confirming = true; render(root, data); root.querySelector('.storage-compact button.primary')?.focus(); };
+      actions.append(start);
+    } else {
+      panel.append(node('p', '', `Pharos closes the library while it compacts and reopens it when it’s done. A 100 GB catalog takes about 45 minutes, and it needs ${bytes(shown.compactNeeds)} free on ${shown.volume}. Meanwhile agents’ Pharos MCP calls fail, and a Terminal command using the library must finish first. Your next backup copies the whole catalog again.`));
+      const go = node('button', 'primary', 'Compact now'), cancel = node('button', '', 'Cancel'), status = node('p', 'meta');
+      go.type = cancel.type = 'button';
+      status.setAttribute('role', 'status');
+      cancel.onclick = () => { confirming = false; render(root, data); root.querySelector('.storage-compact button')?.focus(); };
+      go.onclick = async () => {
+        go.disabled = cancel.disabled = true;
+        status.textContent = 'Starting…';
+        const start = async () => {
+          const response = await fetch('/api/app/compact', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: library.id})});
+          if (!response.ok) throw Error((await response.json().catch(() => ({}))).error || 'Could not start compacting. Try again.');
+        };
+        try {
+          await changePharosLibrary(start, {flush: () => window.pharosSession?.flush(), navigate: path => location.assign(path), destination: '/app?after=compact'});
+        } catch (error) {
+          status.textContent = error.message;
+          status.classList.add('error');
+          go.disabled = cancel.disabled = false;
+        }
+      };
+      actions.append(go, cancel);
+      panel.append(status);
+    }
+    panel.insertBefore(actions, panel.children[1] || null);
+    return library && typeof changePharosLibrary === 'function' ? panel : null;
+  }
+
   function render(root, data) {
     const bytes = window.formatBytes, shown = model(data, view);
     root.replaceChildren();
@@ -136,6 +188,8 @@
       legend.append(item);
     }
     root.append(bar, legend);
+    const offer = shown.compactable ? compact(root, data, shown, bytes) : null;
+    if (offer) root.append(offer);
     const views = node('div', 'storage-views');
     views.setAttribute('role', 'group');
     views.setAttribute('aria-label', 'Break storage down');

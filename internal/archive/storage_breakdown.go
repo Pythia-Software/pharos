@@ -34,6 +34,9 @@ type storageShares struct {
 	Originals, Catalog []storageShare
 	Hosts              map[string]string // host ID to label
 	Repositories       map[string]string // repository ID to display name
+	// CatalogFree is the catalog's free pages: space deleted data left in
+	// the file, which only compacting gives back to the drive.
+	CatalogFree int64
 }
 
 func (c *Catalog) storageShares(ctx context.Context) (storageShares, error) {
@@ -62,6 +65,11 @@ func (c *Catalog) storageShares(ctx context.Context) (storageShares, error) {
 	if err := read(storageCatalogSharesSQL, &shares.Catalog); err != nil {
 		return shares, err
 	}
+	var pages, pageSize int64
+	if err := c.reader().QueryRowContext(ctx, "SELECT freelist_count,page_size FROM pragma_freelist_count,pragma_page_size").Scan(&pages, &pageSize); err != nil {
+		return shares, err
+	}
+	shares.CatalogFree = pages * pageSize
 	for statement, into := range map[string]map[string]string{
 		"SELECT id,label FROM hosts":               shares.Hosts,
 		"SELECT id,display_name FROM repositories": shares.Repositories,
@@ -136,11 +144,15 @@ func storageBreakdown(sizes librarySizes, shares storageShares, current string) 
 		captureOther += capture.Other
 	}
 	catalogTotal := sizes.CatalogBytes + sizes.CatalogSidecarBytes
+	// Free pages are read from the catalog after its file was measured, and
+	// compaction can shrink the file in between.
+	catalogFree := min(shares.CatalogFree, max(sizes.CatalogBytes-sizes.CatalogLogBytes, 0))
 	parts := []storagePart{
 		{"originals_latest", "Originals: latest copies", captureLatest},
 		{"originals_history", "Originals: earlier versions", captureHistory},
 		{"originals_other", "Originals: manifests and indexes", captureOther},
-		{"catalog_database", "Pharos catalog", sizes.CatalogBytes - sizes.CatalogLogBytes},
+		{"catalog_database", "Pharos catalog", sizes.CatalogBytes - sizes.CatalogLogBytes - catalogFree},
+		{"catalog_free", "Free space in the catalog", catalogFree},
 		{"catalog_log", "Catalog write-ahead log", sizes.CatalogLogBytes},
 		{"catalog_sidecar", "Search and analysis caches", sizes.CatalogSidecarBytes},
 		{"preserved", "Preserved packages", sizes.PreservedBytes},
@@ -194,8 +206,11 @@ func storageBreakdown(sizes librarySizes, shares storageShares, current string) 
 		}
 	}
 	return map[string]any{
-		"total_bytes": total,
-		"parts":       parts,
+		"total_bytes":        total,
+		"catalog_free_bytes": catalogFree,
+		// What compacting checks for before it starts (catalog_compact.go).
+		"compact_needs_bytes": compactSpaceNeeded(sizes.CatalogBytes - sizes.CatalogLogBytes - catalogFree),
+		"parts":               parts,
 		"machines": machines.list(label(shares.Hosts, "Unknown Mac", func(id string) string {
 			if id != "" && id == current {
 				return " (this Mac)"
