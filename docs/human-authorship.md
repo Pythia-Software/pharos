@@ -147,3 +147,8 @@ Checkpoint builders also hold a separate authorship file lease. It prevents
 two classifiers from reading/writing partial auxiliary state concurrently,
 while allowing ingest and ordinary readers between SQLite write chunks. The
 OS releases the lease if the builder exits.
+
+Activity advances in a mirrored work retain the suffix watermark when the
+same representative is still selected. A changed representative is detected
+by the graph fingerprint and takes the full fallback. A real ingest test
+covers appending to a linked native/Conductor pair.

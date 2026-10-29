@@ -1382,3 +1382,54 @@ func TestAuthorshipRebuildLease(t *testing.T) {
 		t.Fatalf("lease was not released: %q %v", built, err)
 	}
 }
+
+func TestAuthorshipIncrementalMirrorIngest(t *testing.T) {
+	c, _ := testCatalog(t)
+	native := WorkspaceRecord{SourceID: "native", SourceKind: "claude", Account: "local", Title: "Native", ActivityAt: formatTime(authorAt(0)), Conversations: []ConversationRecord{{NativeID: "native", Provider: "claude", Account: "local", Harness: "claude-code/cli", Coverage: "complete", StartedAt: formatTime(authorAt(0)), Messages: []MessageRecord{{NativeID: "first", Role: "user", Kind: "message", Text: "Please inspect the parser", CreatedAt: formatTime(authorAt(0)), Selected: true}}}}}
+	wrapper := WorkspaceRecord{SourceID: "wrapper", SourceKind: "conductor", Account: "local", Title: "Wrapper", ActivityAt: formatTime(authorAt(0)), Conversations: []ConversationRecord{{NativeID: "conductor:wrapper", Provider: "claude", Account: "local", Harness: "conductor", Coverage: "complete", Aliases: []string{"native"}, StartedAt: formatTime(authorAt(0))}}}
+	ingest := func(record WorkspaceRecord) {
+		t.Helper()
+		tx := seedTx(t, c.DB)
+		if _, _, err := ingestWorkspace(tx, record, false); err != nil {
+			t.Fatal(err)
+		}
+		commitSeed(t, tx)
+	}
+	ingest(native)
+	ingest(wrapper)
+	want, _, _ := c.authorshipGenerations()
+	if err := c.RebuildAuthorship(t.Context(), want); err != nil {
+		t.Fatal(err)
+	}
+	native.ActivityAt = formatTime(authorAt(20))
+	native.Conversations[0].Messages = append(native.Conversations[0].Messages, MessageRecord{NativeID: "next", Role: "user", Kind: "message", Text: "Now inspect the second grammar rule", CreatedAt: formatTime(authorAt(20)), Selected: true})
+	ingest(native)
+	want, _, _ = c.authorshipGenerations()
+	mode, classified := "", 0
+	ctx := withWorkProgress(t.Context(), func(work activityWork) {
+		if strings.HasPrefix(work.Phase, "authorship mode:") {
+			mode = work.Phase
+		}
+		if work.Phase == "classifying authorship" {
+			classified = int(work.Total)
+		}
+	})
+	if err := c.RebuildAuthorship(ctx, want); err != nil {
+		t.Fatal(err)
+	}
+	if mode != "authorship mode: suffix" || classified != 1 {
+		t.Fatalf("native append in mirror: %s classified=%d", mode, classified)
+	}
+	inputs, launches, err := c.authorshipInputs(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := c.classifyInputs(t.Context(), inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := c.planAuthorship(t.Context(), results, launches)
+	if err != nil || len(plan) != 0 {
+		t.Fatalf("mirror ingest differs: %v (%v)", plan, err)
+	}
+}

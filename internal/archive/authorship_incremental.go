@@ -99,9 +99,11 @@ func (c *Catalog) ensureAuthorshipState() error {
 	}
 	// Activity chooses the representative only inside a mirror group. Ordinary
 	// activity appends must not turn every message into a graph-wide rebuild.
+	// The graph fingerprint checks whether the representative actually changed;
+	// retain any message watermark when priority still selects the same copy.
 	_, err := c.DB.Exec(`CREATE TRIGGER IF NOT EXISTS authorship_mirror_activity AFTER UPDATE OF activity_at ON workspaces
  WHEN OLD.activity_at IS NOT NEW.activity_at AND EXISTS(SELECT 1 FROM conversations c JOIN conversation_identity_links l ON c.id=l.left_id OR c.id=l.right_id WHERE c.workspace_id=NEW.id)
- BEGIN UPDATE authorship_dirty SET revision=hex(randomblob(16)),earliest='' WHERE id=1;
+ BEGIN UPDATE authorship_dirty SET revision=hex(randomblob(16)) WHERE id=1;
  INSERT INTO meta(key,value) VALUES('tool_ledger_generation','1') ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT); END`)
 	return err
 }
