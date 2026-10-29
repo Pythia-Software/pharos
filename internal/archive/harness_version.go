@@ -297,6 +297,9 @@ func inheritHarnessAliasesTxContext(ctx context.Context, tx *sql.Tx) error {
    SELECT l.right_id,native.harness_version_first,native.harness_version_last
    FROM conversation_identity_links l JOIN conversations native ON native.id=l.left_id
    JOIN workspaces w ON w.id=native.workspace_id WHERE l.relationship='native-alias' AND w.source_kind IN ('claude','codex') AND native.harness_version_last IS NOT NULL) peer
-  WHERE wrapper.id=peer.wrapper_id AND wrapper.harness='conductor'`)
+  WHERE wrapper.id=peer.wrapper_id AND wrapper.harness='conductor'
+  AND (wrapper.harness_version_first IS NOT COALESCE(wrapper.harness_version_first,peer.harness_version_first)
+   OR wrapper.harness_version_last IS NOT peer.harness_version_last
+   OR wrapper.harness_version_source IS NOT 'alias')`)
 	return err
 }

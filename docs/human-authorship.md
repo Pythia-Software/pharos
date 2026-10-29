@@ -94,3 +94,8 @@ The rebuild stores each span in `message_authorship_spans` (one row per span, wi
 - An Antigravity print-mode run whose log the CLI rotated away before Pharos captured it cannot be told from an interactive run; its prompt usually counts as re-sent.
 - A headless run an app started in a work's folder (Conductor's `codex exec` title and summary runs) is linked to that work's conversation when it had started a command in the 30 seconds before, as if that command had launched it.
 - On a Mac whose Conductor Pharos does not read, Claude SDK sessions count as yours; on one whose Conductor it reads, a session another app ran through the Claude SDK counts as automated.
+
+Identity reconciliation inherits native harness versions only when a value
+changes. Empty aliases are stored as `[]`; legacy `null` aliases are skipped.
+An unchanged manual analysis chain leaves conversation rows and the Search,
+MCP metric and finding-message dirty sets alone.
