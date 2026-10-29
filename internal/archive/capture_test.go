@@ -1,7 +1,9 @@
 package archive
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -11,12 +13,17 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 func captureTestConfig(t *testing.T, sources ...SourceConfig) Config {
@@ -781,10 +788,13 @@ func TestCaptureRootDefaultsAndGuards(t *testing.T) {
 			defer held.Close()
 			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 			defer cancel()
+			// A wait says whose capture it waits for.
+			phases := make(chan string, 4)
+			ctx = withWorkProgress(ctx, func(work activityWork) { phases <- work.Phase })
 			busy := make(chan struct{}, 1)
 			result := make(chan error, 1)
 			go func() {
-				lock, err := waitCaptureLock(ctx, func() (*os.File, error) {
+				lock, err := waitCaptureLock(ctx, "Grady's MacBook", func() (*os.File, error) {
 					lock, err := lockCaptureTarget(ctx, filepath.Join(config.CaptureRoot, currentHost().ID, "reader"))
 					if errors.Is(err, errCaptureBusy) {
 						select {
@@ -812,6 +822,9 @@ func TestCaptureRootDefaultsAndGuards(t *testing.T) {
 			err = <-result
 			if cancelled && !errors.Is(err, context.Canceled) || !cancelled && err != nil {
 				t.Fatal("reader lock wait", err)
+			}
+			if len(phases) != 1 || <-phases != "waiting for the capture on Grady's MacBook to finish" {
+				t.Fatal("the wait was not reported once with the capturing Mac")
 			}
 		})
 	}
@@ -1099,6 +1112,37 @@ func TestCaptureCleansOnlyAbandonedReaderLeases(t *testing.T) {
 	if _, err = os.Stat(lease); !os.IsNotExist(err) {
 		t.Fatalf("abandoned native lease remains: %v", err)
 	}
+
+	// The compression pass sweeps abandoned leases under every host's
+	// captures (decoded copies a crashed reindex of another Mac left), keeps
+	// held ones, and leaves preservation-pin readers to their capture.
+	root := t.TempDir()
+	other := filepath.Join(root, "host-b", "conductor")
+	if err = os.MkdirAll(other, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	held, release, err := openReaderLease(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	abandoned, abandonedLock, err := lockedLease(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSourceFile(t, filepath.Join(abandoned, "history", "decoded.db"), "decoded bytes")
+	abandonedLock.Close()
+	pin := filepath.Join(other, ".reader-pin-x"+captureTempSuffix)
+	writeSourceFile(t, filepath.Join(pin, ".reader.lock"), "")
+	sweepAbandonedLeases(root)
+	if _, err = os.Stat(abandoned); !os.IsNotExist(err) {
+		t.Fatal("abandoned lease of another host survived the sweep", err)
+	}
+	for _, kept := range []string{held, pin} {
+		if _, err = os.Stat(kept); err != nil {
+			t.Fatal("sweep removed a lease it must keep", kept, err)
+		}
+	}
 }
 
 func TestFreezeRetainedInputsWithoutHardLinks(t *testing.T) {
@@ -1267,6 +1311,902 @@ func TestFreezeRetainedCopyFailureDoesNotPublish(t *testing.T) {
 			})
 			if err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// compressGenerations runs one compression pass over this Mac's captures.
+func compressGenerations(t *testing.T, config Config) []compressedGeneration {
+	t.Helper()
+	var done []compressedGeneration
+	if err := compressCaptures(t.Context(), config, nil, func(generation compressedGeneration) { done = append(done, generation) }); err != nil {
+		t.Fatal(err)
+	}
+	return done
+}
+
+// zstdOnDisk reports whether a file holds a zstd frame rather than its
+// original bytes.
+func zstdOnDisk(t *testing.T, file string) bool {
+	t.Helper()
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.HasPrefix(string(data), string(zstdMagic))
+}
+
+// compressionFixture is a Conductor capture with one superseded generation
+// holding a session deleted at the source ("old", 2 messages) beside the
+// latest snapshot ("latest", 1 message).
+func compressionFixture(t *testing.T) (Config, captureTarget) {
+	t.Helper()
+	useHost(t, "host-a")
+	dir := filepath.Join(t.TempDir(), "conductor")
+	exec := conductorFixture(t, dir)
+	config := captureTestConfig(t, SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true})
+	exec(addConductorSession("old", 2)...)
+	runCapture(t, config)
+	exec("DELETE FROM session_messages", "DELETE FROM sessions")
+	exec(addConductorSession("latest", 1)...)
+	runCapture(t, config)
+	if len(readCaptureManifest(t, config, "conductor").Snapshots[0].Generations) != 1 {
+		t.Fatal("fixture needs one retained generation")
+	}
+	return config, captureTarget{Host: currentHost(), Source: "conductor", Dir: capturedPath(config, "conductor", "")}
+}
+
+func temporariesUnder(t *testing.T, dir string) []string {
+	t.Helper()
+	found := []string{}
+	_ = filepath.WalkDir(dir, func(file string, entry os.DirEntry, err error) error {
+		if err == nil && strings.HasSuffix(entry.Name(), captureTempSuffix) {
+			found = append(found, file)
+		}
+		return nil
+	})
+	return found
+}
+
+func TestCaptureCompressesIndexedUnpinnedGenerations(t *testing.T) {
+	config, target := compressionFixture(t)
+	manifest := readCaptureManifest(t, config, "conductor")
+	snapshot := manifest.Snapshots[0]
+	generation := snapshot.Generations[0]
+	file := capturedPath(config, "conductor", generation.Captured)
+
+	// The index still needs a generation its marker lacks.
+	marker := loadIndexMarker(target.Dir)
+	marker.add(snapshot.Path, snapshot.CapturedAt)
+	if err := marker.save(target.Dir, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if done := compressGenerations(t, config); len(done) != 0 {
+		t.Fatal("compressed a generation the index has not read", done)
+	}
+	marker = loadIndexMarker(target.Dir)
+	marker.add(snapshot.Path, generation.CapturedAt)
+	if err := marker.save(target.Dir, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	// A pin holds exact bytes.
+	lock, err := lockCaptureTarget(t.Context(), target.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := sourceCaptureForTarget(t.Context(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.pinVersion("job", "test", generation); err != nil {
+		t.Fatal(err)
+	}
+	releaseLockFile(lock)
+	if done := compressGenerations(t, config); len(done) != 0 {
+		t.Fatal("compressed a pinned generation", done)
+	}
+	if err = releasePreservationOwner(target.Dir, "job"); err != nil {
+		t.Fatal(err)
+	}
+	// A reader leased before compression keeps the original bytes.
+	input, err := leaseCaptureForIndex(t.Context(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	leased := filepath.Join(captureViewOf(input.Adapter).dir, filepath.FromSlash(generation.Captured))
+	before := measureCaptures(t.Context(), config.CaptureRoot)
+	plainManifest := readText(t, filepath.Join(target.Dir, captureManifestName))
+
+	done := compressGenerations(t, config)
+	if len(done) != 1 || done[0].Path != generation.Captured || done[0].Stored >= generation.Size {
+		t.Fatalf("compression pass: %+v", done)
+	}
+	after := readCaptureManifest(t, config, "conductor")
+	encoded := after.Snapshots[0].Generations[0]
+	info, err := os.Stat(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Version != captureGenerationsVersion || encoded.Encoding != captureEncodingZstd || encoded.StoredSize != info.Size() || encoded.Size != generation.Size || encoded.Captured != generation.Captured || !zstdOnDisk(t, file) {
+		t.Fatalf("encoded generation: version %d, %+v (%d bytes on disk)", after.Version, encoded, info.Size())
+	}
+	if sum, size, err := fileSHA256(leased); err != nil || size != generation.Size || sum != encoded.SHA256 || zstdOnDisk(t, leased) {
+		t.Fatal("a reader's lease stopped reading the original bytes", err)
+	}
+	// A lock-free reader that read the manifest before the compression still
+	// reads the original bytes from the file under its stale, plain entry.
+	if f, err := os.Open(file); err != nil {
+		t.Fatal(err)
+	} else {
+		stale := storedAsUnlocked(f, generation)
+		sum, size, err := capturedSHA256File(t.Context(), f, stale.Encoding)
+		f.Close()
+		if stale.Encoding != captureEncodingZstd || err != nil || size != generation.Size || sum != encoded.SHA256 {
+			t.Fatal("a stale plain entry read the compressed file as plain", stale, err)
+		}
+	}
+	// The same pair in a whole tree: a live tree validates (a compression may
+	// land while it is read); a staged copy (recovery, transfer) is torn, and
+	// is refused rather than published to readers that trust the entry.
+	encodedManifest := readText(t, filepath.Join(target.Dir, captureManifestName))
+	if err := os.WriteFile(filepath.Join(target.Dir, captureManifestName), []byte(plainManifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
+		t.Fatal("live validation refused a compression that landed after its manifest read", err)
+	}
+	if err := validateStagedCaptureEvidence(t.Context(), config.CaptureRoot); err == nil || !strings.Contains(err.Error(), "stored compressed but its manifest records it uncompressed") {
+		t.Fatal("staged validation accepted a torn copy", err)
+	}
+	if err := os.WriteFile(filepath.Join(target.Dir, captureManifestName), []byte(encodedManifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateStagedCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
+		t.Fatal(err)
+	}
+	// The Storage section's history is what is on disk: the encoded size.
+	history := func(sizes []captureSize) int64 {
+		for _, size := range sizes {
+			if size.Source == "conductor" {
+				return size.History
+			}
+		}
+		return -1
+	}
+	if history(before) != generation.Size || history(measureCaptures(t.Context(), config.CaptureRoot)) != encoded.StoredSize {
+		t.Fatalf("storage did not shrink: %+v", measureCaptures(t.Context(), config.CaptureRoot))
+	}
+	if left := temporariesUnder(t, target.Dir); len(left) != 1 { // only the reader's lease
+		t.Fatal("compression left temporaries", left)
+	}
+	if done := compressGenerations(t, config); len(done) != 0 {
+		t.Fatal("compressed a generation twice", done)
+	}
+	// A build that cannot decode refuses the capture instead of misreading it.
+	override(t, &captureManifestUnderstood, capturePlainManifestVersion)
+	if _, err := loadCaptureManifest(target.Dir); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("has version %d; this build understands up to %d", captureGenerationsVersion, capturePlainManifestVersion)) {
+		t.Fatal("an older build accepted an encoded capture", err)
+	}
+	captureManifestUnderstood = captureManifestVersion
+	// Retention prunes the encoded generation by name; with no encoded entry
+	// left, the manifest is readable by older builds again.
+	db := openWritableSQLite(t, filepath.Join(config.Sources[0].Path, "conductor.db"))
+	execSQL(t, db, "DELETE FROM sessions")
+	if run := runCapture(t, config); !run.OK {
+		t.Fatal(run)
+	}
+	rotated := readCaptureManifest(t, config, "conductor")
+	if rotated.Version != capturePlainManifestVersion || len(rotated.Snapshots[0].Generations) != 1 || rotated.Snapshots[0].Generations[0].Encoding != "" {
+		t.Fatalf("after rotation: version %d, %+v", rotated.Version, rotated.Snapshots[0].Generations)
+	}
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Fatal("indexed encoded generation was not pruned", err)
+	}
+}
+
+// A kill at each step of the compression order leaves a capture that
+// validates and indexes, and the next pass finishes the job.
+func TestCaptureCompressionSurvivesAKillAtEachStep(t *testing.T) {
+	for _, stage := range []string{"compress-encode", "compress-verify", "compress-manifest", "compress-rename"} {
+		t.Run(stage, func(t *testing.T) {
+			config, target := compressionFixture(t)
+			catalog, _ := testCatalog(t)
+			generation := readCaptureManifest(t, config, "conductor").Snapshots[0].Generations[0]
+			override(t, &captureFault, func(at, rel string) error {
+				if at == stage {
+					panic("killed")
+				}
+				return nil
+			})
+			func() {
+				defer func() {
+					if recover() == nil {
+						t.Fatal("the injected kill did not happen")
+					}
+				}()
+				compressGenerations(t, config)
+			}()
+			captureFault = nil
+			// Whenever the name may hold zstd (once the manifest committed),
+			// an older build refuses the capture, also after a capture runs
+			// before the next pass.
+			gate := func() {
+				t.Helper()
+				committed := readCaptureManifest(t, config, "conductor").Snapshots[0].Generations[0].Encoding != ""
+				if zstdOnDisk(t, capturedPath(config, "conductor", generation.Captured)) && !committed {
+					t.Fatal("the name holds zstd under a plain entry")
+				}
+				captureManifestUnderstood = capturePlainManifestVersion
+				_, err := loadCaptureManifest(target.Dir)
+				captureManifestUnderstood = captureManifestVersion
+				if committed != (err != nil) {
+					t.Fatalf("older build after a kill at %s: committed %v, load error %v", stage, committed, err)
+				}
+			}
+			gate()
+			if stage == "compress-rename" {
+				if run := runCapture(t, config); !run.OK {
+					t.Fatal(run)
+				}
+				gate()
+			}
+			if err := validateCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
+				t.Fatal("killed compression left an invalid capture", err)
+			}
+			result := catalog.IndexCapture(t.Context(), target, nil)
+			if result.Error != nil || len(result.UnavailableInputs) != 0 || conversationMessages(t, catalog, "conductor:old") != 2 || conversationMessages(t, catalog, "conductor:latest") != 1 {
+				t.Fatalf("index after a killed compression: %+v", result)
+			}
+			if stage == "compress-encode" || stage == "compress-verify" {
+				// The next capture sweeps the half-done encoding, never adopting it.
+				if left := temporariesUnder(t, target.Dir); len(left) != 1 {
+					t.Fatal("expected the killed encoding's temporary", left)
+				}
+				if run := runCapture(t, config); !run.OK {
+					t.Fatal(run)
+				}
+				if left := temporariesUnder(t, target.Dir); len(left) != 0 || jsonText(readCaptureManifest(t, config, "conductor").Snapshots[0].Generations[0]) != jsonText(generation) {
+					t.Fatal("capture adopted or kept a killed encoding", left)
+				}
+			}
+			compressGenerations(t, config)
+			encoded := readCaptureManifest(t, config, "conductor").Snapshots[0].Generations[0]
+			if encoded.Encoding != captureEncodingZstd || encoded.Size != generation.Size || encoded.SHA256 == "" || !zstdOnDisk(t, capturedPath(config, "conductor", generation.Captured)) {
+				t.Fatalf("next pass did not finish: %+v", encoded)
+			}
+			if left := temporariesUnder(t, target.Dir); len(left) != 0 {
+				t.Fatal("temporaries left", left)
+			}
+			if err := validateCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	// A cold latest file whose compression was killed between its manifest
+	// and its rename, then rewritten at the source and captured before any
+	// pass corrected the entry: the capture still sees its copy as intact, so
+	// the previous version is preserved rather than lost.
+	t.Run("cold file rewritten after a kill before the rename", func(t *testing.T) {
+		config, catalog, _, claude := coldFilesFixture(t)
+		before := manifestFile(t, readCaptureManifest(t, config, "claude"), "files/p/cold-a.jsonl")
+		override(t, &captureFault, func(at, rel string) error {
+			if at == "compress-rename" && rel == "files/p/cold-a.jsonl" {
+				panic("killed")
+			}
+			return nil
+		})
+		func() {
+			defer func() { _ = recover() }()
+			compressColdFiles(t, config, catalog)
+		}()
+		captureFault = nil
+		if entry := manifestFile(t, readCaptureManifest(t, config, "claude"), "files/p/cold-a.jsonl"); entry.Encoding != captureEncodingZstd || zstdOnDisk(t, capturedPath(config, "claude", entry.Captured)) {
+			t.Fatal("fixture: expected an entry marked encoded over the original bytes", entry)
+		}
+		writeSourceFile(t, filepath.Join(claude, "p", "cold-a.jsonl"), claudeLine("cold-a", "cold-a-rewritten", "rewritten", "/proj", 59))
+		if run := runCapture(t, config); !run.OK {
+			t.Fatal(run)
+		}
+		after := manifestFile(t, readCaptureManifest(t, config, "claude"), "files/p/cold-a.jsonl")
+		if after.Encoding != "" || len(after.Previous) != 1 || after.Previous[0].Size != before.Size {
+			t.Fatalf("rewrite after a killed compression: %+v", after)
+		}
+		previous := capturedPath(config, "claude", after.Previous[0].Captured)
+		if sum, size, err := fileSHA256(previous); err != nil || size != before.Size || sum != before.SHA256 {
+			t.Fatal("the previous version was not preserved", err)
+		}
+		if err := validateCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// A pass remembers what it decided not to compress, so it does not read the
+// same large generation again every pass; one generation's problem does not
+// keep the others uncompressed; and a capture that starts mid-encode leaves
+// the encoding alone.
+func TestCaptureCompressionRemembersWhatItLeft(t *testing.T) {
+	useHost(t, "host-a")
+	dir := filepath.Join(t.TempDir(), "conductor")
+	exec := conductorFixture(t, dir)
+	config := captureTestConfig(t, SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true})
+	config.CaptureGenerations = 3
+	for _, id := range []string{"a", "b", "c", "d"} {
+		exec(addConductorSession(id, 1)...)
+		runCapture(t, config)
+	}
+	target := captureTarget{Host: currentHost(), Source: "conductor", Dir: capturedPath(config, "conductor", "")}
+	manifest, err := loadCaptureManifest(target.Dir)
+	if err != nil || len(manifest.Snapshots[0].Generations) != 3 {
+		t.Fatal("fixture needs three generations", err)
+	}
+	generations := manifest.Snapshots[0].Generations
+	// The bytes of one disagree with its recorded digest: evidence trouble.
+	manifest.Snapshots[0].Generations[0].SHA256 = strings.Repeat("0", 64)
+	if err = writeCaptureManifest(target.Dir, manifest); err != nil {
+		t.Fatal(err)
+	}
+	// Another does not shrink (stand-in bytes of the recorded size).
+	noise := make([]byte, generations[1].Size)
+	if _, err = rand.Read(noise); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(capturedPath(config, "conductor", generations[1].Captured), noise, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	encodes := 0
+	override(t, &captureFault, func(stage, rel string) error {
+		if stage == "compress-encode" {
+			encodes++
+			// A capture starting now does not sweep the encoding in progress.
+			if run := runCapture(t, config); !run.OK {
+				t.Fatal(run)
+			}
+		}
+		return nil
+	})
+	var done []compressedGeneration
+	err = compressCaptures(t.Context(), config, nil, func(g compressedGeneration) { done = append(done, g) })
+	if err == nil || !strings.Contains(err.Error(), "does not match its manifest digest") || len(done) != 1 || done[0].Path != generations[2].Captured || encodes != 3 {
+		t.Fatalf("first pass: %v, compressed %+v, %d encodes", err, done, encodes)
+	}
+	outcomes := loadCompressionOutcomes(target.Dir)
+	if outcomes.Entries[generations[0].Captured].Outcome != "mismatch" || outcomes.Entries[generations[1].Captured].Outcome != "incompressible" {
+		t.Fatalf("outcomes: %+v", outcomes.Entries)
+	}
+	done = nil
+	if err = compressCaptures(t.Context(), config, nil, func(g compressedGeneration) { done = append(done, g) }); err != nil || len(done) != 0 || encodes != 3 {
+		t.Fatalf("second pass read settled generations again: %v, %+v, %d encodes", err, done, encodes)
+	}
+}
+
+// A SQLite-record generation waits for its export receipt without being read
+// again each pass, while a receipt that does not verify (perhaps a passing
+// failure) is retried a bounded number of times.
+func TestCaptureCompressionWaitsForVerifiedRecordExports(t *testing.T) {
+	setup := func(t *testing.T) (Config, capturedVersion, string) {
+		t.Helper()
+		useHost(t, "host-a")
+		dir := filepath.Join(t.TempDir(), "conductor")
+		exec := conductorFixture(t, dir)
+		config := captureTestConfig(t, SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": true}})
+		exec(addConductorSession("a", 1)...)
+		runCapture(t, config)
+		exec(addConductorSession("b", 1)...)
+		runCapture(t, config)
+		generation := readCaptureManifest(t, config, "conductor").Snapshots[0].Generations[0]
+		receipt := capturedPath(config, "conductor", filepath.Join(recordDir, "receipts", hashBytes([]byte(generation.Captured))+".json"))
+		if _, err := os.Stat(receipt); err != nil {
+			t.Fatal("fixture generation has no export receipt", err)
+		}
+		return config, generation, receipt
+	}
+	pass := func(t *testing.T, config Config) (int, error) {
+		t.Helper()
+		compressed := 0
+		err := compressCaptures(t.Context(), config, nil, func(compressedGeneration) { compressed++ })
+		return compressed, err
+	}
+	t.Run("no receipt yet", func(t *testing.T) {
+		config, generation, receipt := setup(t)
+		valid := readText(t, receipt)
+		if err := os.Remove(receipt); err != nil {
+			t.Fatal(err)
+		}
+		if n, err := pass(t, config); n != 0 || err != nil {
+			t.Fatal("generation without a receipt:", n, err)
+		}
+		target := capturedPath(config, "conductor", "")
+		if !loadCompressionOutcomes(target).settled(target, generation) {
+			t.Fatal("a generation awaiting its receipt is read again every pass")
+		}
+		writeSourceFile(t, receipt, valid)
+		if n, err := pass(t, config); n != 1 || err != nil {
+			t.Fatal("generation whose receipt appeared:", n, err)
+		}
+	})
+	t.Run("receipt that does not verify", func(t *testing.T) {
+		config, generation, receipt := setup(t)
+		valid := readText(t, receipt)
+		writeSourceFile(t, receipt, `{"version":1}`)
+		target := capturedPath(config, "conductor", "")
+		defer func() {
+			if t.Failed() {
+				return
+			}
+			// A new receipt that verifies is a new chance.
+			writeSourceFile(t, receipt, valid)
+			if n, err := pass(t, config); n != 1 || err != nil {
+				t.Fatal("generation whose receipt was replaced by one that verifies:", n, err)
+			}
+		}()
+		for attempt := 1; attempt <= captureCompressAttempts; attempt++ {
+			if n, err := pass(t, config); n != 0 || err == nil || !strings.Contains(err.Error(), "does not verify") {
+				t.Fatal("attempt", attempt, n, err)
+			}
+			if got := loadCompressionOutcomes(target).Entries[generation.Captured]; got.Outcome != "failed" || got.Failures != attempt {
+				t.Fatalf("attempt %d recorded %+v", attempt, got)
+			}
+		}
+		if n, err := pass(t, config); n != 0 || err != nil {
+			t.Fatal("unverifiable receipt retried past its attempts:", n, err)
+		}
+		// A different receipt within the same mtime second (HFS+) is still a
+		// new receipt: identified by content, not mtime.
+		info, err := os.Stat(receipt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(receipt, []byte(`{"version":1,"input":"other"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err = os.Chtimes(receipt, info.ModTime(), info.ModTime()); err != nil {
+			t.Fatal(err)
+		}
+		if n, err := pass(t, config); n != 0 || err == nil {
+			t.Fatal("a replaced receipt with the same mtime was not tried again:", n, err)
+		}
+	})
+}
+
+// coldFilesFixture is a Claude capture, seen unchanged by a second capture
+// and indexed, whose transcripts are cold except recent.jsonl.
+func coldFilesFixture(t *testing.T) (Config, *Catalog, captureTarget, string) {
+	t.Helper()
+	useHost(t, "host-a")
+	override(t, &compressMinBytes, 1)
+	catalog, _ := testCatalog(t)
+	claude := filepath.Join(t.TempDir(), "claude")
+	for index, name := range []string{"cold-a", "cold-b"} {
+		lines := ""
+		for line := range 40 {
+			lines += claudeLine(name, fmt.Sprintf("%s-%d", name, line), strings.Repeat("compressible text ", 20), "/proj", index*40+line%60)
+		}
+		writeSourceFile(t, filepath.Join(claude, "p", name+".jsonl"), lines)
+	}
+	writeSourceFile(t, filepath.Join(claude, "p", "recent.jsonl"), claudeLine("recent", "recent-1", strings.Repeat("recent text ", 20), "/proj", 1))
+	recent := time.Now()
+	if err := os.Chtimes(filepath.Join(claude, "p", "recent.jsonl"), recent, recent); err != nil {
+		t.Fatal(err)
+	}
+	writeSourceFile(t, filepath.Join(claude, "p", "sessions-index.json"), `{"entries":[]}`)
+	config := captureTestConfig(t, SourceConfig{Name: "claude", Kind: "claude", Path: claude, Account: "local", Enabled: true})
+	runCapture(t, config)
+	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+	// The second capture finds the transcripts unchanged.
+	runCapture(t, config)
+	return config, catalog, captureTarget{Host: currentHost(), Source: "claude", Dir: capturedPath(config, "claude", "")}, claude
+}
+
+func compressColdFiles(t *testing.T, config Config, catalog *Catalog) []string {
+	t.Helper()
+	compressed := []string{}
+	if err := compressCaptures(t.Context(), config, catalog, func(g compressedGeneration) { compressed = append(compressed, g.Path) }); err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(compressed)
+	return compressed
+}
+
+func TestCaptureCompressesColdFiles(t *testing.T) {
+	config, catalog, target, claude := coldFilesFixture(t)
+	plan, err := planCapture(config.Sources[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint := func() string {
+		t.Helper()
+		c, err := sourceCaptureForTarget(t.Context(), target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		value, err := captureDeliveryFingerprint(t.Context(), config.Sources[0], plan, c)
+		if err != nil || value == "" {
+			t.Fatal("delivery fingerprint", value, err)
+		}
+		return value
+	}
+	delivered := fingerprint()
+	// The source fingerprint read through the capture matches the live
+	// source's, before and after compression.
+	sourceFingerprint := func() string {
+		t.Helper()
+		adapter, _, _, err := openCaptureAdapter(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		value, err := adapter.Fingerprint()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	live, err := (&jsonlAdapter{baseAdapter: baseAdapter{config: config.Sources[0]}, provider: "claude"}).Fingerprint()
+	if err != nil || sourceFingerprint() != live {
+		t.Fatal("capture fingerprint differs from the live source's before compression", err)
+	}
+
+	// Off, or without the index's record, nothing latest is compressed.
+	off := config
+	off.CaptureCompressAfterDays = 0
+	if done := compressColdFiles(t, off, catalog); len(done) != 0 {
+		t.Fatal("compressed latest files with capture_compress_after_days = 0", done)
+	}
+	if done := compressColdFiles(t, config, nil); len(done) != 0 {
+		t.Fatal("compressed latest files the index has not recorded", done)
+	}
+	// After an extractor change the next index parses every part again, so
+	// nothing is cold until it has.
+	if err := catalog.advanceSyncGeneration(t.Context(), "host-a", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	if done := compressColdFiles(t, config, catalog); len(done) != 0 {
+		t.Fatal("compressed latest files recorded by an earlier extractor", done)
+	}
+	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+	// Another Mac's index of this capture records the same parts with
+	// "@offhost": the same bytes, so they count as indexed too.
+	if _, err := catalog.DB.Exec(`UPDATE source_item_states SET extractor=replace(extractor,'@generation:','@offhost@generation:') WHERE host_id='host-a' AND source_name='claude'`); err != nil {
+		t.Fatal(err)
+	}
+	for version, want := range map[string][2]string{
+		"claude:v17":                      {"claude:v17", "claude:v17@offhost"},
+		"claude:v17@offhost@generation:1": {"claude:v17@generation:1", "claude:v17@offhost@generation:1"},
+		"claude:v13-names@generation:2":   {"claude:v13-names@generation:2", "claude:v13-names@offhost@generation:2"},
+	} {
+		if own, offHost := extractorVariants(version); own != want[0] || offHost != want[1] {
+			t.Errorf("extractorVariants(%q) = %q, %q", version, own, offHost)
+		}
+	}
+	done := compressColdFiles(t, config, catalog)
+	if want := []string{"files/p/cold-a.jsonl", "files/p/cold-b.jsonl"}; jsonText(done) != jsonText(want) {
+		t.Fatalf("compressed %v, want %v", done, want)
+	}
+	manifest := readCaptureManifest(t, config, "claude")
+	for _, file := range manifest.Files {
+		encoded := file.Encoding == captureEncodingZstd
+		if encoded != slices.Contains(done, file.Captured) || encoded && (!zstdOnDisk(t, capturedPath(config, "claude", file.Captured)) || file.StoredSize >= file.Size) {
+			t.Fatalf("%s stored as %q (%d of %d bytes)", file.Captured, file.Encoding, file.StoredSize, file.Size)
+		}
+	}
+	if manifest.Version != captureFilesVersion {
+		t.Fatal("manifest with encoded files is not the version older builds refuse", manifest.Version)
+	}
+	// A build that reads only encoded generations (phase 1) refuses it.
+	override(t, &captureManifestUnderstood, captureGenerationsVersion)
+	_, err = loadCaptureManifest(target.Dir)
+	captureManifestUnderstood = captureManifestVersion
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("has version %d; this build understands up to %d", captureFilesVersion, captureGenerationsVersion)) {
+		t.Fatal("a generations-only build accepted encoded latest files", err)
+	}
+	// Delivery fingerprints come from the manifest's original-byte fields.
+	if fingerprint() != delivered {
+		t.Fatal("compression changed the delivery fingerprint")
+	}
+	if sourceFingerprint() != live {
+		t.Fatal("compression changed the capture's source fingerprint")
+	}
+	if err := validateCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
+		t.Fatal(err)
+	}
+	// An unchanged source leaves the encoded copies alone: they are intact by
+	// their stored size.
+	if result := captureResult(t, runCapture(t, config), "claude"); result.FilesCopied != 0 || result.FilesUnchanged != 4 {
+		t.Fatalf("capture over unchanged cold files: %+v", result)
+	}
+	// A cold file that changes again is recopied in full and uncompressed;
+	// a rewritten one keeps its encoded copy in history.
+	appendSourceFile(t, filepath.Join(claude, "p", "cold-a.jsonl"), claudeLine("cold-a", "cold-a-new", "more", "/proj", 59))
+	writeSourceFile(t, filepath.Join(claude, "p", "cold-b.jsonl"), claudeLine("cold-b", "cold-b-new", "rewritten", "/proj", 59))
+	writeSourceFile(t, filepath.Join(claude, "p", "recent.jsonl"), claudeLine("recent", "recent-2", strings.Repeat("rewritten recent ", 20), "/proj", 2))
+	if run := runCapture(t, config); !run.OK {
+		t.Fatal(run)
+	}
+	manifest = readCaptureManifest(t, config, "claude")
+	a, b, recent := manifestFile(t, manifest, "files/p/cold-a.jsonl"), manifestFile(t, manifest, "files/p/cold-b.jsonl"), manifestFile(t, manifest, "files/p/recent.jsonl")
+	if a.Encoding != "" || b.Encoding != "" || len(a.Previous) != 0 || len(b.Previous) != 1 || b.Previous[0].Encoding != captureEncodingZstd || len(recent.Previous) != 1 || recent.Previous[0].Encoding != "" {
+		t.Fatalf("after changes: a %+v, b %+v, recent %+v", a, b, recent)
+	}
+	if err := validateCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
+		t.Fatal(err)
+	}
+	// Superseded versions are cold by definition, whatever their age.
+	if done := compressColdFiles(t, config, nil); jsonText(done) != jsonText([]string{recent.Previous[0].Captured}) {
+		t.Fatal("superseded version compression:", done)
+	}
+	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+	if conversationMessages(t, catalog, "cold-a") != 41 || conversationMessages(t, catalog, "recent") == 0 {
+		t.Fatal("index after cold files changed", conversationMessages(t, catalog, "cold-a"))
+	}
+}
+
+// Only transcripts the index parses when they themselves change are stored
+// encoded; files every plan reads stay plain.
+func TestCaptureCompressesOnlyAllowlistedLatestFiles(t *testing.T) {
+	for _, test := range []struct {
+		kind, rel string
+		want      bool
+	}{
+		{"claude", "files/p/session.jsonl", true},
+		{"claude", "files/p/sessions-index.json", false},
+		{"codex", "files/sessions/2026/09/01/rollout-2026-09-01T00-00-00-x.jsonl", true},
+		{"codex", "files/session_index.jsonl", false},
+		{"codex", "files/history.jsonl", false},
+		{"antigravity", "files/brain/x/.system_generated/logs/transcript_full.jsonl", true},
+		{"antigravity", "files/annotations/x.pbtxt", false},
+		{"antigravity", "files/cli-logs/cli-1.log", false},
+		{"tl1", "files/transcripts/task/1-claude.jsonl", false},
+		{"conductor", "files/conductor.db", false},
+		{"claude", "history/20260901T000000.000000000Z/p/session.jsonl", false},
+	} {
+		if got := compressibleLatest(test.kind, test.rel); got != test.want {
+			t.Errorf("%s %s: %v, want %v", test.kind, test.rel, got, test.want)
+		}
+	}
+	// Retained-input sources keep the original inode in their durable
+	// revisions, so compressing their latest files would save nothing.
+	file := &capturedFile{Path: "/p/a.jsonl", Captured: "files/p/a.jsonl", Size: 1 << 20, MTimeNS: 1, CapturedAt: "2026-09-01T00:00:00Z", MissingSince: "2026-09-02T00:00:00Z"}
+	policy := compressPolicy{afterDays: 14, now: time.Now(), indexed: func(string, string, int64, int64) bool { return true }}
+	manifest := &captureManifest{Source: captureSourceInfo{Name: "claude", Kind: "claude"}, Files: []*capturedFile{file}}
+	if !coldLatest(t.TempDir(), manifest, file, policy) {
+		t.Fatal("a cold, indexed transcript was not eligible")
+	}
+	manifest.RetainedInputCapture = true
+	if coldLatest(t.TempDir(), manifest, file, policy) {
+		t.Fatal("a retained-input source's latest file was eligible")
+	}
+}
+
+// addEncodedClaudeFixture adds a Claude source to config whose capture holds
+// an encoded latest transcript and an encoded earlier version, compressed as
+// a pass would once the index had recorded them. It returns the source.
+func addEncodedClaudeFixture(t *testing.T, config *Config) SourceConfig {
+	t.Helper()
+	override(t, &compressMinBytes, 1)
+	claude := filepath.Join(t.TempDir(), "claude")
+	lines := ""
+	for line := range 40 {
+		lines += claudeLine("kept", fmt.Sprintf("kept-%d", line), strings.Repeat("kept text ", 20), "/proj", line)
+	}
+	writeSourceFile(t, filepath.Join(claude, "p", "kept.jsonl"), lines)
+	writeSourceFile(t, filepath.Join(claude, "p", "rewritten.jsonl"), lines)
+	source := SourceConfig{Name: "claude", Kind: "claude", Path: claude, Account: "local", Enabled: true}
+	config.Sources = append(config.Sources, source)
+	only := *config
+	only.Sources = []SourceConfig{source}
+	runCapture(t, only)
+	writeSourceFile(t, filepath.Join(claude, "p", "rewritten.jsonl"), claudeLine("rewritten", "rewritten-1", "new", "/proj", 1))
+	runCapture(t, only)
+	runCapture(t, only)
+	target := captureTarget{Host: currentHost(), Source: "claude", Dir: capturedPath(only, "claude", "")}
+	policy := compressPolicy{afterDays: 1, now: time.Now(), indexed: func(string, string, int64, int64) bool { return true }}
+	if err := compressSourceFiles(t.Context(), target, policy, nil); err != nil {
+		t.Fatal(err)
+	}
+	manifest := readCaptureManifest(t, only, "claude")
+	kept, rewritten := manifestFile(t, manifest, "files/p/kept.jsonl"), manifestFile(t, manifest, "files/p/rewritten.jsonl")
+	if kept.Encoding != captureEncodingZstd || len(rewritten.Previous) != 1 || rewritten.Previous[0].Encoding != captureEncodingZstd {
+		t.Fatalf("fixture: kept %+v, rewritten %+v", kept, rewritten)
+	}
+	return source
+}
+
+// assertEncodedClaudeFixture checks a copy of that capture under root: the
+// entries are still encoded and decode to their recorded bytes.
+func assertEncodedClaudeFixture(t *testing.T, root, host string) {
+	t.Helper()
+	dir := filepath.Join(root, host, "claude")
+	manifest, err := loadCaptureManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := 0
+	for _, file := range manifest.Files {
+		for _, v := range append([]capturedVersion{file.version()}, file.Previous...) {
+			if v.Encoding == "" {
+				continue
+			}
+			sum, size, err := capturedSHA256(t.Context(), filepath.Join(dir, filepath.FromSlash(v.Captured)), v.Encoding)
+			if err != nil || size != v.Size || sum != v.SHA256 {
+				t.Fatalf("%s did not round-trip: %v", v.Captured, err)
+			}
+			checked++
+		}
+	}
+	if checked < 2 {
+		t.Fatalf("copy holds %d encoded entries, want at least 2", checked)
+	}
+}
+
+// A capture's errors keep only the files they name from counting as seen
+// unchanged; an error naming no file keeps them all.
+func TestCaptureColdFilesNeedACleanLastRun(t *testing.T) {
+	policy := compressPolicy{afterDays: 14, now: time.Now(), indexed: func(string, string, int64, int64) bool { return true }}
+	file := &capturedFile{Path: "/p/a.jsonl", Captured: "files/p/a.jsonl", Size: 1 << 20, MTimeNS: 1, CapturedAt: "2026-09-01T00:00:00Z"}
+	for _, test := range []struct {
+		errors []captureError
+		want   bool
+	}{
+		{nil, true},
+		{[]captureError{{Path: "/p/other.jsonl", Error: "unreadable"}}, true},
+		{[]captureError{{Path: "/p/a.jsonl", Error: "unreadable"}}, false},
+		{[]captureError{{Error: "capture drive: device not configured"}}, false},
+	} {
+		manifest := &captureManifest{Source: captureSourceInfo{Name: "claude", Kind: "claude"}, Files: []*capturedFile{file},
+			LastRun: &captureRunRecord{StartedAt: "2026-09-02T00:00:00Z", FinishedAt: "2026-09-02T00:01:00Z", Errors: test.errors}}
+		if got := coldLatest(t.TempDir(), manifest, file, policy); got != test.want {
+			t.Errorf("last run errors %v: cold %v, want %v", test.errors, got, test.want)
+		}
+	}
+}
+
+// A durable files-only inventory is identified by what it holds: compressing
+// an earlier version of a file neither re-identifies nor restamps it.
+func TestDurableInputsIgnoreCompressionElsewhere(t *testing.T) {
+	useHost(t, "host-a")
+	override(t, &compressMinBytes, 1)
+	claude := filepath.Join(t.TempDir(), "claude")
+	lines := strings.Repeat(claudeLine("s", "u", strings.Repeat("text ", 40), "/proj", 1), 20)
+	writeSourceFile(t, filepath.Join(claude, "p", "s.jsonl"), lines)
+	source := SourceConfig{Name: "claude", Kind: "claude", Path: claude, Account: "local", Enabled: true, Options: map[string]any{"retained_input_capture": true}}
+	config := captureTestConfig(t, source)
+	runCapture(t, config)
+	writeSourceFile(t, filepath.Join(claude, "p", "s.jsonl"), claudeLine("s", "v", "rewritten", "/proj", 2))
+	runCapture(t, config)
+	target := captureTarget{Host: currentHost(), Source: "claude", Dir: capturedPath(config, "claude", "")}
+	freeze := func() {
+		t.Helper()
+		lock, err := lockCaptureTarget(t.Context(), target.Dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer releaseLockFile(lock)
+		input, err := freezeCaptureInput(t.Context(), target, source, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		input.Close()
+	}
+	freeze()
+	if err := compressSourceFiles(t.Context(), target, compressPolicy{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if manifest := readCaptureManifest(t, config, "claude"); manifest.Version != captureFilesVersion || manifest.Files[0].Previous[0].Encoding != captureEncodingZstd {
+		t.Fatal("fixture: the earlier version was not compressed")
+	}
+	freeze()
+	revisions, err := os.ReadDir(filepath.Join(target.Dir, "inputs"))
+	if err != nil || len(revisions) != 1 {
+		t.Fatalf("compressing an earlier version re-identified the inventory: %d revisions, %v", len(revisions), err)
+	}
+	inventory, err := loadCaptureManifest(filepath.Join(target.Dir, "inputs", revisions[0].Name()))
+	if err != nil || inventory.Version != capturePlainManifestVersion {
+		t.Fatal("files-only inventory stamped with another entry's version", inventory.Version, err)
+	}
+}
+
+// loadManifestForTest loads a capture manifest or fails the test.
+func loadManifestForTest(t *testing.T, dir string) *captureManifest {
+	t.Helper()
+	manifest, err := loadCaptureManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return manifest
+}
+
+// Rotation never leaves the bytes it supersedes linked nowhere: a file
+// already at the history name is kept only if it holds those bytes (a pin's
+// copy); anything else is moved aside, kept as evidence that planning reads
+// as an ordinary orphan, and capture keeps working.
+func TestCapturePreserveVerifiesWhatIsAlreadyAtTheName(t *testing.T) {
+	var encoded bytes.Buffer
+	writer, err := zstd.NewWriter(&encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer.Write([]byte(strings.Repeat("not this database ", 50)))
+	writer.Close()
+	for _, test := range []struct {
+		name     string
+		junk     func(size int64) []byte
+		noLinks  bool
+		keepsPin bool
+	}{
+		{name: "wrong-size junk", junk: func(int64) []byte { return []byte("junk") }},
+		{name: "same-size junk", junk: func(size int64) []byte { return make([]byte, size) }},
+		{name: "zstd with the wrong digest", junk: func(int64) []byte { return encoded.Bytes() }},
+		{name: "wrong-size junk without hard links", junk: func(int64) []byte { return []byte("junk") }, noLinks: true},
+		{name: "a pin's copy without hard links", noLinks: true, keepsPin: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			useHost(t, "host-a")
+			_, config := testCatalog(t)
+			config.CaptureRoot = filepath.Join(t.TempDir(), "captures")
+			dir := filepath.Join(t.TempDir(), "conductor")
+			exec := conductorFixture(t, dir)
+			exec(addConductorSession("first", 1)...)
+			config.Sources = []SourceConfig{{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true}}
+			runCapture(t, config)
+			latest := readCaptureManifest(t, config, "conductor").Snapshots[0]
+			original, size, err := fileSHA256(capturedPath(config, "conductor", latest.Captured))
+			if err != nil {
+				t.Fatal(err)
+			}
+			stamp, _ := time.Parse(time.RFC3339Nano, latest.CapturedAt)
+			name := path.Join(captureHistoryDir, stamp.UTC().Format(captureStampLayout), "conductor.db")
+			at := capturedPath(config, "conductor", name)
+			var junk []byte
+			if test.keepsPin {
+				// A copy made where hard links are unavailable: same bytes,
+				// another inode.
+				if junk, err = os.ReadFile(capturedPath(config, "conductor", latest.Captured)); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				junk = test.junk(size)
+			}
+			writeSourceFile(t, at, string(junk))
+			before, _ := os.Stat(at)
+			if test.noLinks {
+				override(t, &historyLinkFile, func(string, string) error { return errors.New("operation not supported") })
+			}
+			exec(addConductorSession("second", 1)...)
+			if run := runCapture(t, config); !run.OK {
+				t.Fatal(run)
+			}
+			generation := readCaptureManifest(t, config, "conductor").Snapshots[0].Generations[0]
+			if sum, n, err := fileSHA256(at); generation.Captured != name || generation.Encoding != "" || err != nil || n != size || sum != original {
+				t.Fatalf("the superseded snapshot did not survive at %s: %+v", name, generation)
+			}
+			conflict := at + ".conflict-1"
+			if test.keepsPin {
+				if after, _ := os.Stat(at); !os.SameFile(before, after) {
+					t.Fatal("rotation replaced a pin's copy")
+				}
+				if _, err := os.Stat(conflict); !os.IsNotExist(err) {
+					t.Fatal("a matching copy was moved aside", err)
+				}
+			} else if kept, err := os.ReadFile(conflict); err != nil || string(kept) != string(junk) {
+				t.Fatal("what was at the name was not kept aside", err)
+			}
+			if err := validateCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
+				t.Fatal(err)
+			}
+			plan, err := planHistory(t.Context(), config, historyScope{Host: "host-a", Source: "conductor"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, u := range plan.Units {
+				if u.Gap != "" && u.Path != "" {
+					t.Fatal("planning found a failing unit", u)
+				}
+			}
+			exec(addConductorSession("third", 1)...)
+			if run := runCapture(t, config); !run.OK {
+				t.Fatal("a later capture failed", run)
 			}
 		})
 	}

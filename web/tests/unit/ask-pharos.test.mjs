@@ -17,7 +17,11 @@ test('a single destination opens for any question, while editing or search suppr
   const navigate = state => model.askShouldNavigate({enabled:true, regular:false, edited:false, prompt:'Open my token usage', cards:[{id:'tokens'}], ...state});
   assert.equal(navigate({}), true);
   for (const prompt of ['Where am I wasting time?', 'Please show me yesterday’s page', 'Take me to my earlier chat', 'Go to Settings', 'Find my work']) assert.equal(navigate({prompt}),true);
-  for (const state of [{cards:[]}, {cards:[{},{}]}, {draft:' '}, {draft:'Actually…'}, {edited:true}, {regular:true}, {enabled:false}]) assert.equal(navigate(state),false);
+  for (const state of [{cards:[]}, {cards:[{},{}]}, {omitted:1}, {draft:' '}, {draft:'Actually…'}, {edited:true}, {regular:true}, {enabled:false}]) assert.equal(navigate(state),false);
+  // A lone card left after Pharos dropped others is a choice, and says so.
+  assert.equal(model.askOmittedNote(0), '');
+  assert.ok(model.askOmittedNote(1));
+  assert.match(model.askOmittedNote(2), /2/);
 });
 test('retrying with another model restores the full conversation and unsent draft in order', () => {
   const turns=[

@@ -1,4 +1,4 @@
-import type { OrderByClause, QueryState } from "@pythia-software/query-table-core";
+import { groupKeyFields, type OrderByClause, type QueryState } from "@pythia-software/query-table-core";
 import type { UsageDataset } from "./usage-workspace-model";
 
 const chronology: Record<UsageDataset, string> = {
@@ -12,7 +12,7 @@ const chronology: Record<UsageDataset, string> = {
 export function orderedUsageQuery(dataset: UsageDataset, query: QueryState): QueryState {
   if (query.orderBy.length) return query;
   if (query.grouping) {
-    const field = query.grouping.keys[0] ?? query.grouping.summaries.find(column => column.op !== "link")?.id;
+    const field = groupKeyFields(query.grouping.keys)[0] ?? query.grouping.summaries.find(column => column.op !== "link")?.id;
     return field ? { ...query, orderBy: [{ field, dir: query.grouping.keys.length ? "asc" : "desc" }] } : query;
   }
   const single = query.where.some(term => "field" in term && !term.negated && term.op === "=" && term.value &&

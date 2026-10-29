@@ -90,8 +90,10 @@ test('library changes save before writing and keep navigation guarded until the 
   }
 });
 
-test('Settings keeps its old document guarded and controls locked after switch, open and create navigate',async()=>{
-  for(const kind of ['connect','open','create']){
+test('Settings keeps its old document guarded and controls locked after switch, open, create, restore and transfer navigate',async()=>{
+  const forms={open:'open',create:'create',recover:'restore',transfer:'transfer'};
+  const destinations={create:'/settings/sources',recover:'/app?after=operation',transfer:'/app?after=operation'};
+  for(const kind of ['connect','open','create','recover','transfer']){
     const created=[],ids=new Map(),calls=[];
     const node=(tag='div')=>{
       const value={tagName:tag.toUpperCase(),children:[],dataset:{},value:'',textContent:'',isConnected:true,
@@ -107,7 +109,7 @@ test('Settings keeps its old document guarded and controls locked after switch, 
     const local={id:'local',name:'Local',available:true},archive={id:'archive',name:'Archive',available:true};
     const model=loadClassicScript('managed-library.js',{
       pharosManagedLibrary:local,
-      document:{body,activeElement:body,getElementById:get,createElement:node},
+      document:{body,activeElement:body,getElementById:get,createElement:node,createElementNS:(_,tag)=>node(tag)},
       location:{assign:path=>arrived(path)},
       fetch:async(path,options)=>{
         if(options?.method==='POST')calls.push(path);
@@ -119,16 +121,61 @@ test('Settings keeps its old document guarded and controls locked after switch, 
     get('library-settings-name').value='Research';
     get('library-settings-parent').value='/Libraries';
     get('library-settings-storage').value='mac';
+    get('library-settings-backup').value='/Backups/Library';
+    get('library-settings-recover-path').value='/Libraries/Restored';
+    get('library-settings-from').value='local';
+    get('library-settings-to').value='archive';
     const activate=kind==='connect'?()=>created.find(value=>value.dataset.libraryID==='archive').onclick():
-      ()=>get('library-settings-'+kind+'-form').onsubmit({preventDefault(){}});
+      ()=>get('library-settings-'+forms[kind]+'-form').onsubmit({preventDefault(){}});
     activate();
-    assert.equal(await navigated,kind==='create'?'/settings/sources':'/settings/libraries');
+    assert.equal(await navigated,destinations[kind]||'/settings/libraries');
     // Simulate the old document staying alive after location.assign returns.
     await new Promise(resolve=>setImmediate(resolve));
     assert.equal(model.pharosLibrarySwitching,true);
     activate();await new Promise(resolve=>setImmediate(resolve));
     assert.deepEqual(calls,['/api/app/'+kind],'the old page must not accept another action during navigation');
   }
+});
+
+test('library cards say that agents search the connected library and which way delivery runs',()=>{
+  const {pharosLibraryRoles}=loadClassicScript('managed-library.js');
+  const state={delivery_source:'local',delivery_target:'archive',libraries:[{id:'local',name:'Local'},{id:'archive',name:'Archive'}]};
+  assert.deepEqual(plain(pharosLibraryRoles({id:'local'},state,true)),['Agents using Pharos MCP search this library','Captures here and delivers to Archive']);
+  assert.deepEqual(plain(pharosLibraryRoles({id:'archive'},state,false)),['Receives history captured in Local']);
+  assert.deepEqual(plain(pharosLibraryRoles({id:'archive'},{...state,delivery_target:''},false)),[]);
+  assert.deepEqual(plain(pharosLibraryRoles({id:'other',recovery_point:'2026-10-01'},state,false)),['Restored from 2026-10-01 · capture starts paused']);
+});
+
+test('library cards say when a closed library was last open and how many conversations it held',()=>{
+  const {pharosLibraryAge,pharosLibraryFacts}=loadClassicScript('managed-library.js');
+  const now=new Date(2026,9,28,15,0).getTime(),at=(...date)=>new Date(...date).toISOString();
+  assert.equal(pharosLibraryAge(at(2026,9,28,14,59,40),now),'just now');
+  assert.equal(pharosLibraryAge(at(2026,9,28,14,15),now),'45 min ago');
+  assert.equal(pharosLibraryAge(at(2026,9,28,9,0),now),'6 hr ago');
+  assert.equal(pharosLibraryAge(at(2026,9,27,9,0),now),'yesterday');
+  assert.equal(pharosLibraryAge(at(2026,9,24,23,0),now),'4 days ago');
+  assert.equal(pharosLibraryAge(at(2026,5,30,12,0),now),'Jun 30');
+  assert.equal(pharosLibraryAge(at(2025,11,3,12,0),now),'Dec 3, 2025');
+  assert.equal(pharosLibraryAge('',now),'');
+  const library={last_opened:at(2026,9,27,9,0),conversations:18342};
+  assert.equal(pharosLibraryFacts(library,false,now),'Last opened yesterday · 18,342 conversations');
+  assert.equal(pharosLibraryFacts({...library,conversations:1},true,now),'1 conversation');
+  assert.equal(pharosLibraryFacts({},false,now),'Not opened recently');
+});
+
+test('library settings reports the last operation until it is stale or no longer applies',()=>{
+  const {pharosLibraryJob}=loadClassicScript('managed-library.js');
+  const now=Date.parse('2026-10-28T12:00:00Z'),at=minutes=>new Date(now-minutes*60e3).toISOString();
+  const delivering={delivery_source:'local',delivery_target:'archive'},off={delivery_source:'',delivery_target:''};
+  const job=(state,minutes,phase='Copying')=>({state,phase,updated_at:at(minutes)});
+  assert.deepEqual(plain(pharosLibraryJob(job('running',60),off,now)),{text:'Running: Copying',error:false});
+  assert.deepEqual(plain(pharosLibraryJob(job('complete',2),off,now)),{text:'Done: Copying',error:false});
+  assert.deepEqual(plain(pharosLibraryJob(job('failed',2),off,now)),{text:'Last library operation failed: Copying',error:true});
+  // A pause delivery keeps reporting stays; one from launch, or after delivery is off, does not.
+  assert.deepEqual(plain(pharosLibraryJob(job('paused',6,'Archive is away'),delivering,now)),{text:'Paused: Archive is away',error:true});
+  assert.equal(pharosLibraryJob(job('paused',1,'Could not open the previous library'),off,now),null);
+  for(const state of ['complete','failed','paused'])assert.equal(pharosLibraryJob(job(state,11),delivering,now),null,state+' never cleared');
+  assert.equal(pharosLibraryJob(null,delivering,now),null);
 });
 
 test('library settings resolves local and external destinations and rejects invalid proposals',()=>{

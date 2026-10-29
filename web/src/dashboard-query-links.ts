@@ -1,4 +1,4 @@
-import { NULLARY_OPS, type FieldSchema, type QueryState, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
+import { NULLARY_OPS, branchesOf, groupKeyField, isCalendarGroupKey, isOrGroup, type FieldSchema, type GroupKey, type QueryState, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 import { groupedDashboardQuery } from "./usage-dashboard-model";
 import { usageDatasets, usageSearchQuery, usageWorkspaceURL, type UsageDataset } from "./usage-workspace-model";
 import { optionLabels } from "./option-labels";
@@ -20,6 +20,12 @@ const dateOperators: Record<string, string> = { ">=": "is on or after", "<=": "i
 function fieldLabel(schema: LinkSchema, query: QueryState, name: string): string {
   return query.grouping?.summaries.find(column => column.id === name)?.label
     ?? schema.fields.find(field => field.name === name)?.label ?? name.replaceAll("_", " ");
+}
+
+// A calendar key names its interval: "Started by day".
+function groupKeyLabel(schema: LinkSchema, query: QueryState, key: GroupKey): string {
+  const label = fieldLabel(schema, query, groupKeyField(key));
+  return isCalendarGroupKey(key) ? `${label} by ${key.interval}` : label;
 }
 
 function filterDescriptions(schema: LinkSchema, query: QueryState, where: WhereTerm[]): string[] {
@@ -47,6 +53,7 @@ function filterDescriptions(schema: LinkSchema, query: QueryState, where: WhereT
   return where.map(term => {
     if (!("any" in term)) return describe(term);
     if (!term.any.length) return "No matching records";
+    if (!isOrGroup(term)) return `(${branchesOf(term).map(branch => branch.length > 1 ? `(${branch.map(describe).join(" and ")})` : describe(branch[0])).join(" or ")})`;
     const first = term.any[0];
     if (term.any.every(clause => clause.field === first.field && clause.op === "=" && !clause.negated)) {
       const days = [...new Set(term.any.map(clause => clause.value))].sort();
@@ -72,7 +79,7 @@ export function dashboardQueryDetails(schema: LinkSchema, query: QueryState): Qu
     { label: "Filters", values: filters },
     ...query.grouping && query.where.length ? [{ label: "Group filters", values: filterDescriptions(schema, query, query.where) }] : [],
     ...query.grouping ? [{ label: "Measures", values: query.grouping.summaries.filter(column => column.op !== "row" && column.op !== "link").map(column => fieldLabel(schema, query, column.id)) }] : [],
-    { label: "Group by", values: query.grouping?.keys.map(key => fieldLabel(schema, source, key)) ?? [] },
+    { label: "Group by", values: query.grouping?.keys.map(key => groupKeyLabel(schema, source, key)) ?? [] },
     { label: "Sort", values: sorts.map(sort => `${fieldLabel(schema, query, sort.field)}${sort.extract ? ` matching /${sort.extract.regex}/` : ""} ${sort.dir === "desc" ? "descending" : "ascending"}${sort.nulls === "first" ? " (empty first)" : ""}`) },
   ].filter(detail => detail.values.length);
 }
@@ -101,7 +108,7 @@ export function dashboardQueryLinks(dataset: UsageDataset, query: QueryState, sc
   const records = usageSearchQuery(query);
   const chart = query.aggregations?.length || query.grouping ? groupedDashboardQuery(query) : null;
   const measure = chart?.grouping?.summaries[0]?.label?.replace(" per conversation group", "") ?? "Recorded totals";
-  const keys = chart?.grouping?.keys.map(key => fieldLabel(schema, records, key).toLowerCase()) ?? [];
+  const keys = chart?.grouping?.keys.map(key => groupKeyLabel(schema, records, key).toLowerCase()) ?? [];
   const explorations = dashboardExplorations(dataset, records, params.get("analyze_topic") === "carbon");
   const destinations = [
     ...(chart ? [{ title: `${measure}${keys.length ? ` by ${keys.join(" & ")}` : " totals"}`, query: chart }] : []),

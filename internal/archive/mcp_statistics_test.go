@@ -378,6 +378,13 @@ func TestStatisticsSelectiveTextPrecedesBothLexicalCuts(t *testing.T) {
 	if _, err = tx.Exec("INSERT INTO message_fts_rows VALUES('m1',1)"); err != nil {
 		t.Fatal(err)
 	}
+	// A posting the old writer left for tool output, which text retrieval
+	// does not match.
+	if _, err = tx.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) VALUES('output','c1','output','tool','tool_result','pangolin','h');
+		INSERT INTO messages_fts(rowid,message_id,text) VALUES(100000,'output','pangolin');
+		INSERT INTO message_fts_rows VALUES('output',100000)`); err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < statisticsTextLimits.recent+1; i++ {
 		id := fmt.Sprintf("noise-%05d", i)
 		if _, err = tx.Exec("INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) VALUES(?,'c2',?,'assistant','message','needle','h')", id, id); err != nil {
@@ -399,6 +406,13 @@ func TestStatisticsSelectiveTextPrecedesBothLexicalCuts(t *testing.T) {
 	}
 	if got["population_complete"] != false {
 		t.Fatal("bounded text search claimed exhaustive population")
+	}
+	if got["coverage"] != toolOutputCoverage {
+		t.Fatalf("text retrieval does not say it leaves out tool output: %#v", got)
+	}
+	output := statisticsCall(t, c, "search_conversations", map[string]any{"query": "pangolin", "result_mode": "metadata", "metric_filters": []any{map[string]any{"name": "total_tokens", "op": "gte", "value": 1000000}}})
+	if items := statisticsItems(output); len(items) != 0 {
+		t.Fatalf("text retrieval matched tool output: %#v", output)
 	}
 }
 

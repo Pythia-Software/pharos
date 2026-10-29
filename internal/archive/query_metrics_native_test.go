@@ -135,7 +135,10 @@ func TestNativeMetricsMatchTheAdapter(t *testing.T) {
 		"an expression":      {ID: "x", Expression: "SUM([n])"},
 		"a number key":       {ID: "x", Op: "count", GroupBy: []string{"n"}},
 		"a group limit":      {ID: "x", Op: "count", GroupBy: []string{"kind"}, GroupLimit: 1},
-		"a minimum count":    {ID: "x", Op: "count", GroupBy: []string{"kind"}, MinCount: 2},
+		"a minimum count":    {ID: "x", Op: "count", GroupBy: []string{"kind"}, MinCount: qt.MetricMinCount{Min: 2}},
+		"a distinct minimum": {ID: "x", Op: "count", GroupBy: []string{"kind"}, MinCount: qt.MetricMinCount{Min: 2, Distinct: "n"}},
+		"a summed minimum":   {ID: "x", Op: "count", GroupBy: []string{"kind"}, MinCount: qt.MetricMinCount{Min: 2, Sum: "n"}},
+		"hours of the day":   {ID: "x", Op: "count", DateGrouping: &qt.MetricDateGrouping{Field: "at", Interval: "hourOfDay"}},
 		"a sort":             {ID: "x", Op: "count", GroupBy: []string{"kind"}, Sort: []qt.MetricSort{{Key: "group0", Dir: "asc"}}},
 		"a metric filter":    {ID: "x", Op: "count", Where: []qt.WhereTerm{{Field: "side", Op: "=", Value: "x"}}},
 		"shown rows":         {ID: "x", Op: "count", Scope: "shownRows"},
@@ -347,6 +350,12 @@ func TestNativeMetricsMatchTheAdapterOnPharosDatasets(t *testing.T) {
 	}
 	types := []string{"uncached_input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens", "unclassified_tokens"}
 	filtered := func(q qt.MetricQuery, where ...qt.WhereTerm) qt.MetricQuery { q.Where = where; return q }
+	minimum := func(q qt.MetricQuery, min qt.MetricMinCount) qt.MetricQuery {
+		for i := range q.Metrics {
+			q.Metrics[i].MinCount = min
+		}
+		return q
+	}
 	summary := sums([]string{"total_tokens", "cost_usd", "uncached_input_tokens", "cache_read_input_tokens", "output_tokens"})
 	summary.Metrics = append(summary.Metrics, qt.AggSpec{ID: "agent_sessions", Op: "count_distinct", Field: "agent_session_id"})
 	for _, sample := range []struct {
@@ -371,6 +380,17 @@ func TestNativeMetricsMatchTheAdapterOnPharosDatasets(t *testing.T) {
 		// Hourly rows are selected before, as the adapter's are.
 		{"hourly tokens over a threshold", "usage", filtered(sums([]string{"total_tokens"}, "hour"), qt.WhereTerm{Field: "total_tokens", Op: ">", Value: "1500"}), true},
 		{"hourly cost by provider, one model", "usage", filtered(sums([]string{"cost_usd"}, "hour", "provider"), qt.WhereTerm{Field: "model", Op: "!=", Value: "absent"}), true},
+		// OR of AND branches, over dimensions and over indexed command text.
+		{"tool errors for pairs", "tool_calls", filtered(sums([]string{"error_count"}, "status"), qt.WhereTerm{Any: []qt.WhereClause{
+			{All: []qt.WhereClause{{Field: "provider", Op: "=", Value: "codex"}, {Field: "tool_name", Op: "=", Value: "Bash"}}}, {Field: "tool_name", Op: "=", Value: "Read"}}}), true},
+		{"tool tokens for command pairs", "tool_calls", filtered(sums([]string{"result_tokens"}, "tool_name"), qt.WhereTerm{Any: []qt.WhereClause{
+			{All: []qt.WhereClause{{Field: "command", Op: "contains", Value: "git"}, {Field: "command", Op: "contains", Value: "test"}}}, {Field: "command", Op: "contains", Value: "./..."}}}), true},
+		{"tokens for model pairs", "usage", filtered(sums([]string{"total_tokens"}, "provider"), qt.WhereTerm{Any: []qt.WhereClause{
+			{All: []qt.WhereClause{{Field: "provider", Op: "=", Value: "codex"}, {Field: "model", Op: "!=", Value: "absent"}}}, {Field: "provider", Op: "=", Value: "claude"}}}), true},
+		// Distinct and summed minimums are the adapter's.
+		{"tool tokens by tool, distinct minimum", "tool_calls", minimum(sums([]string{"result_tokens"}, "tool_name"), qt.MetricMinCount{Min: 2, Distinct: "conversation_id"}), false},
+		{"tool tokens by tool, summed minimum", "tool_calls", minimum(sums([]string{"result_tokens"}, "tool_name"), qt.MetricMinCount{Min: 500, Sum: "result_tokens"}), false},
+		{"tokens by model, distinct minimum", "usage", minimum(sums([]string{"total_tokens"}, "model"), qt.MetricMinCount{Min: 1, Distinct: "agent_session_id"}), true},
 		// A formula is staged.
 		{"tokens per day", "usage", metricRequest(qt.AggSpec{ID: "per day", Expression: "SUM([total_tokens]) / COUNT()"}), false},
 	} {

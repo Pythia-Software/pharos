@@ -1,5 +1,10 @@
 # Usage query optimization handoff
 
+**Resolved upstream.** Query Table 0.9.3 fuses metrics across fields, 0.9.4
+reduces grouped V3 sources directly, and 0.9.7 accepts host predicate
+relations and picks the nearest point on line charts. Pharos adopts predicate
+relations in a later change.
+
 Pharos consumes the published Query Table **0.9.2** release. This work changes
 no Query Table package, module, installed dependency, or generated library code.
 The frontend bundle is rebuilt from the host's normal TypeScript source.

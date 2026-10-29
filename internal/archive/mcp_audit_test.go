@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -66,6 +67,8 @@ func TestMCPSearchMessagesPhrasesAndFilters(t *testing.T) {
 	addAuditMessage(t, catalog, "undated", "conversation", "assistant", "tool_call", "AWS account inspection", 4, nil)
 	addAuditMessage(t, catalog, "noise", "other-conversation", "user", "message", "AWS account unrelated", 1, "2026-05-05T12:00:00Z")
 	addAuditMessage(t, catalog, "substring", "conversation", "user", "message", "Review the flaws in this plan.", 5, "2026-05-05T12:00:00Z")
+	// A posting the old writer left for tool output, which no search returns.
+	addAuditMessage(t, catalog, "output", "conversation", "tool", "tool_result", "AWS account listing output", 6, "2026-05-05T13:00:00Z")
 	for _, test := range []struct {
 		name string
 		args map[string]any
@@ -77,6 +80,8 @@ func TestMCPSearchMessagesPhrasesAndFilters(t *testing.T) {
 		{"mixed phrase and term", map[string]any{"query": `"AWS account" created`}, 1},
 		{"user role", map[string]any{"query": "AWS", "roles": []any{"user"}, "repository": "audit"}, 1},
 		{"tool kind", map[string]any{"query": "AWS", "kinds": []string{"tool_call"}}, 1},
+		{"tool call and output kinds", map[string]any{"query": "AWS", "kinds": []any{"tool_call", "tool_result"}}, 1},
+		{"all kinds", map[string]any{"query": "AWS", "kinds": []any{"all"}, "repository": "audit"}, 4},
 		{"whole day", map[string]any{"query": "AWS", "from": "2026-05-05", "to": "2026-05-05", "repository": "audit"}, 2},
 		{"timestamp offset", map[string]any{"query": "AWS", "from": "2026-05-05T17:59:59-06:00", "to": "2026-05-05T23:59:59.999Z"}, 1},
 		{"source", map[string]any{"query": "AWS", "source": "codex"}, 1},
@@ -87,7 +92,7 @@ func TestMCPSearchMessagesPhrasesAndFilters(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			result := auditCall(t, catalog, "search_messages", test.args)
-			if integer(result["total"]) != int64(test.want) {
+			if integer(result["total"]) != int64(test.want) || result["coverage"] != toolOutputCoverage {
 				t.Fatalf("want %d, got %#v", test.want, result)
 			}
 			for _, item := range result["items"].([]map[string]any) {
@@ -99,6 +104,12 @@ func TestMCPSearchMessagesPhrasesAndFilters(t *testing.T) {
 				}
 			}
 		})
+	}
+	// Tool output alone is an explanation, not an empty page.
+	for _, kinds := range []any{[]any{"tool_result"}, []string{"tool_result"}} {
+		if _, err := callMCP(catalog, "search_messages", map[string]any{"query": "AWS", "kinds": kinds}); err == nil || !strings.Contains(err.Error(), "not word-indexed") || !strings.Contains(err.Error(), "search_text") {
+			t.Errorf("tool output alone: %v", err)
+		}
 	}
 	for _, args := range []map[string]any{
 		{}, {"query": "!!!"}, {"query": `"AWS account`},
@@ -451,6 +462,75 @@ func TestMCPArchiveStatusEmptyAndCurrent(t *testing.T) {
 	}
 }
 
+// get_archive_status adds the freshness ledger: every domain with its state
+// and reason, and the operations open in the journal that affect them, so an
+// agent can tell "behind because indexing runs now" from "behind because it
+// is broken". A row of a process that has exited is not running work. A
+// budget too small for the ledger leaves it out rather than failing.
+func TestMCPArchiveStatusListsDomainsAndRunningWork(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	host := currentHost().ID
+	execTx(t, catalog.DB,
+		// One conversation: findings have inputs to be behind on.
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','codex','local','w','Work','2026-10-27')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c','w','codex','local','c')`,
+		"INSERT INTO source_states(host_id,source_name,kind,capability,coverage,last_attempt_at,last_success_at,updated_at) VALUES("+sqlQuote(host)+",'codex','codex','read','complete',"+sqlQuote(now())+","+sqlQuote(now())+","+sqlQuote(now())+")",
+		"INSERT INTO sync_deferred(name,generation,completed_generation,changed_at) VALUES('findings',3,1,"+sqlQuote(now())+")",
+		fmt.Sprintf(`INSERT INTO operation_journal(id,root_id,kind,trigger,host_id,process,pid,instance,state,started_at,updated_at,detail_json)
+			VALUES('op-live','op-live','index.changes.manual','user',%s,'service',%d,'svc','running',%s,%s,'{}')`, sqlQuote(host), os.Getpid(), sqlQuote(now()), sqlQuote(now())),
+		fmt.Sprintf(`INSERT INTO operation_journal(id,root_id,kind,trigger,host_id,process,pid,instance,state,started_at,updated_at,detail_json)
+			VALUES('op-dead','op-dead','analysis.authorship','read',%s,'service',%d,'gone','running',%s,%s,'{}')`, sqlQuote(host), 1<<22-1, sqlQuote(now()), sqlQuote(now())),
+		// A live PID that started after the row: another process reused it.
+		fmt.Sprintf(`INSERT INTO operation_journal(id,root_id,kind,trigger,host_id,process,pid,instance,state,started_at,updated_at,detail_json)
+			VALUES('op-reused','op-reused','analysis.tools','read',%s,'service',%d,'old','running','2001-01-01T00:00:00Z','2001-01-01T00:00:00Z','{}')`, sqlQuote(host), os.Getpid()))
+	result := auditCall(t, catalog, "get_archive_status", map[string]any{"max_output_tokens": 4000})
+	if result["status"] != "current" || integer(result["total"]) != 1 {
+		t.Fatalf("the older fields are unchanged: %#v", result)
+	}
+	domains := map[string]map[string]any{}
+	for _, domain := range result["domains"].([]map[string]any) {
+		domains[firstString(domain["domain"])] = domain
+	}
+	// Indexed a minute ago, scheduled indexing off: unknown, and the open
+	// index is catching it up.
+	if codex := domains["conv:codex"]; codex["state"] != freshUnknown || codex["reason"] != "indexing" || codex["catching_up"] != "op-live" || codex["as_of"] == nil {
+		t.Fatalf("conv:codex: %#v", codex)
+	}
+	if findings := domains["findings"]; findings["state"] != freshBehind || findings["reason"] != "running" || findings["catching_up"] != "op-live" {
+		t.Fatalf("findings are behind and the open manual index catches them up: %#v", findings)
+	}
+	running := result["running"].([]map[string]any)
+	if len(running) != 1 || running[0]["id"] != "op-live" || !slices.Contains(running[0]["domains"].([]string), "findings") {
+		t.Fatalf("running lists the live operation and the domains it affects, not the dead or reused one: %#v", running)
+	}
+	// The ledger is additive: at the default budget, with enough sources to
+	// fill a page, the items, next_offset and truncated are those of the
+	// page without it.
+	statements := []string{}
+	for index := range 40 {
+		statements = append(statements, fmt.Sprintf("INSERT INTO source_states(host_id,source_name,kind,capability,coverage,last_attempt_at,last_success_at,updated_at) VALUES(%s,'source-%02d-with-a-longer-name','codex','read','partial',%s,%s,%s)",
+			sqlQuote(host), index, sqlQuote(now()), sqlQuote(now()), sqlQuote(now())))
+	}
+	execTx(t, catalog.DB, statements...)
+	for _, args := range []map[string]any{{}, {"max_output_tokens": 450}, {"offset": 3}} {
+		with := auditCall(t, catalog, "get_archive_status", args)
+		override(t, &archiveStatusLedger, false)
+		without := auditCall(t, catalog, "get_archive_status", args)
+		archiveStatusLedger = true
+		if len(with["items"].([]map[string]any)) != len(without["items"].([]map[string]any)) || with["next_offset"] != without["next_offset"] || with["truncated"] != without["truncated"] {
+			t.Fatalf("%v: the ledger changed the page: %d items, next %v, truncated %v; without it %d, %v, %v", args, len(with["items"].([]map[string]any)), with["next_offset"], with["truncated"],
+				len(without["items"].([]map[string]any)), without["next_offset"], without["truncated"])
+		}
+		if without["truncated"] != true && len(args) == 0 {
+			t.Fatal("the fixture must fill the default page")
+		}
+		budget := mcpBudget(args, 1800)
+		if len(jsonText(with)) > budget*3 {
+			t.Fatalf("%v: the page with the ledger is over its budget: %d > %d", args, len(jsonText(with)), budget*3)
+		}
+	}
+}
+
 func TestMCPArchiveStatusDoesNotCallPartialIndexSuccessful(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	host := currentHost()
@@ -612,6 +692,19 @@ func TestMCPAuditToolsExposedAndLogged(t *testing.T) {
 	}
 	if !found["search_messages"] || !found["get_archive_status"] {
 		t.Fatalf("audit tools missing from MCP discovery: %#v", found)
+	}
+	// Every search that reads the word index says it leaves out tool output.
+	described := map[string]string{}
+	for _, tool := range tools {
+		described[firstString(tool["name"])] = firstString(tool["description"]) + " " + jsonText(tool["inputSchema"])
+	}
+	for _, name := range []string{"search_messages", "search_text", "search_conversations", "search_conversation_passages", "search_work", "trace_worktree", "query_statistics"} {
+		if !strings.Contains(described[name], "tool_result") || !strings.Contains(described[name], "word-indexed") {
+			t.Errorf("%s does not say tool output is not word-indexed: %s", name, described[name])
+		}
+	}
+	if strings.Contains(described["search_messages"], "including raw metadata and tool output") {
+		t.Error("search_messages still promises tool output")
 	}
 	args := map[string]any{"query": "AWS account", "match_mode": "phrase", "roles": []any{"user"}, "kinds": []any{"message"}, "secret": "not logged"}
 	response := handleMCP(catalog, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": map[string]any{"name": "search_messages", "arguments": args}})

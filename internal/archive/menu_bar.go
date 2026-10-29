@@ -122,7 +122,9 @@ func (s *Server) menuBarStatus(ctx context.Context) (map[string]any, error) {
 	for key, value := range settings {
 		preferences[key] = value
 	}
-	status := map[string]any{"settings": preferences}
+	// With the unified activity flag on, the native menu also reads the
+	// status snapshot (docs/background-work.md §9); off, it is unchanged.
+	status := map[string]any{"settings": preferences, "unified_activity": s.Catalog.unifiedActivity(ctx)}
 	if !settings["enabled"] {
 		return status, nil
 	}
@@ -234,8 +236,8 @@ func (s *Server) menuBarStatus(ctx context.Context) (map[string]any, error) {
 	}
 	_, backups := s.backups.status()
 	if problem == "" && len(backups) > 0 && backups[0].State == "failed" {
-		problem = "Backup failed. Open Library health for details."
-		status["error_path"] = "/settings"
+		problem = "Backup failed. Open Backups for details."
+		status["error_path"] = "/settings/backups"
 	}
 	status["error"] = problem
 	if settings["backup"] {

@@ -99,6 +99,7 @@ func TestStorageBreakdownDividesOriginalsAndCatalog(t *testing.T) {
 		Repositories: map[string]string{
 			"repo-pharos": "pharos", "repo-site": "site",
 		},
+		CatalogFree: 300,
 	}
 	result := storageBreakdown(sizes, shares, "host-b")
 	if total := result["total_bytes"].(int64); total != 1000+10+90+1000+200+7 {
@@ -109,8 +110,18 @@ func TestStorageBreakdownDividesOriginalsAndCatalog(t *testing.T) {
 		parts[part.Key] = part.Bytes
 	}
 	if parts["originals_latest"] != 690 || parts["originals_history"] != 300 || parts["originals_other"] != 110 ||
-		parts["catalog_database"] != 900 || parts["catalog_log"] != 100 || parts["catalog_sidecar"] != 200 || parts["other"] != 7 {
+		parts["catalog_database"] != 600 || parts["catalog_free"] != 300 || parts["catalog_log"] != 100 || parts["catalog_sidecar"] != 200 || parts["other"] != 7 {
 		t.Fatalf("parts %v", parts)
+	}
+	if result["catalog_free_bytes"] != int64(300) || result["compact_needs_bytes"] != compactSpaceNeeded(600) {
+		t.Fatalf("catalog free %v, compacting needs %v", result["catalog_free_bytes"], result["compact_needs_bytes"])
+	}
+	// Free pages read after a compaction shrank the file count no more than
+	// the file holds.
+	shrunk := shares
+	shrunk.CatalogFree = 5000
+	if free := storageBreakdown(sizes, shrunk, "host-b")["catalog_free_bytes"]; free != int64(900) {
+		t.Fatalf("catalog free after shrinking %v", free)
 	}
 	rows := func(key string) map[string]storageRow {
 		found := map[string]storageRow{}
@@ -169,10 +180,15 @@ func TestStorageBreakdownEndpoint(t *testing.T) {
 		// written from the legacy host.
 		`INSERT INTO conversation_sightings(conversation_id,host_id,origin,source_name,messages,first_seen_at,last_seen_at) VALUES
 			('c1','host-a','/a/c1.jsonl','claude',30,'x','x'),('c1','host-b','/b/c1.jsonl','claude',30,'x','x'),('c2','host-b','/b/c2.jsonl','codex',10,'x','x'),
-			('c3','host-a','/a/c3.jsonl','claude',40,'x','x'),('c3','host-b','/b/c3.jsonl','claude',20,'x','x'),('c4','host-a','/a/c4.jsonl','codex',20,'x','x')`)
+			('c3','host-a','/a/c3.jsonl','claude',40,'x','x'),('c3','host-b','/b/c3.jsonl','claude',20,'x','x'),('c4','host-a','/a/c4.jsonl','codex',20,'x','x')`,
+		// Deleted data leaves free pages in the file.
+		`CREATE TABLE filler(b)`, `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<50) INSERT INTO filler SELECT randomblob(4000) FROM n`, `DROP TABLE filler`)
 	shares, err := catalog.storageShares(t.Context())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if shares.CatalogFree < 50*4000 {
+		t.Fatalf("catalog free %d after dropping 200 kB", shares.CatalogFree)
 	}
 	if len(shares.Originals) != 4 || shares.Hosts["host-b"] != "Air" || shares.Repositories["repo"] != "pharos" {
 		t.Fatalf("shares %+v", shares)
@@ -212,7 +228,7 @@ func TestStorageBreakdownEndpoint(t *testing.T) {
 	}
 	drives.mu.Lock()
 	drives.key = driveKey(config)
-	drives.state = &driveState{checked: time.Now(), sizes: librarySizes{CatalogBytes: 400,
+	drives.state = &driveState{checked: time.Now(), shares: shares, sizes: librarySizes{CatalogBytes: 400,
 		Captures: []captureSize{{Host: "host-b", Source: "claude", Latest: 60}, {Host: "host-b", Source: "codex", Latest: 20}}}}
 	drives.mu.Unlock()
 	body := get()

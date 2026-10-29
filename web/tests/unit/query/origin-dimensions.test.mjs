@@ -4,7 +4,8 @@ import { applyQuery, EMPTY_QUERY, encodeQuery, decodeQueryStrict } from "@pythia
 import { schemas, execution } from "../helpers/recipes.mjs";
 import { originDimensions, originLabel, loadOriginMetadata } from "../../../src/origin-dimensions";
 import { machineWhere, machineWindow } from "../../../src/machine-activity-data";
-import { tokenChartMetrics } from "../../../src/token-chart-request";
+import { trendQuery } from "../../../src/dashboard-trend-model";
+import { tokenAnalysisCatalog } from "../../../src/token-analysis-catalog";
 import { toolSummaryCallFilters, toolMetricPresentation } from "../../../src/tools-dashboard-model";
 
 test("origin filters preserve device IDs and null groups across query links", () => {
@@ -25,7 +26,7 @@ test("machine scopes and summary drilldowns carry initiation and execution separ
   const filters = toolSummaryCallFilters(scope);
   for (const [field] of originDimensions) {
     assert.deepEqual(filters.find(clause => clause.field === field), { field, op: "=", value: scope[field] });
-    assert.deepEqual(tokenChartMetrics({ metric: "tokens", period: "day", split: field })[0].groupBy, ["day", field]);
+    assert.deepEqual(trendQuery(tokenAnalysisCatalog, { metric: "tokens", period: "day", split: field }, []).query.aggregations[0].groupBy, ["day", field]);
   }
 });
 

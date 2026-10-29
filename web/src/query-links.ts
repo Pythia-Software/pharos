@@ -1,7 +1,8 @@
-import { EMPTY_QUERY, decodeQueryStrict, localQuerySnapshotCache, encodeQuery, type QueryState } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, decodeQueryStrict, predicatesOf, localQuerySnapshotCache, encodeQuery, type QueryState } from "@pythia-software/query-table-core";
 import { isUsageWorkspace, readUsageWorkspace, usageDatasetTopics, type UsageDataset } from "./usage-workspace-model";
 import { cardDashboardWhere, cardSourceDataset } from "./card-exploration";
 import { concurrencyWindowRange } from "./concurrency-settings";
+import { windowedChart } from "./card-windows";
 
 export const queryDatasets = ["library", "usage", "conversation_activity", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "parallelism", "findings"] as const;
 export type QueryDataset = typeof queryDatasets[number];
@@ -15,7 +16,7 @@ export function rollingWindowField(dataset: QueryDataset): string | undefined { 
 
 export function queryHasTimeFilter(query: QueryState, field: string): boolean {
   const source = query.grouping?.source ?? query;
-  return source.where.some(term => "any" in term ? term.any.some(clause => clause.field === field) : term.field === field);
+  return source.where.some(term => predicatesOf(term).some(clause => clause.field === field));
 }
 
 // New cards use native elapsed offsets in their saved query and URL. Legacy
@@ -51,6 +52,8 @@ export function updateQueryWindowURL(url: string, days: number | null, fallback?
     const target = readUsageWorkspace(parsed.searchParams).dataset;
     parsed.searchParams.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where: cardDashboardWhere(spec.dataset as UsageDataset, target, (query.grouping?.source ?? query).where) }));
     if (days !== null) parsed.searchParams.set("analyze_days", String(days));
+    const chart = parsed.searchParams.get("analyze_chart");
+    if (chart) { try { parsed.searchParams.set("analyze_chart", JSON.stringify(windowedChart(parsed.searchParams.get("card_id"), JSON.parse(chart), days))); } catch { /* An unreadable chart is reported by the dashboard. */ } }
     if (parsed.searchParams.has("analyze_parallelism")) {
       const settings = JSON.parse(parsed.searchParams.get("analyze_parallelism")!);
       parsed.searchParams.set("analyze_parallelism", JSON.stringify({ ...settings, range: concurrencyWindowRange(days) }));

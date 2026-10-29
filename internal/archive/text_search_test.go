@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -290,8 +291,9 @@ func TestTextSearchEnvelopeWhitespace(t *testing.T) {
 				t.Fatalf("range does not address original evidence: %+v", item)
 			}
 		}
+		// The word index holds every envelope but tool output.
 		legacy, err := c.searchMessages(map[string]any{"query": test.query, "conversation_id": "c"})
-		if !strings.Contains(test.query, "PRE/") && (err != nil || integer(legacy["total"]) != int64(len(types))) {
+		if !strings.Contains(test.query, "PRE/") && (err != nil || integer(legacy["total"]) != int64(len(types)-1)) {
 			t.Fatalf("legacy %s: %v %v", test.query, legacy, err)
 		}
 	}
@@ -313,11 +315,12 @@ func TestTextSearchEnvelopeWhitespace(t *testing.T) {
 	}
 	// JSON strings remain independent phrase units, including when the left
 	// block ends in an encoded newline. Boolean queries may use both blocks.
+	// A tool call is word-indexed, so both the scoped scan and the index see it.
 	boundaryBody := `{"content":["orchid\n","petal"],"other":"cedar","birch":"suffix"}`
 	writeEnvelope := func(native, body string) string {
 		t.Helper()
 		tx := seedTx(t, c.DB)
-		id, _, err := upsertMessage(tx, "c", MessageRecord{NativeID: native, Kind: "tool_result", Role: "tool", Text: body, Selected: true})
+		id, _, err := upsertMessage(tx, "c", MessageRecord{NativeID: native, Kind: "tool_call", Role: "assistant", Text: body, Selected: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -379,7 +382,7 @@ func TestMessageSearchUpgradeResumesAndPreservesEvidence(t *testing.T) {
 	}
 	body := jsonText(map[string]any{"tool": "Read", "content": "Previous paragraph\nThe handout is accurate"})
 	for _, cid := range []string{"c1", "c2"} {
-		id, _, err := upsertMessage(tx, cid, MessageRecord{NativeID: "tool", Kind: "tool_result", Role: "tool", Text: body, RawText: "original evidence", EvidenceLocator: "fixture:" + cid, Selected: true})
+		id, _, err := upsertMessage(tx, cid, MessageRecord{NativeID: "tool", Kind: "tool_call", Role: "assistant", Text: body, RawText: "original evidence", EvidenceLocator: "fixture:" + cid, Selected: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -392,13 +395,18 @@ func TestMessageSearchUpgradeResumesAndPreservesEvidence(t *testing.T) {
 		if _, err := tx.Exec("INSERT INTO message_fts_rows(message_id,fts_rowid) VALUES(?,?)", id, rowid); err != nil {
 			t.Fatal(err)
 		}
+		// Its output, which the repair must not word-index.
+		if _, _, err := upsertMessage(tx, cid, MessageRecord{NativeID: "output", Kind: "tool_result", Role: "tool", Text: body, Selected: true}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	commitSeed(t, tx)
 	before, err := queryMaps(c.DB, "SELECT * FROM messages ORDER BY id")
 	if err != nil {
 		t.Fatal(err)
 	}
-	options := TextSearchOptions{Query: `"The handout is accurate"`, Surface: "tools", ConversationID: "c1"}
+	// Unscoped, so the word index answers (a scoped search scans stored text).
+	options := TextSearchOptions{Query: `"The handout is accurate"`, Surface: "tools"}
 	if result, err := c.SearchText(t.Context(), options); err != nil || len(result.Items) != 0 {
 		t.Fatalf("fixture should require repair: %+v %v", result, err)
 	}
@@ -410,18 +418,287 @@ func TestMessageSearchUpgradeResumesAndPreservesEvidence(t *testing.T) {
 	if pending, err := c.pendingMessageSearch(t.Context()); err != nil || pending != 1 {
 		t.Fatalf("committed checkpoint missing: pending=%d err=%v", pending, err)
 	}
+	if result, err := c.SearchText(t.Context(), options); err != nil || len(result.Items) != 1 {
+		t.Fatalf("first conversation's repair: %+v %v", result, err)
+	}
 	if done, err := c.BackfillMessageSearch(t.Context(), nil); err != nil || done != 1 {
 		t.Fatalf("resume: done=%d err=%v", done, err)
 	}
 	if done, err := c.BackfillMessageSearch(t.Context(), nil); err != nil || done != 0 {
 		t.Fatalf("replayed completed work: done=%d err=%v", done, err)
 	}
-	if result, err := c.SearchText(t.Context(), options); err != nil || len(result.Items) != 1 {
+	if result, err := c.SearchText(t.Context(), options); err != nil || len(result.Items) != 2 {
 		t.Fatalf("repair missed decoded boundary: %+v %v", result, err)
+	}
+	var indexedOutput int
+	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM message_fts_rows r JOIN messages m ON m.id=r.message_id WHERE m.kind='tool_result'`).Scan(&indexedOutput); err != nil || indexedOutput != 0 {
+		t.Fatalf("repair word-indexed tool output: %d %v", indexedOutput, err)
 	}
 	after, err := queryMaps(c.DB, "SELECT * FROM messages ORDER BY id")
 	if err != nil || jsonText(before) != jsonText(after) {
 		t.Fatalf("lexical upgrade changed original evidence: %v", err)
+	}
+}
+
+// A catalog written before tool output left the word index removes its
+// postings in the background, a bounded batch a transaction, resuming from its
+// cursor, then merges them away. Searches answer the same throughout.
+func TestToolOutputLeavesTheWordIndex(t *testing.T) {
+	c, _ := testCatalog(t)
+	override(t, &toolOutputScan, batchBounds{least: 1, first: 3, most: 3})
+	override(t, &toolOutputMergePages, batchBounds{least: 1, first: 1, most: 1})
+	// Ranked searches rank only the most recent matching postings: here the
+	// newest, which is tool output until removed.
+	override(t, &recentMatches, 1)
+	tx := seedTx(t, c.DB)
+	if _, err := tx.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','claude','local','w','Legacy postings','2026-10-28'),('w2','claude','local','w2','Requests','2026-10-28');
+	 INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c','w','claude','local','c'),('requests','w2','claude','local','requests')`); err != nil {
+		t.Fatal(err)
+	}
+	// The old writer indexed every message with text, in rowid order: tool
+	// output in c, requests in another workspace's conversation.
+	for i := range 8 {
+		conversation, kind, role, text := "c", "tool_result", "tool", fmt.Sprintf(`{"content":"quokka output %d"}`, i)
+		if i == 1 {
+			// A spelling only tool output holds, which removal drops from the
+			// vocabulary in its first batch.
+			text = `{"content":"quokka output quokkas"}`
+		}
+		if i%3 == 0 {
+			conversation, kind, role, text = "requests", "message", "user", fmt.Sprintf("quokka request %d", i)
+		}
+		id, _, err := upsertMessage(tx, conversation, MessageRecord{NativeID: fmt.Sprint(i), Kind: kind, Role: role, Text: text, Selected: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := tx.Exec("INSERT INTO messages_fts(message_id,text) SELECT id,pharos_lexical_text(kind,text) FROM messages WHERE id=?", id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rowid, _ := result.LastInsertId()
+		if _, err := tx.Exec("INSERT INTO message_fts_rows(message_id,fts_rowid) VALUES(?,?)", id, rowid); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := tx.Exec("DELETE FROM meta WHERE key IN (?,?)", toolOutputRemovedKey, toolOutputMergedKey); err != nil {
+		t.Fatal(err)
+	}
+	commitSeed(t, tx)
+	before, err := queryMaps(c.DB, "SELECT * FROM messages ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	searches := func() string {
+		t.Helper()
+		unscoped, err := c.SearchText(t.Context(), TextSearchOptions{Query: "quokka", Surface: "all"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		scoped, err := c.SearchText(t.Context(), TextSearchOptions{Query: "quokka", Surface: "all", ConversationID: "c"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		legacy, err := c.searchMessages(map[string]any{"query": "quokka"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		conversations, err := c.searchConversations(map[string]any{"query": "quokka"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		lexical := 0
+		for _, item := range conversations["items"].([]map[string]any) {
+			if strings.Contains(firstString(item["relevance_reason"]), "message text") {
+				lexical++
+			}
+		}
+		evidence, err := c.searchEvidence(t.Context(), SearchOptions{Query: "quokka"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := 0
+		if evidence["w2"] != nil {
+			found = evidence["w2"].text.count
+		}
+		return fmt.Sprint(len(unscoped.Items), len(scoped.Items), legacy["total"], lexical, found)
+	}
+	// Three requests through the word index; c's five tool outputs by scan;
+	// the newest request ranked by search_conversations and Library search.
+	const want = "3 5 3 1 1"
+	if got := searches(); got != want {
+		t.Fatalf("before removal: %s", got)
+	}
+	// Finding the window walks a bounded number of postings; one it cuts
+	// short says so.
+	// A walk that is capped or out of time falls back to the window of the
+	// most recent postings of any kind: fewer matches, said so, but not none.
+	func() {
+		recent := recentMatches
+		recentMatches = 3
+		defer func() { recentMatches = recent }()
+		for _, cut := range []func(){func() { toolOutputWalk = 1 }, func() { toolOutputWalkTime = time.Nanosecond }} {
+			walk, walkTime := toolOutputWalk, toolOutputWalkTime
+			cut()
+			short, err := c.searchConversations(map[string]any{"query": "quokka"})
+			evidence, evidenceErr := c.searchEvidence(t.Context(), SearchOptions{Query: "quokka"})
+			toolOutputWalk, toolOutputWalkTime = walk, walkTime
+			if err != nil || !strings.Contains(firstString(short["coverage"]), "still being removed") || !strings.Contains(jsonText(short), "message text") {
+				t.Fatalf("a walk cut short: %v %v", short, err)
+			}
+			if evidenceErr != nil || evidence["w2"] == nil || evidence["w2"].text.count == 0 {
+				t.Fatalf("Library search after a walk cut short: %v %v", evidence, evidenceErr)
+			}
+		}
+		if whole, err := c.searchConversations(map[string]any{"query": "quokka"}); err != nil || strings.Contains(firstString(whole["coverage"]), "still being removed") {
+			t.Fatalf("a whole walk: %v %v", whole, err)
+		}
+	}()
+	generation, err := c.textSearchGeneration(t.Context(), TextSearchOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := c.SearchText(t.Context(), TextSearchOptions{Query: "quokka", Surface: "all", Limit: 1})
+	if err != nil || page.NextCursor == "" {
+		t.Fatalf("first page: %+v %v", page, err)
+	}
+	progress, err := c.toolOutputIndexProgress(t.Context())
+	if err != nil || progress.Ready || progress.Phase != "removing" || progress.Done != 0 || progress.Total != 8 {
+		t.Fatalf("progress before: %+v %v", progress, err)
+	}
+	// get_search_capabilities describes the index and the removal.
+	described := func() map[string]any {
+		t.Helper()
+		capabilities, err := c.textSearchCapabilities(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		index := capabilities["word_index"].(map[string]any)
+		if !slices.Equal(index["unindexed_kinds"].([]string), []string{"tool_result"}) || index["tool_output"] != toolOutputNotIndexed {
+			t.Fatalf("capabilities: %v", index)
+		}
+		return index
+	}
+	if removal := described()["tool_output_removal"].(toolOutputProgress); removal.Ready {
+		t.Fatalf("capabilities call removal done: %+v", removal)
+	}
+	// Fuzzy cursors carry their expansions: across a removal batch, one
+	// whose expansions are unchanged continues, and one that expanded to a
+	// spelling only removed tool output held is rejected.
+	unchanged, err := c.SearchText(t.Context(), TextSearchOptions{Query: "request", Surface: "all", Fuzzy: true, Limit: 1})
+	if err != nil || unchanged.NextCursor == "" {
+		t.Fatalf("fuzzy first page: %+v %v", unchanged, err)
+	}
+	changed, err := c.SearchText(t.Context(), TextSearchOptions{Query: "quokka", Surface: "all", Fuzzy: true, Limit: 1})
+	if err != nil || changed.NextCursor == "" || !slices.Contains(changed.Expansions["quokka"], "quokkas") {
+		t.Fatalf("fuzzy first page: %+v %v", changed, err)
+	}
+	// One batch checks three rows and commits; the next resumes after them.
+	if more, _, err := c.removeToolOutputBatch(t.Context(), 3); err != nil || !more {
+		t.Fatalf("first batch: %v %v", more, err)
+	}
+	var left int
+	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM message_fts_rows r JOIN messages m ON m.id=r.message_id WHERE m.kind='tool_result'`).Scan(&left); err != nil || left != 3 {
+		t.Fatalf("after one batch %d tool results are left, %v; want 3", left, err)
+	}
+	if progress, err = c.toolOutputIndexProgress(t.Context()); err != nil || progress.Done != 3 {
+		t.Fatalf("progress after a batch: %+v %v", progress, err)
+	}
+	if got := searches(); got != want {
+		t.Fatalf("during removal: %s", got)
+	}
+	if next, err := c.SearchText(t.Context(), TextSearchOptions{Query: "request", Surface: "all", Fuzzy: true, Limit: 1, Cursor: unchanged.NextCursor}); err != nil || len(next.Items) != 1 {
+		t.Fatalf("an unchanged fuzzy cursor across removal: %+v %v", next, err)
+	}
+	if _, err := c.SearchText(t.Context(), TextSearchOptions{Query: "quokka", Surface: "all", Fuzzy: true, Limit: 1, Cursor: changed.NextCursor}); err == nil || !strings.Contains(err.Error(), "restart") {
+		t.Fatalf("a fuzzy cursor whose expansions changed: %v", err)
+	}
+	// Ingest goes on while removal runs, and between merge steps; the
+	// migration still finishes.
+	ingested := 0
+	ingest := func() {
+		t.Helper()
+		tx := seedTx(t, c.DB)
+		id, _, err := upsertMessage(tx, "requests", MessageRecord{NativeID: fmt.Sprint("new-", ingested), Kind: "message", Role: "assistant", Text: fmt.Sprint("wombat reply ", ingested), Selected: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := replaceMessageFTS(tx, id); err != nil {
+			t.Fatal(err)
+		}
+		commitSeed(t, tx)
+		ingested++
+	}
+	migration := newToolOutputMigration()
+	for steps := 0; ; steps++ {
+		if steps > 200 {
+			t.Fatal("the migration did not finish while ingest ran")
+		}
+		ingest()
+		more, err := migration.step(t.Context(), c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !more {
+			break
+		}
+		if progress, err = c.toolOutputIndexProgress(t.Context()); err != nil || progress.Ready || progress.Phase == "removing" && progress.Done > progress.Total {
+			t.Fatalf("progress during the migration: %+v %v", progress, err)
+		}
+		if got := searches(); got != want {
+			t.Fatalf("during the migration: %s", got)
+		}
+	}
+	if progress, err = c.toolOutputIndexProgress(t.Context()); err != nil || !progress.Ready || !described()["tool_output_removal"].(toolOutputProgress).Ready {
+		t.Fatalf("progress after: %+v %v", progress, err)
+	}
+	if result, err := c.SearchText(t.Context(), TextSearchOptions{Query: "wombat", Surface: "all"}); err != nil || len(result.Items) != ingested {
+		t.Fatalf("messages ingested during the migration: %d of %d, %v", len(result.Items), ingested, err)
+	}
+	var postings, mapped int
+	if err := c.DB.QueryRow(`SELECT (SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'output'),(SELECT COUNT(*) FROM message_fts_rows)`).Scan(&postings, &mapped); err != nil || postings != 0 || mapped != 3+ingested {
+		t.Fatalf("after removal: %d tool postings, %d mapped rows, %v", postings, mapped, err)
+	}
+	if _, err := c.DB.Exec("INSERT INTO messages_fts(messages_fts) VALUES('integrity-check')"); err != nil {
+		t.Fatalf("word index integrity: %v", err)
+	}
+	if got := searches(); got != want {
+		t.Fatalf("after removal: %s", got)
+	}
+	// Removal reorders no remaining match: open cursors continue.
+	if after, err := c.textSearchGeneration(t.Context(), TextSearchOptions{}); err != nil || after != generation {
+		t.Fatalf("generation moved from %s to %s: %v", generation, after, err)
+	}
+	if next, err := c.SearchText(t.Context(), TextSearchOptions{Query: "quokka", Surface: "all", Limit: 1, Cursor: page.NextCursor}); err != nil || len(next.Items) != 1 {
+		t.Fatalf("cursor across removal: %+v %v", next, err)
+	}
+	after, err := queryMaps(c.DB, "SELECT * FROM messages WHERE native_id NOT LIKE 'new-%' ORDER BY id")
+	if err != nil || jsonText(before) != jsonText(after) {
+		t.Fatalf("removal changed messages: %v", err)
+	}
+	// Done stays done.
+	if more, err := newToolOutputMigration().step(t.Context(), c); err != nil || more {
+		t.Fatalf("finished migration ran again: %v %v", more, err)
+	}
+	// Ingest merges as it did before: committing message after message
+	// leaves the index a handful of segments, not one per commit. FTS5
+	// numbers a segment's pages from (segment id << 37).
+	for range 48 {
+		ingest()
+	}
+	var segments int
+	if err := c.DB.QueryRow("SELECT COUNT(DISTINCT id>>37) FROM messages_fts_data WHERE id>=(1<<37)").Scan(&segments); err != nil || segments > 24 {
+		t.Fatalf("%d segments after 48 commits, %v", segments, err)
+	}
+	// Batches shrink while they hold the writer too long and grow while
+	// they are quick, within their bounds.
+	sizer := batchSizer{bounds: batchBounds{least: 10, first: 40, most: 100}}
+	sizes := []int{sizer.next()}
+	for _, held := range []time.Duration{3 * toolOutputHold, 3 * toolOutputHold, 3 * toolOutputHold, toolOutputHold, 0, 0, 0, 0} {
+		sizer.held(held)
+		sizes = append(sizes, sizer.next())
+	}
+	if !slices.Equal(sizes, []int{40, 20, 10, 10, 10, 20, 40, 80, 100}) {
+		t.Fatalf("batch sizes %v", sizes)
 	}
 }
 
@@ -677,35 +954,49 @@ func TestTextSearchReasoningIngest(t *testing.T) {
 }
 func TestTextSearchQueries(t *testing.T) {
 	c := textFixture(t)
+	// population is what Library Find's workspace rows find, when it differs:
+	// they keep the word index, which leaves tool output out.
 	cases := []struct {
-		o    TextSearchOptions
-		want []string
+		o          TextSearchOptions
+		want       []string
+		population []string
 	}{
-		{TextSearchOptions{Query: `(cache OR buffer) AND "race condition" NOT redis`}, []string{"a", "o"}},
-		{TextSearchOptions{Query: `cache "race condition"`}, []string{"a", "o"}},
-		{TextSearchOptions{Query: `migrat*`}, []string{"b"}},
-		{TextSearchOptions{Query: `"migrat"*`}, []string{"b"}},
-		{TextSearchOptions{Query: `timeout NEAR/0 retry`}, []string{"a"}},
-		{TextSearchOptions{Query: `timeout NEAR/1 retry`}, []string{"a", "r"}},
-		{TextSearchOptions{Query: `timeout PRE/1 retry`}, []string{"a", "r"}},
-		{TextSearchOptions{Query: `retry PRE/1 timeout`}, []string{}},
-		{TextSearchOptions{Query: `"race condition" PRE/10 cafe`}, []string{"a"}},
-		{TextSearchOptions{Query: `cache NOT (cafe PRE/10 timeout)`}, []string{"a", "o", "span"}},
-		{TextSearchOptions{Query: `cache cafe`, Separators: true}, []string{"a"}},
-		{TextSearchOptions{Query: `foo::bar`, Mode: "literal", Surface: "user"}, []string{"a"}},
-		{TextSearchOptions{Query: `foo[:]+bar`, Mode: "regex", Surface: "user"}, []string{"a"}},
-		{TextSearchOptions{Query: `cache NOT CACHE`, CaseSensitive: true}, []string{"a", "span"}},
-		{TextSearchOptions{Query: `cafe`}, []string{"a"}},
-		{TextSearchOptions{Query: `"foo::bar"`, Separators: true}, []string{"a"}},
-		{TextSearchOptions{Query: `secret`, Surface: "typed"}, []string{}},
-		{TextSearchOptions{Query: `cache NOT redis`, Surface: "typed"}, []string{"span"}},
-		{TextSearchOptions{Query: `secret`, Surface: "pasted"}, []string{"span"}},
-		{TextSearchOptions{Query: `timeout`, Surface: "reasoning"}, []string{"r"}},
-		{TextSearchOptions{Query: `secret`, Surface: "tools"}, []string{"t"}},
-		{TextSearchOptions{Query: `race`, From: "2026-10-12", Provider: "codex"}, []string{"b"}},
-		{TextSearchOptions{Query: `cache OR buffer`, Mode: "terms"}, []string{}},
-		{TextSearchOptions{Query: `(?s)timeout.*retry`, Mode: "regex", Surface: "reasoning"}, []string{"r"}},
-		{TextSearchOptions{Query: `secret`, WorkspaceIDs: []string{}}, []string{}},
+		{TextSearchOptions{Query: `(cache OR buffer) AND "race condition" NOT redis`}, []string{"a", "o"}, nil},
+		{TextSearchOptions{Query: `cache "race condition"`}, []string{"a", "o"}, nil},
+		{TextSearchOptions{Query: `migrat*`}, []string{"b"}, nil},
+		{TextSearchOptions{Query: `"migrat"*`}, []string{"b"}, nil},
+		{TextSearchOptions{Query: `timeout NEAR/0 retry`}, []string{"a"}, nil},
+		{TextSearchOptions{Query: `timeout NEAR/1 retry`}, []string{"a", "r"}, nil},
+		{TextSearchOptions{Query: `timeout PRE/1 retry`}, []string{"a", "r"}, nil},
+		{TextSearchOptions{Query: `retry PRE/1 timeout`}, []string{}, nil},
+		{TextSearchOptions{Query: `"race condition" PRE/10 cafe`}, []string{"a"}, nil},
+		{TextSearchOptions{Query: `cache NOT (cafe PRE/10 timeout)`}, []string{"a", "o", "span"}, nil},
+		{TextSearchOptions{Query: `cache cafe`, Separators: true}, []string{"a"}, nil},
+		{TextSearchOptions{Query: `foo::bar`, Mode: "literal", Surface: "user"}, []string{"a"}, nil},
+		{TextSearchOptions{Query: `foo[:]+bar`, Mode: "regex", Surface: "user"}, []string{"a"}, nil},
+		{TextSearchOptions{Query: `cache NOT CACHE`, CaseSensitive: true}, []string{"a", "span"}, nil},
+		{TextSearchOptions{Query: `cafe`}, []string{"a"}, nil},
+		{TextSearchOptions{Query: `"foo::bar"`, Separators: true}, []string{"a"}, nil},
+		{TextSearchOptions{Query: `secret`, Surface: "typed"}, []string{}, nil},
+		{TextSearchOptions{Query: `cache NOT redis`, Surface: "typed"}, []string{"span"}, nil},
+		{TextSearchOptions{Query: `secret`, Surface: "pasted"}, []string{"span"}, nil},
+		{TextSearchOptions{Query: `timeout`, Surface: "reasoning"}, []string{"r"}, nil},
+		// Tool output is not word-indexed: the fixture's posting for t is one a
+		// catalog still removing them has, and an unscoped search leaves it out.
+		// A scoped one scans stored text, tool output included.
+		{TextSearchOptions{Query: `secret`, Surface: "tools"}, []string{}, nil},
+		{TextSearchOptions{Query: `secret`, Surface: "tools", ConversationID: "c"}, []string{"t"}, nil},
+		{TextSearchOptions{Query: `secret`, Surface: "all", WorkspaceIDs: []string{"w", "other"}}, []string{"span", "t"}, []string{"span"}},
+		{TextSearchOptions{Query: `timeout NOT retry`, Surface: "all", WorkspaceID: "w"}, []string{"t"}, []string{}},
+		{TextSearchOptions{Query: `cache`, Surface: "all", WorkspaceIDs: []string{"w", "other"}}, []string{"a", "o", "span"}, nil},
+		// Instruction scopes (surface all with a role) never reach tool output.
+		{TextSearchOptions{Query: `secret`, Surface: "all", Roles: []string{"system"}, WorkspaceID: "w"}, []string{}, nil},
+		{TextSearchOptions{Query: `CACHE`, Surface: "all", Roles: []string{"user"}, ConversationID: "other"}, []string{"o"}, nil},
+		{TextSearchOptions{Query: `secret`, Surface: "tools", ConversationID: "c", Kinds: []string{"tool_call"}}, []string{}, nil},
+		{TextSearchOptions{Query: `race`, From: "2026-10-12", Provider: "codex"}, []string{"b"}, nil},
+		{TextSearchOptions{Query: `cache OR buffer`, Mode: "terms"}, []string{}, nil},
+		{TextSearchOptions{Query: `(?s)timeout.*retry`, Mode: "regex", Surface: "reasoning"}, []string{"r"}, nil},
+		{TextSearchOptions{Query: `secret`, WorkspaceIDs: []string{}}, []string{}, nil},
 	}
 	for _, tc := range cases {
 		t.Run(fmt.Sprintf("%s/%s/%s", tc.o.Query, tc.o.Mode, tc.o.Surface), func(t *testing.T) {
@@ -724,14 +1015,23 @@ func TestTextSearchQueries(t *testing.T) {
 			options.Limit, options.MaxCandidates, options.MaxBytes = 1, 1, 64
 			population, err := c.SearchText(t.Context(), options)
 			want := map[string]int{}
-			for _, id := range tc.want {
+			ids := tc.want
+			if tc.population != nil {
+				ids = tc.population
+			}
+			// They say so wherever tool output could match and no single
+			// conversation bounds a scan of it.
+			if (textSurfaceToolOutput(tc.o) && tc.o.ConversationID == "") != strings.Contains(population.Coverage, "is not word-indexed, so word searches") {
+				t.Fatalf("workspace rows coverage: %q", population.Coverage)
+			}
+			for _, id := range ids {
 				workspace := "w"
 				if id == "o" {
 					workspace = "other"
 				}
 				want[workspace]++
 			}
-			if err != nil || !population.Complete || population.Count != len(tc.want) || len(population.Items) != len(want) {
+			if err != nil || !population.Complete || population.Count != len(ids) || len(population.Items) != len(want) {
 				t.Fatalf("workspace population: %+v err=%v; want %v", population, err, want)
 			}
 			for _, item := range population.Items {
@@ -740,6 +1040,77 @@ func TestTextSearchQueries(t *testing.T) {
 				}
 			}
 		})
+	}
+	// Each says what it covered.
+	for _, test := range []struct {
+		o        TextSearchOptions
+		strategy string
+		says     string
+	}{
+		{TextSearchOptions{Query: "secret", Surface: "tools"}, "word_index", toolOutputNotIndexed},
+		{TextSearchOptions{Query: "secret", Surface: "all", Kinds: []string{"tool_call", "tool_result"}}, "word_index", toolOutputNotIndexed},
+		{TextSearchOptions{Query: "secret", Surface: "tools", ConversationID: "c"}, "scoped_scan", "scanned the stored text"},
+		{TextSearchOptions{Query: `"secret only"`, Surface: "all", ConversationID: "c", Kinds: []string{"tool_result"}}, "scoped_scan", "scanned the stored text"},
+		{TextSearchOptions{Query: "secret", Surface: "all", Kinds: []string{"message"}}, "word_index", ""},
+		{TextSearchOptions{Query: "secret", Surface: "all", Roles: []string{"developer"}, WorkspaceID: "w"}, "word_index", ""},
+		{TextSearchOptions{Query: "secret", Surface: "all", WorkspaceID: "w", workspaceRows: true}, "word_index", toolOutputNotIndexed},
+		{TextSearchOptions{Query: "secret"}, "word_index", ""},
+	} {
+		result, err := c.SearchText(t.Context(), test.o)
+		if err != nil || result.Strategy != test.strategy || (test.says != "") != strings.Contains(result.Coverage, "not word-indexed") || !strings.Contains(result.Coverage, test.says) {
+			t.Fatalf("%+v: strategy %s, coverage %q, %v", test.o, result.Strategy, result.Coverage, err)
+		}
+	}
+	// Asking the word index for tool output alone is an error that says how
+	// to search it, not an empty result.
+	if _, err := c.SearchText(t.Context(), TextSearchOptions{Query: "secret", Surface: "tools", Kinds: []string{"tool_result"}}); err == nil || !strings.Contains(err.Error(), "conversation_id") {
+		t.Fatalf("unscoped tool-output search: %v", err)
+	}
+	if _, err := c.SearchText(t.Context(), TextSearchOptions{Query: "secret", Surface: "tools", Kinds: []string{"tool_result"}, WorkspaceID: "w", workspaceRows: true}); err == nil || !strings.Contains(err.Error(), "not word-indexed") {
+		t.Fatalf("Find of tool output alone: %v", err)
+	}
+	// A scoped search runs the word index, then a scan of tool output, under
+	// one cursor: every page size and budget pages through the same matches
+	// once each, across the boundary between the two.
+	whole, err := c.SearchText(t.Context(), TextSearchOptions{Query: "timeout", Surface: "all", ConversationID: "c"})
+	if err != nil || !whole.Complete || !slices.Equal(resultIDs(whole), []string{"a", "r", "t"}) || whole.Count != 3 {
+		t.Fatalf("one page across both streams: %+v %v", whole, err)
+	}
+	for _, budget := range []TextSearchOptions{{Limit: 1}, {Limit: 2}, {MaxCandidates: 1}, {MaxBytes: 70}} {
+		o := budget
+		o.Query, o.Surface, o.ConversationID = "timeout", "all", "c"
+		seen, pages := []string{}, 0
+		for {
+			page, err := c.SearchText(t.Context(), o)
+			if err != nil {
+				t.Fatalf("%+v: %v", budget, err)
+			}
+			for _, item := range page.Items {
+				seen = append(seen, item.MessageID)
+			}
+			if pages++; page.NextCursor == "" || pages > 20 {
+				if !page.Complete || page.Count != 3 {
+					t.Fatalf("%+v: last page %+v", budget, page)
+				}
+				break
+			}
+			o.Cursor = page.NextCursor
+		}
+		slices.Sort(seen)
+		if !slices.Equal(seen, []string{"a", "r", "t"}) {
+			t.Fatalf("%+v paged %v", budget, seen)
+		}
+	}
+	// A scoped search reads only tool output whole: another kind it finds
+	// through the word index, so one with no posting is not read.
+	execTx(t, c.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) VALUES('unposted','c','unposted','assistant','tool_call','secret call','u')`)
+	if result, err := c.SearchText(t.Context(), TextSearchOptions{Query: "secret", Surface: "tools", ConversationID: "c"}); err != nil || !slices.Equal(resultIDs(result), []string{"t"}) || result.VerifiedBytes != len("timeout secret-only 0123456789abcdef0123456789abcdef0123456789") {
+		t.Fatalf("scoped scan read more than tool output: %+v %v", result, err)
+	}
+	// The scoped search found t by its text, and a scoped "secret only"
+	// search finds it too.
+	if result, err := c.SearchText(t.Context(), TextSearchOptions{Query: `"secret only"`, Surface: "all", ConversationID: "c", Kinds: []string{"tool_result"}}); err != nil || !slices.Equal(resultIDs(result), []string{"t"}) {
+		t.Fatalf("scoped tool output: %+v %v", result, err)
 	}
 }
 

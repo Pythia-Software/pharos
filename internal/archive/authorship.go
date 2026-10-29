@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -200,6 +201,9 @@ type authorshipState struct {
 	mu        sync.Mutex
 	running   bool
 	lastError string
+	// deferred records a follow-up a rebuild skipped while this process
+	// indexed; the ingest's end runs it (ingestEnded).
+	deferred atomic.Bool
 }
 
 var (
@@ -1172,13 +1176,15 @@ func (c *Catalog) refreshAuthorship() {
 
 // A coordinated manual index cancels its own classification when stopped;
 // page/source refreshes continue to use the service's background lifetime.
-func (c *Catalog) refreshAuthorshipInContext(parent context.Context) {
+// It reports whether it started a rebuild.
+func (c *Catalog) refreshAuthorshipInContext(parent context.Context) bool {
 	if parent != nil && parent.Err() != nil {
-		return
+		return false
 	}
 	if want, built, err := c.authorshipGenerations(); err == nil && want != built {
-		c.startAuthorshipInContext(want, parent)
+		return c.startAuthorshipInContext(want, parent)
 	}
+	return false
 }
 
 // ensureAuthorship is refreshAuthorship for a page. It builds a ledger that
@@ -1201,20 +1207,63 @@ func (c *Catalog) ensureAuthorship() (stale bool) {
 
 // startAuthorship rebuilds for generation in the background, unless a
 // rebuild is running already. A rebuild that succeeds checks again for
-// messages an index wrote while it ran.
+// messages an index wrote while it ran, except one a page started while this
+// process indexes: the index writes on every record, so that rebuild would
+// start again as soon as it ended, rewriting message_authorship and holding a
+// read snapshot round after round. The skipped follow-up is remembered
+// (authorshipFollowUp) and runs once when the last ingest ends, unless it was
+// stopped or the service is stopping, in which case it waits for the next
+// ingest that ends normally or an explicit refresh. A manual index's
+// analysis chain has rebuilt by then (refreshAuthorship), so that run finds
+// the ledger current. Pages show the last ledger meanwhile
+// (ensureAuthorship).
 func (c *Catalog) startAuthorship(generation string) {
 	c.startAuthorshipInContext(generation, nil)
 }
 
-func (c *Catalog) startAuthorshipInContext(generation string, parent context.Context) {
+// authorshipFollowUp reports whether a rebuild that just succeeded should
+// check again for inputs written while it ran.
+// A skipped follow-up is remembered for the ingest's end: a scheduled
+// index runs no analysis chain, and a page does not rebuild a ledger of the
+// current rules, so without it authorship could stay stale until the next
+// manual index.
+func (c *Catalog) authorshipFollowUp(parent context.Context) bool {
+	if parent != nil || c.ingestRuns.Load() == 0 {
+		return true
+	}
+	c.authorship.deferred.Store(true)
+	// The ingest may have ended between the check and the store, its end
+	// finding nothing deferred: then follow up now.
+	return c.ingestRuns.Load() == 0 && c.authorship.deferred.Swap(false)
+}
+
+// ingestStarted and ingestEnded bracket an ingest in this process. Once the
+// last one ends, a follow-up rebuild deferred while it ran runs, once. A
+// manual index's chain has rebuilt by then, so the refresh finds the
+// ledger current and starts nothing. An ingest that was stopped, or that
+// ends because the service is stopping, starts no work the stop no longer
+// controls: the follow-up stays deferred for the next ingest to end
+// normally, and the generation stays dirty for an explicit refresh.
+func (c *Catalog) ingestStarted() { c.ingestRuns.Add(1) }
+
+func (c *Catalog) ingestEnded(stopped bool) {
+	if c.ingestRuns.Add(-1) != 0 || stopped || c.serviceStopping() {
+		return
+	}
+	if c.authorship.deferred.Swap(false) {
+		c.refreshAuthorship()
+	}
+}
+
+func (c *Catalog) startAuthorshipInContext(generation string, parent context.Context) bool {
 	state := &c.authorship
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	if state.running {
-		return
+		return false
 	}
 	state.running = true
-	rebuild := func(ctx context.Context) {
+	rebuild := func(ctx context.Context, op *Op) error {
 		if parent != nil {
 			workCtx, cancel := context.WithCancel(ctx)
 			stop := context.AfterFunc(parent, cancel)
@@ -1225,8 +1274,12 @@ func (c *Catalog) startAuthorshipInContext(generation string, parent context.Con
 			}
 			ctx = workCtx
 			if report, ok := parent.Value(workProgressKey{}).(func(activityWork)); ok {
-				ctx = withWorkProgress(ctx, report)
+				ctx = withWorkProgress(ctx, func(w activityWork) { op.mirrorWork(w); report(w) })
+			} else {
+				ctx = withWorkProgress(ctx, op.mirrorWork)
 			}
+		} else {
+			ctx = withWorkProgress(ctx, op.mirrorWork)
 		}
 		err := c.RebuildAuthorship(ctx, generation)
 		state.mu.Lock()
@@ -1236,13 +1289,24 @@ func (c *Catalog) startAuthorshipInContext(generation string, parent context.Con
 			state.lastError = err.Error()
 		}
 		state.mu.Unlock()
-		if err == nil && ctx.Err() == nil {
+		if err == nil && ctx.Err() == nil && c.authorshipFollowUp(parent) {
 			c.refreshAuthorshipInContext(parent)
 		}
+		return err
 	}
-	if !c.runBackground(rebuild) {
+	// From a page (or the usage summary) the rebuild is a read-started write
+	// (§1) that the page waits for, so foreground (§10); from an index's
+	// analysis chain it is a child of that stage, in its class.
+	spec := OperationSpec{Kind: "analysis.authorship", Trigger: triggerRead, Priority: priorityForeground}
+	if parent != nil {
+		spec.Priority = ""
+		spec.Trigger = triggerChained
+		spec.Parent = opFrom(parent).ID()
+	}
+	if !c.startBackground(spec, rebuild) {
 		state.running = false // the service is stopping
 	}
+	return state.running
 }
 
 // authorshipRunning reports whether a rebuild is writing message_authorship.

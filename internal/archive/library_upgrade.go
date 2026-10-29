@@ -266,17 +266,27 @@ func (c *Catalog) RepositoryMergePreview(ctx context.Context) ([]upgradeMergeGro
 // resumes.
 func (c *Catalog) RunUpgrade(ctx context.Context, progress func(step string, done, total int)) error {
 	state := c.upgrade()
+	// The caller's library.upgrade operation, if any, plans the pending steps
+	// so the journal can say which step a run reached.
+	op := opFrom(ctx)
+	if op != nil && op.spec.Kind != "library.upgrade" {
+		op = nil
+	}
 	state.mu.Lock()
 	if state.running {
 		state.mu.Unlock()
+		op.Skip("already-running")
 		return fmt.Errorf("an upgrade is already running")
 	}
 	state.running, state.startedAt, state.lastError = true, now(), ""
 	state.mu.Unlock()
+	labels := map[string]upgradeStep{"rollup": {ID: "rollup", Label: "Rebuild the Tools rollup"}}
 	report := func(step string, done, total int) {
 		state.mu.Lock()
 		state.step, state.done, state.total = step, done, total
 		state.mu.Unlock()
+		planned := labels[step]
+		op.progress(defaultString(planned.Label, step), "", planned.Unit, float64(done), float64(total), total > 0)
 		if progress != nil {
 			progress(step, done, total)
 		}
@@ -288,6 +298,11 @@ func (c *Catalog) RunUpgrade(ctx context.Context, progress func(step string, don
 			state.lastError = err.Error()
 		}
 		state.mu.Unlock()
+		// The freshness ledger's count (§5): counted again once an upgrade
+		// completes.
+		if err == nil {
+			c.storeUpgradeCount(ctx)
+		}
 		return err
 	}
 	timed := func(id string, work func() error) error {
@@ -317,7 +332,19 @@ func (c *Catalog) RunUpgrade(ctx context.Context, progress func(step string, don
 	if len(state.planned) > 0 {
 		state.planned = append(state.planned, upgradeStep{ID: "rollup"})
 	}
+	plan := []StepPlan{}
+	for _, step := range state.planned {
+		if step.ID != "rollup" {
+			labels[step.ID] = step
+		}
+		planned := labels[step.ID]
+		plan = append(plan, StepPlan{Name: defaultString(planned.Label, step.ID), Unit: planned.Unit, Total: -1})
+	}
 	state.mu.Unlock()
+	if len(plan) == 0 {
+		plan = []StepPlan{{Name: labels["rollup"].Label, Total: -1}}
+	}
+	op.Plan(plan...)
 	if pending["repositories"] > 0 {
 		if err := timed("repositories", func() error { return c.applyRepositoryMerges(ctx, report) }); err != nil {
 			return finish(err)
@@ -446,4 +473,48 @@ func repositoryRenames(db queryer) (map[string]string, error) {
 func setMeta(db execer, key, value string) error {
 	_, err := db.Exec(`INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
 	return err
+}
+
+// inputsGeneration is libraryInputs read from the catalog, or "" when it
+// cannot be read.
+func (c *Catalog) inputsGeneration(ctx context.Context) string {
+	var value string
+	if c.reader().QueryRowContext(ctx, `SELECT COALESCE((SELECT value FROM meta WHERE key='tool_ledger_generation'),'')||':'||
+		COALESCE((SELECT value FROM meta WHERE key='authorship_inputs_generation'),'')`).Scan(&value) != nil {
+		return ""
+	}
+	return value
+}
+
+// upgradeCount is the upgrade's pending steps as the freshness ledger reads
+// them (§5), stored in meta so every process reads the same answer. It
+// stays valid while meta.initialized_build is the build it names: this
+// build's ingest creates no upgrade work; only a write by another build can.
+type upgradeCount struct {
+	Build     string        `json:"build"`
+	StartedAt string        `json:"started_at"`
+	Steps     []upgradeStep `json:"steps"`
+}
+
+const upgradeCountKey = "upgrade_count"
+
+// storeUpgradeCount counts the upgrade's steps and stores the answer, unless
+// a count that started later is already stored. It is best effort: it runs
+// at the end of the analysis chain, after an upgrade, and on open.
+func (c *Catalog) storeUpgradeCount(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+	started := formatTime(time.Now())
+	build, _ := c.metaValue(ctx, initializedBuildKey)
+	steps, err := c.UpgradeSteps(ctx)
+	if err != nil {
+		return
+	}
+	data, _ := json.Marshal(upgradeCount{Build: build, StartedAt: started, Steps: steps})
+	_ = c.writeTransaction(ctx, "upgrade count", func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value
+			WHERE COALESCE(json_extract(meta.value,'$.started_at'),'')<=?`, upgradeCountKey, string(data), started)
+		return err
+	})
 }

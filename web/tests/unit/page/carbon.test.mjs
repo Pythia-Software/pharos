@@ -5,6 +5,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import factors from "../../../../carbon/co2_factors.json";
 import { loadClassicScript } from "../helpers/classic-script.mjs";
+import shared from "../../../../testdata/carbon-estimates.json";
+import { deriveCarbon } from "../../../src/carbon-analysis-catalog";
 
 // carbon.js reads its assumption settings (grid, PUE, energy scenario, input
 // sensitivity) from pharosPrefs once, when it loads.
@@ -117,4 +119,17 @@ test("mass and energy step their unit and keep three significant figures", () =>
   const { mass, energy } = carbon();
   assert.deepEqual([0, 0.0123, 20.84, 999.4, 1234, 562681.19, 1.5e6].map(mass), ["0 g", "0.012 g", "20.8 g", "999 g", "1.23 kg", "563 kg", "1.5 t"]);
   assert.deepEqual([0, 460, 1063.75, 2.5e6].map(energy), ["0 Wh", "460 Wh", "1.06 kWh", "2.5 MWh"]);
+});
+
+// The estimates the service must reproduce too (TestCarbonSharedEstimates),
+// and the Carbon dashboard's token-type split built on this calculator.
+test("the calculator and the dashboard's token-type split reproduce the shared estimates", () => {
+  for (const { name, settings, facility_wh, co2e_g, co2e_g_by_category } of shared.cases) {
+    const pharosCarbon = carbon(settings), result = pharosCarbon.estimate(factors, { tokens: shared.tokens });
+    close(result.facilityWh, facility_wh, `${name} facility Wh`);
+    close(result.co2, co2e_g, `${name} CO₂e`);
+    const totals = Object.entries(shared.tokens).map(([tier, counts]) => ({ keys: [tier], values: { uncached_input_tokens: counts.uncached_input, cache_read_input_tokens: counts.cache_read, cache_creation_input_tokens: counts.cache_write, output_tokens: counts.output } }));
+    const parts = deriveCarbon({ settings: pharosCarbon.settingsSnapshot(factors), factors, estimate: pharosCarbon.estimate }, totals, "co2");
+    for (const [category, grams] of Object.entries(co2e_g_by_category)) close(parts[category], grams, `${name} ${category}`);
+  }
 });

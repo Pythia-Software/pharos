@@ -1,6 +1,7 @@
 import { encodeQuery, normalizeQueryState, type QueryState, type SavedQuery, createQueryLinkService, httpQuerySnapshotStore } from "@pythia-software/query-table-core";
 import type { CardCover } from "./card-cover";
 import { preferences } from "./preferences";
+import { normalizedDashboardChart } from "./analysis-catalogs";
 import { queryDatasets, queryFromURL, queryURL, resolveRollingQuery, rollingQueryMatches, updateQueryWindowURL, type QueryDataset, type RollingWindow } from "./query-links";
 
 export const BOOKMARKS_KEY = "pharos-bookmarks-v1";
@@ -83,14 +84,19 @@ export function collectQuery(dataset: QueryDataset, query: QueryState, title: st
   const items = readBookmarks(), url = options.url ?? queryURL(dataset, query, options.window);
   const dashboardContext = (address: string) => {
     const params = new URL(address, location.origin).searchParams;
-    return params.get("card_query") && params.get("analyze_mode") === "dashboards" ? JSON.stringify([params.get("analyze_topic"), params.get("analyze_chart"), params.get("analyze_filters")]) : "";
+    return params.get("card_query") && params.get("analyze_mode") === "dashboards" ? JSON.stringify([params.get("analyze_topic"), normalizedDashboardChart(params.get("analyze_topic"), params.get("analyze_chart")), params.get("analyze_filters")]) : "";
+  };
+  // The same card link, written before or after a chart's format changed.
+  const sameLink = (address: string) => {
+    const strip = (value: string) => { const parsed = new URL(value, location.origin); parsed.searchParams.delete("analyze_chart"); return parsed.pathname + parsed.search; };
+    return Boolean(dashboardContext(address)) && strip(address) === strip(url) && dashboardContext(address) === dashboardContext(url);
   };
   const existing = items.find(item => {
     // A template can select a specialized study even when its source query
     // and cover match another card. Preserve that identity when collecting.
     if (item.templateId !== options.templateId) return false;
     if (JSON.stringify(item.cover) !== JSON.stringify(options.cover)) return false;
-    if (item.url === url) return true;
+    if (item.url === url || sameLink(item.url)) return true;
     const spec = options.templateId && item.templateId === options.templateId ? queryFromURL(item.url, item.query) : undefined;
     return spec?.dataset === dataset && encodeQuery(spec.query) === encodeQuery(query) && dashboardContext(item.url) === dashboardContext(url);
   });

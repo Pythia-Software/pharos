@@ -7,7 +7,7 @@ import { readDashboardQuery } from "../../../src/usage-dashboard-model";
 import { timeBounds, usageTime, writingTime } from "../../../src/usage-chart";
 import { defaultConcurrencySettings, normalizeConcurrencySettings } from "../../../src/concurrency-settings";
 import usage from "../../../../schemas/usage.schema.json";
-import writing from "../../../../schemas/writing.schema.json";
+import writingMessages from "../../../../schemas/writing_messages.schema.json";
 
 const generatedAt = "2026-11-01T08:30:12.345Z"; // Crosses the US daylight saving change.
 const windows = [["1h", 1], ["6h", 6], ["24h", 24], ["7d", 168], ["30d", 720], ["all", 0]];
@@ -21,11 +21,11 @@ test("summary values open their dashboard with the snapshot's exact elapsed dura
       assert.equal(url.pathname, "/analyze");
       assert.equal(state.topic, topic);
       assert.equal(state.mode, "dashboards");
-      assert.equal(state.dataset, human ? "writing" : "usage");
-      const restored = readDashboardQuery(params, { ...EMPTY_QUERY, where: [{ field: human ? "last_message_at" : "last_usage_at", op: ">=", value: "-30d" }] });
+      assert.equal(state.dataset, human ? "writing_messages" : "usage");
+      const restored = readDashboardQuery(params, { ...EMPTY_QUERY, where: [{ field: human ? "sent_at" : "last_usage_at", op: ">=", value: "-30d" }] });
       assert.equal(restored.error, "");
       assert.deepEqual(restored.query, decodeQueryStrict(params.get("analyze_filters")));
-      const bounds = timeBounds(restored.query.where, human ? writingTime : usageTime);
+      const bounds = timeBounds(restored.query.where, human ? { first: "sent_at", last: "sent_at" } : usageTime);
       if (hours) {
         assert.equal(bounds.to.toISOString(), generatedAt);
         assert.equal(bounds.from.getTime(), Date.parse(generatedAt) - hours * 3600000);
@@ -38,7 +38,7 @@ test("summary values open their dashboard with the snapshot's exact elapsed dura
       assert.equal(chart.period, hours && hours <= 24 ? "hour" : "day");
       if (metric === "cost_usd") assert.equal(chart.metric, "cost");
       if (metric === "tokens") assert.equal(chart.metric, "tokens");
-      const schema = loadSchema(human ? writing : usage);
+      const schema = loadSchema(human ? writingMessages : usage);
       assert.deepEqual(toQueryRequestV3(restored.query, schema, { version: 3, profile: "qt-sqlite-v1" }).diagnostics ?? [], []);
     }
   }

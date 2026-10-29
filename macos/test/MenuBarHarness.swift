@@ -14,6 +14,9 @@ final class ArchiveService: ObservableObject {
     @Published var url: URL? = URL(string: "http://menu-bar-test.invalid/")
     @Published var libraryConnection: String?
     var hasConnectedLibrary = true
+    var managedApplication = false
+    var noLibrarySelected = false
+    var libraryOperation: String?
     var error: String?
     var setupError: String?
     var disconnected: Disconnection?
@@ -36,6 +39,7 @@ final class ArchiveWKWebView: WKWebView {}
 final class MenuFixture: URLProtocol {
     static var activity = false
     static var activityLabel = "Indexing captures"
+    static var activityExtra: [String: Any] = [:]
     static var ejectable = true
     static var failure = ""
     static var indexRequested = false
@@ -86,7 +90,7 @@ final class MenuFixture: URLProtocol {
             }
             value = ["settings": MenuBarPreferences.defaults.merging(["cost": true, "backup": true, "space": true, "index": true, "eject": true]) { _, new in new },
                 "error": Self.failure, "indexed_at": "2026-10-13T10:40:00Z", "backup_at": "2026-10-13T07:40:00Z",
-                "library": ["library_dir": "/Volumes/Archive SSD/Pharos", "activities": Self.activity ? [["kind": "index", "label": Self.activityLabel, "progress": 0.42]] : [], "drive": ["ejectable": Self.ejectable, "name": "Archive SSD"]],
+                "library": ["library_dir": "/Volumes/Archive SSD/Pharos", "activities": Self.activity ? [["kind": "index", "label": Self.activityLabel, "progress": 0.42].merging(Self.activityExtra) { _, extra in extra }] : [], "drive": ["ejectable": Self.ejectable, "name": "Archive SSD"]],
                 "storage": ["sizes": ["library_bytes": 12400000000], "free_bytes": 286000000000]]
         }
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
@@ -106,10 +110,10 @@ final class MenuFixture: URLProtocol {
 }
 
 @main struct MenuBarHarness {
-    static func pump(_ predicate: () -> Bool) {
+    static func pump(_ predicate: () -> Bool, line: UInt = #line) {
         let end = Date().addingTimeInterval(5)
         while !predicate() && Date() < end { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
-        precondition(predicate(), "Timed out waiting for native menu")
+        precondition(predicate(), "Timed out waiting for native menu (line \(line))")
     }
     static func menu(_ controller: MenuBarController) -> NSMenu {
         let item = Mirror(reflecting: controller).children.first { $0.label == "item" }!.value as! NSStatusItem
@@ -148,6 +152,28 @@ final class MenuFixture: URLProtocol {
         let releasedUsageRequests = MenuFixture.usageRequests
         controller.invalidateUsage()
         precondition(MenuFixture.usageRequests == releasedUsageRequests, "Released library fetched usage")
+        // A selected library whose service is not up (starting, respawning,
+        // stopped for a delivery) is still work, not "no library".
+        let neutralDot = Mirror(reflecting: controller).children.first { $0.label == "dot" }!.value as! MenuBarDot
+        precondition(menu.items.contains { $0.title == "Pharos · Working" }, "A selected library's service starting must read as Working")
+        precondition(menu.items.contains { $0.title == "Waiting for the library…" })
+        precondition(neutralDot.color == .systemYellow)
+        precondition(menu.items.first { $0.title == "Index changes now" }?.isEnabled != true, "No service to index with")
+        // With no library selected the menu is idle, not checking forever.
+        service.noLibrarySelected = true
+        controller.refresh()
+        precondition(menu.items.contains { $0.title == "Pharos · No library connected" }, "No library must not read as Working")
+        precondition(neutralDot.color == .systemGray)
+        precondition(menu.items.first { $0.title == "Index changes now" }?.isEnabled != true, "No library to index")
+        // With nothing selected, a broker operation that writes a drive
+        // (creating or recovering a library) is still work.
+        service.noLibrarySelected = false
+        service.libraryOperation = "Restoring the library from the backup"
+        controller.refresh()
+        precondition(menu.items.contains { $0.title == "Pharos · Working" }, "A broker operation must read as Working")
+        precondition(menu.items.contains { $0.title == "Restoring the library from the backup" })
+        precondition(neutralDot.color == .systemYellow)
+        service.libraryOperation = nil
         MenuFixture.humanWords = 3240
         service.hasConnectedLibrary = true
         service.libraryConnection = "library-a:4:true"
@@ -180,6 +206,64 @@ final class MenuFixture: URLProtocol {
         precondition(detail.title.contains("\n"), "Long status must wrap")
         precondition(detail.title.replacingOccurrences(of: "\n", with: " ") == busyLabel + " · stage 42%", "Wrapping must retain the complete status")
         precondition(menu.size.width <= baselineWidth + 2, "Status must not widen the menu")
+        // A whole-operation forecast reads as time left, not the stage's.
+        MenuFixture.activityLabel = "Capture & index"
+        MenuFixture.activityExtra = ["estimated_completion_at": ISO8601DateFormatter().string(from: Date().addingTimeInterval(150)), "estimated_completion_scope": "operation"]
+        controller.refresh()
+        pump { menu.items.contains { $0.title.replacingOccurrences(of: "\n", with: " ").hasPrefix("Capture & index · stage 42% · about") && $0.title.replacingOccurrences(of: "\n", with: " ").hasSuffix(" min left") } }
+        MenuFixture.activityExtra["estimated_completion_scope"] = "stage"
+        controller.refresh()
+        pump { menu.items.contains { $0.title.replacingOccurrences(of: "\n", with: " ").hasPrefix("Capture & index · stage 42% · about") && $0.title.replacingOccurrences(of: "\n", with: " ").hasSuffix(" min for this stage") } }
+        MenuFixture.activityExtra = [:]
+        // The broker state the menu derives "no library" and library
+        // operations from.
+        let library: [String: Any] = ["id": "a", "available": true, "connected": false]
+        let idle = ManagedLibraryStatus.answered(["selected": "a", "libraries": [library], "busy": false])!
+        precondition(!idle.noLibrary && idle.operation == nil && !idle.connected, "A selected library starting is not no library")
+        precondition(ManagedLibraryStatus().noLibrary == false, "Before the broker answers, nothing is known")
+        let none = ManagedLibraryStatus.answered(["selected": "", "libraries": [library], "busy": false, "job": ["state": "complete", "phase": "done"]])!
+        precondition(none.noLibrary && none.operation == nil)
+        let unavailable = ManagedLibraryStatus.answered(["selected": "a", "libraries": [["id": "a", "available": false]]])!
+        precondition(unavailable.noLibrary)
+        let recovering = ManagedLibraryStatus.answered(["selected": "", "libraries": [], "busy": true, "job": ["state": "running", "phase": "Restoring the backup"]])!
+        precondition(!recovering.noLibrary && recovering.operation == "Restoring the backup")
+        let busy = ManagedLibraryStatus.answered(["selected": "", "libraries": [], "busy": true])!
+        precondition(busy.operation == ManagedLibraryStatus.unanswered)
+        precondition(ManagedLibraryStatus.answered(["error": "x"]) == nil, "Not a state document")
+        // A failed or timed-out request (the broker holding its lock while it
+        // creates a library) keeps "Finishing" until an answer says idle.
+        let failed = none.failedRequest(timedOut: true)
+        precondition(none.failedRequest(timedOut: false) == none, "A connection or parse error keeps the last answer")
+        precondition(ManagedLibraryStatus().failedRequest(timedOut: false).operation == nil, "No phantom operation before the first answer")
+        precondition(!failed.noLibrary && failed.operation == ManagedLibraryStatus.unanswered)
+        precondition(failed.current(pendingFor: nil) == failed)
+        precondition(none.current(pendingFor: 3) == none && none.current(pendingFor: 7).operation == ManagedLibraryStatus.unanswered)
+        precondition(recovering.unansweredRequest().operation == "Restoring the backup")
+        // /api/app/operations answers while /api/app/state waits on a create:
+        // its running operation keeps the menu from saying no library.
+        let creating = ["app": ["operations": [["state": "running", "verb": "Creating the library", "label": "Create a library"],
+                                               ["state": "succeeded", "verb": "Opening the library"]]]]
+        precondition(ManagedLibraryStatus.runningBrokerOperations(creating) == ["Creating the library"])
+        precondition(ManagedLibraryStatus.runningBrokerOperations(["error": "x"]) == nil, "Not an operations document")
+        let moving = ["app": ["operations": [["state": "running", "verb": "Copying the library", "step": ["name": "Copying conversations"]]]]]
+        precondition(ManagedLibraryStatus.runningBrokerOperations(moving) == ["Copying conversations"])
+        let whileCreating = none.withBrokerOperations(["Creating the library"])
+        precondition(!whileCreating.noLibrary && whileCreating.activeOperation == "Creating the library")
+        precondition(whileCreating.withBrokerOperations([]).noLibrary, "Once it ends, no library again")
+        precondition(recovering.withBrokerOperations([]).activeOperation == "Restoring the backup", "An older broker's job still counts")
+        // The unified activity flag's line comes from the snapshot's words.
+        let indexing: [String: Any] = ["eject": ["verdict": "safe-in"], "operations": [
+            ["state": "running", "label": "Index changes", "priority": "foreground", "step": ["index": 3, "count": 6, "name": "Claude Code"], "time": ["label": "about 3–6 min"]],
+            ["state": "running", "label": "Index the Search view", "priority": "background"]], "attention": []]
+        precondition(UnifiedMenuStatus.from(indexing) == UnifiedMenuStatus(state: .working, detail: "Index changes · step 3 of 6 · Claude Code · about 3–6 min"))
+        precondition(UnifiedMenuStatus.from(["eject": ["verdict": "safe", "headline": "Safe to eject"], "operations": [["state": "succeeded", "label": "Back up"]], "attention": []])
+            == UnifiedMenuStatus(state: .idle, detail: "Safe to eject"), "Idle, the detail is the verdict's headline")
+        let failing: [String: Any] = ["eject": ["verdict": "safe"], "operations": [], "attention": [["severity": "warning", "title": "Interrupted"], ["severity": "error", "title": "The last backup failed"]]]
+        precondition(UnifiedMenuStatus.from(failing) == UnifiedMenuStatus(state: .attention, detail: "The last backup failed"), "An error outranks a warning")
+        let broker: [String: Any] = ["libraries": [["selected": true, "snapshot": ["eject": ["verdict": "safe"], "operations": []]]],
+                                     "app": ["operations": [["state": "running", "label": "Copy library", "state_label": "Copying the library"]]], "attention": []]
+        precondition(UnifiedMenuStatus.from(broker)?.state == .working, "A broker operation is work")
+        precondition(UnifiedMenuStatus.from(["libraries": [], "app": ["operations": []], "attention": []]) == nil, "No library: the app's own rules decide")
         let font = NSFont.menuFont(ofSize: 13)
         for text in [String(repeating: "conversation/", count: 20), "👩🏽‍💻 日本語の会話を読み込み、ライブラリのインデックスを更新しています。"] {
             let wrapped = MenuBarController.wrappedMenuTitle(text, width: 160, font: font)

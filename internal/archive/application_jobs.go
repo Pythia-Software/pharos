@@ -41,6 +41,18 @@ func (m *applicationManager) startOperation(w http.ResponseWriter, r *http.Reque
 		writeError(w, err, 400)
 		return
 	}
+	// Registered before the services stop, so the lock-free snapshot shows
+	// it from the start.
+	var op *Op
+	if recovering {
+		op = m.operations.begin(OperationSpec{Kind: "library.recover", Trigger: triggerUser})
+	} else {
+		variant := "copy"
+		if body["move"] == true {
+			variant = "move"
+		}
+		op = m.operations.begin(OperationSpec{Kind: "library.transfer", Variant: variant, Trigger: triggerUser}, firstString(body["source"]), firstString(body["target"]))
+	}
 	m.busy = true
 	m.generation++
 	for id := range m.children {
@@ -48,10 +60,11 @@ func (m *applicationManager) startOperation(w http.ResponseWriter, r *http.Reque
 	}
 	m.mu.Unlock()
 	m.reportJob("running", "Preparing library operation")
-	go func() {
+	op.Step("Preparing library operation", "", -1)
+	m.operations.launch(op, func(op *Op) error {
 		defer m.operationMu.Unlock()
-		defer func() { m.mu.Lock(); m.busy = false; m.mu.Unlock() }()
-		progress := func(s string) { m.reportJob("running", s) }
+		defer func() { m.mu.Lock(); m.busy = false; m.publishLocked(); m.mu.Unlock() }()
+		progress := func(s string) { m.reportJob("running", s); op.Step(s, "", -1) }
 		if recovering {
 			var config Config
 			config, err = RecoverLibrary(m.ctx, firstString(body["backup"]), firstString(body["path"]), progress)
@@ -60,8 +73,7 @@ func (m *applicationManager) startOperation(w http.ResponseWriter, r *http.Reque
 				var id string
 				id, err = m.registry.register(config, "")
 				if err == nil {
-					m.registry.Selected = id
-					m.generation++
+					m.selectLocked(id)
 					err = m.registry.save()
 				}
 				m.mu.Unlock()
@@ -74,7 +86,108 @@ func (m *applicationManager) startOperation(w http.ResponseWriter, r *http.Reque
 		} else {
 			m.reportJob("complete", "Library operation completed and verified")
 		}
-	}()
+		return err
+	})
+	writeJSON(w, map[string]any{"started": true}, http.StatusAccepted)
+}
+
+// compactCloseWait is how long a compaction waits for the library's service
+// to finish exiting after stopChildLocked gave up on it, before ending it;
+// tests shorten it.
+var compactCloseWait = 30 * time.Second
+
+// startCompaction compacts one library's catalog (catalog_compact.go). Like a
+// transfer it closes every library while it runs, and the startup window
+// shows its progress and reopens the library when it finishes.
+func (m *applicationManager) startCompaction(w http.ResponseWriter, body map[string]any) {
+	if !m.operationMu.TryLock() {
+		writeError(w, fmt.Errorf("another library operation is running"), 409)
+		return
+	}
+	m.mu.Lock()
+	id := firstString(body["id"])
+	var config Config
+	var err error
+	if l := m.registry.library(id); l == nil {
+		err = fmt.Errorf("choose a library")
+	} else if m.suspended[id] {
+		err = fmt.Errorf("this library has been released; reconnect it first")
+	} else {
+		config, err = l.load()
+	}
+	if err != nil {
+		m.mu.Unlock()
+		m.operationMu.Unlock()
+		writeError(w, err, 400)
+		return
+	}
+	op := m.operations.begin(OperationSpec{Kind: "library.compact", Trigger: triggerUser}, id)
+	m.busy = true
+	m.generation++
+	for child := range m.children {
+		m.stopChildLocked(child)
+	}
+	// A service still checkpointing on its way out holds the library.
+	closing := m.children[id]
+	m.mu.Unlock()
+	m.reportJob("running", "Preparing to compact the catalog")
+	op.Step("Preparing to compact the catalog", "", -1)
+	m.operations.launch(op, func(op *Op) error {
+		defer m.operationMu.Unlock()
+		defer func() { m.mu.Lock(); m.busy = false; m.publishLocked(); m.mu.Unlock() }()
+		if closing != nil {
+			select {
+			case <-closing.done:
+			case <-m.ctx.Done():
+				return m.ctx.Err()
+			case <-time.After(compactCloseWait):
+				// It has ignored SIGTERM this long: end it, as the app's quit
+				// does. Its committed writes are kept, as after any crash.
+				_ = closing.cmd.Process.Kill()
+				select {
+				case <-closing.done:
+				case <-time.After(5 * time.Second):
+					// Fail as a job, so the startup window reopens the library.
+					err := fmt.Errorf("the library is still closing; compact again shortly")
+					m.reportJob("failed", err.Error())
+					return err
+				}
+			}
+			m.mu.Lock()
+			if m.children[id] == closing {
+				delete(m.children, id)
+			}
+			m.mu.Unlock()
+		}
+		step := ""
+		receipt, err := CompactLibrary(m.ctx, config, func(phase string, done, total int64) {
+			if total > 0 {
+				m.reportJob("running", fmt.Sprintf("%s: %s of %s", phase, humanBytes(done), humanBytes(total)))
+			} else {
+				m.reportJob("running", phase)
+			}
+			if phase != step {
+				step = phase
+				unit := ""
+				if total > 0 {
+					unit = "byte"
+				}
+				op.Step(phase, unit, total)
+			}
+			if total > 0 {
+				op.progress(phase, "", "byte", float64(done), float64(total), true)
+			}
+		})
+		switch {
+		case err != nil:
+			m.reportJob("failed", err.Error())
+		case receipt.FreeBytes == 0:
+			m.reportJob("complete", "The catalog had no free space to give back")
+		default:
+			m.reportJob("complete", fmt.Sprintf("Compacted the catalog from %s to %s in %s", humanBytes(receipt.BeforeBytes), humanBytes(receipt.AfterBytes), humanDuration(receipt.Duration)))
+		}
+		return err
+	})
 	writeJSON(w, map[string]any{"started": true}, http.StatusAccepted)
 }
 
@@ -86,6 +199,8 @@ func (m *applicationManager) deliveryCycle(sourceID, targetID string) {
 		return
 	}
 	defer m.operationMu.Unlock()
+	// Whether delivery's IO runs at the utility tier is the flag's (§10).
+	m.operations.refreshFlag(m.ctx)
 	m.mu.Lock()
 	a, b := m.registry.library(sourceID), m.registry.library(targetID)
 	if a == nil || b == nil || m.released || m.suspended[sourceID] {
@@ -103,21 +218,31 @@ func (m *applicationManager) deliveryCycle(sourceID, targetID string) {
 	if m.suspended[targetID] {
 		targetErr = fmt.Errorf("archive is released; pending history stays local until its drive returns")
 	}
+	deliver := m.operations.begin(OperationSpec{Kind: "library.deliver", Trigger: triggerSchedule}, sourceID, targetID)
+	defer func() { deliver.Finish(err) }()
 	m.busy = true
 	m.generation++
 	m.stopChildLocked(sourceID)
 	m.stopChildLocked(targetID)
 	m.mu.Unlock()
-	defer func() { m.mu.Lock(); m.busy = false; m.mu.Unlock() }()
-	progress := func(s string) { m.reportJob("running", s) }
+	defer func() { m.mu.Lock(); m.busy = false; m.publishLocked(); m.mu.Unlock() }()
+	progress := func(s string) { m.reportJob("running", s); deliver.Step(s, "", -1) }
 	if _, e := os.Stat(pendingDeliveryPath(source)); os.IsNotExist(e) {
 		progress("Capturing approved sources into the pending library")
-		err = capturePendingLibrary(m.ctx, source)
+		_, capture := deliver.Child(OperationSpec{Kind: "library.deliver.capture", Libraries: []string{sourceID}, Trigger: triggerChained})
+		// Delivery is background: with the flag on, its IO runs at the
+		// utility tier (§10), as the move's below does.
+		deliver.RunIO(func() { err = capturePendingLibrary(m.ctx, source) })
+		capture.Finish(err)
 	}
 	if err == nil {
 		err = targetErr
 		if err == nil {
-			_, err = TransferLibrary(m.ctx, source, target, true, progress)
+			_, move := deliver.Child(OperationSpec{Kind: "library.transfer", Variant: "move", Libraries: []string{sourceID, targetID}, Trigger: triggerChained})
+			deliver.RunIO(func() {
+				_, err = TransferLibrary(m.ctx, source, target, true, func(s string) { progress(s); move.Step(s, "", -1) })
+			})
+			move.Finish(err)
 		}
 	}
 	if err != nil {

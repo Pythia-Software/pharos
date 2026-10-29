@@ -398,6 +398,10 @@ type driveState struct {
 	sizes   librarySizes
 	checked time.Time
 	growth  cloudGrowth
+	// shares divide sizes for the storage breakdown. They are read with the
+	// sizes, so both describe the same moment and a sync's commits do not
+	// send the breakdown back to the catalog.
+	shares storageShares
 }
 
 func collectDrive(ctx context.Context, config Config) *driveState {
@@ -464,19 +468,56 @@ func (c *driveCache) store(config Config, state *driveState) {
 	}
 }
 
+// publish makes state the current one while its refresh is still running:
+// unlike store, it leaves refreshing set, so no other refresh starts until
+// this one finishes.
+func (c *driveCache) publish(config Config, state *driveState) {
+	key := driveKey(config)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.key == key {
+		c.state = state
+	}
+}
+
+// setGrowth replaces published with a copy carrying growth, unless a newer
+// state has replaced it. Readers may hold published, so it is not modified.
+func (c *driveCache) setGrowth(published *driveState, growth cloudGrowth) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.state == published {
+		updated := *published
+		updated.growth = growth
+		c.state = &updated
+	}
+}
+
 // driveHealth answers from the cache at once and refreshes it in the
 // background, so a slow diskutil never holds up a poll.
 func (s *Server) driveHealth() map[string]any {
 	config := s.Config()
 	state, refresh := drives.cached(config)
 	if refresh {
-		s.spawn(func(ctx context.Context) {
-			var fresh *driveState
-			defer func() { drives.store(config, fresh) }()
-			if state := collectDrive(ctx, config); ctx.Err() == nil {
-				state.growth = s.Catalog.recordCloudLibrarySize(ctx, config, state)
-				fresh = state
+		// A read that writes one library_size_history row (§3.4, hidden). The
+		// sizes are published before that write, which waits for the catalog
+		// writer: during a sync that can take minutes. The refresh stays in
+		// flight until the write lands, so polls meanwhile start no other.
+		s.start(OperationSpec{Kind: "drive.measure", Trigger: triggerRead}, func(ctx context.Context, op *Op) error {
+			defer drives.store(config, nil)
+			fresh := collectDrive(ctx, config)
+			if ctx.Err() != nil {
+				return nil
 			}
+			fresh.growth = cloudLibraryGrowth(nil, fresh.checked, fresh.sizes.LibraryBytes)
+			if state != nil {
+				fresh.growth, fresh.shares = state.growth, state.shares
+			}
+			if shares, err := s.Catalog.storageShares(ctx); err == nil {
+				fresh.shares = shares
+			}
+			drives.publish(config, fresh)
+			drives.setGrowth(fresh, s.Catalog.recordCloudLibrarySize(ctx, config, fresh))
+			return nil
 		})
 	}
 	if state == nil {

@@ -32,7 +32,7 @@ type askModel struct {
 	Default  bool              `json:"default"`
 }
 type askProvider struct {
-	discoveredAt     time.Time
+	checkedAt        time.Time
 	recordSession    func(context.Context, string) error
 	ID               string        `json:"id"`
 	Models           []askModel    `json:"models"`
@@ -385,8 +385,11 @@ func askPrepareCLI(ctx context.Context, p askProvider, s askSelection, dir strin
 	var args []string
 	switch p.ID {
 	case "Codex":
+		// Codex asks to approve each MCP tool call, which approval_policy
+		// "never" refuses; preapprove the read-only Pharos server's tools only,
+		// as Claude's --allowedTools does.
 		args = []string{"exec", "--ignore-user-config", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "-c", `approval_policy="never"`, "-c", "features.shell_tool=false", "-c", "features.apply_patch_freeform=false", "-c", `web_search="disabled"`, "--model", s.Model, "--output-schema", schema, "--output-last-message", filepath.Join(dir, "answer.json"), "--color", "never", "-"}
-		args = append(args[:len(args)-1], "-c", "mcp_servers.pharos.command="+jsonText(p.mcp.Command), "-c", "mcp_servers.pharos.args="+jsonText(p.mcp.Args), "-c", "mcp_servers.pharos.required=true", "-")
+		args = append(args[:len(args)-1], "-c", "mcp_servers.pharos.command="+jsonText(p.mcp.Command), "-c", "mcp_servers.pharos.args="+jsonText(p.mcp.Args), "-c", "mcp_servers.pharos.required=true", "-c", `mcp_servers.pharos.default_tools_approval_mode="approve"`, "-")
 	case "Claude":
 		args = []string{"-p", "--output-format", "json", "--json-schema", askResponseSchema, "--model", s.Model, "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--setting-sources", "", "--settings", `{"disableAllHooks":true}`, "--no-session-persistence", "--permission-mode", "dontAsk"}
 		args = append(args, "--mcp-config", jsonText(map[string]any{"mcpServers": map[string]askMCPServer{"pharos": p.mcp}}), "--allowedTools", "mcp__pharos")
@@ -420,7 +423,7 @@ skills: []
 plugins: []
 commandExecutionPolicy: off
 ---
-Use only the pharos-ask MCP server for archived work and the supplied JSON navigation context for destinations and private history. Do not use other MCP servers or native tools.
+Use only the pharos-ask MCP server, for archived work and for site links (browse_site, then site_link); take section ids and private history from the supplied JSON context. Do not use other MCP servers or native tools.
 `
 		if err := os.WriteFile(filepath.Join(agentDir, "pharos-navigation.md"), []byte(agent), 0600); err != nil {
 			return nil, err

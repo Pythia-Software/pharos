@@ -84,6 +84,13 @@ test('excluding missing values and multiple exclusions round-trip and match the 
   }
 });
 
+test('an OR of conjunctions is never one field\'s slice and survives slice edits', () => {
+  const pairs = { any: [{ all: [{ field, op: '=', value: 'opus-5-5' }, { field: 'provider', op: '=', value: 'claude' }] }, { field, op: '=', value: 'gpt-6-sol' }] };
+  assert.equal(isSliceTerm(pairs, field), false);
+  assert.deepEqual(readSlice([pairs], field), all);
+  assert.deepEqual(withSlice([pairs], field, { values: ['opus-5-5'], excluded: false }), [pairs, { field, op: '=', value: 'opus-5-5' }]);
+});
+
 test('inclusions with an unknown value remain a single OR selection', () => {
   const selection = { values: ['opus-5-5', null], excluded: false };
   const where = withSlice([], field, selection);

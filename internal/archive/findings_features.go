@@ -2,6 +2,7 @@ package archive
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -160,52 +161,28 @@ func (env *findingEnv) featureRowsWithRevisions(name, query, column, revisionsTa
 			nextInput.partitions[id] = findingFeaturePartition{revision: firstString(row["revision"]), rows: partitions[id]}
 		}
 	}
-	if !shared {
+	// Serialize the changed partitions now, before any detector sees the
+	// rows: what is stored is what the query returned, whatever a detector
+	// does with the maps later.
+	encoded := make(map[string]string, len(revisions))
+	for _, row := range revisions {
+		id := firstString(row["conversation_id"])
+		encoded[id] = jsonText(partitions[id])
+	}
+	publication := findingFeaturePublication{name: name, version: version, built: built, full: full, revisions: revisions, rowsJSON: encoded, input: nextInput}
+	if shared {
+		// The pass's snapshot is still open: waiting for the writer here would
+		// keep it, and the WAL behind it, open for every queued write (an index
+		// commits one per record). The pass publishes after it commits.
+		env.pendingFeatures = append(env.pendingFeatures, publication)
+	} else {
 		if err := snapshot.Commit(); err != nil {
 			return nil, err
 		}
-	}
-	if len(revisions) > 0 || full {
-		// Publishing an old revision is harmless: the next read compares it with
-		// the authoritative token. Never mark a newer token as consumed.
-		if err := env.catalog.writeTransaction(env.ctx, "finding-features "+name, func(tx *sql.Tx) error {
-			var current string
-			err := tx.QueryRowContext(env.ctx, "SELECT version FROM finding_feature_builds WHERE feature=?", name).Scan(&current)
-			if err != nil && err != sql.ErrNoRows {
-				return err
-			}
-			if !full && current != built {
-				return nil
-			}
-			if full {
-				if _, err := tx.ExecContext(env.ctx, "DELETE FROM finding_feature_partitions WHERE feature=?", name); err != nil {
-					return err
-				}
-			}
-			statement, err := tx.PrepareContext(env.ctx, `INSERT INTO finding_feature_partitions(feature,conversation_id,revision,rows_json) VALUES(?,?,?,?)
-   ON CONFLICT(feature,conversation_id) DO UPDATE SET revision=excluded.revision,rows_json=excluded.rows_json`)
-			if err != nil {
-				return err
-			}
-			defer statement.Close()
-			for _, row := range revisions {
-				id := firstString(row["conversation_id"])
-				if _, err := statement.ExecContext(env.ctx, name, id, row["revision"], jsonText(partitions[id])); err != nil {
-					return err
-				}
-			}
-			_, err = tx.ExecContext(env.ctx, `INSERT INTO finding_feature_builds(feature,version) VALUES(?,?) ON CONFLICT(feature) DO UPDATE SET version=excluded.version`, name, version)
-			return err
-		}); err != nil {
+		if err := env.catalog.publishFindingFeature(env.ctx, publication); err != nil {
 			return nil, err
 		}
 	}
-	state.featureMu.Lock()
-	if state.featureInputs == nil {
-		state.featureInputs = map[string]*findingFeatureInput{}
-	}
-	state.featureInputs[name] = nextInput
-	state.featureMu.Unlock()
 	ids := make([]string, 0, len(partitions))
 	for id := range partitions {
 		ids = append(ids, id)
@@ -217,6 +194,78 @@ func (env *findingEnv) featureRowsWithRevisions(name, query, column, revisionsTa
 	}
 	orderFindingFeatures(name, rows)
 	return rows, nil
+}
+
+// findingFeaturePublication is one feature's partitions computed from a
+// snapshot, for publishing once that snapshot is closed.
+type findingFeaturePublication struct {
+	name, version, built string
+	full                 bool
+	revisions            []map[string]any
+	rowsJSON             map[string]string // each changed partition's rows, serialized when computed
+	input                *findingFeatureInput
+}
+
+// publishFindingFeatures publishes what featureRows computed inside the
+// pass's shared snapshot. Call it only after that snapshot has ended.
+func (env *findingEnv) publishFindingFeatures(ctx context.Context) error {
+	for len(env.pendingFeatures) > 0 {
+		if err := env.catalog.publishFindingFeature(ctx, env.pendingFeatures[0]); err != nil {
+			return err
+		}
+		env.pendingFeatures = env.pendingFeatures[1:]
+	}
+	return nil
+}
+
+// publishFindingFeature stores a feature's changed partitions, then the
+// in-memory inputs. The memory cache is never ahead of the durable tokens in
+// a way that matters: the next pass reuses a remembered partition only when
+// its revision equals the one stored in finding_feature_partitions.
+func (c *Catalog) publishFindingFeature(ctx context.Context, p findingFeaturePublication) error {
+	if len(p.revisions) > 0 || p.full {
+		// Publishing an old revision is harmless: the next read compares it with
+		// the authoritative token. Never mark a newer token as consumed.
+		if err := c.writeTransaction(ctx, "finding-features "+p.name, func(tx *sql.Tx) error {
+			var current string
+			err := tx.QueryRowContext(ctx, "SELECT version FROM finding_feature_builds WHERE feature=?", p.name).Scan(&current)
+			if err != nil && err != sql.ErrNoRows {
+				return err
+			}
+			if !p.full && current != p.built {
+				return nil
+			}
+			if p.full {
+				if _, err := tx.ExecContext(ctx, "DELETE FROM finding_feature_partitions WHERE feature=?", p.name); err != nil {
+					return err
+				}
+			}
+			statement, err := tx.PrepareContext(ctx, `INSERT INTO finding_feature_partitions(feature,conversation_id,revision,rows_json) VALUES(?,?,?,?)
+   ON CONFLICT(feature,conversation_id) DO UPDATE SET revision=excluded.revision,rows_json=excluded.rows_json`)
+			if err != nil {
+				return err
+			}
+			defer statement.Close()
+			for _, row := range p.revisions {
+				id := firstString(row["conversation_id"])
+				if _, err := statement.ExecContext(ctx, p.name, id, row["revision"], p.rowsJSON[id]); err != nil {
+					return err
+				}
+			}
+			_, err = tx.ExecContext(ctx, `INSERT INTO finding_feature_builds(feature,version) VALUES(?,?) ON CONFLICT(feature) DO UPDATE SET version=excluded.version`, p.name, p.version)
+			return err
+		}); err != nil {
+			return err
+		}
+	}
+	state := &c.findings
+	state.featureMu.Lock()
+	if state.featureInputs == nil {
+		state.featureInputs = map[string]*findingFeatureInput{}
+	}
+	state.featureInputs[p.name] = p.input
+	state.featureMu.Unlock()
+	return nil
 }
 
 // Match the reference scans' index order, including timestamp/token ties.

@@ -130,6 +130,13 @@ func TestMenuBarIgnoresDisabledAndRemovedSourceFailures(t *testing.T) {
 	// Source filtering must not hide a failure of the service itself.
 	server.runs[0].Error = "catalog read failed"
 	check("catalog read failed")
+	// A failed backup links to Settings → Backups, where backups now live.
+	server.runs, server.captures.runs = nil, nil
+	server.backups.runs = []*BackupRun{{ID: "backup-1", State: "failed"}}
+	status := libraryStatusCall(t, server, "/api/menu-bar/status")
+	if status["error"] != "Backup failed. Open Backups for details." || status["error_path"] != "/settings/backups" {
+		t.Fatalf("backup failure: %v, %v", status["error"], status["error_path"])
+	}
 }
 
 func TestMenuBarFreshnessIsScopedToThisMac(t *testing.T) {
@@ -230,9 +237,9 @@ func TestMenuBarUsageMatchesRollingSummary(t *testing.T) {
 	catalog, config := testCatalog(t)
 	ingestUsageFixture(t, catalog)
 	catalog.now = func() time.Time { return time.Date(2026, 9, 21, 2, 15, 0, 0, time.UTC) }
-	catalog.background = func(func(context.Context)) bool { return false }
+	catalog.background = func(OperationSpec, func(context.Context, *Op) error) bool { return false }
 	server := testServer(t, config, catalog)
-	catalog.background = func(func(context.Context)) bool { return false }
+	catalog.background = func(OperationSpec, func(context.Context, *Op) error) bool { return false }
 	summary, err := catalog.UsageSummary(t.Context())
 	if err != nil {
 		t.Fatal(err)

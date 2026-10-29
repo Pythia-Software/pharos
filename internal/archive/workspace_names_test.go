@@ -146,7 +146,7 @@ func TestWorkspaceNamesCacheFirstHumanWordsAcrossSyncAndReopen(t *testing.T) {
 	}
 	// Library reads never start or repeat the authorship classifier.
 	runs := 0
-	c.background = func(func(context.Context)) bool { runs++; return false }
+	c.background = func(OperationSpec, func(context.Context, *Op) error) bool { runs++; return false }
 	for range 3 {
 		if _, err := c.libraryRows(t.Context(), "w.id=?", []any{id}, libraryFields{"title": true}); err != nil {
 			t.Fatal(err)
@@ -204,5 +204,94 @@ func TestAuthoredWorkspaceTitleBoundsUnicodeWithoutPastedText(t *testing.T) {
 	title := authoredWorkspaceTitle(text, []authorSpan{{Start: 0, End: 200, Category: spanTyped}, {Start: 200, End: len(text), Category: spanPasted}})
 	if !strings.HasSuffix(title, "…") || strings.Contains(title, "copied") || len([]rune(title)) != 81 {
 		t.Fatalf("bounded title = %q", title)
+	}
+}
+
+// A bounded lookup finds an edge whether the given workspace is on the left
+// or the right of a native-alias link, the same edges the full scan finds,
+// and one edge however many links or sides found it.
+func TestWorkspaceNameEdgesFromEitherSide(t *testing.T) {
+	c, _ := testCatalog(t)
+	native := ingestNamingRecord(t, c, namingRecord("codex", "native", "Codex native", "Fix login"))
+	task := namingRecord("tl1", "task", "Improve authentication", "", "codex:native")
+	second := task.Conversations[0]
+	second.NativeID = "tl1:task-2"
+	task.Conversations = append(task.Conversations, second)
+	taskID := ingestNamingRecord(t, c, task)
+	ingestNamingRecord(t, c, namingRecord("codex", "unrelated", "Unrelated", "Other work"))
+	if n := countRows(t, c, "SELECT COUNT(*) FROM conversation_identity_links WHERE relationship='native-alias'"); n < 2 {
+		t.Fatalf("fixture has %d native-alias links, want one per task conversation", n)
+	}
+	edges := func(ids []string) []workspaceNameEdge {
+		t.Helper()
+		var found []workspaceNameEdge
+		if err := c.writeTransaction(t.Context(), "edges", func(tx *sql.Tx) error {
+			var err error
+			found, err = workspaceNameEdges(tx, ids)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return found
+	}
+	all := edges(nil)
+	// Links run both ways here (their direction follows conversation IDs), so
+	// each workspace is on the left of one edge and the right of the other.
+	if len(all) != 2 || all[0].left != all[1].right || all[0].right != all[1].left {
+		t.Fatalf("full scan edges = %v, want one each way", all)
+	}
+	sides := map[string]bool{all[0].left: true, all[0].right: true}
+	if !sides[native] || !sides[taskID] {
+		t.Fatalf("edges %v do not join %s and %s", all, native, taskID)
+	}
+	for _, ids := range [][]string{{native}, {taskID}, {native, taskID}} {
+		got := edges(ids)
+		seen := map[workspaceNameEdge]int{}
+		for _, edge := range got {
+			seen[edge]++
+		}
+		if len(got) != len(all) || seen[all[0]] != 1 || seen[all[1]] != 1 {
+			t.Fatalf("edges from %v = %v, want %v once each", ids, got, all)
+		}
+	}
+	// Two links between conversations of the same two workspaces, in the
+	// same orientation, are one edge.
+	var left, right string
+	if err := c.DB.QueryRow(`SELECT l.left_id,l.right_id FROM conversation_identity_links l JOIN conversations a ON a.id=l.left_id
+		WHERE l.relationship='native-alias' AND a.workspace_id=?`, all[0].left).Scan(&left, &right); err != nil {
+		t.Fatal(err)
+	}
+	// The task workspace has a second conversation; link it on its side.
+	sibling := func(workspace, except string) string {
+		var id string
+		_ = c.DB.QueryRow(`SELECT id FROM conversations WHERE workspace_id=? AND id<>? ORDER BY id LIMIT 1`, workspace, except).Scan(&id)
+		return id
+	}
+	if other := sibling(all[0].right, right); other != "" {
+		right = other
+	} else if other := sibling(all[0].left, left); other != "" {
+		left = other
+	} else {
+		t.Fatal("no second conversation on either side")
+	}
+	execTx(t, c.DB, `INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('`+left+`','`+right+`','native-alias',1,'{}')`)
+	if n := countRows(t, c, "SELECT COUNT(*) FROM conversation_identity_links l JOIN conversations a ON a.id=l.left_id JOIN conversations b ON b.id=l.right_id WHERE l.relationship='native-alias' AND a.workspace_id='"+all[0].left+"' AND b.workspace_id='"+all[0].right+"'"); n != 2 {
+		t.Fatalf("fixture has %d same-orientation links, want 2", n)
+	}
+	for _, ids := range [][]string{{all[0].left}, {all[0].right}, {native, taskID}} {
+		got := edges(ids)
+		seen := map[workspaceNameEdge]int{}
+		for _, edge := range got {
+			seen[edge]++
+		}
+		if len(got) != 2 || seen[all[0]] != 1 || seen[all[1]] != 1 {
+			t.Fatalf("duplicate links from %v = %v, want %v once each", ids, got, all)
+		}
+	}
+	if got := edges([]string{stableID("workspace", "codex", "local", "unrelated")}); len(got) != 0 {
+		t.Fatalf("unlinked workspace has edges %v", got)
+	}
+	if got := edges([]string{}); len(got) != 0 {
+		t.Fatalf("no workspaces has edges %v", got)
 	}
 }

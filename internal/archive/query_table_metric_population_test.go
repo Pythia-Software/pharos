@@ -68,8 +68,8 @@ func TestQueryMetricPopulationsHTTP(t *testing.T) {
 
 	// minCount hides small groups and reports them; an invalid sibling fails alone.
 	q = metricRequest(
-		qt.AggSpec{ID: "programs", Expression: "COUNT()", GroupBy: []string{"program"}, MinCount: 70},
-		qt.AggSpec{ID: "invalid", Expression: "COUNT()", MinCount: 2},
+		qt.AggSpec{ID: "programs", Expression: "COUNT()", GroupBy: []string{"program"}, MinCount: qt.MetricMinCount{Min: 70}},
+		qt.AggSpec{ID: "invalid", Expression: "COUNT()", MinCount: qt.MetricMinCount{Min: 2}},
 		qt.AggSpec{ID: "error_kinds", Expression: "COUNT()", GroupBy: []string{"error_type"}, Where: errors},
 	)
 	w = call(http.MethodPost, "/api/query/tool_calls/metrics", q)
@@ -115,9 +115,9 @@ func TestQueryMetricPopulationDependencies(t *testing.T) {
 	catalog, _ := libraryFixture(t)
 	schema, _ := sqliteQuerySchema("library")
 	q := metricRequest(
-		qt.AggSpec{ID: "by_kind", Expression: "SUM([token_count])", GroupBy: []string{"source_kind"}, MinCount: 2,
+		qt.AggSpec{ID: "by_kind", Expression: "SUM([token_count])", GroupBy: []string{"source_kind"}, MinCount: qt.MetricMinCount{Min: 2},
 			Where: []qt.WhereTerm{{Field: "purpose", Op: "contains", Value: "purpose"}}},
-		qt.AggSpec{ID: "invalid", Expression: "SUM([tool_use_count])", MinCount: 2},
+		qt.AggSpec{ID: "invalid", Expression: "SUM([tool_use_count])", MinCount: qt.MetricMinCount{Min: 2}},
 	)
 	fields, err := queryV2SourceFields(context.Background(), catalog.DB, schema, nil, &q, time.Now())
 	if err != nil {
@@ -140,7 +140,7 @@ func TestQueryMetricPopulationUsageHour(t *testing.T) {
 	schema, _ := sqliteQuerySchema("usage")
 	hour := []qt.WhereTerm{{Field: "hour", Op: "=", Value: "2026-09-21T03:00:00Z"}}
 	q := metricRequest(qt.AggSpec{ID: "all", Expression: "SUM([total_tokens])"}, qt.AggSpec{ID: "hour", Expression: "SUM([total_tokens])", Where: hour},
-		qt.AggSpec{ID: "invalid", Expression: "SUM([total_tokens])", MinCount: 2})
+		qt.AggSpec{ID: "invalid", Expression: "SUM([total_tokens])", MinCount: qt.MetricMinCount{Min: 2}})
 	result, err := server.executeQueryV2(context.Background(), "usage", nil, schema, nil, &q)
 	if err != nil {
 		t.Fatal(err)

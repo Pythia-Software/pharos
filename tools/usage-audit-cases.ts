@@ -3,8 +3,6 @@
 import { EMPTY_QUERY, encodeQuery, loadSchema, type QueryState, type WhereTerm } from "../web/node_modules/@pythia-software/query-table-core/dist/index.js";
 import { usageDatasets, usageTopics, usageDatasetTopics, usageWorkspaceURL } from "../web/src/usage-workspace-model";
 import { defaultConcurrencySettings } from "../web/src/concurrency-settings";
-import { defaultToolDashboard } from "../web/src/tools-dashboard-model";
-import { defaultMCPDashboard } from "../web/src/mcp-dashboard-model";
 export { usageDatasets, usageTopics, usageWorkspaceURL, encodeQuery, EMPTY_QUERY, loadSchema };
 export type AuditCase = { id: string; page: string; label: string; url: string; dataset?: string; query?: QueryState; where?: WhereTerm[]; interaction?: string; expectedEmpty?: boolean };
 const day = 86400000;
@@ -94,8 +92,8 @@ export function dashboardCases(topic: keyof typeof usageTopics, documents: Recor
     if (topic === "tokens") view = { metric: ["tokens", "cost", "percent", "percent_cost"][i % 4], split: tokenSplits[i % tokenSplits.length], period: periods[i % periods.length], hours: [1, 6, 12][i % 3], days: [1, 3, 7][i % 3], rollingPeriods: [0, 3, 7][i % 3], scale: scales[i % 3] };
     if (topic === "human") view = { scope: i % 2 ? "all" : "typed", split: humanSplits[i % humanSplits.length], period: periods[i % periods.length], hours: [1, 6, 12][i % 3], days: [1, 3, 7][i % 3], rollingPeriods: [0, 3, 7][i % 3], scale: scales[i % 3] };
     if (topic === "time" || topic === "skills") view = { metric: i % 2, split: (topic === "time" ? ["activity", "tool_category", "provider", "repository_name"] : ["skill_name", "evidence_type", "provider", "repository_name", "status"])[i % (topic === "time" ? 4 : 5)], period: ["day", "week", "month"][(i + (topic === "time" ? Math.floor(i / conditions.length) : 0)) % 3], scale: scales[i % 3] };
-    if (topic === "tools") view = { ...defaultToolDashboard, metric: ["calls", "failures", "failure_rate", "time", "mean_time", "context_added", "context_carried"][i % 7], split: ["tool_category", "tool_name", "command_category", "program", "command_name", "mcp_server", "repository_name", "model_family", "session_kind"][i % 9], view: i % 2 ? "trend" : "compare", period: ["day", "week", "month"][i % 3] };
-    if (topic === "mcp") view = { ...defaultMCPDashboard, metric: ["calls", "failures", "failure_rate", "output", "mean_output", "largest_output", "bytes", "truncated", "time", "mean_time"][i % 10], split: ["tool_name", "status", "query_source"][i % 3], view: i % 2 ? "trend" : "compare", period: ["day", "week", "month"][i % 3] };
+    if (topic === "tools") view = { rollingPeriods: 0, metric: ["calls", "failures", "failure_rate", "time", "mean_time", "context_added", "context_carried"][i % 7], split: ["tool_category", "tool_name", "command_category", "program", "command_name", "mcp_server", "repository_name", "model_family", "session_kind"][i % 9], view: i % 2 ? "trend" : "compare", period: ["day", "week", "month"][i % 3] };
+    if (topic === "mcp") view = { rollingPeriods: 0, metric: ["calls", "failures", "failure_rate", "output", "mean_output", "largest_output", "bytes", "truncated", "time", "mean_time"][i % 10], split: ["tool_name", "status", "query_source"][i % 3], view: i % 2 ? "trend" : "compare", period: ["day", "week", "month"][i % 3] };
     if (topic === "carbon") view = { metric: i % 2 ? "energy" : "co2", split: ["type", "provider", "repository_name", "tier"][i % 4], period: periods[i % 5], hours: [1, 6, 12][i % 3], days: [1, 3, 7][i % 3] };
     if (view) params.set("analyze_chart", JSON.stringify({ ...view, display: i % 4 >= 2 ? "cumulative" : "interval" }));
     if (topic === "parallelism") {

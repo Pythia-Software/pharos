@@ -326,7 +326,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 			tracker = mode.plan.tracker
 		}
 		if tracker == nil {
-			tracker, err = c.newPartTracker(host, config.Name, partial, captureViewOf(adapter))
+			tracker, err = c.newPartTracker(ctx, host, config.Name, partial, captureViewOf(adapter))
 		}
 		if err != nil {
 			return err
@@ -382,7 +382,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 				return err
 			}
 			if updated {
-				c.boundWAL(walSizeLimit)
+				c.boundWAL(ctx, walSizeLimit)
 				result.SkippedCurrent++
 				return nil
 			}
@@ -470,7 +470,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 			result.Older++
 			return nil
 		}
-		c.boundWAL(walSizeLimit)
+		c.boundWAL(ctx, walSizeLimit)
 		if copied {
 			result.SkippedCurrent++
 			return nil
@@ -533,6 +533,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 // commits constantly during a sync) fails its first write at once instead of
 // waiting out busy_timeout.
 func (c *Catalog) beginWrite(ctx context.Context) (*sql.Tx, error) {
+	cliWriteCheck("write")
 	tx, err := c.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -627,10 +628,20 @@ func (c *Catalog) IngestExisting(adapter Adapter, progress ProgressFunc) IngestR
 			return fmt.Errorf("selective adapter emitted unrequested source id %q", record.SourceID)
 		}
 		retainedRecordIdentity(captureViewOf(adapter), &record, nil)
-		tx, beginErr := c.beginWrite(context.Background())
+		// Through the writer gate, so the journal's lane yields to it (§6.2);
+		// released at commit, before the writes below that take it again.
+		tx, finish, beginErr := c.beginTrackedWrite(context.Background(), "repair-existing")
 		if beginErr != nil {
 			return beginErr
 		}
+		released := false
+		done := func() {
+			if !released {
+				released = true
+				finish()
+			}
+		}
+		defer done()
 		conversations, messages, ingestErr := ingestCopy(tx, record, adapter.Capability() == "tl1-release", host.ID, config.Name, captureViewOf(adapter) != nil, repositoryOptions{c.RepositoryAliases, c.RepositorySeparate})
 		if errors.Is(ingestErr, errOlderCopy) {
 			tx.Rollback()
@@ -641,10 +652,12 @@ func (c *Catalog) IngestExisting(adapter Adapter, progress ProgressFunc) IngestR
 			tx.Rollback()
 			return ingestErr
 		}
-		if commitErr := tx.Commit(); commitErr != nil {
+		commitErr := tx.Commit()
+		done()
+		if commitErr != nil {
 			return commitErr
 		}
-		c.boundWAL(walSizeLimit)
+		c.boundWAL(context.Background(), walSizeLimit)
 		result.Workspaces++
 		result.Conversations += conversations
 		result.Messages += messages
@@ -1461,7 +1474,7 @@ func replaceMessageFTS(tx *sql.Tx, id string) error {
 	if err := deleteMessageFTS(tx, id); err != nil {
 		return err
 	}
-	result, err := tx.Exec("INSERT INTO messages_fts(message_id,text) SELECT id,pharos_lexical_text(kind,text) FROM messages WHERE id=? AND text<>''", id)
+	result, err := tx.Exec("INSERT INTO messages_fts(message_id,text) SELECT id,pharos_lexical_text(kind,text) FROM messages WHERE id=? AND text<>'' AND "+wordIndexedKind(""), id)
 	if err != nil {
 		return err
 	}
@@ -1497,7 +1510,7 @@ func insertConversationFTS(tx *sql.Tx, conversationID string) error {
 	if err := tx.QueryRow("SELECT COALESCE(MAX(rowid),0) FROM messages_fts").Scan(&lastRowID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec("INSERT INTO messages_fts(message_id,text) SELECT id,pharos_lexical_text(kind,text) FROM messages WHERE conversation_id=? AND text<>''", conversationID); err != nil {
+	if _, err := tx.Exec("INSERT INTO messages_fts(message_id,text) SELECT id,pharos_lexical_text(kind,text) FROM messages WHERE conversation_id=? AND text<>'' AND "+wordIndexedKind(""), conversationID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec("INSERT INTO message_fts_rows(message_id,fts_rowid) SELECT message_id,rowid FROM messages_fts WHERE rowid>?", lastRowID); err != nil {
@@ -2067,7 +2080,15 @@ func (c *Catalog) ReconcileIdentities() (int, error) {
 	return c.ReconcileIdentitiesContext(context.Background())
 }
 
-func (c *Catalog) ReconcileIdentitiesContext(ctx context.Context) (int, error) {
+func (c *Catalog) ReconcileIdentitiesContext(ctx context.Context) (links int, err error) {
+	err = c.completeStage(ctx, "identities", func() error {
+		links, err = c.reconcileIdentities(ctx)
+		return err
+	})
+	return links, err
+}
+
+func (c *Catalog) reconcileIdentities(ctx context.Context) (int, error) {
 	if err := c.reconcileHistoryLinks(ctx); err != nil {
 		return 0, err
 	}

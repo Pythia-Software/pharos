@@ -15,16 +15,63 @@ tests.
 | Handoff | Problem |
 |---|---|
 | [machine-time-all-time-cpu.md](machine-time-all-time-cpu.md) | Machine Time's all-time view may take twice the CPU the legacy route did; confirm or fix |
+| [usage-v3-hour-grouping.md](usage-v3-hour-grouping.md) | `/query-v3` groups usage by `hour` over daily records, where it is null; only `/metrics` reads the hourly ledger |
 | [query-table-schema-reload.md](query-table-schema-reload.md) | Every staged Query Table request makes its connection re-parse the whole catalog schema twice, adding about 6 ms of CPU |
+
+## Catalog size
+
+From the storage survey of the production library (2026-10-28). The two
+rebuild the same index; read both before starting either.
+
+| Handoff | Problem |
+|---|---|
+| [message-search-without-text-copy.md](message-search-without-text-copy.md) | `messages_fts` stores a second copy of all message text (25.6 GB of a 94.5 GB catalog); make it contentless without changing results |
+| [message-search-without-tool-output.md](message-search-without-tool-output.md) | Tool results are ~84% of the word index; stop indexing them and make the affected searches say so (#274) |
+
+## Capture compression
+
+Phases of [Compressing captured originals at rest](../capture-compression.md),
+shipped as #271–#273.
+
+| Handoff | Problem |
+|---|---|
+| [capture-compression-1-generations.md](capture-compression-1-generations.md) | Superseded SQLite snapshot generations hold ~21.6 GB of originals uncompressed; compress them with an encoding the manifest records |
+| [capture-compression-2-cold-files.md](capture-compression-2-cold-files.md) | Cold latest files and superseded versions (~27 GB, mostly Codex/Claude JSONL); readers list and stat through the manifest and decode only what they parse |
+| [capture-compression-3-idle-snapshots.md](capture-compression-3-idle-snapshots.md) | Idle latest snapshots (Antigravity-CLI per-conversation databases, TL1 installations), excluding any an index reads every run |
 
 ## Upstream Query Table
 
 Pharos uses the published Query Table module and packages without patches.
-The current standalone assignment is
-[`query-table-after-0.9.3.md`](query-table-after-0.9.3.md): close the remaining
-V3/V2 reduction cost gaps and let computed previews use modern transports.
-It includes the 0.9.3 baseline, complete reproduction context and acceptance
-criteria, and can be sent directly to the Query Table team.
+Query Table 0.9.7 delivered every request in
+[`query-table-after-0.9.6.md`](query-table-after-0.9.6.md): chart labels,
+colours, cycle grouping and hit targets; fit-to-screen clipping and grouped
+Detail; saving host query state and last-successful persistence; minimum
+counts, calendar grouping keys and OR-of-AND filters; and the V2, text-index
+and metadata performance asks. Pharos took the chart, fitting and metadata
+fixes on upgrading; it adopts the new capabilities in later changes.
+
+[`query-table-fit-wrapping-links.md`](query-table-fit-wrapping-links.md) is
+open: 0.9.7's fit-to-screen minimums measure a wrapping host link as one
+unshrinkable line, so Analyze's fitted tables scroll at desktop widths. It can
+be sent directly to the Query Table team.
+
+That handoff superseded the requests in
+[`query-table-dashboard-views.md`](query-table-dashboard-views.md),
+[`query-table-fit-link-clipping.md`](query-table-fit-link-clipping.md),
+[`query-table-fit-screen-controls.md`](query-table-fit-screen-controls.md),
+[`query-table-group-detail.md`](query-table-group-detail.md),
+[`query-table-saved-host-query-state.md`](query-table-saved-host-query-state.md)
+(with [`query-table-host-search-clauses.md`](query-table-host-search-clauses.md)),
+[`query-table-query-recovery.md`](query-table-query-recovery.md),
+[`query-table-after-0.9.3.md`](query-table-after-0.9.3.md) and
+[`usage-query-upstream-handoff.md`](../usage-query-upstream-handoff.md).
+Each is marked with the release that resolved it and remains the detailed
+record of its request.
+
+[`query-table-go-link-codec.md`](query-table-go-link-codec.md) asked for Go
+`EncodeQueryLink` and `DecodeQueryLink`, at parity with `encodeQuery` and
+`decodeQueryStrict`, for the [site map](../site-map.md)'s link tools. Query
+Table 0.9.6 resolved it.
 
 The [manual-interventions audit and upstream handoff](query-table-manual-interventions.md)
 records the previous patches and source snapshots, the 0.9.3 response, and the

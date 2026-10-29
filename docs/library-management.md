@@ -1,36 +1,57 @@
 # Libraries and application setup
 
-Pharos.app can run from Applications or from an SSD. Its library is a separate
-folder. The native app opens the standard Pharos header and Home view. First
+Pharos.app runs from Applications. Each library is a separate folder, on this
+Mac or on a drive. The native app opens the standard Pharos header and Home view. First
 launch introduces Pharos and guides new setup one decision at a time. Existing
 history and backup recovery are separate branches. If no library is connected,
 the startup dialog offers registered locations and recovery.
 
 ## Change the current library
 
-Open **Settings → Libraries** to see the current library, its folder, and the
-other registered libraries on this Mac. Choose **Switch to library** to change
-which collection Pharos browses. Unavailable libraries stay visible; reconnect
-their drive before selecting them. Pharos saves pending UI session changes
-before switching and keeps you in Settings. The selection is remembered on the
-next launch.
+After first setup, every library control lives in **Settings → Libraries**. The
+startup window appears only when no library is open: on first launch, after
+**Release for eject**, while an operation has closed every library, or when the
+selected library's drive is missing. It lists registered libraries and offers
+create, open and restore. Requesting it while a library is open goes to
+Settings → Libraries instead.
 
-**Open a library…** expands a form on this page for choosing a library folder or
-pasting its `library.toml` path. **New library…** expands a form for its name,
-storage and parent folder, with the resolved destination shown before creation.
-The standard local location is proposed by default. When the default name is
-already registered, Pharos proposes the next available numbered name. Creating
-a library takes you to **Settings → Sources** to choose what to add.
+The Settings page is grouped by intent:
 
-These actions stay in Settings and use inline forms. Each library keeps its own
-source choices, saved views and preferences. MCP assignment is a separate,
-explicit choice in **Library used by MCP**. Creation, opening and switching
-wait until an active transfer or recovery finishes.
+- **Connected library:** the library you are browsing, which is also the one
+  agents search through MCP. Its card shows its folder, whether it is on this
+  Mac or an external drive, its role in delivery, and its conversation count. A
+  library on an external drive offers **Release for eject**.
+- **Your other libraries:** every other registered library, two cards to a row,
+  each saying when it was last open and how many conversations it held then,
+  with **Switch** at its foot. Unavailable libraries stay visible; attach their
+  drive before switching. The pencil beside a name renames the library on this
+  Mac and, when its folder is reachable, in the library itself, so the name
+  travels with it.
+  Pharos saves pending UI session changes before switching and keeps you in
+  Settings. The selection is remembered on the next launch. Below the list:
+  - **Create a library…** expands a form for its name, storage and parent
+    folder, with the resolved destination shown before creation. The standard
+    local location is proposed by default; when the default name is already
+    registered, Pharos proposes the next numbered name. Creating a library
+    takes you to **Settings → Sources** to choose what to add.
+  - **Add an existing library…** registers a library folder (or its
+    `library.toml`) that Pharos doesn't list yet, and switches to it.
+  - **Restore from a backup…** takes a backup folder and a new library folder,
+    then runs the recovery described below.
+- **Between libraries** (shown once there are two): **Copy or move history**,
+  collapsed until opened, and **Capture here, deliver to a drive**, whose switch
+  opens its choices. Delivery starts only from **Start delivery**; turning the
+  switch off while delivery runs stops it.
 
-For **Move or copy history**, **Capture locally, transfer later**, **Restore a
-backup**, or **Release library**, choose **Transfer, delivery, restore and
-release** under **Library operations** on the same Settings page. It opens the
-existing operations dialog while keeping switching and creation in Settings.
+The app asks each open library's service for its conversation count about once
+a minute (`GET /api/library/summary`), and records when you switch away from a
+library, so closed libraries' cards stay informative without opening them.
+
+Creation, opening and switching wait until an active transfer or recovery
+finishes. Restores and transfers close every library while they run; the
+startup window shows their progress, then reopens the selected library in
+Settings → Libraries once the operation is verified. A failed operation stays
+in the startup window with its error.
 
 ## Choose locations
 
@@ -72,7 +93,7 @@ My Library/
   deliveries/                 small delivery receipts, when used
 ```
 
-The app registration, primary connection and MCP assignment are stored under
+The app registration, selected library and remembered library facts are stored under
 `~/Library/Application Support/Pharos/applications/<installation-id>/`. Runtime
 endpoint files there are private, temporary credentials. Each service binds an
 available loopback port. Configured legacy ports remain supported for standalone
@@ -121,18 +142,17 @@ requested integration settings can remain; macOS permission records are separate
 
 ## MCP and the primary connection
 
-The first registered library becomes the MCP assignment for this application on
-this Mac. Merely connecting to another library never changes it. Use **Library used by MCP** in
-Settings → Libraries to change it explicitly, then use the assigned library's
-MCP settings to register or update an agent client.
+MCP answers for the library open in Pharos: switching libraries switches the
+library agents search. Use the open library's MCP settings to register or update
+an agent client. (Earlier builds kept a separate MCP assignment; the
+application registry's `mcp_library` now always equals the selected library.)
 
-MCP answers only when that app's primary connection is its assigned library and
-that service is ready. Otherwise it returns a helpful unavailable error. It
-does not open the assigned catalog directly. Responses completing after a
-connection or assignment switch are discarded. Private Ask Pharos requests stay
+MCP answers only while that library's service is ready. Otherwise it returns a
+helpful unavailable error. It does not open the catalog directly. Responses
+completing after a library switch are discarded. Private Ask Pharos requests stay
 bound to their originating library: their CLI's MCP server runs as
 `--config LIBRARY mcp --service FILE`, where FILE is a private endpoint for the
-service handling the request, so the MCP assignment does not apply to them.
+service handling the request, so a later library switch does not apply to them.
 
 The application must remain running, though its window may be closed. This is
 a change from older bundled `mcp` registrations, which could read the catalog
@@ -149,7 +169,7 @@ existing direct-library compatibility mode.
 1. Keep Pharos.app and a pending library on the Mac if capture must continue
    while an archive SSD is absent.
 2. Connect to the pending library and authorize its sources.
-3. Open **Capture locally, transfer later** and choose the pending library and
+3. In Settings → Libraries, use **Capture here, deliver to a drive** to choose the pending library and
    destination archive. Enable the pair explicitly.
 
 While the app is open, pending capture runs on a bounded five-minute cadence.
@@ -161,7 +181,7 @@ changed conversations can become pending again without repopulating unchanged
 conversations from the same source container. Pending capture checks content even
 when size and modification time are unchanged; ordinary incremental capture
 reuses recorded hashes without rereading transcript history. Neither browsing
-selection nor MCP assignment follows the delivery target automatically.
+selection (and so MCP) follows the delivery target automatically.
 
 Delivery proof includes each normalized conversation's metadata, instructions
 and aliases, including the current workspace association. A metadata change
@@ -188,18 +208,18 @@ generation pruning.
 Use **Eject** in the library drive panel or menu bar to release the libraries
 on that volume and eject it. An app installed on the Mac stays open with its
 local libraries available. If the app runs from that SSD, Eject also closes its
-broker and bundled MCP processes, then quits before ejecting. **Release library**
-is also available for a later Finder eject. Releasing the archive keeps local
+broker and bundled MCP processes, then quits before ejecting. **Release for
+eject** in Settings → Libraries is also available for a later Finder eject. Releasing the archive keeps local
 pending capture configured and suspends delivery until reconnect or drive return.
 Finder ejects also release managed data libraries; quit a portable app first if
 using Finder to eject its own drive.
-Release is temporary: it preserves the selected library, MCP assignment and
-delivery pair. Relaunch reconnects the selected library when its drive is
+Release is temporary: it preserves the selected library and the delivery
+pair. Relaunch reconnects the selected library when its drive is
 available. A released source pauses capture as well as delivery until reconnect.
 
 ## Verified transfer and recovery
 
-**Move or copy history** works between registered libraries. Both services pause
+**Copy or move history** works between registered libraries. Both services pause
 for the operation. A consistent catalog snapshot preserves catalog-only sessions
 that no longer exist in retained database captures. History snapshots exclude
 private Ask chats, their searchable mirrors and provenance, and independent user
@@ -245,6 +265,44 @@ migration or transfer. This implementation advances the catalog writer guard to
 21 to preserve raw-evidence authority and delivery checkpoints. Capture manifest
 version 5 also protects pending-file observations and retention. App rollback
 does not roll a library back.
+
+## Compact the catalog
+
+Deleting data, such as removing tool output from the word index, leaves free
+pages inside the catalog. SQLite reuses them as the library grows, but the file,
+and every backup of it, stays the same size. Library health's **Storage** shows
+the catalog's free space, and once it is at least 1 GB and a tenth of the
+catalog it offers **Compact catalog**.
+
+Compacting (`library.compact`, `catalog_compact.go`) runs in the app, like a
+transfer:
+
+1. Every library's service stops, and the library's use lock is taken
+   exclusively. While the service is stopped, an agent's Pharos MCP call opens
+   the catalog itself under that lock for the call alone, so compacting waits
+   a few seconds for one to end; a Terminal command holds it until it
+   finishes, and compacting refuses until then. MCP calls made while it
+   compacts fail and say the library is in use.
+2. The WAL is folded in, and `VACUUM INTO` writes a compacted copy beside the
+   catalog (`catalog.sqlite3.compacting`). It needs the catalog's size less
+   its free space, plus a tenth and a gigabyte, free on the drive, and checks
+   for that first.
+3. The copy is flushed to the drive and checked: `quick_check`, the schema, every
+   table's row count, and the rowids of tables without an `INTEGER PRIMARY
+   KEY`, which `VACUUM` may renumber but `tool_command_fts` and
+   `text_search_documents` depend on.
+4. Only then does it replace the catalog with one rename. A link to the old file
+   is kept until the new one opens in WAL mode, and put back if it does not.
+
+On a scratch copy of a 122 GB catalog it took 43 minutes: 6 to record what the
+catalog holds, 19 to write the copy, 17 to check it.
+
+A failure or a quit at any step leaves the original catalog as it was. What a
+compaction killed part way leaves beside the catalog (the unfinished copy, or
+the link to the replaced catalog) is removed the next time the library's
+service starts. The startup window shows
+the progress and reopens the library afterwards. The next backup copies the
+whole catalog again.
 
 ## CLI operations
 

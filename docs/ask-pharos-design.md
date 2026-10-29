@@ -70,7 +70,8 @@ earlier messages preserves the scroll position and offers a “Latest reply” b
 Responses can contain one or several destination cards with descriptive titles
 and explanations. A response with exactly one destination opens it immediately,
 including when the user phrases the request as a question. Multiple matches remain
-choices. Typing a follow-up while waiting or changing to ordinary search suppresses
+choices, and so does a lone card left after Pharos dropped others the agent
+offered beside it. Typing a follow-up while waiting or changing to ordinary search suppresses
 automatic navigation. Validate destinations through Pharos's own routing and URL
 builders.
 
@@ -181,11 +182,18 @@ and common macOS installation directories; it never executes the CLI. After
 opt-in, model discovery uses Codex's app-server `model/list`, Claude's SDK
 initialization response, or `agy models`. Actual model/effort values come from
 those responses. Antigravity's advertised model variants become model and effort
-choices. Model discovery makes no inference request. Discovery errors preserve
-ordinary search and explain that the CLI may need updating or authentication.
+choices. Model discovery makes no inference request. It runs in the
+background: enabling Ask Pharos, or starting the service with it enabled,
+discovers every installed CLI's models, and the picker answers from that
+in-memory list, refreshing one over an hour old behind the answer. Only a CLI
+with no list yet waits for discovery. A failed refresh keeps the previous
+list. Discovery errors preserve ordinary search and explain that the CLI may
+need updating or authentication.
 
 Each question uses noninteractive structured output, a disposable working
-directory, bounded output and a three-minute deadline. Cancellation stops the
+directory, bounded output and a three-minute deadline. Browsing the site map
+adds tool calls inside that run; the motivating Opus-tokens question took
+12–22 s end to end on Claude and Codex (2026-10-28), so the deadline stays. Cancellation stops the
 process group. Codex runs ephemeral with read-only sandboxing and shell tools
 disabled; Claude runs without native tools, hooks, session persistence, or
 inherited MCP configuration; Antigravity uses a dedicated navigation agent,
@@ -194,7 +202,8 @@ Provider login remains the CLI's responsibility; Pharos accepts no API keys.
 
 Every inference launch explicitly connects the read-only Pharos MCP server for
 the current library using the same executable and configuration as Settings →
-MCP, including portable libraries. Codex requires that server to initialize;
+MCP, including portable libraries. Codex requires that server to initialize and preapproves only its tools,
+which `approval_policy="never"` would otherwise refuse;
 Claude loads only that server and preapproves its tools; Antigravity configures
 it as `pharos-ask` in the disposable workspace and enables `call_mcp_tool`.
 The distinct name avoids reusing a global `pharos` connection to another library.
@@ -212,18 +221,43 @@ Pharos checks that policy before sending private context and points to
 Antigravity's `/permissions` command for a missing grant. It never broadens the
 user's global permissions automatically.
 
-The agent receives a navigation catalog built with the existing card URL
-builders, recent conversation context, local time, and a private lookup protocol
-on stdin/stdout. It can request up to two bounded lookups of work, page visits,
-or earlier chats. Pharos services them inside that request. There is no public
-MCP tool, shared connector token, or separate listener for private history.
-The agent can additionally use Pharos MCP tools to inspect archived work,
-conversations, findings, and statistics, and is instructed to report connection
-failures instead of inventing evidence. Private visits and history stay on the
-lookup protocol.
-Returned destination IDs must resolve to known catalog or lookup results;
-model-authored URLs are never accepted. This first build selects existing views
-and their default query windows; it does not generate arbitrary Query Table SQL.
+The agent receives a short list of the top-level sections (home, search,
+cards, analyze, findings, TL1 and the settings pages) with ids, recent
+conversation context, local time, and a private lookup protocol on
+stdin/stdout. It can request up to two bounded lookups of work, page visits,
+or earlier chats. Pharos services them inside that request. There is no
+public MCP tool, shared connector token, or separate listener for private
+history. The agent can additionally use Pharos MCP tools to inspect archived
+work, conversations, findings, and statistics, and is instructed to report
+connection failures instead of inventing evidence. Private visits and history
+stay on the lookup protocol.
+
+The prompt no longer lists every card. For anything more specific than a
+section, the agent browses the [site map](site-map.md) with the MCP tools
+`browse_site` and `site_link`, and returns the URL `site_link` gave it. It is
+told to prefer the exact view asked for (dashboard, chart, split, filters
+and window) over the closest prebuilt card, and to say that no view can show
+something only after browsing confirms it.
+
+A destination is `{id, url, description}`, with exactly one of `id` and
+`url` non-empty; Codex's strict structured output needs every property, so
+the unused one is an empty string. At most three are returned. An `id` must
+be a section, a lookup result, or a card from an earlier turn of the chat. A
+`url` is read with `site_link`'s `{url}` path (`siteLinkFromURL`) in
+process: Pharos accepts it only when the site map parses it into a state and
+rebuilds it, and the card uses the rebuilt canonical URL, the generated
+title, and the generated summary unless the agent's description is
+non-empty. Its kind is the page's section. Anything else, including other
+origins, unknown parameters, charts the page would coerce, and `ask_chat`
+links, is left out of the answer, as is an unknown id, a destination without
+exactly one of `id` and `url`, or an over-long description. The turn records
+how many were left out (`omitted`) and the reply says so. Only a response
+whose every destination was left out fails the request, with a retryable
+error naming the first problem. A card's id is derived from
+its canonical URL, so the same link in another parameter order is one card,
+and a follow-up can name an earlier card by id. Saved chats keep the
+canonical URL. This build does not generate arbitrary Query Table SQL: query
+tables take where terms only, as the site map describes.
 
 Chats and drafts live in the catalog and can be reopened by `/?ask_chat=ID`.
 History supports text search and pagination. Chats follow the library between
@@ -233,6 +267,18 @@ observed URLs, titles and timestamps, including query/filter state, and imports
 the existing browser history after opt-in. Removing or clearing browser history
 also removes the corresponding private visit records. Missing history is never
 presented as proof that a view was unseen.
+
+A visits lookup names each visit's view three ways. `viewKey` ignores
+parameter order but keeps query and filter state; for a link the site map
+reads, it is the key of the canonical link, so older names compare equal.
+`page` and `card` are the site map's page path and card id, where it reads
+one. The lookup also lists `seenViewKeys`, `seenPages` and `seenCards`, so
+the agent compares the pages and cards `browse_site` offers with what the
+user has opened. Two links can draw the same chart (a link that spells out
+every chart setting and one that leaves defaults out), so `viewKey`
+equality is not view equality; `seenPages` and `seenCards` are the coarser
+comparison. Reading a card's link compares it with every card, a few
+milliseconds each, so the views of visited URLs are remembered in memory.
 
 Only user-visible questions, replies and cards enter the general conversation
 index. Private lookup payloads do not. Before sending private context to

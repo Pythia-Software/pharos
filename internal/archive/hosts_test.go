@@ -415,7 +415,7 @@ func TestPreHostCatalogMigratesToLegacyHost(t *testing.T) {
 	for _, statement := range []string{
 		"DROP TABLE source_states", "DROP TABLE source_record_states", "DROP TABLE workspace_sightings",
 		"DROP TABLE conversation_sightings", "DROP TABLE hosts", "ALTER TABLE conversations DROP COLUMN origin_host_id",
-		"DELETE FROM meta WHERE key IN ('legacy_host_id','host_sightings_version')",
+		"DELETE FROM meta WHERE key IN ('legacy_host_id','host_sightings_version','initialized_build')",
 		`CREATE TABLE source_states (source_name TEXT PRIMARY KEY, kind TEXT NOT NULL, capability TEXT NOT NULL, cursor TEXT,
 			fingerprint TEXT, coverage TEXT NOT NULL, last_attempt_at TEXT, last_success_at TEXT, error TEXT,
 			pending_count INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)`,

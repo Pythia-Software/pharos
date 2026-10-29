@@ -160,7 +160,11 @@ func Run(arguments []string) error {
 			return err
 		}
 		defer use.Close()
-		return runHistoryCLI(config, args)
+		if len(args) > 0 && args[0] == "status" {
+			return runHistoryCLI(config, args)
+		}
+		return runCLIOperation(config, "history-backfill", OperationSpec{Kind: "capture.history-backfill", Variant: firstOf(args)},
+			func(context.Context, *Op) error { return runHistoryCLI(config, args) })
 	}
 	if err := config.checkLibrary(volumeIdentity); err != nil {
 		return err
@@ -177,17 +181,24 @@ func Run(arguments []string) error {
 	}
 	// Capturing and backing up only copy files; they never open the catalog
 	// for writing.
+	// Each holds a lease under the capture root while it writes (§6.5).
 	if command == "sqlite-records" {
-		return runSQLiteRecordsCLI(config, args)
+		if subcommand := firstOf(args); subcommand == "status" || subcommand == "verify" {
+			return runSQLiteRecordsCLI(config, args)
+		}
+		return runCLIOperation(config, "sqlite-records", OperationSpec{Kind: "capture.cli", Variant: "sqlite-records"},
+			func(context.Context, *Op) error { return runSQLiteRecordsCLI(config, args) })
 	}
 	if command == "capture" {
-		return runCaptureCLI(config, args)
+		return runCLIOperation(config, "capture", OperationSpec{Kind: "capture.cli"},
+			func(ctx context.Context, _ *Op) error { return runCaptureCLIContext(ctx, config, args) })
 	}
 	if command == "cloud-backup" {
 		return runCloudCLI(config, args)
 	}
 	if command == "backup" {
-		return runBackupCLI(config, args)
+		return runCLIOperation(config, "backup", OperationSpec{Kind: "backup.local"},
+			func(context.Context, *Op) error { return runBackupCLI(config, args) })
 	}
 	// A preview reads the catalog without writing, so it can run beside a
 	// service that is indexing.
@@ -214,28 +225,9 @@ func Run(arguments []string) error {
 			printRepositoryMergePlan(os.Stdout, planRepositoryMerges(items, config.RepositoryAliases, config.RepositorySeparate...))
 			return nil
 		}
-		catalog, err := OpenCatalog(config.CatalogPath)
-		if err != nil {
-			return err
-		}
-		defer catalog.Close()
-		items, err := loadRepositoryIdentities(catalog.DB)
-		if err != nil {
-			return err
-		}
-		prepareRepositoryIdentities(items)
-		resolveGitHubRepositories(context.Background(), items, nil)
-		if err := catalog.saveRepositoryEvidence(context.Background(), items); err != nil {
-			return err
-		}
-		groups := planRepositoryMerges(items, config.RepositoryAliases, config.RepositorySeparate...)
-		printRepositoryMergePlan(os.Stdout, groups)
-		for _, group := range groups {
-			if err := catalog.mergeRepositoryGroup(context.Background(), group); err != nil {
-				return err
-			}
-		}
-		return catalog.writeTransaction(context.Background(), "repository-merge", func(tx *sql.Tx) error { return setMeta(tx, "repository_merge_version", repositoryMergeVersion) })
+		return runLeasedCatalogCommand(config, "repositories", OperationSpec{Kind: "repositories.merge"}, func(_ context.Context, _ *Op, catalog *Catalog) error {
+			return applyRepositoryMergesCLI(config, catalog)
+		})
 	}
 	if command == "add-this-mac" {
 		return runAddThisMacCLI(config, args, os.Stdin, os.Stdout)
@@ -243,16 +235,15 @@ func Run(arguments []string) error {
 	if err := config.EnsureDirs(); err != nil {
 		return err
 	}
-	catalog, err := OpenCatalog(config.CatalogPath)
-	if err != nil {
-		return err
-	}
-	defer catalog.Close()
-	catalog.RepositoryAliases = config.RepositoryAliases
-	catalog.RepositorySeparate = config.RepositorySeparate
-	catalog.setCaptureRoot(config.CaptureRoot)
-	switch command {
-	case "serve":
+	if command == "serve" {
+		catalog, err := OpenCatalog(config.CatalogPath)
+		if err != nil {
+			return err
+		}
+		defer catalog.Close()
+		catalog.RepositoryAliases = config.RepositoryAliases
+		catalog.RepositorySeparate = config.RepositorySeparate
+		catalog.setCaptureRoot(config.CaptureRoot)
 		openBrowser := false
 		for _, arg := range args {
 			if arg == "--open" {
@@ -272,122 +263,208 @@ func Run(arguments []string) error {
 		// (see releasedMarkerName) ends.
 		server.life.listening = func() { _ = os.Remove(releasedMarker(config.CatalogPath)) }
 		return server.Serve()
-	case "ingest":
-		results := []IngestResult{}
-		for _, source := range config.Sources {
-			if !source.Enabled {
-				continue
-			}
-			adapter, err := MakeAdapter(source)
-			if err != nil {
-				return err
-			}
-			results = append(results, catalog.Ingest(adapter, nil))
-		}
-		links, err := catalog.ReconcileIdentities()
-		if err != nil {
-			return err
-		}
-		if err := catalog.refreshMainIntegrations(context.Background()); err != nil {
-			return err
-		}
-		if err := catalog.refreshAllLibrary(context.Background()); err != nil {
-			return err
-		}
-		return printJSON(map[string]any{"sources": results, "identity_links_added": links})
-	case "repair-existing":
-		if len(args) != 1 {
-			return fmt.Errorf("usage: pharos repair-existing SOURCE")
-		}
-		var source *SourceConfig
-		for index := range config.Sources {
-			if config.Sources[index].Name == args[0] {
-				source = &config.Sources[index]
-				break
-			}
-		}
-		if source == nil {
-			return fmt.Errorf("unknown source: %s", args[0])
-		}
-		adapter, err := MakeAdapter(*source)
-		if err != nil {
-			return err
-		}
-		result := catalog.IngestExisting(adapter, nil)
-		links, linkErr := catalog.ReconcileIdentities()
-		if linkErr != nil {
-			return linkErr
-		}
-		if result.Error != nil {
-			return fmt.Errorf("repair failed: %v", result.Error)
-		}
-		if err := catalog.refreshAllLibrary(context.Background()); err != nil {
-			return err
-		}
-		return printJSON(map[string]any{"source": result, "identity_links_added": links})
-	case "build-tools":
-		built, err := catalog.BackfillToolLedger(context.Background(), func(done, total int) {
-			if done%500 == 0 || done == total {
-				fmt.Fprintf(os.Stderr, "built tool ledger for %d/%d conversations\n", done, total)
-			}
-		})
-		if err != nil {
-			return fmt.Errorf("build tool ledger after %d conversations: %w", built, err)
-		}
-		if err := catalog.ensureToolRollup(context.Background()); err != nil {
-			return err
-		}
-		status, err := catalog.ToolLedgerStatus(context.Background())
-		if err != nil {
-			return err
-		}
-		return printJSON(map[string]any{"conversations_built": built, "status": status})
-	case "refine-usage":
-		refined, err := catalog.RefineUsageTimeline(func(done, total int) {
-			if done%100 == 0 || done == total {
-				fmt.Fprintf(os.Stderr, "refined %d/%d conversations\n", done, total)
-			}
-		})
-		if err != nil {
-			return fmt.Errorf("refine usage after %d conversations: %w", refined, err)
-		}
-		return printJSON(map[string]any{"conversations_refined": refined})
-	case "repair-usage-attribution":
-		repaired, err := catalog.RepairUsageAttribution(context.Background(), func(done, total int) {
-			if done%100 == 0 || done == total {
-				fmt.Fprintf(os.Stderr, "repaired usage for %d/%d workspaces\n", done, total)
-			}
-		})
-		if err != nil {
-			return fmt.Errorf("repair usage attribution after %d workspaces: %w", repaired, err)
-		}
-		return printJSON(map[string]any{"workspaces_repaired": repaired})
-	case "upgrade":
-		return runUpgradeCLI(catalog, args)
-	case "pricing":
-		return runPricingCLI(catalog, args)
-	case "search":
-		return runSearchCLI(catalog, args)
-	case "tl1":
-		return runTL1CLI(catalog, args)
-	case "findings":
-		return runFindingsCLI(catalog, args)
-	case "health":
-		value := catalog.Health()
-		value["storage"] = storage(config)
-		value["drive"] = driveReport(config, collectDrive(context.Background(), config))
-		return printJSON(value)
-	case "probe":
-		return runProbeCLI(config, catalog, args)
-	case "index":
-		return runIndexCLI(config, catalog, args)
-	case "upcoming", "protect", "preserve", "reclaim", "reconcile", "tick", "worker":
-		return fmt.Errorf("%s is part of mothballed TL1 reclamation; see docs/reclamation/README.md", command)
-	case "enrich-github":
-		return fmt.Errorf("%s is not enabled in the Go service", command)
-	default:
-		return usageError()
 	}
+	// Every other command opens the catalog under a lease (§6.5): taken
+	// before the open, so its Initialize is seen, and released after the
+	// close, so its checkpoint is too.
+	return runLeasedCatalogCommand(config, command, cliCatalogOperation(command, args), func(ctx context.Context, op *Op, catalog *Catalog) error {
+		catalog.RepositoryAliases = config.RepositoryAliases
+		catalog.RepositorySeparate = config.RepositorySeparate
+		catalog.setCaptureRoot(config.CaptureRoot)
+		switch command {
+		case "ingest":
+			return runIngestCLI(ctx, config, catalog, op)
+		case "repair-existing":
+			return runRepairExistingCLI(config, catalog, args)
+		case "build-tools":
+			return runBuildToolsCLI(ctx, catalog, op)
+		case "refine-usage":
+			refined, err := catalog.RefineUsageTimeline(func(done, total int) {
+				op.progress("Refine usage", "", "conversation", float64(done), float64(total), total > 0)
+				if done%100 == 0 || done == total {
+					fmt.Fprintf(os.Stderr, "refined %d/%d conversations\n", done, total)
+				}
+			})
+			if err != nil {
+				return fmt.Errorf("refine usage after %d conversations: %w", refined, err)
+			}
+			return printJSON(map[string]any{"conversations_refined": refined})
+		case "repair-usage-attribution":
+			repaired, err := catalog.RepairUsageAttribution(ctx, func(done, total int) {
+				op.progress("Repair usage attribution", "", "workspace", float64(done), float64(total), total > 0)
+				if done%100 == 0 || done == total {
+					fmt.Fprintf(os.Stderr, "repaired usage for %d/%d workspaces\n", done, total)
+				}
+			})
+			if err != nil {
+				return fmt.Errorf("repair usage attribution after %d workspaces: %w", repaired, err)
+			}
+			return printJSON(map[string]any{"workspaces_repaired": repaired})
+		case "upgrade":
+			return runUpgradeCLIContext(ctx, catalog, args)
+		case "pricing":
+			return runPricingCLI(catalog, args)
+		case "search":
+			return runSearchCLI(catalog, args)
+		case "tl1":
+			return runTL1CLI(catalog, args)
+		case "findings":
+			return runFindingsCLI(catalog, args)
+		case "health":
+			value := catalog.Health()
+			value["storage"] = storage(config)
+			value["drive"] = driveReport(config, collectDrive(ctx, config))
+			return printJSON(value)
+		case "probe":
+			return runProbeCLI(config, catalog, args)
+		case "index":
+			return runIndexCLIContext(ctx, config, catalog, args)
+		case "upcoming", "protect", "preserve", "reclaim", "reconcile", "tick", "worker":
+			return fmt.Errorf("%s is part of mothballed TL1 reclamation; see docs/reclamation/README.md", command)
+		case "enrich-github":
+			return fmt.Errorf("%s is not enabled in the Go service", command)
+		default:
+			return usageError()
+		}
+	})
+}
+
+// cliCatalogOperation is the operation a catalog command runs as; a read
+// command runs none of its own (its lease covers the open, Initialize and
+// close).
+func cliCatalogOperation(command string, args []string) OperationSpec {
+	switch command {
+	case "ingest":
+		return OperationSpec{Kind: "ingest.cli", Variant: "ingest"}
+	case "repair-existing":
+		return OperationSpec{Kind: "ingest.cli", Variant: "repair-existing"}
+	case "build-tools":
+		return OperationSpec{Kind: "tools.ledger.build"}
+	case "refine-usage", "repair-usage-attribution":
+		return OperationSpec{Kind: "catalog.repair", Variant: command}
+	case "upgrade":
+		if !slices.Contains(args, "--status") && !slices.Contains(args, "--preview") {
+			return OperationSpec{Kind: "library.upgrade"}
+		}
+	case "findings":
+		if slices.Contains(args, "--refresh") {
+			return OperationSpec{Kind: "analysis.findings"}
+		}
+	case "index":
+		return OperationSpec{Kind: "index.captures"}
+	}
+	return OperationSpec{}
+}
+
+// runIngestCLI: pharos ingest, every enabled source in place.
+func runIngestCLI(ctx context.Context, config Config, catalog *Catalog, op *Op) error {
+	results := []IngestResult{}
+	for _, source := range config.Sources {
+		if !source.Enabled {
+			continue
+		}
+		adapter, err := MakeAdapter(source)
+		if err != nil {
+			return err
+		}
+		op.Step(source.Name, "", -1)
+		results = append(results, catalog.Ingest(adapter, nil))
+	}
+	op.Step("Link identities and refresh the Search view", "", -1)
+	links, err := catalog.ReconcileIdentities()
+	if err != nil {
+		return err
+	}
+	if err := catalog.refreshMainIntegrations(ctx); err != nil {
+		return err
+	}
+	if err := catalog.refreshAllLibrary(ctx); err != nil {
+		return err
+	}
+	return printJSON(map[string]any{"sources": results, "identity_links_added": links})
+}
+
+// runRepairExistingCLI: pharos repair-existing SOURCE.
+func runRepairExistingCLI(config Config, catalog *Catalog, args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: pharos repair-existing SOURCE")
+	}
+	var source *SourceConfig
+	for index := range config.Sources {
+		if config.Sources[index].Name == args[0] {
+			source = &config.Sources[index]
+			break
+		}
+	}
+	if source == nil {
+		return fmt.Errorf("unknown source: %s", args[0])
+	}
+	adapter, err := MakeAdapter(*source)
+	if err != nil {
+		return err
+	}
+	result := catalog.IngestExisting(adapter, nil)
+	links, linkErr := catalog.ReconcileIdentities()
+	if linkErr != nil {
+		return linkErr
+	}
+	if result.Error != nil {
+		return fmt.Errorf("repair failed: %v", result.Error)
+	}
+	if err := catalog.refreshAllLibrary(context.Background()); err != nil {
+		return err
+	}
+	return printJSON(map[string]any{"source": result, "identity_links_added": links})
+}
+
+// runBuildToolsCLI: pharos build-tools.
+func runBuildToolsCLI(ctx context.Context, catalog *Catalog, op *Op) error {
+	built, err := catalog.BackfillToolLedger(ctx, func(done, total int) {
+		op.progress("Build the Tools ledger", "", "conversation", float64(done), float64(total), total > 0)
+		if done%500 == 0 || done == total {
+			fmt.Fprintf(os.Stderr, "built tool ledger for %d/%d conversations\n", done, total)
+		}
+	})
+	if err != nil {
+		return fmt.Errorf("build tool ledger after %d conversations: %w", built, err)
+	}
+	if err := catalog.ensureToolRollup(ctx); err != nil {
+		return err
+	}
+	status, err := catalog.ToolLedgerStatus(ctx)
+	if err != nil {
+		return err
+	}
+	return printJSON(map[string]any{"conversations_built": built, "status": status})
+}
+
+// applyRepositoryMergesCLI: pharos repositories --merge --apply.
+func applyRepositoryMergesCLI(config Config, catalog *Catalog) error {
+	items, err := loadRepositoryIdentities(catalog.DB)
+	if err != nil {
+		return err
+	}
+	prepareRepositoryIdentities(items)
+	resolveGitHubRepositories(context.Background(), items, nil)
+	if err := catalog.saveRepositoryEvidence(context.Background(), items); err != nil {
+		return err
+	}
+	groups := planRepositoryMerges(items, config.RepositoryAliases, config.RepositorySeparate...)
+	printRepositoryMergePlan(os.Stdout, groups)
+	for _, group := range groups {
+		if err := catalog.mergeRepositoryGroup(context.Background(), group); err != nil {
+			return err
+		}
+	}
+	return catalog.writeTransaction(context.Background(), "repository-merge", func(tx *sql.Tx) error { return setMeta(tx, "repository_merge_version", repositoryMergeVersion) })
+}
+
+// firstOf is args' first element, or "".
+func firstOf(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	return args[0]
 }
 
 func usageError() error {
@@ -510,6 +587,10 @@ func runPricingCLI(catalog *Catalog, args []string) error {
 // tool, which repositories were renamed or moved; --github is accepted and
 // ignored so scripts written for 0.4.1 keep working.
 func runUpgradeCLI(catalog *Catalog, args []string) error {
+	return runUpgradeCLIContext(context.Background(), catalog, args)
+}
+
+func runUpgradeCLIContext(ctx context.Context, catalog *Catalog, args []string) error {
 	mode := "run"
 	for _, arg := range args {
 		switch arg {
@@ -520,7 +601,6 @@ func runUpgradeCLI(catalog *Catalog, args []string) error {
 			return fmt.Errorf("usage: pharos upgrade [--status|--preview]")
 		}
 	}
-	ctx := context.Background()
 	switch mode {
 	case "--status":
 		value, err := catalog.UpgradeStatus(ctx)

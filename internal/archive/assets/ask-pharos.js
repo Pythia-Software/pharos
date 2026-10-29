@@ -344,6 +344,7 @@ window.initPharosAsk = function(root) {
     const response=answerFor(turn),hasResults=response.cards.length>0&&['multiple','single'].includes(turn.status);
     get('.pharos-destinations').hidden=!hasResults;
     get('.pharos-results-label').hidden=!hasResults;get('.pharos-results-label').textContent=turn.reply;
+    const omitted=askOmittedNote(hasResults?turn.omitted:0);get('.pharos-omitted').hidden=!omitted;get('.pharos-omitted').textContent=omitted;
     element.querySelectorAll('.pharos-destination').forEach((link,index)=>{
       const card=response.cards[index];link.hidden=!hasResults||!card;
       if(!card)return;
@@ -730,6 +731,15 @@ window.initPharosAsk = function(root) {
   product.querySelectorAll('[data-picker]').forEach(button => button.addEventListener('click',() => showPickerPage(button.dataset.picker)));
   find('.pharos-picker-back').addEventListener('click',() => {const previous = pickerPage;showPickerPage(null,false);find('[data-picker="' + previous + '"]').focus();});
   listen(document,'pointerdown',event => {if(!find('.pharos-picker-anchor').contains(event.target))closePicker();});
+  // Known issue (seen in the 0.7.6 app, cleared by relaunching): pressing a
+  // picker row closed the menu instead of opening its page. WebKit does not
+  // focus a clicked button; it moves focus to the nearest focusable ancestor.
+  // If any ancestor of the anchor is focusable (any tabindex; e.g. <main> or
+  // #homePage), relatedTarget is that ancestor, so this handler closes the
+  // picker on press. A WebKit browser test with tabindex=-1 on <main>
+  // reproduces it. What made the ancestor focusable was not found. Likely fix:
+  // also ignore a relatedTarget that contains the anchor. The history popover
+  // below has the same pattern.
   find('.pharos-picker-anchor').addEventListener('focusout',event => {if(event.relatedTarget && !find('.pharos-picker-anchor').contains(event.relatedTarget))closePicker();});
   product.addEventListener('keydown',event => {if(event.key === 'Escape' && !picker.hidden){event.preventDefault();closePicker(true);}});
   historyTrigger.addEventListener('click',()=>{if(chatHistory.hidden)openHistory();else closeHistory();});
@@ -742,7 +752,7 @@ window.initPharosAsk = function(root) {
   const edgeObserver=new ResizeObserver(() => {if(product.getBoundingClientRect().width && !ai.hidden){autoFit();drawEdge();sizePicker();}});edgeObserver.observe(find('.pharos-ai-frame'));
   async function startRequest(turn,retry=true){
     stop();flushDraft();const request=++serial;
-    turn.status='loading';turn.reply='';turn.cards=[];delete turn.clarification;turn.elapsedMs=0;
+    turn.status='loading';turn.reply='';turn.cards=[];delete turn.omitted;delete turn.clarification;turn.elapsedMs=0;
     turn.message='Starting '+turn.cli+'…';
     const controller=new AbortController();pending={request,turnId:turn.id,started:Date.now(),controller,edited:false};
     turns.forEach(updateTurn);syncComposer();writeHistory();
@@ -753,7 +763,7 @@ window.initPharosAsk = function(root) {
       if(pending?.request!==request)return;
       activeCreatedAt=session.createdAt;activeUpdatedAt=session.updatedAt;const edited=pending.edited;const final=session.conversation.find(t=>t.id===turn.id);Object.assign(turn,final);stop(false);updateTurn(turn);syncComposer();sessions=sessionRecords();
       window.dispatchEvent(new Event('pharos:data-refresh'));
-      if(askShouldNavigate({cards:turn.cards,draft:question.value,enabled:mode==='enabled',regular:regularOverride,edited}))window.pharosNavigate?.(turn.cards[0].href);
+      if(askShouldNavigate({cards:turn.cards,omitted:turn.omitted,draft:question.value,enabled:mode==='enabled',regular:regularOverride,edited}))window.pharosNavigate?.(turn.cards[0].href);
     }catch(error){
       if(pending?.request!==request)return;
       // A lost response is not permission to repeat a billable request.

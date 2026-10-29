@@ -195,7 +195,14 @@ func MakeAdapter(config SourceConfig) (Adapter, error) {
 }
 
 func pathFingerprint(root string, include func(string, os.DirEntry) bool) (string, error) {
-	info, err := os.Stat(root)
+	return sourceFiles{}.pathFingerprint(root, include)
+}
+
+// pathFingerprint takes sizes through the capture view, so storing a captured
+// file compressed changes neither the capture's fingerprint nor its agreement
+// with the live source's.
+func (s sourceFiles) pathFingerprint(root string, include func(string, os.DirEntry) bool) (string, error) {
+	info, err := s.Stat(root)
 	if err != nil {
 		return "", err
 	}
@@ -210,7 +217,7 @@ func pathFingerprint(root string, include func(string, os.DirEntry) bool) (strin
 			if entry.IsDir() || !include(path, entry) {
 				return nil
 			}
-			stat, e := entry.Info()
+			stat, e := s.Info(path, entry)
 			if e == nil {
 				relative, _ := filepath.Rel(root, path)
 				rows = append(rows, fmt.Sprintf("%s:%d:%d", relative, stat.Size(), stat.ModTime().UnixNano()))
@@ -273,7 +280,12 @@ func readJSON(path string) (any, error) {
 
 // readJSONVersion also reports the version (mtime) of the file it read.
 func readJSONVersion(path string) (any, int64, error) {
-	file, err := os.Open(path)
+	return sourceFiles{}.ReadJSONVersion(path)
+}
+
+// ReadJSONVersion is readJSONVersion through the capture view.
+func (s sourceFiles) ReadJSONVersion(path string) (any, int64, error) {
+	file, err := s.Open(path)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -315,7 +327,7 @@ const exportIndexVersion = "token-events-v5-origin"
 func (a *canonicalAdapter) indexVersion() string { return exportIndexVersion }
 
 func (a *canonicalAdapter) Fingerprint() (string, error) {
-	fingerprint, err := pathFingerprint(a.config.Path, func(path string, entry os.DirEntry) bool {
+	fingerprint, err := a.files().pathFingerprint(a.config.Path, func(path string, entry os.DirEntry) bool {
 		return strings.HasSuffix(strings.ToLower(entry.Name()), ".json")
 	})
 	return a.indexVersion() + ":" + fingerprint, err
@@ -485,7 +497,7 @@ type jsonlAdapter struct {
 var codexForkFilename = regexp.MustCompile(`([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})_([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl$`)
 
 func (a *jsonlAdapter) Fingerprint() (string, error) {
-	fingerprint, err := pathFingerprint(a.config.Path, func(path string, entry os.DirEntry) bool {
+	fingerprint, err := a.files().pathFingerprint(a.config.Path, func(path string, entry os.DirEntry) bool {
 		if strings.HasSuffix(strings.ToLower(entry.Name()), ".jsonl") && a.accept(path) {
 			return true
 		}
@@ -526,6 +538,12 @@ func (a *jsonlAdapter) Discover(emit func(WorkspaceRecord) error) error {
 
 func (a *jsonlAdapter) partExtractor() string { return a.provider + ":" + jsonlExtractor }
 
+// readsEveryIndex: every Codex plan reads the naming databases (state_*.sqlite)
+// for thread names; Claude captures no database.
+func (a *jsonlAdapter) readsEveryIndex(path string) bool {
+	return a.provider == "codex" && codexStateName(filepath.Base(path))
+}
+
 func (a *jsonlAdapter) transcriptInfo(path string, entry os.DirEntry, walkErr error) (fs.FileInfo, error) {
 	if err := a.context().Err(); err != nil {
 		return nil, err
@@ -539,7 +557,9 @@ func (a *jsonlAdapter) transcriptInfo(path string, entry os.DirEntry, walkErr er
 	if entry.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".jsonl") || !a.accept(path) {
 		return nil, nil
 	}
-	info, err := entry.Info()
+	// Through the capture view: an encoded transcript plans at its original
+	// size without being read.
+	info, err := a.files().Info(path, entry)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -668,7 +688,7 @@ func (a *jsonlAdapter) parse(path string) (WorkspaceRecord, bool, error) {
 // present when it was opened, so a log appended meanwhile, or a capture
 // replaced meanwhile, is parsed again next time rather than taken as current.
 func (a *jsonlAdapter) parseFile(path string) (WorkspaceRecord, sourcePart, bool, error) {
-	file, err := os.Open(path)
+	file, err := a.files().Open(path)
 	if err != nil {
 		return WorkspaceRecord{}, sourcePart{}, false, nil
 	}

@@ -256,7 +256,9 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 	}
 	if unit.Reader != nil && unit.Record == nil {
 		view := captureViewOf(unit.Reader)
-		if view != nil && view.evidenceRevision == "" && view.recordRevision == nil {
+		// A view over a reader lease already reads immutable links; only a
+		// view over the capture directory itself is locked and frozen here.
+		if view != nil && !view.lease && view.evidenceRevision == "" && view.recordRevision == nil {
 			lock, err := lockCaptureTarget(ctx, view.dir)
 			if err != nil {
 				result.Outcome, result.Detail = "deferred", err.Error()
@@ -270,7 +272,7 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 				original := view.original(unit.Reader.Config().Path)
 				rel, err := filepath.Rel(view.dir, unit.Reader.Config().Path)
 				if err != nil {
-					lock.Close()
+					releaseLockFile(lock)
 					result.Detail = err.Error()
 					return
 				}
@@ -283,7 +285,7 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 				manifest = &selected
 			}
 			input, err := freezeManifestInput(ctx, captureTarget{Host: view.host, Source: manifest.Source.Name, Dir: view.dir}, SourceConfig{}, len(manifest.Snapshots) == 0 && manifest.RetainedInputCapture, manifest)
-			lock.Close()
+			releaseLockFile(lock)
 			if err != nil {
 				result.Detail = err.Error()
 				return
@@ -789,9 +791,12 @@ func snapshotAuditScope(ctx context.Context, catalog *Catalog, record WorkspaceR
 		}
 		result[name] = rows
 	}
+	// Tool output is expected to be absent from the word index (see
+	// wordIndexedKind); a catalog still removing its old postings has some.
+	// Neither is a difference from the reference ingest.
 	search, err := queryAuditRows(ctx, tx, `SELECT m.id AS message_id,f.message_id AS indexed_message,f.text AS fts_text,r.fts_rowid,CASE WHEN tr.rowid IS NULL THEN 0 ELSE 1 END AS trigram_coverage
 		FROM messages m LEFT JOIN message_fts_rows r ON r.message_id=m.id LEFT JOIN messages_fts f ON f.rowid=r.fts_rowid
-		LEFT JOIN messages_trigram tr ON tr.rowid=r.fts_rowid WHERE m.conversation_id IN (SELECT id FROM conversations WHERE workspace_id=?) ORDER BY m.id`, budget, &bytes, id)
+		LEFT JOIN messages_trigram tr ON tr.rowid=r.fts_rowid WHERE m.conversation_id IN (SELECT id FROM conversations WHERE workspace_id=?) AND `+wordIndexedKind("m.")+` ORDER BY m.id`, budget, &bytes, id)
 	if err != nil {
 		return nil, err
 	}
@@ -1001,9 +1006,15 @@ func (s *Server) startVerification(w http.ResponseWriter, r *http.Request, body 
 		writeError(w, errors.New("a capture or index is already running"), 409)
 		return
 	}
-	run := s.startRunNamed("verification", nil)
+	variant := "sample"
+	if boolValue(body, "all", false) {
+		variant = "all"
+	}
+	_, handle := s.begin(s.life.ctx, OperationSpec{Kind: "index.verify", Variant: variant, Trigger: triggerUser})
+	run := s.startRunFor(handle, "verification", nil)
 	ctx, end := s.beginIngest(run.ID)
-	if !s.spawn(func(context.Context) {
+	ctx = withOp(ctx, handle)
+	if !s.launch(handle, func(context.Context, *Op) error {
 		defer s.ingestMu.Unlock()
 		defer end()
 		result := auditResult{}
@@ -1035,6 +1046,7 @@ func (s *Server) startVerification(w http.ResponseWriter, r *http.Request, body 
 			run.CompletedAt = now()
 			run.Error = nilIfEmpty(result.Detail)
 		})
+		return nil
 	}) {
 		end()
 		s.ingestMu.Unlock()
@@ -1187,7 +1199,18 @@ func (s *Server) verifyAllInputs(ctx context.Context, runID string, progress fun
 			continue
 		}
 		for _, snapshot := range manifest.Snapshots {
-			handled, err := conductorSessionIDsContext(ctx, filepath.Join(view.dir, filepath.FromSlash(snapshot.Captured)))
+			// Leased (and decoded if stored encoded) like the generations.
+			latest, _, releaseLatest, err := leaseCapturedVersion(ctx, target, snapshot.Captured)
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) || errors.Is(err, errCaptureBusy) {
+					summary.Deferred++
+				} else {
+					summary.Errors++
+				}
+				continue
+			}
+			handled, err := conductorSessionIDsContext(ctx, latest)
+			releaseLatest()
 			if err != nil {
 				summary.Errors++
 				continue
@@ -1196,30 +1219,44 @@ func (s *Server) verifyAllInputs(ctx context.Context, runID string, progress fun
 				if ctx.Err() != nil {
 					break
 				}
-				file := filepath.Join(view.dir, filepath.FromSlash(generation.Captured))
-				ids, err := conductorSessionIDsContext(ctx, file)
+				// Each generation is leased under the capture lock, so a
+				// compression or pruning cannot change it while it is read; an
+				// encoded one is decoded in that lease, removed after the check.
+				file, dir, release, err := leaseCapturedVersion(ctx, target, generation.Captured)
 				if err != nil {
-					if errors.Is(err, os.ErrNotExist) {
+					if errors.Is(err, os.ErrNotExist) || errors.Is(err, errCaptureBusy) {
 						summary.Deferred++
 					} else {
 						summary.Errors++
 					}
 					continue
 				}
-				missing := map[string]bool{}
-				for id := range ids {
-					if !handled[id] {
-						missing[id], handled[id] = true, true
+				func() {
+					defer release()
+					ids, err := conductorSessionIDsContext(ctx, file)
+					if err != nil {
+						if errors.Is(err, os.ErrNotExist) {
+							summary.Deferred++
+						} else {
+							summary.Errors++
+						}
+						return
 					}
-				}
-				if len(missing) == 0 {
-					continue
-				}
-				older := &captureView{host: view.host, dir: view.dir, manifest: manifest, mappings: []capturePathMapping{{Original: snapshot.Path, Captured: file}}}
-				config := conductor.config
-				config.Path = file
-				reader := &conductorAdapter{baseAdapter: baseAdapter{config: config, capability: conductor.capability, view: older}, selected: missing}
-				visit(reader, target.Host.ID)
+					missing := map[string]bool{}
+					for id := range ids {
+						if !handled[id] {
+							missing[id], handled[id] = true, true
+						}
+					}
+					if len(missing) == 0 {
+						return
+					}
+					older := &captureView{host: view.host, dir: dir, lease: true, decoded: map[string]bool{generation.Captured: true}, manifest: manifest, mappings: []capturePathMapping{{Original: snapshot.Path, Captured: file}}}
+					config := conductor.config
+					config.Path = file
+					reader := &conductorAdapter{baseAdapter: baseAdapter{config: config, capability: conductor.capability, view: older}, selected: missing}
+					visit(reader, target.Host.ID)
+				}()
 			}
 		}
 	}

@@ -39,13 +39,13 @@ func runAddThisMacCLI(config Config, args []string, in io.Reader, out io.Writer)
 	drive := volumeName(library)
 	fmt.Fprintf(out, "Adding %s to the Pharos library at %s.\n\n", host.Label, library)
 
-	catalog, err := OpenCatalog(config.CatalogPath)
-	if err != nil {
-		return err
-	}
-	defer catalog.Close()
-	catalog.setCaptureRoot(config.CaptureRoot)
+	return runLeasedCatalogCommand(config, "add-this-mac", OperationSpec{Kind: "host.add"}, func(_ context.Context, _ *Op, catalog *Catalog) error {
+		catalog.setCaptureRoot(config.CaptureRoot)
+		return addThisMac(ctx, config, catalog, host, library, drive, *yes, *captureOnly, in, out)
+	})
+}
 
+func addThisMac(ctx context.Context, config Config, catalog *Catalog, host Host, library, drive string, yes, captureOnly bool, in io.Reader, out io.Writer) error {
 	report := ProbeSources(config, catalog)
 	fmt.Fprintln(out, "Found on this Mac:")
 	adding := 0
@@ -74,7 +74,7 @@ func runAddThisMacCLI(config Config, args []string, in io.Reader, out io.Writer)
 		return errors.New("no conversation sources were found on this Mac")
 	}
 	if adding > 0 {
-		if !*yes && !confirm(in, out, fmt.Sprintf("\nAdd %s to the library? [Y/n] ", plural(adding, "new source"))) {
+		if !yes && !confirm(in, out, fmt.Sprintf("\nAdd %s to the library? [Y/n] ", plural(adding, "new source"))) {
 			fmt.Fprintln(out, "Nothing was changed.")
 			return nil
 		}
@@ -113,7 +113,7 @@ func runAddThisMacCLI(config Config, args []string, in io.Reader, out io.Writer)
 		return errors.New("the capture finished with errors; run this again to retry")
 	}
 	fmt.Fprintf(out, "Captured in %s. You can eject %s now: indexing can run later on any Mac with this drive.\n", time.Since(started).Round(time.Second), drive)
-	if *captureOnly {
+	if captureOnly {
 		fmt.Fprintln(out, "To index later, open Pharos from the drive, or run this again.")
 		return nil
 	}

@@ -57,8 +57,8 @@ export const scopes = [
   { id: "reasoning", label: "Saved agent reasoning", description: "Reasoning explicitly saved by the source. Some sources do not retain it.", surface: "reasoning" },
   { id: "system", label: "System instructions", description: "Setup and rules supplied in system messages, when retained by the source.", surface: "all", role: "system" },
   { id: "developer", label: "Developer instructions", description: "Instructions supplied by the application in developer messages, when retained.", surface: "all", role: "developer" },
-  { id: "tools", label: "Tool calls and output", description: "Commands, tool requests, and the output returned to an agent.", surface: "tools" },
-  { id: "all", label: "All stored text", description: "Every stored message type, including instructions and tool activity.", surface: "all" },
+  { id: "tools", label: "Tool calls and output", description: "Commands and tool requests. Tool output is not word-indexed: search it within one conversation.", surface: "tools" },
+  { id: "all", label: "All stored text", description: "Every stored message type, including instructions and tool calls. Tool output is not word-indexed: search it within one conversation.", surface: "all" },
   { id: "typed", label: "Words typed by users", description: "Only spans classified as typed. Unclassified or stale spans may be missing.", surface: "typed" },
   { id: "pasted", label: "Pasted text", description: "Only spans classified as pasted into a user's message.", surface: "pasted" },
   { id: "quoted", label: "Quoted text", description: "Only spans classified as quotations.", surface: "quoted" },
@@ -68,6 +68,18 @@ export const scopes = [
   { id: "automated", label: "Automatically inserted text", description: "Only spans classified as automated content.", surface: "automated" },
   { id: "attachment", label: "Attachment text", description: "Only spans classified as attachment content inside retained messages.", surface: "attachment" },
 ] as const;
+// textScopeNote is the editor's note on what a search's scope leaves out:
+// "scan" when a literal/regex search across instructions or tools needs a
+// conversation or at most 100 workspaces; "tool-output" when a word search
+// could match tool output (surface tools/all, roles absent or including
+// tool) but no conversation bounds a scan of it, so it leaves tool output out.
+export function textScopeNote(draft: TextSearchDraft): "scan" | "tool-output" | null {
+  const literal = draft.editor === "visual" ? draft.match !== "rules" : ["literal", "regex"].includes(draft.mode);
+  if (!["all", "tools"].includes(draft.scope.surface)) return null;
+  if (literal) return !draft.scope.conversation_id && !draft.scope.workspace_id ? "scan" : null;
+  const toolRole = draft.scope.roles.length === 0 || draft.scope.roles.includes("tool");
+  return toolRole && !draft.scope.conversation_id ? "tool-output" : null;
+}
 export function scopeChoice(scope: TextScope) { return scopes.find(s => s.surface === scope.surface && scope.kinds.length === 0 && scope.roles.join(",") === ("role" in s ? s.role : "")); }
 export function chooseScope(scope: TextScope, id: string): TextScope { const choice = scopes.find(s => s.id === id); return choice ? { ...scope, surface: choice.surface, roles: "role" in choice ? [choice.role] : [], kinds: [] } : scope; }
 export const sourceLabel = (value: string) => ({ claude: "Claude", codex: "Codex", chatgpt: "ChatGPT", conductor: "Conductor", antigravity: "Antigravity", canonical: "Imported archive", tl1: "TL1", "tl1-export": "TL1 export" }[value] ?? value);

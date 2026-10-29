@@ -64,8 +64,16 @@ func (c *Catalog) indexToolSearchBatch(ctx context.Context) (bool, error) {
 }
 
 func (c *Catalog) maintainToolSearch(ctx context.Context) {
+	// One operation for the whole build, forgotten if there was nothing to build.
+	pass := c.beginPass(ctx, "maintenance.search.tools", triggerVersion)
+	defer func() { pass.end(nil) }()
 	for {
-		more, err := c.indexToolSearchBatch(ctx)
+		var more bool
+		var err error
+		pass.runIO(func() { more, err = c.indexToolSearchBatch(ctx) })
+		if more {
+			pass.worked(1)
+		}
 		wait := 20 * time.Millisecond
 		if err != nil {
 			if ctx.Err() != nil {

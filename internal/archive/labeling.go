@@ -374,8 +374,3 @@ func labelingStatus(dir string, w io.Writer) error {
 	fmt.Fprintf(w, "Items: %v; long units: %s; excluded records: %v\n", manifest["items"], compactJSON(manifest["long"]), manifest["excluded_records"])
 	return nil
 }
-
-func compactJSON(value any) string {
-	data, _ := json.Marshal(value)
-	return string(data)
-}

@@ -3,7 +3,9 @@ package archive
 import (
 	"context"
 	"fmt"
+	"maps"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -12,7 +14,7 @@ import (
 
 var searchMessagesTool = map[string]any{
 	"name":        "search_messages",
-	"description": "Audit indexed message text across conversations with lexical-only search. Quoted phrases are exact token sequences; match_mode phrase treats the entire query as a phrase. Filters apply before pagination, with no candidate cutoff or semantic matches. Returns timestamps and evidence handles. Page using next_offset until null; archive coverage may still be incomplete.",
+	"description": "Audit indexed message text across conversations with lexical-only search. Quoted phrases are exact token sequences; match_mode phrase treats the entire query as a phrase. Filters apply before pagination, with no candidate cutoff or semantic matches. Returns timestamps and evidence handles. Page using next_offset until null; archive coverage may still be incomplete. " + toolOutputNotIndexed,
 	"inputSchema": map[string]any{"type": "object", "required": []string{"query"}, "properties": map[string]any{
 		"query":           map[string]any{"type": "string", "minLength": 1},
 		"match_mode":      map[string]any{"type": "string", "enum": []string{"terms", "phrase"}, "default": "terms"},
@@ -22,7 +24,7 @@ var searchMessagesTool = map[string]any{
 		"provider":        map[string]any{"type": "string"},
 		"channel":         map[string]any{"type": "string"}, "machine_id": map[string]any{"type": "string"}, "execution_machine_id": map[string]any{"type": "string"},
 		"roles":             messageListSchema("Exact message roles, such as user, assistant, tool, or system."),
-		"kinds":             messageListSchema("Exact message kinds. Defaults to all indexed kinds, including raw metadata and tool output."),
+		"kinds":             messageListSchema("Exact message kinds. Defaults to every word-indexed kind, including raw metadata and tool calls; tool output (tool_result) is not word-indexed, so asking for only it is an error."),
 		"from":              map[string]any{"type": "string", "description": "Inclusive message timestamp or UTC date; messages without timestamps are excluded."},
 		"to":                map[string]any{"type": "string", "description": "Inclusive message timestamp or UTC date; a date includes the whole day."},
 		"limit":             map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
@@ -33,7 +35,7 @@ var searchMessagesTool = map[string]any{
 
 var archiveStatusTool = map[string]any{
 	"name":        "get_archive_status",
-	"description": "Inspect archive freshness and coverage without starting capture or indexing. Lists known catalog sources across hosts with capture, index and successful sync times, errors, pending counts and stale reasons. Summary status and stale_sources refer to this host; other-host totals are separate. Page items with next_offset. Unknown capture times or coverage are not proof of completeness.",
+	"description": "Inspect archive freshness and coverage without starting capture or indexing. Lists known catalog sources across hosts with capture, index and successful sync times, errors, pending counts and stale reasons. Summary status and stale_sources refer to this host; other-host totals are separate. Page items with next_offset. Unknown capture times or coverage are not proof of completeness. domains is the freshness of each data domain on this Mac (conversations per source, captures, the Search view, search indexes, library-wide analyses, findings, the upgrade, backups): state current, behind or unknown, why (reason, e.g. indexing now or deferred by scheduled indexing), and catching_up, the running operation that will bring it current; running lists those operations. unknown means Pharos cannot tell, not that the data is stale.",
 	"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 		"source":            map[string]any{"type": "string", "description": "Exact source name."},
 		"host_id":           map[string]any{"type": "string"},
@@ -192,7 +194,12 @@ func (c *Catalog) searchMessages(args map[string]any) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	clauses := []string{"messages_fts MATCH ?", filters}
+	// Tool output is not word-indexed; a catalog still removing its old
+	// postings answers as one that has.
+	if unindexedOnly(kindArgument(args["kinds"])) {
+		return nil, fmt.Errorf("%s", toolOutputNotIndexed)
+	}
+	clauses := []string{"messages_fts MATCH ?", filters, wordIndexedKind("m.")}
 	values = append([]any{parsed}, values...)
 	for _, filter := range []struct{ key, column string }{
 		{"conversation_id", "m.conversation_id"}, {"source", "w.source_kind"}, {"provider", "c.provider"},
@@ -265,7 +272,7 @@ func (c *Catalog) searchMessages(args map[string]any) (map[string]any, error) {
 		return nil, err
 	}
 	result := map[string]any{"items": items, "total": total, "offset": offset, "next_offset": nil,
-		"search_scope": "indexed_messages", "search_mode": "lexical",
+		"search_scope": "indexed_messages", "search_mode": "lexical", "coverage": toolOutputCoverage,
 		"freshness": map[string]any{"status": freshness["status"], "stale_sources": freshness["stale_sources"]}}
 	if err := fitAuditPage(result, mcpBudget(args, 1800), offset, total); err != nil {
 		return nil, err
@@ -384,8 +391,86 @@ func (c *Catalog) archiveStatus(args map[string]any) (map[string]any, error) {
 	result["items"] = items[offset:min(total, offset+limit)]
 	result["total"], result["offset"], result["next_offset"] = total, offset, nil
 	result["capture_times_available"] = root != ""
-	if err := fitAuditPage(result, mcpBudget(args, 1800), offset, total); err != nil {
+	return fitArchiveStatus(c, result, mcpBudget(args, 1800), offset, total)
+}
+
+// archiveStatusLedger turns the ledger off, for a test that compares the
+// page with and without it.
+var archiveStatusLedger = true
+
+// archiveStatusLedgerMinimum is about the smallest ledger worth sending (a
+// few behind domains); below it the ledger is not computed.
+const archiveStatusLedgerMinimum = 300
+
+// fitArchiveStatus adds the freshness ledger (docs/background-work.md §5)
+// to the page: domains, each with its state, reason and the operation
+// catching it up, and running, the open operations affecting them. The
+// older fields are unchanged: the page is fitted first, as before, and the
+// ledger gets only the budget left, dropping the current domains first,
+// then itself.
+func fitArchiveStatus(c *Catalog, result map[string]any, budget, offset, total int) (map[string]any, error) {
+	if !archiveStatusLedger {
+		return result, fitAuditPage(result, budget, offset, total)
+	}
+	// The page first, exactly as without the ledger; the ledger only takes
+	// what budget is left, and is not computed when nothing would fit.
+	if err := fitAuditPage(result, budget, offset, total); err != nil {
 		return nil, err
 	}
-	return result, nil
+	omitted := func() (map[string]any, error) {
+		page := maps.Clone(result)
+		page["domains_omitted"] = "increase max_output_tokens to see the freshness domains"
+		if len(jsonText(page)) <= budget*3 {
+			return page, nil
+		}
+		return result, nil
+	}
+	if len(jsonText(result))+archiveStatusLedgerMinimum > budget*3 {
+		return omitted()
+	}
+	rows, ops := c.mcpFreshness(context.Background())
+	domains, behind := []map[string]any{}, []map[string]any{}
+	for _, row := range rows {
+		domain := map[string]any{"domain": row.Domain, "state": row.Behind.State}
+		for key, value := range map[string]*string{"as_of": row.AsOf, "unit": row.Behind.Unit, "catching_up": row.CatchingUp, "next": row.Next} {
+			if value != nil {
+				domain[key] = *value
+			}
+		}
+		if row.Behind.Count != nil {
+			domain["count"] = *row.Behind.Count
+		}
+		if row.Reason != nil {
+			domain["reason"], domain["reason_text"] = row.Reason.Code, row.Reason.Text
+		}
+		domains = append(domains, domain)
+		if row.Behind.State != freshCurrent {
+			behind = append(behind, domain)
+		}
+	}
+	running := []map[string]any{}
+	for _, op := range ops {
+		affected := []string{}
+		for _, row := range rows {
+			if slices.ContainsFunc(op.Affects, func(pattern string) bool { return affectsDomain(pattern, op.Subject, currentHost().ID, row.Domain) }) {
+				affected = append(affected, row.Domain)
+			}
+		}
+		if len(affected) > 0 {
+			running = append(running, map[string]any{"id": op.ID, "kind": op.Kind, "label": op.Label, "state": op.State, "started_at": formatTime(op.Started), "domains": affected})
+		}
+	}
+	for _, attempt := range []func(map[string]any){
+		func(page map[string]any) { page["domains"], page["running"] = domains, running },
+		func(page map[string]any) {
+			page["domains"], page["running"], page["domains_partial"] = behind, running, true
+		},
+	} {
+		page := maps.Clone(result)
+		attempt(page)
+		if len(jsonText(page)) <= budget*3 {
+			return page, nil
+		}
+	}
+	return omitted()
 }

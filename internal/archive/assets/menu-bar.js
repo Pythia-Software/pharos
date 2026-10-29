@@ -32,7 +32,10 @@ function menuBarActivityDetail(activity, now = Date.now()) {
   const parts = [typeof activity.label === 'string' ? activity.label : 'Working'];
   if (Number.isFinite(activity.progress)) parts.push(`stage ${Math.trunc(activity.progress * 100)}%`);
   const completion = Date.parse(activity.estimated_completion_at);
-  if (completion > now) parts.push(`about ${Math.max(1, Math.ceil((completion - now) / 60000))} min for this stage`);
+  // An operation-scoped estimate covers the whole run; otherwise it is the
+  // current stage's (older services send no scope).
+  const minutes = Math.max(1, Math.ceil((completion - now) / 60000));
+  if (completion > now) parts.push(activity.estimated_completion_scope === 'operation' ? `about ${minutes} min left` : `about ${minutes} min for this stage`);
   return parts.join(' · ');
 }
 function normalizeMenuBarSettings(saved = {}) {

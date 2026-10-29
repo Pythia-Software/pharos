@@ -75,7 +75,7 @@ func (c *Catalog) SetUIPreferences(ctx context.Context, body map[string]any) err
 	if len(updates) == 0 && len(deletes) == 0 {
 		return nil
 	}
-	return c.writeTransaction(ctx, "ui-preferences", func(tx *sql.Tx) error {
+	err := c.writeTransaction(ctx, "ui-preferences", func(tx *sql.Tx) error {
 		for key, value := range updates {
 			if _, err := tx.Exec("INSERT INTO ui_preferences(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value); err != nil {
 				return err
@@ -88,6 +88,11 @@ func (c *Catalog) SetUIPreferences(ctx context.Context, body map[string]any) err
 		}
 		return nil
 	})
+	c.flags.invalidate()
+	if err == nil {
+		c.flags.rememberSaved(updates, deletes)
+	}
+	return err
 }
 
 func (s *Server) getPreferences(w http.ResponseWriter, r *http.Request) {

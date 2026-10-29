@@ -6,7 +6,7 @@ toolchain go1.26.8
 
 require (
 	filippo.io/age v1.3.2
-	github.com/Pythia-Software/query-table/backends/go v0.9.5
+	github.com/Pythia-Software/query-table/backends/go v0.9.7
 	github.com/aws/aws-sdk-go-v2 v1.47.4
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.10
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.5

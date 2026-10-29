@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
-import { defaultApi, workID } from "./fixtures.mjs";
+import { defaultApi, workID, eventStream, busyStatus } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery } from "@pythia-software/query-table-core";
 
 test('Library setup keeps focus in its modal and returns to the choice after cancelling a flow', {skip}, async t => {
@@ -112,10 +112,10 @@ test('Library settings opens inline forms and returns focus when cancelled', {sk
   await page.getByRole('link',{name:'Libraries',exact:true}).click();
   await page.locator('#library-settings-current h3').waitFor();
   await shot('libraries');
-  for(const kind of ['open','create']){
-    const button=page.locator(kind==='open'?'#library-settings-open':'#library-settings-new');
+  for(const kind of ['open','create','restore']){
+    const button=page.locator({open:'#library-settings-open',create:'#library-settings-new',restore:'#library-settings-restore'}[kind]);
     await button.click();
-    const input=page.locator(kind==='open'?'#library-settings-existing':'#library-settings-name');
+    const input=page.locator({open:'#library-settings-existing',create:'#library-settings-name',restore:'#library-settings-backup'}[kind]);
     assert.ok(await input.evaluate(el=>el===document.activeElement));
     const form=page.locator('#library-settings-'+kind+'-form');
     if(kind==='create'){
@@ -130,25 +130,55 @@ test('Library settings opens inline forms and returns focus when cancelled', {sk
   }
 });
 
-test('Library settings keeps transfer, delivery, restore and release reachable while connected', {skip}, async t => {
-  const {page,shot}=await open(t,{url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:settingsLocal,api:{
-    'GET /api/app/state':settingsState,
+test('Library settings starts transfers and releases, then the startup window returns there', {skip}, async t => {
+  await t.test('transfer', async t => {
+    const {page,calls,shot}=await open(t,{url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:settingsLocal,api:{
+      'GET /api/app/state':({state})=>state.transferred?{...settingsState,libraries:[{...settingsLocal,connected:false},settingsArchive],job:{state:'complete',phase:'Library operation completed and verified',updated_at:new Date().toISOString()}}:settingsState,
+      'POST /api/app/transfer':({state})=>{state.transferred=true;return {started:true}},
+      'POST /api/app/connect':{saved:true},
+    }});
+    await page.getByRole('heading',{name:'Copy or move history',exact:true}).click();await shot('transfer');
+    await page.getByRole('radio',{name:/^Move/}).check();
+    await page.getByRole('button',{name:'Move history',exact:true}).click();
+    await page.waitForURL(url=>url.pathname==='/settings/libraries'&&calls.some(call=>call.path==='/api/app/connect'));
+    assert.deepEqual(calls.filter(call=>call.method==='POST').map(call=>[call.path,call.body]),[['/api/app/transfer',{source:'local',target:'archive',move:true}],['/api/app/connect',{id:'local'}]]);
+  });
+  await t.test('release', async t => {
+    const {page,calls}=await open(t,{url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:settingsArchive,api:{
+      'GET /api/app/state':({state})=>({...settingsState,selected:'archive',libraries:[settingsLocal,{...settingsArchive,connected:!state.released}]}),
+      'POST /api/app/disconnect':({state})=>{state.released=true;return {saved:true}},
+    }});
+    await page.getByRole('button',{name:'Release for eject',exact:true}).click();
+    await page.locator('#notice').getByText('Library released',{exact:false}).waitFor();
+    assert.deepEqual(calls.find(call=>call.path==='/api/app/disconnect').body,{id:'archive'});
+    assert.ok(await page.getByRole('button',{name:'Reconnect to My archive',exact:true}).isVisible());
+  });
+});
+
+test('Library settings renames in place and opens delivery from its switch, keeping focus', {skip}, async t => {
+  const {page,calls}=await open(t,{url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:settingsLocal,api:{
+    'GET /api/app/state':({state})=>({...settingsState,libraries:[settingsLocal,{...settingsArchive,name:state.renamed||settingsArchive.name}]}),
+    'POST /api/app/rename':({body,state})=>{state.renamed=body.name;return {saved:true}},
   }});
-  const operations=page.getByRole('link',{name:'Transfer, delivery, restore and release →',exact:true});
-  await operations.scrollIntoViewIfNeeded();await shot('operations-link');
-  await operations.click();
-  await page.locator('#library-list .card').first().waitFor();
-  await page.getByText('Move or copy history between libraries',{exact:true}).click();
-  await page.getByRole('button',{name:'Start verified transfer',exact:true}).waitFor();
-  await page.getByText('Capture locally, transfer later',{exact:true}).click();
-  await page.getByRole('button',{name:'Enable automatic delivery',exact:true}).waitFor();
-  const release=page.getByRole('button',{name:'Release library',exact:true});
-  await release.focus();
-  assert.ok(await release.evaluate(el=>el===document.activeElement));
-  await shot('operations');
-  await page.getByRole('button',{name:'Restore a backup',exact:true}).click();
-  await page.locator('#backup').waitFor();
-  assert.ok(await page.locator('#flow-title').evaluate(el=>el===document.activeElement));
+  const rename=page.getByRole('button',{name:'Rename My archive',exact:true});
+  await rename.click();
+  const input=page.getByRole('textbox',{name:'Library name',exact:true});
+  assert.ok(await input.evaluate(el=>el===document.activeElement),'rename did not focus the name');
+  await page.keyboard.press('Escape');
+  assert.ok(await rename.evaluate(el=>el===document.activeElement),'cancelling rename lost focus');
+  await rename.click();
+  await input.fill('Archive drive');
+  await page.keyboard.press('Enter');
+  const renamed=page.getByRole('button',{name:'Rename Archive drive',exact:true});
+  await renamed.waitFor();
+  assert.ok(await renamed.evaluate(el=>el===document.activeElement),'saving a name lost focus');
+  assert.deepEqual(calls.find(call=>call.path==='/api/app/rename').body,{id:'archive',name:'Archive drive'});
+  const delivery=page.getByRole('switch',{name:'Capture here, deliver to a drive',exact:true});
+  assert.ok(!await page.locator('#library-settings-pending').isVisible(),'delivery starts expanded while off');
+  await delivery.click();
+  assert.equal(await delivery.getAttribute('aria-checked'),'true');
+  assert.ok(await page.locator('#library-settings-pending').evaluate(el=>el===document.activeElement),'opening delivery did not focus its first choice');
+  assert.ok(!calls.some(call=>call.path==='/api/app/delivery'),'opening delivery turned it on');
 });
 
 test('Library settings switches within Settings and opens the selected library', {skip}, async t => {
@@ -368,22 +398,24 @@ test('Cloud backup wizard focuses the calculator after Reset and returns to Expl
   assert.ok(await explore.evaluate(input=>input===document.activeElement));
 });
 
-for (const mode of ['drive', 'activity']) test(`Activity ${mode} refresh preserves scrolling, focus and animation phase`, {skip}, async t => {
+// The drive panel, opened from the header chip, is where running work is
+// shown. Maintenance folds into the index's card, so the later tasks here are
+// backups, which keep cards of their own.
+test('Drive panel refresh preserves scrolling, focus and animation phase', {skip}, async t => {
   const main = {id: 'refreshing-index', kind: 'sync', label: 'Capture & index', stoppable: true,
     started_at: new Date(Date.now() - 120_000).toISOString(),
     work: {phase: 'Discovering inputs', source: 'Codex', done: 0, total: 0},
     forecast: {state: 'partial', remaining_steps: 4, predicted_steps: 3, basis: 'Learning the remaining analyses'}};
-  let activities = [main, ...Array.from({length: 5}, (_, index) => ({id: `task-${index}`, kind: 'maintenance', label: `Background task ${index}`}))];
+  let activities = [main, ...Array.from({length: 5}, (_, index) => ({id: `task-${index}`, kind: 'backup', label: `Background task ${index}`}))];
   let stopped = 0;
   const {page, settled, shot} = await open(t, {url: '/library', ready: '#queryTableLibrary .qt-row', viewport: {width: 390, height: 550}, api: {
     'GET /api/library/status': () => ({...defaultApi['GET /api/library/status'], idle: false, activities}),
     'POST /api/library/refresh/stop': () => {stopped++; return {stopped: true};},
   }});
   await page.emulateMedia({reducedMotion: 'no-preference'});
-  if (mode === 'drive') await activateHeaderTool(page, 'pharosDrive');
-  else await page.evaluate(() => window.pharosLibrary.toggleActivityPanel());
+  await activateHeaderTool(page, 'pharosDrive');
   await settled();
-  const panel = page.getByRole('dialog', {name: mode === 'drive' ? 'Library drive' : 'Running activity', exact: true});
+  const panel = page.getByRole('dialog', {name: 'Library drive', exact: true});
   const summary = panel.locator('summary').first();
   await summary.click();
   await summary.focus();
@@ -476,6 +508,95 @@ async function holdsFocus(page, surface, opener) {
   await surface.waitFor({ state: "hidden" });
   await page.waitForFunction(element => document.activeElement === element, await opener.elementHandle());
 }
+
+// The unified activity panel (flag on) takes focus from the chip, keeps it
+// while open, gives it back on Escape, and keeps focus and its disclosure
+// across a pushed snapshot. Stop reaches every stoppable operation through
+// its declared stop; Eject acts only on a fresh verdict.
+test("Unified activity panel holds focus across refreshes, stops each operation and ejects only on a fresh verdict", { skip }, async t => {
+  let fresh = { verdict: "busy", summary: "Busy", blockers: [{ label: "L", on_eject: "O" }], checked: "fresh" };
+  const app = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-unified-activity-v1": true }, api: {
+    "GET /api/status/stream": eventStream(busyStatus),
+    "GET /api/status": ({ query }) => query.get("fresh") === "1" ? { ...busyStatus, eject: fresh } : busyStatus,
+  } });
+  const { page, settled, calls, push } = app;
+  await page.evaluate(() => { window.ejects = 0; window.webkit = { messageHandlers: { pharosLibrary: { postMessage: async () => { window.ejects++; } } } }; });
+  const chip = page.locator("#pharosDrive");
+  await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library?.revision === 2);
+  await press(chip);
+  const panel = page.getByRole("dialog", { name: "Library drive", exact: true });
+  await panel.waitFor();
+  await holdsFocus(page, panel, chip);
+  assert.equal(await page.locator("#pharosDrivePanel").count(), 0, "the old drive panel stays closed while the flag is on");
+
+  await press(chip);
+  await panel.waitFor();
+  await panel.locator("summary").click();
+  const stop = panel.getByRole("button", { name: "Stop", exact: true });
+  await stop.focus();
+  push("/api/status/stream", { ...busyStatus, revision: 3, operations: busyStatus.operations.map(operation => operation.id === "op-index" ? { ...operation, step: { ...operation.step, done: 900e6, fraction: 0.45 } } : operation) });
+  await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library?.revision === 3);
+  assert.ok(await stop.evaluate(element => document.activeElement === element), "a refresh moved focus");
+  assert.ok(await panel.locator("details").first().evaluate(element => element.open), "a refresh closed Show all");
+  await app.shot("refreshed");
+
+  // A busy fresh verdict refuses; a safe one ejects.
+  await panel.getByRole("button", { name: /^Eject/ }).click();
+  await panel.getByRole("button", { name: "Check again", exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => window.ejects), 0, "ejected on a busy verdict");
+  assert.ok(calls.some(call => call.path === "/api/status" && call.query.get("fresh") === "1"));
+  fresh = { verdict: "safe", summary: "Safe", blockers: [], checked: "fresh" };
+  await panel.getByRole("button", { name: "Check again", exact: true }).click();
+  await page.waitForFunction(() => window.ejects === 1);
+
+  // A stop that fails leaves Stop enabled to try again; one that works
+  // keeps it disabled while the operations wind down.
+  // (The refusal is answered in the page, as a 409 from the service would
+  // be, so the harness does not count it as a failed request.)
+  await page.evaluate(() => {
+    const real = window.fetch;
+    window.fetch = (input, options) => String(input).includes("/api/operations/stop") && window.stopFails
+      ? Promise.resolve(new Response(JSON.stringify({ error: "try again in a moment" }), { status: 409 })) : real(input, options);
+    window.stopFails = true;
+  });
+  await stop.click();
+  await page.waitForFunction(() => !document.querySelector('#pharosStatusPanel [data-key="stop"]').disabled);
+  await page.evaluate(() => { window.stopFails = false; });
+  await stop.click();
+  await settled();
+  const stopped = calls.filter(call => call.method === "POST" && call.path === "/api/operations/stop").map(call => call.body.id).sort();
+  assert.deepEqual(stopped, ["op-backup", "op-index", "op-view"]);
+  assert.ok(await page.evaluate(() => document.querySelector('#pharosStatusPanel [data-key="stop"]').disabled), "Stop enabled again after it worked");
+});
+
+// With the flag off (the default) the old drive panel runs and nothing reads
+// the status snapshot. The Settings switch takes over the chip at once, and
+// turning it off gives it back.
+test("Unified activity switch: off leaves the old drive panel alone; on and off again switch the chip's panel", { skip }, async t => {
+  const { page, settled, calls } = await open(t, { url: "/settings/preferences", ready: "#unifiedActivity" });
+  const chip = page.locator("#pharosDrive");
+  const statusCalls = () => calls.filter(call => call.path.startsWith("/api/status") || call.path.startsWith("/api/app/status")).length;
+  await chip.click();
+  await page.locator("#pharosDrivePanel").waitFor();
+  await chip.click();
+  await settled();
+  assert.equal(statusCalls(), 0, "the flag is off, yet the page read the status snapshot");
+  assert.equal(await page.locator("#pharosStatusPanel").count(), 0);
+
+  await page.locator("#unifiedActivity").click();
+  await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library);
+  assert.ok(calls.some(call => call.method === "POST" && call.path === "/api/preferences" && call.body?.set?.["pharos-unified-activity-v1"] === true));
+  await chip.click();
+  await page.locator("#pharosStatusPanel").waitFor();
+  assert.equal(await page.locator("#pharosDrivePanel").count(), 0);
+  await page.keyboard.press("Escape");
+
+  await page.locator("#unifiedActivity").click();
+  await settled();
+  await chip.click();
+  await page.locator("#pharosDrivePanel").waitFor();
+  assert.equal(await page.locator("#pharosStatusPanel").count(), 0);
+});
 
 for (const width of [1440, 390, 320]) test(`Data guide takes focus, keeps controls reachable and returns focus @ ${width}`, { skip }, async t => {
   const app = await open(t, { url: "/analyze?analyze_mode=query&analyze_data=tool_calls&analyze_topic=tools", viewport: { width, height: 900 }, ready: ".usage-workspace-table .qt-row" });
@@ -638,7 +759,7 @@ for (const viewport of [{ width: 2133, height: 1075 }, { width: 1440, height: 90
     await press(expand);
     await sidebar.waitFor();
     await press(sidebar.getByRole('link', { name: /^Human words$/i }));
-    await page.locator('.usage-dashboard .writing-panel .usage-chart').waitFor();
+    await page.locator('.usage-human-dashboard .usage-chart').waitFor();
     await page.waitForFunction(() => document.activeElement?.tagName === 'MAIN');
     assert.equal(await sidebar.getByRole('link', { name: /^Human words$/i }).getAttribute('aria-current'), 'page');
   });
@@ -701,7 +822,7 @@ for (const width of [1440, 390, 320]) test(`Search long query can scroll to subm
 });
 
 for (const route of [
-  { name: "Analyze", url: "/analyze", ready: ".usage-dashboard .usage-chart", link: /^Human words$/i, destination: ".usage-dashboard .writing-panel .usage-chart" },
+  { name: "Analyze", url: "/analyze", ready: ".usage-dashboard .usage-chart", link: /^Human words$/i, destination: ".usage-human-dashboard .usage-chart" },
   { name: "Settings", url: "/settings", ready: "#healthCards .panel:not([aria-busy])", link: /^Sources$/, destination: "#sourceGrid .source-card" },
   { name: "TL1", url: "/tl1", ready: ".tl1-tiles", link: /^Configurations$/, destination: "#tl1-matrix" },
 ]) test(`${route.name} navigation is usable from the keyboard on a phone`, { skip }, async t => {

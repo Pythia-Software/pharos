@@ -35,6 +35,17 @@ func TestReferenceAuditIgnoresMaterializedDeferredToolCube(t *testing.T) {
 	if result := server.Catalog.auditUnit(t.Context(), unit, "cube", automaticAuditBytes); result.Outcome != "passed" {
 		t.Fatalf("deferred cube broke immediate reference verification: %+v", result)
 	}
+	// A catalog still removing the postings the old writer gave tool output
+	// differs from the reference ingest only in what neither should hold.
+	var output string
+	if err := server.Catalog.DB.QueryRow("SELECT id FROM messages WHERE kind='tool_result' LIMIT 1").Scan(&output); err != nil {
+		t.Fatalf("fixture has no tool output: %v", err)
+	}
+	execTx(t, server.Catalog.DB, "INSERT INTO messages_fts(message_id,text) SELECT id,text FROM messages WHERE id="+sqlQuote(output),
+		"INSERT INTO message_fts_rows(message_id,fts_rowid) SELECT message_id,rowid FROM messages_fts WHERE message_id="+sqlQuote(output))
+	if result := server.Catalog.auditUnit(t.Context(), unit, "legacy", automaticAuditBytes); result.Outcome != "passed" {
+		t.Fatalf("an old tool-output posting failed reference verification: %+v", result)
+	}
 	if _, err := server.Catalog.DB.Exec("DELETE FROM messages_trigram"); err != nil {
 		t.Fatal(err)
 	}
@@ -56,6 +67,20 @@ func TestVerificationIncludesDeletedConductorSessionsFromOlderCaptures(t *testin
 	execute("DELETE FROM session_messages WHERE session_id='deleted'", "DELETE FROM sessions WHERE id='deleted'", "UPDATE session_messages SET content='newest evidence' WHERE id='current-m0'")
 	runCapture(t, config)
 	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+	// The older capture is stored compressed once indexed; verification
+	// decodes it into a reader lease of its own and removes that afterwards.
+	if done := compressGenerations(t, config); len(done) != 1 {
+		t.Fatal("indexed generation was not compressed", done)
+	}
+	defer func() {
+		if left := temporariesUnder(t, capturedPath(config, "conductor", "")); len(left) != 0 {
+			t.Error("verification left decoded copies", left)
+		}
+		// The capture lock lives beside the host's sources, never in one.
+		if _, err := os.Stat(capturedPath(config, "conductor", captureLockName)); !os.IsNotExist(err) {
+			t.Error("verification locked a capture lock inside a source directory", err)
+		}
+	}()
 	config.Sources = nil
 	server := testServer(t, config, catalog)
 	t.Cleanup(func() { server.stop(5 * time.Second) })

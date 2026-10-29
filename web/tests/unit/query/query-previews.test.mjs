@@ -600,6 +600,30 @@ test("metric filters and minimum group sizes run only where advertised and discl
   assert.match(preview.note, /1 group hidden \(fewer than 4 rows\)/);
   assert.equal(preview.headlineMetric, undefined);
   assert.match(preview.summary, /^Shown: /);
+  // Distinct and summed minimums name what they counted.
+  clearPreviewCache();
+  fixture(t, path => path.endsWith("capabilities") ? response({ metricCapabilities: { version: 2, expressions: true, distributions: true, filters: true, minCount: true, minCountMeasures: true }, computedExecution: execution, queryCapabilities }) : undefined);
+  const slow = [{ field: "duration_ms", op: ">=", value: "400" }];
+  for (const [minCount, note] of [
+    [{ min: 4, distinct: "conversation_id" }, "1 group hidden (fewer than 4 distinct Conversation ID values)"],
+    [{ min: 200, sum: "result_tokens" }, "1 group hidden (fewer than 200 total Context added (tokens))"],
+  ]) {
+    const measured = await loadQueryPreview("tool_calls", query([{ id: "calls", op: "sum", field: "call_count", groupBy: ["repository_name"], minCount, where: slow }]), schemas.tool_calls);
+    assert.equal(measured.metrics[0].result.hiddenGroups, 1);
+    assert.ok(measured.note.includes(note), measured.note);
+  }
+});
+
+test("grouped previews run distinct minimums only where query-v3 advertises them", async t => {
+  const measures = [{ id: "calls", op: "count", groupBy: ["started_at"], dateGrouping: { field: "started_at", interval: "day", range: "observed", includeEmpty: false }, minCount: { min: 1, distinct: "conversation_id" } }];
+  const dated = rows.map(row => ({ ...row, started_at: new Date(row.started_at).toISOString() }));
+  const handshake = flags => (path, request) => path.endsWith("capabilities") ? response({ metricCapabilities: { version: 2 }, computedExecution: execution, queryCapabilities: { ...queryCapabilities, metricMinCount: true, ...flags } })
+    : path.includes("query-v3") ? response(serverQuery(request, dated)) : undefined;
+  fixture(t, handshake({}));
+  await assert.rejects(loadQueryPreview("tool_calls", query(measures), schemas.tool_calls), /distinct values or a sum/);
+  fixture(t, handshake({ metricMinCountMeasures: true }));
+  const preview = await loadQueryPreview("tool_calls", query(measures), schemas.tool_calls);
+  assert.equal(preview.state, "ready");
 });
 
 test("grouped cards with link columns execute without sending the links", async t => {

@@ -24,6 +24,10 @@ const day = 86400000, iso = offset => new Date(now - offset).toISOString();
 const longTitle = "Investigate why the incremental indexer re-reads every capture after a laptop sleeps through a scheduled sync window";
 const datasets = Object.fromEntries(Object.entries(schemas).map(([name, schema]) => [name, population(schema, { now, count: 48 }).map((row, index) => index % 5 ? row
   : { ...row, title: longTitle, repository_name: "pythia-software/an-unusually-long-repository-name-for-layout", location: "/Users/someone/conductor/workspaces/pharos/a-deeply-nested-worktree-directory/internal/archive" })]));
+// Parallelism records are built with the saved counting and gap settings.
+for (const row of datasets.parallelism) Object.assign(row, { counting: "workspace", gap_minutes: 60 });
+// The service assigns every usage record a carbon factor tier.
+datasets.usage.forEach((row, index) => { row.carbon_tier = ["small", "medium", "large"][index % 3]; });
 // Usage trends consume the calendar keys of their source records.
 for (const row of [...datasets.tools, ...datasets.mcp_calls]) {
   const monday = new Date(`${row.day}T00:00:00Z`);
@@ -200,6 +204,110 @@ export const cloudScheduledStatus={
     {id:'cloud-full-verified',destination_id:'cloud-browser',kind:'full',trigger:'manual',state:'complete',object:scheduledCloudPlan.object,version:'1792684800000000',total_bytes:40000000000,file_bytes:135000000000,files:40000,started_at:iso(8*day),verified:true,restored_directory:'/tmp/pharos/recovered-library'}]
 };
 
+// The status snapshot (docs/background-work.md §7) the unified activity
+// panel renders. `eventStream` marks a stub the harness serves as
+// server-sent events: each document is one `snapshot` event, and the stream
+// stays open.
+export const eventStream = documents => ({ __eventStream: [documents].flat() });
+const statusLibrary = { id: "library-fixture", name: "Pharos SSD", drive: { name: "Pharos SSD", ejectable: true, location: "external", mounted: true }, portable: true, path: "/Volumes/Pharos SSD/Pharos" };
+// The freshness ledger (§5) in the server's shape: rows, and the summary
+// groups the Data row shows.
+const domain = (id, group, label, state, changes = {}) => ({ domain: id, group, label, as_of: null, behind: { state, count: null, unit: null },
+  state_label: { current: "Current", behind: "Behind", unknown: "Unknown" }[state], reason: null, catching_up: null, catching_up_label: null, next: null, ...changes });
+const idleLedger = [
+  domain("conv:claude-code-with-a-long-source-name", "conversations", "Conversations (claude-code-with-a-long-source-name)", "current", { as_of: iso(120000) }),
+  domain("conv:codex", "conversations", "Conversations (codex)", "current", { as_of: iso(180000) }),
+  domain("view", "search", "Search view", "current"),
+  domain("search.substring", "search", "Substring search", "current"),
+  domain("an.identities", "analyses", "Identity links", "current", { as_of: iso(3 * 3600000) }),
+  domain("an.tools", "analyses", "Tools rollup", "current", { as_of: iso(3 * 3600000) }),
+  domain("findings", "findings", "Findings", "scheduled", { as_of: iso(3 * 3600000), state_label: "Scheduled",
+    reason: { code: "changed", text: "New data since today's full pass; the next one runs tomorrow" }, next: "updates with Refresh findings now, or the first index tomorrow" }),
+  // A scheduled cloud backup within its schedule: a local one, which has no
+  // schedule, would be unknown.
+  domain("backup.cloud:archive", "backups", "Cloud backup (Archive bucket)", "current", { as_of: iso(2 * day) }),
+];
+const idleSummary = { all_current: true, text: "All current", checked_label: "checked", checked_at: iso(180000), groups: [
+  { group: "conversations", label: "Conversations", state: "current", short: "", short_age: false, text: "current", as_of: iso(180000), as_of_label: "", catching_up: null, shown: false },
+  { group: "analyses", label: "Analyses", state: "current", short: "", short_age: false, text: "current", as_of: iso(3 * 3600000), as_of_label: "", catching_up: null, shown: false },
+  { group: "findings", label: "Findings", state: "scheduled", short: "updates tomorrow", short_age: false, text: "scheduled, updates with Refresh findings now, or the first index tomorrow", as_of: iso(3 * 3600000), as_of_label: "", catching_up: null, shown: false, muted: true },
+  { group: "backups", label: "Backups", state: "current", short: "", short_age: false, text: "current", as_of: iso(2 * day), as_of_label: "", catching_up: null, shown: false },
+] };
+const deferred = { reason: { code: "deferred-by-schedule", text: "Scheduled indexing skips analyses" }, next: "updates with the next manual index", behind: { state: "behind", count: null, unit: null } };
+const busyLedger = [
+  domain("conv:claude-code-with-a-long-source-name", "conversations", "Conversations (claude-code-with-a-long-source-name)", "behind", { as_of: iso(2 * day), reason: { code: "indexing", text: "Indexing now" }, catching_up: "op-index", catching_up_label: "Index changes" }),
+  domain("conv:codex", "conversations", "Conversations (codex)", "unknown", { as_of: iso(3600000), reason: { code: "schedule-off", text: "Scheduled indexing is off for it" }, next: "updates with the next manual index" }),
+  domain("view", "search", "Search view", "behind", { behind: { state: "behind", count: 38, unit: "workspace" }, reason: { code: "refreshing", text: "Updating now" }, catching_up: "op-view", catching_up_label: "Index the Search view" }),
+  domain("an.identities", "analyses", "Identity links", "behind", { as_of: iso(3 * 3600000), ...deferred }),
+  domain("an.tools", "analyses", "Tools rollup", "behind", { as_of: iso(3 * 3600000), ...deferred }),
+  domain("findings", "findings", "Findings", "behind", { as_of: iso(3 * 3600000), reason: { code: "daily-pass-due", text: "Today's full pass has not run yet" }, next: "updates with the next manual index" }),
+  domain("backup.cloud:archive", "backups", "Cloud backup (Archive bucket with a long name)", "behind", { as_of: iso(9 * day), reason: { code: "overdue", text: "Older than its schedule" }, next: "updates with the next scheduled cloud backup" }),
+];
+const busySummary = { all_current: false, checked_at: null, groups: [
+  { group: "conversations", label: "Conversations", state: "behind", short: "updating", short_age: false, text: "catching up", as_of: iso(2 * day), as_of_label: "last current", catching_up: "op-index", tooltip: "Conversations (claude-code-with-a-long-source-name): behind, indexing now", shown: true },
+  { group: "analyses", label: "Analyses", state: "behind", short: "waits for manual index", short_age: false, text: "behind, updates with the next manual index", as_of: iso(3 * 3600000), as_of_label: "last current", catching_up: null, tooltip: "Identity links: behind, scheduled indexing skips analyses\nTools rollup: behind, scheduled indexing skips analyses", shown: true },
+  { group: "findings", label: "Findings", state: "behind", short: "waits for manual index", short_age: false, text: "behind, updates with the next manual index", as_of: iso(3 * 3600000), as_of_label: "last current", catching_up: null, shown: true },
+  { group: "search", label: "Search", state: "behind", short: "updating", short_age: false, text: "catching up", as_of: null, as_of_label: "", catching_up: "op-view", shown: true },
+  { group: "backups", label: "Backups", state: "behind", short: "behind", short_age: true, text: "behind, updates with the next scheduled cloud backup", as_of: iso(9 * day), as_of_label: "last current", catching_up: null, shown: false, muted: false },
+] };
+// Resources as a service reports them (§10): itself and a Terminal command.
+const statusResources = (label, processes) => ({ cpu_percent: 3, memory_bytes: 340e6, sampled_at: iso(0), basis: "proc_pid_rusage", approximate: false, label, processes });
+const idleResources = statusResources("Pharos is using under 1% of one core · 180 MB", [
+  { pid: 4120, role: "service", cpu_percent: 0, memory_bytes: 180e6, sampled_at: iso(0), basis: "proc_pid_rusage", text: "Library service · under 1% of one core · 180 MB" }]);
+const busyResources = statusResources("Pharos is using ~45% of one core · 1.2 GB", [
+  { pid: 4120, role: "service", cpu_percent: 38, memory_bytes: 1.1e9, sampled_at: iso(0), basis: "proc_pid_rusage", text: "Library service · ~38% of one core · 1.1 GB" },
+  { pid: 5150, role: "cli:capture", cpu_percent: 7, memory_bytes: 64e6, sampled_at: iso(0), basis: "proc_pid_rusage", text: "pharos capture (Terminal) · ~7% of one core · 64 MB" }]);
+const statusHeadings = { work: "Work", data: "Data" };
+export const idleStatus = {
+  version: 1, revision: 1, generated_at: iso(0), host: { id: "test-mac", label: "This Mac" }, library: statusLibrary,
+  eject: { verdict: "safe", eta_seconds: null, checked: "polled", blockers: [], headline: "Safe to eject; checked again on eject", summary: "Nothing Pharos can see is writing to the library. Pharos checks everything again when you eject." },
+  operations: [], attention: [], freshness: idleLedger, freshness_summary: idleSummary, resources: idleResources, headings: statusHeadings, features: { unified_activity: true }, journal: { dropped: 0 },
+};
+const statusOperation = (id, changes) => ({
+  id, kind: "index.changes.manual", variant: null, subject: null, label: "Index changes", verb: "Indexing changes", state: "running", state_label: "Indexing changes",
+  detail: null, reason: null, trigger: "user", process: "service", priority: "foreground", started_at: iso(120000), ended_at: null,
+  step: null, time: null, stoppable: true, stop: { method: "POST", path: "/api/operations/stop", body: { id } }, holds: [{ resource: "drive", mode: "write" }],
+  affects: [], on_eject: "Stops between workspaces; the next index resumes it.", latency: "batch", severity: "none", legacy: null, children: [], children_count: 0, ...changes,
+});
+export const busyStatus = {
+  ...idleStatus, revision: 2,
+  eject: { verdict: "safe-in", eta_seconds: null, checked: "polled", headline: "Safe to eject after the current workspace: stops index changes", summary: "Ejecting stops index changes after the current workspace; if that takes more than 7 s, Pharos refuses and you can try again.",
+    blockers: [{ operation: "op-index", label: "Index changes", on_eject: "Stops between workspaces; the next index resumes it.", latency: "batch", verdict: "safe-in" }] },
+  operations: [
+    statusOperation("op-index", { step: { index: 3, count: 6, name: "Indexing a source with a very long name that has to wrap somewhere", source: "Claude Code", unit: "byte", done: 812e6, total: 1980e6, fraction: 0.41 },
+      time: { state: "estimating", low_seconds: 180, high_seconds: 360, label: "about 3–6 min" },
+      children: [statusOperation("op-chain", { kind: "analysis.chain", label: "Update analyses", state_label: "Updating analyses", stoppable: false, stop: undefined })], children_count: 2 }),
+    statusOperation("op-view", { kind: "maintenance.library-view", label: "Index the Search view", state_label: "Indexing the Search view", priority: "background", stop: { method: "POST", path: "/api/operations/stop", body: { id: "op-view" } }, step: { index: 1, count: null, name: "Search view", unit: "workspace", done: 2, total: 40, fraction: 0.05 } }),
+    statusOperation("op-backup", { kind: "backup.local", label: "Back up", state: "blocked", state_label: "Waiting", priority: "background", stoppable: true, stop: { method: "POST", path: "/api/operations/stop", body: { id: "op-backup" } }, detail: "Waiting for a capture to finish" }),
+    statusOperation("op-old", { kind: "analysis.findings", label: "Update findings", state: "succeeded", state_label: "Done", stoppable: false, stop: undefined, ended_at: iso(60000) }),
+  ],
+  freshness: busyLedger, freshness_summary: busySummary, resources: busyResources,
+  attention: [{ id: "backup-failed", rule: 6, severity: "error", title: "The last backup failed", detail: "The destination drive is full: /Volumes/Backup Drive With A Long Name/Pharos Backup", action: { label: "Open Backups", path: "/settings/backups" } }],
+};
+// The broker's document, with two other libraries. A broker operation
+// touching a library makes its verdict busy, as the broker computes it.
+const copyBlocker = { operation: "op-copy", kind: "library.transfer", label: "Copy library", on_eject: "Not stoppable; eject of either drive must wait.", latency: "none", verdict: "busy", process: "broker" };
+const brokerBusy = eject => ({ ...eject, verdict: "busy", eta_seconds: null, headline: "Eject waits for copy library",
+  summary: "Eject waits for copy library, which cannot stop in time.", blockers: [copyBlocker, ...(eject.blockers || [])] });
+export const managedStatus = snapshot => ({
+  version: 1, revision: 3, generated_at: iso(0),
+  libraries: [
+    { id: "local", name: "Pending history", selected: true, connected: true, service: { state: "running" }, state_label: "Copying the library", snapshot, eject: brokerBusy(snapshot.eject), error: null },
+    { id: "archive", name: "Archive (Backup drive)", selected: false, connected: true, service: { state: "running" }, state_label: "Copying the library", eject: brokerBusy(idleStatus.eject), error: null, snapshot: idleStatus },
+    { id: "spare", name: "Spare", selected: false, connected: false, service: { state: "stopped" }, state_label: "Not open", snapshot: null, eject: idleStatus.eject, error: null },
+  ],
+  // As the broker reports its own work: in app.operations, naming the
+  // libraries it touches (a copy from the selected library to Archive).
+  app: { operations: [statusOperation("op-copy", { kind: "library.transfer", label: "Copy library", state_label: "Copying the library", process: "broker", stoppable: false, stop: undefined,
+    libraries: ["local", "archive"], step: { index: 2, count: 3, name: "Verified copy", unit: "byte", done: 4e9, total: 1e10, fraction: 0.4 } })], update: null },
+  attention: snapshot.attention,
+  // Every Pharos process on this Mac: the app, both open libraries' services.
+  resources: statusResources("Pharos is using ~62% of one core · 1.6 GB", [
+    { pid: 4000, role: "broker", cpu_percent: 12, memory_bytes: 90e6, sampled_at: iso(0), basis: "proc_pid_rusage", text: "Pharos app · ~12% of one core · 90 MB" },
+    ...snapshot.resources.processes.map(process => ({ ...process, library: "local" })),
+    { pid: 4300, role: "service", library: "archive", cpu_percent: 5, memory_bytes: 210e6, sampled_at: iso(0), basis: "proc_pid_rusage", text: "Library service (Archive) · ~5% of one core · 210 MB" }]),
+});
+
 export const defaultApi = {
   "GET /api/app/state": {application:"/Applications/Pharos.app",selected:"local",mcp:"external",busy:false,libraries:[{id:"local",name:"Pending history",available:true,config:"/Users/test/Library/Application Support/Pharos/Libraries/Pending/library.toml"},{id:"external",name:"My archive",available:false,config:"/Volumes/Archive/Pharos/library.toml"}]},
   "GET /api/cloud-backup": {destinations:[],runs:[],schedules:[],active_run_id:"",setup_root:"/tmp/pharos/cloud-setup"},
@@ -256,6 +364,11 @@ export const defaultApi = {
   "GET /api/search/text/capabilities": { fuzzy: true, regex: true, case_sensitive: true },
   "GET /api/tools/status": toolsStatus,
   "GET /api/menu-bar/status": { error: "", indexed_at: iso(60000), library: { library_dir: "/Volumes/Pharos SSD/Pharos", activities: [], drive: { name: "Pharos SSD", ejectable: true } } },
+  "GET /api/status": idleStatus,
+  "GET /api/status/stream": eventStream(idleStatus),
+  "GET /api/app/status": managedStatus(idleStatus),
+  "GET /api/app/status/stream": eventStream(managedStatus(idleStatus)),
+  "POST /api/operations/stop": { stopping: true },
   "GET /api/menu-bar/usage": { human_words: 3240, tokens: 1200000, cost_usd: 8.42, co2e_g: 18.25 },
 
   // Settings.

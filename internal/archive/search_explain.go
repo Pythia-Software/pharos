@@ -14,9 +14,10 @@ import (
 // searchScan best-scoring of the recentMatches most recently indexed matching
 // messages, the workspace with the best message ranks first. Concept similarity is the cosine between the query's and the
 // workspace's concept vectors, counted above relatedThreshold.
+var recentMatches = 25000
+
 const (
 	searchScan       = 500
-	recentMatches    = 25000
 	relatedThreshold = .05
 	relatedWeight    = .6
 	textWeight       = .4
@@ -88,7 +89,7 @@ func (c *Catalog) searchEvidence(ctx context.Context, options SearchOptions) (ma
 		}
 		return evidence[id]
 	}
-	collect := func(query string, args []any, pick func(*searchEvidence) *searchMatches) error {
+	collect := func(ctx context.Context, query string, args []any, pick func(*searchEvidence) *searchMatches) error {
 		rows, err := queryMapsContext(ctx, c.reader(), query, args...)
 		if err != nil {
 			return err
@@ -107,13 +108,21 @@ func (c *Catalog) searchEvidence(ctx context.Context, options SearchOptions) (ma
 		}
 		return nil
 	}
+	// Old tool-output postings, until removed, are left out inside the window,
+	// so they cannot crowd out the matches that count (rankRecent). Every
+	// window of this search shares one walk deadline.
+	walk, cancel := context.WithTimeout(ctx, toolOutputWalkTime)
+	defer cancel()
 	collectFTS := func(parsed string, pick func(*searchEvidence) *searchMatches) error {
-		return collect(`SELECT c.workspace_id,m.id message_id FROM
-			(SELECT message_id,rank FROM messages_fts WHERE messages_fts MATCH ?1 AND rowid>=COALESCE(
-				(SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?1 ORDER BY rowid DESC LIMIT 1 OFFSET ?3),0)
+		_, err := c.rankRecent(ctx, walk, parsed, ` AND rowid>=COALESCE(
+				(SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?1 ORDER BY rowid DESC LIMIT 1 OFFSET ?3),0)`, func(run context.Context, window string) error {
+			return collect(run, `SELECT c.workspace_id,m.id message_id FROM
+			(SELECT message_id,rank FROM messages_fts WHERE messages_fts MATCH ?1`+window+` AND ?3=?3
 			ORDER BY rank LIMIT ?2) f
-			JOIN messages m ON m.id=f.message_id JOIN conversations c ON c.id=m.conversation_id ORDER BY f.rank`,
-			[]any{parsed, searchScan, recentMatches - 1}, pick)
+			JOIN messages m ON m.id=f.message_id JOIN conversations c ON c.id=m.conversation_id WHERE `+wordIndexedKind("m.")+` ORDER BY f.rank`,
+				[]any{parsed, searchScan, recentMatches - 1}, pick)
+		})
+		return err
 	}
 	// FTS5 ranks the matches itself, and only the best searchScan are joined
 	// to their workspaces: joining every match first read a messages row per
@@ -136,7 +145,7 @@ func (c *Catalog) searchEvidence(ctx context.Context, options SearchOptions) (ma
 		}
 	}
 	if terms, _ := substringTerms(wordQuery); options.Substring && len(terms) > 0 {
-		if err := collect(`SELECT c.workspace_id,m.id message_id FROM
+		if err := collect(ctx, `SELECT c.workspace_id,m.id message_id FROM
 			(SELECT rowid,rank FROM messages_trigram WHERE messages_trigram MATCH ?1 AND rowid>=COALESCE(
 				(SELECT rowid FROM messages_trigram WHERE messages_trigram MATCH ?1 ORDER BY rowid DESC LIMIT 1 OFFSET ?3),0)
 			ORDER BY rank LIMIT ?2) f

@@ -11,14 +11,14 @@ export function usageSummaryURL(metric: UsageSummaryMetric, window: string, gene
   const duration = Object.hasOwn(durations, window) ? durations[window] : 0, end = Date.parse(generatedAt);
   if (window !== "all" && (!duration || !Number.isFinite(end))) return;
   const topic: UsageTopic = metric === "human_words" ? "human" : metric === "co2e_g" ? "carbon" : metric === "parallelism" ? "parallelism" : "tokens";
-  const dataset = topic === "human" ? "writing" : topic === "parallelism" ? "parallelism" : "usage";
+  const dataset = topic === "human" ? "writing_messages" : topic === "parallelism" ? "parallelism" : "usage";
   const params = new URLSearchParams({ analyze_topic: topic });
   if (topic === "parallelism") {
     params.set("analyze_parallelism", JSON.stringify({ ...concurrency, mode: "user", range: "all", day: "", startDay: "", endDay: "", workspace: "", agent: "", zoom: duration ? [end - duration, end] : null }));
   } else {
     const where: WhereTerm[] = duration ? [
-      { field: topic === "human" ? "last_message_at" : "last_usage_at", op: ">=", value: new Date(end - duration).toISOString() },
-      { field: topic === "human" ? "first_message_at" : "first_usage_at", op: "<", value: new Date(end).toISOString() },
+      { field: topic === "human" ? "sent_at" : "last_usage_at", op: ">=", value: new Date(end - duration).toISOString() },
+      { field: topic === "human" ? "sent_at" : "first_usage_at", op: "<", value: new Date(end).toISOString() },
     ] : [];
     params.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where }));
     params.set("analyze_chart", JSON.stringify({ period: duration && duration <= durations["24h"] ? "hour" : "day", ...(topic === "tokens" ? { metric: metric === "cost_usd" ? "cost" : "tokens" } : {}) }));

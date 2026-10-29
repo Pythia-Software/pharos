@@ -38,8 +38,9 @@ export const sourceNames = (run: SyncRecord): string[] => run.sources?.length ? 
   ...(run.source_results ?? []).map((result: SyncRecord) => result.source),
   ...(run.phases ?? []).filter((phase: SyncRecord) => !["audit", "projections", "github", "identities", "git", "tools", "authorship", "findings"].includes(phase.name)).map((phase: SyncRecord) => phase.name),
 ])];
+// A deferred run left sources a capture was using to the next run.
 export const resultLabel = (run: SyncRecord): string => run.state === "failed" ? "Failed" : run.state === "interrupted" ? "Stopped"
-  : run.audit?.outcome === "mismatch" ? "Needs attention" : run.state && run.state !== "complete" ? run.state
+  : run.audit?.outcome === "mismatch" ? "Needs attention" : run.state === "deferred" ? "Capture was running" : run.state && run.state !== "complete" ? run.state
   : run.audit?.outcome && run.audit.outcome !== "passed" ? "Check deferred" : run.changed_groups > 0 || run.conversations > 0 ? "Indexed" : "No changes";
 export const runKey = (run: SyncRecord): string => run.run_id || run.finished_at;
 const validDate = (value: unknown) => typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : null;
@@ -75,7 +76,7 @@ export function syncTables(status: SyncRecord): Record<"history" | "sources" | "
 export function runTables(run: SyncRecord): Record<"sourceResults" | "phases" | "stages" | "forecasts", SyncTable> {
   const table = (key: keyof typeof syncSchemas, rows: SyncRecord[], empty: string): SyncTable => ({ schema: syncSchemas[key], rows, empty });
   return {
-    sourceResults: table("sourceResults", rows(run.source_results, result => result.source).map(result => ({ ...result, status: result.error ? "Failed" : result.yielded ? "Partial" : "Complete", error: result.error || null })), "Per-source counts were not recorded for this older run."),
+    sourceResults: table("sourceResults", rows(run.source_results, result => result.source).map(result => ({ ...result, status: result.error ? "Failed" : result.deferred ? "Capture was running" : result.yielded ? "Partial" : "Complete", error: result.error || null })), "Per-source counts were not recorded for this older run."),
     phases: table("phases", rows(run.phases, (phase, index) => `${phase.name}:${index}`).map(phase => ({ ...phase, name: phase.name === "audit" ? "Verification" : phase.name === "projections" ? "Library view" : phase.name })), "No phase measurements recorded."),
     stages: table("stages", (run.phases ?? []).flatMap((phase: SyncRecord, phaseIndex: number) => (phase.work ?? []).map((work: SyncRecord, index: number) => ({
       id: `${phaseIndex}:${index}`, stage: `${phase.name}: ${work.phase}`, done: work.unit ? measured(work.done) : null, total: work.unit && (work.total_known || work.total > 0) ? measured(work.total) : null, unit: work.unit || null, seconds: measured(work.seconds),

@@ -37,6 +37,37 @@ func TestApplyFiltersSortsAndPaginates(t *testing.T) {
 	}
 }
 
+func TestApplyFiltersOrOfAndBranches(t *testing.T) {
+	rows := []map[string]any{
+		{"id": "a", "name": "Alpha", "status": "done", "count": 2.0},
+		{"id": "b", "name": "Beta", "status": "open", "count": 7.0},
+		{"id": "c", "name": "Gamma", "status": "open", "count": 5.0},
+		{"id": "d", "name": "Delta", "status": "done", "count": 9.0},
+	}
+	// (status = open AND count > 6) OR name = Alpha: a flat OR of the same
+	// literals would also keep c and d.
+	where := []WhereTerm{{Any: []WhereClause{
+		{All: []WhereClause{{Field: "status", Op: "=", Value: "open"}, {Field: "count", Op: ">", Value: "6"}}},
+		{Field: "name", Op: "=", Value: "Alpha"},
+	}}}
+	result, err := Apply(rows, Query{Where: where, OrderBy: []OrderBy{{Field: "id", Dir: "asc"}}, Limit: 10}, testSchema())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []any
+	for _, row := range result.Rows {
+		ids = append(ids, row["id"])
+	}
+	if !reflect.DeepEqual(ids, []any{"a", "b"}) {
+		t.Fatalf("OR of AND branches kept %v", ids)
+	}
+	for _, bad := range []WhereClause{{All: []WhereClause{}}, {Field: "name", Op: "=", Value: "x", All: []WhereClause{{Field: "name", Op: "=", Value: "y"}}}} {
+		if _, err := Apply(rows, Query{Where: []WhereTerm{{Any: []WhereClause{bad, {Field: "name", Op: "=", Value: "z"}}}}, Limit: 10}, testSchema()); err == nil {
+			t.Fatalf("malformed branch %+v accepted", bad)
+		}
+	}
+}
+
 func TestApplyRejectsUnknownFields(t *testing.T) {
 	_, err := Apply(nil, Query{Where: []WhereTerm{{Field: "secret", Op: "=", Value: "x"}}, Limit: 10}, testSchema())
 	if err == nil {

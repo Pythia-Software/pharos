@@ -446,29 +446,41 @@ func (d sqlDataset) where(terms []querytable.WhereTerm, schema querytable.Schema
 		parts = append(parts, d.base)
 	}
 	for _, term := range terms {
+		// A term is an OR of AND branches; a plain predicate or OR group
+		// member is a branch of one literal.
 		lookup := false
 		alternatives := []string{}
-		for _, clause := range term.Predicates() {
-			sqlText, clauseArgs, err := d.clause(clause, schema.Fields[clause.Field])
-			if err != nil {
-				return "", nil, err
-			}
-			if d.toolSearchIndexed && !clause.Negated {
-				if term := toolSearchTerm(clause.Field, clause.Op, clause.Value); term != "" {
-					sqlText = "(" + toolSearchPredicate(term) + " AND " + sqlText + ")"
-					clauseArgs = append([]any{term}, clauseArgs...)
-					lookup = true
+		for _, branch := range term.Branches() {
+			conjuncts := make([]string, 0, len(branch))
+			branchLookup := false
+			for _, clause := range branch {
+				sqlText, clauseArgs, err := d.clause(clause, schema.Fields[clause.Field])
+				if err != nil {
+					return "", nil, err
 				}
-			}
-			if column, ok := d.buckets[clause.Field]; ok && clause.Op == "=" && !clause.Negated {
-				if from, to, ok := bucketRange(clause.Field, clause.Value); ok {
-					sqlText = "(" + sqlText + " AND " + column + ">=? AND " + column + "<?)"
-					clauseArgs = append(clauseArgs, from, to)
+				if d.toolSearchIndexed && !clause.Negated {
+					if term := toolSearchTerm(clause.Field, clause.Op, clause.Value); term != "" {
+						sqlText = "(" + toolSearchPredicate(term) + " AND " + sqlText + ")"
+						clauseArgs = append([]any{term}, clauseArgs...)
+						branchLookup = true
+					}
 				}
+				if column, ok := d.buckets[clause.Field]; ok && clause.Op == "=" && !clause.Negated {
+					if from, to, ok := bucketRange(clause.Field, clause.Value); ok {
+						sqlText = "(" + sqlText + " AND " + column + ">=? AND " + column + "<?)"
+						clauseArgs = append(clauseArgs, from, to)
+					}
+				}
+				conjuncts = append(conjuncts, sqlText)
+				args = append(args, clauseArgs...)
+				branchLookup = branchLookup || d.lookups[clause.Field]
 			}
-			alternatives = append(alternatives, sqlText)
-			args = append(args, clauseArgs...)
-			lookup = lookup || d.lookups[clause.Field]
+			if len(conjuncts) == 1 {
+				alternatives = append(alternatives, conjuncts[0])
+			} else {
+				alternatives = append(alternatives, "("+strings.Join(conjuncts, " AND ")+")")
+			}
+			lookup = lookup || branchLookup
 		}
 		// Without statistics SQLite takes a filter on a column it has no index
 		// for to keep few rows, and reads and sorts every match to order a page.
@@ -634,6 +646,51 @@ func (d sqlDataset) Distinct(ctx context.Context, q queryer, fieldName, search s
 		result.HasNull = integer(nulls[0]["has_null"]) != 0
 	}
 	return result, nil
+}
+
+// fieldFrequency is one value of a field and how many rows hold it.
+type fieldFrequency struct {
+	Value string `json:"value"`
+	Count int64  `json:"count"`
+}
+
+// FrequentValues lists a field's most frequent non-empty values, most
+// frequent first. A field the cube groups by is counted from the cube's
+// group counts, as Distinct reads its values there.
+func (d sqlDataset) FrequentValues(ctx context.Context, q queryer, fieldName string, limit int, schema querytable.Schema) ([]fieldFrequency, error) {
+	field, ok := schema.Fields[fieldName]
+	if !ok || !field.Filterable {
+		return nil, fmt.Errorf("unknown filter field %q", fieldName)
+	}
+	from, condition, count, args := d.from, " WHERE ", "COUNT(*)", []any{}
+	expression, grouped := d.cube.dimensionFor(fieldName)
+	if grouped {
+		from, count = d.cube.from, "SUM("+d.cube.count+")"
+	} else {
+		d = d.project([]string{fieldName})
+		var err error
+		if expression, err = d.expr(fieldName); err != nil {
+			return nil, err
+		}
+		where, whereArgs, err := d.where(nil, schema)
+		if err != nil {
+			return nil, err
+		}
+		from, args = d.from, whereArgs
+		if where != "" {
+			condition = where + " AND "
+		}
+	}
+	rows, err := queryMapsContext(ctx, q, fmt.Sprintf("SELECT CAST(%s AS TEXT) value, %s n %s%s%s IS NOT NULL AND %s <> '' GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT ?",
+		expression, count, from, condition, expression, expression), append(args, limit)...)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]fieldFrequency, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, fieldFrequency{Value: firstString(row["value"]), Count: integer(row["n"])})
+	}
+	return out, nil
 }
 
 // FieldStats reports each field's distinct non-null values, and the range of

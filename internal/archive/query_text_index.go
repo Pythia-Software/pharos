@@ -160,9 +160,17 @@ func (c *Catalog) indexQueryTextBatch(ctx context.Context, index queryTextIndex)
 	return last.Valid, tx.Commit()
 }
 func (c *Catalog) maintainQueryTextIndexes(ctx context.Context) {
+	// One operation for the whole build, forgotten if there was nothing to build.
+	pass := c.beginPass(ctx, "maintenance.search.query", triggerVersion)
+	defer func() { pass.end(nil) }()
 	for _, index := range []queryTextIndex{humanQueryText, toolQueryText, toolQueryFacts} {
 		for {
-			more, err := c.indexQueryTextBatch(ctx, index)
+			var more bool
+			var err error
+			pass.runIO(func() { more, err = c.indexQueryTextBatch(ctx, index) })
+			if more {
+				pass.worked(1)
+			}
 			if ctx.Err() != nil {
 				return
 			}
