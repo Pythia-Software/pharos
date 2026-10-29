@@ -70,12 +70,12 @@ body[data-application-setup] #navigator{display:none}
 .application-setup .intro-feature>svg{width:36px;height:36px;color:var(--gold)}
 .application-setup .intro-features h3{margin:0 0 4px;font:600 var(--fs-base)/1.4 var(--sans)}
 .application-setup .intro-features p{margin:0;color:var(--muted);font-size:var(--fs-sm)}
-.application-setup.introduction #application-intro,.application-setup.introduction #library-actions,.application-setup.introduction #libraries,.application-setup.introduction #library-tools{display:none}
+.application-setup.introduction #application-intro,.application-setup.introduction #library-actions,.application-setup.introduction #libraries{display:none}
 .application-setup .header-icon{min-height:30px;width:30px;padding:0}
 .application-setup [hidden]{display:none!important}
 .application-setup :focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .application-setup h1:focus,.application-setup h2:focus,.application-setup #next:focus{outline:none}
-.application-setup.flow-open #application-intro,.application-setup.flow-open #library-actions,.application-setup.flow-open #libraries,.application-setup.flow-open #library-tools{display:none}
+.application-setup.flow-open #application-intro,.application-setup.flow-open #library-actions,.application-setup.flow-open #libraries{display:none}
 .application-setup.library-ready #application-intro,.application-setup.library-ready #library-actions,.application-setup.library-ready #libraries{display:none}
 @media(max-width:760px){body[data-application-setup] .header-icons{display:none}body[data-application-setup] .bar{flex-wrap:wrap;row-gap:8px}body[data-application-setup] .tabs{margin-left:auto}}
 @media(max-width:760px){.application-setup .setup-story{grid-template-columns:1fr;gap:16px;flex:none}.application-setup .setup-art{max-height:200px;width:min(100%,280px);margin:0 auto}.application-setup .setup-storage-art{max-height:300px}.application-setup .setup-actions{margin-top:24px}.application-setup h1{font-size:32px}.application-body{padding:24px}.application-setup #library-actions{gap:8px}}
@@ -120,7 +120,6 @@ body[data-application-setup] #navigator{display:none}
 .application-setup .wizard-review .path{font-size:var(--fs-base)}
 .application-setup .wizard-progress{margin:0 auto 0 0;white-space:nowrap}
 .application-setup .wizard-footer{margin-top:auto;padding-top:20px}
-.application-setup.library-ready #library-tools{display:none}
 @media(max-width:480px){.application-setup .wizard-footer{gap:8px}.application-setup .wizard-footer button{min-width:0;padding:7px 10px}}
 @media(max-width:600px){.application-setup .wizard-options{grid-template-columns:1fr;gap:12px}.application-setup .wizard-choice{display:grid;grid-template-columns:76px minmax(0,1fr);gap:4px 12px;padding:16px 12px}.application-setup .wizard-choice>svg{grid-row:1 / span 3;grid-column:1;width:76px;height:70px;margin:0;align-self:center}.application-setup .wizard-choice strong{grid-column:2;font-size:17px;margin:0;padding-right:18px}.application-setup .wizard-choice .choice-description,.application-setup .wizard-choice .recommendation{grid-column:2}.application-setup .wizard-choice .recommendation{margin-top:4px;font-size:10px}.application-setup .wizard-choice input[type=radio]{top:12px;right:12px}.application-setup .wizard-lead{font-size:14px;margin-bottom:16px}.application-setup .wizard-review{grid-template-columns:1fr;gap:4px}.application-setup .wizard-review dd{margin-bottom:12px}}
 </style>
@@ -216,12 +215,6 @@ body[data-application-setup] #navigator{display:none}
 <div class="setup-actions wizard-footer"><span class="steps wizard-progress" id="steps"></span><button id="cancel" type="button" class="secondary">Back</button><button id="submit" type="submit">Continue</button></div>
 </form></section>
 <section class="card" id="next" tabindex="-1" hidden><h2 id="ready-title">Your library is ready</h2><p>Next, Pharos will find tools in common locations on this Mac. Review the detected tools and their source folders before approving capture.</p><div class="setup-actions"><a class="button secondary" href="/library">Browse library</a><button class="primary" id="configure-sources" type="button">Continue</button></div></section>
-<div id="library-tools" hidden><details id="mcp"><summary>MCP settings · this application on this Mac</summary><p id="mcp-explanation">The first library becomes this installation’s MCP library once. Browsing another library does not change that assignment. An agent receives a helpful unavailable error until you reconnect to the assigned library or explicitly change it here.</p><form id="mcp-form"><label for="mcp-library">Library attached to MCP</label><select id="mcp-library"></select><div class="row"><button>Save MCP assignment</button></div></form><p class="muted">Enable MCP and register your agent client from the assigned library’s MCP settings.</p><a href="/settings/mcp">Open library MCP settings</a></details>
-<details><summary>Move or copy history between libraries</summary><p>History and its retained evidence are verified at the destination. The destination keeps its own saved preferences. A move empties delivered history from the source, including its offline search index. A backup is not required.</p><form id="transfer-form"><label for="from">From</label><select id="from"></select><label for="to">To</label><select id="to"></select><label for="mode">After verification</label><select id="mode"><option value="copy">Keep the source · copy history</option><option value="move">Empty the source · move history</option></select><p class="muted">Both libraries pause while this operation runs. Large libraries need room for verified transfer staging.</p><div class="row"><button>Start verified transfer</button></div></form></details>
-<details><summary>Capture locally, transfer later</summary><p>Choose a local pending library and an archive. Pharos captures the pending library’s approved sources while open, then moves its history to the archive when available. After delivery, the pending library is empty. The archive’s browsing selection and MCP assignment stay independent.</p><form id="delivery-form"><label for="pending">Local pending library</label><select id="pending"></select><label for="archive">Destination archive</label><select id="archive"></select><p>Configure source access in the pending library first. Its own source choices are used; source permissions are never copied from another library.</p><div class="row"><button type="button" class="secondary" id="disable-delivery">Pause delivery</button><button>Enable automatic delivery</button></div></form></details>
-<details><summary>Where the application lives</summary><p>Run Pharos from Applications for access whenever this Mac is on. Or keep Pharos.app on an SSD and launch that copy on each Mac; you do not need to install it on every Mac. To move the app, quit it and drag Pharos.app in Finder, then reopen it.</p><p>If the app is on an unplugged SSD, nothing captures or runs. No local history or history cache is kept by that portable app. Small update, window and integration registration settings may remain on this Mac.</p><p id="application-path" class="path"></p><p>Local capture while your archive is away requires an app and a pending library on this Mac. An SSD library alone cannot capture while unplugged.</p></details>
-
-</div>
 </div></dialog>
 <script id="setup-wizard-model">
 function nextPharosLibraryName(libraries) {
@@ -308,21 +301,27 @@ dialog.addEventListener('keydown',event=>{if(event.key==='Escape'){if(document.q
 for(const el of [document.querySelector('body > header'),document.querySelector('body > main')])el.inert=true;
 document.documentElement.dataset.theme='dark';
 dialog.showModal();$('welcome-title').focus();
-function options(id,selected){const select=$(id);select.replaceChildren();for(const l of state.libraries||[]){const o=document.createElement('option');o.value=l.id;o.textContent=l.name+(l.available?'':' · unavailable');select.append(o)}select.value=selected||select.options[0]?.value||''}
+// Settings → Libraries sends people here when it releases the open library or
+// starts an operation that closes every library. Return them there afterwards.
+const arrival=new URLSearchParams(location.search),libraryHome=arrival.has('after')||arrival.has('released')?'/settings/libraries':'/library';let reopening=false;
+if(arrival.has('released'))notice('Library released. You can eject its drive in Finder. Quit Pharos first if the app is on that drive.');
 async function refresh(){
   state=await call('state');
   $('job').hidden=!state.job;
   if(state.job){$('job').textContent=state.job.phase;$('job').classList.toggle('error',state.job.state==='failed'||state.job.state==='paused')}
+  // A verified operation reopens the selected library; a failed one stays here with its error.
+  const selected=state.libraries.find(l=>l.id===state.selected);
+  if(arrival.get('after')==='operation'&&state.job?.state==='complete'&&!state.busy&&selected?.available&&!reopening){reopening=true;notice('Reopening '+selected.name+'…');act(async()=>{await call('connect',{id:selected.id});location.href=libraryHome});return}
   const signature=JSON.stringify({...state,job:null});if(signature===renderSignature)return;renderSignature=signature;
   if((state.libraries.length||state.job)&&introStep!=='setup')showIntroduction('setup');
   const current=state.libraries.find(l=>l.id===state.selected);
   dialog.classList.toggle('library-manager',!!state.libraries.length);
   $('application-label').textContent=state.libraries.length?'Libraries':'Setup guide';
-  $('libraries').hidden=!state.libraries.length;$('library-tools').hidden=!state.libraries.length;
+  $('libraries').hidden=!state.libraries.length;
   $('application-close').hidden=!current?.connected;
-  $('heading').textContent=state.libraries.length?'Your libraries.':'Let’s set up your library.';
-  if(state.libraries.length)$('library-introduction').textContent=current?.connected?`You’re using ${current.name}. Switch libraries below, or create a separate home for more history.`:'Open a library to browse its history, or create a new library on this Mac or an attached drive.';
-  $('library-manager-note').textContent=state.busy?'A library operation is running. You can switch libraries when it finishes.':'Each library keeps its own history, source choices and saved views. MCP assignment is managed separately below.';
+  $('heading').textContent=!state.libraries.length?'Let’s set up your library.':current?.connected?'Your libraries.':'Choose a library.';
+  if(state.libraries.length)$('library-introduction').textContent=current?.connected?`You’re using ${current.name}. Manage your libraries any time in Settings → Libraries.`:'No library is open. Open one to keep browsing, or create a new library on this Mac or an attached drive.';
+  $('library-manager-note').textContent=state.busy?'A library operation is running. You can open a library when it finishes.':'Each library keeps its own history, sources and saved views. Once one is open, manage them in Settings → Libraries.';
   for(const button of document.querySelectorAll('#library-actions button'))button.disabled=state.busy;
   const list=$('library-list');
   // Keep keyboard focus when polling replaces library cards after a state change.
@@ -340,18 +339,15 @@ async function refresh(){
     const connect=document.createElement('button');connect.className=active?'primary':'secondary';connect.textContent=active?'Continue browsing':selected?'Reconnect':'Switch to library';
     connect.setAttribute('aria-label',(active?'Browse ':selected?'Reconnect to ':'Switch to ')+l.name);connect.dataset.libraryAction='connect:'+l.id;
     connect.disabled=!l.available||state.busy;
-    connect.onclick=()=>act(async()=>{connect.disabled=true;try{await call('connect',{id:l.id});location.href='/library'}finally{connect.disabled=!l.available||state.busy}});
+    connect.onclick=()=>act(async()=>{connect.disabled=true;try{await call('connect',{id:l.id});location.href=libraryHome}finally{connect.disabled=!l.available||state.busy}});
     actions.append(connect);
-    if(active){const release=document.createElement('button');release.className='secondary';release.textContent='Release library';release.dataset.libraryAction='release:'+l.id;release.disabled=state.busy;release.onclick=()=>act(async()=>{await call('disconnect',{id:l.id});notice('Library released. You can eject its drive in Finder. Quit Pharos first if the app is on that drive.');await refresh()});actions.append(release)}
     c.append(heading,p);
     if(l.error){const error=document.createElement('p');error.className='error path';error.textContent=l.error;c.append(error)}
     if(l.recovery_point){const recovery=document.createElement('p');recovery.className='muted';recovery.textContent='Recovered from '+l.recovery_point+' · capture paused';c.append(recovery)}
-    if(l.id===state.mcp){const m=document.createElement('p');m.className='muted';m.textContent='MCP is assigned here'+(state.selected!==l.id?' · unavailable while connected elsewhere':'');c.append(m)}
     c.append(actions);list.append(c);
   }
   if(focused){const next=[...list.querySelectorAll('button')].find(button=>button.dataset.libraryAction===focused);if(next&&!next.disabled)next.focus()}
-  options('mcp-library',state.mcp);options('from',state.selected);options('to',state.libraries.find(l=>l.id!==state.selected)?.id);options('pending',state.delivery_source);options('archive',state.delivery_target||state.libraries[1]?.id);
-  $('application-path').textContent='This app: '+state.application;if(!$('setup').hidden&&flow==='create')updateWizardChoices();$('mcp-form').hidden=!state.libraries.length;
+  if(!$('setup').hidden&&flow==='create')updateWizardChoices();
 }
 async function act(fn){try{await fn()}catch(e){notice(e.message,true)}}
 $('configure-sources').onclick=()=>act(()=>window.pharosOnboarding.open({library:state.selected}));
@@ -443,7 +439,6 @@ $('library-form').onsubmit=e=>{e.preventDefault();notice('');
     notice(flow==='recover'?'Restoration is running. Your restored library will appear after verification.':'');await refresh();
   }finally{$('submit').disabled=false;$('cancel').disabled=false}});
 };
-$('mcp-form').onsubmit=e=>{e.preventDefault();act(async()=>{await call('mcp-library',{id:$('mcp-library').value});notice('MCP assignment saved for this application on this Mac.');await refresh()})};$('transfer-form').onsubmit=e=>{e.preventDefault();act(async()=>{await call('transfer',{source:$('from').value,target:$('to').value,move:$('mode').value==='move'});notice('Transfer started. Source cleanup follows destination verification.');await refresh()})};$('delivery-form').onsubmit=e=>{e.preventDefault();act(async()=>{await call('delivery',{source:$('pending').value,target:$('archive').value});notice('Automatic delivery enabled while this application is open.');await refresh()})};$('disable-delivery').onclick=()=>act(async()=>{await call('delivery',{source:'',target:''});notice('Automatic delivery paused.');await refresh()});
 act(refresh);setInterval(()=>{if(!document.hidden)act(refresh)},5000);
 })();
 

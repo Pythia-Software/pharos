@@ -316,6 +316,21 @@ func TestShadowOperationsCoverLibraryActivities(t *testing.T) {
 			progress, err := catalog.substringIndexProgress(context.Background())
 			return err == nil && progress.Ready && idleOperations(server)
 		})
+
+		// So does removing tool output from the word index.
+		execTx(t, catalog.DB, "DELETE FROM meta WHERE key IN ('message_fts_tool_output_removed','message_fts_tool_output_merged','message_fts_tool_output_cursor')")
+		gate, err = catalog.acquireWriteGate(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		server.daemon("maintainToolOutputIndex", catalog.maintainToolOutputIndex)
+		waitUntil(t, 10*time.Second, "the removal", func() bool { return len(server.ops.running()) > 0 })
+		shadowParity(t, server, "tool-output removal")
+		gate()
+		waitUntil(t, 30*time.Second, "the removal to finish", func() bool {
+			progress, err := catalog.toolOutputIndexProgress(context.Background())
+			return err == nil && progress.Ready && idleOperations(server)
+		})
 	})
 
 	t.Run("backup waiting for a Terminal capture", func(t *testing.T) {

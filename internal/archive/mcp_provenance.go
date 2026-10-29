@@ -173,7 +173,7 @@ func (c *Catalog) boundedWorkDetail(args map[string]any) (map[string]any, error)
 }
 
 var traceWorktreeTool = map[string]any{
-	"name": "trace_worktree", "description": "Read-only lookup of a worktree path, basename, branch, or agent ID. Prioritizes exact recorded metadata; only if none matches, searches indexed transcript phrases with a case-sensitive literal check, never semantic fallback or a full archive text scan. Use search_messages for additional transcript references to a known entity. Returns parent lineage, assignment, activity and evidence handles. References do not establish creation, current Git state, integration, or safe deletion. Page with next_offset.",
+	"name": "trace_worktree", "description": "Read-only lookup of a worktree path, basename, branch, or agent ID. Prioritizes exact recorded metadata; only if none matches, searches indexed transcript phrases with a case-sensitive literal check, never semantic fallback or a full archive text scan. Tool output (tool_result) is not word-indexed, so a path that appears only in tool output is not found. Use search_messages for additional transcript references to a known entity. Returns parent lineage, assignment, activity and evidence handles. References do not establish creation, current Git state, integration, or safe deletion. Page with next_offset.",
 	"inputSchema": map[string]any{"type": "object", "required": []string{"query"}, "properties": map[string]any{
 		"query":             map[string]any{"type": "string", "minLength": 1, "description": "Exact absolute path, worktree basename, branch name, or native agent ID; case-sensitive literal matching."},
 		"repository":        map[string]any{"type": "string"},
@@ -244,7 +244,7 @@ func (c *Catalog) traceWorktree(args map[string]any) (map[string]any, error) {
 			return nil, err
 		}
 		base = joins + ` WHERE c.id IN (SELECT DISTINCT m.conversation_id FROM messages_fts
-			JOIN messages m ON m.id=messages_fts.message_id WHERE messages_fts MATCH ? AND instr(m.text,?)>0)`
+			JOIN messages m ON m.id=messages_fts.message_id WHERE messages_fts MATCH ? AND ` + wordIndexedKind("m.") + ` AND instr(m.text,?)>0)`
 		values = []any{parsed, query}
 		if repository := firstString(args["repository"]); repository != "" {
 			base += " AND " + repositoryNamePredicate("r")
@@ -301,6 +301,9 @@ func (c *Catalog) traceWorktree(args map[string]any) (map[string]any, error) {
 	}
 	result := map[string]any{"query": query, "search_mode": "literal", "lookup_strategy": "metadata_first", "search_scope": scope, "items": items, "total": total, "offset": offset, "next_offset": nil,
 		"limitations": "Recorded references only, not proof of creation or present use. Branches, heads and outcomes are historical reports, not verified integration or permission to delete. Missing evidence is not proof of absence."}
+	if scope == "indexed_message_phrases" {
+		result["coverage"] = toolOutputCoverage
+	}
 	if scope == "entity_metadata" {
 		references := map[string]any{"tool": "search_messages", "query": query, "match_mode": "phrase"}
 		if repository := firstString(args["repository"]); repository != "" {

@@ -389,3 +389,106 @@ func TestTextSearchSparseRolesResumeRejectedPostings(t *testing.T) {
 		t.Fatalf("role pagination lost matches: %v %+v", ids, last)
 	}
 }
+
+// A scoped search's two streams resume after a time budget stops a page
+// anywhere: in the word-index stream, at the boundary, or in the scan of tool
+// output. Every match is returned once.
+func TestTextSearchScopedStreamsResumeAfterTimeBudget(t *testing.T) {
+	slowTest(t)
+	for stallAt := 1; stallAt <= 5; stallAt++ {
+		t.Run(fmt.Sprint(stallAt), func(t *testing.T) {
+			c := textFixture(t)
+			calls, stalled := 0, false
+			hookTextSearch(t, c, nil, func(ctx context.Context) error {
+				if calls++; calls == stallAt && !stalled {
+					stalled = true
+					<-ctx.Done()
+					return ctx.Err()
+				}
+				return nil
+			})
+			o := TextSearchOptions{Query: "timeout", Surface: "all", ConversationID: "c", TimeoutMS: 300}
+			seen, stops := []string{}, []string{}
+			for pages := 0; ; pages++ {
+				if pages > 10 {
+					t.Fatalf("no end: %v %v", seen, stops)
+				}
+				page, err := c.SearchText(t.Context(), o)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, item := range page.Items {
+					seen = append(seen, item.MessageID)
+				}
+				stops = append(stops, page.StopReason)
+				if page.Complete {
+					break
+				}
+				if page.NextCursor != "" {
+					o.Cursor = page.NextCursor
+				}
+			}
+			slices.Sort(seen)
+			if !slices.Equal(seen, []string{"a", "r", "t"}) || !stalled {
+				t.Fatalf("returned %v across %v (stalled %t)", seen, stops, stalled)
+			}
+		})
+	}
+}
+
+// A message the word-index stream skips as oversized still lets the
+// tool-output stream run: the skip is counted, and tool output is found.
+func TestTextSearchScopedStreamsCarryOversizedSkips(t *testing.T) {
+	c := textFixture(t)
+	tx := seedTx(t, c.DB)
+	call, _, err := upsertMessage(tx, "other", MessageRecord{NativeID: "big-call", Kind: "tool_call", Role: "assistant", Text: "zebra " + strings.Repeat("x", 400), Selected: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceMessageFTS(tx, call); err != nil {
+		t.Fatal(err)
+	}
+	output, _, err := upsertMessage(tx, "other", MessageRecord{NativeID: "small-output", Kind: "tool_result", Role: "tool", Text: "zebra seen", Selected: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitSeed(t, tx)
+	whole, err := c.SearchText(t.Context(), TextSearchOptions{Query: "zebra", Surface: "tools", ConversationID: "other"})
+	if err != nil || len(whole.Items) != 2 || !whole.Complete {
+		t.Fatalf("both streams: %+v %v", whole, err)
+	}
+	small, err := c.SearchText(t.Context(), TextSearchOptions{Query: "zebra", Surface: "tools", ConversationID: "other", MaxBytes: 100})
+	if err != nil || len(small.Items) != 1 || small.Items[0].MessageID != output || small.SkippedOversize != 1 || small.StopReason != "oversized_messages" || small.Complete {
+		t.Fatalf("an oversized tool call hid the tool output: %+v %v", small, err)
+	}
+}
+
+// When the tool-output stream's page cannot be confirmed, the page keeps the
+// word-index matches it confirmed and continues from the tool-output stream:
+// following its cursor returns each match once.
+func TestTextSearchScopedStreamsKeepConfirmedMatches(t *testing.T) {
+	slowTest(t)
+	override(t, &textSearchCheckTimeout, 20*time.Millisecond)
+	c := textFixture(t)
+	reads, stall := 0, true
+	hookTextSearchGeneration(t, c, func(ctx context.Context) error {
+		// Before and after each stream's page: the fourth is the check
+		// after the tool-output stream's.
+		if reads++; reads == 4 && stall {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		return nil
+	})
+	o := TextSearchOptions{Query: "timeout", Surface: "all", ConversationID: "c", TimeoutMS: 300}
+	first, err := c.SearchText(t.Context(), o)
+	if err != nil || first.Complete || first.NextCursor == "" || !slices.Equal(resultIDs(first), []string{"a", "r"}) || first.Count != 2 {
+		t.Fatalf("withheld tool-output page: %+v %v", first, err)
+	}
+	stall = false
+	o.Cursor = first.NextCursor
+	rest, err := c.SearchText(t.Context(), o)
+	if err != nil || !rest.Complete || !slices.Equal(resultIDs(rest), []string{"t"}) || rest.Count != 3 {
+		t.Fatalf("continued page: %+v %v", rest, err)
+	}
+}

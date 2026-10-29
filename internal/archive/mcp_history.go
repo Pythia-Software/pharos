@@ -84,6 +84,7 @@ var mcpLoggedArguments = []string{
 	"entity", "metric_scope", "metric_quality", "metric_filters", "order_by", "result_mode", "result_type", "select", "workspace_ids", "group_by", "aggregations",
 	"include_metrics",
 	"retain_snapshot", "release_snapshot",
+	"page", "card", "days",
 }
 
 func mcpArgumentSummary(args map[string]any) string {

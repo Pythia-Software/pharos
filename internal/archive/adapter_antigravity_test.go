@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/binary"
@@ -12,8 +13,11 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 const (
@@ -243,6 +247,17 @@ func TestAntigravityIngestIsIncrementalAndCaptured(t *testing.T) {
 	catalog, config := testCatalog(t)
 	config.CaptureRoot = filepath.Join(t.TempDir(), "captures")
 	dir := antigravityFixture(t)
+	// Transcripts last written a month ago are cold (compressed below).
+	transcripts, _ := filepath.Glob(filepath.Join(dir, "brain", "*", filepath.FromSlash(antigravityLogs), "transcript*.jsonl"))
+	if len(transcripts) == 0 {
+		t.Fatal("fixture has no transcripts")
+	}
+	for _, transcript := range transcripts {
+		old := time.Now().AddDate(0, -1, 0)
+		if err := os.Chtimes(transcript, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
 	source := SourceConfig{Name: "antigravity-cli", Kind: "antigravity", Path: dir, Account: "local", Enabled: true}
 	config.Sources = []SourceConfig{source}
 	parses := countParses(t)
@@ -290,6 +305,28 @@ func TestAntigravityIngestIsIncrementalAndCaptured(t *testing.T) {
 	}
 	if a, b := countRows(t, catalog, "SELECT COUNT(*) FROM messages"), countRows(t, other, "SELECT COUNT(*) FROM messages"); a != b || a == 0 {
 		t.Fatalf("messages live %d, from capture %d", a, b)
+	}
+
+	// Cold transcripts the index recorded are stored compressed; another
+	// index of them, forced, reads them through the capture view.
+	override(t, &compressMinBytes, 1)
+	runCapture(t, config)
+	compressed := 0
+	if err := compressCaptures(t.Context(), config, other, func(compressedGeneration) { compressed++ }); err != nil || compressed == 0 {
+		t.Fatalf("compressed %d of %d transcripts: %v", compressed, len(transcripts), err)
+	}
+	forced, _ := testCatalog(t)
+	targets, err := captureTargets(config.CaptureRoot, []string{"host-a"}, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range targets {
+		if result := forced.IndexCapture(withIngestMode(t.Context(), ingestMode{force: true}), target, nil); result.Error != nil {
+			t.Fatal(result.Error)
+		}
+	}
+	if a, b := countRows(t, catalog, "SELECT COUNT(*) FROM messages"), countRows(t, forced, "SELECT COUNT(*) FROM messages"); a != b {
+		t.Fatalf("messages live %d, from compressed capture %d", a, b)
 	}
 }
 
@@ -423,6 +460,82 @@ func TestAntigravityPrintModeRunsAreHeadless(t *testing.T) {
 	indexCaptures(t, other, config.CaptureRoot, "host-a")
 	if got := sender(other, antigravityRoot); got != "automation:agy-print" {
 		t.Fatalf("sender from a capture the CLI rotated its log out of = %q", got)
+	}
+
+	// Once the transcripts are cold and stored compressed, print-mode
+	// detection, which reads transcripts' start times on every plan, reads
+	// their original bytes, and a normal index decodes nothing.
+	override(t, &compressMinBytes, 1)
+	transcripts, _ := filepath.Glob(filepath.Join(config.CaptureRoot, "host-a", "antigravity-cli", "files", "brain", "*", filepath.FromSlash(antigravityLogs), "transcript*.jsonl"))
+	old := time.Now().AddDate(0, -1, 0)
+	for _, transcript := range transcripts {
+		if err := os.Chtimes(transcript, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lease := func() *antigravityAdapter {
+		t.Helper()
+		target := captureTarget{Host: currentHost(), Source: "antigravity-cli", Dir: filepath.Join(config.CaptureRoot, "host-a", "antigravity-cli")}
+		input, err := leaseCaptureForIndex(t.Context(), target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(input.Close)
+		return input.Adapter.(*antigravityAdapter)
+	}
+	plain := lease()
+	starts := map[string]time.Time{}
+	plainTranscripts, err := plain.transcripts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, path := range plainTranscripts {
+		if starts[id], err = plain.files().readAntigravityStarted(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The capture keeps source mtimes: make its copies cold by recording them
+	// in the manifest as the source's.
+	manifest, err := loadCaptureManifest(filepath.Join(config.CaptureRoot, "host-a", "antigravity-cli"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range manifest.Files {
+		if slices.ContainsFunc(transcripts, func(path string) bool {
+			return strings.HasSuffix(path, filepath.FromSlash(strings.TrimPrefix(file.Captured, "files/")))
+		}) {
+			file.MTimeNS, file.MTime = old.UnixNano(), old.UTC().Format(time.RFC3339Nano)
+		}
+	}
+	if err = writeCaptureManifest(filepath.Join(config.CaptureRoot, "host-a", "antigravity-cli"), manifest); err != nil {
+		t.Fatal(err)
+	}
+	reindexed, _ := testCatalog(t)
+	indexCaptures(t, reindexed, config.CaptureRoot, "host-a")
+	compressed := 0
+	if err := compressCaptures(t.Context(), config, reindexed, func(compressedGeneration) { compressed++ }); err != nil || compressed == 0 {
+		t.Fatal("no cold transcript was compressed", compressed, err)
+	}
+	var decodes atomic.Int64
+	override(t, &capturedContentHook, func(string) { decodes.Add(1) })
+	indexCaptures(t, reindexed, config.CaptureRoot, "host-a")
+	if got := sender(reindexed, antigravityRoot); decodes.Load() != 0 || got != "automation:agy-print" {
+		t.Fatalf("normal index over compressed transcripts: %d decodes, sender %q", decodes.Load(), got)
+	}
+	// With nothing cached, the start times read from the encoded transcripts
+	// are the original ones.
+	headCacheMu.Lock()
+	headCache = map[headKey]any{}
+	headCacheMu.Unlock()
+	encoded := lease()
+	encodedTranscripts, err := encoded.transcripts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, path := range encodedTranscripts {
+		if got, err := encoded.files().antigravityStarted(path); err != nil || !got.Equal(starts[id]) || got.IsZero() {
+			t.Fatalf("start of %s from its compressed transcript = %v, want %v", id, got, starts[id])
+		}
 	}
 }
 
@@ -611,4 +724,476 @@ func TestAntigravityLogReaderHandlesChunkBoundariesAndLongLines(t *testing.T) {
 			t.Fatalf("cancelled log read did not stop: %v", err)
 		}
 	}
+}
+
+// A transcript's start time that could not be read (the file could not be
+// opened, or its encoded bytes not decoded) is not cached as "no start
+// time": print-mode attribution would be lost for the life of the process.
+func TestAntigravityStartTimeFailuresAreNotCached(t *testing.T) {
+	started := time.Date(2026, 9, 28, 14, 30, 2, 0, time.UTC)
+	content := []byte(antigravitySteps(map[string]any{"type": "USER_INPUT", "content": "hello", "created_at": started.Format(time.RFC3339)}))
+	dir := t.TempDir()
+
+	// Open failure: a transcript that stats (so it has a cache key) but
+	// cannot be opened, then can, unchanged.
+	live := filepath.Join(dir, "live", "transcript.jsonl")
+	writeSourceFile(t, live, string(content))
+	if err := os.Chmod(live, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(live, 0o600) })
+	if got, err := (sourceFiles{}).antigravityStarted(live); err == nil || !got.IsZero() {
+		t.Fatal("start time of a transcript that cannot be opened", got, err)
+	}
+	if err := os.Chmod(live, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := (sourceFiles{}).antigravityStarted(live); err != nil || !got.Equal(started) {
+		t.Fatalf("start time after an open failure = %v (%v), want %v", got, err, started)
+	}
+
+	// A plan whose print-mode detection cannot read a conversation's start
+	// time leaves that group undiscovered, with an error, rather than
+	// discovering it as an interactive run.
+	source := antigravityFixture(t)
+	probePut(t, filepath.Join(source, "log", "cli-20260928_080412.log"), "I0928 08:03:00.100000 1 printmode.go:181] Print mode: starting (promptLength=13)\n")
+	adapter := &antigravityAdapter{baseAdapter: baseAdapter{config: SourceConfig{Name: "antigravity-cli", Kind: "antigravity", Path: source}}}
+	transcripts, err := adapter.transcripts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unreadable := transcripts[antigravityOther]
+	if err := os.Chmod(unreadable, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(unreadable, 0o600) })
+	plan, err := adapter.planParts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.discoveryError == nil || !strings.Contains(plan.discoveryError.Error(), "start time") {
+		t.Fatal("unreadable start time did not fail its group's discovery", plan.discoveryError)
+	}
+	for _, group := range plan.groups {
+		for _, part := range group.parts {
+			if part.item == unreadable {
+				t.Fatal("the group whose start time is unreadable was planned")
+			}
+		}
+	}
+
+	// Decode failure: an encoded capture whose bytes do not decode, then the
+	// real encoding under the same name, size and mtime (the same cache key).
+	var encoded bytes.Buffer
+	writer, err := zstd.NewWriter(&encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer.Write(content)
+	writer.Close()
+	rel := "files/brain/x/transcript.jsonl"
+	file := filepath.Join(dir, "capture", filepath.FromSlash(rel))
+	corrupt := append([]byte{}, encoded.Bytes()...)
+	for i := len(zstdMagic) + 8; i < len(corrupt); i++ {
+		corrupt[i] ^= 0x5a
+	}
+	writeSourceFile(t, file, string(corrupt))
+	stamp := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(file, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	view := &captureView{host: Host{ID: "host-a"}, dir: filepath.Join(dir, "capture"), manifest: &captureManifest{Files: []*capturedFile{{Path: "/source/transcript.jsonl", Captured: rel, Size: int64(len(content)), Encoding: captureEncodingZstd, StoredSize: int64(encoded.Len())}}}}
+	files := sourceFiles{view: view}
+	if got, err := files.antigravityStarted(file); err == nil || !got.IsZero() {
+		t.Fatal("start time from undecodable bytes", got, err)
+	}
+	if err := os.WriteFile(file, encoded.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(file, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := files.antigravityStarted(file); !got.Equal(started) {
+		t.Fatalf("start time after a decode failure = %v, want %v", got, started)
+	}
+}
+
+// Idle latest snapshots: an Antigravity conversation's requests database
+// whose source has not changed for capture_compress_after_days is stored
+// compressed once indexed; the summaries database, which every plan reads,
+// stays plain. A normal index decodes nothing, a forced reindex reads the
+// compressed snapshot to the same catalog, pins, record exports and history
+// planning read its original bytes, and a change at the source takes a new,
+// uncompressed snapshot with the compressed one kept in history.
+func TestAntigravityIdleSnapshotsAreCompressed(t *testing.T) {
+	useHost(t, "host-a")
+	override(t, &compressMinBytes, 1)
+	catalog, config := testCatalog(t)
+	config.CaptureRoot = filepath.Join(t.TempDir(), "captures")
+	dir := antigravityFixture(t)
+	old := time.Now().AddDate(0, -1, 0)
+	databases, _ := filepath.Glob(filepath.Join(dir, "conversations", "*.db*"))
+	databases = append(databases, filepath.Join(dir, antigravitySummaries))
+	for _, database := range databases {
+		if err := os.Chtimes(database, old, old); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+	}
+	source := SourceConfig{Name: "antigravity-cli", Kind: "antigravity", Path: dir, Account: "local", Enabled: true}
+	config.Sources = []SourceConfig{source}
+	runCapture(t, config)
+	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+	runCapture(t, config)
+	target := captureTarget{Host: currentHost(), Source: source.Name, Dir: filepath.Join(config.CaptureRoot, "host-a", source.Name)}
+	requests := "files/conversations/" + antigravityRoot + ".db"
+	summaries := "files/" + antigravitySummaries
+
+	compress := func() []string {
+		t.Helper()
+		compressed := []string{}
+		if err := compressCaptures(t.Context(), config, catalog, func(g compressedGeneration) { compressed = append(compressed, g.Path) }); err != nil {
+			t.Fatal(err)
+		}
+		return compressed
+	}
+	// Not while the next index must read everything again (a new index
+	// version), nor after a capture that failed.
+	if err := catalog.advanceSyncGeneration(t.Context(), "host-a", source.Name); err != nil {
+		t.Fatal(err)
+	}
+	if got := compress(); slices.Contains(got, requests) {
+		t.Fatal("compressed a snapshot the next index will read", got)
+	}
+	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+	failed := readCaptureManifest(t, config, source.Name)
+	// The last capture failed on this database (and only on it).
+	failed.LastRun.Errors = []captureError{{Path: filepath.Join(dir, "conversations", antigravityRoot+".db"), Error: "unreadable"}}
+	if err := writeCaptureManifest(target.Dir, &failed); err != nil {
+		t.Fatal(err)
+	}
+	if got := compress(); slices.Contains(got, requests) {
+		t.Fatal("compressed a snapshot after a failed capture", got)
+	}
+	runCapture(t, config)
+	compressed := compress()
+	if !slices.Contains(compressed, requests) || slices.Contains(compressed, summaries) {
+		t.Fatalf("compressed %v: want the idle requests database, not the summaries every plan reads", compressed)
+	}
+	manifest := readCaptureManifest(t, config, source.Name)
+	var snapshot *capturedSnapshot
+	for _, s := range manifest.Snapshots {
+		if s.Captured == requests {
+			snapshot = s
+		}
+	}
+	if snapshot == nil || snapshot.Encoding != captureEncodingZstd || snapshot.SHA256 == "" || !zstdOnDisk(t, capturedPath(config, source.Name, requests)) || manifest.Version != captureSnapshotsVersion {
+		t.Fatalf("idle snapshot: %+v", snapshot)
+	}
+	// A build that reads encoded files but not encoded snapshots (phase 2)
+	// refuses the capture.
+	captureManifestUnderstood = captureFilesVersion
+	_, err := loadCaptureManifest(target.Dir)
+	captureManifestUnderstood = captureManifestVersion
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("has version %d; this build understands up to %d", captureSnapshotsVersion, captureFilesVersion)) {
+		t.Fatal("a files-level build accepted an encoded latest snapshot", err)
+	}
+	if err := validateCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateStagedCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
+		t.Fatal(err)
+	}
+
+	var decodes atomic.Int64
+	override(t, &capturedContentHook, func(string) { decodes.Add(1) })
+	parses := countParses(t)
+	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+	if decodes.Load() != 0 || parses.Load() != 0 {
+		t.Fatalf("normal index over an idle compressed snapshot: %d decodes, %d parses", decodes.Load(), parses.Load())
+	}
+	forced, _ := testCatalog(t)
+	if result := forced.IndexCapture(withIngestMode(t.Context(), ingestMode{force: true}), target, nil); result.Error != nil || decodes.Load() == 0 {
+		t.Fatalf("forced reindex: %+v, %d decodes", result, decodes.Load())
+	}
+	messages := func(c *Catalog) string {
+		t.Helper()
+		rows, err := queryMaps(c.DB, "SELECT c.native_id,m.role,m.text,m.created_at FROM messages m JOIN conversations c ON c.id=m.conversation_id ORDER BY c.native_id,m.created_at,m.text")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return jsonText(rows)
+	}
+	if messages(forced) != messages(catalog) {
+		t.Fatal("forced reindex of a compressed snapshot built a different catalog")
+	}
+	if left := temporariesUnder(t, target.Dir); len(left) != 0 {
+		t.Fatal("indexing left decoded copies", left)
+	}
+
+	// Pins and record exports read the original bytes.
+	lock, err := lockCaptureTarget(t.Context(), target.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := sourceCaptureForTarget(t.Context(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin, err := c.pinVersion("job", "idle snapshot", snapshot.version())
+	if err != nil || pin.Encoding != captureEncodingZstd || pin.SHA256 != snapshot.SHA256 || pin.Size != snapshot.Size {
+		t.Fatal("pin of an idle compressed snapshot", pin, err)
+	}
+	ref, err := newRecordStore(c).exportSQLite(capturedPath(config, source.Name, requests), snapshot.Path, "database", snapshot.Source, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision, err := newRecordStore(c).loadRevision(ref)
+	if err != nil || revision.InputHash != snapshot.SHA256 || revision.Input != requests {
+		t.Fatal("record export of an idle compressed snapshot", revision.Input, err)
+	}
+	// The pin links the encoded snapshot into history under a name the
+	// manifest does not list: history backfill exports it from there.
+	if ref, err = newRecordStore(c).exportSQLite(filepath.Join(target.Dir, filepath.FromSlash(pin.Path)), snapshot.Path, "database", snapshot.Source, "", nil); err != nil {
+		t.Fatal("export of a pinned compressed snapshot", err)
+	}
+	if revision, err = newRecordStore(c).loadRevision(ref); err != nil || revision.InputHash != snapshot.SHA256 || revision.Input != pin.Path {
+		t.Fatal("export of a pinned compressed snapshot", revision.Input, err)
+	}
+	releaseLockFile(lock)
+	if err = releasePreservationOwner(target.Dir, "job"); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planHistory(t.Context(), config, historyScope{Host: "host-a", Source: source.Name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	planned, pinnedCopy := false, false
+	for _, u := range plan.Units {
+		if u.Path == requests {
+			planned = u.Gap == "" && u.Version.Encoding == captureEncodingZstd && u.Version.SHA256 == snapshot.SHA256
+		}
+		// The pin's copy in history is listed, encoded, after its release:
+		// planned as a generation, never as an unrecognised orphan.
+		if u.Path == pin.Path {
+			pinnedCopy = u.Kind == "database" && u.Gap == "" && u.Version.Encoding == captureEncodingZstd && u.Version.SHA256 == snapshot.SHA256
+		}
+		if u.Kind == "orphan-native" {
+			t.Fatal("history planning found an orphan", u)
+		}
+	}
+	if !planned || !pinnedCopy {
+		t.Fatal("history planning did not read the idle compressed snapshot and its pinned copy", planned, pinnedCopy)
+	}
+	if listed, ok := loadManifestForTest(t, target.Dir).version(pin.Path); !ok || listed.Encoding != captureEncodingZstd {
+		t.Fatal("the pinned copy is not listed in the manifest", listed)
+	}
+
+	// Turning on SQLite record capture, which exports every database on every
+	// capture, restores the compressed snapshot to its original bytes once;
+	// later captures decode nothing.
+	config.Sources[0].Options = map[string]any{"sqlite_record_capture": true}
+	decodes.Store(0)
+	if run := runCapture(t, config); !run.OK || decodes.Load() == 0 {
+		t.Fatal("record capture did not restore the compressed snapshot", run)
+	}
+	restored := readCaptureManifest(t, config, source.Name)
+	for _, s := range restored.Snapshots {
+		if s.Captured == requests && (s.Encoding != "" || zstdOnDisk(t, capturedPath(config, source.Name, requests))) {
+			t.Fatalf("record capture left the snapshot compressed: %+v", s)
+		}
+	}
+	decodes.Store(0)
+	if run := runCapture(t, config); !run.OK || decodes.Load() != 0 {
+		t.Fatalf("record capture decoded again: %d decodes, %+v", decodes.Load(), run)
+	}
+	if err := validateCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
+		t.Fatal(err)
+	}
+	// Turned off again, the idle snapshot is compressed again.
+	config.Sources[0].Options = nil
+	runCapture(t, config)
+	runCapture(t, config)
+	if got := compress(); !slices.Contains(got, requests) {
+		t.Fatal("idle snapshot not compressed again after record capture was turned off", got)
+	}
+
+	// The source changes again: a new uncompressed snapshot, and the
+	// compressed one moves into history as it is.
+	antigravityRequestRows(t, dir, antigravityRoot, []any{[]uint64{1}, "gemini-3.8-flash", 1000, 999, 0, 200})
+	if run := runCapture(t, config); !run.OK {
+		t.Fatal(run)
+	}
+	manifest = readCaptureManifest(t, config, source.Name)
+	for _, s := range manifest.Snapshots {
+		if s.Captured != requests {
+			continue
+		}
+		if s.Encoding != "" || len(s.Generations) == 0 || s.Generations[0].Encoding != captureEncodingZstd || s.Generations[0].SHA256 != snapshot.SHA256 {
+			t.Fatalf("after a change at the source: %+v", s)
+		}
+	}
+	if err := validateCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// idleRequestsFixture is an Antigravity capture whose conversation requests
+// database is idle, indexed and stored compressed.
+func idleRequestsFixture(t *testing.T) (Config, captureTarget, string, string, *capturedSnapshot) {
+	t.Helper()
+	useHost(t, "host-a")
+	override(t, &compressMinBytes, 1)
+	catalog, config := testCatalog(t)
+	config.CaptureRoot = filepath.Join(t.TempDir(), "captures")
+	dir := antigravityFixture(t)
+	old := time.Now().AddDate(0, -1, 0)
+	databases, _ := filepath.Glob(filepath.Join(dir, "conversations", "*.db*"))
+	databases = append(databases, filepath.Join(dir, antigravitySummaries))
+	for _, database := range databases {
+		if err := os.Chtimes(database, old, old); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+	}
+	source := SourceConfig{Name: "antigravity-cli", Kind: "antigravity", Path: dir, Account: "local", Enabled: true}
+	config.Sources = []SourceConfig{source}
+	runCapture(t, config)
+	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+	runCapture(t, config)
+	if err := compressCaptures(t.Context(), config, catalog, nil); err != nil {
+		t.Fatal(err)
+	}
+	target := captureTarget{Host: currentHost(), Source: source.Name, Dir: filepath.Join(config.CaptureRoot, "host-a", source.Name)}
+	requests := "files/conversations/" + antigravityRoot + ".db"
+	for _, snapshot := range readCaptureManifest(t, config, source.Name).Snapshots {
+		if snapshot.Captured == requests && snapshot.Encoding == captureEncodingZstd {
+			return config, target, dir, requests, snapshot
+		}
+	}
+	t.Fatal("fixture: the idle requests database was not compressed")
+	return Config{}, captureTarget{}, "", "", nil
+}
+
+// A pinned compressed snapshot, restored to plain for record capture and
+// then superseded: rotation lands on the pin's copy, and the generation is
+// listed as the bytes there are stored (compressed), and exports.
+func TestIdleSnapshotPinnedRestoredThenSupersededKeepsItsEncoding(t *testing.T) {
+	config, target, dir, requests, snapshot := idleRequestsFixture(t)
+	lock, err := lockCaptureTarget(t.Context(), target.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := sourceCaptureForTarget(t.Context(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin, err := c.pinVersion("job", "rotation", snapshot.version())
+	releaseLockFile(lock)
+	if err != nil || pin.Encoding != captureEncodingZstd {
+		t.Fatal("pin", pin, err)
+	}
+	config.Sources[0].Options = map[string]any{"sqlite_record_capture": true}
+	if run := runCapture(t, config); !run.OK {
+		t.Fatal(run)
+	}
+	if zstdOnDisk(t, capturedPath(config, "antigravity-cli", requests)) {
+		t.Fatal("fixture: record capture did not restore the latest snapshot")
+	}
+	antigravityRequestRows(t, dir, antigravityRoot, []any{[]uint64{1}, "gemini-3.8-flash", 1000, 999, 0, 200})
+	if run := runCapture(t, config); !run.OK {
+		t.Fatal(run)
+	}
+	var generation *capturedVersion
+	for _, s := range readCaptureManifest(t, config, "antigravity-cli").Snapshots {
+		for i := range s.Generations {
+			if s.Generations[i].Captured == pin.Path {
+				generation = &s.Generations[i]
+			}
+		}
+	}
+	if generation == nil {
+		t.Fatal("the superseded snapshot is not listed at the pin's copy")
+	}
+	if onDisk := zstdOnDisk(t, capturedPath(config, "antigravity-cli", pin.Path)); onDisk != (generation.Encoding == captureEncodingZstd) {
+		t.Fatalf("generation listed %q over %s bytes", generation.Encoding, map[bool]string{true: "compressed", false: "plain"}[onDisk])
+	}
+	if err := validateStagedCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
+		t.Fatal(err)
+	}
+	lock, err = lockCaptureTarget(t.Context(), target.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseLockFile(lock)
+	if c, err = sourceCaptureForTarget(t.Context(), target); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := newRecordStore(c).exportSQLite(capturedPath(config, "antigravity-cli", pin.Path), snapshot.Path, "database", snapshot.Source, "", nil)
+	if err != nil {
+		t.Fatal("export of the superseded snapshot", err)
+	}
+	if revision, err := newRecordStore(c).loadRevision(ref); err != nil || revision.InputHash != snapshot.SHA256 {
+		t.Fatal("export of the superseded snapshot read other bytes", err)
+	}
+}
+
+// Restoring a compressed snapshot to plain for record capture: a drive
+// failure stops the source, and a decode or digest failure skips the
+// snapshot; either way it stays compressed and intact.
+func TestIdleSnapshotRestoreFailuresLeaveItCompressed(t *testing.T) {
+	check := func(t *testing.T, config Config, requests string, raw string) {
+		t.Helper()
+		for _, s := range readCaptureManifest(t, config, "antigravity-cli").Snapshots {
+			if s.Captured == requests && s.Encoding != captureEncodingZstd {
+				t.Fatalf("restore failure left the entry %+v", s)
+			}
+		}
+		if got, _, err := fileSHA256(capturedPath(config, "antigravity-cli", requests)); err != nil || got != raw {
+			t.Fatal("restore failure changed the stored bytes", err)
+		}
+		if err := validateCaptureEvidence(t.Context(), config.CaptureRoot); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("drive failure", func(t *testing.T) {
+		config, _, _, requests, _ := idleRequestsFixture(t)
+		raw, _, _ := fileSHA256(capturedPath(config, "antigravity-cli", requests))
+		override(t, &captureFault, func(stage, rel string) error {
+			if stage == "restore-plain" {
+				return errors.New("device not configured")
+			}
+			return nil
+		})
+		config.Sources[0].Options = map[string]any{"sqlite_record_capture": true}
+		run := runCapture(t, config)
+		if result := captureResult(t, run, "antigravity-cli"); run.OK || result.State != "failed" || len(result.Errors) == 0 || !strings.Contains(result.Errors[len(result.Errors)-1].Error, "device not configured") {
+			t.Fatalf("a drive failure while restoring did not stop the source: %+v", result)
+		}
+		check(t, config, requests, raw)
+	})
+	t.Run("digest failure", func(t *testing.T) {
+		config, target, _, requests, _ := idleRequestsFixture(t)
+		raw, _, _ := fileSHA256(capturedPath(config, "antigravity-cli", requests))
+		manifest := readCaptureManifest(t, config, "antigravity-cli")
+		for _, s := range manifest.Snapshots {
+			if s.Captured == requests {
+				s.SHA256 = strings.Repeat("0", 64)
+			}
+		}
+		if err := writeCaptureManifest(target.Dir, &manifest); err != nil {
+			t.Fatal(err)
+		}
+		config.Sources[0].Options = map[string]any{"sqlite_record_capture": true}
+		run := runCapture(t, config)
+		if result := captureResult(t, run, "antigravity-cli"); run.OK || !strings.Contains(jsonText(result.Errors), "does not match") {
+			t.Fatalf("a digest failure while restoring was not reported: %+v", result.Errors)
+		}
+		for _, s := range readCaptureManifest(t, config, "antigravity-cli").Snapshots {
+			if s.Captured == requests && s.Encoding != captureEncodingZstd {
+				t.Fatalf("digest failure left the entry %+v", s)
+			}
+		}
+		if got, _, err := fileSHA256(capturedPath(config, "antigravity-cli", requests)); err != nil || got != raw {
+			t.Fatal("digest failure changed the stored bytes", err)
+		}
+	})
 }

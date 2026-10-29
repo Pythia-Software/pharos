@@ -141,6 +141,13 @@ export function refineCardDestination(recipe: QueryRecipe): QueryRecipe {
   return { ...recipe, destination: { ...dashboard, dataset: usageTopicDatasets[dashboard.topic], detailAction: recipe.action }, action: `Explore ${usageTopics[dashboard.topic].label}` };
 }
 
+// The Parallelism ribbon's view on entry from a link: the defaults, less the
+// counting and gap the saved settings own, over the link's range.
+export function parallelismRibbon(days?: number | null) {
+  const { counting: _counting, gap: _gap, ...view } = defaultConcurrencySettings;
+  return { ...view, range: concurrencyWindowRange(days) };
+}
+
 export function cardDestination(recipe: QueryRecipe, query: QueryState, window?: RollingWindow): string {
   const url = queryURL(recipe.dataset, query, window), target = recipe.destination;
   if (!target) return url;
@@ -154,8 +161,7 @@ export function cardDestination(recipe: QueryRecipe, query: QueryState, window?:
   if (target.topic === "parallelism") {
     // The record dataset uses saved counting/gap preferences. Inherit those
     // on entry, while resetting selections and setting the card's time range.
-    const { counting: _counting, gap: _gap, ...view } = defaultConcurrencySettings;
-    parsed.searchParams.set("analyze_parallelism", JSON.stringify({ ...view, range: concurrencyWindowRange(window?.days) }));
+    parsed.searchParams.set("analyze_parallelism", JSON.stringify(parallelismRibbon(window?.days)));
   }
   parsed.searchParams.set("card_query", recipe.dataset);
   parsed.searchParams.set("card_id", recipe.id);

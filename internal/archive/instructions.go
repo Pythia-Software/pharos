@@ -415,7 +415,12 @@ var instructionMarkers = map[string][][]byte{
 // readInstructionsFile parses the record from a Claude session file or Codex
 // rollout, reading only the bytes present when it was opened.
 func readInstructionsFile(path, provider string) ([]InstructionRecord, error) {
-	file, err := os.Open(path)
+	return sourceFiles{}.readInstructions(path, provider)
+}
+
+// readInstructions reads a transcript forward through the capture view.
+func (s sourceFiles) readInstructions(path, provider string) ([]InstructionRecord, error) {
+	file, err := s.Open(path)
 	if err != nil {
 		return nil, err
 	}
@@ -528,7 +533,7 @@ func (c *Catalog) BackfillInstructions(ctx context.Context, progress func(done, 
 				continue
 			}
 			if path != "" {
-				records, err := readInstructionsFile(path, firstString(row["source_kind"]))
+				records, err := captured.files(path).readInstructions(path, firstString(row["source_kind"]))
 				if err == nil {
 					value.status, value.records = "transcript", records
 				}

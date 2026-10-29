@@ -3,8 +3,9 @@ import { periodBuckets, periodIndex, periodKey, periodStart, type ChartPeriod } 
 
 export type ChartSeries = { key: string; label: string; color: string; value?: string; hiddenCount?: number; foldedValues?: string[]; group?: string };
 export type ChartBucket = { key: string; date: Date; values: Record<string, number>; parts?: Record<string, Array<[string, number]>>; detail?: string; windowSize?: number; history?: boolean };
-export type ChartDisplay = "interval" | "cumulative";
-export const validChartDisplay = (value: unknown): value is ChartDisplay | undefined => value === undefined || value === "interval" || value === "cumulative";
+export const chartDisplays = ["interval", "cumulative"] as const;
+export type ChartDisplay = typeof chartDisplays[number];
+export const validChartDisplay = (value: unknown): value is ChartDisplay | undefined => value === undefined || chartDisplays.includes(value as ChartDisplay);
 
 // Accumulate original amounts within the visible range, including folded
 // series. Normalize shares afterwards; adding interval percentages is wrong.

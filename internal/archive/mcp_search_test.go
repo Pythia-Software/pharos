@@ -29,7 +29,8 @@ func TestMCPConversationSearchRanking(t *testing.T) {
 			"repository": map[string]any{"canonical_remote": "github.com/acme/web", "display_name": "web"},
 			"conversations": []any{
 				conversation("css-session", message("c1", "user", "Improve the dashboard colors"), message("c2", "assistant", "Updated the palette")),
-				conversation("chart-session", message("h1", "user", "The chart parser fails on dates"), message("h2", "assistant", "Parsed dates in UTC")),
+				conversation("chart-session", message("h1", "user", "The chart parser fails on dates"), message("h2", "assistant", "Parsed dates in UTC"),
+					map[string]any{"id": "h3", "role": "tool", "kind": "tool_result", "text": "wombat"}),
 				conversation("empty-session"),
 			}},
 	}}
@@ -110,6 +111,18 @@ func TestMCPConversationSearchRanking(t *testing.T) {
 		if !slices.Equal(items, test.want) || got["total"] != test.total || got["next_offset"] != test.next {
 			t.Errorf("%v: items %q, total %v, next %v; want %q, %d, %v", test.args, items, got["total"], got["next_offset"], test.want, test.total, test.next)
 		}
+	}
+	// Tool output is not word-indexed: its words match no message, and the
+	// results say so.
+	if got, err := catalog.searchConversations(map[string]any{"query": "wombat"}); err != nil || got["coverage"] != toolOutputCoverage || strings.Contains(jsonText(got), "message text") {
+		t.Fatalf("search_conversations matched tool output: %v %v", got, err)
+	}
+	chart, _ := queryMaps(catalog.DB, "SELECT id FROM conversations WHERE native_id='chart-session'")
+	if got, err := catalog.conversationPassages(map[string]any{"conversation_id": chart[0]["id"], "query": "wombat"}); err != nil || len(got["items"].([]map[string]any)) != 0 || got["coverage"] != toolOutputCoverage {
+		t.Fatalf("passages matched tool output: %v %v", got, err)
+	}
+	if got, err := callMCP(catalog, "search_work", map[string]any{"query": "wombat"}); err != nil || got.(map[string]any)["coverage"] != toolOutputCoverage {
+		t.Fatalf("search_work: %v %v", got, err)
 	}
 	// Passages come from the chosen conversation only, best first.
 	for _, query := range []string{"parser", "tokenizer", "dates"} {

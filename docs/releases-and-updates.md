@@ -118,7 +118,7 @@ never touches them. If macOS blocks an ad hoc signed build, use **System
 Settings → Privacy & Security → Open Anyway** after trying to open it.
 
 The bundled CLI can also initialize a library folder on a drive. Then open it
-from **Settings → Libraries → Open a library…**:
+from **Settings → Libraries → Add an existing library…**:
 
 ```sh
 /Applications/Pharos.app/Contents/MacOS/pharos init-library "/Volumes/YOUR-DRIVE/Pharos"
@@ -126,14 +126,13 @@ from **Settings → Libraries → Open a library…**:
 
 Agents' MCP servers run from the app in Applications as
 `pharos mcp-app --application /Applications/Pharos.app`, and answer for the
-library assigned in **Library used by MCP** while it is the library open in
-Pharos. Quit Pharos and those clients
+library open in Pharos. Quit Pharos and those clients
 before replacing the app, then reconnect Pharos in each client.
 
 **Older portable installs** ran a copy of `Pharos.app` from the drive, next to
 the library. To migrate:
 1. Install Pharos in Applications.
-2. Open the drive's library with **Settings → Libraries → Open a library…**.
+2. Open the drive's library with **Settings → Libraries → Add an existing library…**.
 3. Re-register agents with the `mcp-app` command above.
 4. Delete the drive's old app copy. An outdated copy refuses newer catalogs (for
    example, "schema version 21, but this build … supports up to 14").

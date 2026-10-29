@@ -19,6 +19,10 @@ func mcpBudget(args map[string]any, fallback int) int {
 // tokenization. Every tool also bounds the number and length of text fields.
 func fitConversationItems(result map[string]any, budget int) {
 	items, _ := result["items"].([]map[string]any)
+	if len(jsonText(result)) > budget*3 && result["coverage"] == toolOutputCoverage {
+		// The tool's description says the same; a match is worth more.
+		delete(result, "coverage")
+	}
 	if len(jsonText(result)) > budget*3 {
 		// Null fields carry nothing; shed them before shedding whole cards.
 		for _, item := range items {
@@ -37,7 +41,11 @@ func fitConversationItems(result map[string]any, budget int) {
 }
 
 func (c *Catalog) searchConversations(args map[string]any) (map[string]any, error) {
-	ctx := context.Background()
+	return c.searchConversationsContext(context.Background(), args)
+}
+
+func (c *Catalog) searchConversationsContext(ctx context.Context, args map[string]any) (map[string]any, error) {
+	cut := false
 	query := strings.TrimSpace(firstString(args["query"]))
 	limit := clamp(int(integer(valueOr(args["limit"], 8))), 1, 20)
 	offset := max(0, int(integer(args["offset"])))
@@ -49,12 +57,22 @@ func (c *Catalog) searchConversations(args map[string]any) (map[string]any, erro
 		// most recent matches itself, and only the best 500 are joined to their
 		// conversations. A snippet tokenizes its whole message, so only the
 		// page's cards get one (see conversationCards).
-		rows, err := queryMaps(c.DB, `SELECT m.conversation_id,f.message_id FROM
+		// Old tool-output postings, until removed, are left out inside the
+		// window, so they cannot crowd out the matches that count (rankRecent).
+		walk, cancel := context.WithTimeout(ctx, toolOutputWalkTime)
+		defer cancel()
+		var rows []map[string]any
+		var err error
+		cut, err = c.rankRecent(ctx, walk, parsed, ` AND rowid>=COALESCE(
+					(SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?1 ORDER BY rowid DESC LIMIT 1 OFFSET ?2),0)`, func(ctx context.Context, window string) error {
+			var err error
+			rows, err = queryMapsContext(ctx, c.reader(), `SELECT m.conversation_id,f.message_id FROM
 			(SELECT message_id,rank FROM messages_fts
-				WHERE messages_fts MATCH ?1 AND rowid>=COALESCE(
-					(SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?1 ORDER BY rowid DESC LIMIT 1 OFFSET ?2),0)
+				WHERE messages_fts MATCH ?1`+window+`
 				ORDER BY rank LIMIT 500) f
-			JOIN messages m ON m.id=f.message_id ORDER BY f.rank`, parsed, recentMatches-1)
+			JOIN messages m ON m.id=f.message_id WHERE `+wordIndexedKind("m.")+` AND ?2=?2 ORDER BY f.rank`, parsed, recentMatches-1)
+			return err
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -193,6 +211,12 @@ func (c *Catalog) searchConversations(args map[string]any) (map[string]any, erro
 	}
 	result := map[string]any{"items": results[offset:end], "next_offset": nil, "total": total,
 		"freshness": map[string]any{"status": freshness["status"], "stale_sources": freshness["stale_sources"]}}
+	if query != "" {
+		result["coverage"] = toolOutputCoverage
+		if cut {
+			result["coverage"] = toolOutputCoverage + toolOutputCut
+		}
+	}
 	if end < total {
 		result["next_offset"] = end
 	}
@@ -421,7 +445,7 @@ func (c *Catalog) conversationPassages(args map[string]any) (map[string]any, err
 	}
 	rows, err := queryMaps(c.DB, `SELECT m.id message_id,m.role,m.kind,m.source_order,f.snippet FROM
 		(SELECT message_id,snippet(messages_fts,1,'','',' … ',28) snippet,rank FROM messages_fts
-			WHERE messages_fts MATCH ? AND rowid BETWEEN ? AND ? AND message_id IN (SELECT id FROM messages WHERE conversation_id=?)
+			WHERE messages_fts MATCH ? AND rowid BETWEEN ? AND ? AND message_id IN (SELECT id FROM messages WHERE conversation_id=? AND `+wordIndexedKind("")+`)
 			ORDER BY rank LIMIT ?) f
 		JOIN messages m ON m.id=f.message_id ORDER BY f.rank`, ftsQuery(query), bounds[0]["low"], bounds[0]["high"], id, limit)
 	if err != nil {
@@ -432,7 +456,7 @@ func (c *Catalog) conversationPassages(args map[string]any) (map[string]any, err
 		items = append(items, map[string]any{"message_id": row["message_id"], "role": row["role"], "kind": row["kind"],
 			"source_order": row["source_order"], "snippet": clipText(lexicalSnippet(firstString(row["snippet"])), 260)})
 	}
-	result := map[string]any{"conversation_id": id, "items": items}
+	result := map[string]any{"conversation_id": id, "items": items, "coverage": toolOutputCoverage}
 	fitConversationItems(result, mcpBudget(args, 900))
 	return result, nil
 }

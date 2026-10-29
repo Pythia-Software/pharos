@@ -331,8 +331,8 @@ Notes:
 ### 3.4 C. Continuous maintenance
 
 The loops started in `Serve` (`maintainLibrary`, `maintainSubstringIndex`,
-`maintainTextSearch`, `maintainToolSearch`, `maintainQueryTextIndexes`,
-`keepWALSmall`, `automaticLoop`, `cloudScheduleLoop`, and the broker's
+`maintainToolOutputIndex`, `maintainTextSearch`, `maintainToolSearch`, `maintainQueryTextIndexes`,
+`keepWALSmall`, `automaticLoop`, `cloudScheduleLoop`, `compressCaptures`, and the broker's
 `maintain`) are **daemons**, not operations: they are registered by name so
 the unregistered-work test can account for them, but they have no state,
 hold nothing, and are never shown. Each pass that does real work starts an
@@ -345,6 +345,7 @@ operation.
 | `maintenance.parallelism` | Measure parallel work · Measuring parallel work | daemon pass | svc | D:w W:w | — | — | Stops; it carries on later. | record | never | bg |
 | `maintenance.cache-warm` | Warm page caches · Warming page caches | daemon pass | svc | D:r | — | — | Stops. | record | never | bg |
 | `maintenance.search.substring` | Build substring search · Building substring search | version, chained | svc | D:w W:w | search.substring | — | Stops between batches; it carries on when Pharos next opens the library. | batch | >30 s | bg |
+| `maintenance.search.tool-output` | Remove tool output from word search · Removing tool output from word search | version | svc | D:w W:w | search.words | — | Stops between batches; it carries on when Pharos next opens the library. | batch | >30 s | bg |
 | `maintenance.search.text` | Build text search · Building text search | version, chained | svc | D:w W:w | search.text | — | Stops between batches; it carries on later. | batch | >30 s | bg |
 | `maintenance.search.tools` | Build tool search · Building tool search | version, chained | svc | D:w W:w | search.tools | — | Stops between batches; it carries on later. | batch | >30 s | bg |
 | `maintenance.search.query` | Build Query Table text indexes · Building table search | version, chained | svc | D:w W:w | search.query | — | Stops between batches; it carries on later. | batch | >30 s | bg |
@@ -354,6 +355,7 @@ operation.
 | `maintenance.mcp-history` | Store MCP call history · Storing MCP call history | read (an MCP call through the service queues its record; one background writer stores the queue, so no request waits for the writer; a direct MCP call stores its own record when it closes the catalog, after its answer is out) | svc, mcp | D:w W:w | — | — | Stops; closing the catalog stores what is still queued. | record | never | bg |
 | `ask.save` | Save an Ask Pharos answer · Saving an Ask Pharos answer | user (a finished Ask turn whose save missed its deadline is retried in the background for up to 5 min) | svc | D:w W:w | — | — | Stops retrying; an answer not yet saved is lost, as when the service stops. | record | never | bg |
 | `ask.models` | Check Ask Pharos models · Checking Ask Pharos models | read (the model picker asks for a CLI whose list is missing or over an hour old; it answers from the old list meanwhile), user (enabling Ask Pharos), startup (Ask Pharos enabled) | svc (+ the AI CLI) | — (subprocess only) | — | — | Stops. | record | never | bg |
+| `maintenance.capture-compress` | Compress cold captures · Compressing cold captures | daemon pass (`compressCaptures`: every 15 min, first 2 min after the service starts), only when an indexed, unpinned snapshot generation, an earlier file version, a cold latest transcript or an idle latest database snapshot of this Mac's captures is stored uncompressed ([capture compression](capture-compression.md)) | svc | D:w C(this):w (the capture lock only for each rename and manifest commit) | — | — | Stops; the file in progress stays uncompressed and a later pass compresses it. | record | >5 s | bg |
 | `drive.measure` | Check the drive · Checking the drive | read (`GET /api/health/drive`, 5 min cache) | svc (+`diskutil`) | D:w W:w (one `library_size_history` row) | — | — | Stops. | record | never | bg |
 
 **Daemon passes.** A pass's operation is registered before the pass runs,
@@ -398,12 +400,24 @@ and after the lock probe; otherwise the process is named as possible; the writer
 a checkpoint, a recovery or a reader at the last frame are only mentioned.
 With no such outside reader it names this process when a slot is marked
 where the checkpoint stopped, "probably" until a second probe agrees, with
-its running operations that started before the stall, oldest first;
-otherwise the holder is unknown. The stall's start is tracked at any size
-(only the diagnosis waits for 1 GiB), and a check whose truncating pass
-reports no counts leaves it as it was. The diagnosis goes in
+its suspects: its reads on the catalog open since before the stall, then its
+running operations that started before it, each oldest first; otherwise the
+holder is unknown. The catalog's pools open connections through
+`catalogConnector` (`catalog_reads.go`), which notes on each connection when
+its current read began (its first query or BEGIN, until its last cursor
+closes outside a transaction or the transaction ends), the statement, the
+operation the context carried and the goroutine's stack; a COMMIT or
+ROLLBACK that fails leaves the read open, with its error. A read is named by
+pool, age, operation and its three innermost callers. The stall's start is
+tracked at any size (only the diagnosis waits for 1 GiB), and a check whose
+truncating pass reports no counts leaves it as it was. The diagnosis goes in
 the skipped operation's detail, one stderr line and attention rule 9
-(§7.3). It cancels nothing.
+(§7.3). Unless another process holds the log, the first diagnosis of a stall
+also writes a report to `logs/catalog-wal-pin-<time>-pid<pid>.txt` in the
+support directory (the last 20 are kept): the diagnosis, every open read on
+the catalog with its statement and stack, and every goroutine's stack. The
+service's stderr survives only as a tail in the app's memory. It cancels
+nothing.
 
 ### 3.5 E. Transitions
 
@@ -707,6 +721,7 @@ additive index, `operation_journal_kind (host_id, kind, started_at DESC)`.
 | `capt:<host>/<source>` | the source's `source_states.last_success_at` on that host (when its captures were last indexed) | `needs_index` from `capturedHosts`; count unknown | `indexing`, `capture-running` (a `capture.*` operation is the one catching up), `unreadable` (the capture root cannot be read: the rows last read, all `unknown`, or one `capt:*` row when none were read; a root that does not exist and never had captures has no rows), `not-indexed` (detail: `capturedHosts`' `index_reason`) | `index.captures`, `library.update`, `capture.*` |
 | `view` (Search view rows) | — | `COUNT(*)` of `workspace_library_dirty` (capped at 100,000), unit workspace | `refreshing`, `version` (`workspace_library_version`; count unknown), `stopped` (`libraryRefreshStopped`) | `maintenance.library-view` |
 | `search.substring` | — | conversations past `message_trigram_cursor` (counted only while not ready) | `building`, `version` | `maintenance.search.substring` |
+| `search.words` | — | `message_fts_tool_output_merged` unset: tool-output postings written before tool output left the word index are still being removed (past `message_fts_tool_output_cursor`) or merged away; count unknown | `building`, `version` | `maintenance.search.tool-output` |
 | `search.text` | — | `text_search_documents_version` not `1`; count unknown | `building`, `version` | `maintenance.search.text` |
 | `search.tools` | — | `tool_command_fts_version` not `1`; count unknown | `building`, `version` | `maintenance.search.tools` |
 | `search.query` | — | the three `*_ready` keys not at their index's version; count unknown | `building`, `version` | `maintenance.search.query` |
@@ -1261,7 +1276,7 @@ positives fixed in phase 0:
 | 6 | The latest local backup failed | error | Open Backups (`/settings/backups`) |
 | 7 | A scheduled cloud backup failed (the schedule has `failures > 0`) or the latest verification failed | error | Open Backups |
 | 8 | The library is unavailable, was disconnected, or setup is needed (native rules today) | error | as today |
-| 9 | The WAL is over 1 GiB and its checkpoint has stopped advancing: frames are left to copy and `nBackfill` did not move between two busy bound checks (a busy truncation alone, with every frame copied, is not a stall). The item says how big the log is and for how long it has not been folded in, and who holds them back when Pharos can tell (another process by pid and command, and what it holds; or this process, with its running operations that started before the stall); otherwise it says it could not tell. It clears once a checkpoint succeeds, the checkpoint advances, or the log is under 1 GiB. | warning | Open Capture & index |
+| 9 | The WAL is over 1 GiB and its checkpoint has stopped advancing: frames are left to copy and `nBackfill` did not move between two busy bound checks (a busy truncation alone, with every frame copied, is not a stall). The item says how big the log is and for how long it has not been folded in, and who holds them back when Pharos can tell (another process by pid and command, and what it holds; or this process, with its catalog reads and running operations open since before the stall); otherwise it says it could not tell. It names the stall's report file when one was written. It clears once a checkpoint succeeds, the checkpoint advances, or the log is under 1 GiB. | warning | Open Capture & index |
 
 Rule 4 is today's web rule (the native menu ignores interruptions). The
 first rule that applies sets the menu's single line; the snapshot lists all.

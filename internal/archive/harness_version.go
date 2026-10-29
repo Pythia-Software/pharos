@@ -75,7 +75,7 @@ func (c *Catalog) backfillHarnessVersionsContext(ctx context.Context) error {
 					}
 					continue
 				}
-				value.harness, value.first, value.last = codexHarnessFromFileContext(ctx, path)
+				value.harness, value.first, value.last = capturedPaths.files(path).codexHarness(ctx, path)
 			case "conductor":
 				value.harness = "conductor"
 			case "chatgpt":
@@ -120,7 +120,16 @@ type harnessInputs struct {
 	inventories map[string]map[string]harnessCapture
 	failures    map[string]error
 	leases      []func()
+	// views are the leases' capture views by leased path: their readers open
+	// through them, streaming an encoded file rather than decoding it to disk.
+	views map[string]*captureView
 }
+
+// files is how a path harnessSourcePath returned is read.
+func (inputs *harnessInputs) files(path string) sourceFiles {
+	return sourceFiles{view: inputs.views[path]}
+}
+
 type harnessCapture struct {
 	dir    string
 	host   Host
@@ -129,7 +138,7 @@ type harnessCapture struct {
 }
 
 func newHarnessInputs() *harnessInputs {
-	return &harnessInputs{paths: map[string]map[string]string{}, inventories: map[string]map[string]harnessCapture{}, failures: map[string]error{}}
+	return &harnessInputs{paths: map[string]map[string]string{}, inventories: map[string]map[string]harnessCapture{}, failures: map[string]error{}, views: map[string]*captureView{}}
 }
 func (inputs *harnessInputs) Close() {
 	for _, close := range inputs.leases {
@@ -189,8 +198,10 @@ func (c *Catalog) harnessSourcePath(ctx context.Context, origin, host, provider 
 		releaseLockFile(lock)
 		if err == nil {
 			cache.leases = append(cache.leases, input.Close)
-			cache.paths[host][origin] = input.Adapter.Config().Path
-			return cache.paths[host][origin], nil
+			path := input.Adapter.Config().Path
+			cache.views[path] = captureViewOf(input.Adapter)
+			cache.paths[host][origin] = path
+			return path, nil
 		}
 		cache.failures[host] = err
 	}
@@ -216,8 +227,13 @@ func codexHarnessFromFile(path string) (string, string, string) {
 }
 
 func codexHarnessFromFileContext(ctx context.Context, path string) (string, string, string) {
+	return sourceFiles{}.codexHarness(ctx, path)
+}
+
+// codexHarness reads a rollout forward through the capture view.
+func (s sourceFiles) codexHarness(ctx context.Context, path string) (string, string, string) {
 	harness, first, last := "codex", "", ""
-	file, err := os.Open(path)
+	file, err := s.Open(path)
 	if err != nil {
 		return harness, first, last
 	}

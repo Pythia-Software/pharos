@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -106,6 +107,20 @@ func cachedValue[T any](ctx context.Context, c *Catalog, key string, compute fun
 	return value.(T), nil
 }
 
+// warmOnlyKey marks a context whose reads take only values already
+// computed: derivedValue returns errDerivedCold rather than computing, waiting
+// for a computation, or starting one. browse_site's frequent values read
+// this way, so a request never blocks on or kicks off a derived rebuild.
+type warmOnlyKey struct{}
+
+var errDerivedCold = errors.New("the derived value is not computed yet")
+
+func warmOnly(ctx context.Context) context.Context {
+	return context.WithValue(ctx, warmOnlyKey{}, true)
+}
+
+func isWarmOnly(ctx context.Context) bool { return ctx.Value(warmOnlyKey{}) == true }
+
 // derivedValue is cachedValue without a type. A request marks the value as
 // used, which keeps it warm.
 func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(context.Context) (any, error), request bool) (any, error) {
@@ -126,9 +141,25 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
+			if isWarmOnly(ctx) {
+				return nil, errDerivedCold
+			}
 			return compute(ctx)
 		}
 		cache.version = version
+		if isWarmOnly(ctx) {
+			entry := cache.entries[key]
+			cache.mu.Unlock()
+			if entry == nil || entry.version != version {
+				return nil, errDerivedCold
+			}
+			select {
+			case <-entry.ready:
+				return entry.value, entry.err
+			default:
+				return nil, errDerivedCold
+			}
+		}
 		cache.pruneDelegationEntries(version, time.Now())
 		// A published tool cube changes independently of the input generation.
 		// Retain only its current completed Machine Time projection; in-flight

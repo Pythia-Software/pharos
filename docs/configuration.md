@@ -1,7 +1,7 @@
 # Configuration
 
-The native app now opens **Libraries** for setup, library selection, recovery and
-per-application MCP assignment. See [Libraries and application setup](library-management.md)
+The native app now opens **Settings → Libraries** for library selection
+(which is also the library MCP answers for), transfers and recovery. See [Libraries and application setup](library-management.md)
 for those flows, independent app/library locations, and verified moves. The
 configuration and beside-app layouts below remain available for existing installs
 and explicit CLI use.
@@ -107,7 +107,7 @@ macos/install-library.sh /Volumes/euclid/Pharos
 
 With a downloaded release, install Pharos in Applications. Create the library
 on the drive from the setup guide (storage: an attached SSD), or from
-**Settings → Libraries → New library…**.
+**Settings → Libraries → Create a library…**.
 
 The script builds `Pharos.app` into the directory and runs
 `pharos init-library DIR` there unless `library.toml` already exists. A
@@ -243,7 +243,8 @@ What it does, in order:
 and no sources. From the install it carries over `package_cap_bytes`,
 `upcoming_days`, and `eligible_days`, and, when set, `snooze_days`,
 `staging_cap_bytes`, `cpu_idle_ceiling`, `io_mbps_ceiling`,
-`yield_poll_seconds`, and `capture_snapshot_generations`. The rest does not
+`yield_poll_seconds`, `capture_snapshot_generations`, and
+`capture_compress_after_days`. The rest does not
 carry over, and the summary lists what was set:
 
 - locations (`data_dir`, `catalog_path`, `archive_root`, `staging_root`,
@@ -673,6 +674,9 @@ the catalog open, so eject the drive rather than pulling it.
 capture_root = "captures"
 # Previous database snapshots kept besides the latest (see below).
 capture_snapshot_generations = 1
+# Days a transcript's source must be unchanged before its capture is stored
+# compressed; 0 keeps latest transcripts uncompressed (see below).
+capture_compress_after_days = 14
 ```
 
 Outside a library the default is beside the catalog rather than under
@@ -756,6 +760,42 @@ milestones. The previous generation gives indexing a full capture cycle to pick
 up a session deleted at the source, and where captures are indexed, a snapshot the index has
 not yet seen is kept longer (see [Indexing captures](#indexing-captures)). Raise
 it where the drive allows.
+
+Once the index has read a generation, the service stores it zstd-compressed
+under the same name, in the background every 15 minutes (about 9.5× smaller
+for Conductor; see [capture compression](capture-compression.md)). A pinned
+generation, one a history backfill has paused, and an unverified SQLite-record
+generation are left as they are. Readers that open a compressed generation
+(salvage during an index, a forced reindex, record exports, history backfill,
+verification) decode it into a temporary reader directory first, which needs
+its original size free on the drive. Each Mac compresses only its own
+captures. A capture with a compressed generation has manifest version 6, which
+builds before this change refuse rather than misread.
+
+The same pass compresses earlier versions of captured files, which are kept in
+`history/` and never parsed again, and cold latest transcripts: Claude
+transcripts, Codex rollouts and Antigravity transcripts whose source has not
+changed for `capture_compress_after_days` (default 14; 0 turns this off), that
+the last capture found unchanged, and whose current version the catalog has
+indexed (Claude JSONL about 3×, Codex rollouts about 2.2×). Index files every
+index reads (`sessions-index.json`, `session_index.jsonl`), run logs,
+annotations and TL1 transcripts, which TL1's index parses whenever its
+database changes, stay uncompressed, as do the latest files of sources with
+retained-input capture, whose durable revisions keep the original anyway. An
+index reads a compressed transcript only when it parses it, decoding it as it
+reads; a normal index over unchanged files decodes nothing. A transcript that
+changes again is captured in full and uncompressed, and its compressed copy
+moves to `history/` if it was rewritten.
+
+Latest database snapshots are compressed the same way once idle: their source
+database has not changed for `capture_compress_after_days`, the last capture
+found them unchanged, and the index has read them. A database the source's
+index opens on every run stays uncompressed: Conductor's, Codex's naming
+databases, Antigravity's summaries and TL1's installation databases. In
+practice that leaves Antigravity's per-conversation request databases, which
+an index reads only to parse their conversation, decoding them into its
+temporary reader directory. A database that changes again is captured afresh,
+uncompressed.
 
 **Low impact.** The capture's disk I/O runs in the utility I/O tier on its own
 thread, yielding to interactive work without the background tier's long stalls,
@@ -1148,7 +1188,7 @@ the directory-copy guard intentionally refuses those copies. See
 
 Settings → MCP shows the local stdio command and configuration to copy into an
 agent client's MCP settings. **Managed Pharos.app installations now require the
-app to remain open and connected to their explicitly assigned MCP library.**
+app to remain open, with the library agents should search open in it.**
 Closing the window is fine; quitting the application makes its MCP tools report
 that Pharos is offline. Existing bundled `mcp` registrations follow this rule
 once their library is registered with the app. Reopening the app resumes the
@@ -1169,8 +1209,7 @@ claude mcp add pharos -s user -- /Applications/Pharos.app/Contents/MacOS/pharos 
 ```
 
 Updating the app in place keeps that path. The server forwards to the running
-app. Agents can read a library only while it is connected, assigned in
-**Library used by MCP**, and currently open in Pharos. After an app update, reconnect Pharos in each
+app. Agents can read a library only while it is the library open in Pharos. After an app update, reconnect Pharos in each
 agent (in Claude Code, `/mcp`).
 
 For an explicitly standalone, unbundled CLI install the command remains the

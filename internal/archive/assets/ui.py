@@ -241,8 +241,8 @@ APP_HTML = r'''<!doctype html>
     body>header .navigator{border-top-color:var(--mast-shadow);background:var(--mast-nav);box-shadow:inset 0 1px 0 color-mix(in srgb,var(--mast-brass) 30%,transparent)}
     body>header .navigator .navigator-error{color:var(--mast-error)}
     body>header :focus-visible{outline-color:var(--mast-brass)}
-    /* One beam leaves the lantern window; .brand-lit repeats the wordmark in lamp colors, clipped to that same beam, so letters read lit inside it and dim outside. */
-    .brand{position:relative;flex:none;color:inherit;text-decoration:none;cursor:pointer;--beam:polygon(10.3px 46.7px,100% 0,100% 100%,10.3px 50px)}.brand::before,.brand-lit{position:absolute;left:0;top:50%;width:420px;height:120px;margin-top:-60px;pointer-events:none;clip-path:var(--beam)}.brand::before{content:"";z-index:-1;background:linear-gradient(90deg,color-mix(in srgb,var(--mast-beam) 50%,transparent),color-mix(in srgb,var(--mast-beam) 22%,transparent) 12%,color-mix(in srgb,var(--mast-beam) 8%,transparent) 60%,transparent)}.brand-lit{display:flex;align-items:center;gap:11px;user-select:none}.brand-lit-spacer{flex:none;width:37px;height:42px}.brand-name{color:var(--mast-brand)}.brand-tagline{color:var(--mast-tagline);white-space:nowrap}.brand-lit .brand-name{color:var(--mast-lit-name);text-shadow:0 0 8px var(--mast-lit-shadow)}.brand-lit .brand-tagline{color:var(--mast-lit-tagline)}
+    /* One beam leaves the lantern window; .brand-lit repeats the wordmark in lamp colors, clipped to that same beam, so letters read lit inside it and dim outside. The beam ends at a fixed length rather than 100%, since the app shell sizes the lit copy to the wordmark. */
+    .brand{position:relative;flex:none;color:inherit;text-decoration:none;cursor:pointer;--beam:polygon(10.3px 46.7px,420px 0,420px 100%,10.3px 50px)}.brand::before,.brand-lit{position:absolute;left:0;top:50%;width:420px;height:120px;margin-top:-60px;pointer-events:none;clip-path:var(--beam)}.brand::before{content:"";z-index:-1;background:linear-gradient(90deg,color-mix(in srgb,var(--mast-beam) 50%,transparent),color-mix(in srgb,var(--mast-beam) 22%,transparent) 12%,color-mix(in srgb,var(--mast-beam) 8%,transparent) 60%,transparent)}.brand-lit{display:flex;align-items:center;gap:11px;user-select:none}.brand-lit-spacer{flex:none;width:37px;height:42px}.brand-name{color:var(--mast-brand)}.brand-tagline{color:var(--mast-tagline);white-space:nowrap}.brand-lit .brand-name{color:var(--mast-lit-name);text-shadow:0 0 8px var(--mast-lit-shadow)}.brand-lit .brand-tagline{color:var(--mast-lit-tagline)}
     input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid color-mix(in srgb,var(--gold) 75%,transparent);outline-offset:0}
     input[type=checkbox],input[type=radio],input[type=range]{accent-color:var(--accent)}
     ::selection{background:color-mix(in srgb,var(--lamp) 45%,transparent)}
@@ -250,7 +250,7 @@ APP_HTML = r'''<!doctype html>
     .qt-empty::before{display:inline-block;width:19px;height:32px;margin:0 12px 0 0;vertical-align:middle}
     body .qt-qb-num{background:var(--panel);color:var(--ink)}
     .feedback-list .empty::before{content:none}
-    @media(max-width:760px){.brand{--beam:polygon(8.4px 49.3px,100% 0,100% 100%,8.4px 51.9px)}.brand::before,.brand-lit{width:240px}.brand-lit-spacer{width:30px;height:34px}}
+    @media(max-width:760px){.brand{--beam:polygon(8.4px 49.3px,240px 0,240px 100%,8.4px 51.9px)}.brand::before,.brand-lit{width:240px}.brand-lit-spacer{width:30px;height:34px}}
     /* While a source sync runs or a page loads, .brand.sweeping turns the beam around the tower (.loading turns it faster): --beam-turn 0deg points right (the static pose), 90deg at the viewer, 180deg left, 270deg away. The beam's length follows cos; its brightness and the lantern flash follow sin. */
     @property --beam-turn{syntax:'<angle>';inherits:true;initial-value:0deg}
     @keyframes pharos-sweep{to{--beam-turn:360deg}}

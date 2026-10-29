@@ -327,13 +327,15 @@ func retainedTree(ctx context.Context, source, target, label string, skipImports
 			if skipImports && entry.Name() == ".imports" {
 				return filepath.SkipDir
 			}
-			// Leases (§6.5) describe running processes, not library data.
-			if entry.Name() == leaseDirName {
+			// Leases (§6.5) describe running processes, not library data, and
+			// temporaries (reader leases, a compression in progress) are not
+			// evidence: local backup leaves both out too.
+			if entry.Name() == leaseDirName || path != source && strings.HasSuffix(entry.Name(), captureTempSuffix) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if entry.Name() == ".delivered.json" || entry.Name() == "indexed.json" || strings.HasSuffix(entry.Name(), ".lock") || strings.HasSuffix(entry.Name(), ".partial") {
+		if entry.Name() == ".delivered.json" || entry.Name() == "indexed.json" || strings.HasSuffix(entry.Name(), ".lock") || strings.HasSuffix(entry.Name(), ".partial") || strings.HasSuffix(entry.Name(), captureTempSuffix) {
 			return nil
 		}
 		rel, err := filepath.Rel(source, path)
@@ -1038,7 +1040,7 @@ func TransferLibrary(ctx context.Context, source, target Config, move bool, prog
 		}
 		receipt.Files = append(receipt.Files, files...)
 	}
-	if err = validateCaptureEvidence(ctx, filepath.Join(dir, "captures")); err != nil {
+	if err = validateStagedCaptureEvidence(ctx, filepath.Join(dir, "captures")); err != nil {
 		return receipt, fmt.Errorf("verify retained source evidence: %w", err)
 	}
 	// Content-addressed transfer IDs make retries and repeated copies reuse the

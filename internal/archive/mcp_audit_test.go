@@ -67,6 +67,8 @@ func TestMCPSearchMessagesPhrasesAndFilters(t *testing.T) {
 	addAuditMessage(t, catalog, "undated", "conversation", "assistant", "tool_call", "AWS account inspection", 4, nil)
 	addAuditMessage(t, catalog, "noise", "other-conversation", "user", "message", "AWS account unrelated", 1, "2026-05-05T12:00:00Z")
 	addAuditMessage(t, catalog, "substring", "conversation", "user", "message", "Review the flaws in this plan.", 5, "2026-05-05T12:00:00Z")
+	// A posting the old writer left for tool output, which no search returns.
+	addAuditMessage(t, catalog, "output", "conversation", "tool", "tool_result", "AWS account listing output", 6, "2026-05-05T13:00:00Z")
 	for _, test := range []struct {
 		name string
 		args map[string]any
@@ -78,6 +80,8 @@ func TestMCPSearchMessagesPhrasesAndFilters(t *testing.T) {
 		{"mixed phrase and term", map[string]any{"query": `"AWS account" created`}, 1},
 		{"user role", map[string]any{"query": "AWS", "roles": []any{"user"}, "repository": "audit"}, 1},
 		{"tool kind", map[string]any{"query": "AWS", "kinds": []string{"tool_call"}}, 1},
+		{"tool call and output kinds", map[string]any{"query": "AWS", "kinds": []any{"tool_call", "tool_result"}}, 1},
+		{"all kinds", map[string]any{"query": "AWS", "kinds": []any{"all"}, "repository": "audit"}, 4},
 		{"whole day", map[string]any{"query": "AWS", "from": "2026-05-05", "to": "2026-05-05", "repository": "audit"}, 2},
 		{"timestamp offset", map[string]any{"query": "AWS", "from": "2026-05-05T17:59:59-06:00", "to": "2026-05-05T23:59:59.999Z"}, 1},
 		{"source", map[string]any{"query": "AWS", "source": "codex"}, 1},
@@ -88,7 +92,7 @@ func TestMCPSearchMessagesPhrasesAndFilters(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			result := auditCall(t, catalog, "search_messages", test.args)
-			if integer(result["total"]) != int64(test.want) {
+			if integer(result["total"]) != int64(test.want) || result["coverage"] != toolOutputCoverage {
 				t.Fatalf("want %d, got %#v", test.want, result)
 			}
 			for _, item := range result["items"].([]map[string]any) {
@@ -100,6 +104,12 @@ func TestMCPSearchMessagesPhrasesAndFilters(t *testing.T) {
 				}
 			}
 		})
+	}
+	// Tool output alone is an explanation, not an empty page.
+	for _, kinds := range []any{[]any{"tool_result"}, []string{"tool_result"}} {
+		if _, err := callMCP(catalog, "search_messages", map[string]any{"query": "AWS", "kinds": kinds}); err == nil || !strings.Contains(err.Error(), "not word-indexed") || !strings.Contains(err.Error(), "search_text") {
+			t.Errorf("tool output alone: %v", err)
+		}
 	}
 	for _, args := range []map[string]any{
 		{}, {"query": "!!!"}, {"query": `"AWS account`},
@@ -682,6 +692,19 @@ func TestMCPAuditToolsExposedAndLogged(t *testing.T) {
 	}
 	if !found["search_messages"] || !found["get_archive_status"] {
 		t.Fatalf("audit tools missing from MCP discovery: %#v", found)
+	}
+	// Every search that reads the word index says it leaves out tool output.
+	described := map[string]string{}
+	for _, tool := range tools {
+		described[firstString(tool["name"])] = firstString(tool["description"]) + " " + jsonText(tool["inputSchema"])
+	}
+	for _, name := range []string{"search_messages", "search_text", "search_conversations", "search_conversation_passages", "search_work", "trace_worktree", "query_statistics"} {
+		if !strings.Contains(described[name], "tool_result") || !strings.Contains(described[name], "word-indexed") {
+			t.Errorf("%s does not say tool output is not word-indexed: %s", name, described[name])
+		}
+	}
+	if strings.Contains(described["search_messages"], "including raw metadata and tool output") {
+		t.Error("search_messages still promises tool output")
 	}
 	args := map[string]any{"query": "AWS account", "match_mode": "phrase", "roles": []any{"user"}, "kinds": []any{"message"}, "secret": "not logged"}
 	response := handleMCP(catalog, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": map[string]any{"name": "search_messages", "arguments": args}})

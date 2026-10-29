@@ -14,7 +14,7 @@ import (
 
 var searchMessagesTool = map[string]any{
 	"name":        "search_messages",
-	"description": "Audit indexed message text across conversations with lexical-only search. Quoted phrases are exact token sequences; match_mode phrase treats the entire query as a phrase. Filters apply before pagination, with no candidate cutoff or semantic matches. Returns timestamps and evidence handles. Page using next_offset until null; archive coverage may still be incomplete.",
+	"description": "Audit indexed message text across conversations with lexical-only search. Quoted phrases are exact token sequences; match_mode phrase treats the entire query as a phrase. Filters apply before pagination, with no candidate cutoff or semantic matches. Returns timestamps and evidence handles. Page using next_offset until null; archive coverage may still be incomplete. " + toolOutputNotIndexed,
 	"inputSchema": map[string]any{"type": "object", "required": []string{"query"}, "properties": map[string]any{
 		"query":           map[string]any{"type": "string", "minLength": 1},
 		"match_mode":      map[string]any{"type": "string", "enum": []string{"terms", "phrase"}, "default": "terms"},
@@ -24,7 +24,7 @@ var searchMessagesTool = map[string]any{
 		"provider":        map[string]any{"type": "string"},
 		"channel":         map[string]any{"type": "string"}, "machine_id": map[string]any{"type": "string"}, "execution_machine_id": map[string]any{"type": "string"},
 		"roles":             messageListSchema("Exact message roles, such as user, assistant, tool, or system."),
-		"kinds":             messageListSchema("Exact message kinds. Defaults to all indexed kinds, including raw metadata and tool output."),
+		"kinds":             messageListSchema("Exact message kinds. Defaults to every word-indexed kind, including raw metadata and tool calls; tool output (tool_result) is not word-indexed, so asking for only it is an error."),
 		"from":              map[string]any{"type": "string", "description": "Inclusive message timestamp or UTC date; messages without timestamps are excluded."},
 		"to":                map[string]any{"type": "string", "description": "Inclusive message timestamp or UTC date; a date includes the whole day."},
 		"limit":             map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
@@ -194,7 +194,12 @@ func (c *Catalog) searchMessages(args map[string]any) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	clauses := []string{"messages_fts MATCH ?", filters}
+	// Tool output is not word-indexed; a catalog still removing its old
+	// postings answers as one that has.
+	if unindexedOnly(kindArgument(args["kinds"])) {
+		return nil, fmt.Errorf("%s", toolOutputNotIndexed)
+	}
+	clauses := []string{"messages_fts MATCH ?", filters, wordIndexedKind("m.")}
 	values = append([]any{parsed}, values...)
 	for _, filter := range []struct{ key, column string }{
 		{"conversation_id", "m.conversation_id"}, {"source", "w.source_kind"}, {"provider", "c.provider"},
@@ -267,7 +272,7 @@ func (c *Catalog) searchMessages(args map[string]any) (map[string]any, error) {
 		return nil, err
 	}
 	result := map[string]any{"items": items, "total": total, "offset": offset, "next_offset": nil,
-		"search_scope": "indexed_messages", "search_mode": "lexical",
+		"search_scope": "indexed_messages", "search_mode": "lexical", "coverage": toolOutputCoverage,
 		"freshness": map[string]any{"status": freshness["status"], "stale_sources": freshness["stale_sources"]}}
 	if err := fitAuditPage(result, mcpBudget(args, 1800), offset, total); err != nil {
 		return nil, err

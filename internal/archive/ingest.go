@@ -1474,7 +1474,7 @@ func replaceMessageFTS(tx *sql.Tx, id string) error {
 	if err := deleteMessageFTS(tx, id); err != nil {
 		return err
 	}
-	result, err := tx.Exec("INSERT INTO messages_fts(message_id,text) SELECT id,pharos_lexical_text(kind,text) FROM messages WHERE id=? AND text<>''", id)
+	result, err := tx.Exec("INSERT INTO messages_fts(message_id,text) SELECT id,pharos_lexical_text(kind,text) FROM messages WHERE id=? AND text<>'' AND "+wordIndexedKind(""), id)
 	if err != nil {
 		return err
 	}
@@ -1510,7 +1510,7 @@ func insertConversationFTS(tx *sql.Tx, conversationID string) error {
 	if err := tx.QueryRow("SELECT COALESCE(MAX(rowid),0) FROM messages_fts").Scan(&lastRowID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec("INSERT INTO messages_fts(message_id,text) SELECT id,pharos_lexical_text(kind,text) FROM messages WHERE conversation_id=? AND text<>''", conversationID); err != nil {
+	if _, err := tx.Exec("INSERT INTO messages_fts(message_id,text) SELECT id,pharos_lexical_text(kind,text) FROM messages WHERE conversation_id=? AND text<>'' AND "+wordIndexedKind(""), conversationID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec("INSERT INTO message_fts_rows(message_id,fts_rowid) SELECT message_id,rowid FROM messages_fts WHERE rowid>?", lastRowID); err != nil {

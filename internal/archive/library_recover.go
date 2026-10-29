@@ -267,7 +267,7 @@ func RecoverLibrary(ctx context.Context, backup, destination string, progress fu
 	if err = durableJSON(descriptorPath(config), descriptor); err != nil {
 		return Config{}, err
 	}
-	if err = validateCaptureEvidence(ctx, config.CaptureRoot); err != nil {
+	if err = validateStagedCaptureEvidence(ctx, config.CaptureRoot); err != nil {
 		return Config{}, err
 	}
 	report("Validating recovered history and publishing candidate")
@@ -294,7 +294,27 @@ func syncDirectory(path string) error {
 
 // Every manifest reference is part of the recovery contract, including old
 // file versions, database generations and nested immutable transfer inventories.
+//
+// validateCaptureEvidence checks a live tree in place, whose captures may be
+// compressed while it reads: a file compressed after its manifest was read
+// is accepted if it decodes to the recorded bytes (storedAsUnlocked). It must
+// never validate a staged copy (a recovery or a transfer), which nothing
+// compresses: there that pair is a torn copy, and lock-taking readers of the
+// published copy would trust the entry. Use validateStagedCaptureEvidence.
 func validateCaptureEvidence(ctx context.Context, root string) error {
+	return validateCaptures(ctx, root, false)
+}
+
+// validateStagedCaptureEvidence checks a staged copy (a recovery or a
+// transfer) before it is published. Nothing compresses a staged copy, so a
+// compressed file under an entry recording it uncompressed is a torn copy:
+// rejected, since every reader that takes the capture lock trusts the entry
+// and would hand the compressed bytes to SQLite or a parser.
+func validateStagedCaptureEvidence(ctx context.Context, root string) error {
+	return validateCaptures(ctx, root, true)
+}
+
+func validateCaptures(ctx context.Context, root string, staged bool) error {
 	return filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -339,45 +359,63 @@ func validateCaptureEvidence(ctx context.Context, root string) error {
 		if err = validateRetainedRecords(ctx, dir, manifest); err != nil {
 			return fmt.Errorf("retained records in %s: %w", dir, err)
 		}
-		verify := func(rel string, size int64, checksum string) error {
-			if !filepath.IsLocal(rel) || rel == "." || strings.Contains(rel, "\\") {
-				return fmt.Errorf("unsafe captured evidence path: %q", rel)
+		// A file stored encoded must be its stored size on disk and decode to
+		// the original size and digest. A compression killed between its
+		// manifest and its rename left an entry marked encoded over the
+		// original bytes; that is checked as plain. The tree may be live, so
+		// one handle is classified and read.
+		verifyStored := func(v capturedVersion) error {
+			if !filepath.IsLocal(v.Captured) || v.Captured == "." || strings.Contains(v.Captured, "\\") {
+				return fmt.Errorf("unsafe captured evidence path: %q", v.Captured)
 			}
-			file := filepath.Join(dir, filepath.FromSlash(rel))
-			info, err := os.Lstat(file)
+			file := filepath.Join(dir, filepath.FromSlash(v.Captured))
+			if info, err := os.Lstat(file); err != nil {
+				return fmt.Errorf("missing captured evidence %s: %w", file, err)
+			} else if !info.Mode().IsRegular() {
+				return fmt.Errorf("captured evidence failed verification: %s", file)
+			}
+			f, err := os.Open(file)
 			if err != nil {
 				return fmt.Errorf("missing captured evidence %s: %w", file, err)
 			}
-			if !info.Mode().IsRegular() || info.Size() != size {
+			defer f.Close()
+			recorded := storedAsFile(f, v)
+			v = storedAsUnlocked(f, v)
+			if staged && v.Encoding != recorded.Encoding {
+				return fmt.Errorf("captured evidence %s is stored compressed but its manifest records it uncompressed; copy the capture again", file)
+			}
+			info, err := f.Stat()
+			if err != nil || info.Size() != v.storedSize() {
 				return fmt.Errorf("captured evidence failed verification: %s", file)
 			}
-			if checksum != "" {
-				digest, _, err := fileDigestContext(ctx, file)
-				if err != nil {
-					return err
-				}
-				if digest != checksum {
-					return fmt.Errorf("captured evidence failed verification: %s", file)
-				}
+			if v.Encoding == "" && v.SHA256 == "" {
+				return nil
+			}
+			digest, size, err := capturedSHA256File(ctx, f, v.Encoding)
+			if err != nil {
+				return err
+			}
+			if size != v.Size || v.SHA256 != "" && digest != v.SHA256 {
+				return fmt.Errorf("captured evidence failed verification: %s", file)
 			}
 			return nil
 		}
 		for _, file := range manifest.Files {
-			if err = verify(file.Captured, file.Size, file.SHA256); err != nil {
+			if err = verifyStored(file.version()); err != nil {
 				return err
 			}
 			for _, previous := range file.Previous {
-				if err = verify(previous.Captured, previous.Size, previous.SHA256); err != nil {
+				if err = verifyStored(previous); err != nil {
 					return err
 				}
 			}
 		}
 		for _, snapshot := range manifest.Snapshots {
-			if err = verify(snapshot.Captured, snapshot.Size, ""); err != nil {
+			if err = verifyStored(snapshot.version()); err != nil {
 				return err
 			}
 			for _, generation := range snapshot.Generations {
-				if err = verify(generation.Captured, generation.Size, generation.SHA256); err != nil {
+				if err = verifyStored(generation); err != nil {
 					return err
 				}
 			}
@@ -402,7 +440,7 @@ func validateRetainedRecords(ctx context.Context, dir string, manifest *captureM
 		if pin.ReleasedAt != "" {
 			continue
 		}
-		digest, size, err := fileDigestContext(ctx, filepath.Join(dir, filepath.FromSlash(pin.Path)))
+		digest, size, err := capturedSHA256(ctx, filepath.Join(dir, filepath.FromSlash(pin.Path)), pin.Encoding)
 		if err != nil {
 			return err
 		}

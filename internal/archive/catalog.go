@@ -90,10 +90,7 @@ func openCatalog(path string, prepare func(*Catalog) error) (*Catalog, error) {
 	// SQLite PRAGMAs are connection-local. The DSN applies them to every pooled
 	// connection, so deleting a session always cascades its message links and
 	// every commit is durable (see catalogDSN).
-	db, err := sql.Open("sqlite", catalogDSN(path))
-	if err != nil {
-		return nil, err
-	}
+	db := openCatalogDB(path, catalogDSN(path), "catalog")
 	// SQLite serializes writes. A small pool still allows UI reads while a source
 	// snapshot is being parsed without creating unbounded lock contention.
 	db.SetMaxOpenConns(4)
@@ -246,10 +243,7 @@ func (c *Catalog) Initialize() error {
 	}
 	// Keep large bulk imports from spending most of their time merging FTS
 	// segments inside individual message inserts. These settings persist in FTS5.
-	if _, err := c.DB.Exec("INSERT INTO messages_fts(messages_fts,rank) VALUES('automerge',8)"); err != nil {
-		return err
-	}
-	if _, err := c.DB.Exec("INSERT INTO messages_fts(messages_fts,rank) VALUES('crisismerge',32)"); err != nil {
+	if _, err := c.DB.Exec(wordIndexMergePolicy); err != nil {
 		return err
 	}
 	if _, err := c.DB.Exec(queryTableComputedDDL + ";" + qtQuerySnapshotsDDL); err != nil {
@@ -438,6 +432,8 @@ func (c *Catalog) Initialize() error {
 	var ftsRowsVersion string
 	if err := c.DB.QueryRow("SELECT value FROM meta WHERE key='message_fts_rows_version'").Scan(&ftsRowsVersion); err == sql.ErrNoRows {
 		// Existing FTS rows need a one-time rowid lookup for bounded updates.
+		// It maps every row, tool output included: the tool-output removal
+		// (tool_output_index.go) finds the postings it deletes through it.
 		if _, err = c.DB.Exec(`INSERT OR REPLACE INTO message_fts_rows(message_id,fts_rowid)
 			SELECT message_id,rowid FROM messages_fts`); err != nil {
 			return err
@@ -457,6 +453,13 @@ func (c *Catalog) Initialize() error {
 	if _, err := c.DB.Exec(`INSERT OR IGNORE INTO meta(key,value) SELECT 'tool_command_fts_version','1'
 		WHERE NOT EXISTS(SELECT 1 FROM tool_calls)`); err != nil {
 		return err
+	}
+	// Nor has its word index any tool output to remove.
+	for _, key := range []string{toolOutputRemovedKey, toolOutputMergedKey} {
+		if _, err := c.DB.Exec(`INSERT OR IGNORE INTO meta(key,value) SELECT ?,'1'
+			WHERE NOT EXISTS(SELECT 1 FROM conversations)`, key); err != nil {
+			return err
+		}
 	}
 	var aliasesVersion string
 	if err := c.DB.QueryRow("SELECT value FROM meta WHERE key='declared_native_aliases_version'").Scan(&aliasesVersion); err == sql.ErrNoRows {

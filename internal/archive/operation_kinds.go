@@ -124,6 +124,8 @@ var operationKinds = []operationKind{
 		OnEject: "Stops.", Latency: "record", Journal: journalNever, Priority: priorityBackground, Hidden: true},
 	{Kind: "maintenance.search.substring", Label: "Build substring search", Verb: "Building substring search", Holds: "D:w W:w", Affects: "search.substring",
 		OnEject: "Stops between batches; it carries on when Pharos next opens the library.", Latency: "batch", Journal: journalLonger(30 * time.Second), Priority: priorityBackground},
+	{Kind: "maintenance.search.tool-output", Label: "Remove tool output from word search", Verb: "Removing tool output from word search", Holds: "D:w W:w", Affects: "search.words",
+		OnEject: "Stops between batches; it carries on when Pharos next opens the library.", Latency: "batch", Journal: journalLonger(30 * time.Second), Priority: priorityBackground},
 	{Kind: "maintenance.search.text", Label: "Build text search", Verb: "Building text search", Holds: "D:w W:w", Affects: "search.text",
 		OnEject: "Stops between batches; it carries on later.", Latency: "batch", Journal: journalLonger(30 * time.Second), Priority: priorityBackground},
 	{Kind: "maintenance.search.tools", Label: "Build tool search", Verb: "Building tool search", Holds: "D:w W:w", Affects: "search.tools",
@@ -142,6 +144,8 @@ var operationKinds = []operationKind{
 		OnEject: "Stops retrying; an answer not yet saved is lost, as when the service stops.", Latency: "record", Journal: journalNever, Priority: priorityBackground, Hidden: true},
 	{Kind: "ask.models", Label: "Check Ask Pharos models", Verb: "Checking Ask Pharos models", Holds: "—", Affects: "—",
 		OnEject: "Stops.", Latency: "record", Journal: journalNever, Priority: priorityBackground, Hidden: true},
+	{Kind: "maintenance.capture-compress", Label: "Compress cold captures", Verb: "Compressing cold captures", Holds: "D:w C(this):w", Affects: "—",
+		OnEject: "Stops; the file in progress stays uncompressed and a later pass compresses it.", Latency: "record", Journal: journalLonger(5 * time.Second), Priority: priorityBackground},
 	{Kind: "drive.measure", Label: "Check the drive", Verb: "Checking the drive", Holds: "D:w W:w", Affects: "—",
 		OnEject: "Stops.", Latency: "record", Journal: journalNever, Priority: priorityBackground, Hidden: true},
 

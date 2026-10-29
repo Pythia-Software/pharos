@@ -161,6 +161,7 @@ func (s *Server) Serve() error {
 	s.startJournal()
 	s.daemon("maintainLibrary", s.Catalog.maintainLibrary)
 	s.daemon("maintainSubstringIndex", s.Catalog.maintainSubstringIndex)
+	s.daemon("maintainToolOutputIndex", s.Catalog.maintainToolOutputIndex)
 	s.daemon("maintainTextSearch", s.Catalog.maintainTextSearch)
 	s.daemon("maintainToolSearch", s.Catalog.maintainToolSearch)
 	s.daemon("maintainQueryTextIndexes", s.Catalog.maintainQueryTextIndexes)
@@ -168,6 +169,7 @@ func (s *Server) Serve() error {
 	s.daemon("automaticLoop", s.automaticLoop)
 	s.daemon("cloudScheduleLoop", s.cloudScheduleLoop)
 	s.daemon("watchFeatureFlags", s.Catalog.watchFeatureFlags)
+	s.daemon("compressCaptures", s.compressCapturesLoop)
 	s.refreshGitInBackground(true)
 	s.countUpgradeInBackground()
 	s.warmAskModelsOnStart()
@@ -485,6 +487,9 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/health/counts":
 		value, err := s.Catalog.HealthCounts(r.Context())
 		writeResult(w, value, err)
+	case path == "/api/library/summary":
+		value, err := s.Catalog.LibrarySummary(r.Context())
+		writeResult(w, value, err)
 	case path == "/api/health/pricing":
 		value, err := s.Catalog.PricingHealth(r.Context())
 		writeResult(w, value, err)
@@ -494,8 +499,7 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/health/storage":
 		writeJSON(w, merge(storage(s.Config()), map[string]any{"index_bytes": s.Catalog.indexBytes()}), 200)
 	case path == "/api/health/storage/breakdown":
-		value, err := s.storageBreakdown(r.Context())
-		writeResult(w, value, err)
+		writeJSON(w, s.storageBreakdown(), 200)
 	case path == "/api/health/freshness":
 		writeJSON(w, merge(s.Catalog.Freshness(), map[string]any{"sync_active": s.syncActive()}), 200)
 	case path == "/api/authorship":
@@ -560,7 +564,12 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, s.backupStatus(), http.StatusOK)
 	case path == "/api/search/status":
 		progress, err := s.Catalog.substringIndexProgress(r.Context())
-		writeResult(w, map[string]any{"substring": progress}, err)
+		if err != nil {
+			writeResult(w, nil, err)
+			break
+		}
+		toolOutput, err := s.Catalog.toolOutputIndexProgress(r.Context())
+		writeResult(w, map[string]any{"substring": progress, "tool_output": toolOutput}, err)
 	case path == "/api/library/status":
 		writeJSON(w, s.libraryStatus(), http.StatusOK)
 	case path == "/api/operations":

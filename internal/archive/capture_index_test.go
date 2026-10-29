@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -636,6 +637,38 @@ func TestCapturedPlanRefreshesWhenManifestChanges(t *testing.T) {
 }
 
 func TestIndexKeepsDeletedConductorSessionsFromUnindexedSnapshots(t *testing.T) {
+	// A generation stored compressed is salvaged as an uncompressed one is,
+	// decoded only into the index's reader lease, and only while the index
+	// still needs it.
+	t.Run("compressed-generation", func(t *testing.T) {
+		// As on exFAT, which has no exclusive rename: leases fall back to a
+		// checked rename, so compression and indexing still work there.
+		override(t, &renameExclusiveNative, func(string, string) error { return syscall.ENOTSUP })
+		config, target := compressionFixture(t)
+		catalog, _ := testCatalog(t)
+		if done := compressGenerations(t, config); len(done) != 1 {
+			t.Fatal("fixture generation was not compressed", done)
+		}
+		generation := readCaptureManifest(t, config, "conductor").Snapshots[0].Generations[0]
+		var decodes atomic.Int64
+		override(t, &capturedContentHook, func(string) { decodes.Add(1) })
+		for pass := range 2 {
+			result := catalog.IndexCapture(t.Context(), target, nil)
+			if result.Error != nil || len(result.UnavailableInputs) != 0 || conversationMessages(t, catalog, "conductor:old") != 2 || conversationMessages(t, catalog, "conductor:latest") != 1 {
+				t.Fatalf("pass %d over a compressed generation: %+v", pass, result)
+			}
+			if want := int64(1); decodes.Load() != want {
+				t.Fatalf("pass %d: %d decodes, want %d", pass, decodes.Load(), want)
+			}
+		}
+		if left := temporariesUnder(t, target.Dir); len(left) != 0 || !zstdOnDisk(t, capturedPath(config, "conductor", generation.Captured)) {
+			t.Fatal("index left decoded copies or changed the stored generation", left)
+		}
+		// A forced reindex reads every generation again.
+		if result := catalog.IndexCapture(withIngestMode(t.Context(), ingestMode{force: true}), target, nil); result.Error != nil || decodes.Load() != 2 {
+			t.Fatalf("forced reindex: %+v, %d decodes", result, decodes.Load())
+		}
+	})
 	for _, damage := range []string{"missing-generation", "resized-generation", "missing-latest"} {
 		t.Run(damage, func(t *testing.T) {
 			useHost(t, "host-a")
@@ -1509,5 +1542,139 @@ func TestSourcePlanBoundsDiscoveryAndRechecksReadVersions(t *testing.T) {
 	}
 	if result = ingestSource(t, catalog, source); result.Error != nil || result.Parsed != 2 || conversationMessages(t, catalog, "planned-later") != 1 || conversationMessages(t, catalog, "planned-first") != 2 {
 		t.Fatalf("later input was lost: %+v", result)
+	}
+}
+
+// Cold transcripts stored compressed index as uncompressed ones do: a normal
+// index over them decodes nothing, a forced reindex decodes them and builds
+// the same catalog as an uncompressed capture, and a file that changes again
+// is parsed from its new, uncompressed copy.
+func TestIndexEncodedTranscriptsDecodesOnlyWhatItParses(t *testing.T) {
+	config, catalog, target, claude := coldFilesFixture(t)
+	messages := func(c *Catalog) string {
+		t.Helper()
+		rows, err := queryMaps(c.DB, "SELECT c.native_id,m.role,m.text,m.created_at FROM messages m JOIN conversations c ON c.id=m.conversation_id ORDER BY c.native_id,m.created_at,m.text")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return jsonText(rows)
+	}
+	uncompressed := messages(catalog)
+	if done := compressColdFiles(t, config, catalog); len(done) != 2 {
+		t.Fatal("fixture transcripts were not compressed", done)
+	}
+	var decodes atomic.Int64
+	override(t, &capturedContentHook, func(string) { decodes.Add(1) })
+	parses := countParses(t)
+	if result := catalog.IndexCapture(t.Context(), target, nil); result.Error != nil || decodes.Load() != 0 || parses.Load() != 0 {
+		t.Fatalf("normal index over unchanged cold files: %+v, %d decodes, %d parses", result, decodes.Load(), parses.Load())
+	}
+	forced, _ := testCatalog(t)
+	if result := forced.IndexCapture(withIngestMode(t.Context(), ingestMode{force: true}), target, nil); result.Error != nil || decodes.Load() != 2 {
+		t.Fatalf("forced reindex: %+v, %d decodes", result, decodes.Load())
+	}
+	if got := messages(forced); got != uncompressed {
+		t.Fatalf("forced reindex of compressed transcripts differs:\n%s\nwant\n%s", got, uncompressed)
+	}
+	if left := temporariesUnder(t, target.Dir); len(left) != 0 {
+		t.Fatal("indexing left decoded copies", left)
+	}
+	appendSourceFile(t, filepath.Join(claude, "p", "cold-a.jsonl"), claudeLine("cold-a", "cold-a-new", "more", "/proj", 59))
+	if run := runCapture(t, config); !run.OK {
+		t.Fatal(run)
+	}
+	decodes.Store(0)
+	if result := catalog.IndexCapture(t.Context(), target, nil); result.Error != nil || decodes.Load() != 0 || conversationMessages(t, catalog, "cold-a") != 41 {
+		t.Fatalf("index after a cold file changed: %+v, %d decodes", result, decodes.Load())
+	}
+}
+
+// A Codex rollout that only session_index.jsonl names has its header read on
+// every plan to match its session id. Stored compressed, that header is
+// decoded once per process (cached by the rollout's original path, size and
+// mtime), never its body.
+func TestIndexEncodedCodexRolloutHeadersAreCached(t *testing.T) {
+	useHost(t, "host-a")
+	override(t, &compressMinBytes, 1)
+	catalog, _ := testCatalog(t)
+	codex := filepath.Join(t.TempDir(), "codex")
+	id := "0199a1b2-c3d4-4e5f-8a9b-0123456789ab"
+	writeSourceFile(t, filepath.Join(codex, "sessions", "2026", "09", "01", "rollout-2026-09-01T00-00-00-"+id+".jsonl"), codexLines(id, 60))
+	writeSourceFile(t, filepath.Join(codex, "session_index.jsonl"), `{"id":"`+id+`","thread_name":"Named by the index","updated_at":"2026-09-01T00:00:00Z"}`+"\n")
+	config := captureTestConfig(t, SourceConfig{Name: "codex", Kind: "codex", Path: codex, Account: "local", Enabled: true})
+	runCapture(t, config)
+	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+	runCapture(t, config)
+	compressed := 0
+	if err := compressCaptures(t.Context(), config, catalog, func(compressedGeneration) { compressed++ }); err != nil || compressed != 1 {
+		t.Fatal("the cold rollout was not compressed", compressed, err)
+	}
+	var decodes atomic.Int64
+	override(t, &capturedContentHook, func(string) { decodes.Add(1) })
+	parses := countParses(t)
+	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+	if decodes.Load() != 0 || parses.Load() != 0 {
+		t.Fatalf("normal index: %d decodes, %d parses", decodes.Load(), parses.Load())
+	}
+	// With nothing cached (a new process), the header is decoded once, and
+	// the session keeps its indexed name.
+	headCacheMu.Lock()
+	headCache = map[headKey]any{}
+	headCacheMu.Unlock()
+	for range 2 {
+		indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+	}
+	var title string
+	if err := catalog.DB.QueryRow("SELECT w.title FROM workspaces w JOIN conversations c ON c.workspace_id=w.id WHERE c.native_id=?", id).Scan(&title); err != nil {
+		t.Fatal(err)
+	}
+	if decodes.Load() != 1 || parses.Load() != 0 || title != "Named by the index" {
+		t.Fatalf("index with a cold cache: %d decodes, %d parses, title %q", decodes.Load(), parses.Load(), title)
+	}
+}
+
+// Conductor's index opens its latest snapshot on every run, so an idle one is
+// never compressed (its adapter's snapshotReader rule is the only thing that
+// keeps it out), and a normal index of it decodes nothing.
+func TestIdleConductorLatestSnapshotStaysUncompressed(t *testing.T) {
+	useHost(t, "host-a")
+	override(t, &compressMinBytes, 1)
+	catalog, _ := testCatalog(t)
+	dir := filepath.Join(t.TempDir(), "conductor")
+	exec := conductorFixture(t, dir)
+	exec(addConductorSession("idle", 2)...)
+	old := time.Now().AddDate(0, -1, 0)
+	files, _ := filepath.Glob(filepath.Join(dir, "conductor.db*"))
+	for _, file := range files {
+		if err := os.Chtimes(file, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	config := captureTestConfig(t, SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true})
+	runCapture(t, config)
+	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+	runCapture(t, config)
+	target := captureTarget{Host: currentHost(), Source: "conductor", Dir: capturedPath(config, "conductor", "")}
+	manifest, err := loadCaptureManifest(target.Dir)
+	if err != nil || len(manifest.Snapshots) != 1 {
+		t.Fatal("fixture needs one latest snapshot", err)
+	}
+	snapshot := manifest.Snapshots[0]
+	// Everything else about it is idle.
+	idle := compressPolicy{afterDays: 14, now: time.Now(), readEveryIndex: func(string, string) bool { return false }, indexCurrent: func(string) bool { return true }}
+	if !idleSnapshot(target.Dir, manifest, snapshot, idle) {
+		t.Fatal("fixture snapshot is not otherwise idle")
+	}
+	if err := compressCaptures(t.Context(), config, catalog, nil); err != nil {
+		t.Fatal(err)
+	}
+	if after := readCaptureManifest(t, config, "conductor"); after.Snapshots[0].Encoding != "" || zstdOnDisk(t, capturedPath(config, "conductor", snapshot.Captured)) {
+		t.Fatal("compressed the snapshot Conductor's index reads on every run")
+	}
+	var decodes atomic.Int64
+	override(t, &capturedContentHook, func(string) { decodes.Add(1) })
+	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+	if decodes.Load() != 0 || conversationMessages(t, catalog, "conductor:idle") != 2 {
+		t.Fatalf("normal index of an idle Conductor capture: %d decodes", decodes.Load())
 	}
 }

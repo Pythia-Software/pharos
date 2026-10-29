@@ -448,6 +448,8 @@ func unregisteredActivities(activities []libraryActivity, ops []opView, leases [
 			ok = running(kinds("tools.ledger.build", "library.upgrade"))
 		case activity.ID == "substring":
 			ok = running(kinds("maintenance.search.substring"))
+		case activity.ID == "word-index":
+			ok = running(kinds("maintenance.search.tool-output"))
 		case activity.Label == "Updating findings":
 			ok = running(kinds("analysis.findings"))
 		case activity.Label == "Classifying your writing":

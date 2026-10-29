@@ -18,6 +18,27 @@ tests.
 | [usage-v3-hour-grouping.md](usage-v3-hour-grouping.md) | `/query-v3` groups usage by `hour` over daily records, where it is null; only `/metrics` reads the hourly ledger |
 | [query-table-schema-reload.md](query-table-schema-reload.md) | Every staged Query Table request makes its connection re-parse the whole catalog schema twice, adding about 6 ms of CPU |
 
+## Catalog size
+
+From the storage survey of the production library (2026-10-28). The two
+rebuild the same index; read both before starting either.
+
+| Handoff | Problem |
+|---|---|
+| [message-search-without-text-copy.md](message-search-without-text-copy.md) | `messages_fts` stores a second copy of all message text (25.6 GB of a 94.5 GB catalog); make it contentless without changing results |
+| [message-search-without-tool-output.md](message-search-without-tool-output.md) | Tool results are ~84% of the word index; stop indexing them and make the affected searches say so (#274) |
+
+## Capture compression
+
+Phases of [Compressing captured originals at rest](../capture-compression.md),
+shipped as #271–#273.
+
+| Handoff | Problem |
+|---|---|
+| [capture-compression-1-generations.md](capture-compression-1-generations.md) | Superseded SQLite snapshot generations hold ~21.6 GB of originals uncompressed; compress them with an encoding the manifest records |
+| [capture-compression-2-cold-files.md](capture-compression-2-cold-files.md) | Cold latest files and superseded versions (~27 GB, mostly Codex/Claude JSONL); readers list and stat through the manifest and decode only what they parse |
+| [capture-compression-3-idle-snapshots.md](capture-compression-3-idle-snapshots.md) | Idle latest snapshots (Antigravity-CLI per-conversation databases, TL1 installations), excluding any an index reads every run |
+
 ## Upstream Query Table
 
 Pharos uses the published Query Table module and packages without patches.
@@ -37,6 +58,14 @@ asks for:
 - a minimum count over distinct values.
 
 It can be sent directly to the Query Table team.
+
+[`query-table-go-link-codec.md`](query-table-go-link-codec.md) is a standalone
+assignment against 0.9.5. It asks for Go `EncodeQueryLink` and
+`DecodeQueryLink`, at parity with `encodeQuery` and `decodeQueryStrict`, so
+Pharos can build and read query links in Go for the
+[site map](../site-map.md)'s link tools. It covers the parity contract, the
+pitfalls a reviewed reference port found, and how to prove parity. It can be
+sent directly to the Query Table team.
 
 The [manual-interventions audit and upstream handoff](query-table-manual-interventions.md)
 records the previous patches and source snapshots, the 0.9.3 response, and the

@@ -212,7 +212,7 @@ func TestStorageBreakdownEndpoint(t *testing.T) {
 	}
 	drives.mu.Lock()
 	drives.key = driveKey(config)
-	drives.state = &driveState{checked: time.Now(), sizes: librarySizes{CatalogBytes: 400,
+	drives.state = &driveState{checked: time.Now(), shares: shares, sizes: librarySizes{CatalogBytes: 400,
 		Captures: []captureSize{{Host: "host-b", Source: "claude", Latest: 60}, {Host: "host-b", Source: "codex", Latest: 20}}}}
 	drives.mu.Unlock()
 	body := get()
