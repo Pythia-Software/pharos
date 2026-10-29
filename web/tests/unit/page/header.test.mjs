@@ -195,3 +195,10 @@ test('history still supports a forward branch when session storage is unavailabl
   sync();
   assert.equal(buttons.navForward.disabled, false);
 });
+
+test('Ask Pharos participates in header defaults, reordering and removal', () => {
+  const header=loadClassicScript('header.js');
+  assert.ok(header.defaultHeaderTools().includes('ask'));
+  assert.deepEqual(plain(header.editHeaderTools(['settings','search'],'ask',0)),['ask','settings','search']);
+  assert.deepEqual(plain(header.editHeaderTools(['ask','settings'],'ask',null)),['settings']);
+});

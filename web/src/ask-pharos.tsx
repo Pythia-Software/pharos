@@ -16,9 +16,22 @@ async function askAPI<T>(path: string, body?: unknown): Promise<T> {
 
 // Keep the existing search editor mounted in a portal. The conversation view
 // owns only its own DOM, including the approved SVG contours and loading UI.
+export function AskPharosHome() {
+  const host = useRef<HTMLDivElement>(null);
+  useEffect(() => { window.dispatchEvent(new CustomEvent("pharos:ask-home", { detail: host.current })); }, []);
+  return <div id="homeAskSearch" ref={host} />;
+}
+
 export function AskPharosSearch({ schema }: { schema: FieldSchema }) {
   const mount = useRef<HTMLDivElement>(null);
   const [markup, setMarkup] = useState("");
+  const [homeHost, setHomeHost] = useState<HTMLElement | null>(() => document.getElementById("homeAskSearch"));
+  useEffect(() => {
+    const attach = (event: Event) => setHomeHost((event as CustomEvent<HTMLElement>).detail);
+    setHomeHost(document.getElementById("homeAskSearch"));
+    window.addEventListener("pharos:ask-home", attach);
+    return () => window.removeEventListener("pharos:ask-home", attach);
+  }, []);
   const [searchHost, setSearchHost] = useState<HTMLElement | null>(null);
   useEffect(() => {
     const controller = new AbortController();
@@ -32,7 +45,7 @@ export function AskPharosSearch({ schema }: { schema: FieldSchema }) {
     return window.initPharosAsk(root);
   }, [markup]);
   return <>
-    {!markup && <HomeSearch schema={schema} />}
+    {!markup && homeHost && createPortal(<HomeSearch schema={schema} />, homeHost)}
     <div ref={mount} dangerouslySetInnerHTML={{ __html: markup }} />
     {searchHost && createPortal(<HomeSearch schema={schema} />, searchHost)}
   </>;
