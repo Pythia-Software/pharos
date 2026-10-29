@@ -8,6 +8,7 @@ import { earliestKey, parseDay, shiftPeriod } from "./chart-period";
 import { resolveRollingQuery, rollingQueryMatches, rollingWindowField, type QueryDataset, type RollingWindow } from "./query-links";
 import type { QueryRecipe } from "./curiosity-data";
 import { readTextSearch, textFindParameters } from "./text-search-model";
+import { readRecordKeywordSearch, recordKeywordParameter, recordKeywordRequest } from "./record-keyword-model";
 import { cardCoverQuery, humanStudyCoverMatches, type CardCover } from "./card-cover";
 import { filterBoxSamples } from "./compact-box-model";
 import { createHumanStudyLoader, clearHumanStudyCache, type HumanStudyPreview } from "./human-study";
@@ -65,6 +66,17 @@ async function fetchPreview<T>(url: string, signal?: AbortSignal, request?: unkn
 
 function searchContext(job: PreviewJob): string {
   const params = new URL(job.options?.url ?? "/", location.origin).searchParams, find = new URLSearchParams();
+  // A saved query's host state is its search; its address mirrors it.
+  for (const [name, values] of Object.entries(job.query.hostState?.params ?? {})) {
+    params.delete(name);
+    for (const value of values) params.append(name, value);
+  }
+  const record = params.get(recordKeywordParameter(job.dataset));
+  if (record !== null) {
+    const saved = readRecordKeywordSearch(record, job.schema.fields);
+    if (!saved.value) throw new Error(saved.error);
+    return `?${new URLSearchParams({ record_search: recordKeywordRequest(saved.value) })}`;
+  }
   if (job.dataset === "writing_messages" && params.has("message_query")) {
     const saved = readTextSearch(new URLSearchParams({ text_builder: params.get("message_query")! }));
     if (saved.error) throw new Error(saved.error);
@@ -468,7 +480,8 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
       for (const item of items) {
         try {
           // A metric filter or minimum group size the executor does not run fails its card, never silently dropped.
-          const grouped = Boolean(item.query.grouping || item.query.aggregations?.some(metric => metric.dateGrouping));
+          // The service runs record keyword clauses only through query-v3.
+          const grouped = Boolean(item.query.grouping || item.query.aggregations?.some(metric => metric.dateGrouping) || /(^|[?&])record_search=/.test(item.search));
           const support = grouped ? { filters: ctx.queryCapabilities?.metricFilters, minCount: ctx.queryCapabilities?.metricMinCount, minCountMeasures: ctx.queryCapabilities?.metricMinCountMeasures } : ctx.capabilities;
           const unsupported = item.query.aggregations?.map(metric => metricPopulationError(metric, support)).find(Boolean);
           if (unsupported) throw new Error(unsupported);

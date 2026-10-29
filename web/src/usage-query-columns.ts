@@ -1,4 +1,4 @@
-import { ITEM_DETAILS_COLUMN, type FieldDef, type FieldSchema, type QueryState } from "@pythia-software/query-table-core";
+import { ITEM_DETAILS_COLUMN, groupKeyFields, type FieldDef, type FieldSchema, type QueryState } from "@pythia-software/query-table-core";
 import { toolSummaryDimensions } from "./tools-dashboard-model";
 import type { UsageDataset } from "./usage-workspace-model";
 
@@ -31,8 +31,25 @@ export function usageQuerySchema(schema: FieldSchema, dataset: UsageDataset): Fi
   return { ...schema, fields: [...schema.fields, ...fields] };
 }
 
+// A grouped result ends with its link summaries, then native group Detail
+// (Query Table 0.9.7), as record tables end with their drill-ins and Detail.
+// An empty select means Query Table's grouped default, the keys, so older
+// saves and links show their keys, then Detail. Columns the select leaves
+// out, link summaries included, stay out.
+export function withGroupDetail(query: QueryState): QueryState {
+  if (!query.grouping) return query;
+  const links = new Set(query.grouping.summaries.filter(column => column.op === "link").map(column => column.id));
+  const select = query.select.length ? query.select : groupKeyFields(query.grouping.keys).map(field => ({ field }));
+  const columns = [
+    ...select.filter(column => column.field !== ITEM_DETAILS_COLUMN && !links.has(column.field)),
+    ...select.filter(column => links.has(column.field)),
+    select.find(column => column.field === ITEM_DETAILS_COLUMN) ?? { field: ITEM_DETAILS_COLUMN },
+  ];
+  return JSON.stringify(columns) === JSON.stringify(query.select) ? query : { ...query, select: columns };
+}
+
 export function usageActionQuery(query: QueryState, schema: FieldSchema, dataset: UsageDataset): QueryState {
-  if (query.grouping) return query;
+  if (query.grouping) return withGroupDetail(query);
   const actionFields = usageDrilldownColumns[dataset].map(column => usageDrilldownField(column.kind));
   const select = query.select.length ? query.select : schema.defaultSelect ?? [];
   const data = select.filter(column => column.field !== ITEM_DETAILS_COLUMN && !actionFields.includes(column.field));

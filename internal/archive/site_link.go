@@ -603,21 +603,22 @@ func (site *siteMap) similarCards(id string) []string {
 }
 
 // argFilters reads where terms: {field, op, value?, negated?} or
-// {any: [terms]}. Values are text, as in a query; numbers and booleans are
-// written as text.
+// {any: [members]}, an OR group whose members are terms or {all: [terms]}
+// conjunctions, as a combined legend selection's supporting query holds.
+// Values are text, as in a query; numbers and booleans are written as text.
 func (site *siteMap) argFilters(raw any) ([]qt.WhereTerm, error) {
 	if raw == nil {
 		return nil, nil
 	}
 	items, ok := raw.([]any)
 	if !ok {
-		return nil, linkError("filters", "must be a list of {field, op, value} terms, or {any: [terms]} for an OR group.")
+		return nil, linkError("filters", "must be a list of {field, op, value} terms, or {any: [terms or {all: [terms]}]} for an OR group.")
 	}
 	terms := []qt.WhereTerm{}
 	for index, item := range items {
 		object, ok := item.(map[string]any)
 		if !ok {
-			return nil, linkError(fmt.Sprintf("filters[%d]", index), "must be {field, op, value} or {any: [terms]}.")
+			return nil, linkError(fmt.Sprintf("filters[%d]", index), "must be {field, op, value} or {any: [terms or {all: [terms]}]}.")
 		}
 		term := qt.WhereTerm{}
 		if members, ok := object["any"]; ok {
@@ -627,7 +628,16 @@ func (site *siteMap) argFilters(raw any) ([]qt.WhereTerm, error) {
 			}
 			term.Any = []qt.WhereClause{}
 			for member, value := range list {
-				clause, err := argClause(value, fmt.Sprintf("filters[%d].any[%d]", index, member))
+				name := fmt.Sprintf("filters[%d].any[%d]", index, member)
+				if branch, ok := value.(map[string]any); ok && branch["all"] != nil {
+					clause, err := argBranch(branch, name)
+					if err != nil {
+						return nil, err
+					}
+					term.Any = append(term.Any, clause)
+					continue
+				}
+				clause, err := argClause(value, name)
 				if err != nil {
 					return nil, err
 				}
@@ -643,6 +653,29 @@ func (site *siteMap) argFilters(raw any) ([]qt.WhereTerm, error) {
 		terms = append(terms, term)
 	}
 	return terms, nil
+}
+
+// argBranch reads an OR group's {all: [terms]} member: two or more terms,
+// none of them a group.
+func argBranch(object map[string]any, name string) (qt.WhereClause, error) {
+	for key := range object {
+		if key != "all" {
+			return qt.WhereClause{}, linkError(name+"."+key, "is not part of an {all: [terms]} branch.", "all")
+		}
+	}
+	list, ok := object["all"].([]any)
+	if !ok || len(list) < 2 {
+		return qt.WhereClause{}, linkError(name+".all", "must be a list of two or more {field, op, value} terms.")
+	}
+	branch := qt.WhereClause{All: []qt.WhereClause{}}
+	for index, value := range list {
+		clause, err := argClause(value, fmt.Sprintf("%s.all[%d]", name, index))
+		if err != nil {
+			return qt.WhereClause{}, err
+		}
+		branch.All = append(branch.All, clause)
+	}
+	return branch, nil
 }
 
 func argClause(raw any, name string) (qt.WhereClause, error) {
@@ -975,17 +1008,24 @@ var siteFieldTypeChecks = map[string]func(string) bool{
 func (site *siteMap) checkFilters(node *siteNode, terms []qt.WhereTerm, arg string) error {
 	dataset := site.Datasets[node.Dataset]
 	for index, term := range terms {
-		clauses := term.Predicates()
-		for member, clause := range clauses {
-			name := fmt.Sprintf("%s[%d]", arg, index)
-			if term.IsGroup() {
-				name = fmt.Sprintf("%s[%d].any[%d]", arg, index, member)
-			}
-			if err := site.checkClause(node, dataset, clause, name); err != nil {
+		if !term.IsGroup() {
+			if err := site.checkClause(node, dataset, term.Predicates()[0], fmt.Sprintf("%s[%d]", arg, index)); err != nil {
 				return err
 			}
+			continue
 		}
-		if term.IsGroup() && len(clauses) == 0 {
+		for member, branch := range term.Branches() {
+			for position, clause := range branch {
+				name := fmt.Sprintf("%s[%d].any[%d]", arg, index, member)
+				if term.Any[member].IsConjunction() {
+					name = fmt.Sprintf("%s.all[%d]", name, position)
+				}
+				if err := site.checkClause(node, dataset, clause, name); err != nil {
+					return err
+				}
+			}
+		}
+		if len(term.Predicates()) == 0 {
 			return linkError(fmt.Sprintf("%s[%d].any", arg, index), "must hold at least one term.")
 		}
 	}
@@ -1226,20 +1266,75 @@ func matchRoute(route, path string) (map[string]string, bool) {
 }
 
 // whereOnly reads a where-only query token over a base query: its where
-// terms, or an error when it carries anything else.
-func (site *siteMap) whereOnly(param, token string, base json.RawMessage) ([]qt.WhereTerm, error) {
+// terms, or an error when it carries anything else. The app's tokens carry
+// the table's host query state (Query Table's hostState): Search's content
+// search and view, or Analyze's record keyword clause. The table mirrors it
+// in the URL's own parameters, which the link reads; a token's host state
+// is accepted when it is empty or says what those parameters say.
+func (site *siteMap) whereOnly(param, token string, base json.RawMessage, node *siteNode, values url.Values) ([]qt.WhereTerm, error) {
 	decoded, err := qt.DecodeQueryLink(token)
 	if err != nil {
 		return nil, linkError("url", fmt.Sprintf("%s is not a readable query: %v", param, err))
+	}
+	if err := site.checkHostState(param, decoded.HostState, node, values); err != nil {
+		return nil, err
 	}
 	canonical, err := site.queryToken(base, decoded.Where)
 	if err != nil {
 		return nil, linkError("url", fmt.Sprintf("%s holds where terms a link cannot carry: %v", param, err))
 	}
-	if !sameQueryToken(token, canonical) {
+	if !sameQueryToken(withoutHostState(decoded), canonical) {
 		return nil, linkError("url", fmt.Sprintf("%s carries more than where terms (columns, sorting, grouping or metrics), which a site link cannot express.", param))
 	}
 	return decoded.Where, nil
+}
+
+func (site *siteMap) checkHostState(param string, host *qt.HostQueryState, node *siteNode, values url.Values) error {
+	if host == nil {
+		return nil
+	}
+	if host.Version < 1 {
+		return linkError("url", param+" carries host query state that cannot be read.")
+	}
+	var names []string
+	if node != nil {
+		if option := site.optionOfKind(node, "where"); option != nil && option.Param == param {
+			names = slices.Clone(option.HostParams)
+		}
+	}
+	for name := range host.Params {
+		if !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		// The app writes these parameters from the same state, so an empty
+		// state means the link carries none of them.
+		state, given := host.Params[name], values[name]
+		same := len(state) == len(given)
+		for index := 0; same && index < len(state); index++ {
+			same = state[index] == given[index] || sameJSONText(state[index], given[index])
+		}
+		if !same {
+			return linkError("url", fmt.Sprintf("%s carries a search clause (%s) that the link's own %s parameter does not say, which a site link cannot express.", param, name, name))
+		}
+		if len(state) > 0 && node != nil && !slices.Contains(site.nodeParams(node), name) {
+			return linkError("url", fmt.Sprintf("%s carries a search clause (%s), which a site link cannot express.", param, name))
+		}
+	}
+	return nil
+}
+
+// withoutHostState re-encodes a decoded token without its host state, for
+// comparison with a token written from where terms alone.
+func withoutHostState(decoded qt.LinkQuery) string {
+	decoded.HostState = nil
+	token, err := qt.EncodeQueryLink(decoded)
+	if err != nil {
+		return ""
+	}
+	return token
 }
 
 // cutWindow takes a window's terms off the end of the where terms: the
@@ -1269,7 +1364,7 @@ func (site *siteMap) parseDashboard(node *siteNode, values url.Values, consumed 
 	var where []qt.WhereTerm
 	if values.Has(whereParam) {
 		var err error
-		if where, err = site.whereOnly(whereParam, values.Get(whereParam), nil); err != nil {
+		if where, err = site.whereOnly(whereParam, values.Get(whereParam), nil, nil, values); err != nil {
 			return siteState{}, err
 		}
 	}
@@ -1329,7 +1424,7 @@ func (site *siteMap) parsePage(node *siteNode, values url.Values, pathValues map
 		var terms []qt.WhereTerm
 		if values.Has(where.Param) {
 			var err error
-			if terms, err = site.whereOnly(where.Param, values.Get(where.Param), node.BaseQuery); err != nil {
+			if terms, err = site.whereOnly(where.Param, values.Get(where.Param), node.BaseQuery, node, values); err != nil {
 				return siteState{}, err
 			}
 		}
@@ -1449,10 +1544,39 @@ func (site *siteMap) parseTextBuilder(node *siteNode, text string) (map[string]a
 	if err != nil {
 		return nil, err
 	}
-	if !sameJSONText(rebuilt, text) {
+	// The app writes text_builder without the editor's rule and group IDs.
+	if !sameJSONText(withoutEditorIDs(rebuilt), withoutEditorIDs(text)) {
 		return nil, linkError("url", "text_builder holds settings beyond its rules and scope (such as fuzzy or case-sensitive matching, or other filters), which a site link cannot express.")
 	}
 	return options, nil
+}
+
+// withoutEditorIDs drops the editor's rule and group IDs from a text search
+// draft, which the app leaves out of its links and rebuilds on reading.
+func withoutEditorIDs(text string) string {
+	var draft map[string]any
+	if json.Unmarshal([]byte(text), &draft) != nil {
+		return text
+	}
+	var strip func(any)
+	strip = func(node any) {
+		condition, ok := node.(map[string]any)
+		if !ok {
+			return
+		}
+		delete(condition, "id")
+		if children, ok := condition["children"].([]any); ok {
+			for _, child := range children {
+				strip(child)
+			}
+		}
+	}
+	strip(draft["root"])
+	out, err := json.Marshal(draft)
+	if err != nil {
+		return text
+	}
+	return string(out)
 }
 
 // parseCard reads a card's own link: the card's link at one of its
@@ -1498,7 +1622,7 @@ func (site *siteMap) parseCard(path string, values url.Values) (siteState, error
 			if err != nil {
 				return siteState{}, err
 			}
-			where, err := site.whereOnly(changeable[1], values.Get(changeable[1]), nil)
+			where, err := site.whereOnly(changeable[1], values.Get(changeable[1]), nil, nil, values)
 			if err != nil {
 				return siteState{}, err
 			}

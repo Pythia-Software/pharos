@@ -53,7 +53,7 @@ export const toolsAnalysisCatalog: AnalysisCatalog = {
   trend: { metric: "calls", split: "tool_category" },
   rangeNote: "The tools rollup records whole local days, so the range snaps to whole days: a range starting mid-day counts that whole day.",
   // A minimum counts calls: a daily summary holds many.
-  samples: "calls",
+  samples: { unit: "calls", label: "Calls", sum: "call_count" },
   executable: (where, now) => toolDashboardWhere(where, timeBounds(where, time, now), new Date(now)),
   scatter: ["calls", "failures"],
 };

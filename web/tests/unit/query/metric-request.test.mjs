@@ -156,7 +156,7 @@ test(`HTTP stores receive bounded fetches that still observe caller cancellation
 });
 }
 
-test('only query rejection and deadline expiry skip automatic restoration',()=>{
+test('only query rejection and deadline expiry skip a default saved query',()=>{
  for(const status of [undefined,400,422])assert.equal(shouldSkipQueryOnRestore(new QueryRequestError('failed',status)),true);
  for(const status of [401,403,404,429,500,502,503,504])assert.equal(shouldSkipQueryOnRestore(new QueryRequestError('failed',status)),false);
  assert.equal(shouldSkipQueryOnRestore(new TypeError('Failed to fetch')),false);

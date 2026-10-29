@@ -41,7 +41,11 @@ export class PageErrorBoundary extends React.Component<{ children: React.ReactNo
   }
 }
 
-export function QueryRecovery({ busy, error, recovered, onRetry, onReset, identity }: { busy: boolean; error?: Error | null; recovered: boolean; onRetry: () => void; onReset: () => void; identity: string }) {
+// A slow or failed query offers Retry and Reset. Query Table keeps such a
+// query out of the last-used slot (persistLast: "succeeded"), so a bare reload
+// returns to the last query that loaded; a failed default saved query is
+// skipped instead (recovered) until Retry.
+export function QueryRecovery({ busy, error, recovered = false, onRetry, onReset, identity }: { busy: boolean; error?: Error | null; recovered?: boolean; onRetry: () => void; onReset: () => void; identity: string }) {
   const [slow, setSlow] = useState(false);
   useEffect(() => {
     setSlow(false);
@@ -51,8 +55,8 @@ export function QueryRecovery({ busy, error, recovered, onRetry, onReset, identi
   }, [busy, identity]);
   if (!slow && !error && !recovered) return null;
   return <div className="query-recovery" role="status">
-    <span>{error ? error.message : slow ? "This query is taking longer than expected." : "A previously failing query was skipped. Choose another saved view or reset the page."}</span>
-    {error ? <button type="button" onClick={onRetry}>Try again</button> : null}
+    <span>{error ? error.message : slow ? "This query is taking longer than expected." : "This table's default saved query failed last time, so it was skipped. Choose a saved view, or Try again to run the default."}</span>
+    {error || recovered ? <button type="button" onClick={onRetry}>Try again</button> : null}
     <button type="button" onClick={onReset}>Reset table</button>
     <ResetPage />
   </div>;

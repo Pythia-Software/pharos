@@ -3,8 +3,7 @@ import { earliestKey, nextPeriod, parseDay, periodBuckets, periodKey, periodLabe
 import { chartSpan, smoothingWhere, timeBounds, widenStart, withEnd, withStart } from "./chart-range";
 import { otherSeriesColor } from "./chart-colors";
 import { chartBucketsWithHistory, cumulativeBuckets, foldSeries, rollingBuckets, shareBuckets, type ChartBucket, type ChartSeries } from "./chart-series";
-import { withSlice } from "./chart-selection";
-import { aggregate, completeStart, partClause, partLabel, periodField, measureExpression, noSplit, normalizeAnalysis, rollingSumUnit, trendKind, unique, type AnalysisCatalog, type AnalysisState, type DerivedTotals, type ResolvedAnalysis } from "./dashboard-analysis-model";
+import { aggregate, completeStart, partClause, predicateCount, selectionWhere, partLabel, periodField, measureExpression, noSplit, normalizeAnalysis, rollingSumUnit, trendKind, unique, type AnalysisCatalog, type AnalysisState, type DerivedTotals, type ResolvedAnalysis } from "./dashboard-analysis-model";
 
 // Over time, driven by a catalog: any measure, over its own population, by
 // any breakdown, a component breakdown or none. The query asks for interval
@@ -73,9 +72,10 @@ export function trendQuery(catalog: AnalysisCatalog, input: AnalysisState, where
     : [{ id: "trend", ...aggregate(measure), groupBy, label: measure.label }]).map(clause => ({ ...clause, ...dateGrouping }));
   const supporting = measure.ratio ? [{ id: "trend:ratio", op: "sum" as const, expression: measureExpression(measure), groupBy, label: measure.label, ...dateGrouping }, ...clauses] : clauses;
   // The supporting query covers what is drawn: with whole periods, from the
-  // rounded start to the end of the last whole period, and a single-field
-  // breakdown's legend selection as a filter on its field.
-  const chosen = slice && state.selection?.values.length ? withSlice([], slice, { values: state.selection.values.map(value => value || null), excluded: state.selection.excluded }) : [];
+  // rounded start to the end of the last whole period, and the legend
+  // selection as a filter on the breakdown's fields, where the predicate
+  // budget allows it with room for whole periods' two bounds.
+  const chosen = breakdown && state.selection?.values.length ? selectionWhere(breakdown.fields, state.selection, predicateCount(run(unique([...where, ...population]))) + 2) ?? [] : [];
   let shown = [...where, ...chosen];
   if (state.completePeriods) {
     // From the first drawn bucket: a custom multi-day or multi-hour bucket
@@ -87,10 +87,9 @@ export function trendQuery(catalog: AnalysisCatalog, input: AnalysisState, where
   }
   return {
     query: { ...EMPTY_QUERY, where: run(unique([...requested, ...population])), aggregations: clauses },
-    // Pharos's grouping stages do not group a timestamp by hour, so an
-    // hourly timestamp trend's supporting query opens the records it draws,
-    // as a timestamp cycle's does.
-    supporting: { ...EMPTY_QUERY, where: run(unique([...shown, ...population])), ...hourly ? {} : { aggregations: supporting } },
+    // An hourly timestamp trend's clauses group by UTC hour, which the grouped
+    // query keys as a calendar group key (groupedDashboardQuery).
+    supporting: { ...EMPTY_QUERY, where: run(unique([...shown, ...population])), aggregations: supporting },
     range, requested, population, slice, normFrom, normTo,
     records: unique([...population, ...trendKind(measure) === "count" && measure.field ? [{ field: measure.field, op: "is_not_null" as const, value: "" }, { field: measure.field, op: "!=" as const, value: "" }] : []]),
   };

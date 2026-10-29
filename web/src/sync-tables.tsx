@@ -36,7 +36,8 @@ function SyncQueryTable({ table, label, onInspect }: { table: SyncTable; label: 
   const api = useQueryTable<SyncRecord>({ schema: table.schema, clientRows: table.rows, storage, syncUrl: false, onRefresh: () => { void window.pharosSync.refresh(); } });
   const ref = useRef(api); ref.current = api;
   const stableApi = useMemo(() => new Proxy({} as QueryTableApi<SyncRecord>, { get: (_target, key) => ref.current[key as keyof QueryTableApi<SyncRecord>] }), []);
-  const loading = api.loading || !api.restoration.ready || api.total === null;
+  // Loading until this exact query's rows have arrived (or failed).
+  const loading = api.execution?.rows !== "succeeded" && api.execution?.rows !== "failed";
   const fields = api.query.grouping ? api.schema!.fields : api.computed.catalogue;
   return <div className="sync-query-table pharos-query-page" role="region" aria-label={label}>
     <QueryBuilder compact api={stableApi} fields={fields} total={api.total} running={api.loading} defaultCollapsed />
