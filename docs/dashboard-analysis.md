@@ -113,9 +113,11 @@ what each offers and why.
   when one record is not one observation: a summed field or a field's
   distinct values, with the unit the controls name. Tools counts calls
   (`{ sum: "call_count" }`), so "ten calls" sums its daily summaries' calls.
-  Tokens and Cost and Carbon count conversations
-  (`{ distinct: "conversation_id" }`): a usage record is a slice of one
-  session's day.
+  Tokens and Cost and Carbon count top-level conversations
+  (`{ distinct: "root_conversation_id" }`, the Conversation unit's key, so a
+  delegated run is not another conversation): a usage record is a slice of
+  one session's day. A link saved before minimums counted conversations
+  reads its minimum as conversations too.
 - **Request** (optional, `request`). How a catalog's records reach the
   service, beside the dashboard's filters (`AnalysisRequest`):
   - `params` are query-string parameters every request carries
@@ -310,7 +312,10 @@ for a missing one), a combined one's are JSON arrays of them.
   with one AND branch per group, and an excluded one is one OR per group
   (each field differs or is missing). Every predicate counts toward Query
   Table's 100 per where list, the dashboard's filters included
-  (`selectionWhere`, `predicateCount`). A selection that would exceed them is
+  (`selectionWhere`, `predicateCount`), with room left for the one predicate
+  per key a bar's drill-down adds, since a link past the budget would drop
+  the bar's own keys; a drill-down past it anyway has none
+  (`analysisInspectQuery`). A selection that would exceed them is
   drawn from the groups the query returns instead, and the note says so and
   that one beyond the query's group limit is not drawn.
 - **Units.** A selection is of a breakdown group, so it maps through the
@@ -547,8 +552,14 @@ chart clause, and the supporting query that "View supporting query" opens.
     occurrences, and a collected card keeps its daily query and "Inspect
     daily totals" action. The parity tests hold each card's fold to its
     dashboard's native boxes, weekday by weekday, over the same days.
-  - **Range.** An hourly occurrence is one calendar group per hour of the
-    range, within `/query-v3`'s 10,000 groups: about 400 days.
+  - **Range.** A box or mean reads one calendar group per occurrence, within
+    `/query-v3`'s 10,000 groups: an hour profile allows 400 days, a weekday
+    profile 10,000. With a range start, a longer range does not run and
+    says "Choose a shorter range…" (`maxCycleSlots`, `cycleRangeError`);
+    without one, the service's group-budget error reads as the same limit.
+    A total reads only its 24 or 7 slots, whatever the range. The note
+    counts the whole hours or days in a bounded range, idle ones included
+    (a ratio's have no value but are still days of the range).
   - **Supporting query.** A timestamp cycle's opens the occurrences it
     summarises: grouped rows keyed by local hour or day (a calendar group
     key, `{ field, interval, timeZone }`, which the service advertises as
@@ -565,7 +576,7 @@ chart clause, and the supporting query that "View supporting query" opens.
   many were hidden. At unit level, each grouped row is one unit, so the
   threshold counts units. A records compare counts the catalog's `samples`
   where it has them: `{ min, sum: "call_count" }` for Tools' calls,
-  `{ min, distinct: "conversation_id" }` for usage's conversations. The
+  `{ min, distinct: "root_conversation_id" }` for usage's conversations. The
   supporting query keeps the same groups with a group filter on that column.
   Distributions take row minimums only, as Query Table requires, so a
   distribution counts its plotted records or units. Pharos's Go fast paths
@@ -892,8 +903,10 @@ The input to phase 4. Every other card in the parity tables above matches.
 | `session-human-output` | A scatter over `conversation_activity` (estimated human text tokens against output tokens per conversation). No catalog reads that dataset; it opens all words by provider. |
 
 Caveats on matched cards:
-- `writing-hours` is all-time on the card; an hour cycle allows 400 days, so
-  an older library must choose a shorter range.
+- `writing-hours` is all-time on the card and opens an hour cycle's total,
+  which reads 24 slots whatever the range. An hour cycle's distribution or
+  mean allows 400 days, so an older library must choose a shorter range for
+  them.
 - `parallel-hours` groups the dataset's `hour_of_day`, the service's local
   hour; the cycle groups by the viewer's local hour, which agree on the Mac
   that recorded them. The cycle counts complete hours only, so the hour
