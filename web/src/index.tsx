@@ -896,20 +896,28 @@ function FindMatchCell({ row }: { row: Row }) {
 // The older Human messages table runs a message search; its definition is host
 // query state (message_query). A cursor continues one search's batches, so it
 // belongs to that search and stays out of the definition (message_cursor).
-const messageHost: SurfaceHost = { query: messageHostQuery, find: messageFind };
+// Each request takes the cursor only when it continues the request's own
+// search, so a request never pairs one search with another's cursor.
 function urlMessageSearch(): string {
   const token = new URLSearchParams(location.search).get("message_query");
   try { return token ? messageFind(messageHostQuery.normalize!({ version: 1, params: { message_query: [token] } })) : ""; } catch { return ""; }
 }
 const urlMessageCursor = () => ({ search: urlMessageSearch(), value: new URLSearchParams(location.search).get("message_cursor") ?? "" });
+type MessageCursor = { search: string; value: string };
 function UserMessageSurface({ header, messageView }: { messageView: MessageView; header: (api: QueryTableApi<Row>, searching: boolean) => React.ReactNode }) {
   if (shared) return <QuerySurface dataset="writing_messages" messageView={messageView} header={api => header(api, false)} />;
   const [hostState, setHostState] = useState<HostQueryState>();
-  const host = useMemo((): SurfaceHost => ({ ...messageHost, onState: setHostState }), []);
+  const [cursor, setCursorState] = useState<MessageCursor>(urlMessageCursor);
+  const cursorRef = useRef(cursor);
+  const setCursor = (next: MessageCursor) => { cursorRef.current = next; setCursorState(next); };
+  const host = useMemo((): SurfaceHost => ({ query: messageHostQuery, onState: setHostState, find: state => {
+    const search = messageFind(state), current = cursorRef.current;
+    return search && current.value && current.search === search ? `${search}&${new URLSearchParams({ find_cursor: current.value })}` : search;
+  } }), []);
   const search = messageFind(hostState);
-  const [cursor, setCursor] = useState(urlMessageCursor);
   const activeCursor = search && cursor.search === search ? cursor.value : "";
-  const restart = () => setCursor({ search: "", value: "" });
+  // A cursor change runs the same definition again, from its first page.
+  const rerun = (api: QueryTableApi<Row>, next: MessageCursor) => { setCursor(next); if (api.query.offset) api.setQuery(previous => ({ ...previous, offset: 0 })); else api.refresh(); };
   const [found, setFound] = useState<FindSummary | null>(null);
   useEffect(() => {
     const restore = () => { if (datasetIsVisible("writing_messages")) setCursor(urlMessageCursor()); };
@@ -917,9 +925,9 @@ function UserMessageSurface({ header, messageView }: { messageView: MessageView;
   }, []);
   useEffect(() => { if (datasetIsVisible("writing_messages")) updateURI("message_cursor", activeCursor); }, [activeCursor]);
   useEffect(() => setFound(null), [search, activeCursor]);
-  return <QuerySurface dataset="writing_messages" host={host} messageView={messageView} header={api => header(api, !!search)} find={activeCursor ? new URLSearchParams({ find_cursor: activeCursor }).toString() : ""} onFind={setFound} controls={(api, builder) => <>
-    <MessageSearchClause api={api} layout={builder} onSearch={restart} />
-    {search && found?.search ? <div className="library-find-status" role="status"><p>{found.search.complete ? "All eligible messages checked." : "Partial search batch; more messages may match."} Table filters and metrics apply to the matching messages in this batch. Ordering is within this batch.</p><p>{found.search.elapsed_ms} ms · {found.search.candidates.toLocaleString()} candidates checked{found.search.skipped_oversize ? ` · ${found.search.skipped_oversize} oversized messages skipped` : ""}.</p>{found.search.stop_message ? <p>{found.search.stop_message}</p> : null}{found.search.next_cursor ? <button type="button" onClick={() => setCursor({ search, value: found.search!.next_cursor })}>Next message search batch</button> : null}{withheldBatch(found.search) ? <button type="button" onClick={() => api.refresh()}>Retry this batch</button> : null}{activeCursor ? <button type="button" onClick={restart}>Restart message search</button> : null}</div> : null}
+  return <QuerySurface dataset="writing_messages" host={host} messageView={messageView} header={api => header(api, !!search)} onFind={setFound} controls={(api, builder) => <>
+    <MessageSearchClause api={api} layout={builder} onSearch={() => setCursor({ search: "", value: "" })} />
+    {search && found?.search ? <div className="library-find-status" role="status"><p>{found.search.complete ? "All eligible messages checked." : "Partial search batch; more messages may match."} Table filters and metrics apply to the matching messages in this batch. Ordering is within this batch.</p><p>{found.search.elapsed_ms} ms · {found.search.candidates.toLocaleString()} candidates checked{found.search.skipped_oversize ? ` · ${found.search.skipped_oversize} oversized messages skipped` : ""}.</p>{found.search.stop_message ? <p>{found.search.stop_message}</p> : null}{found.search.next_cursor ? <button type="button" onClick={() => rerun(api, { search, value: found.search!.next_cursor })}>Next message search batch</button> : null}{withheldBatch(found.search) ? <button type="button" onClick={() => api.refresh()}>Retry this batch</button> : null}{activeCursor ? <button type="button" onClick={() => rerun(api, { search: "", value: "" })}>Restart message search</button> : null}</div> : null}
   </>} />;
 }
 
