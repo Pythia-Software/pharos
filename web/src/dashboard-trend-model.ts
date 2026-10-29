@@ -74,8 +74,8 @@ export function trendQuery(catalog: AnalysisCatalog, input: AnalysisState, where
   // The supporting query covers what is drawn: with whole periods, from the
   // rounded start to the end of the last whole period, and the legend
   // selection as a filter on the breakdown's fields, where the predicate
-  // budget allows it.
-  const chosen = breakdown && state.selection?.values.length ? selectionWhere(breakdown.fields, state.selection, predicateCount(run(unique([...where, ...population])))) ?? [] : [];
+  // budget allows it with room for whole periods' two bounds.
+  const chosen = breakdown && state.selection?.values.length ? selectionWhere(breakdown.fields, state.selection, predicateCount(run(unique([...where, ...population]))) + 2) ?? [] : [];
   let shown = [...where, ...chosen];
   if (state.completePeriods) {
     // From the first drawn bucket: a custom multi-day or multi-hour bucket

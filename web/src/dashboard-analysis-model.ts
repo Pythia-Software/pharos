@@ -4,7 +4,7 @@ import { chartPeriods, validPeriodCount, type ChartPeriod } from "./chart-period
 import { validChartDisplay, validRollingPeriods, type ChartDisplay } from "./chart-series";
 import { isSliceTerm, readSlice, validChartPresentation, withSlice, type SliceSelection } from "./chart-selection";
 import { timeBounds, withEnd } from "./chart-range";
-import { cycleBoxes, cycleFrame, cycleGroups, cycleSamples, hoursOfDay, idleIsZero, weekdays, type CalendarCycle, type CycleKey } from "./weekday-cover";
+import { cycleBoxes, cycleFrame, cycleGroups, cycleRangeError, cycleSamples, hoursOfDay, idleIsZero, maxCycleSlots, weekdays, type CalendarCycle, type CycleKey } from "./weekday-cover";
 
 // A dashboard analysis is a view over one catalog: which records count as
 // one observation (the unit), which measure they carry, and how groups of
@@ -456,8 +456,9 @@ export type AnalysisQuery = {
   // A cycle Query Table computes itself (hour of day or day of week over a
   // timestamp): the chart draws its result as returned, and a slot opens
   // its occurrences' records. Otherwise cycleResult folds hourly or daily
-  // totals.
-  native?: boolean;
+  // totals. occurrences counts the whole hours or days in a bounded range;
+  // problem says why the query does not run (too long a range).
+  native?: boolean; occurrences?: number; problem?: string;
   // A share is of every group in the population the filters define. A
   // legend selection (the state's selection) only chooses which groups are
   // drawn, so it never enters the executed query and never changes a
@@ -520,8 +521,11 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
   const sourceWhere = unique([...where, ...implied]);
   // The selected groups as a filter on fields, added to a where list holding
   // base: a record filter on the breakdown's fields, or a group filter on the
-  // unit's. Undefined when it would exceed the list's predicate budget.
-  const stated = (fields: string[], base: WhereTerm[]) => selection && fields.length ? selectionWhere(fields, selection, predicateCount(base)) : undefined;
+  // unit's. A bucket's drill-down adds one predicate per key to the same
+  // list, so those stay free. Undefined when it would exceed the list's
+  // predicate budget.
+  const drilled = unit ? state.view === "scatter" ? new Set([...groupFields, ...[unit.key].flat()]).size : groupFields.length : recordFields.length;
+  const stated = (fields: string[], base: WhereTerm[]) => selection && fields.length ? selectionWhere(fields, selection, predicateCount(base) + drilled) : undefined;
   // A threshold counts what is plotted: a distribution drops missing values
   // before grouping (records) or as a group filter (units).
   const valued: WhereTerm[] = !unit && state.view === "distribution" ? [{ field: measure.value!, op: "is_not_null", value: "" }] : [];
@@ -619,17 +623,36 @@ function timestampCycle(catalog: AnalysisCatalog, state: ResolvedAnalysis, field
   const bounds = timeBounds(where, catalog.time, now), end = metricDateFloor(Math.min(bounds.to?.getTime() ?? now, now), per, zone);
   const whole = withEnd(completeStart(where, catalog.time, zone, now, per), catalog.time, new Date(end));
   const supporting = groupedRecords(whole, [{ field, interval: per, timeZone: zone }], [summary("analysis_value", measure), ...ratioParts(measure)], [], field);
-  return { query: { ...EMPTY_QUERY, where, aggregations: [clause] }, clause, grouped: false, native: true, supporting };
+  // The whole hours or days in the range, which the note counts: idle ones
+  // too, though a ratio's have no value. A box or mean reads one calendar
+  // group per occurrence, so past maxCycleSlots of them the query would
+  // exceed the service's group budget; it does not run.
+  let occurrences: number | undefined;
+  if (bounds.from) {
+    const from = bounds.from.getTime(), floor = metricDateFloor(from, per, zone);
+    occurrences = 0;
+    for (let start = floor < from ? metricDateNext(floor, per, zone) : floor; start < end && occurrences <= maxCycleSlots[state.cycle]; start = metricDateNext(start, per, zone)) occurrences++;
+  }
+  const problem = state.reduce !== "total" && (occurrences ?? 0) > maxCycleSlots[state.cycle] ? cycleRangeError(state.cycle) : undefined;
+  return { query: { ...EMPTY_QUERY, where, aggregations: problem ? [] : [clause] }, clause, grouped: false, native: true, supporting, ...occurrences === undefined || problem ? {} : { occurrences }, ...problem ? { problem } : {} };
 }
 
 // A native cycle's result, checked as the fold checks its totals: complete,
-// with every slot's value. slots counts the whole hours or days its boxes
-// and means summarise (none for totals); observations, the records.
-export function nativeCycleResult(result: AggregationResultEntry) {
+// with every slot's value. slots counts the whole hours or days in the range
+// (analysisQuery's occurrences); without a range start, the occurrences
+// Query Table counted, which leave out a ratio's idle ones, so only where
+// idle ones count as zero. observations counts the records. A range whose
+// start was not known up front can still exceed the service's group budget;
+// that reads as the range limit.
+export function nativeCycleResult(analysis: AnalysisQuery, result: AggregationResultEntry) {
+  const cycle: CalendarCycle = analysis.clause.dateGrouping?.interval === "hourOfDay" ? "hour" : "weekday";
   if (result.error || result.coverage === "partial" || result.hiddenGroups || (result.groupCount ?? 0) > result.buckets.length || result.buckets.some(bucket => bucket.error)) {
-    throw new Error(result.error ?? result.buckets.find(bucket => bucket.error)?.error ?? "Complete totals are required for an hour or weekday cycle. Choose a shorter range.");
+    const error = result.error ?? result.buckets.find(bucket => bucket.error)?.error;
+    throw new Error(!error || /exceeds|budget|Occurrences need every interval/i.test(error) ? cycleRangeError(cycle) : error);
   }
-  return { result, slots: result.buckets.reduce((n, bucket) => n + (bucket.occurrences ?? 0), 0), observations: result.buckets.reduce((n, bucket) => n + bucket.count, 0) };
+  const counted = result.buckets.reduce((n, bucket) => n + (bucket.occurrences ?? 0), 0);
+  const slots = analysis.occurrences ?? (analysis.clause.dateGrouping?.occurrence && idleIsZero(analysis.clause) ? counted : undefined);
+  return { result, slots, observations: result.buckets.reduce((n, bucket) => n + bucket.count, 0) };
 }
 
 // The predicates a where list holds, every OR branch's included: Query
@@ -691,12 +714,18 @@ function groupedRecords(where: WhereTerm[], keys: GroupKey[], summaries: Summary
 // cycle slot opens the records of its whole hours or days in the range, as
 // ranges with one OR per gap; without a start, or with more occurrences than
 // the predicate budget holds, it has none (null), nor has a folded slot.
+// A query past the predicate budget in any where list has none: a link
+// would drop its last predicates, the bucket's own keys, and open more.
 export function analysisInspectQuery(analysis: AnalysisQuery, bucket: AggregationBucket, clause: AggregationClause, schema: FieldSchema, view: AnalysisView): QueryState | null {
   if (view === "cycle" && !analysis.native) return null;
-  if (!analysis.grouped) return inspectBucketQuery({ ...EMPTY_QUERY, where: analysis.query.where }, bucket, clause, schema);
   const { aggregations: _, ...units } = analysis.query;
-  return inspectBucketQuery(units, bucket, clause, schema);
+  const opened = inspectBucketQuery(analysis.grouped ? units : { ...EMPTY_QUERY, where: analysis.query.where }, bucket, clause, schema);
+  return opened && withinBudget(opened) ? opened : null;
 }
+// Whether every where list of a query, its grouping source's included, fits
+// Query Table's predicate budget, which links and normalization enforce by
+// dropping what is past it.
+export const withinBudget = (query: QueryState) => predicateCount(query.where) <= MAX_WHERE_CLAUSES && (!query.grouping || predicateCount(query.grouping.source.where) <= MAX_WHERE_CLAUSES);
 
 // Fold a cycle view's native hourly or daily totals into 24 local hours or 7
 // weekdays. Every complete slot in [from, to) is an observation, idle ones

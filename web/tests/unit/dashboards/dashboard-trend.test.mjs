@@ -473,13 +473,33 @@ test("a combined selection filters the executed query where a filter can state i
   const trend = trendQuery(catalog, { metric: "tokens", split: "provider_model", period: "day", selection: { values: many, excluded: false } }, range, { now });
   assert.ok(trend.supporting.where.some(item => JSON.stringify(item) === JSON.stringify(term)));
   assert.ok(!trend.query.where.some(item => item.any), "never the executed query: the key keeps every series");
-  // Every predicate counts toward the query's 100: a selection that would
-  // exceed them is drawn from the returned groups, and the note says so.
-  const most = Array.from({ length: 49 }, (_, index) => JSON.stringify(["claude", `model-${index}`]));
-  assert.equal(selectionWhere(["provider", "model_family"], { values: most, excluded: false }, range.length + 1), undefined);
-  const late = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider_model", selection: { values: most, excluded: false } }, [...range, { field: "effort", op: "=", value: "high" }], { now });
-  assert.ok(late.selection.late && !late.query.where.some(item => item.any));
-  assert.equal(late.supporting.grouping.source.where.length, 3, "nor can the supporting query state it");
+  // Every predicate counts toward the query's 100, and a bar's drill-down
+  // adds one per key: a selection is a filter only while the drill-down
+  // still fits, so a link never drops the bar's own keys.
+  const pairs$ = count => Array.from({ length: count }, (_, index) => JSON.stringify(["claude", `m${index}`]));
+  const inspect = analysis => analysisInspectQuery(analysis, { keys: ["claude", "m3"], value: 1, count: 1 }, analysis.clause, schema, "compare");
+  const fits = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider_model", selection: { values: pairs$(48), excluded: false } }, range, { now });
+  assert.ok(!fits.selection.late);
+  const bar = inspect(fits), linked = core.decodeQueryStrict(core.encodeQuery(bar));
+  assert.equal(bar.where.reduce((n, item) => n + core.predicatesOf(item).length, 0), 100);
+  assert.deepEqual(linked.where, bar.where, "the drill-down survives its link");
+  assert.ok(linked.where.some(item => item.field === "model_family" && item.value === "m3"));
+  // 49 pairs and two bounds are 100 predicates: no room for the bar's keys.
+  const late = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider_model", selection: { values: pairs$(49), excluded: false } }, range, { now });
+  assert.ok(late.selection.late && !late.query.where.some(item => item.any), "drawn from the returned groups, and the note says so");
+  assert.equal(late.supporting.grouping.source.where.length, 2, "nor can the supporting query state it");
+  const lateBar = inspect(late);
+  assert.deepEqual(core.decodeQueryStrict(core.encodeQuery(lateBar)).where, [...range, { field: "provider", op: "=", value: "claude" }, { field: "model_family", op: "=", value: "m3" }]);
+  // Units: the group filter leaves room for the bar's keys beside the value filter.
+  const units = analysisQuery(catalog, { view: "compare", unit: "conversation", metric: "tokens", split: "provider_model", reduce: "mean", selection: { values: pairs$(49), excluded: false } }, range, { now });
+  assert.ok(units.selection.late, "48 pairs, one value filter and two keys would be 99; 49 pairs are 101");
+  const unitFits = analysisQuery(catalog, { view: "compare", unit: "conversation", metric: "tokens", split: "provider_model", reduce: "mean", selection: { values: pairs$(48), excluded: false } }, range, { now });
+  const group = inspect(unitFits);
+  assert.deepEqual(core.decodeQueryStrict(core.encodeQuery(group)).where, group.where);
+  assert.ok(group.where.some(item => item.field === "root_model_family" && item.value === "m3"));
+  // A drill-down that would exceed the budget anyway has none.
+  const over = { ...fits, query: { ...fits.query, where: [...fits.query.where, { field: "effort", op: "=", value: "high" }] } };
+  assert.equal(inspect(over), null);
 });
 
 test("a derived component computes each period's parts from its input totals, before smoothing and shares", () => {
