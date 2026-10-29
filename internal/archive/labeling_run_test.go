@@ -1321,6 +1321,15 @@ func TestLabelingResumeChecksTheContract(t *testing.T) {
 	if err := runLabelingJob(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "no longer match") || fakeCalls(t, calls) != 0 {
 		t.Fatalf("changed item = %v", err)
 	}
+	// A request held for a suspicion goes back to pending at the run start:
+	// its items are checked like any other unsent item.
+	execTx(t, db, `UPDATE requests SET state='`+requestWaitingSuspicion+`' WHERE id IN (SELECT request_id FROM request_items WHERE item_id='i_b')`)
+	if err := runLabelingJob(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "no longer match") || fakeCalls(t, calls) != 0 {
+		t.Fatalf("changed held item = %v", err)
+	}
+	if got := labelingRows(t, db, `SELECT DISTINCT q.state FROM requests q JOIN request_items i ON i.request_id=q.id WHERE i.item_id='i_b'`); len(got) != 1 || got[0]["state"] != requestWaitingSuspicion {
+		t.Fatalf("held request = %v", got)
+	}
 }
 
 func TestLabelingStopBetweenLeaseAndSubmit(t *testing.T) {

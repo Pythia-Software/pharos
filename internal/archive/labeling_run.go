@@ -440,7 +440,8 @@ var labelingLeaseHook = func() error { return nil }
 // verifyLabelingContract refuses to resume a job whose frozen contract this
 // build or dataset no longer produces: the schema, taxonomy and prompt
 // template hashes stored at creation, and every unsent item's contract
-// hash.
+// hash, those of requests held for a suspicion included (they return to
+// pending when the run starts).
 func verifyLabelingContract(db *sql.DB, job labelingJob) error {
 	schema, err := labelingSchemaJSON()
 	if err != nil {
@@ -459,7 +460,7 @@ func verifyLabelingContract(db *sql.DB, job labelingJob) error {
 	}
 	rows, err := db.Query(`SELECT i.item_id,i.contract_hash,u.sender_role,u.channel,u.context_prompt,u.context_excerpt,t.text FROM requests q
 		JOIN request_items i ON i.request_id=q.id LEFT JOIN items t ON t.id=i.item_id LEFT JOIN units u ON u.id=t.unit_id
-		WHERE q.job=? AND q.state IN ('pending','leased','stopped') AND i.blocked IS NULL`, job.Name)
+		WHERE q.job=? AND q.state IN ('pending','leased','stopped','waiting_suspicion') AND i.blocked IS NULL`, job.Name)
 	if err != nil {
 		return err
 	}
