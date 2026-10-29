@@ -1,8 +1,9 @@
 # Query Table: native Detail for grouped query results
 
 **Delivered in Query Table 0.9.7** as native Detail for grouped results
-(`api.itemDetails` with `subject: "group"`). Pharos adopts it in a later
-change; grouped tables keep their Records drill-down until then.
+(`api.itemDetails` with `subject: "group"`). Pharos adopted it on Query Table
+0.9.7: grouped tables end with their link summaries, then Detail, and keep
+their Records drill-down.
 
 The original assignment below describes the **0.9.5** implementation.
 

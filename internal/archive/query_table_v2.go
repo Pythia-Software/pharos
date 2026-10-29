@@ -764,6 +764,20 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 	if params.Get("record_search") != "" {
 		return queryV2ExecutionResult{}, fmt.Errorf("record keyword search requires query-v3")
 	}
+	var hostStates []json.RawMessage
+	if rowRequest != nil {
+		hostStates = append(hostStates, rowRequest.HostState)
+	}
+	if metrics != nil {
+		hostStates = append(hostStates, metrics.HostState)
+	}
+	for _, raw := range hostStates {
+		if declared, err := recordKeywordHostState(dataset, raw); err != nil {
+			return queryV2ExecutionResult{}, err
+		} else if declared {
+			return queryV2ExecutionResult{}, fmt.Errorf("record keyword search requires query-v3")
+		}
+	}
 	if dataset == "usage" {
 		var err error
 		ctx, err = withCarbonPreferences(ctx, params.Get("carbon_settings"))

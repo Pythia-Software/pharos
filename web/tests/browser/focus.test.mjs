@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { defaultApi, workID, eventStream, busyStatus } from "./fixtures.mjs";
-import { EMPTY_QUERY, encodeQuery } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 test('Library setup keeps focus in its modal and returns to the choice after cancelling a flow', {skip}, async t => {
   let folderSelections=0;
@@ -981,6 +981,16 @@ test("MCP call details take focus, keep it and return it on Escape", { skip }, a
   await press(opener);
   const dialog = page.getByRole("dialog");
   await dialog.getByText("Arguments (sanitized)", { exact: true }).waitFor();
+  await holdsFocus(page, dialog, opener);
+});
+
+test("grouped results' Detail takes focus, keeps it and returns it on Escape", { skip }, async t => {
+  const grouped = withGroupingKeys({ ...EMPTY_QUERY, select: [{ field: "tool_name" }] }, ["tool_name"]);
+  const { page } = await open(t, { url: `/analyze?${new URLSearchParams({ analyze_mode: "query", analyze_data: "tool_calls", q_tool_calls: encodeQuery(grouped) })}`, ready: ".usage-workspace-table .qt-row" });
+  const opener = page.locator(".usage-workspace-table").getByRole("button", { name: /^Open .+ in modal$/ }).first();
+  await press(opener);
+  const dialog = page.getByRole("dialog", { name: "Group details" });
+  await dialog.waitFor();
   await holdsFocus(page, dialog, opener);
 });
 

@@ -404,6 +404,32 @@ func TestQueryV3RecordKeywordsUseIndividualRecordsBeforeGrouping(t *testing.T) {
 			t.Fatalf("older protocol ignored keywords: %d %s", response.Code, response.Body.String())
 		}
 	}
+	// Analyze's requests carry the keyword's definition as host query state;
+	// record_search, compiled from it, must agree with it.
+	declared := q
+	declared.HostState = json.RawMessage(`{"version":1,"params":{"record_tool_calls":["{\"field\":\"command\"}"]}}`)
+	if got, _, err := s.executeQueryV3(t.Context(), "tool_calls", search, schema, declared); err != nil || got.Total != 2 {
+		t.Fatalf("host state with its compiled search: %+v %v", got, err)
+	}
+	none := q
+	none.HostState = json.RawMessage(`{"version":1,"params":{}}`)
+	for _, mismatch := range []struct {
+		request qt.QueryRequestV3
+		params  url.Values
+	}{{declared, url.Values{}}, {none, search}, {qt.QueryRequestV3{HostState: json.RawMessage(`{"version":"x"}`)}, search}} {
+		if _, _, err := s.executeQueryV3(t.Context(), "tool_calls", mismatch.params, schema, mismatch.request); err == nil {
+			t.Fatalf("ran a keyword definition and search that disagree: %s %v", mismatch.request.HostState, mismatch.params)
+		}
+	}
+	if got, _, err := s.executeQueryV3(t.Context(), "tool_calls", url.Values{}, schema, none); err != nil || got.Total != 5 {
+		t.Fatalf("host state without a keyword: %+v %v", got, err)
+	}
+	for _, path := range []string{"/api/query/tool_calls/rows-v2", "/api/query/tool_calls/metrics"} {
+		response := apiCall(t, s, config.APIToken, http.MethodPost, path, map[string]any{"hostState": json.RawMessage(declared.HostState)})
+		if response.Code != 400 || !strings.Contains(response.Body.String(), "requires query-v3") {
+			t.Fatalf("older protocol ran a keyword definition without its search: %d %s", response.Code, response.Body.String())
+		}
+	}
 	for _, spec := range []recordSearchSpec{{Field: "command", Query: "[", Mode: "regex"}, {Field: "duration_ms", Query: "cache"}, {Field: "command", Query: "cache", Where: &textQuery{Op: "term", Text: "cache"}}} {
 		if _, _, err := s.executeQueryV3(t.Context(), "tool_calls", params(spec), schema, q); err == nil {
 			t.Fatalf("accepted invalid record search: %+v", spec)

@@ -65,6 +65,44 @@ func init() {
 	})
 }
 
+// recordKeywordHostState reports whether a request's host query state holds
+// a record keyword clause (record_<dataset>). Analyze registers the clause as
+// Query Table host state, which every request from the table carries. The
+// browser compiles the clause into record_search, which this service
+// validates and runs; the host state itself is the editor's definition and is
+// not interpreted here. An absent host state (other clients, cards, previews)
+// declares nothing.
+func recordKeywordHostState(dataset string, raw json.RawMessage) (bool, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return false, nil
+	}
+	var state qt.HostQueryState
+	if err := json.Unmarshal(raw, &state); err != nil || state.Version < 1 {
+		return false, fmt.Errorf("this query's host state could not be read")
+	}
+	return len(state.Params["record_"+dataset]) > 0, nil
+}
+
+// checkRecordKeywordHostState refuses a request whose host state declares a
+// keyword clause without record_search, or record_search without a declared
+// clause, so a definition with a keyword clause never runs as the broader
+// query without it. It checks presence only: comparing the two would need the
+// editor's compiler (text-search-model.ts) here, and record_search, which the
+// service validates in full, is what runs.
+func checkRecordKeywordHostState(dataset string, raw json.RawMessage, values url.Values) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	declared, err := recordKeywordHostState(dataset, raw)
+	if err != nil {
+		return err
+	}
+	if declared != (values.Get("record_search") != "") {
+		return fmt.Errorf("this query's keyword filter arrived without its compiled search, or the search without the filter; reload the page")
+	}
+	return nil
+}
+
 func (s *Server) recordSearch(ctx context.Context, dataset string, values url.Values) (*recordSearchPlan, error) {
 	raw := values.Get("record_search")
 	if raw == "" {

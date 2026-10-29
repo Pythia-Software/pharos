@@ -6,6 +6,8 @@ export class QueryRequestError extends Error {
   constructor(message: string, readonly status?: number) { super(message); }
 }
 
+// Only query rejection or the client deadline implicates the query itself.
+// Offline, authentication and service failures say nothing about it.
 export function shouldSkipQueryOnRestore(error: unknown): boolean {
   return error instanceof QueryRequestError && (error.status === undefined || [400, 422].includes(error.status));
 }

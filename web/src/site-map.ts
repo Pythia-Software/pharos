@@ -18,6 +18,8 @@ import { findingsLists, findingTabs } from "./findings-route";
 import { delegationDirections, delegationModes, delegationRouteValues, delegationScopes, delegationTabs, defaultDelegationSort } from "./delegation-route";
 import { emptyTextSearch, newRule, ruleLabels, scopes } from "./text-search-model";
 import { freshSearch } from "./search-composer-state";
+import { libraryHostParameters } from "./host-query-state";
+import { recordKeywordParameter } from "./record-keyword-model";
 import { appSections, findingsPages, tl1Pages } from "./app-navigation-model";
 import { idSources, legacyRoutes, optionalSettingsPages, pageDescriptions, readerParams, siteSections } from "./site-routes";
 import libraryDocument from "../../schemas/library.schema.json";
@@ -563,7 +565,7 @@ export function settingsPages(...html: string[]) {
 // requires: options this one needs, each given, or with values: holding (or
 // defaulting to) one of them. conflicts: options a link cannot give with it.
 type Requirement = { option: string; values?: Scalar[] };
-type Option = { name: string; param: string; key?: string; end_param?: string; kind: string; values?: Array<{ value: Scalar; label?: string; description?: string }>; default?: unknown; requires?: Requirement[]; conflicts?: string[]; id?: string; description?: string };
+type Option = { name: string; param: string; key?: string; end_param?: string; kind: string; values?: Array<{ value: Scalar; label?: string; description?: string }>; default?: unknown; requires?: Requirement[]; conflicts?: string[]; id?: string; description?: string; host_params?: string[] };
 const needs = (option: string, ...values: Scalar[]): Requirement => ({ option, ...values.length ? { values } : {} });
 type SiteNode = { ribbon?: unknown; path: string; title: string; description?: string; route: string; fixed?: Record<string, string>; options?: Option[]; children?: string[]; dataset?: string; dashboard?: string; cards?: boolean; settings?: string; builder?: string };
 const values = (entries: ReadonlyArray<readonly [string, string]> | ReadonlyArray<string>, describe?: (value: string) => string | undefined) =>
@@ -589,7 +591,10 @@ export function buildSiteMap(inputs: SiteInputs) {
   const cards = queryRecipes.filter(recipe => !recipe.retired).map(recipe => siteCard(recipe, clock));
   const topics = Object.keys(usageTopics) as UsageTopic[];
   const dashboards = Object.fromEntries(topics.map(topic => [topic, dashboardFacts(topic)]));
-  const whereOption = (param: string, dataset: string): Option => ({ name: "filters", param, kind: "where", description: `Where terms on ${dataset}'s filterable fields (datasets.${dataset}.fields), encoded with encodeQuery as a where-only query. Browse <node>/filters/<field> for one field.` });
+  // host_params: the parameters the page's table keeps as host query state
+  // (host-query-state.ts). The app's query tokens carry that state, mirrored
+  // in these parameters; a link's token may carry it only as they say it.
+  const whereOption = (param: string, dataset: string, hostParams?: string[]): Option => ({ name: "filters", param, kind: "where", description: `Where terms on ${dataset}'s filterable fields (datasets.${dataset}.fields), encoded with encodeQuery as a where-only query. Browse <node>/filters/<field> for one field.`, ...(hostParams ? { host_params: hostParams } : {}) });
 
   for (const section of siteSections) {
     const title = inputs.titles[section.route === "/" ? "" : section.path] ?? (section.path === "work" ? "Work" : sectionTitle(section.path)) ?? fail(`no title for ${section.path}`);
@@ -619,7 +624,7 @@ export function buildSiteMap(inputs: SiteInputs) {
         { name: "search", param: "search", kind: "text", requires: [needs("kind", "file", "url")], description: "The file path or URL text, for kind file or url." },
         { name: "case", param: "case", kind: "boolean", values: [{ value: "1" }], requires: [needs("kind", "file", "url")], description: "Case-sensitive file or URL search." },
         { name: "view", param: "view", kind: "enum", values: values(["table", "conversation"]), default: "table", description: "The default, table, is left out of the link." },
-        whereOption("q_library", "library"),
+        whereOption("q_library", "library", libraryHostParameters),
         windowOption("window_days", rollingWindowDays, "A rolling window on library.window_field, written as window_mode=relative, window_days, window_field and window_dataset=library."),
       ];
       const draft = emptyTextSearch(), rule = { ...newRule(), id: "rule-1" };
@@ -643,7 +648,7 @@ export function buildSiteMap(inputs: SiteInputs) {
       for (const dataset of Object.keys(usageDatasets) as UsageDataset[]) {
         const page = add({ path: `analyze/query/${dataset}`, title: usageDatasets[dataset].label, description: usageDatasets[dataset].description, route: "/analyze",
           fixed: { analyze_mode: "query", analyze_topic: usageDatasetTopics[dataset], analyze_data: dataset }, dataset, builder: "queryURL",
-          options: [whereOption(`q_${dataset}`, dataset), ...rollingWindowField(dataset) ? [windowOption("window_days", rollingWindowDays, `A rolling window on ${dataset}.window_field: its terms appended to the where terms, and window_mode=relative, window_days, window_field and window_dataset.`)] : []] });
+          options: [whereOption(`q_${dataset}`, dataset, [recordKeywordParameter(dataset)]), ...rollingWindowField(dataset) ? [windowOption("window_days", rollingWindowDays, `A rolling window on ${dataset}.window_field: its terms appended to the where terms, and window_mode=relative, window_days, window_field and window_dataset.`)] : []] });
         query.children!.push(page.path);
       }
     }

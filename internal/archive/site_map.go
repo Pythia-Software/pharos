@@ -91,6 +91,9 @@ type siteOption struct {
 		Values []any  `json:"values"`
 	} `json:"requires"`
 	Conflicts []string `json:"conflicts"`
+	// HostParams are the parameters a where option's table keeps as host
+	// query state, which the app's query tokens carry (host-query-state.ts).
+	HostParams []string `json:"host_params"`
 }
 
 type siteValue struct {
@@ -931,7 +934,8 @@ func (site *siteMap) expandMembers(members map[string]any) map[string]any {
 }
 
 // sameQueryToken compares two query tokens by their decoded state, since
-// deflate bytes differ between implementations.
+// deflate bytes differ between implementations. An empty host query state
+// (which tables with host clauses write as their default) is no state.
 func sameQueryToken(a, b string) bool {
 	left, err := qt.DecodeQueryLink(a)
 	if err != nil {
@@ -940,6 +944,11 @@ func sameQueryToken(a, b string) bool {
 	right, err := qt.DecodeQueryLink(b)
 	if err != nil {
 		return false
+	}
+	for _, query := range []*qt.LinkQuery{&left, &right} {
+		if query.HostState != nil && query.HostState.Version >= 1 && len(query.HostState.Params) == 0 {
+			query.HostState = nil
+		}
 	}
 	return compactJSON(left) == compactJSON(right)
 }
