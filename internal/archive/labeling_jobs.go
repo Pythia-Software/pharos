@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/rand/v2"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -140,12 +141,12 @@ func openLabelingLedger(dir string) (*sql.DB, error) {
 	// busy timeout. A finished dataset leaves prepare in rollback-journal mode;
 	// the first ledger writer switches it.
 	db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String()+
-		"?_pragma=busy_timeout(60000)&_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)&_txlock=immediate")
+		"?_pragma=busy_timeout(60000)&_pragma=synchronous(FULL)&_txlock=immediate")
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(labelingJobSQL); err != nil {
+	if err := labelingUseWAL(db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -154,6 +155,29 @@ func openLabelingLedger(dir string) (*sql.DB, error) {
 		return nil, err
 	}
 	return db, nil
+}
+
+// labelingWALWait bounds how long an opener retries switching a dataset to
+// WAL while other openers hold it.
+var labelingWALWait = 60 * time.Second
+
+// labelingUseWAL switches the dataset to WAL (it stays so). While runners
+// open a dataset in rollback-journal mode at once, SQLite refuses the
+// switch at once with SQLITE_BUSY rather than wait (one holding a shared
+// lock cannot wait for another's exclusive one), so it is retried.
+func labelingUseWAL(db *sql.DB) error {
+	deadline := time.Now().Add(labelingWALWait)
+	for {
+		var mode string
+		err := db.QueryRow(`PRAGMA journal_mode=WAL`).Scan(&mode)
+		if err == nil && mode != "wal" {
+			err = fmt.Errorf("journal_mode is %s, not wal", mode)
+		}
+		if err == nil || !strings.Contains(err.Error(), "SQLITE_BUSY") && !strings.Contains(err.Error(), "database is locked") || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(time.Duration(5+rand.IntN(20)) * time.Millisecond)
+	}
 }
 
 // labelingLedgerColumns are columns added after a ledger may already have
@@ -177,17 +201,38 @@ func labelingHasColumn(db queryer, table, column string) bool {
 	return err == nil && len(rows) == 1 && integer(rows[0]["n"]) > 0
 }
 
+// upgradeLabelingLedger creates the ledger's tables and adds missing
+// columns in one immediate transaction: runners that open a fresh dataset
+// at once serialize on the write lock, and each sees the tables and columns
+// the one before it committed.
 func upgradeLabelingLedger(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(labelingJobSQL); err != nil {
+		return err
+	}
 	for _, add := range labelingLedgerColumns {
-		var present int
-		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?`, add.table, add.column).Scan(&present); err != nil {
+		if err := labelingAddColumn(tx, add.table, add.column, add.definition); err != nil {
 			return err
 		}
-		if present == 0 {
-			if _, err := db.Exec(`ALTER TABLE ` + add.table + ` ADD COLUMN ` + add.column + ` ` + add.definition); err != nil {
-				return err
-			}
-		}
+	}
+	return tx.Commit()
+}
+
+// labelingAddColumn adds a column unless the table has it, tolerating one
+// another opener added meanwhile.
+func labelingAddColumn(db interface {
+	queryer
+	Exec(string, ...any) (sql.Result, error)
+}, table, column, definition string) error {
+	if labelingHasColumn(db, table, column) {
+		return nil
+	}
+	if _, err := db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + definition); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
 	}
 	return nil
 }

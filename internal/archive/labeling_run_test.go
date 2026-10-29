@@ -1924,6 +1924,51 @@ func TestLabelingLedgerSharedByRunners(t *testing.T) {
 	}
 }
 
+// Runners started together on a fresh dataset all open its ledger at
+// once: the switch to WAL is retried while SQLite refuses it without
+// waiting, and creating the tables and adding columns is one immediate
+// transaction, so the openers serialize and none fails.
+func TestLabelingLedgerConcurrentFirstOpens(t *testing.T) {
+	for round := 0; round < 2; round++ {
+		dir := writeLabelingFixture(t, labelingFixtureUnits())
+		const openers = 16
+		errs := make(chan error, openers)
+		start := make(chan struct{})
+		for range openers {
+			go func() {
+				<-start
+				db, err := openLabelingLedger(dir)
+				if err == nil {
+					err = db.Close()
+				}
+				errs <- err
+			}()
+		}
+		close(start)
+		for range openers {
+			if err := <-errs; err != nil {
+				t.Fatalf("round %d: %v", round, err)
+			}
+		}
+		db := openFixtureLedger(t, dir)
+		for _, add := range labelingLedgerColumns {
+			if !labelingHasColumn(db, add.table, add.column) {
+				t.Fatalf("round %d: %s.%s missing", round, add.table, add.column)
+			}
+		}
+	}
+	// A column another opener added between the check and the change is
+	// tolerated.
+	dir := writeLabelingFixture(t, labelingFixtureUnits())
+	db := openFixtureLedger(t, dir)
+	if _, err := db.Exec(`ALTER TABLE jobs ADD COLUMN later_column TEXT`); err != nil {
+		t.Fatal(err)
+	}
+	if err := labelingAddColumn(db, "jobs", "later_column", "TEXT"); err != nil {
+		t.Fatalf("existing column: %v", err)
+	}
+}
+
 func TestLabelingRefusalsBlockOtherJobs(t *testing.T) {
 	quickLabelingTimers(t)
 	for _, scenario := range []string{"refusal", "suspect"} {
