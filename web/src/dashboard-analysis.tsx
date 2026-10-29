@@ -120,14 +120,14 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
   const subjects = (unit?.plural ?? catalog.records.plural).toLowerCase();
 
   const selected = result.results[0] && selectGroups(result.results[0], analysis.selection);
-  let clause: AggregationClause = analysis.clause, entry: AggregationResultEntry | undefined = selected, error = result.error, slots = "";
+  let clause: AggregationClause = analysis.clause, entry: AggregationResultEntry | undefined = selected, error = analysis.problem ?? result.error, slots = "";
   if (view.view === "cycle" && entry) {
     const per = view.cycle === "hour" ? "hours" : "days";
     try {
       if (analysis.native) {
         // Query Table computed the slots; the chart draws them as returned.
-        const native = nativeCycleResult(entry);
-        if (native.slots) slots = `${native.slots.toLocaleString()} complete ${per} in ${zone}.`;
+        const native = nativeCycleResult(analysis, entry);
+        if (native.slots !== undefined) slots = `${native.slots.toLocaleString()} complete ${per} in ${zone}.`;
       } else {
         const now = Date.now();
         const folded = cycleResult(catalog, view, entry, { from: bounds.from?.getTime(), to: Math.min(bounds.to?.getTime() ?? now, now) }, zone);

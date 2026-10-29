@@ -230,11 +230,13 @@ function weekdayPair(id) {
   const card = weekdayMetric(clause, daily, { ...source, aggregations: [clause] }, now, recipe.weekday.unit);
   const where = cardDashboardWhere(recipe.dataset, catalog.dataset, (item.query.grouping?.source ?? item.query).where);
   const state = normalizeAnalysis(catalog, recipe.destination.chart), analysis = analysisQuery(catalog, state, where, { now, zone });
-  const native = nativeCycleResult(core.evaluateMetrics(dashboardRows[catalog.dataset], analysis.query, schemas[catalog.dataset], { now }).metrics[0]);
+  const native = nativeCycleResult(analysis, core.evaluateMetrics(dashboardRows[catalog.dataset], analysis.query, schemas[catalog.dataset], { now }).metrics[0]);
   assert.deepEqual([state.view, state.cycle, state.reduce, analysis.native], ["cycle", "weekday", "median", true], id);
   const summaries = buckets => Object.fromEntries(buckets.map(bucket => [bucket.keys[0], JSON.stringify(bucket.distribution.summary, (_, value) => round(value))]));
   assert.deepEqual(summaries(native.result.buckets.map(bucket => ({ ...bucket, keys: [weekdayName(bucket.keys[0])] }))), summaries(card.result.buckets), id);
-  assert.equal(native.slots, card.days, `${id}: the same complete days`);
+  // The card counts the days with a value; the dashboard every day in range.
+  assert.equal(native.result.buckets.reduce((n, bucket) => n + bucket.occurrences, 0), card.days, `${id}: the same complete days`);
+  assert.ok(native.slots >= card.days);
   assert.ok(card.result.buckets.some(bucket => bucket.distribution.summary?.max > 0));
 }
 test("human-words-weekday and human-messages-weekday: daily totals by local weekday", () => {
@@ -251,7 +253,7 @@ function hourPair(id, cardHours, { minutes = 0, inProgress = {} } = {}) {
   const item = instantiateRecipe(recipe, 7, at), where = cardDashboardWhere(recipe.dataset, catalog.dataset, (item.query.grouping?.source ?? item.query).where);
   const state = normalizeAnalysis(catalog, recipe.destination.chart), analysis = analysisQuery(catalog, state, where, { now: at.getTime(), zone });
   assert.deepEqual([state.view, state.cycle, state.reduce, analysis.native], ["cycle", "hour", "total", true], id);
-  const result = nativeCycleResult(core.evaluateMetrics(dashboardRows[catalog.dataset], analysis.query, schemas[catalog.dataset], { now: at.getTime() }).metrics[0]).result;
+  const result = nativeCycleResult(analysis, core.evaluateMetrics(dashboardRows[catalog.dataset], analysis.query, schemas[catalog.dataset], { now: at.getTime() }).metrics[0]).result;
   const expected = Object.fromEntries(Object.entries(cardHours(item, at.getTime())).map(([hour, value]) => [hour, round(value - (inProgress[hour] ?? 0))]).filter(([, value]) => value));
   assert.deepEqual(Object.fromEntries(result.buckets.filter(bucket => bucket.value).map(bucket => [`${String(bucket.keys[0]).padStart(2, "0")}:00`, round(bucket.value)])), expected, id);
   assert.ok(Object.keys(expected).length > 3);

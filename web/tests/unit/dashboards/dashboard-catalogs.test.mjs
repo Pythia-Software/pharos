@@ -171,9 +171,14 @@ test("a timestamp cycle is Query Table's hour of day or day of week in the viewe
   for (const row of rows.mcp_calls) { const at = Date.parse(row.called_at); if (at >= first && at < midnight) daily.set(core.metricDateFloor(at, "day", zone), daily.get(core.metricDateFloor(at, "day", zone)) + 1); }
   const isoWeekday = day => ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: zone }).format(day)) + 1;
   const byWeekday = Object.fromEntries([1, 2, 3, 4, 5, 6, 7].map(slot => [slot, [...daily].filter(([day]) => isoWeekday(day) === slot).map(([, count]) => count)]));
-  const native = nativeCycleResult(run(mcp, analysis.query)[0]);
+  const native = nativeCycleResult(analysis, run(mcp, analysis.query)[0]);
   assert.deepEqual(Object.fromEntries(native.result.buckets.map(bucket => [bucket.keys[0], bucket.distribution.summary])), Object.fromEntries(Object.entries(byWeekday).map(([slot, values]) => [slot, core.boxSummary(values, "tukey")])));
   assert.equal(native.slots, daily.size);
+  // A ratio's idle days have no value, yet are days of the range.
+  const ratio = analysisQuery(mcp, { ...state, metric: "failure_rate" }, [...where, { field: "status", op: "!=", value: "ok" }], { now, zone });
+  const rated = nativeCycleResult(ratio, run(mcp, ratio.query)[0]);
+  assert.equal(rated.slots, daily.size);
+  assert.ok(rated.result.buckets.reduce((n, bucket) => n + bucket.occurrences, 0) < daily.size, "Query Table counts only days with a ratio");
   assert.match(analysisNote(mcp, state), /whole day in your time zone/);
   // A total adds up the whole days' records; a mean averages them.
   const totals = run(mcp, analysisQuery(mcp, { ...state, reduce: "total" }, where, { now, zone }).query)[0];
@@ -198,6 +203,22 @@ test("a timestamp cycle is Query Table's hour of day or day of week in the viewe
   const hourly = Object.fromEntries(Array.from({ length: 24 }, (_, hour) => [hour, 0]));
   for (const row of rows.mcp_calls) { const at = Date.parse(row.called_at); if (at >= hourStart && at < hourEnd) hourly[Number(local.format(at)) % 24] += 1; }
   assert.deepEqual(Object.fromEntries(run(mcp, hours.query)[0].buckets.map(bucket => [bucket.keys[0], bucket.value])), hourly);
+  // An hour profile's box or mean reads one group per hour: past 400 days it
+  // does not run, and says why; a total reads 24 groups whatever the range.
+  const long = [{ field: "called_at", op: ">=", value: new Date(now - 401 * 86400000).toISOString() }];
+  const tooLong = analysisQuery(mcp, { ...state, cycle: "hour" }, long, { now, zone });
+  assert.match(tooLong.problem, /at most 400 days/);
+  assert.deepEqual(tooLong.query.aggregations, []);
+  const longTotal = analysisQuery(mcp, { ...state, cycle: "hour", reduce: "total" }, long, { now, zone });
+  assert.deepEqual([longTotal.problem, longTotal.query.aggregations.length], [undefined, 1]);
+  assert.equal(analysisQuery(mcp, { ...state, cycle: "hour" }, month(mcp), { now, zone }).problem, undefined);
+  // Without a start the span is known only to the service: its budget error
+  // reads as the same limit.
+  const allTime = analysisQuery(mcp, { ...state, cycle: "hour" }, [], { now, zone });
+  for (const error of ["calendar group population exceeds host budget", "Occurrences need every interval, but the engine returned only some of them."]) {
+    assert.throws(() => nativeCycleResult(allTime, { id: "analysis", buckets: [], error }), /at most 400 days/);
+  }
+  assert.throws(() => nativeCycleResult(allTime, { id: "analysis", buckets: [], error: "unknown field" }), /unknown field/);
   // Without a start there is no single drill-down, and idle days run from
   // the first observed one.
   const open = analysisQuery(mcp, state, [], { now, zone });
