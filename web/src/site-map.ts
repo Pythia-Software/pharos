@@ -21,7 +21,7 @@ import { emptyTextSearch, newRule, ruleLabels, scopes } from "./text-search-mode
 import { freshSearch } from "./search-composer-state";
 import { libraryHostParameters } from "./host-query-state";
 import { recordKeywordParameter } from "./record-keyword-model";
-import { appSections, findingsPages, tl1Pages } from "./app-navigation-model";
+import { appSections, findingsPages } from "./app-navigation-model";
 import { idSources, legacyRoutes, optionalSettingsPages, pageDescriptions, readerParams, siteSections } from "./site-routes";
 import libraryDocument from "../../schemas/library.schema.json";
 import usageDocument from "../../schemas/usage.schema.json";
@@ -476,7 +476,7 @@ type SiteCard = {
   url: { path: string; params: Array<[string, ParamSpec]> };
 };
 export const recipeTextWindows = Object.fromEntries(rollingWindowDays.map(days => [String(days), Object.fromEntries(["{days}", "{period}", "{lastDays}"].map(token => [token, describeRecipeText(token, days)]))]));
-const cardPage = (recipe: QueryRecipe) => recipe.destination ? `analyze/${recipe.destination.topic}` : recipe.dataset === "library" ? "library" : recipe.dataset === "findings" ? "findings/table" : recipe.dataset === "tl1_attempts" ? "tl1/runs" : `analyze/query/${recipe.dataset}`;
+const cardPage = (recipe: QueryRecipe) => recipe.destination ? `analyze/${recipe.destination.topic}` : recipe.dataset === "library" ? "library" : recipe.dataset === "findings" ? "findings/table" : `analyze/query/${recipe.dataset}`;
 
 export function siteCard(recipe: QueryRecipe, clock: Date): SiteCard {
   const windows = recipe.period ? [] : [...rollingWindowDays];
@@ -581,7 +581,7 @@ export function viewTitles(uiPy: string): Record<string, string> {
 export type SiteInputs = { settings: ReturnType<typeof settingsPages>; titles: Record<string, string>; clock?: Date };
 export function buildSiteMap(inputs: SiteInputs) {
   const clock = inputs.clock ?? new Date("2026-01-01T12:00:00Z");
-  const sections = appSections([], new URLSearchParams(), true);
+  const sections = appSections([], new URLSearchParams());
   const sectionTitle = (id: string) => sections.find(section => section.id === id)?.label;
   const nodes: SiteNode[] = [];
   const add = (node: SiteNode) => { nodes.push(node); return node; };
@@ -667,9 +667,6 @@ export function buildSiteMap(inputs: SiteInputs) {
           ...view === "table" ? { dataset: "findings", builder: "queryURL", options: [whereOption("q_findings", "findings"), windowOption("window_days", rollingWindowDays, "A rolling window on findings.window_field, as for query tables.")] } : {} });
       }
     }
-    if (section.path === "tl1") for (const page of tl1Pages.slice(1)) child({ path: page.path.slice(1), title: page.title, description: page.description, route: page.path,
-      ...page.path === "/tl1/runs" ? { dataset: "tl1_attempts", builder: "queryURL", options: [whereOption("q_tl1_attempts", "tl1_attempts"), windowOption("window_days", rollingWindowDays, "A rolling window on tl1_attempts.window_field, as for query tables.")] } : {} });
-    if (section.path === "tl1") node.description = `${section.description} ${tl1Pages[0].description}`;
     if (section.path === "work") {
       node.builder = "conversationRowURL, then the delegation explorer's parameters (delegationRouteValues, empty ones left out), then explorer or sessions.";
       node.options = [

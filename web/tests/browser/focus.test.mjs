@@ -824,7 +824,6 @@ for (const width of [1440, 390, 320]) test(`Search long query can scroll to subm
 for (const route of [
   { name: "Analyze", url: "/analyze", ready: ".usage-dashboard .usage-chart", link: /^Human words$/i, destination: ".usage-human-dashboard .usage-chart" },
   { name: "Settings", url: "/settings", ready: "#healthCards .panel:not([aria-busy])", link: /^Sources$/, destination: "#sourceGrid .source-card" },
-  { name: "TL1", url: "/tl1", ready: ".tl1-tiles", link: /^Configurations$/, destination: "#tl1-matrix" },
 ]) test(`${route.name} navigation is usable from the keyboard on a phone`, { skip }, async t => {
   const { page } = await open(t, { url: route.url, viewport: { width: 390, height: 844 }, ready: route.ready });
   const menu = page.getByRole("dialog", { name: "Navigate Pharos" });
@@ -1042,7 +1041,6 @@ for (const [url, ready] of [
   ["/settings", "#healthCards .panel:not([aria-busy])"],
   ["/settings/sources", "#sourceGrid .source-card"],
   ["/settings/preferences", "#optionalBehaviors"],
-  ["/tl1", ".tl1-tiles"],
   [`/work/${workID}`, ".work-heading h1"],
   [`/work/${workID}/conversation/conv-root`, ".conversation-panel .turn"],
 ]) test(`Opening ${url} leaves focus alone and its title is ordinary text`, { skip }, async t => {

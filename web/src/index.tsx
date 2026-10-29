@@ -80,7 +80,6 @@ import skillUsagesDocument from "../../schemas/skill_usages.schema.json";
 import tl1AttemptsDocument from "../../schemas/tl1_attempts.schema.json";
 import parallelismDocument from "../../schemas/parallelism.schema.json";
 import findingsDocument from "../../schemas/findings.schema.json";
-import { TL1Page } from "./tl1";
 import { FindingsPage, startFindingsChrome } from "./findings";
 import { Icon } from "./icons";
 import { AuthoredMessages, CategoryPill, MessageMix, authoredRenderers } from "./authored";
@@ -157,7 +156,7 @@ function usdCost(value: unknown, row: Row): React.ReactNode {
 
 // A shared export (see share.go) carries its own rows in place of the service:
 // every table runs over them in the browser, and the pages that need the
-// service (search, MCP, TL1, Human Words, Carbon) are left out.
+// service (search, MCP, Human Words, Carbon) are left out.
 type SharedExport = { works: Row[]; datasets: Record<string, Row[]>; tool_calls: Record<string, Row> };
 const shared: SharedExport | null = (window as unknown as { pharosShare?: SharedExport | null }).pharosShare ?? null;
 
@@ -177,7 +176,7 @@ function datasetIsVisible(dataset: Dataset | "machine_calls") {
   if (dataset === "usage") return path === "/analyze" && usageView === "tokens";
   if (dataset === "writing" || dataset === "writing_messages") return path === "/analyze" && usageView === "writing" && (params.get("writing") === "messages") === (dataset === "writing_messages");
   if (["tools", "tool_calls", "skill_usages"].includes(dataset)) return path === "/tools" && (params.get("tools_view") ?? "calls") === (dataset === "tools" ? "summary" : dataset === "skill_usages" ? "skills" : "calls");
-  return dataset === "mcp_calls" ? path === "/mcp" : path.startsWith("/tl1");
+  return dataset === "mcp_calls" && path === "/mcp";
 }
 
 
@@ -2117,7 +2116,6 @@ const mounts: Array<[string, React.ReactNode]> = [
   ["toolsPage", <ToolsPage />],
   ["mcpSettingsPage", <MCPSettings />],
   ["findingsPage", <FindingsPage copy={copyText} table={<QuerySurface dataset="findings" />} />],
-  ["tl1Page", <TL1Page attempts={<QuerySurface dataset="tl1_attempts" />} filterAttempts={(where) => tableApis.get("tl1_attempts")?.setQuery(previous => ({ ...previous, where: where as WhereTerm[], offset: 0 }))} copy={copyText} />],
 ];
 
 // Mount a page on its first visit. Hidden pages used to load capabilities,

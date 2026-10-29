@@ -151,17 +151,6 @@ const findingDetail = card => ({ ...card, chart: { title: "Codex conversations t
   attempts: [{ attempt: 1, change: "A shared instructions file", copied_at: iso(12 * day), status: "watching", target_label: "tl1", savings: { usd: 3.2, added_usd: 0 } }],
   steps: [{ label: "A shared instructions file", change: "" }, { label: "A fallback setting", change: "" }], metric: { kind: "rate", unit: "conversations" }, prompt: `Pharos finding ${card.id} …` });
 
-// TL1: one project with a configuration matrix and follow-ups.
-const followup = { from_flavor: "implement", from_configuration: "codex-high", from_model: "gpt-6", next_flavor: "agent-review", next_configuration: "claude-medium", next_model: "claude-sonnet", next_class: "llm", next_outcome: "findings", paths: 4, with_findings: 3, findings: 5 };
-const tl1Overview = {
-  project: "example", installations: [{ host_label: "Mac", synced_at: iso(3600000) }], enqueues: [], window: { tasks: 14, total_tasks: 14, label: "all time" },
-  coverage: { transcript_share: 1, cost_share: 1 }, totals: { cost_usd: 42, llm_attempts: 14, procedural_attempts: 0, candidates: 4, finished_candidates: 3, llm_error_rate: 0, agent_error_rate: 0, human_tasks: 4, pending_human: 0, median_steps: 3, median_llm_duration_ms: 12000, cache_read_share: 0.5, tokens: { total_tokens: 1000 } },
-  matrix: [{ flavor: "implement", configuration: "codex-high", attempts: 14, advanced: 12, advance_rate: 0.86, escalation_rate: 0.14, agent_error_rate: 0, median_cost_usd: 2, cost_per_advance_usd: 3, median_duration_ms: 12000, median_tokens: 1000, cache_read_share: 0.5, default: true, low_sample: true, flag: "worst_value" },
-    { flavor: "review", configuration: "claude-medium", attempts: 14, advanced: 14, advance_rate: 1, escalation_rate: 0, agent_error_rate: 0, median_cost_usd: 1, cost_per_advance_usd: 1, median_duration_ms: 10000, median_tokens: 500, cache_read_share: 0.4, flag: "best_value" }],
-  flavors: [], graph: { nodes: [], edges: [] }, errors: [], human: {}, reviews: {}, candidates: {},
-  followups: { next: [followup], after: [{ ...followup, after_flavor: "human-review", after_class: "human", after_outcome: "remanded", paths: 2, with_findings: 2, findings: 3 }] },
-};
-
 // Settings, sync and the header's library status.
 const hosts = [{ id: "studio", label: "Mac Studio", sources: [{ name: "Claude", captured_at: iso(3 * day), indexed_at: iso(3600000) }] }, { id: "air", label: "MacBook Air with a long machine name", sources: [{ name: "Codex", last_data_at: iso(125 * 60000) }] }, { id: "new", label: "New Mac", sources: [] }];
 const sources = { configured: 2, enabled: 2, items: [
@@ -401,13 +390,11 @@ export const defaultApi = {
   "GET /api/sync/recovery": { jobs: [] },
   "GET /api/backup": { active: false, run: null, runs: [], last_success: { destination: "/Users/someone/Pharos Backup", finished_at: iso(2 * day) }, record: "/Volumes/Pharos SSD/Pharos/backups.json", suggested_destination: "/Users/someone/Pharos Backup" },
 
-  // Findings, TL1 and MCP.
+  // Findings and MCP.
   "GET /api/findings": findings,
   "POST /api/findings/seen": { ok: true },
   "POST /api/findings/cart/prompt": ({ body }) => ({ target: body?.target, label: "explo", handoff: body?.handoff ?? "pr", prompt: `Pharos findings for explo:\n${(body?.ids ?? []).join("\n")}`, count: body?.ids?.length ?? 0 }),
   "GET /api/findings/:id": ({ params }) => { const card = findingCards.find(item => item.id === params.id); return card && findingDetail(card); },
-  "GET /api/tl1": { projects: [{ project: "example", tasks: 14, installations: [{ installation_id: "mac", host_label: "Mac", tasks: 14 }] }] },
-  "GET /api/tl1/overview": tl1Overview,
   "GET /api/mcp": ({ state }) => ({ enabled: state.mcpEnabled ?? true, transport: "stdio", command: "/Applications/Pharos.app/Contents/MacOS/pharos", args: ["--config", "/Users/someone/Library/Application Support/Pharos/archive.toml", "mcp"], note: "Agent clients launch this local command when they connect.", skill: { name: "search-prior-coding-sessions", text: "Search prior coding sessions with Pharos.", paths: { codex: "~/.codex/skills/search-prior-coding-sessions/SKILL.md" } } }),
   "POST /api/mcp/enabled": ({ body, state }) => { state.mcpEnabled = body.enabled; return { enabled: body.enabled }; },
   "GET /api/mcp/calls": { items: [mcpCall], filtered_total: 1, tool_stats: [{ tool_name: "search_conversations", calls: 1, errors: 0, average_output_tokens: 300, largest_output_tokens: 300, truncated_calls: 0, average_duration_ms: 18 }], stats: { total_calls: 1, failed_calls: 0, average_output_tokens: 300, largest_output_tokens: 300, truncated_calls: 0 } },

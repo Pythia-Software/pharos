@@ -136,7 +136,7 @@ function dashboardFor(recipe: QueryRecipe): CardDashboard {
 }
 
 export function refineCardDestination(recipe: QueryRecipe): QueryRecipe {
-  if (recipe.retired || !Object.hasOwn(usageDatasetTopics, recipe.dataset)) return recipe;
+  if (recipe.retired || recipe.dataset === "tl1_attempts" || !Object.hasOwn(usageDatasetTopics, recipe.dataset)) return recipe;
   const dashboard = dashboardFor(recipe);
   return { ...recipe, destination: { ...dashboard, dataset: usageTopicDatasets[dashboard.topic], detailAction: recipe.action }, action: `Explore ${usageTopics[dashboard.topic].label}` };
 }
