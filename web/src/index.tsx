@@ -11,7 +11,7 @@ import { TextSearchEditor, type LibrarySearchKind as FindKind } from "./text-sea
 import { SearchHelp } from "./search-help";
 import { RecordSearchEditor, recordSearchTargets } from "./record-search-editor";
 import { usageDetailsSchema } from "./usage-row-model";
-import { usageActionQuery, usageQuerySchema } from "./usage-query-columns";
+import { usageActionQuery, usageQuerySchema, withGroupDetail } from "./usage-query-columns";
 import { orderedUsageQuery } from "./usage-query-order";
 import { usageRowRenderers } from "./usage-row-renderers";
 import { createQueryMetadataLoader } from "./query-metadata";
@@ -44,7 +44,7 @@ import { LibraryContent } from "./library-content";
 import { SyncTables } from "./sync-tables";
 import { SettingsWorkspace } from "./settings-workspace";
 import { installAppNavigation } from "./app-navigation";
-import { EMPTY_QUERY, groupKeyField, groupSourceQuery, isWhereConjunction, isWhereGroup, predicatesOf, httpComputedColumnStore, inspectBucketQuery, applyAggregations, encodeQuery, loadSchema, memoryStorageAdapter, toAggregationQuery, type ComputedColumnStore, type QueryCapabilitiesV3, type QueryResultV3, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type FieldSchema, type Transport, type WhereBranch, type WhereClause, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, groupKeyField, groupKeyFields, groupSourceQuery, isWhereConjunction, isWhereGroup, predicatesOf, httpComputedColumnStore, inspectBucketQuery, applyAggregations, encodeQuery, loadSchema, memoryStorageAdapter, toAggregationQuery, type ComputedColumnStore, type QueryCapabilitiesV3, type QueryResultV3, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type FieldSchema, type Transport, type WhereBranch, type WhereClause, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
 import { useQueryTable, type QueryTableApi, type QueryFilterApi } from "@pythia-software/query-table-react";
 import { DataTable, FilterValueProvider, MetricsPanel, QueryFilterRow, SelectionToolbar, defaultRenderers, type CellContext, type FilterValuePresentation, type RenderRegistry } from "@pythia-software/query-table-ui";
 import "@pythia-software/query-table-ui/theme.css";
@@ -322,10 +322,15 @@ const renderers: RenderRegistry<Row> = {
       return <span title={value.toLocaleString()}>{compactNumber(value)}</span>;
     return defaultRenderers.number(context);
   },
-  work_title({ value, row }: CellContext<Row>) {
+  work_title({ value, row, query }: CellContext<Row>) {
+    // A group row (a cell or group Detail) names a work only when the work's
+    // ID is one of its keys; otherwise its identity is the group's.
+    const keys = query?.grouping ? groupKeyFields(query.grouping.keys) : null;
+    const work = row.workspace_id ?? (!keys || keys.includes("id") ? row.id : undefined);
+    if (work == null || work === "") return String(value ?? "Untitled work");
     return <button className="qt-work-link" title={String(value ?? "")} onClick={(event) => {
       event.stopPropagation();
-      window.pharosOpenDetail?.(String(row.workspace_id ?? row.id));
+      window.pharosOpenDetail?.(String(work));
     }}>{String(value ?? "Untitled work")}</button>;
   },
   pull_requests({ value, row }: CellContext<Row>) {
@@ -512,7 +517,7 @@ function QuerySurface({ dataset, usageActions = false, libraryView = "table", me
   const canonicalizeQuery = useMemo(() => (query: QueryState) => {
     const rolling = readRollingWindow(new URLSearchParams(location.search), dataset);
     const resolved = rolling && rollingQueryMatches(query, rolling) ? resolveRollingQuery(query, rolling) : query;
-    const presented = usageActions ? usageActionQuery(orderedUsageQuery(dataset as UsageDataset, resolved), schema, dataset as UsageDataset) : resolved;
+    const presented = usageActions ? usageActionQuery(orderedUsageQuery(dataset as UsageDataset, resolved), schema, dataset as UsageDataset) : withGroupDetail(resolved);
     if (!scopeWhere) return presented;
     const source = presented.grouping?.source ?? presented;
     const where = [...source.where.filter(term => !scopeRemovals.has(termKey(term))), ...scopeWhere];

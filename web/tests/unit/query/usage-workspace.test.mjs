@@ -477,7 +477,7 @@ test("Tool summary call links keep every dimension of the selected row", () => {
 // their behaviour independently of the compact collection projection.
 import { createPropertyView, ITEM_DETAILS_COLUMN, selectedFields, toServerQuery } from "@pythia-software/query-table-core";
 import { conversationRowURL, primaryUsageSource, usageDetailsSchema, usageRowLinks } from "../../../src/usage-row-model.ts";
-import { usageActionQuery, usageDrilldownColumns, usageDrilldownField, usageQuerySchema } from "../../../src/usage-query-columns.ts";
+import { usageActionQuery, usageDrilldownColumns, usageDrilldownField, usageQuerySchema, withGroupDetail } from "../../../src/usage-query-columns.ts";
 import { orderedUsageQuery } from "../../../src/usage-query-order.ts";
 import { authoredRenderers } from "../../../src/authored.tsx";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -644,4 +644,19 @@ test("a query link on the same dataset opens the query it names, with or without
   }
   const kept = new URL(usageWorkspaceURL({ mode: "query" }, new URLSearchParams({ analyze_mode: "query", analyze_data: "usage", q_usage: encodeQuery(saved) })), "http://localhost").searchParams;
   assert.deepEqual(decodeQueryStrict(kept.get("q_usage")).where, saved.where, "without a query, the current one stays");
+});
+
+test('grouped results end with their link summaries, then native group Detail', () => {
+  const grouping = { source: EMPTY_QUERY, keys: ['tool_name'], representative: null, summaries: [
+    { id: 'calls', op: 'count', label: 'Calls' },
+    { id: 'records', op: 'link', label: 'Drill in', link: { label: 'Matching records', to: { kind: 'query', target: 'tool_calls' } } },
+    { id: 'errors', op: 'sum', field: 'error_count', label: 'Errors' },
+  ] };
+  const empty = withGroupDetail({ ...EMPTY_QUERY, grouping });
+  assert.deepEqual(empty.select.map(column => column.field), ['tool_name', 'calls', 'errors', 'records', ITEM_DETAILS_COLUMN]);
+  const chosen = { ...EMPTY_QUERY, grouping, select: [{ field: ITEM_DETAILS_COLUMN }, { field: 'records', width: 140 }, { field: 'calls' }] };
+  const ordered = usageActionQuery(chosen, loadSchema(toolCalls), 'tool_calls');
+  assert.deepEqual(ordered.select, [{ field: 'calls' }, { field: 'records', width: 140 }, { field: ITEM_DETAILS_COLUMN }]);
+  assert.equal(usageActionQuery(ordered, loadSchema(toolCalls), 'tool_calls'), ordered, 'an ordered query is unchanged');
+  assert.equal(withGroupDetail(EMPTY_QUERY), EMPTY_QUERY, 'record queries keep their own Detail placement');
 });

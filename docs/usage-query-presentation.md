@@ -51,9 +51,12 @@ widths and explicit sorts remain in effect. Query drilldowns specify a sort:
 time ascending within one conversation/work/unit, time descending across a
 population, with identity breaking timestamp ties. Grouped results receive an
 explicit key/summary sort; their Records drilldown also applies the appropriate
-record order. Query Table 0.9.7 adds native Detail for grouped results
-([handoff](handoffs/query-table-group-detail.md)); it is adopted in a later
-change.
+record order. Grouped results show native group Detail
+([handoff](handoffs/query-table-group-detail.md)): their columns end with the
+link summaries, then Detail, which shows the group's keys, summaries and link
+summaries. Link summaries in Detail open the same exact-match records as the
+Records drill-down, which stays the table's trailing column. Search and the
+other tables with Detail end grouped results with it too.
 
 Every Analyze query opens with native **Fit All to Screen**, including restored
 queries and drilldowns. The `fitToScreen: true` presentation preference travels
