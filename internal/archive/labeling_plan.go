@@ -24,15 +24,17 @@ import (
 // request. Output includes reasoning, which providers already count as
 // output. These are defaults; plan's flags override each of them.
 type labelingCalibration struct {
-	source                     string
+	source string
+	// effort is the reasoning effort the calibration was measured at.
+	effort                     string
 	overheadTokens, outputItem float64
 	secondsPerRequest          float64
 }
 
 var labelingCalibrations = map[string]labelingCalibration{
-	"claude": {"claude-haiku-5-5 at effort high (default calibration)", 3579.67 * 4, 1006.36, 16.96},
-	"codex":  {"gpt-6-luna at effort high (default calibration)", 4027.74 * 4, 211.75, 10.14},
-	"agy":    {"gemini-3.8-flash at effort low (default calibration)", 16549, 222.17, 13.98},
+	"claude": {"claude-haiku-5-5 at effort high (default calibration)", "high", 3579.67 * 4, 1006.36, 16.96},
+	"codex":  {"gpt-6-luna at effort high (default calibration)", "high", 4027.74 * 4, 211.75, 10.14},
+	"agy":    {"gemini-3.8-flash at effort low (default calibration)", "low", 16549, 222.17, 13.98},
 }
 
 // labelingCharsPerToken converts item characters to tokens. About 3.6
@@ -197,7 +199,7 @@ func runLabelingPlan(args []string, stdout io.Writer) error {
 	flags := flag.NewFlagSet("labeling plan", flag.ContinueOnError)
 	opts := labelingPlanOptions{Today: time.Now()}
 	flags.StringVar(&opts.Dir, "dir", "", "prepared dataset directory")
-	flags.StringVar(&opts.Route, "route", "", "claude or codex")
+	flags.StringVar(&opts.Route, "route", "", "claude, codex or agy")
 	flags.StringVar(&opts.Model, "model", "", "model the route will run, priced with the built-in price book")
 	flags.StringVar(&opts.Effort, "effort", "", "reasoning effort")
 	flags.IntVar(&opts.ItemsPerRequest, "items-per-request", 4, "items per request (4 was measured)")
@@ -339,12 +341,14 @@ func planLabeling(ctx context.Context, opts labelingPlanOptions) (map[string]any
 	if err != nil {
 		return nil, err
 	}
-	cost := book.cost(opts.Model, day, map[string]int64{"uncached_input_tokens": int64(input), "output_tokens": int64(outputTokens)})
+	// Priced as run prices the labeling model: under its exact name only,
+	// so a model run would refuse as unpriced is unpriced here too.
+	cost := labelingExactCost(book, opts.Model, day, map[string]int64{"uncached_input_tokens": int64(input), "output_tokens": int64(outputTokens)})
 	price := map[string]any{"model": opts.Model, "day": day, "status": cost.status, "priced_model": nilIfEmpty(cost.pricedModel), "cost_usd": nil}
 	if cost.cost != nil && cost.status != "unpriced" {
 		price["cost_usd"] = *cost.cost
 	} else {
-		price["note"] = "the built-in price book has no confirmed price for this model on this day; no cost is guessed"
+		price["note"] = "the built-in price book has no price for this exact model name on this day (run would refuse it without --allow-unpriced); no cost is guessed"
 	}
 	serial := float64(len(requests)) * seconds
 	hours := max(serial/float64(opts.Concurrency)/3600, input/opts.TokensPerMinute/60, outputTokens/(opts.TokensPerMinute/5)/60) * 1.25
@@ -356,8 +360,8 @@ func planLabeling(ctx context.Context, opts labelingPlanOptions) (map[string]any
 		fmt.Sprintf("Runtime: %.2f s per request; the larger of request time over %d concurrent requests, input over %.0f tokens/min, and output over a fifth of that, plus 25%%; planning high is 3 times that. Capacity is assumed, not measured.",
 			seconds, opts.Concurrency, opts.TokensPerMinute),
 	}
-	if opts.Effort != "high" {
-		assumptions = append(assumptions, fmt.Sprintf("Effort %s was not calibrated; the measurements are at effort high.", opts.Effort))
+	if opts.Effort != calibration.effort {
+		assumptions = append(assumptions, fmt.Sprintf("Effort %s was not calibrated; the measurements are at effort %s.", opts.Effort, calibration.effort))
 	}
 	// Refusals already recorded in this dataset's jobs, and how many of the
 	// refused items were only packed with the refused material: they are

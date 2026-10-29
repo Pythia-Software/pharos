@@ -571,6 +571,34 @@ func TestLabelingPlanReadsOnlyTheDataset(t *testing.T) {
 	if err != nil || unknown["price"].(map[string]any)["status"] != "unpriced" || unknown["price"].(map[string]any)["cost_usd"] != nil {
 		t.Fatalf("unpriced plan = %v, %v", unknown["price"], err)
 	}
+	// An alias or a dated snapshot name resolves in the price book, but run
+	// prices the labeling model under its exact name only and refuses it:
+	// the plan shows it unpriced too.
+	for _, model := range []string{"haiku", "claude-haiku-5-5-20261007"} {
+		aliased, err := planLabeling(context.Background(), labelingPlanOptions{Dir: dir, Route: "claude", Model: model, Effort: "high",
+			ItemsPerRequest: 4, MaxRequestTokens: 24000, Concurrency: 3, CharsPerToken: labelingCharsPerToken, TokensPerMinute: 2_000_000, Today: today})
+		book, _ := embeddedPriceBook(context.Background(), today)
+		if err != nil || aliased["price"].(map[string]any)["status"] != "unpriced" || aliased["price"].(map[string]any)["cost_usd"] != nil ||
+			labelingRequestEstimate(book, model, "2026-10-27", 1000, 1000) != nil {
+			t.Fatalf("%s plan = %v, %v", model, aliased["price"], err)
+		}
+	}
+	// Each route's calibration was measured at its own effort; only another
+	// effort is flagged.
+	for _, c := range []struct {
+		route, model, effort, warning string
+	}{{"claude", "claude-haiku-5-5", "high", ""}, {"claude", "claude-haiku-5-5", "medium", "at effort high"}, {"codex", "gpt-6-luna", "high", ""},
+		{"agy", "gemini-3.8-flash", "low", ""}, {"agy", "gemini-3.8-flash", "high", "at effort low"}} {
+		planned, err := planLabeling(context.Background(), labelingPlanOptions{Dir: dir, Route: c.route, Model: c.model, Effort: c.effort,
+			ItemsPerRequest: 4, MaxRequestTokens: 24000, Concurrency: 3, CharsPerToken: labelingCharsPerToken, TokensPerMinute: 2_000_000, Today: today})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assumptions := strings.Join(planned["assumptions"].([]string), "\n")
+		if flagged := strings.Contains(assumptions, "was not calibrated"); flagged != (c.warning != "") || !strings.Contains(assumptions, c.warning) {
+			t.Fatalf("%s at %s: %s", c.route, c.effort, assumptions)
+		}
+	}
 	all, err := planLabeling(context.Background(), labelingPlanOptions{Dir: dir, Route: "claude", Model: "claude-haiku-5-5", Effort: "high", IncludeDuplicates: true,
 		ItemsPerRequest: 4, MaxRequestTokens: 24000, Concurrency: 3, CharsPerToken: labelingCharsPerToken, TokensPerMinute: 2_000_000, Today: today})
 	if err != nil || all["items"] != 32 {
