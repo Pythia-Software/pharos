@@ -5,9 +5,9 @@ import { matchingSelectionIDs } from "./query-selection";
 import { DataTaxonomyModal, SourceQueryBuilder } from "./data-taxonomy";
 import { installDelegationExplorer } from "./delegation";
 import { installWorkspaceInbox } from "./workspace-inbox";
-import { MessageTableSearch, newMessageSearch, readMessageSearch } from "./message-table-search";
+import { MessageTableSearch, newMessageSearch } from "./message-table-search";
 import "./conversation-search";
-import { TextSearchEditor, type LibrarySearchKind as FindKind } from "./text-search-editor";
+import { TextSearchEditor } from "./text-search-editor";
 import { SearchHelp } from "./search-help";
 import { RecordSearchEditor, recordSearchTargets } from "./record-search-editor";
 import { usageDetailsSchema } from "./usage-row-model";
@@ -18,10 +18,10 @@ import { createQueryMetadataLoader } from "./query-metadata";
 import { SearchDialog } from "./search-dialog";
 import { ExploreSearch } from "./explore-search";
 import { recordKeywordSummary, RecordKeywordClause } from "./record-keyword-clause";
-import { readRecordKeywordSearch, recordKeywordParameter, recordKeywordRequest } from "./record-keyword-model";
+import { libraryFind, libraryHostQuery, libraryHostState, messageFind, messageHostQuery, readLibraryHost, readMessageSearchHost, readRecordKeyword, recordKeywordFind, recordKeywordHostQuery, sameHostState, withMessageSearch, withoutLibrarySearch, withRecordKeyword, type LibraryHost } from "./host-query-state";
 import { SearchResultsDisplay } from "./search-results-view";
 import { queryForSearchResultsView, searchResultsView, type SearchResultsView } from "./search-results-view-model";
-import { newKeywordSearch, readTextSearch, textFindParameters, searchSentence, withheldBatch, type TextSearchDraft } from "./text-search-model";
+import { newKeywordSearch, searchSentence, withheldBatch, type TextSearchDraft } from "./text-search-model";
 import { CarbonImpact, useLegacyCarbonFilters } from "./carbon-impact";
 import { carbonCatalogShape, legacyCarbonChart } from "./carbon-analysis-catalog";
 import { usageSummaryURL } from "./usage-summary-links";
@@ -44,14 +44,14 @@ import { LibraryContent } from "./library-content";
 import { SyncTables } from "./sync-tables";
 import { SettingsWorkspace } from "./settings-workspace";
 import { installAppNavigation } from "./app-navigation";
-import { EMPTY_QUERY, groupKeyField, groupKeyFields, groupSourceQuery, isWhereConjunction, isWhereGroup, predicatesOf, httpComputedColumnStore, inspectBucketQuery, applyAggregations, encodeQuery, loadSchema, memoryStorageAdapter, toAggregationQuery, type ComputedColumnStore, type QueryCapabilitiesV3, type QueryResultV3, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type FieldSchema, type Transport, type WhereBranch, type WhereClause, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
-import { useQueryTable, type QueryTableApi, type QueryFilterApi } from "@pythia-software/query-table-react";
+import { EMPTY_QUERY, groupKeyField, groupKeyFields, groupSourceQuery, isWhereConjunction, isWhereGroup, predicatesOf, httpComputedColumnStore, inspectBucketQuery, applyAggregations, encodeQuery, loadSchema, memoryStorageAdapter, toAggregationQuery, type ComputedColumnStore, type HostQueryState, type QueryCapabilitiesV3, type QueryResultV3, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type FieldSchema, type Transport, type WhereBranch, type WhereClause, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
+import { useQueryTable, type HostQueryOptions, type QueryTableApi, type QueryFilterApi } from "@pythia-software/query-table-react";
 import { DataTable, FilterValueProvider, MetricsPanel, QueryFilterRow, SelectionToolbar, defaultRenderers, type CellContext, type FilterValuePresentation, type RenderRegistry } from "@pythia-software/query-table-ui";
 import "@pythia-software/query-table-ui/theme.css";
 import "./pharos.css";
 import { savedRollingWindow } from "./bookmarks";
-import { libraryStorageAdapter, rejectLastQuery, retryLastQuery } from "./storage";
-import { queryRequest, queryFetch, shouldSkipQueryOnRestore } from "./query-request";
+import { libraryStorageAdapter } from "./storage";
+import { queryRequest, queryFetch } from "./query-request";
 import { PageErrorBoundary, QueryRecovery, ResetPage, tableRecoveryQuery } from "./query-recovery";
 import { createMCPMonitor, type MCPStatus } from "./mcp-monitor";
 import { HomePage } from "./home";
@@ -111,7 +111,6 @@ const relationships: RelationshipAdapter = {
   },
 };
 type Dataset = "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "findings";
-type LibraryView = SearchResultsView;
 type MessageView = "table" | "text";
 type TranscriptMessage = { role: string; text: unknown; raw_text?: unknown };
 type TurnSummary = { human: TranscriptMessage | null; response: TranscriptMessage | null };
@@ -234,11 +233,9 @@ window.addEventListener("pharos:route", () => {
   });
 });
 
-let clearLibrarySearch: (() => void) | undefined;
 let pendingLibraryFilter: WhereTerm[] | undefined;
 
 function filterLibrary(where: WhereTerm[]) {
-  clearLibrarySearch?.();
   pendingLibraryFilter = where;
   window.dispatchEvent(new Event("pharos:library-filter"));
 }
@@ -256,9 +253,16 @@ function recordBudget(dataset: Dataset, where: WhereTerm[]) {
   return where.some(term => predicatesOf(term).some(c => fields.includes(c.field))) ? new URLSearchParams({ interactive_search: "1" }) : undefined;
 }
 const queryMetadata = createQueryMetadataLoader();
-function makeTransport(dataset: Dataset, extra = "", onFind?: (find: FindSummary | null) => void, capabilities?: MetricCapabilities, queryCapabilities?: QueryCapabilitiesV3): Transport<Row> {
-  const endpoint = (suffix = "", params?: URLSearchParams, collection = true) => {
+// host compiles a table's host query state into the service's parameters. Each
+// request carries the host state it runs with (Query Table adds it), so rows,
+// metrics and filter values never pair one definition's table query with
+// another's keyword search. Field statistics carry none and follow the
+// current definition.
+type HostFind = { find: (state: HostQueryState | undefined) => string; current: () => string };
+function makeTransport(dataset: Dataset, extra = "", onFind?: (find: FindSummary | null) => void, capabilities?: MetricCapabilities, queryCapabilities?: QueryCapabilitiesV3, host?: HostFind): Transport<Row> {
+  const endpoint = (suffix = "", params?: URLSearchParams, collection = true, request?: { hostState?: HostQueryState }) => {
     const query = new URLSearchParams(collection ? extra : "");
+    if (collection && host) new URLSearchParams(request?.hostState ? host.find(request.hostState) : host.current()).forEach((value, name) => query.set(name, value));
     const carbon = new URLSearchParams(location.search).get("analyze_carbon");
     if (dataset === "usage" && carbon) query.set("carbon_settings", carbon);
     params?.forEach((value, name) => query.set(name, value));
@@ -268,7 +272,7 @@ function makeTransport(dataset: Dataset, extra = "", onFind?: (find: FindSummary
     metricCapabilities: capabilities,
     queryCapabilities,
     ...(queryCapabilities?.version === 3 ? { async fetchQueryV3(query: Parameters<NonNullable<Transport<Row>["fetchQueryV3"]>>[0], signal?: AbortSignal) {
-      const result = await queryRequest<QueryResultV3 & { find?: FindSummary }>(endpoint("/query-v3"), {
+      const result = await queryRequest<QueryResultV3 & { find?: FindSummary }>(endpoint("/query-v3", undefined, true, query), {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(query), signal,
       });
       onFind?.(result.find ?? null);
@@ -279,21 +283,21 @@ function makeTransport(dataset: Dataset, extra = "", onFind?: (find: FindSummary
       return result.row;
     },
     async fetchRowsV2(query, signal) {
-      const result = await queryRequest<FetchRowsResultV2<Row> & { find?: FindSummary }>(endpoint("/rows-v2", recordBudget(dataset, query.where)), {
+      const result = await queryRequest<FetchRowsResultV2<Row> & { find?: FindSummary }>(endpoint("/rows-v2", recordBudget(dataset, query.where), true, query), {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(query), signal,
       });
       onFind?.(result.find ?? null);
       return result;
     },
     async fetchMetrics(query, signal) {
-      return queryRequest(endpoint("/metrics", recordBudget(dataset, query.where)), {
+      return queryRequest(endpoint("/metrics", recordBudget(dataset, query.where), true, query), {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(query), signal,
       });
     },
     async fetchDistinctValues(query, signal) {
       const params = new URLSearchParams({ field: query.field, q: query.search });
       if (query.limit) params.set("limit", String(query.limit));
-      const url = endpoint("/distinct", params);
+      const url = endpoint("/distinct", params, true, query);
       return queryMetadata(url, async () => queryRequest(url), signal);
     },
     async fetchFieldStats(fields, signal) {
@@ -457,9 +461,12 @@ function usageGroupFields(fields: FieldSchema<Row>["fields"], query: QueryState)
 
 // header renders between the filters and the metric panels, so a chart there
 // can follow the table's filters.
-// find carries host-owned keyword restrictions before grouping and paging;
+// host registers clauses Pharos runs itself (host-query-state.ts) as part of
+// the table's definition; its find compiles them into each request. find
+// carries other request parameters, such as a message search cursor.
 // onFind receives Library message-search coverage when present.
-function QuerySurface({ dataset, usageActions = false, libraryView = "table", messageView = "table", find = "", onFind, trailing, header, controls, queryContent, querySummary, resultPresentation, presets, selectable = false, scopeWhere, appliedScope, namespace }: { dataset: Dataset; usageActions?: boolean; selectable?: boolean; libraryView?: LibraryView; messageView?: MessageView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode; queryContent?: (api: QueryTableApi<Row>) => React.ReactNode; querySummary?: (api: QueryTableApi<Row>) => React.ReactNode; resultPresentation?: (api: QueryTableApi<Row>) => React.ReactNode; presets?: (api: QueryTableApi<Row>) => React.ReactNode; scopeWhere?: WhereTerm[]; appliedScope?: React.MutableRefObject<WhereTerm[]>; namespace?: "machine_calls" }) {
+type SurfaceHost = { query: HostQueryOptions; find: (state: HostQueryState | undefined) => string; onState?: (state: HostQueryState | undefined) => void };
+function QuerySurface({ dataset, host, usageActions = false, messageView = "table", find = "", onFind, trailing, header, controls, queryContent, querySummary, resultPresentation, presets, selectable = false, scopeWhere, appliedScope, namespace }: { dataset: Dataset; host?: SurfaceHost; usageActions?: boolean; selectable?: boolean; messageView?: MessageView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode; queryContent?: (api: QueryTableApi<Row>) => React.ReactNode; querySummary?: (api: QueryTableApi<Row>) => React.ReactNode; resultPresentation?: (api: QueryTableApi<Row>) => React.ReactNode; presets?: (api: QueryTableApi<Row>) => React.ReactNode; scopeWhere?: WhereTerm[]; appliedScope?: React.MutableRefObject<WhereTerm[]>; namespace?: "machine_calls" }) {
   const registryKey = namespace ?? dataset;
   const visible = shared || datasetIsVisible(registryKey);
   const schema = useMemo(() => namespace ? { ...schemas[dataset], name: "pharos_machine_calls", defaultSelect: [{ field: "started_at", width: 155 }, { field: "repository_name", width: 140 }, { field: "operation_name", width: 180 }, { field: "tool_name", width: 140 }, { field: "command", width: 350 }, { field: "duration_ms", width: 105 }, { field: "status", width: 85 }, { field: "duration_source", width: 120 }, { field: "title", width: 240 }] } : usageActions ? usageQuerySchema(schemas[dataset], dataset as UsageDataset) : schemas[dataset], [dataset, namespace, usageActions]);
@@ -472,8 +479,10 @@ function QuerySurface({ dataset, usageActions = false, libraryView = "table", me
   const [capabilities, setCapabilities] = useState<Capabilities>();
   const [capabilityError, setCapabilityError] = useState<Error>();
   const [capabilityRetry, setCapabilityRetry] = useState(0);
-  const [recovered, setRecovered] = useState(false);
   const remote = !shared;
+  const hostRef = useRef(host);
+  hostRef.current = host;
+  const hostFind = useRef("");
   // A server table runs only once it knows the server's capabilities: rows
   // and metrics both go through V2/V3, and nothing reads the legacy routes
   // first. A failed handshake shows its error instead.
@@ -501,11 +510,12 @@ function QuerySurface({ dataset, usageActions = false, libraryView = "table", me
       setCapabilityError(undefined);
     });
   }, [dataset, Boolean(visible)]);
-  const transport = useMemo(() => shared ? undefined : makeTransport(dataset, find, value => onFindRef.current?.(value), capabilities?.metricCapabilities, capabilities?.queryCapabilities), [dataset, find, capabilities?.metricCapabilities, capabilities?.queryCapabilities]);
+  const transport = useMemo(() => shared ? undefined : makeTransport(dataset, find, value => onFindRef.current?.(value), capabilities?.metricCapabilities, capabilities?.queryCapabilities,
+    host ? { find: state => hostRef.current?.find(state) ?? "", current: () => hostFind.current } : undefined), [dataset, find, capabilities?.metricCapabilities, capabilities?.queryCapabilities, Boolean(host)]);
   const [bookmarkRevision, setBookmarkRevision] = useState(0);
   useEffect(() => { const changed = () => setBookmarkRevision(value => value + 1); window.addEventListener("pharos:bookmarks", changed); return () => window.removeEventListener("pharos:bookmarks", changed); }, []);
   // A shared file has no origin of its own to keep saved queries apart from other files'.
-  const storage = useMemo(() => shared ? memoryStorageAdapter() : libraryStorageAdapter({ fresh: new URLSearchParams(location.search).get("fresh") === "1", onRecovery: () => setRecovered(true) }), [bookmarkRevision]);
+  const storage = useMemo(() => shared ? memoryStorageAdapter() : libraryStorageAdapter({ fresh: new URLSearchParams(location.search).get("fresh") === "1" }), [bookmarkRevision]);
   const propertyStorage = useMemo(() => jsonPropertyViewStorage(
     key => preferences().get<string | null>(key, null),
     (key, value) => preferences().set(key, value),
@@ -530,6 +540,9 @@ function QuerySurface({ dataset, usageActions = false, libraryView = "table", me
     // Keep URL configuration stable; active pauses execution/synchronization
     // without resetting restoration or undo history when a table is hidden.
     storage, debounceMs: 100, syncUrl: true, queryParameter: `q_${registryKey}`, canonicalizeQuery,
+    // A bare reload restores the last query that loaded, never one that
+    // failed, timed out or was cancelled; that one stays on screen to retry.
+    persistLast: "succeeded", hostQuery: host?.query,
     itemDetails: { storage: propertyStorage, ...(detailSchema ? { schema: detailSchema, defaultModes: ["modal", "expand"] as ("modal" | "expand")[] } : {}), relationships: shared ? undefined : relationships,
       loadRow: shared ? undefined : async (id, signal) => {
         const row = await transport!.fetchRow!(id, signal);
@@ -546,16 +559,13 @@ function QuerySurface({ dataset, usageActions = false, libraryView = "table", me
     fittedOnOpen.current = true;
     if (!api.query.fitToScreen) api.setQuery(previous => ({ ...previous, fitToScreen: true }));
   }, [usageActions, visible, api.restoration.ready, api.error, api.query.fitToScreen]);
-  const lastFailure = useRef<Error | null>(null);
-  useEffect(() => {
-    if (!visible || !api.error || api.error === lastFailure.current) return;
-    lastFailure.current = api.error;
-    // Only query rejection or a bounded timeout implicates the restored state.
-    // Offline, authentication and service failures must not discard preferences.
-    if (shouldSkipQueryOnRestore(api.error) && !new URLSearchParams(find).has("record_search")) {
-      rejectLastQuery(schema.name, api.query, { defaults: api.defaults, canonicalize: canonicalizeQuery });
-    }
-  }, [visible, api.error, api.query, schema.name]);
+  const hostState = api.query.hostState, hostKey = JSON.stringify(hostState ?? null);
+  hostFind.current = host ? host.find(hostState) : "";
+  const searching = Boolean(find || hostFind.current);
+  useEffect(() => { hostRef.current?.onState?.(hostState); }, [hostKey]);
+  const failed = api.execution ? api.execution.status === "failed" : Boolean(api.error);
+  const resultsView = searchResultsView(api.query, dataset === "library" ? readLibraryHost(hostState).view : "table");
+  const selectRows = selectable && !api.query.grouping && resultsView === "table";
   useMachineQueryNavigation(api, Boolean(visible && !shared && (namespace || dataset === "usage")), JSON.stringify([scopeWhere, new URLSearchParams(location.search).get("machine_view")]), `q_${registryKey}`, scopeWhere);
   const apiRef = useRef(api);
   apiRef.current = api;
@@ -595,8 +605,9 @@ function QuerySurface({ dataset, usageActions = false, libraryView = "table", me
     if (dataset !== "library" || !api.restoration.ready || !pendingLibraryFilter) return;
     const where = pendingLibraryFilter;
     pendingLibraryFilter = undefined;
-    clearLibrarySearch?.();
-    api.setQuery(previous => ({ ...previous, where, offset: 0 }));
+    // One definition: the work's filters, without the current content search.
+    if (api.setDefinition) api.setDefinition(previous => ({ query: { ...previous.query, where, offset: 0 }, hostState: withoutLibrarySearch(previous.hostState) }));
+    else api.setQuery(previous => ({ ...previous, where, offset: 0 }));
   }, [dataset, api.restoration.ready, locationRevision]);
   useEffect(() => {
     return () => { tableApis.delete(registryKey); };
@@ -623,9 +634,14 @@ function QuerySurface({ dataset, usageActions = false, libraryView = "table", me
   useOriginMetadata(Boolean(visible));
   if (!visible) return null;
   return <FilterValueProvider value={filterPresentations[dataset]}>
-    <QueryRecovery busy={api.loading || api.restoration.status === "resolving" || (remote && !capabilities && !capabilityError)} error={capabilityError ?? api.error} recovered={recovered} identity={JSON.stringify(api.query)}
-      onRetry={() => { retryLastQuery(schema.name); if (capabilityError) setCapabilityRetry(value => value + 1); else if (api.restoration.error) void api.restoreLocation(location.href).catch(() => {}); else api.refresh(); }}
-      onReset={() => { setRecovered(false); api.setQuery(tableRecoveryQuery(schema, scopeWhere)); if (capabilityError) setCapabilityRetry(value => value + 1); }} />
+    <QueryRecovery busy={api.execution?.status === "running" || api.restoration.status === "resolving" || (remote && !capabilities && !capabilityError)} error={capabilityError ?? api.error} identity={api.execution?.key ?? JSON.stringify(api.query)}
+      onRetry={() => { if (capabilityError) setCapabilityRetry(value => value + 1); else if (api.restoration.error) void api.restoreLocation(location.href).catch(() => {}); else api.refresh(); }}
+      onReset={() => {
+        const query = tableRecoveryQuery(schema, scopeWhere);
+        // Reset clears host clauses too, as the native Reset does.
+        if (api.setDefinition && host) api.setDefinition({ query, hostState: host.query.defaults }); else api.setQuery(query);
+        if (capabilityError) setCapabilityRetry(value => value + 1);
+      }} />
     {!api.query.grouping || namespace ? header?.(api) : null}
     {!shared && !namespace && Object.hasOwn(usageDatasets, dataset) ? <UsageQueryIdeas key={dataset} dataset={dataset as UsageDataset} api={api} /> : null}
     {presets?.(api)}
@@ -640,11 +656,11 @@ function QuerySurface({ dataset, usageActions = false, libraryView = "table", me
       onInspect={(bucket, clause) => { const records = inspectBucketQuery(api.query, bucket, clause, sourceSchema); if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, { ...records, orderBy: [], ...(usageActions ? { fitToScreen: true } : {}) }) : records); }} />
     {capabilityError && !capabilities ? <div className="query-table-error">Could not read this table's query capabilities: {capabilityError.message}</div> : null}
     {api.error ? <div className="query-table-error">{api.error?.message}</div> : null}
-    {selectable && !api.query.grouping ? <SelectionToolbar selection={api.selection} actions={ids => <ShareSelection ids={ids} api={api} transport={transport} execution={capabilities?.computedExecution} />} /> : null}
-    {dataset === "library" && searchResultsView(api.query, libraryView) === "conversation" ? <ConversationResults api={api} searching={Boolean(find)} />
-      : dataset === "writing_messages" && messageView === "text" && !api.query.grouping ? <AuthoredMessages api={api} emptyMessage={api.error ? failedMessage : emptyMessages[dataset]} /> : <DataTable
+    {selectRows ? <SelectionToolbar selection={api.selection} actions={ids => <ShareSelection ids={ids} api={api} transport={transport} execution={capabilities?.computedExecution} />} /> : null}
+    {dataset === "library" && resultsView === "conversation" ? <ConversationResults api={api} searching={searching} failed={failed} />
+      : dataset === "writing_messages" && messageView === "text" && !api.query.grouping ? <AuthoredMessages api={api} emptyMessage={failed ? failedMessage : emptyMessages[dataset]} /> : <DataTable
       maxHeight={100000}
-      {...(selectable && !api.query.grouping ? { selection: api.selection } : {})}
+      {...(selectRows ? { selection: api.selection } : {})}
       fields={api.query.grouping ? usageGroupFields(api.visibleFields, api.query) : api.visibleFields}
       rows={api.rows}
       query={api.query}
@@ -657,7 +673,7 @@ function QuerySurface({ dataset, usageActions = false, libraryView = "table", me
       onNavigate={navigateLink}
       total={api.total}
       loading={api.loading}
-      emptyMessage={api.loading ? "Loading results…" : api.error ? failedMessage : find ? "No work matches this search and these filters." : emptyMessages[dataset]}
+      emptyMessage={api.loading ? "Loading results…" : failed ? failedMessage : searching ? "No work matches this search and these filters." : emptyMessages[dataset]}
       classNames={{ empty: api.loading ? "pharos-table-loading" : undefined }}
       {...(api.query.grouping ? { trailing: (row: Row) => {
         const complete = api.query.grouping!.keys.every(key => Object.hasOwn(row, groupKeyField(key)));
@@ -795,8 +811,8 @@ function ConversationResultCard({ row }: { row: Row }) {
   </article>;
 }
 
-function ConversationResults({ api, searching }: { api: QueryTableApi<Row>; searching: boolean }) {
-  if (!api.loading && !api.rows.length) return <div className="conversation-results-empty no-results">{api.error ? failedMessage : searching ? "No work matches this search and these filters." : "No work matches this query."}</div>;
+function ConversationResults({ api, searching, failed }: { api: QueryTableApi<Row>; searching: boolean; failed: boolean }) {
+  if (!api.loading && !api.rows.length) return <div className="conversation-results-empty no-results">{failed ? failedMessage : searching ? "No work matches this search and these filters." : "No work matches this query."}</div>;
   return <div className={`conversation-results ${api.loading ? "loading" : ""}`} aria-busy={api.loading}>
     {api.loading && !api.rows.length ? <div className="conversation-results-empty">Loading conversations…</div> : null}
     {api.rows.map((row) => <ConversationResultCard key={String(api.rowId(row) ?? row.id)} row={row} />)}
@@ -861,82 +877,70 @@ function FindMatchCell({ row }: { row: Row }) {
   return <button type="button" className="library-find-cell" title={`${findHitText(hit)}\n\n${count.toLocaleString()} match${count === 1 ? "" : "es"} · ${findHitLabel(hit)}`} onClick={event => { event.stopPropagation(); openFindHit(hit); }}>Open match{count > 1 ? ` (${count.toLocaleString()})` : ""}</button>;
 }
 
+// The older Human messages table runs a message search; its definition is host
+// query state (message_query). A cursor continues one search's batches, so it
+// belongs to that search and stays out of the definition (message_cursor).
+const messageHost: SurfaceHost = { query: messageHostQuery, find: messageFind };
+function urlMessageSearch(): string {
+  const token = new URLSearchParams(location.search).get("message_query");
+  try { return token ? messageFind(messageHostQuery.normalize!({ version: 1, params: { message_query: [token] } })) : ""; } catch { return ""; }
+}
+const urlMessageCursor = () => ({ search: urlMessageSearch(), value: new URLSearchParams(location.search).get("message_cursor") ?? "" });
 function UserMessageSurface({ header, messageView }: { messageView: MessageView; header: (api: QueryTableApi<Row>, searching: boolean) => React.ReactNode }) {
   if (shared) return <QuerySurface dataset="writing_messages" messageView={messageView} header={api => header(api, false)} />;
-  const [initial] = useState(readMessageSearch), [value, setValue] = useState(initial.draft);
-  const [applied, setApplied] = useState<TextSearchDraft | null>(initial.active ? initial.draft : null), [error, setError] = useState(initial.error);
-  const [cursor, setCursor] = useState(() => new URLSearchParams(location.search).get("message_cursor") ?? "");
+  const [hostState, setHostState] = useState<HostQueryState>();
+  const host = useMemo((): SurfaceHost => ({ ...messageHost, onState: setHostState }), []);
+  const search = messageFind(hostState);
+  const [cursor, setCursor] = useState(urlMessageCursor);
+  const activeCursor = search && cursor.search === search ? cursor.value : "";
+  const restart = () => setCursor({ search: "", value: "" });
   const [found, setFound] = useState<FindSummary | null>(null);
   useEffect(() => {
-    const restore = () => { if (!datasetIsVisible("writing_messages")) return; const next = readMessageSearch(); setValue(next.draft); setApplied(next.active ? next.draft : null); setError(next.error); setCursor(new URLSearchParams(location.search).get("message_cursor") ?? ""); };
+    const restore = () => { if (datasetIsVisible("writing_messages")) setCursor(urlMessageCursor()); };
     window.addEventListener("pharos:route", restore); return () => window.removeEventListener("pharos:route", restore);
   }, []);
-  useEffect(() => { if (datasetIsVisible("writing_messages") && !error) { updateURI("message_query", applied ? JSON.stringify(applied) : ""); updateURI("message_cursor", cursor); } }, [applied, cursor, error]);
-  const find = applied ? textFindParameters(applied, cursor) : "";
-  useEffect(() => setFound(null), [find]);
-  return <QuerySurface dataset="writing_messages" messageView={messageView} header={api => header(api, !!find)} find={find} onFind={setFound} controls={(api, builder) => <>
-    <MessageTableSearch api={api} value={value} active={!!applied} initialError={error} onApply={next => { if (textFindParameters(next) === find) api.refresh(); setValue(next); setApplied(next); setCursor(""); setError(""); }} onClear={() => { setValue(newMessageSearch()); setApplied(null); setCursor(""); setError(""); }} layout={builder} />
-    {find && found?.search ? <div className="library-find-status" role="status"><p>{found.search.complete ? "All eligible messages checked." : "Partial search batch; more messages may match."} Table filters and metrics apply to the matching messages in this batch. Ordering is within this batch.</p><p>{found.search.elapsed_ms} ms · {found.search.candidates.toLocaleString()} candidates checked{found.search.skipped_oversize ? ` · ${found.search.skipped_oversize} oversized messages skipped` : ""}.</p>{found.search.stop_message ? <p>{found.search.stop_message}</p> : null}{found.search.next_cursor ? <button type="button" onClick={() => setCursor(found.search!.next_cursor)}>Next message search batch</button> : null}{withheldBatch(found.search) ? <button type="button" onClick={() => api.refresh()}>Retry this batch</button> : null}{cursor ? <button type="button" onClick={() => setCursor("")}>Restart message search</button> : null}</div> : null}
+  useEffect(() => { if (datasetIsVisible("writing_messages")) updateURI("message_cursor", activeCursor); }, [activeCursor]);
+  useEffect(() => setFound(null), [search, activeCursor]);
+  return <QuerySurface dataset="writing_messages" host={host} messageView={messageView} header={api => header(api, !!search)} find={activeCursor ? new URLSearchParams({ find_cursor: activeCursor }).toString() : ""} onFind={setFound} controls={(api, builder) => <>
+    <MessageSearchClause api={api} layout={builder} onSearch={restart} />
+    {search && found?.search ? <div className="library-find-status" role="status"><p>{found.search.complete ? "All eligible messages checked." : "Partial search batch; more messages may match."} Table filters and metrics apply to the matching messages in this batch. Ordering is within this batch.</p><p>{found.search.elapsed_ms} ms · {found.search.candidates.toLocaleString()} candidates checked{found.search.skipped_oversize ? ` · ${found.search.skipped_oversize} oversized messages skipped` : ""}.</p>{found.search.stop_message ? <p>{found.search.stop_message}</p> : null}{found.search.next_cursor ? <button type="button" onClick={() => setCursor({ search, value: found.search!.next_cursor })}>Next message search batch</button> : null}{withheldBatch(found.search) ? <button type="button" onClick={() => api.refresh()}>Retry this batch</button> : null}{activeCursor ? <button type="button" onClick={restart}>Restart message search</button> : null}</div> : null}
   </>} />;
 }
 
+function MessageSearchClause({ api, layout, onSearch }: { api: QueryTableApi<Row>; layout: React.ReactNode; onSearch: () => void }) {
+  const state = api.query.hostState, key = JSON.stringify(state ?? null);
+  const applied = useMemo(() => readMessageSearchHost(state), [key]);
+  const value = useMemo(() => applied ?? newMessageSearch(), [applied]);
+  const [error, setError] = useState("");
+  // One edit, the search with its record filters and order, is one definition.
+  const commit = (next: TextSearchDraft | null, table: Partial<QueryState> = {}) => {
+    try {
+      const hostState = withMessageSearch(next);
+      const same = sameHostState(messageHostQuery.normalize!(hostState), state);
+      api.setDefinition?.(previous => ({ query: { ...previous.query, ...table, offset: 0 }, hostState }));
+      if (same && next) api.refresh();
+      onSearch(); setError("");
+    } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
+  };
+  return <>
+    <MessageTableSearch api={api} value={value} active={!!applied} onApply={(next, table) => commit(next, table)} onClear={() => commit(null)} layout={layout} />
+    {error ? <p className="query-table-error" role="alert">{error}</p> : null}
+  </>;
+}
+
+// Search's content search (messages, files or URLs) and its result view are
+// host query state (host-query-state.ts), saved and undone with the table query.
 function LibraryPage() {
-  const locationRevision = useLocationRevision();
-  const [initial] = useState(() => readTextSearch(new URLSearchParams(location.search)));
-  const [editorValue, setEditorValue] = useState(initial.draft);
-  const [applied, setApplied] = useState<TextSearchDraft | null>(initial.active ? initial.draft : null);
-  const [initialError, setInitialError] = useState(initial.error);
-  const [kind, setKind] = useState<FindKind>(() => (new URLSearchParams(location.search).get("kind") as FindKind) || "text");
-  const [fileDraft, setFileDraft] = useState(() => new URLSearchParams(location.search).get("search") ?? "");
-  const [fileSearch, setFileSearch] = useState(fileDraft);
-  const [fileCase, setFileCase] = useState(() => new URLSearchParams(location.search).get("case") === "1");
-  const [fileCaseDraft, setFileCaseDraft] = useState(fileCase);
-  const [view, setView] = useState<LibraryView>(() => new URLSearchParams(location.search).get("view") === "conversation" ? "conversation" : "table");
-  const clearText = () => { const empty = newKeywordSearch(); setEditorValue(empty); setApplied(null); setInitialError(""); };
-  useEffect(() => { clearLibrarySearch = () => { clearText(); setFileSearch(""); setFileDraft(""); }; return () => { clearLibrarySearch = undefined; }; }, []);
-  useEffect(() => {
-    const restore = () => {
-      if (!shared && location.pathname !== "/library") return;
-      const params = new URLSearchParams(location.search), next = readTextSearch(params);
-      setEditorValue(next.draft); setApplied(next.active ? next.draft : null); setInitialError(next.error);
-      setKind((params.get("kind") as FindKind) || "text");
-      setFileDraft(params.get("search") ?? ""); setFileSearch(params.get("search") ?? "");
-      setFileCase(params.get("case") === "1"); setFileCaseDraft(params.get("case") === "1");
-      setView(params.get("view") === "conversation" ? "conversation" : "table");
-    };
-    window.addEventListener("pharos:route", restore);
-    return () => window.removeEventListener("pharos:route", restore);
-  }, []);
-  useEffect(() => {
-    if (shared || location.pathname !== "/library" || initialError) return;
-    const url = new URL(location.href);
-    for (const key of [...url.searchParams.keys()]) if (key.startsWith("text_") || ["search", "fuzzy", "case", "separators", "kind"].includes(key)) url.searchParams.delete(key);
-    if (kind === "text") {
-      if (applied) url.searchParams.set("text_builder", JSON.stringify(applied));
-    } else { url.searchParams.set("kind", kind); if (fileSearch) url.searchParams.set("search", fileSearch); if (fileCase) url.searchParams.set("case", "1"); }
-    if (view === "conversation") url.searchParams.set("view", view); else url.searchParams.delete("view");
-    if (url.href !== location.href) { history.replaceState(null, "", url); window.dispatchEvent(new Event("pharos:uri-changed")); }
-  }, [locationRevision, applied, kind, view, fileSearch, fileCase, initialError]);
-  const fileParams = new URLSearchParams({ find: fileSearch, find_kind: kind });
-  if (fileCase) fileParams.set("find_case", "1");
-  const find = shared ? "" : kind === "text" ? applied ? textFindParameters(applied) : "" : fileSearch ? fileParams.toString() : "";
+  const [hostState, setHostState] = useState<HostQueryState>();
+  const host = useMemo((): SurfaceHost => ({ query: libraryHostQuery, find: shared ? () => "" : libraryFind, onState: setHostState }), []);
+  const find = shared ? "" : libraryFind(hostState);
   const [found, setFound] = useState<FindSummary | null>(null);
   useEffect(() => { setFound(null); }, [find]);
   return <div className={`pharos-query-page${find ? " library-searching" : ""}`}>
     <div className="view-heading"><div><h1>{shared ? "Conversations" : "Search"}</h1>{!shared ? <p className="muted">Find past work. Follow a conversation, compare projects, or build a view of your own.</p> : null}</div></div>
-    <QuerySurface dataset="library" libraryView={view} resultPresentation={api => <SearchResultsDisplay view={searchResultsView(api.query, view)} grouped={!!api.query.grouping}
-      onChange={next => {
-        if (next === "conversation" && api.query.grouping) api.setQuery(previous => queryForSearchResultsView(previous, next));
-        setView(next);
-      }} />} find={find} onFind={setFound} selectable={!shared && view === "table"} {...(find ? { trailing: (row: Row) => <FindMatchCell row={row} /> } : {})} queryContent={shared ? undefined : api => <ExploreSearch kind={kind} active={!!find} error={initialError}
-      summary={kind === "text" && applied ? searchSentence(applied).parts.map(part => typeof part === "string" ? part : part.value).join("") : `${fileSearch}${fileCase ? " · case sensitive" : ""}`}
-      onClear={() => { clearText(); setFileSearch(""); setFileDraft(""); }}>
-      {(close, draftKind, setDraftKind) => <TextSearchEditor compact sentence={false} value={editorValue} active={!!applied} initialError={initialError} kind={draftKind} onKind={setDraftKind}
-        onApply={next => { if (kind === "text" && textFindParameters(next) === find) api.refresh(); setKind("text"); setEditorValue(next); setApplied(next); setInitialError(""); close(); }} onClear={clearText}
-        file={{ text: fileDraft, caseSensitive: fileCaseDraft, active: !!fileSearch, dirty: fileDraft.trim() !== fileSearch || fileCaseDraft !== fileCase, onText: setFileDraft, onCase: setFileCaseDraft, onApply: () => { setKind(draftKind); setInitialError(""); setFileSearch(fileDraft.trim()); setFileCase(fileCaseDraft); close(); }, onClear: () => { setFileDraft(""); setFileSearch(""); } }}
-        context={<p className="explore-search-context">Search inside retained messages, file changes, or visited URLs. Use <b>where</b> in the query builder to filter workspaces.</p>}
-        workspaceScope={{ filters: [] }} orderControl={null} />}
-    </ExploreSearch>} controls={shared ? undefined : () => <>
+    <QuerySurface dataset="library" host={host} resultPresentation={api => <SearchResultsDisplay view={searchResultsView(api.query, readLibraryHost(api.query.hostState).view)} grouped={!!api.query.grouping}
+      onChange={next => api.setDefinition?.(previous => ({ query: queryForSearchResultsView(previous.query, next), hostState: libraryHostState({ ...readLibraryHost(previous.hostState), view: next }) }))} />}
+      onFind={setFound} selectable={!shared} {...(find ? { trailing: (row: Row) => <FindMatchCell row={row} /> } : {})} queryContent={shared ? undefined : api => <LibrarySearchClause api={api} />} controls={shared ? undefined : () => <>
     {find && found ? <div className="library-find-status muted" role="status">
       <p>Limit controls workspace rows after filtering and sorting. Counts and metrics include the full matching population.</p>
       {found.workspaces === 0 ? <p>No messages matched these conditions. Try switching “and” to “or”, remove a condition, or choose a broader target.</p> : null}
@@ -944,6 +948,36 @@ function LibraryPage() {
     </div> : null}
     </>} />
   </div>;
+}
+
+function LibrarySearchClause({ api }: { api: QueryTableApi<Row> }) {
+  const state = api.query.hostState, key = JSON.stringify(state ?? null);
+  // Read once per definition, so the editor's rule IDs stay stable.
+  const current = useMemo(() => readLibraryHost(state), [key]);
+  const blank = useMemo(() => newKeywordSearch(), [key]);
+  const [fileDraft, setFileDraft] = useState(current.file);
+  const [fileCaseDraft, setFileCaseDraft] = useState(current.fileCase);
+  useEffect(() => { setFileDraft(current.file); setFileCaseDraft(current.fileCase); }, [current]);
+  const [error, setError] = useState("");
+  // Applying the search already in effect runs it again.
+  const commit = (change: Partial<LibraryHost>, rerun = false) => {
+    try {
+      const hostState = libraryHostState({ ...current, ...change });
+      if (rerun && sameHostState(libraryHostQuery.normalize!(hostState), state)) api.refresh();
+      else api.setDefinition?.(previous => ({ query: { ...previous.query, offset: 0 }, hostState }));
+      setError("");
+      return true;
+    } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); return false; }
+  };
+  return <ExploreSearch kind={current.kind} active={Boolean(libraryFind(state))}
+    summary={current.kind === "text" && current.text ? searchSentence(current.text).parts.map(part => typeof part === "string" ? part : part.value).join("") : `${current.file}${current.fileCase ? " · case sensitive" : ""}`}
+    onClear={() => commit({ kind: "text", text: null, file: "", fileCase: false })}>
+    {(close, draftKind, setDraftKind) => <TextSearchEditor compact sentence={false} value={current.text ?? blank} active={!!current.text} kind={draftKind} onKind={setDraftKind}
+      onApply={next => { if (commit({ kind: "text", text: next }, true)) close(); }} onClear={() => commit({ text: null })}
+      file={{ text: fileDraft, caseSensitive: fileCaseDraft, active: !!current.file, dirty: fileDraft.trim() !== current.file || fileCaseDraft !== current.fileCase, onText: setFileDraft, onCase: setFileCaseDraft, onApply: () => { if (commit({ kind: draftKind, file: fileDraft.trim(), fileCase: fileCaseDraft }, true)) close(); }, onClear: () => { setFileDraft(""); commit({ file: "", fileCase: false }); } }}
+      context={<><p className="explore-search-context">Search inside retained messages, file changes, or visited URLs. Use <b>where</b> in the query builder to filter workspaces.</p>{error ? <p className="text-editor-error" role="alert">{error}</p> : null}</>}
+      workspaceScope={{ filters: [] }} orderControl={null} />}
+  </ExploreSearch>;
 }
 
 const sum = (field: string, groupBy: string[], label: string): AggregationClause => ({ id: `${field}:${groupBy.join(",")}`, op: "sum", field, groupBy, label });
@@ -1661,20 +1695,38 @@ function UsagePage() {
   </UsageChartColorsProvider>;
 }
 
+// A record keyword clause is the table's host query state (record_<dataset>):
+// saved, shared, reset and undone with the table query. Each request compiles
+// its own state into record_search, which the service validates and runs.
 function AnalyzeQueryTable({ dataset }: { dataset: UsageDataset }) {
-  useLocationRevision();
-  const parameter = recordKeywordParameter(dataset), token = new URLSearchParams(location.search).get(parameter);
-  const restored = useMemo(() => readRecordKeywordSearch(token, schemas[dataset].fields), [token, dataset]);
-  const find = restored.error ? new URLSearchParams({ record_search: "invalid" }).toString() : restored.value ? new URLSearchParams({ record_search: recordKeywordRequest(restored.value) }).toString() : "";
+  const fields = schemas[dataset].fields;
+  const host = useMemo((): SurfaceHost => ({ query: recordKeywordHostQuery(dataset, fields), find: state => recordKeywordFind(state, dataset, fields) }), [dataset]);
   return <>
     {/* Keep record predicates and grouped HAVING in the native builder,
         including datasets whose older pages use RecordSearchEditor. */}
-    <QuerySurface dataset={dataset} usageActions
-      find={find}
-      querySummary={restored.value || restored.error ? api => <span>{(api.query.grouping?.source ?? api.query).where.length} source filters{api.query.grouping ? ` · ${api.query.where.length} group filters` : ""} · {restored.value ? recordKeywordSummary(restored.value, schemas[dataset].fields, usageDatasets[dataset]) : "Keyword filter needs attention"}</span> : undefined}
-      queryContent={api => <RecordKeywordClause fields={schemas[dataset].fields} context={usageDatasets[dataset]} value={restored.value} error={restored.error}
-        onChange={next => { const request = next ? recordKeywordRequest(next) : ""; updateURI(parameter, next ? JSON.stringify(next) : ""); api.setQuery(previous => ({ ...previous, offset: 0 })); if (request === (restored.value ? recordKeywordRequest(restored.value) : "")) api.refresh(); }} />}
+    <QuerySurface dataset={dataset} usageActions host={host}
+      querySummary={api => { const value = readRecordKeyword(api.query.hostState, dataset, fields); return value ? <span>{(api.query.grouping?.source ?? api.query).where.length} source filters{api.query.grouping ? ` · ${api.query.where.length} group filters` : ""} · {recordKeywordSummary(value, fields, usageDatasets[dataset])}</span> : undefined; }}
+      queryContent={api => <AnalyzeRecordKeyword api={api} dataset={dataset} host={host.query} />}
       presets={dataset === "mcp_calls" ? () => <MCPUsageNote /> : undefined} />
+  </>;
+}
+
+function AnalyzeRecordKeyword({ api, dataset, host }: { api: QueryTableApi<Row>; dataset: UsageDataset; host: HostQueryOptions }) {
+  const fields = schemas[dataset].fields, state = api.query.hostState, key = JSON.stringify(state ?? null);
+  const value = useMemo(() => readRecordKeyword(state, dataset, fields), [key, dataset]);
+  const [error, setError] = useState("");
+  return <>
+    <RecordKeywordClause fields={fields} context={usageDatasets[dataset]} value={value}
+      onChange={next => {
+        try {
+          const hostState = withRecordKeyword(dataset, next);
+          // Applying the clause already in effect runs it again.
+          if (next && sameHostState(host.normalize!(hostState), state)) api.refresh();
+          else api.setDefinition?.(previous => ({ query: { ...previous.query, offset: 0 }, hostState }));
+          setError("");
+        } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
+      }} />
+    {error ? <p className="query-table-error" role="alert">{error}</p> : null}
   </>;
 }
 

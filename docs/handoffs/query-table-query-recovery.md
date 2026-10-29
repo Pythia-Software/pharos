@@ -2,7 +2,8 @@
 
 **Delivered in Query Table 0.9.7**: `persistLast: "succeeded"` saves the
 last-used query only after its rows and metrics load, and `api.execution`
-is an execution receipt. Pharos adopts them in a later change.
+is an execution receipt. Pharos adopted them on Query Table 0.9.7 and
+removed its own skip list of failed queries.
 
 Query Table release: 0.9.2 (all four npm packages and Go backend).
 

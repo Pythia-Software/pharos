@@ -259,37 +259,42 @@ test('changing a saved range preserves query structure, indexed search context, 
 });
 
 
-test('failed last-used queries are skipped across adapters without deleting named views', async () => {
+test('host query state survives last-used, named saves, updates, defaults and durable links in a fresh browser',async()=>{
  const key='pharos_tool_calls',storage=m.libraryStorageAdapter();
- await storage.saveLast(key,query);
- const saved=await storage.loadDefaultSaved(key),before=JSON.stringify(m.readBookmarks());
- m.rejectLastQuery(key,query);
- await storage.saveLast(key,query); // Query Table can persist after a request fails.
- let recovered=0;
- const next=m.libraryStorageAdapter({onRecovery:()=>recovered++});
- assert.equal(await next.loadLast(key),null);
- assert.equal(recovered,1);
- const changed={...query,limit:26};
- await next.saveLast(key,changed);
- assert.deepEqual(await next.loadLast(key),changed);
- assert.equal(JSON.stringify(m.readBookmarks()),before);
- // An explicit retry can make the same query eligible for restoration again.
- m.retryLastQuery(key);
- await next.saveLast(key,query);
- assert.deepEqual(await next.loadLast(key),query);
- if(saved)assert.equal((await next.loadDefaultSaved(key)).id,saved.id);
+ assert.equal(storage.storesHostState,true,'Query Table refuses to save host state through adapters that drop it');
+ assert.equal(m.clientTableStorageAdapter().storesHostState,true);
+ const keyword={version:1,params:{record_tool_calls:['{"field":"command","draft":{"editor":"syntax","text":"(cache OR buffer) NOT obsolete"}}']}};
+ const withKeyword={...query,hostState:keyword};
+ await storage.saveLast(key,withKeyword);
+ assert.deepEqual((await storage.loadLast(key)).hostState,keyword);
+ const saved=await storage.saveNamed(key,'Keyword errors',withKeyword,40);
+ await storage.setDefaultSaved(key,saved.id);
+ const bookmark=m.readBookmarks().find(item=>item.savedQueryId===saved.id);
+ const address=new URL(bookmark.url,location.origin);
+ assert.match(address.searchParams.get('q_tool_calls'),/^@/);
+ assert.deepEqual(address.searchParams.getAll('record_tool_calls'),keyword.params.record_tool_calls,'the address mirrors host state for previews');
+ cache.clear(); // Another browser: no local snapshot cache.
+ const links=m.createQueryLinkService(key,m.httpQuerySnapshotStore('/api/query-snapshots'));
+ assert.deepEqual((await links.resolve(address.href,'q_tool_calls')).hostState,keyword);
+ assert.deepEqual((await storage.loadDefaultSaved(key)).query.hostState,keyword);
+ assert.deepEqual(m.savedQueries('tool_calls').find(item=>item.id===saved.id).query.hostState,keyword);
+ // Updating the save replaces host state with the table query.
+ const cleared={...query,limit:30,hostState:{version:1,params:{}}};
+ await storage.updateNamed(key,saved.id,cleared,50);
+ assert.deepEqual((await storage.loadDefaultSaved(key)).query,cleared);
+ assert.equal(new URL(m.readBookmarks().find(item=>item.savedQueryId===saved.id).url,location.origin).searchParams.has('record_tool_calls'),false);
+ cache.clear();
+ assert.deepEqual((await links.resolve(address.href,'q_tool_calls')).hostState,keyword,'the earlier durable link still opens its own definition');
+ await storage.deleteSaved(key,saved.id);
 });
 
-test('a rejected named default is bypassed while the saved query and default choice survive',async()=>{
+test('reset page bypasses the last-used query, and a failing query never needs a skip list',async()=>{
+ // Query Table persists only succeeded queries (persistLast: "succeeded"),
+ // so the adapter stores and restores what it is given.
  const key='pharos_tool_calls',storage=m.libraryStorageAdapter();
- const saved=await storage.loadDefaultSaved(key),before=JSON.stringify(m.readBookmarks());
- m.rejectLastQuery(key,saved.query);
- let recovered=false;
- assert.equal(await m.libraryStorageAdapter({onRecovery:()=>recovered=true}).loadDefaultSaved(key),null);
- assert.equal(recovered,true);
- assert.equal(JSON.stringify(m.readBookmarks()),before);
- m.retryLastQuery(key);
- assert.equal((await storage.loadDefaultSaved(key)).id,saved.id);
+ await storage.saveLast(key,{...query,limit:27});
+ assert.deepEqual(await storage.loadLast(key),{...query,limit:27});
+ assert.equal(await m.libraryStorageAdapter({fresh:true}).loadLast(key),null);
 });
 
 test('fresh page links bypass cached queries and named defaults, preserving the saved library',async()=>{
@@ -319,18 +324,6 @@ test('fresh page links bypass cached queries and named defaults, preserving the 
  }
 });
 
-
-test('failed defaults are recognized after schema normalization and machine scope, without skipping a different default',async()=>{
- const key='pharos_tool_calls',storage=m.libraryStorageAdapter(),saved=await storage.loadDefaultSaved(key);
- const defaults=m.normalizeQueryState({...EMPTY_QUERY,limit:50});
- const canonicalize=query=>({...query,where:[...query.where,{field:'provider',op:'=',value:'codex'}]});
- const effective=canonicalize(m.normalizeQueryState(saved.query,defaults));
- m.rejectLastQuery(key,{...effective,limit:effective.limit+1},{defaults,canonicalize});
- assert.equal((await storage.loadDefaultSaved(key)).id,saved.id,'another failed query must not skip this default');
- m.rejectLastQuery(key,effective,{defaults,canonicalize});
- assert.equal(await storage.loadDefaultSaved(key),null);
- m.retryLastQuery(key);
-});
 
 test('computed source links use native conversation redirects and internal query links stay in the app', async t => {
   const { navigateLink } = await import('../../../src/query-link-targets');

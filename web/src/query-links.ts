@@ -111,6 +111,9 @@ export function queryURL(dataset: QueryDataset, query: QueryState, window?: Roll
     if (window.mode === "relative") params.set("window_mode", "relative");
     params.set("window_days", String(window.days)); params.set("window_field", window.field); params.set("window_dataset", dataset);
   }
+  // Host query state also travels in its own parameters, as the table mirrors
+  // it, so previews and older readers of the address see the same search.
+  for (const [name, values] of Object.entries(query.hostState?.params ?? {})) for (const value of values) params.append(name, value);
   return `${path}?${params}`;
 }
 

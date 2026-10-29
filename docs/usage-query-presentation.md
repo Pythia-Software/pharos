@@ -18,13 +18,30 @@ the same unicode61 verifier as message search and never select parent workspaces
 The restriction runs before grouping, metrics, sorting and pagination. Query-v3
 executes it; older row/metric protocols reject it instead of ignoring it.
 
-Record keyword definitions travel in the per-dataset `record_*` URL parameter.
-Invalid saved conditions fail closed. Table Saved/Undo/Reset controls still own
-QueryState; keyword clauses have their own edit/remove controls, like Library's
-content clause. Query Table 0.9.7's host query state
-([handoff](handoffs/query-table-saved-host-query-state.md)) can carry them
-through that lifecycle; it is adopted in a later change. Returning to a dashboard
-explicitly resets keyword conditions, and switching datasets drops them.
+A keyword clause is part of its table's query definition: Query Table 0.9.7's
+host query state ([handoff](handoffs/query-table-saved-host-query-state.md)),
+registered by `web/src/host-query-state.ts`. Save, Update, Saved, Default,
+Share, Reset and Undo/Redo treat the clause and the table query as one
+definition, and adding, editing or removing the clause is one history entry.
+Its definition (field and editor rules, without the editor's rule IDs) is
+mirrored in the per-dataset `record_<dataset>` URL parameter; only that
+dataset's parameter belongs to its table. Saves made before host state, and
+Reset, have no clause. A clause that cannot be read, names a field outside the
+allowlist or exceeds Query Table's 4,000-character host value fails the whole
+restore, so the query never runs without it. Each request compiles the clause
+it runs with into `record_search`, which the service validates and runs; the
+service also refuses a request whose host state and `record_search` disagree.
+Search keeps its content search (`text_builder`, or `kind`, `search` and
+`case`) and its Table/Conversations view the same way, as does the older Human
+messages table's `message_query`; message search cursors stay out of the
+definition. Returning to a dashboard explicitly resets keyword conditions, and
+switching datasets drops them.
+
+A bare reload restores the last query whose rows and metrics loaded
+(`persistLast: "succeeded"`), never one that failed, timed out or was
+cancelled. A failed or slow (12 s) query keeps Retry, Reset table and Reset
+page (`fresh=1`, which also bypasses a default saved query). The client's 45 s
+request deadline stays, so a stalled connection ends as a failure.
 
 | Query | Compact rows | Native Details focus | Drilldown |
 | --- | --- | --- | --- |

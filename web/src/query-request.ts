@@ -6,10 +6,6 @@ export class QueryRequestError extends Error {
   constructor(message: string, readonly status?: number) { super(message); }
 }
 
-export function shouldSkipQueryOnRestore(error: unknown): boolean {
-  return error instanceof QueryRequestError && (error.status === undefined || [400, 422].includes(error.status));
-}
-
 function requestSignal(caller: AbortSignal | null | undefined, deadline: AbortSignal): AbortSignal {
   if (!caller) return deadline;
   // AbortSignal.any arrived in Safari 17.4; the app also supports 17.0–17.3.
