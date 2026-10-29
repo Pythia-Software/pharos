@@ -1,3 +1,4 @@
+import { supportsToday } from "./curiosity-data";
 import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, isFilterable, loadSchema, opsForField, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisCatalogs } from "./analysis-catalogs";
 import { analysisCycles, analysisDefaults, analysisReductions, analysisVersion, analysisViews, availableViews, canonicalState, compareModes, cycleUnavailable, noSplit, normalizeAnalysis, records, rollingOps, switchView, trendKind, validAnalysisState, viewUnavailable, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
@@ -403,12 +404,12 @@ function dashboardFacts(topic: UsageTopic) {
 const optionLabels = {
   view: Object.fromEntries(analysisViews),
   reduce: Object.fromEntries(analysisReductions),
-  window: Object.fromEntries(chartRanges.map(([range, label]) => [String(rangeDays(range)), label])),
+  window: Object.fromEntries(chartRanges.filter(([range]) => range !== "today").map(([range, label]) => [String(rangeDays(range)), range === "1d" ? "1 day" : label])),
 };
 
 // The dashboard window: a chart range preset, or all time. analyze_days
 // carries the window only where readUsageWorkspace reads it back.
-const presetFor = (days: number) => chartRanges.find(([range]) => rangeDays(range) === days)?.[0] ?? fail(`no chart range of ${days} days`);
+const presetFor = (days: number) => chartRanges.find(([range]) => range !== "today" && rangeDays(range) === days)?.[0] ?? fail(`no chart range of ${days} days`);
 export const dashboardWindows = rollingWindowDays.filter(days => chartRanges.some(([range]) => rangeDays(range) === days));
 export const analyzeDays = rollingWindowDays.filter(days => readUsageWorkspace(new URLSearchParams({ analyze_days: String(days) })).days === days);
 export const windowTerms = (time: { first: string; last: string }, days: number | null) => withTimeRange([], time, undefined, undefined, days === null ? "all" : presetFor(days));
@@ -471,7 +472,7 @@ const expand = (query: Record<string, unknown>): QueryState => ({ ...EMPTY_QUERY
 type SiteCard = {
   id: string; title: string; description: string; category: string; dataset: string; kind: string; page: string;
   chart?: Record<string, unknown>; state?: Record<string, unknown>; filters?: WhereTerm[];
-  window?: { field: string; days: number[]; default_days: number[]; terms: WhereTerm[]; chart_days?: string[] };
+  window?: { today?: boolean; field: string; days: number[]; default_days: number[]; terms: WhereTerm[]; chart_days?: string[] };
   url: { path: string; params: Array<[string, ParamSpec]> };
 };
 export const recipeTextWindows = Object.fromEntries(rollingWindowDays.map(days => [String(days), Object.fromEntries(["{days}", "{period}", "{lastDays}"].map(token => [token, describeRecipeText(token, days)]))]));
@@ -498,7 +499,7 @@ export function siteCard(recipe: QueryRecipe, clock: Date): SiteCard {
     const chart = sample.searchParams.has("analyze_chart") ? JSON.parse(sample.searchParams.get("analyze_chart")!) : {};
     const chartDays = Object.keys(chart).filter(key => json(chart[key]) !== json(card.chart?.[key]));
     if (chartDays.some(key => chart[key] !== probe)) fail(`${recipe.id}'s chart changes with the window in another way`);
-    card.window = { field: recipe.field, days: windows, default_days: recipe.days ?? [7, 30, 90], terms: templated(terms, probe) as WhereTerm[], ...chartDays.length ? { chart_days: chartDays } : {} };
+    card.window = { ...(supportsToday(recipe) ? { today: true } : {}), field: recipe.field, days: windows, default_days: recipe.days ?? [7, 30, 90], terms: templated(terms, probe) as WhereTerm[], ...chartDays.length ? { chart_days: chartDays } : {} };
   }
   for (const [key, value] of sample.searchParams) {
     let spec: ParamSpec = value;

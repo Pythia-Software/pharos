@@ -75,7 +75,7 @@ final class MenuFixture: URLProtocol {
                 client?.urlProtocol(self, didFailWithError: NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut))
                 return
             }
-            value = ["human_words": Self.humanWords, "tokens": 1200000, "co2e_g": 18.25, "cost_usd": 8.42]
+            value = ["period": URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "period" })?.value ?? "today", "human_words": Self.humanWords, "tokens": 1200000, "co2e_g": 18.25, "cost_usd": 8.42]
         } else if path == "/api/sync/check" {
             Self.indexRequested = true
             if Self.indexFailure {
@@ -126,6 +126,9 @@ final class MenuFixture: URLProtocol {
         let suite = "pharos-menu-test-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
+        precondition(MenuBarPreferences([:]).usagePeriod == "today")
+        precondition(MenuBarPreferences(["enabled": true]).usagePeriod == "24h")
+        precondition(MenuBarPreferences(["usagePeriod": "today"]).saved["usagePeriod"] as? String == "today")
         let service = ArchiveService()
         let controller = MenuBarController(service: service, defaults: defaults)
         let menu = menu(controller)

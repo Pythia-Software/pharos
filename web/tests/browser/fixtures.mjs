@@ -358,7 +358,7 @@ export const defaultApi = {
   },
   "GET /api/origins": { machines: [{ id: "machine-fixture", label: "Test Mac", kind: "device" }] },
   "GET /api/usage/history": { oldest_conversation_at: iso(180 * day) },
-  "GET /api/usage/summary": { generated_at: iso(0), windows: ["1h", "6h", "24h", "7d", "30d", "all"].map((key, index) => ({ key, human_words: 100 * (index + 1), tokens: 1000 * (index + 1), cost_usd: index + 1, co2e_g: { central: 10 * (index + 1) } })), carbon_factors: carbonFactors },
+  "GET /api/usage/summary": { generated_at: iso(0), windows: ["1h", "6h", "today", "24h", "7d", "30d", "all"].map((key, index) => ({ key, human_words: 100 * (index + 1), tokens: 1000 * (index + 1), cost_usd: index + 1, co2e_g: { central: 10 * (index + 1) } })), carbon_factors: carbonFactors },
   "GET /api/search/text/options": { providers: ["codex", "claude"], sources: ["conductor"] },
   "POST /api/search/text/validate": ({ body }) => ({ where: body.where ?? { op: ["literal", "regex", "phrase"].includes(body.mode) ? body.mode : "term", text: body.query } }),
   "GET /api/search/text/capabilities": { fuzzy: true, regex: true, case_sensitive: true },

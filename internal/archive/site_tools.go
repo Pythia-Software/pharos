@@ -26,14 +26,14 @@ var siteMCPTools = []map[string]any{
 			"limit":             map[string]any{"type": "integer", "minimum": 1, "maximum": 200, "description": "List items per answer; 50 by default."},
 			"offset":            map[string]any{"type": "integer", "minimum": 0, "description": "Skip this many list items; an answer with more gives next_offset."},
 			"max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
-	{"name": "site_link", "description": "Build a link to a Pharos page from the choices browse_site lists, and check it: returns {url, title, summary}, where summary says in one sentence what the page will show. page is a path from browse_site. On a dashboard (analyze/<topic>), options are the chart's settings for one view, such as {view: \"trend\", metric: \"tokens\", split: \"model_family\", rollingPeriods: 7}; settings left out take the dashboard's defaults. filters are where terms on the page's dataset, such as [{field: \"provider\", op: \"=\", value: \"claude\"}, {field: \"model_family\", op: \"contains\", value: \"opus\"}], with {any: [terms]} for an OR group. days is the rolling window (\"all\" for all time; no window when left out). card starts from a prebuilt card: alone it gives the card's own link, and options, filters or days change it. An error names the argument at fault and lists the valid choices; correct it and call again. Given {url} alone, it checks a Pharos link and returns its canonical form and arguments, or says why the link cannot be expressed.",
+	{"name": "site_link", "description": "Build a link to a Pharos page from the choices browse_site lists, and check it: returns {url, title, summary}, where summary says in one sentence what the page will show. page is a path from browse_site. On a dashboard (analyze/<topic>), options are the chart's settings for one view, such as {view: \"trend\", metric: \"tokens\", split: \"model_family\", rollingPeriods: 7}; settings left out take the dashboard's defaults. filters are where terms on the page's dataset, such as [{field: \"provider\", op: \"=\", value: \"claude\"}, {field: \"model_family\", op: \"contains\", value: \"opus\"}], with {any: [terms]} for an OR group. days is the time window (\"today\" since local midnight, \"all\" for all time; no window when left out). card starts from a prebuilt card: alone it gives the card's own link, and options, filters or days change it. An error names the argument at fault and lists the valid choices; correct it and call again. Given {url} alone, it checks a Pharos link and returns its canonical form and arguments, or says why the link cannot be expressed.",
 		"inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{
 			"max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000, "description": "Bounds an error's list of choices; a link itself is small."},
 			"page":              map[string]any{"type": "string", "description": "A page path from browse_site, such as analyze/tokens, analyze/query/usage, findings or work."},
 			"card":              map[string]any{"type": "string", "description": "A card id from browse_site's cards list."},
 			"options":           map[string]any{"type": "object", "description": "The page's options by name, or on a dashboard the chart's settings (browse <page>/chart/<view>)."},
 			"filters":           map[string]any{"type": "array", "description": "Where terms {field, op, value?, negated?}, or {any: [terms]}; browse <page>/filters for fields and operators. Times take ISO values or relative ones such as -30d.", "items": map[string]any{"type": "object"}},
-			"days":              map[string]any{"description": "The rolling window in days, one of the page's windows, or \"all\" for all time.", "anyOf": []any{map[string]any{"type": "integer"}, map[string]any{"type": "string", "enum": []string{"all"}}}},
+			"days":              map[string]any{"description": "The rolling window in days, one of the page's windows, \"today\" since local midnight where supported, or \"all\" for all time.", "anyOf": []any{map[string]any{"type": "integer"}, map[string]any{"type": "string", "enum": []string{"all", "today"}}}},
 			"url":               map[string]any{"type": "string", "description": "A Pharos link to check and make canonical, given alone."}}}},
 }
 
@@ -289,7 +289,10 @@ func (site *siteMap) optionSummary(node *siteNode, option *siteOption) map[strin
 		for _, value := range option.Values {
 			values = append(values, map[string]any{"value": value.Value, "label": value.Label})
 		}
-		return map[string]any{"name": "days", "kind": "window", "values": values, "description": "site_link's days: the rolling window, or \"all\" for all time."}
+		if site.supportsToday(siteState{Page: node.Path}) {
+			values = append([]map[string]any{{"value": "today", "label": "Today since local midnight"}}, values...)
+		}
+		return map[string]any{"name": "days", "kind": "window", "values": values, "description": "site_link's days: a rolling window, today since local midnight where supported, or all time."}
 	case "text_search":
 		summary["description"] = "The words to find: text, or a list of rules {kind, text, other?, distance?, exclude?}, all of which must match."
 	default:
@@ -353,6 +356,7 @@ func (site *siteMap) browseCard(card *siteCard) map[string]any {
 		"topic": card.Category, "dataset": card.Dataset, "kind": card.Kind, "page": card.Page, "link": map[string]any{"card": card.ID}}
 	if card.Window != nil {
 		result["days"] = card.Window.Days
+		result["today"] = card.Window.Today
 		result["default_days"] = card.Window.DefaultDays[0]
 	} else {
 		result["days"] = "none: the card covers a fixed period"

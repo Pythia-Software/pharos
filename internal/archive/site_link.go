@@ -35,7 +35,9 @@ type siteState struct {
 	Chart   orderedObject
 	Filters []qt.WhereTerm
 	// Days is the rolling window; 0 is none (all time).
-	Days int
+	Days          int
+	TodayFrom     string
+	TodayTimezone string
 }
 
 type siteTextRule struct {
@@ -132,6 +134,29 @@ func intStrings(values []int) []string {
 // ----- Building ----------------------------------------------------------------
 
 func (site *siteMap) build(state siteState) (string, error) {
+	if state.TodayFrom != "" {
+		anchor := state.TodayFrom
+		state.TodayFrom = ""
+		raw, err := site.build(state)
+		if err != nil {
+			return "", err
+		}
+		built, err := site.todayURL(raw, anchor, false)
+		if err == nil && state.TodayTimezone != "" {
+			parsed, _ := url.Parse(built)
+			values := parsed.Query()
+			if values.Has("window_days") {
+				values.Set("window_timezone", state.TodayTimezone)
+			}
+			parsed.RawQuery = values.Encode()
+			built = parsed.String()
+		}
+		return built, err
+	}
+	return site.buildWindow(state)
+}
+
+func (site *siteMap) buildWindow(state siteState) (string, error) {
 	node := site.Nodes[state.Page]
 	if node == nil {
 		return "", linkError("page", fmt.Sprintf("%q is not a page", state.Page), site.pagePaths()...)
@@ -457,6 +482,37 @@ func cardChartBase(card *siteCard, days int) map[string]any {
 // linkFromArgs reads site_link's arguments into a state, checking each
 // against the site map.
 func (site *siteMap) linkFromArgs(args map[string]any) (siteState, error) {
+	if args["days"] != "today" {
+		return site.linkWindowFromArgs(args)
+	}
+	copyArgs := map[string]any{}
+	for key, value := range args {
+		copyArgs[key] = value
+	}
+	copyArgs["days"] = 1
+	state, err := site.linkWindowFromArgs(copyArgs)
+	if err != nil {
+		return state, err
+	}
+	if !site.supportsToday(state) {
+		return siteState{}, linkError("days", "Today is not available for this view.")
+	}
+	state.TodayFrom = localMidnight(time.Now(), time.Local).UTC().Format(time.RFC3339Nano)
+	if name := time.Local.String(); name != "Local" {
+		state.TodayTimezone = name
+	}
+	return state, nil
+}
+
+func (site *siteMap) supportsToday(state siteState) bool {
+	if card := site.cardByID[state.Card]; card != nil {
+		return card.Window != nil && card.Window.Today
+	}
+	node := site.Nodes[state.Page]
+	return node != nil && site.optionOfKind(node, "window") != nil && node.Dataset != "tl1_attempts" && node.Dataset != "findings"
+}
+
+func (site *siteMap) linkWindowFromArgs(args map[string]any) (siteState, error) {
 	for key := range args {
 		if !slices.Contains([]string{"page", "card", "options", "filters", "days", "url", "max_output_tokens"}, key) {
 			return siteState{}, linkError(key, "is not an argument of site_link.", "page", "card", "options", "filters", "days", "url")
@@ -1113,6 +1169,155 @@ func siteLinkFromURL(raw string) (siteState, error) {
 }
 
 func (site *siteMap) parseURL(raw string) (siteState, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return siteState{}, err
+	}
+	values, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil {
+		return siteState{}, linkError("url", "has a malformed query string.")
+	}
+	for key, list := range values {
+		if len(list) != 1 {
+			return siteState{}, linkError("url", "repeats the parameter "+key+".")
+		}
+	}
+	if values.Get("window_mode") != "today" && values.Get("analyze_window") != "today" {
+		return site.parseWindowURL(raw)
+	}
+	normalized, err := site.todayURL(raw, "", true)
+	if err != nil {
+		return siteState{}, err
+	}
+	state, err := site.parseWindowURL(normalized)
+	if err != nil {
+		return state, err
+	}
+	if !site.supportsToday(state) {
+		return siteState{}, linkError("url", "Today is not available for this view.")
+	}
+	state.TodayTimezone = values.Get("window_timezone")
+	if state.TodayTimezone != "" {
+		if _, err := time.LoadLocation(state.TodayTimezone); err != nil {
+			return siteState{}, linkError("url", "window_timezone is not a named timezone.")
+		}
+	}
+	// The parsed bound is retained so rebuilding the link is deterministic.
+	for key, list := range values {
+		if key == "analyze_filters" || strings.HasPrefix(key, "q_") {
+			query, decodeErr := qt.DecodeQueryLink(list[0])
+			if decodeErr != nil {
+				continue
+			}
+			source := query
+			for source.Grouping != nil {
+				var grouped struct {
+					Source qt.LinkQuery `json:"source"`
+				}
+				if json.Unmarshal(source.Grouping, &grouped) != nil {
+					break
+				}
+				source = grouped.Source
+			}
+			for index := len(source.Where) - 1; index >= 0; index-- {
+				term := source.Where[index]
+				if term.Op != ">=" {
+					continue
+				}
+				if _, ok := parseTime(term.Value); !ok {
+					continue
+				}
+				if state.TodayFrom != "" && state.TodayFrom != term.Value {
+					return siteState{}, linkError("url", "Today queries disagree about their midnight bound.")
+				}
+				state.TodayFrom = term.Value
+				break
+			}
+		}
+	}
+	if state.TodayFrom == "" {
+		return siteState{}, linkError("url", "Today needs its resolved midnight bound.")
+	}
+	return state, nil
+}
+
+// Convert only the generated one-day window. The query-table grammar stays
+// unchanged; Pharos retains calendar intent in its own URL metadata.
+func (site *siteMap) todayURL(raw, from string, inverse bool) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	values := parsed.Query()
+	for key, list := range values {
+		if key != "analyze_filters" && !strings.HasPrefix(key, "q_") {
+			continue
+		}
+		query, err := qt.DecodeQueryLink(list[0])
+		if err != nil {
+			return "", err
+		}
+		query, err = mapSiteWindowTerms(query, func(terms []qt.WhereTerm) []qt.WhereTerm {
+			// Window terms are appended after the user's other predicates.
+			for index := len(terms) - 1; index >= 0; index-- {
+				term := &terms[index]
+				if term.Op != ">=" {
+					continue
+				}
+				if inverse {
+					if _, ok := parseTime(term.Value); !ok {
+						continue
+					}
+					term.Value = "-1d"
+				} else {
+					if term.Value != "-1d" {
+						continue
+					}
+					term.Value = from
+				}
+				break
+			}
+			return terms
+		})
+		if err != nil {
+			return "", err
+		}
+
+		token, err := qt.EncodeQueryLink(query)
+		if err != nil {
+			return "", err
+		}
+		values.Set(key, token)
+	}
+	if inverse {
+		values.Del("window_timezone")
+		if values.Get("window_mode") == "today" {
+			values.Set("window_mode", "relative")
+		}
+		values.Del("analyze_window")
+	} else if values.Has("window_days") {
+		values.Set("window_mode", "today")
+	} else {
+		values.Set("analyze_window", "today")
+	}
+	if ribbon := values.Get("analyze_parallelism"); ribbon != "" {
+		var object map[string]any
+		if err := json.Unmarshal([]byte(ribbon), &object); err != nil {
+			return "", err
+		}
+		if inverse && object["range"] == "today" {
+			object["range"] = "day"
+		} else if !inverse {
+			object["range"] = "today"
+		}
+		encoded, _ := json.Marshal(object)
+		values.Set("analyze_parallelism", string(encoded))
+	}
+	parsed.RawQuery = values.Encode()
+	return parsed.String(), nil
+}
+
+func (site *siteMap) parseWindowURL(raw string) (siteState, error) {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || raw == "" {
 		return siteState{}, linkError("url", "is not a URL.")
@@ -1649,6 +1854,9 @@ func (site *siteMap) parseCard(path string, values url.Values) (siteState, error
 // ----- Titles and summaries ----------------------------------------------------
 
 func (site *siteMap) title(state siteState) string {
+	if state.TodayFrom != "" && state.Card != "" {
+		return todayCardText(site.cardByID[state.Card].Title)
+	}
 	node := site.Nodes[state.Page]
 	if state.Card != "" {
 		return site.cardText(site.cardByID[state.Card].Title, state.Days)
@@ -1697,6 +1905,9 @@ func (site *siteMap) summary(state siteState) string {
 	node := site.Nodes[state.Page]
 	if state.Card != "" && !state.Changed {
 		card := site.cardByID[state.Card]
+		if state.TodayFrom != "" {
+			return sentence(todayCardText(card.Description))
+		}
 		return sentence(site.cardText(card.Description, state.Days))
 	}
 	parts := []string{}
@@ -1726,7 +1937,9 @@ func (site *siteMap) summary(state siteState) string {
 		parts = append(parts, "where "+site.filterPhrase(site.Datasets[node.Dataset], state.Filters))
 	}
 	if site.optionOfKind(node, "window") != nil {
-		if state.Changed && state.Days > 0 {
+		if state.TodayFrom != "" {
+			parts = append(parts, "today since local midnight")
+		} else if state.Changed && state.Days > 0 {
 			parts = append(parts, fmt.Sprintf("last %s of %s, as the card counts its window", site.Windows.Labels[strconv.Itoa(state.Days)], site.cardByID[state.Card].Window.Field))
 		} else if state.Days > 0 {
 			label := site.Windows.Labels[strconv.Itoa(state.Days)]
@@ -1962,7 +2175,11 @@ func (site *siteMap) arguments(state siteState) map[string]any {
 	if state.Card != "" {
 		out["card"] = state.Card
 		if state.Days > 0 {
-			out["days"] = state.Days
+			if state.TodayFrom != "" {
+				out["days"] = "today"
+			} else {
+				out["days"] = state.Days
+			}
 		}
 		if !state.Changed {
 			return out
@@ -2000,9 +2217,62 @@ func (site *siteMap) arguments(state siteState) map[string]any {
 		out["filters"] = state.Filters
 	}
 	if state.Days > 0 {
-		out["days"] = state.Days
+		if state.TodayFrom != "" {
+			out["days"] = "today"
+		} else {
+			out["days"] = state.Days
+		}
 	} else if site.optionOfKind(site.Nodes[state.Page], "window") != nil {
 		out["days"] = "all"
 	}
 	return out
+}
+
+func mapSiteWindowTerms(query qt.LinkQuery, change func([]qt.WhereTerm) []qt.WhereTerm) (qt.LinkQuery, error) {
+	if query.Grouping == nil {
+		query.Where = change(query.Where)
+		return query, nil
+	}
+	var grouped map[string]json.RawMessage
+	if err := json.Unmarshal(query.Grouping, &grouped); err != nil {
+		return query, err
+	}
+	var source map[string]json.RawMessage
+	if err := json.Unmarshal(grouped["source"], &source); err != nil {
+		return query, err
+	}
+	var terms []qt.WhereTerm
+	if err := json.Unmarshal(source["where"], &terms); err != nil {
+		return query, err
+	}
+	var rawTerms []map[string]json.RawMessage
+	if err := json.Unmarshal(source["where"], &rawTerms); err != nil {
+		return query, err
+	}
+	updated := change(terms)
+	for index, term := range updated {
+		// Preserve all original members, including empty values in predicates
+		// and nested groups. Only the generated date operand changes.
+		if term.Field != "" {
+			rawTerms[index]["value"], _ = json.Marshal(term.Value)
+		}
+	}
+	encoded, err := json.Marshal(rawTerms)
+	if err != nil {
+		return query, err
+	}
+	source["where"] = encoded
+	grouped["source"], err = json.Marshal(source)
+	if err != nil {
+		return query, err
+	}
+	query.Grouping, err = json.Marshal(grouped)
+	return query, err
+}
+
+func todayCardText(text string) string {
+	for _, prefix := range []string{"in", "during", "over"} {
+		text = strings.ReplaceAll(text, prefix+" the last {days} days", "today")
+	}
+	return strings.NewReplacer("{lastDays}", "Today", "{period}", "Today", "the last {days} days", "today", "{days}-day", "today’s", "{days} days", "today", "{days}", "1").Replace(text)
 }

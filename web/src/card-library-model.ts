@@ -1,5 +1,5 @@
 import type { MetricDisplay } from "@pythia-software/query-table-core";
-import { queryRecipes, type QueryRecipe } from "./curiosity-data";
+import { queryRecipes, supportsToday, type QueryRecipe } from "./curiosity-data";
 import { defaultCardCover, type CardCover } from "./card-cover";
 import { preferences } from "./preferences";
 import { validChartDisplay, validRollingPeriods } from "./chart-series";
@@ -12,7 +12,7 @@ export const cardDatasets: Record<string, string> = { conversation_activity: "Co
 export const cardLibraryParams = ["card_search", "card_data", "card_topic", "card_kind", "card_sort"];
 export const cardTopicAll = "all";
 export const cardSorts = [["topic", "Topic"], ["data", "Data source"], ["kind", "Card kind"], ["title", "Title"]] as const;
-export type CardTemplateEdit = { title: string; description: string; days: number; cover?: CardCover };
+export type CardTemplateEdit = { title: string; description: string; days: number; window?: "today"; cover?: CardCover };
 function overrides(): Record<string, CardTemplateEdit> {
   const value = preferences().get<unknown>(CARD_TEMPLATES_KEY, {});
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, CardTemplateEdit> : {};
@@ -22,7 +22,7 @@ export function cardTemplates(): QueryRecipe[] {
   return queryRecipes.filter(recipe => !recipe.retired).map(recipe => {
     const edit = saved[recipe.id];
     return edit && typeof edit.title === "string" && typeof edit.description === "string" && [1, 7, 30, 90].includes(edit.days)
-      ? { ...recipe, title: edit.title, description: edit.description, days: [edit.days], cover: edit.cover } : recipe;
+      ? { ...recipe, title: edit.title, description: edit.description, days: [edit.days], defaultWindow: edit.window === "today" && supportsToday(recipe) ? "today" : undefined, cover: edit.cover } : recipe;
   });
 }
 export function coverChoices(recipe: QueryRecipe) {
@@ -55,6 +55,7 @@ export function saveCardTemplate(id: string, edit?: CardTemplateEdit) {
   const next = { ...overrides() };
   if (edit) {
     if (!edit.title.trim() || edit.title.length > 200 || edit.description.length > 500 || ![1, 7, 30, 90].includes(edit.days)) throw new Error("Choose a title, description and supported lookback.");
+    if (edit.window && (edit.window !== "today" || !supportsToday(recipe))) throw new Error("This card uses complete days or a fixed period.");
     if (edit.cover && (!coverChoices(recipe).some(choice => choice.value === `${edit.cover!.mode}:${edit.cover!.metricId}`) || !availableChartKinds(recipe, edit.cover).includes(edit.cover.kind ?? "auto"))) throw new Error("Choose a compatible metric and chart.");
     if (edit.cover?.density !== undefined && edit.cover.density !== "compact") throw new Error("Choose a valid row density.");
     if (edit.cover?.stackBy !== undefined && !(["session_kind", "session_role"].includes(edit.cover.stackBy))) throw new Error("Choose a supported stack dimension.");

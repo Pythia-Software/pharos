@@ -3,11 +3,14 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	qt "github.com/Pythia-Software/query-table/backends/go"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -244,7 +247,7 @@ func TestMenuBarUsageMatchesRollingSummary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := libraryStatusCall(t, server, "/api/menu-bar/usage")
+	got := libraryStatusCall(t, server, "/api/menu-bar/usage?period=24h")
 	for _, window := range summary["windows"].([]*usageSummaryWindow) {
 		if window.Key != "24h" {
 			continue
@@ -255,5 +258,43 @@ func TestMenuBarUsageMatchesRollingSummary(t *testing.T) {
 		if got["co2e_g"] != menuBarCarbon(summary["carbon_factors"].(carbonDocument), window.CarbonTokens, nil) {
 			t.Fatalf("carbon differs: %v", got)
 		}
+	}
+}
+
+func TestMenuBarTodaySnapshotAndPreference(t *testing.T) {
+	catalog, config := testCatalog(t)
+	ingestUsageFixture(t, catalog)
+	catalog.now = func() time.Time { return time.Date(2026, 9, 21, 2, 15, 0, 0, time.UTC) }
+	catalog.background = func(OperationSpec, func(context.Context, *Op) error) bool { return false }
+	server := testServer(t, config, catalog)
+	for _, period := range []string{"today", "24h"} {
+		got := libraryStatusCall(t, server, "/api/menu-bar/usage?period="+period)
+		if got["period"] != period || got["from"] == "" || got["until"] != got["generated_at"] {
+			t.Fatalf("snapshot: %v", got)
+		}
+		links := got["links"].(map[string]any)
+		for _, key := range []string{"words", "tokens", "cost", "carbon"} {
+			parsed, err := url.Parse(links[key].(string))
+			if err != nil {
+				t.Fatal(err)
+			}
+			query, err := qt.DecodeQueryLink(parsed.Query().Get("analyze_filters"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(query.Where) != 2 || query.Where[0].Value != got["from"] || query.Where[1].Value != got["until"] {
+				t.Fatalf("counter link: %v", query.Where)
+			}
+		}
+		parsed, _ := url.Parse(links["cost"].(string))
+		if !strings.Contains(parsed.Query().Get("analyze_chart"), `"metric":"cost"`) {
+			t.Fatal("cost link lost its metric")
+		}
+	}
+	if menuBarUsagePeriod(map[string]json.RawMessage{}) != "today" {
+		t.Fatal("new configurations should use Today")
+	}
+	if menuBarUsagePeriod(map[string]json.RawMessage{"pharos-menu-bar": json.RawMessage(`{"enabled":true}`)}) != "24h" {
+		t.Fatal("existing configuration changed")
 	}
 }

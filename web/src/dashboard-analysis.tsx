@@ -142,7 +142,7 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
 
   // Box and bar rows have a fixed pitch; give a full day of hours its rows.
   const tall = (clause.display?.kind === "box" || clause.display?.kind === "bar-horizontal") && (entry?.buckets.length ?? 0) > 16;
-  const controls = <AnalysisControls catalog={catalog} view={view} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onFilter(current => withTimeRange(current, catalog.time, from, to, preset))} />;
+  const controls = <AnalysisControls catalog={catalog} view={view} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onFilter(current => withTimeRange(current, catalog.time, from, to, preset), preset)} />;
 
   return <section className="usage-analysis-dashboard" aria-label="Dashboard analysis" aria-busy={result.loading}>
     {controls}

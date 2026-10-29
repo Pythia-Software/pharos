@@ -568,3 +568,51 @@ func TestSiteLinkReadsTheAppsHostQueryState(t *testing.T) {
 		}
 	}
 }
+
+func TestSiteLinkTodayWindows(t *testing.T) {
+	site, err := loadedSiteMap()
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(args map[string]any) {
+		t.Helper()
+		state, err := site.linkFromArgs(args)
+		if err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		if state.TodayFrom == "" {
+			t.Fatal("missing calendar intent")
+		}
+		link, err := site.build(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := site.parseURL(link + "&window_mode=today&window_mode=today"); err == nil {
+			t.Fatal("duplicate calendar metadata accepted")
+		}
+		read := roundTrip(t, site, compactJSON(args), link)
+		if read.TodayFrom != state.TodayFrom {
+			t.Fatalf("lost Today: %+v", read)
+		}
+		if !strings.Contains(strings.ToLower(site.summary(read)), "today") {
+			t.Fatalf("summary: %s", site.summary(read))
+		}
+	}
+	for _, page := range []string{"analyze/tokens", "analyze/human", "analyze/tools", "analyze/parallelism", "analyze/query/usage", "library"} {
+		if site.Nodes[page] != nil {
+			check(map[string]any{"page": page, "days": "today"})
+		}
+	}
+	for _, card := range site.Cards.Items {
+		if card.Window != nil && card.Window.Today {
+			check(map[string]any{"card": card.ID, "days": "today"})
+		}
+	}
+	for _, node := range site.Nodes {
+		if node.Dataset == "tl1_attempts" || node.Dataset == "findings" {
+			if _, err := site.linkFromArgs(map[string]any{"page": node.Path, "days": "today"}); err == nil {
+				t.Fatalf("Today offered for %s", node.Path)
+			}
+		}
+	}
+}

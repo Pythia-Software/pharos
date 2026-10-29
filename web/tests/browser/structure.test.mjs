@@ -918,3 +918,16 @@ for (const id of ['human-words', 'cost-repos', 'machine-time', 'skill-evidence',
     assert.deepEqual(await layoutProblems(page), []);
   });
 }
+
+
+for (const choice of ['today', '24h']) test(`Query time window picker keeps ${choice} selected after replacing a custom range`, { skip }, async t => {
+  const params = new URLSearchParams({ analyze_mode: 'query', analyze_topic: 'human', analyze_data: 'writing_messages', q_writing_messages: encodeQuery({ ...EMPTY_QUERY, where: [{ field: 'sent_at', op: '<=', value: '2026-01-31' }] }) });
+  const app = await open(t, { url: `/analyze?${params}`, ready: 'select[aria-label="Query time window"]' });
+  const picker = app.page.getByRole('combobox', { name: 'Query time window', exact: true });
+  const executed = app.page.waitForResponse(response => new URL(response.url()).pathname.startsWith('/api/query/writing_messages') && response.request().method() === 'POST');
+  await picker.selectOption(choice);
+  await executed;
+  await app.settled();
+  assert.equal(await picker.inputValue(), choice);
+  assert.equal(new URL(app.page.url()).searchParams.get('window_mode'), choice === 'today' ? 'today' : 'relative');
+});
