@@ -3,6 +3,8 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	qt "github.com/Pythia-Software/query-table/backends/go"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -109,6 +111,16 @@ func menuBarSettings(values map[string]json.RawMessage) map[string]bool {
 	return settings
 }
 
+// A fresh configuration uses Today; existing layouts retain their rolling window.
+func menuBarUsagePeriod(values map[string]json.RawMessage) string {
+	var saved map[string]any
+	_ = json.Unmarshal(values[menuBarPreferenceKey], &saved)
+	if saved["usagePeriod"] == "today" || len(saved) == 0 {
+		return "today"
+	}
+	return "24h"
+}
+
 // This small snapshot can be polled with the window closed. Expensive usage
 // totals have their own endpoint and are fetched at most once a minute.
 func (s *Server) menuBarStatus(ctx context.Context) (map[string]any, error) {
@@ -118,7 +130,7 @@ func (s *Server) menuBarStatus(ctx context.Context) (map[string]any, error) {
 	}
 	settings := menuBarSettings(values)
 	order := menuBarOrder(values, settings)
-	preferences := map[string]any{"order": order, "layoutVersion": 2}
+	preferences := map[string]any{"order": order, "layoutVersion": 2, "usagePeriod": menuBarUsagePeriod(values)}
 	for key, value := range settings {
 		preferences[key] = value
 	}
@@ -254,7 +266,7 @@ func (s *Server) menuBarStatus(ctx context.Context) (map[string]any, error) {
 	return status, nil
 }
 
-func (s *Server) menuBarUsage(ctx context.Context) (map[string]any, error) {
+func (s *Server) menuBarUsage(ctx context.Context, requestedPeriod ...string) (map[string]any, error) {
 	summary, err := s.Catalog.UsageSummary(ctx)
 	if err != nil {
 		return nil, err
@@ -263,9 +275,43 @@ func (s *Server) menuBarUsage(ctx context.Context) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	values, err := s.Catalog.UIPreferences(ctx)
+	if err != nil {
+		return nil, err
+	}
+	period := menuBarUsagePeriod(values)
+	if len(requestedPeriod) > 0 && (requestedPeriod[0] == "today" || requestedPeriod[0] == "24h") {
+		period = requestedPeriod[0]
+	}
 	for _, window := range summary["windows"].([]*usageSummaryWindow) {
-		if window.Key == "24h" {
-			return map[string]any{"generated_at": summary["generated_at"], "human_words": window.HumanWords,
+		if window.Key == period {
+			links := map[string]string{}
+			for key, topic := range map[string]string{"words": "human", "tokens": "tokens", "cost": "tokens", "carbon": "carbon"} {
+				first, last := "first_usage_at", "last_usage_at"
+				if key == "words" {
+					first, last = "sent_at", "sent_at"
+				}
+				query := qt.LinkQuery{Where: []qt.WhereTerm{{Field: last, Op: ">=", Value: window.From}, {Field: first, Op: "<", Value: window.Until}}}
+				token, encodeErr := qt.EncodeQueryLink(query)
+				if encodeErr != nil {
+					return nil, encodeErr
+				}
+				chart := map[string]any{"period": "hour"}
+				if key == "cost" {
+					chart["metric"] = "cost"
+				} else if key == "tokens" {
+					chart["metric"] = "tokens"
+				}
+				encoded, _ := json.Marshal(chart)
+				params := url.Values{"analyze_mode": {"dashboards"}, "analyze_topic": {topic}, "analyze_filters": {token}, "analyze_chart": {string(encoded)}}
+				if key == "words" {
+					params.Set("analyze_data", "writing_messages")
+				} else {
+					params.Set("analyze_data", "usage")
+				}
+				links[key] = "/analyze?" + params.Encode()
+			}
+			return map[string]any{"period": period, "from": window.From, "until": window.Until, "timezone": summary["timezone"], "local_day": summary["local_day"], "links": links, "generated_at": summary["generated_at"], "human_words": window.HumanWords,
 				"tokens": window.Tokens, "cost_usd": window.CostUSD,
 				"co2e_g": menuBarCarbon(summary["carbon_factors"].(carbonDocument), window.CarbonTokens, prefs)}, nil
 		}

@@ -2,18 +2,19 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { capabilities, core, execution, schemas } from "../helpers/recipes.mjs";
 import tracker from "../../../../docs/homepage-query-cards.json";
-import { queryRecipes, instantiateRecipe, loadQueryPreview, clearPreviewCache, suggestionWindowLabel } from "../../../src/curiosity-data";
-import { queryFromURL, queryHasTimeFilter, queryURL, resolveRollingQuery } from "../../../src/query-links";
+import { queryRecipes, supportsToday, instantiateRecipe, loadQueryPreview, clearPreviewCache, suggestionWindowLabel } from "../../../src/curiosity-data";
+import { queryFromURL, queryHasTimeFilter, queryURL, resolveRollingQuery, rollingQueryMatches } from "../../../src/query-links";
 import { migrateSavedQueries, readBookmarks, removeBookmark, savedQueries, updateBookmark, replaceSavedQuery } from "../../../src/bookmarks";
 import { cardCoverQuery, defaultCardCover } from "../../../src/card-cover";
 import { wishlistCardRecipes } from "../../../src/wishlist-card-recipes";
 import { updateQueryWindowURL } from "../../../src/query-links";
-import { parallelismSelectionQuery, readDashboardQuery } from "../../../src/usage-dashboard-model";
+import { parallelismSelectionQuery, readDashboardQuery, readDashboardLink } from "../../../src/usage-dashboard-model";
 import { concurrencySettingsKey, readConcurrencySettings, resolveConcurrencyRange } from "../../../src/concurrency-settings";
 import { cardDashboardWhere, cardDetailsURL } from "../../../src/card-exploration";
 import { usageWorkspaceURL } from "../../../src/usage-workspace-model";
 import { timeBounds, usageTime, writingTime } from "../../../src/usage-chart";
 import { cardAnalysisJob, relatedCardDashboardURL, resolveCardAnalysisJob } from "../../../src/card-analysis-model";
+import { todayBounds } from "../../../src/day-window";
 import { windowedChart } from "../../../src/card-windows";
 const clock = new Date(2026, 9, 13, 12);
 
@@ -529,4 +530,109 @@ test("replacing a kept query retains a still-valid cover and its settings", t =>
  const next={...item.query,limit:25};
  replaceSavedQuery("tool_calls","saved",next,200,queryURL("tool_calls",next,item.window));
  assert.deepEqual(values.get("pharos-bookmarks-v1")[0].cover,cover);
+});
+
+
+test("eligible Today cards preserve calendar intent through saved windows and re-evaluate on the next day", t => {
+  bookmarkFixture(t, []);
+  for (const recipe of queryRecipes.filter(supportsToday)) {
+    const card = instantiateRecipe(recipe, "today", clock);
+    assert.equal(suggestionWindowLabel(card), "Today", recipe.id);
+    const spec = queryFromURL(card.url, card.query);
+    assert.equal(spec.window.mode, "today", recipe.id);
+    const tomorrow = new Date(clock); tomorrow.setDate(tomorrow.getDate() + 1);
+    const resolved = resolveRollingQuery(spec.query, spec.window, tomorrow);
+    const source = resolved.grouping?.source ?? resolved;
+    const midnight = new Date(tomorrow); midnight.setHours(0, 0, 0, 0);
+    assert.ok(source.where.some(term => term.field === recipe.field && term.op === ">=" && term.value === midnight.toISOString()), recipe.id);
+    assert.ok(source.where.some(term => term.field === recipe.field && term.op === "<" && term.value === "+0s"), recipe.id);
+    const elapsed = queryFromURL(updateQueryWindowURL(card.url, 1, card.query), card.query);
+    assert.equal(elapsed.window.mode, "relative", recipe.id);
+    assert.equal(queryFromURL(updateQueryWindowURL(card.url, null, card.query), card.query).window, undefined);
+  }
+  for (const recipe of queryRecipes.filter(recipe => !supportsToday(recipe))) assert.notEqual(instantiateRecipe(recipe, "today", clock).window?.mode, "today", recipe.id);
+});
+
+
+test("Today query windows retain saved timezone identity while manual datetime edits release it", t => {
+  bookmarkFixture(t, []);
+  const query = { ...core.EMPTY_QUERY, where: [{ field: "started_at", op: ">=", value: "2026-10-29T00:00:00.000Z" }, { field: "started_at", op: "<", value: "+0s" }] };
+  const window = { mode: "today", days: 1, field: "started_at", timezone: "UTC" };
+  assert.equal(rollingQueryMatches(query, window), true);
+  const resolved = resolveRollingQuery(query, window, new Date("2026-10-29T15:00:00Z"));
+  const paged = { ...resolved, offset: 50 };
+  assert.equal(resolveRollingQuery(paged, window, new Date("2026-10-29T16:00:00Z")), paged);
+  // Go's RFC3339Nano omits zero fractional seconds, and UTC can be written
+  // with an offset. Both forms carry the same calendar intent as JS ISO text.
+  for (const [from, timezone] of [["2026-10-29T00:00:00Z", "UTC"], ["2026-10-29T00:00:00+00:00", "UTC"], ["2026-10-29T06:00:00Z", "America/Denver"], ["2026-11-01T06:00:00Z", "America/Denver"], ["2026-10-28T18:15:00Z", "Asia/Kathmandu"]]) {
+    const linked = { ...query, where: [{ ...query.where[0], value: from }, query.where[1]] };
+    assert.equal(rollingQueryMatches(linked, { ...window, timezone }), true, from);
+  }
+  const openedAt = new Date("2026-10-29T15:00:00Z"), [midnight] = todayBounds(openedAt);
+  const goQuery = { ...query, offset: 50, where: [{ ...query.where[0], value: midnight.replace(".000Z", "Z") }, query.where[1]] };
+  assert.equal(resolveRollingQuery(goQuery, window, openedAt), goQuery, "equivalent timestamps preserve the current page");
+  const tomorrow = new Date(openedAt); tomorrow.setDate(tomorrow.getDate() + 1);
+  const renewed = resolveRollingQuery(goQuery, window, tomorrow);
+  assert.equal(renewed.offset, 0);
+  assert.equal(renewed.where.find(term => term.op === ">=").value, todayBounds(tomorrow)[0]);
+  const manual = { ...query, where: [{ ...query.where[0], value: "2026-10-29T12:34:56.000Z" }, query.where[1]] };
+  assert.equal(rollingQueryMatches(manual, window), false);
+  const tl1 = queryURL("tl1_attempts", query, { days: 1, field: "started_at", mode: "relative" });
+  assert.throws(() => updateQueryWindowURL(tl1, "today"), /does not support/);
+});
+
+
+test("selecting a time window returns a query that replaces every direct date comparison", t => {
+  bookmarkFixture(t, []);
+  const kept = { field: "provider", op: "=", value: "codex" };
+  for (const dataset of ["writing_messages", "usage"]) {
+    const fields = dataset === "usage" ? ["first_usage_at", "last_usage_at"] : ["sent_at"];
+    for (const op of ["=", ">", ">=", "<", "<="]) for (const choice of ["today", 1]) for (const grouped of [false, true]) {
+      const source = { ...core.EMPTY_QUERY, offset: 50, where: [...fields.map(field => ({ field, op, value: "2026-01-31" })), kept] };
+      const query = grouped ? { ...core.EMPTY_QUERY, offset: 100, grouping: { source, keys: ["provider"], summaries: [{ id: "n", op: "count", label: "Rows" }], representative: null } } : source;
+      const adjusted = queryFromURL(updateQueryWindowURL(queryURL(dataset, query), choice, query));
+      const applied = adjusted.query.grouping?.source ?? adjusted.query;
+      assert.deepEqual(applied.where.filter(term => !fields.includes(term.field)), [kept]);
+      assert.equal(applied.where.length, 3, `${dataset}: ${op} → ${choice}`);
+      assert.ok(applied.where.some(term => term.op === "<" && term.value === "+0s"));
+      assert.ok(applied.where.some(term => term.op === ">=" && term.value === (choice === "today" ? todayBounds()[0] : "-1d")));
+      assert.equal(rollingQueryMatches(adjusted.query, adjusted.window), true);
+      assert.equal(applied.offset, 0);
+      assert.equal(adjusted.query.offset, 0);
+      if (grouped) assert.deepEqual(adjusted.query.grouping.summaries, query.grouping.summaries);
+    }
+  }
+});
+
+test("Today cards keep advancing when opened as related dashboard overviews", t => {
+  bookmarkFixture(t, []);
+  const openedAt = new Date(2026, 10, 1, 9), tomorrow = new Date(2026, 10, 2, 9);
+  t.mock.timers.enable({ apis: ["Date"], now: openedAt });
+  let checked = 0;
+  for (const recipe of queryRecipes.filter(supportsToday)) {
+    const card = instantiateRecipe(recipe, "today", openedAt), params = new URL(card.url, location.origin).searchParams;
+    if (!params.has("card_query") || !params.has("analyze_filters")) continue;
+    const overview = new URL(relatedCardDashboardURL(params), location.origin).searchParams;
+    assert.equal(overview.get("analyze_window"), "today", recipe.id);
+    assert.equal(overview.has("window_mode"), false, recipe.id);
+    assert.equal(overview.has("card_query"), false, recipe.id);
+    const where = core.decodeQueryStrict(overview.get("analyze_filters")).where;
+    const time = params.get("analyze_data") === "tools" ? { first: "day", last: "day" } : params.get("analyze_data") === "usage" ? usageTime : params.get("analyze_data") === "writing_messages" ? { first: "sent_at", last: "sent_at" } : { first: recipe.field, last: recipe.field };
+    const before = readDashboardLink(overview, {}, () => true, time, undefined, openedAt);
+    const after = readDashboardLink(overview, {}, () => true, time, undefined, tomorrow);
+    assert.equal(before.error, "", recipe.id);
+    assert.equal(after.error, "", recipe.id);
+    assert.equal(before.where.find(term => term.field === time.last && term.op === ">=").value, todayBounds(openedAt)[0], recipe.id);
+    assert.equal(after.where.find(term => term.field === time.last && term.op === ">=").value, todayBounds(tomorrow)[0], recipe.id);
+    assert.deepEqual(after.where.filter(term => ![time.first, time.last].includes(term.field)), where.filter(term => ![time.first, time.last].includes(term.field)), recipe.id);
+    const elapsed = new URL(instantiateRecipe(recipe, 1, openedAt).url, location.origin).searchParams;
+    assert.equal(new URL(relatedCardDashboardURL(elapsed), location.origin).searchParams.has("analyze_window"), false, recipe.id);
+    const fixed = new URLSearchParams(params);
+    for (const key of [...fixed.keys()]) if (key.startsWith("window_")) fixed.delete(key);
+    assert.equal(new URL(relatedCardDashboardURL(fixed), location.origin).searchParams.has("analyze_window"), false, recipe.id);
+    const switched = new URL(usageWorkspaceURL({ mode: "dashboards", topic: params.get("analyze_topic") === "human" ? "tokens" : "human" }, params), location.origin).searchParams;
+    assert.equal(switched.has("analyze_window"), false, recipe.id);
+    checked++;
+  }
+  assert.ok(checked > 0);
 });

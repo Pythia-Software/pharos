@@ -11,6 +11,35 @@ measures, and minimum-sample thresholds.
 This document describes the engine that supplies those capabilities, how a
 card maps onto it, and the phases that adopt it.
 
+## Today and Last 24 hours
+
+Today runs from midnight in the viewing Mac's local timezone to the current
+evaluation time. Last 24 hours remains an elapsed interval. Today follows
+calendar boundaries across daylight saving and refreshes at midnight and when
+the app returns to the foreground. Saved Today cards and views follow the day;
+clicking a header or native menu counter opens the displayed snapshot's fixed
+interval and metric.
+
+Today is available in the header summary, the native menu's Usage period
+preference, Analyze ranges, eligible card windows/defaults, and message search's
+Date comparison. Parallelism's **Today so far** average includes elapsed idle
+time since midnight; individual calendar dates retain their full-day average.
+Existing native menu configurations keep Last 24 hours; new configurations use
+Today. TL1 windows and completed-day studies keep their existing behavior.
+
+Query Table still receives ordinary timestamp predicates. Pharos saves calendar
+intent in `analyze_window=today` for dashboards or `window_mode=today` with
+`window_days=1`, dataset/field metadata and an optional `window_timezone` for
+queries. Message search retains Today alongside resolved timestamp bounds;
+cursor batches reuse those bounds. `site_link({page, days: "today"})` and
+eligible cards accept the same calendar choice.
+
+Fact grain remains visible: tool summaries count recorded whole local days,
+usage facts are hourly, and workspace/conversation measures retain their
+existing population rules. The header's hourly token, cost and carbon ledger
+prorates an hour touching the starting boundary. Today does not turn a
+completed-day baseline into a partial-day comparison.
+
 ## The model: view × unit × catalog
 
 The engine is `web/src/dashboard-analysis-model.ts`, with the trend's query

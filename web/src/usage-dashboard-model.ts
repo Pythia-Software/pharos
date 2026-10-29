@@ -1,3 +1,4 @@
+import { todayBounds } from "./day-window";
 import { EMPTY_QUERY, decodeQueryStrict, inspectBucketQuery, isMetricCycle, type CalendarGroupKey, type GroupKey, type AggregationClause, type QueryState, type SummaryColumn, type CellDisplay, type WhereTerm, type OrderByClause } from "@pythia-software/query-table-core";
 import { readUsageWorkspace, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { withTimeRange } from "./chart-range";
@@ -32,6 +33,10 @@ export function readDashboardLink<T extends object>(params: URLSearchParams, def
   }
   const from = new Date(now); from.setHours(0, 0, 0, 0); from.setDate(from.getDate() - readUsageWorkspace(params).days + 1);
   const restored = readDashboardQuery(params, { ...EMPTY_QUERY, where: withTimeRange([], time, from) });
+  if (params.get("analyze_window") === "today" && !restored.error) {
+    const where = restored.query.where.filter(term => !("field" in term && [time.first, time.last].includes(term.field) && !term.negated && [">", ">=", "<", "<="].includes(term.op)));
+    restored.query = { ...restored.query, where: [...where, { field: time.last, op: ">=", value: todayBounds(now)[0] }, { field: time.first, op: "<", value: "+0s" }] };
+  }
   const read = migrate && !error && !restored.error ? migrate(view, restored.query.where) : { state: view, where: restored.query.where };
   return { view: read.state, where: read.where, error: error || restored.error, migrated: read.where !== restored.query.where || read.state !== view };
 }

@@ -1,3 +1,4 @@
+import { windowLabel, type WindowChoice } from "./day-window";
 import { EMPTY_QUERY, type AggregationClause, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { type QueryCategory } from "./query-categories";
 import { resolveRollingQuery, type QueryDataset, type RollingWindow } from "./query-links";
@@ -38,13 +39,15 @@ export type QueryRecipe = {
   action?: string;
   // Current-state and all-time cards carry no rolling lookback.
   period?: "current" | "all";
+  defaultWindow?: "today";
   trend?: CardTrend;
   weekday?: { metricId: string; unit: string };
   destination?: CardDestination;
 };
 export type QuerySuggestion = QueryRecipe & { query: QueryState; window?: RollingWindow; url: string; instanceId: string };
-export function suggestionWindowLabel(item: { window?: RollingWindow; period?: QueryRecipe["period"] }): string {
-  return item.period === "current" ? "Now" : item.period === "all" || !item.window ? "All time" : item.window.days === 365 ? "Last year" : `Last ${item.window.days}d`;
+export function suggestionWindowLabel(item: { window?: RollingWindow; period?: QueryRecipe["period"]; dataset?: QueryDataset }): string {
+  if (item.dataset === "tl1_attempts" && item.window && !item.period) return item.window.days === 365 ? "Last year" : `Last ${item.window.days}d`;
+  return item.period === "current" ? "Now" : item.period === "all" || !item.window ? "All time" : windowLabel(item.window.mode === "today" ? "today" : item.window.days);
 }
 const agg = (op: AggregationClause["op"], field: string, groupBy: string[], label: string): AggregationClause => ({ id: `${op}:${field}:${groupBy.join(",")}`, op, ...(field ? { field } : {}), groupBy, label });
 const count = (group: string[], label: string) => agg("count", "", group, label);
@@ -100,7 +103,9 @@ const baseRecipes: QueryRecipe[] = [
 ];
 export const queryRecipes = baseRecipes.map(enrichCardRecipe).map(refineHumanRecipe).map(applyHumanCardCopy).map(refineModelChoiceRecipe).map(refineContextCachingRecipe).map(refineErrorPatternRecipe).map(refineToolFlowRecipe).map(refineSkillsInstructionsRecipe).map(refineResearchRecipe).map(refineApiCostRecipe).map(refineTokenUsageRecipe).map(refineDelegationRecipe).map(refineSteeringRecipe).map(recipe => recipe.humanStudy ? { ...recipe, days: [7] } : recipe).map(refineCardDestination);
 
-export function describeRecipeText(text: string, days: number | null): string {
+export const supportsToday = (recipe: QueryRecipe) => !recipe.period && !recipe.weekday && !recipe.trend?.completeDays && !recipe.humanStudy && !["tl1_attempts", "findings"].includes(recipe.dataset);
+export function describeRecipeText(text: string, days: WindowChoice | null): string {
+  if (days === "today") return text.replace(/(?:in|during|over) the last \{days\} days/g, "today").replaceAll("{lastDays}", "Today").replaceAll("{period}", "Today").replaceAll("the last {days} days", "today").replaceAll("{days}-day", "today’s").replaceAll("{days} days", "today").replaceAll("{days}", "1");
   return days === null ? text
     .replaceAll("{lastDays} of", "All-time").replaceAll("{lastDays}", "All time").replaceAll("{period}", "All-time")
     .replaceAll("the start of the last {days} days", "the start of recorded history")
@@ -111,8 +116,9 @@ export function describeRecipeText(text: string, days: number | null): string {
     : text.replaceAll("{days}", String(days)).replaceAll("{period}", days === 7 ? "Weekly" : days === 1 ? "Daily" : `${days}-day`).replaceAll("{lastDays}", days === 7 ? "Last seven days" : days === 1 ? "Last 24 hours" : `Last ${days} days`);
 }
 
-export function instantiateRecipe(recipe: QueryRecipe, days: number | null, clock = new Date()): QuerySuggestion {
-  const window: RollingWindow | undefined = recipe.period || days === null ? undefined : { days, field: recipe.field, mode: "relative" };
+export function instantiateRecipe(recipe: QueryRecipe, days: WindowChoice | null, clock = new Date()): QuerySuggestion {
+  if (days === "today" && !supportsToday(recipe)) days = recipe.days?.[0] ?? 7;
+  const window: RollingWindow | undefined = recipe.period || days === null ? undefined : { days: days === "today" ? 1 : days, field: recipe.field, mode: days === "today" ? "today" : "relative" };
   const measures = recipe.calendarTimezone === "local" ? recipe.measures.map(metric => metric.dateGrouping ? { ...metric, dateGrouping: { ...metric.dateGrouping, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC" } } : metric) : recipe.measures;
   const source = { ...EMPTY_QUERY, where: recipe.where ?? [], aggregations: measures };
   const view = recipe.exploration;
@@ -137,5 +143,5 @@ export function shuffled<T>(items: T[]): T[] {
 export function suggestionPool(clock = new Date(), recipes = queryRecipes): QuerySuggestion[] {
   // One explicit window per question per visit. Keep the mix broad, without
   // filling the belt with three nearly identical windows of the same card.
-  return shuffled(recipes.filter(recipe => !recipe.retired)).map((recipe, index) => instantiateRecipe(recipe, (recipe.days ?? [7, 30, 90])[index % (recipe.days?.length ?? 3)], clock));
+  return shuffled(recipes.filter(recipe => !recipe.retired)).map((recipe, index) => instantiateRecipe(recipe, recipe.defaultWindow ?? (recipe.days ?? [7, 30, 90])[index % (recipe.days?.length ?? 3)], clock));
 }

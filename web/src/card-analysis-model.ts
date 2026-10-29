@@ -25,11 +25,11 @@ export function cardAnalysisJob(url: string, schema: FieldSchema, fallback?: Que
     const saved = params.get(`card_${field}`);
     // Collections may store already-rendered default copy. Restore its template
     // when changing range, while retaining wording the user customized.
-    return saved === null || [null, ...rollingWindowDays].some(days => describeRecipeText(recipe[field], days) === saved) ? recipe[field] : saved;
+    return saved === null || [null, "today" as const, ...rollingWindowDays].some(days => describeRecipeText(recipe[field], days) === saved) ? recipe[field] : saved;
   };
   const item = instantiateRecipe({ ...recipe,
     title: copy("title"), description: copy("description"),
-  }, window?.days ?? null);
+  }, window?.mode === "today" ? "today" : window?.days ?? null);
   return { id: recipe.id, dataset, query: spec.query, schema,
     options: { recipe: item, window, cover, coverMetricId: params.get("card_metric") ?? undefined, url } };
 }

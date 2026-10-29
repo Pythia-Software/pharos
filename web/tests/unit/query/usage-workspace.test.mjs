@@ -307,6 +307,13 @@ test("dashboard returns retain edited source filters and disclose incompatible r
   back = usageDashboardReturn(current);
   assert.match(back.label, /resets query filters/);
   assert.deepEqual(decodeQueryStrict(new URL(back.href, "http://localhost").searchParams.get("analyze_filters")).where, []);
+  const original = [{ field: "last_usage_at", op: ">=", value: "2026-10-29T06:00:00Z" }, { field: "first_usage_at", op: "<", value: "+0s" }];
+  const edited = [{ field: "last_usage_at", op: ">=", value: "2026-01-01" }, { field: "first_usage_at", op: "<", value: "2026-02-01" }];
+  const today = new URLSearchParams({ analyze_mode: "query", analyze_topic: "tokens", analyze_data: "usage", analyze_window: "today", window_mode: "today", window_days: "1", window_dataset: "usage", window_field: "last_usage_at", window_until_field: "first_usage_at", analyze_filters: encodeQuery({ ...EMPTY_QUERY, where: original }), analyze_opened: encodeQuery({ ...EMPTY_QUERY, where: original }), q_usage: encodeQuery({ ...EMPTY_QUERY, where: edited }) });
+  const returned = new URL(usageDashboardReturn(today).href, "http://localhost").searchParams;
+  assert.equal(returned.has("analyze_window"), false, "an edited range must not be promoted back to Today");
+  assert.equal(returned.has("window_mode"), false);
+  assert.deepEqual(decodeQueryStrict(returned.get("analyze_filters")).where, edited);
 });
 
 test("legacy analyses carry the full query and linked chart assumptions or label a reset", () => {

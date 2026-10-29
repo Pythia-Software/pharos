@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Icon } from "./icons";
 import { SearchSelect } from "./search-select";
 import { SearchInput, WrappingInput } from "./search-input";
-import { chooseScope, compileRules, newGroup, newRule, optionScope, optionsInEffect, querySyntax, scopeChoice, scopes, searchDateValue, searchDateWindow, searchRequest, searchSentence, sourceLabel, textScopeNote, visualFromQuery, withSearchDateComparison, withSearchDateRange, withSearchDateWindow, type SentencePart, type RuleKind, type SearchDateComparison, type SearchIssue, type TextCondition, type TextGroup, type TextQuery, type TextScope, type TextSearchDraft } from "./text-search-model";
+import { chooseScope, compileRules, refreshSearchToday, newGroup, newRule, optionScope, optionsInEffect, querySyntax, scopeChoice, scopes, searchDateValue, searchDateWindow, searchRequest, searchSentence, sourceLabel, textScopeNote, visualFromQuery, withSearchDateComparison, withSearchDateRange, withSearchDateWindow, type SentencePart, type RuleKind, type SearchDateComparison, type SearchIssue, type TextCondition, type TextGroup, type TextQuery, type TextScope, type TextSearchDraft } from "./text-search-model";
 import "./text-search-editor.css";
 
 const EditorDOMPrefix = createContext("");
@@ -240,7 +240,7 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
     try {
       await validate(compiled.request, controller.signal);
       if (controller.signal.aborted) return;
-      onApply(draft);
+      onApply(refreshSearchToday(draft));
     } catch (cause) { if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { if (!controller.signal.aborted) setBusy(false); }
   };
@@ -307,7 +307,7 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
     {targetNote ? <p className="text-target-note" id={`${filterID}-target`}>{targetNote}</p> : <span className="sr-only" id={`${filterID}-target`}>{targetDescription} {sameSpan}</span>}
   </div>;
   const filters = <div className="text-query-filters" role="group" aria-label="Additional query filters">
-    {textKind ? visibleFields.map(field => {
+    {textKind ? visibleFields.filter(field => !(dateWindow?.duration === "today" && field.key === "to")).map(field => {
       const relative = field.key === "from" ? dateWindow : undefined;
       const name = relative ? "Date last" : "menu" in field ? field.menu : field.label;
       const id = `${filterID}-${field.key}`;
@@ -319,23 +319,23 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
         <span className="text-join">and</span>
         <div className="text-filter-clause">
           <label htmlFor={id}>{field.label} {!date ? <span className="text-filter-operator">{field.operator}</span> : null}</label>
-          {field.key === "from" || field.key === "to" ? <SearchSelect aria-label={field.key === "from" ? "Date comparison" : "End date comparison"} value={relative ? "last" : field.key} onChange={event => {
+          {field.key === "from" || field.key === "to" ? <SearchSelect aria-label={field.key === "from" ? "Date comparison" : "End date comparison"} value={relative?.duration === "today" ? "today" : relative ? "last" : field.key} onChange={event => {
             const comparison = event.target.value as SearchDateComparison;
-            const target = comparison === "last" ? "from" : comparison;
+            const target = comparison === "last" || comparison === "today" ? "from" : comparison;
             patch(withSearchDateComparison(draft, field.key, comparison));
             setAddedFields(fields => [...fields.filter(key => key !== field.key), target]);
             requestAnimationFrame(() => document.getElementById(`${filterID}-${target}`)?.focus());
-          }}><option value="last" disabled={!!draft.scope[field.key === "from" ? "to" : "from"]}>last</option><option value="from" disabled={field.key !== "from" && !!draft.scope.from}>on or after</option><option value="to" disabled={field.key !== "to" && !!draft.scope.to}>on or before</option></SearchSelect> : null}
+          }}><option value="today">today (local time)</option><option value="last" disabled={dateWindow?.duration !== "today" && !!draft.scope[field.key === "from" ? "to" : "from"]}>last</option><option value="from" disabled={field.key !== "from" && !!draft.scope.from}>on or after</option><option value="to" disabled={dateWindow?.duration !== "today" && field.key !== "to" && !!draft.scope.to}>on or before</option></SearchSelect> : null}
           {options && !choicesError ? <SearchSelect id={id} aria-label={name} value={value} onChange={e => scope({ [field.key]: e.target.value })}>
             <option value="">Any {field.label.toLowerCase()}</option>
             {Array.from(new Set([...options, ...(value ? [value] : [])])).map(v => <option key={v} value={v}>{sourceLabel(v)}</option>)}
-          </SearchSelect> : relative ? <WrappingInput id={id} aria-label={name} value={relative.duration} placeholder="30d, 7d, 24h" aria-invalid={issueList.some(i => i.id === "dates")} aria-describedby={`${filterID}-dates`} onValue={duration => patch(withSearchDateWindow(draft, duration))} />
+          </SearchSelect> : relative?.duration === "today" ? <span className="text-filter-note">Since local midnight</span> : relative ? <WrappingInput id={id} aria-label={name} value={relative.duration} placeholder="30d, 7d, 24h" aria-invalid={issueList.some(i => i.id === "dates")} aria-describedby={`${filterID}-dates`} onValue={duration => patch(withSearchDateWindow(draft, duration))} />
             : date ? <input id={id} aria-label={name} type="date" value={searchDateValue(value)} aria-invalid={issueList.some(i => i.id === "dates")} aria-describedby={`${filterID}-dates ${id}-utc`} onChange={e => scope({ [field.key]: e.target.value })} />
             : <WrappingInput id={id} aria-label={name} value={value} placeholder={field.placeholder} aria-invalid={date && issueList.some(i => i.id === "dates")} aria-describedby={date ? `${filterID}-dates ${id}-utc` : undefined} onValue={text => scope({ [field.key]: text })} />}
           {date && !relative ? <span className="text-filter-note" id={`${id}-utc`} title={utcNote}>UTC<span className="sr-only">: {utcNote}</span></span> : null}
-          {date && !visibleFields.some(other => other.key === (field.key === "from" ? "to" : "from")) ? <button type="button" onClick={() => addDateBound(field.key === "from" ? "to" : "from")}><Icon name="plus" />{field.key === "from" ? "Add end date" : "Add start date"}</button> : null}
+          {date && dateWindow?.duration !== "today" && !visibleFields.some(other => other.key === (field.key === "from" ? "to" : "from")) ? <button type="button" onClick={() => addDateBound(field.key === "from" ? "to" : "from")}><Icon name="plus" />{field.key === "from" ? "Add end date" : "Add start date"}</button> : null}
           {field.key === "from" && !draft.scope.to ? <button type="button" aria-label="Search all time" onClick={() => { scope({ from: "" }); setAddedFields(fields => fields.filter(key => key !== "from")); }}>All time<Icon name="close" /></button>
-            : <RemoveButton label={`Remove ${name.toLowerCase()} filter`} onRemove={() => { scope({ [field.key]: "" }); setAddedFields(fields => fields.filter(key => key !== field.key)); }} />}
+            : <RemoveButton label={`Remove ${name.toLowerCase()} filter`} onRemove={() => { patch(dateWindow?.duration === "today" ? { ...draft, dateWindow: undefined, scope: { ...draft.scope, from: "", to: "" } } : { ...draft, scope: { ...draft.scope, [field.key]: "" } }); setAddedFields(fields => fields.filter(key => key !== field.key)); }} />}
         </div>
       </div>;
     }) : null}

@@ -1,3 +1,4 @@
+import { todayBounds } from "./day-window";
 import { parseRelativeDuration } from "@pythia-software/query-table-core";
 
 // The visual editor produces the engine's typed tree. Text entered into a rule
@@ -8,7 +9,7 @@ export type TextRule = { id: string; kind: RuleKind; text: string; other: string
 export type TextGroup = { id: string; kind: "group"; join: "all" | "any"; children: TextCondition[]; exclude: boolean };
 export type TextCondition = TextRule | TextGroup;
 export type TextScope = { surface: string; roles: string[]; kinds: string[]; repository: string; provider: string; source: string; from: string; to: string; conversation_id: string; workspace_id: string };
-export type TextSearchDraft = { editor: "visual" | "syntax"; match: "rules" | "literal" | "regex"; root: TextGroup; text: string; mode: string; scope: TextScope; fuzzy: boolean; caseSensitive: boolean; separators: boolean; dateWindow?: { duration: string; from: string } };
+export type TextSearchDraft = { editor: "visual" | "syntax"; match: "rules" | "literal" | "regex"; root: TextGroup; text: string; mode: string; scope: TextScope; fuzzy: boolean; caseSensitive: boolean; separators: boolean; dateWindow?: { duration: string; from: string; to?: string } };
 export type SearchIssue = { id: string; message: string };
 let nextID = 0;
 export const newRule = (text = ""): TextRule => ({ id: `rule-${++nextID}`, kind: "words", text, other: "", distance: "8", exclude: false });
@@ -18,17 +19,26 @@ export const emptyTextSearch = (): TextSearchDraft => ({ editor: "visual", match
 // Keep the relative expression beside its resolved bound so saved links and
 // cursor batches search the same messages while the editor reads "last 30d".
 export function searchDateWindow(draft: TextSearchDraft) {
-  return draft.dateWindow && draft.dateWindow.from === draft.scope.from && !draft.scope.to ? draft.dateWindow : undefined;
+  return draft.dateWindow && draft.dateWindow.from === draft.scope.from && (draft.dateWindow.duration === "today" ? draft.dateWindow.to === draft.scope.to : !draft.scope.to) ? draft.dateWindow : undefined;
 }
 function searchDuration(duration: string): number | null {
   const offset = parseRelativeDuration(`-${duration.trim()}`);
   return offset !== null && offset < 0 ? offset : null;
 }
 export function withSearchDateWindow(draft: TextSearchDraft, duration: string, clock = new Date()): TextSearchDraft {
+  if (duration === "today") {
+    const [from, to] = todayBounds(clock);
+    return { ...draft, dateWindow: { duration, from, to }, scope: { ...draft.scope, from, to } };
+  }
   const offset = searchDuration(duration);
   const instant = offset === null ? NaN : clock.getTime() + offset;
   const from = Number.isFinite(new Date(instant).getTime()) ? new Date(instant).toISOString() : "";
   return { ...draft, dateWindow: { duration, from }, scope: { ...draft.scope, from, to: "" } };
+}
+export function refreshSearchToday(draft: TextSearchDraft, clock = new Date(), onlyNewDay = false): TextSearchDraft {
+  const selected = searchDateWindow(draft);
+  if (selected?.duration !== "today" || onlyNewDay && selected.from === todayBounds(clock)[0]) return draft;
+  return withSearchDateWindow(draft, "today", clock);
 }
 export function searchDateValue(value: string): string {
   if (!value || /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
@@ -38,8 +48,10 @@ export function searchDateValue(value: string): string {
 export function withSearchDateRange(draft: TextSearchDraft): TextSearchDraft {
   return { ...draft, dateWindow: undefined, scope: { ...draft.scope, from: searchDateValue(draft.scope.from), to: searchDateValue(draft.scope.to) } };
 }
-export type SearchDateComparison = "last" | "from" | "to";
+export type SearchDateComparison = "today" | "last" | "from" | "to";
 export function withSearchDateComparison(draft: TextSearchDraft, field: "from" | "to", comparison: SearchDateComparison, clock = new Date()): TextSearchDraft {
+  if (comparison === "today") return withSearchDateWindow(draft, "today", clock);
+  if (searchDateWindow(draft)?.duration === "today") draft = { ...draft, dateWindow: undefined, scope: { ...draft.scope, to: "" } };
   const other = field === "from" ? "to" : "from";
   // A comparison changes this bound; it must not replace a second bound.
   if (comparison !== field && draft.scope[other]) return draft;
@@ -140,7 +152,8 @@ export function searchRequest(draft: TextSearchDraft): { request?: Record<string
   else if (draft.editor === "visual") where = { op: draft.match === "literal" ? "literal" : "regex", text: draft.text };
   if (/^\d{4}-\d{2}-\d{2}$/.test(draft.scope.from) && /^\d{4}-\d{2}-\d{2}$/.test(draft.scope.to) && draft.scope.from > draft.scope.to) issues.push({ id: "dates", message: "The end date must be on or after the start date." });
   const window = searchDateWindow(draft);
-  if (window && (searchDuration(window.duration) === null || !window.from)) issues.push({ id: "dates", message: "Enter a duration such as 30d, 7d, or 24h." });
+  if (window?.duration === "today" && (!Number.isFinite(Date.parse(window.from)) || !window.to || !Number.isFinite(Date.parse(window.to)) || Date.parse(window.to) < Date.parse(window.from))) issues.push({ id: "dates", message: "Choose Today again to resolve its local date bounds." });
+  if (window && window.duration !== "today" && (searchDuration(window.duration) === null || !window.from)) issues.push({ id: "dates", message: "Enter a duration such as 30d, 7d, or 24h." });
   if (issues.length) return { issues };
   const { roles, kinds, ...filters } = draft.scope;
   return { request: { ...(where ? { where } : { query: draft.text, mode: draft.mode }), ...filters, ...(roles.length ? { roles } : {}), ...(kinds.length ? { kinds } : {}), ...(({ fuzzy, caseSensitive, separators }) => ({ fuzzy, case_sensitive: caseSensitive, separators }))(optionsInEffect(draft)) }, issues };
@@ -213,7 +226,8 @@ export function searchSentence(d: TextSearchDraft, context: SentenceContext = {}
     if (s.repository) filters.push(["in repositories matching ", quote(s.repository)]);
     const window = searchDateWindow(d);
     if (window) {
-      if (!context.hideDefaultDate || searchDuration(window.duration) !== -30 * 86400000) filters.push(["in the last ", { value: window.duration }]);
+      if (window.duration === "today") filters.push(["today (local time)"]);
+      else if (!context.hideDefaultDate || searchDuration(window.duration) !== -30 * 86400000) filters.push(["in the last ", { value: window.duration }]);
     }
     else if (s.from && s.to) filters.push(["between ", { value: day(s.from) }, " and ", { value: day(s.to) }]);
     else if (s.from) filters.push(["on or after ", { value: day(s.from) }]);
@@ -294,7 +308,7 @@ export function readTextSearch(params: URLSearchParams, clock = new Date()): { d
       const restored: TextSearchDraft = { editor: value.editor, match: value.match, text: value.text, mode: value.mode, scope, root, fuzzy: value.fuzzy === true, caseSensitive: value.caseSensitive === true, separators: value.separators === true };
       if (value.dateWindow !== undefined) {
         if (!value.dateWindow || typeof value.dateWindow.duration !== "string" || typeof value.dateWindow.from !== "string") throw new Error();
-        restored.dateWindow = { duration: value.dateWindow.duration, from: value.dateWindow.from };
+        restored.dateWindow = { duration: value.dateWindow.duration, from: value.dateWindow.from, ...(typeof value.dateWindow.to === "string" ? { to: value.dateWindow.to } : {}) };
         if (!searchDateWindow(restored)) delete restored.dateWindow;
       }
       if (!searchRequest(restored).request) throw new Error();

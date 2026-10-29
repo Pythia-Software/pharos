@@ -531,7 +531,7 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		value, err := s.menuBarStatus(r.Context())
 		writeResult(w, value, err)
 	case path == "/api/menu-bar/usage":
-		value, err := s.menuBarUsage(r.Context())
+		value, err := s.menuBarUsage(r.Context(), r.URL.Query().Get("period"))
 		writeResult(w, value, err)
 	case path == "/api/tools/status":
 		value, err := s.Catalog.ToolLedgerStatus(r.Context())

@@ -1,3 +1,4 @@
+import type { WindowChoice } from "./day-window";
 import { encodeQuery, normalizeQueryState, type QueryState, type SavedQuery, createQueryLinkService, httpQuerySnapshotStore } from "@pythia-software/query-table-core";
 import type { CardCover } from "./card-cover";
 import { preferences } from "./preferences";
@@ -27,7 +28,7 @@ export function migrateSavedQueries() {
   let items = readBookmarks(), changed = false;
   items = items.map(item => {
     const spec = queryFromURL(item.url, item.query);
-    if (spec?.window && spec.window.mode !== "relative" && rollingQueryMatches(spec.query, spec.window)) {
+    if (spec?.window && spec.window.mode === "calendar" && rollingQueryMatches(spec.query, spec.window)) {
       const url = updateQueryWindowURL(item.url, spec.window.days, item.query);
       changed = true; item = { ...item, url, query: queryFromURL(url)?.query };
     }
@@ -110,7 +111,7 @@ export function collectQuery(dataset: QueryDataset, query: QueryState, title: st
   return item;
 }
 
-export function updateBookmark(id: string, title: string, description: string, days?: number | null, coverMetricId?: string): Bookmark {
+export function updateBookmark(id: string, title: string, description: string, days?: WindowChoice | null, coverMetricId?: string): Bookmark {
   if (!title.trim() || title.trim().length > 200 || description.length > 500) throw new Error("Use a title up to 200 characters and a description up to 500.");
   const items = readBookmarks(), current = items.find(item => item.id === id), spec = current && queryFromURL(current.url, current.query);
   if (!current) throw new Error("This saved view is no longer in your collection.");
@@ -134,7 +135,7 @@ export function updateBookmark(id: string, title: string, description: string, d
       }
     } else { delete updated.coverMetricId; delete updated.cover; }
   }
-  if (days !== undefined && days !== spec?.window?.days) {
+  if (days !== undefined && days !== (spec?.window?.mode === "today" ? "today" : spec?.window?.days)) {
     updated.url = updateQueryWindowURL(updated.url, days, updated.query ?? current.query);
     updated.query = queryFromURL(updated.url, updated.query ?? current.query)?.query;
     if (current.templateId) updated.templateId = `${current.templateId.split(":")[0]}:${days ?? "all"}`;

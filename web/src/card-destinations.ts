@@ -161,7 +161,7 @@ export function cardDestination(recipe: QueryRecipe, query: QueryState, window?:
   if (target.topic === "parallelism") {
     // The record dataset uses saved counting/gap preferences. Inherit those
     // on entry, while resetting selections and setting the card's time range.
-    parsed.searchParams.set("analyze_parallelism", JSON.stringify(parallelismRibbon(window?.days)));
+    parsed.searchParams.set("analyze_parallelism", JSON.stringify(window?.mode === "today" ? { ...parallelismRibbon(1), range: "today" } : parallelismRibbon(window?.days)));
   }
   parsed.searchParams.set("card_query", recipe.dataset);
   parsed.searchParams.set("card_id", recipe.id);
