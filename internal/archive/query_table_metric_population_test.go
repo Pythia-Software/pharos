@@ -3,9 +3,11 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -93,6 +95,57 @@ func TestQueryMetricPopulationsHTTP(t *testing.T) {
 		t.Fatalf("error kinds=%v, want %d", got, expected.errors)
 	}
 
+	// The dashboards' minimums over summed fields and distinct values: Tools
+	// counts calls over its daily rollup, and a records view counts a field's
+	// distinct values (Tokens counts conversations). Each hides exactly the groups whose measure is short of
+	// the minimum, and says how many.
+	for _, c := range []struct {
+		dataset string
+		measure qt.AggSpec
+		minimum qt.MetricMinCount
+	}{
+		{"tools", qt.AggSpec{Op: "sum", Field: "call_count"}, qt.MetricMinCount{Sum: "call_count"}},
+		{"tool_calls", qt.AggSpec{Op: "count_distinct", Field: "ended_at"}, qt.MetricMinCount{Distinct: "ended_at"}},
+	} {
+		run := func(spec qt.AggSpec) qt.SQLiteMetricV2 {
+			t.Helper()
+			spec.ID, spec.GroupBy = "m", []string{"tool_name"}
+			w := call(http.MethodPost, "/api/query/"+c.dataset+"/metrics", metricRequest(spec))
+			var result qt.SQLiteMetricsV2Result
+			if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || w.Code != 200 || result.Metrics[0].Error != "" {
+				t.Fatalf("%s: %d %s", c.dataset, w.Code, w.Body.String())
+			}
+			return result.Metrics[0]
+		}
+		measures := map[string]float64{}
+		values := []float64{}
+		for _, bucket := range run(c.measure).Buckets {
+			measures[fmt.Sprint(bucket.Keys[0])] = bucket.Value.(float64)
+			values = append(values, bucket.Value.(float64))
+		}
+		slices.Sort(values)
+		if len(values) < 3 || values[0] == values[len(values)-1] {
+			t.Fatalf("%s: the fixture needs groups of different sizes: %v", c.dataset, measures)
+		}
+		c.minimum.Min = int(values[len(values)/2])
+		kept := run(qt.AggSpec{Op: "count", MinCount: c.minimum})
+		want := []string{}
+		for key, value := range measures {
+			if value >= float64(c.minimum.Min) {
+				want = append(want, key)
+			}
+		}
+		got := []string{}
+		for _, bucket := range kept.Buckets {
+			got = append(got, fmt.Sprint(bucket.Keys[0]))
+		}
+		slices.Sort(want)
+		slices.Sort(got)
+		if !reflect.DeepEqual(got, want) || kept.HiddenGroups == nil || int(*kept.HiddenGroups) != len(measures)-len(want) {
+			t.Fatalf("%s %+v: kept %v (hidden %v), want %v of %v", c.dataset, c.minimum, got, kept.HiddenGroups, want, measures)
+		}
+	}
+
 	// V3 calendar metrics carry the same controls on every dataset path.
 	v3 := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(),
 		Result: qt.WireQuery{Limit: 1},
@@ -139,8 +192,13 @@ func TestQueryMetricPopulationUsageHour(t *testing.T) {
 	server := testServer(t, config, catalog)
 	schema, _ := sqliteQuerySchema("usage")
 	hour := []qt.WhereTerm{{Field: "hour", Op: "=", Value: "2026-09-21T03:00:00Z"}}
+	// Tokens' records minimum counts the top-level conversations a group's
+	// usage belongs to.
+	conversations := func(min int) qt.AggSpec {
+		return qt.AggSpec{ID: fmt.Sprint("conversations-", min), Op: "sum", Field: "total_tokens", GroupBy: []string{"provider"}, MinCount: qt.MetricMinCount{Min: min, Distinct: "root_conversation_id"}}
+	}
 	q := metricRequest(qt.AggSpec{ID: "all", Expression: "SUM([total_tokens])"}, qt.AggSpec{ID: "hour", Expression: "SUM([total_tokens])", Where: hour},
-		qt.AggSpec{ID: "invalid", Expression: "SUM([total_tokens])", MinCount: qt.MetricMinCount{Min: 2}})
+		qt.AggSpec{ID: "invalid", Expression: "SUM([total_tokens])", MinCount: qt.MetricMinCount{Min: 2}}, conversations(1), conversations(1000))
 	result, err := server.executeQueryV2(context.Background(), "usage", nil, schema, nil, &q)
 	if err != nil {
 		t.Fatal(err)
@@ -151,5 +209,9 @@ func TestQueryMetricPopulationUsageHour(t *testing.T) {
 	}
 	if result.Metrics.Metrics[2].Error == "" {
 		t.Fatalf("invalid metric=%+v", result.Metrics.Metrics[2])
+	}
+	kept, none := result.Metrics.Metrics[3], result.Metrics.Metrics[4]
+	if kept.Error != "" || none.Error != "" || metricTotal(t, kept) != 3150 || len(none.Buckets) != 0 || none.HiddenGroups == nil || int(*none.HiddenGroups) != len(kept.Buckets) {
+		t.Fatalf("conversation minimums: kept %+v, none %+v", kept, none)
 	}
 }

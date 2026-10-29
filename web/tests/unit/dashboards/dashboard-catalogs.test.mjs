@@ -8,9 +8,10 @@ import { capabilities, core, execution, fullMatrix, instantiateRecipe, queryReci
 import { relatedCardDashboardURL } from "../../../src/card-analysis-model";
 import { usageDashboardReturn, usageWorkspaceURL } from "../../../src/usage-workspace-model";
 import { dashboardQueryLinks } from "../../../src/dashboard-query-links";
+import { groupedDashboardQuery } from "../../../src/usage-dashboard-model";
 import { normalizedDashboardChart } from "../../../src/analysis-catalogs";
 import { now, toolCalls, toolsRollup, mcpCalls, skillUsages } from "../helpers/record-ledgers.mjs";
-import { analysisInspectQuery, analysisNote, analysisQuery, analysisViews, catalogProblems, cycleResult, normalizeAnalysis, readAnalysisLink, switchView, trendAdjustments, trendUnavailable, validAnalysisState, viewOptions, analysisVersion } from "../../../src/dashboard-analysis-model";
+import { analysisInspectQuery, analysisNote, analysisQuery, analysisViews, catalogProblems, nativeCycleResult, normalizeAnalysis, readAnalysisLink, switchView, trendAdjustments, trendUnavailable, validAnalysisState, viewOptions, analysisVersion } from "../../../src/dashboard-analysis-model";
 import { trendNote, trendQuery, trendSeries } from "../../../src/dashboard-trend-model";
 import { tokenAnalysisCatalog } from "../../../src/token-analysis-catalog";
 import { toolsAnalysisCatalog as tools } from "../../../src/tools-analysis-catalog";
@@ -26,7 +27,11 @@ const rows = { tools: toolsRollup(), mcp_calls: mcpCalls(), tool_calls: toolCall
 const catalogs = [tools, mcp, time, skills];
 const month = catalog => withTimeRange([], catalog.time, new Date(now - 30 * 86400000), new Date(now));
 const run = (catalog, query) => core.evaluateMetrics(rows[catalog.dataset], query, schemas[catalog.dataset], { now }).metrics;
-const compiles = (catalog, query, label) => assert.deepEqual(core.toQueryRequestV3(query, schemas[catalog.dataset], { ...capabilities, regexSourceFilters: true }, execution, { now, rows: false }).diagnostics, [], label);
+// A cycle's per-occurrence clause is planned into plain calendar metrics
+// before it is sent, as runAnalysisQuery does.
+const compiles = (catalog, query, label) => {
+  for (const part of core.planMetricSeries(query, schemas[catalog.dataset], { now })?.queries ?? [query]) assert.deepEqual(core.toQueryRequestV3(part, schemas[catalog.dataset], { ...capabilities, regexSourceFilters: true }, execution, { now, rows: false }).diagnostics, [], label);
+};
 
 test("every view of every measure and breakdown executes over its own dataset", () => {
   for (const catalog of catalogs) {
@@ -152,29 +157,83 @@ test("older links: numbered metrics read as measures; only dashboards with a leg
   assert.ok(mcp.measures.mean_output.ratio);
 });
 
-test("a timestamp cycle groups natively in the viewer’s zone and counts every complete local day", () => {
+test("a timestamp cycle is Query Table's hour of day or day of week in the viewer's zone, over whole local days or hours", () => {
   const zone = "America/Denver", state = { view: "cycle", cycle: "weekday", metric: "calls", split: "none", reduce: "median" };
   const where = month(mcp), analysis = analysisQuery(mcp, state, where, { now, zone });
-  assert.deepEqual(analysis.clause.dateGrouping, { field: "called_at", interval: "day", timeZone: zone, includeEmpty: true, range: "observed" });
-  assert.equal(analysis.supporting.grouping, undefined, "a grouped query cannot group timestamps by date, so the link opens records");
-  const from = Date.parse(analysis.query.where.find(term => term.op === ">=").value), to = Date.parse(where.find(term => term.op === "<").value);
-  assert.equal(new Intl.DateTimeFormat("en-US", { hour: "numeric", hourCycle: "h23", timeZone: zone }).format(from), "00", "the range starts at a local midnight");
-  const folded = cycleResult(mcp, { ...state, reduce: "total" }, run(mcp, analysis.query)[0], { from, to }, zone);
-  // Every complete local day counts, idle ones as zero; today is partial.
-  const weekday = new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: zone }), midnight = core.metricDateFloor(now, "day", zone);
-  const expected = Object.fromEntries(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map(day => [day, 0]));
-  for (const row of rows.mcp_calls) { const at = Date.parse(row.called_at); if (at >= from && at < midnight) expected[weekday.format(at)] += 1; }
-  assert.deepEqual(Object.fromEntries(folded.result.buckets.map(bucket => [bucket.keys[0], bucket.value])), expected);
-  assert.equal(folded.slots, Math.round((midnight - from) / 86400000));
-  assert.match(analysisNote(mcp, state), /complete day in your time zone/);
-  // Hours are UTC hours, placed at the viewer's local hour.
-  const hours = analysisQuery(mcp, { ...state, cycle: "hour" }, where, { now, zone });
-  assert.equal(hours.clause.dateGrouping.timeZone, "UTC");
-  const profile = cycleResult(mcp, { ...state, cycle: "hour", reduce: "total" }, run(mcp, hours.query)[0], { from: Date.parse(where[0].value), to }, zone);
-  const local = new Intl.DateTimeFormat("en-US", { hour: "numeric", hourCycle: "h23", timeZone: zone });
-  const hourly = new Array(24).fill(0);
-  for (const row of rows.mcp_calls) if (Date.parse(row.called_at) >= Date.parse(where[0].value) && Date.parse(row.called_at) < to) hourly[Number(local.format(Date.parse(row.called_at))) % 24] += 1;
-  assert.deepEqual(profile.result.buckets.map(bucket => bucket.value), hourly);
+  assert.deepEqual(analysis.clause.dateGrouping, { field: "called_at", interval: "dayOfWeek", timeZone: zone, includeEmpty: true, range: "query", occurrence: { interval: "day", includeEmpty: true } });
+  assert.ok(analysis.native);
+  assert.deepEqual(analysis.query.where, where, "whole days are Query Table's to find, not a rounded start");
+  // Every whole local day in the range is one observation, idle ones as
+  // zero; the partial first day and today are left out.
+  const from = Date.parse(where[0].value), first = core.metricDateNext(core.metricDateFloor(from, "day", zone), "day", zone), midnight = core.metricDateFloor(now, "day", zone);
+  const daily = new Map();
+  for (let day = first; day < midnight; day = core.metricDateNext(day, "day", zone)) daily.set(day, 0);
+  for (const row of rows.mcp_calls) { const at = Date.parse(row.called_at); if (at >= first && at < midnight) daily.set(core.metricDateFloor(at, "day", zone), daily.get(core.metricDateFloor(at, "day", zone)) + 1); }
+  const isoWeekday = day => ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: zone }).format(day)) + 1;
+  const byWeekday = Object.fromEntries([1, 2, 3, 4, 5, 6, 7].map(slot => [slot, [...daily].filter(([day]) => isoWeekday(day) === slot).map(([, count]) => count)]));
+  const native = nativeCycleResult(analysis, run(mcp, analysis.query)[0]);
+  assert.deepEqual(Object.fromEntries(native.result.buckets.map(bucket => [bucket.keys[0], bucket.distribution.summary])), Object.fromEntries(Object.entries(byWeekday).map(([slot, values]) => [slot, core.boxSummary(values, "tukey")])));
+  assert.equal(native.slots, daily.size);
+  // Across a daylight-saving change a day of 25 hours is one day, and its
+  // hours are 25.
+  const autumn = [{ field: "called_at", op: ">=", value: new Date(core.metricDateTime("2026-10-20", zone)).toISOString() }, { field: "called_at", op: "<", value: new Date(core.metricDateTime("2026-11-10", zone)).toISOString() }];
+  const late = Date.parse("2026-11-12T00:00:00Z");
+  assert.equal(analysisQuery(mcp, state, autumn, { now: late, zone }).occurrences, 21);
+  assert.equal(analysisQuery(mcp, { ...state, cycle: "hour" }, autumn, { now: late, zone }).occurrences, 21 * 24 + 1);
+  // A ratio's idle days have no value, yet are days of the range.
+  const ratio = analysisQuery(mcp, { ...state, metric: "failure_rate" }, [...where, { field: "status", op: "!=", value: "ok" }], { now, zone });
+  const rated = nativeCycleResult(ratio, run(mcp, ratio.query)[0]);
+  assert.equal(rated.slots, daily.size);
+  assert.ok(rated.result.buckets.reduce((n, bucket) => n + bucket.occurrences, 0) < daily.size, "Query Table counts only days with a ratio");
+  assert.match(analysisNote(mcp, state), /whole day in your time zone/);
+  // A total adds up the whole days' records; a mean averages them.
+  const totals = run(mcp, analysisQuery(mcp, { ...state, reduce: "total" }, where, { now, zone }).query)[0];
+  assert.deepEqual(Object.fromEntries(totals.buckets.map(bucket => [bucket.keys[0], bucket.value])), Object.fromEntries(Object.entries(byWeekday).map(([slot, values]) => [slot, values.reduce((n, value) => n + value, 0)])));
+  const means = run(mcp, analysisQuery(mcp, { ...state, reduce: "mean" }, where, { now, zone }).query)[0];
+  for (const bucket of means.buckets) assert.ok(Math.abs(bucket.value - byWeekday[bucket.keys[0]].reduce((n, value) => n + value, 0) / byWeekday[bucket.keys[0]].length) < 1e-9);
+  // A weekday opens the records of its whole days; the supporting query, the
+  // daily totals as grouped rows keyed by local day.
+  const monday = native.result.buckets.find(bucket => bucket.keys[0] === 1);
+  const opened = analysisInspectQuery(analysis, monday, analysis.clause, schemas.mcp_calls, "cycle");
+  assert.equal(core.applyQuery(rows.mcp_calls, { ...opened, limit: 1000 }, schemas.mcp_calls, { now }).total, byWeekday[1].reduce((n, value) => n + value, 0));
+  assert.deepEqual(analysis.supporting.grouping.keys, [{ field: "called_at", interval: "day", timeZone: zone }]);
+  compiles(mcp, analysis.supporting, "the supporting query");
+  const grouped = core.applyQuery(rows.mcp_calls, { ...analysis.supporting, limit: 1000 }, schemas.mcp_calls, { now }).rows;
+  assert.deepEqual(new Map(grouped.map(row => [Date.parse(row.called_at), row.analysis_value])), new Map([...daily].filter(([, count]) => count)));
+  // Hours are local hours too, so a fractional-offset zone's slots start on
+  // its own hours.
+  const kolkata = "Asia/Kolkata", hours = analysisQuery(mcp, { ...state, cycle: "hour", reduce: "total" }, where, { now, zone: kolkata });
+  assert.deepEqual(hours.clause.dateGrouping, { field: "called_at", interval: "hourOfDay", timeZone: kolkata, includeEmpty: true, range: "query", partialIntervals: "exclude" });
+  const hourStart = core.metricDateNext(core.metricDateFloor(from, "hour", kolkata), "hour", kolkata), hourEnd = core.metricDateFloor(now, "hour", kolkata);
+  const local = new Intl.DateTimeFormat("en-US", { hour: "numeric", hourCycle: "h23", timeZone: kolkata });
+  const hourly = Object.fromEntries(Array.from({ length: 24 }, (_, hour) => [hour, 0]));
+  for (const row of rows.mcp_calls) { const at = Date.parse(row.called_at); if (at >= hourStart && at < hourEnd) hourly[Number(local.format(at)) % 24] += 1; }
+  assert.deepEqual(Object.fromEntries(run(mcp, hours.query)[0].buckets.map(bucket => [bucket.keys[0], bucket.value])), hourly);
+  // An hour profile's box or mean reads one group per hour: past 400 days it
+  // does not run, and says why; a total reads 24 groups whatever the range.
+  const long = [{ field: "called_at", op: ">=", value: new Date(now - 401 * 86400000).toISOString() }];
+  const tooLong = analysisQuery(mcp, { ...state, cycle: "hour" }, long, { now, zone });
+  assert.match(tooLong.problem, /at most 400 days/);
+  assert.deepEqual(tooLong.query.aggregations, []);
+  const longTotal = analysisQuery(mcp, { ...state, cycle: "hour", reduce: "total" }, long, { now, zone });
+  assert.deepEqual([longTotal.problem, longTotal.query.aggregations.length], [undefined, 1]);
+  assert.equal(analysisQuery(mcp, { ...state, cycle: "hour" }, month(mcp), { now, zone }).problem, undefined);
+  // Without a start the span is known only to the service: its budget error
+  // reads as the same limit.
+  const allTime = analysisQuery(mcp, { ...state, cycle: "hour" }, [], { now, zone });
+  for (const error of ["calendar group population exceeds host budget", "Occurrences need every interval, but the engine returned only some of them."]) {
+    assert.throws(() => nativeCycleResult(allTime, { id: "analysis", buckets: [], error }), /at most 400 days/);
+  }
+  // Every other error reads as it is: another budget, or any error of a
+  // total, which reads no occurrences.
+  for (const error of ["unknown field", "matching population exceeds host budget"]) assert.throws(() => nativeCycleResult(allTime, { id: "analysis", buckets: [], error }), { message: error });
+  const allTotal = analysisQuery(mcp, { ...state, cycle: "hour", reduce: "total" }, [], { now, zone });
+  assert.throws(() => nativeCycleResult(allTotal, { id: "analysis", buckets: [], error: "group population exceeds host budget" }), { message: "group population exceeds host budget" });
+  // Without a start there is no single drill-down, and idle days run from
+  // the first observed one.
+  const open = analysisQuery(mcp, state, [], { now, zone });
+  assert.equal(open.clause.dateGrouping.range, "observed");
+  assert.equal(analysisInspectQuery(open, monday, open.clause, schemas.mcp_calls, "cycle"), null);
 });
 
 test("a unit may combine fields: one observation per tool in a conversation, or per skill path", () => {
@@ -236,15 +295,22 @@ test("Compare names two values that share a label, and each opens its own record
   for (const [index, bucket] of shown.metric.buckets.entries()) assert.equal(shown.sourceBucket(bucket), result.buckets[index]);
 });
 
-test("a Tools minimum opens a bar's daily summaries, and says it cannot count what it hides", () => {
+test("a Tools minimum sums calls natively: it reports what it hides, and a bar opens its daily summaries", () => {
   const state = { view: "compare", metric: "failure_rate", split: "tool_name", minSamples: 10 };
   const analysis = analysisQuery(tools, state, month(tools), { now }), result = run(tools, analysis.query)[0];
+  assert.deepEqual(analysis.clause.minCount, { min: 10, sum: "call_count" });
+  assert.equal(analysis.query.grouping, undefined, "no grouping stage: one clause over the summaries");
+  assert.ok(result.hiddenGroups > 0, "the groups below ten calls are counted");
   const bucket = result.buckets.find(item => item.keys[0] === "Bash");
   const opened = analysisInspectQuery(analysis, bucket, analysis.clause, schemas.tools, "compare");
-  assert.equal(opened.grouping, undefined, "records, not the grouped row");
+  assert.equal(opened.grouping, undefined, "records, not a grouped row");
   const summaries = core.applyQuery(rows.tools, opened, schemas.tools, { now }).rows;
   assert.ok(summaries.length > 1 && summaries.every(row => row.tool_name === "Bash"));
-  assert.match(analysisNote(tools, state), /hidden; how many is not shown/);
+  assert.doesNotMatch(analysisNote(tools, state), /how many is not shown/);
+  // The supporting query keeps the same groups: a group filter on their calls.
+  assert.deepEqual(analysis.supporting.where, [{ field: "analysis_samples", op: ">=", value: "10" }]);
+  const kept = core.applyQuery(rows.tools, { ...analysis.supporting, limit: 1000 }, schemas.tools, { now }).rows.map(row => row.tool_name);
+  assert.deepEqual(kept.sort(), result.buckets.map(item => item.keys[0]).sort());
 });
 
 test("a scatter says when one measure's population narrows the other", () => {
@@ -330,22 +396,27 @@ test("the day boundary: Over time's days are the recorded days the cards count; 
   // The weekday cycle's days are the viewer's: the moved request is on its
   // local date, not its recorded one (the documented trade-off).
   const cycle = analysisQuery(mcp, { view: "cycle", cycle: "weekday", metric: "calls", split: "none" }, where, { now, zone: localZone });
-  const daily = Object.fromEntries(core.evaluateMetrics(moved, cycle.query, schemas.mcp_calls, { now }).metrics[0].buckets.filter(bucket => bucket.value).map(bucket => [local(bucket.keys[0]), bucket.value]));
-  const viewer = {};
-  for (const row of moved) if (Date.parse(row.called_at) >= Date.parse(cycle.query.where.find(term => term.op === ">=").value)) viewer[local(row.called_at)] = (viewer[local(row.called_at)] ?? 0) + 1;
+  const daily = Object.fromEntries(core.applyQuery(moved, { ...cycle.supporting, limit: 1000 }, schemas.mcp_calls, { now }).rows.map(row => [local(row.called_at), row.analysis_value]));
+  const bound = op => Date.parse(cycle.supporting.grouping.source.where.find(term => term.op === op).value), viewer = {};
+  for (const row of moved) if (Date.parse(row.called_at) >= bound(">=") && Date.parse(row.called_at) < bound("<")) viewer[local(row.called_at)] = (viewer[local(row.called_at)] ?? 0) + 1;
   assert.deepEqual(daily, viewer);
+  assert.ok(local(moved[0].called_at) in daily);
   assert.notEqual(local(moved[0].called_at), moved[0].day);
   assert.match(trendNote(mcp, state), /after a time-zone change a late-evening record can fall on different days/);
   // Hours: every catalog with a timestamp offers them, as UTC clock hours,
-  // whose supporting query opens records.
+  // whose supporting query opens the hourly totals as grouped rows.
   for (const catalog of [mcp, time, skills]) {
     assert.equal(trendAdjustments(catalog, { metric: catalog.trend.metric, split: "none", period: "hour" }).length, 0, catalog.dataset);
     const hours = trendQuery(catalog, { metric: catalog.trend.metric, split: "none", period: "hour" }, where.map(term => ({ ...term, field: catalog.time.first })), { now, zone: localZone });
     assert.deepEqual(hours.query.aggregations[0].dateGrouping, { field: catalog.timestamp, interval: "hour", timeZone: "UTC", includeEmpty: false, range: "query" });
-    assert.equal(hours.supporting.aggregations, undefined);
     const drawn = trendSeries(catalog, { metric: catalog.trend.metric, split: "none", period: "hour" }, hours, run(catalog, hours.query), { now });
     assert.equal(drawn.error, undefined);
     assert.ok(drawn.buckets.length > 24 * 29 && drawn.buckets.some(bucket => bucket.values.total), catalog.dataset);
+    const grouped = groupedDashboardQuery(hours.supporting);
+    assert.deepEqual(grouped.grouping.keys, [{ field: catalog.timestamp, interval: "hour", timeZone: "UTC" }], catalog.dataset);
+    compiles(catalog, grouped, `${catalog.dataset}: hourly supporting query`);
+    const totals = new Map(core.applyQuery(rows[catalog.dataset], { ...grouped, limit: 1000 }, schemas[catalog.dataset], { now }).rows.map(row => [new Date(row[catalog.timestamp]).toISOString(), row.dashboard_1]));
+    for (const bucket of drawn.buckets) if (bucket.values.total) assert.equal(totals.get(new Date(bucket.date).toISOString()), bucket.values.total, `${catalog.dataset} ${bucket.key}`);
   }
   // Usage keeps its recorded hours.
   assert.equal(trendQuery(tokenAnalysisCatalog, { metric: "tokens", split: "none", period: "hour" }, [], { now }).query.aggregations[0].dateGrouping, undefined);
