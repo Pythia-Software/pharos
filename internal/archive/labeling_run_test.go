@@ -54,6 +54,20 @@ func labelingFakeCLI() int {
 		}
 		return 0
 	}
+	if len(args) == 1 && args[0] == "agents" {
+		// Like agy: the agents in $HOME/.gemini/config/agents, by name.
+		files, _ := filepath.Glob(filepath.Join(os.Getenv("HOME"), ".gemini", "config", "agents", "*.md"))
+		for _, file := range files {
+			data, _ := os.ReadFile(file)
+			for _, line := range strings.Split(string(data), "\n") {
+				if name, ok := strings.CutPrefix(line, "name: "); ok {
+					fmt.Println(name)
+					break
+				}
+			}
+		}
+		return 0
+	}
 	route := labelingRouteClaude
 	if len(args) > 0 && args[0] == "exec" {
 		route = labelingRouteCodex
@@ -2155,11 +2169,24 @@ func TestLabelingRunThroughAntigravity(t *testing.T) {
 		t.Fatalf("worker HOME %q, private config %s, login link %q, global config %s", called.Home, config, linked, unchanged)
 	}
 	joined := strings.Join(called.Argv, " ")
-	for _, want := range []string{"--model gemini-3.8-flash-low --sandbox --disable-slash-commands --output-format stream-json --json-schema " + filepath.Join(dir, "contracts"),
-		"--print-timeout 10s -p You are a text annotation service."} {
+	for _, want := range []string{"--model gemini-3.8-flash-low --agent pharos-labeling --mode plan --sandbox --disable-slash-commands --output-format stream-json --json-schema " +
+		filepath.Join(dir, "contracts"), "--print-timeout 10s -p You are a text annotation service."} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("argv lacks %q: %.300s", want, joined)
 		}
+	}
+	// The agent allows only finish: no MCP servers, skills, plugins,
+	// subagents or commands. It lives in the private home; the job's own
+	// working directory stays empty.
+	agent, _ := os.ReadFile(filepath.Join(private, ".gemini", "config", "agents", "pharos-labeling.md"))
+	for _, want := range []string{"name: pharos-labeling\n", "mainAgent: true\n", "subagent: false\n", "tools:\n  - finish\nmcpServers: []\nskills: []\nplugins: []\n",
+		"commandExecutionPolicy: off\n"} {
+		if !strings.Contains(string(agent), want) {
+			t.Fatalf("agent lacks %q:\n%s", want, agent)
+		}
+	}
+	if entries, err := os.ReadDir(filepath.Join(dir, "runner", "pilot")); err != nil || len(entries) != 0 {
+		t.Fatalf("runner directory: %v, %v", entries, err)
 	}
 	usage := labelingRows(t, db, `SELECT model,cost_status,cost_usd,tokens FROM usage`)
 	attempt, _ := labelingAttemptRecord(db, "pilot:000001/1")
@@ -2199,6 +2226,16 @@ func TestLabelingRunThroughAntigravity(t *testing.T) {
 	if err := runLabelingJob(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "MCP servers") || fakeCalls(t, calls) != 0 {
 		t.Fatalf("stubborn MCP: %v, %d calls", err, fakeCalls(t, calls))
 	}
+	// If agy does not list the labeling agent (here a fake whose listing
+	// ignores HOME), its workers could use tools: the run refuses.
+	agentless := filepath.Join(t.TempDir(), "agy")
+	os.WriteFile(agentless, []byte("#!/bin/sh\nif [ \"$1\" = agents ]; then echo 'default'; exit 0; fi\nexec '"+cli+"' \"$@\"\n"), 0o755)
+	dir = writeLabelingFixture(t, labelingFixtureUnits())
+	opts = labelingTestOptions(dir, agentless, io.Discard)
+	opts.Spec = labelingJobSpec{Route: labelingRouteAgy, Model: "gemini-3.8-flash", Effort: "low", LimitItems: 4}
+	if err := runLabelingJob(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "pharos-labeling agent") || fakeCalls(t, calls) != 0 {
+		t.Fatalf("missing agent: %v, %d calls", err, fakeCalls(t, calls))
+	}
 	// Without the CLI's login there is nothing to link.
 	os.Remove(login)
 	dir = writeLabelingFixture(t, labelingFixtureUnits())
@@ -2206,5 +2243,96 @@ func TestLabelingRunThroughAntigravity(t *testing.T) {
 	opts.Spec = labelingJobSpec{Route: labelingRouteAgy, Model: "gemini-3.8-flash", Effort: "low", LimitItems: 4}
 	if err := runLabelingJob(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "agy login") {
 		t.Fatalf("missing login: %v", err)
+	}
+}
+
+// Runners starting at once share the private agy home: each file is
+// replaced atomically, and left alone when it already holds the content.
+func TestLabelingAgyHomeIsSharedSafely(t *testing.T) {
+	userHome := t.TempDir()
+	login := filepath.Join(userHome, labelingAgyLogin)
+	os.MkdirAll(filepath.Dir(login), 0o700)
+	if err := os.WriteFile(login, []byte("login"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	const runners = 16
+	errs := make(chan error, runners)
+	for range runners {
+		go func() {
+			_, err := labelingAgyHome(dir, userHome)
+			errs <- err
+		}()
+	}
+	for range runners {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	config := filepath.Join(dir, "agy-home", ".gemini", "config")
+	files := map[string]string{filepath.Join(config, "mcp_config.json"): `{"mcpServers":{}}` + "\n", filepath.Join(config, "agents", "pharos-labeling.md"): labelingAgyAgent}
+	before := map[string]os.FileInfo{}
+	for path, want := range files {
+		data, err := os.ReadFile(path)
+		if err != nil || string(data) != want {
+			t.Fatalf("%s = %q, %v", path, data, err)
+		}
+		before[path], _ = os.Stat(path)
+	}
+	if linked, _ := os.Readlink(filepath.Join(dir, "agy-home", labelingAgyLogin)); linked != login {
+		t.Fatalf("login link = %q", linked)
+	}
+	for _, directory := range []string{config, filepath.Join(config, "agents"), filepath.Dir(filepath.Join(dir, "agy-home", labelingAgyLogin))} {
+		entries, _ := os.ReadDir(directory)
+		for _, entry := range entries {
+			if strings.HasSuffix(entry.Name(), ".tmp") {
+				t.Fatalf("left a temporary file: %s", entry.Name())
+			}
+		}
+	}
+	// Unchanged content is not rewritten; changed content is replaced.
+	os.WriteFile(filepath.Join(config, "mcp_config.json"), []byte(`{"mcpServers":{"pharos":{}}}`), 0o600)
+	if _, err := labelingAgyHome(dir, userHome); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range files {
+		after, _ := os.Stat(path)
+		data, _ := os.ReadFile(path)
+		if string(data) != want || strings.HasSuffix(path, ".md") && !os.SameFile(before[path], after) {
+			t.Fatalf("%s = %q, same file %v", path, data, os.SameFile(before[path], after))
+		}
+	}
+}
+
+// Each job works in its own runner directory: a file one job's CLI left
+// stops that job only.
+func TestLabelingRunnerDirectoryPerJob(t *testing.T) {
+	quickLabelingTimers(t)
+	dir := writeLabelingFixture(t, labelingFixtureUnits())
+	cli, calls, _ := fakeLabelingCLI(t, "ok")
+	a := labelingTestOptions(dir, cli, io.Discard)
+	a.Job, a.CreateOnly, a.Spec.LimitItems = "a", true, 2
+	if err := runLabelingJob(context.Background(), a); err != nil {
+		t.Fatal(err)
+	}
+	leftover := filepath.Join(dir, "runner", "a", "notes.md")
+	os.MkdirAll(filepath.Dir(leftover), 0o700)
+	if err := os.WriteFile(leftover, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a.Create, a.CreateOnly = false, false
+	if err := runLabelingJob(context.Background(), a); err == nil || !strings.Contains(err.Error(), "not empty") || fakeCalls(t, calls) != 0 {
+		t.Fatalf("job a with a leftover file: %v, %d calls", err, fakeCalls(t, calls))
+	}
+	b := labelingTestOptions(dir, cli, io.Discard)
+	b.Job, b.Spec.LimitItems = "b", 2
+	if err := runLabelingJob(context.Background(), b); err != nil || fakeCalls(t, calls) == 0 {
+		t.Fatalf("job b: %v, %d calls", err, fakeCalls(t, calls))
+	}
+	attempt, _ := labelingAttemptRecord(openFixtureLedger(t, dir), "b:000001/1")
+	var command struct{ Cwd string }
+	data, _ := os.ReadFile(filepath.Join(firstString(attempt["dir"]), "command.json"))
+	if json.Unmarshal(data, &command); command.Cwd != filepath.Join(dir, "runner", "b") {
+		t.Fatalf("command = %s", data)
 	}
 }

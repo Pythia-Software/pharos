@@ -325,7 +325,9 @@ func (r *labelingRunner) prepareFiles() error {
 	} else if r.job.CLIVersion != r.cliVersion {
 		r.printf("%s: the %s CLI is now %q (the job began with %q); each attempt records its version\n", r.job.Name, r.job.Route, r.cliVersion, r.job.CLIVersion)
 	}
-	r.runner = filepath.Join(r.dir, "runner")
+	// Each job has its own working directory, so a file one job's CLI left
+	// stops only that job.
+	r.runner = filepath.Join(r.dir, "runner", r.job.Name)
 	if err := os.MkdirAll(r.runner, 0o700); err != nil {
 		return err
 	}
@@ -343,6 +345,11 @@ func (r *labelingRunner) prepareFiles() error {
 			return err
 		} else if listed != "" {
 			return fmt.Errorf("agy would still start MCP servers with HOME=%s; refusing to run:\n%s", home, listed)
+		}
+		if found, listed, err := labelingAgyHasAgent(r.cliPath, home); err != nil {
+			return err
+		} else if !found {
+			return fmt.Errorf("agy does not list the %s agent with HOME=%s, so its workers could use tools; refusing to run. It lists:\n%s", labelingAgyAgentName, home, listed)
 		}
 		r.env = []string{"HOME=" + home}
 	}

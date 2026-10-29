@@ -19,12 +19,14 @@ import (
 
 // Routes run a labeling request through a model CLI as an annotation-only
 // worker: no tools, files, browser, MCP or delegation, untrusted corpus
-// text on stdin, an ephemeral session, an empty private working directory.
+// text on stdin, an ephemeral session, an empty private working directory
+// per job.
 // Each flag was checked against claude 2.1.288 and codex-cli 0.155.0 --help.
 const (
 	labelingRouteClaude = "claude"
 	labelingRouteCodex  = "codex"
-	// labelingRouteAgy is the Antigravity CLI (agy 1.4.8). Its model id is
+	// labelingRouteAgy is the Antigravity CLI (agy 1.4.8, checked again
+	// with 1.4.9). Its model id is
 	// the model and effort joined ("gemini-3.8-flash-low"); the prompt is
 	// an argument (-p), as in the historical runner; it has no flag to
 	// keep a session from being saved.
@@ -79,8 +81,10 @@ func labelingCommand(route, model, effort, schemaText, schemaPath, answerPath, s
 	case labelingRouteAgy:
 		// --print-timeout and the prompt (-p PROMPT, last) are added by the
 		// runner.
-		return []string{"--model", labelingCLIModel(route, model, effort), "--sandbox", "--disable-slash-commands", "--output-format", "stream-json",
-			"--json-schema", schemaPath}, nil
+		// The labeling agent (labelingAgyAgent, in the private home) allows
+		// only the finish tool, as Ask Pharos restricts agy.
+		return []string{"--model", labelingCLIModel(route, model, effort), "--agent", labelingAgyAgentName, "--mode", "plan", "--sandbox",
+			"--disable-slash-commands", "--output-format", "stream-json", "--json-schema", schemaPath}, nil
 	}
 	return nil, errors.New("unknown route " + route + ": use claude, codex or agy")
 }
@@ -699,18 +703,44 @@ wait:
 // ~/.gemini/config/mcp_config.json (the user's interactive setup, such as
 // Pharos's own MCP server on the live catalog). Labeling workers need no
 // tools, so they run with HOME set to a private home whose MCP configuration
-// is empty and whose only other content is a link to the CLI's own login.
-// Conversations are then saved there, not under the user's ~/.gemini.
+// is empty, which holds the labeling agent (labelingAgyAgent), and whose only
+// other content is a link to the CLI's own login. Conversations are then
+// saved there, not under the user's ~/.gemini. Several runners can share
+// the home: each file is replaced atomically, and only when it differs.
 var labelingAgyLogin = filepath.Join(".gemini", "antigravity-cli", "antigravity-oauth-token")
+
+// labelingAgyAgentName is the agent every agy attempt runs as. agy 1.4.9
+// reads agent definitions from ~/.gemini/config/agents (as well as
+// ~/.gemini/agents and ~/.gemini/antigravity-cli/agents), so it lives in the
+// private home, never in the runner's working directory.
+const labelingAgyAgentName = "pharos-labeling"
+
+// labelingAgyAgent is the labeling agent: like Ask Pharos's agy agent, the
+// main agent, no subagents, no MCP servers, skills or plugins, no command
+// execution, and only finish, the tool that returns the structured result.
+const labelingAgyAgent = `---
+name: ` + labelingAgyAgentName + `
+description: Pharos labeling worker (annotation only)
+mainAgent: true
+subagent: false
+tools:
+  - finish
+mcpServers: []
+skills: []
+plugins: []
+commandExecutionPolicy: off
+---
+Return the requested annotations as the structured result. Use no tool other than finish.
+`
 
 func labelingAgyHome(datasetDir, userHome string) (string, error) {
 	home := filepath.Join(datasetDir, "agy-home")
 	config := filepath.Join(home, ".gemini", "config")
-	if err := os.MkdirAll(config, 0o700); err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(filepath.Join(config, "mcp_config.json"), []byte(`{"mcpServers":{}}`+"\n"), 0o600); err != nil {
-		return "", err
+	for path, content := range map[string]string{filepath.Join(config, "mcp_config.json"): `{"mcpServers":{}}` + "\n",
+		filepath.Join(config, "agents", labelingAgyAgentName+".md"): labelingAgyAgent} {
+		if err := labelingWriteIfChanged(path, []byte(content)); err != nil {
+			return "", err
+		}
 	}
 	// Plugins can declare MCP servers too; the private home has none.
 	if err := os.RemoveAll(filepath.Join(config, "plugins")); err != nil {
@@ -724,27 +754,66 @@ func labelingAgyHome(datasetDir, userHome string) (string, error) {
 		return "", err
 	}
 	if target, err := os.Readlink(link); err != nil || target != login {
-		os.Remove(link)
-		if err := os.Symlink(login, link); err != nil {
+		// A link made beside it and renamed over it: another runner never
+		// sees the login missing.
+		temporary := link + "." + randomUUID() + ".tmp"
+		if err := os.Symlink(login, temporary); err != nil {
+			return "", err
+		}
+		if err := os.Rename(temporary, link); err != nil {
+			os.Remove(temporary)
 			return "", err
 		}
 	}
 	return home, nil
 }
 
-// labelingAgyMCPServers lists the MCP servers agy would start with HOME set
-// to home, so a run can refuse to start any.
-func labelingAgyMCPServers(path, home string) (string, error) {
-	cmd := exec.Command(path, "mcp", "list")
+// labelingWriteIfChanged replaces path with content (temporary file and
+// rename, 0600) unless it already holds exactly that.
+func labelingWriteIfChanged(path string, content []byte) error {
+	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, content) {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return writeFileAtomic(path, content, 0o600)
+}
+
+// labelingAgyListing runs an agy listing subcommand with HOME set to home.
+func labelingAgyListing(path, home string, args ...string) (string, error) {
+	cmd := exec.Command(path, args...)
 	cmd.Env, cmd.Dir = append(cliEnvironment(path), "HOME="+home), os.TempDir()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("agy mcp list: %w: %s", err, strings.TrimSpace(string(output)))
+		return "", fmt.Errorf("agy %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 	}
-	if listed := strings.TrimSpace(string(output)); listed != "No MCP servers configured." {
-		return listed, nil
+	return strings.TrimSpace(string(output)), nil
+}
+
+// labelingAgyMCPServers lists the MCP servers agy would start with HOME set
+// to home, so a run can refuse to start any.
+func labelingAgyMCPServers(path, home string) (string, error) {
+	listed, err := labelingAgyListing(path, home, "mcp", "list")
+	if err != nil || listed == "No MCP servers configured." {
+		return "", err
 	}
-	return "", nil
+	return listed, nil
+}
+
+// labelingAgyHasAgent reports whether agy, with HOME set to home, lists the
+// labeling agent, so a run can refuse to start without it.
+func labelingAgyHasAgent(path, home string) (bool, string, error) {
+	listed, err := labelingAgyListing(path, home, "agents")
+	if err != nil {
+		return false, "", err
+	}
+	for _, line := range strings.Split(listed, "\n") {
+		if fields := strings.Fields(line); len(fields) > 0 && fields[0] == labelingAgyAgentName {
+			return true, listed, nil
+		}
+	}
+	return false, listed, nil
 }
 
 // labelingCLIVersion asks a CLI for its version once per job.
