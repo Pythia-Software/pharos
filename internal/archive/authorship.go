@@ -1333,11 +1333,14 @@ func (c *Catalog) RebuildAuthorship(ctx context.Context, generation string) erro
 	}
 	classifyTook := time.Since(classified)
 	stored := time.Now()
-	if err := c.storeAuthorship(ctx, results, launches, generation); err != nil {
-		return err
-	}
-	reportWork(ctx, fmt.Sprintf("authorship timings: inputs=%s classify=%s store=%s", inputsTook.Round(time.Millisecond), classifyTook.Round(time.Millisecond), time.Since(stored).Round(time.Millisecond)), "message", len(inputs), len(inputs))
-	return nil
+	// Keep both timings and direct write counts in the final journal step.
+	progress := withWorkProgress(ctx, func(work activityWork) {
+		if strings.HasPrefix(work.Phase, "saved authorship:") {
+			work.Phase += fmt.Sprintf("; inputs=%s classify=%s store=%s", inputsTook.Round(time.Millisecond), classifyTook.Round(time.Millisecond), time.Since(stored).Round(time.Millisecond))
+		}
+		reportWork(ctx, work.Phase, work.Unit, int(work.Done), int(work.Total))
+	})
+	return c.storeAuthorship(progress, results, launches, generation)
 }
 
 // The user messages to classify, and the agent replies, in send order, that
