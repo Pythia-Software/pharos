@@ -571,7 +571,8 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
     if (!visible || shared || !receipt || receipt.status === "running") return;
     const restoration = { defaults: api.defaults, canonicalize: canonicalizeQuery };
     if (receipt.status === "succeeded") acceptDefaultQuery(schema.name, receipt.query, restoration);
-    else if (shouldSkipQueryOnRestore(receipt.error)) rejectDefaultQuery(schema.name, receipt.query, restoration);
+    // Only failed rows: a default whose rows load is not skipped for one metric.
+    else if (receipt.rows === "failed" && shouldSkipQueryOnRestore(receipt.error)) rejectDefaultQuery(schema.name, receipt.query, restoration);
   }, [visible, receipt?.key, receipt?.status]);
   // Empty states describe the rows: a failed metric alone does not empty them.
   const failed = api.execution ? api.execution.rows === "failed" : Boolean(api.error);
@@ -647,8 +648,17 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
   return <FilterValueProvider value={filterPresentations[dataset]}>
     <QueryRecovery busy={api.execution?.status === "running" || api.restoration.status === "resolving" || (remote && !capabilities && !capabilityError)} error={capabilityError ?? api.error} recovered={recovered} identity={api.execution?.key ?? JSON.stringify(api.query)}
       onRetry={() => {
-        retryDefaultQuery(schema.name);
-        if (recovered) { setRecovered(false); if (api.saved.defaultId) { try { api.saved.load(api.saved.defaultId); } catch { /* Query Table reports an unreadable save. */ } return; } }
+        const skipped = retryDefaultQuery(schema.name);
+        if (recovered) {
+          // Run the skipped default. Setting it as the default again (it
+          // is) makes the Saved menu read it back.
+          setRecovered(false);
+          if (skipped) {
+            try { api.saved.load(skipped); } catch { /* Query Table reports an unreadable save. */ }
+            void api.saved.setDefault(skipped).catch(() => {});
+            return;
+          }
+        }
         if (capabilityError) setCapabilityRetry(value => value + 1); else if (api.restoration.error) void api.restoreLocation(location.href).catch(() => {}); else api.refresh();
       }}
       onReset={() => {

@@ -34,7 +34,9 @@ function defaultFor(key: string, query: QueryState, restoration: Restoration): S
 
 export function rejectDefaultQuery(key: string, query: QueryState, restoration: Restoration) {
   const saved = defaultFor(key, query, restoration);
-  if (saved) try { localStorage.setItem(REJECTED_PREFIX + key, JSON.stringify([queryFingerprint(saved.query)])); } catch { /* Storage can be unavailable. */ }
+  if (!saved) return;
+  notified.delete(key);
+  try { localStorage.setItem(REJECTED_PREFIX + key, JSON.stringify([queryFingerprint(saved.query)])); } catch { /* Storage can be unavailable. */ }
 }
 
 /** A successful run of the default (from Saved, say) restores it on bare visits again. */
@@ -43,9 +45,18 @@ export function acceptDefaultQuery(key: string, query: QueryState, restoration: 
   if (saved && rejected(key, saved.query)) retryDefaultQuery(key);
 }
 
-export function retryDefaultQuery(key: string) {
+/** Stops skipping the default; returns its id, so Try again can load it. */
+export function retryDefaultQuery(key: string): string | null {
+  notified.delete(key);
   try { localStorage.removeItem(REJECTED_PREFIX + key); } catch { /* Storage can be unavailable. */ }
+  const id = readDefaultId(key);
+  return id && readSaved(key).some(saved => saved.id === id) ? id : null;
 }
+
+// The skip is reported once per page: the Saved menu's refreshes, after a
+// save or deletion, ask for the default again and must not bring back a
+// notice the person has dismissed with Reset table.
+const notified = new Set<string>();
 
 function rejected(key: string, query: QueryState) {
   try {
@@ -150,7 +161,10 @@ export function libraryStorageAdapter(options: { fresh?: boolean; onRecovery?: (
       if (!id) return null;
       const found = readSaved(key).find(query => query.id === id);
       if (!found) writeDefaultId(key, null);
-      if (found && rejected(key, found.query)) { options.onRecovery?.(); return null; }
+      if (found && rejected(key, found.query)) {
+        if (!notified.has(key)) { notified.add(key); options.onRecovery?.(); }
+        return null;
+      }
       return found ?? null;
     },
     async setDefaultSaved(key, id) {

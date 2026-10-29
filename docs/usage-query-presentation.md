@@ -51,8 +51,10 @@ A bare reload restores the last query whose rows and metrics loaded
 cancelled. A table's default saved query is restored on every bare visit, so
 Pharos skips a default whose rows the service rejected (HTTP 400 or 422) or
 that ran past the client's 45 s deadline (`rejectDefaultQuery` in
-`web/src/storage.ts`), and says so. Try again runs the default, and the default
-is restored again once it loads, from Saved say. A failed or slow (12 s) query
+`web/src/storage.ts`); a failed metric alone does not skip it. It says so once
+per page, and while skipped the Saved menu shows no default. Try again runs the
+default and shows it as the default again, and it is restored again once it
+loads, from Saved say. A failed or slow (12 s) query
 keeps Retry, Reset table and Reset page (`fresh=1`, which bypasses the last-used
 and default queries). The deadline stays, so a stalled connection ends as a
 failure.

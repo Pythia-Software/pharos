@@ -303,15 +303,27 @@ test('a rejected named default is bypassed while the saved query and default cho
  await storage.setDefaultSaved(key,(await storage.saveNamed(key,'Default errors',query,60)).id);
  const saved=await storage.loadDefaultSaved(key),before=JSON.stringify(m.readBookmarks());
  m.rejectDefaultQuery(key,m.normalizeQueryState(saved.query,restoration.defaults),restoration);
- let recovered=false;
- assert.equal(await m.libraryStorageAdapter({onRecovery:()=>recovered=true}).loadDefaultSaved(key),null);
- assert.equal(recovered,true);
+ let recovered=0;
+ const notice=m.libraryStorageAdapter({onRecovery:()=>recovered++});
+ assert.equal(await notice.loadDefaultSaved(key),null);
+ assert.equal(recovered,1);
+ // The Saved menu asks again after saves and deletions, with a new adapter;
+ // the notice is not repeated.
+ assert.equal(await notice.loadDefaultSaved(key),null);
+ assert.equal(await m.libraryStorageAdapter({onRecovery:()=>recovered++}).loadDefaultSaved(key),null);
+ assert.equal(recovered,1);
  assert.equal(JSON.stringify(m.readBookmarks()),before);
  // The last-used query is not skipped: Query Table only saves successes.
  await storage.saveLast(key,saved.query);
  assert.deepEqual(await storage.loadLast(key),saved.query);
- m.retryDefaultQuery(key);
+ // Try again names the default to load, and the Saved menu sees it again.
+ assert.equal(m.retryDefaultQuery(key),saved.id);
  assert.equal((await storage.loadDefaultSaved(key)).id,saved.id);
+ // A later failure reports the skip again.
+ m.rejectDefaultQuery(key,m.normalizeQueryState(saved.query,restoration.defaults),restoration);
+ assert.equal(await notice.loadDefaultSaved(key),null);
+ assert.equal(recovered,2);
+ m.retryDefaultQuery(key);
  // A successful run of the default, loaded from Saved, also restores it.
  m.rejectDefaultQuery(key,m.normalizeQueryState(saved.query,restoration.defaults),restoration);
  assert.equal(await storage.loadDefaultSaved(key),null);
