@@ -603,21 +603,22 @@ func (site *siteMap) similarCards(id string) []string {
 }
 
 // argFilters reads where terms: {field, op, value?, negated?} or
-// {any: [terms]}. Values are text, as in a query; numbers and booleans are
-// written as text.
+// {any: [members]}, an OR group whose members are terms or {all: [terms]}
+// conjunctions, as a combined legend selection's supporting query holds.
+// Values are text, as in a query; numbers and booleans are written as text.
 func (site *siteMap) argFilters(raw any) ([]qt.WhereTerm, error) {
 	if raw == nil {
 		return nil, nil
 	}
 	items, ok := raw.([]any)
 	if !ok {
-		return nil, linkError("filters", "must be a list of {field, op, value} terms, or {any: [terms]} for an OR group.")
+		return nil, linkError("filters", "must be a list of {field, op, value} terms, or {any: [terms or {all: [terms]}]} for an OR group.")
 	}
 	terms := []qt.WhereTerm{}
 	for index, item := range items {
 		object, ok := item.(map[string]any)
 		if !ok {
-			return nil, linkError(fmt.Sprintf("filters[%d]", index), "must be {field, op, value} or {any: [terms]}.")
+			return nil, linkError(fmt.Sprintf("filters[%d]", index), "must be {field, op, value} or {any: [terms or {all: [terms]}]}.")
 		}
 		term := qt.WhereTerm{}
 		if members, ok := object["any"]; ok {
@@ -627,7 +628,16 @@ func (site *siteMap) argFilters(raw any) ([]qt.WhereTerm, error) {
 			}
 			term.Any = []qt.WhereClause{}
 			for member, value := range list {
-				clause, err := argClause(value, fmt.Sprintf("filters[%d].any[%d]", index, member))
+				name := fmt.Sprintf("filters[%d].any[%d]", index, member)
+				if branch, ok := value.(map[string]any); ok && branch["all"] != nil {
+					clause, err := argBranch(branch, name)
+					if err != nil {
+						return nil, err
+					}
+					term.Any = append(term.Any, clause)
+					continue
+				}
+				clause, err := argClause(value, name)
 				if err != nil {
 					return nil, err
 				}
@@ -643,6 +653,29 @@ func (site *siteMap) argFilters(raw any) ([]qt.WhereTerm, error) {
 		terms = append(terms, term)
 	}
 	return terms, nil
+}
+
+// argBranch reads an OR group's {all: [terms]} member: two or more terms,
+// none of them a group.
+func argBranch(object map[string]any, name string) (qt.WhereClause, error) {
+	for key := range object {
+		if key != "all" {
+			return qt.WhereClause{}, linkError(name+"."+key, "is not part of an {all: [terms]} branch.", "all")
+		}
+	}
+	list, ok := object["all"].([]any)
+	if !ok || len(list) < 2 {
+		return qt.WhereClause{}, linkError(name+".all", "must be a list of two or more {field, op, value} terms.")
+	}
+	branch := qt.WhereClause{All: []qt.WhereClause{}}
+	for index, value := range list {
+		clause, err := argClause(value, fmt.Sprintf("%s.all[%d]", name, index))
+		if err != nil {
+			return qt.WhereClause{}, err
+		}
+		branch.All = append(branch.All, clause)
+	}
+	return branch, nil
 }
 
 func argClause(raw any, name string) (qt.WhereClause, error) {
@@ -975,17 +1008,24 @@ var siteFieldTypeChecks = map[string]func(string) bool{
 func (site *siteMap) checkFilters(node *siteNode, terms []qt.WhereTerm, arg string) error {
 	dataset := site.Datasets[node.Dataset]
 	for index, term := range terms {
-		clauses := term.Predicates()
-		for member, clause := range clauses {
-			name := fmt.Sprintf("%s[%d]", arg, index)
-			if term.IsGroup() {
-				name = fmt.Sprintf("%s[%d].any[%d]", arg, index, member)
-			}
-			if err := site.checkClause(node, dataset, clause, name); err != nil {
+		if !term.IsGroup() {
+			if err := site.checkClause(node, dataset, term.Predicates()[0], fmt.Sprintf("%s[%d]", arg, index)); err != nil {
 				return err
 			}
+			continue
 		}
-		if term.IsGroup() && len(clauses) == 0 {
+		for member, branch := range term.Branches() {
+			for position, clause := range branch {
+				name := fmt.Sprintf("%s[%d].any[%d]", arg, index, member)
+				if term.Any[member].IsConjunction() {
+					name = fmt.Sprintf("%s.all[%d]", name, position)
+				}
+				if err := site.checkClause(node, dataset, clause, name); err != nil {
+					return err
+				}
+			}
+		}
+		if len(term.Predicates()) == 0 {
 			return linkError(fmt.Sprintf("%s[%d].any", arg, index), "must hold at least one term.")
 		}
 	}

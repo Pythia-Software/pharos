@@ -490,3 +490,15 @@ func TestSiteLinkTakesAnOutputBudget(t *testing.T) {
 		t.Errorf("bounded error: %d bytes: %v", len(fmt.Sprint(err)), err)
 	}
 }
+
+// A combined legend selection reaches a supporting query and a bucket's
+// records as one OR of AND branches. A link holding one reads, builds and
+// reads again as the same term.
+func TestSiteLinkReadsAnOrOfAndSelection(t *testing.T) {
+	site := testSiteMap(t)
+	where := `[{"field":"last_usage_at","op":">=","value":"-30d"},{"any":[{"all":[{"field":"provider","op":"=","value":"codex"},{"field":"model_family","op":"=","value":"gpt-5"}]},{"all":[{"field":"provider","op":"=","value":"claude"},{"field":"model_family","op":"is_null","value":""}]}]}]`
+	state := roundTrip(t, site, "or of and", "/analyze?analyze_mode=query&analyze_topic=tokens&analyze_data=usage&q_usage="+mustToken(t, site, where))
+	if len(state.Filters) != 2 || len(state.Filters[1].Branches()) != 2 || len(state.Filters[1].Branches()[1]) != 2 {
+		t.Fatalf("read %s", compactJSON(state.Filters))
+	}
+}
