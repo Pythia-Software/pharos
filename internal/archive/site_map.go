@@ -91,6 +91,9 @@ type siteOption struct {
 		Values []any  `json:"values"`
 	} `json:"requires"`
 	Conflicts []string `json:"conflicts"`
+	// HostParams are the parameters a where option's table keeps as host
+	// query state, which the app's query tokens carry (host-query-state.ts).
+	HostParams []string `json:"host_params"`
 }
 
 type siteValue struct {

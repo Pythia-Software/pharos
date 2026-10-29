@@ -1289,19 +1289,6 @@ func (site *siteMap) whereOnly(param, token string, base json.RawMessage, node *
 	return decoded.Where, nil
 }
 
-// siteHostParams are the URL parameters a page's table keeps as host query
-// state (web/src/host-query-state.ts): Search's content search and view, and
-// each Analyze table's record keyword clause.
-func siteHostParams(node *siteNode) []string {
-	if node == nil || node.Dataset == "" {
-		return nil
-	}
-	if node.Dataset == "library" {
-		return []string{"text_builder", "kind", "search", "case", "view"}
-	}
-	return []string{"record_" + node.Dataset}
-}
-
 func (site *siteMap) checkHostState(param string, host *qt.HostQueryState, node *siteNode, values url.Values) error {
 	if host == nil {
 		return nil
@@ -1309,7 +1296,12 @@ func (site *siteMap) checkHostState(param string, host *qt.HostQueryState, node 
 	if host.Version < 1 {
 		return linkError("url", param+" carries host query state that cannot be read.")
 	}
-	names := siteHostParams(node)
+	var names []string
+	if node != nil {
+		if option := site.optionOfKind(node, "where"); option != nil && option.Param == param {
+			names = slices.Clone(option.HostParams)
+		}
+	}
 	for name := range host.Params {
 		if !slices.Contains(names, name) {
 			names = append(names, name)
