@@ -556,7 +556,8 @@ chart clause, and the supporting query that "View supporting query" opens.
     `/query-v3`'s 10,000 groups: an hour profile allows 400 days, a weekday
     profile 10,000. With a range start, a longer range does not run and
     says "Choose a shorter range…" (`maxCycleSlots`, `cycleRangeError`);
-    without one, the service's group-budget error reads as the same limit.
+    without one, the service's group-budget error for those occurrences
+    reads as the same limit, and every other error as it is.
     A total reads only its 24 or 7 slots, whatever the range. The note
     counts the whole hours or days in a bounded range, idle ones included
     (a ratio's have no value but are still days of the range).

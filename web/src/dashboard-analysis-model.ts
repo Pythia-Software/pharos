@@ -629,12 +629,19 @@ function timestampCycle(catalog: AnalysisCatalog, state: ResolvedAnalysis, field
   // exceed the service's group budget; it does not run.
   let occurrences: number | undefined;
   if (bounds.from) {
-    const from = bounds.from.getTime(), floor = metricDateFloor(from, per, zone);
-    occurrences = 0;
-    for (let start = floor < from ? metricDateNext(floor, per, zone) : floor; start < end && occurrences <= maxCycleSlots[state.cycle]; start = metricDateNext(start, per, zone)) occurrences++;
+    const from = bounds.from.getTime(), floor = metricDateFloor(from, per, zone), start = floor < from ? metricDateNext(floor, per, zone) : floor;
+    occurrences = Math.max(0, wholeIntervals(start, end, per, zone));
   }
   const problem = state.reduce !== "total" && (occurrences ?? 0) > maxCycleSlots[state.cycle] ? cycleRangeError(state.cycle) : undefined;
   return { query: { ...EMPTY_QUERY, where, aggregations: problem ? [] : [clause] }, clause, grouped: false, native: true, supporting, ...occurrences === undefined || problem ? {} : { occurrences }, ...problem ? { problem } : {} };
+}
+
+// The whole hours or days from start to end, both boundaries of that unit in
+// zone. Hours are fixed lengths; days count local calendar dates, so a DST
+// day of 23 or 25 hours is one day.
+const localDate = (time: number, zone: string) => Date.parse(`${new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(time)}T00:00:00Z`);
+function wholeIntervals(start: number, end: number, per: "hour" | "day", zone: string) {
+  return per === "hour" ? Math.round((end - start) / 3_600_000) : Math.round((localDate(end, zone) - localDate(start, zone)) / 86_400_000);
 }
 
 // A native cycle's result, checked as the fold checks its totals: complete,
@@ -642,13 +649,14 @@ function timestampCycle(catalog: AnalysisCatalog, state: ResolvedAnalysis, field
 // (analysisQuery's occurrences); without a range start, the occurrences
 // Query Table counted, which leave out a ratio's idle ones, so only where
 // idle ones count as zero. observations counts the records. A range whose
-// start was not known up front can still exceed the service's group budget;
-// that reads as the range limit.
+// start was not known up front can still exceed the service's group budget
+// with its occurrences; that, and only that, reads as the range limit.
 export function nativeCycleResult(analysis: AnalysisQuery, result: AggregationResultEntry) {
   const cycle: CalendarCycle = analysis.clause.dateGrouping?.interval === "hourOfDay" ? "hour" : "weekday";
   if (result.error || result.coverage === "partial" || result.hiddenGroups || (result.groupCount ?? 0) > result.buckets.length || result.buckets.some(bucket => bucket.error)) {
     const error = result.error ?? result.buckets.find(bucket => bucket.error)?.error;
-    throw new Error(!error || /exceeds|budget|Occurrences need every interval/i.test(error) ? cycleRangeError(cycle) : error);
+    const groups = analysis.clause.dateGrouping?.occurrence && (!error || /\bgroup population exceeds host budget|exceeds \d+ groups|^Occurrences need every interval/.test(error));
+    throw new Error(groups ? cycleRangeError(cycle) : error ?? "Complete totals are required for an hour or weekday cycle. Choose a shorter range.");
   }
   const counted = result.buckets.reduce((n, bucket) => n + (bucket.occurrences ?? 0), 0);
   const slots = analysis.occurrences ?? (analysis.clause.dateGrouping?.occurrence && idleIsZero(analysis.clause) ? counted : undefined);

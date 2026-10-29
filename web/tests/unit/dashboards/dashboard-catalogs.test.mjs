@@ -174,6 +174,12 @@ test("a timestamp cycle is Query Table's hour of day or day of week in the viewe
   const native = nativeCycleResult(analysis, run(mcp, analysis.query)[0]);
   assert.deepEqual(Object.fromEntries(native.result.buckets.map(bucket => [bucket.keys[0], bucket.distribution.summary])), Object.fromEntries(Object.entries(byWeekday).map(([slot, values]) => [slot, core.boxSummary(values, "tukey")])));
   assert.equal(native.slots, daily.size);
+  // Across a daylight-saving change a day of 25 hours is one day, and its
+  // hours are 25.
+  const autumn = [{ field: "called_at", op: ">=", value: new Date(core.metricDateTime("2026-10-20", zone)).toISOString() }, { field: "called_at", op: "<", value: new Date(core.metricDateTime("2026-11-10", zone)).toISOString() }];
+  const late = Date.parse("2026-11-12T00:00:00Z");
+  assert.equal(analysisQuery(mcp, state, autumn, { now: late, zone }).occurrences, 21);
+  assert.equal(analysisQuery(mcp, { ...state, cycle: "hour" }, autumn, { now: late, zone }).occurrences, 21 * 24 + 1);
   // A ratio's idle days have no value, yet are days of the range.
   const ratio = analysisQuery(mcp, { ...state, metric: "failure_rate" }, [...where, { field: "status", op: "!=", value: "ok" }], { now, zone });
   const rated = nativeCycleResult(ratio, run(mcp, ratio.query)[0]);
@@ -218,7 +224,11 @@ test("a timestamp cycle is Query Table's hour of day or day of week in the viewe
   for (const error of ["calendar group population exceeds host budget", "Occurrences need every interval, but the engine returned only some of them."]) {
     assert.throws(() => nativeCycleResult(allTime, { id: "analysis", buckets: [], error }), /at most 400 days/);
   }
-  assert.throws(() => nativeCycleResult(allTime, { id: "analysis", buckets: [], error: "unknown field" }), /unknown field/);
+  // Every other error reads as it is: another budget, or any error of a
+  // total, which reads no occurrences.
+  for (const error of ["unknown field", "matching population exceeds host budget"]) assert.throws(() => nativeCycleResult(allTime, { id: "analysis", buckets: [], error }), { message: error });
+  const allTotal = analysisQuery(mcp, { ...state, cycle: "hour", reduce: "total" }, [], { now, zone });
+  assert.throws(() => nativeCycleResult(allTotal, { id: "analysis", buckets: [], error: "group population exceeds host budget" }), { message: "group population exceeds host budget" });
   // Without a start there is no single drill-down, and idle days run from
   // the first observed one.
   const open = analysisQuery(mcp, state, [], { now, zone });
