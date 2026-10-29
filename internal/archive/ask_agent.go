@@ -97,7 +97,6 @@ var askSections = sync.OnceValue(func() []askCard {
 		{ID: "cards", Title: "Card Library", Description: "Browse all questions and analysis views", Href: "/cards"},
 		{ID: "analyze", Title: "Analyze your work", Description: "Usage, tokens, costs, human effort, concurrency, tools, and MCP calls", Href: "/analyze"},
 		{ID: "findings", Title: "Opportunities to improve", Description: "Recurring patterns, instructions and agent failures", Href: "/findings"},
-		{ID: "tl1", Title: "TL1 runs", Description: "Task outcomes, configurations, reviews, and follow-ups", Href: "/tl1"},
 		{ID: "settings", Title: "App preferences", Description: "Configure Pharos", Href: "/settings/preferences"},
 		{ID: "sources", Title: "Conversation sources", Description: "Configure the sources Pharos indexes", Href: "/settings/sources"},
 		{ID: "sync", Title: "Capture and index", Description: "Refresh sources, automatic schedules and sync history", Href: "/settings/sync"},

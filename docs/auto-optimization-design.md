@@ -117,12 +117,13 @@ rest of this document disagrees, these win.
     detector names, or IDs. Show only the numbers that carry the point,
     in the spirit of Tufte's data-ink ratio. IDs appear only in the prompt,
     where the agent needs them.
-20. **TL1 concerns become findings; the TL1 tab keeps its analysis.** The
-    TL1 tab's concerns with copyable prompts (error clusters, cost outliers,
-    loops) move into Findings, with the cart, measurement, and wins. TL1
+20. **TL1 concerns become findings.** Concerns with copyable prompts
+    (error clusters, cost outliers, loops) appear in Findings, with the cart,
+    measurement, and wins. TL1
     flavors are a scope of their own: grouping work by flavor can surface
-    findings more specific than a repository's. The TL1 tab keeps its flavor
-    comparisons and attempts table, and no longer makes recommendations.
+    findings more specific than a repository's. The dedicated TL1 pages are
+    removed for now; attempts use Analyze's shared query table, and analysis
+    remains available through the TL1 APIs and MCP tools.
 21. **Repository identity always uses GitHub when it can.** Findings are
     mostly scoped to a repository, so one repository must be one row even
     after a rename or a move between owners. Pharos always asks GitHub,

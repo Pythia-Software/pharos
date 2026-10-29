@@ -30,13 +30,13 @@ function NavigationLink({ navigate, ...props }: React.ComponentProps<typeof Page
 function AppNavigation({ settings, contentNavigation }: { settings: NestedPage[]; contentNavigation: HTMLElement }) {
   const revision = useLocationRevision();
   const [layout, setLayout] = useState(readLayout);
-  const [hasTL1, setHasTL1] = useState(false), [badge, setBadge] = useState("");
+  const [badge, setBadge] = useState("");
   const [collapsed, setCollapsed] = useState(() => preferences().get("pharos-sidebar-collapsed", false));
   const [open, setOpen] = useState(false), [branch, setBranch] = useState("");
   const dialog = useRef<HTMLDialogElement>(null), trigger = useRef<HTMLButtonElement>(null);
   const navigating = useRef(false), previousURL = useRef(location.href);
   const params = new URLSearchParams(location.search), selected = appLocation(location.pathname, params);
-  const sections = appSections(settings, params, hasTL1 || location.pathname.startsWith("/tl1"));
+  const sections = appSections(settings, params);
   const { section, page } = appLocationLabel(sections, selected);
   const [expanded, setExpanded] = useState<NavigationExpansion>({});
   const toggle = (section: string, id: string) => setExpanded(state => toggleNavigationSection(state, section, id));
@@ -67,17 +67,6 @@ function AppNavigation({ settings, contentNavigation }: { settings: NestedPage[]
     observer.observe(document.querySelector("body > header .tabs")!, { subtree: true, attributes: true, childList: true, characterData: true });
     sync();
     return () => observer.disconnect();
-  }, []);
-  useEffect(() => {
-    const controller = new AbortController();
-    const load = () => {
-      void fetch("/api/tl1", { signal: controller.signal }).then(response => response.ok ? response.json() : null).then(body => {
-        if (!controller.signal.aborted && body) setHasTL1(Boolean(body.projects?.length));
-      }).catch(() => {});
-    };
-    load();
-    window.addEventListener("pharos:route", load);
-    return () => { window.removeEventListener("pharos:route", load); controller.abort(); };
   }, []);
   useEffect(() => {
     if (previousURL.current === location.href && !navigating.current) return;

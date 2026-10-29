@@ -2,7 +2,7 @@ import { groupKeyFields, type OrderByClause, type QueryState } from "@pythia-sof
 import type { UsageDataset } from "./usage-workspace-model";
 
 const chronology: Record<UsageDataset, string> = {
-  usage: "first_usage_at", conversation_activity: "event_at", writing: "last_message_at",
+  tl1_attempts: "started_at", usage: "first_usage_at", conversation_activity: "event_at", writing: "last_message_at",
   writing_messages: "sent_at", tool_calls: "started_at", tools: "day",
   mcp_calls: "called_at", skill_usages: "created_at", parallelism: "started_at",
 };

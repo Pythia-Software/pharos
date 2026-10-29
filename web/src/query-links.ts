@@ -122,7 +122,6 @@ export function queryURL(dataset: QueryDataset, query: QueryState, window?: Roll
   } else if (dataset === "findings") {
     path = "/findings"; params.set("view", "table");
   }
-  else if (dataset === "tl1_attempts") path = "/tl1/runs";
   if (window) {
     if (window.mode === "relative" || window.mode === "today") params.set("window_mode", window.mode);
     if (window.mode === "today") params.set("window_timezone", localTimezone());
@@ -149,7 +148,7 @@ export function queryFromURL(url: string, fallback?: QueryState): { dataset: Que
       : path === "/findings" ? params.get("view") === "table" ? "findings" : undefined
       : path === "/analyze" ? params.get("analyze_view") === "conversations" ? "conversation_activity" : params.get("analyze_view") === "writing" ? params.get("writing") === "messages" ? "writing_messages" : "writing" : "usage"
       : path === "/tools" ? params.get("tools_view") === "summary" ? "tools" : params.get("tools_view") === "skills" ? "skill_usages" : "tool_calls"
-      : path === "/mcp" ? "mcp_calls" : path.startsWith("/tl1") ? "tl1_attempts" : undefined;
+      : path === "/mcp" ? "mcp_calls" : undefined;
     if (dataset) {
       const token = params.get(`q_${dataset}`);
       if (token !== null) {
