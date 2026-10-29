@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
-import type { AggregationClause, AggregationResultEntry, FieldDef, FieldSchema, QueryState, WhereTerm } from "@pythia-software/query-table-core";
+import { MAX_WHERE_CLAUSES, type AggregationClause, type AggregationResultEntry, type FieldDef, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { MetricCard, defaultRenderers } from "@pythia-software/query-table-ui";
-import { changeState, cycleUnavailable, notTrended, sampleSubject, selectGroups, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, cycleTotal, noSplit, normalizeAnalysis, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, type AnalysisCatalog, type AnalysisQuery as AnalysisQueryResult, type AnalysisReduce, type AnalysisUnit, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
+import { changeState, cycleUnavailable, notTrended, sampleSubject, selectGroups, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, nativeCycleResult, cycleTotal, noSplit, normalizeAnalysis, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, type AnalysisCatalog, type AnalysisQuery as AnalysisQueryResult, type AnalysisReduce, type AnalysisUnit, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
 import { runAnalysisQuery, type LocalRows } from "./analysis-request";
 import type { RequestParams } from "./metric-request";
 import { onDatasetRefresh } from "./dataset-refresh";
@@ -91,10 +91,11 @@ const selectionNote = (group: string, unit: AnalysisUnit | undefined, selection:
   (selection.share ? `Your ${group} legend selection is drawn as slices and every other group as Other; shares are of every group in your filters.`
     : `Only your ${group} legend selection is drawn; your filters are unchanged.`)
   + (selection.mapped && unit ? ` Each ${unit.label.toLowerCase()} is counted in its top-level ${group} group, so the selection is shown as the top-level ${group}.` : "")
-  + (selection.late ? ` So many combined groups cannot filter the query, so they are drawn from the ${unit ? unit.plural.toLowerCase() : "groups"} it returns; one beyond its limit is not drawn.` : "")
+  + (selection.late ? ` The selection holds more conditions than one query allows (${MAX_WHERE_CLAUSES} with your filters), so it is drawn from the ${unit ? unit.plural.toLowerCase() : "groups"} the query returns; one beyond its limit is not drawn.` : "")
   + (missing ? ` ${missing.toLocaleString()} selected ${missing === 1 ? "group is" : "groups are"} not among the largest groups returned; any ${missing === 1 ? "value it has is" : "values they have are"} ${selection.share ? "counted in Other" : "not drawn"}.` : "");
 
-// The folded cycle's slots are not dataset fields; name them for the chart.
+// The folded cycle's slots are not dataset fields; name them for the chart,
+// as a native cycle's timestamp is named for its slots.
 const cycleFields: FieldDef[] = [{ name: "hour_of_day", label: "Local hour", type: "text", source: { kind: "backend" } }, { name: "weekday", label: "Weekday", type: "text", source: { kind: "backend" } }];
 const scales: Array<["linear" | "logarithmic", string]> = [["linear", "Linear"], ["logarithmic", "Logarithmic"]];
 const axis = (value?: string) => value === "logarithmic" ? "logarithmic" : "linear";
@@ -121,16 +122,23 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
   const selected = result.results[0] && selectGroups(result.results[0], analysis.selection);
   let clause: AggregationClause = analysis.clause, entry: AggregationResultEntry | undefined = selected, error = result.error, slots = "";
   if (view.view === "cycle" && entry) {
+    const per = view.cycle === "hour" ? "hours" : "days";
     try {
-      const now = Date.now();
-      const folded = cycleResult(catalog, view, entry, { from: bounds.from?.getTime(), to: Math.min(bounds.to?.getTime() ?? now, now) }, zone);
-      clause = folded.clause; entry = folded.result;
-      slots = `${folded.slots.toLocaleString()} complete ${view.cycle === "hour" ? "hours" : "days"} in ${zone}.${folded.earlier ? ` ${folded.earlier.toLocaleString()} earlier recorded ${folded.earlier === 1 ? "date was" : "dates were"} left out: recorded in another time zone, ${folded.earlier === 1 ? "it holds" : "they hold"} only part of a day in your range.` : ""}`;
+      if (analysis.native) {
+        // Query Table computed the slots; the chart draws them as returned.
+        const native = nativeCycleResult(entry);
+        if (native.slots) slots = `${native.slots.toLocaleString()} complete ${per} in ${zone}.`;
+      } else {
+        const now = Date.now();
+        const folded = cycleResult(catalog, view, entry, { from: bounds.from?.getTime(), to: Math.min(bounds.to?.getTime() ?? now, now) }, zone);
+        clause = folded.clause; entry = folded.result;
+        slots = `${folded.slots.toLocaleString()} complete ${per} in ${zone}.${folded.earlier ? ` ${folded.earlier.toLocaleString()} earlier recorded ${folded.earlier === 1 ? "date was" : "dates were"} left out: recorded in another time zone, ${folded.earlier === 1 ? "it holds" : "they hold"} only part of a day in your range.` : ""}`;
+      }
     } catch (failure) { error = failure instanceof Error ? failure.message : String(failure); entry = undefined; }
   }
   const presentation = useMemo(() => toolMetricPresentation(entry, clause.groupBy, catalog.labels), [entry, originRevision, clause, catalog]);
   const empty = !result.loading && !error && entry && (!entry.buckets.length || entry.buckets.every(bucket => bucket.distribution?.kind === "histogram" ? !bucket.distribution.n : bucket.distribution?.kind === "box" && !bucket.distribution.summary));
-  const hidden = entry?.hiddenGroups ? `${entry.hiddenGroups.toLocaleString()} ${entry.hiddenGroups === 1 ? "group" : "groups"} hidden below the ${view.minSamples.toLocaleString()}-${unit?.label.toLowerCase() ?? "record"} minimum.` : "";
+  const hidden = entry?.hiddenGroups ? `${entry.hiddenGroups.toLocaleString()} ${entry.hiddenGroups === 1 ? "group" : "groups"} hidden below the minimum of ${view.minSamples.toLocaleString()} ${sampleSubject(catalog, view)}.` : "";
 
   // Box and bar rows have a fixed pitch; give a full day of hours its rows.
   const tall = (clause.display?.kind === "box" || clause.display?.kind === "bar-horizontal") && (entry?.buckets.length ?? 0) > 16;
@@ -140,8 +148,8 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
     {controls}
     {error ? <p className="query-table-error" role="alert">{error}</p>
       : empty ? <p className="usage-analysis-empty" role="status">{analysisEmptyLabel(catalog, view)}</p>
-      : <MetricCard className={tall ? "usage-analysis-tall" : undefined} clause={clause} result={presentation.metric as AggregationResultEntry | undefined} fields={view.view === "cycle" ? [...schema.fields, ...cycleFields] : schema.fields} loading={result.loading} renderers={defaultRenderers}
-        onInspect={view.view === "cycle" ? undefined : bucket => {
+      : <MetricCard className={tall ? "usage-analysis-tall" : undefined} clause={clause} result={presentation.metric as AggregationResultEntry | undefined} fields={view.view !== "cycle" ? schema.fields : analysis.native ? schema.fields.map(field => field.name === clause.dateGrouping?.field ? { ...field, label: view.cycle === "hour" ? "Local hour" : "Weekday" } : field) : [...schema.fields, ...cycleFields]} loading={result.loading} renderers={defaultRenderers}
+        onInspect={view.view === "cycle" && !analysis.native ? undefined : bucket => {
           const query = analysisInspectQuery(analysis, presentation.sourceBucket(bucket) as typeof bucket, analysis.clause, schema, view.view);
           if (query) window.pharosNavigate?.(usageWorkspaceURL({ mode: "query", dataset, query: orderedUsageQuery(dataset, query) }, new URLSearchParams(location.search)));
         }} />}
@@ -152,6 +160,6 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
         (Tools' failure kinds); otherwise it would show this query's table
         under its default chart. */}
     <UsageDashboardLinks schema={schema} dataset={dataset} query={analysis.supporting} currentURL={legacyURL} />
-    <p className="usage-dashboard-note">{analysisNote(catalog, view)}{view.view === "cycle" ? "" : ` Select a ${view.view === "scatter" ? "point" : "bar or box"} to open its ${unit ? subjects : "records"}.`}</p>
+    <p className="usage-dashboard-note">{analysisNote(catalog, view)}{view.view === "cycle" && !analysis.native ? "" : ` Select a ${view.view === "scatter" ? "point" : "bar or box"} to open its ${unit ? subjects : "records"}.`}</p>
   </section>;
 }

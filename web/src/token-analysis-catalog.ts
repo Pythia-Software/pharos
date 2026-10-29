@@ -60,6 +60,9 @@ export const tokenAnalysisCatalog: AnalysisCatalog = {
   // The hourly ledger answers hour; the others are recorded calendar dates.
   periods: { hour: "hour", day: "day", week: "week", month: "month" },
   trend: { metric: "tokens", split: "model_family" },
+  // A usage record is a slice of one session's day, so a minimum counts the
+  // distinct conversations a group's records belong to.
+  samples: { unit: "conversations", label: "Conversations", distinct: "conversation_id" },
   // The Usage chart's percentage metrics are a measure shown as shares.
   legacySlices: true,
   legacy: state => state.metric === "percent" || state.metric === "percent_cost" ? { ...state, metric: state.metric === "percent" ? "tokens" : "cost", share: true } : state,

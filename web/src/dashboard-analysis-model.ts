@@ -1,8 +1,9 @@
-import { EMPTY_QUERY, coerceValue, type WhereClause, inspectBucketQuery, metricDateFloor, metricDateNext, metricDateTime, type AggOp, type AggregationBucket, type AggregationClause, type AggregationResultEntry, type FieldSchema, type MetricDisplay, type MetricValueFormat, type QueryState, type SummaryColumn, type WhereTerm } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, MAX_WHERE_CLAUSES, coerceValue, groupKeyFields, predicatesOf, type GroupKey, type MetricDateGrouping, type WhereClause, inspectBucketQuery, metricDateFloor, metricDateNext, type AggOp, type AggregationBucket, type AggregationClause, type AggregationResultEntry, type FieldSchema, type MetricDisplay, type MetricValueFormat, type QueryState, type SummaryColumn, type WhereTerm } from "@pythia-software/query-table-core";
 import { defaultChartScale, validChartScale, type ChartScale } from "./chart-scale";
 import { chartPeriods, validPeriodCount, type ChartPeriod } from "./chart-period";
 import { validChartDisplay, validRollingPeriods, type ChartDisplay } from "./chart-series";
 import { isSliceTerm, readSlice, validChartPresentation, withSlice, type SliceSelection } from "./chart-selection";
+import { timeBounds, withEnd } from "./chart-range";
 import { cycleBoxes, cycleFrame, cycleGroups, cycleSamples, hoursOfDay, idleIsZero, weekdays, type CalendarCycle, type CycleKey } from "./weekday-cover";
 
 // A dashboard analysis is a view over one catalog: which records count as
@@ -110,10 +111,12 @@ export type AnalysisCatalog = {
   // metric name that meant a measure shown as shares. It must return a state
   // in the catalog's terms and leave a current one unchanged.
   legacy?: (state: AnalysisState) => AnalysisState;
-  // What a records minimum counts when one record is not one observation:
-  // an additive measure, such as the calls a daily tools summary holds.
+  // What a records minimum counts when one record is not one observation: a
+  // summed field, such as the calls a daily tools summary holds, or a field's
+  // distinct values, such as the conversations usage records belong to.
+  // unit names them ("calls"); label heads the supporting query's column.
   // Without it, a minimum counts records.
-  samples?: string;
+  samples?: { unit: string; label: string } & ({ sum: string } | { distinct: string });
   // Labels for a field's values where the schema has none, such as Agent
   // Time's activities.
   labels?: Record<string, (value: string) => string>;
@@ -450,9 +453,11 @@ export type AnalysisQuery = {
   // What "View supporting query" opens: the same population and grouping.
   supporting: QueryState;
   grouped: boolean;
-  // A query grouped only to apply a minimum counted in a measure (samples):
-  // a bucket opens its group's own records, not the one grouped row.
-  recordsGrouped?: boolean;
+  // A cycle Query Table computes itself (hour of day or day of week over a
+  // timestamp): the chart draws its result as returned, and a slot opens
+  // its occurrences' records. Otherwise cycleResult folds hourly or daily
+  // totals.
+  native?: boolean;
   // A share is of every group in the population the filters define. A
   // legend selection (the state's selection) only chooses which groups are
   // drawn, so it never enters the executed query and never changes a
@@ -461,9 +466,10 @@ export type AnalysisQuery = {
   // a breakdown group, so for a unit it maps through the unit's fields
   // (provider = codex selects the conversations whose top-level provider is
   // codex); mapped names the unit field when it differs. The supporting query
-  // keeps a single-field selection. fields counts the breakdown's keys.
-  // late: a selection outside shares that no filter can state, so it is
-  // drawn from the groups the query returned.
+  // keeps the selection where a filter can state it. fields counts the
+  // breakdown's keys.
+  // late: a selection outside shares too large for the query's predicate
+  // budget, so it is drawn from the groups the query returned.
   selection?: { values: string[]; excluded: boolean; mapped?: string; fields: number; share: boolean; late?: boolean };
 };
 
@@ -472,10 +478,10 @@ export type AnalysisQuery = {
 // per unit (and its constant breakdown), as card recipes do, then compares,
 // distributes or pairs those rows. A threshold is native minCount: it removes
 // small groups before groupLimit, so they never crowd out eligible ones.
-// A weekday cycle counts complete days only, and a trend with complete
-// periods whole periods only. The range starts at the next local period
-// boundary (midnight for days), so the first period's records are whole, not
-// the part of a day after a preset's start time.
+// A weekday cycle over recorded dates counts complete days only, and a trend
+// with complete periods whole periods only. The range starts at the next
+// local period boundary (midnight for days), so the first period's records
+// are whole, not the part of a day after a preset's start time.
 export function completeStart(where: WhereTerm[], time: AnalysisCatalog["time"], zone: string, now: number, unit: TrendPeriodField = "day"): WhereTerm[] {
   return where.map(term => {
     if (!("field" in term) || term.negated || ![">=", ">"].includes(term.op) || ![time.first, time.last].includes(term.field)) return term;
@@ -485,6 +491,14 @@ export function completeStart(where: WhereTerm[], time: AnalysisCatalog["time"],
     return { ...term, op: ">=" as const, value: new Date(start).toISOString() };
   });
 }
+
+// What a minimum counts: rows (each one an observation), or the catalog's
+// samples, a summed field or a field's distinct values, where one record is
+// not one observation.
+const minimumOf = (catalog: AnalysisCatalog, min: number): AggregationClause["minCount"] => catalog.samples
+  ? "sum" in catalog.samples ? { min, sum: catalog.samples.sum } : { min, distinct: catalog.samples.distinct } : min;
+const samplesColumn = (samples: NonNullable<AnalysisCatalog["samples"]>): SummaryColumn => "sum" in samples
+  ? { id: "analysis_samples", op: "sum", field: samples.sum, label: samples.label } : { id: "analysis_samples", op: "count_distinct", field: samples.distinct, label: samples.label };
 
 export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, inputWhere: WhereTerm[], { zone = "UTC", now = Date.now() }: { zone?: string; now?: number } = {}): AnalysisQuery {
   const state = normalizeAnalysis(catalog, input);
@@ -496,25 +510,31 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
   const groupFields = state.unit === records ? recordFields : catalog.units[state.unit]?.breakdowns[state.split] ?? [];
   const chosen = recordFields.length ? state.selection : undefined;
   const selection: AnalysisQuery["selection"] = chosen?.values.length ? { values: chosen.values, excluded: chosen.excluded, fields: recordFields.length, share: shares, ...groupFields[0] !== recordFields[0] ? { mapped: groupFields[0] } : {} } : undefined;
-  const where = state.view === "cycle" && state.cycle === "weekday" ? completeStart(inputWhere, catalog.time, zone, now) : inputWhere;
+  const cycleKey = state.view === "cycle" ? catalog.cycle![state.cycle]! : undefined;
+  const where = cycleKey?.kind === "recorded-date" ? completeStart(inputWhere, catalog.time, zone, now) : inputWhere;
   const run = (terms: WhereTerm[]) => catalog.executable ? catalog.executable(terms, now) : terms;
   const measure = catalog.measures[state.metric], measureY = catalog.measures[state.metricY];
   const breakdown = state.split === noSplit ? undefined : catalog.breakdowns[state.split];
   const unit = state.unit === records ? undefined : catalog.units[state.unit];
   const implied = [...unit?.where ?? [], ...breakdown?.where ?? [], ...measure.where ?? [], ...state.view === "scatter" ? measureY.where ?? [] : []];
   const sourceWhere = unique([...where, ...implied]);
-  // The supporting query lists the selected groups where one filter can: a
-  // record filter on the breakdown's field, or a group filter on the unit's.
-  const chosenGroups = (fields: string[]): WhereTerm[] => selection && groupFields.length ? selectionWhere(fields, selection) ?? [] : [];
-  const supportingWhere = unit ? sourceWhere : [...sourceWhere, ...chosenGroups(recordFields)];
-  // Outside shares there is no denominator to protect, so a single-field
-  // selection filters the executed query: no group or point limit can crowd
-  // a selected group out. A share keeps every group and selects afterwards.
-  const filtered = Boolean(selection && !shares && selectionWhere(groupFields, selection));
-  if (selection && !shares && !filtered) selection.late = true;
+  // The selected groups as a filter on fields, added to a where list holding
+  // base: a record filter on the breakdown's fields, or a group filter on the
+  // unit's. Undefined when it would exceed the list's predicate budget.
+  const stated = (fields: string[], base: WhereTerm[]) => selection && fields.length ? selectionWhere(fields, selection, predicateCount(base)) : undefined;
   // A threshold counts what is plotted: a distribution drops missing values
   // before grouping (records) or as a group filter (units).
-  const minCount = thresholded(state) ? { minCount: state.minSamples } : {};
+  const valued: WhereTerm[] = !unit && state.view === "distribution" ? [{ field: measure.value!, op: "is_not_null", value: "" }] : [];
+  const recordWhere = [...sourceWhere, ...valued];
+  // Outside shares there is no denominator to protect, so the selection
+  // filters the executed query: no group or point limit can crowd a selected
+  // group out. A share keeps every group and selects afterwards.
+  const unitHaving: WhereTerm[] = unit && (state.view === "distribution" || state.view === "compare" && state.reduce !== "count") ? [{ field: "analysis_value", op: "is_not_null", value: "" }] : [];
+  const filter = selection && !shares ? unit ? stated(groupFields, unitHaving) : stated(recordFields, run(recordWhere)) : undefined;
+  if (selection && !shares && !filter) selection.late = true;
+  // A records compare counts the catalog's samples; distributions take row
+  // minimums only, and each unit row is one unit.
+  const counted = thresholded(state) ? { minCount: !unit && state.view === "compare" ? minimumOf(catalog, state.minSamples) : state.minSamples } : {};
   const valueLabel = state.view === "compare" && unit && state.reduce !== "total" ? `${reductionLabel(state.reduce, measure, unit)}${state.reduce === "count" ? "" : ` · ${measure.label}`}` : measure.label;
   const format = state.view === "compare" && state.reduce === "count" ? { kind: "number" as const, decimals: 0 } : measure.format;
   const compareDisplay = (groups: boolean): MetricDisplay => !groups ? { kind: "value", format, valueLabel }
@@ -522,42 +542,32 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
     : { kind: "bar-horizontal", maxGroups: barsShown, legendPosition: "none", xLabel: valueLabel, xScale: log(state.scale), format };
   const distributionDisplay = (box: boolean): MetricDisplay => ({ kind: box ? "box" : "histogram", maxGroups: barsShown, xLabel: measure.label, xScale: log(state.scale), ...(box ? { format } : { xFormat: format }) });
 
-  if (state.view === "cycle") {
-    const { kind, field } = catalog.cycle![state.cycle]!;
-    // A timestamp is grouped natively: by local date in the viewer's zone,
-    // or by UTC hour, the grain cycleSamples steps hours on.
-    const dateGrouping = kind === "timestamp" ? { dateGrouping: { field, interval: state.cycle === "hour" ? "hour" as const : "day" as const, timeZone: state.cycle === "hour" ? "UTC" : zone, includeEmpty: true, range: "observed" as const } } : {};
-    const clause: AggregationClause = { id: "analysis", ...aggregate(measure), groupBy: [field], ...dateGrouping, groupLimit: cycleGroups, sort: [{ key: "group0", dir: "asc" }], label: measure.label };
+  if (cycleKey) {
+    const { kind, field } = cycleKey;
+    if (kind === "timestamp") return timestampCycle(catalog, state, field, run(sourceWhere), { zone, now });
+    // Usage's ledger: hourly totals keyed by UTC instants, or recorded dates,
+    // which cycleResult folds into slots.
+    const clause: AggregationClause = { id: "analysis", ...aggregate(measure), groupBy: [field], groupLimit: cycleGroups, sort: [{ key: "group0", dir: "asc" }], label: measure.label };
     const query = { ...EMPTY_QUERY, where: run(sourceWhere), aggregations: [clause] };
     // Grouped usage queries read daily records, which carry no hour (see
-    // docs/handoffs/usage-v3-hour-grouping.md), and a grouped query cannot
-    // group a timestamp by date, so those open as records.
+    // docs/handoffs/usage-v3-hour-grouping.md), so the hour cycle opens as
+    // records.
     return { query, clause, grouped: false, supporting: kind === "recorded-date" ? groupedRecords(run(sourceWhere), [field], [summary("analysis_value", measure)], [], field) : { ...EMPTY_QUERY, where: run(sourceWhere) } };
-  }
-
-  if (!unit && catalog.samples && state.view === "compare" && "minCount" in minCount) {
-    // Each group is one grouped row holding its measure and its samples (its
-    // calls, not its rollup rows); the minimum is a group filter on them.
-    const keys = breakdown!.fields, samples = catalog.measures[catalog.samples];
-    const columns = [summary("analysis_value", measure), summary("analysis_samples", samples), ...ratioParts(measure)];
-    const clause: AggregationClause = { id: "analysis", op: "sum", field: "analysis_value", groupBy: keys, groupLimit: analysisLimits.groups, sort: [{ key: "value", dir: "desc" }], label: valueLabel, display: compareDisplay(true) };
-    const query: QueryState = { ...groupedRecords(run(sourceWhere), keys, columns, [{ field: "analysis_samples", op: ">=", value: String(state.minSamples) }, ...filtered ? chosenGroups(keys) : []], "analysis_value"), aggregations: [clause] };
-    const { aggregations: _, ...supporting } = query;
-    return { query, clause, grouped: true, recordsGrouped: true, selection, supporting: { ...supporting, where: [...supporting.where, ...filtered ? [] : chosenGroups(keys)] } };
   }
 
   if (!unit) {
     const groupBy = breakdown?.fields ?? [];
-    const valued: WhereTerm[] = state.view === "distribution" ? [{ field: measure.value!, op: "is_not_null", value: "" }] : [];
     const clause: AggregationClause = state.view === "distribution"
-      ? { id: "analysis", op: "count", groupBy, groupLimit: analysisLimits.groups, sort: [{ key: "samples", dir: "desc" }], label: measure.label, ...minCount,
+      ? { id: "analysis", op: "count", groupBy, groupLimit: analysisLimits.groups, sort: [{ key: "samples", dir: "desc" }], label: measure.label, ...counted,
         distribution: breakdown ? { kind: "box", input: `[${measure.value}]`, whiskers: "tukey" } : { kind: "histogram", input: `[${measure.value}]` }, display: distributionDisplay(Boolean(breakdown)) }
-      : { id: "analysis", ...aggregate(measure), groupBy, groupLimit: analysisLimits.groups, sort: [{ key: "value", dir: "desc" }], label: valueLabel, ...minCount, display: compareDisplay(Boolean(breakdown)) };
-    const query = { ...EMPTY_QUERY, where: run([...filtered ? supportingWhere : sourceWhere, ...valued]), aggregations: [clause] };
-    const summaries = [summary("analysis_value", measure), ...ratioParts(measure), { id: "analysis_records", op: "count" as const, label: catalog.records.plural }];
+      : { id: "analysis", ...aggregate(measure), groupBy, groupLimit: analysisLimits.groups, sort: [{ key: "value", dir: "desc" }], label: valueLabel, ...counted, display: compareDisplay(Boolean(breakdown)) };
+    const query = { ...EMPTY_QUERY, where: run([...recordWhere, ...filter ?? []]), aggregations: [clause] };
+    // The supporting query lists what is drawn: a share's selected groups too.
+    const supported = run([...recordWhere, ...filter ?? stated(recordFields, run(recordWhere)) ?? []]);
+    const samples = state.view === "compare" && catalog.samples ? catalog.samples : undefined;
+    const summaries = [summary("analysis_value", measure), ...ratioParts(measure), { id: "analysis_records", op: "count" as const, label: catalog.records.plural }, ...samples ? [samplesColumn(samples)] : []];
     if (state.view === "distribution") summaries.splice(1, 0, { id: "analysis_median", op: "formula", expression: `MEDIAN([${measure.value}])`, label: `Median ${measure.label.toLowerCase()} per ${catalog.records.label.toLowerCase()}` });
-    const having: WhereTerm[] = "minCount" in minCount ? [{ field: "analysis_records", op: ">=", value: String(state.minSamples) }] : [];
-    const supported = run([...supportingWhere, ...valued]);
+    const having: WhereTerm[] = "minCount" in counted ? [{ field: samples ? "analysis_samples" : "analysis_records", op: ">=", value: String(state.minSamples) }] : [];
     return { query, clause, grouped: false, selection, supporting: breakdown ? groupedRecords(supported, groupBy, summaries, having) : { ...EMPTY_QUERY, where: supported } };
   }
 
@@ -575,39 +585,76 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
     ? { id: "analysis", op: "max", field: "analysis_value", expression: "MAX([analysis_value])", expressionY: "MAX([analysis_y])", groupBy: keys, groupLimit: analysisLimits.points, sort: [{ key: "value", dir: "desc" }], label: unit.plural,
       display: { kind: "scatter", maxGroups: analysisLimits.points, xLabel: measure.label, yLabel: measureY.label, xScale: log(state.scale), yScale: log(state.scaleY), xFormat: measure.format, yFormat: measureY.format, legendPosition: unitSplit ? "right" : "none" } }
     : state.view === "distribution"
-      ? { id: "analysis", op: "count", field: "analysis_value", ...unitSplit ? { expression: "MEDIAN([analysis_value])" } : {}, groupBy, groupLimit: analysisLimits.groups, sort: [{ key: "samples", dir: "desc" }], label: `${measure.label} per ${unit.label.toLowerCase()}`, ...minCount,
+      ? { id: "analysis", op: "count", field: "analysis_value", ...unitSplit ? { expression: "MEDIAN([analysis_value])" } : {}, groupBy, groupLimit: analysisLimits.groups, sort: [{ key: "samples", dir: "desc" }], label: `${measure.label} per ${unit.label.toLowerCase()}`, ...counted,
         distribution: unitSplit ? { kind: "box", input: "[analysis_value]", whiskers: "tukey" } : { kind: "histogram", input: "[analysis_value]" }, display: distributionDisplay(Boolean(unitSplit)) }
-      : { id: "analysis", ...reduce[state.reduce], groupBy, groupLimit: analysisLimits.groups, sort: [{ key: "value", dir: "desc" }], label: valueLabel, ...minCount, display: compareDisplay(Boolean(unitSplit)) };
+      : { id: "analysis", ...reduce[state.reduce], groupBy, groupLimit: analysisLimits.groups, sort: [{ key: "value", dir: "desc" }], label: valueLabel, ...counted, display: compareDisplay(Boolean(unitSplit)) };
   // Only units with a value are plotted, so only they meet a minimum. A
   // count of units counts every unit.
-  const having: WhereTerm[] = state.view === "distribution" || state.view === "compare" && state.reduce !== "count" ? [{ field: "analysis_value", op: "is_not_null", value: "" }] : [];
   const query: QueryState = { ...EMPTY_QUERY, grouping: { source: { ...EMPTY_QUERY, where: run(sourceWhere) }, keys, summaries, representative: null },
-    select: [...keys, ...summaries.map(column => column.id)].map(field => ({ field })), where: [...having, ...filtered ? chosenGroups(groupFields) : []], orderBy: [{ field: "analysis_value", dir: "desc", nulls: "last" }, ...keys.map(field => ({ field, dir: "asc" as const }))], aggregations: [clause] };
+    select: [...keys, ...summaries.map(column => column.id)].map(field => ({ field })), where: [...unitHaving, ...filter ?? []], orderBy: [{ field: "analysis_value", dir: "desc", nulls: "last" }, ...keys.map(field => ({ field, dir: "asc" as const }))], aggregations: [clause] };
   // The supporting query lists the selected groups' units: a group filter
   // on the unit's own field, never a record filter on another one.
-  const groups = filtered ? [] : chosenGroups(groupFields);
+  const groups = filter ? [] : stated(groupFields, unitHaving) ?? [];
   return { query, clause, grouped: true, selection, supporting: groups.length ? { ...query, where: [...query.where, ...groups] } : query };
 }
 
-// A legend selection as a filter on its group fields, as an AND of terms,
-// each a clause or an OR of clauses (not yet Query Table 0.9.7's OR of AND
-// branches). One field is a slice.
-// Combined groups exclude as one OR per group (field != value, or missing);
-// included, the OR of each group's equalities expands into one OR per choice
-// of a field from every group, which stays small only for a few groups:
-// beyond selectionTerms the selection has no filter (undefined) and is drawn
-// after the query instead.
-export const selectionTerms = 64;
-export function selectionWhere(fields: string[], selection: { values: string[]; excluded: boolean }): WhereTerm[] | undefined {
+// Hour of day or day of week over a timestamp, computed by Query Table in
+// the viewer's zone (dateGrouping hourOfDay or dayOfWeek). An observation is
+// one whole local hour or day in the range (an occurrence), idle ones
+// included: a box over them, or their mean. A total adds up every record in
+// a slot's whole hours or days. Occurrences the range cuts short, and the one
+// in progress, are left out. The supporting query opens the hourly or daily
+// totals the slots summarise, as grouped rows keyed by local hour or day.
+function timestampCycle(catalog: AnalysisCatalog, state: ResolvedAnalysis, field: string, where: WhereTerm[], { zone, now }: { zone: string; now: number }): AnalysisQuery {
+  const measure = catalog.measures[state.metric], hour = state.cycle === "hour", per = hour ? "hour" as const : "day" as const, slots = hour ? 24 : 7;
+  // Idle occurrences fill the range from its start; without one, from the
+  // first observed occurrence.
+  const bounded = where.some(term => "field" in term && term.field === field && !term.negated && [">", ">=", "="].includes(term.op));
+  const dateGrouping: MetricDateGrouping = { field, interval: hour ? "hourOfDay" : "dayOfWeek", timeZone: zone, includeEmpty: true, range: bounded ? "query" : "observed",
+    ...state.reduce === "total" ? { partialIntervals: "exclude" as const } : { occurrence: { interval: per, includeEmpty: true } } };
+  const bars = (label: string): Partial<AggregationClause> => ({ label, display: { kind: "bar-vertical", maxGroups: slots, xLabel: hour ? "Local hour" : "Weekday", yLabel: measure.label, yScale: log(state.scale), format: measure.format, legendPosition: "none" } });
+  const clause: AggregationClause = { id: "analysis", ...aggregate(measure), groupBy: [field], dateGrouping, sort: [{ key: "group0", dir: "asc" }],
+    ...state.reduce === "median" ? { label: `${measure.label} per ${per}`, distribution: { kind: "box", input: "", whiskers: "tukey" }, display: { kind: "box", maxGroups: slots, xLabel: `${measure.label} / ${per}`, xScale: log(state.scale), format: measure.format } }
+      : bars(state.reduce === "total" ? `Total ${measure.label.toLowerCase()}` : `${measure.additive ? "Mean" : "Unweighted mean"} ${measure.label.toLowerCase()} per ${per}`) };
+  const bounds = timeBounds(where, catalog.time, now), end = metricDateFloor(Math.min(bounds.to?.getTime() ?? now, now), per, zone);
+  const whole = withEnd(completeStart(where, catalog.time, zone, now, per), catalog.time, new Date(end));
+  const supporting = groupedRecords(whole, [{ field, interval: per, timeZone: zone }], [summary("analysis_value", measure), ...ratioParts(measure)], [], field);
+  return { query: { ...EMPTY_QUERY, where, aggregations: [clause] }, clause, grouped: false, native: true, supporting };
+}
+
+// A native cycle's result, checked as the fold checks its totals: complete,
+// with every slot's value. slots counts the whole hours or days its boxes
+// and means summarise (none for totals); observations, the records.
+export function nativeCycleResult(result: AggregationResultEntry) {
+  if (result.error || result.coverage === "partial" || result.hiddenGroups || (result.groupCount ?? 0) > result.buckets.length || result.buckets.some(bucket => bucket.error)) {
+    throw new Error(result.error ?? result.buckets.find(bucket => bucket.error)?.error ?? "Complete totals are required for an hour or weekday cycle. Choose a shorter range.");
+  }
+  return { result, slots: result.buckets.reduce((n, bucket) => n + (bucket.occurrences ?? 0), 0), observations: result.buckets.reduce((n, bucket) => n + bucket.count, 0) };
+}
+
+// The predicates a where list holds, every OR branch's included: Query
+// Table allows MAX_WHERE_CLAUSES of them in one list.
+export const predicateCount = (terms: WhereTerm[]) => terms.reduce((count, term) => count + predicatesOf(term).length, 0);
+
+// A legend selection as a filter on its group fields. One field is a slice.
+// Combined groups are included as one OR of AND branches, one branch per
+// group's equalities, and excluded as one OR per group (field != value, or
+// missing). Every predicate counts toward the query's budget: where the
+// selection would take a where list already holding `used` predicates past
+// it, the selection has no filter (undefined) and is drawn after the query.
+export function selectionWhere(fields: string[], selection: { values: string[]; excluded: boolean }, used = 0): WhereTerm[] | undefined {
   if (!selection.values.length) return [];
+  const terms = selectionTerms(fields, selection);
+  return used + predicateCount(terms) > MAX_WHERE_CLAUSES ? undefined : terms;
+}
+function selectionTerms(fields: string[], selection: { values: string[]; excluded: boolean }): WhereTerm[] {
   if (fields.length === 1) return withSlice([], fields[0], { values: selection.values.map(value => value || null), excluded: selection.excluded });
   const groups = selection.values.map(value => (JSON.parse(value) as unknown[]).map((key, index) => ({ field: fields[index], key: key === null || key === undefined || key === "" ? null : String(key) })));
   const equal = ({ field, key }: { field: string; key: string | null }): WhereClause => key === null ? { field, op: "is_null", value: "" } : { field, op: "=", value: key };
   if (selection.excluded) return groups.map(group => ({ any: group.flatMap(({ field, key }): WhereClause[] => key === null ? [{ field, op: "is_not_null", value: "" }] : [{ field, op: "!=", value: key }, { field, op: "is_null", value: "" }]) }));
-  if (fields.length ** groups.length > selectionTerms) return undefined;
-  let choices: WhereClause[][] = [[]];
-  for (const group of groups) choices = choices.flatMap(choice => group.map(part => [...choice, equal(part)]));
-  return choices.map(choice => choice.length === 1 ? choice[0] : { any: choice });
+  // One group is its equalities; a lone branch would be normalized to them.
+  if (groups.length === 1) return groups[0].map(equal);
+  return [{ any: groups.map(group => ({ all: group.map(equal) })) }];
 }
 
 // A result drawn under a legend selection: the selected groups (or all but
@@ -632,19 +679,21 @@ export function selectGroups(entry: AggregationResultEntry, selection?: Analysis
   return { ...shown, ...rest.length ? { other: { keys: [], value, count } } : { other: undefined } };
 }
 
-function groupedRecords(where: WhereTerm[], keys: string[], summaries: SummaryColumn[], having: WhereTerm[], order = summaries[0].id): QueryState {
+function groupedRecords(where: WhereTerm[], keys: GroupKey[], summaries: SummaryColumn[], having: WhereTerm[], order = summaries[0].id): QueryState {
+  const fields = groupKeyFields(keys);
   return { ...EMPTY_QUERY, grouping: { source: { ...EMPTY_QUERY, where }, keys, summaries, representative: null },
-    select: [...keys, ...summaries.map(column => column.id)].map(field => ({ field })), where: having,
-    orderBy: [{ field: order, dir: order === keys[0] ? "asc" : "desc", nulls: "last" }, ...keys.filter(field => field !== order).map(field => ({ field, dir: "asc" as const }))] };
+    select: [...fields, ...summaries.map(column => column.id)].map(field => ({ field })), where: having,
+    orderBy: [{ field: order, dir: order === fields[0] ? "asc" : "desc", nulls: "last" }, ...fields.filter(field => field !== order).map(field => ({ field, dir: "asc" as const }))] };
 }
 
 // The records behind one chart bucket. Records use the native bucket filter;
-// units open the grouped query restricted to that group's rows. A cycle slot
-// spans many separate days or hours and has no single filter.
+// units open the grouped query restricted to that group's rows. A native
+// cycle slot opens the records of its whole hours or days in the range, as
+// ranges with one OR per gap; without a start, or with more occurrences than
+// the predicate budget holds, it has none (null), nor has a folded slot.
 export function analysisInspectQuery(analysis: AnalysisQuery, bucket: AggregationBucket, clause: AggregationClause, schema: FieldSchema, view: AnalysisView): QueryState | null {
-  if (view === "cycle") return null;
+  if (view === "cycle" && !analysis.native) return null;
   if (!analysis.grouped) return inspectBucketQuery({ ...EMPTY_QUERY, where: analysis.query.where }, bucket, clause, schema);
-  if (analysis.recordsGrouped) return inspectBucketQuery({ ...EMPTY_QUERY, where: analysis.query.grouping!.source.where }, bucket, { id: clause.id, op: "count", groupBy: clause.groupBy }, schema);
   const { aggregations: _, ...units } = analysis.query;
   return inspectBucketQuery(units, bucket, clause, schema);
 }
@@ -699,10 +748,13 @@ export function analysisNote(catalog: AnalysisCatalog, input: AnalysisState): st
   const subject = unit ? unit.plural.toLowerCase() : catalog.records.plural.toLowerCase();
   const parts = [measure.note, ...catalog.rangeNote ? [catalog.rangeNote] : [], ...catalog.request?.note ? [catalog.request.note] : []];
   const idle = idleIsZero(aggregate(measure)) ? " as zero" : ", which have no value", kind = state.view === "cycle" ? catalog.cycle![state.cycle]!.kind : undefined;
-  if (state.view === "cycle") parts.push(state.cycle === "hour"
-    ? `One observation is one complete clock hour in the range, placed at its hour in your time zone, idle hours included${idle}. Partial first and last hours are left out. An hour bar spans many dates, so it has no single drill-down; hourly totals cannot yet open as a grouped query, so the link opens the records.`
-    : kind === "recorded-date" ? `One observation is one complete recorded day in the range, idle days included${idle}. Days are the dates the recording Mac assigned in its own time zone. The range starts at your next local midnight; the current day is left out. When the recording Mac's time zone differs from yours, a date just before your first date can be returned with part of its records; it is left out and reported. Select the grouped query for the daily totals; a weekday bar spans many dates, so it has no single drill-down.`
-    : `One observation is one complete day in your time zone in the range, idle days included${idle}. The range starts at your next local midnight; the current day is left out. A weekday bar spans many dates, so it has no single drill-down; daily totals of a timestamp cannot yet open as a grouped query, so the link opens the records.`);
+  if (state.view === "cycle") {
+    const per = state.cycle === "hour" ? "hour" : "day";
+    parts.push(kind === "timestamp"
+      ? `One observation is one whole ${per} in your time zone in the range, idle ${per}s included${idle}. ${per === "hour" ? "Partial first and last hours, and the current hour," : "A partial first day, and the current day,"} are left out. A slot opens the records of its whole ${per}s; in a range without a start, or with more than about 48 of them, it has no single drill-down. The grouped query lists the ${per === "hour" ? "hourly" : "daily"} totals.`
+      : state.cycle === "hour" ? `One observation is one complete clock hour in the range, placed at its hour in your time zone, idle hours included${idle}. Partial first and last hours are left out. An hour bar spans many dates, so it has no single drill-down; hourly usage cannot yet open as a grouped query, so the link opens the records.`
+      : `One observation is one complete recorded day in the range, idle days included${idle}. Days are the dates the recording Mac assigned in its own time zone. The range starts at your next local midnight; the current day is left out. When the recording Mac's time zone differs from yours, a date just before your first date can be returned with part of its records; it is left out and reported. Select the grouped query for the daily totals; a weekday bar spans many dates, so it has no single drill-down.`);
+  }
   else if (unit) parts.push(`${unit.note} One observation is one ${unit.label.toLowerCase()}: its ${measure.label.toLowerCase()} over all its matching records in the range.`);
   else parts.push(`One observation is one ${catalog.records.label.toLowerCase()}. ${catalog.records.note}`);
   // A breakdown's implied population follows the measure's note.
@@ -716,14 +768,14 @@ export function analysisNote(catalog: AnalysisCatalog, input: AnalysisState): st
   const narrowed = state.view === "scatter" ? [[measure, catalog.measures[state.metricY]], [catalog.measures[state.metricY], measure]].filter(([own, other]) => own.where?.length && !other.where?.length).map(([own, other]) => `${other.label} counts only ${own.label.toLowerCase()}'s records here.`) : [];
   if (state.view === "scatter") parts.push(`Each point is one ${unit!.label.toLowerCase()}; both measures use the records matching both measures' populations.${narrowed.length ? ` ${narrowed.join(" ")}` : ""} Up to ${analysisLimits.points.toLocaleString("en-US")} ${subject} with the largest ${measure.label.toLowerCase()} are drawn; the grouped query lists them all.`);
   if (state.view === "distribution" || state.view === "compare" && unit && state.reduce !== "count") parts.push(`${unit ? subject[0].toUpperCase() + subject.slice(1) : catalog.records.plural} without a ${measure.label.toLowerCase()} value are left out.`);
-  if (thresholded(state)) parts.push(`Groups with fewer than ${state.minSamples.toLocaleString("en-US")} ${state.view === "distribution" ? "plotted " : ""}${sampleSubject(catalog, state)} are hidden${unit || !catalog.samples || state.view !== "compare" ? "" : "; how many is not shown"}.`);
+  if (thresholded(state)) parts.push(`Groups with fewer than ${state.minSamples.toLocaleString("en-US")} ${state.view === "distribution" ? "plotted " : ""}${sampleSubject(catalog, state)} are hidden.`);
   if (state.compareAs === "share" && state.view === "compare") parts.push("Shares divide each group by the total of all groups, including those folded into Other.");
   return parts.join(" ");
 }
 
 // What a minimum counts: units, records, or the catalog's sample measure.
 export const sampleSubject = (catalog: AnalysisCatalog, state: ResolvedAnalysis) => state.unit !== records ? catalog.units[state.unit].plural.toLowerCase()
-  : catalog.samples && state.view === "compare" ? catalog.measures[catalog.samples].unit : catalog.records.plural.toLowerCase();
+  : catalog.samples && state.view === "compare" ? catalog.samples.unit : catalog.records.plural.toLowerCase();
 
 export function analysisEmptyLabel(catalog: AnalysisCatalog, input: AnalysisState): string {
   const state = normalizeAnalysis(catalog, input);

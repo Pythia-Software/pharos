@@ -10,7 +10,7 @@ import factors from "../../../../carbon/co2_factors.json";
 import { core, schemas, instantiateRecipe, recipeById, cardCoverQuery } from "../helpers/recipes.mjs";
 import { now, writingMessages, parallelismRecords, carbonUsage } from "../helpers/bespoke-ledgers.mjs";
 import { loadClassicScript } from "../helpers/classic-script.mjs";
-import { canonicalState, analysisQuery, catalogProblems, cycleResult, normalizeAnalysis, selectGroups, trendAdjustments, validAnalysisState, readAnalysisLink, analysisVersion } from "../../../src/dashboard-analysis-model";
+import { canonicalState, analysisQuery, catalogProblems, nativeCycleResult, normalizeAnalysis, selectGroups, trendAdjustments, validAnalysisState, readAnalysisLink, analysisVersion } from "../../../src/dashboard-analysis-model";
 import { trendQuery, trendSeries } from "../../../src/dashboard-trend-model";
 import { humanAnalysisCatalog as human, humanLegacyURL, readHumanLink } from "../../../src/human-analysis-catalog";
 import { carbonAnalysisCatalog, carbonCatalogShape, deriveCarbon } from "../../../src/carbon-analysis-catalog";
@@ -24,7 +24,7 @@ import { loadQueryPreview, clearPreviewCache } from "../../../src/curiosity-data
 import { compactTimelineBuckets } from "../../../src/column-marks";
 import { buildCardTrend, cardTrendDays, cardTrendQueries } from "../../../src/card-trend";
 import { withTimeRange } from "../../../src/chart-range";
-import { weekdayMetric } from "../../../src/weekday-cover";
+import { weekdayMetric, weekdays } from "../../../src/weekday-cover";
 import { answerQuery } from "../../support/query-server.mjs";
 import { runAnalysisQuery } from "../../../src/analysis-request";
 
@@ -177,8 +177,9 @@ test("a message recorded on another Mac's day: the day trend files it as the car
   const recorded = Object.fromEntries(card.buckets.map(bucket => [bucket.keys[0], bucket.value]));
   assert.equal(built.buckets.find(bucket => bucket.key === message.day).values.total, recorded[message.day], "the recorded day holds the message on both");
   const cycle = analysisQuery(human, { view: "cycle", cycle: "weekday", metric: "typed", split: "none" }, where, { now, zone });
-  const days = Object.fromEntries(core.evaluateMetrics(cardRows.writing_messages, cycle.query, schemas.writing_messages, { now }).metrics[0].buckets.map(bucket => [new Date(String(bucket.keys[0])).toLocaleDateString("en-CA"), bucket.value]));
-  const viewer = cardRows.writing_messages.filter(row => new Date(row.sent_at).toLocaleDateString("en-CA") === local && Date.parse(row.sent_at) >= Date.parse(cycle.query.where.find(term => term.op === ">=").value)).reduce((sum, row) => sum + row.typed_words, 0);
+  // The daily totals the weekday boxes summarise: its supporting query.
+  const days = Object.fromEntries(core.applyQuery(cardRows.writing_messages, { ...cycle.supporting, limit: 1000 }, schemas.writing_messages, { now }).rows.map(row => [new Date(String(row.sent_at)).toLocaleDateString("en-CA"), row.analysis_value]));
+  const viewer = cardRows.writing_messages.filter(row => new Date(row.sent_at).toLocaleDateString("en-CA") === local).reduce((sum, row) => sum + row.typed_words, 0);
   assert.equal(days[local], viewer, "the cycle files it on its local day");
 });
 
@@ -218,7 +219,10 @@ test("human-messages-per-day and human-conversations-per-day: 7-day means over c
   trailingCard("human-conversations-per-day");
 });
 
-// Weekday and hour cards fold the same daily or hourly totals.
+// Weekday cards fold daily totals (weekdayMetric); the dashboard's weekday
+// cycle is Query Table's day of week over whole local days. Both must give
+// every weekday the same box over the same days.
+const weekdayName = slot => weekdays[slot - 1];
 function weekdayPair(id) {
   const recipe = recipeById(id), catalog = catalogs[recipe.destination.topic], item = instantiateRecipe(recipe, 90, new Date(now));
   const source = cardCoverQuery(item.query, recipe).query, clause = { ...source.aggregations[0], dateGrouping: { ...source.aggregations[0].dateGrouping, timeZone: zone } };
@@ -226,14 +230,11 @@ function weekdayPair(id) {
   const card = weekdayMetric(clause, daily, { ...source, aggregations: [clause] }, now, recipe.weekday.unit);
   const where = cardDashboardWhere(recipe.dataset, catalog.dataset, (item.query.grouping?.source ?? item.query).where);
   const state = normalizeAnalysis(catalog, recipe.destination.chart), analysis = analysisQuery(catalog, state, where, { now, zone });
-  const result = core.evaluateMetrics(dashboardRows[catalog.dataset], analysis.query, schemas[catalog.dataset], { now }).metrics[0];
-  const start = where.find(term => term.field === catalog.time.first && term.op === ">=");
-  const bounds = { from: Number(core.coerceValue("datetime", start.value, now)), to: now };
-  const folded = cycleResult(catalog, state, result, bounds, zone);
-  assert.deepEqual([state.view, state.cycle, state.reduce], ["cycle", "weekday", "median"], id);
-  const summaries = entry => entry.result.buckets.map(bucket => [bucket.keys[0], JSON.stringify(bucket.distribution.summary, (_, value) => round(value))]);
-  assert.deepEqual(summaries(folded), summaries(card), id);
-  assert.equal(folded.slots, card.days, `${id}: the same complete days`);
+  const native = nativeCycleResult(core.evaluateMetrics(dashboardRows[catalog.dataset], analysis.query, schemas[catalog.dataset], { now }).metrics[0]);
+  assert.deepEqual([state.view, state.cycle, state.reduce, analysis.native], ["cycle", "weekday", "median", true], id);
+  const summaries = buckets => Object.fromEntries(buckets.map(bucket => [bucket.keys[0], JSON.stringify(bucket.distribution.summary, (_, value) => round(value))]));
+  assert.deepEqual(summaries(native.result.buckets.map(bucket => ({ ...bucket, keys: [weekdayName(bucket.keys[0])] }))), summaries(card.result.buckets), id);
+  assert.equal(native.slots, card.days, `${id}: the same complete days`);
   assert.ok(card.result.buckets.some(bucket => bucket.distribution.summary?.max > 0));
 }
 test("human-words-weekday and human-messages-weekday: daily totals by local weekday", () => {
@@ -249,12 +250,10 @@ function hourPair(id, cardHours, { minutes = 0, inProgress = {} } = {}) {
   const at = new Date(now); at.setMinutes(minutes, 0, 0);
   const item = instantiateRecipe(recipe, 7, at), where = cardDashboardWhere(recipe.dataset, catalog.dataset, (item.query.grouping?.source ?? item.query).where);
   const state = normalizeAnalysis(catalog, recipe.destination.chart), analysis = analysisQuery(catalog, state, where, { now: at.getTime(), zone });
-  assert.deepEqual([state.view, state.cycle, state.reduce], ["cycle", "hour", "total"], id);
-  const result = core.evaluateMetrics(dashboardRows[catalog.dataset], analysis.query, schemas[catalog.dataset], { now: at.getTime() }).metrics[0];
-  const from = where.find(term => term.field === catalog.time.first && (term.op === ">=" || term.op === ">"));
-  const folded = cycleResult(catalog, state, result, { from: from ? Number(core.coerceValue("datetime", from.value, at.getTime())) : undefined, to: at.getTime() }, zone);
+  assert.deepEqual([state.view, state.cycle, state.reduce, analysis.native], ["cycle", "hour", "total", true], id);
+  const result = nativeCycleResult(core.evaluateMetrics(dashboardRows[catalog.dataset], analysis.query, schemas[catalog.dataset], { now: at.getTime() }).metrics[0]).result;
   const expected = Object.fromEntries(Object.entries(cardHours(item, at.getTime())).map(([hour, value]) => [hour, round(value - (inProgress[hour] ?? 0))]).filter(([, value]) => value));
-  assert.deepEqual(Object.fromEntries(folded.result.buckets.filter(bucket => bucket.value).map(bucket => [bucket.keys[0], round(bucket.value)])), expected, id);
+  assert.deepEqual(Object.fromEntries(result.buckets.filter(bucket => bucket.value).map(bucket => [`${String(bucket.keys[0]).padStart(2, "0")}:00`, round(bucket.value)])), expected, id);
   assert.ok(Object.keys(expected).length > 3);
 }
 test("writing-hours: typed words by local hour", () => {

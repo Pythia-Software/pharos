@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { capabilities, core, execution, queryRecipes, schemas } from "../helpers/recipes.mjs";
 import { now, usageLedger } from "../helpers/usage-ledger.mjs";
-import { analysisLimits, analysisQuery, selectionWhere, catalogProblems, changeState, selectGroups, normalizeAnalysis, readAnalysisLink, analysisVersion, switchView, trendAdjustments, trendLimits, validAnalysisState } from "../../../src/dashboard-analysis-model";
+import { analysisInspectQuery, analysisLimits, analysisQuery, selectionWhere, catalogProblems, changeState, selectGroups, normalizeAnalysis, readAnalysisLink, analysisVersion, switchView, trendAdjustments, trendLimits, validAnalysisState } from "../../../src/dashboard-analysis-model";
 import { trendNote, trendQuery, trendSeries, trendTitle } from "../../../src/dashboard-trend-model";
 import { tokenAnalysisCatalog as catalog } from "../../../src/token-analysis-catalog";
 import { tokenTypes } from "../../../src/token-chart-request";
@@ -454,10 +454,32 @@ test("a combined selection filters the executed query where a filter can state i
   const kept = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider_model", selection: { values: pairs, excluded: true } }, range, { now });
   const totals = core.evaluateMetrics(rows, kept.query, schema, { now }).metrics[0].buckets.map(bucket => JSON.stringify(bucket.keys));
   assert.ok(totals.length > 0 && totals.every(key => !pairs.includes(key)));
-  // Too many included pairs to expand: drawn after the query, as before.
-  const many = Array.from({ length: 7 }, (_, index) => JSON.stringify(["claude", `model-${index}`]));
-  assert.equal(selectionWhere(["provider", "model_family"], { values: many, excluded: false }), undefined);
-  assert.ok(!analysisQuery(catalog, { ...state, selection: { values: many, excluded: false } }, range, { now }).query.where.some(term => term.any));
+  // Included pairs are one OR of AND branches, however many: the executed
+  // query, the supporting query and a bucket's records all carry it.
+  const many = Array.from({ length: 30 }, (_, index) => JSON.stringify(index ? ["claude", `model-${index}`] : ["codex", "gpt-5"]));
+  const term = { any: many.map(pair => ({ all: [{ field: "provider", op: "=", value: JSON.parse(pair)[0] }, { field: "model_family", op: "=", value: JSON.parse(pair)[1] }] })) };
+  assert.deepEqual(selectionWhere(["provider", "model_family"], { values: many, excluded: false }), [term]);
+  const compare = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider_model", selection: { values: many, excluded: false } }, range, { now });
+  assert.ok(compare.query.where.some(item => JSON.stringify(item) === JSON.stringify(term)) && !compare.selection.late);
+  assert.deepEqual(core.toQueryRequestV3(compare.query, schema, capabilities, execution, { now, rows: false }).diagnostics, []);
+  assert.deepEqual(core.evaluateMetrics(rows, compare.query, schema, { now }).metrics[0].buckets.map(bucket => bucket.keys), [["codex", "gpt-5"]], "only the selected pairs that hold usage");
+  assert.ok(compare.supporting.grouping.source.where.some(item => JSON.stringify(item) === JSON.stringify(term)));
+  const opened = analysisInspectQuery(compare, { keys: ["codex", "gpt-5"], value: 1, count: 1 }, compare.clause, schema, "compare");
+  assert.ok(opened.where.some(item => JSON.stringify(item) === JSON.stringify(term)));
+  // Links carry the term as it is.
+  for (const query of [compare.supporting, opened]) assert.deepEqual(core.decodeQueryStrict(core.encodeQuery(query)), core.decodeQueryStrict(core.encodeQuery(core.decodeQueryStrict(core.encodeQuery(query)))));
+  assert.deepEqual(core.decodeQueryStrict(core.encodeQuery(opened)).where, opened.where);
+  // The trend draws the selection itself; its supporting query lists it too.
+  const trend = trendQuery(catalog, { metric: "tokens", split: "provider_model", period: "day", selection: { values: many, excluded: false } }, range, { now });
+  assert.ok(trend.supporting.where.some(item => JSON.stringify(item) === JSON.stringify(term)));
+  assert.ok(!trend.query.where.some(item => item.any), "never the executed query: the key keeps every series");
+  // Every predicate counts toward the query's 100: a selection that would
+  // exceed them is drawn from the returned groups, and the note says so.
+  const most = Array.from({ length: 49 }, (_, index) => JSON.stringify(["claude", `model-${index}`]));
+  assert.equal(selectionWhere(["provider", "model_family"], { values: most, excluded: false }, range.length + 1), undefined);
+  const late = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider_model", selection: { values: most, excluded: false } }, [...range, { field: "effort", op: "=", value: "high" }], { now });
+  assert.ok(late.selection.late && !late.query.where.some(item => item.any));
+  assert.equal(late.supporting.grouping.source.where.length, 3, "nor can the supporting query state it");
 });
 
 test("a derived component computes each period's parts from its input totals, before smoothing and shares", () => {

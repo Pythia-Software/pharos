@@ -619,7 +619,7 @@ test("grouped previews run distinct minimums only where query-v3 advertises them
   const dated = rows.map(row => ({ ...row, started_at: new Date(row.started_at).toISOString() }));
   const handshake = flags => (path, request) => path.endsWith("capabilities") ? response({ metricCapabilities: { version: 2 }, computedExecution: execution, queryCapabilities: { ...queryCapabilities, metricMinCount: true, ...flags } })
     : path.includes("query-v3") ? response(serverQuery(request, dated)) : undefined;
-  fixture(t, handshake({}));
+  fixture(t, handshake({ metricMinCountMeasures: false }));
   await assert.rejects(loadQueryPreview("tool_calls", query(measures), schemas.tool_calls), /distinct values or a sum/);
   fixture(t, handshake({ metricMinCountMeasures: true }));
   const preview = await loadQueryPreview("tool_calls", query(measures), schemas.tool_calls);

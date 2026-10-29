@@ -1,4 +1,4 @@
-import { EMPTY_QUERY, decodeQueryStrict, inspectBucketQuery, type AggregationClause, type QueryState, type SummaryColumn, type CellDisplay, type WhereTerm, type OrderByClause } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, decodeQueryStrict, inspectBucketQuery, isMetricCycle, type CalendarGroupKey, type GroupKey, type AggregationClause, type QueryState, type SummaryColumn, type CellDisplay, type WhereTerm, type OrderByClause } from "@pythia-software/query-table-core";
 import { readUsageWorkspace, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { withTimeRange } from "./chart-range";
 import type { ConcurrencySelection } from "./concurrency";
@@ -48,13 +48,20 @@ function summaryDisplay(clause: AggregationClause): CellDisplay | undefined {
   return undefined;
 }
 
+// Metric clauses as the grouped rows they draw: one summary per clause over
+// their shared keys. A calendar date grouping (a timestamp by hour, say)
+// becomes a calendar group key, one row per local interval; a cycle,
+// occurrences, whole intervals or filled empty intervals have no grouped
+// rows to match.
 export function groupedDashboardQuery(query: QueryState): QueryState {
   if (query.grouping) return query;
   const clauses = query.aggregations ?? [];
   if (!clauses.length) return query;
-  const keys = clauses[0].groupBy;
-  if (clauses.some(clause => JSON.stringify(clause.groupBy) !== JSON.stringify(keys))) throw new Error("Choose measures with the same grouping before opening grouped results.");
-  if (clauses.some(clause => clause.where?.length || clause.dateGrouping || clause.expressionY || clause.distribution || clause.minCount || clause.scope && clause.scope !== "allMatching")) throw new Error("This graph needs its own grouped-query conversion.");
+  const fields = clauses[0].groupBy, dateGrouping = clauses[0].dateGrouping;
+  if (clauses.some(clause => JSON.stringify(clause.groupBy) !== JSON.stringify(fields) || JSON.stringify(clause.dateGrouping) !== JSON.stringify(dateGrouping))) throw new Error("Choose measures with the same grouping before opening grouped results.");
+  const calendar = dateGrouping && !isMetricCycle(dateGrouping.interval) && !dateGrouping.occurrence && !dateGrouping.partialIntervals && !dateGrouping.includeEmpty && fields[0] === dateGrouping.field;
+  if (dateGrouping && !calendar || clauses.some(clause => clause.where?.length || clause.expressionY || clause.distribution || clause.minCount || clause.window || clause.share || clause.scope && clause.scope !== "allMatching")) throw new Error("This graph needs its own grouped-query conversion.");
+  const keys: GroupKey[] = fields.map((field, index) => index === 0 && calendar ? { field, interval: dateGrouping.interval as CalendarGroupKey["interval"], ...dateGrouping.timeZone ? { timeZone: dateGrouping.timeZone } : {} } : field);
   const summaries: SummaryColumn[] = clauses.map((clause, index) => ({
     id: `dashboard_${index + 1}`, op: clause.expression ? "formula" : clause.op,
     ...(clause.field && !clause.expression ? { field: clause.field } : {}),
@@ -63,13 +70,13 @@ export function groupedDashboardQuery(query: QueryState): QueryState {
     ...(summaryDisplay(clause) ? { display: summaryDisplay(clause) } : {}),
   }));
   const orderBy: OrderByClause[] = (clauses[0].sort ?? []).flatMap(sort => {
-    const field = sort.key === "value" ? summaries[0].id : /^group\d+$/.test(sort.key) ? keys[Number(sort.key.slice(5))] : undefined;
+    const field = sort.key === "value" ? summaries[0].id : /^group\d+$/.test(sort.key) ? fields[Number(sort.key.slice(5))] : undefined;
     return field ? [{ field, dir: sort.dir }] : [];
   });
-  for (const field of keys) if (!orderBy.some(sort => sort.field === field)) orderBy.push({ field, dir: "asc" });
+  for (const field of fields) if (!orderBy.some(sort => sort.field === field)) orderBy.push({ field, dir: "asc" });
   const { aggregations: _, ...source } = query;
   return { ...EMPTY_QUERY, limit: query.limit, grouping: { source: { ...source, offset: 0 }, keys, summaries, representative: null },
-    select: [...keys, ...summaries.map(column => column.id)].map(field => ({ field })), orderBy };
+    select: [...fields, ...summaries.map(column => column.id)].map(field => ({ field })), orderBy };
 }
 
 // The ribbon is continuous; its native query dataset is hourly occupancy.

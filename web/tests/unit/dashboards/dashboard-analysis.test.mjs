@@ -56,8 +56,28 @@ test("record views group or distribute records directly", () => {
   const compare = analysisQuery(catalog, { view: "compare", metric: "priced_cost", split: "provider", minSamples: 3 }, where);
   assert.equal(compare.grouped, false);
   assert.deepEqual(compare.query.where, [...where, { field: "price_status", op: "=", value: "priced" }], "a measure's population joins the filters");
-  assert.deepEqual([compare.clause.groupBy, compare.clause.field, compare.clause.minCount], [["provider"], "cost_usd", 3]);
-  assert.deepEqual(compare.supporting.where, [{ field: "analysis_records", op: ">=", value: "3" }], "the supporting query keeps the threshold as a group filter");
+  // A usage record is a slice of a session's day: the minimum counts the
+  // distinct conversations a group's records belong to.
+  assert.deepEqual([compare.clause.groupBy, compare.clause.field, compare.clause.minCount], [["provider"], "cost_usd", { min: 3, distinct: "conversation_id" }]);
+  assert.deepEqual(compare.supporting.where, [{ field: "analysis_samples", op: ">=", value: "3" }], "the supporting query keeps the threshold as a group filter");
+  assert.ok(compare.supporting.grouping.summaries.some(column => column.id === "analysis_samples" && column.op === "count_distinct" && column.field === "conversation_id"));
+  const reach = (min, split) => {
+    const conversations = {};
+    for (const row of rows) if (row.conversation_id) (conversations[row[split]] ??= new Set()).add(row.conversation_id);
+    return Object.entries(conversations).filter(([, set]) => set.size >= min).map(([key]) => key).sort();
+  };
+  let hid = 0;
+  // Antigravity has 6 records in 4 conversations; Sonnet 12 records in 8.
+  for (const [min, split] of [[5, "provider"], [9, "model_family"]]) {
+    const result = evaluate(analysisQuery(catalog, { view: "compare", metric: "tokens", split, minSamples: min }, []).query);
+    hid += result.hiddenGroups ?? 0;
+    assert.deepEqual(result.buckets.map(bucket => bucket.keys[0]).sort(), reach(min, split), `${split}: groups reaching ${min} conversations`);
+    assert.equal(result.hiddenGroups, new Set(rows.map(row => row[split])).size - reach(min, split).length);
+  }
+  assert.equal(hid, 3, "groups with enough records but too few conversations");
+  assert.match(analysisNote(catalog, { view: "compare", metric: "tokens", split: "provider", minSamples: 3 }), /fewer than 3 conversations are hidden/);
+  // A distribution's minimum counts its plotted records.
+  assert.equal(analysisQuery(catalog, { view: "distribution", metric: "tokens", split: "provider", minSamples: 3 }, []).clause.minCount, 3);
   const histogram = analysisQuery(catalog, { view: "distribution", metric: "output", split: "none", minSamples: 5 }, []);
   assert.deepEqual([histogram.clause.distribution, histogram.clause.minCount, histogram.clause.groupBy], [{ kind: "histogram", input: "[output_tokens]" }, undefined, []], "a single histogram has no groups to threshold");
   const boxes = evaluate(analysisQuery(catalog, { view: "distribution", metric: "tokens", split: "provider" }, []).query);
