@@ -33,12 +33,13 @@ export function usageQuerySchema(schema: FieldSchema, dataset: UsageDataset): Fi
 
 // A grouped result ends with its link summaries, then native group Detail
 // (Query Table 0.9.7), as record tables end with their drill-ins and Detail.
-// An empty select means the grouped defaults: every key, then every summary.
-// Link columns the select leaves out stay out.
+// An empty select means Query Table's grouped default, the keys, so older
+// saves and links show their keys, then Detail. Columns the select leaves
+// out, link summaries included, stay out.
 export function withGroupDetail(query: QueryState): QueryState {
   if (!query.grouping) return query;
   const links = new Set(query.grouping.summaries.filter(column => column.op === "link").map(column => column.id));
-  const select = query.select.length ? query.select : [...groupKeyFields(query.grouping.keys), ...query.grouping.summaries.map(column => column.id)].map(field => ({ field }));
+  const select = query.select.length ? query.select : groupKeyFields(query.grouping.keys).map(field => ({ field }));
   const columns = [
     ...select.filter(column => column.field !== ITEM_DETAILS_COLUMN && !links.has(column.field)),
     ...select.filter(column => links.has(column.field)),

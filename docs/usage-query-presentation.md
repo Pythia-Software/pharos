@@ -30,18 +30,32 @@ Reset, have no clause. A clause that cannot be read, names a field outside the
 allowlist or exceeds Query Table's 4,000-character host value fails the whole
 restore, so the query never runs without it. Each request compiles the clause
 it runs with into `record_search`, which the service validates and runs; the
-service also refuses a request whose host state and `record_search` disagree.
+service also refuses a request whose host state declares a clause without
+`record_search`, or `record_search` without a declared clause. It checks that
+both are present, not that they match: matching them would need the editor's
+compiler on the server.
 Search keeps its content search (`text_builder`, or `kind`, `search` and
 `case`) and its Table/Conversations view the same way, as does the older Human
 messages table's `message_query`; message search cursors stay out of the
 definition. Returning to a dashboard explicitly resets keyword conditions, and
 switching datasets drops them.
 
+Query Table keeps each host value within 4,000 characters, where Pharos used to
+accept keyword drafts of up to 28,000 (Analyze) or 24,000 (Search's
+`text_builder`). Editing past the limit says the search is too large; an older
+link or save that carries a larger draft fails to restore, and Reset page opens
+the table without it. Pharos has asked upstream to raise the limit.
+
 A bare reload restores the last query whose rows and metrics loaded
 (`persistLast: "succeeded"`), never one that failed, timed out or was
-cancelled. A failed or slow (12 s) query keeps Retry, Reset table and Reset
-page (`fresh=1`, which also bypasses a default saved query). The client's 45 s
-request deadline stays, so a stalled connection ends as a failure.
+cancelled. A table's default saved query is restored on every bare visit, so
+Pharos skips a default whose rows the service rejected (HTTP 400 or 422) or
+that ran past the client's 45 s deadline (`rejectDefaultQuery` in
+`web/src/storage.ts`), and says so. Try again runs the default, and the default
+is restored again once it loads, from Saved say. A failed or slow (12 s) query
+keeps Retry, Reset table and Reset page (`fresh=1`, which bypasses the last-used
+and default queries). The deadline stays, so a stalled connection ends as a
+failure.
 
 | Query | Compact rows | Native Details focus | Drilldown |
 | --- | --- | --- | --- |

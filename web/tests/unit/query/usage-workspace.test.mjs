@@ -653,7 +653,7 @@ test('grouped results end with their link summaries, then native group Detail', 
     { id: 'errors', op: 'sum', field: 'error_count', label: 'Errors' },
   ] };
   const empty = withGroupDetail({ ...EMPTY_QUERY, grouping });
-  assert.deepEqual(empty.select.map(column => column.field), ['tool_name', 'calls', 'errors', 'records', ITEM_DETAILS_COLUMN]);
+  assert.deepEqual(empty.select.map(column => column.field), ['tool_name', ITEM_DETAILS_COLUMN], "an empty select keeps Query Table's grouped default, the keys");
   const chosen = { ...EMPTY_QUERY, grouping, select: [{ field: ITEM_DETAILS_COLUMN }, { field: 'records', width: 140 }, { field: 'calls' }] };
   const ordered = usageActionQuery(chosen, loadSchema(toolCalls), 'tool_calls');
   assert.deepEqual(ordered.select, [{ field: 'calls' }, { field: 'records', width: 140 }, { field: ITEM_DETAILS_COLUMN }]);

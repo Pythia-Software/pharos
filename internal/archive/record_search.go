@@ -83,9 +83,12 @@ func recordKeywordHostState(dataset string, raw json.RawMessage) (bool, error) {
 	return len(state.Params["record_"+dataset]) > 0, nil
 }
 
-// checkRecordKeywordHostState refuses a request whose host state and
-// record_search disagree, so a definition with a keyword clause never runs as
-// the broader query without it, and a clause never runs without its definition.
+// checkRecordKeywordHostState refuses a request whose host state declares a
+// keyword clause without record_search, or record_search without a declared
+// clause, so a definition with a keyword clause never runs as the broader
+// query without it. It checks presence only: comparing the two would need the
+// editor's compiler (text-search-model.ts) here, and record_search, which the
+// service validates in full, is what runs.
 func checkRecordKeywordHostState(dataset string, raw json.RawMessage, values url.Values) error {
 	if len(raw) == 0 {
 		return nil
@@ -95,7 +98,7 @@ func checkRecordKeywordHostState(dataset string, raw json.RawMessage, values url
 		return err
 	}
 	if declared != (values.Get("record_search") != "") {
-		return fmt.Errorf("this query's keyword filter does not match the search it sent; reload the page")
+		return fmt.Errorf("this query's keyword filter arrived without its compiled search, or the search without the filter; reload the page")
 	}
 	return nil
 }

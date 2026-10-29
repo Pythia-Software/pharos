@@ -99,6 +99,13 @@ test('Search file and URL searches, and older keyword links, normalize to their 
   assert.deepEqual(file.params, { case: ['1'], kind: ['file'], search: ['go.mod'] });
   assert.deepEqual(Object.fromEntries(new URLSearchParams(libraryFind(file))), { find: 'go.mod', find_kind: 'file', find_case: '1' });
   assert.deepEqual(normalized(libraryHostQuery, { version: 1, params: { kind: ['url'], search: [''] } }), emptyHostState(), 'an empty file search is no search');
+  // The live state (names sorted by Query Table) and a freshly built one
+  // compare equal, so re-applying a case-sensitive search runs it again.
+  const built = libraryHostState({ kind: 'file', text: null, file: 'go.mod', fileCase: true, view: 'conversation' });
+  assert.deepEqual(Object.keys(libraryHostQuery.normalize(built).params), ['case', 'kind', 'search', 'view']);
+  assert.ok(sameHostState(libraryHostQuery.normalize(built), parseHostQueryState(built)));
+  assert.ok(sameHostState({ version: 1, params: { search: ['a'], case: ['1'] } }, { version: 1, params: { case: ['1'], search: ['a'] } }));
+  assert.ok(!sameHostState(built, emptyHostState()));
   // An older keyword link (search, case, text_mode) becomes a text_builder.
   const legacy = normalized(libraryHostQuery, { version: 1, params: { search: ['cache'], case: ['1'], fuzzy: ['0'] } });
   assert.deepEqual(Object.keys(legacy.params), ['text_builder']);

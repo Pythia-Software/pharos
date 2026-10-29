@@ -1,4 +1,4 @@
-import { MAX_HOST_QUERY_VALUE_LENGTH, type FieldDef, type HostQueryState } from "@pythia-software/query-table-core";
+import { MAX_HOST_QUERY_VALUE_LENGTH, parseHostQueryState, type FieldDef, type HostQueryState } from "@pythia-software/query-table-core";
 import type { HostQueryOptions } from "@pythia-software/query-table-react";
 import { readRecordKeywordSearch, recordKeywordParameter, recordKeywordRequest, type RecordKeywordSearch } from "./record-keyword-model";
 import { emptyScope, readTextSearch, textFindParameters, type TextCondition, type TextSearchDraft } from "./text-search-model";
@@ -16,7 +16,9 @@ import type { SearchResultsView } from "./search-results-view-model";
 
 export const HOST_STATE_VERSION = 1;
 export const emptyHostState = (): HostQueryState => ({ version: HOST_STATE_VERSION, params: {} });
-export const sameHostState = (a: HostQueryState | undefined, b: HostQueryState | undefined) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+// Compares canonical forms: Query Table sorts parameter names.
+const canonicalState = (state: HostQueryState | undefined) => { try { return JSON.stringify(state ? parseHostQueryState(state) : null); } catch { return JSON.stringify(state); } };
+export const sameHostState = (a: HostQueryState | undefined, b: HostQueryState | undefined) => canonicalState(a) === canonicalState(b);
 
 function editorFree(condition: TextCondition): object {
   return condition.kind === "group"
@@ -43,7 +45,8 @@ function readParams(state: HostQueryState, owned: readonly string[]): Map<string
   }
   return params;
 }
-const stateOf = (params: Record<string, string>): HostQueryState => ({ version: HOST_STATE_VERSION, params: Object.fromEntries(Object.entries(params).map(([name, value]) => [name, [value]])) });
+// Parameter names sorted, as Query Table keeps them.
+const stateOf = (params: Record<string, string>): HostQueryState => ({ version: HOST_STATE_VERSION, params: Object.fromEntries(Object.entries(params).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([name, value]) => [name, [value]])) });
 
 // ---- Analyze: one record keyword clause per dataset (record_<dataset>). ----
 
