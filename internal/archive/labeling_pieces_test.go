@@ -146,6 +146,18 @@ func TestHumanPiecesSeparateTheirMaterial(t *testing.T) {
 			}
 		},
 	}, {
+		// Authorship stops at the unrecognized tag and counts what follows
+		// as typed; the harness block after it is dropped all the same.
+		name: "a known harness block after an unrecognized one",
+		text: "<in-app-browser-context source=\"ambient-ui-state\">\nThe browser shows /settings\n</in-app-browser-context>\n" +
+			"<system-reminder>\nBe brief.\n</system-reminder>\n<in-app-browser-context>\nStill /settings\n</in-app-browser-context>\nMake the header sticky",
+		visible: "Make the header sticky",
+		check: func(t *testing.T, text string, unit humanUnit) {
+			if unit.Unrecognized != 2 || targetText(text, unit.Pieces) != "Make the header sticky" {
+				t.Fatalf("unrecognized = %d, targets %q", unit.Unrecognized, targetText(text, unit.Pieces))
+			}
+		},
+	}, {
 		name:    "re-sent text whose source is unknown",
 		text:    "Please rerun the migration against staging and compare the row counts with production afterwards\n\nand hurry",
 		visible: "⟦re-sent text of unverified origin, context only, 96 chars: \"Please rerun the migration against staging and compare the row counts with production afterwards\"⟧\n\nand hurry",

@@ -96,7 +96,8 @@ var unrecognizedHarnessTags = []string{"in-app-browser-context"}
 const unrecognizedHarnessReason = "unrecognized_harness_tag"
 
 // labelingHarnessBlocks returns the harness blocks that open text, those
-// authorship knows and the unrecognized tags, the latter flagged.
+// authorship knows and the unrecognized tags, the latter flagged. Blocks of
+// either kind are taken repeatedly, in any order, until neither leads.
 func labelingHarnessBlocks(text string) (blocks []harnessBlock, unrecognized []bool) {
 	offset := 0
 	for {
@@ -123,6 +124,7 @@ func labelingHarnessBlocks(text string) (blocks []harnessBlock, unrecognized []b
 			blocks = append(blocks, harnessBlock{Start: start, End: end, Source: tag})
 			unrecognized = append(unrecognized, true)
 			offset, found = end, true
+			break
 		}
 		if !found {
 			return blocks, unrecognized
@@ -173,16 +175,24 @@ func secretRanges(text string) [][2]int {
 }
 
 // cleanPieces applies the labeling-side rules to a message's pieces: leading
-// blocks of unrecognized harness tags are dropped silently, and each secret
-// becomes a dropped piece, so no secret is ever visible or quotable.
+// harness blocks are dropped silently, those of unrecognized tags and the
+// known blocks after one (which authorship, stopping at the unrecognized
+// tag, counted as typed), and each secret becomes a dropped piece, so no
+// secret is ever visible or quotable.
 func cleanPieces(text string, pieces []labelingPiece) ([]labelingPiece, int, int) {
 	blocks, unrecognized := labelingHarnessBlocks(text)
 	tags := 0
 	for index, block := range blocks {
+		reason := unrecognizedHarnessReason
 		if unrecognized[index] {
 			tags++
-			pieces = carvePieces(pieces, block.Start, block.End, labelingPiece{Role: pieceDropped, Status: spanHarness, Category: spanHarness, Reason: unrecognizedHarnessReason})
+		} else if known, ok := harnessReasons[block.Source]; ok {
+			reason = known.text()
+		} else {
+			reason = reasonHarness.text()
 		}
+		// A known block authorship already dropped is left as it is.
+		pieces = carvePieces(pieces, block.Start, block.End, labelingPiece{Role: pieceDropped, Status: spanHarness, Category: spanHarness, Reason: reason})
 	}
 	secrets := secretRanges(text)
 	for _, secret := range secrets {

@@ -860,3 +860,61 @@ func TestLabelingPrepareFromACurrentCopyMatchesTheCatalog(t *testing.T) {
 		t.Fatal("preparing from a copy differs from preparing from the catalog")
 	}
 }
+
+// A known harness block after an unrecognized one is dropped: the item's
+// text, its target hash and the next unit's context hold only what was
+// typed.
+func TestLabelingDropsHarnessAfterAnUnrecognizedTag(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	typed := "Make the header sticky on narrow screens"
+	tx := seedTx(t, catalog.DB)
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('ws-a','claude','local','ws-a','ws-a','2026-10-01'),('ws-b','claude','local','ws-b','ws-b','2026-10-01')`, nil},
+		{`INSERT INTO conversations(id,workspace_id,provider,account,native_id,agent_depth,started_at) VALUES('c-a','ws-a','claude','local','c-a',0,'2026-09-01T12:00:00.000Z'),
+			('c-b','ws-b','claude','local','c-b',0,'2026-09-02T12:00:00.000Z')`, nil},
+	} {
+		if _, err := tx.Exec(statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for index, m := range [][4]string{
+		{"m-1", "c-a", "user", "<in-app-browser-context source=\"ambient-ui-state\">\nThe browser shows /settings\n</in-app-browser-context>\n<system-reminder>\nPRIVATE HARNESS\n</system-reminder>\n" + typed},
+		{"m-2", "c-a", "assistant", "I made the header sticky."},
+		{"m-3", "c-a", "user", "Now check it on tablets as well"},
+		{"m-4", "c-b", "user", typed},
+	} {
+		if _, err := tx.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,selected,source_order) VALUES(?,?,?,?,'message',?,?,?,1,?)`,
+			m[0], m[1], m[0], m[2], m[3], "hash-"+m[0], fmt.Sprintf("2026-09-0%dT12:%02d:00.000Z", 1+index/3, index), index+1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commitSeed(t, tx)
+	dir := filepath.Join(t.TempDir(), "dataset")
+	if _, err := prepareLabelingDataset(context.Background(), labelingPrepareOptions{Dir: dir, CatalogPath: catalog.Path, Live: true, FreshDays: 14,
+		Now: func() time.Time { return labelingFixtureNow }}, false); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(dir, labelingDatasetFile)+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	items := map[string]map[string]any{}
+	for _, row := range labelingRows(t, db, `SELECT u.message_id,i.text,i.target_hash,u.context_text FROM items i JOIN units u ON u.id=i.unit_id`) {
+		items[firstString(row["message_id"])] = row
+	}
+	first, next, plain := items["m-1"], items["m-3"], items["m-4"]
+	if first == nil || next == nil || plain == nil {
+		t.Fatalf("items = %v", items)
+	}
+	if first["text"] != typed || first["target_hash"] != plain["target_hash"] {
+		t.Fatalf("item %q (hash %v), typed alone hashes %v", first["text"], first["target_hash"], plain["target_hash"])
+	}
+	context := firstString(next["context_text"])
+	if !strings.Contains(context, "Previous user request:\n"+typed) || strings.Contains(context, "PRIVATE HARNESS") || strings.Contains(context, "/settings") {
+		t.Fatalf("next unit's context = %q", context)
+	}
+}
