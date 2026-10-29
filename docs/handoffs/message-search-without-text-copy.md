@@ -105,10 +105,9 @@ test the update ordering explicitly.
 - Expect about 14 GB of extra index while both exist. Check free space first
   and refuse with a clear status rather than filling the drive.
 - Dropping the old table frees pages inside the file; it does not shrink the
-  file. The file shrinks only with `VACUUM`, which needs about the catalog's
-  size in free space and hours on the drive. Make reclaiming a separate,
-  explicit step (Settings or `pharos` CLI), reported in Library health. Don't
-  run it automatically.
+  file. Library health's Storage offers to compact the catalog
+  (`library.compact`, `catalog_compact.go`) once its free space is worth it;
+  don't compact automatically.
 - Surface the progress in Background work (`docs/background-work.md`), as
   the substring index's backfill does (`substringIndexProgress`).
 

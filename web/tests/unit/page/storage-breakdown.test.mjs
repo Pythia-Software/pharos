@@ -40,3 +40,17 @@ test("a breakdown with nothing measured has no parts or rows", () => {
   const empty = model({ status: "measured", total_bytes: 0, parts: [{ key: "other", label: "Other", bytes: 0 }] }, "repositories");
   assert.deepEqual(plain([empty.parts, empty.rows, empty.volume]), [[], [], "the library drive"]);
 });
+
+test("compacting is offered once the catalog's free space is a gigabyte and a tenth of it", () => {
+  const GB = 2 ** 30;
+  const catalog = (database, free) => ({ ...breakdown, catalog_free_bytes: free, compact_needs_bytes: 88 * GB, parts: [
+    { key: "catalog_database", label: "Pharos catalog", bytes: database },
+    { key: "catalog_free", label: "Free space in the catalog", bytes: free },
+  ] });
+  const offer = model(catalog(79 * GB, 31 * GB));
+  assert.deepEqual(plain([offer.compactable, offer.catalogFree, offer.compactNeeds]), [true, 31 * GB, 88 * GB]);
+  // Too little to be worth the rewrite, in bytes or as a share.
+  assert.equal(model(catalog(2 * GB, GB / 2)).compactable, false);
+  assert.equal(model(catalog(100 * GB, 5 * GB)).compactable, false);
+  assert.equal(model(breakdown).compactable, false);
+});

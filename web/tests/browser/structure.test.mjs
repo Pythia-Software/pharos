@@ -51,6 +51,9 @@ const askClarificationSession={...askSession,conversation:[{...askSession.conver
 // Engine dashboards are ready when their view stops loading and links its
 // supporting query.
 const overTimeReady = 'section[aria-label="Over time"][aria-busy="false"] .usage-query-destinations', analysisReady = '.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations';
+const storageBreakdown = defaultApi["GET /api/health/storage/breakdown"];
+const compactableBreakdown = { ...storageBreakdown, catalog_free_bytes: 31e9, compact_needs_bytes: 70e9,
+  parts: storageBreakdown.parts.flatMap(part => part.key === "catalog_database" ? [{ ...part, bytes: 63e9 }, { key: "catalog_free", label: "Free space in the catalog", bytes: 31e9 }] : [part]) };
 const ROUTES = [
   {name:'Library settings expanded',url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:{id:'local',name:'Pending history',config:'/Users/test/Libraries/Pending/library.toml'},open:async page=>{
     await page.locator('#library-settings-transfer-panel summary').click();
@@ -292,6 +295,9 @@ const ROUTES = [
   { name: "MCP legacy link", url: "/mcp", ready: `.usage-mcp-dashboard ${analysisReady}` },
   { name: "MCP settings", url: "/settings/mcp", ready: "#mcpSettingsPage .mcp-setup-grid" },
   { name: "Library health", url: "/settings", ready: "#healthCards .panel:not([aria-busy])" },
+  // In the app, a catalog with much free space offers to compact it.
+  { name: "Library health compact catalog", url: "/settings", ready: ".storage-compact button", managedLibrary: { id: "local", name: "Pending history", config: "/Users/test/Libraries/Pending/library.toml" },
+    api: { "GET /api/health/storage/breakdown": compactableBreakdown }, open: page => page.getByRole("button", { name: "Compact catalog…", exact: true }).click(), shown: ".storage-compact button.primary" },
   { name: "Cloud backup entry", url: "/settings/backups", ready: "#cloud-explore" },
   { name: "Cloud backup ongoing status", url: "/settings/backups", ready: ".cloud-ongoing article", api:{'GET /api/cloud-backup':cloudScheduledStatus} },
   { name: "Cloud backup schedule settings", url: "/settings/backups", ready: ".cloud-ongoing article", api:{'GET /api/cloud-backup':cloudScheduledStatus},open:page=>page.locator('.cloud-schedule-settings summary').click(),shown:'.cloud-schedule-settings .cloud-fields' },

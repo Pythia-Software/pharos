@@ -33,6 +33,7 @@ var unregisteredWorkAllowed = map[string]allowedWork{
 	"application.go:runApplicationMCPCLI":         {1, "watchdog for the app's volume in an MCP stdio process"},
 	"capture.go:newHash":                          {1, "a hashing pipeline stage inside a capture, which is the operation"},
 	"backup.go:boundWAL":                          {1, "a WAL poller inside a backup, which is the operation"},
+	"catalog_compact.go:writeCompacted":           {1, "a size poller for progress inside a compaction, which is the operation"},
 	"cli.go:Run":                                  {1, "opens the browser for serve --open"},
 	"drive.go:cachedVolumeIdentity":               {1, "subprocess: a diskutil lookup for a status read; writes nothing"},
 	"feedback.go:CaptureFeedbackServiceLogs":      {1, "service log capture (§3.7), not an operation"},

@@ -719,6 +719,10 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 		m.startOperation(w, r, body)
 		return
 	}
+	if r.URL.Path == "/api/app/compact" {
+		m.startCompaction(w, body)
+		return
+	}
 	if r.URL.Path == "/api/app/release-volume" {
 		if !m.operationMu.TryLock() {
 			writeError(w, fmt.Errorf("Pharos is finishing a library operation; wait and eject again"), 503)
