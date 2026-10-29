@@ -392,3 +392,25 @@ func TestIdentitiesAndChainLeaveUnchangedConversationsAlone(t *testing.T) {
 		}
 	}
 }
+
+func TestHarnessAliasKeepsACompatiblePeer(t *testing.T) {
+	c, _ := testCatalog(t)
+	execTx(t, c.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('n','claude','local','n','Native','t'),('w','conductor','local','w','Wrapper','t')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,harness_version_first,harness_version_last,harness_version_source) VALUES
+   ('a','n','claude','local','a','claude-code','1','2','transcript'),
+   ('b','n','claude','local','b','claude-code','3','4','transcript'),
+   ('w','w','claude','local','w','conductor','1','2','alias')`,
+		`INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('a','w','native-alias',1,'{}'),('b','w','native-alias',1,'{}')`,
+		`CREATE TABLE alias_write_probe(id TEXT)`,
+		`CREATE TRIGGER alias_write_probe AFTER UPDATE ON conversations BEGIN INSERT INTO alias_write_probe VALUES(NEW.id); END`)
+	for range 2 {
+		if err := c.inheritHarnessAliases(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := queryMaps(c.DB, `SELECT * FROM alias_write_probe`)
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("compatible alias rewrites: %v (%v)", rows, err)
+	}
+}
