@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -25,10 +26,12 @@ type authorshipTable struct {
 	columns []string
 	keys    int
 	rows    [][]any
+	filter  string
+	args    []any
 }
 
 func (table authorshipTable) plan(ctx context.Context, q queryer) ([]authorshipMutation, error) {
-	stored, err := queryMapsContext(ctx, q, "SELECT "+strings.Join(table.columns, ",")+" FROM "+table.name)
+	stored, err := queryMapsContext(ctx, q, "SELECT "+strings.Join(table.columns, ",")+" FROM "+table.name+table.filter, table.args...)
 	if err != nil {
 		return nil, err
 	}
@@ -85,56 +88,19 @@ func (table authorshipTable) plan(ctx context.Context, q queryer) ([]authorshipM
 // Compute folding against the proposed launches, so dry-run probes and the
 // store share the same plan without publishing launches just to read parents.
 func authorshipParents(ctx context.Context, q queryer, launches []conversationLaunch) (map[string]string, error) {
-	rows, err := queryMapsContext(ctx, q, `SELECT id,workspace_id,parent_id FROM conversations`)
-	if err != nil {
-		return nil, err
-	}
-	works, totals, roots := map[string]string{}, map[string]int{}, map[string]int{}
-	for _, row := range rows {
-		id, work := asString(row["id"]), asString(row["workspace_id"])
-		works[id] = work
-		totals[work]++
-		if row["parent_id"] == nil {
-			roots[work]++
-		}
-	}
-	type group struct {
-		count  int
-		parent string
-	}
-	sub, run := map[string]group{}, map[string]group{}
-	add := func(groups map[string]group, child, parent string) {
-		if parent == "" || child == parent {
-			return
-		}
-		g := groups[child]
-		g.count++
-		if g.parent == "" || parent < g.parent {
-			g.parent = parent
-		}
-		groups[child] = g
-	}
-	for _, row := range rows {
-		add(sub, asString(row["workspace_id"]), works[asString(row["parent_id"])])
-	}
+	rows := make([]map[string]string, 0, len(launches))
 	for _, launch := range launches {
-		add(run, works[launch.child], works[launch.parent])
+		rows = append(rows, map[string]string{"child": launch.child, "parent": launch.parent})
 	}
-	parents := map[string]string{}
-	for work, g := range sub {
-		if g.count == totals[work] {
-			parents[work] = g.parent
-		}
-	}
-	for work, g := range run {
-		if _, ok := parents[work]; !ok && g.count == roots[work] {
-			parents[work] = g.parent
-		}
-	}
-	return parents, nil
+	parents, _, err := foldedParentsUsing(ctx, q, `(SELECT json_extract(value,'$.child') child_id,json_extract(value,'$.parent') parent_id FROM json_each(?))`, jsonText(rows))
+	return parents, err
 }
 
 func (c *Catalog) planAuthorship(ctx context.Context, results []authorResult, launches []conversationLaunch) ([]authorshipMutation, error) {
+	return c.planAuthorshipScope(ctx, results, launches, nil)
+}
+
+func (c *Catalog) planAuthorshipScope(ctx context.Context, results []authorResult, launches []conversationLaunch, since *time.Time) ([]authorshipMutation, error) {
 	parents, err := authorshipParents(ctx, c.DB, launches)
 	if err != nil {
 		return nil, err
@@ -172,20 +138,54 @@ func (c *Catalog) planAuthorship(ctx context.Context, results []authorResult, la
 			}
 		}
 	}
-	workspaces, err := queryMapsContext(ctx, c.DB, "SELECT id FROM workspaces ORDER BY id")
+	query, args := "SELECT id FROM workspaces ORDER BY id", []any{}
+	if since != nil {
+		ids, works := []string{}, map[string]bool{}
+		for _, result := range results {
+			ids = append(ids, result.Input.ID)
+			works[result.Input.WorkspaceID] = true
+		}
+		messages.filter = " WHERE message_id IN (SELECT value FROM json_each(?))"
+		messages.args = []any{jsonText(ids)}
+		spans.filter, spans.args = messages.filter, messages.args
+		query = "SELECT id FROM workspaces WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id"
+		args = []any{jsonText(sortedNameIDs(works))}
+	}
+	workspaces, err := queryMapsContext(ctx, c.DB, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	for _, work := range workspaces {
 		id := asString(work["id"])
+		if since != nil {
+			rows, err := queryMapsContext(ctx, c.DB, "SELECT authored_at FROM workspace_names WHERE workspace_id=?", id)
+			if err != nil {
+				return nil, err
+			}
+			if len(rows) > 0 {
+				if at, ok := parseTime(asString(rows[0]["authored_at"])); ok && at.Before(*since) {
+					continue
+				}
+			}
+		}
 		values := named[id]
 		if values == nil {
 			values = []any{id, nil, nil, nil, nil, workspaceNamesVersion}
 		}
 		names.rows = append(names.rows, values)
 	}
+	tables := []authorshipTable{launchTable, messages, spans, names}
+	if since != nil {
+		namesIDs := []string{}
+		for _, row := range names.rows {
+			namesIDs = append(namesIDs, asString(row[0]))
+		}
+		names.filter = " WHERE workspace_id IN (SELECT value FROM json_each(?))"
+		names.args = []any{jsonText(namesIDs)}
+		tables = []authorshipTable{messages, spans, names}
+	}
 	plan := []authorshipMutation{}
-	for _, table := range []authorshipTable{launchTable, messages, spans, names} {
+	for _, table := range tables {
 		changes, err := table.plan(ctx, c.DB)
 		if err != nil {
 			return nil, err
@@ -200,25 +200,25 @@ func (c *Catalog) storeAuthorship(ctx context.Context, results []authorResult, l
 	if err != nil {
 		return err
 	}
-	written := map[string]int{}
+	if err := c.storeAuthorshipRows(ctx, plan, map[string]int{}); err != nil {
+		return err
+	}
+	return c.publishAuthorship(ctx, generation)
+}
+
+func (c *Catalog) storeAuthorshipRows(ctx context.Context, plan []authorshipMutation, written map[string]int) error {
 	reportWork(ctx, "saving authorship", "row", 0, len(plan))
 	for start := 0; start < len(plan); start += max(1, authorshipWriteBatch) {
 		stop := min(start+max(1, authorshipWriteBatch), len(plan))
 		if err := c.writeTransaction(ctx, "save authorship chunk", func(tx *sql.Tx) error {
 			names := []string{}
-			for _, change := range plan[start:stop] {
-				result, err := tx.ExecContext(ctx, change.query, change.args...)
-				if err != nil {
-					return err
-				}
-				count, err := result.RowsAffected()
-				if err != nil {
-					return err
-				}
+			if err := executeAuthorshipMutations(ctx, tx, plan[start:stop], func(change authorshipMutation, count int64) {
 				written[change.table] += int(count)
 				if change.workspace != "" {
 					names = append(names, change.workspace)
 				}
+			}); err != nil {
+				return err
 			}
 			if len(names) > 0 {
 				return refreshWorkspaceNames(tx, names)
@@ -229,18 +229,52 @@ func (c *Catalog) storeAuthorship(ctx context.Context, results []authorResult, l
 		}
 		reportWork(ctx, "saving authorship", "row", stop, len(plan))
 	}
-	// The marker is deliberately separate from all chunks: interruption leaves
-	// the previous generation, and retrying diffs against the rows already saved.
-	if err := c.writeTransaction(ctx, "complete authorship", func(tx *sql.Tx) error {
+	reportWork(ctx, fmt.Sprintf("saved authorship: messages=%d spans=%d launches=%d names=%d", written["message_authorship"], written["message_authorship_spans"], written["conversation_launches"], written["workspace_names"]), "row", len(plan), len(plan))
+	return nil
+}
+
+func (c *Catalog) publishAuthorship(ctx context.Context, generation string) error {
+	return c.writeTransaction(ctx, "complete authorship", func(tx *sql.Tx) error {
 		for key, value := range map[string]string{"authorship_generation": generation, "authorship_built_at": now()} {
 			if _, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value); err != nil {
 				return err
 			}
 		}
 		return nil
-	}); err != nil {
-		return err
+	})
+}
+
+// Prepare each mutation shape once per writer turn. State indexes can contain
+// many candidates; parsing the same INSERT for every row would dominate their
+// initial build even though commits are bounded.
+func executeAuthorshipMutations(ctx context.Context, tx *sql.Tx, changes []authorshipMutation, visit func(authorshipMutation, int64)) error {
+	statements := map[string]*sql.Stmt{}
+	defer func() {
+		for _, statement := range statements {
+			_ = statement.Close()
+		}
+	}()
+	for _, change := range changes {
+		statement := statements[change.query]
+		if statement == nil {
+			var err error
+			statement, err = tx.PrepareContext(ctx, change.query)
+			if err != nil {
+				return err
+			}
+			statements[change.query] = statement
+		}
+		result, err := statement.ExecContext(ctx, change.args...)
+		if err != nil {
+			return err
+		}
+		if visit != nil {
+			count, err := result.RowsAffected()
+			if err != nil {
+				return err
+			}
+			visit(change, count)
+		}
 	}
-	reportWork(ctx, fmt.Sprintf("saved authorship: messages=%d spans=%d launches=%d names=%d", written["message_authorship"], written["message_authorship_spans"], written["conversation_launches"], written["workspace_names"]), "row", len(plan), len(plan))
 	return nil
 }

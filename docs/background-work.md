@@ -635,6 +635,16 @@ stale and its retry diffs against the committed rows. Agent replies are read
 in bounded pages, with no read statement held through the classification
 loop. Worker progress reports phase timings and direct row-write counts.
 
+Authorship's trigger-fed watermark and derived checkpoint select a suffix
+rebuild without changing admission or scheduling. User-message changes remain
+independent of tool activity. The checkpoint is published only after output
+and state chunks, with a conditional input-revision check; cancellation or a
+concurrent write leaves the next rebuild eligible for the full fallback.
+Historical edits/backfills, oversized suffixes, graph/launch ambiguity and
+global template-count changes retain full replay. The original rules version
+stays unchanged. See [writing classification](human-authorship.md) for the
+checkpoint contents, conservative fallbacks and opt-in probes.
+
 Phase 3 implements these as one function over today's storage
 (`Catalog.freshness`, `freshness.go`). Storage changes only by two kinds of
 additive `meta` rows that record what a completion was for (below). Every

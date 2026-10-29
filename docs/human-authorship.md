@@ -111,3 +111,39 @@ The operation's progress records input, classification and storage timings and
 counts direct writes for messages, spans, launches and authored name caches.
 `TestAuthorshipBackupProbe` (`-tags probe`) measures those phases and the
 would-write counts against an explicitly supplied immutable backup.
+
+The classifier also keeps a versioned, derived checkpoint: the latest source
+and offset for each copied-text candidate, the source shingles used to verify
+it, reused-line origins and their first distinct conversations, template
+session/day counts, last user-turn times, and question-form provenance.
+Triggers record the earliest changed input time, including user-only messages.
+A normal append reads and classifies only that suffix, looking up historical
+candidates and lines as needed. It reuses launches when all changed inputs
+postdate every existing headless start. Reply replay includes any idle gap
+since the previous user turn, so question forms remain recognizable beyond
+the seven-day copied-output window.
+
+The full classifier remains the fallback for missing/old/interrupted state,
+identity or mirror changes, launch overlap, historical edits/deletions or
+backfills, equal-time additions, and suffixes exceeding 2,000 user messages.
+A template crossing its threshold, or changing an existing template's session
+or day counts, also takes the full path: older messages' category or displayed
+reason can change. These conservative cases deliberately remain full passes;
+stream-local launch replay and targeted historical template replay are not
+implemented. Neither classification rules (`authorship-v8`) nor scheduling
+changed. The first changed-data rebuild populates the extra derived tables;
+its production storage cost has not yet been measured.
+
+Checkpoint publication is chunked too. Its version is invalidated before
+output writes and restored with the generation only after all state writes
+succeed and the input revision still matches. A concurrent input change keeps
+the dirty evidence and prevents reusing the obsolete checkpoint. The opt-in
+`TestAuthorshipIncrementalWorkProbe` measures suffix work on local fixtures;
+`TestAuthorshipBackupProbe` can compare the paged and original single-statement
+reply streams with `PHAROS_AUTHORSHIP_PROBE_REFERENCE=1`. Backups are opened
+immutable/read-only, and the probe reports when their stored results are stale.
+
+Checkpoint builders also hold a separate authorship file lease. It prevents
+two classifiers from reading/writing partial auxiliary state concurrently,
+while allowing ingest and ordinary readers between SQLite write chunks. The
+OS releases the lease if the builder exits.

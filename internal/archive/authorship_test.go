@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -1008,7 +1010,7 @@ func TestAuthorshipDiffStoreAndInterruptedChunks(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	ctx = withWorkProgress(ctx, func(work activityWork) {
-		if work.Phase == "saving authorship" {
+		if work.Phase == "saving authorship" && work.Done > 0 {
 			cancel()
 		}
 	})
@@ -1061,7 +1063,7 @@ func TestAuthorshipReplyPagesReleaseReadStatements(t *testing.T) {
    ('b','c','b','assistant','message','A second reply at the same instant has its own source','2026-09-01T12:00:00Z','b'),
    ('d','c','d','assistant','message','A reply on a later day crosses the window boundary','2026-09-02T12:00:00Z','d')`)
 	inputs := []authorInput{{ID: "u", ConversationID: "user", Text: "These exact words in the reply should be counted as copied output when sent again", SentAt: authorAt(25 * 60)}}
-	baseline, err := c.classifyInputs(t.Context(), inputs)
+	baseline, err := classifyAuthorshipUnpaged(t.Context(), c.DB, inputs, newClassifier(inputs))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1080,5 +1082,303 @@ func TestAuthorshipReplyPagesReleaseReadStatements(t *testing.T) {
 	got, err := c.classifyInputs(ctx, inputs)
 	if err != nil || jsonText(got) != jsonText(baseline) {
 		t.Fatalf("paged classification differs: %v (%v)", got, err)
+	}
+}
+
+// Compare every stored table to the actual full classifier after each split.
+// The final, ordered suffix also exercises loading historical re-sent text,
+// lines, last-turn times and question provenance from the persisted checkpoint.
+func TestAuthorshipIncrementalParity(t *testing.T) {
+	type event struct {
+		id, conversation, role, kind, text string
+		at                                 time.Time
+		tool                               bool
+	}
+	copyText := "The parser now accepts nested tables and every fixture passes with the new grammar rules enabled for all supported inputs"
+	events := []event{
+		{id: "reply", conversation: "c0", role: "assistant", kind: "message", text: copyText, at: authorAt(0)},
+		{id: "first", conversation: "c0", role: "user", kind: "message", text: "Please carefully inspect the behavior of this unusual parser and explain how the nested grammar should work across all these inputs", at: authorAt(1)},
+		{id: "resent", conversation: "c1", role: "user", kind: "message", text: "Please carefully inspect the behavior of this unusual parser and explain how the nested grammar should work across all these inputs", at: authorAt(2)},
+		{id: "launch", conversation: "c0", role: "assistant", kind: "tool_call", text: `{"tool":"Bash","input":{"command":"claude -p 'inspect grammar'"}}`, at: authorAt(3), tool: true},
+		{id: "headless", conversation: "run", role: "user", kind: "message", text: "Inspect the nested grammar", at: authorAt(4)},
+		{id: "child", conversation: "child", role: "user", kind: "message", text: "Check grammar from the child session", at: authorAt(5)},
+		{id: "question", conversation: "c0", role: "assistant", kind: "tool_call", text: `{"tool":"request_user_input","input":{"questions":[{"header":"Deploy","id":"deploy","question":"Should the parser be deployed now?","options":[{"label":"Deploy the current parser","description":"Use the current build"},{"label":"Wait for another review","description":"Wait"}]}]}}`, at: authorAt(6), tool: true},
+		{id: "edge", conversation: "c2", role: "user", kind: "message", text: copyText, at: authorAt(7 * 24 * 60)},
+		{id: "outside", conversation: "c3", role: "user", kind: "message", text: copyText + " today", at: authorAt(7 * 24 * 60).Add(time.Second)},
+		{id: "answer", conversation: "c0", role: "user", kind: "message", text: "Should the parser be deployed now?\nDeploy the current parser", at: authorAt(20 * 24 * 60)},
+	}
+	for i := 0; i < 5; i++ {
+		events = append(events, event{id: fmt.Sprintf("template%d", i), conversation: fmt.Sprintf("c%d", i), role: "user", kind: "message", text: fmt.Sprintf("Please review the changes in this workspace .context/attachments/x%d/Review request.md", i), at: authorAt((i + 1) * 24 * 60)})
+		events = append(events, event{id: fmt.Sprintf("line%d", i), conversation: fmt.Sprintf("c%d", i), role: "user", kind: "message", text: fmt.Sprintf("Task %d needs attention.\nwe should preserve this repeated line across several different conversations\nPlease investigate", i), at: authorAt((i+1)*24*60 + 10)})
+	}
+	orders := [][]int{}
+	ordered := make([]int, len(events))
+	for i := range ordered {
+		ordered[i] = i
+	}
+	sort.SliceStable(ordered, func(i, j int) bool { return events[ordered[i]].at.Before(events[ordered[j]].at) })
+	orders = append(orders, ordered)
+	adversarial := append([]int{}, ordered...)
+	for i, id := range adversarial {
+		if events[id].id == "template4" {
+			adversarial = append(append(adversarial[:i:i], adversarial[i+1:]...), id)
+			break
+		}
+	}
+	orders = append(orders, adversarial)
+	for _, seed := range []int64{7, 29, 83} {
+		order := rand.New(rand.NewSource(seed)).Perm(len(events))
+		orders = append(orders, order)
+	}
+	for split, order := range orders {
+		t.Run(fmt.Sprint(split), func(t *testing.T) {
+			c, _ := testCatalog(t)
+			tx := seedTx(t, c.DB)
+			for _, id := range []string{"c0", "c1", "c2", "c3", "c4", "run", "child"} {
+				work := id
+				if id == "child" {
+					work = "child-work"
+				}
+				if _, err := tx.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at,location) VALUES(?,'claude','local',?,?,'2026-09-01','/project')`, work, work, work); err != nil {
+					t.Fatal(err)
+				}
+				var parent any
+				harness := "claude-code/cli"
+				if id == "child" {
+					parent = "c0"
+				}
+				if id == "run" {
+					harness = "claude-code/sdk-cli"
+				}
+				if _, err := tx.Exec(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,parent_id,started_at) VALUES(?,?,'claude','local',?,?,?,?)`, id, work, id, harness, parent, formatTime(authorAt(3).Add(time.Second))); err != nil {
+					t.Fatal(err)
+				}
+			}
+			commitSeed(t, tx)
+			suffixes := 0
+			for start := 0; start < len(order); {
+				stop := min(start+1+start%3, len(order))
+				tx := seedTx(t, c.DB)
+				for _, index := range order[start:stop] {
+					e := events[index]
+					if _, err := tx.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES(?,?,?,?,?,?,?,?)`, e.id, e.conversation, e.id, e.role, e.kind, e.text, formatTime(e.at), hashBytes([]byte(e.text))); err != nil {
+						t.Fatal(err)
+					}
+					if e.tool {
+						category, program := "other", ""
+						if e.id == "launch" {
+							category, program = "command", "claude"
+						}
+						if _, err := tx.Exec(`INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,program,command,call_message_id,started_at,ended_at,status) VALUES(?,?,?,1,'claude','tool_call','Bash',?,?,?,?,?,?,'success')`, e.id, e.conversation, e.conversation, category, nilIfEmpty(program), "claude -p 'inspect grammar'", e.id, formatTime(e.at), formatTime(e.at.Add(2*time.Minute))); err != nil {
+							t.Fatal(err)
+						}
+						if program != "" {
+							if _, err := tx.Exec(`INSERT INTO tool_commands(tool_call_id,position,program,subcommand,command) VALUES(?,0,'claude','-p',?)`, e.id, "claude -p 'inspect grammar'"); err != nil {
+								t.Fatal(err)
+							}
+						}
+					}
+				}
+				commitSeed(t, tx)
+				want, _, err := c.authorshipGenerations()
+				if err != nil {
+					t.Fatal(err)
+				}
+				ctx := withWorkProgress(t.Context(), func(work activityWork) {
+					if work.Phase == "authorship mode: suffix" {
+						suffixes++
+					}
+				})
+				if err := c.RebuildAuthorship(ctx, want); err != nil {
+					t.Fatal(err)
+				}
+				inputs, launches, err := c.authorshipInputs(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				results, err := c.classifyInputs(t.Context(), inputs)
+				if err != nil {
+					t.Fatal(err)
+				}
+				plan, err := c.planAuthorship(t.Context(), results, launches)
+				if err != nil || len(plan) != 0 {
+					t.Fatalf("split %d at %d differs from full pass: changes=%v err=%v", split, stop, plan, err)
+				}
+				start = stop
+			}
+			// A new turn in an existing conversation after the graph is stable must
+			// classify just this suffix and find the latest historical copy.
+			text := events[1].text
+			if _, err := c.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('append','c0','append','user','message',?,?,?)`, text, formatTime(authorAt(21*24*60)), hashBytes([]byte(text))); err != nil {
+				t.Fatal(err)
+			}
+			want, _, _ := c.authorshipGenerations()
+			classified := 0
+			ctx := withWorkProgress(t.Context(), func(work activityWork) {
+				if work.Phase == "authorship mode: suffix" {
+					suffixes++
+				}
+				if work.Phase == "classifying authorship" {
+					classified = int(work.Total)
+				}
+			})
+			if err := c.RebuildAuthorship(ctx, want); err != nil {
+				t.Fatal(err)
+			}
+			if classified != 1 || suffixes == 0 {
+				t.Fatalf("append reclassified %d messages; suffix runs %d", classified, suffixes)
+			}
+			inputs, launches, err := c.authorshipInputs(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			results, err := c.classifyInputs(t.Context(), inputs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan, err := c.planAuthorship(t.Context(), results, launches)
+			if err != nil || len(plan) != 0 {
+				t.Fatalf("append differs: %v (%v)", plan, err)
+			}
+		})
+	}
+}
+
+func TestAuthorshipIncrementalFallbacks(t *testing.T) {
+	for _, name := range []string{"version", "identity", "automation", "backfill", "same-time", "suffix-limit"} {
+		t.Run(name, func(t *testing.T) {
+			c, _ := testCatalog(t)
+			execTx(t, c.DB,
+				`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','codex','local','w','Work','2026-09-01')`,
+				`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness) VALUES('c','w','codex','local','c','codex'),('other','w','codex','local','other','codex')`,
+				`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('m','c','m','user','message','Please inspect the first parser carefully','2026-09-01T12:00:00.000Z','hash')`)
+			want, _, _ := c.authorshipGenerations()
+			if err := c.RebuildAuthorship(t.Context(), want); err != nil {
+				t.Fatal(err)
+			}
+			switch name {
+			case "version":
+				execSQL(t, c.DB, `UPDATE meta SET value='old-state' WHERE key='authorship_state_version'`)
+			case "identity":
+				execSQL(t, c.DB, `INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('c','other','native-alias',1,'{}')`)
+			case "automation":
+				execSQL(t, c.DB, `UPDATE conversations SET harness='codex/codex_exec' WHERE id='c'`)
+			case "backfill":
+				execSQL(t, c.DB, `UPDATE messages SET text='Please recheck the changed parser' WHERE id='m'`)
+			case "same-time":
+				execSQL(t, c.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('same','c','same','user','message','A turn at the previous watermark','2026-09-01T12:00:00.000Z','same')`)
+			case "suffix-limit":
+				override(t, &authorshipSuffixLimit, 1)
+				execTx(t, c.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('n1','c','n1','user','message','A new turn','2026-09-02T12:00:00.000Z','n1'),('n2','c','n2','user','message','Another new turn','2026-09-02T13:00:00.000Z','n2')`)
+			}
+			want, _, _ = c.authorshipGenerations()
+			mode := ""
+			ctx := withWorkProgress(t.Context(), func(work activityWork) {
+				if strings.HasPrefix(work.Phase, "authorship mode:") {
+					mode = work.Phase
+				}
+			})
+			if err := c.RebuildAuthorship(ctx, want); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "" || mode == "authorship mode: suffix" || mode == "authorship mode: unchanged" {
+				t.Fatalf("missing full fallback: %s", mode)
+			}
+			inputs, launches, err := c.authorshipInputs(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			results, err := c.classifyInputs(t.Context(), inputs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan, err := c.planAuthorship(t.Context(), results, launches)
+			if err != nil || len(plan) != 0 {
+				t.Fatalf("fallback differs: %v (%v)", plan, err)
+			}
+		})
+	}
+}
+
+func TestAuthorshipIncrementalRetainsQuestionsAcrossIdleGap(t *testing.T) {
+	c, _ := testCatalog(t)
+	execTx(t, c.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','codex','local','w','Work','2026-09-01')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness) VALUES('c','w','codex','local','c','codex')`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('m','c','m','user','message','Please inspect the first parser carefully','2026-09-01T12:00:00.000Z','hash')`)
+	rebuild := func() {
+		t.Helper()
+		want, _, _ := c.authorshipGenerations()
+		if err := c.RebuildAuthorship(t.Context(), want); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rebuild()
+	text := `{"tool":"request_user_input","input":{"questions":[{"question":"Should we publish the fix?","options":[{"label":"Publish the fix now"},{"label":"Wait for review"}]}]}}`
+	if _, err := c.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('q','c','q','assistant','tool_call',?,'2026-09-02T12:00:00.000Z','q')`, text); err != nil {
+		t.Fatal(err)
+	}
+	execSQL(t, c.DB, `INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,call_message_id,started_at,status) VALUES('q','w','c',1,'codex','tool_call','request_user_input','other','q','2026-09-02T12:00:00.000Z','ok')`)
+	rebuild() // No user suffix; keep the dirty evidence until a user consumes it.
+	execSQL(t, c.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('answer','c','answer','user','message','Should we publish the fix?
+Publish the fix now','2026-10-02T12:00:00.000Z','answer')`)
+	rebuild()
+	inputs, launches, err := c.authorshipInputs(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := c.classifyInputs(t.Context(), inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := c.planAuthorship(t.Context(), results, launches)
+	if err != nil || len(plan) != 0 {
+		t.Fatalf("idle-gap answer differs: %v (%v)", plan, err)
+	}
+}
+
+func classifyAuthorshipUnpaged(ctx context.Context, q queryer, inputs []authorInput, classifier *classifier) ([]authorResult, error) {
+	if len(inputs) == 0 {
+		return []authorResult{}, nil
+	}
+	rows, err := q.QueryContext(ctx, authorshipRepliesQuery, formatTime(inputs[0].SentAt.Add(-authorshipWindow)))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return walkAuthorshipInputs(ctx, inputs, classifier, func(context.Context) (*authorshipReply, error) {
+		for rows.Next() {
+			var id, conversation, created, text, kind string
+			if err := rows.Scan(&id, &conversation, &created, &text, &kind); err != nil {
+				return nil, err
+			}
+			if at, ok := parseTime(created); ok {
+				return &authorshipReply{at: at, origin: textOrigin{conversation, id}, text: text, kind: kind}, nil
+			}
+		}
+		return nil, rows.Err()
+	})
+}
+
+func TestAuthorshipRebuildLease(t *testing.T) {
+	c, _ := testCatalog(t)
+	lease, err := fileLease(canonical(c.Path)+".authorship.lock", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A second process/handle must not read a checkpoint another builder can
+	// be changing between chunks. A lease is independent of SQLite's writer.
+	if err := c.RebuildAuthorship(t.Context(), "blocked"); err == nil {
+		t.Fatal("concurrent checkpoint builder was admitted")
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RebuildAuthorship(t.Context(), "available"); err != nil {
+		t.Fatal(err)
+	}
+	built, err := c.metaValue(t.Context(), "authorship_generation")
+	if err != nil || built != "available" {
+		t.Fatalf("lease was not released: %q %v", built, err)
 	}
 }
