@@ -119,57 +119,38 @@ host declines, such as averages, run 1.5× faster warm and about 17–29 ms slow
 on a generation's first request, so proofs pay off from a source's second
 request in a generation.
 
-### Substring relations
+### Substring relations (measured, not adopted)
 
-`queryTextRelations` gives Query Table the transactionally maintained trigram
-indexes over tool commands and authored message text as an
-`SQLitePredicateRelations` provider. For an ASCII `contains` needle of at least
-three characters it reads the index's readiness in the execution's own
-transaction and returns an exact relation (`SELECT id … WHERE rowid IN (SELECT
-rowid FROM … MATCH ?)`); it declines short and non-ASCII needles, other
-operators, and every predicate while the backfill is incomplete. Negation uses
-the same relation with the compiler's null/empty guard. V2 rows and metrics
-that the adapter executes, and `/query-v3` sources and filters, set the
-provider, and their sources no longer carry the host's index narrowing.
+0.9.7 lets a host give the SQLite executors a relation for a predicate. Pharos
+measured its trigram indexes over tool commands and authored text as exact
+relations for adapter V2 executions and `/query-v3`, in place of the host's
+narrowing of their sources, and kept the narrowing. `TestQueryTextPerformance`
+(`-tags probe`) times substring filters over 200,000 synthetic tool calls with
+60–500-byte commands: a selective needle (0.1% of calls), a broad one (14%) and
+the broad one negated. Wall-clock medians of ten requests after a warmup, two
+process runs each, alternating host narrowing (`15d7d34`) and relations on an
+Apple M3 Ultra under load average 7–14:
 
-The host still narrows by the index itself where it writes the SQL, because
-the compile-only APIs never consult relations: the indexed row window
-(`indexedQueryRowsV2`, which pages below a `LIMIT` and counts with cube fast
-paths), `nativeMetricsV2`, and the broad-exclusion subtraction from a fresh
-cube's nonempty-command population (`textComplementWhere`), which depends on
-Pharos's own derived facts. These keep `residualWhere` and the docsize guard for
-negation. `TestQueryTextIndexesMatchTypedSubstringFilters` compares rows,
-adapter metrics (including a metric's own filter) and `/query-v3` groupings
-with ordinary typed execution, ready and mid-backfill, for negation, short and
-non-ASCII needles, OR terms and OR-of-AND terms.
-
-`TestQueryTextPerformance` (`-tags probe`) times substring filters over
-200,000 synthetic tool calls with 60–500-byte commands: a selective needle
-(0.1% of calls), a broad one (14%) and the broad one negated. Wall-clock
-medians of ten requests after a warmup, two process runs each, alternating
-before (`15d7d34`) and after on the same machine under load average 7–14:
-
-| Request | Needle | Before | After |
+| Request | Needle | Host narrowing | Relations |
 | --- | --- | ---: | ---: |
-| V2 rows (host window) | selective / broad / negated | 43 / 53 / 53 | 44 / 55 / 55 |
-| V2 count and sum (host reducer) | selective / broad / negated | 32 / 74 / 136 | 33 / 77 / 139 |
 | V2 count and average (adapter) | selective / broad / negated | 30 / 219 / 1,118 | 52 / 314 / 502 |
 | `/query-v3` grouping | selective / broad / negated | 32 / 343 / 1,810 | 52 / 407 / 1,292 |
 
-Milliseconds, mean of the two runs' medians; runs agreed within 5%.
+Milliseconds, mean of the two runs' medians. Rows and the host reducer use the
+host's own SQL and did not change.
 
-Host paths are unchanged. Through Query Table, a negated needle is 2.2× faster
-for metrics and 1.4× for groupings, because the relation replaces the typed
-`contains` over every remaining command. Positive needles are slower: about
-20 ms on a selective needle and 60–95 ms on a broad one. In plain SQL the
-relation plan drives through the ID index and takes 3 ms; CPU profiles put the
-extra time in trigram phrase matching inside the adapter's population and
-reduction statements. An alternative measured on a
-50,000-call fixture is for the host to keep narrowing adapter sources and drop
-exact text terms from their filter, as its own paths do: selective 14 ms and
-broad 33 ms against 20 and 62 ms with relations, and negated about equal. That
-keeps the host-specific path the relations were meant to replace, so the
-choice between them is open.
+Relations made negated needles 1.4–2.2× faster but positive needles, the common
+case, 20–95 ms slower: in plain SQL the relation drives through the ID index in
+3 ms, while CPU profiles put the extra time in trigram phrase matching inside
+the adapter's population and reduction statements. They also removed no host
+code: the compile-only APIs never consult relations, so the indexed row window,
+`nativeMetricsV2`, the cube complement and record search's restricted source
+(`CompileSQLiteComputedRows`) still need the host's narrowing, and record search
+would have lost it. Revisit this when a release makes positive relations as
+cheap as narrowing inside the adapter.
+`TestQueryTextIndexesMatchTypedSubstringFilters` compares rows, adapter metrics
+(including a metric's own filter) and `/query-v3` groupings over narrowed
+sources with typed execution, ready and mid-backfill.
 
 ## 0.9.6 changes
 
@@ -433,10 +414,11 @@ of mirrored tool work. Command-search candidates use the existing trigram index;
 day/week/month equality can use indexed timestamp bounds. The full upstream
 predicate still checks candidates. A separate, complete substring index
 answers supported ASCII `contains` predicates of at least three characters
-exactly. Query Table reads it through a predicate relation
-([substring relations](#substring-relations)); the host's own row window,
-reducer and cube complement narrow by it directly and drop only an exact term
-from their residual filter. Other text operators, short or non-ASCII needles
+exactly. Sources narrow by it, and the host's own row window, reducer and cube
+complement drop an exact term from their residual filter; Query Table's
+predicate relations were measured and not adopted
+([substring relations](#substring-relations-measured-not-adopted)). Other text
+operators, short or non-ASCII needles
 and incomplete indexes retain the ordinary predicate, and an OR uses the index
 only when every branch has it.
 
