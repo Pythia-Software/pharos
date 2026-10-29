@@ -88,6 +88,7 @@ var freshnessReasons = map[string]string{
 	"capture-busy":         "A capture was using it at the last index",
 	"needs-capture":        "Newer captured inputs are waiting to be indexed",
 	"schedule-off":         "Scheduled indexing is off for it",
+	"manual-only":          "Scheduled indexing does not read this kind of source",
 	"interrupted":          "The last index of this source was interrupted",
 	"overdue":              "The scheduled index has not checked it recently",
 	"not-indexed":          "Captured data is not indexed yet",
@@ -457,11 +458,12 @@ func (l *ledger) conversations(ctx context.Context, c *Catalog) {
 	type sourceState struct {
 		success, automaticSuccess, automaticIndexed string
 		attemptAt, attemptError                     string
+		kind                                        string
 	}
 	states := map[string]*sourceState{}
 	rows, err := c.reader().QueryContext(ctx, `WITH keys AS (SELECT source_name FROM source_states WHERE host_id=?1 UNION SELECT source_name FROM automatic_source_states WHERE host_id=?1)
 		SELECT k.source_name,COALESCE(s.last_success_at,''),COALESCE(a.succeeded_at,''),COALESCE(a.indexed_at,''),
-		COALESCE(s.last_attempt_at,''),COALESCE(s.error,''),COALESCE(a.attempted_at,''),COALESCE(a.error,'')
+		COALESCE(s.last_attempt_at,''),COALESCE(s.error,''),COALESCE(a.attempted_at,''),COALESCE(a.error,''),COALESCE(s.kind,'')
 		FROM keys k LEFT JOIN source_states s ON s.host_id=?1 AND s.source_name=k.source_name
 		LEFT JOIN automatic_source_states a ON a.host_id=?1 AND a.source_name=k.source_name`, l.in.host)
 	known := err == nil
@@ -469,7 +471,7 @@ func (l *ledger) conversations(ctx context.Context, c *Catalog) {
 		for rows.Next() {
 			var name, manualAttempt, manualError, automaticAttempt, automaticError string
 			state := &sourceState{}
-			if rows.Scan(&name, &state.success, &state.automaticSuccess, &state.automaticIndexed, &manualAttempt, &manualError, &automaticAttempt, &automaticError) != nil {
+			if rows.Scan(&name, &state.success, &state.automaticSuccess, &state.automaticIndexed, &manualAttempt, &manualError, &automaticAttempt, &automaticError, &state.kind) != nil {
 				known = false
 				break
 			}
@@ -504,12 +506,15 @@ func (l *ledger) conversations(ctx context.Context, c *Catalog) {
 	interval := time.Duration(max(settings.Interval, 60)) * time.Second
 	for _, name := range sources {
 		entry := domainEntry{domain: "conv:" + name, group: "conversations", label: "Conversations (" + name + ")", running: "indexing"}
-		scheduled := settingsErr == nil && settings.Enabled && (len(settings.Sources) == 0 || slices.Contains(settings.Sources, name))
+		state := states[name]
+		// The schedule reads only automaticProvider's kinds (autoSources),
+		// whatever its settings select.
+		manualOnly := state != nil && state.kind != "" && !automaticProvider(state.kind)
+		scheduled := settingsErr == nil && settings.Enabled && !manualOnly && (len(settings.Sources) == 0 || slices.Contains(settings.Sources, name))
 		entry.next = nextManualIndex
 		if scheduled {
 			entry.next = nextScheduledIndex
 		}
-		state := states[name]
 		if state != nil {
 			entry.asOf = latestTime(state.success, state.automaticSuccess, state.automaticIndexed)
 		}
@@ -527,6 +532,8 @@ func (l *ledger) conversations(ctx context.Context, c *Catalog) {
 			entry.state, entry.reason = freshUnknown, "capture-busy"
 		case pending[name]:
 			entry.state, entry.reason = freshBehind, "needs-capture"
+		case manualOnly:
+			entry.state, entry.reason = freshUnknown, "manual-only"
 		case !scheduled:
 			// Only the last index's answer is known; whether the source has
 			// changed since is not.
