@@ -307,6 +307,7 @@ var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/status-panel.js":      {"status-panel.js", "text/javascript; charset=utf-8"},
 	"/assets/cloud-backup.js":      {"cloud-backup.js", "text/javascript; charset=utf-8"},
 	"/assets/sync.js":              {"sync.js", "text/javascript; charset=utf-8"},
+	"/assets/background.js":        {"background.js", "text/javascript; charset=utf-8"},
 	"/assets/carbon.js":            {"carbon.js", "text/javascript; charset=utf-8"},
 	"/assets/menu-bar.js":          {"menu-bar.js", "text/javascript; charset=utf-8"},
 	"/assets/header.js":            {"header.js", "text/javascript; charset=utf-8"},

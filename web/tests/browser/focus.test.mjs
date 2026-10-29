@@ -531,13 +531,15 @@ test("Unified activity panel holds focus across refreshes, stops each operation 
 
   await press(chip);
   await panel.waitFor();
-  await panel.locator("summary").click();
+  // Daily is closed in this snapshot: open it.
+  const daily = panel.locator('[data-key="cadence:daily"]');
+  await daily.locator("summary").click();
   const stop = panel.getByRole("button", { name: "Stop", exact: true });
   await stop.focus();
   push("/api/status/stream", { ...busyStatus, revision: 3, operations: busyStatus.operations.map(operation => operation.id === "op-index" ? { ...operation, step: { ...operation.step, done: 900e6, fraction: 0.45 } } : operation) });
   await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library?.revision === 3);
   assert.ok(await stop.evaluate(element => document.activeElement === element), "a refresh moved focus");
-  assert.ok(await panel.locator("details").first().evaluate(element => element.open), "a refresh closed Show all");
+  assert.ok(await daily.evaluate(element => element.open), "a refresh closed the cadence row the user opened");
   await app.shot("refreshed");
 
   // A busy fresh verdict refuses; a safe one ejects.

@@ -343,6 +343,7 @@ APP_HTML = r'''<!doctype html>
   <script src="/assets/status-panel.js" defer></script>
   <script src="/assets/cloud-backup.js" defer></script>
   <script src="/assets/sync.js" defer></script>
+  <script src="/assets/background.js" defer></script>
   <script src="/assets/carbon.js" defer></script>
   <script src="/assets/menu-bar.js" defer></script>
   <link rel="stylesheet" href="/assets/query-tables.css">
@@ -356,8 +357,9 @@ APP_HTML = r'''<!doctype html>
     <div id="settingsContent" class="settings-content">
     <section id="health" class="settings-section" data-settings-route="/settings" data-page-title="Library health" data-page-description="Check your library’s usage, storage, and recent activity." aria-labelledby="settingsPageHeading"><div id="healthCards" class="health"></div><div id="storageBreakdown"></div></section>
     <section id="backupSettings" class="settings-section" data-settings-route="/settings/backups" data-page-title="Backups" data-page-description="Back up to another drive, and plan a private cloud copy." aria-labelledby="settingsPageHeading" hidden><div id="backupSettingsLocal"></div><div id="cloudBackupPlanner"></div></section>
-    <section id="sources" class="settings-section" data-settings-route="/settings/sources" data-page-title="Sources" data-page-description="Choose which conversation files Pharos reads on this Mac. Capture, index, and schedule automatic indexing on the Capture &amp; index page." aria-labelledby="settingsPageHeading" hidden><div class="source-toolbar" id="sourceToolbar" aria-label="Source actions"><div id="sourceSetupAction"></div><a href="/settings/sync">Open Capture &amp; index →</a></div><div class="source-summary" id="sourceSummary"></div><div class="source-grid" id="sourceGrid"></div></section>
-    <section id="syncSettings" class="settings-section" data-settings-route="/settings/sync" data-page-title="Capture &amp; index" data-page-description="Keep the library current, and see what each run indexed and what it cost." aria-labelledby="settingsPageHeading" hidden><div id="syncDashboard">
+    <section id="sources" class="settings-section" data-settings-route="/settings/sources" data-page-title="Sources" data-page-description="Choose which conversation files Pharos reads on this Mac. Pharos keeps them current on the Background updates page." aria-labelledby="settingsPageHeading" hidden><div class="source-toolbar" id="sourceToolbar" aria-label="Source actions"><div id="sourceSetupAction"></div><a href="/settings/sync">Open Background updates →</a></div><div class="source-summary" id="sourceSummary"></div><div class="source-grid" id="sourceGrid"></div></section>
+    <section id="syncSettings" class="settings-section" data-settings-route="/settings/sync" data-page-title="Background updates" data-page-description="Pharos keeps your library current on its own. Each kind of work runs as often as its cost allows: quick work every few minutes, heavier work hourly, the heaviest overnight." aria-labelledby="settingsPageHeading" hidden><div id="syncDashboard">
+      <div id="backgroundSchedule"></div>
       <div id="syncHistoryTables"></div>
       <section id="syncOperations" class="sync-panel" aria-label="Capture and index now">
         <div class="sync-section-head"><div><h3>Capture &amp; index</h3><p class="muted">Capture this Mac’s source files, index captures from every Mac, and finish any pending library upgrade.</p></div><div id="syncUpdateAction" class="sync-actions"></div></div>

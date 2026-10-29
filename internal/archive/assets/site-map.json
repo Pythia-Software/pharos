@@ -280,13 +280,13 @@
   "settings/sources": {
    "path": "settings/sources",
    "title": "Sources",
-   "description": "Choose which conversation files Pharos reads on this Mac. Capture, index, and schedule automatic indexing on the Capture & index page.",
+   "description": "Choose which conversation files Pharos reads on this Mac. Pharos keeps them current on the Background updates page.",
    "route": "/settings/sources"
   },
   "settings/sync": {
    "path": "settings/sync",
-   "title": "Capture & index",
-   "description": "Keep the library current, and see what each run indexed and what it cost.",
+   "title": "Background updates",
+   "description": "Pharos keeps your library current on its own. Each kind of work runs as often as its cost allows: quick work every few minutes, heavier work hourly, the heaviest overnight.",
    "route": "/settings/sync"
   },
   "settings/mcp": {

@@ -1,45 +1,60 @@
-// The unified activity panel (docs/background-work.md §7–9), shown while the
-// pharos-unified-activity-v1 preference is on. It renders only from the
-// status store (status-store.js) and, while on, is the one renderer of the
-// header's drive chip, its panel and the header's Index changes state;
-// library.js and sync.js leave those alone. Off, it does nothing at all and
-// library.js's drive panel runs as before.
+// The unified activity panel (docs/background-work.md §7–9, §11), shown
+// while the pharos-unified-activity-v1 preference is on. It renders only
+// from the status store (status-store.js) and, while on, is the one renderer
+// of the header's drive chip, its panel and the header's Index changes
+// state; library.js and sync.js leave those alone. Off, it does nothing at
+// all and library.js's drive panel runs as before.
 //
-// The panel answers, in this order: is it safe to eject; is the data
-// current (the freshness ledger's summary groups; omitted while the
-// snapshot has none); is Pharos busy on this Mac (the Load row; omitted
-// while null); what is running, one line per top-level operation; then "Show all"
-// for the operation tree and each data domain, the other libraries, and
-// what needs attention. Every sentence comes from the server; this file
-// formats numbers and durations only. Explanations are in tooltips.
+// The panel answers, in this order: what is happening and what it means for
+// the pages (the schedule's headline); what runs now, with its progress and
+// load; how each cadence (Frequently, Hourly, Daily) is doing, each opening
+// to its items; what needs attention; and whether ejecting is safe, beside
+// Eject. Every sentence comes from the server; this file adds ages, times
+// and numbers.
 //
 // panelModel and chipModel are pure, for web/tests/unit/page/status-panel.test.mjs.
 (() => {
   'use strict';
   const CSS = `
-.pharos-status-panel .pharos-status-rows{display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 12px;margin:12px 0 4px;align-items:baseline}
-.pharos-status-rows>dt{color:var(--muted,#666);font-size:12px;letter-spacing:.04em;text-transform:uppercase}
-.pharos-status-rows>dd{margin:0;min-width:0;overflow-wrap:anywhere}
-.pharos-status-verdict{display:flex;gap:8px;align-items:baseline}
-.pharos-status-verdict>.pharos-dot{position:relative;top:-1px}
-.pharos-status-line{display:block}
-.pharos-status-line+.pharos-status-line{margin-top:6px}
-.pharos-status-step{display:block;font-size:12px}
-.pharos-status-finished{margin-top:4px;font-size:12px}
+.pharos-status-panel{width:min(440px,calc(100vw - 24px))}
+.pharos-status-eject{display:flex;gap:8px;align-items:baseline;margin-top:4px;font-size:12px;color:var(--muted,#666)}
+.pharos-status-headline{margin:12px 0 10px;padding:10px 12px;border-radius:8px;background:color-mix(in srgb,var(--ink,#000) 5%,transparent);border-left:3px solid #8cc6a0}
+.pharos-status-headline.busy{border-left-color:var(--accent,#d8ae5e)}
+.pharos-status-headline.behind{border-left-color:var(--warn,#f0955a)}
+.pharos-status-headline.bad{border-left-color:var(--bad,#ef8c84)}
+.pharos-status-headline.paused{border-left-color:var(--muted,#888)}
+.pharos-status-headline strong{display:block;font-weight:650}
+.pharos-status-headline p{margin:2px 0 0;font-size:13px;color:var(--muted,#666)}
+.pharos-status-headline details{margin-top:6px;font-size:12px;color:var(--muted,#666);overflow-wrap:anywhere}
+.pharos-status-headline details>summary{cursor:pointer}
+.pharos-status-headline .pharos-button{margin-top:8px}
+.pharos-status-now{margin:0 0 10px}
+.pharos-status-line{display:block;overflow-wrap:anywhere}
+.pharos-status-line+.pharos-status-line{margin-top:8px}
 .pharos-status-line>strong{font-weight:650}
 .pharos-status-line .pharos-status-time{color:var(--muted,#666);white-space:nowrap}
-.pharos-status-more{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 12px;color:var(--muted,#666)}
-.pharos-status-tree{margin:8px 0 0;padding-left:16px}
-.pharos-status-tree ul{padding-left:16px}
-.pharos-status-tree li{margin:3px 0;overflow-wrap:anywhere}
-.pharos-status-domains{margin-top:10px;border-top:1px solid var(--line,#ddd);padding-top:8px}
-.pharos-status-heading{margin-top:8px;color:var(--muted,#666);font-size:11px;letter-spacing:.04em;text-transform:uppercase}
-.pharos-status-heading+.pharos-status-tree{margin-top:2px}
-.pharos-status-heading.data{margin-top:10px;border-top:1px solid var(--line,#ddd);padding-top:8px}
-.pharos-status-heading.data+.pharos-status-domains{margin-top:2px;border-top:0;padding-top:0}
-.pharos-status-data{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;line-clamp:1;overflow:hidden;overflow-wrap:normal}
-@media (max-width:600px){.pharos-status-data{-webkit-line-clamp:2;line-clamp:2}}
-.pharos-status-panel details>summary{cursor:pointer}
+.pharos-status-step{display:block;font-size:12px}
+.pharos-status-bar{height:5px;border-radius:3px;background:color-mix(in srgb,var(--ink,#000) 10%,transparent);margin:5px 0 3px;overflow:hidden}
+.pharos-status-bar>i{display:block;height:100%;background:var(--accent,#d8ae5e)}
+.pharos-status-load{display:block;font-size:12px;color:var(--muted,#666);margin-top:4px}
+.pharos-status-cadences{border-top:1px solid var(--line,#ddd)}
+.pharos-status-cadences details{border-bottom:1px solid var(--line,#ddd)}
+.pharos-status-cadences summary{list-style:none;display:grid;grid-template-columns:18px 86px minmax(0,1fr);gap:2px 8px;align-items:baseline;padding:8px 2px;cursor:pointer}
+.pharos-status-cadences summary::-webkit-details-marker{display:none}
+.pharos-status-cadences .pharos-status-icon{color:var(--muted,#666)}
+.pharos-status-cadences .pharos-status-name{font-weight:650}
+.pharos-status-cadences .pharos-status-state{font-size:13px;min-width:0;overflow-wrap:anywhere}
+.pharos-status-cadences .pharos-status-what{grid-column:3;font-size:12px;color:var(--muted,#666);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pharos-status-cadences details[open] .pharos-status-what{display:none}
+.pharos-status-items{list-style:none;margin:0 0 8px;padding:0 0 0 26px}
+.pharos-status-items li{display:flex;gap:8px;align-items:baseline;padding:2px 0;font-size:13px}
+.pharos-status-items li>span:last-child{margin-left:auto;text-align:right;color:var(--muted,#666);font-size:12px}
+.pharos-status-panel .pharos-dot.small{width:7px;height:7px;flex:none;margin-right:6px}
+.pharos-status-panel .pharos-dot.paused{background:transparent;box-shadow:inset 0 0 0 2px var(--muted,#888)}
+.pharos-status-foot{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:12px}
+.pharos-status-foot a{margin-left:auto}
+.pharos-status-foot small{flex-basis:100%;color:var(--muted,#666);font-size:12px}
+.pharos-status-others{margin-top:10px;font-size:12px;color:var(--muted,#666);overflow-wrap:anywhere}
 .pharos-status-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
 .pharos-status-panel .pharos-panel-head{flex-wrap:wrap}`;
 
@@ -80,38 +95,55 @@
     return text === 'just now' ? '<1 min' : text.replace(/ ago$/, '');
   };
 
-  // The Data row and its detail (docs/background-work.md §5): the page
-  // groups that are stale (backups and planned runs are not), each "Label
-  // short-state" ("Analyses waits for
-  // manual index", "Findings behind 3 h"), or "All current · checked 2 min
-  // ago"; the longer words are the tooltip. Under Show all, one line per
-  // domain. The server says every word; this adds ages and counts. Null
-  // until the snapshot has a ledger.
-  function dataModel(library, now = Date.now()) {
-    if (!Array.isArray(library?.freshness)) return null;
-    const summary = library.freshness_summary || {};
-    const shown = (Array.isArray(summary.groups) ? summary.groups : []).filter(group => group.shown);
-    const line = shown.map(group => ({group: group.group, state: group.state, label: group.label,
-      text: `${group.short || group.state}${group.short_age && group.as_of ? ` ${span(group.as_of, now)}` : ''}`,
-      tooltip: [group.text, group.as_of ? `${group.as_of_label || ''} ${ago(group.as_of, now)}`.trim() : '', group.tooltip].filter(Boolean).join('\n')}));
-    if (!line.length && summary.all_current && summary.text) {
-      line.push({group: 'all', state: 'current', label: '',
-        text: [summary.text, summary.checked_at ? `${summary.checked_label || ''} ${ago(summary.checked_at, now)}`.trim() : ''].filter(Boolean).join(' · '), tooltip: ''});
-      // Planned runs, muted: "Findings updates tomorrow".
-      for (const group of summary.groups || []) if (group.muted) {
-        line.push({group: group.group, state: group.state, label: group.label, text: group.short || '', tooltip: [group.text, group.tooltip].filter(Boolean).join('\n'), muted: true});
-      }
-    }
-    const domains = library.freshness.map(row => {
-      const behind = row.behind || {};
-      const amount = behind.count > 0 && behind.unit ? `${count(behind.count)} ${unitName(behind.unit, behind.count)}` : '';
-      const reason = row.reason?.text ? (row.catching_up_label ? `${row.reason.text} (${row.catching_up_label})` : row.reason.detail ? `${row.reason.text} (${row.reason.detail})` : row.reason.text) : '';
-      return {domain: row.domain, group: row.group, state: behind.state, label: row.label,
-        text: [row.state_label, reason, amount].filter(Boolean).join(' · ') + (row.as_of ? ` · ${ago(row.as_of, now)}` : ''),
-        tooltip: [row.next].filter(Boolean).join('\n')};
-    });
-    return {line, domains};
+  // When something next happens: "now", "in 3 min", "at 5:00 PM",
+  // "tomorrow at 3:00 AM".
+  function until(value, now = Date.now()) {
+    const time = Date.parse(value);
+    if (!Number.isFinite(time)) return '';
+    const seconds = (time - now) / 1000;
+    if (seconds < 60) return 'now';
+    if (seconds < 3600) return `in ${Math.round(seconds / 60)} min`;
+    const clock = new Date(time).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+    const day = date => new Date(date).toDateString();
+    if (day(time) === day(now)) return `at ${clock}`;
+    return day(time) === day(now + 86400000) ? `tomorrow at ${clock}` : `${new Date(time).toLocaleDateString([], {weekday: 'short'})} at ${clock}`;
   }
+
+  // A cadence's or an item's state: the server's label, then its age or
+  // its next time (docs/background-work.md §11).
+  function scheduleText(entry, now = Date.now()) {
+    if (!entry) return '';
+    const label = entry.state_label || '';
+    const next = entry.next_at ? until(entry.next_at, now) : '';
+    switch (entry.state) {
+      case 'current': return [entry.as_of ? `${label} ${ago(entry.as_of, now)}` : label, next ? `next ${next}` : ''].filter(Boolean).join(' · ');
+      case 'failed': return next ? `${label} · retrying ${next}` : label;
+      case 'missed': case 'never': return next ? `${label} · runs ${next}` : label;
+      case 'paused': case 'manual': return entry.as_of ? `${label} · ${ago(entry.as_of, now)}` : label;
+      default: return label;
+    }
+  }
+  const SCHEDULE_DOTS = {current: '', running: 'busy', queued: 'busy', failed: 'bad', missed: 'warn', never: 'warn', paused: 'paused', manual: 'paused', unavailable: 'paused'};
+  const CADENCE_ICONS = {frequent: '↻', hourly: '◷', daily: '☾'};
+
+  // The schedule's part of the panel: its headline, one row per cadence
+  // (open when something in it is happening or wrong), and what Update
+  // everything now costs. Null when the snapshot has no schedule.
+  function scheduleModel(background, now = Date.now()) {
+    if (!background || !Array.isArray(background.cadences)) return null;
+    const items = Object.fromEntries((background.items || []).map(item => [item.id, item]));
+    const rows = background.cadences.map(row => {
+      const members = (row.items || []).map(id => items[id]).filter(Boolean);
+      return {id: row.id, label: row.label, icon: CADENCE_ICONS[row.id] || '', dot: SCHEDULE_DOTS[row.state] ?? '', text: scheduleText(row, now),
+        open: ['running', 'queued', 'failed', 'missed'].includes(row.state), what: members.map(item => item.label).join(', '),
+        items: members.map(item => ({id: item.id, label: item.label, dot: SCHEDULE_DOTS[item.state] ?? '', text: scheduleText(item, now)}))};
+    });
+    const headline = background.headline || {};
+    return {headline: {tone: headline.tone || 'good', title: headline.title || '', text: headline.text || '', tech: headline.tech || '',
+      action: headline.action?.path ? {label: headline.action.label || '', path: headline.action.path, body: headline.action.body || {}} : null},
+      rows, everything: background.everything?.text || ''};
+  }
+
   // A step's measured progress: "812 MB of 2 GB", "42 of 100 conversations".
   function stepAmount(step) {
     if (!step?.unit || !(step.total > 0)) return '';
@@ -149,13 +181,6 @@
   // A line as one string, for tooltips and the other libraries' rows.
   const lineText = line => [[line.label, ...line.primary, ...line.secondary].join(' · '), line.time].filter(Boolean).join(' ');
 
-  function treeNode(operation) {
-    const line = operationLine(operation);
-    return {id: operation.id, label: operation.label, text: [...line.primary, ...line.secondary].join(' · '), time: line.time, tooltip: line.tooltip,
-      children: (operation.children || []).filter(running).map(treeNode),
-      hidden: Math.max(0, (operation.children_count || 0) - (operation.children || []).filter(running).length)};
-  }
-
   // The chip's and the panel's name: the drive's, else Library for a
   // portable library on this Mac's disk, else This Mac.
   const driveName = view => {
@@ -174,16 +199,14 @@
   // panel's eject flow; options.verdict overrides the snapshot's verdict
   // (the debounced one, see settleVerdict); options.stopRequested holds the
   // operations Stop was pressed for.
-  function panelModel(view, {ejectState = null, verdict = null, unavailable = null, nativeEject = false, stopRequested = new Set()} = {}) {
+  function panelModel(view, {ejectState = null, verdict = null, unavailable = null, nativeEject = false, stopRequested = new Set(), now = Date.now()} = {}) {
     const library = view?.library || null;
     const operations = currentOperations(view);
+    // Now: the foreground work, else the first background work; the
+    // schedule's rows say what else is under way.
     const foreground = operations.filter(operation => operation.priority !== 'background');
     const shown = foreground.length ? foreground : operations.slice(0, 1);
-    // Show all reveals what Now does not: the shown runs' running stages,
-    // and the other work. Finished runs are counted apart.
-    const tree = [...shown.flatMap(operation => treeNode(operation).children), ...operations.filter(operation => !shown.includes(operation)).map(treeNode)];
-    const finished = (library?.operations || []).filter(operation => !running(operation)).length;
-    const common = {lines: shown.map(operationLine), tree, moreCount: tree.length, finished, attention: (view?.attention || []).map(attentionModel)};
+    const common = {lines: shown.map(operationLine), attention: (view?.attention || []).map(attentionModel)};
     if (!library) {
       return {available: false, title: driveName(view), ...common, stateLabel: view?.service?.stateLabel || null,
         message: operations.length ? null : unavailable || (view?.service?.error ? `${view.service.error}` : null)};
@@ -200,10 +223,9 @@
       where: [LOCATIONS[drive.location] || (drive.ejectable ? 'Drive' : ''), library.library?.path].filter(Boolean).join(' · '),
       verdict: {verdict: eject.verdict || 'unsafe', text, dot: VERDICT_DOT[eject.verdict] ?? 'bad', checked: eject.checked || null,
         tooltip: [eject.summary !== text ? eject.summary : '', ...(eject.blockers || []).map(blocker => [blocker.label, blocker.on_eject].filter(Boolean).join(': '))].filter(Boolean).join('\n')},
-      // A null keeps the row out.
-      freshness: dataModel(library),
+      // Null without a schedule (an older service).
+      schedule: scheduleModel(library.background, now),
       load: loadModel(view.resources ?? library.resources),
-      headings: {work: library.headings?.work || '', data: library.headings?.data || ''},
       others: (view.others || []).map(other => {
         const first = (other.operations || []).find(running);
         return {id: other.id, name: other.name || 'Library',
@@ -280,7 +302,7 @@
 
   // ---- rendering (only while the flag is on)
   const enabled = () => window.pharosStatusStore?.enabled() === true;
-  let panel = null, ejectState = null, showAll = false, shown = null, holdTimer = null, sheet = null, subscribed = null;
+  let panel = null, ejectState = null, shown = null, holdTimer = null, sheet = null, subscribed = null;
   const live = (target, content) => window.pharosLibrary?.updateLiveChildren ? window.pharosLibrary.updateLiveChildren(target, content) : target.replaceChildren(...content.childNodes);
   const chip = () => window.pharosLibrary?.ensureChip?.() || document.getElementById('pharosDrive');
   const anchor = () => window.headerToolAnchor?.(chip()) ?? chip();
@@ -397,17 +419,12 @@
       unavailable: state?.error ? (state.error.status === 503 ? 'Pharos is stopping; it has released or is releasing the library.' : `Could not read the library's status: ${state.error.message}`) : null});
     const scrollTop = panel.scrollTop;
     const content = node('div');
-    const head = node('div', 'pharos-panel-head'), heading = node('h2', '', model.title);
-    head.append(heading);
+    const head = node('div', 'pharos-panel-head'), title = node('div'), heading = node('h2', '', model.title);
+    title.append(heading);
+    if (model.available && model.where) title.append(node('div', 'pharos-sub', model.where));
+    head.append(title);
     const actions = node('div', 'pharos-status-actions');
     actions.dataset.key = 'actions';
-    if (model.stop) {
-      const stop = button(model.stop.stopping ? 'Stopping…' : 'Stop', '', () => stopAll(model.stop.targets));
-      stop.dataset.key = 'stop';
-      stop.disabled = Boolean(model.stop.stopping);
-      if (model.stop.title) stop.title = model.stop.title;
-      actions.append(stop);
-    }
     if (model.eject) {
       const label = model.eject.phase === 'checking' ? 'Checking…' : model.eject.phase === 'ejecting' ? model.eject.text : '⏏ Eject';
       const ejectButton = button(label, '', checkEject);
@@ -422,13 +439,17 @@
     if (!model.available) {
       if (model.message) content.append(node('p', 'pharos-error', model.message));
       else if (model.stateLabel) content.append(node('div', 'pharos-sub', model.stateLabel));
-      const rows = node('dl', 'pharos-status-rows');
-      appendWork(content, rows, model);
+      appendNow(content, model);
       appendAttention(content, model.attention);
       commit(content, scrollTop);
       return;
     }
-    if (model.where) content.append(node('div', 'pharos-sub', model.where));
+    // Whether ejecting is safe, under the drive's name.
+    const verdict = node('div', 'pharos-status-eject');
+    verdict.dataset.key = 'eject-verdict';
+    verdict.append(node('span', 'pharos-dot small' + (model.verdict.dot ? ` ${model.verdict.dot}` : '')), node('span', '', model.verdict.text));
+    if (model.verdict.tooltip) verdict.title = model.verdict.tooltip;
+    content.append(verdict);
     if (model.eject && ['confirm', 'refused', 'error'].includes(model.eject.phase)) {
       const flow = node('div', 'pharos-row');
       flow.dataset.key = `eject-${model.eject.phase}`;
@@ -439,128 +460,125 @@
       flow.append(button('Cancel', '', () => { ejectState = null; render(); }));
       content.append(flow);
     }
-    const rows = node('dl', 'pharos-status-rows');
-    const row = (key, label, value) => {
-      const term = node('dt', '', label), detail = node('dd');
-      term.dataset.key = `${key}-label`;
-      detail.dataset.key = key;
-      detail.append(...[value].flat());
-      rows.append(term, detail);
-      return detail;
-    };
-    const verdict = node('div', 'pharos-status-verdict');
-    verdict.append(node('span', 'pharos-dot' + (model.verdict.dot ? ` ${model.verdict.dot}` : '')), node('span', '', model.verdict.text));
-    if (model.verdict.tooltip) verdict.title = model.verdict.tooltip;
-    row('eject', 'Eject', verdict);
-    if (model.freshness?.line.length) {
-      // One line (two on a narrow screen); the rest is in the tooltip and
-      // under Show all.
-      const data = node('span', 'pharos-status-data');
-      for (const [index, group] of model.freshness.line.entries()) {
-        const item = node('span', group.muted ? 'pharos-sub' : '');
-        item.dataset.key = `data:${group.group}`;
-        item.append(index ? ' · ' : '');
-        if (group.label) item.append(node('strong', '', group.label), ' ');
-        item.append(group.text);
-        if (group.tooltip) item.title = group.tooltip;
-        data.append(item);
+    const schedule = model.schedule;
+    if (schedule?.headline.title) {
+      const headline = node('div', `pharos-status-headline ${schedule.headline.tone}`);
+      headline.dataset.key = 'headline';
+      headline.append(node('strong', '', schedule.headline.title));
+      if (schedule.headline.text) headline.append(node('p', '', schedule.headline.text));
+      if (schedule.headline.tech) {
+        const details = node('details'), summary = node('summary', '', 'Details for support');
+        details.append(summary, schedule.headline.tech);
+        headline.append(details);
       }
-      data.title = model.freshness.line.map(group => [group.label, group.text].filter(Boolean).join(' ') + (group.tooltip ? `\n${group.tooltip}` : '')).join('\n\n');
-      row('data', 'Data', data);
+      if (schedule.headline.action) headline.append(button(schedule.headline.action.label, 'primary', () => post(schedule.headline.action.path, schedule.headline.action.body)));
+      content.append(headline);
     }
-    if (model.load) {
-      const load = node('span', '', model.load.text);
-      if (model.load.tooltip) load.title = model.load.tooltip;
-      row('load', 'Load', load);
-    }
-    appendWork(content, rows, model);
+    appendNow(content, model);
+    if (schedule?.rows.length) content.append(cadenceList(schedule.rows));
+    appendAttention(content, model.attention);
+    const foot = node('div', 'pharos-status-foot');
+    foot.dataset.key = 'foot';
+    const everything = button('Update everything now', '', () => post('/api/sync/check', {}));
+    everything.disabled = indexBusy(state?.view, window.pharosLibrary?.localBusy?.());
+    const settings = node('a', '', 'Schedule settings');
+    settings.href = '/settings/sync';
+    settings.onclick = event => { event.preventDefault(); navigate('/settings/sync'); };
+    foot.append(everything, settings);
+    if (schedule?.everything) foot.append(node('small', '', schedule.everything));
+    content.append(foot);
     if (model.others.length) {
-      const others = node('dl', 'pharos-status-rows');
+      const others = node('div', 'pharos-status-others');
       others.dataset.key = 'others';
+      others.append('Other libraries: ');
       model.others.forEach((other, index) => {
-        const term = node('dt', '', index ? '' : 'Other'), detail = node('dd');
-        detail.dataset.key = `other:${other.id}`;
-        detail.append(node('strong', '', other.name));
-        if (other.text) detail.append(` — ${other.text}`);
-        if (other.tooltip) detail.title = other.tooltip;
-        others.append(term, detail);
+        const entry = node('span');
+        entry.dataset.key = `other:${other.id}`;
+        entry.append(index ? ', ' : '', node('strong', '', other.name), other.text ? ` (${other.text})` : '');
+        if (other.tooltip) entry.title = other.tooltip;
+        others.append(entry);
       });
       content.append(others);
     }
-    appendAttention(content, model.attention);
     commit(content, scrollTop);
   }
 
-  // The Now row and Show all.
-  function appendWork(content, rows, model) {
-    if (model.lines.length) {
-      const lines = model.lines.map(line => {
-        const item = node('span', 'pharos-status-line');
-        item.dataset.key = `line:${line.id}`;
-        const primary = node('span');
-        primary.dataset.key = 'primary';
-        primary.append(node('strong', '', line.label));
-        if (line.primary.length) primary.append(` · ${line.primary.join(' · ')}`);
-        if (line.time) primary.append(' ', node('span', 'pharos-status-time', line.time));
-        item.append(primary);
-        if (line.secondary.length) item.append(node('span', 'pharos-sub pharos-status-step', line.secondary.join(' · ')));
-        if (line.tooltip) item.title = line.tooltip;
-        if (line.fraction != null) item.setAttribute('aria-description', `${Math.floor(line.fraction * 100)}% of this step`);
-        return item;
-      });
-      const term = node('dt', '', 'Now'), detail = node('dd');
-      term.dataset.key = 'now-label';
-      detail.dataset.key = 'now';
-      detail.append(...lines);
-      rows.append(term, detail);
-    }
-    if (rows.childElementCount) content.append(rows);
-    const domains = model.freshness?.domains || [];
-    if (!model.moreCount && !model.finished && !domains.length) return;
-    const details = node('details', 'pharos-status-all');
-    details.dataset.key = 'show-all';
-    if (showAll) details.open = true;
-    details.addEventListener('toggle', () => { showAll = details.open; });
-    const summary = node('summary', 'pharos-status-more');
-    summary.append(node('span', '', model.moreCount ? `+ ${model.moreCount} more` : ''), node('span', '', 'Show all'));
-    details.append(summary);
-    // A quiet heading over each part, in the server's words.
-    const heading = (key, text) => { if (text) { const h = node('div', `pharos-status-heading ${key}`, text); h.dataset.key = `heading:${key}`; details.append(h); } };
-    if (model.tree.length || model.finished) heading('work', model.headings?.work);
-    if (model.tree.length) details.append(treeList(model.tree));
-    if (model.finished) details.append(node('div', 'pharos-sub pharos-status-finished', `${model.finished} finished`));
-    if (domains.length) heading('data', model.headings?.data);
-    if (domains.length) details.append(dataList(domains));
-    content.append(details);
+  // A schedule action or Update everything now; the snapshot shows what
+  // it changed.
+  async function post(path, body) {
+    try {
+      const response = await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
+      if (!response.ok) toast((await response.json().catch(() => ({}))).error || response.statusText);
+    } catch (error) { toast(error.message); }
+    window.pharosStatusStore?.refresh();
   }
 
-  // Show all's per-domain detail.
-  function dataList(domains) {
-    const list = node('ul', 'pharos-status-tree pharos-status-domains');
-    list.dataset.key = 'domains';
-    list.setAttribute('aria-label', 'Data');
-    for (const domain of domains) {
-      const entry = node('li', domain.state === 'current' ? 'pharos-sub' : '');
-      entry.dataset.key = `domain:${domain.domain}`;
-      entry.append(node('strong', '', domain.label), ` · ${domain.text}`);
-      if (domain.tooltip) entry.title = domain.tooltip;
-      list.append(entry);
+  // Now: each shown operation with its step, measured amount, time range
+  // and progress, then the Load line.
+  function appendNow(content, model) {
+    if (!model.lines.length) return;
+    const now = node('div', 'pharos-status-now');
+    now.dataset.key = 'now';
+    for (const line of model.lines) {
+      const item = node('div', 'pharos-status-line');
+      item.dataset.key = `line:${line.id}`;
+      const primary = node('div');
+      primary.dataset.key = 'primary';
+      primary.append(node('strong', '', line.label));
+      if (line.primary.length) primary.append(` · ${line.primary.join(' · ')}`);
+      if (line.time) primary.append(' ', node('span', 'pharos-status-time', line.time));
+      item.append(primary);
+      if (line.fraction != null) {
+        const bar = node('div', 'pharos-status-bar'), fill = node('i');
+        fill.style.width = `${Math.round(Math.max(0, Math.min(1, line.fraction)) * 100)}%`;
+        bar.append(fill);
+        bar.setAttribute('aria-hidden', 'true');
+        item.append(bar);
+        item.setAttribute('aria-description', `${Math.floor(line.fraction * 100)}% of this step`);
+      }
+      if (line.secondary.length) item.append(node('span', 'pharos-sub pharos-status-step', line.secondary.join(' · ')));
+      if (line.tooltip) item.title = line.tooltip;
+      now.append(item);
     }
-    return list;
+    if (model.load) {
+      const load = node('span', 'pharos-status-load', model.load.text);
+      load.dataset.key = 'load';
+      if (model.load.tooltip) load.title = model.load.tooltip;
+      now.append(load);
+    }
+    if (model.stop) {
+      const stop = button(model.stop.stopping ? 'Stopping…' : 'Stop', '', () => stopAll(model.stop.targets));
+      stop.dataset.key = 'stop';
+      stop.disabled = Boolean(model.stop.stopping);
+      if (model.stop.title) stop.title = model.stop.title;
+      now.append(stop);
+    }
+    content.append(now);
   }
 
-  function treeList(items) {
-    const list = node('ul', 'pharos-status-tree');
-    for (const item of items) {
-      const entry = node('li');
-      entry.dataset.key = `tree:${item.id}`;
-      entry.append(node('strong', '', item.label));
-      if (item.text) entry.append(` · ${item.text}`);
-      if (item.time) entry.append(' ', node('span', 'pharos-status-time', item.time));
-      if (item.tooltip) entry.title = item.tooltip;
-      if (item.children.length) entry.append(treeList(item.children));
-      if (item.hidden) entry.append(node('div', 'pharos-sub', `+ ${item.hidden} finished`));
-      list.append(entry);
+  // One row per cadence, opening to its items. A row the user opened or
+  // closed stays so while the panel is open.
+  const cadenceOpen = new Map();
+  function cadenceList(rows) {
+    const list = node('div', 'pharos-status-cadences');
+    list.dataset.key = 'cadences';
+    for (const row of rows) {
+      const details = node('details');
+      details.dataset.key = `cadence:${row.id}`;
+      details.open = cadenceOpen.has(row.id) ? cadenceOpen.get(row.id) : row.open;
+      details.addEventListener('toggle', () => cadenceOpen.set(row.id, details.open));
+      const summary = node('summary'), state = node('span', 'pharos-status-state');
+      state.append(node('span', 'pharos-dot small' + (row.dot ? ` ${row.dot}` : '')), row.text);
+      summary.append(node('span', 'pharos-status-icon', row.icon), node('span', 'pharos-status-name', row.label), state, node('span', 'pharos-status-what', row.what));
+      const items = node('ul', 'pharos-status-items');
+      for (const item of row.items) {
+        const entry = node('li');
+        entry.dataset.key = `item:${item.id}`;
+        entry.append(node('span', 'pharos-dot small' + (item.dot ? ` ${item.dot}` : '')), node('span', '', item.label), node('span', '', item.text));
+        items.append(entry);
+      }
+      details.append(summary, items);
+      list.append(details);
     }
     return list;
   }
@@ -618,6 +636,7 @@
     if (!panel) return;
     panel.remove();
     panel = null;
+    cadenceOpen.clear();
     if (ejectState?.phase !== 'ejecting') ejectState = null;
     chip()?.setAttribute('aria-expanded', 'false');
     if (restoreFocus) anchor()?.focus();
@@ -675,7 +694,7 @@
   window.pharosStatusPanel = {
     open, close, toggle, render, renderHeader,
     // Pure helpers, for web/tests/unit/page/status-panel.test.mjs.
-    panelModel, chipModel, operationLine, lineText, treeNode, currentOperations, settleVerdict, ejectDecision, indexBusy, stepAmount, dataModel, ago, span,
+    panelModel, chipModel, operationLine, lineText, currentOperations, settleVerdict, ejectDecision, indexBusy, stepAmount, scheduleModel, scheduleText, ago, until, span,
   };
   if (enabled()) activate();
 })();

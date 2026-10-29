@@ -15,21 +15,22 @@ pending library upgrades.
 ## Controls and freshness
 
 The header button beside the library disk runs **Index changes**. Settings →
-Capture & index (`/settings/sync`) schedules it as **Automatic indexing** for
-this Mac's enabled Claude, Codex, Conductor, and Antigravity sources. It
-starts **Off**. The dedicated Settings page supports sidebar navigation,
-direct links, and reloads without showing the other Settings sections. Choose
-one minute, five minutes, fifteen minutes, thirty minutes, or a custom
-interval from one minute to one day. The initial suggested interval is five
-minutes. Sources and schedule are retained per host; an empty source
-selection means all supported, enabled sources. **Index changes now** (and
-the header button) runs that incremental pipeline without enabling the
-schedule, then refreshes GitHub repository identities, library-wide identity
-links, local Git integration, tool rollups, Human Words, and a full findings
-pass. The manual run remains active until those stages finish. GitHub is
-optional: missing or signed-out `gh` leaves existing repository data usable.
-Scheduled runs leave these expensive analyses pending, including Human Words;
-their totals reflect the most recent manual refresh.
+Background updates (`/settings/sync`) runs it on a schedule, the
+**Frequently** cadence, for this Mac's enabled Claude, Codex, Conductor, and
+Antigravity sources. Background updates are **On** by default (a recovered
+library starts with them off); **Pause for 1 hour** and **Only when I ask**
+stop them. The interval is two, five (the default), fifteen or thirty
+minutes. The schedule is retained per host; an empty source selection
+(`sync_settings.sources_json`, no longer shown) means all supported, enabled
+sources. **Update everything now** (and the header button) runs that
+incremental pipeline, then refreshes GitHub repository identities,
+library-wide identity links, local Git integration, tool rollups, Human
+Words, and a full findings pass. The manual run remains active until those
+stages finish. GitHub is optional: missing or signed-out `gh` leaves existing
+repository data usable. A scheduled run leaves these analyses pending
+(`sync_deferred`); the background schedule then runs each on its own cadence,
+Frequently, Hourly or Daily by its measured cost
+([background updates](background-work.md#11-background-updates)).
 
 The page opens with the latest run's conversation count, elapsed time, CPU
 time, and observed RAM peak, followed by a table of the five most recent
@@ -184,7 +185,7 @@ defers verification or leaves a group eligible for the next run.
 
 ## Repair and verification
 
-Settings → Capture & index and integrity issues expose:
+Settings → Background updates and integrity issues expose:
 
 - **Full recapture & reindex…** freshly copies available selected local
   evidence, then forces parser, search, ledger, and supported derivation work

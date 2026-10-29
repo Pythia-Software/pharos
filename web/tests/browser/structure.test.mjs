@@ -178,8 +178,10 @@ const ROUTES = [
     open: async page => {
       await page.evaluate(() => { window.webkit = {messageHandlers: {pharosLibrary: {postMessage: async () => {}}}}; });
       await activateHeaderTool(page, 'pharosDrive');
-      await page.locator('#pharosStatusPanel summary').click();
-    }, shown: '#pharosStatusPanel .pharos-status-domains',
+      // Every cadence row open, its items listed.
+      const closed = page.locator('#pharosStatusPanel .pharos-status-cadences details:not([open]) summary');
+      while (await closed.count()) await closed.first().click();
+    }, shown: '#pharosStatusPanel .pharos-status-items li',
   })),
   { name: "Home", url: "/", ready: ".home-belt-row .query-card" },
   { name: "Home search composer", url: "/", ready: ".home-search-trigger", open: page => page.getByRole("button", { name: "Search past work", exact: true }).click(), shown: ".home-search-disclosure.is-expanded" },
@@ -354,10 +356,11 @@ const ROUTES = [
     },shown:`#cloud-step-${step-1}`
   })),
   { name: "Sources", url: "/settings/sources", ready: "#sourceGrid .source-card" },
-  { name: "Capture & index", url: "/settings/sync", ready: "#syncHistoryTables .qt-row" },
-  { name: "Capture & index diagnostics", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByText("Performance & verification details", { exact: true }).click(), shown: "#syncDiagnosticTables .qt-row" },
-  { name: "Capture & index run details", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByRole("region", { name: "Recent run history", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" },
-  { name: "Capture & index empty", url: "/settings/sync", ready: "#syncHistoryTables .qt-empty", api: { "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [], source_states: [] } } },
+  { name: "Background updates", url: "/settings/sync", ready: "#syncHistoryTables .qt-row" },
+  { name: "Background updates schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Your writing" }).click(), shown: "#backgroundSchedule .bg-detail" },
+  { name: "Background updates diagnostics", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByText("Performance & verification details", { exact: true }).click(), shown: "#syncDiagnosticTables .qt-row" },
+  { name: "Background updates run details", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByRole("region", { name: "Recent run history", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" },
+  { name: "Background updates empty", url: "/settings/sync", ready: "#syncHistoryTables .qt-empty", api: { "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [], source_states: [] } } },
   { name: "Legacy Findings settings", url: "/settings/optimization", ready: ".findings-settings .findings-panel" },
   { name: "Header settings", url: "/settings/header", ready: "#headerActive .header-tool" },
   { name: "App preferences", url: "/settings/preferences", ready: "#showMacMenuBar" },

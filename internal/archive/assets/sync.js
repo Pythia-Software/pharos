@@ -207,66 +207,9 @@
     const focused = dashboard.contains(document.activeElement) ? document.activeElement.dataset.syncFocus : null;
     // Keep the React tables and activity panel attached. Detaching a host
     // resets its scroll containers even when the React root is retained.
-    const retained = new Set(['syncHistoryTables', 'syncSourceTables', 'syncDiagnosticTables', 'syncOperations'].map(id => document.getElementById(id)));
+    const retained = new Set(['backgroundSchedule', 'syncHistoryTables', 'syncSourceTables', 'syncDiagnosticTables', 'syncOperations'].map(id => document.getElementById(id)));
     for (const child of [...dashboard.children]) if (!retained.has(child)) child.remove();
-    const settings = status.settings;
-    const preferences = node('section', '', 'sync-panel');
-    preferences.append(node('h3', 'Automatic indexing'));
-    const controls = node('div', '', 'sync-controls');
-    const label = node('label', 'Index changes ');
-    const cadence = document.createElement('select');
-    cadence.setAttribute('aria-label', 'Automatic indexing schedule');
-    for (const [value, text] of [[0, 'Off'], [60, 'Every minute'], [300, 'Every 5 minutes'], [900, 'Every 15 minutes'], [1800, 'Every 30 minutes'], [-1, 'Custom…']]) {
-      const option = node('option', text);
-      option.value = value;
-      cadence.append(option);
-    }
-    cadence.value = settings.enabled ? ([60, 300, 900, 1800].includes(settings.interval_seconds) ? settings.interval_seconds : -1) : 0;
-    const custom = document.createElement('input');
-    custom.type = 'number'; custom.min = 1; custom.max = 1440;
-    custom.value = settings.interval_seconds / 60;
-    custom.setAttribute('aria-label', 'Custom interval in minutes');
-    custom.hidden = Number(cadence.value) !== -1;
-    const save = async () => {
-      const value = Number(cadence.value);
-      custom.hidden = value !== -1;
-      if (value === -1 && !custom.reportValidity()) return;
-      await call('/api/sync/settings', {enabled: value !== 0, interval_seconds: value === -1 ? Number(custom.value) * 60 : value || settings.interval_seconds});
-      await refresh();
-    };
-    cadence.onchange = () => save().catch(error => showError(error.message));
-    custom.onchange = cadence.onchange;
-    label.append(cadence);
-    const check = button('Index changes now', () => call('/api/sync/check', {}));
-    check.disabled = Boolean(status.busy);
-    controls.append(label, custom, check);
-    preferences.append(node('p', 'Automatic indexing updates conversations. Index changes now also refreshes GitHub, identities, Git integration, tool summaries, Human Words, and findings.', 'muted'));
-    const schedule = node('p', `${status.pause_reason || 'Ready'} · Next run: `, 'muted');
-    schedule.append(settings.enabled ? time(settings.next_at) : document.createTextNode('Off'));
-    preferences.append(controls, schedule);
-    const sources = node('fieldset', '', 'sync-controls');
-    sources.append(node('legend', 'Index changes from these sources on this Mac'));
-    const selected = new Set(settings.sources.length ? settings.sources : (status.available_sources || status.sources || []).map(source => source.name));
-    for (const source of status.available_sources || status.sources || []) {
-      const choice = document.createElement('input');
-      choice.type = 'checkbox'; choice.checked = selected.has(source.name);
-      choice.setAttribute('aria-label', `Index changes from ${source.name}`);
-      choice.onchange = async () => {
-        if (choice.checked) selected.add(source.name); else selected.delete(source.name);
-        if (!selected.size) { choice.checked = true; selected.add(source.name); showError('Choose at least one source, or turn automatic indexing Off.'); return; }
-        try { await call('/api/sync/settings', {sources: [...selected]}); }
-        catch (error) { showError(error.message); }
-      };
-      const sourceLabel = node('label', ''); sourceLabel.append(choice, document.createTextNode(` ${source.name}`)); sources.append(sourceLabel);
-    }
-    for (const source of status.available_sources || []) {
-      if (source.preservation_mode === 'filesystem-retained-sqlite-gated') preferences.append(node('p', `${source.name}: transcript preservation is enabled for file-only inputs. Sources with SQLite naming metadata await preservation validation.`, 'muted'));
-      if (source.preservation_mode === 'live-sqlite-rollout-gap') preferences.append(node('p', `${source.name}: live indexing continues; automatic source preservation awaits validation. Use Capture & index to preserve available inputs.`, 'muted'));
-    }
-    preferences.append(sources, node('p', 'Index changes reads live inputs by default. Input preservation is opt-in; use Capture & index to preserve available inputs. Manual indexing also refreshes library-wide analysis.', 'muted'));
-    dashboard.insertBefore(preferences, document.getElementById('syncSourceTables'));
-    const latest = status.history?.[0];
-    if (settings.enabled && latest?.seconds > settings.interval_seconds) dashboard.insertBefore(node('p', 'Indexing changes takes longer than the selected interval. The next run starts after this one finishes.', 'badtext'), document.getElementById('syncDiagnosticTables'));
+    // The schedule (Background updates) is background.js's, at the top.
     const repairs = panel('Repair & maintenance', 'repairs', status.recovery_jobs?.some(job => ['interrupted', 'failed'].includes(job.state)));
     repairs.append(node('p', 'For missing data or damaged indexes. These operations can take a long time; everyday capturing and indexing do not need them.', 'muted'));
     const actions = node('div', '', 'sync-actions');
