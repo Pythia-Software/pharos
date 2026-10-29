@@ -16,13 +16,15 @@ type authorshipReply struct {
 
 // Read replies in day windows, and bounded pages within each day. QueryMaps
 // closes each statement before classification starts; no cursor pins the WAL
-// while the CPU walks the corpus. Label preparation may still supply its own
+// while the CPU walks the corpus. Advance by timestamp, using an offset only
+// within one tied timestamp; later pages never rescan an entire day. Label preparation may still supply its own
 // explicit snapshot through q.
 type authorshipReplyCursor struct {
 	q                queryer
 	start, stop      time.Time
 	page             []map[string]any
 	position, offset int
+	lower            string
 }
 
 func (cursor *authorshipReplyCursor) next(ctx context.Context) (*authorshipReply, error) {
@@ -48,7 +50,11 @@ func (cursor *authorshipReplyCursor) next(ctx context.Context) (*authorshipReply
 		query := strings.Replace(authorshipRepliesQuery, "created_at>=?1", "created_at>=?1 AND created_at<?2", 1)
 		query = strings.Replace(query, "t.started_at>=?1", "t.started_at>=?1 AND t.started_at<?2", 1)
 		batch := max(1, authorshipReplyBatch)
-		page, err := queryMapsContext(ctx, cursor.q, query+" LIMIT ?3 OFFSET ?4", formatTime(cursor.start), formatTime(end), batch, cursor.offset)
+		lower := cursor.lower
+		if lower == "" {
+			lower = formatTime(cursor.start)
+		}
+		page, err := queryMapsContext(ctx, cursor.q, query+" LIMIT ?3 OFFSET ?4", lower, formatTime(end), batch, cursor.offset)
 		if err != nil {
 			return nil, err
 		}
@@ -56,8 +62,19 @@ func (cursor *authorshipReplyCursor) next(ctx context.Context) (*authorshipReply
 		if len(page) < batch {
 			cursor.start = end
 			cursor.offset = 0
+			cursor.lower = ""
 		} else {
-			cursor.offset += len(page)
+			last := asString(page[len(page)-1]["created_at"])
+			trailing := 0
+			for i := len(page) - 1; i >= 0 && asString(page[i]["created_at"]) == last; i-- {
+				trailing++
+			}
+			if cursor.lower == last {
+				cursor.offset += trailing
+			} else {
+				cursor.offset = trailing
+			}
+			cursor.lower = last
 		}
 	}
 }
