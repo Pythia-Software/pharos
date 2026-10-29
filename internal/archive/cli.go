@@ -56,6 +56,11 @@ func Run(arguments []string) error {
 	if command == "cloud-restore" {
 		return runCloudRestoreCLI(args)
 	}
+	// Labeling never opens the catalog through OpenCatalog: prepare reads a
+	// read-only snapshot, and plan and status read only a dataset.
+	if command == "labeling" {
+		return runLabelingCLI(configPath, args, os.Stdout, os.Stderr)
+	}
 	if command == "init" {
 		path := "archive.toml"
 		if len(args) > 0 {
@@ -463,7 +468,7 @@ func firstOf(args []string) string {
 }
 
 func usageError() error {
-	return fmt.Errorf("usage: pharos [--config PATH] {app,mcp-app,library-transfer,library-recover,init,init-library,add-this-mac,serve,capture,index,history-backfill,sqlite-records,backup,cloud-backup,cloud-restore,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,upgrade,build-tools,pricing,search,tl1,findings,health,doctor,dev-ui,mcp,probe,volume-id}")
+	return fmt.Errorf("usage: pharos [--config PATH] {app,mcp-app,library-transfer,library-recover,init,init-library,add-this-mac,serve,capture,index,history-backfill,sqlite-records,backup,cloud-backup,cloud-restore,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,upgrade,build-tools,pricing,search,tl1,findings,labeling,health,doctor,dev-ui,mcp,probe,volume-id}")
 
 }
 func urlQueryEscape(value string) string {

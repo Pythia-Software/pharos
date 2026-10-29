@@ -20,6 +20,17 @@ type authorshipQuestion struct {
 	origin  textOrigin
 }
 
+// questionAnswer is a prewritten option a message submitted to a question
+// recognized in its conversation: the byte ranges of the question title and
+// the answer line, the option as offered, and the tool call that asked it.
+// Classification does not store it; labeling records it as a human action.
+type questionAnswer struct {
+	Title, Option        string
+	TitleStart, TitleEnd int
+	Start, End           int
+	Origin               textOrigin
+}
+
 func authorshipToolName(name string) string {
 	name = strings.ToLower(name)
 	if i := strings.LastIndex(name, "__"); i >= 0 {
@@ -417,6 +428,16 @@ func (c *classifier) addAuthorshipCall(at time.Time, origin textOrigin, name str
 // establish provenance. Free-text answers remain available to other rules.
 func (c *classifier) claimQuestionForms(l *labeler, input authorInput, bodyStart int) {
 	lines := textLines(input.Text)
+	// One answer per answer line: questions are in asking order, so the most
+	// recent matching one replaces an earlier one with the same title.
+	answers := map[int]questionAnswer{}
+	defer func() {
+		for _, line := range lines {
+			if answer, ok := answers[line[0]]; ok {
+				c.answers = append(c.answers, answer)
+			}
+		}
+	}()
 	for _, q := range c.questions[input.ConversationID] {
 		for i, line := range lines {
 			if line[0] < bodyStart || strings.TrimSpace(input.Text[line[0]:line[1]]) != q.title || i+1 >= len(lines) {
@@ -435,6 +456,8 @@ func (c *classifier) claimQuestionForms(l *labeler, input authorInput, bodyStart
 				}
 				if trim(option) == trim(value) {
 					generated = true
+					answers[answer[0]] = questionAnswer{Title: q.title, Option: option, TitleStart: line[0], TitleEnd: line[1],
+						Start: answer[0], End: answer[1], Origin: q.origin}
 					break
 				}
 			}

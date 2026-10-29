@@ -97,6 +97,8 @@ Delegated work is retained as a recursive `agent_sessions` tree, including sub-a
 
 Run diagnostics with `dist/Pharos.app/Contents/MacOS/pharos --config "$HOME/Library/Application Support/Pharos/archive.toml" doctor`. Configuration is documented in [`docs/configuration.md`](configuration.md).
 
+`pharos labeling` prepares a read-only snapshot of conversation text as a versioned dataset for offline labeling by a large model, runs labeling jobs and exports training data; see [`docs/library-labeling.md`](library-labeling.md).
+
 ## Sources and identity
 
 | Kind | Acquisition | Mutation capability |

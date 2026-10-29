@@ -243,9 +243,9 @@ func scratchFolder(folder string) bool {
 // conversations an app such as Conductor records starting) to the command
 // that launched it. representative maps a mirrored work to the work that
 // stands for it, whose conversation the link names when it has the command.
-func (c *Catalog) deriveLaunches(ctx context.Context, claimed map[string]bool, representative map[string]string) ([]conversationLaunch, error) {
+func (c *Catalog) deriveLaunches(ctx context.Context, q queryer, claimed map[string]bool, representative map[string]string) ([]conversationLaunch, error) {
 	index := &launchIndex{conversations: map[string]*launchConversation{}, representative: representative, counterpart: map[string]string{}, runs: map[string]bool{}, works: map[string]bool{}}
-	rows, err := c.DB.QueryContext(ctx, `SELECT c.id,c.workspace_id,COALESCE(w.location,''),COALESCE(c.parent_id,''),COALESCE(c.origin_host_id,''),c.provider,COALESCE(c.harness,''),COALESCE(c.started_at,'')
+	rows, err := q.QueryContext(ctx, `SELECT c.id,c.workspace_id,COALESCE(w.location,''),COALESCE(c.parent_id,''),COALESCE(c.origin_host_id,''),c.provider,COALESCE(c.harness,''),COALESCE(c.started_at,'')
 		FROM conversations c JOIN workspaces w ON w.id=c.workspace_id`)
 	if err != nil {
 		return nil, err
@@ -280,7 +280,7 @@ func (c *Catalog) deriveLaunches(ctx context.Context, claimed map[string]bool, r
 			index.works[location] = true
 		}
 	}
-	links, err := c.DB.QueryContext(ctx, `SELECT left_id,right_id FROM conversation_identity_links`)
+	links, err := q.QueryContext(ctx, `SELECT left_id,right_id FROM conversation_identity_links`)
 	if err != nil {
 		return nil, err
 	}
@@ -296,7 +296,7 @@ func (c *Catalog) deriveLaunches(ctx context.Context, claimed map[string]bool, r
 	if err := links.Err(); err != nil {
 		return nil, err
 	}
-	named, err := c.headlessCommands(ctx)
+	named, err := c.headlessCommands(ctx, q)
 	if err != nil {
 		return nil, err
 	}
@@ -320,7 +320,7 @@ func (c *Catalog) deriveLaunches(ctx context.Context, claimed map[string]bool, r
 	for _, key := range keys {
 		for _, stream := range streams[key] {
 			first := stream[0]
-			candidates, err := c.launchCandidates(ctx, first.started)
+			candidates, err := c.launchCandidates(ctx, q, first.started)
 			if err != nil {
 				return nil, err
 			}
@@ -374,8 +374,8 @@ func (c *Catalog) deriveLaunches(ctx context.Context, claimed map[string]bool, r
 
 // headlessCommands returns, by agent in start order, the shell commands that
 // ran an agent headlessly.
-func (c *Catalog) headlessCommands(ctx context.Context) (map[string][]launchCommand, error) {
-	rows, err := c.DB.QueryContext(ctx, `SELECT t.tool_call_id,t.program,COALESCE(t.subcommand,''),t.command,c.conversation_id,COALESCE(c.call_message_id,''),c.started_at,c.ended_at
+func (c *Catalog) headlessCommands(ctx context.Context, q queryer) (map[string][]launchCommand, error) {
+	rows, err := q.QueryContext(ctx, `SELECT t.tool_call_id,t.program,COALESCE(t.subcommand,''),t.command,c.conversation_id,COALESCE(c.call_message_id,''),c.started_at,c.ended_at
 		FROM tool_commands t JOIN tool_calls c ON c.id=t.tool_call_id
 		WHERE t.program IN ('claude','agy','codex') AND c.started_at IS NOT NULL AND c.ended_at IS NOT NULL`)
 	if err != nil {
@@ -406,8 +406,8 @@ func (c *Catalog) headlessCommands(ctx context.Context) (map[string][]launchComm
 
 // launchCandidates returns the shell commands that started within launchLead
 // before at, which the first run of a stream started at.
-func (c *Catalog) launchCandidates(ctx context.Context, at time.Time) ([]launchCommand, error) {
-	rows, err := c.DB.QueryContext(ctx, `SELECT id,conversation_id,COALESCE(call_message_id,''),COALESCE(command,''),started_at,ended_at,backgrounded
+func (c *Catalog) launchCandidates(ctx context.Context, q queryer, at time.Time) ([]launchCommand, error) {
+	rows, err := q.QueryContext(ctx, `SELECT id,conversation_id,COALESCE(call_message_id,''),COALESCE(command,''),started_at,ended_at,backgrounded
 		FROM tool_calls WHERE tool_category='command' AND started_at BETWEEN ? AND ? AND ended_at IS NOT NULL`,
 		formatTime(at.Add(-launchLead)), formatTime(latestLaunch(at)))
 	if err != nil {

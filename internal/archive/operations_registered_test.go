@@ -42,6 +42,9 @@ var unregisteredWorkAllowed = map[string]allowedWork{
 	"incremental_metrics.go:beginSyncMeasurement": {1, "a timer sampling memory inside an index run, which is the operation"},
 	"main.go:run":                                 {1, "cmd/feedback's signal handling, outside the service"},
 	"status_api.go:statusCurrent":                 {1, "the status snapshot's shared computation: a read, bounded by statusComputeTimeout, that writes nothing"},
+	"labeling_routes.go:runLabelingProcess":       {3, "subprocess pipe: feeds a labeling CLI its prompt, reads its stream and waits for it to exit, inside the offline `pharos labeling run` command"},
+	"labeling_routes.go:labelingCLIVersion":       {1, "subprocess: a labeling CLI's --version, bounded by a timeout; writes nothing"},
+	"labeling_run.go:loop":                        {1, "the offline `pharos labeling run` command's bounded worker pool; it runs outside the service and journals its work in the dataset's own ledger"},
 }
 
 type allowedWork struct {

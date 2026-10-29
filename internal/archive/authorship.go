@@ -304,6 +304,8 @@ type authorInput struct {
 type authorResult struct {
 	Input authorInput
 	Spans []authorSpan
+	// Answers are the question-form options the message submitted.
+	Answers []questionAnswer
 }
 
 // textOrigin names the message a span's text was found in.
@@ -600,6 +602,9 @@ type classifier struct {
 	lines        map[uint64]*lineUse
 	lastUserSent map[string]time.Time
 	questions    map[string][]authorshipQuestion
+	// answers holds the question-form options the last classified message
+	// submitted.
+	answers []questionAnswer
 }
 
 func newClassifier(inputs []authorInput) *classifier {
@@ -628,6 +633,7 @@ func newClassifier(inputs []authorInput) *classifier {
 func (c *classifier) classify(input authorInput) []authorSpan {
 	text := input.Text
 	l := newLabeler(text)
+	c.answers = nil
 	previous, hasPrevious := c.lastUserSent[input.ConversationID]
 	c.lastUserSent[input.ConversationID] = input.SentAt
 	if reason, automated := automatedReason(input); automated {
@@ -1347,17 +1353,39 @@ const (
 // authorshipInputs links headless runs to the commands that launched them,
 // and reads the user messages to classify.
 func (c *Catalog) authorshipInputs(ctx context.Context) ([]authorInput, []conversationLaunch, error) {
-	workspaces, err := queryMapsContext(ctx, c.DB, `SELECT w.id,w.source_kind,w.activity_at FROM workspaces w`)
+	return c.authorshipInputsFrom(ctx, c.DB)
+}
+
+// authorshipInputsFrom is authorshipInputs read through q, such as one read
+// transaction holding a consistent snapshot (see labeling prepare).
+func (c *Catalog) authorshipInputsFrom(ctx context.Context, q queryer) ([]authorInput, []conversationLaunch, error) {
+	workspaces, err := queryMapsContext(ctx, q, `SELECT w.id,w.source_kind,w.activity_at FROM workspaces w`)
 	if err != nil {
 		return nil, nil, err
 	}
 	// Not suppressMirrors: its cached links can predate a running ingest's
 	// identity reconciliation (see cacheVersion), and these results are stored
 	// as current for this generation.
-	links, err := queryMapsContext(ctx, c.DB, identityLinkWorkspacesSQL)
+	links, err := queryMapsContext(ctx, q, identityLinkWorkspacesSQL)
 	if err != nil {
 		return nil, nil, err
 	}
+	representative := mirrorRepresentatives(workspaces, links)
+	claimed, err := c.appClaims(ctx, q)
+	if err != nil {
+		return nil, nil, err
+	}
+	launches, err := c.deriveLaunches(ctx, q, claimed, representative)
+	if err != nil {
+		return nil, nil, err
+	}
+	inputs, err := c.authorInputs(ctx, q, representative, claimed, launches)
+	return inputs, launches, err
+}
+
+// mirrorRepresentatives maps each mirrored work to the work that stands for
+// it (see suppressMirrorRows).
+func mirrorRepresentatives(workspaces, links []map[string]any) map[string]string {
 	representative := map[string]string{}
 	for _, row := range suppressMirrorRows(workspaces, links) {
 		if mirrors, ok := row["mirrored_workspace_ids"].([]string); ok {
@@ -1366,22 +1394,13 @@ func (c *Catalog) authorshipInputs(ctx context.Context) ([]authorInput, []conver
 			}
 		}
 	}
-	claimed, err := c.appClaims(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	launches, err := c.deriveLaunches(ctx, claimed, representative)
-	if err != nil {
-		return nil, nil, err
-	}
-	inputs, err := c.authorInputs(ctx, representative, claimed, launches)
-	return inputs, launches, err
+	return representative
 }
 
 // appClaims returns the conversations an app records starting: those a
 // Conductor session links to.
-func (c *Catalog) appClaims(ctx context.Context) (map[string]bool, error) {
-	rows, err := c.DB.QueryContext(ctx, `SELECT left_id FROM conversation_identity_links UNION SELECT right_id FROM conversation_identity_links`)
+func (c *Catalog) appClaims(ctx context.Context, q queryer) (map[string]bool, error) {
+	rows, err := q.QueryContext(ctx, `SELECT left_id FROM conversation_identity_links UNION SELECT right_id FROM conversation_identity_links`)
 	if err != nil {
 		return nil, err
 	}
@@ -1399,10 +1418,10 @@ func (c *Catalog) appClaims(ctx context.Context) (map[string]bool, error) {
 
 // authorInputs reads the user messages to classify, skipping mirrored works
 // (the keys of representative).
-func (c *Catalog) authorInputs(ctx context.Context, representative map[string]string, claimed map[string]bool, launches []conversationLaunch) ([]authorInput, error) {
+func (c *Catalog) authorInputs(ctx context.Context, q queryer, representative map[string]string, claimed map[string]bool, launches []conversationLaunch) ([]authorInput, error) {
 	// Only a Mac whose Conductor is read can show a session was not its own.
 	conductorHosts := map[string]bool{}
-	hosts, err := c.DB.QueryContext(ctx, `SELECT DISTINCT c.origin_host_id FROM conversations c JOIN workspaces w ON w.id=c.workspace_id
+	hosts, err := q.QueryContext(ctx, `SELECT DISTINCT c.origin_host_id FROM conversations c JOIN workspaces w ON w.id=c.workspace_id
 		WHERE w.source_kind='conductor' AND c.origin_host_id IS NOT NULL`)
 	if err != nil {
 		return nil, err
@@ -1423,7 +1442,7 @@ func (c *Catalog) authorInputs(ctx context.Context, representative map[string]st
 	for index := range launches {
 		launched[launches[index].child] = &launches[index]
 	}
-	rows, err := c.DB.QueryContext(ctx, authorshipInputsQuery)
+	rows, err := q.QueryContext(ctx, authorshipInputsQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -1460,11 +1479,16 @@ func (c *Catalog) authorInputs(ctx context.Context, representative map[string]st
 // replies in the same order, so the agent index always holds exactly the
 // replies of the preceding window.
 func (c *Catalog) classifyInputs(ctx context.Context, inputs []authorInput) ([]authorResult, error) {
+	return classifyInputsFrom(ctx, c.DB, inputs)
+}
+
+// classifyInputsFrom is classifyInputs reading agent replies through q.
+func classifyInputsFrom(ctx context.Context, q queryer, inputs []authorInput) ([]authorResult, error) {
 	results := make([]authorResult, 0, len(inputs))
 	if len(inputs) == 0 {
 		return results, nil
 	}
-	rows, err := c.DB.QueryContext(ctx, authorshipRepliesQuery, formatTime(inputs[0].SentAt.Add(-authorshipWindow)))
+	rows, err := q.QueryContext(ctx, authorshipRepliesQuery, formatTime(inputs[0].SentAt.Add(-authorshipWindow)))
 	if err != nil {
 		return nil, err
 	}
@@ -1513,7 +1537,8 @@ func (c *Catalog) classifyInputs(ctx context.Context, inputs []authorInput) ([]a
 			}
 		}
 		classifier.agentText.evict(cutoff)
-		results = append(results, authorResult{Input: input, Spans: classifier.classify(input)})
+		spans := classifier.classify(input)
+		results = append(results, authorResult{Input: input, Spans: spans, Answers: classifier.answers})
 		if index%100 == 0 || index+1 == len(inputs) {
 			reportWork(ctx, "classifying authorship", "message", index+1, len(inputs))
 		}

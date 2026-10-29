@@ -19,7 +19,18 @@ type usageConversationAttribution struct {
 // even across workspaces. Filename forks are continuations of the same work.
 // Missing parents and cycles remain unresolved rather than inventing a root.
 func (c *Catalog) usageConversationRoots(ledger []map[string]any) (*usageConversationAttribution, error) {
-	conversations, err := queryMaps(c.reader(), `SELECT c.id,c.workspace_id,c.parent_id,c.agent_depth,c.provider,
+	return usageConversationRootsFrom(c.reader(), ledger)
+}
+
+// usageConversationRootsFrom is usageConversationRoots read through q.
+func usageConversationRootsFrom(q queryer, ledger []map[string]any) (*usageConversationAttribution, error) {
+	return usageConversationRootsWith(q, ledger, nil)
+}
+
+// usageConversationRootsWith resolves roots with the given launch links
+// (child_id, parent_id) in place of the stored ledger, when not nil.
+func usageConversationRootsWith(q queryer, ledger, derived []map[string]any) (*usageConversationAttribution, error) {
+	conversations, err := queryMaps(q, `SELECT c.id,c.workspace_id,c.parent_id,c.agent_depth,c.provider,
 		COALESCE(NULLIF(c.model,''),a.model) model,COALESCE(NULLIF(c.effort,''),a.effort) effort,
 		w.title root_title,r.display_name root_repository_name
 		FROM conversations c LEFT JOIN agent_sessions a ON a.conversation_id=c.id AND a.native_id='main'
@@ -27,17 +38,19 @@ func (c *Catalog) usageConversationRoots(ledger []map[string]any) (*usageConvers
 	if err != nil {
 		return nil, err
 	}
-	sessions, err := queryMaps(c.reader(), `SELECT id,native_id,kind,conversation_id,parent_id,child_conversation_id FROM agent_sessions ORDER BY id`)
+	sessions, err := queryMaps(q, `SELECT id,native_id,kind,conversation_id,parent_id,child_conversation_id FROM agent_sessions ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
-	links, err := queryMaps(c.reader(), `SELECT left_id,right_id FROM conversation_identity_links ORDER BY left_id,right_id`)
+	links, err := queryMaps(q, `SELECT left_id,right_id FROM conversation_identity_links ORDER BY left_id,right_id`)
 	if err != nil {
 		return nil, err
 	}
-	launches, err := queryMaps(c.reader(), `SELECT child_id,parent_id FROM conversation_launches ORDER BY child_id,parent_id`)
-	if err != nil {
-		return nil, err
+	launches := derived
+	if launches == nil {
+		if launches, err = queryMaps(q, `SELECT child_id,parent_id FROM conversation_launches ORDER BY child_id,parent_id`); err != nil {
+			return nil, err
+		}
 	}
 	return resolveUsageConversationRoots(conversations, sessions, links, launches, ledger), nil
 }

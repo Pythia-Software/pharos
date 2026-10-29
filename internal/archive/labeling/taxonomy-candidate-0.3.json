@@ -1,0 +1,670 @@
+{
+  "version": "candidate-0.3",
+  "roots": [
+    "P",
+    "C"
+  ],
+  "root_policy": "multi",
+  "status": "structural proposal, not validated",
+  "rows": [
+    {
+      "id": "P",
+      "parent": null,
+      "name": "Pitcher",
+      "definition": "Initiate or steer what another entity should do, supply, or decide. This is a message function, independent of the sender\u2019s identity.",
+      "example": "",
+      "children_policy": "multi",
+      "boundary": "",
+      "children": [
+        "P.request",
+        "P.frame",
+        "P.control"
+      ],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "P.request",
+      "parent": "P",
+      "name": "Request",
+      "definition": "Ask for work or input. Work and input branches may coexist.",
+      "example": "",
+      "children_policy": "multi",
+      "boundary": "",
+      "children": [
+        "P.request.work",
+        "P.request.input"
+      ],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "P.request.work",
+      "parent": "P.request",
+      "name": "Request work",
+      "definition": "Commission an activity. Its children are work-request subtypes, not a separate global Activity dimension.",
+      "example": "",
+      "children_policy": "multi",
+      "boundary": "",
+      "children": [
+        "P.request.work.investigate",
+        "P.request.work.implement",
+        "P.request.work.review",
+        "P.request.work.revise",
+        "P.request.work.verify"
+      ],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "P.request.work.investigate",
+      "parent": "P.request.work",
+      "name": "Investigate",
+      "definition": "Request discovery, diagnosis, or deeper understanding.",
+      "example": "Investigate why the importer drops messages.",
+      "children_policy": "none",
+      "boundary": "A request for a known explanation may instead be P.request.input.information. Keep the broad parent when this distinction cannot be established.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "P.request.work.implement",
+      "parent": "P.request.work",
+      "name": "Implement",
+      "definition": "Request new behavior or a work product.",
+      "example": "Add a library chooser.",
+      "children_policy": "none",
+      "boundary": "",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "P.request.work.review",
+      "parent": "P.request.work",
+      "name": "Review",
+      "definition": "Request an assessment of existing work or a proposal.",
+      "example": "Review this diff for correctness.",
+      "children_policy": "none",
+      "boundary": "A request to fix review findings is revision, not a request to perform a review.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "P.request.work.revise",
+      "parent": "P.request.work",
+      "name": "Revise",
+      "definition": "Request changes to existing work, including repairs or addressing feedback.",
+      "example": "Address the review comments.",
+      "children_policy": "none",
+      "boundary": "Feedback is the reason for revision when stated; it is not an independently inferred relation tag.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "P.request.work.verify",
+      "parent": "P.request.work",
+      "name": "Verify",
+      "definition": "Request testing, validation, or reproduction.",
+      "example": "Reproduce the missing-message case.",
+      "children_policy": "none",
+      "boundary": "",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "P.request.input",
+      "parent": "P.request",
+      "name": "Request input",
+      "definition": "Ask the other entity for information, clarification, a choice, permission, or guidance.",
+      "example": "",
+      "children_policy": "multi",
+      "boundary": "",
+      "children": [
+        "P.request.input.information",
+        "P.request.input.clarification",
+        "P.request.input.choice",
+        "P.request.input.permission",
+        "P.request.input.guidance"
+      ],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "P.request.input.information",
+      "parent": "P.request.input",
+      "name": "Information or explanation",
+      "definition": "Ask for an answer, explanation, or known status.",
+      "example": "Why is the index empty?",
+      "children_policy": "none",
+      "boundary": "\u201cWhy\u201d does not reliably distinguish an investigation from an explanation. Context or a broad parent can be necessary.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "P.request.input.clarification",
+      "parent": "P.request.input",
+      "name": "Clarification",
+      "definition": "Ask to disambiguate or supply a missing detail.",
+      "example": "Do you mean text contrast or chart colors?",
+      "children_policy": "none",
+      "boundary": "This is Pitcher for a human, lead agent, or worker. No second Catcher clarification tag or synthetic sub-session is created.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "P.request.input.choice",
+      "parent": "P.request.input",
+      "name": "Choice",
+      "definition": "Ask for selection among identifiable alternatives.",
+      "example": "Which layout should we use?",
+      "children_policy": "none",
+      "boundary": "",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "P.request.input.permission",
+      "parent": "P.request.input",
+      "name": "Permission",
+      "definition": "Ask for authorization to perform an identifiable action.",
+      "example": "May I publish this version?",
+      "children_policy": "none",
+      "boundary": "",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "P.request.input.guidance",
+      "parent": "P.request.input",
+      "name": "Guidance",
+      "definition": "Ask for a procedure, priority, policy, or decision criterion.",
+      "example": "Which release policy should I follow?",
+      "children_policy": "none",
+      "boundary": "Can coexist with clarification if both functions have evidence.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "P.frame",
+      "parent": "P",
+      "name": "Frame or constrain",
+      "definition": "State what should be achieved and the conditions under which it should be done.",
+      "example": "",
+      "children_policy": "multi",
+      "boundary": "",
+      "children": [
+        "P.frame.scope",
+        "P.frame.constraint",
+        "P.frame.criteria"
+      ],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "P.frame.scope",
+      "parent": "P.frame",
+      "name": "Scope or objective",
+      "definition": "Specify included work, exclusions, or the desired result.",
+      "example": "Cover import and export.",
+      "children_policy": "none",
+      "boundary": "",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "P.frame.constraint",
+      "parent": "P.frame",
+      "name": "Constraint",
+      "definition": "Restrict an action, implementation, process, or output.",
+      "example": "Keep the existing storage format.",
+      "children_policy": "none",
+      "boundary": "\u201cDo not investigate yet\u201d supplies a negative constraint, not a positive investigation request.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "P.frame.criteria",
+      "parent": "P.frame",
+      "name": "Acceptance criteria",
+      "definition": "State how the work will be judged or verified.",
+      "example": "It must reopen the same library after restart.",
+      "children_policy": "none",
+      "boundary": "",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "P.control",
+      "parent": "P",
+      "name": "Steer ongoing work",
+      "definition": "Control continuation or direction of identifiable existing work.",
+      "example": "",
+      "children_policy": "multi",
+      "boundary": "",
+      "children": [
+        "P.control.continue",
+        "P.control.redirect",
+        "P.control.pause",
+        "P.control.cancel"
+      ],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "P.control.continue",
+      "parent": "P.control",
+      "name": "Continue",
+      "definition": "Ask for work to proceed.",
+      "example": "Please continue.",
+      "children_policy": "none",
+      "boundary": "Continuation does not imply acceptance of the approach or completion.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "P.control.redirect",
+      "parent": "P.control",
+      "name": "Redirect",
+      "definition": "Change the approach, priority, or scope.",
+      "example": "Focus on the reader first.",
+      "children_policy": "none",
+      "boundary": "Can coexist with a new work request, a constraint, and Catcher feedback.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "P.control.pause",
+      "parent": "P.control",
+      "name": "Pause",
+      "definition": "Suspend work without withdrawing it.",
+      "example": "Hold off until I check the screenshot.",
+      "children_policy": "none",
+      "boundary": "",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "P.control.cancel",
+      "parent": "P.control",
+      "name": "Cancel",
+      "definition": "Withdraw or stop the existing work.",
+      "example": "Stop this task; we no longer need it.",
+      "children_policy": "none",
+      "boundary": "Canceling the whole task differs from rejecting one proposal.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C",
+      "parent": null,
+      "name": "Catcher",
+      "definition": "Supply a response, assessment, or account of work in response to another entity or a received task. Includes intermediate work and retained deliberation.",
+      "example": "",
+      "children_policy": "multi",
+      "boundary": "",
+      "children": [
+        "C.input",
+        "C.feedback",
+        "C.report",
+        "C.deliberation",
+        "C.difficulty"
+      ],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.input",
+      "parent": "C",
+      "name": "Supply requested input",
+      "definition": "Answer or provide a decision requested by the other entity.",
+      "example": "",
+      "children_policy": "multi",
+      "boundary": "",
+      "children": [
+        "C.input.answer",
+        "C.input.option",
+        "C.input.permission"
+      ],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.input.answer",
+      "parent": "C.input",
+      "name": "Answer or explain",
+      "definition": "Provide information responsive to a request.",
+      "example": "The importer drops records without a source ID.",
+      "children_policy": "none",
+      "boundary": "",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.input.option",
+      "parent": "C.input",
+      "name": "Choose an option",
+      "definition": "Select a recoverable alternative the other entity offered.",
+      "example": "The second layout.",
+      "children_policy": "none",
+      "boundary": "Without the preceding options, \u201cthe second one\u201d may remain a context-dependent candidate.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.input.permission",
+      "parent": "C.input",
+      "name": "Respond to permission request",
+      "definition": "Grant, deny, or defer authorization for a known action.",
+      "example": "Yes, publish it.",
+      "children_policy": "exclusive_same_target_and_time",
+      "boundary": "This is the deliberately narrow exclusivity example. If the scope is unclear or contradictory, retain the parent and mark the child unresolved.",
+      "children": [
+        "C.input.permission.grant",
+        "C.input.permission.deny",
+        "C.input.permission.defer"
+      ],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.input.permission.grant",
+      "parent": "C.input.permission",
+      "name": "Grant",
+      "definition": "Authorize the specified action.",
+      "example": "Yes, publish this version.",
+      "children_policy": "none",
+      "boundary": "",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.input.permission.deny",
+      "parent": "C.input.permission",
+      "name": "Deny",
+      "definition": "Refuse authorization for the specified action.",
+      "example": "Do not publish this version.",
+      "children_policy": "none",
+      "boundary": "",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.input.permission.defer",
+      "parent": "C.input.permission",
+      "name": "Defer",
+      "definition": "Postpone deciding or granting authorization.",
+      "example": "Wait until I have reviewed it.",
+      "children_policy": "none",
+      "boundary": "A conditional grant is not automatically defer; this boundary needs adjudication on real messages.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.feedback",
+      "parent": "C",
+      "name": "Evaluate received work or a proposal",
+      "definition": "Express a disposition about something the other entity supplied. Replaces the old Pitcher disposition family and separate alignment tags.",
+      "example": "",
+      "children_policy": "multi",
+      "boundary": "",
+      "children": [
+        "C.feedback.accept",
+        "C.feedback.qualify",
+        "C.feedback.challenge",
+        "C.feedback.reject"
+      ],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.feedback.accept",
+      "parent": "C.feedback",
+      "name": "Accept",
+      "definition": "Accept a recoverable result, claim, or proposal.",
+      "example": "The approach looks good.",
+      "children_policy": "none",
+      "boundary": "A nearby new instruction is independently Pitcher. Acceptance need not cover every part of the proposal.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.feedback.qualify",
+      "parent": "C.feedback",
+      "name": "Qualify",
+      "definition": "Retain part of a response while stating an exception or condition.",
+      "example": "Good approach, but preserve the old format.",
+      "children_policy": "none",
+      "boundary": "Can overlap acceptance of one target, concern about another, and a Pitcher constraint. These siblings are not globally exclusive.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.feedback.challenge",
+      "parent": "C.feedback",
+      "name": "Challenge or identify a problem",
+      "definition": "Express an error, unmet expectation, or disagreement.",
+      "example": "The contrast still feels weak.",
+      "children_policy": "none",
+      "boundary": "Visual feedback can be a later child if real samples support a useful distinction; a screenshot alone does not imply criticism.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.feedback.reject",
+      "parent": "C.feedback",
+      "name": "Reject",
+      "definition": "Decline a supplied proposal or result.",
+      "example": "That design does not work for me.",
+      "children_policy": "none",
+      "boundary": "Rejection of a proposal does not imply cancellation of the task. A cancellation request is separately P.control.cancel.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.report",
+      "parent": "C",
+      "name": "Report work or state",
+      "definition": "Describe intended work, progress, findings, verification, delivery, or limits. Siblings can co-occur.",
+      "example": "",
+      "children_policy": "multi",
+      "boundary": "",
+      "children": [
+        "C.report.intent",
+        "C.report.progress",
+        "C.report.product",
+        "C.report.finding",
+        "C.report.verification",
+        "C.report.completion",
+        "C.report.limitation"
+      ],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.report.intent",
+      "parent": "C.report",
+      "name": "Intention",
+      "definition": "State an intention to take up the work.",
+      "example": "I will investigate the dropped messages.",
+      "children_policy": "none",
+      "boundary": "Future intention is neither a request to another entity nor work already performed.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.report.progress",
+      "parent": "C.report",
+      "name": "Progress",
+      "definition": "Describe work done or still underway.",
+      "example": "The parser is updated; the reader changes remain.",
+      "children_policy": "none",
+      "boundary": "",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.report.product",
+      "parent": "C.report",
+      "name": "Work product or change",
+      "definition": "Present an artifact or report changes made.",
+      "example": "Here is the revised panel.",
+      "children_policy": "none",
+      "boundary": "An artifact can be delivered without claiming the full task is complete.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.report.finding",
+      "parent": "C.report",
+      "name": "Finding or explanation from work",
+      "definition": "Report an observation, diagnosis, or assessment result.",
+      "example": "I found that missing IDs cause the drop.",
+      "children_policy": "none",
+      "boundary": "Do not copy the request\u2019s investigation label onto the response. This is a reported finding; the underlying claim may be wrong.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.report.verification",
+      "parent": "C.report",
+      "name": "Verification result",
+      "definition": "Report a check, test, or reproduction outcome, whether pass, fail, or inconclusive.",
+      "example": "The import tests fail on the new fixture.",
+      "children_policy": "none",
+      "boundary": "Success/failure is a scoped result value, not three incompatible whole-message tags. A planned check is not a verification result.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.report.completion",
+      "parent": "C.report",
+      "name": "Completion claim",
+      "definition": "State that identifiable work is complete.",
+      "example": "The import fixes are complete.",
+      "children_policy": "none",
+      "boundary": "A final channel, conditional instruction, quoted \u201cdone,\u201d or lack of further messages is not sufficient evidence.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.report.limitation",
+      "parent": "C.report",
+      "name": "Limitation or assumption",
+      "definition": "State a premise, unverified area, or limit of the response.",
+      "example": "I have not verified WebKit.",
+      "children_policy": "none",
+      "boundary": "A limitation need not be a blocker. Completion of one component can coexist with a limitation on another.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.deliberation",
+      "parent": "C",
+      "name": "Retained work deliberation",
+      "definition": "Express a plan, hypothesis, examination of evidence, or revision of understanding while working on a received task. Channel alone does not supply this tag.",
+      "example": "",
+      "children_policy": "multi",
+      "boundary": "",
+      "children": [
+        "C.deliberation.plan",
+        "C.deliberation.hypothesis",
+        "C.deliberation.evidence",
+        "C.deliberation.reconsider"
+      ],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.deliberation.plan",
+      "parent": "C.deliberation",
+      "name": "Plan next step",
+      "definition": "Consider the next action to take oneself.",
+      "example": "I should inspect the journal next.",
+      "children_policy": "none",
+      "boundary": "Self-directed planning is not a Pitcher request unless another entity is actually being asked to act.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.deliberation.hypothesis",
+      "parent": "C.deliberation",
+      "name": "Consider a hypothesis",
+      "definition": "Propose a tentative explanation.",
+      "example": "Maybe the importer drops records before indexing.",
+      "children_policy": "none",
+      "boundary": "",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.deliberation.evidence",
+      "parent": "C.deliberation",
+      "name": "Weigh evidence",
+      "definition": "Assess what observations support or undermine a claim.",
+      "example": "The journal contains those records, so the drop seems later.",
+      "children_policy": "none",
+      "boundary": "This is expressed deliberation, not an asserted view into unretained internal reasoning.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.deliberation.reconsider",
+      "parent": "C.deliberation",
+      "name": "Reconsider or self-correct",
+      "definition": "Revise a previously stated interpretation or plan.",
+      "example": "My earlier diagnosis was wrong.",
+      "children_policy": "none",
+      "boundary": "A different statement alone does not establish a correction of a known prior claim.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.difficulty",
+      "parent": "C",
+      "name": "State a difficulty",
+      "definition": "Explicitly report something that makes the task unclear, inconsistent, or blocked. This replaces a free-standing Obstacle dimension.",
+      "example": "",
+      "children_policy": "multi",
+      "boundary": "",
+      "children": [
+        "C.difficulty.ambiguity",
+        "C.difficulty.inconsistency",
+        "C.difficulty.guidance",
+        "C.difficulty.blocker"
+      ],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.difficulty.ambiguity",
+      "parent": "C.difficulty",
+      "name": "Ambiguous or missing information",
+      "definition": "State that a needed referent, goal, or detail is unclear.",
+      "example": "Contrast could mean text or chart colors.",
+      "children_policy": "none",
+      "boundary": "A subsequent clarification question is independently P.request.input.clarification. A question alone does not prove ambiguity.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.difficulty.inconsistency",
+      "parent": "C.difficulty",
+      "name": "Inconsistency",
+      "definition": "Explicitly identify conflicting requirements, claims, or evidence.",
+      "example": "These two requirements conflict.",
+      "children_policy": "none",
+      "boundary": "Tag the expressed conflict. Verifying whether the requirements actually contradict is a different task.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.difficulty.guidance",
+      "parent": "C.difficulty",
+      "name": "Missing guidance",
+      "definition": "State that a needed policy, priority, or decision criterion is unspecified.",
+      "example": "I do not know which release policy applies.",
+      "children_policy": "none",
+      "boundary": "Asking for guidance is independently Pitcher. The message may state a difficulty without asking anything.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    },
+    {
+      "id": "C.difficulty.blocker",
+      "parent": "C.difficulty",
+      "name": "Blocker",
+      "definition": "State that an obstacle prevents an identifiable action.",
+      "example": "I cannot run the checks without the fixture.",
+      "children_policy": "none",
+      "boundary": "A limitation or uncertainty does not automatically mean work is blocked.",
+      "children": [],
+      "selection": "independent candidate detection; accepting a child entails its ancestors"
+    }
+  ]
+}
