@@ -43,21 +43,25 @@ shipped as #271–#273.
 
 Pharos uses the published Query Table module and packages without patches.
 The current standalone assignment is
-[`query-table-after-0.9.3.md`](query-table-after-0.9.3.md): close the remaining
-V3/V2 reduction cost gaps and let computed previews use modern transports.
-It includes the 0.9.3 baseline, complete reproduction context and acceptance
-criteria, and can be sent directly to the Query Table team.
+[`query-table-after-0.9.6.md`](query-table-after-0.9.6.md). It collects every
+open request, checked against the 0.9.6 source and browser suite: chart labels,
+colours, cycle grouping and hit targets; fit-to-screen clipping and grouped
+Detail; saving host query state and last-successful persistence; minimum
+counts, calendar grouping keys and OR-of-AND filters; and the remaining V2,
+text-index and metadata performance asks. It can be sent directly to the
+Query Table team.
 
-[`query-table-dashboard-views.md`](query-table-dashboard-views.md) is a
-standalone assignment against 0.9.5 from the dashboard analysis views. It
-asks for:
-- chart group labels that fit instead of clipping their start;
-- marks coloured by their whole group key;
-- hour-of-day and weekday grouping with per-occurrence statistics and
-  drill-down;
-- a minimum count over distinct values.
-
-It can be sent directly to the Query Table team.
+It supersedes the open requests in
+[`query-table-dashboard-views.md`](query-table-dashboard-views.md),
+[`query-table-fit-link-clipping.md`](query-table-fit-link-clipping.md),
+[`query-table-fit-screen-controls.md`](query-table-fit-screen-controls.md),
+[`query-table-group-detail.md`](query-table-group-detail.md),
+[`query-table-saved-host-query-state.md`](query-table-saved-host-query-state.md)
+(with [`query-table-host-search-clauses.md`](query-table-host-search-clauses.md)),
+[`query-table-query-recovery.md`](query-table-query-recovery.md),
+[`query-table-after-0.9.3.md`](query-table-after-0.9.3.md) and
+[`usage-query-upstream-handoff.md`](../usage-query-upstream-handoff.md).
+Those remain the detailed records of each request.
 
 [`query-table-go-link-codec.md`](query-table-go-link-codec.md) is a standalone
 assignment against 0.9.5. It asks for Go `EncodeQueryLink` and
