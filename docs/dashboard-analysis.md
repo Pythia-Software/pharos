@@ -85,22 +85,23 @@ what each offers and why.
   breakdown's fields followed by the key's other fields, so a card keyed by
   `[tool_name, conversation_id]` reads the same rows.
 - **Cycle keys** (optional, `cycle`). For each of `hour` and `weekday`, the
-  field a cycle folds and how its keys name their slots (`CycleKey`):
+  field a cycle reads and how its keys name their slots (`CycleKey`):
+  - `timestamp`: a datetime field. Query Table computes the cycle itself:
+    hour of day or day of week in the viewer's zone (`dateGrouping`
+    `hourOfDay` or `dayOfWeek`), over whole local hours or days. Pharos
+    MCP, Agent Time, Skills, Human Words and Parallelism read `called_at`,
+    `started_at`, `created_at`, `sent_at` and `started_at` this way.
   - `recorded-date`: a date the recording Mac assigned in its own zone, such
     as usage `day`. It folds as a date.
   - `instant`: a UTC instant, such as usage `hour`, placed at the viewer's
     local hour.
-  - `timestamp`: a datetime field grouped natively with `dateGrouping`, by
-    day in the viewer's zone or by UTC hour (`includeEmpty`, observed
-    range). Pharos MCP, Agent Time, Skills, Human Words and Parallelism fold
-    `called_at`, `started_at`, `created_at`, `sent_at` and `started_at`
-    this way.
 
-  One function, `cycleFrame` in `weekday-cover.ts`, derives the zone a cycle
-  folds in, its complete range and each key's slot start, for `cycleResult`
-  and for the weekday cards' `weekdayMetric` alike. A catalog without cycle
-  keys offers the cycle view disabled with its reason; one without a cycle
-  disables that cycle.
+  Usage's two keys are folded in the browser (`cycleResult`). One function,
+  `cycleFrame` in `weekday-cover.ts`, derives the zone a fold uses, its
+  complete range and each key's slot start, for `cycleResult` and for the
+  weekday cards' `weekdayMetric` alike. A catalog without cycle keys offers
+  the cycle view disabled with its reason; one without a cycle disables that
+  cycle.
 - **Record views** follow from the catalog. Without units, Scatter is
   unavailable; without units or any measure with a per-record `value`,
   Distribution is too (the Tools rollup: a daily summary is not an
@@ -108,10 +109,13 @@ what each offers and why.
   (`viewUnavailable`), and a link asking for one opens Compare. Where records
   carry values but some measure does not (Pharos MCP's call count), the
   distribution's Metric control disables that measure.
-- **Samples** (optional, `samples`). What a records minimum counts when one
-  record is not one observation: an additive measure. Tools counts calls, so
-  "ten calls" is a group filter on summed calls over one grouped row per
-  group, not `minCount` on daily summaries.
+- **Samples** (optional, `samples`). What a records compare's minimum counts
+  when one record is not one observation: a summed field or a field's
+  distinct values, with the unit the controls name. Tools counts calls
+  (`{ sum: "call_count" }`), so "ten calls" sums its daily summaries' calls.
+  Tokens and Cost and Carbon count conversations
+  (`{ distinct: "conversation_id" }`): a usage record is a slice of one
+  session's day.
 - **Request** (optional, `request`). How a catalog's records reach the
   service, beside the dashboard's filters (`AnalysisRequest`):
   - `params` are query-string parameters every request carries
@@ -158,10 +162,10 @@ what each offers and why.
   rule; usage keeps its recorded `hour` too. The trade-off: a record's
   recorded day is the recording Mac's local date, so after a time-zone
   change a late-evening record can sit on one day in a day trend and on the
-  next in the weekday cycle; the trend's note says so. Pharos's grouping
-  stages do not yet group a timestamp by hour (Query Table 0.9.7's calendar
-  grouping keys are adopted in a later change), so an hourly timestamp
-  trend's supporting query opens the records it draws.
+  next in the weekday cycle; the trend's note says so. An hourly timestamp
+  trend's supporting query opens the hourly totals it draws as grouped rows,
+  keyed by a calendar group key (`{ field, interval: "hour", timeZone: "UTC"
+  }`, `groupedDashboardQuery`), as a day trend's opens its recorded days.
 - **Trend defaults.** The trend's default measure and breakdown.
 - **Legacy mapping** (optional, `legacy`). A function that reads a link or
   saved state written in an older vocabulary into the catalog's terms, and
@@ -302,20 +306,24 @@ for a missing one), a combined one's are JSON arrays of them.
   unit's fields (`selectionWhere`). No group or point limit can then crowd a
   selected group out (a scatter draws its 2,000 largest points among the
   selected groups). A combined selection is an OR of each group's
-  equalities. Pharos writes it as an AND of ORs, so an excluded selection is
-  one OR per group, and an included one expands into one OR per choice of a
-  field from each group. Past 64 such terms it is drawn from the groups the
-  query returns instead, and the note says one beyond the limit is not drawn.
-  Query Table 0.9.7's OR of AND branches, one term per selection, is adopted
-  in a later change.
+  equalities: an included one is one term, `{ any: [{ all: [...] }, ...] }`,
+  with one AND branch per group, and an excluded one is one OR per group
+  (each field differs or is missing). Every predicate counts toward Query
+  Table's 100 per where list, the dashboard's filters included
+  (`selectionWhere`, `predicateCount`). A selection that would exceed them is
+  drawn from the groups the query returns instead, and the note says so and
+  that one beyond the query's group limit is not drawn.
 - **Units.** A selection is of a breakdown group, so it maps through the
   unit's fields: `provider = codex` selects the conversations (or delegated
   runs) whose top-level provider is codex, never a population filter on
   record `provider`. The note says so.
 - **Supporting queries** add the selection as the same filter, so they list
-  what is drawn (unless it is too large to state, as above).
+  what is drawn (unless it is too large to state, as above). The trend's
+  supporting query does too, for single-field and combined breakdowns alike.
 - **Drill-downs** from a selected series or bucket open that group's records,
-  within the population.
+  within the population, with the same term. The term round-trips through
+  query links (`encodeQuery`, `decodeQueryStrict`) and the site map's Go link
+  codec, whose `site_link` arguments accept `{ all: [...] }` branches.
 - **Clearing.** Changing the breakdown clears the selection. Views without a
   legend say a selection is drawn and offer "Show every group".
 - A test checks that the trend and Compare give the same share under a
@@ -426,8 +434,8 @@ no sum, cumulative or share.
   group count, hidden groups or a bucket error is an error beneath the chart,
   never idle periods, as in `buildCardTrend`. No results yet means loading,
   not an error.
-- **Supporting query.** It covers what is drawn: the dashboard's filters, a
-  single-field legend selection as a filter, and populations, with whole periods from the
+- **Supporting query.** It covers what is drawn: the dashboard's filters, the
+  legend selection as a filter where it fits, and populations, with whole periods from the
   first drawn bucket (for custom multi-day or multi-hour buckets, the first
   whole bucket after the rounded start) to the end of the last whole period.
 - **Drill-downs** open the records behind a point: the dashboard's filters,
@@ -483,58 +491,93 @@ chart clause, and the supporting query that "View supporting query" opens.
   `model-choice-recipes.ts`, `api-cost-recipes.ts` and `cardCoverQuery`. A
   scatter puts the breakdown first because Query Table colors points by the
   first key. The supporting query is the executed grouped query itself.
-- **Cycle.** One clause grouped by the catalog's cycle key. For usage that is
-  the ledger's `hour` or `day`: `/metrics` answers `hour` from its hourly
-  ledger rows, and `day` is the recorded day. A `timestamp` key adds a
-  `dateGrouping`: local days in the viewer's zone, or UTC hours.
-  `cycleResult` folds the totals into 24 hours or 7 weekdays, reading keys
-  through `cycleFrame`.
-  - **Observations.** Every complete slot in the range is one. The same rule
-    (`idleIsZero`) decides idle slots for the fold, the note and the weekday
-    cards. Sums, counts and distinct counts of an idle slot are zero, and so
-    is a sum whose only inputs were missing: an hour of unpriced usage adds no
-    cost. A ratio of nothing has no value.
-  - **Time zones.** Hour keys are UTC instants, placed at the viewer's local
-    hour; a timestamp's hours are grouped as UTC hours for the same reason.
-    A timestamp's days are local days in the viewer's zone, so every
-    complete local day in the range is one observation and the current day
-    is left out.
-    - Day keys are dates the recording Mac assigned in its own time zone,
-      which the dashboard does not know. A date's weekday is the same in
-      every zone, so days fold as dates. The weekday cards follow the same
-      rule: their keys are dates in their query's zone.
-    - Only complete dates count, by the rule `weekdayMetric` uses for the
-      cards; a test runs both folds on the same daily totals.
+- **Cycle.** A timestamp cycle is one clause Query Table computes; usage's
+  is folded in the browser.
+  - **Timestamps.** The clause groups the timestamp by `hourOfDay` or
+    `dayOfWeek` in the viewer's zone, so a record falls in the slot of its
+    local hour or weekday, across daylight-saving changes and in
+    fractional-offset zones. A box or a mean summarises each slot's
+    occurrences (`dateGrouping.occurrence`: one whole local hour or day,
+    idle ones included): Query Table evaluates the measure once per
+    occurrence, counting an idle one as zero for sums, counts and distinct
+    counts and leaving it out for ratios. A total adds up every record in
+    the slot's whole hours or days (`partialIntervals: "exclude"`).
+    Occurrences the range cuts short, and the one in progress, are left
+    out. With a range start, idle occurrences fill the range (`range:
+    "query"`); without one, they run from the first observed one.
+    `planMetricSeries` turns the clause into a plain calendar metric, which
+    `runAnalysisQuery` sends to `/query-v3` (the service advertises
+    `calendarCycles`) and combines into slots; servers never receive
+    `occurrence`. The chart draws the result as returned, with Query Table's
+    slot labels, and `nativeCycleResult` checks it is complete.
+  - **Usage.** One clause grouped by the ledger's `hour` or `day`:
+    `/metrics` answers `hour` from its hourly ledger rows, and `day` is the
+    recorded day. `cycleResult` folds the totals into 24 hours or 7
+    weekdays, reading keys through `cycleFrame`. Usage's facts are
+    day-grained and its `day` is text, so neither key can be a calendar
+    interval: `hourOfDay` over `first_usage_at` would place a whole day's
+    usage at its first hour.
+    - **Observations.** Every complete slot in the range is one. The same
+      rule (`idleIsZero`) decides idle slots for the fold, the note and the
+      weekday cards. Sums, counts and distinct counts of an idle slot are
+      zero, and so is a sum whose only inputs were missing: an hour of
+      unpriced usage adds no cost. A ratio of nothing has no value.
+    - **Time zones.** Hour keys are UTC instants, placed at the viewer's
+      local hour. Day keys are dates the recording Mac assigned in its own
+      time zone, which the dashboard does not know. A date's weekday is the
+      same in every zone, so days fold as dates.
       - The weekday query's range starts at the viewer's next local midnight
-        (`completeStart`). A preset such as "Last 30 days" opened mid-afternoon
-        would otherwise return the first date with only part of its records.
+        (`completeStart`). A preset such as "Last 30 days" opened
+        mid-afternoon would otherwise return the first date with only part
+        of its records.
       - Dates from the viewer's current day on are left out as incomplete.
       - Idle dates pad out the viewer's range.
-    - When the recording Mac's zone differs from the viewer's, a date just
-      before the first one can still be returned, holding part of a day. It
-      is left out of the fold and reported beneath the chart.
-    - The note says which rule applies.
-  - **Range.** An hour profile allows 400 days: every hour of them fits the
-    query's 10,000-group limit.
-  - **Missing keys.** A bucket without a key is an error, never an idle slot.
-  - **The fold's code** (`cycleSamples`, `cycleBoxes`) lives beside the
-    weekday cover in `weekday-cover.ts`, which now uses it too.
-  - **Supporting query.** The usage hour cycle's supporting query opens
-    records, because `/query-v3` cannot yet group usage by hour; see
+      - When the recording Mac's zone differs from the viewer's, a date just
+        before the first one can still be returned, holding part of a day.
+        It is left out of the fold and reported beneath the chart.
+      - The note says which rule applies.
+    - **Range.** An hour profile allows 400 days: every hour of them fits the
+      query's 10,000-group limit.
+    - **Missing keys.** A bucket without a key is an error, never an idle
+      slot.
+  - **Weekday cards.** The weekday cards (`weekday-cover.ts`,
+    `weekdayMetric`) keep folding their saved daily query with the same
+    `cycleSamples` and `cycleBoxes`: their previews run through the card
+    preview batch, which sends clauses as saved and does not plan
+    occurrences, and a collected card keeps its daily query and "Inspect
+    daily totals" action. The parity tests hold each card's fold to its
+    dashboard's native boxes, weekday by weekday, over the same days.
+  - **Range.** An hourly occurrence is one calendar group per hour of the
+    range, within `/query-v3`'s 10,000 groups: about 400 days.
+  - **Supporting query.** A timestamp cycle's opens the occurrences it
+    summarises: grouped rows keyed by local hour or day (a calendar group
+    key, `{ field, interval, timeZone }`, which the service advertises as
+    `calendarGroupKeys`), over whole hours or days. Hour-of-day and
+    day-of-week are not grouping keys. The usage weekday cycle's opens the
+    daily totals grouped by `day`; the usage hour cycle's opens records,
+    because `/query-v3` cannot yet group usage by hour; see
     [`handoffs/usage-v3-hour-grouping.md`](handoffs/usage-v3-hour-grouping.md).
-    A timestamp cycle's opens records too: Pharos's grouping stages do not
-    yet group a timestamp by calendar date.
 - **Thresholds.** These use Query Table's native `minCount`, which the service
-  advertises for both `/metrics` and `/query-v3`. It removes small groups
-  before `groupLimit` and reports `hiddenGroups`, so small groups cannot crowd
-  out eligible ones. At unit level, each grouped row is one unit, so the
-  threshold counts units. A catalog's `samples` measure (Tools' calls) is a
-  group filter over one grouped row per group instead; such a minimum does
-  not count the groups it hides. Query Table 0.9.7's summed minimum is
-  adopted in a later change.
+  advertises for both `/metrics` and `/query-v3`, with its distinct and
+  summed measures (`minCountMeasures`, `metricMinCountMeasures`). It removes
+  small groups before `groupLimit` and reports `hiddenGroups`, so small groups
+  cannot crowd out eligible ones, and the note beneath the chart says how
+  many were hidden. At unit level, each grouped row is one unit, so the
+  threshold counts units. A records compare counts the catalog's `samples`
+  where it has them: `{ min, sum: "call_count" }` for Tools' calls,
+  `{ min, distinct: "conversation_id" }` for usage's conversations. The
+  supporting query keeps the same groups with a group filter on that column.
+  Distributions take row minimums only, as Query Table requires, so a
+  distribution counts its plotted records or units. Pharos's Go fast paths
+  (the native V2 reducer, Machine Time's accelerator, the count-only path)
+  decline any active minimum, so Query Table's adapter answers it.
 - **Drill-down.** A records bucket uses `inspectBucketQuery`. A unit bucket
-  opens the grouped query restricted to that group (HAVING on its key). A cycle
-  slot spans many dates and has no drill-down.
+  opens the grouped query restricted to that group (HAVING on its key). A
+  timestamp cycle's slot opens the records of its whole hours or days in the
+  range: a range from the first to the last, with one OR per gap. It has no
+  drill-down without a range start, or past about 48 occurrences (Query
+  Table's predicate budget), such as one hour of the day over 90 days. A
+  folded usage slot spans many dates and has no drill-down.
 
 ### Execution
 
@@ -542,6 +585,9 @@ chart clause, and the supporting query that "View supporting query" opens.
 
 - record metrics go to `/metrics`, falling back to `/query-v3` when `/metrics`
   refuses the budget;
+- a clause with per-occurrence statistics or whole intervals (a timestamp
+  cycle) is first planned into plain calendar metrics (`planMetricSeries`),
+  whose results are combined into its slots;
 - grouped queries go to `/query-v3` (`postQueryStateMetrics` in
   `metric-request.ts`), and so do clauses with a `dateGrouping` (a timestamp
   cycle or trend), which `/metrics` does not accept;
@@ -579,8 +625,8 @@ around it. Its default view is the one it always opened on.
   MCP server and MCP method imply their populations. A rollup row is no
   observation a person cares about, so there are no units or per-record
   values: Distribution and Scatter are disabled with that reason, and a
-  minimum counts calls (`samples`); a bar opens the group's daily summaries,
-  and the note says the minimum cannot count the groups it hides. Its
+  minimum sums calls (`samples`) and reports the groups it hides; a bar
+  opens the group's daily summaries. Its
   Compare view keeps the legacy-view link, since that page still shows
   failure kinds. The
   rollup's text `day` makes it the one catalog with `executable` bounds.
@@ -849,8 +895,8 @@ Caveats on matched cards:
 - `writing-hours` is all-time on the card; an hour cycle allows 400 days, so
   an older library must choose a shorter range.
 - `parallel-hours` groups the dataset's `hour_of_day`, the service's local
-  hour; the cycle places UTC hours at the viewer's hour, which agree on the
-  Mac that recorded them. The cycle counts complete hours only, so the hour
+  hour; the cycle groups by the viewer's local hour, which agree on the Mac
+  that recorded them. The cycle counts complete hours only, so the hour
   in progress is on the card and not on the dashboard; the test opens both
   mid-hour and asserts exactly that difference.
 - `carbon-trend` and `human-word-total` trail over the card's own window:
@@ -868,22 +914,17 @@ match for windows starting at a local midnight; see Whole days.
 - The usage ledger is day-grained per session and model, so cycles use the
   ledger's hourly rows and recorded days rather than calendar grouping on
   `first_usage_at`. Calendar grouping would place a whole day's usage at its
-  first hour.
-- `/query-v3` groups usage by `hour` over daily records, so the hour cycle's
-  supporting query opens records, and a `/query-v3` fallback for the hour
-  clause fails visibly ([handoff](handoffs/usage-v3-hour-grouping.md)).
-- Hours step on UTC hour boundaries and take the local hour of their start.
-  In zones offset by a fraction of an hour, each slot starts mid-hour locally.
-- Cycle slots are folded in the browser and cannot be drilled into. Query
-  Table 0.9.7's native hour-of-day and day-of-week grouping is adopted in a
-  later change.
-- Thresholds count rows. A records compare view therefore cannot require
-  "five distinct conversations per model"; use the conversation unit, where
-  each row is one conversation. A minimum over a summed field (Tools' calls)
-  runs as a group filter and cannot report how many groups it hid. Query
-  Table 0.9.7's distinct and summed minimums are adopted in a later change.
-- Pharos's grouping stages do not group a timestamp by calendar date or hour,
-  so a timestamp cycle's or hourly trend's supporting query opens records.
+  first hour. Usage cycles are therefore folded in the browser.
+- `/query-v3` groups usage by `hour` over daily records, so the usage hour
+  cycle's supporting query opens records, and a `/query-v3` fallback for the
+  hour clause fails visibly ([handoff](handoffs/usage-v3-hour-grouping.md)).
+- Usage's hours step on UTC hour boundaries and take the local hour of their
+  start. In zones offset by a fraction of an hour, each slot starts mid-hour
+  locally. Timestamp cycles use whole local hours.
+- A timestamp cycle's slot drills down only within a range with a start and
+  at most about 48 of its hours or days; a usage slot has no drill-down.
+- Distributions take row minimums only, so a records distribution's minimum
+  counts records even where its compare counts calls or conversations.
 - A day trend files a record under its recorded day, the cycles under its
   day in the viewer's zone; they differ for late records after a time-zone
   change.
@@ -898,7 +939,12 @@ match for windows starting at a local midnight; see Whole days.
 Query Table 0.9.7 resolved the requests in
 [`handoffs/query-table-dashboard-views.md`](handoffs/query-table-dashboard-views.md):
 chart labels fit their gutter, and multi-key pies, bars and boxes colour each
-whole key.
+whole key. Scatters still colour by their first key, by design, so a scatter
+keeps its breakdown first. It also delivered the dashboards' requests in
+[`handoffs/query-table-after-0.9.6.md`](handoffs/query-table-after-0.9.6.md)
+(3, 10, 11, 12 and 13): native hour-of-day and day-of-week cycles, distinct
+and summed minimums, calendar keys in grouping stages, and OR of AND legend
+selections, which the sections above describe.
 
 ## Phases
 
