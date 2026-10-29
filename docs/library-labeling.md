@@ -249,6 +249,10 @@ The labels are a teacher model's provisional labels, not reviewed truth, and the
 
 **Production student.** Any later student model must ship its own parity fixture for its tokenizer and text normalization (lowercasing, Unicode normalization, whitespace and control handling, truncation), checked in both its training environment and the Go (or other) runtime that will score text, before a long training run. Passing this repository's fixture says nothing about a different tokenizer.
 
+## Student-model research
+
+The research on training local students from these labels (round 1, 2026-10-28, and the round-2 bird studies, 2026-10-29), its reproduction instructions and the plan to ship the Go linear labeler are in [labeler-research/](labeler-research/README.md).
+
 ## Known limits
 
 - Human pieces inherit the classifier's limits: typed text is an estimate, and prose written elsewhere and pasted without cues still counts as typed.
