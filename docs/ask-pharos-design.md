@@ -292,3 +292,26 @@ Runtime endpoints are under `/api/ask/` and use Pharos's existing authenticated,
 same-origin loopback boundary. They are deliberately absent from the MCP tool
 registry and general query datasets. The design-review prototype remains a
 separate simulated review surface.
+
+Ask streams progress to the UI while Codex, Claude, or Antigravity is running. Codex uses
+[`exec --json`](https://learn.chatgpt.com/docs/non-interactive-mode#make-output-machine-readable);
+Claude uses [`--output-format stream-json --verbose --include-partial-messages`](https://code.claude.com/docs/en/headless#stream-responses).
+Antigravity uses [`--output-format stream-json`](https://antigravity.google/docs/cli/headless/#streaming-json),
+reading `step_update` transitions for tool calls, response generation, and checkpoints.
+The browser requests newline-delimited JSON from
+`/api/ask/send`: `progress` events carry a timestamped activity label, and a
+`result` event carries the complete validated session. Clients without that
+Accept header retain the single JSON response. Partial model output is never
+used as a destination or final answer.
+
+The waiting indicator shows the latest action and elapsed time, including time
+since the last update after ten seconds of silence. An expandable Activity list
+retains the latest 40 updates, including startup, Pharos tool calls, private
+lookups, and answer saving. Labels are authored by Pharos; raw reasoning, model
+text, tool arguments/results, and CLI diagnostics do not enter the feed.
+Antigravity's `call_mcp_tool` routing identifies the Pharos operation, and its
+`tool_info.error` marks failed calls. Repeated active steps do not duplicate
+activity; routing details arriving later can refine a generic tool label.
+Running activity is held in memory and included when reopening a chat; it is saved with the finished
+turn, outside the conversation search index. A broken stream uses the existing
+session reconciliation path and never automatically repeats inference.
