@@ -222,6 +222,10 @@ func upgradeLabelingLedger(db *sql.DB) error {
 	return tx.Commit()
 }
 
+// labelingColumnCheckedHook runs between labelingAddColumn's check and its
+// change; tests add the column there, as another opener could.
+var labelingColumnCheckedHook = func(table, column string) {}
+
 // labelingAddColumn adds a column unless the table has it, tolerating one
 // another opener added meanwhile.
 func labelingAddColumn(db interface {
@@ -231,6 +235,7 @@ func labelingAddColumn(db interface {
 	if labelingHasColumn(db, table, column) {
 		return nil
 	}
+	labelingColumnCheckedHook(table, column)
 	if _, err := db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + definition); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 		return err
 	}
@@ -711,25 +716,36 @@ func computeLabelingSpend(db *sql.DB, job labelingJob, book priceBook, day strin
 	if err != nil {
 		return spend, err
 	}
-	for _, attempt := range money {
-		if attempt.known != nil {
+	// Sums run in a fixed order (attempt IDs, models), so an unchanged
+	// ledger always gives the same totals to the last digit.
+	for _, id := range sortedKeys(money) {
+		if attempt := money[id]; attempt.known != nil {
 			spend.Known += *attempt.known
 		}
-		if attempt.estimate != nil {
+		if attempt := money[id]; attempt.estimate != nil {
 			spend.EstimatedUsage += *attempt.estimate
 		}
 	}
+	// Auxiliary models' known cost only: an estimate is exposure, never
+	// what a model cost.
 	spend.AuxiliaryModels = map[string]float64{}
 	auxiliary := []map[string]any{}
 	if labelingHasColumn(tx, "usage", "role") {
-		if auxiliary, err = queryMaps(tx, `SELECT u.model,SUM(COALESCE(u.cost_usd,0)) cost FROM usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.job=? AND u.role='auxiliary' GROUP BY u.model`, job.Name); err != nil {
+		if auxiliary, err = queryMaps(tx, `SELECT u.model,u.cost_usd,u.cost_status FROM usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.job=? AND u.role='auxiliary'
+			ORDER BY u.model,u.attempt_id`, job.Name); err != nil {
 			return spend, err
 		}
 	}
 	for _, row := range auxiliary {
-		cost, _ := number(row["cost"])
-		spend.AuxiliaryModels[firstString(row["model"])] = cost
-		spend.Auxiliary += cost
+		model := firstString(row["model"])
+		cost, ok := row["cost_usd"].(float64)
+		if !ok || labelingEstimatedStatus(firstString(row["cost_status"])) {
+			cost = 0
+		}
+		spend.AuxiliaryModels[model] += cost
+	}
+	for _, model := range sortedKeys(spend.AuxiliaryModels) {
+		spend.Auxiliary += spend.AuxiliaryModels[model]
 	}
 	rows, err := queryMaps(tx, `SELECT u.attempt_id,u.model,u.tokens,u.cost_status FROM usage u JOIN attempts a ON a.id=u.attempt_id
 		WHERE a.job=? AND u.cost_status IN ('partial','unpriced','estimated_upper_bound')`, job.Name)

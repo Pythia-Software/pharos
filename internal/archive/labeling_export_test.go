@@ -151,8 +151,8 @@ func TestLabelingExport(t *testing.T) {
 		now(), "2026-10-27"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(`INSERT INTO usage(attempt_id,model,model_source,tokens,cost_status,day,cost_usd) VALUES('pilot:crafted/m-o3/a','a-bound','test','{}','estimated_upper_bound','2026-10-27',0.4),
-		('pilot:crafted/m-o3/a','b-served','test','{}','estimated','2026-10-27',0.1),('pilot:crafted/m-o3/a','c-aux','test','{}','priced','2026-10-27',0.05)`); err != nil {
+	if _, err := tx.Exec(`INSERT INTO usage(attempt_id,model,model_source,tokens,cost_status,day,cost_usd,role) VALUES('pilot:crafted/m-o3/a','a-bound','test','{}','estimated_upper_bound','2026-10-27',0.4,'primary'),
+		('pilot:crafted/m-o3/a','b-aux','test','{}','estimated','2026-10-27',0.1,'auxiliary'),('pilot:crafted/m-o3/a','c-aux','test','{}','priced','2026-10-27',0.05,'auxiliary')`); err != nil {
 		t.Fatal(err)
 	}
 	commitSeed(t, tx)
@@ -331,8 +331,20 @@ func TestLabelingExport(t *testing.T) {
 			estimated += *attempt.estimate
 		}
 	}
-	if math.Abs(spend.Known-known) > 1e-12 || math.Abs(spend.EstimatedUsage-estimated) > 1e-12 || math.Abs(estimated-0.75) > 1e-12 {
+	if math.Abs(spend.Known-known) > 1e-12 || math.Abs(spend.EstimatedUsage-0.75) > 1e-12 || math.Abs(estimated-0.75) > 1e-12 {
 		t.Errorf("status spend %+v, export known %v estimated %v", spend, known, estimated)
+	}
+	// An auxiliary model's estimate is exposure, not what it cost.
+	if spend.AuxiliaryModels["b-aux"] != 0 || spend.AuxiliaryModels["c-aux"] != 0.05 || math.Abs(spend.Auxiliary-0.05) > 1e-12 {
+		t.Errorf("auxiliary %v (%v)", spend.AuxiliaryModels, spend.Auxiliary)
+	}
+	// Totals are summed in a fixed order: the same ledger gives the same
+	// numbers every time.
+	for range 20 {
+		again, err := computeLabelingSpend(ledger, labelingJob{Name: "pilot", Model: "claude-haiku-5-5"}, book, "2026-10-27")
+		if err != nil || again.Known != spend.Known || again.EstimatedUsage != spend.EstimatedUsage || again.Auxiliary != spend.Auxiliary {
+			t.Fatalf("spend changed: %+v then %+v (%v)", spend, again, err)
+		}
 	}
 	// An item blocked as oversize used nothing.
 	if receipt := labels[itemOf["m-f4-2"]]["receipt"].(map[string]any); receipt["cost_status"] != "no_usage" {

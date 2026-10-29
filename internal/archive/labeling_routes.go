@@ -101,8 +101,11 @@ type labelingStream struct {
 	Error     string           `json:"error,omitempty"`
 	Refusal   string           `json:"refusal,omitempty"`
 	Tools     []map[string]any `json:"tool_events,omitempty"`
-	Warnings  []string         `json:"warnings,omitempty"`
-	Unparsed  int              `json:"unparsed_lines,omitempty"`
+	// AgentNotApplied is set when agy's init event names an agent other
+	// than the labeling one: its tools were not restricted.
+	AgentNotApplied string   `json:"agent_not_applied,omitempty"`
+	Warnings        []string `json:"warnings,omitempty"`
+	Unparsed        int      `json:"unparsed_lines,omitempty"`
 	// Started is set by the route's first session event (Claude
 	// system/init, Codex thread.started): before it nothing was sent.
 	Started                bool `json:"started,omitempty"`
@@ -324,6 +327,14 @@ func (s *labelingStream) observeAgy(event map[string]any) {
 		init := mapValueDefault(event["init"])
 		s.SessionID = defaultString(firstString(event["conversation_id"]), firstString(init["conversation_id"]))
 		s.model(defaultString(firstString(event["model"]), firstString(init["model"])))
+		// agy 1.4.9's init lists every tool the CLI has (browser, shell,
+		// files...) even when the agent allows only finish, so the list
+		// cannot show the restriction; the agent it names can. Any other
+		// agent (or none) means the tools were not restricted: tool use.
+		if agent := firstString(init["agent"]); agent != labelingAgyAgentName && s.AgentNotApplied == "" {
+			s.AgentNotApplied = defaultString(agent, "(none)")
+			s.Tools = append(s.Tools, map[string]any{"name": "agent_not_applied", "agent": s.AgentNotApplied})
+		}
 	case "step_update":
 		step := mapValueDefault(event["step_update"])
 		s.model(firstString(step["model"]))
@@ -780,10 +791,11 @@ func labelingWriteIfChanged(path string, content []byte) error {
 	return writeFileAtomic(path, content, 0o600)
 }
 
-// labelingAgyListing runs an agy listing subcommand with HOME set to home.
-func labelingAgyListing(path, home string, args ...string) (string, error) {
+// labelingAgyListing runs an agy listing subcommand with HOME set to home,
+// in dir: the workers' own directory, so it sees what they would.
+func labelingAgyListing(path, home, dir string, args ...string) (string, error) {
 	cmd := exec.Command(path, args...)
-	cmd.Env, cmd.Dir = append(cliEnvironment(path), "HOME="+home), os.TempDir()
+	cmd.Env, cmd.Dir = append(cliEnvironment(path), "HOME="+home), dir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("agy %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
@@ -793,18 +805,19 @@ func labelingAgyListing(path, home string, args ...string) (string, error) {
 
 // labelingAgyMCPServers lists the MCP servers agy would start with HOME set
 // to home, so a run can refuse to start any.
-func labelingAgyMCPServers(path, home string) (string, error) {
-	listed, err := labelingAgyListing(path, home, "mcp", "list")
+func labelingAgyMCPServers(path, home, dir string) (string, error) {
+	listed, err := labelingAgyListing(path, home, dir, "mcp", "list")
 	if err != nil || listed == "No MCP servers configured." {
 		return "", err
 	}
 	return listed, nil
 }
 
-// labelingAgyHasAgent reports whether agy, with HOME set to home, lists the
-// labeling agent, so a run can refuse to start without it.
-func labelingAgyHasAgent(path, home string) (bool, string, error) {
-	listed, err := labelingAgyListing(path, home, "agents")
+// labelingAgyHasAgent reports whether agy, with HOME set to home and run in
+// dir (the job's runner directory, where workspace agents would be found
+// too), lists the labeling agent, so a run can refuse to start without it.
+func labelingAgyHasAgent(path, home, dir string) (bool, string, error) {
+	listed, err := labelingAgyListing(path, home, dir, "agents")
 	if err != nil {
 		return false, "", err
 	}

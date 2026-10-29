@@ -341,12 +341,12 @@ func (r *labelingRunner) prepareFiles() error {
 		if err != nil {
 			return err
 		}
-		if listed, err := labelingAgyMCPServers(r.cliPath, home); err != nil {
+		if listed, err := labelingAgyMCPServers(r.cliPath, home, r.runner); err != nil {
 			return err
 		} else if listed != "" {
 			return fmt.Errorf("agy would still start MCP servers with HOME=%s; refusing to run:\n%s", home, listed)
 		}
-		if found, listed, err := labelingAgyHasAgent(r.cliPath, home); err != nil {
+		if found, listed, err := labelingAgyHasAgent(r.cliPath, home, r.runner); err != nil {
 			return err
 		} else if !found {
 			return fmt.Errorf("agy does not list the %s agent with HOME=%s, so its workers could use tools; refusing to run. It lists:\n%s", labelingAgyAgentName, home, listed)
@@ -1546,6 +1546,10 @@ func (r *labelingRunner) finalize(attempt labelingAttemptInfo, stream *labelingS
 	r.mu.Unlock()
 	if process.ReceiptError != "" {
 		r.halt("attempt " + attempt.id + ": its saved stream is not durable (" + process.ReceiptError + "); it stays unknown; fix the storage and run again")
+	}
+	if stream.AgentNotApplied != "" {
+		r.halt(fmt.Sprintf("attempt %s: agy ran as agent %q, not %s, so its tools were not restricted; the attempt is invalid (tool_use). Check the private agy home before running again",
+			attempt.id, stream.AgentNotApplied, labelingAgyAgentName))
 	}
 	if outcome == requestHeld {
 		names := []string{}

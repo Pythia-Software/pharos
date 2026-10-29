@@ -55,7 +55,10 @@ func labelingFakeCLI() int {
 		return 0
 	}
 	if len(args) == 1 && args[0] == "agents" {
-		// Like agy: the agents in $HOME/.gemini/config/agents, by name.
+		// Like agy: the agents in $HOME/.gemini/config/agents, by name. The
+		// directory it was run in is recorded.
+		cwd, _ := os.Getwd()
+		os.WriteFile(os.Getenv(labelingFakeArgs)+".agents-cwd", []byte(cwd), 0o600)
 		files, _ := filepath.Glob(filepath.Join(os.Getenv("HOME"), ".gemini", "config", "agents", "*.md"))
 		for _, file := range files {
 			data, _ := os.ReadFile(file)
@@ -161,7 +164,13 @@ func labelingFakeCLI() int {
 	output := map[string]any{"annotations": annotations}
 	session := defaultString(flag("--session-id"), "fake-session")
 	if route == labelingRouteAgy {
-		emit(map[string]any{"event": "init", "init": map[string]any{"conversation_id": "conv-fake"}})
+		// agy's init lists every tool it has, whatever the agent allows,
+		// and names the agent it runs as.
+		init := map[string]any{"conversation_id": "conv-fake", "agent": flag("--agent"), "tools": []any{"finish", "run_command", "write_to_file"}}
+		if scenario == "no-agent" {
+			init["agent"] = "default"
+		}
+		emit(map[string]any{"event": "init", "init": init})
 		emit(map[string]any{"event": "step_update", "step_update": map[string]any{"step_type": "PLANNER_RESPONSE", "state": "DONE", "text": "PRIVATE THOUGHT"}})
 		if scenario == "tool" {
 			emit(map[string]any{"event": "step_update", "step_update": map[string]any{"step_type": "RUN_COMMAND", "state": "DONE", "tool_name": "run_command"}})
@@ -1975,11 +1984,20 @@ func TestLabelingLedgerConcurrentFirstOpens(t *testing.T) {
 	// tolerated.
 	dir := writeLabelingFixture(t, labelingFixtureUnits())
 	db := openFixtureLedger(t, dir)
-	if _, err := db.Exec(`ALTER TABLE jobs ADD COLUMN later_column TEXT`); err != nil {
-		t.Fatal(err)
+	added := false
+	override(t, &labelingColumnCheckedHook, func(table, column string) {
+		if _, err := db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` TEXT`); err != nil {
+			t.Fatal(err)
+		}
+		added = true
+	})
+	if err := labelingAddColumn(db, "jobs", "later_column", "TEXT"); err != nil || !added || !labelingHasColumn(db, "jobs", "later_column") {
+		t.Fatalf("column added meanwhile: %v (hook ran %v)", err, added)
 	}
-	if err := labelingAddColumn(db, "jobs", "later_column", "TEXT"); err != nil {
-		t.Fatalf("existing column: %v", err)
+	// Any other error still fails.
+	labelingColumnCheckedHook = func(string, string) {}
+	if err := labelingAddColumn(db, "no_such_table", "x", "TEXT"); err == nil {
+		t.Fatal("ALTER of a missing table succeeded")
 	}
 }
 
@@ -2188,6 +2206,11 @@ func TestLabelingRunThroughAntigravity(t *testing.T) {
 	if entries, err := os.ReadDir(filepath.Join(dir, "runner", "pilot")); err != nil || len(entries) != 0 {
 		t.Fatalf("runner directory: %v, %v", entries, err)
 	}
+	// The agent listing ran where the workers run.
+	listedIn, _ := os.ReadFile(last + ".agents-cwd")
+	if resolved, _ := filepath.EvalSymlinks(filepath.Join(dir, "runner", "pilot")); string(listedIn) != resolved {
+		t.Fatalf("agents listed in %q, workers run in %q", listedIn, resolved)
+	}
 	usage := labelingRows(t, db, `SELECT model,cost_status,cost_usd,tokens FROM usage`)
 	attempt, _ := labelingAttemptRecord(db, "pilot:000001/1")
 	command, _ := os.ReadFile(filepath.Join(firstString(attempt["dir"]), "command.json"))
@@ -2214,6 +2237,14 @@ func TestLabelingRunThroughAntigravity(t *testing.T) {
 	_, db, _, _ = agy("tool")
 	if got := requestStates(t, db); got != requestInvalid {
 		t.Fatalf("tool: %s", got)
+	}
+	// An attempt that did not run as the labeling agent had its tools
+	// unrestricted: tool use, and the run halts saying why.
+	_, db, _, halted = agy("no-agent")
+	attempt, _ = labelingAttemptRecord(db, "pilot:000001/1")
+	if got := requestStates(t, db); got != requestInvalid || !strings.Contains(halted, `agent "default"`) || !strings.Contains(halted, "not restricted") ||
+		!strings.Contains(compactJSON(attempt["tool_events"]), "agent_not_applied") {
+		t.Fatalf("no agent: %s, %s, %v", got, halted, attempt["tool_events"])
 	}
 	// If agy would still list an MCP server (here a fake whose listing
 	// ignores HOME), the run refuses before sending anything.
