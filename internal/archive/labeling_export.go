@@ -633,48 +633,14 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 		json.Unmarshal([]byte(text(row, "problems")), &info.problems)
 		attempts[text(row, "id")] = info
 	}
-	// Ledgers from before pricing-v5 have no estimate columns; their
-	// unpriced usage may carry the older estimated_upper_bound status.
-	estimateColumns := "NULL estimate_usd,NULL estimate_basis"
-	if labelingHasColumn(tx, "usage", "estimate_usd") && labelingHasColumn(tx, "usage", "estimate_basis") {
-		estimateColumns = "u.estimate_usd,u.estimate_basis"
-	}
-	usageRows, err := queryMapsContext(ctx, tx, `SELECT u.attempt_id,u.cost_usd,u.cost_status,`+estimateColumns+` FROM usage u JOIN attempts a ON a.id=u.attempt_id
-		WHERE a.job=? ORDER BY u.attempt_id,u.model`, job)
+	// Usage, priced as status counts it: estimates are exposure, never cost.
+	money, err := labelingUsageMoney(ctx, tx, job)
 	if err != nil {
 		return nil, err
 	}
-	// An unknown (newer) cost status ranks worst, so it is never hidden.
-	statusRank := func(status string) int {
-		if rank, ok := map[string]int{"": 0, "priced": 1, "assumed": 2, "estimated": 3, "estimated_upper_bound": 4, "partial": 5, "unpriced": 6}[status]; ok {
-			return rank
-		}
-		return 7
-	}
-	for _, row := range usageRows {
-		info := attempts[text(row, "attempt_id")]
-		if info == nil {
-			continue
-		}
-		if cost, ok := row["cost_usd"].(float64); ok {
-			sum := cost
-			if info.cost != nil {
-				sum += *info.cost
-			}
-			info.cost = &sum
-		}
-		if estimate, ok := row["estimate_usd"].(float64); ok {
-			sum := estimate
-			if info.estimate != nil {
-				sum += *info.estimate
-			}
-			info.estimate = &sum
-		}
-		if basis := text(row, "estimate_basis"); basis != "" && !slices.Contains(info.basis, basis) {
-			info.basis = append(info.basis, basis)
-		}
-		if status := text(row, "cost_status"); statusRank(status) > statusRank(info.costStatus) {
-			info.costStatus = status
+	for id, attempt := range money {
+		if info := attempts[id]; info != nil {
+			info.costStatus, info.cost, info.estimate, info.basis = attempt.status, attempt.known, attempt.estimate, attempt.basis
 		}
 	}
 
@@ -895,9 +861,6 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 			if info := attempts[result.attempt]; info != nil {
 				label.Receipt.CostStatus, label.Receipt.AttemptCost = info.costStatus, info.cost
 				label.Receipt.AttemptEstimate, label.Receipt.EstimateBasis = info.estimate, defaultSlice(info.basis)
-				if label.Receipt.CostStatus == "" {
-					label.Receipt.CostStatus = "no_usage"
-				}
 				if slices.Contains(info.problems, "answer_without_terminal") {
 					flags["answer_without_terminal"] = true
 				}
@@ -909,6 +872,11 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 				}
 			} else if result.importedFrom != "" {
 				label.Receipt.CostStatus = "imported"
+			}
+			// An attempt without usage, or a result no attempt made (an item
+			// blocked as oversize or by a refusal elsewhere), used nothing.
+			if label.Receipt.CostStatus == "" {
+				label.Receipt.CostStatus = "no_usage"
 			}
 			label.Flags = sortedKeys(flags)
 			if labelingExportLabeled(status) {

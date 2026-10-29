@@ -574,6 +574,81 @@ type labelingSpend struct {
 	CommittedEstimate float64            `json:"committed_usd"`
 }
 
+// labelingEstimatedStatus reports a usage cost status whose cost_usd is an
+// estimate, not a price: estimated (pricing-v3) and estimated_upper_bound
+// (pricing-v4). Such a cost is exposure, never known spend.
+func labelingEstimatedStatus(status string) bool {
+	return status == "estimated" || status == costUpperBound
+}
+
+// labelingCostStatusRank orders cost statuses from best to worst; an
+// unknown (newer) status ranks worst, so it is never hidden.
+func labelingCostStatusRank(status string) int {
+	if rank, ok := map[string]int{"": 0, "priced": 1, "assumed": 2, "estimated": 3, costUpperBound: 4, "partial": 5, "unpriced": 6}[status]; ok {
+		return rank
+	}
+	return 7
+}
+
+// labelingAttemptMoney is what an attempt's usage rows say about money:
+// known spend, exposure (estimates), the worst cost status and how the
+// estimates were made.
+type labelingAttemptMoney struct {
+	known, estimate *float64
+	status          string
+	basis           []string
+}
+
+// labelingUsageMoney reads the usage of a job's attempts, by attempt, as
+// status and export both count it: cost_usd is known spend unless its
+// status is an estimate (labelingEstimatedStatus), and estimate_usd (since
+// pricing-v5, beside an unpriced row) is always exposure.
+func labelingUsageMoney(ctx context.Context, q queryer, job string) (map[string]*labelingAttemptMoney, error) {
+	// Ledgers from before pricing-v5 have no estimate columns.
+	estimateColumns := "NULL estimate_usd,NULL estimate_basis"
+	if labelingHasColumn(q, "usage", "estimate_usd") && labelingHasColumn(q, "usage", "estimate_basis") {
+		estimateColumns = "u.estimate_usd,u.estimate_basis"
+	}
+	rows, err := queryMapsContext(ctx, q, `SELECT u.attempt_id,u.cost_usd,u.cost_status,`+estimateColumns+` FROM usage u JOIN attempts a ON a.id=u.attempt_id
+		WHERE a.job=? ORDER BY u.attempt_id,u.model`, job)
+	if err != nil {
+		return nil, err
+	}
+	add := func(total **float64, value float64) {
+		if *total != nil {
+			value += **total
+		}
+		*total = &value
+	}
+	money := map[string]*labelingAttemptMoney{}
+	for _, row := range rows {
+		id := firstString(row["attempt_id"])
+		attempt := money[id]
+		if attempt == nil {
+			attempt = &labelingAttemptMoney{}
+			money[id] = attempt
+		}
+		status := firstString(row["cost_status"])
+		if cost, ok := row["cost_usd"].(float64); ok {
+			if labelingEstimatedStatus(status) {
+				add(&attempt.estimate, cost)
+			} else {
+				add(&attempt.known, cost)
+			}
+		}
+		if estimate, ok := row["estimate_usd"].(float64); ok {
+			add(&attempt.estimate, estimate)
+		}
+		if basis := firstString(row["estimate_basis"]); basis != "" && !slices.Contains(attempt.basis, basis) {
+			attempt.basis = append(attempt.basis, basis)
+		}
+		if labelingCostStatusRank(status) > labelingCostStatusRank(attempt.status) {
+			attempt.status = status
+		}
+	}
+	return money, nil
+}
+
 func computeLabelingSpend(db *sql.DB, job labelingJob, book priceBook, day string) (labelingSpend, error) {
 	spend := labelingSpend{PartialTokens: map[string]map[string]int64{}, EstimateDay: day,
 		CLIReportedNote: "the CLIs' own cost estimates, not authoritative: known spend is priced from usage with the Pharos price book"}
@@ -584,19 +659,21 @@ func computeLabelingSpend(db *sql.DB, job labelingJob, book priceBook, day strin
 		return spend, err
 	}
 	defer tx.Rollback()
-	var known, reported sql.NullFloat64
-	if err := tx.QueryRow(`SELECT SUM(u.cost_usd) FROM usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.job=? AND u.cost_status NOT IN ('estimated','estimated_upper_bound')`, job.Name).Scan(&known); err != nil {
+	var reported sql.NullFloat64
+	// Known spend is usage priced as itself; estimates (usage that cannot
+	// be priced as itself) are exposure.
+	money, err := labelingUsageMoney(context.Background(), tx, job.Name)
+	if err != nil {
 		return spend, err
 	}
-	spend.Known = known.Float64
-	// Usage of a served model that cannot be priced as itself: its known
-	// tokens at the requested model's rate, an estimate.
-	var estimated sql.NullFloat64
-	if err := tx.QueryRow(`SELECT SUM(CASE WHEN u.cost_status IN ('estimated','estimated_upper_bound') THEN u.cost_usd ELSE 0 END)+SUM(COALESCE(u.estimate_usd,0))
-		FROM usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.job=?`, job.Name).Scan(&estimated); err != nil {
-		return spend, err
+	for _, attempt := range money {
+		if attempt.known != nil {
+			spend.Known += *attempt.known
+		}
+		if attempt.estimate != nil {
+			spend.EstimatedUsage += *attempt.estimate
+		}
 	}
-	spend.EstimatedUsage = estimated.Float64
 	spend.AuxiliaryModels = map[string]float64{}
 	auxiliary := []map[string]any{}
 	if labelingHasColumn(tx, "usage", "role") {

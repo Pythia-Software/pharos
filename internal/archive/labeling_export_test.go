@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -142,6 +143,16 @@ func TestLabelingExport(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := tx.Exec(`INSERT INTO usage(attempt_id,model,model_source,tokens,cost_status,day,estimate_usd,estimate_basis) VALUES('pilot:crafted/m-a1/a','mystery','test','{}','unpriced','2026-10-27',0.25,'requested model rate')`); err != nil {
+		t.Fatal(err)
+	}
+	// A ledger priced under pricing-v3/v4 stored estimates as cost_usd:
+	// they are exposure, as status counts them, never the attempt's cost.
+	if _, err := tx.Exec(`INSERT INTO attempts(id,request_id,number,job,state,submitted_at,day,dir,prompt_sha256) VALUES('pilot:crafted/m-o3/a','pilot:crafted',1,'pilot','finished',?,?,'','')`,
+		now(), "2026-10-27"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(`INSERT INTO usage(attempt_id,model,model_source,tokens,cost_status,day,cost_usd) VALUES('pilot:crafted/m-o3/a','a-bound','test','{}','estimated_upper_bound','2026-10-27',0.4),
+		('pilot:crafted/m-o3/a','b-served','test','{}','estimated','2026-10-27',0.1),('pilot:crafted/m-o3/a','c-aux','test','{}','priced','2026-10-27',0.05)`); err != nil {
 		t.Fatal(err)
 	}
 	commitSeed(t, tx)
@@ -293,6 +304,39 @@ func TestLabelingExport(t *testing.T) {
 	if receipt := labels[itemOf["m-a1"]]["receipt"].(map[string]any); receipt["cost_status"] != "unpriced" || receipt["attempt_cost_usd"] != nil ||
 		receipt["attempt_estimate_usd"] != 0.25 || !slices.Equal(strs(receipt["estimate_basis"]), []string{"requested model rate"}) {
 		t.Errorf("receipt = %v", receipt)
+	}
+	if receipt := labels[itemOf["m-o3"]]["receipt"].(map[string]any); receipt["cost_status"] != costUpperBound || receipt["attempt_cost_usd"] != 0.05 ||
+		receipt["attempt_estimate_usd"] != 0.5 {
+		t.Errorf("estimated receipt = %v", receipt)
+	}
+	ledger := openFixtureLedger(t, dir)
+	money, err := labelingUsageMoney(context.Background(), ledger, "pilot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	book, err := embeddedPriceBook(context.Background(), labelingTestDay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spend, err := computeLabelingSpend(ledger, labelingJob{Name: "pilot", Model: "claude-haiku-5-5"}, book, "2026-10-27")
+	if err != nil {
+		t.Fatal(err)
+	}
+	known, estimated := 0.0, 0.0
+	for _, attempt := range money {
+		if attempt.known != nil {
+			known += *attempt.known
+		}
+		if attempt.estimate != nil {
+			estimated += *attempt.estimate
+		}
+	}
+	if math.Abs(spend.Known-known) > 1e-12 || math.Abs(spend.EstimatedUsage-estimated) > 1e-12 || math.Abs(estimated-0.75) > 1e-12 {
+		t.Errorf("status spend %+v, export known %v estimated %v", spend, known, estimated)
+	}
+	// An item blocked as oversize used nothing.
+	if receipt := labels[itemOf["m-f4-2"]]["receipt"].(map[string]any); receipt["cost_status"] != "no_usage" {
+		t.Errorf("oversize receipt = %v", receipt)
 	}
 	// Masked: the unsupported label with its ancestors, the uncertain one,
 	// and every child of the returned broad parent.
