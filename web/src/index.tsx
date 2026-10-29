@@ -44,7 +44,7 @@ import { LibraryContent } from "./library-content";
 import { SyncTables } from "./sync-tables";
 import { SettingsWorkspace } from "./settings-workspace";
 import { installAppNavigation } from "./app-navigation";
-import { EMPTY_QUERY, groupSourceQuery, httpComputedColumnStore, inspectBucketQuery, applyAggregations, encodeQuery, loadSchema, memoryStorageAdapter, toAggregationQuery, type ComputedColumnStore, type QueryCapabilitiesV3, type QueryResultV3, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type FieldSchema, type Transport, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, groupKeyField, groupSourceQuery, isWhereConjunction, isWhereGroup, predicatesOf, httpComputedColumnStore, inspectBucketQuery, applyAggregations, encodeQuery, loadSchema, memoryStorageAdapter, toAggregationQuery, type ComputedColumnStore, type QueryCapabilitiesV3, type QueryResultV3, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type FieldSchema, type Transport, type WhereBranch, type WhereClause, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
 import { useQueryTable, type QueryTableApi, type QueryFilterApi } from "@pythia-software/query-table-react";
 import { DataTable, FilterValueProvider, MetricsPanel, QueryFilterRow, SelectionToolbar, defaultRenderers, type CellContext, type FilterValuePresentation, type RenderRegistry } from "@pythia-software/query-table-ui";
 import "@pythia-software/query-table-ui/theme.css";
@@ -253,7 +253,7 @@ async function responseJSON<T>(response: Response): Promise<T> {
 // metrics, and filter pickers all follow it. onFind hears how it went.
 function recordBudget(dataset: Dataset, where: WhereTerm[]) {
   const fields = dataset === "tool_calls" ? ["command", "file_path"] : dataset === "writing_messages" ? ["text"] : dataset === "mcp_calls" ? ["arguments_json", "error_text"] : [];
-  return where.some(term => ("any" in term ? term.any : [term]).some(c => fields.includes(c.field))) ? new URLSearchParams({ interactive_search: "1" }) : undefined;
+  return where.some(term => predicatesOf(term).some(c => fields.includes(c.field))) ? new URLSearchParams({ interactive_search: "1" }) : undefined;
 }
 const queryMetadata = createQueryMetadataLoader();
 function makeTransport(dataset: Dataset, extra = "", onFind?: (find: FindSummary | null) => void, capabilities?: MetricCapabilities, queryCapabilities?: QueryCapabilitiesV3): Transport<Row> {
@@ -655,7 +655,7 @@ function QuerySurface({ dataset, usageActions = false, libraryView = "table", me
       emptyMessage={api.loading ? "Loading results…" : api.error ? failedMessage : find ? "No work matches this search and these filters." : emptyMessages[dataset]}
       classNames={{ empty: api.loading ? "pharos-table-loading" : undefined }}
       {...(api.query.grouping ? { trailing: (row: Row) => {
-        const complete = api.query.grouping!.keys.every(key => Object.hasOwn(row, key));
+        const complete = api.query.grouping!.keys.every(key => Object.hasOwn(row, groupKeyField(key)));
         const records = complete ? groupSourceQuery(api.query, row, sourceSchema) : null;
         return <button type="button" className="mcp-detail-button" disabled={!records} title={records ? "Open the source records for this group, keeping source filters" : complete ? "These group keys cannot be matched exactly in the source records" : "Include all group key columns to inspect the source records"} onClick={() => { if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, { ...records, orderBy: [], ...(usageActions ? { fitToScreen: true } : {}) }) : records); }}>Records</button>;
       }, trailingLabel: usageActions ? "Drill in" : "Inspect" }
@@ -1547,7 +1547,7 @@ function HumanUsageDashboard() {
 const readHumanWhere: ReadWhere = (where, state) => {
   const read = readHumanLink(where, state.v === analysisVersion);
   if (!read.unsupported.length) return read;
-  const selection = (term: WhereTerm) => ("any" in term ? term.any : [term]).some(clause => clause.field === state.split);
+  const selection = (term: WhereTerm) => predicatesOf(term).some(clause => clause.field === state.split);
   return { where: read.where, notice: <>This older link’s {read.unsupported.some(selection) ? "legend selection and filters" : "filters"} on whole works cannot keep their meaning for messages, so they are left out: {read.unsupported.map(describeTerm).join("; ")}. <a href={humanLegacyURL(where)}>Open them in the legacy Human words view</a>, where they still apply.</> };
 };
 
@@ -1895,8 +1895,9 @@ function ToolLedgerBanner() {
 }
 
 function termKey(term: WhereTerm): string {
-  const clause = (item: { field: string; op: string; value: string; negated?: boolean }) => `${item.field}|${item.op}|${item.value}|${item.negated ? 1 : 0}`;
-  return "any" in term ? `any:${term.any.map(clause).join("&")}` : clause(term);
+  const clause = (item: WhereClause) => `${item.field}|${item.op}|${item.value}|${item.negated ? 1 : 0}`;
+  const branch = (member: WhereBranch) => isWhereConjunction(member) ? `all:${member.all.map(clause).join("+")}` : clause(member);
+  return isWhereGroup(term) ? `any:${term.any.map(branch).join("&")}` : clause(term);
 }
 
 function ToolsPage() {

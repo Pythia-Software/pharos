@@ -1,4 +1,4 @@
-import { isOrGroup, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
+import { isOrGroup, isOrOfAndsGroup, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 
 export type LegendAction = "only" | "toggle" | "exclude" | "clear";
 export type SliceValue = string | null;
@@ -20,6 +20,8 @@ function clauseSelection(clause: WhereClause, field: string): SliceSelection<Sli
 }
 
 function termSelection(term: WhereTerm, field: string): SliceSelection<SliceValue> | null {
+  // An OR of conjunctions spans several fields, so it is never one field's slice.
+  if (isOrOfAndsGroup(term)) return null;
   if (!isOrGroup(term)) return clauseSelection(term, field);
   const parts = term.any.map(clause => clauseSelection(clause, field));
   if (!parts.length || parts.some(part => !part)) return null;

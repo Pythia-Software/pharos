@@ -602,6 +602,18 @@ test("metric filters and minimum group sizes run only where advertised and discl
   assert.match(preview.summary, /^Shown: /);
 });
 
+test("grouped previews run distinct minimums only where query-v3 advertises them", async t => {
+  const measures = [{ id: "calls", op: "count", groupBy: ["started_at"], dateGrouping: { field: "started_at", interval: "day", range: "observed", includeEmpty: false }, minCount: { min: 1, distinct: "conversation_id" } }];
+  const dated = rows.map(row => ({ ...row, started_at: new Date(row.started_at).toISOString() }));
+  const handshake = flags => (path, request) => path.endsWith("capabilities") ? response({ metricCapabilities: { version: 2 }, computedExecution: execution, queryCapabilities: { ...queryCapabilities, metricMinCount: true, ...flags } })
+    : path.includes("query-v3") ? response(serverQuery(request, dated)) : undefined;
+  fixture(t, handshake({}));
+  await assert.rejects(loadQueryPreview("tool_calls", query(measures), schemas.tool_calls), /distinct values or a sum/);
+  fixture(t, handshake({ metricMinCountMeasures: true }));
+  const preview = await loadQueryPreview("tool_calls", query(measures), schemas.tool_calls);
+  assert.equal(preview.state, "ready");
+});
+
 test("grouped cards with link columns execute without sending the links", async t => {
   const requests = fixture(t);
   const source = { ...core.EMPTY_QUERY };

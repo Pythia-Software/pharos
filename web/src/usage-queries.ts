@@ -1,4 +1,4 @@
-import { EMPTY_QUERY, applyPatch, matchPatch, type GroupingDefinition, type QueryPatch, type QueryState, type SummaryColumn } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, applyPatch, groupKeyFields, matchPatch, type GroupingDefinition, type QueryPatch, type QueryState, type SummaryColumn } from "@pythia-software/query-table-core";
 
 export type UsageTablePreset = {
   label: string;
@@ -54,7 +54,7 @@ export const usageComparisonPresets: UsageTablePreset[] = [
 export function usageTablePresetPatch(preset: UsageTablePreset): QueryPatch {
   return { id: `usage:${preset.label}`, owns: ["grouping", "columns", "order"], query: {
     grouping: { ...preset.grouping, source: EMPTY_QUERY },
-    select: (preset.columns ?? [...preset.grouping.keys, ...preset.grouping.summaries.map(column => column.id)]).map(field => ({ field })),
+    select: (preset.columns ?? [...groupKeyFields(preset.grouping.keys), ...preset.grouping.summaries.map(column => column.id)]).map(field => ({ field })),
     orderBy: preset.orderBy,
   } };
 }

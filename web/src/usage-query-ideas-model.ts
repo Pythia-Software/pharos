@@ -1,4 +1,4 @@
-import { applyPatch, matchPatch, type AggregationClause, type QueryState, type SummaryColumn } from "@pythia-software/query-table-core";
+import { applyPatch, groupKeyFields, matchPatch, type AggregationClause, type QueryState, type SummaryColumn } from "@pythia-software/query-table-core";
 import { usageGroupPresets, usageComparisonPresets, usageTablePresetPatch, type UsageTablePreset } from "./usage-queries";
 import type { UsageDataset } from "./usage-workspace-model";
 
@@ -19,7 +19,7 @@ function finish(dataset: UsageDataset, idea: QueryIdea): QueryIdea {
   const links = summaries.filter(column => column.op === "link");
   const records: SummaryColumn = { id: "idea_records", op: "link", label: "Drill In", link: { label: "Matching records", to: { kind: "query", target: dataset } } };
   const ordered = [...summaries.filter(column => column.op !== "link"), ...links, records];
-  const columns = [...(idea.columns ?? [...idea.grouping.keys, ...summaries.map(column => column.id)]).filter(field => !links.some(link => link.id === field)), ...links.map(link => link.id), records.id];
+  const columns = [...(idea.columns ?? [...groupKeyFields(idea.grouping.keys), ...summaries.map(column => column.id)]).filter(field => !links.some(link => link.id === field)), ...links.map(link => link.id), records.id];
   return { ...idea, grouping: { ...idea.grouping, summaries: ordered }, columns };
 }
 function idea(dataset: UsageDataset, id: string, section: string, label: string, title: string, keys: string[], summaries: SummaryColumn[], sort = summaries.find(column => column.op !== "link")?.id, chronological = false): QueryIdea {

@@ -163,6 +163,14 @@ test("repeated missing-repository segments replace their filters and preserve mi
   assert.ok(where.includes(mixed));
 });
 
+test("OR-of-AND selections stay whole in drill-downs and shift with the comparison period", () => {
+  const pairs = { any: [{ all: [{ field: "repository_name", op: "=", value: "repo-a" }, { field: "tool_name", op: "=", value: "Bash" }] }, { field: "repository_name", op: "=", value: "repo-b" }] };
+  const where = machineDrilldownWhere([pairs], repositoryFilter("repo-a"));
+  assert.ok(where.includes(pairs), "A mixed-field OR of conjunctions is not one field's selection");
+  const window = { any: [{ all: [{ field: "started_at", op: ">=", value: "2026-10-08T00:00:00.000Z" }, { field: "status", op: "=", value: "ok" }] }, { field: "day", op: "=", value: "2026-10-09" }] };
+  assert.deepEqual(previousTimeWhere([window], 7), [{ any: [{ all: [{ field: "started_at", op: ">=", value: "2026-10-01T00:00:00.000Z" }, { field: "status", op: "=", value: "ok" }] }, { field: "day", op: "=", value: "2026-10-02" }] }]);
+});
+
 
 test("explicit legacy machine links reset origin filters from previous visits", () => {
   const saved = { days: 30, repository: "old", provider: "codex", model: "old-model", channel: "desktop", machine_id: "laptop", execution_machine_id: "worker" };

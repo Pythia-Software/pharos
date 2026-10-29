@@ -1,4 +1,5 @@
-import { EMPTY_QUERY, encodeQuery, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, branchesOf, encodeQuery, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
+import { mapTermPredicates } from "./where-terms";
 import writing from "../../schemas/writing.schema.json";
 import writingMessages from "../../schemas/writing_messages.schema.json";
 import type { AnalysisCatalog, AnalysisMeasure, AnalysisState } from "./dashboard-analysis-model";
@@ -108,9 +109,8 @@ export function readHumanLink(where: WhereTerm[], versioned: boolean): HumanLink
   const read: WhereTerm[] = [], unsupported: WhereTerm[] = [];
   let changed = false;
   for (const term of where) {
-    const clauses = ("any" in term ? term.any : [term]).map(readClause);
-    if (clauses.some(clause => !clause)) { unsupported.push(term); changed = true; continue; }
-    const next: WhereTerm = "any" in term ? { ...term, any: clauses as WhereClause[] } : clauses[0]!;
+    const next = mapTermPredicates(term, readClause);
+    if (!next) { unsupported.push(term); changed = true; continue; }
     changed ||= JSON.stringify(next) !== JSON.stringify(term);
     read.push(next);
   }
@@ -119,4 +119,4 @@ export function readHumanLink(where: WhereTerm[], versioned: boolean): HumanLink
 // The legacy Writing view of an older link's filters, where they still apply.
 export const humanLegacyURL = (where: WhereTerm[]) => `/analyze?${new URLSearchParams({ analyze_view: "writing", q_writing: encodeQuery({ ...EMPTY_QUERY, where }) })}`;
 const describeClause = (clause: WhereClause) => `${clause.negated ? "not " : ""}${clause.field} ${clause.op} ${clause.value}`.trim();
-export const describeTerm = (term: WhereTerm) => "any" in term ? term.any.map(describeClause).join(" or ") : describeClause(term);
+export const describeTerm = (term: WhereTerm) => branchesOf(term).map(branch => branch.length > 1 ? `(${branch.map(describeClause).join(" and ")})` : describeClause(branch[0])).join(" or ");

@@ -1,4 +1,4 @@
-import { EMPTY_QUERY, decodeQueryStrict, localQuerySnapshotCache, encodeQuery, type QueryState } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, decodeQueryStrict, predicatesOf, localQuerySnapshotCache, encodeQuery, type QueryState } from "@pythia-software/query-table-core";
 import { isUsageWorkspace, readUsageWorkspace, usageDatasetTopics, type UsageDataset } from "./usage-workspace-model";
 import { cardDashboardWhere, cardSourceDataset } from "./card-exploration";
 import { concurrencyWindowRange } from "./concurrency-settings";
@@ -16,7 +16,7 @@ export function rollingWindowField(dataset: QueryDataset): string | undefined { 
 
 export function queryHasTimeFilter(query: QueryState, field: string): boolean {
   const source = query.grouping?.source ?? query;
-  return source.where.some(term => "any" in term ? term.any.some(clause => clause.field === field) : term.field === field);
+  return source.where.some(term => predicatesOf(term).some(clause => clause.field === field));
 }
 
 // New cards use native elapsed offsets in their saved query and URL. Legacy

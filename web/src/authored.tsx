@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { createSetFilter, isOrGroup, loadSchema, readSetFilter, type AggregationClause, type WhereTerm } from "@pythia-software/query-table-core";
+import { createSetFilter, isWhereGroup, loadSchema, readSetFilter, type AggregationClause, type WhereTerm } from "@pythia-software/query-table-core";
 import type { QueryTableApi } from "@pythia-software/query-table-react";
 import type { CellContext } from "@pythia-software/query-table-ui";
 import writingMessagesDocument from "../../schemas/writing_messages.schema.json";
@@ -287,7 +287,7 @@ function includesCategory(where: WhereTerm[], category: string): boolean {
 }
 
 function isCategoryTerm(term: WhereTerm, category: string): boolean {
-  return !isOrGroup(term) && term.field === "categories" && term.op === "includes" && !term.negated && term.value === category;
+  return !isWhereGroup(term) && term.field === "categories" && term.op === "includes" && !term.negated && term.value === category;
 }
 
 // toggleCategory keeps, or stops keeping, only messages holding category. The

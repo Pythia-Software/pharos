@@ -1,4 +1,4 @@
-import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, predicatesOf, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisVersion } from "./dashboard-analysis-model";
 
 // Analyze owns guided dashboards and the full query surfaces. Explicit older
@@ -43,7 +43,7 @@ const timeFields: Record<UsageDataset, string[]> = {
   mcp_calls: ["called_at", "day", "week", "month"], skill_usages: ["created_at", "day", "week", "month"], parallelism: ["started_at", "day", "hour_of_day", "week", "month"],
 };
 const builtWith: Partial<Record<UsageDataset, string[]>> = { parallelism: ["counting", "gap_minutes"] };
-const termFields = (term: WhereTerm): string[] => "any" in term ? term.any.map(clause => clause.field) : [term.field];
+const termFields = (term: WhereTerm): string[] => predicatesOf(term).map(clause => clause.field);
 
 // The dashboard's own filters, with the user's edits to the query a dashboard
 // link opened. A link adds its own terms (a legend selection, a measure's
