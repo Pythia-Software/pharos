@@ -225,7 +225,7 @@ def build_parity_fixture():
 
 
 if os.environ.get("PHAROS_WRITE_PARITY_FIXTURE"):
-    PARITY_FIXTURE.write_text(json.dumps(build_parity_fixture(), indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    PARITY_FIXTURE.write_text(json.dumps(build_parity_fixture(), ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
 
 
 class ExportCheckTests(unittest.TestCase):

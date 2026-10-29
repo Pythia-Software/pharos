@@ -40,8 +40,7 @@ func labelingCLIModel(route, model, effort string) string {
 }
 
 // labelingCodexDisabled are codex features that give the model tools or
-// actions: the historical runner's list (evidence/label-models/20261027/
-// run_models.py) plus the rest that `codex features list` of codex-cli
+// actions: the list the measured comparison used plus the rest that `codex features list` of codex-cli
 // 0.155.0 shows enabled by default (image_generation, unified_exec,
 // view_image, tool_suggest, skill_search, sleep_tool, goals,
 // remote_plugin). Every name was confirmed in that listing. Web search is
@@ -66,8 +65,8 @@ func labelingCommand(route, model, effort, schemaText, schemaPath, answerPath, s
 			"--json-schema", schemaText, "--tools", "", "--safe-mode", "--disable-slash-commands", "--no-chrome", "--strict-mcp-config",
 			"--permission-prompts", "none", "--permission-mode", "dontAsk", "--no-session-persistence", "--session-id", sessionID,
 			// A named session skips Claude Code's own title-generation call
-			// (an auxiliary claude-haiku-4-5 request of 5-7k input tokens,
-			// costlier than the labeling call in the 2026-10-27 pilot).
+			// (an auxiliary claude-haiku-4-5 request carrying several thousand
+			// input tokens, which can cost more than the labeling call).
 			"--name", "Pharos labeling", "--prompt-suggestions", "false"}, nil
 	case labelingRouteCodex:
 		args := []string{"exec", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "--sandbox", "read-only",

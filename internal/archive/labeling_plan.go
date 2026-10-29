@@ -18,14 +18,11 @@ import (
 	"github.com/gbdubs/pharos/pricing"
 )
 
-// labelingCalibration is what one measured route cost per request. The
-// constants come from the 2026-10-27 Luna/Haiku comparison: 18 requests of 4
-// independent short items each at effort high, summarized in the handoff's
-// evidence/corpus-budget/20261027/calibration.json (from
-// evidence/label-models/20261027 receipts). Overhead is the measured input
-// beyond the items' own text and context (prompt, taxonomy, schema and CLI
-// framing) per request: fixed_input_per_item × 4. Output includes reasoning,
-// which providers already count as output.
+// labelingCalibration is what one route cost per request when measured on
+// requests of 4 independent short items. Overhead is the input beyond the
+// items' own text and context (prompt, taxonomy, schema and CLI framing) per
+// request. Output includes reasoning, which providers already count as
+// output. These are defaults; plan's flags override each of them.
 type labelingCalibration struct {
 	source                     string
 	overheadTokens, outputItem float64
@@ -33,22 +30,14 @@ type labelingCalibration struct {
 }
 
 var labelingCalibrations = map[string]labelingCalibration{
-	"claude": {"claude-haiku-5-5, effort high (calibration.json haiku-high, measured 2026-10-27)", 3579.67 * 4, 1006.36, 16.96},
-	"codex":  {"gpt-6-luna, effort high (calibration.json luna-high, measured 2026-10-27)", 4027.74 * 4, 211.75, 10.14},
-	// From evidence/label-models/20261027/runs/repeat-flash-low-00..02 (3
-	// requests of 4 items, CLI usage equal to the native records in
-	// agy-native-ledger.json): input 17,639 / 17,656 / 19,330 tokens, output
-	// 717 / 718 / 1,231, wall 7.7 / 7.5 / 26.7 s. Overhead is batch 00's
-	// input less its items' text and context (1,090 tokens by the luna-high
-	// proxies of the same items, calibration.json compare-luna-high-00).
-	"agy": {"gemini-3.8-flash, effort low (repeat-flash-low-00..02, measured 2026-10-27)", 16549, 222.17, 13.98},
+	"claude": {"claude-haiku-5-5 at effort high (default calibration)", 3579.67 * 4, 1006.36, 16.96},
+	"codex":  {"gpt-6-luna at effort high (default calibration)", 4027.74 * 4, 211.75, 10.14},
+	"agy":    {"gemini-3.8-flash at effort low (default calibration)", 16549, 222.17, 13.98},
 }
 
-// labelingCharsPerToken converts item characters to tokens: 3.59 characters
-// per o200k_base token was the density of sampled user requests in the
-// 2026-10-27 production census (evidence/corpus-budget/20261027/
-// token-sample.json); replies (3.97) and thinking (5.04) were less dense, so
-// it overestimates them. The benchmark's own items ran at 4.47.
+// labelingCharsPerToken converts item characters to tokens. About 3.6
+// characters per o200k_base token is typical of user requests; agent replies
+// and thinking are less dense, so it overestimates them.
 const labelingCharsPerToken = 3.6
 
 // labelingPlanItem is one item as the plan sizes it.

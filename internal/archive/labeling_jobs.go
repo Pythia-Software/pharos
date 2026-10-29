@@ -157,7 +157,7 @@ func openLabelingLedger(dir string) (*sql.DB, error) {
 }
 
 // labelingLedgerColumns are columns added after a ledger may already have
-// been created (the pilot's); the ledger gains them in place.
+// been created by an earlier build; the ledger gains them in place.
 var labelingLedgerColumns = []struct{ table, column, definition string }{
 	{"jobs", "pricing_rule", "TEXT"},
 	{"attempts", "cli_warnings", "TEXT"},

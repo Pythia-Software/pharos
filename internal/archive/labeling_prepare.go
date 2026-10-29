@@ -24,8 +24,8 @@ import (
 	"unicode/utf8"
 )
 
-// labelingTaxonomy is the frozen candidate-0.3 taxonomy, byte for byte as it
-// was measured (evidence/label-frontier/20261027/taxonomy.json). Preparation
+// labelingTaxonomy is the frozen candidate-0.3 taxonomy, byte for byte as the
+// prompt contract was measured with it. Preparation
 // records its version and hash; prompts use it.
 //
 //go:embed labeling/taxonomy-candidate-0.3.json
