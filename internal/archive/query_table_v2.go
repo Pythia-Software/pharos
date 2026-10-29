@@ -796,15 +796,11 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 		d.MaxPopulation = min(d.MaxPopulation, populationLimit[0])
 	}
 	table, sqlBacked := sqlDatasetFor(dataset)
-	if sqlBacked {
-		d.PredicateRelations = queryTextRelations(dataset)
-	}
 	var sourceRows, usageHours []map[string]any
 	var sourceNames []string
 	var find *libraryFindSet
 	var evidence map[string]*searchEvidence
 	var bounds map[string][2]string
-	var window sqlSource
 	if sqlBacked {
 		if err := s.Catalog.prepareSQLDataset(ctx, dataset); err != nil {
 			return queryV2ExecutionResult{}, err
@@ -867,13 +863,6 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 				}
 			}
 		}
-		// Query Table answers indexed substring predicates through
-		// d.PredicateRelations. Only the host's own row window narrows its
-		// source by the index (see indexedQueryRowsV2).
-		if rowRequest != nil {
-			window.sql, window.args = projected.v2WindowedSource(schema, where, clock, bounds)
-		}
-		projected.queryText = nil
 		d.SourceSQL, d.SourceArgs = projected.v2WindowedSource(schema, where, clock, bounds)
 	} else {
 		var err error
@@ -1002,7 +991,7 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 		}
 	}
 	if !handled {
-		if err = s.executeStagedQueryV2(ctx, dataset, table, sqlBacked, d, rowRequest, metrics, options, bounds, window, sourceRows, usageHours, sourceNames, &result, populationLimit...); err != nil {
+		if err = s.executeStagedQueryV2(ctx, dataset, table, sqlBacked, d, rowRequest, metrics, options, bounds, sourceRows, usageHours, sourceNames, &result, populationLimit...); err != nil {
 			return result, err
 		}
 	}
@@ -1103,18 +1092,10 @@ func (s *Server) metricsWithoutStaging(ctx context.Context, dataset string, tabl
 	return result, handled, err
 }
 
-// sqlSource is a SQL dataset's source statement and its arguments.
-type sqlSource struct {
-	sql  string
-	args []any
-}
-
 // executeStagedQueryV2 runs rows, and metrics no accelerator answered, in a
 // transaction leasing memory-backed temporary storage for the adapter's
-// staging, and releases it before the caller enriches the rows. window is
-// the source of the host's own row window, which narrows by indexed
-// substrings itself; d's source leaves them to Query Table.
-func (s *Server) executeStagedQueryV2(ctx context.Context, dataset string, table sqlDataset, sqlBacked bool, d qt.SQLiteV2Dataset, rowRequest *qt.ServerQueryV2, metrics *qt.MetricQuery, options qt.PlanOptions, bounds map[string][2]string, window sqlSource, sourceRows, usageHours []map[string]any, sourceNames []string, out *queryV2ExecutionResult, populationLimit ...int) error {
+// staging, and releases it before the caller enriches the rows.
+func (s *Server) executeStagedQueryV2(ctx context.Context, dataset string, table sqlDataset, sqlBacked bool, d qt.SQLiteV2Dataset, rowRequest *qt.ServerQueryV2, metrics *qt.MetricQuery, options qt.PlanOptions, bounds map[string][2]string, sourceRows, usageHours []map[string]any, sourceNames []string, out *queryV2ExecutionResult, populationLimit ...int) error {
 	tx, release, err := leaseQueryV2(ctx, s.Catalog.reader())
 	if err != nil {
 		return err
@@ -1144,9 +1125,7 @@ func (s *Server) executeStagedQueryV2(ctx context.Context, dataset string, table
 		if len(populationLimit) > 0 {
 			population = min(population, populationLimit[0])
 		}
-		rows := d
-		rows.SourceSQL, rows.SourceArgs = window.sql, window.args
-		out.SQLiteV2ExecutionResult, indexed, err = s.indexedQueryRowsV2(ctx, tx, table, rows, *rowRequest, options, bounds, population)
+		out.SQLiteV2ExecutionResult, indexed, err = s.indexedQueryRowsV2(ctx, tx, table, d, *rowRequest, options, bounds, population)
 	}
 	if indexed {
 		// The indexed window has already executed in this same transaction.

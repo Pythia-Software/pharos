@@ -15,11 +15,10 @@ import (
 // with case-sensitive trigrams. A quoted MATCH phrase therefore answers the
 // supported substring predicate exactly, including negation. Other operators
 // and short/non-ASCII needles keep the ordinary typed predicate.
-// keys selects the dataset's ID field for each indexed row.
-type queryTextIndex struct{ table, from, rowID, body, field, keys, columns, projection string }
+type queryTextIndex struct{ table, from, rowID, body, field, columns, projection string }
 
-var toolQueryText = queryTextIndex{table: "tool_query_text_fts", from: "FROM tool_calls t", rowID: "t.rowid", body: "t.command", field: "command", keys: "SELECT t.id FROM tool_calls t"}
-var humanQueryText = queryTextIndex{table: "human_query_text_fts", from: "FROM message_authorship ma JOIN messages m ON m.id=ma.message_id", rowID: "ma.rowid", body: "m.text", field: "text", keys: "SELECT ma.message_id FROM message_authorship ma"}
+var toolQueryText = queryTextIndex{table: "tool_query_text_fts", from: "FROM tool_calls t", rowID: "t.rowid", body: "t.command", field: "command"}
+var humanQueryText = queryTextIndex{table: "human_query_text_fts", from: "FROM message_authorship ma JOIN messages m ON m.id=ma.message_id", rowID: "ma.rowid", body: "m.text", field: "text"}
 var toolQueryFacts = queryTextIndex{table: "tool_query_facts", from: "FROM tool_calls t", rowID: "t.rowid",
 	columns:    "rowid,id,workspace_id,started_at,duration_ms,provider,activity,tool_category,day",
 	projection: "t.rowid,t.id,t.workspace_id,t.started_at,t.duration_ms,t.provider,machine_activity(t.tool_category,t.command_category,t.tool_name,t.mcp_server,t.program),t.tool_category,date(t.started_at,'localtime')"}
@@ -45,39 +44,6 @@ func (index *queryTextIndex) term(clause qt.WhereClause) bool {
 	}
 	return true
 }
-// queryTextRelations lets Query Table answer dataset's supported substring
-// predicates from its index, exactly, in the execution's own transaction:
-// rows, metric populations and filters, and /query-v3 source filters. It
-// declines other operators, short or non-ASCII needles, and every predicate
-// while the index's backfill is incomplete in that snapshot, leaving the
-// typed predicate. A negated predicate uses the same relation: the compiler
-// negates it and keeps its own null and empty guard.
-func queryTextRelations(dataset string) qt.SQLitePredicateRelations {
-	var index *queryTextIndex
-	switch dataset {
-	case "tool_calls":
-		index = &toolQueryText
-	case "writing_messages":
-		index = &humanQueryText
-	default:
-		return nil
-	}
-	return qt.SQLitePredicateRelationsFunc(func(ctx context.Context, tx *sql.Tx, p qt.SQLitePredicate) (qt.SQLitePredicateRelation, bool, error) {
-		if !index.term(qt.WhereClause{Field: p.Field, Op: p.Op, Value: p.Value}) {
-			return qt.SQLitePredicateRelation{}, false, nil
-		}
-		var ready bool
-		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM meta WHERE key=? AND value=?)", index.table+"_ready", index.version()).Scan(&ready); err != nil || !ready {
-			return qt.SQLitePredicateRelation{}, false, err
-		}
-		return qt.SQLitePredicateRelation{
-			SQL:   index.keys + " WHERE " + index.rowID + " IN (SELECT rowid FROM " + index.table + " WHERE " + index.table + " MATCH ?)",
-			Args:  []any{substringQuery([]string{strings.ToLower(p.Value)})},
-			Exact: true,
-		}, true, nil
-	})
-}
-
 func (d sqlDataset) residualWhere(where []qt.WhereTerm) []qt.WhereTerm {
 	result := make([]qt.WhereTerm, 0, len(where))
 	for _, term := range where {
@@ -253,4 +219,3 @@ func (c *Catalog) ensureQueryFactTriggers() error {
 	}
 	return tx.Commit()
 }
-

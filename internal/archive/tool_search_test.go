@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	qt "github.com/Pythia-Software/query-table/backends/go"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -127,74 +128,30 @@ func TestQueryTextIndexesMatchTypedSubstringFilters(t *testing.T) {
 				commitSeed(t, tx)
 				publishProjections(t, c)
 			}
-			// Rows take the host's indexed window; the averages and the
-			// grouping go to Query Table, which reads the index through
-			// queryTextRelations. Every answer must match ordinary typed
-			// execution, which is what runs while the index is not ready.
-			number := map[string]string{"tool_calls": "duration_ms", "writing_messages": "words"}[dataset]
-			server := &Server{Catalog: c}
-			setReady := func(ready bool) {
-				t.Helper()
-				statement := "DELETE FROM meta WHERE key=?"
-				if ready {
-					statement = "INSERT INTO meta(key,value) VALUES(?,'1')"
-				}
-				if _, err := c.DB.Exec(statement, index.table+"_ready"); err != nil {
-					t.Fatal(err)
-				}
-			}
-			execute := func(where []qt.WhereTerm) (any, error) {
-				t.Helper()
-				request := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id"}, Where: where, Limit: 100}}
-				rows, err := server.executeQueryV2(t.Context(), dataset, nil, schema, &request, nil)
-				if err != nil {
-					return nil, err
-				}
-				metrics := metricRequest(qt.AggSpec{ID: "rows", Op: "count", GroupBy: []string{"conversation_id"}},
-					qt.AggSpec{ID: "mean", Op: "avg", Field: number, GroupBy: []string{"conversation_id"}},
-					qt.AggSpec{ID: "filtered", Op: "count", Where: where})
-				metrics.Where = where
-				reduced, err := server.executeQueryV2(t.Context(), dataset, nil, schema, nil, &metrics)
-				if err != nil {
-					return nil, err
-				}
-				grouping := groupRequest("conversation_id", qt.SummaryColumn{ID: "calls", Op: "count"}, qt.SummaryColumn{ID: "mean", Op: "avg", Field: number})
-				grouping.Source = qt.WireQuery{Where: where}
-				grouping.Result.OrderBy = qt.OrderBys{{Field: "conversation_id", Dir: "asc"}}
-				grouped, _, err := server.executeQueryV3(t.Context(), dataset, nil, schema, grouping)
-				return []any{rows.Rows.Total, rows.Rows.Rows, rows.Rows.Computed, reduced.Metrics, grouped.Rows, grouped.Total, grouped.SourceTotal}, err
-			}
-			contains := func(value string, negated bool) qt.WhereClause {
-				return qt.WhereClause{Field: index.field, Op: "contains", Value: value, Negated: negated}
-			}
 			check := func() {
 				t.Helper()
-				filters := [][]qt.WhereTerm{
-					// Either branch indexed, and a branch that is not: the term
-					// then keeps its typed predicates.
-					{{Any: []qt.WhereClause{contains("test", false), contains("quotes", false)}}},
-					{{Any: []qt.WhereClause{contains("test", false), contains("a", false)}}},
-					{{Any: []qt.WhereClause{{All: []qt.WhereClause{contains("test", false), contains("updated", true)}}, contains("foo", false)}}},
-					{{Any: []qt.WhereClause{{All: []qt.WhereClause{contains("test", false), {Field: "conversation_id", Op: "is_not_null"}}}, contains("zzz", false)}}},
-				}
 				for _, needle := range []string{"TEST", "foo", "bar", "quotes", "kelvin", "a", "absent_82f14c", "\"qu", "  ", "\nwi", "   ", "İ"} {
 					for _, negated := range []bool{false, true} {
-						filters = append(filters, []qt.WhereTerm{{Field: index.field, Op: "contains", Value: needle, Negated: negated}})
-					}
-				}
-				for _, where := range filters {
-					if !index.term(contains("TEST", false)) {
-						t.Fatal("eligible term rejected")
-					}
-					setReady(false)
-					want, err := execute(where)
-					if err != nil {
-						t.Fatal(err)
-					}
-					setReady(true)
-					got, err := execute(where)
-					if err != nil || !identical(got, want) {
-						t.Fatalf("%+v: got=%+v want=%+v err=%v", where, got, want, err)
+						where := []qt.WhereTerm{{Field: index.field, Op: "contains", Value: needle, Negated: negated}}
+						if !index.term(where[0].Predicates()[0]) && needle == "TEST" {
+							t.Fatal("eligible term rejected")
+						}
+						request := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id"}, Where: where, Limit: 100}}
+						server := &Server{Catalog: c}
+						if _, err := c.DB.Exec("DELETE FROM meta WHERE key=?", index.table+"_ready"); err != nil {
+							t.Fatal(err)
+						}
+						want, err := server.executeQueryV2(t.Context(), dataset, nil, schema, &request, nil)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if _, err := c.DB.Exec("INSERT INTO meta(key,value) VALUES(?,'1')", index.table+"_ready"); err != nil {
+							t.Fatal(err)
+						}
+						got, err := server.executeQueryV2(t.Context(), dataset, nil, schema, &request, nil)
+						if err != nil || got.Rows.Total != want.Rows.Total || !reflect.DeepEqual(got.Rows.Rows, want.Rows.Rows) || !reflect.DeepEqual(got.Rows.Computed, want.Rows.Computed) {
+							t.Fatalf("%q negated=%v: got=%+v want=%+v err=%v", needle, negated, got.Rows, want.Rows, err)
+						}
 					}
 				}
 			}
