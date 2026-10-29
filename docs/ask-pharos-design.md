@@ -75,6 +75,23 @@ offered beside it. Typing a follow-up while waiting or changing to ordinary sear
 automatic navigation. Validate destinations through Pharos's own routing and URL
 builders.
 
+Ask Pharos is also a configurable, icon-only header tool, with a search glyph
+and ribbon edge. It opens the same chat in a modal over the current page. Every
+submitted question captures that page's local URI, including its filters and
+view settings, as private context. Retries retain the original URI; follow-ups
+capture the page currently being viewed. This context stays out of the indexed
+conversation text.
+
+A picture-in-picture icon moves the chat from either Home or the overlay into
+a draggable, dismissible progress panel. Drag the panel itself to move it, or
+tap it once to reopen the chat; drafts and active questions stay intact.
+The panel shows only the latest streamed activity or request state
+and announces a completed response, clarification, or error. Dismissing it keeps
+the request running; the header button marks a ready response and reopens the
+chat. Once browsing has been chosen, the request never automatically navigates,
+even if the chat is reopened before completion. Destination cards remain
+explicit links. Closing a pending modal also switches to browsing.
+
 Loading needs elapsed time, cancellation, retry, and preserved drafts. Suggestions
 prefill the editor without submitting and follow the existing card carousel's
 interaction patterns.

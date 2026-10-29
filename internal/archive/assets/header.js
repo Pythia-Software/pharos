@@ -6,6 +6,7 @@ const HEADER_TOOLS = [
   { id: 'library', family: 'library', element: 'headerLibrary', label: 'Drive & sync status', description: 'Library activity, drive actions, and Index changes.', on: true },
   { id: 'sync', family: 'library', element: 'headerSyncOnly', label: 'Sync only', description: 'Index changes without the drive name or status.', on: false },
   { id: 'search', element: 'searchToggle', label: 'Search', description: 'Search the library. The ⌘K shortcut also works.', on: true },
+  { id: 'ask', element: 'askPharosToggle', label: 'Ask Pharos', description: 'Ask about the current page and browse while Pharos works.', on: true },
   { id: 'summary', element: 'usageSummaryToggle', label: 'Analyze summary', description: 'Recent words, tokens, CO₂e, and API cost.', on: true, legacy: 'pharos-show-usage-summary-button' },
   { id: 'annotations', element: 'feedbackToggle', label: 'Agent annotations', description: 'Mark up the interface to share feedback with an agent.', on: false, legacy: 'pharos-show-agent-annotation-button' },
   { id: 'feedback', element: 'feedbackSubmitToggle', label: 'Send feedback', description: 'Send a bug report, request, or prompt to Pythia Software.', on: true },

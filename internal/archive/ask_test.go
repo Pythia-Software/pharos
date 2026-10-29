@@ -207,8 +207,12 @@ func TestAskConversationPersistenceAndSelection(t *testing.T) {
 	s := askTestServer(t)
 	askEnable(t, s)
 	calls := 0
+	pageURI := "/analyze?analyze_topic=tokens&private_view=retainedscope"
 	override(t, &askRunCLI, func(ctx context.Context, p askProvider, selection askSelection, prompt string) ([]byte, error) {
 		calls++
+		if !strings.Contains(prompt, jsonText(pageURI)) {
+			t.Error("current page context missing from CLI conversation")
+		}
 		if strings.Contains(prompt, s.Config().APIToken) {
 			t.Error("passed service token to CLI")
 		}
@@ -217,10 +221,22 @@ func TestAskConversationPersistenceAndSelection(t *testing.T) {
 		response.Message = fmt.Sprintf("Navigation reply %d", calls)
 		return []byte(jsonText(response)), nil
 	})
-	askOK(t, s, "send", askInput())
+	for _, uri := range []string{"https://elsewhere.test/", "//elsewhere.test/", "/api/status", "/analyze?token=secret"} {
+		invalid := askInput()
+		invalid["currentURI"] = uri
+		if r := askCall(t, s, http.MethodPost, "send", invalid); r.Code == 200 {
+			t.Fatalf("accepted unsafe context %q", uri)
+		}
+	}
+	input := askInput()
+	input["currentURI"] = pageURI
+	askOK(t, s, "send", input)
 	session, err := s.askSession(t.Context(), "chat-1")
 	if err != nil || len(session.Conversation) != 1 || len(session.Conversation[0].Cards) != 2 {
 		t.Fatalf("session: %+v %v", session, err)
+	}
+	if session.Conversation[0].CurrentURI != pageURI {
+		t.Fatal("page context was not persisted")
 	}
 	if session.Conversation[0].Cards[0].Href == "" || session.Conversation[0].ModelLabel != "Test Model" {
 		t.Fatal("missing route or model identity")
@@ -279,6 +295,10 @@ func TestAskConversationPersistenceAndSelection(t *testing.T) {
 	found, searchErr := s.Catalog.Search(SearchOptions{Query: "wasting", Limit: 10, ctx: t.Context()})
 	if searchErr != nil || len(found["items"].([]map[string]any)) != 1 {
 		t.Fatalf("chat missing from general search: %v %v", found, searchErr)
+	}
+	var contextCount int
+	if err = s.Catalog.reader().QueryRow("SELECT COUNT(*) FROM messages WHERE text LIKE '%retainedscope%'").Scan(&contextCount); err != nil || contextCount != 0 {
+		t.Fatalf("private page context entered archive: %d %v", contextCount, err)
 	}
 	var count int
 	if err = s.Catalog.reader().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH ?", `"wasting"`).Scan(&count); err != nil || count != 1 {
@@ -401,7 +421,9 @@ func TestAskCancelAndDisable(t *testing.T) {
 				<-ctx.Done()
 				return nil, ctx.Err()
 			})
-			go func() { done <- askCall(t, s, http.MethodPost, "send", askInput()) }()
+			input := askInput()
+			input["currentURI"] = "/analyze?analyze_topic=tokens"
+			go func() { done <- askCall(t, s, http.MethodPost, "send", input) }()
 			select {
 			case <-started:
 			case <-time.After(5 * time.Second):
@@ -423,6 +445,26 @@ func TestAskCancelAndDisable(t *testing.T) {
 			session, err := s.askSession(t.Context(), "chat-1")
 			if err != nil || session.Conversation[0].Status != "canceled" {
 				t.Fatalf("canceled state: %+v %v", session, err)
+			}
+			if action == "cancel" {
+				// Cancellation may have changed the finished copy while it was saving.
+				if pending, err := s.saveFinishedAsk("chat-1"); pending || err != nil {
+					t.Fatalf("finish canceled save: %v", err)
+				}
+				override(t, &askRunCLI, func(_ context.Context, _ askProvider, _ askSelection, prompt string) ([]byte, error) {
+					if !strings.Contains(prompt, jsonText(input["currentURI"])) {
+						t.Error("retry lost original page context")
+					}
+					return askReply("findings"), nil
+				})
+				retry := askInput()
+				retry["retry"] = true
+				retry["currentURI"] = "/library"
+				askOK(t, s, "send", retry)
+				session, err = s.askSession(t.Context(), "chat-1")
+				if err != nil || len(session.Conversation) != 1 || session.Conversation[0].CurrentURI != input["currentURI"] {
+					t.Fatalf("retry context: %+v %v", session, err)
+				}
 			}
 		})
 	}

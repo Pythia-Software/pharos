@@ -85,6 +85,11 @@ test('chat URLs preserve unrelated parameters and support replacing and clearing
   assert.equal(new URL(model.askChatURL('http://pharos.test/home','saved')).searchParams.get('ask_chat'),'saved');
   const destination='http://pharos.test/analyze?analyze_topic=tools';
   assert.equal(model.askChatURL(destination,'saved'),destination);
+  assert.equal(model.askHistoryURL(original,'saved'),model.askChatURL(original,'saved'));
+  assert.equal(model.askHistoryURL('http://pharos.test/home?range=week','saved'),'http://pharos.test/home?range=week&ask_chat=saved');
+  for(const path of ['/library?text=cache','/analyze?analyze_topic=tools','/settings#models']){
+    assert.equal(model.askHistoryURL('http://pharos.test'+path,'chat one'),'http://pharos.test/?ask_chat=chat+one');
+  }
 });
 test('history keeps server matches from later messages and only adds the current chat to unfiltered lists', () => {
   const first={id:'initial',updatedAt:1,conversation:[{prompt:'Initial topic'}]},second={id:'newer',updatedAt:2,conversation:[{prompt:'Another topic'}]};
@@ -166,4 +171,27 @@ test('Ask elapsed time preserves the latest real activity and shows silence hone
   assert.equal(quiet.message,activity[0].message);
   assert.match(quiet.elapsed,/20s since last update/);
   assert.match(model.askWaitStatus({cli:'Claude',elapsedMs:12000}).elapsed,/12s since last update/);
+});
+
+test('page context preserves the active view while removing chat routing and credentials', () => {
+  assert.equal(model.askPageURI('http://pharos.test/analyze?analyze_topic=tokens&q_usage=filters#chart'), '/analyze?analyze_topic=tokens&q_usage=filters#chart');
+  assert.equal(model.askPageURI('http://pharos.test/?ask_chat=chat&token=secret&accessToken=secret&range=week'), '/?range=week');
+});
+test('browsing suppresses automatic navigation even after reopening a single response', () => {
+  const state={cards:[{href:'/analyze'}],enabled:true,regular:false,edited:false};
+  assert.equal(model.askShouldNavigate(state),true);
+  assert.equal(model.askShouldNavigate({...state,browsing:true}),false);
+});
+test('floating progress reflects the latest state and distinguishes completion from waiting or cancellation', () => {
+  const running=model.askFloatingState({status:'loading',message:'Comparing model usage…'});
+  assert.equal(running.message,'Comparing model usage…');assert.equal(running.ready,false);
+  const streaming=model.askFloatingState({status:'loading',message:'Starting Codex…',elapsedMs:7000,activity:[{message:'Browsing available views…',elapsedMs:2000},{message:'Searching archived work…',elapsedMs:4000}]});
+  assert.equal(streaming.message,'Searching archived work…');assert.equal(streaming.ready,false);
+  for (const status of ['single','multiple','clarification','error']) assert.equal(model.askFloatingState({status}).ready,true);
+  assert.equal(model.askFloatingState({status:'canceled'}).ready,false);
+});
+test('dragged progress stays reachable after moving or shrinking the window', () => {
+  const bounds={width:300,height:80,viewportWidth:390,viewportHeight:550};
+  assert.deepEqual(plain(model.askFloatingPosition({...bounds,x:-100,y:999})),{x:8,y:462});
+  assert.deepEqual(plain(model.askFloatingPosition({...bounds,x:60,y:100})),{x:60,y:100});
 });

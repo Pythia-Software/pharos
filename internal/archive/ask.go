@@ -31,6 +31,7 @@ type askCard struct {
 type askTurn struct {
 	ID         string        `json:"id"`
 	Prompt     string        `json:"prompt"`
+	CurrentURI string        `json:"currentURI,omitempty"`
 	CLI        string        `json:"cli"`
 	Model      string        `json:"model"`
 	ModelLabel string        `json:"modelLabel"`
@@ -850,12 +851,13 @@ func (s *Server) dropFinishedAsk(id string) {
 
 func (s *Server) startAsk(ctx context.Context, body map[string]any) (askSession, askProvider, context.Context, context.CancelFunc, error) {
 	var input struct {
-		ID        string
-		TurnID    string
-		Prompt    string
-		Draft     string
-		Selection askSelection
-		Retry     bool
+		ID         string
+		TurnID     string
+		Prompt     string
+		CurrentURI string
+		Draft      string
+		Selection  askSelection
+		Retry      bool
 	}
 	fail := func(err error) (askSession, askProvider, context.Context, context.CancelFunc, error) {
 		return askSession{}, askProvider{}, nil, nil, err
@@ -872,6 +874,9 @@ func (s *Server) startAsk(ctx context.Context, body map[string]any) (askSession,
 	}
 	if len(input.Draft) > 12000 {
 		return fail(fmt.Errorf("draft is too long"))
+	}
+	if input.CurrentURI != "" && !askSafeURL(input.CurrentURI) {
+		return fail(fmt.Errorf("invalid current page URI"))
 	}
 	p, err := s.askProvider(ctx, input.Selection.Provider)
 	if err != nil {
@@ -906,6 +911,7 @@ func (s *Server) startAsk(ctx context.Context, body map[string]any) (askSession,
 			if !input.Retry || i != len(session.Conversation)-1 || !slices.Contains([]string{"canceled", "error", "loading"}, turn.Status) {
 				return fail(fmt.Errorf("message was already submitted; reload the chat to see its result"))
 			}
+			input.CurrentURI = turn.CurrentURI
 			input.Prompt = turn.Prompt
 			session.Conversation = session.Conversation[:i]
 			break
@@ -920,7 +926,7 @@ func (s *Server) startAsk(ctx context.Context, body map[string]any) (askSession,
 			label = model.Label
 		}
 	}
-	session.Conversation = append(session.Conversation, askTurn{ID: input.TurnID, Prompt: input.Prompt, CLI: p.ID, Model: input.Selection.Model, ModelLabel: label, Effort: input.Selection.Effort, Status: "loading", StartedAt: time.Now().UnixMilli(), Cards: []askCard{}})
+	session.Conversation = append(session.Conversation, askTurn{ID: input.TurnID, Prompt: input.Prompt, CurrentURI: input.CurrentURI, CLI: p.ID, Model: input.Selection.Model, ModelLabel: label, Effort: input.Selection.Effort, Status: "loading", StartedAt: time.Now().UnixMilli(), Cards: []askCard{}})
 	session.Draft = input.Draft
 	session.ClarificationDraft = ""
 	session.UpdatedAt = time.Now().UnixMilli()
