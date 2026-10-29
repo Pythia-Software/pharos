@@ -182,7 +182,21 @@ export async function open(t, { url = "/", viewport = { width: 1440, height: 900
   // A request counts as in flight until its response headers arrive: Chrome
   // reports no "finished" for a body the page never reads.
   const done = request => { inflight.delete(request); wake(); };
-  page.on("request", request => inflight.add(request));
+  // Loading another document cancels the current one's requests, including
+  // any it starts while the next loads, and Chrome does not always report
+  // those as failed: they leave the count when the new document commits.
+  // History navigations within a document load nothing and cancel nothing.
+  let loadingDocument = false;
+  page.on("request", request => {
+    if (request.isNavigationRequest() && request.frame() === page.mainFrame()) loadingDocument = true;
+    inflight.add(request);
+  });
+  page.on("framenavigated", frame => {
+    if (frame !== page.mainFrame() || !loadingDocument) return;
+    loadingDocument = false;
+    for (const request of inflight) if (!request.isNavigationRequest()) inflight.delete(request);
+    wake();
+  });
   page.on("response", response => {
     const request = response.request();
     if (response.status() >= 400) failed.push(`${response.status()} ${request.method()} ${request.url().replace(origin, "")}`);
