@@ -94,7 +94,7 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
     {children}
     {links ? <>
       <UsageDashboardLinks schema={schema} dataset={dataset} query={trend.supporting} currentURL={currentURL} />
-      <p className="usage-dashboard-note">{trendNote(catalog, view)} Click a column or point to pin its key, then follow a series to its contributing records. Drag across two or more periods to filter dates. Select legend entries to compare or exclude series. {timestampHours(catalog, view) ? "Hourly totals of a timestamp cannot yet open as a grouped query, so the link opens the records drawn." : "Grouped rows show the interval amounts before smoothing, accumulation, shares or folding."}</p>
+      <p className="usage-dashboard-note">{trendNote(catalog, view)} Click a column or point to pin its key, then follow a series to its contributing records. Drag across two or more periods to filter dates. Select legend entries to compare or exclude series. Grouped rows show the interval amounts before smoothing, accumulation, shares or folding{timestampHours(catalog, view) ? ", one row per UTC clock hour" : ""}.</p>
     </> : null}
   </section>;
 }
