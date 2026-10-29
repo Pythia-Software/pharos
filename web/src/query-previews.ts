@@ -1,7 +1,7 @@
 import { isOriginDimension, originLabel, loadOriginMetadata } from "./origin-dimensions";
 import { apiCostTrendQuery, apiCostTrendFacts, buildApiCostTrend, usesApiCostTrend, type CostTimeBucket } from "./api-cost-trend";
 import { formatMetricOutput } from "@pythia-software/query-table-ui";
-import { groupKeyFields, metricPopulationError, parseRelativeDuration, createGroupingModel, sourceExecutionSchema, toQueryRequestV3, validateQueryResultV3, validateComputedColumn, toMetricQuery, toServerQueryV2, type QueryCapabilitiesV3, type QueryResultV3, type ComputedColumn, type AggregationClause, type AggregationResult, type AggregationResultEntry, type ComputedExecution, type FieldSchema, type MetricCapabilities, type MetricQuery, type QueryState } from "@pythia-software/query-table-core";
+import { groupKeyFields, metricMinCountText, metricPopulationError, parseRelativeDuration, createGroupingModel, sourceExecutionSchema, toQueryRequestV3, validateQueryResultV3, validateComputedColumn, toMetricQuery, toServerQueryV2, type QueryCapabilitiesV3, type QueryResultV3, type ComputedColumn, type AggregationClause, type AggregationResult, type AggregationResultEntry, type ComputedExecution, type FieldSchema, type MetricCapabilities, type MetricQuery, type QueryState } from "@pythia-software/query-table-core";
 import { categoryForQuery, queryCategories } from "./query-categories";
 import { chartBucketsWithHistory, foldSeries, rollingAverageBuckets, validRollingPeriods, type ChartBucket, type ChartSeries } from "./chart-series";
 import { earliestKey, parseDay, shiftPeriod } from "./chart-period";
@@ -224,7 +224,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
     : `${formatPreviewValue(result.processedRows ?? total, "")} observations · ${clause.label ?? clause.op}`;
   const notes = [recipe?.note, searchNote, options.sourceCover ? "Chart covers source observations before grouped filters" : undefined, result.scope === "shownRows" ? "Covers the saved table page" : undefined, result.coverage === "partial" ? "Partial results" : undefined,
     result.groupCount !== undefined && result.groupCount > result.buckets.length ? "Open the view for all results" : undefined,
-    hidden ? `${hidden.toLocaleString()} ${hidden === 1 ? "group" : "groups"} hidden (fewer than ${clause.minCount?.toLocaleString()} rows)` : undefined,
+    hidden ? `${hidden.toLocaleString()} ${hidden === 1 ? "group" : "groups"} hidden (fewer than ${metricMinCountText(clause, field => schema.fields.find(item => item.name === field)?.label ?? field)})` : undefined,
     result.buckets.some(bucket => bucket.error || bucket.yError) ? "Some groups have calculation errors" : undefined];
   let ready = values.length > 0, eligible = true;
   if (options.suggested && recipe?.eligibility && !query.grouping) {

@@ -600,6 +600,18 @@ test("metric filters and minimum group sizes run only where advertised and discl
   assert.match(preview.note, /1 group hidden \(fewer than 4 rows\)/);
   assert.equal(preview.headlineMetric, undefined);
   assert.match(preview.summary, /^Shown: /);
+  // Distinct and summed minimums name what they counted.
+  clearPreviewCache();
+  fixture(t, path => path.endsWith("capabilities") ? response({ metricCapabilities: { version: 2, expressions: true, distributions: true, filters: true, minCount: true, minCountMeasures: true }, computedExecution: execution, queryCapabilities }) : undefined);
+  const slow = [{ field: "duration_ms", op: ">=", value: "400" }];
+  for (const [minCount, note] of [
+    [{ min: 4, distinct: "conversation_id" }, "1 group hidden (fewer than 4 distinct Conversation ID values)"],
+    [{ min: 200, sum: "result_tokens" }, "1 group hidden (fewer than 200 total Context added (tokens))"],
+  ]) {
+    const measured = await loadQueryPreview("tool_calls", query([{ id: "calls", op: "sum", field: "call_count", groupBy: ["repository_name"], minCount, where: slow }]), schemas.tool_calls);
+    assert.equal(measured.metrics[0].result.hiddenGroups, 1);
+    assert.ok(measured.note.includes(note), measured.note);
+  }
 });
 
 test("grouped previews run distinct minimums only where query-v3 advertises them", async t => {
