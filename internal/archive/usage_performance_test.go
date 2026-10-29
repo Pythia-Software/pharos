@@ -297,7 +297,7 @@ func TestUsagePerformanceFilteredMetrics(t *testing.T) {
 						}
 					} else {
 						// The staged paths, without the in-memory executor ahead of them.
-						err = s.executeStagedQueryV2(ctx, "usage", sqlDataset{}, false, d, nil, &q, options, nil, daily, hours, names, &result)
+						err = s.executeStagedQueryV2(ctx, "usage", sqlDataset{}, false, d, nil, &q, options, nil, sqlSource{}, daily, hours, names, &result)
 					}
 					if err != nil {
 						t.Fatal(line, path, err)
@@ -491,6 +491,81 @@ func TestUsagePerformanceSQLHost(t *testing.T) {
 		q.Metrics = []qt.AggSpec{{ID: "all_groups", Op: "count"}, {ID: "shown", Op: "sum", Field: "messages", Scope: "shownRows"}}
 		measure(t, "/api/query/writing_messages/query-v3", q)
 	})
+}
+
+// TestQueryTextPerformance times substring filters on the tool ledger's
+// command, answered by its trigram index: rows, metrics the host reduces and
+// metrics it leaves to Query Table, and a /query-v3 grouping, each with a
+// selective needle, a broad one and the broad one negated. The synthetic
+// ledger has 200,000 calls with commands of 60 to 500 bytes:
+//
+//	PHAROS_TEST_PROCESSES=1 go test -tags probe -run '^TestQueryTextPerformance$' -v -count=1 ./internal/archive
+func TestQueryTextPerformance(t *testing.T) {
+	c, config := testCatalog(t)
+	override(t, &queryTextIndexBatch, 50_000)
+	const population = 200_000
+	seedToolCalls(t, c, population)
+	tx := seedTx(t, c.DB)
+	if _, err := tx.Exec(`UPDATE tool_calls SET command=printf('cd /work/repo%d && %s --flag-%d %s',rowid%50,
+		CASE rowid%7 WHEN 0 THEN 'go test ./...' WHEN 1 THEN 'git status' WHEN 2 THEN 'rg -n pattern' WHEN 3 THEN 'npm --prefix web run check'
+		WHEN 4 THEN 'sed -n 1,80p file.go' WHEN 5 THEN 'python3 tools/run.py' ELSE 'ls -la' END,rowid%1000,hex(randomblob(20+rowid%200)))`); err != nil {
+		t.Fatal(err)
+	}
+	commitSeed(t, tx)
+	publishProjections(t, c)
+	c.maintainQueryTextIndexes(t.Context())
+	s := testServer(t, config, c)
+	measure := func(t *testing.T, path string, body any) {
+		t.Helper()
+		var expected string
+		var wall []time.Duration
+		for run := range 11 {
+			start := time.Now()
+			response := apiCall(t, s, config.APIToken, http.MethodPost, path, body)
+			elapsed := time.Since(start)
+			if response.Code != http.StatusOK || strings.Contains(response.Body.String(), `"error":"`) {
+				t.Fatal(response.Code, response.Body.String())
+			}
+			if run == 0 {
+				expected = response.Body.String()
+				continue
+			}
+			if response.Body.String() != expected {
+				t.Fatal("responses differ between runs")
+			}
+			wall = append(wall, elapsed)
+		}
+		t.Logf("%s wall=%v", t.Name(), medianDuration(wall).Round(10*time.Microsecond))
+	}
+	for _, needle := range []struct {
+		name    string
+		value   string
+		negated bool
+	}{{"selective", "--flag-42 ", false}, {"broad", "git status", false}, {"excluded", "git status", true}} {
+		where := []qt.WhereTerm{{Field: "command", Op: "contains", Value: needle.value, Negated: needle.negated}}
+		t.Run(needle.name+"/rows", func(t *testing.T) {
+			q := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile,
+				WireQuery: qt.WireQuery{Select: []string{"id", "command", "started_at"}, Where: where, Limit: 50}}
+			measure(t, "/api/query/tool_calls/rows-v2", q)
+		})
+		t.Run(needle.name+"/host-metrics", func(t *testing.T) {
+			q := metricRequest(qt.AggSpec{ID: "calls", Op: "count", GroupBy: []string{"tool_name"}},
+				qt.AggSpec{ID: "duration", Op: "sum", Field: "duration_ms", GroupBy: []string{"tool_name"}})
+			q.Where = where
+			measure(t, "/api/query/tool_calls/metrics", q)
+		})
+		t.Run(needle.name+"/adapter-metrics", func(t *testing.T) {
+			q := metricRequest(qt.AggSpec{ID: "calls", Op: "count", GroupBy: []string{"tool_name"}},
+				qt.AggSpec{ID: "duration", Op: "avg", Field: "duration_ms", GroupBy: []string{"tool_name"}})
+			q.Where = where
+			measure(t, "/api/query/tool_calls/metrics", q)
+		})
+		t.Run(needle.name+"/v3-grouped", func(t *testing.T) {
+			q := groupRequest("tool_name", qt.SummaryColumn{ID: "calls", Op: "count"}, qt.SummaryColumn{ID: "mean", Op: "avg", Field: "duration_ms"})
+			q.Source = qt.WireQuery{Where: where}
+			measure(t, "/api/query/tool_calls/query-v3", q)
+		})
+	}
 }
 
 func medianDuration(values []time.Duration) time.Duration {

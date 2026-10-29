@@ -120,6 +120,10 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 		where = q.Source.Where
 	}
 	table, sqlBacked := sqlDatasetFor(dataset)
+	if sqlBacked {
+		// Query Table answers indexed substring predicates itself.
+		d.PredicateRelations = queryTextRelations(dataset)
+	}
 	var rows []map[string]any
 	var required []string
 	var find *libraryFindSet
@@ -149,6 +153,7 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 			bounds, err = queryBucketBounds(ctx, s.Catalog.reader(), where)
 			if err == nil {
 				projected, _ := table.project(required).preferCoveringScan(where)
+				projected.queryText = nil
 				d.SourceSQL, d.SourceArgs = projected.v2WindowedSource(schema, where, time.UnixMilli(q.Now), bounds)
 			}
 		}
