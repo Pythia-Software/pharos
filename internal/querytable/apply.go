@@ -150,15 +150,20 @@ func filterRows(rows []map[string]any, where []WhereTerm, schema Schema) ([]map[
 	for _, row := range rows {
 		matches := true
 		for _, term := range where {
+			// A term is an OR of AND branches; a plain predicate is one
+			// one-literal branch. Every literal is evaluated so that a bad
+			// operand fails the query wherever it sits.
 			termMatch := false
-			for _, clause := range term.Predicates() {
-				match, err := matchesClause(row, clause, schema.Fields[clause.Field])
-				if err != nil {
-					return nil, err
+			for _, branch := range term.Branches() {
+				branchMatch := true
+				for _, clause := range branch {
+					match, err := matchesClause(row, clause, schema.Fields[clause.Field])
+					if err != nil {
+						return nil, err
+					}
+					branchMatch = branchMatch && match
 				}
-				if match {
-					termMatch = true
-				}
+				termMatch = termMatch || branchMatch
 			}
 			if !termMatch {
 				matches = false

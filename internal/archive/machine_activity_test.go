@@ -54,9 +54,38 @@ func TestMachineTimeQueries(t *testing.T) {
 			t.Fatalf("operation metrics must match raw calls for %v: %v", groups, err)
 		}
 	}
+	// An OR of AND branches over dimensions, and minimums the cubes cannot
+	// count, answer as the raw calls do.
+	pairs := []qt.WhereTerm{{Any: []qt.WhereClause{{All: []qt.WhereClause{{Field: "provider", Op: "=", Value: "codex"}, {Field: "tool_name", Op: "=", Value: "Bash"}}}, {Field: "tool_name", Op: "=", Value: "Read"}}}}
+	byTool := []string{"tool_name", "provider"}
+	for _, spec := range []qt.AggSpec{
+		{ID: "time", Op: "sum", Field: "duration_ms", GroupBy: byTool},
+		{ID: "distinct", Op: "sum", Field: "duration_ms", GroupBy: byTool, MinCount: qt.MetricMinCount{Min: 2, Distinct: "conversation_id"}},
+		{ID: "summed", Op: "count", GroupBy: byTool, MinCount: qt.MetricMinCount{Min: 5000, Sum: "duration_ms"}},
+	} {
+		for _, where := range [][]qt.WhereTerm{nil, pairs} {
+			q := metricRequest(spec)
+			q.Where = where
+			result, err := server.executeQueryV2(ctx, "tool_calls", nil, v2Schema, nil, &q)
+			want, wantErr := generic.ExecuteV2(ctx, catalog.reader(), nil, &q, qt.PlanOptions{})
+			if err != nil || wantErr != nil || !same(result.SQLiteV2ExecutionResult, want) {
+				t.Fatalf("%s over %+v must match raw calls: %v %v", spec.ID, where, err, wantErr)
+			}
+		}
+	}
 	schema, err := server.queryTableSchema("tool_calls")
 	if err != nil {
 		t.Fatal(err)
+	}
+	count := metricRequest(qt.AggSpec{ID: "n", Op: "count"})
+	count.Where = pairs
+	counted, err := generic.ExecuteV2(ctx, catalog.reader(), nil, &count, qt.PlanOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	paired, err := toolCallDataset.Rows(ctx, catalog.DB, querytable.Query{Select: []string{"id"}, Where: pairs, Limit: 1000}, schema)
+	if err != nil || float64(paired.Total) != counted.Metrics.Metrics[0].Buckets[0].Value {
+		t.Fatalf("source rows for OR-of-AND pairs: %d, adapter %v (%v)", paired.Total, counted.Metrics.Metrics[0].Buckets[0].Value, err)
 	}
 	rows, err := toolCallDataset.Rows(ctx, catalog.DB, querytable.Query{
 		Select:  []string{"id", "operation_key", "operation_name", "activity", "command", "tool_name", "duration_ms", "title", "workspace_id", "conversation_id", "status"},

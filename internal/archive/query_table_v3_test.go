@@ -520,3 +520,92 @@ func TestQueryV3RecordKeywordsOnMapRowsAndMatchingOptions(t *testing.T) {
 		}
 	})
 }
+
+// Pharos advertises the library's capabilities as they are, so every shape
+// they promise must run on its own datasets: hour-of-day and day-of-week
+// cycles, calendar grouping keys, distinct and summed minimums, and OR-of-AND
+// source filters, over a SQL dataset and over staged map rows.
+func TestQueryV3RunsEveryAdvertisedShape(t *testing.T) {
+	previous := time.Local
+	time.Local = time.UTC
+	t.Cleanup(func() { time.Local = previous })
+	catalog, config := testCatalog(t)
+	seedToolCalls(t, catalog, 40)
+	ingestUsageFixture(t, catalog)
+	publishProjections(t, catalog)
+	server := testServer(t, config, catalog)
+	for _, sample := range []struct{ dataset, at, day, key, field, nullable string }{
+		{"tool_calls", "started_at", "day", "tool_name", "duration_ms", "mcp_server"},
+		{"usage", "first_usage_at", "day", "provider", "total_tokens", "repository_name"},
+	} {
+		w := apiCall(t, server, config.APIToken, http.MethodGet, "/api/query/"+sample.dataset+"/capabilities", nil)
+		var handshake struct {
+			MetricCapabilities qt.SQLiteMetricCapabilities `json:"metricCapabilities"`
+			QueryCapabilities  qt.QueryCapabilitiesV3      `json:"queryCapabilities"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &handshake) != nil {
+			t.Fatal(w.Code, w.Body.String())
+		}
+		capabilities := handshake.QueryCapabilities
+		if !capabilities.CalendarCycles || !capabilities.CalendarGroupKeys || !capabilities.MetricMinCountMeasures || !handshake.MetricCapabilities.MinCountMeasures {
+			t.Fatalf("%s: %+v %+v", sample.dataset, capabilities, handshake.MetricCapabilities)
+		}
+		run := func(body string) qt.QueryResultV3 {
+			t.Helper()
+			w := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/"+sample.dataset+"/query-v3", body)
+			var result qt.QueryResultV3
+			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil {
+				t.Fatalf("%s: %d %s\n%s", sample.dataset, w.Code, w.Body.String(), body)
+			}
+			return result
+		}
+		total := func(metric qt.SQLiteMetricV2) (n int64) {
+			if metric.Error != "" {
+				t.Fatalf("%s: metric %s: %s", sample.dataset, metric.ID, metric.Error)
+			}
+			for _, bucket := range metric.Buckets {
+				n += bucket.Count
+			}
+			return n
+		}
+		head := fmt.Sprintf(`{"version":3,"profile":%q,"now":%d,"rows":false,"result":{"select":["id"],"limit":1}`, qt.SQLiteExpressionProfile, time.Now().UnixMilli())
+		cycle := func(interval string) string {
+			return fmt.Sprintf(`{"id":%q,"op":"count","groupBy":[%q],"dateGrouping":{"field":%q,"interval":%q,"timeZone":"UTC","includeEmpty":true,"range":"observed"}}`, interval, sample.at, sample.at, interval)
+		}
+		cycles := run(head + `,"metrics":[{"id":"all","op":"count"},` + cycle("hourOfDay") + `,` + cycle("dayOfWeek") + `]}`)
+		population := total(cycles.Metrics[0])
+		if population == 0 || len(cycles.Metrics[1].Buckets) != 24 || len(cycles.Metrics[2].Buckets) != 7 || total(cycles.Metrics[1]) != population || total(cycles.Metrics[2]) != population {
+			t.Fatalf("%s: cycles %+v", sample.dataset, cycles.Metrics)
+		}
+		// A calendar key groups as the dataset's own local-day field does.
+		grouped := func(key string) map[string]float64 {
+			result := run(fmt.Sprintf(`{"version":3,"profile":%q,"now":%d,"rows":true,"source":{"limit":1},"grouping":{"keys":[%s],"summaries":[{"id":"n","op":"count"}],"representative":null},"result":{"select":["n"],"limit":100}}`,
+				qt.SQLiteExpressionProfile, time.Now().UnixMilli(), key))
+			counts := map[string]float64{}
+			for _, row := range result.Rows {
+				counts[fmt.Sprint(row["n"])]++
+			}
+			return counts
+		}
+		if calendar, plain := grouped(fmt.Sprintf(`{"field":%q,"interval":"day","timeZone":"UTC"}`, sample.at)), grouped(fmt.Sprintf("%q", sample.day)); !reflect.DeepEqual(calendar, plain) {
+			t.Fatalf("%s: calendar-day groups %v, day groups %v", sample.dataset, calendar, plain)
+		}
+		// Minimums over distinct values and sums hide groups and say so.
+		minimums := run(head + fmt.Sprintf(`,"metrics":[{"id":"distinct","op":"count","groupBy":[%q],"minCount":{"min":1000,"distinct":"id"}},{"id":"summed","op":"count","groupBy":[%q],"minCount":{"min":1,"sum":%q}}]}`, sample.key, sample.key, sample.field))
+		if hidden := minimums.Metrics[0].HiddenGroups; hidden == nil || *hidden == 0 || len(minimums.Metrics[0].Buckets) != 0 || minimums.Metrics[1].Error != "" {
+			t.Fatalf("%s: minimums %+v", sample.dataset, minimums.Metrics)
+		}
+		// An OR of AND branches selects the union of its branches: here only
+		// its second, where a flat OR of the same literals keeps every row.
+		filtered := func(where string) int64 {
+			return total(run(fmt.Sprintf(`{"version":3,"profile":%q,"now":%d,"rows":false,"result":{"select":["id"],"where":[%s],"limit":1},"metrics":[{"id":"n","op":"count"}]}`,
+				qt.SQLiteExpressionProfile, time.Now().UnixMilli(), where)).Metrics[0])
+		}
+		null := fmt.Sprintf(`{"field":%q,"op":"is_null","value":""}`, sample.nullable)
+		present := fmt.Sprintf(`{"field":%q,"op":"is_not_null","value":""}`, sample.nullable)
+		branches := filtered(`{"any":[{"all":[` + present + `,` + null + `]},` + present + `]}`)
+		if keyed := filtered(present); branches != keyed || keyed == population || filtered(null) == 0 {
+			t.Fatalf("%s: OR of AND branches kept %d of %d rows, plain %d", sample.dataset, branches, population, keyed)
+		}
+	}
+}

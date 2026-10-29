@@ -154,56 +154,68 @@ func (d sqlDataset) v2CandidateSource(schema qt.Schema, terms []qt.WhereTerm, cl
 	conditions := []string{}
 	bind := func(value any) string { args = append(args, value); return fmt.Sprintf("?%d", len(args)) }
 	for _, term := range terms {
+		// Each literal's candidate (or exact text) predicate replaces it in
+		// place: AND within a branch, OR across branches. The term narrows
+		// only when every literal has one.
 		branches := []string{}
 		saved := len(args)
-		for _, clause := range term.Predicates() {
-			predicate := ""
-			if d.calendarFacts && clause.Field == "day" && !clause.Negated && clause.Op == "is_null" {
-				predicate = "t.rowid IN (SELECT rowid FROM tool_query_facts WHERE day IS NULL OR day='')"
-			}
-			if !clause.Negated && clause.Op == "=" && clause.Value != "" && d.lookups[clause.Field] && d.columns[clause.Field] != "" &&
-				(schema.Fields[clause.Field].Kind == qt.FieldText || schema.Fields[clause.Field].Kind == qt.FieldEnum) {
-				predicate = d.columns[clause.Field] + "=" + bind(clause.Value)
-			}
-			if clock != nil && !clause.Negated && d.timestamps[clause.Field] != "" && schema.Fields[clause.Field].Kind == qt.FieldDatetime {
-				if from, to, ok := indexedDatetimeBounds(clause, *clock); ok {
-					column := d.timestamps[clause.Field]
-					if from != "" {
-						predicate = column + ">=" + bind(from)
-					}
-					if to != "" {
-						if predicate != "" {
-							predicate += " AND "
+	literals:
+		for _, branch := range term.Branches() {
+			conjuncts := make([]string, 0, len(branch))
+			for _, clause := range branch {
+				predicate := ""
+				if d.calendarFacts && clause.Field == "day" && !clause.Negated && clause.Op == "is_null" {
+					predicate = "t.rowid IN (SELECT rowid FROM tool_query_facts WHERE day IS NULL OR day='')"
+				}
+				if !clause.Negated && clause.Op == "=" && clause.Value != "" && d.lookups[clause.Field] && d.columns[clause.Field] != "" &&
+					(schema.Fields[clause.Field].Kind == qt.FieldText || schema.Fields[clause.Field].Kind == qt.FieldEnum) {
+					predicate = d.columns[clause.Field] + "=" + bind(clause.Value)
+				}
+				if clock != nil && !clause.Negated && d.timestamps[clause.Field] != "" && schema.Fields[clause.Field].Kind == qt.FieldDatetime {
+					if from, to, ok := indexedDatetimeBounds(clause, *clock); ok {
+						column := d.timestamps[clause.Field]
+						if from != "" {
+							predicate = column + ">=" + bind(from)
 						}
-						predicate += column + "<" + bind(to)
-					}
-					predicate = "(" + predicate + ")"
-				}
-			}
-			if !clause.Negated && d.toolSearchIndexed {
-				if search := toolSearchTerm(clause.Field, clause.Op, clause.Value); search != "" {
-					predicate = "t.rowid IN (SELECT rowid FROM tool_command_fts WHERE tool_command_fts MATCH " + bind(search) + ")"
-				}
-			}
-			if !clause.Negated && clause.Op == "=" && d.buckets[clause.Field] != "" {
-				if from, to, ok := bucketRange(clause.Field, clause.Value); ok {
-					if len(exact) > 0 {
-						if bounds, found := exact[0][clause.Field+"\x00"+clause.Value]; found {
-							from, to = bounds[0], bounds[1]
+						if to != "" {
+							if predicate != "" {
+								predicate += " AND "
+							}
+							predicate += column + "<" + bind(to)
 						}
+						predicate = "(" + predicate + ")"
 					}
-					predicate = "(" + d.buckets[clause.Field] + ">=" + bind(from) + " AND " + d.buckets[clause.Field] + "<" + bind(to) + ")"
 				}
+				if !clause.Negated && d.toolSearchIndexed {
+					if search := toolSearchTerm(clause.Field, clause.Op, clause.Value); search != "" {
+						predicate = "t.rowid IN (SELECT rowid FROM tool_command_fts WHERE tool_command_fts MATCH " + bind(search) + ")"
+					}
+				}
+				if !clause.Negated && clause.Op == "=" && d.buckets[clause.Field] != "" {
+					if from, to, ok := bucketRange(clause.Field, clause.Value); ok {
+						if len(exact) > 0 {
+							if bounds, found := exact[0][clause.Field+"\x00"+clause.Value]; found {
+								from, to = bounds[0], bounds[1]
+							}
+						}
+						predicate = "(" + d.buckets[clause.Field] + ">=" + bind(from) + " AND " + d.buckets[clause.Field] + "<" + bind(to) + ")"
+					}
+				}
+				if d.queryText.term(clause) {
+					predicate = d.queryText.predicate(clause, bind, d.pageFrom == "FROM tool_query_facts t")
+				}
+				if predicate == "" {
+					branches = nil
+					args = args[:saved]
+					break literals
+				}
+				conjuncts = append(conjuncts, predicate)
 			}
-			if d.queryText.term(clause) {
-				predicate = d.queryText.predicate(clause, bind, d.pageFrom == "FROM tool_query_facts t")
+			if len(conjuncts) == 1 {
+				branches = append(branches, conjuncts[0])
+			} else {
+				branches = append(branches, "("+strings.Join(conjuncts, " AND ")+")")
 			}
-			if predicate == "" {
-				branches = nil
-				args = args[:saved]
-				break
-			}
-			branches = append(branches, predicate)
 		}
 		if len(branches) > 0 {
 			conditions = append(conditions, "("+strings.Join(branches, " OR ")+")")
