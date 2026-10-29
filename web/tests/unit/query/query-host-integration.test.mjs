@@ -288,13 +288,51 @@ test('host query state survives last-used, named saves, updates, defaults and du
  await storage.deleteSaved(key,saved.id);
 });
 
-test('reset page bypasses the last-used query, and a failing query never needs a skip list',async()=>{
- // Query Table persists only succeeded queries (persistLast: "succeeded"),
+test('reset page bypasses the last-used query, which Query Table saves only after it loads',async()=>{
+ // persistLast: "succeeded" keeps failed queries out of the last-used slot,
  // so the adapter stores and restores what it is given.
  const key='pharos_tool_calls',storage=m.libraryStorageAdapter();
  await storage.saveLast(key,{...query,limit:27});
  assert.deepEqual(await storage.loadLast(key),{...query,limit:27});
  assert.equal(await m.libraryStorageAdapter({fresh:true}).loadLast(key),null);
+});
+
+const restoration={defaults:m.normalizeQueryState({...EMPTY_QUERY,limit:50}),canonicalize:query=>query};
+test('a rejected named default is bypassed while the saved query and default choice survive',async()=>{
+ const key='pharos_tool_calls',storage=m.libraryStorageAdapter();
+ await storage.setDefaultSaved(key,(await storage.saveNamed(key,'Default errors',query,60)).id);
+ const saved=await storage.loadDefaultSaved(key),before=JSON.stringify(m.readBookmarks());
+ m.rejectDefaultQuery(key,m.normalizeQueryState(saved.query,restoration.defaults),restoration);
+ let recovered=false;
+ assert.equal(await m.libraryStorageAdapter({onRecovery:()=>recovered=true}).loadDefaultSaved(key),null);
+ assert.equal(recovered,true);
+ assert.equal(JSON.stringify(m.readBookmarks()),before);
+ // The last-used query is not skipped: Query Table only saves successes.
+ await storage.saveLast(key,saved.query);
+ assert.deepEqual(await storage.loadLast(key),saved.query);
+ m.retryDefaultQuery(key);
+ assert.equal((await storage.loadDefaultSaved(key)).id,saved.id);
+ // A successful run of the default, loaded from Saved, also restores it.
+ m.rejectDefaultQuery(key,m.normalizeQueryState(saved.query,restoration.defaults),restoration);
+ assert.equal(await storage.loadDefaultSaved(key),null);
+ m.acceptDefaultQuery(key,{...m.normalizeQueryState(saved.query,restoration.defaults),limit:3},restoration);
+ assert.equal(await storage.loadDefaultSaved(key),null,'another query succeeding does not');
+ m.acceptDefaultQuery(key,m.normalizeQueryState(saved.query,restoration.defaults),restoration);
+ assert.equal((await storage.loadDefaultSaved(key)).id,saved.id);
+});
+
+test('failed defaults are recognized after schema normalization, machine scope and host defaults, without skipping a different default',async()=>{
+ const key='pharos_tool_calls',storage=m.libraryStorageAdapter(),saved=await storage.loadDefaultSaved(key);
+ const defaults=m.normalizeQueryState({...EMPTY_QUERY,limit:50,hostState:{version:1,params:{}}});
+ const canonicalize=query=>({...query,where:[...query.where,{field:'provider',op:'=',value:'codex'}]});
+ assert.equal(saved.query.hostState,undefined,'a save from before host state');
+ const effective={...canonicalize(m.normalizeQueryState(saved.query,defaults)),hostState:defaults.hostState};
+ m.rejectDefaultQuery(key,{...effective,limit:effective.limit+1},{defaults,canonicalize});
+ assert.equal((await storage.loadDefaultSaved(key)).id,saved.id,'another failed query must not skip this default');
+ m.rejectDefaultQuery(key,effective,{defaults,canonicalize});
+ assert.equal(await storage.loadDefaultSaved(key),null);
+ m.retryDefaultQuery(key);
+ assert.equal((await storage.loadDefaultSaved(key)).id,saved.id);
 });
 
 test('fresh page links bypass cached queries and named defaults, preserving the saved library',async()=>{

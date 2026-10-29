@@ -3,7 +3,7 @@ import test from "node:test";
 import { core, schemas } from "../helpers/recipes.mjs";
 import { answerQuery, population } from "../../support/query-server.mjs";
 import { MetricRequestError, metricRequest, metricResults, postMetrics, postQueryV3Metrics } from "../../../src/metric-request";
-import { queryRequest, queryFetch, QueryRequestError } from "../../../src/query-request";
+import { queryRequest, queryFetch, QueryRequestError, shouldSkipQueryOnRestore } from "../../../src/query-request";
 import { tokenSummaryMetrics, tokenTypes } from "../../../src/token-chart-request";
 import { trendQuery } from "../../../src/dashboard-trend-model";
 import { tokenAnalysisCatalog } from "../../../src/token-analysis-catalog";
@@ -156,3 +156,9 @@ test(`HTTP stores receive bounded fetches that still observe caller cancellation
 });
 }
 
+test('only query rejection and deadline expiry skip a default saved query',()=>{
+ for(const status of [undefined,400,422])assert.equal(shouldSkipQueryOnRestore(new QueryRequestError('failed',status)),true);
+ for(const status of [401,403,404,429,500,502,503,504])assert.equal(shouldSkipQueryOnRestore(new QueryRequestError('failed',status)),false);
+ assert.equal(shouldSkipQueryOnRestore(new TypeError('Failed to fetch')),false);
+ assert.equal(shouldSkipQueryOnRestore(new DOMException('Superseded','AbortError')),false);
+});

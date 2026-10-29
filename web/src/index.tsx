@@ -50,8 +50,8 @@ import { DataTable, FilterValueProvider, MetricsPanel, QueryFilterRow, Selection
 import "@pythia-software/query-table-ui/theme.css";
 import "./pharos.css";
 import { savedRollingWindow } from "./bookmarks";
-import { libraryStorageAdapter } from "./storage";
-import { queryRequest, queryFetch } from "./query-request";
+import { acceptDefaultQuery, libraryStorageAdapter, rejectDefaultQuery, retryDefaultQuery } from "./storage";
+import { queryRequest, queryFetch, shouldSkipQueryOnRestore } from "./query-request";
 import { PageErrorBoundary, QueryRecovery, ResetPage, tableRecoveryQuery } from "./query-recovery";
 import { createMCPMonitor, type MCPStatus } from "./mcp-monitor";
 import { HomePage } from "./home";
@@ -515,7 +515,8 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
   const [bookmarkRevision, setBookmarkRevision] = useState(0);
   useEffect(() => { const changed = () => setBookmarkRevision(value => value + 1); window.addEventListener("pharos:bookmarks", changed); return () => window.removeEventListener("pharos:bookmarks", changed); }, []);
   // A shared file has no origin of its own to keep saved queries apart from other files'.
-  const storage = useMemo(() => shared ? memoryStorageAdapter() : libraryStorageAdapter({ fresh: new URLSearchParams(location.search).get("fresh") === "1" }), [bookmarkRevision]);
+  const [recovered, setRecovered] = useState(false);
+  const storage = useMemo(() => shared ? memoryStorageAdapter() : libraryStorageAdapter({ fresh: new URLSearchParams(location.search).get("fresh") === "1", onRecovery: () => setRecovered(true) }), [bookmarkRevision]);
   const propertyStorage = useMemo(() => jsonPropertyViewStorage(
     key => preferences().get<string | null>(key, null),
     (key, value) => preferences().set(key, value),
@@ -563,7 +564,17 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
   hostFind.current = host ? host.find(hostState) : "";
   const searching = Boolean(find || hostFind.current);
   useEffect(() => { hostRef.current?.onState?.(hostState); }, [hostKey]);
-  const failed = api.execution ? api.execution.status === "failed" : Boolean(api.error);
+  // A default saved query that the service rejects or that runs out of time
+  // is skipped on later visits (storage.ts); one that loads is restored again.
+  const receipt = api.execution;
+  useEffect(() => {
+    if (!visible || shared || !receipt || receipt.status === "running") return;
+    const restoration = { defaults: api.defaults, canonicalize: canonicalizeQuery };
+    if (receipt.status === "succeeded") acceptDefaultQuery(schema.name, receipt.query, restoration);
+    else if (shouldSkipQueryOnRestore(receipt.error)) rejectDefaultQuery(schema.name, receipt.query, restoration);
+  }, [visible, receipt?.key, receipt?.status]);
+  // Empty states describe the rows: a failed metric alone does not empty them.
+  const failed = api.execution ? api.execution.rows === "failed" : Boolean(api.error);
   const resultsView = searchResultsView(api.query, dataset === "library" ? readLibraryHost(hostState).view : "table");
   const selectRows = selectable && !api.query.grouping && resultsView === "table";
   useMachineQueryNavigation(api, Boolean(visible && !shared && (namespace || dataset === "usage")), JSON.stringify([scopeWhere, new URLSearchParams(location.search).get("machine_view")]), `q_${registryKey}`, scopeWhere);
@@ -634,9 +645,14 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
   useOriginMetadata(Boolean(visible));
   if (!visible) return null;
   return <FilterValueProvider value={filterPresentations[dataset]}>
-    <QueryRecovery busy={api.execution?.status === "running" || api.restoration.status === "resolving" || (remote && !capabilities && !capabilityError)} error={capabilityError ?? api.error} identity={api.execution?.key ?? JSON.stringify(api.query)}
-      onRetry={() => { if (capabilityError) setCapabilityRetry(value => value + 1); else if (api.restoration.error) void api.restoreLocation(location.href).catch(() => {}); else api.refresh(); }}
+    <QueryRecovery busy={api.execution?.status === "running" || api.restoration.status === "resolving" || (remote && !capabilities && !capabilityError)} error={capabilityError ?? api.error} recovered={recovered} identity={api.execution?.key ?? JSON.stringify(api.query)}
+      onRetry={() => {
+        retryDefaultQuery(schema.name);
+        if (recovered) { setRecovered(false); if (api.saved.defaultId) { try { api.saved.load(api.saved.defaultId); } catch { /* Query Table reports an unreadable save. */ } return; } }
+        if (capabilityError) setCapabilityRetry(value => value + 1); else if (api.restoration.error) void api.restoreLocation(location.href).catch(() => {}); else api.refresh();
+      }}
       onReset={() => {
+        setRecovered(false);
         const query = tableRecoveryQuery(schema, scopeWhere);
         // Reset clears host clauses too, as the native Reset does.
         if (api.setDefinition && host) api.setDefinition({ query, hostState: host.query.defaults }); else api.setQuery(query);

@@ -12,6 +12,47 @@ import { queryFetch } from "./query-request";
 const DEFAULT_PREFIX = "query-table:default:";
 const MAX_SAVED_QUERIES = 100;
 const MAX_SAVED_NAME_LENGTH = 200;
+const REJECTED_PREFIX = "pharos-query-rejected:";
+const queryFingerprint = (query: QueryState) => JSON.stringify(normalizeQueryState(query));
+
+// Query Table saves the last-used query only once it loads (persistLast:
+// "succeeded"), but restores a table's default saved query on every bare
+// visit. A default that the service rejected or that ran out of time would
+// fail again each time, so it is skipped until Retry, or until the same
+// query succeeds (for example when loaded from Saved).
+type Restoration = { defaults: QueryState; canonicalize: (query: QueryState) => QueryState };
+// The table's default saved query, when query is its effective form: a
+// default acquires schema details, host scope and host defaults during
+// restoration.
+function defaultFor(key: string, query: QueryState, restoration: Restoration): SavedQuery | undefined {
+  const id = readDefaultId(key), saved = id ? readSaved(key).find(saved => saved.id === id) : undefined;
+  if (!saved) return;
+  const effective = restoration.canonicalize(normalizeQueryState(saved.query, restoration.defaults));
+  if (!effective.hostState && restoration.defaults.hostState) effective.hostState = restoration.defaults.hostState;
+  return queryFingerprint(effective) === queryFingerprint(query) ? saved : undefined;
+}
+
+export function rejectDefaultQuery(key: string, query: QueryState, restoration: Restoration) {
+  const saved = defaultFor(key, query, restoration);
+  if (saved) try { localStorage.setItem(REJECTED_PREFIX + key, JSON.stringify([queryFingerprint(saved.query)])); } catch { /* Storage can be unavailable. */ }
+}
+
+/** A successful run of the default (from Saved, say) restores it on bare visits again. */
+export function acceptDefaultQuery(key: string, query: QueryState, restoration: Restoration) {
+  const saved = defaultFor(key, query, restoration);
+  if (saved && rejected(key, saved.query)) retryDefaultQuery(key);
+}
+
+export function retryDefaultQuery(key: string) {
+  try { localStorage.removeItem(REJECTED_PREFIX + key); } catch { /* Storage can be unavailable. */ }
+}
+
+function rejected(key: string, query: QueryState) {
+  try {
+    const fingerprints: unknown = JSON.parse(localStorage.getItem(REJECTED_PREFIX + key) ?? "null");
+    return Array.isArray(fingerprints) && fingerprints.includes(queryFingerprint(query));
+  } catch { return false; }
+}
 function datasetOf(key: string): QueryDataset | undefined {
   return queryDatasets.find(dataset => key === `pharos_${dataset}`);
 }
@@ -86,9 +127,10 @@ export function clientTableStorageAdapter(): StorageAdapter {
 // (QueryState.hostState): the local adapter and normalizeQueryState carry it,
 // bookmarks store the whole query, and durable links snapshot it. Query Table
 // writes the last-used query only once it has loaded (persistLast:
-// "succeeded"), so a failing query is never restored on a bare reload. fresh
-// (Reset page) bypasses the last-used and default queries.
-export function libraryStorageAdapter(options: { fresh?: boolean } = {}): StorageAdapter {
+// "succeeded"), so a failing query is never restored on a bare reload; a
+// failing default is skipped (rejectDefaultQuery). fresh (Reset page)
+// bypasses the last-used and default queries.
+export function libraryStorageAdapter(options: { fresh?: boolean; onRecovery?: () => void } = {}): StorageAdapter {
   const local = localStorageAdapter();
   return {
     storesHostState: true,
@@ -108,6 +150,7 @@ export function libraryStorageAdapter(options: { fresh?: boolean } = {}): Storag
       if (!id) return null;
       const found = readSaved(key).find(query => query.id === id);
       if (!found) writeDefaultId(key, null);
+      if (found && rejected(key, found.query)) { options.onRecovery?.(); return null; }
       return found ?? null;
     },
     async setDefaultSaved(key, id) {
