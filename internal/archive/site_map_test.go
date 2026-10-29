@@ -502,3 +502,69 @@ func TestSiteLinkReadsAnOrOfAndSelection(t *testing.T) {
 		t.Fatalf("read %s", compactJSON(state.Filters))
 	}
 }
+
+// The app's own Search and Analyze links carry the table's host query state
+// in the query token, mirrored in the link's own parameters.
+func TestSiteLinkReadsTheAppsHostQueryState(t *testing.T) {
+	site := testSiteMap(t)
+	built, err := site.linkTool(linkArgs(t, `{"page": "library", "options": {"text": [{"kind": "phrase", "text": "lock this"}], "scope": "user", "view": "conversation"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	link, _ := url.Parse(built["url"].(string))
+	// The app writes text_builder without the editor's IDs.
+	builder := withoutEditorIDs(link.Query().Get("text_builder"))
+	withHost := func(param string, host *qt.HostQueryState) string {
+		t.Helper()
+		query, err := qt.DecodeQueryLink(link.Query().Get(param))
+		if param != "q_library" {
+			query, err = qt.DecodeQueryLink(mustToken(t, site, `[{"field":"status","op":"=","value":"error"}]`))
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		query.HostState = host
+		token, err := qt.EncodeQueryLink(query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+	none := &qt.HostQueryState{Version: 1, Params: map[string][]string{}}
+	search := &qt.HostQueryState{Version: 1, Params: map[string][]string{"text_builder": {builder}, "view": {"conversation"}}}
+	keyword := &qt.HostQueryState{Version: 1, Params: map[string][]string{"record_tool_calls": {`{"field":"command","draft":{}}`}}}
+	library := func(host *qt.HostQueryState, extra url.Values) string {
+		values := url.Values{"q_library": {withHost("q_library", host)}}
+		for key, list := range extra {
+			values[key] = list
+		}
+		return "/library?" + values.Encode()
+	}
+	analyze := func(host *qt.HostQueryState, extra string) string {
+		return "/analyze?analyze_mode=query&analyze_topic=tools&analyze_data=tool_calls&q_tool_calls=" + withHost("q_tool_calls", host) + extra
+	}
+	for name, address := range map[string]string{
+		"search with no host clause":   library(none, nil),
+		"search with its clause":       library(search, url.Values{"text_builder": {builder}, "view": {"conversation"}}),
+		"analyze with no host clause":  analyze(none, ""),
+		"search and a site-link token": "/library?" + url.Values{"q_library": {link.Query().Get("q_library")}, "text_builder": {builder}}.Encode(),
+	} {
+		if _, err := site.linkTool(map[string]any{"url": address}); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	for name, address := range map[string]string{
+		"clause without its parameter": library(search, url.Values{"view": {"conversation"}}),
+		"parameter without its clause": library(none, url.Values{"view": {"conversation"}}),
+		"clause that differs":          library(search, url.Values{"text_builder": {builder}, "view": {"table"}}),
+		"keyword clause":               analyze(keyword, "&record_tool_calls="+url.QueryEscape(keyword.Params["record_tool_calls"][0])),
+		"unreadable host state":        library(&qt.HostQueryState{Version: 0, Params: map[string][]string{}}, nil),
+	} {
+		_, err := site.linkTool(map[string]any{"url": address})
+		if err == nil || !strings.HasPrefix(err.Error(), "url") {
+			t.Errorf("%s: %s gave %v", name, address, err)
+		} else if strings.Contains(err.Error(), "more than where terms") {
+			t.Errorf("%s: reported as a table query: %v", name, err)
+		}
+	}
+}

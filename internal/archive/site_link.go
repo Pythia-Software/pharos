@@ -1266,20 +1266,83 @@ func matchRoute(route, path string) (map[string]string, bool) {
 }
 
 // whereOnly reads a where-only query token over a base query: its where
-// terms, or an error when it carries anything else.
-func (site *siteMap) whereOnly(param, token string, base json.RawMessage) ([]qt.WhereTerm, error) {
+// terms, or an error when it carries anything else. The app's tokens carry
+// the table's host query state (Query Table's hostState): Search's content
+// search and view, or Analyze's record keyword clause. The table mirrors it
+// in the URL's own parameters, which the link reads; a token's host state
+// is accepted when it is empty or says what those parameters say.
+func (site *siteMap) whereOnly(param, token string, base json.RawMessage, node *siteNode, values url.Values) ([]qt.WhereTerm, error) {
 	decoded, err := qt.DecodeQueryLink(token)
 	if err != nil {
 		return nil, linkError("url", fmt.Sprintf("%s is not a readable query: %v", param, err))
+	}
+	if err := site.checkHostState(param, decoded.HostState, node, values); err != nil {
+		return nil, err
 	}
 	canonical, err := site.queryToken(base, decoded.Where)
 	if err != nil {
 		return nil, linkError("url", fmt.Sprintf("%s holds where terms a link cannot carry: %v", param, err))
 	}
-	if !sameQueryToken(token, canonical) {
+	if !sameQueryToken(withoutHostState(decoded), canonical) {
 		return nil, linkError("url", fmt.Sprintf("%s carries more than where terms (columns, sorting, grouping or metrics), which a site link cannot express.", param))
 	}
 	return decoded.Where, nil
+}
+
+// siteHostParams are the URL parameters a page's table keeps as host query
+// state (web/src/host-query-state.ts): Search's content search and view, and
+// each Analyze table's record keyword clause.
+func siteHostParams(node *siteNode) []string {
+	if node == nil || node.Dataset == "" {
+		return nil
+	}
+	if node.Dataset == "library" {
+		return []string{"text_builder", "kind", "search", "case", "view"}
+	}
+	return []string{"record_" + node.Dataset}
+}
+
+func (site *siteMap) checkHostState(param string, host *qt.HostQueryState, node *siteNode, values url.Values) error {
+	if host == nil {
+		return nil
+	}
+	if host.Version < 1 {
+		return linkError("url", param+" carries host query state that cannot be read.")
+	}
+	names := siteHostParams(node)
+	for name := range host.Params {
+		if !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		// The app writes these parameters from the same state, so an empty
+		// state means the link carries none of them.
+		state, given := host.Params[name], values[name]
+		same := len(state) == len(given)
+		for index := 0; same && index < len(state); index++ {
+			same = state[index] == given[index] || sameJSONText(state[index], given[index])
+		}
+		if !same {
+			return linkError("url", fmt.Sprintf("%s carries a search clause (%s) that the link's own %s parameter does not say, which a site link cannot express.", param, name, name))
+		}
+		if len(state) > 0 && node != nil && !slices.Contains(site.nodeParams(node), name) {
+			return linkError("url", fmt.Sprintf("%s carries a search clause (%s), which a site link cannot express.", param, name))
+		}
+	}
+	return nil
+}
+
+// withoutHostState re-encodes a decoded token without its host state, for
+// comparison with a token written from where terms alone.
+func withoutHostState(decoded qt.LinkQuery) string {
+	decoded.HostState = nil
+	token, err := qt.EncodeQueryLink(decoded)
+	if err != nil {
+		return ""
+	}
+	return token
 }
 
 // cutWindow takes a window's terms off the end of the where terms: the
@@ -1309,7 +1372,7 @@ func (site *siteMap) parseDashboard(node *siteNode, values url.Values, consumed 
 	var where []qt.WhereTerm
 	if values.Has(whereParam) {
 		var err error
-		if where, err = site.whereOnly(whereParam, values.Get(whereParam), nil); err != nil {
+		if where, err = site.whereOnly(whereParam, values.Get(whereParam), nil, nil, values); err != nil {
 			return siteState{}, err
 		}
 	}
@@ -1369,7 +1432,7 @@ func (site *siteMap) parsePage(node *siteNode, values url.Values, pathValues map
 		var terms []qt.WhereTerm
 		if values.Has(where.Param) {
 			var err error
-			if terms, err = site.whereOnly(where.Param, values.Get(where.Param), node.BaseQuery); err != nil {
+			if terms, err = site.whereOnly(where.Param, values.Get(where.Param), node.BaseQuery, node, values); err != nil {
 				return siteState{}, err
 			}
 		}
@@ -1489,10 +1552,39 @@ func (site *siteMap) parseTextBuilder(node *siteNode, text string) (map[string]a
 	if err != nil {
 		return nil, err
 	}
-	if !sameJSONText(rebuilt, text) {
+	// The app writes text_builder without the editor's rule and group IDs.
+	if !sameJSONText(withoutEditorIDs(rebuilt), withoutEditorIDs(text)) {
 		return nil, linkError("url", "text_builder holds settings beyond its rules and scope (such as fuzzy or case-sensitive matching, or other filters), which a site link cannot express.")
 	}
 	return options, nil
+}
+
+// withoutEditorIDs drops the editor's rule and group IDs from a text search
+// draft, which the app leaves out of its links and rebuilds on reading.
+func withoutEditorIDs(text string) string {
+	var draft map[string]any
+	if json.Unmarshal([]byte(text), &draft) != nil {
+		return text
+	}
+	var strip func(any)
+	strip = func(node any) {
+		condition, ok := node.(map[string]any)
+		if !ok {
+			return
+		}
+		delete(condition, "id")
+		if children, ok := condition["children"].([]any); ok {
+			for _, child := range children {
+				strip(child)
+			}
+		}
+	}
+	strip(draft["root"])
+	out, err := json.Marshal(draft)
+	if err != nil {
+		return text
+	}
+	return string(out)
 }
 
 // parseCard reads a card's own link: the card's link at one of its
@@ -1538,7 +1630,7 @@ func (site *siteMap) parseCard(path string, values url.Values) (siteState, error
 			if err != nil {
 				return siteState{}, err
 			}
-			where, err := site.whereOnly(changeable[1], values.Get(changeable[1]), nil)
+			where, err := site.whereOnly(changeable[1], values.Get(changeable[1]), nil, nil, values)
 			if err != nil {
 				return siteState{}, err
 			}
