@@ -57,7 +57,7 @@ import { queryRequest, queryFetch, shouldSkipQueryOnRestore } from "./query-requ
 import { PageErrorBoundary, QueryRecovery, ResetPage, tableRecoveryQuery } from "./query-recovery";
 import { createMCPMonitor, type MCPStatus } from "./mcp-monitor";
 import { HomePage } from "./home";
-import { AskPharosSettings } from "./ask-pharos";
+import { AskPharosSearch, AskPharosSettings } from "./ask-pharos";
 import { CardLibraryPage } from "./card-library";
 import { linkTargets, navigateLink } from "./query-link-targets";
 import { QueryChip } from "./query-card";
@@ -2098,6 +2098,12 @@ const dataGuideHost = document.createElement("div");
 dataGuideHost.id = "dataGuideHost";
 document.body.append(dataGuideHost);
 createRoot(dataGuideHost).render(<DataTaxonomyModal />);
+
+// Ask remains available before Home's first visit and while another page is active.
+if (!shared) {
+  const host = document.createElement("div");host.hidden = true;document.body.append(host);
+  createRoot(host).render(<AskPharosSearch schema={schemas.library} />);
+}
 
 const mounts: Array<[string, React.ReactNode]> = [
   ["searchComposerDialog", <SearchDialog schema={schemas.library} />],

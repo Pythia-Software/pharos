@@ -78,8 +78,8 @@ function askRetryDraft({turns = [], draft = ''}) {
 }
 // A lone card opens itself, unless Pharos left out other destinations the
 // agent offered with it: then the agent meant a choice.
-function askShouldNavigate({cards = [], omitted = 0, draft = '', enabled, regular, edited}) {
-  return enabled && !regular && !edited && draft.length === 0 && cards.length === 1 && !omitted;
+function askShouldNavigate({cards = [], omitted = 0, draft = '', enabled, regular, edited, browsing = false}) {
+  return enabled && !regular && !edited && !browsing && draft.length === 0 && cards.length === 1 && !omitted;
 }
 function askOmittedNote(omitted = 0) {
   if (!omitted) return '';
@@ -91,6 +91,11 @@ function askChatURL(href, id) {
   if (id) url.searchParams.set('ask_chat', id);
   else url.searchParams.delete('ask_chat');
   return url.href;
+}
+// History links must work independently of the page hosting the overlay.
+function askHistoryURL(href, id) {
+  const url = new URL(href);
+  return askChatURL(['/', '/home'].includes(url.pathname) ? url.href : new URL('/', url).href, id);
 }
 // Search results are matched against complete chats on the server. Their
 // summaries cannot be searched again without dropping later-message matches.
@@ -115,4 +120,21 @@ function askThreadHeight({total, latest, previous = 0, gap = 0, available}) {
 function askClarificationActions({latest = false, status, pending = false, enabled = false, opening = false, draft = ''}) {
   const active = latest && status === 'clarification' && enabled && !pending && !opening;
   return {active, sendOther: active && !!draft.trim()};
+}
+
+// Capture the complete view, including filters, without coupling it to chat routing.
+function askPageURI(href) {
+  const url = new URL(href);
+  for (const key of [...url.searchParams.keys()]) if (key === 'ask_chat' || key.toLowerCase().includes('token')) url.searchParams.delete(key);
+  return url.pathname + url.search + url.hash;
+}
+function askFloatingState(turn) {
+  if (!turn) return {message: 'Ask a question', ready: false};
+  if (turn.status === 'loading') return {message: askWaitStatus(turn).message, ready: false};
+  if (turn.status === 'error') return {message: 'Question failed · Review or retry', ready: true};
+  if (turn.status === 'canceled') return {message: 'Question canceled', ready: false};
+  return {message: turn.status === 'clarification' ? 'Pharos has a question for you' : 'Your response is ready', ready: true};
+}
+function askFloatingPosition({x, y, width, height, viewportWidth, viewportHeight}) {
+  return {x: Math.max(8, Math.min(x, viewportWidth - width - 8)), y: Math.max(8, Math.min(y, viewportHeight - height - 8))};
 }
