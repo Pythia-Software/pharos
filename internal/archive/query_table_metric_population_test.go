@@ -192,10 +192,10 @@ func TestQueryMetricPopulationUsageHour(t *testing.T) {
 	server := testServer(t, config, catalog)
 	schema, _ := sqliteQuerySchema("usage")
 	hour := []qt.WhereTerm{{Field: "hour", Op: "=", Value: "2026-09-21T03:00:00Z"}}
-	// Tokens' records minimum counts the conversations a group's usage
-	// belongs to.
+	// Tokens' records minimum counts the top-level conversations a group's
+	// usage belongs to.
 	conversations := func(min int) qt.AggSpec {
-		return qt.AggSpec{ID: fmt.Sprint("conversations-", min), Op: "sum", Field: "total_tokens", GroupBy: []string{"provider"}, MinCount: qt.MetricMinCount{Min: min, Distinct: "conversation_id"}}
+		return qt.AggSpec{ID: fmt.Sprint("conversations-", min), Op: "sum", Field: "total_tokens", GroupBy: []string{"provider"}, MinCount: qt.MetricMinCount{Min: min, Distinct: "root_conversation_id"}}
 	}
 	q := metricRequest(qt.AggSpec{ID: "all", Expression: "SUM([total_tokens])"}, qt.AggSpec{ID: "hour", Expression: "SUM([total_tokens])", Where: hour},
 		qt.AggSpec{ID: "invalid", Expression: "SUM([total_tokens])", MinCount: qt.MetricMinCount{Min: 2}}, conversations(1), conversations(1000))
