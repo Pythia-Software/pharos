@@ -584,7 +584,7 @@ func TestAuthorshipManualRefreshHonorsRunCancellation(t *testing.T) {
 			for _, phase := range []string{"classifying authorship", "saving authorship"} {
 				found := false
 				for _, stage := range stages {
-					if stage.Phase == phase && stage.TotalKnown && stage.Total == 1 && stage.Done == 1 && stage.Completed {
+					if stage.Phase == phase && stage.TotalKnown && stage.Total > 0 && stage.Done == stage.Total && stage.Completed {
 						found = true
 					}
 				}
@@ -974,5 +974,111 @@ func TestAuthorshipRebuildUsesToolSourcesAndSharedCounts(t *testing.T) {
 	}
 	if typed != 4 {
 		t.Fatalf("reader words=%d", typed)
+	}
+}
+
+func TestAuthorshipDiffStoreAndInterruptedChunks(t *testing.T) {
+	c, _ := testCatalog(t)
+	execTx(t, c.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','codex','local','w','Work','2026-09-01')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness) VALUES('c','w','codex','local','c','codex')`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES
+   ('m1','c','m1','user','message','Please inspect the parser carefully','2026-09-01T12:00:00Z','one'),
+   ('m2','c','m2','user','message','Fix the second grammar problem','2026-09-01T13:00:00Z','two')`)
+	if err := c.RebuildAuthorship(t.Context(), "first"); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, c.DB, `CREATE TABLE authorship_write_probe(table_name TEXT)`)
+	for _, table := range []string{"message_authorship", "message_authorship_spans", "conversation_launches", "workspace_names"} {
+		for _, event := range []string{"INSERT", "UPDATE", "DELETE"} {
+			execSQL(t, c.DB, fmt.Sprintf(`CREATE TRIGGER probe_%s_%s AFTER %s ON %s BEGIN INSERT INTO authorship_write_probe VALUES('%s'); END`, table, event, event, table, table))
+		}
+	}
+	// A second explicit full rebuild still computes the same classification;
+	// none of the output or trigram maintenance triggers should run.
+	if err := c.RebuildAuthorship(t.Context(), "second"); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM authorship_write_probe`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("unchanged writes=%d (%v)", n, err)
+	}
+	execSQL(t, c.DB, `UPDATE messages SET text='Review this changed input in detail',content_hash='changed' WHERE id='m2'`)
+	override(t, &authorshipWriteBatch, 1)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ctx = withWorkProgress(ctx, func(work activityWork) {
+		if work.Phase == "saving authorship" {
+			cancel()
+		}
+	})
+	if err := c.RebuildAuthorship(ctx, "third"); err == nil {
+		t.Fatal("interruption succeeded")
+	}
+	built, err := c.metaValue(t.Context(), "authorship_generation")
+	if err != nil || built != "second" {
+		t.Fatalf("partial generation=%q (%v)", built, err)
+	}
+	execSQL(t, c.DB, `DELETE FROM authorship_write_probe`)
+	if err := c.RebuildAuthorship(t.Context(), "third"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := queryMaps(c.DB, `SELECT a.message_id,a.spans_json FROM message_authorship a ORDER BY message_id`)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("after retry: %v %v", rows, err)
+	}
+	inputs, launches, err := c.authorshipInputs(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := c.classifyInputs(t.Context(), inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := c.planAuthorship(t.Context(), results, launches)
+	if err != nil || len(plan) != 0 {
+		t.Fatalf("retry differs: %v (%v)", plan, err)
+	}
+	// Deletions are per key, including surplus span positions.
+	execSQL(t, c.DB, `DELETE FROM messages WHERE id='m2'`)
+	if err := c.RebuildAuthorship(t.Context(), "fourth"); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"message_authorship", "message_authorship_spans"} {
+		if err := c.DB.QueryRow("SELECT COUNT(*) FROM " + table + " WHERE message_id='m2'").Scan(&n); err != nil || n != 0 {
+			t.Fatalf("surplus %s=%d (%v)", table, n, err)
+		}
+	}
+}
+
+func TestAuthorshipReplyPagesReleaseReadStatements(t *testing.T) {
+	c, _ := testCatalog(t)
+	execTx(t, c.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','codex','local','w','Work','2026-09-01')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness) VALUES('c','w','codex','local','c','codex')`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES
+   ('a','c','a','assistant','message','These exact words in the reply should be counted as copied output when sent again','2026-09-01T12:00:00Z','a'),
+   ('b','c','b','assistant','message','A second reply at the same instant has its own source','2026-09-01T12:00:00Z','b'),
+   ('d','c','d','assistant','message','A reply on a later day crosses the window boundary','2026-09-02T12:00:00Z','d')`)
+	inputs := []authorInput{{ID: "u", ConversationID: "user", Text: "These exact words in the reply should be counted as copied output when sent again", SentAt: authorAt(25 * 60)}}
+	baseline, err := c.classifyInputs(t.Context(), inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	override(t, &authorshipReplyBatch, 1)
+	// A callback can acquire the sole connection while classification is in
+	// progress; the old streaming statement held it until the loop ended.
+	c.DB.SetMaxOpenConns(1)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	ctx = withWorkProgress(ctx, func(work activityWork) {
+		var n int
+		if err := c.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM messages").Scan(&n); err != nil {
+			t.Error(err)
+		}
+	})
+	got, err := c.classifyInputs(ctx, inputs)
+	if err != nil || jsonText(got) != jsonText(baseline) {
+		t.Fatalf("paged classification differs: %v (%v)", got, err)
 	}
 }

@@ -99,3 +99,15 @@ Identity reconciliation inherits native harness versions only when a value
 changes. Empty aliases are stored as `[]`; legacy `null` aliases are skipped.
 An unchanged manual analysis chain leaves conversation rows and the Search,
 MCP metric and finding-message dirty sets alone.
+
+Rebuilding compares messages, individual spans, launches and cached authored
+workspace names with their stored values. Only changed rows are written, in
+writer-gated chunks of at most 250 row mutations. Until the final generation
+marker is saved, readers may see a mixture of generations; an interruption is
+retried by diffing against the chunks already committed. Unchanged messages
+keep their trigram index entries. The classifier reads agent replies in day
+windows and pages of 250 rows, closing each statement before classification.
+The operation's progress records input, classification and storage timings and
+counts direct writes for messages, spans, launches and authored name caches.
+`TestAuthorshipBackupProbe` (`-tags probe`) measures those phases and the
+would-write counts against an explicitly supplied immutable backup.

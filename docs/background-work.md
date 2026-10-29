@@ -628,6 +628,13 @@ resolved values, Git checks only unresolved heads, Tools checks its generations,
 and findings partitions check their revisions. Findings completion timestamps
 may still advance. Scheduled indexes continue to defer the analysis chain.
 
+Authorship publishes changed rows in bounded writer turns; the built generation
+is recorded only after all turns complete. During publication readers can see
+a mixture of the previous and next classifications. A stopped run remains
+stale and its retry diffs against the committed rows. Agent replies are read
+in bounded pages, with no read statement held through the classification
+loop. Worker progress reports phase timings and direct row-write counts.
+
 Phase 3 implements these as one function over today's storage
 (`Catalog.freshness`, `freshness.go`). Storage changes only by two kinds of
 additive `meta` rows that record what a completion was for (below). Every
