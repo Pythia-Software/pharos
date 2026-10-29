@@ -1,6 +1,9 @@
 package archive
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestLabelingQuoteMapping(t *testing.T) {
 	// Two target pieces with an untargeted space between them in the
@@ -58,5 +61,25 @@ func TestLabelingQuoteMapping(t *testing.T) {
 	// shows context apart from CURRENT_TEXT); it is flagged and counted.
 	if got := locateLabelingQuote(context, "L", "fix it"); got.Status != "valid" || !got.EchoesContext {
 		t.Fatalf("also in context = %+v", got)
+	}
+}
+
+// An evidence entry whose quote is null, missing or not a string is a
+// malformed annotation (invalid), not an evidence issue.
+func TestLabelingEvidenceQuoteMustBeAString(t *testing.T) {
+	item := labelingItemSource{id: "i", text: "Please fix it", message: "Please fix it",
+		targets: []labelingTargetPiece{{start: 0, end: 13, visibleStart: 0, visibleEnd: 13}}}
+	labels := labelingLabels()
+	for _, entry := range []string{`{"label":"` + fakeLabel + `","quote":null}`, `{"label":"` + fakeLabel + `"}`, `{"label":"` + fakeLabel + `","quote":7}`,
+		`{"label":null,"quote":"fix it"}`} {
+		output := `{"annotations":[{"id":"i","labels":["` + fakeLabel + `"],"uncertain_labels":[],"evidence":[` + entry + `],"need_context":false}]}`
+		results, problems := validateLabelingOutput(json.RawMessage(output), []labelingItemSource{item}, labels)
+		if len(problems) != 0 || results[0].Outcome != itemInvalid || !containsString(results[0].Issues, "evidence_shape") {
+			t.Fatalf("%s: outcome %s, issues %v, problems %v", entry, results[0].Outcome, results[0].Issues, problems)
+		}
+	}
+	output := `{"annotations":[{"id":"i","labels":["` + fakeLabel + `"],"uncertain_labels":[],"evidence":[{"label":"` + fakeLabel + `","quote":"fix it"}],"need_context":false}]}`
+	if results, _ := validateLabelingOutput(json.RawMessage(output), []labelingItemSource{item}, labels); results[0].Outcome != itemUsable {
+		t.Fatalf("a string quote: %s %v", results[0].Outcome, results[0].Issues)
 	}
 }

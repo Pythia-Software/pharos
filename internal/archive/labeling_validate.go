@@ -164,6 +164,17 @@ func validateLabelingOutput(output json.RawMessage, items []labelingItemSource, 
 	return results, problems
 }
 
+// labelingJSONString reads a JSON string; null, a missing value or any
+// other type is not one.
+func labelingJSONString(raw json.RawMessage) (string, bool) {
+	raw = bytes.TrimSpace(raw)
+	var value string
+	if len(raw) == 0 || raw[0] != '"' || json.Unmarshal(raw, &value) != nil {
+		return "", false
+	}
+	return value, true
+}
+
 func appendUnique(values []string, value string) []string {
 	if containsString(values, value) {
 		return values
@@ -235,8 +246,11 @@ func validateLabelingItem(item labelingItemSource, fields map[string]json.RawMes
 			fail("field_type:evidence")
 		}
 		for _, entry := range entries {
-			var label, quote string
-			if json.Unmarshal(entry["label"], &label) != nil || json.Unmarshal(entry["quote"], &quote) != nil || len(entry) != 2 {
+			// A null, missing or non-string label or quote is a malformed
+			// annotation, not an evidence issue.
+			label, labelOK := labelingJSONString(entry["label"])
+			quote, quoteOK := labelingJSONString(entry["quote"])
+			if !labelOK || !quoteOK || len(entry) != 2 {
 				fail("evidence_shape")
 				continue
 			}
