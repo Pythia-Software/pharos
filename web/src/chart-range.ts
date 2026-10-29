@@ -1,3 +1,4 @@
+import { todayBounds } from "./day-window";
 import { isWhereGroup, parseRelativeDuration, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 import { localDay, shiftPeriod, type ChartPeriod } from "./chart-period";
 import { validRollingPeriods } from "./chart-series";
@@ -5,14 +6,14 @@ import { validRollingPeriods } from "./chart-series";
 // The time filter the charts and tables share, without any DOM: reading its
 // bounds, writing a range, and widening a chart's request for smoothing.
 
-export type ChartRange = "1d" | "7d" | "30d" | "90d" | "6m" | "1y";
+export type ChartRange = "today" | "1d" | "7d" | "30d" | "90d" | "6m" | "1y";
 
 export type RangeChange = (from?: Date, to?: Date, preset?: ChartRange | "all") => void;
 
-export type FilterChange = (change: (where: WhereTerm[]) => WhereTerm[]) => void;
+export type FilterChange = (change: (where: WhereTerm[]) => WhereTerm[], preset?: ChartRange | "all") => void;
 
 // Range presets the charts offer.
-export const chartRanges: Array<[ChartRange, string]> = [["1d", "1 day"], ["7d", "7 days"], ["30d", "30 days"], ["90d", "90 days"], ["6m", "6 months"], ["1y", "1 year"]];
+export const chartRanges: Array<[ChartRange, string]> = [["today", "Today"], ["1d", "24 hours"], ["7d", "7 days"], ["30d", "30 days"], ["90d", "90 days"], ["6m", "6 months"], ["1y", "1 year"]];
 
 const pad2 = (value: number) => String(value).padStart(2, "0");
 
@@ -20,6 +21,7 @@ const pad2 = (value: number) => String(value).padStart(2, "0");
 export function rangeStart(range: ChartRange): Date {
   const start = new Date();
   start.setHours(0, 0, 0, 0);
+  if (range === "today") return start;
   if (range.endsWith("d")) start.setDate(start.getDate() - parseInt(range) + 1);
   else if (range === "6m") { start.setMonth(start.getMonth() - 6); start.setDate(start.getDate() + 1); }
   else { start.setFullYear(start.getFullYear() - 1); start.setDate(start.getDate() + 1); }
@@ -38,7 +40,7 @@ export const writingTime: TimeFields = { first: "first_message_at", last: "last_
 // to is exclusive.
 export type TimeBounds = { from?: Date; to?: Date; preset?: ChartRange };
 
-export const rangeDays = (range: ChartRange) => range === "6m" ? 180 : range === "1y" ? 365 : parseInt(range);
+export const rangeDays = (range: ChartRange) => range === "today" ? 1 : range === "6m" ? 180 : range === "1y" ? 365 : parseInt(range);
 
 // parseStamp reads a datetime filter value as the service does: RFC 3339, or a
 // zone-less date or time as UTC.
@@ -79,8 +81,9 @@ export function timeBounds(where: WhereTerm[], fields: TimeFields, now = Date.no
   // Only exact preset pairs qualify; extra time predicates remain custom.
   const terms = where.filter(term => isTimeTerm(term, fields));
   if (terms.length === 2 && terms.some(term => term.op === "<" && term.value === "+0s")) {
-    const preset = chartRanges.find(([range]) => terms.some(term => term.op === ">=" && term.value === `-${rangeDays(range)}d`))?.[0];
+    const preset = chartRanges.find(([range]) => range !== "today" && terms.some(term => term.op === ">=" && term.value === `-${rangeDays(range)}d`))?.[0];
     if (preset) bounds.preset = preset;
+    else if (terms.some(term => term.op === ">=" && term.value === todayBounds(new Date(now))[0])) bounds.preset = "today";
   }
   return bounds;
 }
@@ -88,6 +91,7 @@ export function timeBounds(where: WhereTerm[], fields: TimeFields, now = Date.no
 export function withTimeRange(where: WhereTerm[], fields: TimeFields, from?: Date, to?: Date, preset?: ChartRange | "all"): WhereTerm[] {
   const kept = where.filter(term => !isTimeTerm(term, fields));
   if (preset === "all") return kept;
+  if (preset === "today") return [...kept, { field: fields.last, op: ">=", value: todayBounds()[0] }, { field: fields.first, op: "<", value: "+0s" }];
   if (preset) return [...kept, { field: fields.last, op: ">=", value: `-${rangeDays(preset)}d` }, { field: fields.first, op: "<", value: "+0s" }];
   if (from) kept.push({ field: fields.last, op: ">=", value: localStamp(from) });
   if (to) kept.push({ field: fields.first, op: "<", value: localStamp(to) });

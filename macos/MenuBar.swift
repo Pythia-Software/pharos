@@ -28,10 +28,12 @@ struct MenuBarPreferences {
     }
     var values: [String: Bool]
     var order: [String]
-    var saved: [String: Any] { values.reduce(into: ["order": order, "layoutVersion": 2] as [String: Any]) { $0[$1.key] = $1.value } }
+    var usagePeriod: String
+    var saved: [String: Any] { values.reduce(into: ["order": order, "layoutVersion": 2, "usagePeriod": usagePeriod] as [String: Any]) { $0[$1.key] = $1.value } }
 
     init(_ saved: [String: Any] = [:]) {
         values = Self.defaults
+        usagePeriod = saved["usagePeriod"] as? String == "today" || saved.isEmpty ? "today" : "24h"
         order = []
         for key in values.keys {
             // JSON booleans only; a numeric or corrupt preference uses its default.
@@ -300,6 +302,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var unifiedTask: URLSessionDataTask?
     private var usageTask: URLSessionDataTask?
     private var usageUpdated = Date.distantPast
+    private var usageGeneration = 0
     private var connectedURL: URL?
     private var libraryConnection: String?
     private var generation = 0
@@ -333,7 +336,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // A poll already in flight may precede the page's debounced save.
         if fromServer && Date().timeIntervalSince(preferencesChangedAt) < 2 { return }
         if !fromServer { preferencesChangedAt = Date() }
-        preferences = MenuBarPreferences(saved)
+        let next = MenuBarPreferences(saved)
+        if next.usagePeriod != preferences.usagePeriod { usageGeneration += 1; usageTask?.cancel(); usageTask = nil; usage = nil; usageUpdated = .distantPast }
+        preferences = next
         defaults.set(preferences.saved, forKey: cacheKey)
         arrangeMenu()
         update()
@@ -391,8 +396,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             order.append(id)
         }
         if let last = order.last, MenuBarPreferences.isSeparator(last) { order.removeLast() }
-        guard arrangedOrder != order else { return }
-        arrangedOrder = order
+        let identity = order + [preferences.usagePeriod]
+        guard arrangedOrder != identity else { return }
+        arrangedOrder = identity
         menu.removeAllItems()
         var previousGroup: String?
         let lastUsage = order.last { MenuBarPreferences.group($0) == "usage" }
@@ -400,7 +406,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             if MenuBarPreferences.isSeparator(id) { menu.addItem(.separator()); continue }
             let group = MenuBarPreferences.group(id)
             if previousGroup != group && ["usage", "library"].contains(group) {
-                let heading = NSMenuItem(title: group == "usage" ? "Last 24 hours" : "Library", action: nil, keyEquivalent: "")
+                let heading = NSMenuItem(title: group == "usage" ? (preferences.usagePeriod == "today" ? "Today" : "Last 24 hours") : "Library", action: nil, keyEquivalent: "")
                 heading.isEnabled = false
                 menu.addItem(heading)
             }
@@ -416,6 +422,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     func refresh() {
         guard let service else { return }
+        if preferences.usagePeriod == "today" {
+            let midnight = Calendar.current.startOfDay(for: Date())
+            if !Calendar.current.isDateInToday(usageUpdated) || Self.date(usage?["from"]).map({ $0 != midnight }) == true {
+                usage = nil; usageUpdated = .distantPast
+            }
+        }
         if connectedURL != service.url || libraryConnection != service.libraryConnection {
             generation += 1
             connectedURL = service.url
@@ -455,18 +467,25 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     private func refreshUsage() {
+        if preferences.usagePeriod == "today" && !Calendar.current.isDateInToday(usageUpdated) { usage = nil }
         guard service?.hasConnectedLibrary == true, preferences["enabled"], ["words", "tokens", "carbon", "cost"].contains(where: { preferences[$0] }),
-              usageTask == nil, Date().timeIntervalSince(usageUpdated) >= 60,
-              let request = service?.localRequest("/api/menu-bar/usage") else { return }
+              usageTask == nil, (Date().timeIntervalSince(usageUpdated) >= 60 || !Calendar.current.isDateInToday(usageUpdated)),
+              let request = service?.localRequest("/api/menu-bar/usage?period=\(preferences.usagePeriod)") else { return }
         let origin = service?.url
         let connection = service?.libraryConnection
         let generation = self.generation
+        let period = preferences.usagePeriod
+        let usageGeneration = self.usageGeneration
         usageTask = fetch(request) { [weak self] result in
             guard let self, self.generation == generation, self.service?.url == origin, self.service?.libraryConnection == connection else { return }
+            guard self.preferences.usagePeriod == period, self.usageGeneration == usageGeneration else { return }
             self.usageTask = nil
             self.usageUpdated = Date()
             switch result {
-            case .success(let value): self.usage = value; self.usageError = nil
+            case .success(let value):
+                guard value["period"] as? String == period else { self.usageUpdated = .distantPast; return }
+                self.usage = value; self.usageError = nil
+                if let links = value["links"] as? [String: String] { for (key, path) in links { self.rows[key]?.representedObject = path } }
             case .failure(let error): self.usage = nil; self.usageError = error.localizedDescription
             }
             self.update()

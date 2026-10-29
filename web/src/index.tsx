@@ -1,3 +1,5 @@
+import { rangeDays, type ChartRange } from "./chart-range";
+import { startDayClock, localTimezone } from "./day-window";
 import "./visit-history";
 import { originLabel, originRenderers, useOriginMetadata, isOriginDimension } from "./origin-dimensions";
 import "./uifeedback/pharos-client";
@@ -18,7 +20,7 @@ import { createQueryMetadataLoader } from "./query-metadata";
 import { SearchDialog } from "./search-dialog";
 import { ExploreSearch } from "./explore-search";
 import { recordKeywordSummary, RecordKeywordClause } from "./record-keyword-clause";
-import { libraryFind, libraryHostQuery, libraryHostState, messageFind, messageHostQuery, readLibraryHost, readMessageSearchHost, readRecordKeyword, recordKeywordFind, recordKeywordHostQuery, sameHostState, withMessageSearch, withoutLibrarySearch, withRecordKeyword, type LibraryHost } from "./host-query-state";
+import { refreshTodayHost, libraryFind, libraryHostQuery, libraryHostState, messageFind, messageHostQuery, readLibraryHost, readMessageSearchHost, readRecordKeyword, recordKeywordFind, recordKeywordHostQuery, sameHostState, withMessageSearch, withoutLibrarySearch, withRecordKeyword, type LibraryHost } from "./host-query-state";
 import { SearchResultsDisplay } from "./search-results-view";
 import { queryForSearchResultsView, searchResultsView, type SearchResultsView } from "./search-results-view-model";
 import { newKeywordSearch, searchSentence, withheldBatch, type TextSearchDraft } from "./text-search-model";
@@ -55,11 +57,11 @@ import { queryRequest, queryFetch, shouldSkipQueryOnRestore } from "./query-requ
 import { PageErrorBoundary, QueryRecovery, ResetPage, tableRecoveryQuery } from "./query-recovery";
 import { createMCPMonitor, type MCPStatus } from "./mcp-monitor";
 import { HomePage } from "./home";
-import { AskPharosSettings } from "./ask-pharos";
+import { AskPharosSearch, AskPharosSettings } from "./ask-pharos";
 import { CardLibraryPage } from "./card-library";
 import { linkTargets, navigateLink } from "./query-link-targets";
 import { QueryChip } from "./query-card";
-import { readRollingWindow, resolveRollingQuery, rollingQueryMatches } from "./query-links";
+import { queryFromURL, queryURL, rollingWindowField, updateQueryWindowURL, readRollingWindow, resolveRollingQuery, rollingQueryMatches } from "./query-links";
 import { mainIntegration, pullRequestLabel, pullRequestURL, pullRequests } from "./pull-requests";
 import { optionLabels } from "./option-labels";
 import { preferences } from "./preferences";
@@ -78,7 +80,6 @@ import skillUsagesDocument from "../../schemas/skill_usages.schema.json";
 import tl1AttemptsDocument from "../../schemas/tl1_attempts.schema.json";
 import parallelismDocument from "../../schemas/parallelism.schema.json";
 import findingsDocument from "../../schemas/findings.schema.json";
-import { TL1Page } from "./tl1";
 import { FindingsPage, startFindingsChrome } from "./findings";
 import { Icon } from "./icons";
 import { AuthoredMessages, CategoryPill, MessageMix, authoredRenderers } from "./authored";
@@ -155,7 +156,7 @@ function usdCost(value: unknown, row: Row): React.ReactNode {
 
 // A shared export (see share.go) carries its own rows in place of the service:
 // every table runs over them in the browser, and the pages that need the
-// service (search, MCP, TL1, Human Words, Carbon) are left out.
+// service (search, MCP, Human Words, Carbon) are left out.
 type SharedExport = { works: Row[]; datasets: Record<string, Row[]>; tool_calls: Record<string, Row> };
 const shared: SharedExport | null = (window as unknown as { pharosShare?: SharedExport | null }).pharosShare ?? null;
 
@@ -175,7 +176,7 @@ function datasetIsVisible(dataset: Dataset | "machine_calls") {
   if (dataset === "usage") return path === "/analyze" && usageView === "tokens";
   if (dataset === "writing" || dataset === "writing_messages") return path === "/analyze" && usageView === "writing" && (params.get("writing") === "messages") === (dataset === "writing_messages");
   if (["tools", "tool_calls", "skill_usages"].includes(dataset)) return path === "/tools" && (params.get("tools_view") ?? "calls") === (dataset === "tools" ? "summary" : dataset === "skill_usages" ? "skills" : "calls");
-  return dataset === "mcp_calls" ? path === "/mcp" : path.startsWith("/tl1");
+  return dataset === "mcp_calls" && path === "/mcp";
 }
 
 
@@ -252,6 +253,7 @@ function recordBudget(dataset: Dataset, where: WhereTerm[]) {
   const fields = dataset === "tool_calls" ? ["command", "file_path"] : dataset === "writing_messages" ? ["text"] : dataset === "mcp_calls" ? ["arguments_json", "error_text"] : [];
   return where.some(term => predicatesOf(term).some(c => fields.includes(c.field))) ? new URLSearchParams({ interactive_search: "1" }) : undefined;
 }
+startDayClock();
 const queryMetadata = createQueryMetadataLoader();
 // host compiles a table's host query state into the service's parameters. Each
 // request carries the host state it runs with (Query Table adds it), so rows,
@@ -521,11 +523,22 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
     key => preferences().get<string | null>(key, null),
     (key, value) => preferences().set(key, value),
   ), []);
+  // Resolve an opened calendar search once. Repeated normalization and cursor
+  // batches reuse the execution's bounds instead of following a moving clock.
+  const openedSearches = useRef(new Map<string, HostQueryState>());
   const scopeSignature = JSON.stringify(scopeWhere);
   const restoredScope = useRef<WhereTerm[]>(history.state?.pharosMachineScopes?.[`q_${registryKey}`] ?? []);
   const scopeRemovals = useMemo(() => new Set([...restoredScope.current, ...(appliedScope?.current ?? []), ...(history.state?.pharosMachineScopes?.[`q_${registryKey}`] ?? []), ...(scopeWhere ?? [])].map(termKey)), [scopeSignature, locationRevision]);
   useEffect(() => { if (appliedScope && scopeWhere) appliedScope.current = scopeWhere; }, [scopeSignature]);
   const canonicalizeQuery = useMemo(() => (query: QueryState) => {
+    const hostKey = JSON.stringify(query.hostState);
+    const opened = openedSearches.current.get(hostKey);
+    const renewedHost = opened ?? refreshTodayHost(query.hostState);
+    if (renewedHost && JSON.stringify(renewedHost) !== hostKey) {
+      openedSearches.current.set(hostKey, renewedHost);
+      openedSearches.current.set(JSON.stringify(renewedHost), renewedHost);
+      query = { ...query, hostState: renewedHost, offset: 0 };
+    }
     const rolling = readRollingWindow(new URLSearchParams(location.search), dataset);
     const resolved = rolling && rollingQueryMatches(query, rolling) ? resolveRollingQuery(query, rolling) : query;
     const presented = usageActions ? usageActionQuery(orderedUsageQuery(dataset as UsageDataset, resolved), schema, dataset as UsageDataset) : withGroupDetail(resolved);
@@ -628,16 +641,29 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
     if (!visible || !api.restoration.ready || api.error) return;
     const rolling = readRollingWindow(new URLSearchParams(location.search), dataset);
     if (rolling && !rollingQueryMatches(api.query.grouping?.source ?? api.query, rolling)) {
-      for (const name of ["window_days", "window_field", "window_dataset", "window_mode"]) updateURI(name, "");
+      for (const name of ["window_days", "window_field", "window_dataset", "window_mode", "window_until_field", "window_timezone"]) updateURI(name, "");
+    } else if (rolling?.mode === "today") {
+      updateURI("window_timezone", localTimezone());
     } else if (!rolling) {
       const savedWindow = savedRollingWindow(dataset, api.query);
       if (savedWindow) {
         updateURI("window_days", String(savedWindow.days)); updateURI("window_field", savedWindow.field); updateURI("window_dataset", dataset);
-        updateURI("window_mode", savedWindow.mode === "relative" ? "relative" : "");
+        updateURI("window_mode", savedWindow.mode === "today" ? "today" : savedWindow.mode === "relative" ? "relative" : "");
+        updateURI("window_timezone", savedWindow.mode === "today" ? localTimezone() : "");
+        updateURI("window_until_field", savedWindow.untilField ?? "");
       }
     }
   }, [dataset, api.query, visible, api.restoration.ready, api.error]);
 
+  useEffect(() => {
+    const refresh = () => {
+      const selected = readRollingWindow(new URLSearchParams(location.search), dataset);
+      const current = apiRef.current;
+      if (selected?.mode === "today" || refreshTodayHost(current.query.hostState) !== current.query.hostState) current.setQuery(previous => ({ ...resolveRollingQuery(previous, selected?.mode === "today" ? selected : undefined), hostState: refreshTodayHost(previous.hostState), offset: 0 }));
+    };
+    window.addEventListener("pharos:day-change", refresh);
+    return () => window.removeEventListener("pharos:day-change", refresh);
+  }, [dataset]);
   // Drilldowns filter source records, including canonical computed fields.
   const sourceSchema = useMemo(() => ({ ...schema, fields: api.computed.catalogue }), [schema, api.computed.catalogue]);
   // Inactive controllers retain their query state, but their controls must not
@@ -671,6 +697,15 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
     {!api.query.grouping || namespace ? header?.(api) : null}
     {!shared && !namespace && Object.hasOwn(usageDatasets, dataset) ? <UsageQueryIdeas key={dataset} dataset={dataset as UsageDataset} api={api} /> : null}
     {presets?.(api)}
+    {!shared && !namespace && !["tl1_attempts", "findings"].includes(dataset) && rollingWindowField(dataset) ? <label className="usage-chart-field">Time window<select aria-label="Query time window" value={(() => { const choice = readRollingWindow(new URLSearchParams(location.search), dataset); return choice?.mode === "today" ? "today" : choice?.mode === "relative" && choice.days === 1 ? "24h" : "saved"; })()} onChange={event => {
+      if (event.target.value === "saved") return;
+      const selected = readRollingWindow(new URLSearchParams(location.search), dataset);
+      const address = updateQueryWindowURL(queryURL(dataset, api.query, selected), event.target.value === "today" ? "today" : 1, api.query);
+      const adjusted = queryFromURL(address)!;
+      const params = new URL(address, location.origin).searchParams;
+      for (const key of ["window_mode", "window_days", "window_field", "window_dataset", "window_timezone", "window_until_field"]) updateURI(key, params.get(key) || "");
+      api.setQuery(adjusted.query);
+    }}><option value="saved">Query filters</option><option value="today">Today</option><option value="24h">Last 24 hours</option></select></label> : null}
     {queryContent || resultPresentation ? <SourceQueryBuilder dataset={dataset} compact summary={querySummary?.(api)} api={stableApi} fields={api.query.grouping ? api.schema!.fields : api.computed.catalogue} total={api.total} running={api.loading}
       whereRow={<>
         {resultPresentation?.(api)}
@@ -1079,7 +1114,19 @@ function RefreshPricesButton() {
 
 // Charts change their table's filters through this.
 function filterChange(api: QueryTableApi<Row>): FilterChange {
-  return change => api.setQuery(previous => ({ ...previous, where: change(previous.where), offset: 0 }));
+  return (change, preset) => {
+    const dataset = [...tableApis.entries()].find(([, candidate]) => candidate === api)?.[0] as Dataset | undefined;
+    if (dataset && preset && rollingWindowField(dataset)) {
+      updateURI("window_mode", preset === "today" ? "today" : "relative");
+      updateURI("window_days", preset === "today" ? "1" : String(rangeDays(preset as ChartRange)));
+      updateURI("window_field", dataset === "usage" ? "last_usage_at" : dataset === "writing" ? "last_message_at" : rollingWindowField(dataset)!);
+      updateURI("window_until_field", dataset === "usage" ? "first_usage_at" : dataset === "writing" ? "first_message_at" : "");
+      updateURI("window_dataset", dataset);
+      updateURI("window_timezone", preset === "today" ? localTimezone() : "");
+      if (preset === "all") for (const key of ["window_mode", "window_days", "window_field", "window_until_field", "window_dataset", "window_timezone"]) updateURI(key, "");
+    }
+    api.setQuery(previous => ({ ...previous, where: change(previous.where), offset: 0 }));
+  };
 }
 
 
@@ -1182,11 +1229,11 @@ function TokenUsage({ scopeWhere, appliedScope, onTimeRangeChange }: { scopeWher
     return <>
       <p className="muted machine-token-note">Reconciled tokens by session, model, and effort. Input includes cached tokens. Cost is the API list-price equivalent at standard rates; subscriptions and long-context premiums are excluded. ≈ marks costs priced by assumption.</p>
       <TokenSummary where={where} />
-      <AnalysisTrend catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={chart} where={where} onChange={update} onFilter={filterChange(api)} onTimeFilter={change => {
+      <AnalysisTrend catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={chart} where={where} onChange={update} onFilter={filterChange(api)} onTimeFilter={(change, preset) => {
         // A chart date selection replaces the page period. Release its scope
         // before updating the query so normalization cannot restore that limit.
         onTimeRangeChange?.();
-        filterChange(api)(change);
+        filterChange(api)(change, preset);
       }} local={tokenSharedRows} format={tokenAmount} tick={tokenTick} links={false} />
       <PresetRow label="Chart" presets={tokenChartPresets} query={api.query} chart={normalizeAnalysis(tokenAnalysisCatalog, { ...chart, view: "trend" }) as TokenChartView} onApply={preset => { if (preset?.chart) update(preset.chart as Partial<TokenTrendView>); }} />
     </>;
@@ -1380,7 +1427,7 @@ function WritingPanel({ where, onFilter, status, reload }: { where: WhereTerm[];
         <ChartSelect label="Breakdown" value={view.split} options={writingSplits.map(([value, text]) => [value, value === "kind" ? "Text source" : text])}
           title="How each chart column is divided" onChange={next => update({ split: next, seriesLimit: 15, selection: { values: [], excluded: false } })} />
         <DisplayControl value={view.display} onChange={display => update({ display })} />
-        <RangeControl bounds={bounds} onPresetChange={(range, oldest) => update(presetPeriod(range, oldest))} onChange={(from, to, preset) => onFilter(current => withTimeRange(current, writingTime, from, to, preset))} />
+        <RangeControl bounds={bounds} onPresetChange={(range, oldest) => update(presetPeriod(range, oldest))} onChange={(from, to, preset) => onFilter(current => withTimeRange(current, writingTime, from, to, preset), preset)} />
         <ScaleControl value={view.scale} onChange={scale => update({ scale })} />
         <PeriodControl view={view} onChange={update} />
         <RollingControl value={view.rollingPeriods} display={view.display} period={view.period} count={periodCount} onChange={rollingPeriods => update({ rollingPeriods })} />
@@ -1489,8 +1536,9 @@ function useUsageDashboardState<T extends object>(defaults: T, valid: (value: T)
     // A route change can belong to another page, so a restored link is not
     // rewritten here; the next change writes it whole (persist).
     const restore = () => setState(read());
-    window.addEventListener("pharos:route", restore);
-    return () => window.removeEventListener("pharos:route", restore);
+    const refresh = () => { if (new URLSearchParams(location.search).get("analyze_window") === "today") restore(); };
+    window.addEventListener("pharos:route", restore); window.addEventListener("pharos:usage-refresh", refresh);
+    return () => { window.removeEventListener("pharos:route", restore); window.removeEventListener("pharos:usage-refresh", refresh); };
   }, [time.first, time.last]);
   // A migrated link's state and population are written together, so its
   // filters are never read as a version 2 population while still holding
@@ -1501,7 +1549,13 @@ function useUsageDashboardState<T extends object>(defaults: T, valid: (value: T)
     if (next.migrated || field === "analyze_filters") updateURI("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where: next.where }));
   };
   const update = (change: Partial<T>) => persist({ ...live.current, view: { ...live.current.view, ...change } }, "analyze_chart");
-  const onFilter: FilterChange = change => persist({ ...live.current, where: change(live.current.where) }, "analyze_filters");
+  const onFilter: FilterChange = (change, preset) => {
+    const where = change(live.current.where);
+    const dates = (terms: WhereTerm[]) => JSON.stringify(terms.filter(term => predicatesOf(term).some(c => [time.first,time.last].includes(c.field))));
+    if (preset === "today") updateURI("analyze_window", "today");
+    else if (preset || dates(where) !== dates(live.current.where)) updateURI("analyze_window", "");
+    persist({ ...live.current, where }, "analyze_filters");
+  };
   return { ...state, update, onFilter };
 }
 
@@ -2044,6 +2098,12 @@ dataGuideHost.id = "dataGuideHost";
 document.body.append(dataGuideHost);
 createRoot(dataGuideHost).render(<DataTaxonomyModal />);
 
+// Ask remains available before Home's first visit and while another page is active.
+if (!shared) {
+  const host = document.createElement("div");host.hidden = true;document.body.append(host);
+  createRoot(host).render(<AskPharosSearch schema={schemas.library} />);
+}
+
 const mounts: Array<[string, React.ReactNode]> = [
   ["searchComposerDialog", <SearchDialog schema={schemas.library} />],
   ["homePage", <HomePage schemas={schemas} />],
@@ -2056,7 +2116,6 @@ const mounts: Array<[string, React.ReactNode]> = [
   ["toolsPage", <ToolsPage />],
   ["mcpSettingsPage", <MCPSettings />],
   ["findingsPage", <FindingsPage copy={copyText} table={<QuerySurface dataset="findings" />} />],
-  ["tl1Page", <TL1Page attempts={<QuerySurface dataset="tl1_attempts" />} filterAttempts={(where) => tableApis.get("tl1_attempts")?.setQuery(previous => ({ ...previous, where: where as WhereTerm[], offset: 0 }))} copy={copyText} />],
 ];
 
 // Mount a page on its first visit. Hidden pages used to load capabilities,
@@ -2093,7 +2152,7 @@ window.addEventListener("pharos:preferences-saved", event => {
   for (const dataset of datasetsForSavedPreferences((event as CustomEvent<{ set?: Record<string, unknown>; delete?: string[] }>).detail)) window.pharosQueryTables?.refresh(dataset as Dataset);
 });
 window.pharosQueryTables = {
-  summaryURL: (metric, window, generatedAt) => usageSummaryURL(metric, window, generatedAt, readConcurrencySettings()),
+  summaryURL: (metric, window, generatedAt, _concurrency, from) => usageSummaryURL(metric, window, generatedAt, readConcurrencySettings(), from),
   async createLink() {
     const entry = [...tableApis.entries()].find(([dataset]) => datasetIsVisible(dataset));
     if (!entry) return { url: location.href };

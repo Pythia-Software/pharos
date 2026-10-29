@@ -247,3 +247,39 @@ for (const zone of ['America/Phoenix', 'America/Denver']) {
     } finally { if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous; }
   });
 }
+
+
+test('Today follows local midnight across DST and fractional offsets while 24 hours stays elapsed', async () => {
+  const { todayBounds } = await import('../../../src/day-window');
+  for (const [zone, clock, midnight] of [
+    ['America/Denver', '2026-03-08T10:00:00Z', '2026-03-08T07:00:00.000Z'],
+    ['America/Denver', '2026-11-01T10:00:00Z', '2026-11-01T06:00:00.000Z'],
+    ['Asia/Kathmandu', '2026-10-29T05:00:00Z', '2026-10-28T18:15:00.000Z'],
+  ]) assert.deepEqual(todayBounds(new Date(clock), zone), [midnight, new Date(clock).toISOString()]);
+  const today = withTimeRange([], usageTime, undefined, undefined, 'today');
+  const now = Date.now();
+  assert.equal(timeBounds(today, usageTime, now).preset, 'today');
+  assert.equal(timeBounds(today, usageTime, now).from.toISOString(), todayBounds(new Date(now))[0]);
+  const elapsed = withTimeRange([], usageTime, undefined, undefined, '1d');
+  assert.equal(now - timeBounds(elapsed, usageTime, now).from.getTime(), 86400000);
+});
+
+
+test('the calendar clock rolls at midnight and rechecks after waking', async t => {
+  const { startDayClock } = await import('../../../src/day-window');
+  const now = new Date(2026, 9, 29, 23, 59, 59);
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now });
+  const target = new EventTarget(); target.document = new EventTarget(); target.document.visibilityState = 'visible';
+  let days = 0, refreshes = 0;
+  target.addEventListener('pharos:day-change', () => days++);
+  target.addEventListener('pharos:usage-refresh', () => refreshes++);
+  const stop = startDayClock(target);
+  t.after(stop);
+  t.mock.timers.tick(1000);
+  assert.equal(days, 1); assert.equal(refreshes, 1);
+  target.dispatchEvent(new Event('focus'));
+  assert.equal(days, 1); assert.equal(refreshes, 2);
+  stop();
+  t.mock.timers.tick(86400000);
+  assert.equal(days, 1);
+});

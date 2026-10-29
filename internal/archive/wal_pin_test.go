@@ -11,8 +11,11 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"modernc.org/sqlite"
 )
 
 // walIndexBytes builds a -shm header as SQLite lays it out.
@@ -356,6 +359,48 @@ func TestCatalogReadsFollowConnections(t *testing.T) {
 	trace.exec(ctx, "ROLLBACK\nTO before", nil)
 	if trace.read.Began.IsZero() {
 		t.Fatal("a ROLLBACK TO a savepoint ended the transaction")
+	}
+}
+
+// cancelWALTestQuery is the query pharos_cancel_query() cancels, while
+// SQLite computes its first row.
+var cancelWALTestQuery atomic.Pointer[context.CancelFunc]
+
+func init() {
+	sqlite.MustRegisterDeterministicScalarFunction("pharos_cancel_query", 0, func(*sqlite.FunctionContext, []driver.Value) (driver.Value, error) {
+		if cancel := cancelWALTestQuery.Load(); cancel != nil {
+			(*cancel)()
+		}
+		time.Sleep(20 * time.Millisecond) // the driver's interrupt sees the cancellation before the step returns
+		return int64(1), nil
+	})
+}
+
+// A query cancelled after SQLite stepped to its first row returns no rows.
+// The driver must still finalize that statement: modernc.org/sqlite before
+// v1.41.0 dropped it, so the discarded connection lived on as a zombie that
+// held its snapshot, and the WAL, until the process exited, with no read or
+// goroutine left to name.
+func TestCancelledQueryLeavesNoSnapshot(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cancelWALTestQuery.Store(&cancel)
+	defer cancelWALTestQuery.Store(nil)
+	rows, err := catalog.reader().QueryContext(ctx, "SELECT pharos_cancel_query(), key FROM meta")
+	if err == nil {
+		rows.Close()
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("the cancelled query: %v", err)
+	}
+	writeRows(t, catalog.DB, "after-")
+	var busy, frames, copied int
+	if err := catalog.DB.QueryRow("PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &frames, &copied); err != nil {
+		t.Fatal(err)
+	}
+	if busy != 0 {
+		t.Fatalf("a cancelled query holds the WAL: busy=%d frames=%d copied=%d", busy, frames, copied)
 	}
 }
 

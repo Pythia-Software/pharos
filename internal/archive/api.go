@@ -283,7 +283,7 @@ func (s *Server) authorized(r *http.Request) bool {
 // of which serves the single-page UI.
 func isUIPage(path string) bool {
 	switch path {
-	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/preferences", "/settings/ask", "/sources", "/activity", "/analyze", "/tools", "/tl1", "/tl1/configurations", "/tl1/followups", "/tl1/quality", "/tl1/runs", "/health", "/mcp", "/findings":
+	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/preferences", "/settings/ask", "/sources", "/activity", "/analyze", "/tools", "/health", "/mcp", "/findings":
 		return true
 	}
 	return strings.HasPrefix(path, "/work/")
@@ -531,7 +531,7 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		value, err := s.menuBarStatus(r.Context())
 		writeResult(w, value, err)
 	case path == "/api/menu-bar/usage":
-		value, err := s.menuBarUsage(r.Context())
+		value, err := s.menuBarUsage(r.Context(), r.URL.Query().Get("period"))
 		writeResult(w, value, err)
 	case path == "/api/tools/status":
 		value, err := s.Catalog.ToolLedgerStatus(r.Context())

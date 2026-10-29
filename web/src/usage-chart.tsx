@@ -20,7 +20,7 @@ export const chartPeriodCount = (view: { period: ChartPeriod; hours: number; day
 // Keep daily detail for 90 days; longer bounded ranges use weeks.
 export function presetPeriod(range: ChartRange | "all", oldestConversation?: Date, now = new Date()): Partial<PeriodView> & { period: ChartPeriod } {
   switch (range) {
-    case "1d": return { period: "hour" };
+    case "today": case "1d": return { period: "hour" };
     case "7d": return { period: "hours", hours: 4 };
     case "30d": case "90d": return { period: "day" };
     case "6m": case "1y": return { period: "week" };
@@ -75,6 +75,7 @@ export function finerPeriod(period: ChartPeriod, from: Date, to: Date, count = 1
 }
 
 export function rangeLabel(bounds: TimeBounds): string {
+  if (bounds.preset === "today") return "Today";
   const year = new Date().getFullYear();
   const timed = [bounds.from, bounds.to].some(date => date && (date.getHours() || date.getMinutes() || date.getSeconds()));
   if (timed) {
@@ -120,7 +121,7 @@ export function RangeControl({ bounds, onChange, onPresetChange, editable = true
   const timed = [bounds.from, bounds.to].some(date => date && (date.getHours() || date.getMinutes() || date.getSeconds() || date.getMilliseconds()));
   const mode = custom ?? (active ? null : timed ? "custom-times" : "custom");
   const picker = <ChartSelect label="Range" value={mode ?? active!}
-    options={[...chartRanges.map(([range, text]): [string, string] => [range, `Last ${text}`]), ...(editable ? [["custom", "Custom dates…"], ["custom-times", "Custom times…"]] as Array<[string, string]> : active ? [] : [["custom", rangeLabel(bounds), "Dates selected in the chart or table"] as [string, string, string]]), ["all", "All time", history.ready ? undefined : "Loading conversation history…"]]}
+    options={[...chartRanges.map(([range, text]): [string, string] => [range, range === "today" ? text : `Last ${text}`]), ...(editable ? [["custom", "Custom dates…"], ["custom-times", "Custom times…"]] as Array<[string, string]> : active ? [] : [["custom", rangeLabel(bounds), "Dates selected in the chart or table"] as [string, string, string]]), ["all", "All time", history.ready ? undefined : "Loading conversation history…"]]}
     title="Dates included in this usage view. Choose All time to clear the date filter."
     onChange={range => {
       if (range === "custom" || range === "custom-times") {

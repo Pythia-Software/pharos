@@ -1,7 +1,7 @@
 import { MAX_HOST_QUERY_VALUE_LENGTH, parseHostQueryState, type FieldDef, type HostQueryState } from "@pythia-software/query-table-core";
 import type { HostQueryOptions } from "@pythia-software/query-table-react";
 import { readRecordKeywordSearch, recordKeywordParameter, recordKeywordRequest, type RecordKeywordSearch } from "./record-keyword-model";
-import { emptyScope, readTextSearch, textFindParameters, type TextCondition, type TextSearchDraft } from "./text-search-model";
+import { emptyScope, refreshSearchToday, readTextSearch, textFindParameters, type TextCondition, type TextSearchDraft } from "./text-search-model";
 import type { SearchResultsView } from "./search-results-view-model";
 
 // Clauses Pharos runs itself, registered with Query Table as host query state
@@ -161,3 +161,17 @@ export const messageFind = (state: HostQueryState | undefined): string => {
   const draft = readMessageSearchHost(state);
   return draft ? textFindParameters(draft) : "";
 };
+
+// Renew a calendar search at execution boundaries, never while paging a batch.
+export function refreshTodayHost(state: HostQueryState | undefined, clock = new Date(), onlyNewDay = false): HostQueryState | undefined {
+  if (state?.params.text_builder) {
+    const host = readLibraryHost(state);
+    const text = host.text && refreshSearchToday(host.text, clock, onlyNewDay);
+    if (text && text !== host.text) return libraryHostState({ ...host, text });
+  } else if (state?.params.message_query) {
+    const draft = readMessageSearchHost(state);
+    const next = draft && refreshSearchToday(draft, clock, onlyNewDay);
+    if (next && next !== draft) return withMessageSearch(next);
+  }
+  return state;
+}

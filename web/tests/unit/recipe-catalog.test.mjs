@@ -54,7 +54,7 @@ for (const recipe of queryRecipes) test(`${recipe.id}${recipe.retired ? " (retir
     if (Object.hasOwn(usageDatasetTopics, recipe.dataset)) {
       assert.equal(url.pathname, "/analyze", `Analyze route @${days}d`);
       assert.equal(readUsageWorkspace(url.searchParams).dataset, recipe.destination?.dataset ?? recipe.dataset);
-      if (!recipe.retired) assert.ok(recipe.destination, "analysis cards start exploration on a dashboard");
+      if (!recipe.retired && recipe.dataset !== "tl1_attempts") assert.ok(recipe.destination, "analysis cards start exploration on a dashboard");
     }
     if (recipe.destination) {
       const { topic, chart } = recipe.destination;

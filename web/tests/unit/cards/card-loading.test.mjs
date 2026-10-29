@@ -72,3 +72,18 @@ test("chart heights persist through template edits and pairing pies remain edita
   saveCardTemplate(pairing.id, { title: pairing.title, description: pairing.description, days: 7, cover: pairing.cover });
   assert.equal(cardTemplates().find(item => item.id === pairing.id).cover.kind, "pie");
 });
+
+
+test("eligible template defaults retain Today while fixed and completed-day cards reject it", t => {
+  const before = global.window, storage = new Map();
+  global.window = { dispatchEvent() {}, pharosPrefs: { get: (key, fallback) => storage.get(key) ?? fallback, set: (key, value) => storage.set(key, value) } };
+  t.after(() => { global.window = before; });
+  const recipe = queryRecipes.find(recipe => recipe.id === "usage-models");
+  saveCardTemplate(recipe.id, { title: recipe.title, description: recipe.description, days: 1, window: "today" });
+  const saved = cardTemplates().find(item => item.id === recipe.id);
+  assert.equal(saved.defaultWindow, "today");
+  assert.equal(instantiateRecipe(saved, saved.defaultWindow).window.mode, "today");
+  for (const other of queryRecipes.filter(recipe => recipe.dataset === "tl1_attempts" || recipe.weekday || recipe.trend?.completeDays || recipe.period)) {
+    assert.throws(() => saveCardTemplate(other.id, { title: other.title, description: other.description, days: 1, window: "today" }), /complete days|fixed period/);
+  }
+});

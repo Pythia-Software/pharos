@@ -577,10 +577,6 @@ func TestTL1APIAndMCP(t *testing.T) {
 	if _, ok := get("/api/tl1/overview?days=0")["findings"].([]any); !ok {
 		t.Fatal("overview should list the findings scoped to TL1 flavors")
 	}
-	get("/tl1")
-	for _, page := range []string{"/tl1/configurations", "/tl1/followups", "/tl1/quality", "/tl1/runs"} {
-		get(page)
-	}
 	latest := get("/api/tl1/overview?since=latest")
 	if window := latest["window"].(map[string]any); window["mode"] != "latest_enqueue" || latest["enqueues"] == nil {
 		t.Fatalf("latest enqueue window: %v", window)

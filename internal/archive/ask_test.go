@@ -207,20 +207,36 @@ func TestAskConversationPersistenceAndSelection(t *testing.T) {
 	s := askTestServer(t)
 	askEnable(t, s)
 	calls := 0
+	pageURI := "/analyze?analyze_topic=tokens&private_view=retainedscope"
 	override(t, &askRunCLI, func(ctx context.Context, p askProvider, selection askSelection, prompt string) ([]byte, error) {
 		calls++
+		if !strings.Contains(prompt, jsonText(pageURI)) {
+			t.Error("current page context missing from CLI conversation")
+		}
 		if strings.Contains(prompt, s.Config().APIToken) {
 			t.Error("passed service token to CLI")
 		}
 		var response askAgentResponse
-		_ = json.Unmarshal(askReply("tl1", "findings"), &response)
+		_ = json.Unmarshal(askReply("analyze", "findings"), &response)
 		response.Message = fmt.Sprintf("Navigation reply %d", calls)
 		return []byte(jsonText(response)), nil
 	})
-	askOK(t, s, "send", askInput())
+	for _, uri := range []string{"https://elsewhere.test/", "//elsewhere.test/", "/api/status", "/analyze?token=secret"} {
+		invalid := askInput()
+		invalid["currentURI"] = uri
+		if r := askCall(t, s, http.MethodPost, "send", invalid); r.Code == 200 {
+			t.Fatalf("accepted unsafe context %q", uri)
+		}
+	}
+	input := askInput()
+	input["currentURI"] = pageURI
+	askOK(t, s, "send", input)
 	session, err := s.askSession(t.Context(), "chat-1")
 	if err != nil || len(session.Conversation) != 1 || len(session.Conversation[0].Cards) != 2 {
 		t.Fatalf("session: %+v %v", session, err)
+	}
+	if session.Conversation[0].CurrentURI != pageURI {
+		t.Fatal("page context was not persisted")
 	}
 	if session.Conversation[0].Cards[0].Href == "" || session.Conversation[0].ModelLabel != "Test Model" {
 		t.Fatal("missing route or model identity")
@@ -279,6 +295,10 @@ func TestAskConversationPersistenceAndSelection(t *testing.T) {
 	found, searchErr := s.Catalog.Search(SearchOptions{Query: "wasting", Limit: 10, ctx: t.Context()})
 	if searchErr != nil || len(found["items"].([]map[string]any)) != 1 {
 		t.Fatalf("chat missing from general search: %v %v", found, searchErr)
+	}
+	var contextCount int
+	if err = s.Catalog.reader().QueryRow("SELECT COUNT(*) FROM messages WHERE text LIKE '%retainedscope%'").Scan(&contextCount); err != nil || contextCount != 0 {
+		t.Fatalf("private page context entered archive: %d %v", contextCount, err)
 	}
 	var count int
 	if err = s.Catalog.reader().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH ?", `"wasting"`).Scan(&count); err != nil || count != 1 {
@@ -401,7 +421,9 @@ func TestAskCancelAndDisable(t *testing.T) {
 				<-ctx.Done()
 				return nil, ctx.Err()
 			})
-			go func() { done <- askCall(t, s, http.MethodPost, "send", askInput()) }()
+			input := askInput()
+			input["currentURI"] = "/analyze?analyze_topic=tokens"
+			go func() { done <- askCall(t, s, http.MethodPost, "send", input) }()
 			select {
 			case <-started:
 			case <-time.After(5 * time.Second):
@@ -423,6 +445,26 @@ func TestAskCancelAndDisable(t *testing.T) {
 			session, err := s.askSession(t.Context(), "chat-1")
 			if err != nil || session.Conversation[0].Status != "canceled" {
 				t.Fatalf("canceled state: %+v %v", session, err)
+			}
+			if action == "cancel" {
+				// Cancellation may have changed the finished copy while it was saving.
+				if pending, err := s.saveFinishedAsk("chat-1"); pending || err != nil {
+					t.Fatalf("finish canceled save: %v", err)
+				}
+				override(t, &askRunCLI, func(_ context.Context, _ askProvider, _ askSelection, prompt string) ([]byte, error) {
+					if !strings.Contains(prompt, jsonText(input["currentURI"])) {
+						t.Error("retry lost original page context")
+					}
+					return askReply("findings"), nil
+				})
+				retry := askInput()
+				retry["retry"] = true
+				retry["currentURI"] = "/library"
+				askOK(t, s, "send", retry)
+				session, err = s.askSession(t.Context(), "chat-1")
+				if err != nil || len(session.Conversation) != 1 || session.Conversation[0].CurrentURI != input["currentURI"] {
+					t.Fatalf("retry context: %+v %v", session, err)
+				}
 			}
 		})
 	}
@@ -674,6 +716,11 @@ func TestAskInstalledCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := testServer(t, config, catalog)
+	var activity []string
+	provider.progress = func(message string) {
+		activity = append(activity, message)
+		t.Logf("activity: %s", message)
+	}
 	session := askSession{Selection: askSelection{Provider: name, Model: model.ID, Effort: effort}, Conversation: []askTurn{{Prompt: "First call list_repositories through the Pharos MCP server (pharos-ask for Antigravity, pharos otherwise), then show me Pharos settings. Use the catalog for the destination; do not request a private lookup."}}}
 	answer, err := server.answerAsk(ctx, provider, session, "America/Denver")
 	if err != nil {
@@ -685,6 +732,9 @@ func TestAskInstalledCLI(t *testing.T) {
 	var calls int
 	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM mcp_calls WHERE tool_name='list_repositories' AND status='ok'").Scan(&calls); err != nil || calls == 0 {
 		t.Fatalf("agent did not successfully use Pharos MCP: calls=%d, err=%v", calls, err)
+	}
+	if !slices.ContainsFunc(activity, func(message string) bool { return strings.HasPrefix(message, "Reading repositories") }) {
+		t.Fatalf("CLI used Pharos MCP without reporting tool activity: %v", activity)
 	}
 	t.Logf("%s · %s · %s -> %s", name, model.Label, effort, answer.Cards[0].Title)
 }
@@ -1247,5 +1297,237 @@ func TestAskOpusTokensQuestion(t *testing.T) {
 	askOK(t, s, "send", input)
 	if session, err = s.askSession(t.Context(), "chat-1"); err != nil || len(session.Conversation) != 3 || len(session.Conversation[2].Cards) != 1 || session.Conversation[2].Omitted != 1 || session.Conversation[1].Omitted != 0 {
 		t.Fatalf("omitted destination: %+v %v", session, err)
+	}
+}
+
+func TestAskCLIProgress(t *testing.T) {
+	for _, tc := range []struct {
+		provider string
+		events   []string
+		last     string
+	}{
+		{"Codex", []string{
+			`{"type":"thread.started"}`,
+			`{"type":"item.started","item":{"id":"call-1","type":"mcp_tool_call","server":"pharos","tool":"browse_site","arguments":{"secret":"private lookup"}}}`,
+			`{"type":"item.completed","item":{"id":"call-1","type":"mcp_tool_call","server":"pharos","tool":"browse_site","status":"completed","result":"private result"}}`,
+			`{"type":"item.completed","item":{"type":"reasoning","text":"private reasoning"}}`,
+		}, "Thinking…"},
+		{"Claude", []string{
+			`{"type":"system","subtype":"init"}`,
+			`{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","id":"call-1","name":"mcp__pharos__browse_site"}}}`,
+			`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"call-1","name":"mcp__pharos__browse_site","input":"private lookup"}]}}`,
+			`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call-1","content":"private result"}]}}`,
+			`{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"thinking","thinking":"private reasoning"}}}`,
+		}, "Thinking…"},
+		{"Antigravity", []string{
+			`{"event":"step_update","step_update":{"step_index":0,"step_type":"user_input","state":"DONE"}}`,
+			`{"event":"step_update","step_update":{"step_index":1,"step_type":"tool","state":"ACTIVE","tool_name":"call_mcp_tool","tool_info":{"parameters":{"ServerName":"pharos-ask","ToolName":"browse_site","Arguments":{"query":"private lookup"}}}}}`,
+			`{"event":"step_update","step_update":{"step_index":1,"step_type":"tool","state":"ACTIVE","tool_name":"call_mcp_tool","tool_info":{"parameters":{"ServerName":"pharos-ask","ToolName":"browse_site"}}}}`,
+			`{"event":"step_update","step_update":{"step_index":1,"step_type":"tool","state":"DONE","tool_name":"call_mcp_tool","tool_info":{"output":"private result"}}}`,
+			`{"event":"step_update","step_update":{"step_index":2,"step_type":"agent_response","state":"ACTIVE","text_delta":"private response"}}`,
+		}, "Preparing the response…"},
+	} {
+		t.Run(tc.provider, func(t *testing.T) {
+			var messages []string
+			events := askCLIEvents{provider: askProvider{ID: tc.provider, progress: func(message string) { messages = append(messages, message) }}}
+			for _, raw := range tc.events {
+				events.read([]byte(raw))
+			}
+			if len(messages) != 4 || messages[1] != "Browsing available views…" || messages[2] != "Browsing available views — done" || messages[3] != tc.last || strings.Contains(strings.Join(messages, " "), "private") {
+				t.Fatalf("unexpected activity or private payload exposed: %v", messages)
+			}
+			events.read([]byte(`{"type":"item.started","item":{"type":"mcp_tool_call","server":"elsewhere","tool":"private"}}`))
+			events.read([]byte(`{"type":"assistant","message":{"content":[{"type":"text","text":"private"}]}}`))
+			events.read([]byte(`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"private"}}}`))
+			events.read([]byte(`{"event":"step_update","step_update":{"step_index":3,"step_type":"tool","state":"ACTIVE","tool_name":"call_mcp_tool","tool_info":{"parameters":{"ServerName":"elsewhere","ToolName":"private"}}}}`))
+			events.read([]byte(`{"event":"step_update","step_update":{"step_type":"tool","state":"ACTIVE","tool_name":"call_mcp_tool"}}`))
+			events.read([]byte(`not JSON`))
+			if len(messages) != 4 {
+				t.Fatalf("unsupported event changed progress: %v", messages)
+			}
+		})
+	}
+	t.Run("Antigravity partial routing and failures", func(t *testing.T) {
+		var messages []string
+		events := askCLIEvents{provider: askProvider{ID: "Antigravity", progress: func(message string) { messages = append(messages, message) }}}
+		for _, raw := range []string{
+			`{"event":"step_update","step_update":{"step_index":1,"step_type":"tool","state":"ACTIVE","tool_name":"call_mcp_tool"}}`,
+			`{"event":"step_update","step_update":{"step_index":1,"step_type":"tool","state":"ACTIVE","tool_info":{"name":"call_mcp_tool","parameters":{"ServerName":"pharos-ask","ToolName":"site_link"}}}}`,
+			`{"event":"step_update","step_update":{"step_index":1,"step_type":"tool","state":"DONE","tool_name":"call_mcp_tool","tool_info":{"error":{"type":"failed","message":"private error details"}}}}`,
+			`{"event":"step_update","step_update":{"step_index":2,"step_type":"tool","state":"DONE","tool_name":"call_mcp_tool","tool_info":{"parameters":{"ServerName":"pharos-ask","ToolName":"list_repositories"},"error":null}}}`,
+			`{"event":"step_update","step_update":{"step_index":3,"step_type":"tool","state":"DONE","tool_name":"finish"}}`,
+			`{"event":"step_update","step_update":{"step_index":4,"step_type":"checkpoint","state":"DONE"}}`,
+		} {
+			events.read([]byte(raw))
+		}
+		want := []string{"Reading Pharos data…", "Checking a destination link…", "Checking a destination link — failed", "Reading repositories — done", "Preparing the response…", "Finalizing the response…"}
+		if !reflect.DeepEqual(messages, want) {
+			t.Fatalf("AGY activity = %v, want %v", messages, want)
+		}
+	})
+}
+
+func TestAskCLIStreamingProcess(t *testing.T) {
+	for _, provider := range []string{"Codex", "Claude", "Antigravity"} {
+		t.Run(provider, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "cli")
+			start := `{"type":"item.started","item":{"id":"call-1","type":"mcp_tool_call","server":"pharos","tool":"browse_site"}}`
+			preamble := "#!/bin/sh\ncat >/dev/null\n"
+			if provider == "Claude" {
+				start = `{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","id":"call-1","name":"mcp__pharos__browse_site"}}}`
+			}
+			if provider == "Antigravity" {
+				t.Setenv("HOME", dir)
+				settings := filepath.Join(dir, ".gemini", "antigravity-cli", "settings.json")
+				if err := os.MkdirAll(filepath.Dir(settings), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(settings, []byte(`{"permissions":{"allow":["mcp(pharos-ask/*)"]}}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+				start = `{"event":"step_update","step_update":{"step_index":1,"step_type":"tool","state":"ACTIVE","tool_name":"call_mcp_tool","tool_info":{"parameters":{"ServerName":"pharos-ask","ToolName":"browse_site"}}}}`
+				preamble = "#!/bin/sh\nprintf '%s\\n' '{\"event\":\"init\",\"conversation_id\":\"private-session\"}'\nIFS= read -r question\nprintf '%s' \"$question\" >prompt.json\n"
+			}
+			// This process cannot finish by itself. Receiving its tool event
+			// cancels it, proving progress is read before process completion.
+			script := preamble + "printf '%s\\n' '" + start + "'\nexec tail -f /dev/null\n"
+			if err := os.WriteFile(path, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			seen, registered := false, false
+			p := askProvider{ID: provider, path: path, mcp: askMCPServer{Command: "/test/pharos"}, progress: func(message string) {
+				if message == "Browsing available views…" {
+					seen = true
+					if provider == "Antigravity" && !registered {
+						t.Error("AGY received private context before session registration")
+					}
+					cancel()
+				}
+			}, recordSession: func(_ context.Context, id string) error {
+				if id != "private-session" {
+					t.Errorf("unexpected private session: %q", id)
+				}
+				registered = true
+				return nil
+			}}
+			if _, err := askRunCLI(ctx, p, askSelection{Model: "test-model", Effort: "Default"}, "test question"); !errors.Is(err, context.Canceled) || !seen {
+				t.Fatalf("CLI did not stream before exit: seen=%v, err=%v", seen, err)
+			}
+			// Final output still passes through the provider's structured response.
+			script = preamble + "cat >answer.json <<'JSON'\n" + string(askReply("home")) + "\nJSON\n"
+			switch provider {
+			case "Claude":
+				script += "cat <<'JSON'\n" + jsonText(map[string]any{"type": "result", "structured_output": json.RawMessage(askReply("home"))}) + "\nJSON\n"
+			case "Antigravity":
+				script += "cat <<'JSON'\n" + jsonText(map[string]any{"event": "result", "result": map[string]any{"status": "SUCCESS", "structured_output": json.RawMessage(askReply("home"))}}) + "\nJSON\n"
+			}
+			if err := os.WriteFile(path, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			p.progress = nil
+			raw, err := askRunCLI(t.Context(), p, askSelection{Model: "test-model", Effort: "Default"}, "test question")
+			if err != nil || strings.TrimSpace(string(raw)) != string(askReply("home")) {
+				t.Fatalf("lost structured response: %s, %v", raw, err)
+			}
+		})
+	}
+}
+
+func TestAskStreamsActivityAndReconciles(t *testing.T) {
+	for _, action := range []string{"complete", "cancel"} {
+		t.Run(action, func(t *testing.T) {
+			s := askTestServer(t)
+			askEnable(t, s)
+			finish := make(chan struct{})
+			override(t, &askRunCLI, func(ctx context.Context, p askProvider, _ askSelection, _ string) ([]byte, error) {
+				p.reportProgress("Browsing available views…")
+				select {
+				case <-finish:
+					return askReply("home"), nil
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			})
+			listener := httptest.NewServer(s)
+			defer listener.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			r, _ := http.NewRequestWithContext(ctx, http.MethodPost, listener.URL+"/api/ask/send", strings.NewReader(jsonText(askInput())))
+			r.Header.Set("Authorization", "Bearer test-token")
+			r.Header.Set("Content-Type", "application/json")
+			r.Header.Set("Accept", "application/x-ndjson")
+			response, err := http.DefaultClient.Do(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode != 200 || response.Header.Get("Content-Type") != "application/x-ndjson" {
+				t.Fatalf("stream: %d %v", response.StatusCode, response.Header)
+			}
+			decoder := json.NewDecoder(response.Body)
+			var event struct {
+				Type     string
+				Activity askProgress
+				Session  askSession
+			}
+			for range 2 {
+				if err := decoder.Decode(&event); err != nil || event.Type != "progress" {
+					t.Fatalf("progress did not arrive while CLI blocked: %+v %v", event, err)
+				}
+			}
+			if event.Activity.Message != "Browsing available views…" {
+				t.Fatalf("missing tool activity: %+v", event)
+			}
+			// Reopening a running chat sees the same transient progress, without
+			// rewriting the catalog for every event or repeating the CLI request.
+			var running askSession
+			if err := json.Unmarshal(askCall(t, s, http.MethodGet, "session?id=chat-1", nil).Body.Bytes(), &running); err != nil || len(running.Conversation) != 1 || len(running.Conversation[0].Activity) != 2 || running.Conversation[0].Status != "loading" {
+				t.Fatalf("reopened progress: %+v %v", running, err)
+			}
+			wantStatus, wantActivity, wantCards := "single", 3, 1
+			if action == "cancel" {
+				askOK(t, s, "cancel", map[string]any{"id": "chat-1"})
+				wantStatus, wantActivity, wantCards = "canceled", 2, 0
+			} else {
+				close(finish)
+			}
+			for event.Type != "result" {
+				if err := decoder.Decode(&event); err != nil {
+					t.Fatal(err)
+				}
+			}
+			turn := event.Session.Conversation[0]
+			if turn.Status != wantStatus || len(turn.Activity) != wantActivity || len(turn.Cards) != wantCards {
+				t.Fatalf("lost final answer or activity: %+v", turn)
+			}
+			saved, err := s.askSession(t.Context(), "chat-1")
+			if err != nil || !reflect.DeepEqual(saved.Conversation[0].Activity, turn.Activity) {
+				t.Fatalf("activity not saved: %+v %v", saved, err)
+			}
+		})
+	}
+}
+
+func TestAskActivityIsBounded(t *testing.T) {
+	s := askTestServer(t)
+	askEnable(t, s)
+	override(t, &askRunCLI, func(_ context.Context, p askProvider, _ askSelection, _ string) ([]byte, error) {
+		for i := range askActivityLimit + 5 {
+			message := fmt.Sprintf("Action %d", i)
+			p.reportProgress(message)
+			p.reportProgress(message)
+		}
+		return askReply("home"), nil
+	})
+	var session askSession
+	if err := json.Unmarshal(askOK(t, s, "send", askInput()).Body.Bytes(), &session); err != nil {
+		t.Fatal(err)
+	}
+	activity := session.Conversation[0].Activity
+	if len(activity) != askActivityLimit || activity[0].Message != "Action 6" || activity[len(activity)-1].Message != "Saving the answer…" {
+		t.Fatalf("activity was not bounded and deduplicated: %+v", activity)
 	}
 }

@@ -65,6 +65,7 @@ export function usageRowLinks(dataset: UsageDataset, row: Row, current = new URL
 // Order is intentional: content/evidence first, then measures and provenance.
 // All other fields remain available in the native property picker.
 export const usageDetailFields: Record<UsageDataset, string[]> = {
+  tl1_attempts: ["source_links", "title", "project", "flavor", "configuration", "disposition", "started_at", "duration_ms", "cost_usd", "error_signature"],
   usage: ["source_links", "title", "first_usage_at", "last_usage_at", "repository_name", "model_effort", "session_kind", "total_tokens", "cost_usd", "price_status", "uncached_input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens", "reasoning_output_tokens", "cache_read_share", "attribution", "root_title", "energy_wh", "co2e_g", "carbon_tier"],
   conversation_activity: ["channel", "machine_id", "execution_machine_id", "source_links", "title", "event_at", "event_kind", "human_input_tokens_estimate", "human_messages", "output_tokens", "repository_name", "root_title", "root_provider", "root_model_family", "root_effort"],
   writing: ["channel", "machine_id", "execution_machine_id", "source_links", "title", "repository_name", "first_message_at", "last_message_at", "typed_words", "typed_turns", "typed_share", "user_words", "pasted_words", "copied_words", "quoted_words", "resent_words", "template_words", "attachment_words", "harness_words", "automated_words", "total_tokens", "cost_usd", "price_status", "typed_per_mtok"],

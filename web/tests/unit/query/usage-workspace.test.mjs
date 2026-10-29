@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { EMPTY_QUERY, applyQuery, applyAggregations, decodeQueryStrict, encodeQuery, loadSchema, normalizeQueryState, toMetricQuery, toQueryRequestV3 } from "@pythia-software/query-table-core";
 import { queryCases, dashboardCases, dashboardControlCases } from "../../../../tools/usage-audit-cases.ts";
+import tl1Attempts from "../../../../schemas/tl1_attempts.schema.json";
 import usage from "../../../../schemas/usage.schema.json";
 import conversationActivity from "../../../../schemas/conversation_activity.schema.json";
 import writing from "../../../../schemas/writing.schema.json";
@@ -11,6 +12,7 @@ import toolCalls from "../../../../schemas/tool_calls.schema.json";
 import skillUsages from "../../../../schemas/skill_usages.schema.json";
 import parallelism from "../../../../schemas/parallelism.schema.json";
 import mcpCalls from "../../../../schemas/mcp_calls.schema.json";
+import { queryURL, queryFromURL } from "../../../src/query-links";
 import { currentUsageAnalyses, isUsageWorkspace, readUsageWorkspace, usageAnalysisLink, usageDashboardReturn, usageDatasets, usageSearchQuery, usageTopics, usageWorkspaceURL } from "../../../src/usage-workspace-model.ts";
 import { toolSummaryCallFilters } from "../../../src/tools-dashboard-model.ts";
 import { readDashboardQuery, groupedDashboardQuery, parallelismSelectionQuery, toolDashboardWhere } from "../../../src/usage-dashboard-model.ts";
@@ -249,8 +251,11 @@ test("the live audit provides 25 valid, distinct queries per dataset and dashboa
   }
 });
 
-test("every Analyze dataset and dashboard topic has a reloadable route", () => {
-  const schemas = { usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
+test("every Analyze dataset and dashboard topic has a reloadable route", t => {
+  const originalLocation = globalThis.location;
+  globalThis.location = new URL("http://localhost/");
+  t.after(() => { globalThis.location = originalLocation; });
+  const schemas = { tl1_attempts: tl1Attempts, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
   for (const [dataset, target] of Object.entries(usageDatasets)) assert.ok(schemas[dataset].fields.some(field => field.name === target.field), `${dataset}'s search entry point belongs to its own schema`);
   for (const dataset of Object.keys(usageDatasets)) for (const mode of ["query", "search"]) {
     const url = new URL(usageWorkspaceURL({ mode, dataset }), "http://localhost");
@@ -262,6 +267,10 @@ test("every Analyze dataset and dashboard topic has a reloadable route", () => {
     const linked = new URL(usageWorkspaceURL({ mode, dataset, query }), "http://localhost");
     assert.deepEqual(decodeQueryStrict(linked.searchParams.get(`q_${dataset}`)), { ...query, fitToScreen: true }, `${dataset} fits to screen without changing the analysis`);
     assert.equal(query.fitToScreen, undefined, "Link generation preserves the input query");
+    const tableURL = new URL(queryURL(dataset, query), "http://localhost");
+    assert.equal(tableURL.pathname, "/analyze");
+    assert.equal(readUsageWorkspace(tableURL.searchParams).dataset, dataset);
+    assert.deepEqual(queryFromURL(tableURL.href), { dataset, query, window: undefined });
   }
   for (const topic of Object.keys(usageTopics)) assert.equal(readUsageWorkspace(new URL(usageWorkspaceURL({ topic }), "http://localhost").searchParams).topic, topic);
   assert.ok(currentUsageAnalyses.every(item => Object.hasOwn(usageTopics, item.topic)));
@@ -307,6 +316,13 @@ test("dashboard returns retain edited source filters and disclose incompatible r
   back = usageDashboardReturn(current);
   assert.match(back.label, /resets query filters/);
   assert.deepEqual(decodeQueryStrict(new URL(back.href, "http://localhost").searchParams.get("analyze_filters")).where, []);
+  const original = [{ field: "last_usage_at", op: ">=", value: "2026-10-29T06:00:00Z" }, { field: "first_usage_at", op: "<", value: "+0s" }];
+  const edited = [{ field: "last_usage_at", op: ">=", value: "2026-01-01" }, { field: "first_usage_at", op: "<", value: "2026-02-01" }];
+  const today = new URLSearchParams({ analyze_mode: "query", analyze_topic: "tokens", analyze_data: "usage", analyze_window: "today", window_mode: "today", window_days: "1", window_dataset: "usage", window_field: "last_usage_at", window_until_field: "first_usage_at", analyze_filters: encodeQuery({ ...EMPTY_QUERY, where: original }), analyze_opened: encodeQuery({ ...EMPTY_QUERY, where: original }), q_usage: encodeQuery({ ...EMPTY_QUERY, where: edited }) });
+  const returned = new URL(usageDashboardReturn(today).href, "http://localhost").searchParams;
+  assert.equal(returned.has("analyze_window"), false, "an edited range must not be promoted back to Today");
+  assert.equal(returned.has("window_mode"), false);
+  assert.deepEqual(decodeQueryStrict(returned.get("analyze_filters")).where, edited);
 });
 
 test("legacy analyses carry the full query and linked chart assumptions or label a reset", () => {

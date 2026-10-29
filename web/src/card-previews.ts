@@ -1,3 +1,4 @@
+import { todayBounds } from "./day-window";
 import { browserCardPreviewStorage, createCardPreviewCache } from "./card-preview-cache";
 import { clearPreviewCache, loadQueryPreviews, type PreviewJob, type QueryPreview } from "./query-previews";
 
@@ -18,7 +19,7 @@ export function invalidateCardPreviews() { cache?.invalidate(); }
 // time zone, search and template edits. Hashing keeps persisted keys small.
 export async function cardPreviewKey(job: PreviewJob): Promise<string> {
   const { id: _id, priority: _priority, ...definition } = job;
-  const serialized = JSON.stringify([definition, Intl.DateTimeFormat().resolvedOptions().timeZone, Intl.NumberFormat().resolvedOptions().locale], (_key, value) =>
+  const serialized = JSON.stringify([definition, job.options?.window?.mode === "today" ? todayBounds()[0] : null, Intl.DateTimeFormat().resolvedOptions().timeZone, Intl.NumberFormat().resolvedOptions().locale], (_key, value) =>
     value && typeof value === "object" && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))) : value);
   if (!globalThis.crypto?.subtle) return serialized;
   const encoded = new TextEncoder().encode(serialized);

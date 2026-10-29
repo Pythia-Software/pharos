@@ -122,11 +122,13 @@ const ROUTES = [
   {name:"Ask Pharos model picker",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:page=>page.locator("#pharos-ask .pharos-model-trigger").click(),shown:"#pharos-model-menu:not([hidden])"},
   {name:"Ask Pharos history",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:page=>page.locator("#pharos-ask .pharos-history-trigger").click(),shown:"#pharos-chat-history:not([hidden])"},
   {name:"Ask Pharos conversation",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-turn",api:askAPI},
+  {name:"Ask Pharos activity",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-activity:not([hidden])",api:{...askAPI,"GET /api/ask/session":{...askSession,conversation:askSession.conversation.map(turn=>({...turn,activity:[{message:"Browsing available views…",elapsedMs:1200},{message:"Browsing available views — done",elapsedMs:2500},{message:"Checking a destination link…",elapsedMs:3000}]}))}},open:page=>page.locator('#pharos-ask .pharos-activity summary').click(),shown:'#pharos-ask .pharos-activity[open]'},
   {name:"Ask Pharos clarification",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-clarification:not([hidden])",api:{...askAPI,"GET /api/ask/session":askClarificationSession}},
   {name:"Ask Pharos opt-in",url:"/",ready:"#pharos-ask .pharos-invitation:not([hidden])",api:{"GET /api/ask/status":{settings:{enabled:false,showInvitation:true},providers:askProviders}},open:page=>page.locator("#pharos-ask .pharos-try").click(),shown:"#pharos-ask .pharos-consent[open]"},
   {name:"Ask Pharos settings",url:"/settings/ask",ready:"#askSettingsPage .ask-settings select",api:askAPI},
 
   ].map(route=>({...route,name:`${route.name} (${theme})`,preferences:{"pharos-theme":theme}}))),
+  { name: "TL1 attempts query", url: "/analyze?analyze_mode=query&analyze_data=tl1_attempts", ready: ".usage-workspace-table .qt-row" },
   { name: "Data guide", url: "/analyze?analyze_mode=query&analyze_data=tool_calls&analyze_topic=tools", ready: ".usage-workspace-table .qt-row", open: page => page.locator(".usage-workspace-table .data-source-link").click(), shown: ".data-guide[open]" },
   ...["usage", "writing", "writing_messages", "conversation_activity", "tool_calls", "tools", "skill_usages", "mcp_calls", "parallelism"].flatMap(dataset => [false, true].map(explore => ({
     name: `Query ideas ${explore ? "Explore " : ""}${dataset}`,
@@ -199,11 +201,6 @@ const ROUTES = [
   { name: "Search content editor", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("button", { name: "Messages", exact: true }).click(), shown: ".explore-search-modal" },
   { name: "Search grouped search", url: exploreGroupedSearch, ready: "#queryTableLibrary .qt-row" },
   { name: "Search grouped conversation display", url: exploreGroupedSearch, ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("group", { name: "Display results as" }).getByRole("button", { name: "Conversations", exact: true }).click(), shown: ".conversation-result-card" },
-  { name: "TL1 overview", url: "/tl1", ready: ".tl1-tiles" },
-  { name: "TL1 configurations", url: "/tl1/configurations", ready: "#tl1-matrix tbody tr" },
-  { name: "TL1 follow-ups", url: "/tl1/followups", ready: "#tl1-followup-next tbody tr" },
-  { name: "TL1 quality", url: "/tl1/quality", ready: "#tl1-errors" },
-  { name: "TL1 runs", url: "/tl1/runs", ready: "#tl1Page .qt-row" },
   { name: "Analyze tokens", url: "/analyze?analyze_view=tokens&machine_view=tokens", ready: "#queryTableUsage .usage-chart" },
   { name: "Analyze machine time", url: "/analyze?analyze_view=tokens&machine_view=time", ready: ".machine-call-surface .qt-row" },
   { name: "Analyze parallelism", url: "/analyze?analyze_view=tokens&machine_view=parallelism", ready: ".concurrency-chart svg" },
@@ -918,3 +915,16 @@ for (const id of ['human-words', 'cost-repos', 'machine-time', 'skill-evidence',
     assert.deepEqual(await layoutProblems(page), []);
   });
 }
+
+
+for (const choice of ['today', '24h']) test(`Query time window picker keeps ${choice} selected after replacing a custom range`, { skip }, async t => {
+  const params = new URLSearchParams({ analyze_mode: 'query', analyze_topic: 'human', analyze_data: 'writing_messages', q_writing_messages: encodeQuery({ ...EMPTY_QUERY, where: [{ field: 'sent_at', op: '<=', value: '2026-01-31' }] }) });
+  const app = await open(t, { url: `/analyze?${params}`, ready: 'select[aria-label="Query time window"]' });
+  const picker = app.page.getByRole('combobox', { name: 'Query time window', exact: true });
+  const executed = app.page.waitForResponse(response => new URL(response.url()).pathname.startsWith('/api/query/writing_messages') && response.request().method() === 'POST');
+  await picker.selectOption(choice);
+  await executed;
+  await app.settled();
+  assert.equal(await picker.inputValue(), choice);
+  assert.equal(new URL(app.page.url()).searchParams.get('window_mode'), choice === 'today' ? 'today' : 'relative');
+});

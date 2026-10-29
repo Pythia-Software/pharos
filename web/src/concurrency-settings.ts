@@ -1,9 +1,10 @@
+import { todayBounds } from "./day-window";
 import { preferences } from "./preferences";
 import { zonedDayBounds, type ConcurrencyCounting, type ConcurrencyData, type ConcurrencyMode, type Interval } from "./concurrency-data";
 import { validRollingPeriods } from "./chart-series";
 
 export const concurrencySettingsKey = "pharos-concurrency-v1";
-export type ConcurrencyRange = "day" | "3d" | "7d" | "30d" | "90d" | "180d" | "365d" | "all" | "custom";
+export type ConcurrencyRange = "today" | "day" | "3d" | "7d" | "30d" | "90d" | "180d" | "365d" | "all" | "custom";
 export const concurrencyRangePresets = [["3d", 3, "Last 3 days"], ["7d", 7, "Last 7 days"], ["30d", 30, "Last 30 days"], ["90d", 90, "Last 90 days"], ["180d", 180, "Last 180 days"], ["365d", 365, "Last year"]] as const;
 
 export function concurrencyWindowRange(days?: number | null): ConcurrencyRange {
@@ -36,7 +37,12 @@ export function shiftCalendarDay(day: string, offset: number): string {
   return date.toISOString().slice(0, 10);
 }
 
-export function resolveConcurrencyRange(data: Pick<ConcurrencyData, "period_start" | "period_end" | "timezone">, settings: ConcurrencySettings): { startDay: string; endDay: string; bounds: Interval } {
+export function resolveConcurrencyRange(data: Pick<ConcurrencyData, "period_start" | "period_end" | "timezone">, settings: ConcurrencySettings, clock = new Date()): { startDay: string; endDay: string; bounds: Interval } {
+  if (settings.range === "today") {
+    const [from, to] = todayBounds(clock);
+    const day = new Intl.DateTimeFormat("en-CA").format(clock);
+    return { startDay: day, endDay: day, bounds: [Date.parse(from), Date.parse(to)] };
+  }
   const clamp = (day: string) => day < data.period_start ? data.period_start : day > data.period_end ? data.period_end : day;
   let startDay = clamp(settings.day || data.period_end), endDay = startDay;
   if (settings.range === "all") { startDay = data.period_start; endDay = data.period_end; }
@@ -61,7 +67,7 @@ export function normalizeConcurrencySettings(value: unknown): ConcurrencySetting
     gap: [0, 15, 30, 60].includes(saved.gap as number) ? saved.gap! : 60,
     repository: typeof saved.repository === "string" ? saved.repository : "",
     day: validDay(saved.day),
-    range: saved.range === "day" || saved.range === "all" || saved.range === "custom" || concurrencyRangePresets.some(([key]) => key === saved.range) ? saved.range! : "day",
+    range: saved.range === "today" || saved.range === "day" || saved.range === "all" || saved.range === "custom" || concurrencyRangePresets.some(([key]) => key === saved.range) ? saved.range! : "day",
     startDay: validDay(saved.startDay), endDay: validDay(saved.endDay),
     workspace: typeof saved.workspace === "string" ? saved.workspace : "",
     zoom, showConversations: saved.showConversations === true,

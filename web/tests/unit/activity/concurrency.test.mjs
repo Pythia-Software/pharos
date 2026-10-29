@@ -355,3 +355,21 @@ test("multi-day windows follow daylight savings and retain idle days in the aver
   const spans = new Map([["a", [[range.bounds[0], range.bounds[0] + 2 * 60 * minute]]]]);
   assert.equal(concurrencyMetrics(spans, [], range.bounds).average, 2 / 71);
 });
+
+
+test("Today parallelism includes elapsed idle time without substituting the last captured date", () => {
+  const now = new Date(2026, 10, 1, 9), midnight = new Date(now); midnight.setHours(0, 0, 0, 0);
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const day = new Intl.DateTimeFormat("en-CA").format(now);
+  const data = { timezone: zone, period_start: day, period_end: day, threads: [repoThread("w", "repo", [[+midnight, +midnight + 3600000]])] };
+  const settings = normalizeConcurrencySettings({ range: "today" });
+  assert.equal(settings.range, "today");
+  assert.deepEqual(resolveConcurrencyRange(data, settings, now).bounds, [+midnight, +now]);
+  const result = threadedSummaryWindow(data, 0, "", "today", +now, "workspace", midnight.toISOString());
+  assert.equal(result.average, 3600000/(+now-+midnight));
+  assert.equal(threadedSummaryWindow({ ...data, threads: [] }, 0, "", "today", +now).average, 0);
+  const old = { ...data, period_start: "2026-01-01", period_end: "2026-01-02" };
+  assert.deepEqual(resolveConcurrencyRange(old, settings, now).bounds, [+midnight, +now]);
+  assert.equal(threadedSummaryWindow(old, 0, "", "today", +now), null);
+  assert.equal(threadedSummaryWindow(data, 0, "", "today", +midnight), null);
+});

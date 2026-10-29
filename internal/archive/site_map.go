@@ -224,6 +224,7 @@ type siteCard struct {
 	State       map[string]any `json:"state"`
 	Filters     []qt.WhereTerm `json:"filters"`
 	Window      *struct {
+		Today       bool           `json:"today"`
 		Field       string         `json:"field"`
 		Days        []int          `json:"days"`
 		DefaultDays []int          `json:"default_days"`

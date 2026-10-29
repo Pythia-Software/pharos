@@ -80,7 +80,7 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
     : "No earlier point has a value, so there is no norm yet.");
   const bounds = timeBounds(where, catalog.time);
   const title = trendTitle(catalog, view);
-  const controls = <AnalysisControls catalog={catalog} view={view} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onTimeFilter(current => withTimeRange(current, catalog.time, from, to, preset))} />;
+  const controls = <AnalysisControls catalog={catalog} view={view} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onTimeFilter(current => withTimeRange(current, catalog.time, from, to, preset), preset)} />;
   return <section className="usage-analysis-trend" aria-label="Over time" aria-busy={result.loading}>
     <StackedColumns title={title} controls={controls} series={built.series.length ? built.series : [{ key: "none", label: title, color: "var(--heat-1)" }]} buckets={built.buckets} prepared
       period={view.period} periodCount={count} rollingPeriods={view.rollingPeriods} display={view.display} cumulativeStart={built.cumulativeStart} scale={view.scale}

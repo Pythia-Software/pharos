@@ -11,6 +11,7 @@ export function UsageQueryIdeas({ dataset, api }: { dataset: UsageDataset; api: 
   const [open, setOpen] = useState(() => queryIdeasOpen(preferences().get<unknown>(key, undefined)));
   const ideas = usageQueryIdeas[dataset];
   const sections = [...new Set(ideas.map(idea => idea.section))];
+  if (!ideas.length) return null;
   return <details className="usage-query-search usage-query-ideas" open={open} onToggle={event => {
     const next = event.currentTarget.open;
     // The initial native toggle event is not a user preference change.

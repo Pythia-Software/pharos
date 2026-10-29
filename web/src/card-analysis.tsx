@@ -1,3 +1,5 @@
+import { readWindowChoice } from "./day-window";
+import { supportsToday } from "./curiosity-data";
 import React, { useEffect, useState } from "react";
 import type { FieldSchema } from "@pythia-software/query-table-core";
 import { cardAnalysisJob, relatedCardDashboardURL, resolveCardAnalysisJob } from "./card-analysis-model";
@@ -16,8 +18,8 @@ export function CardAnalysis({ url, schema }: { url: string; schema: FieldSchema
   const [state, setState] = useState<{ job?: PreviewJob; preview?: QueryPreview; error?: string }>({});
   useEffect(() => {
     const refresh = () => setRevision(value => value + 1);
-    window.addEventListener("pharos:data-refresh", refresh);
-    return () => window.removeEventListener("pharos:data-refresh", refresh);
+    window.addEventListener("pharos:data-refresh", refresh); window.addEventListener("pharos:usage-refresh", refresh);
+    return () => { window.removeEventListener("pharos:data-refresh", refresh); window.removeEventListener("pharos:usage-refresh", refresh); };
   }, []);
   useEffect(() => {
     const controller = new AbortController();
@@ -44,9 +46,9 @@ export function CardAnalysis({ url, schema }: { url: string; schema: FieldSchema
   return <section className="card-analysis" aria-label="Card analysis" style={{ "--query-tone": queryCategories[recipe?.category ?? "usage"].tone } as React.CSSProperties}>
     <div className="card-analysis-heading"><div><h2>{recipe?.title ?? "Card analysis"}</h2><p>{recipe?.description}</p></div>
       <div className="card-analysis-controls">
-        {job && !recipe?.period && !(trailing && recipe?.trend?.lookback) ? <label>{trailing ? "Trailing window" : "Time window"}<select aria-label={trailing ? "Trailing window" : "Time window"} value={job.options?.window?.days ?? "all"} onChange={event => {
-          window.pharosNavigate?.(updateQueryWindowURL(url, event.target.value === "all" ? null : Number(event.target.value), job.query));
-        }}>{rollingWindowDays.map(days => <option key={days} value={days}>{days === 1 ? "Last 24 hours" : `Last ${days} days`}</option>)}<option value="all">All time</option></select></label> : null}
+        {job && !recipe?.period && !(trailing && recipe?.trend?.lookback) ? <label>{trailing ? "Trailing window" : "Time window"}<select aria-label={trailing ? "Trailing window" : "Time window"} value={job.options?.window?.mode === "today" ? "today" : job.options?.window?.days ?? "all"} onChange={event => {
+          window.pharosNavigate?.(updateQueryWindowURL(url, event.target.value === "all" ? null : readWindowChoice(event.target.value), job.query));
+        }}>{recipe && supportsToday(recipe) ? <option value="today">Today</option> : null}{rollingWindowDays.map(days => <option key={days} value={days}>{days === 1 ? "Last 24 hours" : `Last ${days} days`}</option>)}<option value="all">All time</option></select></label> : null}
         <button type="button" onClick={refresh}>Refresh</button>
       </div>
     </div>

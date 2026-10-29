@@ -824,7 +824,6 @@ for (const width of [1440, 390, 320]) test(`Search long query can scroll to subm
 for (const route of [
   { name: "Analyze", url: "/analyze", ready: ".usage-dashboard .usage-chart", link: /^Human words$/i, destination: ".usage-human-dashboard .usage-chart" },
   { name: "Settings", url: "/settings", ready: "#healthCards .panel:not([aria-busy])", link: /^Sources$/, destination: "#sourceGrid .source-card" },
-  { name: "TL1", url: "/tl1", ready: ".tl1-tiles", link: /^Configurations$/, destination: "#tl1-matrix" },
 ]) test(`${route.name} navigation is usable from the keyboard on a phone`, { skip }, async t => {
   const { page } = await open(t, { url: route.url, viewport: { width: 390, height: 844 }, ready: route.ready });
   const menu = page.getByRole("dialog", { name: "Navigate Pharos" });
@@ -1042,7 +1041,6 @@ for (const [url, ready] of [
   ["/settings", "#healthCards .panel:not([aria-busy])"],
   ["/settings/sources", "#sourceGrid .source-card"],
   ["/settings/preferences", "#optionalBehaviors"],
-  ["/tl1", ".tl1-tiles"],
   [`/work/${workID}`, ".work-heading h1"],
   [`/work/${workID}/conversation/conv-root`, ".conversation-panel .turn"],
 ]) test(`Opening ${url} leaves focus alone and its title is ordinary text`, { skip }, async t => {
@@ -1742,6 +1740,23 @@ test('Ask Pharos chat links survive reload, new tabs and browser Back/Forward', 
   releaseSession();await settled();
   assert.equal(new URL(page.url()).searchParams.get('ask_chat'),null);
   assert.equal(await page.getByRole('status').filter({hasText:'An earlier reply'}).count(),0);
+  // A history link from another page must also restore the chat when copied
+  // into a new tab, while an ordinary click keeps the chat in the overlay.
+  await page.evaluate(()=>window.pharosNavigate('/analyze?analyze_topic=tokens'));await settled();
+  const contextURL=page.url();
+  await activateHeaderTool(page,'askPharosToggle');
+  await page.getByRole('button',{name:'History',exact:true}).click();
+  await link.waitFor();
+  const modalChatURL=new URL(await link.getAttribute('href'),page.url()).href;
+  const modalTab=await page.context().newPage();
+  try{
+    await modalTab.goto(modalChatURL);
+    await modalTab.getByRole('status').filter({hasText:'An earlier reply'}).waitFor();
+    assert.equal(new URL(modalTab.url()).searchParams.get('ask_chat'),'saved-chat');
+  }finally{await modalTab.close();}
+  await link.click();
+  await page.getByRole('dialog',{name:'Ask Pharos',exact:true}).getByRole('status').filter({hasText:'An earlier reply'}).waitFor();
+  assert.equal(page.url(),contextURL,'opening a chat in the overlay must preserve the page URI');
 });
 
 for(const theme of ['dark','light']) for(const mode of ['choice','other','composer']) test(`Ask Pharos clarification supports ${mode} replies and keeps focus usable (${theme})`,{skip},async t=>{
@@ -1795,4 +1810,160 @@ for(const theme of ['dark','light']) for(const mode of ['choice','other','compos
   await question.focus();
   assert.ok(await question.evaluate(element=>element===document.activeElement));
   await shot('answered');
+});
+
+for (const width of [1440,390,320]) test(`Ask Pharos overlay and floating progress keep focus and stay reachable @ ${width}`, {skip}, async t => {
+  const selection={provider:'Codex',model:'test-model',effort:'Low'};
+  let finish, sent;
+  const response=new Promise(resolve=>{finish=resolve;});
+  t.after(()=>finish());
+  const {page,shot}=await open(t,{url:'/analyze?analyze_topic=tokens',viewport:{width,height:650},ready:'body>header',api:{
+    'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
+    'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
+    'GET /api/ask/sessions':{sessions:[]},
+    'POST /api/ask/session':({body})=>body,
+    'POST /api/ask/send':async({body})=>{
+      sent=body;await response;
+      return {id:body.id,createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:body.turnID,prompt:body.prompt,currentURI:body.currentURI,cli:'Codex',model:'test-model',effort:'Low',status:'single',message:'',elapsedMs:1000,reply:'Ready to explore.',cards:[{id:'library',title:'Search',kind:'Page',description:'Your past work',href:'/library'}]}]};
+    },
+  }});
+  await page.waitForFunction(()=>document.querySelector('.pharos-current-settings')?.textContent.includes('Test Model'));
+  await activateHeaderTool(page,'askPharosToggle');
+  const modal=page.getByRole('dialog',{name:'Ask Pharos',exact:true});
+  const editor=page.getByRole('textbox',{name:'Ask a question',exact:true});
+  assert.ok(await editor.evaluate(element=>element===document.activeElement));
+  await page.locator('body>header .brand').evaluate(element=>element.focus());
+  assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)),'the overlay must keep focus');
+  await shot('ask-overlay');
+  await page.getByRole('button',{name:'Switch to non-AI search',exact:true}).click();
+  await modal.getByRole('button',{name:'Search past work',exact:true}).click();
+  await modal.getByRole('textbox',{name:'Text for rule 1.1',exact:true}).fill('cache');
+  await modal.getByRole('button',{name:'Search messages',exact:true}).click();
+  await page.waitForURL(url=>url.pathname==='/library');
+  await modal.waitFor({state:'hidden'});
+  const brand=page.locator('body>header .brand');await brand.focus();
+  assert.ok(await brand.evaluate(element=>element===document.activeElement),'ordinary search results must allow background interaction');
+  await page.evaluate(()=>window.pharosNavigate('/analyze?analyze_topic=tokens'));
+  await activateHeaderTool(page,'askPharosToggle');
+  const originalURI=await page.evaluate(()=>location.pathname+location.search+location.hash);
+  await editor.fill('What if we broke it down by model?');
+  await page.getByRole('button',{name:'Send question',exact:true}).click();
+  await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();
+  await modal.waitFor({state:'hidden'});
+  const panel=page.getByRole('complementary',{name:'Ask Pharos progress'});
+  await panel.waitFor();
+  const handle=page.getByRole('button',{name:'Move Ask Pharos progress'});
+  const bounds=await panel.locator('.pharos-floating-open').boundingBox();
+  await page.mouse.move(bounds.x+bounds.width/2,bounds.y+bounds.height/2);
+  await page.mouse.down();await page.mouse.move(width-15,620);await page.mouse.up();
+  await handle.focus();await page.keyboard.press('ArrowDown');
+  const fits=element=>{const rect=element.getBoundingClientRect();return rect.left>=0&&rect.right<=innerWidth&&rect.top>=0&&rect.bottom<=innerHeight;};
+  assert.ok(await panel.evaluate(fits),'dragged progress must stay in the viewport');
+  await panel.locator('.pharos-floating-open').click();
+  await modal.waitFor();
+  assert.ok(await editor.evaluate(element=>element===document.activeElement));
+  await page.setViewportSize({width:320,height:500});
+  await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();
+  await panel.waitFor();
+  assert.ok(await panel.evaluate(fits),'progress restored after a hidden resize must stay in the viewport');
+  await panel.locator('.pharos-floating-open').click();await modal.waitFor();
+  await page.setViewportSize({width,height:650});
+  await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();await panel.waitFor();
+  await activateHeaderTool(page,'settingsToggle');
+  await page.waitForURL('**/settings*');
+  await panel.getByRole('button',{name:'Dismiss Ask Pharos progress'}).click();
+  await panel.waitFor({state:'hidden'});
+  // Reopen while pending, then close with Escape: this restores the floating panel.
+  await activateHeaderTool(page,'askPharosToggle');
+  assert.ok(await editor.evaluate(element=>element===document.activeElement));
+  await page.keyboard.press('Escape');await modal.waitFor({state:'hidden'});await panel.waitFor();
+  finish();
+  await panel.getByRole('button',{name:/Your response is ready/}).waitFor();
+  assert.equal(new URL(page.url()).pathname,'/settings','a ready response must leave the current page alone');
+  assert.equal(sent.currentURI,originalURI,'navigation while waiting must preserve the question context');
+  await shot('ask-floating-ready');
+  await panel.getByRole('button',{name:/Your response is ready/}).click();
+  await page.locator('.pharos-destination:not([hidden])').click();
+  await modal.waitFor({state:'hidden'});
+  await page.waitForURL(url=>url.pathname==='/library');
+  assert.ok(await page.locator('#askPharosToggle').evaluate(element=>element===document.activeElement)||await page.locator('#headerMore').evaluate(element=>element===document.activeElement));
+});
+
+test('Ask Pharos on Home can keep browsing without losing the active chat', {skip}, async t => {
+  const selection={provider:'Codex',model:'test-model',effort:'Low'};
+  let finish;
+  const response=new Promise(resolve=>{finish=resolve;});t.after(()=>finish());
+  const {page}=await open(t,{url:'/',ready:'#pharos-ask .pharos-ai:not([hidden])',api:{
+    'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
+    'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
+    'GET /api/ask/sessions':{sessions:[]},
+    'POST /api/ask/session':({body})=>body,
+    'POST /api/ask/send':async({body})=>{await response;return {id:body.id,createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:body.turnID,prompt:body.prompt,cli:'Codex',model:'test-model',effort:'Low',status:'clarification',message:'',elapsedMs:1000,reply:'',cards:[],clarification:{question:'Which metric?',options:['Tokens','Cost']}}]};},
+  }});
+  await page.waitForFunction(()=>document.querySelector('.pharos-current-settings')?.textContent.includes('Test Model'));
+  await page.getByRole('textbox',{name:'Ask a question',exact:true}).fill('Break it down');
+  await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();
+  const panel=page.getByRole('complementary',{name:'Ask Pharos progress'});await panel.waitFor();
+  await panel.locator('.pharos-floating-open').click();
+  assert.equal(await page.getByRole('textbox',{name:'Ask a question',exact:true}).inputValue(),'Break it down');
+  // Keep the server's deferred answer, and deliver activity through the real
+  // NDJSON reader so the floating surface is exercised before completion.
+  await page.evaluate(()=>{
+    const nativeFetch=window.fetch;
+    window.fetch=(path,options)=>{
+      const response=nativeFetch(path,options);
+      if(path!=='/api/ask/send')return response;
+      const encoder=new TextEncoder();
+      return Promise.resolve(new Response(new ReadableStream({start(controller){
+        const write=event=>controller.enqueue(encoder.encode(JSON.stringify(event)+'\n'));
+        window.pharosAskProgress=activity=>write({type:'progress',activity});
+        response.then(result=>result.json()).then(session=>{write({type:'result',session});controller.close();}).catch(error=>controller.error(error));
+      }}),{headers:{'Content-Type':'application/x-ndjson'}}));
+    };
+  });
+  await page.getByRole('button',{name:'Send question',exact:true}).click();
+  await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();
+  await panel.waitFor();
+  await page.waitForFunction(()=>typeof window.pharosAskProgress==='function');
+  await page.evaluate(()=>window.pharosAskProgress({message:'Browsing available views…',elapsedMs:1000}));
+  await panel.getByRole('button',{name:/Browsing available views/}).waitFor();
+  await activateHeaderTool(page,'settingsToggle');
+  await page.evaluate(()=>window.pharosAskProgress({message:'Searching archived work…',elapsedMs:2000}));
+  await panel.getByRole('button',{name:/Searching archived work/}).waitFor();
+  finish();await panel.getByRole('button',{name:/Pharos has a question/}).waitFor();
+  await panel.getByRole('button',{name:/Pharos has a question/}).click();
+  await page.getByRole('button',{name:'A. Tokens',exact:true}).waitFor();
+  await page.keyboard.press('Escape');
+  await page.locator('body>header .brand').click();
+  await page.locator('#homeAskSearch').getByRole('button',{name:'A. Tokens',exact:true}).waitFor();
+});
+
+for (const browsing of [false,true]) test(`Ask Pharos ${browsing?'reopened browsing':'blocking'} overlay handles a ready destination`, {skip}, async t => {
+  const selection={provider:'Codex',model:'test-model',effort:'Low'};
+  let finish;
+  const response=new Promise(resolve=>{finish=resolve;});t.after(()=>finish());
+  const {page}=await open(t,{url:'/library',ready:'body>header',api:{
+    'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
+    'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
+    'GET /api/ask/sessions':{sessions:[]},
+    'POST /api/ask/session':({body})=>body,
+    'POST /api/ask/send':async({body})=>{await response;return {id:body.id,createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:body.turnID,prompt:body.prompt,cli:'Codex',model:'test-model',effort:'Low',status:'single',message:'',elapsedMs:1000,reply:'Your preferences.',cards:[{id:'settings',title:'Settings',kind:'Page',description:'Your preferences',href:'/settings'}]}]};},
+  }});
+  await page.waitForFunction(()=>document.querySelector('.pharos-current-settings')?.textContent.includes('Test Model'));
+  await activateHeaderTool(page,'askPharosToggle');
+  await page.getByRole('textbox',{name:'Ask a question',exact:true}).fill('Open settings');
+  await page.getByRole('button',{name:'Send question',exact:true}).click();
+  const modal=page.getByRole('dialog',{name:'Ask Pharos',exact:true});
+  if(browsing){
+    await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();
+    await activateHeaderTool(page,'askPharosToggle');
+  }
+  finish();
+  if(browsing){
+    await page.locator('.pharos-destination:not([hidden])').waitFor();
+    assert.equal(new URL(page.url()).pathname,'/library');
+    assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)));
+    await page.locator('.pharos-destination:not([hidden])').click();
+  }
+  await page.waitForURL('**/settings');await modal.waitFor({state:'hidden'});
 });
