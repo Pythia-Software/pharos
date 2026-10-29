@@ -9,7 +9,7 @@ import (
 
 // Prompt versions. The reproduction version is the measured
 // experiment.py prompt(rows, 'questions', 'short') byte for byte; the
-// pieces version adds one sentence explaining human-pieces-v1 markers and is
+// pieces version adds one sentence explaining human-pieces-v2 markers and is
 // the default, so one job uses one prompt for every cohort.
 const (
 	labelingPromptReproduction = "prompt-candidate-0.3-questions-short"
@@ -29,7 +29,7 @@ For each accepted label return one SHORT EXACT quote from CURRENT_TEXT. No long 
 `
 
 // labelingPiecesSentence is the one line pieces-v1 adds after the quoted
-// speech line. It names both human-pieces-v1 marker formats
+// speech line. It names both human-pieces-v2 marker formats
 // (labelingMarker, labelingContextMarker).
 const labelingPiecesSentence = `A bracketed marker such as ⟦excluded: quoted text, 412 chars⟧ or ⟦quoted text, context only, 412 chars: "excerpt"⟧ stands in CURRENT_TEXT for material the current author did not write (quoted, pasted, generated or redacted text); it is not the author's act, it only shows what the author reacts to, and evidence quotes must never come from inside a marker.
 `

@@ -14,7 +14,7 @@ import (
 // dataset records; changing what one of them produces needs a new version.
 const (
 	labelingUnitsVersion    = "labeling-units-v1"
-	humanPiecesVersion      = "human-pieces-v1"
+	humanPiecesVersion      = "human-pieces-v2"
 	labelingContextVersion  = "context-v3"
 	labelingChunkVersion    = "chunking-v1"
 	labelingSplitsVersion   = "splits-v1"
@@ -61,7 +61,7 @@ type labelingPiece struct {
 	SourceStart, SourceEnd int
 }
 
-// humanUnit is human-pieces-v1 applied to one message: its pieces in order,
+// humanUnit is human-pieces-v2 applied to one message: its pieces in order,
 // the text a teacher model sees with the visible byte ranges of its markers,
 // or the reason it is excluded.
 type humanUnit struct {
@@ -175,17 +175,21 @@ func secretRanges(text string) [][2]int {
 }
 
 // cleanPieces applies the labeling-side rules to a message's pieces: leading
-// harness blocks are dropped silently, those of unrecognized tags and the
-// known blocks after one (which authorship, stopping at the unrecognized
-// tag, counted as typed), and each secret becomes a dropped piece, so no
-// secret is ever visible or quotable.
-func cleanPieces(text string, pieces []labelingPiece) ([]labelingPiece, int, int) {
+// blocks of unrecognized harness tags are dropped silently, in a user-role
+// message (human, agent_in_user_role) so are the known blocks after one
+// (which authorship, stopping at the unrecognized tag, counted as typed),
+// and each secret becomes a dropped piece, so no secret is ever visible or
+// quotable. Agent cohorts (agent_reply, delegation, thinking) drop only the
+// unrecognized blocks.
+func cleanPieces(text string, pieces []labelingPiece, userRole bool) ([]labelingPiece, int, int) {
 	blocks, unrecognized := labelingHarnessBlocks(text)
 	tags := 0
 	for index, block := range blocks {
 		reason := unrecognizedHarnessReason
 		if unrecognized[index] {
 			tags++
+		} else if !userRole {
+			continue
 		} else if known, ok := harnessReasons[block.Source]; ok {
 			reason = known.text()
 		} else {
@@ -201,7 +205,7 @@ func cleanPieces(text string, pieces []labelingPiece) ([]labelingPiece, int, int
 	return pieces, tags, len(secrets)
 }
 
-// pieceRole maps an authorship span to its human-pieces-v1 role and status.
+// pieceRole maps an authorship span to its human-pieces-v2 role and status.
 func pieceRole(span authorSpan) (role, status string) {
 	switch span.Category {
 	case spanTyped:
@@ -268,13 +272,13 @@ func markerExcerpt(text string, limit int) string {
 	return firstRunes(text, head) + "…" + lastRunes(text, limit-1-head)
 }
 
-// humanPieces applies human-pieces-v1 to a user message the classifier did
+// humanPieces applies human-pieces-v2 to a user message the classifier did
 // not attribute to automation. A unit whose targets hold no letter, number,
 // or symbol is kept when that is the whole message (a "?" or "+1" sent on
 // purpose) and excluded as residual punctuation when material around it was
 // excluded.
 func humanPieces(text string, spans []authorSpan, reuse labelingReuse) humanUnit {
-	pieces, tags, secrets := cleanPieces(text, resolveReuse(text, mergeFeedbackJSON(text, spans), reuse))
+	pieces, tags, secrets := cleanPieces(text, resolveReuse(text, mergeFeedbackJSON(text, spans), reuse), true)
 	unit := renderPieces(text, pieces)
 	unit.Secrets, unit.Unrecognized = secrets, tags
 	if unit.Exclude == "" && !meaningfulText(targetText(text, unit.Pieces)) && unit.Copied {

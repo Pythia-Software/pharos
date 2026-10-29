@@ -1531,7 +1531,7 @@ func (p *labelingPass) record(conversation string, record labelingRecord, answer
 				p.counters["delegation_payload_raw"]++
 			}
 		}
-		pieces, _, secrets := cleanPieces(text, raw)
+		pieces, _, secrets := cleanPieces(text, raw, false)
 		rendered = renderPieces(text, pieces)
 		rendered.Secrets = secrets
 		if candidate == "thinking" {
@@ -1634,7 +1634,7 @@ func agentUserPieces(text string) humanUnit {
 	start += len(text[start:]) - len(strings.TrimLeft(text[start:], " \t\r\n"))
 	end := max(start, len(strings.TrimRight(text, " \t\r\n")))
 	pieces = append(pieces, labelingPiece{Role: pieceTarget, Status: "agent_text", Start: start, End: end})
-	pieces, _, secrets := cleanPieces(text, pieces)
+	pieces, _, secrets := cleanPieces(text, pieces, true)
 	unit := renderPieces(text, pieces)
 	unit.Secrets, unit.Unrecognized = secrets, tags
 	return unit
@@ -2030,7 +2030,7 @@ func (p *labelingPass) messageSessionKind(id string) string {
 }
 
 // sourceTargets marks, byte by byte, which text of a user message is target
-// under human-pieces-v1, resolving its own re-sent pieces in turn. It returns
+// under human-pieces-v2, resolving its own re-sent pieces in turn. It returns
 // nil for a message without classification, an automated one, or a cycle.
 func (p *labelingPass) sourceTargets(id string, visiting map[string]bool) []bool {
 	if mask, ok := p.targetCache[id]; ok {
@@ -2045,7 +2045,7 @@ func (p *labelingPass) sourceTargets(id string, visiting map[string]bool) []bool
 	text := result.Input.Text
 	pieces, _, _ := cleanPieces(text, resolveReuse(text, mergeFeedbackJSON(text, result.Spans), func(text string, piece labelingPiece) []labelingPiece {
 		return p.reuseFrom(text, piece, visiting)
-	}))
+	}), true)
 	mask := make([]bool, len(text))
 	for _, piece := range pieces {
 		if piece.Role == pieceTarget {

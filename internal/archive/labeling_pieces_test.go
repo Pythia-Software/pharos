@@ -12,7 +12,7 @@ import (
 	"unicode/utf8"
 )
 
-// checkHumanUnit asserts human-pieces-v1's invariants: pieces tile the
+// checkHumanUnit asserts human-pieces-v2's invariants: pieces tile the
 // message in order, each visible target slices the original text exactly
 // (or decodes it, for a transformed one), and visible targets separated by
 // excluded material have a marker between them.
@@ -509,5 +509,23 @@ func TestMarkerChunksAttachToTheirNeighbors(t *testing.T) {
 	chunks, attached = attachMarkerChunks([]labelingChunk{{0, len(marker)}, {len(marker), len(visible)}}, pieces)
 	if attached != 1 || len(chunks) != 1 || chunks[0].Start != 0 || chunks[0].End != len(visible) {
 		t.Fatalf("leading marker: %+v", chunks)
+	}
+}
+
+// Known harness blocks after an unrecognized tag are dropped only in
+// user-role messages; agent cohorts drop the unrecognized tag alone, as
+// before.
+func TestCleanPiecesDropsLaterHarnessOnlyForUserRoles(t *testing.T) {
+	text := "<in-app-browser-context>\nThe browser shows /settings\n</in-app-browser-context>\n<system-reminder>\nBe brief.\n</system-reminder>\nShip it"
+	for _, userRole := range []bool{true, false} {
+		pieces, tags, _ := cleanPieces(text, []labelingPiece{{Role: pieceTarget, Status: "agent_text", Start: 0, End: len(text)}}, userRole)
+		target := strings.TrimSpace(targetText(text, renderPieces(text, pieces).Pieces))
+		want := "Ship it"
+		if !userRole {
+			want = "<system-reminder>\nBe brief.\n</system-reminder>\nShip it"
+		}
+		if tags != 1 || target != want {
+			t.Fatalf("user role %v: tags %d, target %q", userRole, tags, target)
+		}
 	}
 }
