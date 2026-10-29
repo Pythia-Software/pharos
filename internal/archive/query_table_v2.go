@@ -1130,10 +1130,10 @@ func (s *Server) executeStagedQueryV2(ctx context.Context, dataset string, table
 	}
 	if !sqlBacked {
 		d.SourceSQL, err = stageQueryRows(ctx, tx, "pharos_query_rows", sourceRows, d.Schema, sourceNames)
-	} else {
+	} else if metrics != nil {
 		// A staged copy is new in every request; only a SQL source lasts a
-		// generation.
-		d, err = s.Catalog.withSourceProofs(ctx, tx, table, d)
+		// generation. Rows use no proofs.
+		d, err = s.Catalog.withSourceProofs(ctx, tx, d)
 	}
 	if err != nil {
 		return err

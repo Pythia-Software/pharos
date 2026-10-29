@@ -38,34 +38,19 @@ func queryGeneration(ctx context.Context, tx *sql.Tx) (int64, error) {
 	return generation, err
 }
 
-// withSourceProofs lets Query Table reuse what it proved about d's source,
-// a projection of table, while tx reads the same data generation: the first
-// metric batch in a generation proves the source's row count and that its
-// summed integer fields are safe, and later batches skip per-row checks. The
-// generation is read in tx itself, so the proofs describe tx's snapshot.
-//
-// A proof reads up to a population of rows and proves nothing about a larger
-// source, so proofs are left off when table's whole source exceeds d's
-// population: the tool ledger, unless a request's budget is raised. The
-// whole-source count is the one nativeTableBounds caches per generation.
-func (c *Catalog) withSourceProofs(ctx context.Context, tx *sql.Tx, table sqlDataset, d qt.SQLiteV2Dataset) (qt.SQLiteV2Dataset, error) {
+// withSourceProofs lets Query Table reuse what it proved about d's source
+// while tx reads the same data generation: the first metric batch over a
+// source in a generation proves its row count and that its summed integer
+// fields are safe, and later batches skip per-row checks. The generation is
+// read in tx itself, so the proofs describe tx's snapshot. Query Table bounds
+// a proof to a population of rows and remembers a source too large to prove.
+func (c *Catalog) withSourceProofs(ctx context.Context, tx *sql.Tx, d qt.SQLiteV2Dataset) (qt.SQLiteV2Dataset, error) {
 	generation, err := queryGeneration(ctx, tx)
 	if err != nil {
 		return d, err
 	}
-	var fast []func(context.Context, *sql.Tx) (int64, bool, error)
-	if table.cube == toolCallCube {
-		fast = append(fast, c.freshToolCubeCount)
-	}
-	whole, err := c.queryCount(ctx, tx, "SELECT COUNT(*) FROM ("+table.project([]string{d.Schema.IDField}).v2Source(d.Schema)+")", nil, fast...)
-	population := d.MaxPopulation
-	if population == 0 {
-		population = queryTablePopulation
-	}
-	if err == nil && whole <= int64(population) {
-		d.SourceGeneration, d.SourceProofs = fmt.Sprint(generation), &c.sourceProofs
-	}
-	return d, err
+	d.SourceGeneration, d.SourceProofs = fmt.Sprint(generation), &c.sourceProofs
+	return d, nil
 }
 
 func (c *Catalog) queryCount(ctx context.Context, tx *sql.Tx, statement string, args []any, fast ...func(context.Context, *sql.Tx) (int64, bool, error)) (int64, error) {

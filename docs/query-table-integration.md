@@ -73,13 +73,14 @@ execution transaction, and share one `SQLiteSourceProofs` per catalog
 generation in its own transaction, so a proof describes exactly the snapshot
 that uses it. The first metric batch over a source in a generation proves its
 row count and integer bounds in one scan; later batches over the same source
-statement skip the per-row checks. Proofs are off when the dataset's whole
-source exceeds the request's population, since a proof reads at most a
-population of rows and then proves nothing; that whole-source count is the one
-`nativeTableBounds` already caches per generation. Staged map copies are new in
-every request and are not proven. Query Table does not prove the tool
-ledger's joined source in practice: a test that pins the generation finds a
-stale proof trusted for Human Words but not for tool calls.
+statement skip the per-row checks. Only metric requests set a generation; rows
+never use proofs. Query Table bounds a proof to the request's population and
+remembers a source too large to prove for the rest of the generation. Staged map
+copies are new in every request and are not proven. Query Table does not prove
+the tool ledger's joined source in practice: in an ad hoc experiment that pinned
+the generation, a stale proof was trusted for Human Words but not for tool
+calls (`TestAdapterMetricsFollowWritesBetweenRequests` covers Human Words with
+the real generation).
 
 `TestUsagePerformanceSQLHost` (`-tags probe`) times complete HTTP requests for
 Human Words' count and nine sums over 50,000 authored messages, with the host

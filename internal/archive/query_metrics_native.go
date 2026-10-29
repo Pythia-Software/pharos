@@ -108,7 +108,6 @@ func (c *Catalog) nativeTableBounds(ctx context.Context, tx *sql.Tx, table sqlDa
 	if table.cube == toolCallCube {
 		fast = append(fast, c.freshToolCubeCount)
 	}
-	// The same whole-source count as withSourceProofs reads.
 	matched, err := c.queryCount(ctx, tx, "SELECT COUNT(*) FROM ("+table.project([]string{schema.IDField}).v2Source(schema)+")", nil, fast...)
 	if err == nil && matched > int64(population) {
 		matched, err = c.queryCount(ctx, tx, count, args)
