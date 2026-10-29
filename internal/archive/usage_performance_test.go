@@ -332,7 +332,13 @@ func processCPU() time.Duration {
 // the same catalog, indexes, filters and authorization through the real routes.
 func TestUsagePerformanceSQLHost(t *testing.T) {
 	c, config := testCatalog(t)
-	if err := c.RebuildAuthorship(t.Context(), "probe"); err != nil {
+	// Record the ledger as current, so that no request starts a rebuild that
+	// would replace the synthetic rows while they are measured.
+	want, _, err := c.authorshipGenerations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RebuildAuthorship(t.Context(), want); err != nil {
 		t.Fatal(err)
 	}
 	tx := seedTx(t, c.DB)
@@ -374,15 +380,37 @@ func TestUsagePerformanceSQLHost(t *testing.T) {
 	measure := func(t *testing.T, path string, body any) {
 		t.Helper()
 		var expected any
-		variants := []bool{true, false}
+		// Each path runs warm, within one data generation, and as the first
+		// request of a new generation, which reads its source's bounds or
+		// proves it again.
+		type variant struct {
+			name               string
+			native, generation bool
+		}
+		variants := []variant{{"native/warm", true, false}, {"native/new-generation", true, true},
+			{"adapter/warm", false, false}, {"adapter/new-generation", false, true}}
 		grouped := strings.HasSuffix(path, "/query-v3")
 		if grouped {
-			variants = []bool{false} // V3 always uses ordinary Query Table execution.
+			variants = variants[2:] // V3 always uses ordinary Query Table execution.
 		}
-		for _, enabled := range variants {
-			nativeMetrics = enabled
+		for _, v := range variants {
+			nativeMetrics = v.native
 			var wall, cpu []time.Duration
-			for run := range 4 {
+			for run := range 11 {
+				if v.generation {
+					write, finish, err := c.beginTrackedWrite(t.Context(), "probe")
+					if err != nil {
+						t.Fatal(err)
+					}
+					_, err = write.Exec("UPDATE query_cache_generation SET value=value+1 WHERE id=1")
+					if err == nil {
+						err = write.Commit()
+					}
+					finish()
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
 				start, startCPU := time.Now(), processCPU()
 				response := apiCall(t, s, config.APIToken, http.MethodPost, path, body)
 				elapsed, usedCPU := time.Since(start), processCPU()-startCPU
@@ -429,24 +457,27 @@ func TestUsagePerformanceSQLHost(t *testing.T) {
 					wall, cpu = append(wall, elapsed), append(cpu, usedCPU)
 				}
 			}
-			t.Logf("native=%v rows=%d wall=%v cpu=%v", enabled, population,
+			t.Logf("%s rows=%d wall=%v cpu=%v", v.name, population,
 				medianDuration(wall).Round(10*time.Microsecond), medianDuration(cpu).Round(10*time.Microsecond))
 		}
 	}
+	// Averages are beyond the host reduction, so both variants of that shape
+	// run the adapter.
 	for _, shape := range []struct {
-		name   string
-		groups []string
-		where  []qt.WhereTerm
+		name, op string
+		groups   []string
+		where    []qt.WhereTerm
 	}{
-		{"scalar", nil, nil},
-		{"grouped", []string{"day"}, nil},
-		{"filtered", []string{"day"}, []qt.WhereTerm{{Field: "provider", Op: "=", Value: "codex"}}},
+		{"scalar", "sum", nil, nil},
+		{"grouped", "sum", []string{"day"}, nil},
+		{"filtered", "sum", []string{"day"}, []qt.WhereTerm{{Field: "provider", Op: "=", Value: "codex"}}},
+		{"averaged", "avg", []string{"day"}, nil},
 	} {
 		t.Run("v2/"+shape.name, func(t *testing.T) {
 			q := metricRequest(qt.AggSpec{ID: "messages", Op: "count", GroupBy: shape.groups},
-				qt.AggSpec{ID: "words", Op: "sum", Field: "words", GroupBy: shape.groups})
+				qt.AggSpec{ID: "words", Op: shape.op, Field: "words", GroupBy: shape.groups})
 			for _, category := range authorshipCategories {
-				q.Metrics = append(q.Metrics, qt.AggSpec{ID: category, Op: "sum", Field: category + "_words", GroupBy: shape.groups})
+				q.Metrics = append(q.Metrics, qt.AggSpec{ID: category, Op: shape.op, Field: category + "_words", GroupBy: shape.groups})
 			}
 			q.Where = shape.where
 			measure(t, "/api/query/writing_messages/metrics", q)
