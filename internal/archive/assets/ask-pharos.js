@@ -14,7 +14,10 @@ window.initPharosAsk = function(root) {
   let loadingModels=false,providers=[], accessEnabled=false, disposed=false, draftTimer=null, writeQueue=Promise.resolve();
   const providerModels={},providerCatalog={};
   const report=error=>{searchNotice.hidden=false;searchNotice.textContent=error.message||String(error);};
-  const api=async(path,body,signal)=>{const response=await fetch("/api/ask/"+path,{method:body?"POST":"GET",headers:{"Content-Type":"application/json"},...(body?{body:JSON.stringify(body)}:{}),signal});const result=await response.json();if(!response.ok)throw new Error(result.error||"Ask Pharos request failed");return result;};
+  const api=async(path,body,signal,onProgress)=>{
+    const response=await fetch("/api/ask/"+path,{method:body?"POST":"GET",headers:{"Content-Type":"application/json",...(onProgress?{Accept:'application/x-ndjson'}:{})},...(body?{body:JSON.stringify(body)}:{}),signal});
+    return askReadResponse(response,onProgress);
+  };
   const modalReturns = new WeakMap();
   const searchNotice = find('.pharos-search-notice');
   const thread = find('.pharos-thread');
@@ -339,8 +342,17 @@ window.initPharosAsk = function(root) {
     element.dataset.status=turn.status;
     get('.pharos-agent-message').setAttribute('aria-busy',String(loading));
     get('.pharos-waiting').hidden=!loading;
-    get('.pharos-wait-message').textContent=turn.message;
-    get('.pharos-elapsed').textContent=Math.floor(turn.elapsedMs/1000)+'s';
+    const wait=askWaitStatus(turn);
+    get('.pharos-wait-message').textContent=wait.message;
+    get('.pharos-elapsed').textContent=wait.elapsed;
+    const activity=turn.activity||[],activityKey=JSON.stringify(activity);
+    get('.pharos-activity').hidden=activity.length===0;
+    if(view.activityKey!==activityKey){
+      view.activityKey=activityKey;
+      get('.pharos-activity ol').replaceChildren(...activity.map(event=>{
+        const item=document.createElement('li');item.textContent=Math.floor(event.elapsedMs/1000)+'s · '+event.message;return item;
+      }));
+    }
     const response=answerFor(turn),hasResults=response.cards.length>0&&['multiple','single'].includes(turn.status);
     get('.pharos-destinations').hidden=!hasResults;
     get('.pharos-results-label').hidden=!hasResults;get('.pharos-results-label').textContent=turn.reply;
@@ -752,14 +764,18 @@ window.initPharosAsk = function(root) {
   const edgeObserver=new ResizeObserver(() => {if(product.getBoundingClientRect().width && !ai.hidden){autoFit();drawEdge();sizePicker();}});edgeObserver.observe(find('.pharos-ai-frame'));
   async function startRequest(turn,retry=true){
     stop();flushDraft();const request=++serial;
-    turn.status='loading';turn.reply='';turn.cards=[];delete turn.omitted;delete turn.clarification;turn.elapsedMs=0;
+    turn.status='loading';turn.reply='';turn.cards=[];delete turn.omitted;delete turn.clarification;turn.elapsedMs=0;turn.activity=[];
     turn.message='Starting '+turn.cli+'…';
     const controller=new AbortController();pending={request,turnId:turn.id,started:Date.now(),controller,edited:false};
     turns.forEach(updateTurn);syncComposer();writeHistory();
     ticker=setInterval(()=>tickRequest(request),1000);
     try {
       await writeQueue;await cancelQueue;
-      const session=await api('send',{id:activeSessionId,turnID:turn.id,prompt:turn.prompt,draft:question.value,selection:copySelection(choices),retry,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone},controller.signal);
+      const session=await api('send',{id:activeSessionId,turnID:turn.id,prompt:turn.prompt,draft:question.value,selection:copySelection(choices),retry,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone},controller.signal,activity=>{
+        if(pending?.request!==request)return;
+        if(!turn.activity.length){pending.started=Date.now()-activity.elapsedMs;turn.startedAt=pending.started;}
+        turn.activity=[...(turn.activity||[]),activity].slice(-40);turn.elapsedMs=Date.now()-pending.started;updateTurn(turn);
+      });
       if(pending?.request!==request)return;
       activeCreatedAt=session.createdAt;activeUpdatedAt=session.updatedAt;const edited=pending.edited;const final=session.conversation.find(t=>t.id===turn.id);Object.assign(turn,final);stop(false);updateTurn(turn);syncComposer();sessions=sessionRecords();
       window.dispatchEvent(new Event('pharos:data-refresh'));
@@ -774,10 +790,10 @@ window.initPharosAsk = function(root) {
   function watchRequest(turn){
     const request=++serial,controller=new AbortController();
     pending={request,turnId:turn.id,started:turn.startedAt||Date.now(),controller,edited:true};syncComposer();ticker=setInterval(()=>tickRequest(request),1000);
-    const poll=async()=>{try{const saved=await api('session?id='+encodeURIComponent(activeSessionId),undefined,controller.signal);if(pending?.request!==request)return;const actual=saved.conversation.find(t=>t.id===turn.id);if(actual&&actual.status!=='loading'){Object.assign(turn,actual);activeUpdatedAt=saved.updatedAt;stop(false);updateTurn(turn);syncComposer();sessions=sessionRecords();return;}}catch(error){if(pending?.request!==request)return;stop(false);turn.status='error';turn.reply='Could not reconnect to this question. Reopen the chat to check its result.';updateTurn(turn);syncComposer();return;}if(pending?.request===request)pollTimer=setTimeout(poll,800);};
+    const poll=async()=>{try{const saved=await api('session?id='+encodeURIComponent(activeSessionId),undefined,controller.signal);if(pending?.request!==request)return;const actual=saved.conversation.find(t=>t.id===turn.id);if(actual){Object.assign(turn,actual);turn.elapsedMs=Date.now()-pending.started;updateTurn(turn);if(actual.status!=='loading'){activeUpdatedAt=saved.updatedAt;stop(false);syncComposer();sessions=sessionRecords();return;}}}catch(error){if(pending?.request!==request)return;stop(false);turn.status='error';turn.reply='Could not reconnect to this question. Reopen the chat to check its result.';updateTurn(turn);syncComposer();return;}if(pending?.request===request)pollTimer=setTimeout(poll,800);};
     void poll();
   }
-  function tickRequest(request){if(pending?.request!==request)return;const turn=turns.find(t=>t.id===pending.turnId);if(!turn)return;turn.elapsedMs=Date.now()-pending.started;turn.message=(turn.elapsedMs>=10000?'Still waiting for ':'Waiting for ')+turn.cli+'…';updateTurn(turn);}
+  function tickRequest(request){if(pending?.request!==request)return;const turn=turns.find(t=>t.id===pending.turnId);if(!turn)return;turn.elapsedMs=Date.now()-pending.started;updateTurn(turn);}
   function submitQuestion(value,preserveDraft=false){
     if(pending||openingSession!==null||!accessEnabled||!value.trim()||!choices.model)return;
     const prompt=value.trim();closePicker();closeHistory();

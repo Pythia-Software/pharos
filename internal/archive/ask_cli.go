@@ -34,6 +34,7 @@ type askModel struct {
 type askProvider struct {
 	checkedAt        time.Time
 	recordSession    func(context.Context, string) error
+	progress         func(string)
 	ID               string        `json:"id"`
 	Models           []askModel    `json:"models"`
 	DefaultSelection *askSelection `json:"defaultSelection,omitempty"`
@@ -331,13 +332,42 @@ var askRunCLI = func(ctx context.Context, p askProvider, s askSelection, prompt 
 		return askRunAGY(ctx, cmd, p, prompt)
 	}
 	cmd.Stdin = strings.NewReader(prompt)
-	var out, diagnostics askOutput
-	cmd.Stdout = &out
+	var diagnostics askOutput
 	cmd.Stderr = &diagnostics
-	if err = cmd.Run(); err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err = cmd.Start(); err != nil {
+		return nil, err
+	}
+	events := askCLIEvents{provider: p}
+	output := &io.LimitedReader{R: stdout, N: 2<<20 + 1}
+	scan := bufio.NewScanner(output)
+	scan.Buffer(make([]byte, 4096), 2<<20+1)
+	var result []byte
+	for scan.Scan() {
+		events.read(scan.Bytes())
+		var envelope struct{ Type string }
+		if p.ID == "Claude" && json.Unmarshal(scan.Bytes(), &envelope) == nil && envelope.Type == "result" {
+			result = bytes.Clone(scan.Bytes())
 		}
+	}
+	readErr := scan.Err()
+	if output.N == 0 {
+		readErr = fmt.Errorf("CLI output exceeded 2 MiB")
+	}
+	if readErr != nil {
+		_ = cmd.Cancel()
+	}
+	err = cmd.Wait()
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if readErr != nil {
+		return nil, readErr
+	}
+	if err != nil {
 		return nil, fmt.Errorf("%s could not complete the request. Check its CLI version, Pharos MCP connection, login and account limits in Terminal, then retry", p.ID)
 	}
 	if p.ID == "Codex" {
@@ -355,7 +385,7 @@ var askRunCLI = func(ctx context.Context, p askProvider, s askSelection, prompt 
 		IsError          bool            `json:"is_error"`
 		Status           string          `json:"status"`
 	}
-	if err = json.Unmarshal(out.Bytes(), &envelope); err != nil {
+	if err = json.Unmarshal(result, &envelope); err != nil {
 		return nil, fmt.Errorf("%s returned invalid JSON", p.ID)
 	}
 	if envelope.IsError || envelope.Status == "ERROR" {
@@ -388,10 +418,10 @@ func askPrepareCLI(ctx context.Context, p askProvider, s askSelection, dir strin
 		// Codex asks to approve each MCP tool call, which approval_policy
 		// "never" refuses; preapprove the read-only Pharos server's tools only,
 		// as Claude's --allowedTools does.
-		args = []string{"exec", "--ignore-user-config", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "-c", `approval_policy="never"`, "-c", "features.shell_tool=false", "-c", "features.apply_patch_freeform=false", "-c", `web_search="disabled"`, "--model", s.Model, "--output-schema", schema, "--output-last-message", filepath.Join(dir, "answer.json"), "--color", "never", "-"}
+		args = []string{"exec", "--json", "--ignore-user-config", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "-c", `approval_policy="never"`, "-c", "features.shell_tool=false", "-c", "features.apply_patch_freeform=false", "-c", `web_search="disabled"`, "--model", s.Model, "--output-schema", schema, "--output-last-message", filepath.Join(dir, "answer.json"), "--color", "never", "-"}
 		args = append(args[:len(args)-1], "-c", "mcp_servers.pharos.command="+jsonText(p.mcp.Command), "-c", "mcp_servers.pharos.args="+jsonText(p.mcp.Args), "-c", "mcp_servers.pharos.required=true", "-c", `mcp_servers.pharos.default_tools_approval_mode="approve"`, "-")
 	case "Claude":
-		args = []string{"-p", "--output-format", "json", "--json-schema", askResponseSchema, "--model", s.Model, "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--setting-sources", "", "--settings", `{"disableAllHooks":true}`, "--no-session-persistence", "--permission-mode", "dontAsk"}
+		args = []string{"-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--json-schema", askResponseSchema, "--model", s.Model, "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--setting-sources", "", "--settings", `{"disableAllHooks":true}`, "--no-session-persistence", "--permission-mode", "dontAsk"}
 		args = append(args, "--mcp-config", jsonText(map[string]any{"mcpServers": map[string]askMCPServer{"pharos": p.mcp}}), "--allowedTools", "mcp__pharos")
 	case "Antigravity":
 		// Use a dedicated workspace agent, plan mode and the terminal sandbox.
@@ -526,6 +556,7 @@ func askRunAGY(ctx context.Context, cmd *exec.Cmd, p askProvider, prompt string)
 	defer func() { _ = cmd.Cancel(); _ = cmd.Wait() }()
 	scan := bufio.NewScanner(io.LimitReader(stdout, 2<<20))
 	scan.Buffer(make([]byte, 4096), 1<<20)
+	events := askCLIEvents{provider: p}
 	sent := false
 	for scan.Scan() {
 		var event struct {
@@ -552,6 +583,10 @@ func askRunAGY(ctx context.Context, cmd *exec.Cmd, p askProvider, prompt string)
 			}
 			_ = stdin.Close()
 			sent = true
+			p.reportProgress("Connected to Antigravity; processing your question…")
+		}
+		if sent {
+			events.read(scan.Bytes())
 		}
 		if event.Event == "result" {
 			if event.Result.Status != "SUCCESS" {

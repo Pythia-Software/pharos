@@ -268,6 +268,10 @@ You have a private Pharos interface through lookup. Choose kind "visits" to sear
 			if attempt == 2 {
 				return askAnswer{}, fmt.Errorf("the agent needed more lookups; refine your question and retry")
 			}
+			label := map[string]string{"visits": "Reading your page visit history…", "chats": "Searching your earlier Ask chats…", "work": "Searching archived work…"}[response.Lookup.Kind]
+			if label != "" {
+				p.reportProgress(label)
+			}
 			result, cards, err := s.askLookup(ctx, response.Lookup, session.ID)
 			if err != nil {
 				return askAnswer{}, err

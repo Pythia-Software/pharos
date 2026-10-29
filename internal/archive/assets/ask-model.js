@@ -1,4 +1,37 @@
 // DOM-free interaction rules shared by the composer and its unit tests.
+async function askReadResponse(response, onProgress) {
+  if (!response.ok || !response.headers.get('Content-Type')?.includes('application/x-ndjson')) {
+    const result=await response.json();
+    if(!response.ok)throw new Error(result.error||'Ask Pharos request failed');
+    return result;
+  }
+  const reader=response.body.getReader(),decoder=new TextDecoder();
+  let buffer='';
+  try {
+    while(true){
+      const {value,done}=await reader.read();
+      buffer+=decoder.decode(value,{stream:!done});
+      if(buffer.length>8*1024*1024)throw new Error('Ask Pharos response is too large');
+      let newline;
+      while((newline=buffer.indexOf('\n'))>=0){
+        const line=buffer.slice(0,newline);buffer=buffer.slice(newline+1);
+        if(!line.trim())continue;
+        const event=JSON.parse(line);
+        if(event.type==='progress')onProgress?.(event.activity);
+        if(event.type==='result'&&event.session)return event.session;
+      }
+      if(done)throw new Error('Ask Pharos connection ended before the answer arrived');
+    }
+  } finally { reader.releaseLock(); }
+}
+function askWaitStatus({activity=[],elapsedMs=0,message='',cli=''}) {
+  const latest=activity.at(-1),elapsed=Math.floor(elapsedMs/1000);
+  const silent=latest?Math.max(0,Math.floor((elapsedMs-latest.elapsedMs)/1000)):elapsed;
+  return {
+    message:latest?.message||message||'Starting '+cli+'…',
+    elapsed:elapsed+'s elapsed'+(silent>=10?' · '+silent+'s since last update':''),
+  };
+}
 function askComposerActions({draft = '', turns = [], pending = false, enabled = false, model = ''}) {
   const populated = turns.length > 0 || draft.length > 0;
   return {send: enabled && !!model && !pending && !!draft.trim(), history: !populated, clear: populated, modelLocked: turns.length > 0};

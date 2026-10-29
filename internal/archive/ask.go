@@ -29,18 +29,19 @@ type askCard struct {
 	Href        string `json:"href"`
 }
 type askTurn struct {
-	ID         string    `json:"id"`
-	Prompt     string    `json:"prompt"`
-	CLI        string    `json:"cli"`
-	Model      string    `json:"model"`
-	ModelLabel string    `json:"modelLabel"`
-	Effort     string    `json:"effort"`
-	Status     string    `json:"status"`
-	Message    string    `json:"message"`
-	Reply      string    `json:"reply"`
-	ElapsedMs  int64     `json:"elapsedMs"`
-	StartedAt  int64     `json:"startedAt"`
-	Cards      []askCard `json:"cards"`
+	ID         string        `json:"id"`
+	Prompt     string        `json:"prompt"`
+	CLI        string        `json:"cli"`
+	Model      string        `json:"model"`
+	ModelLabel string        `json:"modelLabel"`
+	Effort     string        `json:"effort"`
+	Status     string        `json:"status"`
+	Message    string        `json:"message"`
+	Reply      string        `json:"reply"`
+	ElapsedMs  int64         `json:"elapsedMs"`
+	StartedAt  int64         `json:"startedAt"`
+	Cards      []askCard     `json:"cards"`
+	Activity   []askProgress `json:"activity,omitempty"`
 	// Omitted counts destinations the agent returned that Pharos could not
 	// open; the page notes them and does not open a lone remaining card.
 	Omitted       int               `json:"omitted,omitempty"`
@@ -63,8 +64,9 @@ type askVisit struct {
 	At    int64  `json:"at"`
 }
 type askActive struct {
-	cancel context.CancelFunc
-	done   chan struct{}
+	cancel   context.CancelFunc
+	done     chan struct{}
+	activity []askProgress
 }
 type askState struct {
 	discovering map[string]*askDiscovery
@@ -489,7 +491,9 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 				fail(err)
 				return
 			}
-			if _, running := s.ask.active[id]; !running {
+			if active, running := s.ask.active[id]; running && len(session.Conversation) > 0 {
+				session.Conversation[len(session.Conversation)-1].Activity = slices.Clone(active.activity)
+			} else if !running {
 				for i := range session.Conversation {
 					if session.Conversation[i].Status == "loading" {
 						session.Conversation[i].Status = "canceled"
@@ -672,7 +676,44 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.ask.mu.Unlock()
+		// Keep the JSON response for existing clients. The UI opts into a
+		// newline-delimited event stream, flushed as each CLI action arrives.
+		stream := r.Header.Get("Accept") == "application/x-ndjson"
+		emit := func(event any) {
+			if !stream {
+				return
+			}
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			if err := json.NewEncoder(w).Encode(event); err != nil {
+				cancel()
+				return
+			}
+			if err := http.NewResponseController(w).Flush(); err != nil {
+				cancel()
+			}
+		}
+		started := time.UnixMilli(session.Conversation[len(session.Conversation)-1].StartedAt)
+		p.progress = func(message string) {
+			activity := askProgress{Message: message, ElapsedMs: time.Since(started).Milliseconds()}
+			s.ask.mu.Lock()
+			active := s.ask.active[session.ID]
+			if n := len(active.activity); n > 0 && active.activity[n-1].Message == message {
+				s.ask.mu.Unlock()
+				return
+			}
+			active.activity = append(active.activity, activity)
+			if len(active.activity) > askActivityLimit {
+				active.activity = slices.Clone(active.activity[len(active.activity)-askActivityLimit:])
+			}
+			s.ask.active[session.ID] = active
+			s.ask.mu.Unlock()
+			emit(map[string]any{"type": "progress", "activity": activity})
+		}
+		p.reportProgress("Starting " + p.ID + "…")
 		result, runErr := s.answerAsk(runCtx, p, session, firstString(body["timezone"]))
+		if runErr == nil {
+			p.reportProgress("Saving the answer…")
+		}
 		cancel()
 		s.ask.mu.Lock()
 		fresh, readErr := s.askSession(context.WithoutCancel(ctx), session.ID)
@@ -681,6 +722,7 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			session.ClarificationDraft = fresh.ClarificationDraft
 		}
 		turn := &session.Conversation[len(session.Conversation)-1]
+		turn.Activity = slices.Clone(s.ask.active[session.ID].activity)
 		turn.ElapsedMs = time.Since(time.UnixMilli(turn.StartedAt)).Milliseconds()
 		turn.Message = ""
 		turn.Omitted = 0
@@ -733,7 +775,11 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		s.ask.mu.Lock()
-		writeJSON(w, session, 200)
+		if stream {
+			emit(map[string]any{"type": "result", "session": session})
+		} else {
+			writeJSON(w, session, 200)
+		}
 	default:
 		writeError(w, fmt.Errorf("not found"), 404)
 	}

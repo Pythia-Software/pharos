@@ -127,3 +127,43 @@ test('only the latest unanswered clarification accepts a choice or a nonempty cu
     assert.deepEqual(actions({draft:'Tokens',...state}),{active:false,sendOther:false});
   }
 });
+
+test('Ask receives activity before the final answer across split UTF-8 and JSON chunks', {timeout:2000}, async () => {
+  let controller,observed;
+  const seen=new Promise(resolve=>{observed=resolve;});
+  const body=new ReadableStream({start(value){controller=value;}});
+  const response=new Response(body,{headers:{'Content-Type':'application/x-ndjson'}});
+  const activity={message:'Browsing available views…',elapsedMs:1200};
+  const bytes=new TextEncoder().encode(JSON.stringify({type:'progress',activity})+'\n');
+  const split=bytes.indexOf(0xe2)+1;
+  const messages=[];
+  const result=model.askReadResponse(response,value=>{messages.push(plain(value));observed();});
+  controller.enqueue(bytes.slice(0,split));controller.enqueue(bytes.slice(split));
+  await seen;
+  assert.deepEqual(messages,[activity]);
+  const session={id:'chat-1',conversation:[{status:'single',cards:[{href:'/'}]}]};
+  controller.enqueue(new TextEncoder().encode(JSON.stringify({type:'result',session})+'\n'));
+  controller.close();
+  assert.deepEqual(plain(await result),session);
+});
+
+test('Ask stream failures reconcile instead of accepting an unfinished answer', async () => {
+  const stream=text=>new Response(text,{headers:{'Content-Type':'application/x-ndjson'}});
+  await assert.rejects(model.askReadResponse(stream('{"type":"progress","activity":{}}\n')),/before the answer/);
+  await assert.rejects(model.askReadResponse(stream('{"type":"result","session":')),/before the answer/);
+  await assert.rejects(model.askReadResponse(stream('not JSON\n')),/JSON|Unexpected/);
+  await assert.rejects(model.askReadResponse(new Response('{"error":"Model unavailable"}',{status:400})),/Model unavailable/);
+  const session={id:'older-server'};
+  assert.deepEqual(plain(await model.askReadResponse(new Response(JSON.stringify(session)))),session);
+});
+
+test('Ask elapsed time preserves the latest real activity and shows silence honestly', () => {
+  const activity=[{message:'Searching archived work…',elapsedMs:4000}];
+  const active=plain(model.askWaitStatus({activity,elapsedMs:7000,cli:'Codex'}));
+  assert.equal(active.message,activity[0].message);
+  assert.match(active.elapsed,/7s elapsed/);
+  const quiet=plain(model.askWaitStatus({activity,elapsedMs:24000,cli:'Codex'}));
+  assert.equal(quiet.message,activity[0].message);
+  assert.match(quiet.elapsed,/20s since last update/);
+  assert.match(model.askWaitStatus({cli:'Claude',elapsedMs:12000}).elapsed,/12s since last update/);
+});
