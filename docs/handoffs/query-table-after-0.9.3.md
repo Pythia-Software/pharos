@@ -1,5 +1,11 @@
 # Query Table: replace the remaining host reducers after 0.9.3
 
+> **0.9.7 update (2026-10-28):** Priority 2 is delivered as per-generation
+> source proofs for V2 integer metric batches (`SQLiteV2Dataset.SourceGeneration`
+> and `SourceProofs`), and host predicate relations replace the text-index
+> candidates. Pharos adopts them, and decides whether its V2 reducer stays, in
+> a later change.
+>
 > **0.9.4 integration update (2026-10-21):** Pharos now consumes the aligned
 > published release. Ordinary V3 execution replaces the general host grouping
 > pre-reducer and its synthetic-row/request rewrites. The frontend omits legacy

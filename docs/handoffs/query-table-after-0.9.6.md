@@ -1,5 +1,17 @@
 # Query Table: outstanding requests from Pharos after 0.9.6
 
+**Resolved in Query Table 0.9.7** (upstream PR #146), consumed by Pharos's
+matching published core/React/UI/codegen packages and Go module. Every request
+below landed. Pharos took the fixes that need no feature of its own on
+upgrading: chart labels (1), whole-key colours (2), nearest-point picking (4),
+fitted links and Detail/JSON buttons (5, 6) and the metadata flood (16); the
+browser suite's `KNOWN` list is empty again. The capabilities (3, 7–15) are
+adopted in later changes. See
+[the integration guide](../query-table-integration.md#097-changes).
+
+The original assignment below is dated **2026-10-28** and describes the
+**0.9.6** implementation.
+
 For the Query Table team. This is a self-contained assignment against the
 published **0.9.6** release, dated **2026-10-28**. It collects every request
 from Pharos that is still open and replaces the earlier per-topic handoffs.

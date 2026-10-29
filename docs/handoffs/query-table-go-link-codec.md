@@ -1,5 +1,8 @@
 # Query Table: read and write query link tokens in Go
 
+**Resolved in Query Table 0.9.6**: `EncodeQueryLink`, `DecodeQueryLink` and
+`LinkQuery`, which the [site map](../site-map.md)'s link tools use.
+
 A standalone assignment for the Query Table repository
 (`github.com/Pythia-Software/query-table`), against `main` after 0.9.5. Pharos
 needs it in a published release before it can ship the link tools described

@@ -42,16 +42,16 @@ shipped as #271–#273.
 ## Upstream Query Table
 
 Pharos uses the published Query Table module and packages without patches.
-The current standalone assignment is
-[`query-table-after-0.9.6.md`](query-table-after-0.9.6.md). It collects every
-open request, checked against the 0.9.6 source and browser suite: chart labels,
+Query Table 0.9.7 delivered every request in
+[`query-table-after-0.9.6.md`](query-table-after-0.9.6.md): chart labels,
 colours, cycle grouping and hit targets; fit-to-screen clipping and grouped
 Detail; saving host query state and last-successful persistence; minimum
-counts, calendar grouping keys and OR-of-AND filters; and the remaining V2,
-text-index and metadata performance asks. It can be sent directly to the
-Query Table team.
+counts, calendar grouping keys and OR-of-AND filters; and the V2, text-index
+and metadata performance asks. Pharos took the chart, fitting and metadata
+fixes on upgrading; it adopts the new capabilities in later changes. No
+Query Table request is open.
 
-It supersedes the open requests in
+That handoff superseded the requests in
 [`query-table-dashboard-views.md`](query-table-dashboard-views.md),
 [`query-table-fit-link-clipping.md`](query-table-fit-link-clipping.md),
 [`query-table-fit-screen-controls.md`](query-table-fit-screen-controls.md),
@@ -61,15 +61,13 @@ It supersedes the open requests in
 [`query-table-query-recovery.md`](query-table-query-recovery.md),
 [`query-table-after-0.9.3.md`](query-table-after-0.9.3.md) and
 [`usage-query-upstream-handoff.md`](../usage-query-upstream-handoff.md).
-Those remain the detailed records of each request.
+Each is marked with the release that resolved it and remains the detailed
+record of its request.
 
-[`query-table-go-link-codec.md`](query-table-go-link-codec.md) is a standalone
-assignment against 0.9.5. It asks for Go `EncodeQueryLink` and
-`DecodeQueryLink`, at parity with `encodeQuery` and `decodeQueryStrict`, so
-Pharos can build and read query links in Go for the
-[site map](../site-map.md)'s link tools. It covers the parity contract, the
-pitfalls a reviewed reference port found, and how to prove parity. It can be
-sent directly to the Query Table team.
+[`query-table-go-link-codec.md`](query-table-go-link-codec.md) asked for Go
+`EncodeQueryLink` and `DecodeQueryLink`, at parity with `encodeQuery` and
+`decodeQueryStrict`, for the [site map](../site-map.md)'s link tools. Query
+Table 0.9.6 resolved it.
 
 The [manual-interventions audit and upstream handoff](query-table-manual-interventions.md)
 records the previous patches and source snapshots, the 0.9.3 response, and the

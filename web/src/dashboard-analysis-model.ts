@@ -589,13 +589,14 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
   return { query, clause, grouped: true, selection, supporting: groups.length ? { ...query, where: [...query.where, ...groups] } : query };
 }
 
-// A legend selection as a filter on its group fields, in the where format
-// (an AND of terms, each a clause or an OR of clauses). One field is a slice.
+// A legend selection as a filter on its group fields, as an AND of terms,
+// each a clause or an OR of clauses (not yet Query Table 0.9.7's OR of AND
+// branches). One field is a slice.
 // Combined groups exclude as one OR per group (field != value, or missing);
 // included, the OR of each group's equalities expands into one OR per choice
 // of a field from every group, which stays small only for a few groups:
 // beyond selectionTerms the selection has no filter (undefined) and is drawn
-// after the query instead (Query Table request 7).
+// after the query instead.
 export const selectionTerms = 64;
 export function selectionWhere(fields: string[], selection: { values: string[]; excluded: boolean }): WhereTerm[] | undefined {
   if (!selection.values.length) return [];
