@@ -21,8 +21,9 @@ executes it; older row/metric protocols reject it instead of ignoring it.
 Record keyword definitions travel in the per-dataset `record_*` URL parameter.
 Invalid saved conditions fail closed. Table Saved/Undo/Reset controls still own
 QueryState; keyword clauses have their own edit/remove controls, like Library's
-content clause. Their unified lifecycle remains an upstream request in
-[the concrete saved-host-state handoff](handoffs/query-table-saved-host-query-state.md). Returning to a dashboard
+content clause. Query Table 0.9.7's host query state
+([handoff](handoffs/query-table-saved-host-query-state.md)) can carry them
+through that lifecycle; it is adopted in a later change. Returning to a dashboard
 explicitly resets keyword conditions, and switching datasets drops them.
 
 | Query | Compact rows | Native Details focus | Drilldown |
@@ -50,17 +51,18 @@ widths and explicit sorts remain in effect. Query drilldowns specify a sort:
 time ascending within one conversation/work/unit, time descending across a
 population, with identity breaking timestamp ties. Grouped results receive an
 explicit key/summary sort; their Records drilldown also applies the appropriate
-record order. Native Detail for grouped results requires the upstream support
-described in [this handoff](handoffs/query-table-group-detail.md).
+record order. Query Table 0.9.7 adds native Detail for grouped results
+([handoff](handoffs/query-table-group-detail.md)); it is adopted in a later
+change.
 
 Every Analyze query opens with native **Fit All to Screen**, including restored
 queries and drilldowns. The `fitToScreen: true` presentation preference travels
 in the encoded `q_<dataset>` URL parameter and adapts to the viewer's table area
 after loading. Filters, sorts and selected data columns are preserved. Manual
 column sizing can override the fit during the current visit.
-At phone widths, Query Table 0.9.5 can clip native Detail/JSON buttons when
-columns reach its minimum size; [the upstream handoff](handoffs/query-table-fit-screen-controls.md)
-records the reproduction and the scoped browser-test todos.
+Since Query Table 0.9.7, fitting keeps each column wide enough for its Detail
+and JSON buttons and scrolls the table when they do not fit
+([handoff](handoffs/query-table-fit-screen-controls.md)).
 
 This is host integration against the published Query Table 0.9.2 release. No dependency patches or generated-bundle edits are involved.
 

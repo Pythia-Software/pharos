@@ -1,4 +1,4 @@
-import { EMPTY_QUERY, loadSchema, normalizeQueryState, type AggregationClause, type AggregationResultEntry, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, loadSchema, normalizeQueryState, type AggregationClause, type AggregationResultEntry, type FieldSchema, type GroupKey, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import toolsDocument from "../../schemas/tools.schema.json";
 import type { CardCover } from "./card-cover";
 import type { HumanStudyPreview } from "./human-study";
@@ -42,7 +42,7 @@ export function usesCardTrend(job: PreviewJob): boolean {
   const source = job.query.grouping?.source ?? job.query, view = recipe.exploration, grouping = job.query.grouping;
   const where = source.where.filter(term => !(window && "field" in term && term.field === window.field));
   if (JSON.stringify(where) !== JSON.stringify(recipe.where ?? []) || Boolean(view) !== Boolean(grouping)) return false;
-  const shape = (aggregations: AggregationClause[] = [], keys?: string[], summaries?: unknown, representative?: unknown, having: WhereTerm[] = []) =>
+  const shape = (aggregations: AggregationClause[] = [], keys?: readonly GroupKey[], summaries?: unknown, representative?: unknown, having: WhereTerm[] = []) =>
     JSON.stringify(normalizeQueryState({ ...EMPTY_QUERY, aggregations, where: having, ...(keys ? { grouping: { source: { ...EMPTY_QUERY }, keys, summaries, representative: representative ?? null } } : {}) } as QueryState));
   return shape(source.aggregations, grouping?.keys, grouping?.summaries, grouping?.representative, grouping ? job.query.where : [])
     === shape(recipe.measures, view?.keys, view?.summaries, view?.representative, view?.having);

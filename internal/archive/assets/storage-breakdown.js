@@ -13,7 +13,8 @@
 .storage-bar span{min-width:2px;height:100%}
 .storage-swatch{display:inline-block;flex:none;width:10px;height:10px;border-radius:3px;vertical-align:-1px}
 .storage-legend{display:flex;flex-wrap:wrap;gap:6px 18px;margin:0;padding:0;list-style:none;font-size:var(--fs-md,13px)}
-.storage-legend li{display:flex;align-items:center;gap:7px;white-space:nowrap}
+.storage-legend li{display:flex;align-items:center;gap:7px;max-width:100%;white-space:nowrap}
+.storage-legend li>span:not([class]){min-width:0;white-space:normal}
 .storage-legend b,.storage-table td.num{font-weight:600;font-variant-numeric:tabular-nums}
 .storage-views{display:inline-flex;margin:18px 0 8px;border:1px solid var(--line,#ccc);border-radius:5px;overflow:hidden}
 .storage-views button{border:0;border-radius:0;background:none;color:var(--muted,#666);padding:4px 10px}

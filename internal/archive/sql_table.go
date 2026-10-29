@@ -446,29 +446,41 @@ func (d sqlDataset) where(terms []querytable.WhereTerm, schema querytable.Schema
 		parts = append(parts, d.base)
 	}
 	for _, term := range terms {
+		// A term is an OR of AND branches; a plain predicate or OR group
+		// member is a branch of one literal.
 		lookup := false
 		alternatives := []string{}
-		for _, clause := range term.Predicates() {
-			sqlText, clauseArgs, err := d.clause(clause, schema.Fields[clause.Field])
-			if err != nil {
-				return "", nil, err
-			}
-			if d.toolSearchIndexed && !clause.Negated {
-				if term := toolSearchTerm(clause.Field, clause.Op, clause.Value); term != "" {
-					sqlText = "(" + toolSearchPredicate(term) + " AND " + sqlText + ")"
-					clauseArgs = append([]any{term}, clauseArgs...)
-					lookup = true
+		for _, branch := range term.Branches() {
+			conjuncts := make([]string, 0, len(branch))
+			branchLookup := false
+			for _, clause := range branch {
+				sqlText, clauseArgs, err := d.clause(clause, schema.Fields[clause.Field])
+				if err != nil {
+					return "", nil, err
 				}
-			}
-			if column, ok := d.buckets[clause.Field]; ok && clause.Op == "=" && !clause.Negated {
-				if from, to, ok := bucketRange(clause.Field, clause.Value); ok {
-					sqlText = "(" + sqlText + " AND " + column + ">=? AND " + column + "<?)"
-					clauseArgs = append(clauseArgs, from, to)
+				if d.toolSearchIndexed && !clause.Negated {
+					if term := toolSearchTerm(clause.Field, clause.Op, clause.Value); term != "" {
+						sqlText = "(" + toolSearchPredicate(term) + " AND " + sqlText + ")"
+						clauseArgs = append([]any{term}, clauseArgs...)
+						branchLookup = true
+					}
 				}
+				if column, ok := d.buckets[clause.Field]; ok && clause.Op == "=" && !clause.Negated {
+					if from, to, ok := bucketRange(clause.Field, clause.Value); ok {
+						sqlText = "(" + sqlText + " AND " + column + ">=? AND " + column + "<?)"
+						clauseArgs = append(clauseArgs, from, to)
+					}
+				}
+				conjuncts = append(conjuncts, sqlText)
+				args = append(args, clauseArgs...)
+				branchLookup = branchLookup || d.lookups[clause.Field]
 			}
-			alternatives = append(alternatives, sqlText)
-			args = append(args, clauseArgs...)
-			lookup = lookup || d.lookups[clause.Field]
+			if len(conjuncts) == 1 {
+				alternatives = append(alternatives, conjuncts[0])
+			} else {
+				alternatives = append(alternatives, "("+strings.Join(conjuncts, " AND ")+")")
+			}
+			lookup = lookup || branchLookup
 		}
 		// Without statistics SQLite takes a filter on a column it has no index
 		// for to keep few rows, and reads and sorts every match to order a page.

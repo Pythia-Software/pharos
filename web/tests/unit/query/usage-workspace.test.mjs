@@ -129,11 +129,13 @@ test("dashboard filter descriptions preserve alternatives, negations, empties an
     { field: "first_usage_at", op: "<", value: "2026-10-21T12:00:00.000Z" },
     { field: "last_usage_at", op: ">", value: "2026-10-21T12:34:56.123-06:00" },
     { any: [] },
+    { any: [{ all: [{ field: "provider", op: "=", value: "claude" }, { field: "model", op: "=", value: "opus" }] }, { field: "provider", op: "=", value: "codex" }] },
   ] };
   assert.deepEqual(dashboardQueryDetails(schema, query)[0].values, [
     "(Provider is Codex or Claude)", "(not (Repository contains pharos) or Provider is empty)",
     "Day from 2026-10-01 to 2026-10-03", "(Day is 2026-10-01 or 2026-10-03)", "Provider is not Claude",
     "First usage is before 2026-10-21 12:00 UTC", "Last usage is after 2026-10-21 12:34:56.123 -06:00", "No matching records",
+    "((Provider is Claude and Reported model is opus) or Provider is Codex)",
   ]);
 });
 

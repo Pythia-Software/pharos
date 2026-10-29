@@ -1,5 +1,9 @@
 # Query Table handoff: save the complete query, including host URL parameters
 
+**Delivered in Query Table 0.9.7** as host query state
+(`useQueryTable({ hostQuery })`, `QueryState.hostState`, Go `HostState`).
+Pharos adopts it in a later change.
+
 Status: upstream implementation requested; no local Query Table patch.
 Baseline: published Query Table 0.9.5 / Go v0.9.5.
 Consumer: Pharos. Prepared 2026-10-22.

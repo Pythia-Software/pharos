@@ -393,13 +393,9 @@ const WIDTHS = [{ width: 1440, height: 900 }, { width: 1280, height: 720 }, { wi
 // problems match here is marked todo with the bug, so the suite stays honest;
 // any other problem still fails it.
 const KNOWN = [{
-  bug: "Query Table 0.9.5 box and horizontal-bar charts reserve a fixed label margin, so long group labels are cut off; docs/handoffs/query-table-dashboard-views.md (request 1)",
-  when: route => route.name.startsWith("Tokens and Cost distribution") || /^(tools|mcp|time|skills|human|carbon|parallelism) dashboard (compare|unit compare|distribution|unit distribution)/.test(route.name),
-  match: /chart label ".*" cut off by svg .* in div\.qt-metric/,
-}, {
-  bug: "Query Table 0.9.5 fit-to-screen can clip native Detail and JSON buttons at phone widths; docs/handoffs/query-table-fit-screen-controls.md",
-  when: (route, viewport) => route.fitTable && viewport.width < 641,
-  match: /a control is cut off where nothing scrolls: button\.qt-(?:link-btn\.qt-item-detail-button|json-preview)/,
+  bug: "Query Table 0.9.7 fit-to-screen floors a column at its wrapping host link measured on one line, so Analyze's fitted tables scroll at desktop widths; docs/handoffs/query-table-fit-wrapping-links.md",
+  when: (route, viewport) => /^Analyze workspace query (usage|writing|writing_messages|tool_calls|skill_usages|conversation_activity)$/.test(route.name) && viewport.width >= 1024,
+  match: /^fitted table still scrolls sideways: \d+px wide in \d+px$/,
 }];
 
 for (const width of [1440, 390, 320]) test(`Search filter suggestions stay readable and keep input focus @ ${width}`, { skip }, async t => {
@@ -789,10 +785,21 @@ describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY
           await app.page.locator(route.shown).first().waitFor();
           await app.settled();
         }
+        // A fitted table stops scrolling sideways at desktop widths. One that
+        // still scrolls once the wait ends is a problem, so KNOWN can name it.
+        const fitting = [];
         if (route.fitTable && viewport.width >= 1024) {
           await app.page.waitForFunction(() => {
             const wrap = document.querySelector('.usage-workspace-table .qt-table-wrap');
             return wrap && wrap.scrollWidth <= wrap.clientWidth + 1;
+          }).catch(async error => {
+            const size = await app.page.evaluate(() => {
+              const wrap = document.querySelector('.usage-workspace-table .qt-table-wrap');
+              return wrap ? { scroll: wrap.scrollWidth, client: wrap.clientWidth } : null;
+            });
+            if (!size) throw error;
+            // Fitting may have finished as the wait ended.
+            if (size.scroll > size.client + 1) fitting.push(`fitted table still scrolls sideways: ${size.scroll}px wide in ${size.client}px`);
           });
         }
         if (route.check) await route.check(app.page);
@@ -804,7 +811,7 @@ describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY
           await app.shot("scrolled");
           problems.push(...(await layoutProblems(app.page)).filter(problem => !problems.includes(problem)));
         }
-        problems.push(...app.problems());
+        problems.push(...fitting, ...app.problems());
         const known = KNOWN.filter(bug => (!bug.when || bug.when(route, viewport)) && problems.some(problem => bug.match.test(problem)));
         if (problems.some(problem => !known.some(bug => bug.match.test(problem)))) assert.fail(`${name} (${route.url}):\n  ${problems.join("\n  ")}`);
         if (known.length) t.todo(known.map(bug => bug.bug).join("; "));

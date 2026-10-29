@@ -1,16 +1,68 @@
-# Query Table 0.9.5 in Pharos
+# Query Table 0.9.7 in Pharos
 
-Pharos pins core, React, UI and codegen to the published npm **0.9.5** packages,
-and the Go adapter to the published **v0.9.5** module, with no replacement or
+Pharos pins core, React, UI and codegen to the published npm **0.9.7** packages,
+and the Go adapter to the published **v0.9.7** module, with no replacement or
 local copy. The npm lockfile records registry URLs and integrities; `go.sum`
 records the released Go module. Clean builds use these pinned sources without
 another Query Table checkout.
 
-The [upstream migration guide](https://github.com/Pythia-Software/query-table/blob/v0.9.5/docs/host-integration-next-release.md)
-and [release notes](https://github.com/Pythia-Software/query-table/blob/v0.9.5/CHANGELOG.md)
+The [upstream migration guide](https://github.com/Pythia-Software/query-table/blob/v0.9.7/docs/host-integration-next-release.md)
+and [release notes](https://github.com/Pythia-Software/query-table/blob/v0.9.7/CHANGELOG.md)
 define the release contract. Optional worktree linking is described in
 [local development](query-table-local-development.md). The earlier
 [next-release handoff](query-table-next-release-handoff.md) is a historical record.
+
+## 0.9.7 changes
+
+0.9.7 delivers every request in
+[the after-0.9.6 handoff](handoffs/query-table-after-0.9.6.md). This upgrade
+takes the type changes and the fixes that need no Pharos feature; the new
+capabilities are adopted in later changes.
+
+- **Where terms.** A term can be an OR of AND branches
+  (`{ any: [{ all: [a, b] }, c] }`). Pharos code that walks terms reads every
+  branch's predicates (`predicatesOf`) to find fields, describes the term as
+  "(a and b) or c", and rewrites it branch by branch or not at all
+  (`web/src/where-terms.ts`). Slice and category readers skip it, and the
+  message filter editor shows it as one removable condition. In Go, the SQL
+  dataset's WHERE, its indexed candidate source, the Machine Time matcher and
+  the map executor (`internal/querytable`) evaluate `WhereTerm.Branches()`.
+- **Grouping keys** are `GroupKey[]`; Pharos reads a key's column with
+  `groupKeyField`, and descriptions name a calendar key's interval.
+- **Minimums.** `AggSpec.MinCount` is a `MetricMinCount`. The native V2
+  reducer, the Machine Time cubes and the count-only fast path answer no
+  clause with an active minimum, so the adapter runs row, distinct and summed
+  minimums alike.
+- **Capabilities.** Pharos serves the library's own `Capabilities()` for V2
+  and V3, so it advertises `minCountMeasures`, `metricMinCountMeasures`,
+  `calendarCycles` and `calendarGroupKeys`.
+  `TestQueryV3RunsEveryAdvertisedShape` runs each over a SQL dataset and over
+  staged map rows. Host fast paths decline date grouping (cycles included),
+  calendar keys and minimums, so these shapes always reach the adapter.
+  Grouped Home previews pass `metricMinCountMeasures` to
+  `metricPopulationError`, as the library's own table does.
+- **Fixes taken as they are.** Chart label gutters, whole-key colours for
+  multi-key pies, bars and boxes, nearest-point picking on line and scatter
+  charts, fit-to-screen minimum widths for links and Detail and JSON buttons,
+  and the source-filter metadata flood. The browser suite's two 0.9.5
+  `KNOWN` entries are gone; its one entry is the open fit regression below.
+  Pharos keeps its metadata scheduler
+  (`web/src/query-metadata.ts`): the service runs one metadata scan at a time,
+  and keeping one request in flight stops waiting reads from holding HTTP/1
+  connections the rows need. The dashboard scatter still puts the breakdown
+  first, because scatter charts still colour by their first key.
+- **Open regression.** Fitting floors a column at its whole cell content on
+  one line when the cell holds a link, so Analyze's wrapping title links keep
+  fitted tables wider than desktop viewports. The browser suite runs those
+  cases as todo through its `KNOWN` entry. See
+  [the fit handoff](handoffs/query-table-fit-wrapping-links.md).
+
+## 0.9.6 changes
+
+The Go query-link codec (`EncodeQueryLink`, `DecodeQueryLink`) lets the
+[site map](site-map.md)'s link tools build and read links in Go. Metric
+windows, shares and whole intervals, and `--qt-touch-target-scale`, are
+available; Pharos keeps its own trend smoothing.
 
 ## 0.9.5 changes
 

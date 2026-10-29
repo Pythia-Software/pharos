@@ -1,4 +1,4 @@
-import { isOrGroup, parseRelativeDuration, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
+import { isWhereGroup, parseRelativeDuration, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 import { localDay, shiftPeriod, type ChartPeriod } from "./chart-period";
 import { validRollingPeriods } from "./chart-series";
 
@@ -60,7 +60,7 @@ function localStamp(date: Date): string {
 }
 
 function isTimeTerm(term: WhereTerm, fields: TimeFields): term is WhereClause {
-  return !isOrGroup(term) && (term.field === fields.first || term.field === fields.last) && !term.negated && [">", ">=", "<", "<="].includes(term.op);
+  return !isWhereGroup(term) && (term.field === fields.first || term.field === fields.last) && !term.negated && [">", ">=", "<", "<="].includes(term.op);
 }
 
 export function timeBounds(where: WhereTerm[], fields: TimeFields, now = Date.now()): TimeBounds {

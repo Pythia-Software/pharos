@@ -1772,8 +1772,16 @@ func (site *siteMap) filterPhrase(dataset *siteDataset, terms []qt.WhereTerm) st
 	for _, term := range terms {
 		if term.IsGroup() {
 			members := []string{}
-			for _, member := range term.Any {
-				members = append(members, clause(member))
+			for _, branch := range term.Branches() {
+				literals := []string{}
+				for _, literal := range branch {
+					literals = append(literals, clause(literal))
+				}
+				if len(literals) == 1 {
+					members = append(members, literals[0])
+				} else {
+					members = append(members, "("+strings.Join(literals, " and ")+")")
+				}
 			}
 			parts = append(parts, "("+strings.Join(members, " or ")+")")
 		} else {

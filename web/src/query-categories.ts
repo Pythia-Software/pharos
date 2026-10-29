@@ -1,4 +1,4 @@
-import type { QueryState } from "@pythia-software/query-table-core";
+import { predicatesOf, type QueryState } from "@pythia-software/query-table-core";
 import type { QueryDataset } from "./query-links";
 
 // One palette for a card's subject, regardless of whether it is collected or
@@ -28,7 +28,7 @@ export type QueryCategory = keyof typeof queryCategories;
 // from query fields, never from the user-editable title or description.
 export function categoryForQuery(dataset?: QueryDataset, query?: QueryState): QueryCategory {
   if (query?.grouping) return categoryForQuery(dataset, query.grouping.source);
-  const predicates = query?.where.flatMap(term => "any" in term ? term.any : [term]) ?? [];
+  const predicates = query?.where.flatMap(predicatesOf) ?? [];
   const measures = query?.aggregations ?? [];
   const fields = new Set([...predicates.map(term => term.field), ...measures.flatMap(metric => [metric.field, ...metric.groupBy,
     ...[metric.expression, metric.expressionY, metric.distribution?.input].flatMap(expression => [...(expression ?? "").matchAll(/\[([^\]]+)\]/g)].map(match => match[1])),

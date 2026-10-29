@@ -87,9 +87,9 @@ export function trendQuery(catalog: AnalysisCatalog, input: AnalysisState, where
   }
   return {
     query: { ...EMPTY_QUERY, where: run(unique([...requested, ...population])), aggregations: clauses },
-    // A grouping stage cannot group a timestamp by hour (Query Table
-    // request 6), so an hourly timestamp trend's supporting query opens the
-    // records it draws, as a timestamp cycle's does.
+    // Pharos's grouping stages do not group a timestamp by hour, so an
+    // hourly timestamp trend's supporting query opens the records it draws,
+    // as a timestamp cycle's does.
     supporting: { ...EMPTY_QUERY, where: run(unique([...shown, ...population])), ...hourly ? {} : { aggregations: supporting } },
     range, requested, population, slice, normFrom, normTo,
     records: unique([...population, ...trendKind(measure) === "count" && measure.field ? [{ field: measure.field, op: "is_not_null" as const, value: "" }, { field: measure.field, op: "!=" as const, value: "" }] : []]),

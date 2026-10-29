@@ -264,7 +264,7 @@ func nativeAnswer(ctx context.Context, tx *sql.Tx, d qt.SQLiteV2Dataset, q qt.Me
 // or enum fields.
 func nativeMetric(spec qt.AggSpec, schema qt.Schema) bool {
 	if spec.Expression != "" || spec.ExpressionY != "" || spec.Distribution != nil || spec.DateGrouping != nil || len(spec.Sort) > 0 ||
-		spec.GroupLimit != 0 || spec.MinCount != 0 || len(spec.Where) > 0 || len(spec.Diagnostics) > 0 || spec.Scope != "" && spec.Scope != "allMatching" {
+		spec.GroupLimit != 0 || spec.MinCount.Active() || len(spec.Where) > 0 || len(spec.Diagnostics) > 0 || spec.Scope != "" && spec.Scope != "allMatching" {
 		return false
 	}
 	if !(spec.Op == "count" && spec.Field == "" || (spec.Op == "count" || spec.Op == "sum") && nativeColumn(schema, spec.Field, qt.FieldNumber)) {

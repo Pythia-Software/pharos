@@ -158,9 +158,10 @@ what each offers and why.
   rule; usage keeps its recorded `hour` too. The trade-off: a record's
   recorded day is the recording Mac's local date, so after a time-zone
   change a late-evening record can sit on one day in a day trend and on the
-  next in the weekday cycle; the trend's note says so. A grouping stage
-  cannot group a timestamp by hour (Query Table request 6), so an hourly
-  timestamp trend's supporting query opens the records it draws.
+  next in the weekday cycle; the trend's note says so. Pharos's grouping
+  stages do not yet group a timestamp by hour (Query Table 0.9.7's calendar
+  grouping keys are adopted in a later change), so an hourly timestamp
+  trend's supporting query opens the records it draws.
 - **Trend defaults.** The trend's default measure and breakdown.
 - **Legacy mapping** (optional, `legacy`). A function that reads a link or
   saved state written in an older vocabulary into the catalog's terms, and
@@ -301,11 +302,12 @@ for a missing one), a combined one's are JSON arrays of them.
   unit's fields (`selectionWhere`). No group or point limit can then crowd a
   selected group out (a scatter draws its 2,000 largest points among the
   selected groups). A combined selection is an OR of each group's
-  equalities; the where format is an AND of ORs, so an excluded selection is
+  equalities. Pharos writes it as an AND of ORs, so an excluded selection is
   one OR per group, and an included one expands into one OR per choice of a
   field from each group. Past 64 such terms it is drawn from the groups the
-  query returns instead, and the note says one beyond the limit is not drawn
-  (Query Table request 7).
+  query returns instead, and the note says one beyond the limit is not drawn.
+  Query Table 0.9.7's OR of AND branches, one term per selection, is adopted
+  in a later change.
 - **Units.** A selection is of a breakdown group, so it maps through the
   unit's fields: `provider = codex` selects the conversations (or delegated
   runs) whose top-level provider is codex, never a population filter on
@@ -520,15 +522,16 @@ chart clause, and the supporting query that "View supporting query" opens.
   - **Supporting query.** The usage hour cycle's supporting query opens
     records, because `/query-v3` cannot yet group usage by hour; see
     [`handoffs/usage-v3-hour-grouping.md`](handoffs/usage-v3-hour-grouping.md).
-    A timestamp cycle's opens records too: a grouping stage cannot group a
-    timestamp by calendar date (Query Table request 6).
+    A timestamp cycle's opens records too: Pharos's grouping stages do not
+    yet group a timestamp by calendar date.
 - **Thresholds.** These use Query Table's native `minCount`, which the service
   advertises for both `/metrics` and `/query-v3`. It removes small groups
   before `groupLimit` and reports `hiddenGroups`, so small groups cannot crowd
   out eligible ones. At unit level, each grouped row is one unit, so the
   threshold counts units. A catalog's `samples` measure (Tools' calls) is a
   group filter over one grouped row per group instead; such a minimum does
-  not count the groups it hides (Query Table request 5).
+  not count the groups it hides. Query Table 0.9.7's summed minimum is
+  adopted in a later change.
 - **Drill-down.** A records bucket uses `inspectBucketQuery`. A unit bucket
   opens the grouped query restricted to that group (HAVING on its key). A cycle
   slot spans many dates and has no drill-down.
@@ -871,18 +874,16 @@ match for windows starting at a local midnight; see Whole days.
   clause fails visibly ([handoff](handoffs/usage-v3-hour-grouping.md)).
 - Hours step on UTC hour boundaries and take the local hour of their start.
   In zones offset by a fraction of an hour, each slot starts mid-hour locally.
-- Query Table has no hour-of-day or weekday grouping, so cycle slots are
-  folded in the browser and cannot be drilled into.
-- Query Table colors chart marks by the first group key only, so a share of
-  "Provider + model" draws same-provider slices in one color.
-- Query Table's box and horizontal-bar charts clip long group labels at a
-  fixed margin.
-- `minCount` counts rows. A records compare view therefore cannot require
+- Cycle slots are folded in the browser and cannot be drilled into. Query
+  Table 0.9.7's native hour-of-day and day-of-week grouping is adopted in a
+  later change.
+- Thresholds count rows. A records compare view therefore cannot require
   "five distinct conversations per model"; use the conversation unit, where
   each row is one conversation. A minimum over a summed field (Tools' calls)
-  runs as a group filter and cannot report how many groups it hid.
-- A grouping stage cannot group a timestamp by calendar date or hour, so a
-  timestamp cycle's or hourly trend's supporting query opens records.
+  runs as a group filter and cannot report how many groups it hid. Query
+  Table 0.9.7's distinct and summed minimums are adopted in a later change.
+- Pharos's grouping stages do not group a timestamp by calendar date or hour,
+  so a timestamp cycle's or hourly trend's supporting query opens records.
 - A day trend files a record under its recorded day, the cycles under its
   day in the viewer's zone; they differ for late records after a time-zone
   change.
@@ -894,8 +895,10 @@ match for windows starting at a local midnight; see Whole days.
 - Human Words' message mix shares words, not characters: messages carry
   per-source word counts only.
 
-The Query Table limitations are requested in
-[`handoffs/query-table-dashboard-views.md`](handoffs/query-table-dashboard-views.md).
+Query Table 0.9.7 resolved the requests in
+[`handoffs/query-table-dashboard-views.md`](handoffs/query-table-dashboard-views.md):
+chart labels fit their gutter, and multi-key pies, bars and boxes colour each
+whole key.
 
 ## Phases
 

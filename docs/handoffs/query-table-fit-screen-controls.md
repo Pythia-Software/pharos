@@ -1,5 +1,12 @@
 # Query Table: keep native controls usable when fitting to screen
 
+**Resolved in Query Table 0.9.7**, consumed by Pharos's matching published
+core/React/UI/codegen packages and Go module. Each fitted column's minimum
+counts its padding and native Detail and JSON buttons. The browser suite's
+`KNOWN` entry for these buttons is removed.
+
+The original report below describes the **0.9.5** implementation.
+
 Pharos consumes published Query Table **0.9.5**, aligned across core, React, UI,
 codegen and the Go module. Its dependency policy disallows local library fixes.
 

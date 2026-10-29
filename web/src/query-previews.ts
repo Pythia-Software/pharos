@@ -1,7 +1,7 @@
 import { isOriginDimension, originLabel, loadOriginMetadata } from "./origin-dimensions";
 import { apiCostTrendQuery, apiCostTrendFacts, buildApiCostTrend, usesApiCostTrend, type CostTimeBucket } from "./api-cost-trend";
 import { formatMetricOutput } from "@pythia-software/query-table-ui";
-import { metricPopulationError, parseRelativeDuration, createGroupingModel, sourceExecutionSchema, toQueryRequestV3, validateQueryResultV3, validateComputedColumn, toMetricQuery, toServerQueryV2, type QueryCapabilitiesV3, type QueryResultV3, type ComputedColumn, type AggregationClause, type AggregationResult, type AggregationResultEntry, type ComputedExecution, type FieldSchema, type MetricCapabilities, type MetricQuery, type QueryState } from "@pythia-software/query-table-core";
+import { groupKeyFields, metricMinCountText, metricPopulationError, parseRelativeDuration, createGroupingModel, sourceExecutionSchema, toQueryRequestV3, validateQueryResultV3, validateComputedColumn, toMetricQuery, toServerQueryV2, type QueryCapabilitiesV3, type QueryResultV3, type ComputedColumn, type AggregationClause, type AggregationResult, type AggregationResultEntry, type ComputedExecution, type FieldSchema, type MetricCapabilities, type MetricQuery, type QueryState } from "@pythia-software/query-table-core";
 import { categoryForQuery, queryCategories } from "./query-categories";
 import { chartBucketsWithHistory, foldSeries, rollingAverageBuckets, validRollingPeriods, type ChartBucket, type ChartSeries } from "./chart-series";
 import { earliestKey, parseDay, shiftPeriod } from "./chart-period";
@@ -151,7 +151,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
         ?? query.grouping.summaries.find(column => column.op !== "row")?.id;
     const column = query.grouping.summaries.find(column => column.id === valueField);
     const unit = cover && valueField === cover.valueField ? cover.unit : column?.field?.includes("cost") ? "USD" : column?.field === "duration_ms" || column?.expression === "MEDIAN([duration_ms])" ? "ms" : column?.field?.includes("tokens") ? "tokens" : column?.field?.includes("words") ? "words" : ["card_rate", "card_escalation"].includes(valueField ?? "") ? "percent" : "";
-    const labelFields = cover?.labelFields ?? query.grouping.keys;
+    const labelFields = cover?.labelFields ?? groupKeyFields(query.grouping.keys);
     const insights = (payload.rows ?? []).slice(0, 3).map(row => ({
       label: labelFields.map(field => String(row[field] ?? "Unspecified")).join(" · "),
       value: valueField && typeof row[valueField] === "number" ? formatPreviewValue(row[valueField] as number, unit) : "—",
@@ -224,7 +224,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
     : `${formatPreviewValue(result.processedRows ?? total, "")} observations · ${clause.label ?? clause.op}`;
   const notes = [recipe?.note, searchNote, options.sourceCover ? "Chart covers source observations before grouped filters" : undefined, result.scope === "shownRows" ? "Covers the saved table page" : undefined, result.coverage === "partial" ? "Partial results" : undefined,
     result.groupCount !== undefined && result.groupCount > result.buckets.length ? "Open the view for all results" : undefined,
-    hidden ? `${hidden.toLocaleString()} ${hidden === 1 ? "group" : "groups"} hidden (fewer than ${clause.minCount?.toLocaleString()} rows)` : undefined,
+    hidden ? `${hidden.toLocaleString()} ${hidden === 1 ? "group" : "groups"} hidden (fewer than ${metricMinCountText(clause, field => schema.fields.find(item => item.name === field)?.label ?? field)})` : undefined,
     result.buckets.some(bucket => bucket.error || bucket.yError) ? "Some groups have calculation errors" : undefined];
   let ready = values.length > 0, eligible = true;
   if (options.suggested && recipe?.eligibility && !query.grouping) {
@@ -237,7 +237,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   if (!ready && recipe?.emptyLabel) preview.emptyLabel = recipe.emptyLabel;
   if (!ready && minimum && (clause.distribution?.kind === "box" || clause.expressionY)) preview.emptyLabel = `No cohorts with at least ${minimum} ${(options.cover ?? recipe?.cover)?.sampleUnit ?? (!query.grouping && ["tool_calls", "mcp_calls"].includes(job.dataset) ? "calls" : "conversations")}`;
   if (query.grouping && recipe?.exploration?.context && payload.rows?.length) {
-    preview.groupEvidence = Object.fromEntries(payload.rows.map(row => [JSON.stringify(query.grouping!.keys.map(key => row[key] ?? null)), recipe.exploration!.context!.map(item => typeof row[item.field] === "number" ? `${formatPreviewValue(row[item.field] as number, item.unit ?? "")} ${item.label}` : "").filter(Boolean).join(" · ")]));
+    preview.groupEvidence = Object.fromEntries(payload.rows.map(row => [JSON.stringify(groupKeyFields(query.grouping!.keys).map(key => row[key] ?? null)), recipe.exploration!.context!.map(item => typeof row[item.field] === "number" ? `${formatPreviewValue(row[item.field] as number, item.unit ?? "")} ${item.label}` : "").filter(Boolean).join(" · ")]));
   }
   if (query.grouping && recipe?.exploration?.context && values[0]) {
     preview.evidence = recipe.exploration.context.map(item => {
@@ -246,7 +246,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
     }).filter(Boolean).join(" · ") || preview.groupEvidence?.[JSON.stringify(values[0].keys)];
   }
   if (query.grouping && recipe?.exploration?.labelFields && payload.rows?.length) {
-    preview.groupLabels = Object.fromEntries(payload.rows.map(row => [JSON.stringify(query.grouping!.keys.map(key => row[key] ?? null)), recipe.exploration!.labelFields!.map(field => keyLabel(schema, field)?.(row[field]) ?? String(row[field] ?? "Unspecified")).join(" · ")]));
+    preview.groupLabels = Object.fromEntries(payload.rows.map(row => [JSON.stringify(groupKeyFields(query.grouping!.keys).map(key => row[key] ?? null)), recipe.exploration!.labelFields!.map(field => keyLabel(schema, field)?.(row[field]) ?? String(row[field] ?? "Unspecified")).join(" · ")]));
   }
   // A ranked cover needs values and evidence as well as bars. Match companion
   // metrics by their actual group keys, never by bucket position.
@@ -469,7 +469,7 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
         try {
           // A metric filter or minimum group size the executor does not run fails its card, never silently dropped.
           const grouped = Boolean(item.query.grouping || item.query.aggregations?.some(metric => metric.dateGrouping));
-          const support = grouped ? { filters: ctx.queryCapabilities?.metricFilters, minCount: ctx.queryCapabilities?.metricMinCount } : ctx.capabilities;
+          const support = grouped ? { filters: ctx.queryCapabilities?.metricFilters, minCount: ctx.queryCapabilities?.metricMinCount, minCountMeasures: ctx.queryCapabilities?.metricMinCountMeasures } : ctx.capabilities;
           const unsupported = item.query.aggregations?.map(metric => metricPopulationError(metric, support)).find(Boolean);
           if (unsupported) throw new Error(unsupported);
           if (grouped) {

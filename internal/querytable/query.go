@@ -74,6 +74,11 @@ func (q Query) Validate() error {
 		if len(predicates) == 0 {
 			return fmt.Errorf("where group must contain a predicate")
 		}
+		for _, member := range term.Any {
+			if member.IsConjunction() && (member.Field != "" || member.Op != "" || member.Value != "" || member.Negated || len(member.All) == 0) {
+				return fmt.Errorf("invalid filter branch: a branch is either a literal or a non-empty {\"all\": [...]}")
+			}
+		}
 		for _, clause := range predicates {
 			literals++
 			if clause.Field == "" || len(clause.Field) > 256 || len(clause.Value) > 10_000 {

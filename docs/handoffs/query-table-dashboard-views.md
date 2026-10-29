@@ -1,5 +1,15 @@
 # Query Table: requests from Pharos dashboard analysis views
 
+**Resolved in Query Table 0.9.7**, consumed by Pharos's matching published
+core/React/UI/codegen packages and Go module. Chart labels fit their gutter
+(1) and multi-key marks colour by their whole key (2) as Pharos upgrades; the
+cycle grouping, measured minimums, calendar keys and OR-of-AND filters (3–7)
+are adopted in later changes. These requests were carried into
+[the after-0.9.6 handoff](query-table-after-0.9.6.md).
+
+The original assignment below is dated **2026-10-27** and describes the
+affected **0.9.5** implementation.
+
 For the Query Table team. This is a self-contained assignment against the
 published **0.9.5** release, dated **2026-10-27**. Implement the requests below
 as reusable library behaviour, and publish them in one aligned Go and npm

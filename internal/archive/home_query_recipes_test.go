@@ -98,14 +98,18 @@ func TestHomeQueryCardGroupedDestinations(t *testing.T) {
 	}
 	var tracker struct {
 		Recipes []struct {
-			ID          string         `json:"id"`
-			Dataset     string         `json:"dataset"`
-			Where       []qt.WhereTerm `json:"where"`
+			ID      string         `json:"id"`
+			Dataset string         `json:"dataset"`
+			Where   []qt.WhereTerm `json:"where"`
+			// The grouping is read on its own: GroupingDefinition decodes
+			// strictly, and embedding it would hand it the whole object.
 			Exploration *struct {
-				qt.GroupingDefinition
-				ValueField  string         `json:"valueField"`
-				Having      []qt.WhereTerm `json:"having"`
-				CoverMetric *qt.AggSpec    `json:"coverMetric"`
+				Keys           json.RawMessage `json:"keys"`
+				Summaries      json.RawMessage `json:"summaries"`
+				Representative json.RawMessage `json:"representative"`
+				ValueField     string          `json:"valueField"`
+				Having         []qt.WhereTerm  `json:"having"`
+				CoverMetric    *qt.AggSpec     `json:"coverMetric"`
 			} `json:"exploration"`
 		} `json:"implemented_recipes"`
 	}
@@ -123,12 +127,20 @@ func TestHomeQueryCardGroupedDestinations(t *testing.T) {
 		}
 		t.Run(recipe.ID, func(t *testing.T) {
 			view := recipe.Exploration
-			fields := append([]string{}, view.Keys...)
-			for _, summary := range view.Summaries {
+			var grouping qt.GroupingDefinition
+			representative := view.Representative
+			if representative == nil {
+				representative = json.RawMessage("null")
+			}
+			if err := json.Unmarshal([]byte(`{"keys":`+string(view.Keys)+`,"summaries":`+string(view.Summaries)+`,"representative":`+string(representative)+`}`), &grouping); err != nil {
+				t.Fatal(err)
+			}
+			fields := append([]string{}, grouping.Keys...)
+			for _, summary := range grouping.Summaries {
 				fields = append(fields, summary.ID)
 			}
 			request := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Rows: true,
-				Source: qt.WireQuery{Where: recipe.Where, Limit: 50}, Grouping: &view.GroupingDefinition,
+				Source: qt.WireQuery{Where: recipe.Where, Limit: 50}, Grouping: &grouping,
 				Result: qt.WireQuery{Select: fields, Where: view.Having, OrderBy: qt.OrderBys{{Field: view.ValueField, Dir: "desc", Nulls: "last"}}, Limit: 3},
 			}
 			if view.CoverMetric != nil {

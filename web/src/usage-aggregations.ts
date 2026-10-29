@@ -1,4 +1,4 @@
-import { EMPTY_QUERY, applyAggregations, isOrGroup, matchesClause, predicatesOf, type AggregationRequest, type FieldSchema, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, applyAggregations, branchesOf, matchesClause, predicatesOf, type AggregationRequest, type FieldSchema, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 
 type Row = Record<string, any>;
 const dailyID = (row: Row) => `${row.agent_session_id}|${row.day}|${row.model}|${row.effort ?? ""}`;
@@ -17,7 +17,7 @@ export function usageRowsForWhere(daily: Row[], hourly: Row[], where: WhereTerm[
     const comparable = datetime && typeof value === "string" ? { ...row, [clause.field]: Date.parse(value) } : row;
     return matchesClause(comparable, clause, schema);
   };
-  const matches = (row: Row, term: WhereTerm) => isOrGroup(term) ? term.any.some(clause => matchesPredicate(row, clause)) : matchesPredicate(row, term);
+  const matches = (row: Row, term: WhereTerm) => branchesOf(term).some(branch => branch.every(clause => matchesPredicate(row, clause)));
   const rowWhere = where.filter(term => !hourTerm(term)), hourWhere = where.filter(hourTerm);
   const ids = new Set(daily.filter(row => rowWhere.every(term => matches(row, term))).map(row => String(row.id)));
   const hours = hourly.filter(row => ids.has(dailyID(row)) && hourWhere.every(term => matches(row, term)));

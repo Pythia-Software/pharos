@@ -1,4 +1,4 @@
-import { boxSummary, coerceValue, loadSchema, metricDateFloor, metricDateNext, metricDateTime, resolveFieldName, type AggregationClause, type AggregationResultEntry, type QueryState, type WhereClause } from "@pythia-software/query-table-core";
+import { boxSummary, coerceValue, loadSchema, predicatesOf, metricDateFloor, metricDateNext, metricDateTime, resolveFieldName, type AggregationClause, type AggregationResultEntry, type QueryState, type WhereClause } from "@pythia-software/query-table-core";
 import writingDocument from "../../schemas/writing_messages.schema.json";
 import parallelismDocument from "../../schemas/parallelism.schema.json";
 import type { QueryRecipe } from "./curiosity-data";
@@ -25,7 +25,7 @@ function weekdayDatePredicates(clause: AggregationClause, query?: QueryState): W
   const where = [...((query?.grouping?.source ?? query)?.where ?? []), ...(clause.where ?? [])];
   for (const term of where) {
     if ("any" in term) {
-      if (term.any.some(predicate => isDate(predicate) || isCalendar(predicate))) return;
+      if (predicatesOf(term).some(predicate => isDate(predicate) || isCalendar(predicate))) return;
     } else {
       if (isCalendar(term)) return;
       if (isDate(term)) {

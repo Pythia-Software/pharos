@@ -1,4 +1,5 @@
 import type { WhereClause, WhereTerm } from "@pythia-software/query-table-core";
+import { mapTermPredicates } from "./where-terms";
 import { usageDatasets, usageWorkspaceURL, type UsageDataset } from "./usage-workspace-model";
 import writing from "../../schemas/writing.schema.json";
 import tools from "../../schemas/tools.schema.json";
@@ -20,12 +21,9 @@ export function cardDashboardWhere(source: UsageDataset, target: UsageDataset, w
     }
     return cohorts.has(term.field) && targetFields[target].has(term.field) ? term : undefined;
   };
+  // A group projects only when every predicate of every branch does.
   return where.flatMap<WhereTerm>(term => {
-    if ("any" in term) {
-      const projected = term.any.map(project);
-      return projected.every((clause): clause is WhereClause => Boolean(clause)) ? [{ ...term, any: projected }] : [];
-    }
-    const projected = project(term);
+    const projected = mapTermPredicates(term, project);
     return projected ? [projected] : [];
   });
 }
