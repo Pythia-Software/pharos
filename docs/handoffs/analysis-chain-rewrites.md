@@ -115,6 +115,14 @@ every other chain stage: github (`RefreshRepositoryForgeIDs`), git
 
 ### What to change
 
+**Already done.** Steps 1 and 2 shipped with background updates, because
+the identities stage now runs after every scheduled index: the guarded
+`UPDATE` (`harness_version.go`) and the `'null'` filter (`ingest.go`), with
+`TestHarnessBackfillAndAlias` checking that a second inherit marks nothing
+dirty. Start from a `master` that includes them; the rest of PR 1 (the
+`WHEN` decision, the audit of other writers, the whole-chain invariant test)
+remains.
+
 1. **Guard the harness update.** Make `inheritHarnessAliasesTxContext` update
    only rows whose `harness_version_first`, `harness_version_last` or
    `harness_version_source` would actually change (`IS NOT` on each).

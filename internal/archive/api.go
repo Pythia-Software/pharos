@@ -77,6 +77,8 @@ type Server struct {
 	estimator activityEstimator
 	forecasts forecastStore
 	auto      automaticSync
+	// background is the Hourly and Daily schedule's state (background.go).
+	background backgroundState
 	// Leave catalog connections available for rows/previews while metadata scans run.
 	queryMetadata chan struct{}
 	ask           askState
@@ -97,6 +99,7 @@ type Server struct {
 
 func NewServer(config Config, catalog *Catalog) *Server {
 	server := &Server{Catalog: catalog, config: config, runs: []*SyncRun{}, queryMetadata: make(chan struct{}, 1)}
+	server.background.wake = make(chan struct{}, 1)
 	server.life.init()
 	server.ops = newOpRegistry("service")
 	server.ops.releasing = server.releasing
@@ -170,6 +173,7 @@ func (s *Server) Serve() error {
 	s.daemon("maintainQueryTextIndexes", s.Catalog.maintainQueryTextIndexes)
 	s.daemon("keepWALSmall", func(ctx context.Context) { s.Catalog.keepWALSmall(ctx, 10*time.Second, walSizeLimit) })
 	s.daemon("automaticLoop", s.automaticLoop)
+	s.daemon("backgroundLoop", s.backgroundLoop)
 	s.daemon("cloudScheduleLoop", s.cloudScheduleLoop)
 	s.daemon("watchFeatureFlags", s.Catalog.watchFeatureFlags)
 	s.daemon("compressCaptures", s.compressCapturesLoop)
@@ -579,6 +583,8 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		s.serveOperations(w, r)
 	case path == "/api/status":
 		s.serveStatus(w, r)
+	case path == "/api/background":
+		s.getBackground(w, r)
 	case path == "/api/status/stream":
 		s.serveStatusStream(w, r)
 	case path == "/api/health/drive":
@@ -676,6 +682,10 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 
 	case strings.HasPrefix(path, "/api/sync/") || path == "/api/library/update":
 		s.postIncrementalSync(w, r, body)
+	case path == "/api/background/settings":
+		s.postBackgroundSettings(w, r, body)
+	case path == "/api/background/run":
+		s.postBackgroundRun(w, r, body)
 	case path == "/api/upgrade":
 		// The upgrade reads and rewrites much of the catalog, so it runs in the
 		// background; /api/upgrade and the library status report progress. A

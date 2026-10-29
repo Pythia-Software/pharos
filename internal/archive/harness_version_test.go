@@ -77,6 +77,19 @@ func TestHarnessBackfillAndAlias(t *testing.T) {
 	if _, err := os.Stat(c.captureRootPath()); !os.IsNotExist(err) {
 		t.Fatalf("metadata backfill created retained transcripts without opt-in: %v", err)
 	}
+	// Inheriting again changes nothing, so it marks nothing dirty: the
+	// identities stage runs after every scheduled index.
+	execSQL(t, c.DB, "DELETE FROM workspace_library_dirty")
+	if err := c.inheritHarnessAliases(); err != nil {
+		t.Fatal(err)
+	}
+	var dirty int
+	if err := c.DB.QueryRow("SELECT COUNT(*) FROM workspace_library_dirty").Scan(&dirty); err != nil {
+		t.Fatal(err)
+	}
+	if dirty != 0 {
+		t.Fatalf("inheriting unchanged aliases marked %d workspaces dirty", dirty)
+	}
 }
 
 func TestHarnessOptionalFieldsKeepDigest(t *testing.T) {

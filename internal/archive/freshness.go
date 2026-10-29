@@ -88,13 +88,17 @@ var freshnessReasons = map[string]string{
 	"capture-busy":         "A capture was using it at the last index",
 	"needs-capture":        "Newer captured inputs are waiting to be indexed",
 	"schedule-off":         "Scheduled indexing is off for it",
-	"manual-only":          "Scheduled indexing does not read this kind of source",
+	"manual-only":          "Set to update only when you ask",
+	"scheduled-frequent":   "Waiting for the next frequent update",
+	"scheduled-hourly":     "Waiting for the next hourly update",
+	"scheduled-daily":      "Waiting for the next daily update",
+	"late":                 "Its scheduled update is late",
 	"interrupted":          "The last index of this source was interrupted",
 	"overdue":              "The scheduled index has not checked it recently",
 	"not-indexed":          "Captured data is not indexed yet",
 	"stopped":              "Stopped by you",
 	"version":              "This version of Pharos rebuilds it",
-	"deferred-by-schedule": "Scheduled indexing skips analyses",
+	"deferred-by-schedule": "Waits for Update everything now",
 	"failed":               "The last update failed",
 	"never-built":          "Not built yet",
 	"changed":              "Changed since it was last built",
@@ -147,6 +151,9 @@ var pageGroups = map[string]bool{"conversations": true, "search": true, "analyse
 // What catches a domain up when nothing runs (§5 "next").
 const (
 	nextScheduledIndex = "updates with the next scheduled index"
+	nextFrequentUpdate = "updates within minutes"
+	nextHourlyUpdate   = "updates with the next hourly update"
+	nextDailyUpdate    = "updates with the next daily update"
 	nextManualIndex    = "updates with the next manual index"
 	nextOnItsOwn       = "carries on by itself"
 	nextResume         = "carries on when you resume it or Pharos next opens the library"
@@ -239,6 +246,9 @@ func (c *Catalog) freshness(ctx context.Context, in freshnessInput) []freshnessR
 		in.host = currentHost().ID
 	}
 	l := ledger{in: in, empty: c.freshnessEmpty(ctx)}
+	var backgroundErr error
+	l.background, backgroundErr = c.backgroundSettings(ctx, in.now)
+	l.backgroundKnown = backgroundErr == nil
 	meta, metaErr := c.freshnessMeta(ctx)
 	deferred, deferredErr := c.freshnessDeferred(ctx)
 	ends := c.latestAnalysisEnds(ctx, in.host)
@@ -263,6 +273,45 @@ type ledger struct {
 	// empty is a library with no conversations: the derived domains have no
 	// inputs, so nothing is waiting, which is evidence they are current.
 	empty bool
+	// background is this Mac's schedule (§11), when it could be read.
+	background      backgroundSettings
+	backgroundKnown bool
+}
+
+// cadenceWindow is how long work may wait for its cadence's next update
+// before the ledger calls it late.
+var cadenceWindow = map[string]time.Duration{cadenceFrequent: 30 * time.Minute, cadenceHourly: 3 * time.Hour, cadenceDaily: 30 * time.Hour}
+
+var (
+	cadenceNext  = map[string]string{cadenceFrequent: nextFrequentUpdate, cadenceHourly: nextHourlyUpdate, cadenceDaily: nextDailyUpdate}
+	cadenceShort = map[string]string{cadenceFrequent: "updates within minutes", cadenceHourly: "updates within the hour", cadenceDaily: "updates overnight"}
+)
+
+// itemCadence is where the schedule runs item, or manual when background
+// updates are off, paused or unknown.
+func (l *ledger) itemCadence(id string) string {
+	item, _ := backgroundItemByID(id)
+	if !l.backgroundKnown || l.background.Mode != "on" {
+		return cadenceManual
+	}
+	return l.background.cadence(item)
+}
+
+// scheduledFor is a domain whose work waits for item's cadence: scheduled
+// within the cadence's window, late past it, and behind for the manual
+// index when the schedule will not run it.
+func (l *ledger) scheduledFor(entry *domainEntry, item, pendingSince string) {
+	cadence := l.itemCadence(item)
+	if cadence == cadenceManual {
+		entry.state, entry.reason, entry.next = freshBehind, "deferred-by-schedule", nextManualIndex
+		return
+	}
+	entry.next = cadenceNext[cadence]
+	if since, ok := parseTime(pendingSince); ok && l.in.now.Sub(since) > cadenceWindow[cadence] {
+		entry.state, entry.reason = freshBehind, "late"
+		return
+	}
+	entry.state, entry.reason, entry.short = freshScheduled, "scheduled-"+cadence, cadenceShort[cadence]
 }
 
 // freshnessEmpty reports a library with no conversations; false when it
@@ -410,10 +459,12 @@ func (c *Catalog) freshnessMeta(ctx context.Context) (map[string]string, error) 
 type deferredRow struct {
 	generation, completed  int64
 	changedAt, completedAt string
+	// pendingSince is when its waiting work began.
+	pendingSince string
 }
 
 func (c *Catalog) freshnessDeferred(ctx context.Context) (map[string]deferredRow, error) {
-	rows, err := c.reader().QueryContext(ctx, "SELECT name,generation,completed_generation,changed_at,COALESCE(completed_at,'') FROM sync_deferred")
+	rows, err := c.reader().QueryContext(ctx, "SELECT name,generation,completed_generation,changed_at,COALESCE(completed_at,''),COALESCE(pending_since,changed_at) FROM sync_deferred")
 	if err != nil {
 		return nil, err
 	}
@@ -422,7 +473,7 @@ func (c *Catalog) freshnessDeferred(ctx context.Context) (map[string]deferredRow
 	for rows.Next() {
 		var name string
 		var row deferredRow
-		if err := rows.Scan(&name, &row.generation, &row.completed, &row.changedAt, &row.completedAt); err != nil {
+		if err := rows.Scan(&name, &row.generation, &row.completed, &row.changedAt, &row.completedAt, &row.pendingSince); err != nil {
 			return nil, err
 		}
 		values[name] = row
@@ -507,12 +558,21 @@ func (l *ledger) conversations(ctx context.Context, c *Catalog) {
 	for _, name := range sources {
 		entry := domainEntry{domain: "conv:" + name, group: "conversations", label: "Conversations (" + name + ")", running: "indexing"}
 		state := states[name]
-		// The schedule reads only automaticProvider's kinds (autoSources),
-		// whatever its settings select.
-		manualOnly := state != nil && state.kind != "" && !automaticProvider(state.kind)
-		scheduled := settingsErr == nil && settings.Enabled && !manualOnly && (len(settings.Sources) == 0 || slices.Contains(settings.Sources, name))
+		// Scheduled indexing reads only automaticProvider's kinds
+		// (autoSources); the others are read in full by the other-sources
+		// background item, on its cadence.
+		wholeSource := state != nil && state.kind != "" && !automaticProvider(state.kind)
+		cadence := cadenceFrequent
+		if wholeSource {
+			cadence = l.itemCadence("other-sources")
+		}
+		manualOnly := wholeSource && cadence == cadenceManual && l.backgroundKnown && l.background.Mode == "on"
+		scheduled := settingsErr == nil && settings.Enabled && cadence != cadenceManual && (wholeSource || len(settings.Sources) == 0 || slices.Contains(settings.Sources, name))
+		window := max(2*interval, interval+15*time.Minute)
 		entry.next = nextManualIndex
-		if scheduled {
+		if scheduled && wholeSource {
+			entry.next, window = cadenceNext[cadence], cadenceWindow[cadence]
+		} else if scheduled {
 			entry.next = nextScheduledIndex
 		}
 		if state != nil {
@@ -538,7 +598,7 @@ func (l *ledger) conversations(ctx context.Context, c *Catalog) {
 			// Only the last index's answer is known; whether the source has
 			// changed since is not.
 			entry.state, entry.reason = freshUnknown, "schedule-off"
-		case l.in.now.Sub(asOf) > max(2*interval, interval+15*time.Minute):
+		case l.in.now.Sub(asOf) > window:
 			entry.state, entry.reason = freshUnknown, "overdue"
 		default:
 			entry.state = freshCurrent
@@ -695,8 +755,10 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 		row, ok := deferred[name]
 		return row.changedAt, ok && row.generation > row.completed
 	}
-	deferral := func(entry *domainEntry) {
-		entry.state, entry.reason, entry.next = freshBehind, "deferred-by-schedule", nextManualIndex
+	// Each stage waits for its background item's cadence.
+	items := map[string]string{"identities": "repositories", "git": "repositories", "tools": "tools", "authorship": "writing"}
+	deferral := func(entry *domainEntry, name string) {
+		l.scheduledFor(entry, items[name], deferred[name].pendingSince)
 	}
 	for _, stage := range chainStages[1:3] {
 		name := strings.TrimPrefix(stage.kind, "analysis.")
@@ -711,7 +773,7 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 		case l.nothingToDo(&entry):
 		case chainFailure(&entry, ends, changedAt):
 		case isDeferred:
-			deferral(&entry)
+			deferral(&entry, name)
 		case recorded == "":
 			entry.state, entry.reason, entry.next = freshUnknown, "no-record", nextManualIndex
 		default:
@@ -738,7 +800,7 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 	case l.nothingToDo(&tools):
 	case chainFailure(&tools, ends, changedAt):
 	case isDeferred:
-		deferral(&tools)
+		deferral(&tools, "tools")
 	case built == "":
 		tools.state, tools.reason, tools.next = freshBehind, "never-built", nextReadOrIndex
 	case !layout:
@@ -762,7 +824,7 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 	case l.nothingToDo(&authorship):
 	case chainFailure(&authorship, ends, changedAt):
 	case isDeferred:
-		deferral(&authorship)
+		deferral(&authorship, "authorship")
 	case meta["authorship_generation"] == "":
 		authorship.state, authorship.reason, authorship.next = freshBehind, "never-built", nextManualIndex
 	default:
@@ -796,6 +858,9 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 // findingsNext is what runs the next full findings pass: tomorrow's first
 // index, unless scheduled indexing (which defers findings) is on.
 func (l *ledger) findingsNext() string {
+	if l.itemCadence("review") == cadenceDaily {
+		return nextDailyUpdate
+	}
 	if l.scheduledIndexing {
 		return nextFindingsManual
 	}
@@ -837,7 +902,9 @@ func (l *ledger) findings(c *Catalog, meta map[string]string, metaErr error, def
 	case meta["findings_generation"] == "":
 		entry.state, entry.reason = freshBehind, "never-built"
 	case isDeferred:
-		entry.state, entry.reason = freshBehind, "deferred-by-schedule"
+		l.scheduledFor(&entry, "findings", row.pendingSince)
+	case !today && l.dailyReviewWaiting():
+		entry.state, entry.reason, entry.next, entry.short = freshScheduled, "scheduled-daily", nextDailyUpdate, cadenceShort[cadenceDaily]
 	case !today:
 		entry.state, entry.reason = freshBehind, "daily-pass-due"
 	case meta["findings_inputs_generation"] == "":
@@ -849,12 +916,25 @@ func (l *ledger) findings(c *Catalog, meta map[string]string, metaErr error, def
 		// cadence; tomorrow, without a pass, it is daily-pass-due.
 		entry.state, entry.reason, entry.next = freshScheduled, "changed", l.findingsNext()
 		entry.short = "updates tomorrow"
-		if l.scheduledIndexing {
+		if l.itemCadence("review") == cadenceDaily {
+			entry.short = cadenceShort[cadenceDaily]
+		} else if l.scheduledIndexing {
 			// A scheduled index defers findings rather than running the pass.
 			entry.short = "updates with manual index"
 		}
 	}
 	l.add(entry)
+}
+
+// dailyReviewWaiting is whether today's full findings pass is still within
+// its daily time: not reached yet, or reached less than dailyLatest ago.
+func (l *ledger) dailyReviewWaiting() bool {
+	if l.itemCadence("review") != cadenceDaily {
+		return false
+	}
+	instant := dailyInstant(l.in.now, l.background.DailyAt)
+	today := l.in.now.In(time.Local)
+	return instant.YearDay() != today.YearDay() || l.in.now.Sub(instant) <= dailyLatest
 }
 
 func conditionalText(condition bool, value string) string {

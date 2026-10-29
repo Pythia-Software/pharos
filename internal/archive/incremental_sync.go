@@ -126,7 +126,8 @@ func unitOf(source SourceConfig, parts []sourcePart, changed bool) syncUnit {
 }
 
 func (c *Catalog) syncSettings(ctx context.Context) (syncSettings, error) {
-	settings := syncSettings{Interval: 300, Sources: []string{}}
+	// Background updates are on until someone turns them off.
+	settings := syncSettings{Enabled: true, Interval: 300, Sources: []string{}}
 	var enabled int
 	var sources string
 	err := c.reader().QueryRowContext(ctx, "SELECT enabled,interval_seconds,sources_json,COALESCE(next_at,'') FROM sync_settings WHERE host_id=?", currentHost().ID).
@@ -188,7 +189,7 @@ func (s *Server) automaticLoop(ctx context.Context) {
 	defer timer.Stop()
 	for {
 		settings, err := s.Catalog.syncSettings(ctx)
-		if err == nil && settings.Enabled {
+		if err == nil && settings.Enabled && !s.Catalog.backgroundPaused(ctx, time.Now()) {
 			due, _ := time.Parse(time.RFC3339Nano, settings.NextAt)
 			if due.IsZero() || !time.Now().Before(due) {
 				s.runAutomatic(ctx, settings)
@@ -458,6 +459,9 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 	}
 	if len(changedWorkspaces) == 0 {
 		op.skip("projections")
+	} else if !manual {
+		// The analyses placed Frequently follow the index that fed them.
+		defer s.wakeBackground()
 	}
 	if len(changedWorkspaces) > 0 && ctx.Err() == nil {
 		op.begin("projections")
@@ -578,8 +582,11 @@ func conditionalString(condition bool, value string) any {
 
 func markSyncDeferred(tx *sql.Tx) error {
 	for _, name := range []string{"identities", "git", "tools", "authorship", "findings"} {
-		if _, err := tx.Exec(`INSERT INTO sync_deferred(name,generation,changed_at) VALUES(?,1,?)
-			ON CONFLICT(name) DO UPDATE SET generation=generation+1,changed_at=excluded.changed_at`, name, now()); err != nil {
+		// pending_since is when the work began waiting: the first change
+		// after the stage last caught up.
+		if _, err := tx.Exec(`INSERT INTO sync_deferred(name,generation,changed_at,pending_since) VALUES(?,1,?,?)
+			ON CONFLICT(name) DO UPDATE SET generation=generation+1,changed_at=excluded.changed_at,
+			pending_since=CASE WHEN sync_deferred.generation<=sync_deferred.completed_generation OR sync_deferred.pending_since IS NULL THEN excluded.changed_at ELSE sync_deferred.pending_since END`, name, now(), now()); err != nil {
 			return err
 		}
 	}

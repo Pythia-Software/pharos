@@ -1146,6 +1146,18 @@ CREATE TABLE IF NOT EXISTS sync_settings (
   host_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL, interval_seconds INTEGER NOT NULL,
   sources_json TEXT NOT NULL DEFAULT '[]', next_at TEXT
 );
+-- Background updates (docs/background-work.md §11): this Mac's schedule
+-- beside sync_settings (whose enabled is the on/off switch), and each item's
+-- last scheduled run.
+CREATE TABLE IF NOT EXISTS background_settings (
+  host_id TEXT PRIMARY KEY, paused_until TEXT, daily_at TEXT NOT NULL DEFAULT '03:00',
+  hold_when_busy INTEGER NOT NULL DEFAULT 1, overrides_json TEXT NOT NULL DEFAULT '{}',
+  placements_json TEXT NOT NULL DEFAULT '{}', updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS background_runs (
+  host_id TEXT NOT NULL, item TEXT NOT NULL, started_at TEXT, finished_at TEXT,
+  succeeded_at TEXT, error TEXT, seconds REAL, PRIMARY KEY(host_id,item)
+);
 CREATE TABLE IF NOT EXISTS automatic_source_states (
   host_id TEXT NOT NULL, source_name TEXT NOT NULL, attempted_at TEXT, succeeded_at TEXT,
   error TEXT, indexed_at TEXT, preflight TEXT, counts_json TEXT NOT NULL DEFAULT '{}',

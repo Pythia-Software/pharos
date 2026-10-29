@@ -2096,7 +2096,8 @@ func (c *Catalog) reconcileIdentities(ctx context.Context) (int, error) {
 	if err := c.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM conversation_identity_links").Scan(&before); err != nil {
 		return 0, err
 	}
-	rows, err := queryMapsContext(ctx, c.DB, "SELECT id,aliases_json FROM conversations WHERE aliases_json<>'[]'")
+	// A conversation with no aliases stores [] or, from a nil list, null.
+	rows, err := queryMapsContext(ctx, c.DB, "SELECT id,aliases_json FROM conversations WHERE aliases_json NOT IN ('[]','null')")
 	if err != nil {
 		return 0, err
 	}

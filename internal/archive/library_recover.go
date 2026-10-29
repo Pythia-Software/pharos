@@ -230,7 +230,14 @@ func RecoverLibrary(ctx context.Context, backup, destination string, progress fu
 		_, err = catalog.DB.ExecContext(ctx, `DELETE FROM sync_settings; DELETE FROM automatic_source_states; DELETE FROM sync_deferred; DELETE FROM sync_recovery_jobs;
  DELETE FROM cloud_backup_schedules;
  DELETE FROM library_delivery_checkpoints; DELETE FROM library_workspace_delivery_checkpoints;
- DELETE FROM source_input_states; DELETE FROM source_states; DELETE FROM source_record_states; DELETE FROM source_item_states; DELETE FROM source_terminal_states; DELETE FROM sync_generations;`)
+ DELETE FROM source_input_states; DELETE FROM source_states; DELETE FROM source_record_states; DELETE FROM source_item_states; DELETE FROM source_terminal_states; DELETE FROM sync_generations;
+ DELETE FROM background_runs;`)
+	}
+	if err == nil {
+		// A recovered library starts with background updates off on every
+		// Mac it knows (they are on by default), until someone turns them on.
+		_, err = catalog.DB.ExecContext(ctx, `INSERT OR IGNORE INTO sync_settings(host_id,enabled,interval_seconds) SELECT id,0,300 FROM hosts;
+ INSERT OR IGNORE INTO sync_settings(host_id,enabled,interval_seconds) VALUES(?,0,300)`, currentHost().ID)
 	}
 	if closeErr := catalog.Close(); err == nil {
 		err = closeErr
