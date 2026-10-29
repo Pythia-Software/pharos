@@ -4,8 +4,8 @@
 matching published core/React/UI/codegen packages and Go module. Every request
 below landed. Pharos took the fixes that need no feature of its own on
 upgrading: chart labels (1), whole-key colours (2), nearest-point picking (4),
-fitted links and Detail/JSON buttons (5, 6) and the metadata flood (16); the
-browser suite's `KNOWN` list is empty again. The capabilities (3, 7–15) are
+fitted links and Detail/JSON buttons (5, 6) and the metadata flood (16), and
+removed the browser suite's `KNOWN` entries for them. The capabilities (3, 7–15) are
 adopted in later changes. See
 [the integration guide](../query-table-integration.md#097-changes).
 

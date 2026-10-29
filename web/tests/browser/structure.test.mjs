@@ -386,7 +386,11 @@ const WIDTHS = [{ width: 1440, height: 900 }, { width: 1280, height: 720 }, { wi
 // Layout bugs found by this sweep and not fixed yet. A case whose only
 // problems match here is marked todo with the bug, so the suite stays honest;
 // any other problem still fails it.
-const KNOWN = [];
+const KNOWN = [{
+  bug: "Query Table 0.9.7 fit-to-screen floors a column at its wrapping host link measured on one line, so Analyze's fitted tables scroll at desktop widths; docs/handoffs/query-table-fit-wrapping-links.md",
+  when: (route, viewport) => /^Analyze workspace query (usage|writing|writing_messages|tool_calls|skill_usages|conversation_activity)$/.test(route.name) && viewport.width >= 1024,
+  match: /^fitted table still scrolls sideways: \d+px wide in \d+px$/,
+}];
 
 for (const width of [1440, 390, 320]) test(`Search filter suggestions stay readable and keep input focus @ ${width}`, { skip }, async t => {
   const values = ["exploration", "exploration-service", "exploration-service-v2", "gbw-utilities", "general-purpose-repository",
@@ -775,10 +779,20 @@ describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY
           await app.page.locator(route.shown).first().waitFor();
           await app.settled();
         }
+        // A fitted table stops scrolling sideways at desktop widths. One that
+        // still scrolls once the wait ends is a problem, so KNOWN can name it.
+        const fitting = [];
         if (route.fitTable && viewport.width >= 1024) {
           await app.page.waitForFunction(() => {
             const wrap = document.querySelector('.usage-workspace-table .qt-table-wrap');
             return wrap && wrap.scrollWidth <= wrap.clientWidth + 1;
+          }).catch(async error => {
+            const size = await app.page.evaluate(() => {
+              const wrap = document.querySelector('.usage-workspace-table .qt-table-wrap');
+              return wrap ? `${wrap.scrollWidth}px wide in ${wrap.clientWidth}px` : null;
+            });
+            if (!size) throw error;
+            fitting.push(`fitted table still scrolls sideways: ${size}`);
           });
         }
         if (route.check) await route.check(app.page);
@@ -790,7 +804,7 @@ describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY
           await app.shot("scrolled");
           problems.push(...(await layoutProblems(app.page)).filter(problem => !problems.includes(problem)));
         }
-        problems.push(...app.problems());
+        problems.push(...fitting, ...app.problems());
         const known = KNOWN.filter(bug => (!bug.when || bug.when(route, viewport)) && problems.some(problem => bug.match.test(problem)));
         if (problems.some(problem => !known.some(bug => bug.match.test(problem)))) assert.fail(`${name} (${route.url}):\n  ${problems.join("\n  ")}`);
         if (known.length) t.todo(known.map(bug => bug.bug).join("; "));

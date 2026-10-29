@@ -44,15 +44,17 @@ capabilities are adopted in later changes.
 - **Fixes taken as they are.** Chart label gutters, whole-key colours for
   multi-key pies, bars and boxes, nearest-point picking on line and scatter
   charts, fit-to-screen minimum widths for links and Detail and JSON buttons,
-  and the source-filter metadata flood. The browser suite's `KNOWN` list is
-  empty again. Pharos keeps its metadata scheduler
+  and the source-filter metadata flood. The browser suite's two 0.9.5
+  `KNOWN` entries are gone; its one entry is the open fit regression below.
+  Pharos keeps its metadata scheduler
   (`web/src/query-metadata.ts`): the service runs one metadata scan at a time,
   and keeping one request in flight stops waiting reads from holding HTTP/1
   connections the rows need. The dashboard scatter still puts the breakdown
   first, because scatter charts still colour by their first key.
 - **Open regression.** Fitting floors a column at its whole cell content on
   one line when the cell holds a link, so Analyze's wrapping title links keep
-  fitted tables wider than desktop viewports. See
+  fitted tables wider than desktop viewports. The browser suite runs those
+  cases as todo through its `KNOWN` entry. See
   [the fit handoff](handoffs/query-table-fit-wrapping-links.md).
 
 ## 0.9.6 changes
