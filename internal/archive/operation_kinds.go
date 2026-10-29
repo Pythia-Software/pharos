@@ -179,6 +179,8 @@ var operationKinds = []operationKind{
 		OnEject: "Not stoppable; eject of either drive must wait.", Latency: "none", Journal: journalAlways, Priority: priorityForeground, Broker: true},
 	{Kind: "library.recover", Label: "Restore a backup", Verb: "Restoring a backup", Holds: "O:w D(target):w", Affects: "(target) all",
 		OnEject: "Not stoppable; eject must wait.", Latency: "none", Journal: journalAlways, Priority: priorityForeground, Broker: true},
+	{Kind: "library.compact", Label: "Compact the catalog", Verb: "Compacting the catalog", Holds: "O:w D(target):w", Affects: "—",
+		OnEject: "Not stoppable; eject must wait. Quitting Pharos stops it and keeps the original catalog.", Latency: "none", Journal: journalAlways, Priority: priorityForeground, Broker: true},
 	{Kind: "library.deliver", Label: "Deliver captured history", Verb: "Delivering history", Holds: "O:w M:w D(source):w D(target):w", Affects: "(target) conv:*",
 		OnEject: "Not stoppable; it stops both libraries' services first (§4.4).", Latency: "none", Journal: journalAlways, Priority: priorityBackground, Broker: true},
 	{Kind: "library.deliver.capture", Label: "Capture into the pending library", Verb: "Capturing pending history", Holds: "D(source):w", Affects: "—",

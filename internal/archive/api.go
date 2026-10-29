@@ -131,6 +131,9 @@ func (s *Server) Serve() error {
 		return err
 	}
 	defer owner.Close()
+	// A compaction holds the use lock exclusively, so none is running; what
+	// one killed part way left is tens of gigabytes nothing else removes.
+	removeCompactionLeftovers(canonical(config.CatalogPath))
 	if config.Host != "127.0.0.1" && config.Host != "::1" && config.Host != "localhost" {
 		return fmt.Errorf("the archive API may bind only to a loopback address")
 	}

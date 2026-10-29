@@ -310,8 +310,12 @@ async function refresh(){
   $('job').hidden=!state.job;
   if(state.job){$('job').textContent=state.job.phase;$('job').classList.toggle('error',state.job.state==='failed'||state.job.state==='paused')}
   // A verified operation reopens the selected library; a failed one stays here with its error.
-  const selected=state.libraries.find(l=>l.id===state.selected);
-  if(arrival.get('after')==='operation'&&state.job?.state==='complete'&&!state.busy&&selected?.available&&!reopening){reopening=true;notice('Reopening '+selected.name+'…');act(async()=>{await call('connect',{id:selected.id});location.href=libraryHome});return}
+  // A compaction that fails leaves the catalog as it was, so it reopens too: to
+  // Library health's Storage when it finished, else to the Libraries page, which
+  // shows the failure.
+  const selected=state.libraries.find(l=>l.id===state.selected),after=arrival.get('after');
+  const ended=after==='operation'?state.job?.state==='complete':after==='compact'&&['complete','failed'].includes(state.job?.state);
+  if(ended&&!state.busy&&selected?.available&&!reopening){reopening=true;notice('Reopening '+selected.name+'…');const home=after==='compact'&&state.job.state==='complete'?'/settings':libraryHome;act(async()=>{await call('connect',{id:selected.id});location.href=home});return}
   const signature=JSON.stringify({...state,job:null});if(signature===renderSignature)return;renderSignature=signature;
   if((state.libraries.length||state.job)&&introStep!=='setup')showIntroduction('setup');
   const current=state.libraries.find(l=>l.id===state.selected);
