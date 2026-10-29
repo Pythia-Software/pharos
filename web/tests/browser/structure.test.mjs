@@ -789,10 +789,11 @@ describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY
           }).catch(async error => {
             const size = await app.page.evaluate(() => {
               const wrap = document.querySelector('.usage-workspace-table .qt-table-wrap');
-              return wrap ? `${wrap.scrollWidth}px wide in ${wrap.clientWidth}px` : null;
+              return wrap ? { scroll: wrap.scrollWidth, client: wrap.clientWidth } : null;
             });
             if (!size) throw error;
-            fitting.push(`fitted table still scrolls sideways: ${size}`);
+            // Fitting may have finished as the wait ended.
+            if (size.scroll > size.client + 1) fitting.push(`fitted table still scrolls sideways: ${size.scroll}px wide in ${size.client}px`);
           });
         }
         if (route.check) await route.check(app.page);

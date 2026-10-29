@@ -194,7 +194,8 @@ export async function open(t, { url = "/", viewport = { width: 1440, height: 900
     inflight.add(request);
   });
   page.on("framenavigated", frame => {
-    if (frame !== page.mainFrame() || !loadingDocument || frame.url() !== loadingDocument.url()) return;
+    const unhashed = url => url.split("#")[0];
+    if (frame !== page.mainFrame() || !loadingDocument || unhashed(frame.url()) !== unhashed(loadingDocument.url())) return;
     loadingDocument = null;
     for (const request of inflight) if (!request.isNavigationRequest()) inflight.delete(request);
     wake();
