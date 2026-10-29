@@ -48,8 +48,12 @@ colours, cycle grouping and hit targets; fit-to-screen clipping and grouped
 Detail; saving host query state and last-successful persistence; minimum
 counts, calendar grouping keys and OR-of-AND filters; and the V2, text-index
 and metadata performance asks. Pharos took the chart, fitting and metadata
-fixes on upgrading; it adopts the new capabilities in later changes. No
-Query Table request is open.
+fixes on upgrading; it adopts the new capabilities in later changes.
+
+[`query-table-fit-wrapping-links.md`](query-table-fit-wrapping-links.md) is
+open: 0.9.7's fit-to-screen minimums measure a wrapping host link as one
+unshrinkable line, so Analyze's fitted tables scroll at desktop widths. It can
+be sent directly to the Query Table team.
 
 That handoff superseded the requests in
 [`query-table-dashboard-views.md`](query-table-dashboard-views.md),

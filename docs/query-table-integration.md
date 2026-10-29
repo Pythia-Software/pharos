@@ -50,6 +50,10 @@ capabilities are adopted in later changes.
   and keeping one request in flight stops waiting reads from holding HTTP/1
   connections the rows need. The dashboard scatter still puts the breakdown
   first, because scatter charts still colour by their first key.
+- **Open regression.** Fitting floors a column at its whole cell content on
+  one line when the cell holds a link, so Analyze's wrapping title links keep
+  fitted tables wider than desktop viewports. See
+  [the fit handoff](handoffs/query-table-fit-wrapping-links.md).
 
 ## 0.9.6 changes
 
