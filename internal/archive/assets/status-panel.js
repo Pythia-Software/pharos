@@ -468,6 +468,9 @@
       if (schedule.headline.text) headline.append(node('p', '', schedule.headline.text));
       if (schedule.headline.tech) {
         const details = node('details'), summary = node('summary', '', 'Details for support');
+        details.dataset.viewKey = 'status:support';
+        details.dataset.viewDefault = 'false';
+        details.open = window.pharosView?.read('disclosures', {})['status:support'] === true;
         details.append(summary, schedule.headline.tech);
         headline.append(details);
       }
@@ -558,15 +561,16 @@
 
   // One row per cadence, opening to its items. A row the user opened or
   // closed stays so while the panel is open.
-  const cadenceOpen = new Map();
   function cadenceList(rows) {
     const list = node('div', 'pharos-status-cadences');
     list.dataset.key = 'cadences';
     for (const row of rows) {
       const details = node('details');
       details.dataset.key = `cadence:${row.id}`;
-      details.open = cadenceOpen.has(row.id) ? cadenceOpen.get(row.id) : row.open;
-      details.addEventListener('toggle', () => cadenceOpen.set(row.id, details.open));
+      details.dataset.viewKey = 'status:' + details.dataset.key;
+      details.dataset.viewDefault = String(Boolean(row.open));
+      details.setAttribute('data-view-capture-initial', '');
+      details.open = window.pharosView?.read('disclosures', {})[details.dataset.viewKey] ?? row.open;
       const summary = node('summary'), state = node('span', 'pharos-status-state');
       state.append(node('span', 'pharos-dot small' + (row.dot ? ` ${row.dot}` : '')), row.text);
       summary.append(node('span', 'pharos-status-icon', row.icon), node('span', 'pharos-status-name', row.label), state, node('span', 'pharos-status-what', row.what));
@@ -617,10 +621,11 @@
     panel.style.left = `${Math.round(Math.max(12, Math.min(box.left, window.innerWidth - panel.offsetWidth - 12)))}px`;
   }
 
-  function open() {
+  function open({fromURL = false, focus = true} = {}) {
     if (!enabled() || !chip()) return;
-    window.pharosLibrary?.closePanel?.();
-    if (panel) close();
+    if (panel) return;
+    window.pharosLibrary?.closePanel?.({fromURL: true});
+    if (!fromURL) window.pharosView?.write('overlay', 'drive');
     panel = node('section', 'pharos-drive-panel pharos-status-panel');
     panel.id = 'pharosStatusPanel';
     panel.tabIndex = -1;
@@ -629,14 +634,14 @@
     document.body.append(panel);
     renderChip();
     renderPanel();
-    (panel.querySelector('button:not(:disabled), summary, [href]') || panel).focus({preventScroll: true});
+    if (focus) (panel.querySelector('button:not(:disabled), summary, [href]') || panel).focus({preventScroll: true});
   }
 
-  function close({restoreFocus = false} = {}) {
+  function close({restoreFocus = false, fromURL = false} = {}) {
     if (!panel) return;
+    if (!fromURL && window.pharosView?.read('overlay', 'none') === 'drive') window.pharosView.write('overlay', 'none');
     panel.remove();
     panel = null;
-    cadenceOpen.clear();
     if (ejectState?.phase !== 'ejecting') ejectState = null;
     chip()?.setAttribute('aria-expanded', 'false');
     if (restoreFocus) anchor()?.focus();
@@ -697,4 +702,5 @@
     panelModel, chipModel, operationLine, lineText, currentOperations, settleVerdict, ejectDecision, indexBusy, stepAmount, scheduleModel, scheduleText, ago, until, span,
   };
   if (enabled()) activate();
+  window.dispatchEvent(new Event('pharos:drive-view-ready'));
 })();
