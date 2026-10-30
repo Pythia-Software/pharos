@@ -2,49 +2,28 @@
 <div id="pharos-ask">
     <section class="pharos-product" aria-label="Pharos landing page search">
       <div class="pharos-regular"><div class="pharos-search-host"></div><button type="button" class="pharos-mode-switch pharos-ai-mode" hidden>Ask Pharos <span aria-hidden="true">✦</span></button></div>
-      <div class="pharos-window-controls"><strong>Ask Pharos</strong><button type="button" class="pharos-browse pharos-icon-control" aria-label="Float Ask Pharos" title="Picture in picture · keep browsing"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><rect x="12" y="11" width="6" height="6" rx=".7" fill="currentColor" stroke="none"/></svg></button><button type="button" class="pharos-window-close pharos-plain" aria-label="Close Ask Pharos" hidden>&#215;</button></div>
-      <p class="pharos-page-context" hidden>About <a></a></p>
       <form class="pharos-ai" aria-label="Ask Pharos" hidden>
         <div class="pharos-ai-frame">
-          <svg class="pharos-ai-surface" aria-hidden="true" focusable="false"><path/></svg>
-          <svg class="pharos-edge-art" aria-hidden="true" focusable="false">
-            <defs>
-              <linearGradient id="pharos-edge-cool" x1="0" y1="1" x2="1" y2="0" gradientUnits="objectBoundingBox">
-                <stop offset="0" stop-color="var(--pharos-aqua)" stop-opacity="0"/>
-                <stop offset=".24" stop-color="var(--pharos-aqua)" stop-opacity=".72"/>
-                <stop offset=".53" stop-color="var(--pharos-violet)" stop-opacity=".95"/>
-                <stop offset=".77" stop-color="var(--pharos-aqua)" stop-opacity=".7"/>
-                <stop offset="1" stop-color="var(--pharos-aqua)" stop-opacity="0"/>
-              </linearGradient>
-              <linearGradient id="pharos-edge-warm" x1="0" y1="1" x2="1" y2="0" gradientUnits="objectBoundingBox">
-                <stop offset="0" stop-color="var(--pharos-gold)" stop-opacity="0"/>
-                <stop offset=".27" stop-color="var(--pharos-gold)" stop-opacity=".85"/>
-                <stop offset=".58" stop-color="var(--pharos-violet)" stop-opacity=".8"/>
-                <stop offset=".81" stop-color="var(--pharos-gold)" stop-opacity=".6"/>
-                <stop offset="1" stop-color="var(--pharos-violet)" stop-opacity="0"/>
-              </linearGradient>
-              <filter id="pharos-edge-halo" x="-30%" y="-50%" width="160%" height="200%" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="3"/></filter>
-              <filter id="pharos-edge-trace-glow" x="-10%" y="-30%" width="120%" height="160%" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="1.6"/></filter>
-            </defs>
-            <path class="pharos-edge-hairline"/>
-            <g class="pharos-edge-halo" filter="url(#pharos-edge-halo)"><path data-contour="cool" stroke="url(#pharos-edge-cool)"/><path data-contour="warm" stroke="url(#pharos-edge-warm)"/></g>
-            <g class="pharos-edge-lines pharos-edge-cool" stroke="url(#pharos-edge-cool)"><path/><path/><path/><path/><path/></g>
-            <g class="pharos-edge-lines pharos-edge-warm" stroke="url(#pharos-edge-warm)"><path/><path/><path/><path/></g>
-            <path class="pharos-edge-trace pharos-edge-trace-halo" pathLength="1000" filter="url(#pharos-edge-trace-glow)"/>
-            <path class="pharos-edge-trace" pathLength="1000"/>
-          </svg>
           <div class="pharos-ai-inner">
+            <div class="pharos-composer-header" hidden>
+              <div class="pharos-window-controls">
+                <button type="button" class="pharos-clear-chat cursor-interaction" aria-label="Clear" title="Clear chat and start fresh" hidden>Clear</button>
+                <button type="button" class="pharos-window-close cursor-interaction" aria-label="Close Ask Pharos" title="Close Ask Pharos (Escape)" hidden>Close</button>
+              </div>
+            </div>
             <div class="pharos-thread-wrap" hidden>
               <div class="pharos-thread-viewport" role="region" aria-label="Chat messages, scroll for earlier replies" tabindex="0">
                 <div class="pharos-thread" role="log" aria-label="Conversation" aria-live="polite" hidden></div>
               </div>
               <button type="button" class="pharos-latest cursor-interaction" hidden>Latest reply <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14m-5-5 5 5 5-5"/></svg></button>
             </div>
-            <textarea id="pharos-question" aria-label="Ask a question" placeholder="What would you like to find in your work?" rows="2"></textarea>
+            <div class="pharos-question-field">
+              <div id="pharos-question" role="textbox" aria-label="Ask a question" aria-multiline="true" contenteditable="true" data-placeholder="What would you like to find in your work?" spellcheck="true"></div>
+            </div>
             <div class="pharos-composer-footer">
               <div class="pharos-picker-anchor">
                 <button type="button" class="pharos-model-trigger cursor-interaction" aria-expanded="false" aria-haspopup="dialog" aria-controls="pharos-model-menu"><span class="pharos-current-settings">Choose a model</span><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-lucide="chevron-down" aria-hidden="true" class="lucide lucide-chevron-down"><path d="m6 9 6 6 6-6"></path></svg></button>
-                <section id="pharos-model-menu" class="pharos-model-menu" role="dialog" aria-label="Model selection" hidden>
+                <section id="pharos-model-menu" class="pharos-model-menu" role="dialog" aria-label="Model selection" popover="manual" hidden>
                   <div class="pharos-picker-root">
                     <div class="pharos-picker-title"><h3 class="pharos-picker-heading">Model selection</h3><button type="button" class="pharos-save-default cursor-interaction" aria-label="Make this selection the default" aria-pressed="false" data-tooltip="Save this CLI, model and effort as your default"><span aria-hidden="true">&#9734;</span></button></div>
                     <button type="button" class="pharos-picker-row cursor-interaction" data-picker="provider"><span>CLI</span><span class="pharos-selected-provider">Codex</span><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-lucide="chevron-right" aria-hidden="true" class="lucide lucide-chevron-right"><path d="m9 18 6-6-6-6"></path></svg></button>
@@ -68,15 +47,15 @@
                     <div class="pharos-history-list"></div><button type="button" class="pharos-history-more pharos-plain" hidden>More chats</button>
                   </section>
                 </div>
-                <button type="button" class="pharos-icon-control pharos-clear-chat cursor-interaction" aria-label="Clear" data-tooltip="Clear chat and start fresh" hidden><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 8H4V3m0 5a8.5 8.5 0 1 1 1.4 9.8"/></svg></button>
-                <button type="button" class="pharos-send cursor-interaction" aria-label="Send question" data-tooltip="Send question" disabled><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-lucide="send" aria-hidden="true" class="lucide lucide-send"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"></path><path d="m21.854 2.147-10.94 10.939"></path></svg></button>
+                <button type="button" class="pharos-browse pharos-icon-control cursor-interaction" aria-label="Float Ask Pharos" title="Picture in picture · keep browsing" data-tooltip="Picture in picture · keep browsing"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><rect x="12" y="11" width="6" height="6" rx=".7" fill="currentColor" stroke="none"/></svg><span id="pharos-browse-hint" class="pharos-browse-hint" role="tooltip" hidden>Browse while you wait</span></button>
+                <button type="button" class="pharos-send cursor-interaction" aria-label="Send question" data-tooltip="Send question" data-action="send" disabled><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-lucide="send" aria-hidden="true" class="pharos-send-icon lucide lucide-send"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"></path><path d="m21.854 2.147-10.94 10.939"></path></svg><svg class="pharos-stop-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2"/></svg></button>
               </div>
             </div>
           </div>
         </div>
       </form>
       <section class="pharos-suggestions" aria-label="Prompt suggestions" hidden>
-        <div class="pharos-suggestions-heading"><span>A few starting points</span><div class="pharos-idea-actions">
+        <div class="pharos-suggestions-heading"><button type="button" class="pharos-idea-toggle pharos-plain cursor-interaction" aria-expanded="true" aria-controls="pharos-idea-viewport">Hide suggestions</button><div class="pharos-idea-actions">
           <span class="pharos-idea-countdown"><span class="pharos-idea-countdown-track"><i></i></span><span class="pharos-idea-countdown-label">More in 30s</span></span>
           <div class="pharos-idea-controls" role="group" aria-label="Suggestion carousel controls">
             <button type="button" class="pharos-idea-play cursor-interaction" aria-label="Pause suggestions">&#8545; Pause</button>
@@ -85,7 +64,7 @@
             <button type="button" class="pharos-idea-refresh cursor-interaction" aria-label="Refresh suggestions"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 9a8.2 8.2 0 0 0-14.2-3L4 8m0-5v5h5M4 15a8.2 8.2 0 0 0 14.2 3L20 16m0 5v-5h-5"/></svg></button>
           </div>
         </div></div>
-        <div class="pharos-idea-viewport" role="region" aria-label="Browse prompt suggestions"><div class="pharos-suggestion-list"></div></div>
+        <div id="pharos-idea-viewport" class="pharos-idea-viewport" role="region" aria-label="Browse prompt suggestions"><div class="pharos-suggestion-list"></div></div>
         <span class="pharos-idea-announcement" role="status" aria-live="polite"></span>
       </section>
       <div class="pharos-invitation" hidden><button type="button" class="pharos-try cursor-interaction"><span>Try Ask Pharos</span></button><button type="button" class="pharos-plain pharos-dismiss cursor-interaction">Not now</button></div>
@@ -103,19 +82,18 @@
     </section>
   <template id="pharos-turn-template">
     <article class="pharos-turn">
-      <div class="pharos-message pharos-user-message"><span class="pharos-avatar pharos-user-avatar" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7.5" r="3"/><path d="M5.5 20v-2.2a6.5 6.5 0 0 1 13 0V20"/></svg></span><div class="pharos-message-body"><strong class="pharos-speaker">You</strong><p class="pharos-user-question"></p></div></div>
-      <div class="pharos-message pharos-agent-message"><span class="pharos-avatar pharos-agent-avatar" aria-hidden="true"></span><div class="pharos-message-body">
-        <div class="pharos-agent-heading"><strong class="pharos-speaker pharos-agent-name"></strong></div>
+      <div class="pharos-message pharos-user-message" role="group" aria-label="Your message"><span class="pharos-avatar pharos-user-avatar" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7.5" r="3"/><path d="M5.5 20v-2.2a6.5 6.5 0 0 1 13 0V20"/></svg></span><div class="pharos-message-body"><p class="pharos-user-question"></p></div></div>
+      <div class="pharos-message pharos-agent-message" role="group" aria-label="Pharos response"><span class="pharos-avatar pharos-agent-avatar" aria-hidden="true"></span><div class="pharos-message-body">
         <section class="pharos-waiting" aria-label="AI request in progress" hidden>
-          <div class="pharos-wait-heading"><div><span class="pharos-wait-message" role="status">Starting&#8230;</span><small class="pharos-elapsed">0s</small></div><button type="button" class="pharos-plain pharos-stop cursor-interaction">Cancel</button></div>
+          <div class="pharos-wait-heading"><div><span class="pharos-wait-message" role="status">Starting&#8230;</span><small class="pharos-elapsed">0s</small></div></div>
           <div class="pharos-skeleton" aria-hidden="true"><span></span><span></span><span></span></div>
         </section>
         <details class="pharos-activity" hidden><summary>Activity</summary><ol></ol></details>
         <section class="pharos-destinations" aria-label="Suggested destinations" hidden>
         <p class="pharos-results-label" role="status"></p>
-        <a class="pharos-destination" href="/" hidden><span class="pharos-destination-kind"></span><strong></strong><span></span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M7 7h10v10M7 17 17 7"/></svg></a>
-        <a class="pharos-destination" href="/" hidden><span class="pharos-destination-kind"></span><strong></strong><span></span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M7 7h10v10M7 17 17 7"/></svg></a>
-        <a class="pharos-destination" href="/" hidden><span class="pharos-destination-kind"></span><strong></strong><span></span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M7 7h10v10M7 17 17 7"/></svg></a>
+        <a class="pharos-destination" href="/" hidden><strong></strong><span></span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M7 7h10v10M7 17 17 7"/></svg></a>
+        <a class="pharos-destination" href="/" hidden><strong></strong><span></span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M7 7h10v10M7 17 17 7"/></svg></a>
+        <a class="pharos-destination" href="/" hidden><strong></strong><span></span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M7 7h10v10M7 17 17 7"/></svg></a>
         <p class="pharos-omitted" hidden></p>
       </section>
       <div class="pharos-answer" role="status" aria-live="polite" hidden></div>

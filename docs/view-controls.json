@@ -88,6 +88,10 @@
       "field": "disclosures"
     },
     {
+      "file": "web/src/conversation-results.tsx",
+      "field": "disclosures"
+    },
+    {
       "file": "web/src/view-disclosure.tsx",
       "field": "disclosures"
     },
@@ -170,6 +174,10 @@
     {
       "file": "web/src/conversation-search.tsx",
       "field": "reader_search"
+    },
+    {
+      "file": "web/src/conversation-results.tsx",
+      "field": "search_cards"
     },
     {
       "file": "web/src/index.tsx",
@@ -531,15 +539,6 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
-      "key": "fragment:1b10f28691f91420:0",
-      "file": "internal/archive/assets/ask-pharos.html",
-      "owner": "<html:fragment>",
-      "tag": "button",
-      "control": "<button type=\"button\" class=\"pharos-browse pharos-icon-control\" aria-label=\"Float Ask Pharos\" title=\"Picture in picture · keep browsing\">",
-      "contract": "editing",
-      "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
-    },
-    {
       "key": "fragment:2095e9c1516aba27:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
@@ -547,6 +546,15 @@
       "control": "<button type=\"button\" class=\"pharos-save-default cursor-interaction\" aria-label=\"Make this selection the default\" aria-pressed=\"false\" data-tooltip=\"Save this CLI, model and effort as your default\">",
       "contract": "editing",
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
+    },
+    {
+      "key": "fragment:226ebb0b1ffcca38:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-send cursor-interaction\" aria-label=\"Send question\" data-tooltip=\"Send question\" data-action=\"send\" disabled>",
+      "contract": "action",
+      "reason": "Starts or cancels a private Ask request; it does not change the linked library view."
     },
     {
       "key": "fragment:2721697042beae61:0",
@@ -567,13 +575,13 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
-      "key": "fragment:3b9493b344721371:0",
+      "key": "fragment:431a1ba11bc82920:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
       "tag": "button",
-      "control": "<button type=\"button\" class=\"pharos-icon-control pharos-clear-chat cursor-interaction\" aria-label=\"Clear\" data-tooltip=\"Clear chat and start fresh\" hidden>",
-      "contract": "editing",
-      "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
+      "control": "<button type=\"button\" class=\"pharos-window-close cursor-interaction\" aria-label=\"Close Ask Pharos\" title=\"Close Ask Pharos (Escape)\" hidden>",
+      "contract": "transient",
+      "reason": "Closes or floats the private Ask composer; Ask chat identity continues to use ask_chat."
     },
     {
       "key": "fragment:4a649a70fea95888:0",
@@ -603,13 +611,14 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
-      "key": "fragment:55c76d8f8d3c5aa8:0",
+      "key": "fragment:584408b697814075:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
-      "tag": "textarea",
-      "control": "<textarea id=\"pharos-question\" aria-label=\"Ask a question\" placeholder=\"What would you like to find in your work?\" rows=\"2\">",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-idea-toggle pharos-plain cursor-interaction\" aria-expanded=\"true\" aria-controls=\"pharos-idea-viewport\">",
+      "disclosure": true,
       "contract": "editing",
-      "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
+      "reason": "Shows prompt suggestions inside the private Ask editor, independently of the result view."
     },
     {
       "key": "fragment:5e47ea571ac9bf33:0",
@@ -730,15 +739,6 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
-      "key": "fragment:a9d2832d3a28dc3d:0",
-      "file": "internal/archive/assets/ask-pharos.html",
-      "owner": "<html:fragment>",
-      "tag": "button",
-      "control": "<button type=\"button\" class=\"pharos-plain pharos-stop cursor-interaction\">",
-      "contract": "editing",
-      "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
-    },
-    {
       "key": "fragment:ad63fe0a924cd37a:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
@@ -757,15 +757,6 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
-      "key": "fragment:bd29815702d25302:0",
-      "file": "internal/archive/assets/ask-pharos.html",
-      "owner": "<html:fragment>",
-      "tag": "button",
-      "control": "<button type=\"button\" class=\"pharos-window-close pharos-plain\" aria-label=\"Close Ask Pharos\" hidden>",
-      "contract": "editing",
-      "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
-    },
-    {
       "key": "fragment:bdb1b51f287e9afe:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
@@ -775,20 +766,20 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
+      "key": "fragment:cb3c3de9ef456866:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-browse pharos-icon-control cursor-interaction\" aria-label=\"Float Ask Pharos\" title=\"Picture in picture · keep browsing\" data-tooltip=\"Picture in picture · keep browsing\">",
+      "contract": "transient",
+      "reason": "Closes or floats the private Ask composer; Ask chat identity continues to use ask_chat."
+    },
+    {
       "key": "fragment:e4b6f7d373db8149:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
       "tag": "button",
       "control": "<button type=\"button\" class=\"pharos-more-ideas cursor-interaction\" aria-label=\"Next suggestions\">",
-      "contract": "editing",
-      "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
-    },
-    {
-      "key": "fragment:e53fc43380f21697:0",
-      "file": "internal/archive/assets/ask-pharos.html",
-      "owner": "<html:fragment>",
-      "tag": "button",
-      "control": "<button type=\"button\" class=\"pharos-send cursor-interaction\" aria-label=\"Send question\" data-tooltip=\"Send question\" disabled>",
       "contract": "editing",
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
@@ -836,6 +827,15 @@
       "control": "<button type=\"button\" class=\"pharos-history-close cursor-interaction\" aria-label=\"Close chat history\">",
       "contract": "editing",
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
+    },
+    {
+      "key": "fragment:fa76bd164da9f5dd:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-clear-chat cursor-interaction\" aria-label=\"Clear\" title=\"Clear chat and start fresh\" hidden>",
+      "contract": "editing",
+      "reason": "Clears the private Ask conversation and unsent draft, then starts a fresh composer; this is an action, not durable view state."
     },
     {
       "key": "eedffbde75af05e5:0",
@@ -894,6 +894,25 @@
       "control": "'button'",
       "contract": "editing",
       "reason": "Ask conversation/drafts remain on the private chat protocol, not public view URLs."
+    },
+    {
+      "key": "8d138b9bccbfa081:0",
+      "file": "internal/archive/assets/ask-pharos.js",
+      "owner": "syncIdeaVisibility",
+      "tag": "aria-expanded",
+      "control": "ideaToggle",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Ask prompt ideas are suggestions for the unapplied chat composer; their picker visibility is editor state."
+    },
+    {
+      "key": "6c90fe78404cee3a:0",
+      "file": "internal/archive/assets/ask-prompt.js",
+      "owner": "makeChip",
+      "tag": "button",
+      "control": "'button'",
+      "contract": "editing",
+      "reason": "Removes a context chip from the unsent Ask prompt draft."
     },
     {
       "key": "78f30533f5901a54:0",
@@ -2753,24 +2772,6 @@
       "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
     },
     {
-      "key": "25f10a91a1fd2428:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "authorshipNote",
-      "tag": "summary",
-      "control": "'summary', '', `${(Number(authorship.typed_words)||0).toLocaleString()} words typed · ${other.toLocaleString()} from elsewhere`",
-      "contract": "reader",
-      "reason": "Content expansion uses keyed reader_content, reader_expanded/reader_collapsed or disclosures; deliberate paging stores loaded message IDs. Automatic viewport paging is transient."
-    },
-    {
-      "key": "e09e30c29b34bee4:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "authorshipNote",
-      "tag": "details",
-      "control": "'details', 'authorship-note'",
-      "contract": "reader",
-      "reason": "Content disclosure identity is supplied by bindReaderView, messageCard content keys or the work archive data-view-key. Diagnostics in source payloads follow their containing view."
-    },
-    {
       "key": "b9d31ba372bfa501:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "closePreview",
@@ -4342,6 +4343,56 @@
       "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
     },
     {
+      "key": "1175fae1fc64a7a2:0",
+      "file": "web/src/conversation-results.tsx",
+      "owner": "branchList",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={`search:${workspaceID}:conversation:${id}`} defaultOpen={id === String(forest[0]?.conversation.id) || id === currentID}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "168b8957c2968f12:0",
+      "file": "web/src/conversation-results.tsx",
+      "owner": "branchList",
+      "tag": "button",
+      "control": "onClick={() => void load(id)}",
+      "contract": "action",
+      "reason": "Retries loading the same conversation or overview without changing the selected view."
+    },
+    {
+      "key": "2c8b24403d7927dd:0",
+      "file": "web/src/conversation-results.tsx",
+      "owner": "entryList",
+      "tag": "button",
+      "control": "data-view-field=\"search_cards\" onClick={() => choose(id, item.id)}",
+      "binding": "search_cards",
+      "contract": "view.search_cards",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "76969926c6d90b29:0",
+      "file": "web/src/conversation-results.tsx",
+      "owner": "entryList",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={`search:${workspaceID}:conversation:${id}:entry:${item.id}:children`} defaultOpen",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "71f63e383558595c:0",
+      "file": "web/src/conversation-results.tsx",
+      "owner": "ResultConversationBrowser",
+      "tag": "button",
+      "control": "onClick={() => overview.error || selection.error ? setReload(value => value + 1) : void load(currentID)}",
+      "contract": "action",
+      "reason": "Retries loading the selected conversation or resolving the retained turn identity; the retry counter is transient."
+    },
+    {
       "key": "0b24f86fce417896:0",
       "file": "web/src/conversation-search.tsx",
       "owner": "ConversationSearch",
@@ -4424,6 +4475,60 @@
       "binding": "reader_order",
       "contract": "view.reader_order",
       "reason": "Bound by the shared view-state primitive."
+    },
+    {
+      "key": "2da290a1c01e8a10:0",
+      "file": "web/src/create-dashboard-card.tsx",
+      "owner": "CreateDashboardCard",
+      "tag": "button",
+      "control": "",
+      "contract": "editing",
+      "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
+    },
+    {
+      "key": "3539ef4de8f33cc5:0",
+      "file": "web/src/create-dashboard-card.tsx",
+      "owner": "CreateDashboardCard",
+      "tag": "input",
+      "control": "value={draft.title} onChange={event => setDraft({ ...draft, title: event.target.value })}",
+      "contract": "editing",
+      "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
+    },
+    {
+      "key": "4ada7fc2fbb9ff79:0",
+      "file": "web/src/create-dashboard-card.tsx",
+      "owner": "CreateDashboardCard",
+      "tag": "button",
+      "control": "onClick={() => dialog.current?.close()}",
+      "contract": "editing",
+      "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
+    },
+    {
+      "key": "6a4e9253499dd22d:0",
+      "file": "web/src/create-dashboard-card.tsx",
+      "owner": "CreateDashboardCard",
+      "tag": "button",
+      "control": "onClick={() => { const url = dashboardCardURL(location.href, catalog, state, where); setDraft({ url, title: dashboardCardTitle(catalog, state), description: dashboardCardDescription(url) }); setError(\"\"); setSaved(false); dialog.current?.showModal(); }}",
+      "contract": "editing",
+      "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
+    },
+    {
+      "key": "b4d31e6a92c6f43b:0",
+      "file": "web/src/create-dashboard-card.tsx",
+      "owner": "CreateDashboardCard",
+      "tag": "a",
+      "control": "onClick={event => { event.preventDefault(); window.pharosNavigate?.(\"/home\"); }}",
+      "contract": "editing",
+      "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
+    },
+    {
+      "key": "eccae4db9182a984:0",
+      "file": "web/src/create-dashboard-card.tsx",
+      "owner": "CreateDashboardCard",
+      "tag": "textarea",
+      "control": "value={draft.description} onChange={event => setDraft({ ...draft, description: event.target.value })}",
+      "contract": "editing",
+      "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
     },
     {
       "key": "069920aa96aa07cd:0",
@@ -4766,6 +4871,15 @@
       "control": "onCollapsedChange={props.onCollapsedChange??setCollapsed}",
       "contract": "native-query",
       "reason": "Query Builder serializes its definition in q_*; query_layout controls its collapse state."
+    },
+    {
+      "key": "a762fe31ca857a95:0",
+      "file": "web/src/data-taxonomy.tsx",
+      "owner": "SourceQueryBuilder",
+      "tag": "QueryFilterRow",
+      "control": "",
+      "contract": "native-query",
+      "reason": "Edits the native source query, including grouping.source filters, through the published Query Table API."
     },
     {
       "key": "756f4bd37da479aa:0",
@@ -5769,15 +5883,26 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
-      "key": "3f80cc92874f3cc1:0",
+      "key": "4fdbaf71bb0bff42:0",
       "file": "web/src/index.tsx",
       "owner": "ConversationResultCard",
       "tag": "button",
-      "control": "data-view-field=\"search_cards\" onClick={() => setBrowse((value) => !value)}",
+      "control": "data-view-field=\"search_cards\" onClick={() => { setHasBrowsed(true); setBrowse(value => !value); }}",
       "binding": "search_cards",
       "disclosure": true,
       "contract": "view.search_cards",
-      "reason": "Bound by the shared view-state primitive."
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "65734982c21de1f3:0",
+      "file": "web/src/index.tsx",
+      "owner": "ConversationResultCard",
+      "tag": "button",
+      "control": "data-view-field=\"search_cards\" aria-label={`Browse turns: ${activitySummary}`} onClick={() => { setHasBrowsed(true); setBrowse(true); browserToggle.current?.focus({ preventScroll: true }); }}",
+      "binding": "search_cards",
+      "disclosure": true,
+      "contract": "view.search_cards",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "40b4c7c5f5fca240:0",
@@ -6086,24 +6211,6 @@
       "control": "onClick={() => void copy()}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "e91721fa28de8d2d:0",
-      "file": "web/src/index.tsx",
-      "owner": "ResultConversationBrowser",
-      "tag": "button",
-      "control": "onClick={() => setActive(index + 1)} aria-label=\"Next turn\"",
-      "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
-    },
-    {
-      "key": "f9b03a0c5cf078b5:0",
-      "file": "web/src/index.tsx",
-      "owner": "ResultConversationBrowser",
-      "tag": "button",
-      "control": "onClick={() => setActive(index - 1)} aria-label=\"Previous turn\"",
-      "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
       "key": "04209a8ead3dd74e:0",

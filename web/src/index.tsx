@@ -16,6 +16,7 @@ import { installDelegationExplorer } from "./delegation";
 import { installWorkspaceInbox } from "./workspace-inbox";
 import { MessageTableSearch, newMessageSearch } from "./message-table-search";
 import "./conversation-search";
+import { ConversationFacts, ResultConversationBrowser, ResultMessage, conversationActivitySummary } from "./conversation-results";
 import { TextSearchEditor } from "./text-search-editor";
 import { SearchHelp } from "./search-help";
 import { RecordSearchEditor, recordSearchTargets } from "./record-search-editor";
@@ -121,24 +122,6 @@ const relationships: RelationshipAdapter = {
 };
 type Dataset = "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "findings";
 type MessageView = "table" | "text";
-type TranscriptMessage = { id?: string; role: string; text: unknown; raw_text?: unknown };
-type TurnSummary = { human: TranscriptMessage | null; response: TranscriptMessage | null };
-type ConversationTurn = { provider: string; conversation: number; turn: number; input: TranscriptMessage | null; response: TranscriptMessage | null };
-// Messages render with the conversation view's own renderer (ui.py), so XML
-// chips, Markdown, and Show more behave the same in both places.
-function ResultMessage({ label, message, kind }: { label: string; message: TranscriptMessage; kind: "human" | "assistant" }) {
-  const body = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const card = window.pharosMessageCard?.(message);
-    if (card) body.current?.replaceChildren(card);
-    else if (body.current) body.current.textContent = String(message.text ?? "");
-  }, [message.role, message.text, message.raw_text]);
-  return <div className={`result-message ${kind}`}>
-    <div className="result-message-label">{label}</div>
-    <div className="result-message-body" ref={body} />
-  </div>;
-}
-
 function mainIntegrationLink(row: Row): React.ReactNode {
   const merge = mainIntegration(row);
   if (!merge) return "";
@@ -204,8 +187,6 @@ declare global {
     pharosCopyText?: (text: string) => Promise<void>;
     pharosShareDownload?: (ids: string[]) => Promise<void>;
     pharosApi?: (path: string) => Promise<Row>;
-    pharosMessageCard?: (message: TranscriptMessage) => HTMLElement;
-    pharosTurnSummaries?: (conversation: Row) => TurnSummary[];
     pharosQueryTables?: {
       createLink: () => Promise<{ url: string; query?: QueryState; dataset?: Dataset }>;
       refresh: (dataset: Dataset) => void;
@@ -735,7 +716,7 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
     {!api.query.grouping || namespace ? header?.(api) : null}
     {!shared && !namespace && Object.hasOwn(usageDatasets, dataset) ? <UsageQueryIdeas key={dataset} dataset={dataset as UsageDataset} api={api} /> : null}
     {presets?.(api)}
-    {!shared && !namespace && !["tl1_attempts", "findings"].includes(dataset) && rollingWindowField(dataset) ? <label className="usage-chart-field">Time window<select aria-label="Query time window" value={(() => { const choice = readRollingWindow(new URLSearchParams(location.search), dataset); return choice?.mode === "today" ? "today" : choice?.mode === "relative" && choice.days === 1 ? "24h" : "saved"; })()} onChange={event => {
+    {!shared && !namespace && !["library", "tl1_attempts", "findings"].includes(dataset) && rollingWindowField(dataset) ? <label className="usage-chart-field">Time window<select aria-label="Query time window" value={(() => { const choice = readRollingWindow(new URLSearchParams(location.search), dataset); return choice?.mode === "today" ? "today" : choice?.mode === "relative" && choice.days === 1 ? "24h" : "saved"; })()} onChange={event => {
       if (event.target.value === "saved") return;
       const selected = readRollingWindow(new URLSearchParams(location.search), dataset);
       const address = updateQueryWindowURL(queryURL(dataset, api.query, selected), event.target.value === "today" ? "today" : 1, api.query);
@@ -759,7 +740,7 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
     {capabilityError && !capabilities ? <div className="query-table-error">Could not read this table's query capabilities: {capabilityError.message}</div> : null}
     {api.error ? <div className="query-table-error">{api.error?.message}</div> : null}
     {selectRows ? <SelectionToolbar selection={api.selection} actions={ids => <ShareSelection ids={ids} api={api} transport={transport} execution={capabilities?.computedExecution} />} /> : null}
-    {dataset === "library" && resultsView === "conversation" ? <ConversationResults api={api} searching={searching} failed={failed} />
+    {dataset === "library" && resultsView === "conversation" ? <ConversationResults api={api} searching={searching} failed={failed} renderers={tableRenderers} />
       : dataset === "writing_messages" && messageView === "text" && !api.query.grouping ? <AuthoredMessages api={api} emptyMessage={failed ? failedMessage : emptyMessages[dataset]} /> : <DataTable
       maxHeight={100000}
       {...(selectRows ? { selection: api.selection } : {})}
@@ -824,102 +805,44 @@ function readerJSON(path: string, signal?: AbortSignal): Promise<Row> {
   return shared ? window.pharosApi!(path) : fetch(path, { signal }).then(responseJSON<Row>);
 }
 
-function conversationTurns(work: Row): ConversationTurn[] {
-  return (work.conversations ?? []).flatMap((conversation: Row, index: number) => {
-    const provider = String(conversation.provider ?? "Agent");
-    return (window.pharosTurnSummaries?.(conversation) ?? [])
-      .filter(summary => summary.human)
-      .map((summary, turn) => ({ provider, conversation: index + 1, turn: turn + 1, input: summary.human, response: summary.response }));
-  });
-}
-
-function ResultConversationBrowser({ workspaceID }: { workspaceID: string }) {
-  const [state, setState] = useState<{ loading: boolean; error: string; turns: ConversationTurn[] }>({ loading: true, error: "", turns: [] });
-  const [activeID, setActiveID] = useViewEntry("search_cards", `${workspaceID}/turn`, "");
-  const active = Math.max(0, state.turns.findIndex(turn => turn.input?.id === activeID));
-  const setActive = (index: number) => setActiveID(state.turns[index]?.input?.id ?? "");
-  useEffect(() => {
-    const controller = new AbortController();
-    void (async () => {
-      try {
-        const base = `/api/work/${encodeURIComponent(workspaceID)}`;
-        const work = await readerJSON(base, controller.signal);
-        // The overview omits messages. Sub-agents' assignments are not user
-        // turns, so only top-level conversations are fetched.
-        const conversations = await Promise.all((work.conversations ?? []).filter((conversation: Row) => !conversation.parent_id)
-          .map((conversation: Row) => readerJSON(`${base}/conversations/${encodeURIComponent(String(conversation.id))}`, controller.signal)));
-        if (!controller.signal.aborted) setState({ loading: false, error: "", turns: conversationTurns({ conversations }) });
-      } catch (error) {
-        if (!controller.signal.aborted) setState({ loading: false, error: error instanceof Error ? error.message : "Conversation unavailable", turns: [] });
-      }
-    })();
-    return () => controller.abort();
-  }, [workspaceID]);
-  if (state.loading) return <div className="conversation-result-status">Loading turns…</div>;
-  if (state.error) return <div className="conversation-result-status badtext">{state.error}</div>;
-  if (!state.turns.length) return <div className="conversation-result-status">No retained turns are available.</div>;
-  const index = Math.min(active, state.turns.length - 1);
-  const turn = state.turns[index];
-  return <div className="result-turn-browser">
-    <div className="result-turn-nav">
-      <button type="button" disabled={index === 0} onClick={() => setActive(index - 1)} aria-label="Previous turn"><Icon name="arrow-left" /></button>
-      <span>{turn.provider}{state.turns.some((item) => item.conversation !== turn.conversation) ? ` conversation ${turn.conversation}` : ""} · turn {turn.turn} of {state.turns.filter((item) => item.conversation === turn.conversation).length}</span>
-      <button type="button" disabled={index === state.turns.length - 1} onClick={() => setActive(index + 1)} aria-label="Next turn"><Icon name="arrow-right" /></button>
-    </div>
-    <div className="result-exchange">
-      <ResultMessage label="You" message={turn.input ?? { role: "user", text: "Input unavailable" }} kind="human" />
-      <ResultMessage label={turn.provider} message={turn.response ?? { role: "assistant", text: "No retained response for this turn." }} kind="assistant" />
-    </div>
-  </div>;
-}
-
-function ConversationResultCard({ row }: { row: Row }) {
+function ConversationResultCard({ row, api, renderers }: { row: Row; api: QueryTableApi<Row>; renderers: RenderRegistry<Row> }) {
   const [browse, setBrowse] = useViewEntry("search_cards", `${row.id}/browse`, false);
-  const turnCount = Math.max(0, Number(row.turn_count) || 0);
+  const [hasBrowsed, setHasBrowsed] = useState(false);
+  const browserToggle = useRef<HTMLButtonElement>(null);
+  const browserID = React.useId();
+  const activitySummary = conversationActivitySummary(row);
   const firstInput = row.first_input ? { role: "user", text: row.first_input } : row.purpose ? { role: "user", text: row.purpose } : null;
   const latestResponse = row.last_response ? { role: "assistant", text: row.last_response } : row.outcome ? { role: "assistant", text: row.outcome } : null;
-  const toolCount = Math.max(0, Number(row.tool_use_count) || 0);
-  const fileCount = Math.max(0, Number(row.changed_file_count) || 0);
-  const models = String(row.models ?? "").split(",").map(model => model.trim()).filter(Boolean);
-  const prs = pullRequests(row);
   return <article className="conversation-result-card" data-pharos-target={`row:${row.id}`}>
     <div className="conversation-result-head">
       <div className="conversation-result-summary">
         <button className="conversation-result-title" type="button" onClick={() => window.pharosOpenDetail?.(String(row.id))}>{String(row.title ?? "Untitled work")}</button>
-        <div className="conversation-result-meta">{[row.repository_name, row.source_kind, models.join(", "), row.efforts ? `Effort: ${row.efforts}` : "", row.activity_at ? new Date(row.activity_at).toLocaleDateString() : ""].filter(Boolean).join(" · ")}</div>
-        <div className="conversation-result-facts">
-          <span className="conversation-result-count">{turnCount} turn{turnCount === 1 ? "" : "s"}</span>
-          <span className="conversation-result-count">{toolCount} tool use{toolCount === 1 ? "" : "s"}</span>
-          <span className="conversation-result-count">{fileCount} file{fileCount === 1 ? "" : "s"} edited</span>
-          <span className="conversation-result-count conversation-result-cost" title="API list-price equivalent cost">{usdCost(row.cost_usd, row)} API cost</span>
-          {prs.map((pr, index) => {
-            const url = pullRequestURL(pr, row.canonical_remote);
-            const label = pullRequestLabel(pr);
-            return url ? <a key={`${pr.host}:${pr.number}:${index}`} className="conversation-result-count conversation-result-pr" href={url} target="_blank" rel="noopener noreferrer" title={pr.title || label}>{label}</a>
-              : <span key={`${pr.host}:${pr.number}:${index}`} className="conversation-result-count" title={pr.title || label}>{label}</span>;
-          })}
-          {row.main_merge_commit ? <span className="conversation-result-count conversation-result-pr">{mainIntegrationLink(row)}</span> : null}
-        </div>
+        <ConversationFacts row={row} fields={api.visibleFields} query={api.query} renderers={renderers} />
       </div>
       <div className="conversation-result-actions">
-        <button type="button" onClick={() => window.pharosOpenDetail?.(String(row.id))}>Open full conversation</button>
-        <button data-view-field="search_cards" type="button" onClick={() => setBrowse((value) => !value)} disabled={!turnCount} aria-expanded={browse}>{browse ? "Close turn browser" : "Browse turns"}</button>
+        <button type="button" onClick={() => window.pharosOpenDetail?.(String(row.id))}>Open <Icon name="arrow-right" /></button>
+        <button type="button" ref={browserToggle} data-view-field="search_cards" className="conversation-browser-toggle" onClick={() => { setHasBrowsed(true); setBrowse(value => !value); }} aria-expanded={browse} aria-controls={browserID}><Icon name="tree" />{browse ? "Collapse turns" : "Browse"}<Icon name="chevron-down" /></button>
       </div>
     </div>
     {row.find_hit ? <FindMatch hit={row.find_hit} count={Number(row.find_match_count) || 1} /> : null}
-    {firstInput || latestResponse ? <div className="conversation-result-preview">
-      {firstInput ? <ResultMessage label="First ask" message={firstInput} kind="human" /> : null}
-      {latestResponse ? <ResultMessage label="Latest response" message={latestResponse} kind="assistant" /> : null}
-    </div> : <p className="muted conversation-result-empty">No retained message preview.</p>}
-    {browse ? <ResultConversationBrowser workspaceID={String(row.id)} /> : null}
+    {!browse && (firstInput || latestResponse) ? <div className={`conversation-result-preview${firstInput && latestResponse ? " joined" : ""}`}>
+      {firstInput ? <ResultMessage label="First ask" message={firstInput} kind="human" compact /> : null}
+      <button type="button" data-view-field="search_cards" className="conversation-preview-browse" aria-label={`Browse turns: ${activitySummary}`} aria-expanded={browse} aria-controls={browserID} onClick={() => { setHasBrowsed(true); setBrowse(true); browserToggle.current?.focus({ preventScroll: true }); }}>
+        <Icon name="tree" /><span>{activitySummary}</span><Icon name="chevron-down" />
+      </button>
+      {latestResponse ? <ResultMessage label="Latest response" message={latestResponse} kind="assistant" compact /> : null}
+    </div> : !browse ? <p className="muted conversation-result-empty">No retained message preview.</p> : null}
+    <div id={browserID} className={`conversation-browser-disclosure${browse ? " is-expanded" : ""}`} aria-hidden={!browse} ref={element => { if (element) element.inert = !browse; }}>
+      <div className="conversation-browser-content">{hasBrowsed || browse ? <ResultConversationBrowser workspaceID={String(row.id)} readJSON={readerJSON} /> : null}</div>
+    </div>
   </article>;
 }
 
-function ConversationResults({ api, searching, failed }: { api: QueryTableApi<Row>; searching: boolean; failed: boolean }) {
+function ConversationResults({ api, searching, failed, renderers }: { api: QueryTableApi<Row>; searching: boolean; failed: boolean; renderers: RenderRegistry<Row> }) {
   if (!api.loading && !api.rows.length) return <div className="conversation-results-empty no-results">{failed ? failedMessage : searching ? "No work matches this search and these filters." : "No work matches this query."}</div>;
   return <div className={`conversation-results ${api.loading ? "loading" : ""}`} aria-busy={api.loading}>
     {api.loading && !api.rows.length ? <div className="conversation-results-empty">Loading conversations…</div> : null}
-    {api.rows.map((row) => <ConversationResultCard key={String(api.rowId(row) ?? row.id)} row={row} />)}
+    {api.rows.map((row) => <ConversationResultCard key={String(api.rowId(row) ?? row.id)} row={row} api={api} renderers={renderers} />)}
   </div>;
 }
 
@@ -1050,7 +973,7 @@ function LibraryPage() {
   useEffect(() => { setFound(null); }, [find]);
   return <div className={`pharos-query-page${find ? " library-searching" : ""}`}>
     <div className="view-heading"><div><h1>{shared ? "Conversations" : "Search"}</h1>{!shared ? <p className="muted">Find past work. Follow a conversation, compare projects, or build a view of your own.</p> : null}</div></div>
-    <QuerySurface dataset="library" host={host} resultPresentation={api => <SearchResultsDisplay view={searchResultsView(api.query, readLibraryHost(api.query.hostState).view)} grouped={!!api.query.grouping}
+    <QuerySurface dataset="library" host={host} resultPresentation={api => <SearchResultsDisplay view={searchResultsView(api.query, readLibraryHost(api.query.hostState).view)}
       onChange={next => api.setDefinition?.(previous => ({ query: queryForSearchResultsView(previous.query, next), hostState: libraryHostState({ ...readLibraryHost(previous.hostState), view: next }) }))} />}
       onFind={setFound} selectable={!shared} {...(find ? { trailing: (row: Row) => <FindMatchCell row={row} /> } : {})} queryContent={shared ? undefined : api => <LibrarySearchClause api={api} />} controls={shared ? undefined : () => <>
     {find && found ? <div className="library-find-status muted" role="status">

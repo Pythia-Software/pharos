@@ -2,9 +2,9 @@ import React from "react";
 import type { AggregationBucket } from "@pythia-software/query-table-core";
 import { sharedBoxScale, boxCost, boxNumber, boxDuration, boxBytes, boxDetails, boxAxisCost, boxAxisNumber, boxOutliers, boxWhiskerExtent } from "./compact-box-model";
 
-export function CompactBoxPlot({ buckets, budget, colors, labels, compact = false, scale = "linear", unit = "USD", axisLabel = unit }: { buckets: AggregationBucket[]; budget: number; colors: string[]; labels: string[]; compact?: boolean; scale?: "linear" | "log"; unit?: string; axisLabel?: string }) {
-  const currency = unit === "USD", duration = unit === "ms", bytes = unit === "bytes", format = currency ? boxCost : duration ? boxDuration : bytes ? boxBytes : boxNumber;
-  const axis = sharedBoxScale(buckets, budget, scale, !currency && !duration);
+export function CompactBoxPlot({ buckets, budget, colors, labels, compact = false, scale = "linear", unit = "USD", axisLabel = unit, format: formatter }: { buckets: AggregationBucket[]; budget: number; colors: string[]; labels: string[]; compact?: boolean; scale?: "linear" | "log"; unit?: string; axisLabel?: string; format?: (value: number) => string }) {
+  const currency = unit === "USD", duration = unit === "ms", bytes = unit === "bytes", format = formatter ?? (currency ? boxCost : duration ? boxDuration : bytes ? boxBytes : boxNumber);
+  const axis = sharedBoxScale(buckets, budget, scale, !currency && !duration && !formatter);
   const left = (value: number) => `${axis.fraction(value) * 100}%`;
   return <div className={`query-shared-box${compact || Math.min(budget, buckets.length) > 8 ? " is-dense" : ""}`}>
     <span className="query-box-scale-label">Shared {axis.log ? "log " : ""}{axisLabel || "value"} axis · {Math.min(budget, buckets.length)} of {buckets.length} groups</span>
@@ -14,7 +14,7 @@ export function CompactBoxPlot({ buckets, budget, colors, labels, compact = fals
         const summary = bucket.distribution?.kind === "box" ? bucket.distribution.summary : null;
         if (!summary || bucket.error) return <div key={index} className="query-box-row">{labels[index]} · No samples</div>;
         const color = colors[index], whisker = boxWhiskerExtent(summary);
-        return <div key={index} className="query-box-row qt-metric-box-row" data-chart-tooltip={boxDetails(labels[index], summary, unit)} data-chart-colors={JSON.stringify([color])} style={{ "--box-color": color } as React.CSSProperties}>
+        return <div key={index} className="query-box-row qt-metric-box-row" data-chart-tooltip={boxDetails(labels[index], summary, unit, formatter)} data-chart-colors={JSON.stringify([color])} style={{ "--box-color": color } as React.CSSProperties}>
           <div className="query-box-row-label"><span>{labels[index]}</span><strong>Median {format(summary.median)} <small>· Mean {format(summary.mean)}</small></strong></div>
           <div className="query-box-marks" data-axis-min={axis.min} data-axis-max={axis.max}>
             <i className="query-box-whisker" style={{ left: left(whisker.low), width: `${(axis.fraction(whisker.high) - axis.fraction(whisker.low)) * 100}%` }} />
@@ -26,7 +26,7 @@ export function CompactBoxPlot({ buckets, budget, colors, labels, compact = fals
         </div>;
       })}
     </div>
-    <div className="query-box-axis">{axis.ticks.map((value, index) => <span key={value} style={{ left: left(value), transform: index === 0 ? "none" : index === axis.ticks.length - 1 ? "translateX(-100%)" : "translateX(-50%)" }}>{currency ? boxAxisCost(value) : duration || bytes ? format(value) : boxAxisNumber(value)}</span>)}</div>
+    <div className="query-box-axis">{axis.ticks.map((value, index) => <span key={value} style={{ left: left(value), transform: index === 0 ? "none" : index === axis.ticks.length - 1 ? "translateX(-100%)" : "translateX(-50%)" }}>{formatter ? format(value) : currency ? boxAxisCost(value) : duration || bytes ? format(value) : boxAxisNumber(value)}</span>)}</div>
     <small className="query-box-key">Box: middle 50% · line: median · dots: sampled outliers and extremes</small>
   </div>;
 }

@@ -169,6 +169,41 @@ test('unavailable detail links retry when custom results switch to a native tabl
  assert.equal(new URL(app.page.url()).searchParams.get('reveal'),target,'the same linked target becomes available without navigation');
 });
 
+test('conversation result links restore their session and inline agent without taking focus',{skip},async t=>{
+ const message=(id,role,text)=>({id,native_id:id,role,kind:'message',text});
+ const api={
+  'POST /api/query/library/:operation':request=>{
+   const result=defaultApi['* /api/query/:dataset/:operation']({...request,params:{dataset:'library',operation:request.params.operation}});
+   return !result?.rows?result:{...result,total:1,rows:result.rows.slice(0,1).map(row=>({...row,id:workID}))};
+  },
+  'GET /api/work/:id':request=>({...defaultApi['GET /api/work/:id'](request),conversations:[{id:'first',provider:'codex'},{id:'second',provider:'codex'}]}),
+  'GET /api/work/:id/conversations/:conversation':({params})=>({id:params.conversation,workspace_id:workID,provider:'codex',messages:params.conversation==='first'?[message('first-prompt','user','First session prompt')]:[
+   message('second-prompt','user','Second session prompt'),
+   message('shared-envelope','assistant',JSON.stringify({content:[
+    {type:'tool_use',id:'configuration',name:'Task',input:{subagent_type:'Configuration auditor',prompt:'Check configuration'}},
+    {type:'tool_use',id:'timing',name:'Agent',input:{subagent_type:'Timing auditor',prompt:'Check timing'}},
+   ]})),
+   {...message('configuration-result','tool',JSON.stringify({content:'Configuration checked.'})),kind:'delegation_result',call_id:'configuration'},
+   {...message('timing-result','tool',JSON.stringify({content:'Timing checked.'})),kind:'delegation_result',call_id:'timing'},
+  ]}),
+ };
+ const state={[`${workID}/browse`]:true,[`${workID}/turn`]:'second-prompt'};
+ const disclosures={[`search:${workID}:conversation:first`]:true,[`search:${workID}:conversation:second`]:true};
+ const app=await open(t,{url:'/library?'+new URLSearchParams({view:'conversation',search_cards:JSON.stringify(state),disclosures:JSON.stringify(disclosures)}),api,ready:'.conversation-result-card'});
+ const preview=app.page.getByRole('region',{name:'Selected turn preview',exact:true});
+ await preview.getByText('Second session prompt',{exact:true}).waitFor();
+ await app.page.getByRole('navigation',{name:'Conversation outline',exact:true}).getByRole('button',{name:/First session prompt/}).waitFor();
+ assert.equal(await preview.evaluate(element=>element.contains(document.activeElement)),false);
+ await app.page.getByRole('navigation',{name:'Conversation outline',exact:true}).getByRole('button',{name:/Sub-agent · Timing auditor/}).click();
+ await preview.getByText('Timing checked.',{exact:true}).waitFor();
+ const fresh=await open(t,{url:path(app.page),api,ready:'.conversation-result-card'});
+ const restored=fresh.page.getByRole('region',{name:'Selected turn preview',exact:true});
+ await restored.getByText('Check timing',{exact:true}).waitFor();
+ await restored.getByText('Timing checked.',{exact:true}).waitFor();
+ await fresh.page.getByRole('navigation',{name:'Conversation outline',exact:true}).getByRole('button',{name:/First session prompt/}).waitFor();
+ assert.equal(await restored.evaluate(element=>element.contains(document.activeElement)),false);
+});
+
 test('JSON display cells restore their inspector choices in a fresh browser',{skip,todo:'Query Table 0.9.8 DataTable does not wire cell display JsonCell to scoped state; docs/query-table-url-state-handoff.md'},async t=>{
  const fixture=jsonInspectorFixture(),query={...fixture.query,select:[{field:'id'},{field:'arguments_json',display:{kind:'json'}}],itemDetails:{modes:['expand']}};
  const first=await open(t,{url:fixture.route(query),api:fixture.api,ready:'.usage-workspace-table .qt-row'});
@@ -854,8 +889,7 @@ test('revealing a closed accordion highlights its summary without overriding exp
  assert.equal(await page.locator('[data-view-key="sync:separate"]').evaluate(element=>element.open),false);
  for(const [key,route]of [['sync:diagnostics','/settings/sync'],['background:writing','/settings/sync'],['library:drive-health','/settings']]){
   await page.evaluate(({key,route,entries})=>window.pharosNavigate(route+'?'+new URLSearchParams({disclosures:JSON.stringify(entries),reveal:'section:'+key})),{key,route,entries});
-  const target=page.locator('[data-pharos-target="section:'+key+'"].pharos-reveal');await target.waitFor();
-  assert.equal(await target.isVisible(),true,'a closed section still exposes its highlighted control');
+  const target=page.locator('[data-pharos-target="section:'+key+'"].pharos-reveal');await target.waitFor({state:'visible'});
   assert.equal(await target.evaluate(element=>element.contains(document.activeElement)),false,'revealing a closed section does not move focus');
   assert.equal(await page.locator('[data-view-key="'+key+'"],[data-pharos-target="section:'+key+'"]').first().evaluate(element=>element.tagName==='DETAILS'?element.open:element.getAttribute('aria-expanded')==='true'),false);
   await page.waitForFunction(()=>document.documentElement.dataset.pharosAttentionMissing==='');

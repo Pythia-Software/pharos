@@ -44,7 +44,11 @@
 .bg-detail{margin:8px 0 0 15px;padding:10px 12px;border-radius:6px;background:var(--panel);font-size:var(--fs-sm)}
 .bg-detail p{margin:0 0 6px}
 .bg-detail .bg-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px}
-.bg-detail select{font:inherit;font-size:var(--fs-sm);border:1px solid var(--line);border-radius:5px;padding:4px 6px;background:var(--bg);color:var(--ink)}
+.bg-detail select{font:inherit;font-size:var(--fs-sm);border:1px solid var(--line);border-radius:5px;padding:4px 6px;background:var(--bg);color:var(--ink);max-width:100%}
+.bg-detail .bg-row>label{min-width:0;max-width:100%}
+#backgroundSchedule .bg-detail .bg-button{max-width:100%;white-space:normal;text-align:left}
+.bg-detail .bg-moves{gap:6px}
+#backgroundSchedule .bg-moves .bg-button{padding:4px 8px;border-radius:4px;font-size:var(--fs-xs);font-weight:500;line-height:1.3}
 .bg-error{color:var(--bad)}
 .bg-sources{border:0;margin:6px 0 0;padding:0}
 .bg-sources legend{font-weight:600;padding:0}
@@ -162,6 +166,7 @@
       dot: DOTS[item.state] ?? '', state: item.state, text: stateText(item, now), error: item.error || '',
       cost: item.cost ? {class: item.cost.class || '', text: item.cost.text || ''} : null,
       choices: item.choices || [], override: item.override || '', cadenceLabel: item.cadence_label || '', fixed: Boolean(item.fixed),
+      moves: item.cadence_moves || [], temporary: item.temporary_cadence || null,
       sources: Array.isArray(item.sources) ? item.sources.map(source => ({name: source.name, selected: Boolean(source.selected)})) : null};
   }
 
@@ -276,7 +281,7 @@
     if (item.sources?.length) detail.append(sourcePicker(item.sources));
     const row = node('div', 'bg-row');
     if (item.choices.length) {
-      const label = node('label', '', 'Run ');
+      const label = node('label', '', item.temporary ? 'Normally ' : 'Run ');
       label.append(select(item.choices.map(choice => [choice.value, choice.label]), item.override, value => save({overrides: {[item.id]: value}}), `When ${item.label} runs`));
       row.append(label);
     }
@@ -286,6 +291,18 @@
       refresh(true);
     }));
     detail.append(row);
+    if (item.temporary) {
+      const expiry = new Date(item.temporary.expires_at).toLocaleString([], {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'});
+      detail.append(line('Temporary schedule', `${item.cadenceLabel} until ${expiry}`));
+    }
+    if (item.moves.length || item.temporary) {
+      const moves = node('div', 'bg-row bg-moves');
+      for (const move of item.moves) {
+        moves.append(button(move.label, () => save({temporary_cadences: {[item.id]: move.cadence}})));
+      }
+      if (item.temporary) moves.append(button('End temporary schedule', () => save({temporary_cadences: {[item.id]: ''}})));
+      detail.append(moves);
+    }
     entry.append(detail);
     return entry;
   }

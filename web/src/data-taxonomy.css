@@ -1,8 +1,4 @@
-/* A host-owned source header shares the query editor’s theme and stays visible
-   when it is collapsed, without replacing any of its native controls. */
-.data-source-query { min-width: 0; }
-.data-source-statement { display: flex; align-items: baseline; gap: 6px; padding: 8px; border: 1px solid var(--qt-border); border-bottom: 0; border-radius: var(--qt-radius) var(--qt-radius) 0 0; background: var(--qt-bg, var(--panel)); font-size: 13px; }
-.data-source-statement > .qt-qb-kw { flex: none; }
+/* Source information is an ordinary clause in the query builder. */
 .data-source-link { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; color: var(--ink); font: inherit; font-weight: 400; text-decoration: underline; text-decoration-style: dotted; text-decoration-color: var(--muted); text-underline-offset: 4px; line-height: 1.6; }
 .data-source-link:hover { color: var(--gold); text-decoration-style: solid; }
 .data-source-link:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; border-radius: 2px; }
