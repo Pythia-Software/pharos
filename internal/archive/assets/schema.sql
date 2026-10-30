@@ -1158,6 +1158,10 @@ CREATE TABLE IF NOT EXISTS background_runs (
   host_id TEXT NOT NULL, item TEXT NOT NULL, started_at TEXT, finished_at TEXT,
   succeeded_at TEXT, error TEXT, seconds REAL, PRIMARY KEY(host_id,item)
 );
+CREATE TABLE IF NOT EXISTS background_temporary_cadences (
+  host_id TEXT NOT NULL, item TEXT NOT NULL, cadence TEXT NOT NULL, expires_at TEXT NOT NULL,
+  PRIMARY KEY(host_id,item)
+);
 CREATE TABLE IF NOT EXISTS automatic_source_states (
   host_id TEXT NOT NULL, source_name TEXT NOT NULL, attempted_at TEXT, succeeded_at TEXT,
   error TEXT, indexed_at TEXT, preflight TEXT, counts_json TEXT NOT NULL DEFAULT '{}',

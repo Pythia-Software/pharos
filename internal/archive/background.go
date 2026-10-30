@@ -19,8 +19,8 @@ import (
 // data has an automatic owner on one of three cadences: Frequently, with the
 // scheduled index; Hourly, once the library has been quiet; and Daily,
 // overnight. An adaptive item sits in the most frequent cadence its measured
-// cost allows, so it moves as it gets faster or slower. An override can only
-// move an item to a slower cadence, or to only when you ask.
+// cost allows, so it moves as it gets faster or slower. Permanent overrides
+// slow work down; a temporary override can also promote adaptive work.
 
 const (
 	cadenceFrequent = "frequent"
@@ -122,19 +122,26 @@ func backgroundItemByID(id string) (backgroundItem, bool) {
 // backgroundSettings is this Mac's schedule. Mode is on, paused or manual
 // ("only when I ask"); manual is scheduled indexing turned off.
 type backgroundSettings struct {
-	Mode         string            `json:"mode"`
-	PausedUntil  string            `json:"paused_until,omitempty"`
-	Interval     int               `json:"interval_seconds"`
-	DailyAt      string            `json:"daily_at"`
-	HoldWhenBusy bool              `json:"hold_when_busy"`
-	Overrides    map[string]string `json:"overrides"`
-	Placements   map[string]string `json:"placements"`
+	Mode         string                      `json:"mode"`
+	PausedUntil  string                      `json:"paused_until,omitempty"`
+	Interval     int                         `json:"interval_seconds"`
+	DailyAt      string                      `json:"daily_at"`
+	HoldWhenBusy bool                        `json:"hold_when_busy"`
+	Overrides    map[string]string           `json:"overrides"`
+	Placements   map[string]string           `json:"placements"`
+	Temporary    map[string]temporaryCadence `json:"temporary_cadences"`
 	// Battery is what each cadence does on battery (power.go).
 	Battery batteryPolicy `json:"battery"`
 	sync    syncSettings
 }
 
 const defaultDailyAt = "03:00"
+const temporaryCadenceDuration = 7 * 24 * time.Hour
+
+type temporaryCadence struct {
+	Cadence   string `json:"cadence"`
+	ExpiresAt string `json:"expires_at"`
+}
 
 // backgroundSettings reads this Mac's schedule. A catalog without the table
 // (an older catalog opened read-only) has the defaults.
@@ -159,6 +166,19 @@ func (c *Catalog) backgroundSettings(ctx context.Context, at time.Time) (backgro
 		_ = json.Unmarshal([]byte(battery), &settings.Battery)
 	case !errors.Is(err, sql.ErrNoRows) && !strings.Contains(err.Error(), "no such table"):
 		return settings, err
+	}
+	settings.Temporary = map[string]temporaryCadence{}
+	rows, err := queryMapsContext(ctx, c.reader(), "SELECT item,cadence,expires_at FROM background_temporary_cadences WHERE host_id=?", currentHost().ID)
+	if err != nil && !strings.Contains(err.Error(), "no such table") {
+		return settings, err
+	}
+	for _, row := range rows {
+		id, cadence := asString(row["item"]), asString(row["cadence"])
+		item, known := backgroundItemByID(id)
+		until := asString(row["expires_at"])
+		if expiry, ok := parseTime(until); known && item.Adaptive && slices.Contains(cadences, cadence) && ok && at.Before(expiry) {
+			settings.Temporary[id] = temporaryCadence{Cadence: cadence, ExpiresAt: until}
+		}
 	}
 	settings.Mode = "on"
 	if until, ok := parseTime(settings.PausedUntil); ok && at.Before(until) {
@@ -190,9 +210,12 @@ func (settings backgroundSettings) placed(item backgroundItem) string {
 	return item.Cadence
 }
 
-// cadence is where an item runs: an opt-in item only when chosen; an
-// override only when it is slower than the placement.
+// cadence is where an item runs: a live temporary schedule takes precedence
+// for adaptive work; permanent overrides only slow down the placement.
 func (settings backgroundSettings) cadence(item backgroundItem) string {
+	if temporary, ok := settings.Temporary[item.ID]; item.Adaptive && ok {
+		return temporary.Cadence
+	}
 	override := settings.Overrides[item.ID]
 	if item.OptIn {
 		if override == cadenceDaily {
