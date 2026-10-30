@@ -16,6 +16,7 @@ declare global {
   }
 }
 const format = (key: keyof Window["pharosSync"]["format"], value: unknown) => window.pharosSync.format[key](value);
+const verificationReasons: Record<string, string> = { evidence_size: "Selected evidence exceeds the check’s size limit", time_budget: "Verification time limit reached", source_changed: "Selected inputs changed", cancelled: "Stopped", unsupported_capture: "Required source capture is unavailable", source_unavailable: "Waiting for the source to be available", no_eligible_input: "Inputs are changing, queued or waiting for retry", read_error: "Could not read selected evidence" };
 function Timestamp({ value }: { value: unknown }) {
   if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) return <span className="muted">Not yet</span>;
   return <time dateTime={new Date(value).toISOString()} title={new Date(value).toLocaleString()}>{format("when", value)}</time>;
@@ -26,7 +27,7 @@ const renderers: RenderRegistry<SyncRecord> = {
   sync_seconds: ({ value }) => value == null ? "—" : Number(value) < 0 ? `−${format("seconds", -Number(value))}` : format("seconds", value),
   sync_memory: ({ value }) => format("memory", value),
   sync_percent: ({ value }) => format("percent", value),
-  sync_result: ({ value }) => <span className={`sync-result${["Failed", "Stopped", "Needs attention", "Check deferred", "Error", "Needs capture"].includes(String(value)) ? " attention" : ""}`}>{String(value ?? "—")}</span>,
+  sync_result: ({ value }) => <span className={`sync-result${["Failed", "Stopped", "Needs attention", "Success without verification", "Verification failed", "Verification incomplete", "Error", "Needs capture"].includes(String(value)) ? " attention" : ""}`}>{String(value ?? "—")}</span>,
 };
 
 function SyncQueryTable({ table, label, onInspect }: { table: SyncTable; label: string; onInspect?: (id: string) => void }) {
@@ -50,18 +51,26 @@ function SyncQueryTable({ table, label, onInspect }: { table: SyncTable; label: 
     {api.error ? <p className="query-table-error" role="alert">{api.error.message}</p> : null}
   </div>;
 }
+const HistoryQueryTable = React.memo(SyncQueryTable);
 
 function RunDetails({ run, onClose }: { run: SyncRecord; onClose: () => void }) {
   const tables = useMemo(() => runTables(run), [run]);
   return <ModalSurface title="Index run details" onClose={onClose} className="qt-modal sync-run-dialog">
     <div className="qt-overlay-body">
     <p><Timestamp value={run.finished_at} /> · {resultLabel(run)}</p>
+    {resultLabel(run) === "Success without verification" ? <p>Indexing finished, but the verification check was postponed. Inputs may still be changing or exceed the automatic check’s time or size limit.</p> : null}
+    {run.audit ? <p>Verification: {run.audit.outcome || "Unknown"} · {format("number", run.audit.discovered_units)} discoverable units · {format("number", run.audit.deferred_units)} deferred. {run.audit.detail}</p> : null}
+    {run.audit?.evidence_bytes > 0 ? <p>Selected verification evidence: {format("number", run.audit.evidence_bytes)} bytes.</p> : null}
+    {run.audit?.attempts?.length ? <><h3>Verification attempts</h3><ul>{run.audit.attempts.map((attempt: SyncRecord, index: number) => <li key={`${attempt.source}:${attempt.unit}:${index}`}>
+      {attempt.source} · {({passed: "Verified", mismatch: "Mismatch", deferred: "Skipped", read_error: "Could not verify"} as Record<string,string>)[attempt.outcome] || attempt.outcome}
+      {attempt.reason ? ` · ${verificationReasons[attempt.reason] || attempt.reason}` : ""} · {format("seconds", attempt.seconds)}
+      {attempt.evidence_bytes > 0 ? ` · ${format("number", attempt.evidence_bytes)} evidence bytes` : ""}
+    </li>)}</ul></> : null}
     <h3>Indexed by source</h3><SyncQueryTable table={tables.sourceResults} label="Source breakdown" />
     {tables.phases.rows.length ? <><h3>Time by phase</h3><SyncQueryTable table={tables.phases} label="Time by phase" /></> : null}
     {tables.stages.rows.length ? <><h3>Stage measurements</h3><SyncQueryTable table={tables.stages} label="Stage measurements" /></> : null}
     {tables.forecasts.rows.length ? <><h3>Forecast accuracy</h3><SyncQueryTable table={tables.forecasts} label="Forecast accuracy for run" /></> : null}
     {run.trigger ? <p className="muted">{run.trigger === "manual" ? "Manual sync · includes analysis refreshes" : "Automatic indexing · analyses deferred"}</p> : null}
-    {run.audit ? <p>Verification: {run.audit.outcome || "Unknown"} · {format("number", run.audit.discovered_units)} discoverable units · {format("number", run.audit.deferred_units)} deferred. {run.audit.detail}</p> : null}
     <p className="muted">CPU: {format("percent", run.cpu_percent_one_core)} of one core · RAM at start: {format("memory", run.rss_baseline_bytes)} · Allocated: {format("memory", run.allocated_bytes)}</p>
     </div>
   </ModalSurface>;
@@ -70,6 +79,11 @@ function RunDetails({ run, onClose }: { run: SyncRecord; onClose: () => void }) 
 function Diagnostics({ status, tables }: { status: SyncRecord; tables: ReturnType<typeof syncTables> }) {
   return <details className="sync-panel sync-disclosure">
     <summary>Performance &amp; verification details</summary>
+    {status.verification?.available ? <>
+      <p>Last completed verification: <Timestamp value={status.verification.last_verified_at} />.</p>
+      <p>{format("number", (status.verification.pending ?? []).reduce((total: number, row: SyncRecord) => total + Number(row.units || 0), 0))} larger checks queued for Verify indexed data on the background schedule.</p>
+      {status.verification.pending?.length ? <ul>{status.verification.pending.map((row: SyncRecord) => <li key={`${row.source_name}:${row.reason}`}>{row.source_name} · {format("number", row.units)} inputs · {verificationReasons[row.reason] || row.reason}</li>)}</ul> : null}
+    </> : null}
     <p className="muted">Measured cost by workload, across the last 200 runs. Median is the typical run; p95 covers 95% of runs.</p>
     <SyncQueryTable table={tables.costs} label="Measured indexing cost" />
     {tables.accuracy.rows.length ? <>
@@ -95,6 +109,7 @@ export function SyncTables() {
     return () => window.removeEventListener("pharos:sync-status", update);
   }, []);
   const tables = useMemo(() => syncTables(status ?? {}), [status]);
+  const history = useMemo(() => syncTables({history: status?.history}).history, [status?.history]);
   const selectedRun = (status?.history ?? []).find((run: SyncRecord) => runKey(run) === selected);
   if (!status?.settings) return <p className="muted" role="status">Loading capture and index history…</p>;
   const latest = status.history?.[0];
@@ -105,7 +120,8 @@ export function SyncTables() {
       {latest ? <div className="sync-summary" aria-label="Last run cost">{[
         ["Conversations indexed", format("number", latest.conversations)], ["Elapsed time", format("seconds", latest.seconds)], ["CPU time", format("seconds", latest.cpu_seconds)], ["RAM peak", format("memory", latest.rss_observed_peak_bytes)],
       ].map(([label, value]) => <div key={label} className="sync-metric"><span>{label}</span><strong>{value}</strong></div>)}</div> : null}
-      <SyncQueryTable table={tables.history} label="Recent run history" onInspect={setSelected} />
+      <p className="muted">Automatic table refresh is off. Use Run Now to refresh this table’s history.</p>
+      <HistoryQueryTable table={history} label="Recent run history" onInspect={setSelected} />
       <p className="muted">Counts cover whole indexed conversations, not just newly added messages. CPU and RAM reflect the whole Pharos process, including other work. History includes up to 200 runs on this Mac.</p>
     </section>
     {createPortal(<section className="sync-panel"><h3>Source status</h3><SyncQueryTable table={tables.sources} label="Source status" /><p className="muted">Needs capture means changes have been indexed but the source files have not been captured yet.</p></section>, document.getElementById("syncSourceTables")!)}
