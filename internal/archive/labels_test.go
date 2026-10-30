@@ -134,6 +134,13 @@ func TestLabelsLedgerLabelsEveryUnitOnceAndThenOnlyChanges(t *testing.T) {
 		t.Fatalf("incremental run: %+v %v", small, err)
 	}
 
+	// Rewriting a classification without changing it marks nothing.
+	execTx(t, catalog.DB, `UPDATE message_authorship SET spans_json=spans_json,work_id=work_id`)
+	var marks int
+	if err := catalog.DB.QueryRow(`SELECT COUNT(*) FROM message_labels_dirty`).Scan(&marks); err != nil || marks != 0 {
+		t.Fatalf("an unchanged rewrite marked %d conversations dirty (%v)", marks, err)
+	}
+
 	// A deleted message loses its label; labels deleted behind the ledger's
 	// back are restored.
 	execTx(t, catalog.DB, `DELETE FROM messages WHERE id='m-o8'`, `DELETE FROM message_labels WHERE message_id IN ('m-a1','m-h3')`)

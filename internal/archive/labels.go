@@ -40,7 +40,7 @@ var labelsContract = strings.Join([]string{labelrt.FramingContract, labelingUnit
 // labels chunks separately too).
 const labelsMergeVersion = "chunk-union-v1"
 
-const labelsSchemaVersion = "1"
+const labelsSchemaVersion = "2"
 
 // labelsSchemaDDL is created by the first labels run, not when a catalog
 // opens: a library that never enables labeling has none of it. Older builds
@@ -95,7 +95,17 @@ func labelsDirtyTriggers() []string {
 		for _, ref := range refs {
 			body += mark(strings.ReplaceAll(conversation, "$", ref))
 		}
-		statements = append(statements, "CREATE TRIGGER IF NOT EXISTS "+name+" AFTER "+event+of+" ON "+table+" BEGIN "+body+" END")
+		// An upsert names every column in its SET list, so UPDATE OF fires
+		// for unchanged values too: mark only a real change.
+		when := ""
+		if event == "UPDATE" && columns != "" {
+			changed := []string{}
+			for _, column := range strings.Split(columns, ",") {
+				changed = append(changed, "OLD."+column+" IS NOT NEW."+column)
+			}
+			when = " WHEN " + strings.Join(changed, " OR ")
+		}
+		statements = append(statements, "DROP TRIGGER IF EXISTS "+name, "CREATE TRIGGER "+name+" AFTER "+event+of+" ON "+table+when+" BEGIN "+body+" END")
 	}
 	for _, event := range []string{"INSERT", "DELETE", "UPDATE"} {
 		columns := map[string]string{
@@ -122,7 +132,9 @@ func labelsDirtyTriggers() []string {
 	return statements
 }
 
-// ensureLabelsSchema creates the ledger's tables and triggers once.
+// ensureLabelsSchema creates the ledger's tables and triggers once, and
+// replaces the triggers when labelsSchemaVersion changes (version 2 marks
+// only real changes).
 func (c *Catalog) ensureLabelsSchema(ctx context.Context) error {
 	if version, err := c.metaValue(ctx, "labels_schema_version"); err == nil && version == labelsSchemaVersion {
 		return nil
