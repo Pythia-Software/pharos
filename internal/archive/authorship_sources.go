@@ -15,6 +15,7 @@ var (
 )
 
 type authorshipQuestion struct {
+	at      time.Time
 	title   string
 	options []string
 	origin  textOrigin
@@ -407,7 +408,7 @@ func (c *classifier) addAuthorshipCall(at time.Time, origin textOrigin, name str
 			if title == "" {
 				continue
 			}
-			question := authorshipQuestion{title: title, origin: origin}
+			question := authorshipQuestion{at: at, title: title, origin: origin}
 			options, _ := q["options"].([]any)
 			for _, raw := range options {
 				option := firstString(raw)

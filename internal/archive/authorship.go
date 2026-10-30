@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -198,6 +199,7 @@ func spanRule(span authorSpan) string {
 
 // authorshipState tracks the in-process rebuild.
 type authorshipState struct {
+	rebuild   sync.Mutex
 	mu        sync.Mutex
 	running   bool
 	lastError string
@@ -321,6 +323,8 @@ type shingleRef struct {
 
 // shingleIndex holds the word runs of texts seen within the window.
 type shingleIndex struct {
+	load   func([]uint64) error
+	err    error
 	seen   map[uint64]shingleRef
 	queue  []*shingleBatch
 	byText map[[32]byte]*shingleBatch
@@ -441,6 +445,13 @@ func copyCandidate(hashes []uint64) uint64 {
 // coverage keeps the labeler from rescanning overlapping prefixes.
 func copiedRuns(tokens []wordToken, hashes []uint64, index *shingleIndex, cutoff time.Time) []copiedRun {
 	runs := []copiedRun{}
+	if index.load != nil && index.err == nil {
+		keys := []uint64{}
+		for i := 0; i+copyShingles <= len(hashes); i++ {
+			keys = append(keys, copyCandidate(hashes[i:]))
+		}
+		index.err = index.load(keys)
+	}
 	for position := 0; position+copyShingles <= len(hashes); position++ {
 		ref, ok := index.seen[copyCandidate(hashes[position:])]
 		if !ok || ref.batch.sentAt.Before(cutoff) {
@@ -596,12 +607,15 @@ type lineUse struct {
 // agent output of the window before the current message, and every earlier
 // message's text and lines.
 type classifier struct {
-	templates    map[string]*templateUse
-	agentText    *shingleIndex
-	userText     *shingleIndex
-	lines        map[uint64]*lineUse
-	lastUserSent map[string]time.Time
-	questions    map[string][]authorshipQuestion
+	replyStart     time.Time
+	loadLines      func([]uint64) error
+	incrementalErr error
+	templates      map[string]*templateUse
+	agentText      *shingleIndex
+	userText       *shingleIndex
+	lines          map[uint64]*lineUse
+	lastUserSent   map[string]time.Time
+	questions      map[string][]authorshipQuestion
 	// answers holds the question-form options the last classified message
 	// submitted.
 	answers []questionAnswer
@@ -762,6 +776,9 @@ func (c *classifier) repeatedLines(conversation, text string, lines [][2]int, bo
 			keys[index] = key
 			within[key]++
 		}
+	}
+	if c.loadLines != nil && c.incrementalErr == nil {
+		c.incrementalErr = c.loadLines(keys)
 	}
 	for index, key := range keys {
 		if key == 0 {
@@ -1319,28 +1336,81 @@ func (c *Catalog) authorshipRunning() bool {
 // RebuildAuthorship links headless runs to the commands that launched them,
 // classifies user messages in send order and stores only changed rows.
 func (c *Catalog) RebuildAuthorship(ctx context.Context, generation string) error {
+	// Cache readers must not observe another classifier's partial checkpoint.
+	// This lease does not block ingest or hold a SQLite snapshot/transaction.
+	if !c.authorship.rebuild.TryLock() {
+		return fmt.Errorf("writing classification is already running")
+	}
+	defer c.authorship.rebuild.Unlock()
+	if c.Path != "" {
+		lease, err := fileLease(canonical(c.Path)+".authorship.lock", true)
+		if err != nil {
+			return fmt.Errorf("writing classification lease: %w", err)
+		}
+		defer lease.Close()
+	}
 	started := time.Now()
 	reportWork(ctx, "reading authorship inputs", "", 0, -1)
-	inputs, launches, err := c.authorshipInputs(ctx)
+	run, err := c.incrementalAuthorship(ctx)
 	if err != nil {
 		return err
 	}
+	if run.reason == "unchanged" || run.reason == "no user suffix" {
+		if err := c.writeTransaction(ctx, "complete unchanged authorship", func(tx *sql.Tx) error {
+			for key, value := range map[string]string{"authorship_generation": generation, "authorship_state_generation": generation, "authorship_built_at": now()} {
+				if _, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		reportWork(ctx, "authorship mode: "+run.reason, "message", 0, 0)
+		return nil
+	}
+	full := run.classifier == nil
+	if full {
+		run.inputs, run.launches, err = c.authorshipInputs(ctx)
+		if err != nil {
+			return err
+		}
+		run.classifier = newClassifier(run.inputs)
+	}
 	inputsTook := time.Since(started)
+	reportWork(ctx, "authorship mode: "+run.reason, "message", 0, len(run.inputs))
 	classified := time.Now()
-	results, err := c.classifyInputs(ctx, inputs)
+	results, err := classifyAuthorship(ctx, c.DB, run.inputs, run.classifier)
 	if err != nil {
 		return err
 	}
 	classifyTook := time.Since(classified)
 	stored := time.Now()
-	// Keep both timings and direct write counts in the final journal step.
-	progress := withWorkProgress(ctx, func(work activityWork) {
-		if strings.HasPrefix(work.Phase, "saved authorship:") {
-			work.Phase += fmt.Sprintf("; inputs=%s classify=%s store=%s", inputsTook.Round(time.Millisecond), classifyTook.Round(time.Millisecond), time.Since(stored).Round(time.Millisecond))
-		}
-		reportWork(ctx, work.Phase, work.Unit, int(work.Done), int(work.Total))
-	})
-	return c.storeAuthorship(progress, results, launches, generation)
+	var since *time.Time
+	if !full {
+		since = &run.since
+	}
+	plan, err := c.planAuthorshipScope(ctx, results, run.launches, since)
+	if err != nil {
+		return err
+	}
+	// Invalidate before output chunks as well as state chunks. The public store
+	// remains available to full-pass parity tests and repair callers.
+	if err := c.writeTransaction(ctx, "invalidate authorship checkpoint", func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, "DELETE FROM meta WHERE key='authorship_state_version'")
+		return err
+	}); err != nil {
+		return err
+	}
+	written := map[string]int{}
+	if err := c.storeAuthorshipRows(ctx, plan, written); err != nil {
+		return err
+	}
+	if err := c.storeAuthorshipState(ctx, run, results, generation, full); err != nil {
+		return err
+	}
+	reportWork(ctx, fmt.Sprintf("authorship %s: inputs=%s classify=%s store=%s; messages=%d spans=%d launches=%d names=%d", run.reason, inputsTook.Round(time.Millisecond), classifyTook.Round(time.Millisecond), time.Since(stored).Round(time.Millisecond), written["message_authorship"], written["message_authorship_spans"], written["conversation_launches"], written["workspace_names"]), "message", len(run.inputs), len(run.inputs))
+	return nil
 }
 
 // The user messages to classify, and the agent replies, in send order, that
@@ -1429,6 +1499,10 @@ func (c *Catalog) appClaims(ctx context.Context, q queryer) (map[string]bool, er
 // authorInputs reads the user messages to classify, skipping mirrored works
 // (the keys of representative).
 func (c *Catalog) authorInputs(ctx context.Context, q queryer, representative map[string]string, claimed map[string]bool, launches []conversationLaunch) ([]authorInput, error) {
+	return c.authorInputsSince(ctx, q, representative, claimed, launches, nil)
+}
+
+func (c *Catalog) authorInputsSince(ctx context.Context, q queryer, representative map[string]string, claimed map[string]bool, launches []conversationLaunch, since *time.Time) ([]authorInput, error) {
 	// Only a Mac whose Conductor is read can show a session was not its own.
 	conductorHosts := map[string]bool{}
 	hosts, err := q.QueryContext(ctx, `SELECT DISTINCT c.origin_host_id FROM conversations c JOIN workspaces w ON w.id=c.workspace_id
@@ -1452,7 +1526,12 @@ func (c *Catalog) authorInputs(ctx context.Context, q queryer, representative ma
 	for index := range launches {
 		launched[launches[index].child] = &launches[index]
 	}
-	rows, err := q.QueryContext(ctx, authorshipInputsQuery)
+	query, args := authorshipInputsQuery, []any{}
+	if since != nil {
+		query += " AND m.created_at>=?"
+		args = append(args, formatTime(*since))
+	}
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1494,18 +1573,26 @@ func (c *Catalog) classifyInputs(ctx context.Context, inputs []authorInput) ([]a
 
 // classifyInputsFrom is classifyInputs reading agent replies through q.
 func classifyInputsFrom(ctx context.Context, q queryer, inputs []authorInput) ([]authorResult, error) {
+	return classifyAuthorship(ctx, q, inputs, newClassifier(inputs))
+}
+
+func classifyAuthorship(ctx context.Context, q queryer, inputs []authorInput, classifier *classifier) ([]authorResult, error) {
 	results := make([]authorResult, 0, len(inputs))
 	if len(inputs) == 0 {
 		return results, nil
 	}
-	classifier := newClassifier(inputs)
-	cursor := authorshipReplyCursor{q: q, start: inputs[0].SentAt.Add(-authorshipWindow), stop: inputs[len(inputs)-1].SentAt.Add(time.Second)}
-	var pending *authorshipReply
-	next := func() error {
-		var err error
-		pending, err = cursor.next(ctx)
-		return err
+	start := inputs[0].SentAt.Add(-authorshipWindow)
+	if !classifier.replyStart.IsZero() && classifier.replyStart.Before(start) {
+		start = classifier.replyStart
 	}
+	cursor := authorshipReplyCursor{q: q, start: start, stop: inputs[len(inputs)-1].SentAt.Add(time.Second)}
+	return walkAuthorshipInputs(ctx, inputs, classifier, cursor.next)
+}
+
+func walkAuthorshipInputs(ctx context.Context, inputs []authorInput, classifier *classifier, read func(context.Context) (*authorshipReply, error)) ([]authorResult, error) {
+	results := make([]authorResult, 0, len(inputs))
+	var pending *authorshipReply
+	next := func() error { var err error; pending, err = read(ctx); return err }
 	if err := next(); err != nil {
 		return nil, err
 	}
@@ -1528,6 +1615,12 @@ func classifyInputsFrom(ctx context.Context, q queryer, inputs []authorInput) ([
 		}
 		classifier.agentText.evict(cutoff)
 		spans := classifier.classify(input)
+		if classifier.userText.err != nil {
+			return nil, classifier.userText.err
+		}
+		if classifier.incrementalErr != nil {
+			return nil, classifier.incrementalErr
+		}
 		results = append(results, authorResult{Input: input, Spans: spans, Answers: classifier.answers})
 		if index%100 == 0 || index+1 == len(inputs) {
 			reportWork(ctx, "classifying authorship", "message", index+1, len(inputs))
