@@ -96,9 +96,19 @@ analysis chain (after findings, when labels_enabled)      pharos labels run
 - **The worker is a thin tensor runner** (`cmd/pharos-labeler-ort`). It is
   Go with cgo against the ONNX Runtime C API, and it loads the library at run
   time with `dlopen`, so neither binary links ONNX Runtime. The vendored C API
-  header and ONNX Runtime's MIT license are in
-  `cmd/pharos-labeler-ort/include/`. Workers for other platforms or runtimes
-  are drop-in (below).
+  headers (v1.31.1, unmodified) and ONNX Runtime's MIT license are in
+  `cmd/pharos-labeler-ort/include/`.
+  - It finds the library from `--runtime PATH`, then `PHAROS_ORT_LIBRARY`,
+    then a `libonnxruntime.dylib` beside the executable, then the loader's
+    search path. It asks for the header's C API version (31) and refuses an
+    older library.
+  - Session options are ONNX Runtime's defaults except the intra-op thread
+    count, as in the Python reference.
+  - Replies go out on a duplicate of file descriptor 1, which is pointed at
+    stderr, so a native library's prints cannot corrupt the frames.
+  - Built without cgo, it still speaks the protocol and refuses every hello
+    with code `model`. `--version` prints its version.
+  - Workers for other platforms or runtimes are drop-in (below).
 - **One new module dependency:** `golang.org/x/text`, for the tokenizer's NFC
   normalizer (`unicode/norm`). The standard library has none, and NFC must
   match the tokenizer's exactly; the Go project maintains this package.
