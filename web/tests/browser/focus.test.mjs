@@ -621,6 +621,8 @@ for (const width of [1440, 390, 320]) test(`Data guide takes focus, keeps contro
   await dialog.getByRole("button", { name: "Close data guide", exact: true }).click();
   await page.waitForFunction(element => document.activeElement === element, await opener.elementHandle());
   await press(page.getByRole("button", { name: "Collapse query builder", exact: true }));
+  await app.shot("collapsed-query");
+  await press(page.getByRole("button", { name: "Expand query builder", exact: true }));
   await press(opener);
   await holdsFocus(page, dialog, opener);
 });
@@ -660,9 +662,10 @@ for (const [dataset, path, numeric] of [["library", "/library", "conversation_co
     await holdsFocus(page, page.getByRole("dialog", { name: "Data Guide", exact: true }), guideLink);
     await app.shot(`${dataset}-grouping-with-source`);
     await press(page.getByRole("button", { name: "Collapse query builder", exact: true }));
+    await app.shot(`${dataset}-grouping-collapsed`);
+    await press(page.getByRole("button", { name: "Expand query builder", exact: true }));
     await press(guideLink);
     await holdsFocus(page, page.getByRole("dialog", { name: "Data Guide", exact: true }), guideLink);
-    await press(page.getByRole("button", { name: "Expand query builder", exact: true }));
     await press(page.getByRole("button", { name: "Remove Repository grouping", exact: true }));
     const addGroup = page.getByRole("button", { name: "Add group by", exact: true });
     await press(addGroup);
@@ -1499,18 +1502,58 @@ test('Ask Pharos invitation gives focus back to existing search when dismissed',
   assert.ok(await page.getByRole('button',{name:'Search past work',exact:true}).evaluate(element=>element===document.activeElement));
 });
 
+for(const modal of [false,true]) for(const width of [1440,390,320]) test(`Ask Pharos model picker overlays content without expanding ${modal?'the dialog':'Home'} @ ${width}`,{skip},async t=>{
+  const selection={provider:'Codex',model:'test-model',effort:'Low'};
+  const {page,settled,shot}=await open(t,{url:'/',viewport:{width,height:900},ready:'#pharos-ask .pharos-ai:not([hidden])',api:{
+    'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
+    'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true},...Array.from({length:30},(_,index)=>({id:'model-'+index,label:'Model '+index,efforts:['Default']}))]},
+    'GET /api/ask/sessions':{sessions:[]},
+  }});
+  if(modal)await activateHeaderTool(page,'askPharosToggle');
+  const trigger=page.locator('.pharos-model-trigger'),product=page.locator('.pharos-product');
+  await trigger.scrollIntoViewIfNeeded();await settled();
+  const height=(await product.boundingBox()).height;
+  await trigger.click();
+  const picker=page.getByRole('dialog',{name:'Model selection',exact:true});
+  const check=async()=>{
+    assert.equal((await product.boundingBox()).height,height,'opening or resizing the picker must not expand its container');
+    assert.ok(await picker.evaluate(element=>{
+      const box=element.getBoundingClientRect();
+      return box.left>=0&&box.right<=innerWidth&&box.top>=0&&box.bottom<=innerHeight&&element.contains(document.elementFromPoint(box.x+box.width/2,box.y+box.height/2));
+    }),'the picker must stay on screen above other content');
+  };
+  await check();await shot('model-picker-overlay');
+  await picker.getByRole('button',{name:/^Model /}).click();
+  await check();
+  if(!modal){
+    await page.locator('main').evaluate(element=>{element.scrollTop+=innerHeight;});
+    await settled();await check();
+  }
+  await picker.getByRole('button',{name:'Model 29',exact:true}).click();
+  await check();
+  await page.keyboard.press('Escape');
+  assert.ok(await picker.isHidden());
+  assert.ok(await trigger.evaluate(element=>element===document.activeElement),'Escape returns focus to the model control');
+  await trigger.click();
+  await page.setViewportSize({width,height:400});await settled();
+  await check();await shot('model-picker-short-viewport');
+  await page.getByRole('textbox',{name:'Ask a question',exact:true}).click();
+  assert.ok(await picker.isHidden(),'clicking outside dismisses the picker');
+});
+
 for (const theme of ['dark','light']) for (const width of [1440,390,320]) test(`Ask Pharos keeps long chats scrollable and the editor reachable (${theme}) @ ${width}`, {skip}, async t => {
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   const turn=index=>({id:'turn-'+index,prompt:'Question '+index,cli:'Codex',model:'test-model',modelLabel:'Test Model',effort:'Low',status:'multiple',message:'',elapsedMs:1000,reply:index===5?'The newest reply.':'Earlier context. '.repeat(100),cards:[]});
   let session={id:'long-chat',createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:Array.from({length:6},(_,index)=>turn(index))};
   let finish;
-  const reply=new Promise(resolve=>{finish=resolve;});
-  const {page,settled,shot}=await open(t,{url:'/?ask_chat=long-chat',viewport:{width,height:900},preferences:{'pharos-theme':theme},ready:'#pharos-ask .pharos-turn',api:{
+  let reply=new Promise(resolve=>{finish=resolve;});t.after(()=>finish());
+  const {page,settled,shot,calls}=await open(t,{url:'/?ask_chat=long-chat',viewport:{width,height:900},preferences:{'pharos-theme':theme},ready:'#pharos-ask .pharos-turn',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
     'GET /api/ask/session':()=>session,
     'GET /api/ask/sessions':()=>({sessions:[session]}),
     'POST /api/ask/session':({body})=>(session={...session,draft:body.draft}),
+    'POST /api/ask/cancel':{ok:true},
     'POST /api/ask/send':async({body})=>{
       await reply;
       return session={...session,draft:'',conversation:[...session.conversation,{...turn(6),id:body.turnID,prompt:body.prompt,reply:'A completed reply while you read the earlier messages.'}]};
@@ -1524,13 +1567,44 @@ for (const theme of ['dark','light']) for (const width of [1440,390,320]) test(`
   assert.ok(await page.getByRole('textbox',{name:'Ask a question',exact:true}).evaluate(fits),'editor must stay on screen');
   assert.ok(await page.locator('.pharos-user-question').last().evaluate(fits),'latest prompt should be visible with a short reply');
   assert.ok(await page.getByRole('button',{name:'Send question',exact:true}).evaluate(fits),'send must stay on screen');
+  const clear=page.locator('.pharos-ai').getByRole('button',{name:'Clear',exact:true});
+  assert.ok(await clear.evaluate(button=>{
+    const transcript=document.querySelector('.pharos-thread-viewport'),before=transcript.getBoundingClientRect();
+    button.hidden=true;
+    const after=transcript.getBoundingClientRect();
+    button.hidden=false;
+    return before.top===after.top&&before.height===after.height;
+  }),'Clear overlays the conversation without taking up vertical space');
+  const reachable=element=>{const box=element.getBoundingClientRect(),target=document.elementFromPoint(box.x+box.width/2,box.y+box.height/2);return element===target||element.contains(target);};
+  assert.ok(await clear.evaluate(reachable),'Clear must be clickable above the conversation');
   await shot('latest-exchange');
 
   await page.getByRole('textbox',{name:'Ask a question',exact:true}).fill('A follow-up question');
   await page.getByRole('button',{name:'Send question',exact:true}).click();
   await page.getByRole('region',{name:'AI request in progress',exact:true}).waitFor();
+  const stop=page.getByRole('button',{name:'Stop',exact:true});
+  assert.ok(await stop.isEnabled(),'an empty draft must still allow stopping the request');
+  assert.ok(await stop.evaluate(fits),'Stop must stay on screen while the conversation scrolls');
+  await shot('processing-stop');
+  const editor=page.getByRole('textbox',{name:'Ask a question',exact:true});
+  await editor.fill('A preserved follow-up');
+  await editor.press('Enter');
+  assert.equal(calls.filter(call=>call.path==='/api/ask/cancel').length,0,'typing Enter in a follow-up must not stop the current request');
+  await stop.focus();await page.keyboard.press('Enter');
+  const send=page.getByRole('button',{name:'Send question',exact:true});await send.waitFor();
+  await page.getByRole('button',{name:'Try again',exact:true}).waitFor();
+  await page.waitForFunction(element=>element===document.activeElement,await send.elementHandle());
+  assert.ok(await send.isEnabled(),'a preserved follow-up can be sent after stopping');
+  assert.equal(await editor.evaluate(element=>element.value),'A preserved follow-up');
+  await shot('stopped-preserving-draft');
+  finish();await settled();
+  assert.equal(calls.filter(call=>call.path==='/api/ask/cancel').length,1,'Stop sends one cancellation');
+  reply=new Promise(resolve=>{finish=resolve;});
+  await send.click();
+  await page.getByRole('region',{name:'AI request in progress',exact:true}).waitFor();
   await viewport.evaluate(element=>{element.scrollTop=0;});
   await page.getByRole('button',{name:'Latest reply',exact:true}).waitFor();
+  assert.ok(await clear.evaluate(reachable),'scrolling earlier replies must not cover Clear');
   finish();
   await settled();
   await page.getByRole('status').filter({hasText:'A completed reply while you read the earlier messages.'}).waitFor({state:'attached'});
@@ -1546,6 +1620,11 @@ for (const theme of ['dark','light']) for (const width of [1440,390,320]) test(`
   await page.keyboard.press('Home');
   await page.keyboard.press('Tab');
   assert.ok(await page.getByRole('textbox',{name:'Ask a question',exact:true}).evaluate(element=>element===document.activeElement)||await page.getByRole('button',{name:'Latest reply',exact:true}).evaluate(element=>element===document.activeElement),'keyboard focus can leave the scrollable conversation');
+  await editor.fill('An unsent follow-up');
+  await clear.click();
+  assert.equal(await editor.evaluate(element=>element.value),'');
+  assert.ok(await editor.evaluate(element=>element===document.activeElement),'Clear returns focus to the fresh composer');
+  assert.ok(await page.locator('.pharos-model-trigger').isEnabled(),'Clear starts a new chat with an unlocked model selection');
 });
 
 for(const [status,width,theme,longTranscript] of [['error',1440,'dark'],['error',390,'light'],['error',320,'dark'],['canceled',390,'dark'],['error',1440,'light',true]]) test(`Ask Pharos retry with another model focuses the picker (${status}, ${theme}${longTranscript?', long transcript':''}) @ ${width}`,{skip},async t=>{
@@ -1575,20 +1654,20 @@ for(const [status,width,theme,longTranscript] of [['error',1440,'dark'],['error'
   const clear=page.locator('.pharos-recovery').getByRole('button',{name:'Clear',exact:true});
   await clear.focus();await page.keyboard.press('Enter');
   assert.ok(await question.evaluate(element=>element===document.activeElement),'clearing a failure returns focus to the composer');
-  assert.equal(await question.inputValue(),'');
+  assert.equal(await question.evaluate(element=>element.value),'');
   assert.ok(await page.getByRole('log',{name:'Conversation',exact:true}).isHidden(),'clearing hides the prior conversation');
   assert.ok(await page.locator('.pharos-model-trigger').isEnabled(),'a cleared chat allows choosing another model');
   assert.equal(new URL(page.url()).searchParams.get('ask_chat'),null);
   await shot('cleared-chat');
   await page.goBack();await clear.waitFor();await settled();
-  assert.equal(await question.inputValue(),original.draft,'the failed chat remains available with its prior draft');
+  assert.equal(await question.evaluate(element=>element.value),original.draft,'the failed chat remains available with its prior draft');
   const retry=page.getByRole('button',{name:'Try Again with a different model',exact:true});
   await retry.focus();await page.keyboard.press('Enter');
   const picker=page.getByRole('dialog',{name:'Model selection',exact:true});
   assert.ok(await picker.evaluate(element=>element.contains(document.activeElement)),'retry moves keyboard focus into the model picker');
   const prior=longTranscript?'[Earlier conversation omitted or shortened to fit.]\n\nYou:\nWhich commands keep failing?\n\nPharos:\n'+'B'.repeat(8000):'You:\nWhich commands keep failing?\n\nPharos:\nWhich project?\n\n- Pharos\n\n- All projects';
   const expected=prior+'\n\nYou:\nPharos\n\nPharos ('+status+'):\n'+original.conversation.at(-1).reply+'\n\nYou (unsent draft):\nKeep the time range to this week.';
-  assert.equal(await question.inputValue(),expected);
+  assert.equal(await question.evaluate(element=>element.value),expected);
   const newID=new URL(page.url()).searchParams.get('ask_chat');
   assert.ok(newID&&newID!==original.id,'retry has its own draft chat');
   assert.equal(calls.filter(call=>call.path==='/api/ask/send').length,0,'opening the picker must not send a request');
@@ -1684,7 +1763,7 @@ test('Ask Pharos chat links survive reload, new tabs and browser Back/Forward', 
   assert.ok(id,'a new draft gets a conversation URL');
   await page.reload();await settled();
   await page.waitForFunction(()=>document.querySelector('#pharos-question')?.value==='Keep this question');
-  assert.equal(await question.inputValue(),'Keep this question');
+  assert.equal(await question.evaluate(element=>element.value),'Keep this question');
   assert.ok(await page.evaluate(() => document.activeElement === document.body), 'restoring a chat should leave initial focus alone');
   const choose=async(kind,value,expected)=>{
     const persisted=page.waitForResponse(response=>response.url().includes('/api/ask/session')&&response.request().method()==='POST'&&Object.entries(expected).every(([key,value])=>response.request().postDataJSON().selection[key]===value));
@@ -1754,6 +1833,64 @@ test('Ask Pharos chat links survive reload, new tabs and browser Back/Forward', 
   assert.equal(page.url(),contextURL,'opening a chat in the overlay must preserve the page URI');
 });
 
+for(const url of ['/', '/analyze?analyze_topic=tokens']) test(`Ask Pharos restores its open and floating surfaces after reload (${url==='/'?'Home':'Analyze'})`,{skip},async t=>{
+  const selection={provider:'Codex',model:'test-model',effort:'Low'};
+  let session=null;
+  const {page,settled}=await open(t,{url,ready:'#askPharosToggle:not([disabled])',api:{
+    'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
+    'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
+    'GET /api/ask/sessions':()=>({sessions:session?[session]:[]}),
+    'GET /api/ask/session':()=>session,
+    'POST /api/ask/session':({body})=>session={createdAt:Date.now(),updatedAt:Date.now(),conversation:[],...body},
+  }});
+  const modal=page.getByRole('dialog',{name:'Ask Pharos',exact:true});
+  const question=page.getByRole('textbox',{name:'Ask a question',exact:true});
+  const panel=page.getByRole('complementary',{name:'Ask Pharos progress'});
+  const pageURL=page.url();
+  const reload=async()=>{await settled();await page.waitForLoadState('networkidle');await page.reload();await settled();};
+  await activateHeaderTool(page,'askPharosToggle');
+  await reload();
+  await modal.waitFor();
+  assert.ok(await question.evaluate(element=>element===document.activeElement),'the restored modal focuses its editor');
+  const saved=page.waitForResponse(response=>response.url().includes('/api/ask/session')&&response.request().method()==='POST');
+  await question.evaluate(element=>{element.value='Keep this open question';element.dispatchEvent(new Event('input',{bubbles:true}));});await saved;await settled();
+  await question.getByRole('group',{name:/^About/}).focus();await page.keyboard.press('Alt+ArrowRight');
+  const inlineDraft=await question.innerText();await question.focus();
+  await reload();
+  await modal.waitFor();
+  await page.waitForFunction(()=>document.querySelector('#pharos-question')?.value==='Keep this open question');
+  assert.equal(await question.evaluate(element=>element.value),'Keep this open question');
+  assert.equal(await question.innerText(),inlineDraft,'reload preserves the context chip position within the draft');
+  assert.equal(page.url(),pageURL,'restoring the overlay keeps the underlying page URI');
+  await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();
+  const handle=panel.getByRole('button',{name:'Move Ask Pharos progress'});
+  await handle.focus();await page.keyboard.press('ArrowLeft');
+  await reload();
+  await panel.waitFor();
+  assert.equal(page.url(),pageURL,'restoring floating progress keeps the underlying page URI');
+  await panel.getByRole('button',{name:'Dismiss Ask Pharos progress',exact:true}).click();
+  await reload();
+  assert.equal(await panel.isVisible(),false,'dismissed progress stays dismissed');
+  assert.equal(await modal.isVisible(),false);
+  await activateHeaderTool(page,'askPharosToggle');
+  assert.equal(await question.evaluate(element=>element.value),'Keep this open question');
+  await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();
+  await panel.getByRole('button',{name:/^Ask Pharos/}).click();
+  assert.equal(await question.evaluate(element=>element.value),'Keep this open question');
+  await page.getByRole('button',{name:'Close Ask Pharos',exact:true}).click();
+  await reload();
+  assert.equal(await modal.isVisible(),false,'a closed overlay stays closed');
+  await page.waitForFunction(()=>document.querySelector('#pharos-question')?.value==='Keep this open question');
+  if(url==='/'){
+    await page.locator('#homeAskSearch').getByRole('textbox',{name:'Ask a question',exact:true}).waitFor();
+    assert.equal(await question.evaluate(element=>element.value),'Keep this open question','Home still owns the composer after reload');
+  }else{
+    await page.locator('body>header .brand').click();
+    await page.locator('#homeAskSearch').getByRole('textbox',{name:'Ask a question',exact:true}).waitFor();
+    assert.equal(await question.evaluate(element=>element.value),'Keep this open question','returning Home reattaches the restored composer');
+  }
+});
+
 for(const theme of ['dark','light']) for(const mode of ['choice','other','composer']) test(`Ask Pharos clarification supports ${mode} replies and keeps focus usable (${theme})`,{skip},async t=>{
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   const clarification={question:'By “use”, do you mean model tokens, API cost equivalent, or something else?',options:['Model tokens','API cost equivalent']};
@@ -1797,7 +1934,7 @@ for(const theme of ['dark','light']) for(const mode of ['choice','other','compos
   assert.equal(submitted.length,1,'an answer should submit exactly one request');
   assert.equal(submitted[0].prompt,expected);
   assert.equal(new URL(page.url()).searchParams.get('ask_chat'),'clarification-chat');
-  if(mode!=='composer')assert.equal(await question.inputValue(),'An unrelated next question');
+  if(mode!=='composer')assert.equal(await question.evaluate(element=>element.value),'An unrelated next question');
   if(mode!=='composer')assert.ok(await question.evaluate(element=>element===document.activeElement),'answering should return keyboard focus to the composer');
   assert.ok(await page.getByRole('button',{name:'A. Model tokens',exact:true}).isDisabled(),'older clarification options must not be submitted again');
   const footer=page.getByRole('button',{name:'Send question',exact:true});
@@ -1807,12 +1944,142 @@ for(const theme of ['dark','light']) for(const mode of ['choice','other','compos
   await shot('answered');
 });
 
-for (const width of [1440,390,320]) test(`Ask Pharos overlay and floating progress keep focus and stay reachable @ ${width}`, {skip}, async t => {
+for(const width of [1440,390])test(`Ask Pharos prompt chips drag into text and support keyboard editing @ ${width}`,{skip},async t=>{
+  const selection={provider:'Codex',model:'test-model',effort:'Low'};let sent;
+  const {page,shot}=await open(t,{viewport:{width,height:800},ready:'.pharos-ai:not([hidden])',api:{
+    'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
+    'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
+    'GET /api/ask/sessions':{sessions:[]},'POST /api/ask/session':({body})=>body,
+    'POST /api/ask/send':({body})=>{sent=body;return {id:body.id,createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:body.turnID,prompt:body.prompt,currentURI:body.currentURI,cli:'Codex',model:'test-model',effort:'Low',status:'multiple',reply:'Here is the breakdown.',cards:[]}]};},
+  }});
+  await page.waitForFunction(()=>document.querySelector('.pharos-current-settings')?.textContent.includes('Test Model'));
+  await activateHeaderTool(page,'askPharosToggle');
+  const editor=page.getByRole('textbox',{name:'Ask a question',exact:true}),chip=page.getByRole('group',{name:/About Home context/});
+  const contextURI=await page.evaluate(()=>askPageURI(location.href));
+  await editor.press('End');await page.keyboard.insertText('Find usage by model');
+  assert.equal(await editor.evaluate(element=>element.value),'Find usage by model');
+  const beforeDrag=await editor.innerText();
+  // Drop at the caret after “Find ”, using the rendered text's real location.
+  const target=await editor.evaluate(element=>{
+    const walker=document.createTreeWalker(element,NodeFilter.SHOW_TEXT);
+    while(walker.nextNode())if(walker.currentNode.data.includes('Find usage by model')){
+      const range=document.createRange();range.setStart(walker.currentNode,5);range.collapse(true);
+      const caret=range.getBoundingClientRect(),box=element.getBoundingClientRect();return {x:caret.x-box.x+1,y:caret.y-box.y+caret.height/2};
+    }
+    throw new Error('The typed prompt is missing');
+  });
+  await chip.dragTo(editor,{sourcePosition:{x:12,y:12},targetPosition:target});
+  assert.match(await editor.innerText(),/Find .*About Home.*usage by model/s,'the chip moves between the words at the drop caret');
+  assert.equal(await editor.evaluate(element=>element.value),'Find usage by model','dragging preserves the question');
+  await shot('chip-between-words');
+  await editor.press('Meta+z');
+  assert.equal(await editor.innerText(),beforeDrag,'undo restores the chip position');
+  await editor.press('Meta+Shift+z');
+  assert.match(await editor.innerText(),/Find .*About Home.*usage by model/s);
+  await chip.focus();await page.keyboard.press('Alt+ArrowRight');
+  assert.match(await editor.innerText(),/Find u.*About Home.*sage by model/s,'keyboard movement relocates the same chip');
+  await page.keyboard.press('Backspace');
+  assert.ok(await editor.evaluate(element=>element===document.activeElement),'removing a focused chip returns to the editor');
+  assert.equal(await editor.evaluate(element=>element.value),'Find usage by model');
+  await editor.press('Meta+z');await chip.waitFor();
+  await editor.press('Meta+a');await page.keyboard.press('Backspace');
+  assert.equal(await editor.evaluate(element=>element.value),'','select-all deletion clears text and context together');
+  await editor.press('Meta+z');await chip.waitFor();
+  assert.equal(await editor.evaluate(element=>element.value),'Find usage by model','undo restores the selected prompt and chip');
+  await editor.press('Meta+ArrowDown');await page.keyboard.press('Shift+Enter');await page.keyboard.insertText('this week');
+  assert.equal(await editor.evaluate(element=>element.value),'Find usage by model\nthis week');
+  await page.getByRole('button',{name:'Send question',exact:true}).click();
+  await page.getByRole('status').filter({hasText:'Here is the breakdown.'}).waitFor();
+  assert.equal(sent.prompt,'Find usage by model\nthis week');assert.equal(sent.currentURI,contextURI);
+});
+
+for(const [width,height,motion] of [[2133,1070,'no-preference'],[390,650,'no-preference'],[320,480,'reduce']])test(`Ask Pharos dialog grows within the viewport and settles back after Clear (${motion}) @ ${width}`,{skip},async t=>{
+  const selection={provider:'Codex',model:'test-model',effort:'Low'};
+  let finish;const response=new Promise(resolve=>{finish=resolve;});t.after(()=>finish());
+  const {page,settled,shot}=await open(t,{viewport:{width,height},ready:'.pharos-ai:not([hidden])',api:{
+    'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
+    'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default'],default:true}]},
+    'GET /api/ask/sessions':{sessions:Array.from({length:8},(_,index)=>({id:'prior-'+index,selection,conversation:[{prompt:'Prior question '+index}],updatedAt:Date.now()}))},'POST /api/ask/session':({body})=>body,
+    'POST /api/ask/send':async({body})=>{await response;return {id:body.id,createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:body.turnID,prompt:body.prompt,cli:'Codex',model:'test-model',effort:'Low',status:'multiple',reply:'Your activity overview. '+('Here is more detail about the work and the questions you explored. '.repeat(150)),cards:[]}]};},
+  }});
+  await page.emulateMedia({reducedMotion:motion});
+  await page.waitForFunction(()=>document.querySelector('.pharos-current-settings')?.textContent.includes('Test Model'));
+  await activateHeaderTool(page,'askPharosToggle');
+  const modal=page.getByRole('dialog',{name:'Ask Pharos',exact:true}),editor=page.getByRole('textbox',{name:'Ask a question',exact:true});
+  const finishMotion=()=>modal.evaluate(async element=>{
+    for(;;){
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      const animations=[element,...element.querySelectorAll('.pharos-ai-frame')].flatMap(surface=>surface.getAnimations()).filter(animation=>animation.playState==='running'&&animation.effect.getTiming().iterations!==Infinity);
+      if(!animations.length)return;
+      await Promise.all(animations.map(animation=>animation.finished.catch(()=>{})));
+    }
+  });
+  await finishMotion();
+  const empty=await modal.boundingBox();
+  assert.ok(empty.y>0&&empty.y+empty.height<=height,'the empty overlay floats inside the viewport');
+  if(height>900)assert.ok(empty.y>height/5&&empty.y<height/3,'the empty overlay starts around a quarter down a tall window');
+  await shot('empty-position');
+  await modal.getByRole('button',{name:'History',exact:true}).click();await finishMotion();
+  assert.ok(await modal.getByRole('button',{name:'Close chat history',exact:true}).evaluate(element=>{const box=element.getBoundingClientRect(),hit=document.elementFromPoint(box.x+box.width/2,box.y+box.height/2);return element===hit||element.contains(hit);}),'history controls remain reachable as the dialog makes room for the menu');
+  await modal.getByRole('button',{name:'Close chat history',exact:true}).click();await finishMotion();
+  const clear=modal.getByRole('button',{name:'Clear',exact:true}),close=modal.getByRole('button',{name:'Close Ask Pharos',exact:true});
+  const checkWindowControls=async()=>{
+    await finishMotion();
+    const clearBox=await clear.boundingBox(),closeBox=await close.boundingBox();
+    assert.ok(clearBox.x+clearBox.width<=closeBox.x&&clearBox.y<closeBox.y+closeBox.height&&closeBox.y<clearBox.y+clearBox.height,'Clear sits to the left of Close on the same row');
+    for(const button of [clear,close])assert.ok(await button.evaluate(element=>{const box=element.getBoundingClientRect(),hit=document.elementFromPoint(box.x+box.width/2,box.y+box.height/2);return element===hit||element.contains(hit);}), 'window controls remain clickable');
+    const transcript=modal.getByRole('region',{name:'Chat messages, scroll for earlier replies'});
+    if(await transcript.isVisible()){
+      assert.ok(await clear.evaluate(button=>{
+        const transcript=document.querySelector('.pharos-thread-viewport'),before=transcript.getBoundingClientRect();
+        button.hidden=true;
+        const after=transcript.getBoundingClientRect();
+        button.hidden=false;
+        return before.top===after.top&&before.height===after.height;
+      }),'Clear adds no vertical space beside Close');
+    }
+  };
+  await editor.fill('Summarize my recent work.\nHighlight recurring themes.\nCompare usage across models.\nShow changes over time.\nFind work worth revisiting.\nSuggest a useful next question.');
+  await finishMotion();
+  const draft=await modal.boundingBox();
+  assert.ok(draft.y<empty.y&&draft.y+draft.height>empty.y+empty.height,'a growing prompt expands above and below the empty composer');
+  await shot('draft-growth');
+  await editor.fill('An unsent question');await checkWindowControls();await shot('draft-clear');
+  await clear.click();
+  assert.equal(await editor.evaluate(element=>element.value),'');
+  assert.ok(await editor.evaluate(element=>element===document.activeElement),'clearing a draft returns focus to the composer');
+  assert.ok(await clear.isHidden(),'Clear hides when the composer is empty');
+  await modal.evaluate(element=>{element.observedTransitions=[];element.addEventListener('transitionrun',event=>{if(event.target===element)element.observedTransitions.push(event.propertyName);});});
+  await editor.fill('Give me a detailed overview of my recent work.');
+  await page.getByRole('button',{name:'Send question',exact:true}).click();
+  await page.getByRole('region',{name:'AI request in progress',exact:true}).waitFor();
+  await checkWindowControls();
+  finish();await page.getByRole('status').filter({hasText:'Your activity overview.'}).waitFor();await settled();await finishMotion();
+  const expanded=await modal.boundingBox();
+  assert.ok(expanded.height>empty.height&&expanded.y<empty.y,'the overlay expands into the space above the starting position');
+  assert.ok(expanded.y>=0&&expanded.y+expanded.height<=height,'the expanded overlay stays on screen');
+  const fits=element=>{const box=element.getBoundingClientRect();return box.top>=0&&box.bottom<=innerHeight;};
+  assert.ok(await editor.evaluate(fits),'the draft remains reachable with a long response');
+  assert.ok(await page.getByRole('button',{name:'Send question',exact:true}).evaluate(fits),'Send remains reachable with a long response');
+  assert.ok(await page.getByRole('region',{name:'Chat messages, scroll for earlier replies'}).evaluate(element=>element.scrollHeight>element.clientHeight),'a long response scrolls inside the composer');
+  const transitions=await modal.evaluate(element=>element.observedTransitions);
+  if(motion==='reduce')assert.deepEqual(transitions,[],'reduced motion disables dialog transitions');
+  else assert.ok(transitions.includes('height')&&transitions.includes('top'),'growth and repositioning animate');
+  await shot('expanded-position');
+  await checkWindowControls();
+  await clear.click();await settled();await finishMotion();
+  assert.ok((await modal.boundingBox()).y>expanded.y,'Clear returns the empty composer to its starting region');
+  await page.setViewportSize({width:320,height:350});await settled();await finishMotion();
+  assert.ok(await editor.evaluate(fits),'the empty composer fits after shrinking the window');
+  assert.ok(await page.getByRole('button',{name:'Close Ask Pharos',exact:true}).evaluate(fits),'Close stays reachable after shrinking the window');
+});
+
+for (const [width,url,theme] of [[1440,'/analyze?analyze_topic=tokens','dark'],[390,'/analyze?analyze_topic=tokens','dark'],[320,'/analyze?analyze_topic=tokens','dark'],[2133,'/','dark'],[1440,'/','light'],[390,'/','light']]) test(`Ask Pharos overlay and floating progress keep focus and stay reachable (${url==='/'?'Home':'Analyze'}, ${theme}) @ ${width}`, {skip}, async t => {
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   let finish, sent;
   const response=new Promise(resolve=>{finish=resolve;});
   t.after(()=>finish());
-  const {page,shot}=await open(t,{url:'/analyze?analyze_topic=tokens',viewport:{width,height:650},ready:'body>header',api:{
+  const {page,shot}=await open(t,{url,preferences:{'pharos-theme':theme},viewport:{width,height:width===2133?1070:650},ready:'body>header',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
     'GET /api/ask/sessions':{sessions:[]},
@@ -1829,7 +2096,27 @@ for (const width of [1440,390,320]) test(`Ask Pharos overlay and floating progre
   assert.ok(await editor.evaluate(element=>element===document.activeElement));
   await page.locator('body>header .brand').evaluate(element=>element.focus());
   assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)),'the overlay must keep focus');
+  await editor.evaluate(element=>{element.value='What if we broke it down by model?';element.dispatchEvent(new Event('input',{bubbles:true}));});
+  const reachable=element=>{const box=element.getBoundingClientRect(),target=document.elementFromPoint(box.x+box.width/2,box.y+box.height/2);return box.left>=0&&box.right<=innerWidth&&(element===target||element.contains(target));};
+  for(const name of ['Clear','Close Ask Pharos','Remove page context'])assert.ok(await modal.getByRole('button',{name,exact:true}).evaluate(reachable),name+' must stay reachable');
+  assert.ok(await editor.evaluate(element=>{
+    const controls=[...element.closest('form').querySelectorAll('.pharos-window-controls button:not([hidden])')].map(button=>button.getBoundingClientRect());
+    const walker=document.createTreeWalker(element,NodeFilter.SHOW_TEXT);
+    while(walker.nextNode()){
+      const range=document.createRange();range.selectNodeContents(walker.currentNode);
+      for(const box of range.getClientRects())for(const control of controls)if(box.left<control.right&&box.right>control.left&&box.top<control.bottom&&box.bottom>control.top)return false;
+    }
+    return true;
+  }),'floating controls must not obscure prompt text');
   await shot('ask-overlay');
+  await modal.getByRole('button',{name:'Remove page context',exact:true}).click();
+  assert.ok(await editor.evaluate(element=>element===document.activeElement),'removing context returns focus to the request');
+  assert.equal(await editor.evaluate(element=>element.value),'What if we broke it down by model?','removing context preserves the draft');
+  await modal.getByRole('button',{name:'Close Ask Pharos',exact:true}).click();
+  await modal.waitFor({state:'hidden'});
+  assert.ok(await page.locator('#askPharosToggle').evaluate(element=>element===document.activeElement)||await page.locator('#headerMore').evaluate(element=>element===document.activeElement),'Close returns focus to the header');
+  await activateHeaderTool(page,'askPharosToggle');
+  await modal.getByRole('button',{name:'Remove page context',exact:true}).waitFor();
   await page.getByRole('button',{name:'Switch to non-AI search',exact:true}).click();
   await modal.getByRole('button',{name:'Search past work',exact:true}).click();
   await modal.getByRole('textbox',{name:'Text for rule 1.1',exact:true}).fill('cache');
@@ -1841,8 +2128,14 @@ for (const width of [1440,390,320]) test(`Ask Pharos overlay and floating progre
   await page.evaluate(()=>window.pharosNavigate('/analyze?analyze_topic=tokens'));
   await activateHeaderTool(page,'askPharosToggle');
   const originalURI=await page.evaluate(()=>location.pathname+location.search+location.hash);
-  await editor.fill('What if we broke it down by model?');
+  if(width===390)await modal.getByRole('button',{name:'Remove page context',exact:true}).click();
+  await editor.evaluate(element=>{element.value='What if we broke it down by model?';element.dispatchEvent(new Event('input',{bubbles:true}));});
   await page.getByRole('button',{name:'Send question',exact:true}).click();
+  const browseHint=page.getByRole('tooltip');await browseHint.waitFor();
+  await page.waitForFunction(()=>{const hint=document.getElementById('pharos-browse-hint'),rect=hint.getBoundingClientRect();return rect.left>=0&&rect.right<=innerWidth&&rect.top>=0&&rect.bottom<=innerHeight;});
+  await page.waitForFunction(element=>new Promise(resolve=>{const observer=new IntersectionObserver(([entry])=>{observer.disconnect();resolve(entry.intersectionRatio===1);});observer.observe(element);}),await browseHint.elementHandle());
+  assert.ok(await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).evaluate(element=>{const rect=element.getBoundingClientRect(),target=document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2);return element===target||element.contains(target);}), 'the hint leaves picture in picture clickable');
+  await shot('ask-browse-hint');
   await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();
   await modal.waitFor({state:'hidden'});
   const panel=page.getByRole('complementary',{name:'Ask Pharos progress'});
@@ -1875,7 +2168,7 @@ for (const width of [1440,390,320]) test(`Ask Pharos overlay and floating progre
   finish();
   await panel.getByRole('button',{name:/Your response is ready/}).waitFor();
   assert.equal(new URL(page.url()).pathname,'/settings','a ready response must leave the current page alone');
-  assert.equal(sent.currentURI,originalURI,'navigation while waiting must preserve the question context');
+  assert.equal(sent.currentURI,width===390?'':originalURI,'the request uses the attached context and respects its removal');
   await shot('ask-floating-ready');
   await panel.getByRole('button',{name:/Your response is ready/}).click();
   await page.locator('.pharos-destination:not([hidden])').click();
@@ -1897,10 +2190,14 @@ test('Ask Pharos on Home can keep browsing without losing the active chat', {ski
   }});
   await page.waitForFunction(()=>document.querySelector('.pharos-current-settings')?.textContent.includes('Test Model'));
   await page.getByRole('textbox',{name:'Ask a question',exact:true}).fill('Break it down');
+  await page.getByRole('button',{name:'Clear',exact:true}).click();
+  assert.equal(await page.getByRole('textbox',{name:'Ask a question',exact:true}).evaluate(element=>element.value),'');
+  assert.ok(await page.getByRole('textbox',{name:'Ask a question',exact:true}).evaluate(element=>element===document.activeElement),'clearing a Home draft returns focus to the composer');
+  await page.getByRole('textbox',{name:'Ask a question',exact:true}).fill('Break it down');
   await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();
   const panel=page.getByRole('complementary',{name:'Ask Pharos progress'});await panel.waitFor();
   await panel.locator('.pharos-floating-open').click();
-  assert.equal(await page.getByRole('textbox',{name:'Ask a question',exact:true}).inputValue(),'Break it down');
+  assert.equal(await page.getByRole('textbox',{name:'Ask a question',exact:true}).evaluate(element=>element.value),'Break it down');
   // Keep the server's deferred answer, and deliver activity through the real
   // NDJSON reader so the floating surface is exercised before completion.
   await page.evaluate(()=>{

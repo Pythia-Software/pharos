@@ -20404,7 +20404,7 @@
       "idea": "cost-01",
       "id": "token-volume-log",
       "title": "Token volume across scales",
-      "description": "Daily repository tokens over the last {days} days on a logarithmic scale, keeping smaller workloads visible.",
+      "description": "Daily tokens over the last {days} days, with a separate line for each repository on a logarithmic scale.",
       "days": [
         30,
         90
@@ -20443,7 +20443,7 @@
         }
       },
       "action": "Explore Tokens and Cost",
-      "note": "Recorded processing volume includes cached input, assumed, partial and unpriced usage. It is not unique text, effort or value. Dates use the retained usage fact’s placement; facts are not prorated. Log1p scaling keeps zero at zero; vertical distance does not represent an additive difference. Switch to linear to compare absolute amounts.",
+      "note": "Recorded processing volume includes cached input, assumed, partial and unpriced usage. It is not unique text, effort or value. Dates use the retained usage fact’s placement; facts are not prorated. Each line shows one repository’s daily tokens independently. Log1p scaling keeps zero at zero; vertical distance does not represent an additive difference. Switch to linear to compare absolute amounts.",
       "exploration": {
         "keys": [
           "day",

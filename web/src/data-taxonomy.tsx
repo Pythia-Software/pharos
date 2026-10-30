@@ -1,6 +1,7 @@
 import { useViewEntry, useViewState } from "./view-state";
-import React, { useEffect, useRef, useState } from "react";
-import { QueryBuilder, type QueryBuilderProps } from "@pythia-software/query-table-ui";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { QueryBuilder, QueryFilterRow, type QueryBuilderProps } from "@pythia-software/query-table-ui";
+import type { QueryFilterApi } from "@pythia-software/query-table-react";
 import { Icon } from "./icons";
 import { dataEntities, dataSources, describeDataSource, type DataEntity, type DataSource } from "./data-taxonomy-model";
 import { readConcurrencySettings } from "./concurrency-settings";
@@ -24,20 +25,27 @@ function useDataSource(dataset: DataSource) {
 
 function SourceStatement({ dataset }: { dataset: DataSource }) {
   const source = useDataSource(dataset);
-  return <span className="data-source-statement">
+  return <div className="qt-qb-row data-source-statement">
     <span className="qt-qb-kw">FROM</span>
     <a className="data-source-link" href={`#data-guide-${source.entity}`} aria-haspopup="dialog" onClick={event => { event.preventDefault(); openDataTaxonomy(dataset, event.currentTarget); }}>{source.label}<Icon name="info" /></a>
-  </span>;
+  </div>;
 }
 
-// Keep decoration outside the builder’s replacement slots: `clauses` disables
-// its native grouping UI, and `summary` replaces its grouped query summary.
-export function SourceQueryBuilder<Row>({ dataset, ...props }: QueryBuilderProps<Row> & { dataset: DataSource }) {
+// Compose source information with WHERE, leaving the builder's native grouping
+// clauses and collapsed summary intact. Grouped WHERE edits the source rows.
+export function SourceQueryBuilder<Row>({ dataset, whereRow, ...props }: QueryBuilderProps<Row> & { dataset: DataSource }) {
   const [collapsed,setCollapsed]=useViewEntry("query_layout",dataset,Boolean(props.defaultCollapsed));
-  return <div className="data-source-query" data-pharos-target={`control:q_${dataset}`}>
+  const currentApi = useRef(props.api);
+  currentApi.current = props.api;
+  // A grouped result can replace the source facade. Keep the filter API stable
+  // so suggestion effects do not restart on each result.
+  const sourceFilters = useMemo(() => new Proxy({} as QueryFilterApi<Row>, {
+    get: (_, property) => Reflect.get(currentApi.current.query.grouping ? currentApi.current.grouping!.source : currentApi.current, property),
+  }), []);
+  return <div className="data-source-query" data-pharos-target={`control:q_${dataset}`}><QueryBuilder {...props} collapsed={props.collapsed??collapsed} onCollapsedChange={props.onCollapsedChange??setCollapsed} whereRow={<>
     <SourceStatement dataset={dataset} />
-    <QueryBuilder {...props} collapsed={props.collapsed??collapsed} onCollapsedChange={props.onCollapsedChange??setCollapsed} />
-  </div>;
+    {whereRow ?? <QueryFilterRow api={sourceFilters} fields={props.api.query.grouping ? props.api.grouping!.source.schema.fields : props.fields} />}
+  </>} /></div>;
 }
 
 export function DataTaxonomyModal() {

@@ -116,3 +116,37 @@ test("sidebar widths normalize legacy preferences and fractional drag limits for
     assert.equal(sidebarWidth(normalized), normalized);
   }
 });
+
+test("result outlines keep turns, setup and nested inline agents under their owning turn", () => {
+ const conversation = { messages: [
+  event("setup", "context", "Session context"), human("Inspect the rules."),
+  event("delegate", "delegation", { name: "Task", input: { subagent_type: "Reviewer", prompt: "Audit configuration" } }, 1, { call_id: "agent-1" }),
+  event("child", "message", "Reviewing.", 2, { parent_native_id: "agent-1" }),
+  event("nested", "delegation", { name: "Task", input: { description: "Check timing" } }, 3, { call_id: "agent-2", parent_native_id: "agent-1" }),
+  event("nested-reply", "message", "Timing checked.", 4, { parent_native_id: "agent-2" }),
+  event("result", "delegation_result", { content: "Audit complete." }, 5, { call_id: "agent-1" }),
+  event("final", "message", "Done.", 6),
+  event("second", "message", "Explain the fix.", 7, { role: "user" }),
+ ] };
+ // Result cards can load the reader even if another page-shell initializer fails.
+ assert.equal(typeof reader.window.pharosConversationOutline, "function");
+ const outline = reader.window.pharosConversationOutline(conversation);
+ assert.equal(outline.length, 3); assert.equal(outline[0].label, "Session setup");
+ assert.equal(outline[1].label, "Turn 1"); assert.equal(outline[2].label, "Turn 2");
+ assert.equal(outline[1].human.text, "Inspect the rules."); assert.equal(outline[1].response.text, "Done.");
+ const agent = outline[1].children[0];
+ assert.equal(agent.label, "Reviewer"); assert.equal(agent.human.text, "Audit configuration");
+ assert.equal(agent.response.text, "Reviewing.");
+ assert.equal(agent.children[0].prompt, "Check timing"); assert.equal(agent.children[0].response.text, "Timing checked.");
+ assert.equal(outline[2].human.text, "Explain the fix."); assert.equal(outline[2].response, null);
+});
+
+
+test("result outlines unwrap a delegation result when no child reply is retained", () => {
+ const outline = reader.conversationOutline({ messages: [human(),
+  event("delegate", "delegation", { name: "Task", input: { description: "Audit" } }, 1, { call_id: "agent" }),
+  event("result", "delegation_result", { content: "Audit complete." }, 2, { call_id: "agent" }),
+ ] });
+ assert.equal(outline[0].children[0].response.role, "assistant");
+ assert.equal(outline[0].children[0].response.text, "Audit complete.");
+});

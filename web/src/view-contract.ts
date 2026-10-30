@@ -32,7 +32,7 @@ export const viewFields: Record<string, ViewField> = {
   query_search: field("analyze_search", ["analyze/query/*"], "enum", "Retained search-entry route hint.", ["1"]),
   query_layout: field("query_layout", ["library","analyze/query/*","findings/table"], "json", "Query builder collapsed state by dataset ID."),
   reader_content: field("reader_content", ["work","library"], "json", "Expanded prose, turn summaries, file paths, action previews and deliberately loaded events by stable message/conversation identity."),
-  search_cards: field("search_cards", ["library"], "json", "Conversation-result presentation keyed by work ID/browse or work ID/turn; browse is boolean and turn is a stable input message ID."),
+  search_cards: field("search_cards", ["library"], "json", "Conversation-result presentation keyed by work ID/browse, work ID/conversation and work ID/turn; browse is boolean, conversation is a stable session ID, and turn is a stable message or outline entry ID."),
   chart_pins: field("chart_pins", ["analyze/*"], "json", "Pinned chart bucket keys by chart title. Hover is transient."),
   conveyor_paused: field("conveyor_paused", ["home"], "boolean", "Pause the Home suggestion carousel."),
   delegation_page: field("delegation_page", ["work"], "text", "Zero-based session page number, 0–250 (site_link accepts a number or decimal string). Replays current cursors on open; does not store expiring server cursors."),
