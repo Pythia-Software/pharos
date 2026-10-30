@@ -217,7 +217,7 @@ func TestAskConversationPersistenceAndSelection(t *testing.T) {
 			t.Error("passed service token to CLI")
 		}
 		var response askAgentResponse
-		_ = json.Unmarshal(askReply("tl1", "findings"), &response)
+		_ = json.Unmarshal(askReply("analyze", "findings"), &response)
 		response.Message = fmt.Sprintf("Navigation reply %d", calls)
 		return []byte(jsonText(response)), nil
 	})

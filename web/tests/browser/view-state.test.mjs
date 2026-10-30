@@ -22,29 +22,6 @@ test('copied Cards view overrides preferences in a fresh context and follows Bac
  await fresh.page.waitForFunction(()=>document.querySelector('select[aria-label="Preview window"]')?.value==='30');
 });
 
-test('TL1 scope and relative windows survive copying without activating hidden Runs', {skip},async t=>{
- const api={'GET /api/tl1':{projects:[{project:'example',tasks:14,installations:[{installation_id:'mac-a',host_label:'Mac A',tasks:7},{installation_id:'mac-b',host_label:'Mac B',tasks:7}]}]}};
- const first=await open(t,{url:'/tl1?tl1_project=example&tl1_installation=mac-b',api,ready:'.tl1-controls'});
- await first.page.getByRole('button',{name:'Current definitions',exact:true}).click();
- await first.page.getByRole('button',{name:'7 days',exact:true}).click();
- await first.page.waitForFunction(()=>new URLSearchParams(location.search).get('tl1_scope')==='current');
- assert.equal(new URL(first.page.url()).searchParams.has('q_tl1_attempts'),false);
- const fresh=await open(t,{url:path(first.page),api,ready:'.tl1-controls'});
- assert.equal(await fresh.page.getByRole('button',{name:'Current definitions',exact:true}).getAttribute('aria-pressed'),'true');
- assert.equal(await fresh.page.getByRole('button',{name:'7 days',exact:true}).getAttribute('aria-pressed'),'true');
- await fresh.settled();
- assert.match(fresh.calls.filter(call=>call.path==='/api/tl1/overview').at(-1).query.toString(),/days=7/);
- await fresh.page.getByRole('link',{name:'Quality & review',exact:true}).click();
- await fresh.page.waitForFunction(()=>location.pathname==='/tl1/quality');await fresh.settled();
- assert.equal(await fresh.page.getByRole('button',{name:'Current definitions',exact:true}).getAttribute('aria-pressed'),'true');
- assert.equal(await fresh.page.getByRole('button',{name:'7 days',exact:true}).getAttribute('aria-pressed'),'true');
- const query=fresh.calls.filter(call=>call.path==='/api/tl1/overview').at(-1).query;
- assert.equal(query.get('scope'),'current');assert.equal(query.get('days'),'7');
- assert.equal(query.get('project'),'example');assert.equal(query.get('installation'),'mac-b');
- assert.equal(await fresh.page.getByRole('group',{name:'TL1 filters',exact:true}).getByRole('combobox',{name:/^Project/}).inputValue(),'example');
- assert.equal(await fresh.page.getByRole('group',{name:'TL1 filters',exact:true}).getByRole('combobox',{name:/^Mac/}).inputValue(),'mac-b');
-});
-
 test('an explicit query sizing choice survives native restoration', {skip},async t=>{
  const query={...EMPTY_QUERY,fitToScreen:false,select:[{field:'model',width:240}],limit:5};
  const opened=await open(t,{url:'/analyze?'+new URLSearchParams({analyze_mode:'query',analyze_data:'usage',q_usage:encodeQuery(query)}),ready:'.usage-workspace-table .qt-table'});

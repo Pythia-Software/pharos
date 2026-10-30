@@ -169,8 +169,8 @@ function nodeCases(map: SiteMap) {
   add("library", searchURL({ ...filtered, text: { ...text, root: { ...text.root, id: "group-1", children: [rule(1, "deploy", "words")] } }, window, query: { ...filtered.query, where: [where("repository_name", "contains", "pharos"), where(window.field, ">=", "-30d"), where(window.field, "<", "+0s")] } }), { kind: "text", window: 30 });
   // Query tables, with and without a window.
   let turn = 0;
-  for (const dataset of [...Object.keys(usageDatasets), "findings", "tl1_attempts"] as QueryDataset[]) {
-    const path = dataset === "findings" ? "findings/table" : dataset === "tl1_attempts" ? "tl1/runs" : `analyze/query/${dataset}`;
+  for (const dataset of [...Object.keys(usageDatasets), "findings"] as QueryDataset[]) {
+    const path = dataset === "findings" ? "findings/table" : `analyze/query/${dataset}`;
     for (const filters of filterSets(dataset).slice(1, 4)) {
       const days = map.datasets[dataset].window_field ? rollingWindowDays[turn++ % rollingWindowDays.length] : null;
       add(path, datasetURL(dataset, filters, days), { filters, days });
@@ -180,7 +180,7 @@ function nodeCases(map: SiteMap) {
   add("findings", "/findings?list=wins&repo=pharos", { list: "wins", repo: "pharos" });
   add("findings", findingDetailURL("tool-failures:repository:abc123", "evidence"), { finding: "tool-failures:repository:abc123", tab: "evidence" });
   add("findings/settings", "/findings?view=settings", { view: "settings" });
-  for (const path of Object.keys(map.nodes).filter(path => path.startsWith("tl1") || path.startsWith("settings"))) add(path, map.nodes[path].route);
+  for (const path of Object.keys(map.nodes).filter(path => path.startsWith("settings"))) add(path, map.nodes[path].route);
   // The reader: a work, a conversation and message, and the delegation explorer.
   add("work", conversationRowURL({ workspace_id: "workspace-1" })!, { work_id: "workspace-1" });
   add("work", conversationRowURL({ workspace_id: "workspace-1", conversation_id: "conversation-2" }, "message-3", undefined, "call-4")!, { work_id: "workspace-1", conversation: "conversation-2", message: "message-3", call: "call-4" });

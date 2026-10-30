@@ -55,7 +55,7 @@ Native elapsed predicates (`-7d`, `+0s`) remain relative in definitions, URLs, s
 
 Today is represented explicitly and re-resolved at execution boundaries. Omitted timezone follows the viewer; a supplied IANA timezone stays pinned. Dashboard-to-query navigation preserves separate lower/upper interval-overlap fields. Long range controls are labeled **180 days** and **365 days**, accurately reflecting their elapsed-day definitions rather than promising calendar months/years.
 
-TL1's latest enqueue remains a selector, days remain relative, and a selected enqueue/segment retains its event timestamp and segmentation choice. Session pagination and conversation Find batches store a page number and rebuild current server cursors when opened; expired cursor blobs are not used as identities.
+TL1 attempts remain available through the Analyze query dataset; the retired TL1 report pages and their view fields are removed. Session pagination and conversation Find batches store a page number and rebuild current server cursors when opened; expired cursor blobs are not used as identities.
 
 Carbon and Parallelism assumptions are view-scoped overrides. Request parameters carry them to rows, metrics and item details. Restoring a URL never saves preferences. Deliberate changes to counting assumptions, Carbon settings or Findings ranking also update the corresponding library defaults; other linked overrides are not copied into those defaults. Existing explicit URLs keep their chosen values, while new unlinked views use the saved defaults.
 

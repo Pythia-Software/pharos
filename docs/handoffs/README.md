@@ -18,6 +18,15 @@ tests.
 | [usage-v3-hour-grouping.md](usage-v3-hour-grouping.md) | `/query-v3` groups usage by `hour` over daily records, where it is null; only `/metrics` reads the hourly ledger |
 | [query-table-schema-reload.md](query-table-schema-reload.md) | Every staged Query Table request makes its connection re-parse the whole catalog schema twice, adding about 6 ms of CPU |
 
+## Analysis chain cost
+
+From the "what refreshes when" survey (2026-10-29): groundwork for running the
+analysis chain automatically after scheduled indexes.
+
+| Handoff | Problem |
+|---|---|
+| [analysis-chain-rewrites.md](analysis-chain-rewrites.md) | Completed in #288–#290: identities rewrote ~3,500 unchanged conversations, so every chain refreshed the whole Search view; writing classification rebuilt everything (≈6 min) on any new message |
+
 ## Catalog size
 
 From the storage survey of the production library (2026-10-28). The two

@@ -666,7 +666,6 @@ func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
 		t.Fatal("non-timestamp window accepted")
 	}
 	for _, input := range []string{
-		`{"page":"tl1/quality","view":{"tl1_project":"example","tl1_scope":"current","tl1_window":{"mode":"latest"}}}`,
 		`{"page":"cards","view":{"card_window":"today","card_filters":false},"highlight":["card:tool-failures"],"reveal":"text:failed command"}`,
 		`{"page":"work","options":{"work_id":"w","conversation":"c"},"view":{"reader_page":"1","reader_expanded":["message:m"],"reader_filter":["prompts","response"],"delegation_columns":["tokens","cost"],"delegation_tint":"sort"},"reveal":"message:m"}`,
 	} {
@@ -684,7 +683,7 @@ func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
 		t.Fatal(nested)
 	}
 	for _, raw := range []string{
-		"/cards?card_window=unknown", "/cards?card_filters=false", "/tl1?tl1_window=" + url.QueryEscape(`{"mode":"days","days":0}`),
+		"/cards?card_window=unknown", "/cards?card_filters=false",
 		"/cards?reveal=card:a&reveal=card:b", "/cards?highlight=message:m", "/library?text_builder=" + url.QueryEscape(`{}`),
 	} {
 		if _, err := site.linkTool(map[string]any{"url": raw}); err == nil {

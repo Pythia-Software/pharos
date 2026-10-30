@@ -736,31 +736,6 @@ func validateViewShape(name string, value any) error {
 			}
 		}
 
-	case "tl1_window":
-		mode, _ := object["mode"].(string)
-		switch mode {
-		case "latest", "all":
-		case "days":
-			v, ok := object["days"].(float64)
-			if !ok || v < 1 || v > 3650 || v != float64(int(v)) {
-				return fmt.Errorf("days must be an integer from 1 to 3650")
-			}
-		case "enqueue":
-			if text, ok := object["since"].(string); !ok || text == "" {
-				return fmt.Errorf("enqueue needs its since timestamp")
-			}
-			if _, ok := object["segment"].(bool); !ok {
-				return fmt.Errorf("enqueue needs a segment boolean")
-			}
-		case "custom":
-			for _, key := range []string{"since", "until"} {
-				if _, ok := object[key].(string); !ok {
-					return fmt.Errorf("custom needs since and until timestamps")
-				}
-			}
-		default:
-			return fmt.Errorf("unknown time window mode")
-		}
 	}
 	return nil
 }

@@ -56,6 +56,9 @@ type SyncRun struct {
 	// StopRequested is set while a running run winds down after a stop
 	// request: it finishes the record in hand and keeps everything written.
 	StopRequested bool `json:"stop_requested,omitempty"`
+	// Changed is a run that indexed nothing but updated what pages show (a
+	// background pass), so they refresh when it ends.
+	Changed bool `json:"changed,omitempty"`
 }
 type Server struct {
 	Catalog  *Catalog
@@ -77,6 +80,8 @@ type Server struct {
 	estimator activityEstimator
 	forecasts forecastStore
 	auto      automaticSync
+	// background is the Hourly and Daily schedule's state (background.go).
+	background backgroundState
 	// Leave catalog connections available for rows/previews while metadata scans run.
 	queryMetadata chan struct{}
 	ask           askState
@@ -97,6 +102,7 @@ type Server struct {
 
 func NewServer(config Config, catalog *Catalog) *Server {
 	server := &Server{Catalog: catalog, config: config, runs: []*SyncRun{}, queryMetadata: make(chan struct{}, 1)}
+	server.background.wake = make(chan struct{}, 1)
 	server.life.init()
 	server.ops = newOpRegistry("service")
 	server.ops.releasing = server.releasing
@@ -170,6 +176,7 @@ func (s *Server) Serve() error {
 	s.daemon("maintainQueryTextIndexes", s.Catalog.maintainQueryTextIndexes)
 	s.daemon("keepWALSmall", func(ctx context.Context) { s.Catalog.keepWALSmall(ctx, 10*time.Second, walSizeLimit) })
 	s.daemon("automaticLoop", s.automaticLoop)
+	s.daemon("backgroundLoop", s.backgroundLoop)
 	s.daemon("cloudScheduleLoop", s.cloudScheduleLoop)
 	s.daemon("watchFeatureFlags", s.Catalog.watchFeatureFlags)
 	s.daemon("compressCaptures", s.compressCapturesLoop)
@@ -283,7 +290,7 @@ func (s *Server) authorized(r *http.Request) bool {
 // of which serves the single-page UI.
 func isUIPage(path string) bool {
 	switch path {
-	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/preferences", "/settings/ask", "/sources", "/activity", "/analyze", "/tools", "/tl1", "/tl1/configurations", "/tl1/followups", "/tl1/quality", "/tl1/runs", "/health", "/mcp", "/findings":
+	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/preferences", "/settings/ask", "/sources", "/activity", "/analyze", "/tools", "/health", "/mcp", "/findings":
 		return true
 	}
 	return strings.HasPrefix(path, "/work/")
@@ -300,6 +307,7 @@ var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/status-panel.js":      {"status-panel.js", "text/javascript; charset=utf-8"},
 	"/assets/cloud-backup.js":      {"cloud-backup.js", "text/javascript; charset=utf-8"},
 	"/assets/sync.js":              {"sync.js", "text/javascript; charset=utf-8"},
+	"/assets/background.js":        {"background.js", "text/javascript; charset=utf-8"},
 	"/assets/carbon.js":            {"carbon.js", "text/javascript; charset=utf-8"},
 	"/assets/menu-bar.js":          {"menu-bar.js", "text/javascript; charset=utf-8"},
 	"/assets/header.js":            {"header.js", "text/javascript; charset=utf-8"},
@@ -579,6 +587,8 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		s.serveOperations(w, r)
 	case path == "/api/status":
 		s.serveStatus(w, r)
+	case path == "/api/background":
+		s.getBackground(w, r)
 	case path == "/api/status/stream":
 		s.serveStatusStream(w, r)
 	case path == "/api/health/drive":
@@ -676,6 +686,10 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 
 	case strings.HasPrefix(path, "/api/sync/") || path == "/api/library/update":
 		s.postIncrementalSync(w, r, body)
+	case path == "/api/background/settings":
+		s.postBackgroundSettings(w, r, body)
+	case path == "/api/background/run":
+		s.postBackgroundRun(w, r, body)
 	case path == "/api/upgrade":
 		// The upgrade reads and rewrites much of the catalog, so it runs in the
 		// background; /api/upgrade and the library status report progress. A

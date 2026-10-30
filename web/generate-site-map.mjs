@@ -26,7 +26,7 @@ const map = {...buildSiteMap(inputs),query_types:publishedQueryTypes()};
 // Literal IDs are discovered from the same page sources, not a second hand
 // maintained list. Runtime entity IDs remain documented target families.
 const sectionOwners = {
- "card-library.tsx":["cards"], "tl1.tsx":["tl1","tl1/*"],
+ "card-library.tsx":["cards"],
  "findings.tsx":["findings","findings/*"], "delegation.tsx":["work"],
  "concurrency.tsx":["analyze/parallelism"],
 };
@@ -39,12 +39,7 @@ for(const [file,pages] of Object.entries(sectionOwners)){
    const id=node.initializer.text;
    // Editing dialogs and generated IDs are outside content navigation.
    if(!/dialog|template/i.test(id)){
-    let scoped=pages;
-    for(let ancestor=node.parent;ancestor;ancestor=ancestor.parent){
-     if(ts.isConditionalExpression(ancestor)&&node.pos>=ancestor.whenTrue.pos&&node.end<=ancestor.whenTrue.end){const match=ancestor.condition.getText(tree).match(/page === "(\/tl1[^"\s]*)"/);if(match){scoped=[match[1].slice(1)];break}}
-     if(ts.isFunctionDeclaration(ancestor)&&ancestor.name?.text==="Followups"){scoped=["tl1/followups"];break}
-    }
-    for(const name of Object.keys(map.nodes))if(scoped.some(pattern=>pattern===name||pattern.endsWith("/*")&&name.startsWith(pattern.slice(0,-1))))(sections[name]??=[]).push("section:"+id);
+    for(const name of Object.keys(map.nodes))if(pages.some(pattern=>pattern===name||pattern.endsWith("/*")&&name.startsWith(pattern.slice(0,-1))))(sections[name]??=[]).push("section:"+id);
    }
   }
   ts.forEachChild(node,visit);

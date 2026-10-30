@@ -153,38 +153,6 @@
     {
       "file": "web/src/workspace-inbox.ts",
       "field": "sidebar_width"
-    },
-    {
-      "file": "web/src/tl1.tsx",
-      "field": "tl1_candidate"
-    },
-    {
-      "file": "web/src/tl1.tsx",
-      "field": "tl1_flavor"
-    },
-    {
-      "file": "web/src/tl1.tsx",
-      "field": "tl1_from"
-    },
-    {
-      "file": "web/src/tl1.tsx",
-      "field": "tl1_installation"
-    },
-    {
-      "file": "web/src/tl1.tsx",
-      "field": "tl1_project"
-    },
-    {
-      "file": "web/src/tl1.tsx",
-      "field": "tl1_scope"
-    },
-    {
-      "file": "web/src/tl1.tsx",
-      "field": "tl1_to"
-    },
-    {
-      "file": "web/src/tl1.tsx",
-      "field": "tl1_window"
     }
   ],
   "controls": [
@@ -853,6 +821,60 @@
       "control": "'button'",
       "contract": "editing",
       "reason": "Ask conversation/drafts remain on the private chat protocol, not public view URLs."
+    },
+    {
+      "key": "78f30533f5901a54:0",
+      "file": "internal/archive/assets/background.js",
+      "owner": "button",
+      "tag": "button",
+      "control": "'button', className, text",
+      "contract": "settings",
+      "reason": "Background-update scheduling, power/source preferences, run actions and their operational diagnostics are excluded from content view URLs."
+    },
+    {
+      "key": "f96939e6262189c2:0",
+      "file": "internal/archive/assets/background.js",
+      "owner": "render",
+      "tag": "input",
+      "control": "'input'",
+      "contract": "settings",
+      "reason": "Background-update scheduling, power/source preferences, run actions and their operational diagnostics are excluded from content view URLs."
+    },
+    {
+      "key": "f96939e6262189c2:1",
+      "file": "internal/archive/assets/background.js",
+      "owner": "render",
+      "tag": "input",
+      "control": "'input'",
+      "contract": "settings",
+      "reason": "Background-update scheduling, power/source preferences, run actions and their operational diagnostics are excluded from content view URLs."
+    },
+    {
+      "key": "eb774bc870314479:0",
+      "file": "internal/archive/assets/background.js",
+      "owner": "renderItem",
+      "tag": "button",
+      "control": "'button', 'bg-item-head'",
+      "contract": "settings",
+      "reason": "Background-update scheduling, power/source preferences, run actions and their operational diagnostics are excluded from content view URLs."
+    },
+    {
+      "key": "c7b7dd6cbc73773b:0",
+      "file": "internal/archive/assets/background.js",
+      "owner": "select",
+      "tag": "select",
+      "control": "'select'",
+      "contract": "settings",
+      "reason": "Background-update scheduling, power/source preferences, run actions and their operational diagnostics are excluded from content view URLs."
+    },
+    {
+      "key": "d35f0091ebca75f5:0",
+      "file": "internal/archive/assets/background.js",
+      "owner": "sourcePicker",
+      "tag": "input",
+      "control": "'input'",
+      "contract": "settings",
+      "reason": "Background-update scheduling, power/source preferences, run actions and their operational diagnostics are excluded from content view URLs."
     },
     {
       "key": "2b58de1373a6d0f4:0",
@@ -1683,24 +1705,6 @@
       "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
     },
     {
-      "key": "6d822448bace5706:0",
-      "file": "internal/archive/assets/status-panel.js",
-      "owner": "appendWork",
-      "tag": "details",
-      "control": "'details', 'pharos-status-all'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
-    },
-    {
-      "key": "f6d0d03cdbd38f05:0",
-      "file": "internal/archive/assets/status-panel.js",
-      "owner": "appendWork",
-      "tag": "summary",
-      "control": "'summary', 'pharos-status-more'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
-    },
-    {
       "key": "02a9d1cd32a4c315:0",
       "file": "internal/archive/assets/status-panel.js",
       "owner": "button",
@@ -1708,6 +1712,42 @@
       "control": "'button', 'pharos-button ' + cls, text",
       "contract": "settings",
       "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+    },
+    {
+      "key": "1522eafd07502a33:0",
+      "file": "internal/archive/assets/status-panel.js",
+      "owner": "cadenceList",
+      "tag": "summary",
+      "control": "'summary'",
+      "contract": "settings",
+      "reason": "Read-only background-update cadence and support diagnostics in the Library status panel; operational diagnostics are excluded from content view URLs."
+    },
+    {
+      "key": "5fd00d2ef6f7a013:0",
+      "file": "internal/archive/assets/status-panel.js",
+      "owner": "cadenceList",
+      "tag": "details",
+      "control": "'details'",
+      "contract": "settings",
+      "reason": "Read-only background-update cadence and support diagnostics in the Library status panel; operational diagnostics are excluded from content view URLs."
+    },
+    {
+      "key": "0138786a2b976830:0",
+      "file": "internal/archive/assets/status-panel.js",
+      "owner": "renderPanel",
+      "tag": "details",
+      "control": "'details'",
+      "contract": "settings",
+      "reason": "Read-only background-update cadence and support diagnostics in the Library status panel; operational diagnostics are excluded from content view URLs."
+    },
+    {
+      "key": "99b509e459519a10:0",
+      "file": "internal/archive/assets/status-panel.js",
+      "owner": "renderPanel",
+      "tag": "summary",
+      "control": "'summary', '', 'Details for support'",
+      "contract": "settings",
+      "reason": "Read-only background-update cadence and support diagnostics in the Library status panel; operational diagnostics are excluded from content view URLs."
     },
     {
       "key": "30dd407bc3fb9139:0",
@@ -1771,33 +1811,6 @@
       "control": "'details', '', 'sync-panel sync-disclosure'",
       "contract": "settings",
       "reason": "Settings/diagnostic or feedback-editing disclosure, explicitly excluded from view URLs."
-    },
-    {
-      "key": "0e33d708d1a983d7:0",
-      "file": "internal/archive/assets/sync.js",
-      "owner": "renderDashboard",
-      "tag": "select",
-      "control": "'select'",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "51fc62dea204f68d:0",
-      "file": "internal/archive/assets/sync.js",
-      "owner": "renderDashboard",
-      "tag": "input",
-      "control": "'input'",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "51fc62dea204f68d:1",
-      "file": "internal/archive/assets/sync.js",
-      "owner": "renderDashboard",
-      "tag": "input",
-      "control": "'input'",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
       "key": "html:0135b6ac2c05c3f9:0",
@@ -7234,320 +7247,6 @@
       "control": "onClick={() => addDateBound(field.key === \"from\" ? \"to\" : \"from\")}",
       "contract": "host-search",
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
-    },
-    {
-      "key": "032f33a61125ce52:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "agent",
-      "tag": "button",
-      "control": "onClick={() => onFlavor(flavor)}",
-      "contract": "tl1",
-      "reason": "tl1_* view fields carry scope/windows/selection; Runs links carry native query state."
-    },
-    {
-      "key": "60e72b1ae10e9b23:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "BarList",
-      "tag": "button",
-      "control": "onClick={item.onClick}",
-      "contract": "tl1",
-      "reason": "tl1_* view fields carry scope/windows/selection; Runs links carry native query state."
-    },
-    {
-      "key": "ed70deb9ba61214a:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "CandidateDialog",
-      "tag": "button",
-      "control": "onClick={() => openWork(task.workspace_id)}",
-      "contract": "tl1",
-      "reason": "tl1_* view fields carry scope/windows/selection; Runs links carry native query state."
-    },
-    {
-      "key": "1389ca7a752608cb:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "ConfigurationTable",
-      "tag": "button",
-      "control": "onClick={() => onFlavor?.(row.flavor)}",
-      "contract": "tl1",
-      "reason": "tl1_* view fields carry scope/windows/selection; Runs links carry native query state."
-    },
-    {
-      "key": "ab0df0cabadf5d62:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "CopyButton",
-      "tag": "button",
-      "control": "onClick={async () => { try { await copy(text); setState(\"copied\"); } catch { setState(\"failed\"); } window.setTimeout(() => setState(\"\"), 2200); }}",
-      "contract": "action",
-      "reason": "Copying a prompt does not change a view."
-    },
-    {
-      "key": "07cbea54d5acc326:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "Dialog",
-      "tag": "button",
-      "control": "onClick={onClose}",
-      "contract": "tl1",
-      "reason": "tl1_* view fields carry scope/windows/selection; Runs links carry native query state."
-    },
-    {
-      "key": "086ea13f336b65a4:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "Dialog",
-      "tag": "div",
-      "control": "onClick={onClose}",
-      "contract": "tl1",
-      "reason": "tl1_* view fields carry scope/windows/selection; Runs links carry native query state."
-    },
-    {
-      "key": "b34de3678512d28f:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "Dialog",
-      "tag": "div",
-      "control": "aria-label={title} onClick={event => event.stopPropagation()}",
-      "contract": "tl1",
-      "reason": "tl1_* view fields carry scope/windows/selection; Runs links carry native query state."
-    },
-    {
-      "key": "3cb45f5bc2c7ba9a:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "FlavorDialog",
-      "tag": "ViewDisclosure",
-      "control": "viewKey={`tl1:flavor:${name}:definition`}",
-      "binding": "disclosures",
-      "contract": "view.disclosures",
-      "reason": "Bound by the shared view-state primitive."
-    },
-    {
-      "key": "91856d377cfc16b8:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "FlavorDialog",
-      "tag": "button",
-      "control": "onClick={() => openWork(task.workspace_id)}",
-      "contract": "tl1",
-      "reason": "tl1_* view fields carry scope/windows/selection; Runs links carry native query state."
-    },
-    {
-      "key": "b559219b964c022f:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "FlavorDialog",
-      "tag": "button",
-      "control": "onClick={() => { onRuns({ flavor: name }); onClose(); }}",
-      "contract": "tl1",
-      "reason": "tl1_* view fields carry scope/windows/selection; Runs links carry native query state."
-    },
-    {
-      "key": "f8c700645f78001b:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "FlavorDialog",
-      "tag": "summary",
-      "control": "",
-      "contract": "tl1",
-      "reason": "tl1_* view fields carry scope/windows/selection; Runs links carry native query state."
-    },
-    {
-      "key": "425ab7924b19a133:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "Followups",
-      "tag": "select",
-      "control": "data-view-field=\"tl1_to\" value={to} onChange={event => setTo(event.target.value)}",
-      "binding": "tl1_to",
-      "contract": "view.tl1_to",
-      "reason": "Bound by the shared view-state primitive."
-    },
-    {
-      "key": "b16bb3307d10c11a:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "Followups",
-      "tag": "select",
-      "control": "data-view-field=\"tl1_from\" value={from} onChange={event => setFrom(event.target.value)}",
-      "binding": "tl1_from",
-      "contract": "view.tl1_from",
-      "reason": "Bound by the shared view-state primitive."
-    },
-    {
-      "key": "0c9f6022ac0dcb57:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "TL1Page",
-      "tag": "select",
-      "control": "data-view-field=\"tl1_installation\" value={mac} onChange={event => { setInstallation(event.target.value); setEnqueues([]); if (timeWindow.mode === \"enqueue\") setTimeWindow({ mode: \"latest\" }); }}",
-      "binding": "tl1_installation",
-      "contract": "view.tl1_installation",
-      "reason": "Bound by the shared view-state primitive."
-    },
-    {
-      "key": "54bcabb18b119198:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "TL1Page",
-      "tag": "select",
-      "control": "data-view-field=\"tl1_project\" value={selected} onChange={event => { setProject(event.target.value); setInstallation(\"\"); preferences().set(\"tl1-project\", event.target.value); // A chosen enqueue belongs to the previous project. setEnqueues([]); if (timeWindow.mode === \"enqueue\") setTimeWindow({ mode: \"latest\" }); }}",
-      "binding": "tl1_project",
-      "contract": "view.tl1_project",
-      "reason": "Bound directly to the registered view field."
-    },
-    {
-      "key": "5a1a2edb2eae06bb:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "TL1Page",
-      "tag": "button",
-      "control": "data-view-field=\"tl1_scope\" onClick={() => setScope(\"all\")}",
-      "binding": "tl1_scope",
-      "contract": "view.tl1_scope",
-      "reason": "Bound by the shared view-state primitive."
-    },
-    {
-      "key": "6dcd8bff3ac1b9e4:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "TL1Page",
-      "tag": "button",
-      "control": "data-view-field=\"tl1_scope\" onClick={() => setScope(\"current\")}",
-      "binding": "tl1_scope",
-      "contract": "view.tl1_scope",
-      "reason": "Bound by the shared view-state primitive."
-    },
-    {
-      "key": "7478b1beb3b4dcb5:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "TL1Page",
-      "tag": "button",
-      "control": "onClick={() => filterAttempts([])}",
-      "contract": "tl1",
-      "reason": "tl1_* view fields carry scope/windows/selection; Runs links carry native query state."
-    },
-    {
-      "key": "783d95ad4924be22:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "TL1Page",
-      "tag": "a",
-      "control": "onClick={event => { if (event.metaKey || event.ctrlKey || event.shiftKey || !window.pharosNavigate) return; event.preventDefault(); window.pharosNavigate(\"/findings\"); }}",
-      "contract": "tl1",
-      "reason": "tl1_* view fields carry scope/windows/selection; Runs links carry native query state."
-    },
-    {
-      "key": "995fab172e742d78:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "TL1Page",
-      "tag": "button",
-      "control": "data-view-field=\"tl1_candidate\" onClick={() => setCandidate(row.candidate_id)}",
-      "binding": "tl1_candidate",
-      "contract": "view.tl1_candidate",
-      "reason": "Bound by the shared view-state primitive."
-    },
-    {
-      "key": "ceb6ab40ee1f4764:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "TL1Page",
-      "tag": "button",
-      "control": "onClick={() => filterAttempts([...windowWhere(), ...projectWhere()])}",
-      "contract": "tl1",
-      "reason": "tl1_* view fields carry scope/windows/selection; Runs links carry native query state."
-    },
-    {
-      "key": "cebf6ee74c184ff0:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "TL1Page",
-      "tag": "WindowControls",
-      "control": "value={timeWindow} onChange={setTimeWindow}",
-      "contract": "tl1",
-      "reason": "tl1_* view fields carry scope/windows/selection; Runs links carry native query state."
-    },
-    {
-      "key": "d28f2008a83ac87d:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "TL1Page",
-      "tag": "button",
-      "control": "onClick={() => showRuns({ error_signature: cluster.signature })}",
-      "contract": "tl1",
-      "reason": "tl1_* view fields carry scope/windows/selection; Runs links carry native query state."
-    },
-    {
-      "key": "fff688b20a0f605e:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "TL1Page",
-      "tag": "button",
-      "control": "onClick={() => { void loadInstallations(); load(); }}",
-      "contract": "tl1",
-      "reason": "tl1_* view fields carry scope/windows/selection; Runs links carry native query state."
-    },
-    {
-      "key": "17481b460b07f7a8:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "WindowControls",
-      "tag": "button",
-      "control": "onClick={() => onChange({ mode: \"latest\" })}",
-      "contract": "tl1",
-      "reason": "tl1_* view fields carry scope/windows/selection; Runs links carry native query state."
-    },
-    {
-      "key": "3bfdd593aa27276b:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "WindowControls",
-      "tag": "input",
-      "control": "checked={segment} onChange={event => onChange({ mode: \"enqueue\", since: selectedSince, segment: event.target.checked })}",
-      "contract": "tl1",
-      "reason": "tl1_* view fields carry scope/windows/selection; Runs links carry native query state."
-    },
-    {
-      "key": "5e2768f5141eb7b3:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "WindowControls",
-      "tag": "button",
-      "control": "onClick={() => onChange({ mode: \"days\", days: item.days })}",
-      "contract": "tl1",
-      "reason": "tl1_* view fields carry scope/windows/selection; Runs links carry native query state."
-    },
-    {
-      "key": "675b04e40a117c9e:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "WindowControls",
-      "tag": "button",
-      "control": "onClick={() => onChange({ mode: \"all\" })}",
-      "contract": "tl1",
-      "reason": "tl1_* view fields carry scope/windows/selection; Runs links carry native query state."
-    },
-    {
-      "key": "7b4a454ab76dacc8:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "WindowControls",
-      "tag": "button",
-      "control": "onClick={() => pick(item, index)}",
-      "contract": "tl1",
-      "reason": "tl1_* view fields carry scope/windows/selection; Runs links carry native query state."
-    },
-    {
-      "key": "ab3dd4658f0e4d25:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "WindowControls",
-      "tag": "input",
-      "control": "aria-label=\"Tasks created from\" value={toLocalInput(custom.since)} onChange={event => onChange({ mode: \"custom\", since: fromLocalInput(event.target.value), until: custom.until ?? \"\" })}",
-      "contract": "tl1",
-      "reason": "tl1_* view fields carry scope/windows/selection; Runs links carry native query state."
-    },
-    {
-      "key": "b7bd5a0db6c673a1:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "WindowControls",
-      "tag": "input",
-      "control": "aria-label=\"Tasks created before\" value={toLocalInput(custom.until)} onChange={event => onChange({ mode: \"custom\", since: custom.since ?? \"\", until: fromLocalInput(event.target.value) })}",
-      "contract": "tl1",
-      "reason": "tl1_* view fields carry scope/windows/selection; Runs links carry native query state."
-    },
-    {
-      "key": "244b850133d9e54a:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "WindowSummary",
-      "tag": "button",
-      "control": "onClick={() => onFlavor(name)}",
-      "contract": "tl1",
-      "reason": "tl1_* view fields carry scope/windows/selection; Runs links carry native query state."
-    },
-    {
-      "key": "6c13218452182a50:0",
-      "file": "web/src/tl1.tsx",
-      "owner": "WindowSummary",
-      "tag": "button",
-      "control": "onClick={onCurrent}",
-      "contract": "tl1",
-      "reason": "tl1_* view fields carry scope/windows/selection; Runs links carry native query state."
     },
     {
       "key": "c2ef28fbea4ddd0a:0",

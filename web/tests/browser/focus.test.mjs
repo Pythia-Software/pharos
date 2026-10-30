@@ -532,13 +532,15 @@ test("Unified activity panel holds focus across refreshes, stops each operation 
 
   await press(chip);
   await panel.waitFor();
-  await panel.locator("summary").click();
+  // Daily is closed in this snapshot: open it.
+  const daily = panel.locator('[data-key="cadence:daily"]');
+  await daily.locator("summary").click();
   const stop = panel.getByRole("button", { name: "Stop", exact: true });
   await stop.focus();
   push("/api/status/stream", { ...busyStatus, revision: 3, operations: busyStatus.operations.map(operation => operation.id === "op-index" ? { ...operation, step: { ...operation.step, done: 900e6, fraction: 0.45 } } : operation) });
   await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library?.revision === 3);
   assert.ok(await stop.evaluate(element => document.activeElement === element), "a refresh moved focus");
-  assert.ok(await panel.locator("details").first().evaluate(element => element.open), "a refresh closed Show all");
+  assert.ok(await daily.evaluate(element => element.open), "a refresh closed the cadence row the user opened");
   await app.shot("refreshed");
 
   // A busy fresh verdict refuses; a safe one ejects.
@@ -825,7 +827,6 @@ for (const width of [1440, 390, 320]) test(`Search long query can scroll to subm
 for (const route of [
   { name: "Analyze", url: "/analyze", ready: ".usage-dashboard .usage-chart", link: /^Human words$/i, destination: ".usage-human-dashboard .usage-chart" },
   { name: "Settings", url: "/settings", ready: "#healthCards .panel:not([aria-busy])", link: /^Sources$/, destination: "#sourceGrid .source-card" },
-  { name: "TL1", url: "/tl1", ready: ".tl1-tiles", link: /^Configurations$/, destination: "#tl1-matrix" },
 ]) test(`${route.name} navigation is usable from the keyboard on a phone`, { skip }, async t => {
   const { page } = await open(t, { url: route.url, viewport: { width: 390, height: 844 }, ready: route.ready });
   const menu = page.getByRole("dialog", { name: "Navigate Pharos" });
@@ -935,14 +936,6 @@ for (const width of [1440, 390]) test(`Optimize pages move keyboard focus to the
   await choose('Table', '.findings-table .qt-row');
   assert.ok(await table.evaluate(element => element.isConnected), 'Findings Settings keeps the findings table mounted');
   await choose('Dashboard', '.findings-card');
-  if (phone) await press(page.locator('#appNavigationToggle'));
-  await press(navigation.getByRole('link', { name: 'Configurations', exact: true }));
-  await page.locator('#tl1-matrix').waitFor();
-  await page.waitForFunction(() => document.activeElement?.tagName === 'MAIN');
-  await settled();
-  await shot('optimize-tl1');
-  await page.goBack();
-  await page.locator('.findings-card').first().waitFor();
   await settled();
   await shot('optimize-findings');
 });
@@ -1043,7 +1036,6 @@ for (const [url, ready] of [
   ["/settings", "#healthCards .panel:not([aria-busy])"],
   ["/settings/sources", "#sourceGrid .source-card"],
   ["/settings/preferences", "#optionalBehaviors"],
-  ["/tl1", ".tl1-tiles"],
   [`/work/${workID}`, ".work-heading h1"],
   [`/work/${workID}/conversation/conv-root`, ".conversation-panel .turn"],
 ]) test(`Opening ${url} leaves focus alone and its title is ordinary text`, { skip }, async t => {

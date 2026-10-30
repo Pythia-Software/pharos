@@ -59,7 +59,6 @@ routes. Legacy aliases are not offered; only canonical routes are.
 | Analyze dashboards | Every topic, with chart, filters and window |
 | Analyze query | Each dataset, with full native `q_<dataset>` |
 | Findings | List, finding, tab, repo, and the table view with full native `q_findings` |
-| TL1 | Each page; Runs takes full native `q_tl1_attempts` |
 | Work and reader | IDs, conversation, message, and the delegation explorer's options |
 | Settings | Each settings page |
 
@@ -71,7 +70,7 @@ Native query state includes columns, sorting, predicates, grouping, metrics, pag
 
 | Facts | Source |
 |---|---|
-| Routes | `appSections`, `tl1Pages` and `findingsPages` (`app-navigation-model.ts`); `usageTopics` and `usageDatasets` (`usage-workspace-model.ts`); the shell's `VIEW_TITLES` and `data-settings-route` panels (`ui.py`, `managed-library.html`) |
+| Routes | `appSections` and `findingsPages` (`app-navigation-model.ts`); `usageTopics` and `usageDatasets` (`usage-workspace-model.ts`); the shell's `VIEW_TITLES` and `data-settings-route` panels (`ui.py`, `managed-library.html`) |
 | Page descriptions, alias routes, ID sources, reader parameters | `site-routes.ts`, which owns them |
 | Dashboards | `analysisCatalogs`, `dashboardDefaults` (`dashboard-defaults.ts`, which the page uses too), `validAnalysisState` and `normalizeAnalysis` |
 | Filterable fields | `schemas/*.schema.json` through Query Table's `loadSchema`, `isFilterable` and `opsForField` |
@@ -82,7 +81,7 @@ Native query state includes columns, sorting, predicates, grouping, metrics, pag
 | Page readers | `findings-route.ts`, `delegation-route.ts`, `card-library-model.ts`, `text-search-model.ts`, `search-composer-state.ts`, `conversationRowURL` |
 
 Some lists live only in Go or in the shell: `isUIPage`, `ROUTES`,
-`TL1_PAGES`, the reader's parameters in `updateConversationURL`, and the MCP
+the reader's parameters in `updateConversationURL`, and the MCP
 tools behind each ID source. `web/tests/unit/site-map/site-map.test.mjs`
 compares each of them with the map.
 
@@ -372,7 +371,7 @@ Query table links follow `queryURL`:
 3. With a window: `window_mode=relative`, `window_days`, `window_field` and
    `window_dataset`.
 
-Findings' table also carries `view=table`. TL1 runs use `/tl1/runs`.
+Findings' table also carries `view=table`. TL1 attempts use the shared Analyze query route with `analyze_data=tl1_attempts`.
 
 ### Library
 

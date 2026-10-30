@@ -1,3 +1,5 @@
+> Historical audit: the dedicated TL1 report pages were subsequently retired. TL1 attempts remain available in Analyze Query; the current contract, generated control ledger and site map reflect the surviving surfaces.
+
 # View and query URL audit
 
 Baseline audit: 2026-10-29 at commit `a52d889f`. The findings below describe the original behavior, before implementation. See [the implementation contract and coverage status](url-view-state.md) for the changes and the outstanding upstream dependency gap.

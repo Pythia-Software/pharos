@@ -16,12 +16,12 @@ export const viewFields: Record<string, ViewField> = {
   guide_entity: field("guide_entity", ["*"], "enum", "Selected Data Guide entity.", ["workspaces","conversations","agents","messages","tool_calls"]),
   guide_example: field("guide_example", ["*"], "enum", "Selected example conversation.", ["implementation","review"]),
   overlay: field("overlay", ["*"], "enum", "Open read-only header content.", ["none","history","bookmarks","usage"]),
-  window_mode: field("window_mode", ["library","analyze/query/*","findings/table","tl1/runs"], "enum", "Native time intent companion for full queries.", ["relative","calendar","today"]),
-  window_days: field("window_days", ["library","analyze/query/*","findings/table","tl1/runs"], "enum", "Native time-window size.", ["1","7","30","90","180","365"]),
-  window_field: field("window_field", ["library","analyze/query/*","findings/table","tl1/runs"], "text", "Lower-bound timestamp field; preserve with the query."),
-  window_until_field: field("window_until_field", ["library","analyze/query/*","findings/table","tl1/runs"], "text", "Upper-bound timestamp field for interval overlap."),
-  window_dataset: field("window_dataset", ["library","analyze/query/*","findings/table","tl1/runs"], "text", "Dataset owning the time intent."),
-  window_timezone: field("window_timezone", ["library","analyze/query/*","findings/table","tl1/runs"], "text", "Pinned IANA timezone for Today. Omit to follow the viewer."),
+  window_mode: field("window_mode", ["library","analyze/query/*","findings/table"], "enum", "Native time intent companion for full queries.", ["relative","calendar","today"]),
+  window_days: field("window_days", ["library","analyze/query/*","findings/table"], "enum", "Native time-window size.", ["1","7","30","90","180","365"]),
+  window_field: field("window_field", ["library","analyze/query/*","findings/table"], "text", "Lower-bound timestamp field; preserve with the query."),
+  window_until_field: field("window_until_field", ["library","analyze/query/*","findings/table"], "text", "Upper-bound timestamp field for interval overlap."),
+  window_dataset: field("window_dataset", ["library","analyze/query/*","findings/table"], "text", "Dataset owning the time intent."),
+  window_timezone: field("window_timezone", ["library","analyze/query/*","findings/table"], "text", "Pinned IANA timezone for Today. Omit to follow the viewer."),
   query_dashboard_chart: field("analyze_chart", ["analyze/query/*"], "json", "Retained dashboard chart used when returning from its source query."),
   query_dashboard_filters: field("analyze_filters", ["analyze/query/*"], "text", "Retained dashboard population as a native query token."),
   query_dashboard_window: field("analyze_window", ["analyze/query/*"], "enum", "Retained moving dashboard time intent.", ["today"]),
@@ -29,7 +29,7 @@ export const viewFields: Record<string, ViewField> = {
   query_days: field("analyze_days", ["analyze/query/*"], "enum", "Retained dashboard window, in elapsed days.", ["7","30","90"]),
   query_report: field("analyze_report", ["analyze/query/*"], "text", "Retained analysis report identity."),
   query_search: field("analyze_search", ["analyze/query/*"], "enum", "Retained search-entry route hint.", ["1"]),
-  query_layout: field("query_layout", ["library","analyze/query/*","tl1/runs","findings/table"], "json", "Query builder collapsed state by dataset ID."),
+  query_layout: field("query_layout", ["library","analyze/query/*","findings/table"], "json", "Query builder collapsed state by dataset ID."),
   reader_content: field("reader_content", ["work","library"], "json", "Expanded prose, turn summaries, file paths, action previews and deliberately loaded events by stable message/conversation identity."),
   search_cards: field("search_cards", ["library"], "json", "Conversation-result presentation keyed by work ID/browse or work ID/turn; browse is boolean and turn is a stable input message ID."),
   chart_pins: field("chart_pins", ["analyze/*"], "json", "Pinned chart bucket keys by chart title. Hover is transient."),
@@ -37,14 +37,6 @@ export const viewFields: Record<string, ViewField> = {
   delegation_page: field("delegation_page", ["work"], "text", "Zero-based session page number, 0–250 (site_link accepts a number or decimal string). Replays current cursors on open; does not store expiring server cursors."),
   card_window: field("card_window", ["cards"], "enum", "Preview lookback; moving windows remain relative. Numeric day values are also accepted by site_link.", ["default", "today", "1", "7", "30", "90"], "default"),
   card_filters: field("card_filters", ["cards"], "boolean", "Show the card filters.", undefined, false),
-  tl1_project: field("tl1_project", ["tl1", "tl1/*"], "text", "Project name from /api/tl1."),
-  tl1_installation: field("tl1_installation", ["tl1", "tl1/*"], "text", "Installation ID; empty means all Macs."),
-  tl1_scope: field("tl1_scope", ["tl1", "tl1/*"], "enum", "Which flavor definitions contribute.", ["all", "current"], "all"),
-  tl1_window: field("tl1_window", ["tl1", "tl1/*"], "json", 'Time intent: {mode:"latest"|"all"}, {mode:"days",days:N}, {mode:"enqueue",since:ISO,segment:boolean}, or {mode:"custom",since:ISO,until:ISO}. Latest and days resolve on execution.'),
-  tl1_from: field("tl1_from", ["tl1/followups"], "text", "Starting flavor filter."),
-  tl1_to: field("tl1_to", ["tl1/followups"], "text", "Successor flavor filter."),
-  tl1_flavor: field("tl1_flavor", ["tl1", "tl1/*"], "text", "Open a flavor's details by name."),
-  tl1_candidate: field("tl1_candidate", ["tl1", "tl1/*"], "text", "Open candidate details by ID."),
   findings_rank: field("findings_rank", ["findings", "findings/table"], "enum", "Linked rank override; restoring a URL does not save settings. Manual Rank by changes also save the library default.", ["", "usd", "tokens", "minutes", "failures"]),
   delegation_columns: field("delegation_columns", ["work"], "strings", "Visible metric column IDs in display order."),
   delegation_column_order: field("delegation_column_order", ["work"], "strings", "Metric column ordering, including hidden columns."),
@@ -103,7 +95,7 @@ export const attentionTargets = [
   { pattern: "message:<id>", pages: ["work"], description: "Message ID; materializes the message and opens its ancestors." },
   { pattern: "call:<id>", pages: ["work"], description: "Tool-call ID; reveals its owning message." },
   { pattern: "session:<id>", pages: ["work"], description: "Conversation/session ID in the delegation explorer." },
-  { pattern: "row:<id>", pages: ["library", "analyze/query/*", "findings/table", "tl1/runs"], description: "Stable record ID in the current query result. Does not broaden filters." },
+  { pattern: "row:<id>", pages: ["library", "analyze/query/*", "findings/table"], description: "Stable record ID in the current query result. Does not broaden filters." },
   { pattern: "text:<literal>", pages: ["*"], description: "Literal text search. Opens a prefilled Find box, highlights matches and reveals the first. No browser focus movement." }
 ];
 export const viewDependencyGaps = {
@@ -137,9 +129,6 @@ export function parseViewValue(field: ViewField, raw: string): unknown {
       const restored=readTextSearch(new URLSearchParams({text_builder:JSON.stringify(value.draft)}));if(restored.error||!restored.active||restored.draft.fuzzy)throw new Error("Invalid record keyword search.");
       const scope=restored.draft.scope;
       if(Object.entries(emptyTextSearch().scope).some(([key,value])=>Array.isArray(value)?scope[key as keyof typeof scope].length!==0:scope[key as keyof typeof scope]!==value))throw new Error("Record keywords cannot carry message scope filters.");
-    }
-    if(field.param==="tl1_window") {
-      if(!["latest","all","days","enqueue","custom"].includes(value.mode)||value.mode==="days"&&(!Number.isInteger(value.days)||value.days<1||value.days>3650)||["enqueue","custom"].includes(value.mode)&&typeof value.since!=="string"||value.mode==="enqueue"&&typeof value.segment!=="boolean"||value.mode==="custom"&&typeof value.until!=="string") throw new Error("Invalid TL1 window.");
     }
     return value;
   }

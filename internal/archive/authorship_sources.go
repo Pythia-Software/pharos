@@ -15,6 +15,7 @@ var (
 )
 
 type authorshipQuestion struct {
+	at      time.Time
 	title   string
 	options []string
 	origin  textOrigin
@@ -22,7 +23,8 @@ type authorshipQuestion struct {
 
 // questionAnswer is a prewritten option a message submitted to a question
 // recognized in its conversation: the byte ranges of the question title and
-// the answer line, the option as offered, and the tool call that asked it.
+// the answer value, the option as offered, and the tool call that asked it.
+// Structured replies retain ranges over JSON-encoded string contents.
 // Classification does not store it; labeling records it as a human action.
 type questionAnswer struct {
 	Title, Option        string
@@ -407,7 +409,7 @@ func (c *classifier) addAuthorshipCall(at time.Time, origin textOrigin, name str
 			if title == "" {
 				continue
 			}
-			question := authorshipQuestion{title: title, origin: origin}
+			question := authorshipQuestion{at: at, title: title, origin: origin}
 			options, _ := q["options"].([]any)
 			for _, raw := range options {
 				option := firstString(raw)
@@ -449,23 +451,28 @@ func (c *classifier) claimQuestionForms(l *labeler, input authorInput, bodyStart
 				continue
 			}
 			l.claim(line[0], line[1], spanHarness, reasonQuestionForm, q.origin)
-			generated := value == "(Skipped)"
-			for _, option := range q.options {
-				trim := func(s string) string {
-					return strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(s, " (Recommended)"), " (recommended)"))
-				}
-				if trim(option) == trim(value) {
-					generated = true
-					answers[answer[0]] = questionAnswer{Title: q.title, Option: option, TitleStart: line[0], TitleEnd: line[1],
-						Start: answer[0], End: answer[1], Origin: q.origin}
-					break
-				}
+			option, generated := questionOption(q.options, value)
+			if option != "" {
+				answers[answer[0]] = questionAnswer{Title: q.title, Option: option, TitleStart: line[0], TitleEnd: line[1],
+					Start: answer[0], End: answer[1], Origin: q.origin}
 			}
 			if generated {
 				l.claim(answer[0], answer[1], spanHarness, reasonQuestionForm, q.origin)
 			}
 		}
 	}
+}
+
+func questionOption(options []string, value string) (string, bool) {
+	trim := func(s string) string {
+		return strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(s), " (Recommended)"), " (recommended)"))
+	}
+	for _, option := range options {
+		if trim(option) == trim(value) {
+			return option, true
+		}
+	}
+	return "", strings.TrimSpace(value) == "(Skipped)"
 }
 
 func maskGeneratedAuthorship(text string, l *labeler) string {

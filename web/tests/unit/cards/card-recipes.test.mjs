@@ -18,6 +18,21 @@ import { todayBounds } from "../../../src/day-window";
 import { windowedChart } from "../../../src/card-windows";
 const clock = new Date(2026, 9, 13, 12);
 
+test("TL1 cards open their grouped attempts in the shared Analyze table", t => {
+  bookmarkFixture(t, []);
+  const recipe = queryRecipes.find(recipe => recipe.id === "tl1-revisits");
+  const suggestion = instantiateRecipe(recipe, 7, clock);
+  const url = new URL(suggestion.url, location.origin);
+  assert.equal(url.pathname, "/analyze");
+  assert.equal(url.searchParams.get("analyze_mode"), "query");
+  assert.equal(url.searchParams.get("analyze_data"), "tl1_attempts");
+  const restored = queryFromURL(url.href);
+  assert.equal(restored.dataset, "tl1_attempts");
+  assert.deepEqual(restored.query, core.normalizeQueryState(suggestion.query));
+  assert.ok(restored.query.grouping);
+  assert.deepEqual(restored.window, suggestion.window);
+});
+
 test("origin cards explore the metric and breakdown promised by their covers", t => {
   bookmarkFixture(t, []);
   for (const field of ["channel", "machine_id", "execution_machine_id"]) for (const metric of ["tokens", "cost"]) {

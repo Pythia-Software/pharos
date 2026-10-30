@@ -16,12 +16,11 @@ const query={...EMPTY_QUERY,where:Array.from({length:70},(_,i)=>({field:'model',
 const address=q=>'https://pharos.test/analyze?'+new URLSearchParams({analyze_mode:'query',analyze_data:'usage',q_usage:encodeQuery(q)});
 
 test('host view codecs preserve explicit false, empty values, ordered IDs and relative intent',()=>{
- const values={card_window:'today',card_filters:false,tl1_window:{mode:'days',days:7},tl1_project:'',delegation_columns:['cost','tokens'],reader_expanded:['message:m'],disclosures:{'row:r:input':true},findings_rank:'tokens'};
+ const values={card_window:'today',card_filters:false,search_cards:{},delegation_columns:['cost','tokens'],reader_expanded:['message:m'],disclosures:{'row:r:input':true},findings_rank:'tokens'};
  for(const [key,value]of Object.entries(values))assert.deepEqual(parseViewValue(viewFields[key],encodeViewValue(viewFields[key],value)),value,key);
- assert.ok(fieldsForPage('tl1/quality').tl1_window);
  assert.equal(fieldsForPage('findings/settings').findings_rank,undefined);
  assert.equal(fieldsForPage('analyze/query/tool_calls','tool_calls').record_keyword.param,'record_tool_calls');
- for(const [key,raw]of [['card_filters','false'],['card_window','forever'],['delegation_columns','[1]'],['tl1_window','{"mode":"days","days":0}'],['search_state','{}']])assert.throws(()=>parseViewValue(viewFields[key],raw),key);
+ for(const [key,raw]of [['card_filters','false'],['card_window','forever'],['delegation_columns','[1]'],['search_state','{}']])assert.throws(()=>parseViewValue(viewFields[key],raw),key);
 });
 
 test('large links remain self-contained until immutable library persistence succeeds',async()=>{
