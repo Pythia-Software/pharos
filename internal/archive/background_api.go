@@ -118,21 +118,12 @@ func (s *Server) itemAsOf(item backgroundItem, plan itemPlan, rows map[string]fr
 		}
 		return found
 	}
-	sources := func(other bool) []string {
-		domains := []string{}
-		for _, source := range s.Config().Sources {
-			if source.Enabled && automaticProvider(source.Kind) != other {
-				domains = append(domains, "conv:"+source.Name)
-			}
-		}
-		return domains
-	}
 	value := ""
 	switch item.ID {
 	case "conversations", "search":
-		value = oldest(sources(false)...)
+		value = oldest(sourceDomains(s.Config(), false)...)
 	case "other-sources":
-		value = oldest(sources(true)...)
+		value = oldest(sourceDomains(s.Config(), true)...)
 	case "repositories":
 		value = oldest("an.identities", "an.git")
 	case "tools":
@@ -162,15 +153,36 @@ func (s *Server) itemAsOf(item backgroundItem, plan itemPlan, rows map[string]fr
 }
 
 // itemFailure is a freshness row saying the item's last update failed,
-// outside the schedule's own record (a manual index's chain).
-func itemFailure(item backgroundItem, rows map[string]freshnessRow) string {
+// outside the schedule's own record: a manual index's chain, or a source
+// whose latest index failed (scheduled indexing records that per source,
+// not as a background run).
+func (s *Server) itemFailure(item backgroundItem, rows map[string]freshnessRow) string {
 	domains := map[string][]string{"repositories": {"an.identities", "an.git"}, "tools": {"an.tools"}, "writing": {"an.authorship"}, "findings": {"findings"}}[item.ID]
+	failed := map[string]bool{"failed": true, "blocked": true}
+	if item.ID == "conversations" || item.ID == "other-sources" {
+		domains, failed = sourceDomains(s.Config(), item.ID == "other-sources"), map[string]bool{"source-error": true, "interrupted": true}
+	}
 	for _, domain := range domains {
-		if row, ok := rows[domain]; ok && row.Reason != nil && (row.Reason.Code == "failed" || row.Reason.Code == "blocked") {
+		if row, ok := rows[domain]; ok && row.Reason != nil && failed[row.Reason.Code] {
+			if item.ID == "conversations" || item.ID == "other-sources" {
+				return row.Label + ": " + row.Reason.Text
+			}
 			return row.Reason.Text
 		}
 	}
 	return ""
+}
+
+// sourceDomains are the conv:<source> domains of this Mac's enabled
+// sources that scheduled indexing reads, or (other) those read in full.
+func sourceDomains(config Config, other bool) []string {
+	domains := []string{}
+	for _, source := range config.Sources {
+		if source.Enabled && automaticProvider(source.Kind) != other {
+			domains = append(domains, "conv:"+source.Name)
+		}
+	}
+	return domains
 }
 
 // stateLabels are the item and cadence states' words.
@@ -204,7 +216,7 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 		asOf := s.itemAsOf(item, plan, rows, in)
 		problem := plan.Error
 		if problem == "" {
-			problem = itemFailure(item, rows)
+			problem = s.itemFailure(item, rows)
 		}
 		switch {
 		case live[item.ID]:
@@ -245,6 +257,22 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 		}
 		if item.ID == "backup" && in.backupDestination != "" {
 			entry["label"] = "Back up to " + in.backupDestination
+		}
+		if item.ID == "conversations" {
+			// The sources scheduled indexing reads (sync_settings.sources_json,
+			// empty for all), which Settings lets you choose.
+			sources, chosen := []map[string]any{}, []string{}
+			for _, source := range s.autoSources(syncSettings{}) {
+				selected := len(settings.sync.Sources) == 0 || slices.Contains(settings.sync.Sources, source.Name)
+				sources = append(sources, map[string]any{"name": source.Name, "selected": selected})
+				if selected {
+					chosen = append(chosen, source.Name)
+				}
+			}
+			entry["sources"] = sources
+			if len(chosen) < len(sources) {
+				entry["sub"] = fmt.Sprintf("%s (%d of %d sources)", strings.Join(chosen, ", "), len(chosen), len(sources))
+			}
 		}
 		items = append(items, entry)
 		byCadence[column] = append(byCadence[column], entry)
@@ -688,12 +716,9 @@ func (s *Server) postBackgroundRun(w http.ResponseWriter, r *http.Request, body 
 		item, _ := backgroundItemByID(id)
 		switch {
 		case item.ID == "conversations":
-			// The scheduled index, now.
-			_, err := s.Catalog.DB.ExecContext(r.Context(), "UPDATE sync_settings SET next_at=? WHERE host_id=?", now(), currentHost().ID)
-			if err != nil {
-				writeError(w, err, 500)
-				return
-			}
+			// One scheduled index now, whatever the mode, power or time;
+			// the saved schedule is unchanged.
+			s.requestIndex()
 		case item.continuous:
 		default:
 			run = append(run, id)

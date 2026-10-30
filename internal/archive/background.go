@@ -626,6 +626,9 @@ type backgroundState struct {
 	// power is the last power reading (cachedPower).
 	power   powerState
 	powerAt time.Time
+	// indexNow is a Run now of new conversations: the scheduled index runs
+	// once whatever the mode, power or time.
+	indexNow bool
 	// backup is the last backup's destination and time, from backups.json.
 	backup   [2]string
 	backupAt time.Time
@@ -678,6 +681,26 @@ func (s *Server) requestBackground(items ...string) {
 	}
 	s.background.mu.Unlock()
 	s.wakeBackground()
+}
+
+// requestIndex asks automaticLoop for one scheduled index now (Run now of
+// new conversations); it stays asked until an index runs.
+func (s *Server) requestIndex() {
+	s.background.mu.Lock()
+	s.background.indexNow = true
+	s.background.mu.Unlock()
+}
+
+func (s *Server) indexRequested() bool {
+	s.background.mu.Lock()
+	defer s.background.mu.Unlock()
+	return s.background.indexNow
+}
+
+func (s *Server) takeIndexRequest() {
+	s.background.mu.Lock()
+	s.background.indexNow = false
+	s.background.mu.Unlock()
 }
 
 func (s *Server) takeRequested() map[string]bool {
@@ -813,10 +836,27 @@ func (s *Server) runBackgroundPass(parent context.Context, cadence string, ids [
 	done := make(chan struct{})
 	s.auto.cancel, s.auto.done = cancel, done
 	s.auto.mu.Unlock()
-	registered, end := s.beginIngest(string(handle.ID()))
+	// A run in /api/activity (not shadowing the operation, which has its
+	// own steps), so open pages refresh once a pass changed something, as
+	// after an index (sync.js, finishedRunsChanged).
+	run := s.startRunNamed(backgroundRunKind, ids)
+	registered, end := s.beginIngest(run.ID)
 	stop := context.AfterFunc(registered, cancel)
 	var failure error
+	changed := false
 	defer func() {
+		state := "complete"
+		if ctx.Err() != nil {
+			state = "interrupted"
+		} else if failure != nil {
+			state = "failed"
+		}
+		s.updateRun(run.ID, func(run *SyncRun) {
+			run.State, run.Phase, run.Changed, run.CompletedAt, run.CurrentSource = state, state, changed, now(), nil
+			if failure != nil {
+				run.Error = failure.Error()
+			}
+		})
 		stop()
 		end()
 		cancel()
@@ -834,9 +874,12 @@ func (s *Server) runBackgroundPass(parent context.Context, cadence string, ids [
 	}
 	handle.Run()
 	handle.Plan(backgroundSteps(ids)...)
-	failure = s.runBackgroundItems(ctx, handle, ids, plans)
+	changed, failure = s.runBackgroundItems(ctx, handle, run.ID, ids, plans)
 	return true
 }
+
+// backgroundRunKind is a background pass's run kind in /api/activity.
+const backgroundRunKind = "background-update"
 
 // backgroundSteps are a pass's steps, one per item, for "step N of M".
 func backgroundSteps(ids []string) []StepPlan {
@@ -851,8 +894,15 @@ func backgroundSteps(ids []string) []StepPlan {
 // runBackgroundItems runs each item in turn, recording each one's outcome;
 // the chain's stages run together, in chain order, with the stages before
 // them that have work waiting.
-func (s *Server) runBackgroundItems(ctx context.Context, op *Op, ids []string, plans []itemPlan) error {
+// It reports whether any item succeeded (and so may have changed what
+// pages show).
+func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID string, ids []string, plans []itemPlan) (bool, error) {
 	var failure error
+	succeeded := false
+	record := func(id string, started time.Time, err error) {
+		s.Catalog.recordBackgroundRun(context.WithoutCancel(ctx), id, started, true, err)
+		succeeded = succeeded || err == nil
+	}
 	pending := map[string]bool{}
 	for _, plan := range plans {
 		item, _ := backgroundItemByID(plan.ID)
@@ -894,6 +944,7 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, ids []string, p
 	next := func(id string) {
 		item, _ := backgroundItemByID(id)
 		op.Step(item.Label, "", -1)
+		s.updateRun(runID, func(run *SyncRun) { run.Phase = item.Verb })
 	}
 	for _, id := range ids {
 		if ctx.Err() != nil {
@@ -910,7 +961,7 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, ids []string, p
 		if ctx.Err() != nil && err == nil {
 			err = ctx.Err()
 		}
-		s.Catalog.recordBackgroundRun(context.WithoutCancel(ctx), id, started, true, err)
+		record(id, started, err)
 		if err != nil && failure == nil {
 			failure = fmt.Errorf("%s: %w", item.Label, err)
 		}
@@ -955,11 +1006,11 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, ids []string, p
 					break
 				}
 			}
-			s.Catalog.recordBackgroundRun(context.WithoutCancel(ctx), id, started, true, itemErr)
+			record(id, started, itemErr)
 		}
 		if err != nil && failure == nil {
 			failure = err
 		}
 	}
-	return failure
+	return succeeded, failure
 }

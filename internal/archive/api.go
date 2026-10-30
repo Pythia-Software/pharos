@@ -56,6 +56,9 @@ type SyncRun struct {
 	// StopRequested is set while a running run winds down after a stop
 	// request: it finishes the record in hand and keeps everything written.
 	StopRequested bool `json:"stop_requested,omitempty"`
+	// Changed is a run that indexed nothing but updated what pages show (a
+	// background pass), so they refresh when it ends.
+	Changed bool `json:"changed,omitempty"`
 }
 type Server struct {
 	Catalog  *Catalog

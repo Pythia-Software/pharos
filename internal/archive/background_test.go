@@ -348,6 +348,10 @@ func TestBackgroundSettingsAPI(t *testing.T) {
 	if !server.peekRequested()["writing"] {
 		t.Fatal("Run now asks the next pass for the item")
 	}
+	post("/api/background/run", map[string]any{"item": "conversations"}, http.StatusAccepted)
+	if !server.indexRequested() {
+		t.Fatal("Run now of new conversations asks for an index whatever the schedule")
+	}
 	post("/api/background/run", map[string]any{"item": "nothing"}, http.StatusBadRequest)
 	if status := getStatus(t, server, "/api/status"); status.raw["background"] == nil {
 		t.Fatal("the status snapshot carries the schedule")
@@ -449,5 +453,111 @@ func TestBatteryHeadline(t *testing.T) {
 	}
 	if low := batteryHeadline(defaultBatteryPolicy(), powerState{Battery: true, OnBattery: true, Percent: 9}); low["title"] != "Battery at 9%" {
 		t.Fatalf("a low battery says so: %v", low)
+	}
+}
+
+// With background updates on by default there may be no schedule row: the
+// first scheduled index stores one, so the next waits its interval instead
+// of running again a second later.
+func TestScheduledIndexStoresTheDefaultSchedule(t *testing.T) {
+	catalog, config := testCatalog(t)
+	server := testServer(t, config, catalog)
+	ctx := context.Background()
+	settings, err := catalog.syncSettings(ctx)
+	if err != nil || !settings.Enabled || settings.NextAt != "" {
+		t.Fatalf("a Mac with no schedule row has the default, unstored: %+v %v", settings, err)
+	}
+	if !server.runAutomatic(ctx, settings) {
+		t.Fatal("the scheduled index did not run")
+	}
+	stored, err := catalog.syncSettings(ctx)
+	next, ok := parseTime(stored.NextAt)
+	if err != nil || !stored.Enabled || !ok || next.Before(time.Now().Add(4*time.Minute)) {
+		t.Fatalf("the default schedule was not stored with the next run an interval away: %+v %v", stored, err)
+	}
+	background, _ := catalog.backgroundSettings(ctx, time.Now())
+	if automaticDue(background, powerState{}, false, time.Now()) {
+		t.Fatal("the scheduled index is due again at once")
+	}
+}
+
+// The scheduled index runs when its time comes, on battery only as its
+// policy allows; Run now runs it whatever the mode, power or time.
+func TestAutomaticIndexIsDueByModePowerAndRunNow(t *testing.T) {
+	at := time.Date(2026, 10, 29, 15, 0, 0, 0, time.Local)
+	on := backgroundSettings{Mode: "on", Battery: defaultBatteryPolicy()}
+	on.sync = syncSettings{Enabled: true, Interval: 300, NextAt: formatTime(at.Add(-time.Second))}
+	battery := powerState{Battery: true, OnBattery: true, Percent: 80}
+	if !automaticDue(on, powerState{}, false, at) {
+		t.Fatal("a due index does not run")
+	}
+	if automaticDue(on, battery, false, at) {
+		t.Fatal("on battery, Frequently runs every 15 min, not every 5")
+	}
+	if !automaticDue(on, battery, false, at.Add(slowerBy(300))) {
+		t.Fatal("on battery, the index runs 15 min after the last")
+	}
+	paused := on
+	paused.Mode = "paused"
+	waiting := on
+	waiting.Battery.Frequent = batteryWait
+	for name, settings := range map[string]backgroundSettings{"paused": paused, "waiting for power": waiting} {
+		if automaticDue(settings, battery, false, at) {
+			t.Errorf("%s: the index ran", name)
+		}
+		if !automaticDue(settings, battery, true, at) {
+			t.Errorf("%s: Run now did not run the index", name)
+		}
+	}
+}
+
+// A source whose latest index failed makes New conversations failed, and
+// the headline says so; the sources scheduled indexing reads are listed,
+// with a chosen subset in the item's line.
+func TestBackgroundViewShowsSourceFailuresAndTheSourceFilter(t *testing.T) {
+	catalog, config := testCatalog(t)
+	config.Sources = []SourceConfig{{Name: "claude", Kind: "claude", Enabled: true}, {Name: "codex", Kind: "codex", Enabled: true}}
+	server := testServer(t, config, catalog)
+	host := sqlQuote(currentHost().ID)
+	stamp := func(d time.Duration) string { return sqlQuote(formatTime(time.Now().Add(-d))) }
+	execTx(t, catalog.DB, "INSERT INTO sync_settings(host_id,enabled,interval_seconds,sources_json,next_at) VALUES("+host+",1,300,'[\"claude\"]',"+stamp(-time.Minute)+")",
+		"INSERT INTO automatic_source_states(host_id,source_name,attempted_at,succeeded_at,error) VALUES("+host+",'claude',"+stamp(time.Minute)+","+stamp(time.Hour)+",'unreadable transcript')")
+	response := apiCall(t, server, config.APIToken, http.MethodGet, "/api/background", nil)
+	var document struct {
+		View struct {
+			Items    []map[string]any `json:"items"`
+			Headline map[string]any   `json:"headline"`
+		} `json:"view"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatal(err)
+	}
+	var conversations map[string]any
+	for _, item := range document.View.Items {
+		if item["id"] == "conversations" {
+			conversations = item
+		}
+	}
+	if conversations["state"] != "failed" || conversations["error"] == nil || document.View.Headline["tone"] != "bad" {
+		t.Fatalf("a failed source index is not reported: %v; headline %v", conversations, document.View.Headline)
+	}
+	sources, _ := conversations["sources"].([]any)
+	if len(sources) != 2 || fmt.Sprint(conversations["sub"]) != "claude (1 of 2 sources)" {
+		t.Fatalf("the source filter is not shown: %v, %v", sources, conversations["sub"])
+	}
+}
+
+// A pass appears in /api/activity, marked changed when an item succeeded,
+// so open pages refresh their data when it ends.
+func TestBackgroundPassIsAnActivityRun(t *testing.T) {
+	catalog, config := testCatalog(t)
+	server := testServer(t, config, catalog)
+	server.requestBackground("tools")
+	if !server.backgroundPass(context.Background(), time.Now()) {
+		t.Fatal("Run now ran nothing")
+	}
+	runs := server.activity()["runs"].([]map[string]any)
+	if len(runs) == 0 || runs[0]["kind"] != backgroundRunKind || runs[0]["state"] != "complete" || runs[0]["changed"] != true {
+		t.Fatalf("the pass is not a finished, changed run in /api/activity: %v", runs)
 	}
 }

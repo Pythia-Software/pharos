@@ -1593,8 +1593,13 @@ the same schedule from one declaration (`backgroundItems`):
   fails records its error; the items after it record that they waited for
   it. A failed item waits 15 min before it runs again.
 - **Mode.** On (default), paused until a time (scheduled indexing waits
-  too), or only when I ask (`sync_settings.enabled` off). Run now runs an
-  item whatever the mode.
+  too), or only when I ask (`sync_settings.enabled` off). With no schedule
+  row, the first scheduled index stores the default one. Run now runs an
+  item whatever the mode or power source; for new conversations it asks
+  `automaticLoop` for one scheduled index, leaving the saved schedule as it
+  is. New conversations' details choose the sources scheduled indexing reads
+  (`sync_settings.sources_json`; all of them, stored as none, by default),
+  and its line names a chosen subset.
 - **Hold when busy.** With `hold_when_busy` (default), Hourly and Daily
   work waits while the one-minute load is over 80% of the cores, unless it
   is overdue (3 h past an hourly update, 12 h past the daily time).
@@ -1609,7 +1614,13 @@ the same schedule from one declaration (`backgroundItems`):
   whatever the power source. The freshness ledger does not excuse waiting
   for power: work past its cadence's window is `late`.
 - **Holding.** A pass holds the ingest coordinator as a scheduled index
-  does: a manual index cancels it, and a scheduled index waits for it.
+  does: a manual index cancels it, and a scheduled index waits for it. It
+  is also a `background-update` run in `/api/activity`, marked `changed`
+  when an item succeeded, so open pages refresh their data when it ends;
+  the header's Index changes stays free while one runs.
+- **Failures.** An item is `failed` when its last scheduled run failed, its
+  chain stage failed or was blocked, or (new conversations, other sources)
+  a source's latest index failed or was interrupted (`conv:<source>`).
 - **Freshness.** Work waiting for its cadence is `scheduled`
   (`scheduled-<cadence>`), `late` past its window, and
   `deferred-by-schedule` (behind) when the schedule will not run it (§5).
