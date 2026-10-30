@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 )
 
 // labelsItemBuilder builds the items the local labeler labels from a live
@@ -16,6 +17,9 @@ import (
 // read in short statements, never one long read transaction.
 type labelsItemBuilder struct {
 	p *labelingPass
+	// sessions lists each conversation's agent sessions with their kinds,
+	// for its structure fingerprint.
+	sessions map[string][]string
 }
 
 // newLabelsItemBuilder reads the catalog-wide inputs the pass needs once
@@ -23,15 +27,24 @@ type labelsItemBuilder struct {
 func newLabelsItemBuilder(ctx context.Context, db labelingReader) (*labelsItemBuilder, error) {
 	p := newLabelingPass(db, true)
 	p.itemsOnly = true
-	if _, _, _, _, err := loadLabelingPass(ctx, db, p); err != nil {
+	_, _, sessions, _, err := loadLabelingPass(ctx, db, p)
+	if err != nil {
 		return nil, err
+	}
+	byConversation := map[string][]string{}
+	for _, row := range sessions {
+		conversation := firstString(row["conversation_id"])
+		byConversation[conversation] = append(byConversation[conversation], firstString(row["id"])+":"+firstString(row["kind"])+":"+firstString(row["child"])+":"+firstString(row["delegation"]))
+	}
+	for _, list := range byConversation {
+		sort.Strings(list)
 	}
 	// Delegation duplicates are bookkeeping for training, not item inputs.
 	p.childOwners = map[string]bool{}
 	p.loadAuthorship = func(id string) (*authorResult, error) {
 		return loadStoredAuthorship(ctx, db, `SELECT m.id,m.conversation_id,m.text,a.spans_json FROM message_authorship a JOIN messages m ON m.id=a.message_id WHERE a.message_id=?`, id)
 	}
-	return &labelsItemBuilder{p: p}, nil
+	return &labelsItemBuilder{p: p, sessions: byConversation}, nil
 }
 
 // conversation returns the units of one conversation, in transcript order:

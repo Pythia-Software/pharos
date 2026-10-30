@@ -52,7 +52,9 @@ type Catalog struct {
 	// authorship tracks the human-authorship rebuild.
 	authorship authorshipState
 	// findings tracks the findings pass (see findings.go).
-	findings   findingsState
+	findings findingsState
+	// labels allows one labels run at a time in this process (labels.go).
+	labels     sync.Mutex
 	mcpHistory mcpHistory
 	wal        walBound
 	writers    catalogWriteTracker

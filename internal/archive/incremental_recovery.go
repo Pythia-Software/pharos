@@ -480,6 +480,15 @@ func (s *Server) finishDeferredSyncPhases(ctx context.Context, forceFindings boo
 			return s.Catalog.RefreshFindings(ctx, forceFindings)
 		}},
 	}
+	// Local labels come last, and only where they are turned on: a backlog
+	// never delays findings, and a library without them runs the chain as
+	// before (docs/local-labeler.md).
+	if settings := s.Config().Labels; settings.Enabled {
+		stages = append(stages, struct {
+			name string
+			work func() error
+		}{"labels", func() error { return s.chainLabels(ctx, settings) }})
+	}
 	for _, stage := range stages {
 		if err := ctx.Err(); err != nil {
 			return err

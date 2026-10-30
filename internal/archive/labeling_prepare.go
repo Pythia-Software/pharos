@@ -110,8 +110,10 @@ type labelingPass struct {
 	// statistics or exclusion rows. The labels ledger reads a live catalog
 	// this way (labels_items.go); prepare keeps every record.
 	itemsOnly bool
-	// emit receives each unit once its context is set.
-	emit func(*labelingUnit) error
+	// emit receives each unit once its context is set; excluded hears why a
+	// record is not one (pharos labels explain).
+	emit     func(*labelingUnit) error
+	excluded func(messageID, reason, detail string)
 	// loadAuthorship, when set, supplies classifications not in authorship:
 	// the labels ledger reads them from the stored ledger on demand, where
 	// prepare classifies the whole snapshot in memory first.
@@ -898,6 +900,9 @@ func (p *labelingPass) conversation(ctx context.Context, id string) error {
 			// units; the rest (tool calls and results, metadata) are counted.
 			candidate := labelingCandidate(record)
 			p.exclude(reason, candidate, 1)
+			if p.excluded != nil {
+				p.excluded(record.id, reason, detail)
+			}
 			if p.writer != nil && candidate != "" {
 				if err := p.writer.exclusion(record.id, id, candidate, reason, detail, duplicate); err != nil {
 					return err

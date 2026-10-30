@@ -99,6 +99,8 @@ Run diagnostics with `dist/Pharos.app/Contents/MacOS/pharos --config "$HOME/Libr
 
 `pharos labeling` prepares a read-only snapshot of conversation text as a versioned dataset for offline labeling by a large model, runs labeling jobs and exports training data; see [`docs/library-labeling.md`](library-labeling.md).
 
+**Local labels** (a prototype, off unless `labels_enabled` is set) label every message's function (requests, steering, feedback, reports and so on, taxonomy `candidate-0.3`) on this Mac with the `kestrel-68m` encoder. Pharos builds each message's items with `labeling prepare`'s own code, tokenizes and frames them in pure Go, and runs the model in a separate worker process (`cmd/pharos-labeler-ort`, ONNX Runtime) over a small versioned stdin/stdout protocol, so the `pharos` binary stays pure Go. Labels are a derived ledger (`message_labels`) rebuilt after authorship in the analysis chain, incrementally, never by a page; see [`docs/local-labeler.md`](local-labeler.md).
+
 ## Sources and identity
 
 | Kind | Acquisition | Mutation capability |
