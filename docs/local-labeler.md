@@ -136,7 +136,10 @@ guard it.
    or another target kind `H-typed+ctx`, then feedback, template, re-sent.
    Datasets store each item's segment too.
    `TestLabelsItemsEqualPreparedItems` checks that the app's items equal
-   prepare's, field for field, on the seeded fixture catalog.
+   prepare's, field for field, on the seeded fixture catalog. Codex
+   continuations, which prepare once classified differently from the
+   stored ledger, are one rule in both since `authorship-v9`
+   (`authorshipContinuations`).
 2. **Tokenizer and framing** (`internal/labeler/tokenizer.go`, `framing.go`):
    a pure-Go reading of the model's `tokenizer.json` (ModernBERT/ettin
    byte-level BPE with NFC and added tokens, as the `tokenizers` library does
@@ -480,14 +483,6 @@ Notes for authors:
 
 ## Known limits
 
-- **Codex continuations differ from training.** Prepare treats a
-  continuation (a Codex filename fork, whose lineage is the root's own
-  execution) as the person's, in memory. The stored authorship ledger, which
-  the app reads, counts it as a sub-agent, so its messages are labeled as
-  agent text in the user role (`AIUR`) rather than as human text. This also
-  shifts template counts, and so other messages' segments. The equivalence
-  test leaves those forks out. Aligning the authorship ledger with prepare
-  would remove it.
 - **Re-sent text is resolved against its source's current classification,
   but only conversations whose own inputs changed are rebuilt.** A change to
   a source message's classification that leaves the re-sending message's

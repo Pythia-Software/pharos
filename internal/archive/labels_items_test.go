@@ -64,14 +64,11 @@ func liveItems(t *testing.T, catalog *Catalog) map[string]labelingItem {
 }
 
 // The labeler's items must be the items it was trained on: prepare's, field
-// for field, from the same catalog. The fixture's Codex filename forks are
-// left out: prepare classifies a continuation as the root's own execution, in
-// memory, where the stored ledger the labeler reads counts it as a sub-agent
-// (docs/local-labeler.md, Known limits).
+// for field, from the same catalog, Codex continuations included (prepare
+// and the stored ledger classify them by one rule).
 func TestLabelsItemsEqualPreparedItems(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	seedLabelingCatalog(t, catalog)
-	execTx(t, catalog.DB, `DELETE FROM messages WHERE conversation_id LIKE 'c-fork%'`, `DELETE FROM conversations WHERE id LIKE 'c-fork%'`)
 	if err := catalog.RebuildAuthorship(context.Background(), "test"); err != nil {
 		t.Fatal(err)
 	}

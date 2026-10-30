@@ -26,7 +26,7 @@ import (
 // docs/human-authorship.md.
 
 // authorshipVersion names the classification rules; a new version rebuilds.
-const authorshipVersion = "authorship-v8"
+const authorshipVersion = "authorship-v9"
 
 const (
 	// authorshipWindow bounds how far back agent output is looked for. Your
@@ -1555,6 +1555,18 @@ func (c *Catalog) authorInputsSince(ctx context.Context, q queryer, representati
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	rows.Close()
+	if slices.ContainsFunc(inputs, func(input authorInput) bool { return input.SubAgent }) {
+		continuations, err := authorshipContinuations(ctx, q, representative, launches)
+		if err != nil {
+			return nil, err
+		}
+		for index := range inputs {
+			if inputs[index].SubAgent && continuations[inputs[index].ConversationID] {
+				inputs[index].SubAgent = false
+			}
+		}
+	}
 	sort.SliceStable(inputs, func(i, j int) bool {
 		if !inputs[i].SentAt.Equal(inputs[j].SentAt) {
 			return inputs[i].SentAt.Before(inputs[j].SentAt)
@@ -1562,6 +1574,40 @@ func (c *Catalog) authorInputsSince(ctx context.Context, q queryer, representati
 		return inputs[i].ID < inputs[j].ID
 	})
 	return inputs, nil
+}
+
+// authorshipContinuations are the conversations that have a parent but are
+// a continuation of its execution, not a delegation: a Codex filename fork,
+// to which the usage lineage gives a root but no run of its own. A
+// continuation's new user messages are the person's, as the root's are, so
+// it is no sub-agent (authorship-v9). Labeling prepare classifies through
+// the same inputs, so both see one rule.
+func authorshipContinuations(ctx context.Context, q queryer, representative map[string]string, launches []conversationLaunch) (map[string]bool, error) {
+	workspaces, err := queryMapsContext(ctx, q, `SELECT id FROM workspaces`)
+	if err != nil {
+		return nil, err
+	}
+	kept := []map[string]any{}
+	for _, row := range workspaces {
+		if representative[firstString(row["id"])] == "" {
+			kept = append(kept, map[string]any{"workspace_id": row["id"]})
+		}
+	}
+	derived := make([]map[string]any, 0, len(launches))
+	for _, launch := range launches {
+		derived = append(derived, map[string]any{"child_id": launch.child, "parent_id": launch.parent})
+	}
+	lineage, err := usageConversationRootsWith(q, kept, derived)
+	if err != nil {
+		return nil, err
+	}
+	continuations := map[string]bool{}
+	for id, root := range lineage.roots {
+		if root != nil && lineage.runs[id] == "" {
+			continuations[id] = true
+		}
+	}
+	return continuations, nil
 }
 
 // classifyInputs walks user messages in send order while streaming agent

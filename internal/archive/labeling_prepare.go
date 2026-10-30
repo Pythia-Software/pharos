@@ -494,16 +494,9 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 	if p.lineage, err = usageConversationRootsWith(tx, kept, derived); err != nil {
 		return nil, err
 	}
-	// A conversation with a parent is a sub-agent to authorship, but a
-	// continuation (a Codex filename fork) is the root's own execution: its
-	// new messages are the person's. Here only, in memory.
-	for index := range inputs {
-		id := inputs[index].ConversationID
-		if inputs[index].SubAgent && p.lineage.roots[id] != nil && p.lineage.runs[id] == "" {
-			inputs[index].SubAgent = false
-			p.counters["continuation_messages"]++
-		}
-	}
+	// A continuation (a Codex filename fork) is the root's own execution, so
+	// its new messages are the person's: authorship's own rule
+	// (authorshipContinuations), applied in authorshipInputsFrom.
 	results, err := classifyInputsFrom(workCtx, tx, inputs)
 	if err != nil {
 		return nil, fmt.Errorf("authorship classification: %w", err)

@@ -1563,3 +1563,27 @@ func TestAuthorshipIncrementalMirrorIngest(t *testing.T) {
 		}
 	})
 }
+
+// A Codex filename fork continues its root's execution, so the person's new
+// messages there are theirs; a delegated child is still a sub-agent
+// (authorship-v9, the rule labeling prepare shares).
+func TestAuthorshipContinuationIsTheRootsExecution(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	seedLabelingCatalog(t, catalog)
+	if err := catalog.RebuildAuthorship(context.Background(), "test"); err != nil {
+		t.Fatal(err)
+	}
+	category := func(id string) string {
+		var main string
+		if err := catalog.DB.QueryRow(`SELECT COALESCE(main_category,'') FROM message_authorship WHERE message_id=?`, id).Scan(&main); err != nil {
+			t.Fatalf("%s: %v", id, err)
+		}
+		return main
+	}
+	if got := category("m-fork-3"); got == spanAutomated {
+		t.Errorf("a continuation's new message is %s", got)
+	}
+	if got := category("m-c1"); got != spanAutomated {
+		t.Errorf("a delegated child's prompt is %s, want %s", got, spanAutomated)
+	}
+}

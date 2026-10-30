@@ -43,7 +43,7 @@ Rules run in this order, and the first rule to claim a character keeps it.
 
 | Category | Rule |
 |---|---|
-| **Automated** | The whole message, when a script or another agent sent it: headless runs linked to the command that launched them (the span links to that command), the senders above, TL1 workspaces, sub-agent conversations (which include forked copies of the parent's history), and Claude SDK sessions Conductor did not start. |
+| **Automated** | The whole message, when a script or another agent sent it: headless runs linked to the command that launched them (the span links to that command), the senders above, TL1 workspaces, sub-agent conversations (delegated children, and forks that copy the parent's history; a continuation, a Codex filename fork whose lineage is the root's own execution with no run of its own, is not a sub-agent, so its new messages are classified like the root's), and Claude SDK sessions Conductor did not start. |
 | **Harness** | `<system_instruction>`, `<system-reminder>`, `<environment_context>`, `<user_instructions>`, or `<recommended_plugins>` blocks at the start of the message; generated fields and instructions in recognized page-feedback reports; question titles, selected prewritten options, and skipped markers in a recognized response to a question from the same conversation. Free-text answers remain eligible as human writing. The stored message keeps this text, since it is part of the prompt and counts toward context growth everywhere else; only this classification sets it apart. |
 | **Template** | The whole message, when its normalized text (attachment references collapsed, case and whitespace ignored, at least 10 characters) was sent in 5 or more sessions on 3 or more days. This catches Conductor's buttons (Create a PR, Review, Rebase, Resolve conflicts) without a hard-coded list. Sending one prompt to many sessions on a single day is not a template: the first copy counts as typed and the rest as re-sent. A leading slash command such as `/compact` is also a template; its arguments stay typed. |
 | **Attachment** | Conductor attachment markers (`@⟦name⟧(path)`), `.context/attachments/…` paths, and image placeholders. |
@@ -134,8 +134,9 @@ A template crossing its threshold, or changing an existing template's session
 or day counts, also takes the full path: older messages' category or displayed
 reason can change. These conservative cases deliberately remain full passes;
 stream-local launch replay and targeted historical template replay are not
-implemented. Neither classification rules (`authorship-v8`) nor scheduling
-changed. The first changed-data rebuild populates the extra derived tables;
+implemented. Neither classification rules nor scheduling changed (at the time,
+`authorship-v8`; `authorship-v9` since treats continuations as the root's
+execution). The first changed-data rebuild populates the extra derived tables;
 its production storage cost has not yet been measured.
 Checkpoint version 2 forces one full rebuild of version 1 state, which may
 have lost question history or restored an incompatible mirror message anchor.
