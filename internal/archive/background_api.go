@@ -249,10 +249,16 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 			"adaptive": item.Adaptive, "fixed": item.Fixed, "opt_in": item.OptIn, "override": settings.Overrides[item.ID],
 			"state": state, "state_label": stateLabels[state], "as_of": nullable(asOf), "next_at": nullableTime(plan.Next), "error": nullable(problem),
 			"choices": itemChoices(item, settings), "cost": nil, "note": nil}
+		entry["cadence_moves"] = itemCadenceMoves(item, settings)
+		entry["temporary_cadence"] = nil
+		if temporary, ok := settings.Temporary[item.ID]; ok {
+			entry["temporary_cadence"] = temporary
+			entry["note"] = "Temporary schedule; your usual schedule resumes after one week."
+		}
 		if measured {
 			entry["cost"] = map[string]any{"seconds": cost.Seconds, "runs": cost.Runs, "class": costClass(cost, true), "text": durationWords(cost.Seconds)}
 		}
-		if item.Adaptive && settings.placed(item) != cadenceFrequent {
+		if item.Adaptive && settings.placed(item) != cadenceFrequent && entry["temporary_cadence"] == nil {
 			entry["note"] = "Moves to Frequently once a run usually takes under a minute."
 		}
 		if item.ID == "backup" && in.backupDestination != "" {
@@ -380,6 +386,29 @@ func itemChoices(item backgroundItem, settings backgroundSettings) []map[string]
 		choices = append(choices, map[string]any{"value": cadence, "label": cadenceLabels[cadence]})
 	}
 	return append(choices, map[string]any{"value": cadenceManual, "label": "Only when I ask"})
+}
+
+// A temporary move is one bucket faster or slower than the effective schedule.
+// Fixed, opt-in and manually disabled work keep their existing controls.
+func itemCadenceMoves(item backgroundItem, settings backgroundSettings) []map[string]any {
+	if !item.Adaptive {
+		return nil
+	}
+	index := slices.Index(cadences, settings.cadence(item))
+	if index < 0 {
+		return nil
+	}
+	moves := []map[string]any{}
+	for _, move := range []struct {
+		offset int
+		verb   string
+	}{{-1, "Promote"}, {1, "Demote"}} {
+		if target := index + move.offset; target >= 0 && target < len(cadences) {
+			cadence := cadences[target]
+			moves = append(moves, map[string]any{"cadence": cadence, "label": move.verb + " to " + cadenceLabels[cadence] + " for a week"})
+		}
+	}
+	return moves
 }
 
 // backgroundHeadline is the panel's first line: what is happening, and what
@@ -541,7 +570,7 @@ func (s *Server) getBackground(w http.ResponseWriter, r *http.Request) {
 	freshness := s.freshness(r.Context(), views, false)
 	writeJSON(w, map[string]any{
 		"settings": map[string]any{"mode": settings.Mode, "paused_until": nullable(settings.PausedUntil), "interval_seconds": settings.Interval,
-			"daily_at": settings.DailyAt, "hold_when_busy": settings.HoldWhenBusy, "overrides": settings.Overrides, "battery": settings.Battery,
+			"daily_at": settings.DailyAt, "hold_when_busy": settings.HoldWhenBusy, "overrides": settings.Overrides, "temporary_cadences": settings.Temporary, "battery": settings.Battery,
 			"battery_choices": batteryChoices, "battery_slower_minutes": int(batterySlowerInterval.Minutes()), "low_battery_percent": lowBatteryPercent},
 		"power": s.cachedPower(r.Context()),
 		"view":  s.backgroundView(r.Context(), views, freshness, at),
@@ -555,7 +584,8 @@ func (s *Server) getBackground(w http.ResponseWriter, r *http.Request) {
 // postBackgroundSettings answers POST /api/background/settings: mode (on,
 // pause, manual; pause_minutes, default 60), interval_seconds, daily_at
 // ("HH:MM"), hold_when_busy, and overrides ({item: cadence, or "" for
-// automatic}).
+// automatic}), temporary_cadences ({adaptive item: cadence for seven days,
+// or "" to end the temporary schedule}).
 func (s *Server) postBackgroundSettings(w http.ResponseWriter, r *http.Request, body map[string]any) {
 	ctx := r.Context()
 	at := time.Now()
@@ -564,6 +594,7 @@ func (s *Server) postBackgroundSettings(w http.ResponseWriter, r *http.Request, 
 		writeError(w, err, 500)
 		return
 	}
+	temporaryChanges := map[string]string{}
 	indexing := settings.sync
 	paused := settings.PausedUntil
 	if value, ok := body["mode"]; ok {
@@ -661,6 +692,23 @@ func (s *Server) postBackgroundSettings(w http.ResponseWriter, r *http.Request, 
 			} else {
 				settings.Overrides[id] = cadence
 			}
+			temporaryChanges[id] = ""
+		}
+	}
+	if raw, ok := body["temporary_cadences"]; ok {
+		values, valid := raw.(map[string]any)
+		if !valid {
+			writeError(w, errors.New("temporary_cadences must be an object of item names to cadences"), 400)
+			return
+		}
+		for id, rawCadence := range values {
+			item, known := backgroundItemByID(id)
+			cadence, valid := rawCadence.(string)
+			if !known || !item.Adaptive || !valid || (cadence != "" && !slices.Contains(cadences, cadence)) {
+				writeError(w, fmt.Errorf("%q cannot temporarily run on %q", id, cadence), 400)
+				return
+			}
+			temporaryChanges[id] = cadence
 		}
 	}
 	indexing.NextAt = at.Add(time.Duration(indexing.Interval) * time.Second).UTC().Format(time.RFC3339Nano)
@@ -678,7 +726,21 @@ func (s *Server) postBackgroundSettings(w http.ResponseWriter, r *http.Request, 
 			ON CONFLICT(host_id) DO UPDATE SET paused_until=excluded.paused_until,daily_at=excluded.daily_at,hold_when_busy=excluded.hold_when_busy,
 			overrides_json=excluded.overrides_json,battery_json=excluded.battery_json,updated_at=excluded.updated_at`,
 			currentHost().ID, nilIfEmpty(paused), settings.DailyAt, settings.HoldWhenBusy, jsonText(settings.Overrides), jsonText(settings.Placements), jsonText(settings.Battery), now())
-		return err
+		if err != nil {
+			return err
+		}
+		for id, cadence := range temporaryChanges {
+			if cadence == "" {
+				_, err = tx.ExecContext(ctx, "DELETE FROM background_temporary_cadences WHERE host_id=? AND item=?", currentHost().ID, id)
+			} else {
+				_, err = tx.ExecContext(ctx, `INSERT INTO background_temporary_cadences(host_id,item,cadence,expires_at) VALUES(?,?,?,?)
+				 ON CONFLICT(host_id,item) DO UPDATE SET cadence=excluded.cadence,expires_at=excluded.expires_at`, currentHost().ID, id, cadence, formatTime(at.Add(temporaryCadenceDuration)))
+			}
+			if err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	s.auto.mu.Unlock()
 	if err != nil {
