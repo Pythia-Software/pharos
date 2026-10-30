@@ -385,6 +385,10 @@ func sharedPage(app string, payload []byte, title string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	quickStatsScript, err := assets.ReadFile("assets/quick-stats.js")
+	if err != nil {
+		return nil, err
+	}
 	head := fmt.Sprintf(`<head>
   <meta http-equiv="Content-Security-Policy" content="%s">
   <script>document.documentElement.classList.add('shared')</script>
@@ -393,6 +397,7 @@ func sharedPage(app string, payload []byte, title string) ([]byte, error) {
 	page := app
 	for _, edit := range []struct{ old, new string }{
 		// The reader's model, and the tables' bundle and styles, travel inside the file.
+		{`<script src="/assets/quick-stats.js"></script>`, "<script>" + strings.ReplaceAll(string(quickStatsScript), "</script", `<\/script`) + "</script>"},
 		{`<script src="/assets/header.js"></script>`, "<script>" + strings.ReplaceAll(string(headerScript), "</script", `<\/script`) + "</script>"},
 		{`<script src="/assets/reader-model.js"></script>`, "<script>" + strings.ReplaceAll(string(readerModel), "</script", `<\/script`) + "</script>"},
 		{`<script src="/assets/query-tables.js"></script>`, "<script>" + strings.ReplaceAll(string(tableScript), "</script", `<\/script`) + "</script>"},

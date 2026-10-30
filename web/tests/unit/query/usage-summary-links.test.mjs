@@ -86,3 +86,26 @@ test("Today summary links use the service's midnight and freeze the displayed sn
   }
   assert.equal(usageSummaryURL("tokens", "today", "invalid"), undefined);
 });
+
+
+test("calendar and short summary links freeze the service's exact interval", () => {
+  const from="2026-11-01T06:00:00.000Z",until="2026-11-02T07:00:00.000Z";
+  for(const key of ['yesterday','week','month']) {
+    const where=decodeQueryStrict(urlFor('tokens',key,until,defaultConcurrencySettings,from).searchParams.get('analyze_filters')).where;
+    assert.equal(where.find(term=>term.op==='>=').value,from);
+    assert.equal(where.find(term=>term.op==='<').value,until);
+    assert.equal(usageSummaryURL('tokens',key,until),undefined);
+  }
+  for(const [key,minutes] of [['5m',5],['15m',15]]) {
+    const where=decodeQueryStrict(urlFor('tokens',key,until).searchParams.get('analyze_filters')).where;
+    assert.equal(Date.parse(where.find(term=>term.op==='>=').value),Date.parse(until)-minutes*60000);
+  }
+  for(const metric of ['tool_calls','failed_tool_calls','tool_failure_rate','tool_time_ms']) {
+    const url=urlFor(metric,'yesterday',until,defaultConcurrencySettings,from);
+    assert.equal(readUsageWorkspace(url.searchParams).dataset,'tool_calls');
+    const where=decodeQueryStrict(url.searchParams.get('q_tool_calls')).where;
+    assert.equal(where.find(term=>term.op==='>=').value,from);
+    assert.equal(where.some(term=>term.field==='status'),metric==='failed_tool_calls');
+  }
+  for(const metric of ['message_count','active_conversations','delegated_runs']) assert.equal(usageSummaryURL(metric,'1h',until),undefined);
+});
