@@ -448,11 +448,15 @@ func decodeJSON(t *testing.T, data []byte) any {
 func TestLibraryPreviewsFollowTheirMessages(t *testing.T) {
 	catalog, _ := libraryFixture(t)
 	ctx := context.Background()
+	var wantElapsed any = int64(3000)
 	preview := func() (any, any) {
 		t.Helper()
 		page := []map[string]any{{"id": "c"}}
 		if err := catalog.attachLibraryPreviews(ctx, page); err != nil {
 			t.Fatal(err)
+		}
+		if got := page[0]["preview_elapsed_ms"]; !reflect.DeepEqual(got, wantElapsed) {
+			t.Fatalf("preview elapsed time %v, want %v", got, wantElapsed)
 		}
 		return page[0]["first_input"], page[0]["last_response"]
 	}
@@ -476,6 +480,7 @@ func TestLibraryPreviewsFollowTheirMessages(t *testing.T) {
 		VALUES('m9','cc','9','assistant','message','Shipped it','2026-09-23T03:00:00Z','h')`); err != nil {
 		t.Fatal(err)
 	}
+	wantElapsed = int64(3600000)
 	if _, last := preview(); last != "Shipped it" || stored() != 0 {
 		t.Fatalf("latest response %q, stored %d", last, stored())
 	}
@@ -498,6 +503,16 @@ func TestLibraryPreviewsFollowTheirMessages(t *testing.T) {
 	}
 	if _, last := preview(); last != "Shipped it" {
 		t.Fatalf("filled preview %q", last)
+	}
+	for _, stamp := range []struct {
+		at   string
+		want any
+	}{{"", nil}, {"invalid", nil}, {"2026-09-23T04:00:00Z", nil}, {"2026-09-23T03:00:00Z", int64(0)}} {
+		if _, err := catalog.DB.Exec("UPDATE messages SET created_at=? WHERE id='m1'", stamp.at); err != nil {
+			t.Fatal(err)
+		}
+		wantElapsed = stamp.want
+		preview()
 	}
 }
 

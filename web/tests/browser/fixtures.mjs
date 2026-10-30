@@ -275,7 +275,9 @@ const idleBackground = backgroundView([
   backgroundItem("conversations", "New conversations", "frequent", "current", { sub: "claude (1 of 2 sources)", fixed: true, choices: null,
     sources: [{ name: "claude", selected: true }, { name: "codex-with-a-rather-long-source-name", selected: false }] }),
   backgroundItem("repositories", "Repositories & merges", "frequent", "current"),
-  backgroundItem("writing", "Your writing", "hourly", "current", { cost: { seconds: 358, runs: 7, class: "heavy", text: "about 6 min" }, note: "Moves to Frequently once a run usually takes under a minute." }),
+  backgroundItem("writing", "Your writing", "hourly", "current", { adaptive: true,
+    cadence_moves: [{ cadence: "frequent", label: "Promote to Frequently for a week" }, { cadence: "daily", label: "Demote to Daily for a week" }],
+    cost: { seconds: 358, runs: 7, class: "heavy", text: "about 6 min" }, note: "Moves to Frequently once a run usually takes under a minute." }),
   backgroundItem("findings", "Findings", "hourly", "current"),
   backgroundItem("preserve", "Preserve originals", "daily", "current"),
   backgroundItem("backup", "Back up to /Volumes/Backup Drive With A Long Name/Pharos Backup", "manual", "unavailable", { column: "daily", cost: null }),
@@ -298,6 +300,13 @@ export const backgroundDocument = {
     { id: "frequent", label: "Frequently", seconds: 10800, measured: true, text: "197 checks, 54 found nothing new" },
     { id: "hourly", label: "Hourly", seconds: 6840, measured: false, text: "projected: about 8 min × 14, mostly Your writing" },
     { id: "daily", label: "Daily", seconds: 480, measured: false, text: "projected" }] },
+};
+export const temporaryBackgroundDocument = {
+  ...backgroundDocument,
+  view: backgroundView(idleBackground.items.map(item => item.id === "writing" ? {
+    ...item, placed: "daily", temporary_cadence: { cadence: "hourly", expires_at: iso(-7 * day) },
+    note: "Temporary schedule; your usual schedule resumes after one week.",
+  } : item), idleBackground.headline),
 };
 export const idleStatus = {
   version: 1, revision: 1, generated_at: iso(0), host: { id: "test-mac", label: "This Mac" }, library: statusLibrary,
@@ -351,6 +360,10 @@ export const managedStatus = snapshot => ({
 });
 
 export const defaultApi = {
+  "GET /api/markdown-link": {status:"unavailable",detail:"File or local server unavailable on this Mac"},
+  // No remote image bytes in fixtures; the renderer uses its globe fallback.
+  "GET /api/markdown-favicon": {},
+
   "GET /api/app/state": {application:"/Applications/Pharos.app",selected:"local",mcp:"external",busy:false,libraries:[{id:"local",name:"Pending history",available:true,config:"/Users/test/Library/Application Support/Pharos/Libraries/Pending/library.toml"},{id:"external",name:"My archive",available:false,config:"/Volumes/Archive/Pharos/library.toml"}]},
   "GET /api/cloud-backup": {destinations:[],runs:[],schedules:[],active_run_id:"",setup_root:"/tmp/pharos/cloud-setup"},
   "POST /api/cloud-backup/schedule": {saved:true},

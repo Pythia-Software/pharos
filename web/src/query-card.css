@@ -66,6 +66,7 @@
 .query-cover-columns { position:absolute; inset:0 0 0 24px; display:flex; align-items:stretch; gap:0; height:100%; }
 .query-cover-columns>span { flex:1; min-width:0; display:flex; flex-direction:column-reverse; justify-content:flex-start; height:100%; }
 .query-cover-columns i { display:block; flex:none; width:100%; min-height:0; }
+.query-timeline-lines { position:absolute; inset:0; width:100%; height:100%; overflow:visible; pointer-events:none; }
 .query-compact-metric .qt-metric-axis-labels,.query-chart-axis-labels { display:flex; flex:none; justify-content:space-between; gap:8px; padding-top:3px; font-size:8px; line-height:11px; color:var(--muted); }
 .query-chart-axis-labels>span { min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .query-compact-metric .qt-metric-axis { font-size:8px; }
@@ -234,6 +235,5 @@
 .query-shared-box.is-dense .query-box-outlier { top:4px; }
 .query-role-values>span { display:inline-flex; align-items:center; gap:3px; white-space:nowrap; }
 .query-role-values i { display:inline-block; width:4px; height:4px; flex:none; border-radius:1px; }
-.query-timeline-lines { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; fill:none; stroke-width:1.5; }
 .query-cover-columns .query-timeline-point { position:absolute; left:50%; width:4px; height:4px; border-radius:50%; transform:translate(-50%,50%); }
 .query-cover-columns>.query-timeline-reference { height:0; position:absolute; left:0; right:0; border-top:1px dashed var(--muted); pointer-events:none; }

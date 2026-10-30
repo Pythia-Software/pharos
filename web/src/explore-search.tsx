@@ -41,7 +41,6 @@ export function ExploreSearch({ kind, active, summary, error, onClear, children 
           <button type="button" className="qt-link-btn" aria-label="Remove content search" onClick={onClear}><Icon name="close" /></button>
         </> : <>
           {targets.map(target => <button key={target.kind} type="button" className="qt-btn" onClick={event => edit(event, target.kind)}><Icon name="plus" />{target.label}</button>)}
-          <span className="explore-content-hint">Across the workspaces above</span>
         </>}
       </div>
     </div>
