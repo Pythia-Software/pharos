@@ -315,6 +315,8 @@ var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/ask-pharos.html":      {"ask-pharos.html", "text/html; charset=utf-8"},
 	"/assets/ask-pharos.css":       {"ask-pharos.css", "text/css; charset=utf-8"},
 	"/assets/ask-model.js":         {"ask-model.js", "text/javascript; charset=utf-8"},
+	"/assets/ask-glow.js":          {"ask-glow.js", "text/javascript; charset=utf-8"},
+	"/assets/ask-prompt.js":        {"ask-prompt.js", "text/javascript; charset=utf-8"},
 	"/assets/ask-pharos.js":        {"ask-pharos.js", "text/javascript; charset=utf-8"},
 	"/assets/reader-model.js":      {"reader-model.js", "text/javascript; charset=utf-8"},
 	"/assets/storage-breakdown.js": {"storage-breakdown.js", "text/javascript; charset=utf-8"},
@@ -326,6 +328,10 @@ var uiAssets = map[string]struct{ name, contentType string }{
 func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	switch {
+	case path == "/api/markdown-link":
+		s.markdownLink(w, r)
+	case path == "/api/markdown-favicon":
+		s.markdownFavicon(w, r)
 	case isUIPage(path):
 		writeHTML(w, appHTML())
 	case strings.HasPrefix(path, "/conversation/"):

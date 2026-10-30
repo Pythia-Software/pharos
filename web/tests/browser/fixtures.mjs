@@ -351,6 +351,10 @@ export const managedStatus = snapshot => ({
 });
 
 export const defaultApi = {
+  "GET /api/markdown-link": {status:"unavailable",detail:"File or local server unavailable on this Mac"},
+  // No remote image bytes in fixtures; the renderer uses its globe fallback.
+  "GET /api/markdown-favicon": {},
+
   "GET /api/app/state": {application:"/Applications/Pharos.app",selected:"local",mcp:"external",busy:false,libraries:[{id:"local",name:"Pending history",available:true,config:"/Users/test/Library/Application Support/Pharos/Libraries/Pending/library.toml"},{id:"external",name:"My archive",available:false,config:"/Volumes/Archive/Pharos/library.toml"}]},
   "GET /api/cloud-backup": {destinations:[],runs:[],schedules:[],active_run_id:"",setup_root:"/tmp/pharos/cloud-setup"},
   "POST /api/cloud-backup/schedule": {saved:true},
