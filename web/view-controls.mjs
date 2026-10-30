@@ -60,7 +60,7 @@ for(const name of readdirSync(join(root,'internal/archive/assets')).filter(name=
 controls.sort((a,b)=>a.file.localeCompare(b.file)||a.owner.localeCompare(b.owner)||a.key.localeCompare(b.key));
 export const discoveredControls=controls;
 export const discoveredBindings=bindings;
-const dependencyPackages=['@pythia-software/query-table-core','@pythia-software/query-table-react','@pythia-software/query-table-ui'];
+const dependencyPackages=['@pythia-software/query-table-core','@pythia-software/query-table-react','@pythia-software/query-table-ui','@pythia-software/query-table-codegen'];
 export function checkedLedger(){
  const ledger=JSON.parse(readFileSync(ledgerPath,'utf8')),known=new Map(ledger.controls.map(control=>[control.key,control]));
  const dependencies=Object.fromEntries(dependencyPackages.map(name=>{const version=JSON.parse(readFileSync(join(root,'web/node_modules',name,'package.json'),'utf8')).version;const reviewed=ledger.dependencies?.[name];return [name,{version,status:reviewed?.version===version?reviewed.status:'unclassified',reason:reviewed?.version===version?reviewed.reason:''}]}));

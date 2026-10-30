@@ -1,8 +1,11 @@
 import searchCases from '../../../../testdata/search-draft-cases.json';
+import inspectionCases from '../../../../testdata/json-inspection-cases.json';
+import {parseDetailTarget,detailReference,revealQueryDetail} from '../../../src/query-attention';
+import {createAttentionRegistry,parseJsonInspections} from '@pythia-software/query-table-core';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {EMPTY_QUERY,encodeQuery,decodeQueryStrict} from '@pythia-software/query-table-core';
-import {viewFields,fieldsForPage,encodeViewValue,parseViewValue} from '../../../src/view-contract';
+import {viewFields,fieldsForPage,encodeViewValue,parseViewValue,retainPageView} from '../../../src/view-contract';
 import {portableQueryLinks} from '../../../src/portable-query-link';
 import {viewRequestURL} from '../../../src/query-request';
 import {withSearchDateWindow,emptyTextSearch,refreshSearchToday,readTextSearch} from '../../../src/text-search-model';
@@ -14,6 +17,27 @@ import {readDashboardLink} from '../../../src/usage-dashboard-model';
 
 const query={...EMPTY_QUERY,where:Array.from({length:70},(_,i)=>({field:'model',op:'!=',value:`${i}-${Array.from({length:60},(_,n)=>String.fromCharCode(33+(i*31+n*17+i*n)%90)).join('')}`}))};
 const address=q=>'https://pharos.test/analyze?'+new URLSearchParams({analyze_mode:'query',analyze_data:'usage',q_usage:encodeQuery(q)});
+
+test('JSON inspection definitions use the shared TypeScript and Go link fixtures',()=>{
+ for(const item of inspectionCases){
+  const query={...EMPTY_QUERY,select:[{field:'id'},{field:'tool_name'}],itemDetails:{modes:['expand'],jsonInspections:item.inspections}};
+  if(item.valid){assert.deepEqual(decodeQueryStrict(encodeQuery(query)),item.query,item.name);assert.deepEqual(decodeQueryStrict(item.token),item.query,item.name);assert.deepEqual(decodeQueryStrict(item.goToken),item.query,`${item.name}: published Go encoder`);}
+  else assert.throws(()=>encodeQuery(query),undefined,item.name);
+ }
+ const entry=inspectionCases[0].inspections[0];
+ assert.deepEqual(parseJsonInspections([{...entry,state:{...entry.state,hover:true,focus:'transient'}}]),[entry]);
+});
+
+test('semantic detail targets preserve typed identities, reject ambiguous paths, and cancel navigation',async()=>{
+ for(const target of [{rowId:'0'},{rowId:0,field:'arguments_json'},{rowId:'a:b',field:'arguments_json',path:'$["quote\\"key"][21]'}])assert.deepEqual(parseDetailTarget(detailReference(target)),target);
+ for(const target of [{},{rowId:null},{rowId:false},{rowId:'a',path:'$'},{rowId:'a',field:'arguments_json',path:'$.events'},{rowId:'a',field:''},{rowId:'a',unknown:true}])assert.throws(()=>detailReference(target));
+ const registry=createAttentionRegistry(),target={rowId:0,field:'arguments_json',path:'$["events"][21]'},calls=[];
+ registry.register({dataset:'pharos_mcp_calls',rowId:0},{reveal:(value,signal)=>{calls.push(value);return !signal.aborted}});
+ const navigation=new AbortController();
+ assert.equal(await revealQueryDetail(registry,'pharos_mcp_calls',detailReference(target),navigation.signal),'revealed');
+ assert.deepEqual(calls,[{...target,dataset:'pharos_mcp_calls'}]);
+ navigation.abort();assert.equal(await revealQueryDetail(registry,'pharos_mcp_calls',detailReference(target),navigation.signal),'cancelled');assert.equal(calls.length,1);
+});
 
 test('host view codecs preserve explicit false, empty values, ordered IDs and relative intent',()=>{
  const values={card_window:'today',card_filters:false,search_cards:{},delegation_columns:['cost','tokens'],reader_expanded:['message:m'],disclosures:{'row:r:input':true},findings_rank:'tokens'};
@@ -80,6 +104,14 @@ test('the same contract is exported to agents, and each field has a runtime owne
  assert.deepEqual(map.view_contract.fields,JSON.parse(JSON.stringify(viewContract.fields)));
  assert.deepEqual(map.view_contract.targets,viewContract.targets);
  const ledger=JSON.parse(readFileSync(join(root,'docs/view-controls.json'),'utf8'));
+ const packages=JSON.parse(readFileSync(join(root,'web/package.json'),'utf8'));
+ for(const name of ['core','react','ui','codegen']){
+  const key='@pythia-software/query-table-'+name,version=packages.dependencies[key]??packages.devDependencies[key];
+  assert.equal(version,map.query_types.version);
+  assert.equal(ledger.dependencies[key].version,version);
+ }
+ assert.ok(readFileSync(join(root,'go.mod'),'utf8').includes('github.com/Pythia-Software/query-table/backends/go v'+map.query_types.version));
+ for(const name of ['JsonInspectionState','JsonInspectionScope','JsonMatchIdentity','ScopedJsonInspectionState'])assert.ok(map.query_types.types[name],`${name} is discoverable`);
  const runtimeBindings=new Set(ledger.bindings.map(binding=>binding.field));
  for(const [name] of Object.entries(viewFields)){
   if(delegatedViewFields[name]){const owner=delegatedViewFields[name];assert.ok(readFileSync(join(root,owner.file),'utf8').includes(owner.symbol),name);}
@@ -229,4 +261,18 @@ test('changing a window preserves unrelated datetime constraints and pinned Toda
  }
  const url=queryURL('tool_calls',EMPTY_QUERY,{mode:'today',days:1,field:'started_at',timezone:'Asia/Tokyo'});
  assert.equal(queryFromURL(updateQueryWindowURL(url,'today')).window.timezone,'Asia/Tokyo');
+});
+
+
+test('page navigation drops source attention while preserving global view controls',()=>{
+ const params=new URLSearchParams({highlight:'text:quorum',reveal:'message:old',nav_collapsed:'1',reader_content:'{"old":true}'});
+ params.append('highlight','card:old');
+ retainPageView(params,'cards');
+ assert.deepEqual(params.getAll('highlight'),[]);assert.equal(params.has('reveal'),false);
+ assert.equal(params.get('nav_collapsed'),'1');assert.equal(params.has('reader_content'),false);
+ const samePage=new URLSearchParams({highlight:'control:query_days',reveal:'page'});
+ retainPageView(samePage,'analyze/query/usage',[],'analyze/query/usage');
+ assert.equal(samePage.get('highlight'),'control:query_days');assert.equal(samePage.get('reveal'),'page');
+ retainPageView(samePage,'analyze/query/tools',[],'analyze/query/usage');
+ assert.equal(samePage.has('highlight'),false);assert.equal(samePage.has('reveal'),false);
 });

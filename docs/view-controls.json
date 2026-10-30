@@ -2,19 +2,24 @@
   "version": 1,
   "dependencies": {
     "@pythia-software/query-table-core": {
-      "version": "0.9.7",
+      "version": "0.9.8",
       "status": "reviewed",
-      "reason": "Native queries serialize applied filters, columns, layout, metrics and item views through the published codec. JSON-inspector state is an explicit dependency blocker in viewDependencyGaps.query_table_json; hover, menus and editors are excluded."
+      "reason": "Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-react": {
-      "version": "0.9.7",
+      "version": "0.9.8",
       "status": "reviewed",
-      "reason": "Native queries serialize applied filters, columns, layout, metrics and item views through the published codec. JSON-inspector state is an explicit dependency blocker in viewDependencyGaps.query_table_json; hover, menus and editors are excluded."
+      "reason": "Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-ui": {
-      "version": "0.9.7",
+      "version": "0.9.8",
       "status": "reviewed",
-      "reason": "Native queries serialize applied filters, columns, layout, metrics and item views through the published codec. JSON-inspector state is an explicit dependency blocker in viewDependencyGaps.query_table_json; hover, menus and editors are excluded."
+      "reason": "Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+    },
+    "@pythia-software/query-table-codegen": {
+      "version": "0.9.8",
+      "status": "reviewed",
+      "reason": "Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     }
   },
   "bindings": [
@@ -57,10 +62,6 @@
     {
       "file": "web/src/delegation.tsx",
       "field": "delegation_tint"
-    },
-    {
-      "file": "internal/archive/assets/carbon.js",
-      "field": "disclosures"
     },
     {
       "file": "web/src/usage-query-ideas.tsx",
@@ -7705,8 +7706,8 @@
       "owner": "usageRowRenderers",
       "tag": "JsonValueView",
       "control": "value={value}",
-      "contract": "upstream.query_table_json",
-      "reason": "Blocked: Query Table 0.9.7 exposes no controlled JSON inspection state API. See docs/query-table-url-state-handoff.md; this is not an opt-out."
+      "contract": "native-query",
+      "reason": "Direct JsonValueView is controlled by native ObjectProperties through itemDetails.jsonInspections, keyed by dataset, typed record ID and property name."
     },
     {
       "key": "96c7bfc8b0a7994b:0",

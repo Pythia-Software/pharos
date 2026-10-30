@@ -1,4 +1,6 @@
 import controlAudit from "../../docs/view-controls.json";
+import { usageDetailsSchema } from "./usage-row-model";
+import { jsonInspectionTemplate } from "./query-inspection-contract";
 import { usageQuerySchema,usageActionQuery } from "./usage-query-columns";
 import { viewContract } from "./view-contract";
 import { supportsToday } from "./curiosity-data";
@@ -573,7 +575,12 @@ export function buildSiteMap(inputs: SiteInputs) {
   const nodes: SiteNode[] = [];
   const add = (node: SiteNode) => { nodes.push(node); return node; };
   const opSets = new Map<string, { types: Set<string>; ops: string[] }>();
-  const datasets = Object.fromEntries((Object.keys(schemaDocuments) as QueryDataset[]).map(name => [name, { ...datasetLabel(name), ...rollingWindowField(name) ? { window_field: rollingWindowField(name) } : {}, columns: (Object.hasOwn(usageDatasets,name)?usageQuerySchema(siteSchemas[name],name as UsageDataset):siteSchemas[name]).fields.map(field=>({name:field.name,label:field.label??field.name,type:field.type})), fields: datasetFields(siteSchemas[name], opSets) }]));
+  const datasets = Object.fromEntries((Object.keys(schemaDocuments) as QueryDataset[]).map(name => {
+    const schema = siteSchemas[name], detail = usageDetailsSchema(schema, name) ?? schema;
+    return [name, { ...datasetLabel(name), schema_name: detail.name,
+      properties: detail.fields.filter(field => field.property?.enabled !== false).map(field => ({ name: field.name, label: field.label ?? field.name, type: field.type, default: field.property?.default ?? false })),
+      ...rollingWindowField(name) ? { window_field: rollingWindowField(name) } : {}, columns: (Object.hasOwn(usageDatasets,name)?usageQuerySchema(schema,name as UsageDataset):schema).fields.map(field=>({name:field.name,label:field.label??field.name,type:field.type})), fields: datasetFields(schema, opSets) }];
+  }));
   const opKey = (signature: string) => [...opSets.get(signature)!.types].sort().join("|");
   for (const dataset of Object.values(datasets)) for (const field of dataset.fields) field.ops = opKey(field.ops);
   const cards = queryRecipes.filter(recipe => !recipe.retired).map(recipe => siteCard(recipe, clock));
@@ -709,9 +716,10 @@ export function buildSiteMap(inputs: SiteInputs) {
       limit:"Page size", offset:"Zero-based result offset",
       aggregations:"Native metric definitions, including chart/display options. Each has id, op, field, groupBy and optional expression/dateGrouping/window/share/sort/topN/display.",
       grouping:"{source:QueryState,keys:(field ID or calendar key)[],summaries:SummaryColumn[],representative:null|{orderBy:OrderBy[]}}; outer select/where/orderBy/offset apply to grouped rows.",
-      itemDetails:"Native item properties, modes, page template and active {id,mode:modal|expand}. These travel with the query.",
+      itemDetails:"Native item properties, modes, page template, active {id,mode:modal|expand}, and jsonInspections:[{dataset:<schema_name>,rowId:<typed ID>,field:<property name>,state:<JsonInspectionState>}]. All inspection choices travel in the query. Use query/types/JsonInspectionState for members and limits; dataset is schema_name, not the route dataset ID.",
       hostState:"{version:1,params:{name:string[]}}. Search owns text_builder/kind/search/case/view; Analyze query owns record_<dataset>. Mirrored URL parameters must agree."
     },
+    json_inspection_example: { modes: ["expand"], jsonInspections: [{ dataset: "<schema_name>", rowId: "<record ID>", field: "<property name>", state: jsonInspectionTemplate }] },
     empty_query: EMPTY_QUERY,
     cards: { text_windows: recipeTextWindows, items: cards },
   };

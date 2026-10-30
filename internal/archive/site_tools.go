@@ -33,9 +33,9 @@ var siteMCPTools = []map[string]any{
 			"card":              map[string]any{"type": "string", "description": "A card id from browse_site's cards list."},
 			"options":           map[string]any{"type": "object", "description": "The page's options by name, or on a dashboard the chart's settings (browse <page>/chart/<view>)."},
 			"view":              map[string]any{"type": "object", "description": "Host view fields from browse_site <page>/view. Overrides saved preferences without changing defaults."},
-			"query":             map[string]any{"type": "object", "description": "Complete native QueryState for query-table pages (columns, order, grouping, metrics, pagination, itemDetails and hostState). Give without filters/card. Optional days adds moving time bounds if the query has none; browse <page>/query for the page default and example."},
+			"query":             map[string]any{"type": "object", "description": "Complete native QueryState for query-table pages (columns, order, grouping, metrics, pagination, itemDetails including jsonInspections, and hostState). Give without filters/card. Optional days adds moving time bounds if the query has none; browse <page>/query for the page default and example."},
 			"highlight":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Target references from <page>/targets. Multiple persistent highlights."},
-			"reveal":            map[string]any{"type": "string", "description": "One target reference to scroll to and highlight distinctively; never browser focus. text:<literal> opens Find."},
+			"reveal":            map[string]any{"type": "string", "description": "One target reference to scroll to and highlight distinctively; never browser focus. text:<literal> opens Find. Query-table pages also accept detail:{\"rowId\":\"id\",\"field\":\"property\",\"path\":\"$\"} with optional field/path, as described in <page>/targets."},
 			"filters":           map[string]any{"type": "array", "description": "Where terms {field, op, value?, negated?}, or {any: [terms]}; browse <page>/filters for fields and operators. Times take ISO values or relative ones such as -30d.", "items": map[string]any{"type": "object"}},
 			"days":              map[string]any{"description": "The rolling window in days, one of the page's windows, \"today\" since local midnight where supported, or \"all\" for all time.", "anyOf": []any{map[string]any{"type": "integer"}, map[string]any{"type": "string", "enum": []string{"all", "today"}}}},
 			"url":               map[string]any{"type": "string", "description": "A Pharos link to check and make canonical, given alone."}}}},
@@ -193,7 +193,10 @@ func (site *siteMap) browse(ctx context.Context, catalog *Catalog, path, query s
 		switch {
 		case parts[0] == "query" && node.Dataset != "" && site.optionOfKind(node, "where") != nil && strings.HasPrefix(site.optionOfKind(node, "where").Param, "q_"):
 			if len(parts) == 1 {
-				return map[string]any{"path": node.Path + "/query", "argument": "query", "fields": site.QueryState, "default": site.nativeQueryDefault(node), "time_window": site.nativeWindowHelp(node), "columns": site.Datasets[node.Dataset].Columns, "type_reference": node.Path + "/query/types/QueryState"}, nil
+				return map[string]any{"path": node.Path + "/query", "argument": "query", "fields": site.QueryState, "default": site.nativeQueryDefault(node), "time_window": site.nativeWindowHelp(node), "columns": site.Datasets[node.Dataset].Columns, "schema_name": site.Datasets[node.Dataset].SchemaName, "properties_path": node.Path + "/query/properties", "json_inspection_example": site.JSONInspectionExample, "type_reference": node.Path + "/query/types/QueryState"}, nil
+			}
+			if len(parts) == 2 && parts[1] == "properties" {
+				return map[string]any{"path": path, "schema_name": site.Datasets[node.Dataset].SchemaName, "items": site.Datasets[node.Dataset].Properties}, nil
 			}
 			if len(parts) == 2 && parts[1] == "types" {
 				names := make([]string, 0, len(site.QueryTypes.Types))

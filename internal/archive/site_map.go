@@ -31,12 +31,13 @@ type siteMap struct {
 			Uses       []string `json:"uses"`
 		} `json:"types"`
 	} `json:"query_types"`
-	QueryState   map[string]string         `json:"query_state"`
-	ViewContract siteViewContract          `json:"view_contract"`
-	Version      int                       `json:"version"`
-	Nodes        map[string]*siteNode      `json:"nodes"`
-	IDSources    map[string][]siteIDSource `json:"id_sources"`
-	Excluded     struct {
+	QueryState            map[string]string         `json:"query_state"`
+	JSONInspectionExample json.RawMessage           `json:"json_inspection_example"`
+	ViewContract          siteViewContract          `json:"view_contract"`
+	Version               int                       `json:"version"`
+	Nodes                 map[string]*siteNode      `json:"nodes"`
+	IDSources             map[string][]siteIDSource `json:"id_sources"`
+	Excluded              struct {
 		LegacyRoutes map[string]string `json:"legacy_routes"`
 		Params       []string          `json:"params"`
 	} `json:"excluded"`
@@ -208,6 +209,8 @@ type siteRule struct {
 }
 
 type siteDataset struct {
+	SchemaName  string           `json:"schema_name"`
+	Properties  []map[string]any `json:"properties"`
 	Columns     []map[string]any `json:"columns"`
 	Label       string           `json:"label"`
 	Description string           `json:"description"`

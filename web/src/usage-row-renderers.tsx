@@ -40,9 +40,9 @@ export function usageRowRenderers(dataset: UsageDataset, shared = false): Render
       try { const url = new URL(item.url); if (["https:", "http:"].includes(url.protocol)) href = url.href; } catch { /* Retain the source text without an unsafe link. */ }
       return <li key={index}>{href ? <a href={href} target="_blank" rel="noopener noreferrer" onClick={event => event.stopPropagation()}>{item.url}</a> : String(item.url ?? "")} <span className="muted">· {item.source}</span></li>;
     })}</ul> : "—",
-    // Use the public native JSON component at full detail density. Wrapping it
-    // leaves its own search/copy/tree controls available inside the property.
-    usage_json: ({ value, field }) => <div><JsonValueView value={value} label={field.label} display={field.display?.kind === "json" ? field.display : { kind: "json", encoding: "auto" }} /></div>,
+    // Return the native element directly: ObjectProperties supplies its scoped
+    // inspection state, change callback and attention registry through this API.
+    usage_json: ({ value, field }) => <JsonValueView value={value} label={field.label} display={field.display?.kind === "json" ? field.display : { kind: "json", encoding: "auto" }} />,
     usage_payload: ({ value, row, field }) => {
       const text = String(value ?? ""), truncated = row[field.name === "input_text" ? "input_text_truncated" : "result_text_truncated"];
       if (!text) return <span className="muted">No retained text.</span>;

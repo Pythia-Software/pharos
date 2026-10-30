@@ -4,8 +4,179 @@ import {open,skip} from './harness.mjs';
 import {workID,rootConversation,defaultApi} from './fixtures.mjs';
 import {EMPTY_QUERY,encodeQuery,decodeQueryStrict,loadSchema} from '@pythia-software/query-table-core';
 import toolCallsDocument from '../../../schemas/tool_calls.schema.json' with {type:'json'};
+import mcpCallsDocument from '../../../schemas/mcp_calls.schema.json' with {type:'json'};
 import {answerQuery} from '../support/query-server.mjs';
 const path=page=>new URL(page.url()).pathname+new URL(page.url()).search;
+
+function jsonInspectorFixture() {
+ const schema=loadSchema(mcpCallsDocument),now=Date.now(),definitions=new Map();
+ const payload={'key.with.dots':{'quote"key':'needle'},events:Array.from({length:45},(_,i)=>({text:`needle ${i}`})),...Object.fromEntries(Array.from({length:240},(_,i)=>['tail'+i,i]))};
+ const rows=[{id:'inspect-1',tool_name:'query',arguments_json:JSON.stringify(payload),called_at:new Date(now).toISOString(),status:'success'},
+  {id:'inspect-2',tool_name:'query',arguments_json:JSON.stringify({other:'needle'}),called_at:new Date(now).toISOString(),status:'success'}];
+ const api={
+  '* /api/query/mcp_calls/:operation':({params,body,query})=>answerQuery(params.operation,body,rows,schema,{now,id:query.get('id')}),
+  'PUT /api/query-snapshots':({body})=>{definitions.set(body.code,body);return body},
+  'GET /api/query-snapshots':({query})=>definitions.get(query.get('code')),
+ };
+ const query={...EMPTY_QUERY,where:[{field:'tool_name',op:'=',value:'query'}],select:[{field:'id'},{field:'tool_name'},{field:'__qt_item_details__'}],fitToScreen:false,limit:5,itemDetails:{modes:['expand'],active:{id:'inspect-1',mode:'expand'}}};
+ const route=(state=query,reveal)=>'/analyze?'+new URLSearchParams({analyze_mode:'query',analyze_data:'mcp_calls',q_mcp_calls:encodeQuery(state),...(reveal?{reveal}:{})});
+ const read=page=>{const token=new URL(page.url()).searchParams.get('q_mcp_calls');return decodeQueryStrict(token.startsWith('@')?definitions.get(token.slice(1)).token:token)};
+ return {api,query,route,read};
+}
+
+test('native JSON property choices restore in independent browsers and through Back/Forward',{skip},async t=>{
+ const fixture=jsonInspectorFixture(),app=await open(t,{url:fixture.route(),api:fixture.api,ready:'.qt-property-json-open'}),{page}=app;
+ const copies=[];
+ const change=async action=>{const before=new URL(page.url()).searchParams.get('q_mcp_calls');await action();await page.waitForFunction(before=>new URLSearchParams(location.search).get('q_mcp_calls')!==before,before);await app.settled();};
+ const capture=()=>copies.push({url:path(page),inspection:fixture.read(page).itemDetails.jsonInspections[0].state});
+ await change(()=>page.getByRole('button',{name:'Open Arguments (sanitized) in JSON Viewer',exact:true}).click());
+ const dialog=page.getByRole('dialog',{name:'Arguments (sanitized) · JSON',exact:true});await dialog.waitFor();
+ await change(()=>dialog.getByRole('button',{name:'Expand $',exact:true}).click());
+ await change(()=>dialog.getByRole('button',{name:'Expand $["events"]',exact:true}).click());
+ await change(()=>dialog.getByRole('button',{name:'Expand $["events"] items 20–39',exact:true}).click());
+ await change(()=>dialog.getByRole('button',{name:'Show more',exact:true}).click());capture();
+ await change(()=>dialog.getByRole('searchbox',{name:'Search Arguments (sanitized) JSON',exact:true}).fill('needle'));
+ await change(()=>dialog.getByRole('combobox',{name:'JSON search mode',exact:true}).selectOption('find'));
+ await change(()=>dialog.getByRole('button',{name:'Next JSON match',exact:true}).click());capture();
+ await change(()=>dialog.getByRole('button',{name:'Collapse $["events"]',exact:true}).click());capture();
+ await change(()=>dialog.getByRole('button',{name:'Show original',exact:true}).click());capture();
+ await change(()=>dialog.getByRole('button',{name:'Show JSON',exact:true}).click());
+ await change(()=>dialog.getByRole('searchbox',{name:'Search Arguments (sanitized) JSON',exact:true}).fill(''));capture();
+ await change(()=>dialog.getByRole('button',{name:'Close Arguments (sanitized) · JSON',exact:true}).click());capture();
+ for(const copy of copies){
+  const fresh=await open(t,{url:copy.url,api:fixture.api,ready:'.qt-property-json-open'}),restored=fresh.page.getByRole('dialog',{name:'Arguments (sanitized) · JSON',exact:true});
+  assert.equal(await restored.isVisible(),copy.inspection.open);
+  if(copy.inspection.open){
+   assert.equal(await restored.getByRole('searchbox',{name:'Search Arguments (sanitized) JSON',exact:true}).inputValue(),copy.inspection.search);
+   assert.equal(await restored.getByRole('combobox',{name:'JSON search mode',exact:true}).inputValue(),copy.inspection.searchMode);
+   assert.equal(await restored.getByRole('button',{name:copy.inspection.raw?'Show JSON':'Show original',exact:true}).getAttribute('aria-pressed'),String(copy.inspection.raw));
+  }
+  assert.deepEqual(fixture.read(fresh.page).itemDetails.jsonInspections[0].state,copy.inspection);
+ }
+ await page.evaluate(url=>window.pharosNavigate(url),copies[1].url);await dialog.waitFor();
+ await page.goBack();await dialog.waitFor({state:'hidden'});
+ await page.goForward();await dialog.waitFor();
+ assert.equal(await dialog.getByRole('searchbox',{name:'Search Arguments (sanitized) JSON',exact:true}).inputValue(),'needle');
+});
+
+test('semantic JSON-path reveal materializes exact details, preserves focus, and never replays on refresh',{skip},async t=>{
+ const fixture=jsonInspectorFixture(),target='detail:'+JSON.stringify({rowId:'inspect-1',field:'arguments_json',path:'$["events"][41]["text"]'});
+ const app=await open(t,{url:fixture.route({...fixture.query,itemDetails:{modes:['expand']}},target),api:fixture.api,ready:'.qt-attention-target'}),{page}=app;
+ await page.waitForFunction(()=>document.documentElement.dataset.pharosAttentionMissing==='');
+ const marker=page.locator('.qt-attention-target').filter({hasText:'needle 41'});await marker.first().waitFor();
+ assert.equal(await page.evaluate(()=>document.activeElement===document.body),true);
+ let scrolls=await page.evaluate(()=>{window.__attentionScrolls=0;const original=Element.prototype.scrollIntoView;Element.prototype.scrollIntoView=function(...args){window.__attentionScrolls++;return original.apply(this,args)};return window.__attentionScrolls});
+ const refreshed=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/query/mcp_calls/rows-v2');
+ await page.evaluate(()=>window.pharosQueryTables.refresh('mcp_calls'));await refreshed;await app.settled();
+ assert.equal(await page.evaluate(()=>window.__attentionScrolls),scrolls);
+ const state=fixture.read(page);assert.equal(state.offset,fixture.query.offset);assert.deepEqual(state.where,fixture.query.where);
+ await page.evaluate(()=>window.pharosNavigate('/cards'));
+ await page.locator('.card-library-page').waitFor();assert.equal(await page.locator('.qt-attention-target:visible').count(),0);
+});
+
+test('semantic reveal waits for the initial result page instead of landing in a temporary fallback',{skip},async t=>{
+ const fixture=jsonInspectorFixture();let release,requested,itemCalls=0;
+ const started=new Promise(resolve=>requested=resolve),rowsReady=new Promise(resolve=>release=resolve);
+ const respond=fixture.api['* /api/query/mcp_calls/:operation'];
+ const api={
+  'POST /api/query/mcp_calls/rows-v2':async request=>{requested();await rowsReady;return respond({...request,params:{operation:'rows-v2'}})},
+  'GET /api/query/mcp_calls/item':request=>{itemCalls++;return respond({...request,params:{operation:'item'}})},
+  ...fixture.api,
+ };
+ const app=await open(t,{url:'/cards',api,ready:'.card-library-page'}),target='detail:'+JSON.stringify({rowId:'inspect-1',field:'arguments_json',path:'$["events"][41]["text"]'});
+ await app.page.evaluate(url=>window.pharosNavigate(url),fixture.route({...fixture.query,itemDetails:{modes:['expand']}},target));await started;
+ await app.page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+ assert.equal(itemCalls,0,'no native landing before its result surface is ready');
+ release();await app.page.locator('.qt-attention-target').filter({hasText:'needle 41'}).first().waitFor();await app.settled();
+ assert.equal(itemCalls>0,true);
+});
+
+test('missing JSON paths report unavailable without changing the query population',{skip},async t=>{
+ const fixture=jsonInspectorFixture(),target='detail:'+JSON.stringify({rowId:'inspect-1',field:'arguments_json',path:'$["deleted"]'});
+ const app=await open(t,{url:fixture.route(fixture.query,target),api:fixture.api,ready:'.qt-property-json-open'});await app.settled();
+ await app.page.waitForFunction(target=>document.documentElement.dataset.pharosAttentionMissing===target&&document.documentElement.dataset.pharosAttentionPending==='',target);
+ assert.equal(await app.page.locator('.qt-attention-target').count(),0);
+ assert.deepEqual(fixture.read(app.page).where,fixture.query.where);
+});
+
+test('native modal and restored nested JSON reveal preserve keyboard focus',{skip},async t=>{
+ const fixture=jsonInspectorFixture(),target='detail:'+JSON.stringify({rowId:'inspect-1',field:'arguments_json',path:'$["events"][21]["text"]'});
+ const state={version:1,open:true,search:'needle',searchMode:'find',raw:false,collapsedPaths:[],expandedBuckets:[],visibleEntryLimit:200,searchOverrides:[]};
+ const query={...fixture.query,itemDetails:{modes:['modal'],jsonInspections:[{dataset:'pharos_mcp_calls',rowId:'inspect-1',field:'arguments_json',state}]}};
+ const app=await open(t,{url:fixture.route(query,target),api:fixture.api,ready:'.qt-json-inspector .qt-attention-target'});
+ await app.page.waitForFunction(()=>document.documentElement.dataset.pharosAttentionMissing==='');
+ assert.equal(await app.page.evaluate(()=>document.activeElement===document.body),true);
+ assert.equal(fixture.read(app.page).itemDetails.active.mode,'modal');
+});
+
+test('native detail reveal loads a record outside the result page without broadening it',{skip},async t=>{
+ const fixture=jsonInspectorFixture(),target='detail:'+JSON.stringify({rowId:'inspect-2',field:'arguments_json',path:'$["other"]'});
+ const query={...fixture.query,limit:1,itemDetails:{modes:['expand','modal']}};
+ const app=await open(t,{url:fixture.route(query,target),api:fixture.api,ready:'.qt-attention-target'});
+ await app.page.waitForFunction(()=>document.documentElement.dataset.pharosAttentionMissing==='');
+ const restored=fixture.read(app.page);
+ assert.equal(restored.itemDetails.active.id,'inspect-2');assert.equal(restored.limit,1);assert.equal(restored.offset,0);assert.deepEqual(restored.where,query.where);
+ assert.equal(await app.page.evaluate(()=>document.activeElement===document.body),true);
+});
+
+test('JSON inspection scope follows record and property identities across layouts',{skip},async t=>{
+ const fixture=jsonInspectorFixture(),state={version:1,open:true,search:'needle',searchMode:'find',raw:false,collapsedPaths:[],expandedBuckets:[],visibleEntryLimit:400,searchOverrides:[]};
+ const query={...fixture.query,itemDetails:{...fixture.query.itemDetails,jsonInspections:[{dataset:'pharos_mcp_calls',rowId:'inspect-1',field:'arguments_json',state}]}};
+ const other=await open(t,{url:fixture.route({...query,itemDetails:{...query.itemDetails,active:{id:'inspect-2',mode:'expand'}}}),api:fixture.api,ready:'.qt-property-json-open'});
+ assert.equal(await other.page.getByRole('dialog',{name:'Arguments (sanitized) · JSON',exact:true}).isVisible(),false);
+ await other.page.getByRole('button',{name:'Open Arguments (sanitized) in JSON Viewer',exact:true}).click();
+ assert.equal(await other.page.getByRole('searchbox',{name:'Search Arguments (sanitized) JSON',exact:true}).inputValue(),'');
+ const reordered={...query,itemDetails:{...query.itemDetails,views:{expand:{version:1,properties:[{id:'renamed-instance',field:'tool_name'},{id:'new-property-id',field:'arguments_json',label:'Renamed payload'}]}}}};
+ const fresh=await open(t,{url:fixture.route(reordered),api:fixture.api,ready:'.qt-json-inspector'});
+ assert.equal(await fresh.page.getByRole('searchbox',{name:'Search Renamed payload JSON',exact:true}).inputValue(),'needle');
+ assert.equal(await fresh.page.getByRole('combobox',{name:'JSON search mode',exact:true}).inputValue(),'find');
+});
+
+test('JSON inspection state survives automatic durable snapshots without a browser cache',{skip},async t=>{
+ const fixture=jsonInspectorFixture(),state={version:1,open:true,search:'needle',searchMode:'find',raw:false,collapsedPaths:[],expandedBuckets:['$["events"]:bucket:20'],visibleEntryLimit:400,searchOverrides:[]};
+ const terms=Array.from({length:70},(_,i)=>({field:'tool_name',op:'!=',value:`unused-${i}-${Array.from({length:48},(_,n)=>String.fromCharCode(33+(i*31+n*17+i*n)%90)).join('')}`}));
+ const query={...fixture.query,where:[...fixture.query.where,...terms],itemDetails:{...fixture.query.itemDetails,jsonInspections:[{dataset:'pharos_mcp_calls',rowId:'inspect-1',field:'arguments_json',state}]}};
+ const first=await open(t,{url:fixture.route(query),api:fixture.api,ready:'.qt-json-inspector'});
+ await first.page.waitForFunction(()=>new URLSearchParams(location.search).get('q_mcp_calls')?.startsWith('@'));
+ const fresh=await open(t,{url:path(first.page),api:fixture.api,ready:'.qt-json-inspector'});
+ assert.equal(await fresh.page.getByRole('searchbox',{name:'Search Arguments (sanitized) JSON',exact:true}).inputValue(),'needle');
+ assert.deepEqual(fixture.read(fresh.page).itemDetails.jsonInspections[0].state,state);
+});
+
+test('a pending native detail reveal is cancelled when navigation leaves its page',{skip},async t=>{
+ const fixture=jsonInspectorFixture();let release,requested;
+ const started=new Promise(resolve=>requested=resolve),pending=new Promise(resolve=>release=resolve);
+ const api={'GET /api/query/mcp_calls/item':async({query})=>{if(query.get('id')==='inspect-2'){requested();await pending;}return {row:{id:'inspect-2',tool_name:'query',arguments_json:'{"other":"needle"}'}}},...fixture.api};
+ const app=await open(t,{url:fixture.route({...fixture.query,itemDetails:{modes:['expand']}}),api,ready:'.usage-workspace-table .qt-row'});
+ const target='detail:'+JSON.stringify({rowId:'inspect-2',field:'arguments_json',path:'$["other"]'});
+ await app.page.evaluate(url=>window.pharosNavigate(url),fixture.route({...fixture.query,itemDetails:{modes:['expand']}},target));
+ await started;
+ await app.page.evaluate(()=>window.pharosNavigate('/cards'));
+ await app.page.locator('.card-library-page').waitFor();release();await app.settled();
+ assert.equal(new URL(app.page.url()).pathname,'/cards');
+ assert.equal(await app.page.locator('.qt-attention-target:visible').count(),0);
+});
+
+test('unavailable detail links retry when custom results switch to a native table',{skip},async t=>{
+ const target='detail:'+JSON.stringify({rowId:'row-0',field:'title'});
+ const app=await open(t,{url:'/library?'+new URLSearchParams({view:'conversation',reveal:target}),ready:'.conversation-result-card'});
+ await app.page.waitForFunction(target=>document.documentElement.dataset.pharosAttentionMissing===target&&document.documentElement.dataset.pharosAttentionPending==='',target);
+ assert.equal(new URL(app.page.url()).searchParams.get('view'),'conversation');
+ assert.equal(await app.page.locator('.qt-attention-target').count(),0);
+ await app.page.getByRole('group',{name:'Display results as',exact:true}).getByRole('button',{name:'Table',exact:true}).click();
+ await app.page.locator('[data-property-field="title"].qt-attention-target').first().waitFor();
+ await app.page.waitForFunction(()=>document.documentElement.dataset.pharosAttentionMissing==='');
+ assert.equal(new URL(app.page.url()).searchParams.get('reveal'),target,'the same linked target becomes available without navigation');
+});
+
+test('JSON display cells restore their inspector choices in a fresh browser',{skip,todo:'Query Table 0.9.8 DataTable does not wire cell display JsonCell to scoped state; docs/query-table-url-state-handoff.md'},async t=>{
+ const fixture=jsonInspectorFixture(),query={...fixture.query,select:[{field:'id'},{field:'arguments_json',display:{kind:'json'}}],itemDetails:{modes:['expand']}};
+ const first=await open(t,{url:fixture.route(query),api:fixture.api,ready:'.usage-workspace-table .qt-row'});
+ await first.page.getByRole('button',{name:'Inspect Arguments (sanitized)',exact:true}).first().click();
+ await first.page.getByRole('searchbox',{name:'Search Arguments (sanitized) JSON',exact:true}).fill('needle');
+ const fresh=await open(t,{url:path(first.page),api:fixture.api,ready:'.usage-workspace-table .qt-row'});
+ assert.equal(await fresh.page.getByRole('dialog',{name:'Arguments (sanitized) · JSON',exact:true}).isVisible(),true);
+});
 
 test('copied Cards view overrides preferences in a fresh context and follows Back/Forward', {skip}, async t=>{
  const first=await open(t,{url:'/cards?card_topic=all',ready:'.card-library-page'});
@@ -170,6 +341,25 @@ test('Carbon factor disclosures survive copying into a fresh browser', {skip},as
 });
 
 
+for(const empty of ['absent','empty'])test(`Carbon disclosure history restores ${empty} overrides after rerender`,{skip},async t=>{
+ const params=new URLSearchParams({analyze_topic:'carbon',disclosures:JSON.stringify({'carbon:calculation':true,'carbon:reference':true})});
+ const app=await open(t,{url:'/analyze?'+params,ready:'#carbonCard .carbon-method > summary'}),{page}=app;
+ await page.waitForFunction(()=>document.querySelector('#carbonCard .carbon-calculation')?.open&&document.querySelector('#carbonCard .carbon-method')?.open);
+ await app.settled();
+ // A route refresh replaces Carbon's DOM while keeping the current URL state.
+ await page.evaluate(()=>window.dispatchEvent(new Event('pharos:route')));await app.settled();
+ assert.equal(await page.locator('#carbonCard .carbon-method').evaluate(element=>element.open),true);
+ await page.evaluate(empty=>{const url=new URL(location.href);if(empty==='empty')url.searchParams.set('disclosures','{}');else url.searchParams.delete('disclosures');window.pharosNavigate(url.pathname+url.search);},empty);
+ const closed=()=>page.waitForFunction(()=>!document.querySelector('#carbonCard .carbon-calculation')?.open&&!document.querySelector('#carbonCard .carbon-method')?.open);
+ await closed();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('disclosures'),empty==='empty'?'{}':null);
+ await page.goBack();
+ await page.waitForFunction(()=>document.querySelector('#carbonCard .carbon-calculation')?.open&&document.querySelector('#carbonCard .carbon-method')?.open);
+ await page.goForward();await closed();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('disclosures'),empty==='empty'?'{}':null);
+});
+
+
 test('copied disclosure defaults override a different browser preference without a toggle', {skip},async t=>{
  const first=await open(t,{url:'/analyze?analyze_mode=query&analyze_data=usage',ready:'.usage-query-ideas',preferences:{'pharos-query-ideas:usage':false}});
  await first.page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('disclosures')||'{}')['query:usage:ideas']===false);
@@ -233,6 +423,8 @@ test('session Next and Previous use one live request while URL restoration repla
  }
  const before=cursors.length;
  await page.evaluate(()=>{const url=new URL(location.href);url.searchParams.set('delegation_page','2');window.pharosNavigate(url.pathname+url.search);});
+ await pagination.getByRole('button',{name:'Previous',exact:true,disabled:false}).waitFor();
+ await pagination.getByRole('button',{name:'Next',exact:true,disabled:true}).waitFor();
  await app.settled();
  assert.deepEqual(cursors.slice(before),['',`${execution}:1`,`${execution}:2`]);
 });
@@ -386,6 +578,40 @@ for(const empty of ['absent','empty'])test(`reader disclosure history restores $
  for(const name of ['reader_expanded','reader_collapsed'])assert.equal(params.get(name),empty==='empty'?'[]':null);
  await page.goForward();
  await page.waitForFunction(({opened,closed})=>{const details=[...document.querySelectorAll('details[data-pharos-disclosure]')];return details.find(item=>item.dataset.pharosDisclosure===opened.id)?.open===false&&details.find(item=>item.dataset.pharosDisclosure===closed.id)?.open===true;},{opened,closed});
+});
+
+
+for(const empty of ['absent','empty'])test(`reader content history restores ${empty} overrides to collapsed defaults`,{skip},async t=>{
+ const messages=[{id:'long-prose',role:'assistant',kind:'message',text:'Long synthetic prose. '.repeat(60),created_at:new Date().toISOString()}];
+ const api={'GET /api/work/:id/conversations/:conversation':request=>({...defaultApi['GET /api/work/:id/conversations/:conversation'](request),messages})};
+ const params=new URLSearchParams({conversation:rootConversation,reader_content:JSON.stringify({'long-prose':true,['summary:'+rootConversation]:true})});
+ const app=await open(t,{api,url:`/work/${workID}?${params}`,ready:'.message-toggle'}),{page}=app;
+ const expanded=()=>page.waitForFunction(()=>document.querySelector('.message-toggle')?.getAttribute('aria-expanded')==='true'&&!document.querySelector('.tool-summary')?.hidden);
+ const collapsed=()=>page.waitForFunction(()=>document.querySelector('.message-toggle')?.getAttribute('aria-expanded')==='false'&&document.querySelector('.message-prose')?.classList.contains('prose-truncated')&&document.querySelector('.tool-summary')?.hidden);
+ await expanded();await app.settled();
+ await page.evaluate(empty=>{const url=new URL(location.href);if(empty==='empty')url.searchParams.set('reader_content','{}');else url.searchParams.delete('reader_content');window.pharosNavigate(url.pathname+url.search);},empty);
+ await collapsed();await app.settled();
+ const fresh=await open(t,{api,url:path(page),ready:'.message-toggle'});
+ assert.equal(await fresh.page.locator('.message-toggle').getAttribute('aria-expanded'),'false');
+ assert.equal(await fresh.page.locator('.tool-summary').evaluate(element=>element.hidden),true);
+ await page.goBack();await expanded();await page.goForward();await collapsed();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('reader_content'),empty==='empty'?'{}':null);
+});
+
+
+test('header navigation clears source attention and explicit destination links retain their targets',{skip},async t=>{
+ const params=new URLSearchParams({conversation:rootConversation,highlight:'text:Turn',reveal:'page',nav_collapsed:'0'});
+ const api={'POST /api/search/text':()=>({items:[],complete:true,stop_reason:'complete',elapsed_ms:1,coverage:'Synthetic fixture'})};
+ const app=await open(t,{url:`/work/${workID}?${params}`,api,ready:'.conversation-panel'}),{page}=app;
+ await page.locator('header button[data-view="library"]').click();await page.locator('#library.active').waitFor();await app.settled();
+ const destination=new URL(page.url()).searchParams;
+ assert.deepEqual(destination.getAll('highlight'),[]);assert.equal(destination.has('reveal'),false);assert.equal(destination.get('nav_collapsed'),'0');
+ assert.equal(await page.locator('.pharos-attention-find:visible').count(),0);
+ await page.goBack();await page.waitForFunction(()=>new URLSearchParams(location.search).get('reveal')==='page');
+ assert.deepEqual(new URL(page.url()).searchParams.getAll('highlight'),['text:Turn']);
+ await page.evaluate(()=>window.pharosNavigate('/cards?highlight=page&reveal=page'));
+ await page.locator('.card-library-page').waitFor();await app.settled();
+ assert.deepEqual(new URL(page.url()).searchParams.getAll('highlight'),['page']);assert.equal(new URL(page.url()).searchParams.get('reveal'),'page');
 });
 
 

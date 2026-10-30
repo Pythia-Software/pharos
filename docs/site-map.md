@@ -649,3 +649,9 @@ The node unit tests read each valid link back through the page's own readers:
 - the delegation explorer: `readDelegationRoute`.
 
 Each link must yield exactly the state that built it.
+
+## JSON inspection state (Query Table 0.9.8)
+
+Query-table `<page>/query` help includes `schema_name`, a `properties_path` to the paginated detail property catalogue, and a validated inspection template. `itemDetails.jsonInspections` carries complete version-1 state keyed by `{dataset:<schema_name>,rowId:<typed ID>,field:<property name>}`. The installed public types are reachable under `<page>/query/types/JsonInspectionState` and `ScopedJsonInspectionState`.
+
+`<page>/targets` documents `detail:<json>` as a reveal-only reference, for example `detail:{"rowId":"call-id","field":"arguments_json","path":"$[\"events\"][21]"}`. Field/path are optional; numeric IDs remain numbers. Exact detail loading does not alter filters or pagination. Native table-cell display JSON and multi-target semantic highlighting remain visible dependency gaps; see [the handoff](query-table-url-state-handoff.md).

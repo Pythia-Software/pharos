@@ -406,6 +406,8 @@ func (site *siteMap) attentionIDSources(pattern string) any {
 		return []map[string]string{{"endpoint": "GET /api/work/{work_id}/delegation", "field": "rows[].id", "note": "Stable delegation session identity from this endpoint, rather than a conversation ID."}}
 	case "row:<id>":
 		return "ID column from the page's dataset/query result; include id in select to obtain it."
+	case "detail:<json>":
+		return "The typed ID column from this page's query results. Property names, schema_name and the inspection template are in <page>/query. JSONPaths use bracket notation; exact detail loading never changes the result population."
 	case "card:<id>":
 		return "browse_site({path:cards}); each cards/<id> entry names the definition."
 	}
@@ -465,6 +467,21 @@ func (site *siteMap) summary(state siteState) string {
 			parts = append(parts, metric.ID+" = "+metric.Op+"("+metric.Field+") by "+strings.Join(metric.GroupBy, ", "))
 		}
 		parts = append(parts, fmt.Sprintf("limit %d, offset %d", state.Query.Limit, state.Query.Offset))
+		var details struct {
+			JSONInspections []qt.ScopedJSONInspectionState `json:"jsonInspections"`
+		}
+		_ = json.Unmarshal(state.Query.ItemDetails, &details)
+		if len(details.JSONInspections) > 0 {
+			parts = append(parts, fmt.Sprintf("%d retained JSON inspections", len(details.JSONInspections)))
+			for i, inspection := range details.JSONInspections {
+				if i >= 3 {
+					break
+				}
+				if inspection.State.Search != "" {
+					parts = append(parts, inspection.Field+" "+inspection.State.SearchMode+" "+strconv.Quote(inspection.State.Search))
+				}
+			}
+		}
 		text = strings.Join(parts, ", ")
 	}
 	keys := []string{}

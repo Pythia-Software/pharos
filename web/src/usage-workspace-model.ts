@@ -172,7 +172,8 @@ export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?
   }
   const page=mode==="query"?`analyze/query/${next.dataset}`:`analyze/${next.topic}`;
   const cardWindow = params.has("card_query") ? [...params.keys()].filter(key => key.startsWith("window_")) : [];
-  retainPageView(params,page,[...cardWindow,...(mode==="dashboards"?["analyze_chart","analyze_filters","analyze_window","analyze_days"]:[])]);
+  const sourcePage=previous.mode==="query"?`analyze/query/${previous.dataset}`:`analyze/${previous.topic}`;
+  retainPageView(params,page,[...cardWindow,...(mode==="dashboards"?["analyze_chart","analyze_filters","analyze_window","analyze_days"]:[])],sourcePage);
   if(mode!==previous.mode||next.topic!==previous.topic||next.dataset!==previous.dataset){params.delete("highlight");params.delete("reveal");}
   return `/analyze?${params}`;
 }

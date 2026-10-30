@@ -30,6 +30,7 @@ type siteTarget struct {
 	Pattern     string   `json:"pattern"`
 	Pages       []string `json:"pages"`
 	Description string   `json:"description"`
+	RevealOnly  bool     `json:"revealOnly,omitempty"`
 }
 type siteViewContract struct {
 	Dependencies map[string]any           `json:"dependencies"`
@@ -114,12 +115,15 @@ func viewValue(field siteViewField, value any) (string, error) {
 	}
 	return raw, nil
 }
-func (site *siteMap) checkAttention(page, target string) error {
+func (site *siteMap) checkAttention(page, target string, query *qt.LinkQuery) error {
 	choices := []string{}
 	for _, family := range site.ViewContract.Targets {
 		if viewApplies(family.Pages, page) {
 			choices = append(choices, family.Pattern)
 		}
+	}
+	if strings.HasPrefix(target, "detail:") && slices.Contains(choices, "detail:<json>") {
+		return site.checkDetailAttention(page, target, query)
 	}
 	if id, ok := strings.CutPrefix(target, "card:"); ok && site.cardByID[id] == nil {
 		ids := []string{}
@@ -156,6 +160,73 @@ func (site *siteMap) checkAttention(page, target string) error {
 		}
 	}
 	return linkError("attention", fmt.Sprintf("%q is not a target on %s; browse %s/targets", target, page, page), choices...)
+}
+
+func (site *siteMap) checkDetailAttention(page, reference string, query *qt.LinkQuery) error {
+	node := site.Nodes[page]
+	if node == nil || node.Dataset == "" || site.optionOfKind(node, "where") == nil || !strings.HasPrefix(site.optionOfKind(node, "where").Param, "q_") {
+		return linkError("reveal", "detail targets need a query-table page")
+	}
+	if jsTextLength(reference) >= 4096 {
+		return linkError("reveal", "detail target is too large")
+	}
+	var target map[string]any
+	if json.Unmarshal([]byte(strings.TrimPrefix(reference, "detail:")), &target) != nil || target == nil {
+		return linkError("reveal", `needs detail:{"rowId":"id","field":"property","path":"$"}; field/path are optional`)
+	}
+	for name := range target {
+		if !slices.Contains([]string{"rowId", "field", "path"}, name) {
+			return linkError("reveal", "unknown detail target member "+name, "rowId", "field", "path")
+		}
+	}
+	switch id := target["rowId"].(type) {
+	case string:
+		if id == "" {
+			return linkError("reveal", "needs a nonempty rowId")
+		}
+	case float64:
+	default:
+		return linkError("reveal", "rowId needs a string or number; preserve its type")
+	}
+	field, hasField := target["field"]
+	if hasField {
+		name, ok := field.(string)
+		if !ok || name == "" {
+			return linkError("reveal", "field needs a property name")
+		}
+		found, choices := false, []string{}
+		properties := site.Datasets[node.Dataset].Properties
+		if query != nil && query.Grouping != nil {
+			result, err := site.checkQueryLevel(node, site.Datasets[node.Dataset], *query, "query", 0)
+			if err != nil {
+				return err
+			}
+			properties = result.Columns
+		}
+		for _, property := range properties {
+			candidate := siteString(property["name"])
+			choices = append(choices, candidate)
+			found = found || candidate == name
+		}
+		if !found {
+			return linkError("reveal.field", "unknown property; browse "+page+"/query", choices...)
+		}
+	}
+	if path, given := target["path"]; given {
+		value, ok := path.(string)
+		if !ok || !hasField {
+			return linkError("reveal.path", "JSONPath needs a field and a bracket JSONPath")
+		}
+		// The published link codec owns JSONPath validation in both languages.
+		state := qt.NewJSONInspectionState()
+		state.CollapsedPaths = []string{value}
+		entry := qt.ScopedJSONInspectionState{Dataset: site.Datasets[node.Dataset].SchemaName, RowID: target["rowId"], Field: field.(string), State: state}
+		details, _ := json.Marshal(map[string]any{"modes": []string{"expand"}, "jsonInspections": []qt.ScopedJSONInspectionState{entry}})
+		if _, err := qt.EncodeQueryLink(qt.LinkQuery{ItemDetails: details}); err != nil {
+			return linkError("reveal.path", err.Error())
+		}
+	}
+	return nil
 }
 func (site *siteMap) build(state siteState) (string, error) {
 	view, query, highlights, reveal := state.View, state.Query, state.Highlight, state.Reveal
@@ -256,12 +327,18 @@ func (site *siteMap) build(state siteState) (string, error) {
 		}
 	}
 	for _, target := range highlights {
-		if err := site.checkAttention(state.Page, target); err != nil {
+		for _, family := range site.ViewContract.Targets {
+			prefix, _, dynamic := strings.Cut(family.Pattern, "<")
+			if family.RevealOnly && viewApplies(family.Pages, state.Page) && (target == family.Pattern || dynamic && strings.HasPrefix(target, prefix)) {
+				return "", linkError("highlight", family.Pattern+" supports reveal only; browse "+state.Page+"/targets")
+			}
+		}
+		if err := site.checkAttention(state.Page, target, query); err != nil {
 			return "", err
 		}
 	}
 	if reveal != "" {
-		if err := site.checkAttention(state.Page, reveal); err != nil {
+		if err := site.checkAttention(state.Page, reveal, query); err != nil {
 			return "", err
 		}
 		values.Set("reveal", reveal)
@@ -577,7 +654,7 @@ func (site *siteMap) browseTargets(node *siteNode) map[string]any {
 	items := []map[string]any{}
 	for _, target := range site.ViewContract.Targets {
 		if viewApplies(target.Pages, node.Path) {
-			items = append(items, map[string]any{"pattern": target.Pattern, "pages": target.Pages, "description": target.Description, "id_sources": site.attentionIDSources(target.Pattern)})
+			items = append(items, map[string]any{"pattern": target.Pattern, "pages": target.Pages, "description": target.Description, "reveal_only": target.RevealOnly, "id_sources": site.attentionIDSources(target.Pattern)})
 		}
 	}
 	if option := site.optionOfKind(node, "where"); option != nil && strings.HasPrefix(option.Param, "q_") {

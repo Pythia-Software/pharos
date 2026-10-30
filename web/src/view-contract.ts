@@ -96,10 +96,12 @@ export const attentionTargets = [
   { pattern: "call:<id>", pages: ["work"], description: "Tool-call ID; reveals its owning message." },
   { pattern: "session:<id>", pages: ["work"], description: "Conversation/session ID in the delegation explorer." },
   { pattern: "row:<id>", pages: ["library", "analyze/query/*", "findings/table"], description: "Stable record ID in the current query result. Does not broaden filters." },
+  { pattern: "detail:<json>", pages: ["library", "analyze/query/*", "findings/table"], revealOnly: true, description: 'Reveal an exact record/property/JSONPath via Query Table: detail:{"rowId":"id","field":"arguments_json","path":"$[\\"events\\"][21]"}. field/path are optional; preserve numeric versus string IDs. The page selects the dataset. Loads exact details without changing filters or pagination; disabled/absent properties are unavailable. This family supports reveal only.' },
   { pattern: "text:<literal>", pages: ["*"], description: "Literal text search. Opens a prefilled Find box, highlights matches and reveals the first. No browser focus movement." }
 ];
 export const viewDependencyGaps = {
-  query_table_json: {status:"blocked",version:"0.9.7",owner:"@pythia-software/query-table-ui JsonValueView/JsonCell",reason:"No controlled API for search, filter/find mode, collapsed JSON paths, buckets, raw view or page size. Requires an upstream release; not an opt-out.",handoff:"docs/query-table-url-state-handoff.md"}
+  query_table_json_cells: {status:"blocked",version:"0.9.8",owner:"@pythia-software/query-table-ui DataTable",reason:"Native property JSON is portable. JSON display cells created by DataTable still do not receive scoped controlled inspection state; requires a published upstream integration.",handoff:"docs/query-table-url-state-handoff.md"},
+  query_table_attention: {status:"partial",version:"0.9.8",owner:"@pythia-software/query-table-core AttentionRegistry",reason:"Exact record/property/JSONPath reveal is integrated. The public API does not support highlight-only, multiple persistent semantic targets, or clearing/replacing prior property marks. detail: is reveal-only; existing host highlights remain supported.",handoff:"docs/query-table-url-state-handoff.md"},
 };
 export const viewExclusions = {
   settings: "Settings and their read-only diagnostics; not view overrides.",
@@ -162,8 +164,9 @@ export const delegatedViewFields: Record<string,{file:string; symbol:string}> = 
 for (const name of ["window_mode","window_days","window_field","window_until_field","window_dataset","window_timezone"]) delegatedViewFields[name]={file:"web/src/query-links.ts",symbol:"readRollingWindow"};
 for (const name of ["query_dashboard_chart","query_dashboard_filters","query_dashboard_window","query_opened","query_days","query_report","query_search"]) delegatedViewFields[name]={file:"web/src/usage-workspace-model.ts",symbol:"usageWorkspaceURL"};
 
-/** Page navigation drops another page's scoped fields, retaining global view state. */
-export function retainPageView(params: URLSearchParams, page: string, nativeParameters: readonly string[] = []) {
+/** Page navigation retains global view controls, but attention belongs to its source page. */
+export function retainPageView(params: URLSearchParams, page: string, nativeParameters: readonly string[] = [], sourcePage?: string) {
+  if(sourcePage!==page){params.delete("highlight");params.delete("reveal");}
   const allowed=new Set([...Object.values(fieldsForPage(page)).map(field=>field.param),...nativeParameters]);
   for(const field of Object.values(viewFields))if(!field.param.includes("{dataset}")&&!allowed.has(field.param))params.delete(field.param);
 }

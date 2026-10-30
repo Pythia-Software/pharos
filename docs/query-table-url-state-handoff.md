@@ -1,6 +1,6 @@
 # Upstream handoff: portable JSON-inspector view state
 
-Pharos consumes all four npm Query Table packages and the Go backend at **0.9.7**. Local dependency patches, vendoring, module replacements, package-cache edits and generated-bundle patches are prohibited. This is an unresolved dependency requirement, **not an approved opt-out** from URL coverage.
+**0.9.8 integration:** Pharos now consumes core, React, UI, codegen and Go at **0.9.8**. Native property inspectors retain the complete version-1 JSON inspection envelope in query URLs, snapshots and agent links. The semantic registry is connected for exact detail/property/JSONPath reveal with navigation cancellation and focus preservation. Fresh-browser tests cover manual choices, Back/Forward, layout changes, record isolation, delayed reveal and missing paths. The original request below remains as context; the remaining requirements are listed at the end. Local dependency patches, vendoring, module replacements, package-cache edits and generated-bundle patches remain prohibited.
 
 ## Reproduction
 
@@ -29,3 +29,27 @@ Expose semantic attention registration/resolution for a row, property and JSONPa
 - No keyboard-focus movement caused by an attention reveal.
 
 After publishing, pin core, react, ui, codegen and the Go module to the same release. Wire the new state into Pharos's shared contract, add the upstream-owned composite to the control ledger, and remove `viewDependencyGaps.query_table_json` only when fresh-browser coverage passes.
+
+
+## Remaining requirements after 0.9.8
+
+### DataTable JSON display cells still have local ownership
+
+Reproduce in Pharos on Analyze → Query → MCP calls:
+
+1. Select `arguments_json` with `display:{kind:"json"}`.
+2. Open its cell inspector and enter a literal search or switch to Find/raw.
+3. Copy the address into a fresh context.
+4. The inspector and search do not reopen; `itemDetails.jsonInspections` was never updated.
+
+`resolveRenderer`/`renderCellDisplay` creates `JsonCell` for column JSON displays without an inspection scope, controlled state/change callback or attention registry. The native property path supplies those props; the DataTable cell path does not. An override in the renderer registry cannot intercept a column display, which takes precedence. Hosts must not rewrite dependency rendering or manipulate the query definition to work around this.
+
+Expose a supported DataTable integration (or wire it internally) using the native detail controller's schema/typed row ID/field and inspection lifecycle. Keep query display overrides and header editing intact. Duplicate field instances, projected IDs, grouped rows, virtualized cells, false/empty state and disabled detail affordances all need an explicit policy. The same scoped state must survive URL, Save/Share and snapshot round trips. Pharos carries a browser TODO reproducer in the existing `view-state.test.mjs`; this is a dependency blocker, not an opt-out.
+
+### Semantic highlight lifecycle
+
+The public `AttentionRegistry` only resolves one scroll-and-highlight request at a time. It exposes no highlight-only/multiple-target set or clear/replace operation. Property providers add an outline class without clearing previous property marks. JSON providers retain one attention path. A row-only native reveal scrolls its detail surface but does not mark the surface.
+
+Please expose a cancellable semantic highlight set (without scrolling), one reveal landing, and clear/replace semantics, with exact record/property/path identities. Repeated target sets and refreshes must neither scroll nor reopen user-collapsed content; marks must persist or be reapplied without scrolling after a viewer remount. A row detail needs the same distinctive mark as a property/path. Clearing or changing URL instructions must remove obsolete marks through a public API rather than dependency DOM inspection. Retain focus preservation and reduced-motion behavior.
+
+Pharos currently advertises `detail:<json>` as reveal-only, rejects it in `highlight`, themes native reveal marks, and hides them when URL attention is cleared. Existing host multi-highlights are unchanged. `viewDependencyGaps.query_table_attention` records the remaining upstream behavior; `query_table_json_cells` records the display-cell gap.

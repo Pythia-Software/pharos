@@ -699,3 +699,14 @@ test("card dashboard returns retain Today and relative-window companions", async
     assert.equal(switched.searchParams.has("card_query"),false);assert.equal(switched.searchParams.has("window_mode"),false);
   }
 });
+
+
+test('analysis navigation retains attention only while staying on the same page',()=>{
+ const current=new URLSearchParams({analyze_mode:'query',analyze_data:'usage',highlight:'row:usage-1',reveal:'page'});
+ const same=new URL(usageWorkspaceURL({query:EMPTY_QUERY},current),'http://localhost').searchParams;
+ assert.equal(same.get('highlight'),'row:usage-1');assert.equal(same.get('reveal'),'page');
+ for(const change of [{dataset:'tool_calls'},{mode:'dashboards'},{topic:'human'}]){
+  const changed=new URL(usageWorkspaceURL(change,current),'http://localhost').searchParams;
+  assert.equal(changed.has('highlight'),false);assert.equal(changed.has('reveal'),false);
+ }
+});

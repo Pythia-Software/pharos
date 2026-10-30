@@ -2,7 +2,7 @@
 
 A copied Pharos URL describes the applied query and presentation, independently of another browser's saved defaults. It restores a moving view, not frozen result data. Settings, drafts/editing, hover, ordinary keyboard focus, menus and scroll offsets are excluded. Legacy Analyze/Tools migration remains explicitly deferred.
 
-**Coverage is incomplete for upstream JSON-inspector controls.** Query Table 0.9.7 does not expose controlled JSON search/mode/path state. This is recorded as a dependency gap, not an opt-out. See [the upstream handoff](query-table-url-state-handoff.md). Do not remove that gap until a published release supplies the API and fresh-browser restoration passes.
+Query Table **0.9.8** supplies portable native property inspectors. Search, Filter/Find, raw/tree, collapsed JSONPaths, array buckets, visible-entry limit, selected match and open state travel in `query.itemDetails.jsonInspections`, scoped by schema name, typed record ID and property field. Native Save/Share and durable snapshots use the same definition. Fresh-browser tests cover the controls, Back/Forward and record/layout isolation. Table-cell display inspectors and highlight-only/multiple native targets remain [upstream blockers](query-table-url-state-handoff.md), not opt-outs.
 
 ## Shared contract
 
@@ -39,6 +39,8 @@ A native `query` includes its filters/time predicates; give it without `filters`
 
 Analysis source-query links also retain the dashboard chart/population and opened-query baseline. These are documented view fields so returning to a dashboard can reconcile user edits without dropping relative time intent. Specialized time companions (`window_mode/days/field/until_field/dataset/timezone`) remain discoverable and portable.
 
+`<page>/query` also publishes `schema_name`, an inspection template, and a `properties_path` to the paginated property catalogue. Use that schema name (for example `pharos_mcp_calls`) in each inspection scope. `JsonInspectionState`, `JsonMatchIdentity` and related types are generated from the installed core declarations. Returning a native `JsonValueView` directly from a property renderer lets Query Table bind its controlled state and semantic registry; wrapping that element in a host div hides it from the supported integration.
+
 ## Attention
 
 `highlight` is repeatable; `reveal` names one landing target. Reveal means **scroll and distinctive persistent highlighting**, without moving browser/keyboard focus. Ordinary tabbing and scrolling never change these parameters. Clear highlights removes the instructions.
@@ -46,6 +48,8 @@ Analysis source-query links also retain the dashboard chart/population and opene
 Targets include the page, controls, named sections, card definition IDs, message/tool-call IDs, session IDs, records in the current result page, and literal text. IDs refer to data/semantic identity rather than DOM order. A row target highlights its actual rendered row through public table extension points. It does not open a modal or broaden a query.
 
 `text:<literal>` restores a prefilled Find box. Repeated literal targets are highlighted together; the reader represents multiple literals as an escaped OR search. The conversation reader uses its existing search API to find hidden/unmaterialized messages and reveal a match; other pages use a literal page Find with previous/next navigation. No token IDs are created. Message reveal materializes its owning turn and opens ancestors. Content expansions are retained as view state.
+
+`reveal=detail:{"rowId":"id","field":"arguments_json","path":"$[\"events\"][41][\"text\"]"}` invokes the published semantic registry. The page selects the dataset; preserve numeric versus string IDs. Field and path are optional. The target loads exact details and materializes a selected property/JSONPath without changing the population, filters, sort or pagination. Missing records/properties/paths report unavailable. Reveal waits for restoration and the initial row execution, so a temporary fallback cannot consume the landing. Navigation aborts pending work; completed landings survive temporary provider withdrawal, so background refresh does not repeat scrolling. This family is reveal-only because the upstream registry has no highlight-only or multi-target API. Native marks use Pharos reveal styling and Clear highlights hides them.
 
 Components register target resolvers with `window.pharosView.register`. Rendering can expose `data-pharos-target`, `data-view-field` or an existing semantic identity attribute. Registration and DOM mutation signals handle delayed content. Navigation cancels stale scheduled landings. A background refresh reapplies highlighting without repeatedly scrolling. Targets unavailable under the current tab/query are reported and never silently widen its data scope.
 

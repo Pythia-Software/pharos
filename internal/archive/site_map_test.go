@@ -1,12 +1,15 @@
 package archive
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -689,6 +692,107 @@ func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
 		if _, err := site.linkTool(map[string]any{"url": raw}); err == nil {
 			t.Errorf("accepted invalid view %s", raw)
 		}
+	}
+}
+
+func TestSiteLinkJSONInspectionsAndDetailTargets(t *testing.T) {
+	site := testSiteMap(t)
+	copy := *site
+	copy.Nodes = maps.Clone(site.Nodes)
+	site = &copy
+	// Even a query-capable legacy node must obey the advertised target scope.
+	for _, page := range []string{"tl1/runs", "mcp", "tools"} {
+		legacy := *site.Nodes["analyze/query/tool_calls"]
+		legacy.Path = page
+		site.Nodes[page] = &legacy
+	}
+	for page, node := range site.Nodes {
+		advertised := false
+		for _, item := range site.browseTargets(node)["items"].([]map[string]any) {
+			advertised = advertised || item["pattern"] == "detail:<json>"
+		}
+		err := site.checkAttention(page, `detail:{"rowId":"a"}`, nil)
+		if (err == nil) != advertised {
+			t.Errorf("%s: advertised=%v, validation=%v", page, advertised, err)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "json-inspection-cases.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []struct {
+		Name        string
+		Valid       bool
+		Inspections []any
+		Token       string
+		Query       map[string]any
+	}
+	if err := json.Unmarshal(data, &cases); err != nil {
+		t.Fatal(err)
+	}
+	for _, sample := range cases {
+		t.Run(sample.Name, func(t *testing.T) {
+			query := map[string]any{"select": []map[string]string{{"field": "id"}, {"field": "tool_name"}}, "itemDetails": map[string]any{"modes": []string{"expand"}, "jsonInspections": sample.Inspections}}
+			result, err := site.linkTool(map[string]any{"page": "analyze/query/mcp_calls", "query": query})
+			if (err == nil) != sample.Valid {
+				t.Fatalf("valid=%v: %v", sample.Valid, err)
+			}
+			if !sample.Valid {
+				return
+			}
+			if sample.Name == "all inspection choices and quoted paths" && !strings.Contains(result["summary"].(string), `arguments_json find "needle"`) {
+				t.Fatal("summary omitted JSON search", result)
+			}
+			read := roundTrip(t, site, sample.Name, result["url"].(string))
+			expected, err := qt.DecodeQueryLink(sample.Token)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got, want any
+			encoded, _ := json.Marshal(read.Query)
+			_ = json.Unmarshal(encoded, &got)
+			encoded, _ = json.Marshal(expected)
+			_ = json.Unmarshal(encoded, &want)
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("Go and TypeScript disagree: got %s, want %s", compactJSON(got), compactJSON(want))
+			}
+		})
+	}
+	for _, target := range []string{`detail:{"rowId":"0"}`, `detail:{"rowId":0,"field":"arguments_json"}`, `detail:{"rowId":"call-1","field":"arguments_json","path":"$[\"quote\\\"key\"][21]"}`} {
+		result, err := site.linkTool(map[string]any{"page": "analyze/query/mcp_calls", "reveal": target})
+		if err != nil {
+			t.Fatal(target, err)
+		}
+		read := roundTrip(t, site, "semantic detail", result["url"].(string))
+		if read.Reveal != target {
+			t.Fatal(read.Reveal)
+		}
+	}
+	for _, target := range []string{`detail:{}`, `detail:{"rowId":null}`, `detail:{"rowId":false}`, `detail:{"rowId":"a","field":"not_a_property"}`, `detail:{"rowId":"a","path":"$"}`, `detail:{"rowId":"a","field":"arguments_json","path":"$.events"}`, `detail:{"rowId":"a","field":"arguments_json","unknown":true}`} {
+		if _, err := site.linkTool(map[string]any{"page": "analyze/query/mcp_calls", "reveal": target}); err == nil {
+			t.Error("accepted", target)
+		}
+	}
+	if _, err := site.linkTool(map[string]any{"page": "cards", "reveal": `detail:{"rowId":"a"}`}); err == nil {
+		t.Error("detail on non-query page accepted")
+	}
+	if _, err := site.linkTool(map[string]any{"page": "analyze/query/mcp_calls", "highlight": []string{`detail:{"rowId":"a"}`}}); err == nil {
+		t.Error("unsupported semantic multi-highlight accepted")
+	}
+	grouped := linkArgs(t, `{"page":"analyze/query/mcp_calls","query":{"grouping":{"source":{"select":[{"field":"tool_name"}]},"keys":["tool_name"],"summaries":[{"id":"calls","op":"count"}],"representative":null}},"reveal":"detail:{\"rowId\":\"group-id\",\"field\":\"calls\"}"}`)
+	if _, err := site.linkTool(grouped); err != nil {
+		t.Fatal("grouped property target", err)
+	}
+	help, err := site.browse(context.Background(), nil, "analyze/query/mcp_calls/query", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if help["schema_name"] != "pharos_mcp_calls" || help["properties_path"] != "analyze/query/mcp_calls/query/properties" {
+		t.Fatal("missing inspection help", help)
+	}
+	properties, err := site.browseTool(context.Background(), nil, map[string]any{"path": "analyze/query/mcp_calls/query/properties", "query": "arguments_json"})
+	if err != nil || len(properties["items"].([]map[string]any)) != 1 {
+		t.Fatal("missing paginated property help", properties, err)
 	}
 }
 

@@ -1,7 +1,9 @@
 import { hostQueryV3Transport } from "./host-query-transport";
 import { ViewDisclosure } from "./view-disclosure";
 import { useViewEntry } from "./view-state";
-import { installViewAttention } from "./view-attention";
+import { installViewAttention, registerDetailAttentionResolver } from "./view-attention";
+import { revealQueryDetail } from "./query-attention";
+import { createAttentionRegistry } from "@pythia-software/query-table-core";
 import { portableLinkOptions, portableQueryLinks } from "./portable-query-link";
 import { rangeDays, type ChartRange } from "./chart-range";
 import { startDayClock, localTimezone } from "./day-window";
@@ -475,6 +477,7 @@ function usageGroupFields(fields: FieldSchema<Row>["fields"], query: QueryState)
 type SurfaceHost = { requiresV3?: boolean; query: HostQueryOptions; find: (state: HostQueryState | undefined) => string; onState?: (state: HostQueryState | undefined) => void };
 function QuerySurface({ dataset, host, usageActions = false, messageView = "table", find = "", onFind, trailing, header, controls, queryContent, querySummary, resultPresentation, presets, selectable = false, scopeWhere, appliedScope, namespace }: { dataset: Dataset; host?: SurfaceHost; usageActions?: boolean; selectable?: boolean; messageView?: MessageView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode; queryContent?: (api: QueryTableApi<Row>) => React.ReactNode; querySummary?: (api: QueryTableApi<Row>) => React.ReactNode; resultPresentation?: (api: QueryTableApi<Row>) => React.ReactNode; presets?: (api: QueryTableApi<Row>) => React.ReactNode; scopeWhere?: WhereTerm[]; appliedScope?: React.MutableRefObject<WhereTerm[]>; namespace?: "machine_calls" }) {
   const registryKey = namespace ?? dataset;
+  const attention = useMemo(() => createAttentionRegistry(), [registryKey]);
   const visible = shared || datasetIsVisible(registryKey);
   const schema = useMemo(() => namespace ? { ...schemas[dataset], name: "pharos_machine_calls", defaultSelect: [{ field: "started_at", width: 155 }, { field: "repository_name", width: 140 }, { field: "operation_name", width: 180 }, { field: "tool_name", width: 140 }, { field: "command", width: 350 }, { field: "duration_ms", width: 105 }, { field: "status", width: 85 }, { field: "duration_source", width: 120 }, { field: "title", width: 240 }] } : usageActions ? usageQuerySchema(schemas[dataset], dataset as UsageDataset) : schemas[dataset], [dataset, namespace, usageActions]);
   const locationRevision = useLocationRevision();
@@ -575,7 +578,7 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
     // A bare reload restores the last query that loaded, never one that
     // failed, timed out or was cancelled; that one stays on screen to retry.
     persistLast: "succeeded", hostQuery: host?.query,
-    itemDetails: { storage: propertyStorage, ...(detailSchema ? { schema: detailSchema, defaultModes: ["modal", "expand"] as ("modal" | "expand")[] } : {}), relationships: shared ? undefined : relationships,
+    itemDetails: { attention, storage: propertyStorage, ...(detailSchema ? { schema: detailSchema, defaultModes: ["modal", "expand"] as ("modal" | "expand")[] } : {}), relationships: shared ? undefined : relationships,
       loadRow: shared ? undefined : async (id, signal) => {
         const row = await transport!.fetchRow!(id, signal);
         return row ? { row, loadedFields: Object.keys(row) } : null;
@@ -613,6 +616,19 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
   // Empty states describe the rows: a failed metric alone does not empty them.
   const failed = api.execution ? api.execution.rows === "failed" : Boolean(api.error);
   const resultsView = searchResultsView(api.query, dataset === "library" ? readLibraryHost(hostState).view : "table");
+  const attentionSchema = api.itemDetails?.schema.name;
+  const attentionRowsReady = Boolean(api.execution && api.execution.rows !== "running");
+  const nativeDetailSurface = resultsView === "table" && !(dataset === "writing_messages" && messageView === "text" && !api.query.grouping);
+  useEffect(() => {
+    if (!visible || shared || !api.restoration.ready || !attentionRowsReady || api.loading || !attentionSchema) return;
+    // Wait for the result page: otherwise native details can reveal in an
+    // off-page fallback which the arriving rows immediately replace.
+    // Custom conversation/text presentations do not mount native properties.
+    // Report unavailable rather than waiting for a provider that cannot exist.
+    const unregister = registerDetailAttentionResolver((reference, signal) => nativeDetailSurface
+      ? revealQueryDetail(attention, attentionSchema, reference, signal) : Promise.resolve("unavailable"));
+    return () => { unregister(); attention.cancel(); };
+  }, [visible, api.restoration.ready, api.loading, attentionRowsReady, attentionSchema, attention, nativeDetailSurface]);
   const selectRows = selectable && !api.query.grouping && resultsView === "table";
   useMachineQueryNavigation(api, Boolean(visible && !shared && (namespace || dataset === "usage")), JSON.stringify([scopeWhere, new URLSearchParams(location.search).get("machine_view")]), `q_${registryKey}`, scopeWhere);
   const apiRef = useRef(api);

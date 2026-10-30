@@ -470,10 +470,10 @@
 
   function disclosure(key, title, cls = '') {
     const details = node('details', cls), summary = node('summary', '', title);
+    // The shared disclosure binding captures the native closed default and
+    // restores URL overrides after insertion, including across rerenders.
     details.dataset.viewKey='carbon:'+key;
-    details.open = window.pharosView?.read('disclosures',{})[details.dataset.viewKey] ?? disclosureState.get(key) ?? false;
     summary.dataset.carbonControl = `disclosure:${key}`;
-    details.ontoggle = () => { if (details.isConnected) disclosureState.set(key, details.open); };
     details.append(summary);
     return details;
   }
@@ -789,8 +789,6 @@
   function methodology(factors, result, setup) {
     const details = node('details', 'carbon-method');
     details.dataset.viewKey='carbon:reference';
-    details.open = window.pharosView?.read('disclosures',{})[details.dataset.viewKey] ?? disclosureState.get('reference') ?? false;
-    details.ontoggle = () => { if (details.isConnected) disclosureState.set('reference', details.open); };
     const summary = node('summary', '', 'All factor settings and sources');
     summary.dataset.carbonControl = 'disclosure:reference';
     details.append(summary);
