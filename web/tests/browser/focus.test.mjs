@@ -1535,10 +1535,14 @@ for(const modal of [false,true]) for(const width of [1440,390,320]) test(`Ask Ph
   assert.ok(await picker.isHidden());
   assert.ok(await trigger.evaluate(element=>element===document.activeElement),'Escape returns focus to the model control');
   await trigger.click();
-  await page.setViewportSize({width,height:400});await settled();
-  await check();await shot('model-picker-short-viewport');
   await page.getByRole('textbox',{name:'Ask a question',exact:true}).click();
   assert.ok(await picker.isHidden(),'clicking outside dismisses the picker');
+  await trigger.click();
+  await page.setViewportSize({width,height:400});await settled();
+  await check();await shot('model-picker-short-viewport');
+  // At this height the popover can cover the editor; Escape must still dismiss it.
+  await page.keyboard.press('Escape');
+  assert.ok(await picker.isHidden());
 });
 
 for (const theme of ['dark','light']) for (const width of [1440,390,320]) test(`Ask Pharos keeps long chats scrollable and the editor reachable (${theme}) @ ${width}`, {skip}, async t => {
