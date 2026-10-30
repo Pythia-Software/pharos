@@ -2069,7 +2069,7 @@ createRoot(dataGuideHost).render(<DataTaxonomyModal />);
 // Ask remains available before Home's first visit and while another page is active.
 if (!shared) {
   const host = document.createElement("div");host.hidden = true;document.body.append(host);
-  createRoot(host).render(<AskPharosSearch schema={schemas.library} />);
+  createRoot(host).render(<AskPharosSearch schemas={schemas} />);
 }
 
 const mounts: Array<[string, React.ReactNode]> = [

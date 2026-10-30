@@ -136,10 +136,10 @@ function askRetryDraft({turns = [], draft = ''}) {
   }
   return notice+kept.join('\n\n');
 }
-// A lone card opens itself, unless Pharos left out other destinations the
-// agent offered with it: then the agent meant a choice.
-function askShouldNavigate({cards = [], omitted = 0, draft = '', enabled, regular, edited, browsing = false}) {
-  return enabled && !regular && !edited && !browsing && draft.length === 0 && cards.length === 1 && !omitted;
+// Chart previews stay in the answer for inspection. A lone ordinary link opens
+// itself unless the agent offered a choice or the user has started browsing.
+function askShouldNavigate({cards = [], omitted = 0, draft = '', enabled, regular, edited, browsing = false, hasPreview = false}) {
+  return enabled && !regular && !edited && !browsing && !hasPreview && draft.length === 0 && cards.length === 1 && !omitted;
 }
 function askOmittedNote(omitted = 0) {
   if (!omitted) return '';
