@@ -6,7 +6,7 @@ this, with several studies each, run by a director agent and researcher
 agents. The data was this library's labeling dataset: Haiku 5.5, Gemini 3.8
 Flash and Gemini 4 Argon labels, taxonomy `candidate-0.3`.
 
-**Decision (2026-10-29): ship the pure-Go linear labeler everywhere.** A
+**Decision under review (2026-10-29 evening).** The first decision was to ship the pure-Go linear labeler everywhere. A
 fine-tuned 68M-parameter encoder is better, by about 0.06 Jaccard on typed
 human text. But the linear model:
 
@@ -17,6 +17,12 @@ human text. But the linear model:
 The quality gap was judged worth the engineering simplicity. The plan is in
 [linear-labeler-plan.md](linear-labeler-plan.md).
 
+Round 3 ([generalization.md](generalization.md)) then found that on other
+people's data the encoder generalizes clearly better on typed human text:
+about 0.12 ahead zero-shot, against about 0.06 in this library. Before the
+shipped architecture is chosen, both models should be retrained on data from
+several populations.
+
 ## Files
 
 | File | What it is |
@@ -25,6 +31,7 @@ The quality gap was judged worth the engineering simplicity. The plan is in
 | [methodology.md](methodology.md) | Targets, splits, segments, the fair leave-one-out comparison, the harness, and pitfalls found along the way |
 | [reproduction.md](reproduction.md) | How to restore the data and code from the euclid archive and rerun each study |
 | [linear-labeler-plan.md](linear-labeler-plan.md) | The concrete plan for wiring the Go linear labeler into Pharos |
+| [generalization.md](generalization.md) | Round 3: holding out whole groups within the library (HERON), and other people's public data (IBIS) |
 | [reports/](reports/) | Sanitized copies of every study report and the Go parity contract (`r2-DOTTEREL-PARITY.md`) |
 
 ## What is not in the repository, and where it is
