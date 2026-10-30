@@ -598,9 +598,13 @@ every output, as LAPWING did.
   a source message's classification that leaves the re-sending message's
   spans alone reaches the re-sending conversation's labels only through
   `--full`, a new model or contract, or its next change.
-- **Unicode versions.** Go's tables (Unicode 17) and the tokenizer library's
-  regex engine may classify characters assigned after Unicode 15 differently
-  in pre-tokenization.
+- **Unicode versions.** The tokenizer library's regex engine (Unicode 16)
+  and NFC data are older than Go's and `x/text`'s. The tokenizer pins both to
+  the library's, with generated tables (`onigClassFix`, `nfcUnknown`).
+  - These are checked for the Unicode 15 and 17 tables that Go 1.26/1.27 and
+    `x/text` v0.42 carry.
+  - A test fails on any other version, so upgrading either means rerunning
+    the probes (`studies/MERLIN/tokcheck`).
 - **Segments the model does poorly on:** agent text in the user role (`AIUR`,
   J 0.69) and delegations (`DEL`, 0.67) are the weakest segments; the model
   never predicts `P.frame.criteria`. See the research for per-segment scores.
