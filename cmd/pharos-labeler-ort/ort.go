@@ -112,24 +112,29 @@ static OrtStatus* pharos_io_type(const OrtApi* api, const OrtSession* s, int out
 	return status;
 }
 
-// pharos_run runs one batch of int64 input_ids and attention_mask [batch, seq]
-// over the caller's buffers and stores the requested outputs in values.
+// pharos_run runs one batch of inputs [batch, seq], each int64 or int32 by
+// input_types, over the caller's buffers, and stores the requested outputs in
+// values. The input values over the buffers are released before it returns.
 static OrtStatus* pharos_run(const OrtApi* api, OrtSession* s, const OrtMemoryInfo* memory,
-		int64_t* ids, int64_t* mask, int64_t batch, int64_t seq,
+		char** input_names, void** input_data, int* input_types, size_t inputs, int64_t batch, int64_t seq,
 		char** output_names, size_t outputs, OrtValue** values) {
-	static const char* input_names[2] = {"input_ids", "attention_mask"};
 	int64_t shape[2] = {batch, seq};
-	size_t bytes = (size_t)(batch * seq) * sizeof(int64_t);
-	OrtValue* inputs[2] = {NULL, NULL};
-	OrtStatus* status = api->CreateTensorWithDataAsOrtValue(memory, ids, bytes, shape, 2, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64, &inputs[0]);
-	if (status == NULL) status = api->CreateTensorWithDataAsOrtValue(memory, mask, bytes, shape, 2, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64, &inputs[1]);
+	OrtValue** in = calloc(inputs, sizeof(OrtValue*));
+	if (in == NULL) return api->CreateStatus(ORT_FAIL, "out of memory for the run's inputs");
+	OrtStatus* status = NULL;
+	for (size_t k = 0; status == NULL && k < inputs; k++) {
+		size_t element = input_types[k] == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64 ? sizeof(int64_t) : sizeof(int32_t);
+		status = api->CreateTensorWithDataAsOrtValue(memory, input_data[k], (size_t)(batch * seq) * element, shape, 2,
+			(ONNXTensorElementDataType)input_types[k], &in[k]);
+	}
 	if (status == NULL) {
-		status = api->Run(s, NULL, input_names, (const OrtValue* const*)inputs, 2,
+		status = api->Run(s, NULL, (const char* const*)input_names, (const OrtValue* const*)in, inputs,
 			(const char* const*)output_names, outputs, values);
 	}
-	for (int k = 0; k < 2; k++) {
-		if (inputs[k] != NULL) api->ReleaseValue(inputs[k]);
+	for (size_t k = 0; k < inputs; k++) {
+		if (in[k] != NULL) api->ReleaseValue(in[k]);
 	}
+	free(in);
 	return status;
 }
 
@@ -161,6 +166,7 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"unsafe"
 
 	"github.com/gbdubs/pharos/internal/labeler"
@@ -172,7 +178,9 @@ type ortSession struct {
 	env    *C.OrtEnv
 	sess   *C.OrtSession
 	memory *C.OrtMemoryInfo
-	// outputNames holds the model's output names as C strings for Run.
+	// inputNames and outputNames hold the model's input and output names
+	// as C strings for Run.
+	inputNames  map[string]*C.char
 	outputNames map[string]*C.char
 	info        modelInfo
 }
@@ -190,7 +198,7 @@ func openORT(library string, cfg sessionConfig) (session, error) {
 		return nil, fmt.Errorf("ONNX Runtime %s at %s does not provide C API version %d; this worker needs ONNX Runtime 1.%d or newer",
 			version, library, C.pharos_api_version(), C.pharos_api_version())
 	}
-	s := &ortSession{api: api, outputNames: map[string]*C.char{}}
+	s := &ortSession{api: api, inputNames: map[string]*C.char{}, outputNames: map[string]*C.char{}}
 	s.info.Runtime = "onnxruntime " + version
 	s.info.Device = "cpu"
 	s.info.Providers = []string{"CPUExecutionProvider"}
@@ -219,6 +227,9 @@ func (s *ortSession) open(cfg sessionConfig) error {
 	}
 	if s.info.Outputs, err = s.describe(true); err != nil {
 		return err
+	}
+	for _, in := range s.info.Inputs {
+		s.inputNames[in.Name] = C.CString(in.Name)
 	}
 	for _, out := range s.info.Outputs {
 		s.outputNames[out.Name] = C.CString(out.Name)
@@ -308,22 +319,42 @@ func dtypeName(t C.int) string {
 
 func (s *ortSession) Info() modelInfo { return s.info }
 
-func (s *ortSession) Run(ids, mask []int64, batch, seq int, outputs []string) ([]labeler.Tensor, error) {
-	if batch < 1 || seq < 1 || len(ids) != batch*seq || len(mask) != batch*seq || len(outputs) == 0 {
-		return nil, fmt.Errorf("run of %d ids, %d mask values for [%d, %d] and %d outputs", len(ids), len(mask), batch, seq, len(outputs))
+func (s *ortSession) Run(inputs []modelInput, batch, seq int, outputs []string) ([]labeler.Tensor, error) {
+	if batch < 1 || seq < 1 || len(inputs) == 0 || len(outputs) == 0 {
+		return nil, fmt.Errorf("run of %d inputs [%d, %d] and %d outputs", len(inputs), batch, seq, len(outputs))
 	}
-	names := make([]*C.char, len(outputs))
+	// The data pointers are Go memory handed to C inside a Go array, so
+	// they are pinned for the call; the C helper releases the input values
+	// over them before it returns.
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+	inputNames := make([]*C.char, len(inputs))
+	data := make([]unsafe.Pointer, len(inputs))
+	types := make([]C.int, len(inputs))
+	for i, in := range inputs {
+		if inputNames[i] = s.inputNames[in.Name]; inputNames[i] == nil {
+			return nil, fmt.Errorf("unknown input %q", in.Name)
+		}
+		switch {
+		case len(in.Int64) == batch*seq && in.Int32 == nil:
+			data[i], types[i] = unsafe.Pointer(&in.Int64[0]), C.ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64
+		case len(in.Int32) == batch*seq && in.Int64 == nil:
+			data[i], types[i] = unsafe.Pointer(&in.Int32[0]), C.ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32
+		default:
+			return nil, fmt.Errorf("input %s has %d int64 and %d int32 values for [%d, %d]", in.Name, len(in.Int64), len(in.Int32), batch, seq)
+		}
+		pinner.Pin(data[i])
+	}
+	outputNames := make([]*C.char, len(outputs))
 	for i, name := range outputs {
-		if names[i] = s.outputNames[name]; names[i] == nil {
+		if outputNames[i] = s.outputNames[name]; outputNames[i] == nil {
 			return nil, fmt.Errorf("unknown output %q", name)
 		}
 	}
-	// The C helper sees ids and mask only for the length of the call: the
-	// input values over them are released before it returns.
 	values := make([]*C.OrtValue, len(outputs))
 	status := C.pharos_run(s.api, s.sess, s.memory,
-		(*C.int64_t)(unsafe.Pointer(&ids[0])), (*C.int64_t)(unsafe.Pointer(&mask[0])), C.int64_t(batch), C.int64_t(seq),
-		&names[0], C.size_t(len(names)), &values[0])
+		&inputNames[0], &data[0], &types[0], C.size_t(len(inputs)), C.int64_t(batch), C.int64_t(seq),
+		&outputNames[0], C.size_t(len(outputNames)), &values[0])
 	defer func() {
 		for _, v := range values {
 			if v != nil {
@@ -364,9 +395,11 @@ func (s *ortSession) Run(ids, mask []int64, batch, seq int, outputs []string) ([
 func (s *ortSession) Close() error {
 	C.pharos_release(s.api, s.sess, s.memory, s.env)
 	s.sess, s.memory, s.env = nil, nil, nil
-	for name, c := range s.outputNames {
-		C.free(unsafe.Pointer(c))
-		delete(s.outputNames, name)
+	for _, names := range []map[string]*C.char{s.inputNames, s.outputNames} {
+		for name, c := range names {
+			C.free(unsafe.Pointer(c))
+			delete(names, name)
+		}
 	}
 	return nil
 }

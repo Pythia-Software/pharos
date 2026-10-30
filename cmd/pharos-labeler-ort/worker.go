@@ -25,11 +25,20 @@ import (
 type session interface {
 	// Info describes the runtime and the model's inputs and outputs.
 	Info() modelInfo
-	// Run runs one batch. ids and mask are row-major [batch, seq]; outputs
-	// names the model outputs to return, in that order, and is never empty.
-	Run(ids, mask []int64, batch, seq int, outputs []string) ([]labeler.Tensor, error)
+	// Run runs one batch. inputs holds every model input, row-major
+	// [batch, seq]; outputs names the model outputs to return, in that
+	// order, and is never empty.
+	Run(inputs []modelInput, batch, seq int, outputs []string) ([]labeler.Tensor, error)
 	// Close releases the model.
 	Close() error
+}
+
+// modelInput is one model input for Run, by the model's name for it. Int64
+// holds its data when the model takes int64, Int32 when it takes int32.
+type modelInput struct {
+	Name  string
+	Int64 []int64
+	Int32 []int32
 }
 
 type modelInfo struct {
@@ -122,13 +131,13 @@ func (r *replies) error(id uint64, code, format string, args ...any) {
 	r.json(labeler.FrameError, labeler.ErrorReply{ID: id, Code: code, Message: fmt.Sprintf(format, args...)})
 }
 
-// job is a validated run request waiting for the runner.
+// job is a validated run request waiting for the runner. inputs are the
+// request's tensors in the model's input order.
 type job struct {
 	id      uint64
 	batch   int
 	seq     int
-	ids     []int32
-	mask    []int32
+	inputs  []labeler.Tensor
 	outputs []string
 }
 
@@ -267,6 +276,9 @@ func (w *worker) start(payload []byte) error {
 	if !slices.Contains(hello.Protocol, labeler.ProtocolVersion) {
 		return fatal(labeler.ErrCodeProtocol, "hello offers protocol versions %v; this worker speaks %d", hello.Protocol, labeler.ProtocolVersion)
 	}
+	if err := labeler.ValidateInputs(hello.RunInputs()); err != nil {
+		return fatal(labeler.ErrCodeProtocol, "hello inputs: %v", err)
+	}
 	if hello.Model == "" {
 		return fatal(labeler.ErrCodeModel, "hello names no model")
 	}
@@ -282,7 +294,7 @@ func (w *worker) start(payload []byte) error {
 		return fatal(labeler.ErrCodeModel, "%v", err)
 	}
 	info := sess.Info()
-	if err := checkModel(info); err != nil {
+	if err := checkModel(info, hello.RunInputs()); err != nil {
 		sess.Close()
 		return fatal(labeler.ErrCodeModel, "%s: %v", hello.Model, err)
 	}
@@ -295,7 +307,7 @@ func (w *worker) start(payload []byte) error {
 	r.Model.SHA256 = sum
 	r.Model.Inputs = info.Inputs
 	r.Model.Outputs = info.Outputs
-	r.Limits.MaxBatch, r.Limits.MaxSeq = limits(&hello, info.Outputs)
+	r.Limits.MaxBatch, r.Limits.MaxSeq = limits(&hello, len(info.Inputs), info.Outputs)
 	r.Limits.MaxFrameBytes = labeler.MaxFrameBytes
 	r.Capabilities = []string{"ping"}
 
@@ -318,21 +330,29 @@ func fileSHA256(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// checkModel requires the protocol's v1 inputs, which the worker converts to
-// int64, and float32 outputs, the only output type on the wire.
-func checkModel(info modelInfo) error {
-	var names []string
+// checkModel requires the model's inputs to be exactly the ones the hello
+// declares, each int64 or int32 [batch, seq] (the worker converts the wire's
+// int32 to the model's type), and float32 outputs, the only output type on
+// the wire.
+func checkModel(info modelInfo, declared []labeler.InputSpec) error {
+	var model, hello []string
 	for _, in := range info.Inputs {
-		names = append(names, in.Name)
-		if in.Name != "input_ids" && in.Name != "attention_mask" {
-			return fmt.Errorf("model input %q is not one of protocol v1's input_ids and attention_mask", in.Name)
-		}
-		if in.DType != "int64" || len(in.Shape) != 2 {
-			return fmt.Errorf("model input %s is %s rank %d, not int64 [batch, seq]", in.Name, in.DType, len(in.Shape))
-		}
+		model = append(model, in.Name)
 	}
-	if len(names) != 2 || names[0] == names[1] {
-		return fmt.Errorf("model inputs %v are not input_ids and attention_mask", names)
+	for _, in := range declared {
+		hello = append(hello, in.Name)
+	}
+	mismatch := len(model) != len(hello)
+	for _, name := range hello {
+		mismatch = mismatch || !slices.Contains(model, name)
+	}
+	if mismatch {
+		return fmt.Errorf("the hello declares inputs %v but the model's inputs are %v", hello, model)
+	}
+	for _, in := range info.Inputs {
+		if (in.DType != "int64" && in.DType != "int32") || len(in.Shape) != 2 {
+			return fmt.Errorf("model input %s is %s rank %d, not int64 or int32 [batch, seq]", in.Name, in.DType, len(in.Shape))
+		}
 	}
 	if len(info.Outputs) == 0 {
 		return errors.New("model has no outputs")
@@ -347,7 +367,7 @@ func checkModel(info modelInfo) error {
 
 // limits is the hello's batch and sequence limits, or the defaults, lowered
 // so that the largest request and result each fit in one frame.
-func limits(hello *labeler.Hello, outputs []labeler.TensorInfo) (maxBatch, maxSeq int) {
+func limits(hello *labeler.Hello, inputs int, outputs []labeler.TensorInfo) (maxBatch, maxSeq int) {
 	maxBatch, maxSeq = hello.MaxBatch, hello.MaxSeq
 	if maxBatch <= 0 {
 		maxBatch = defaultMaxBatch
@@ -357,9 +377,10 @@ func limits(hello *labeler.Hello, outputs []labeler.TensorInfo) (maxBatch, maxSe
 	}
 	// Generous room for the ids, counts, names and dims around the elements.
 	const room = labeler.MaxFrameBytes - 4096
-	// A request row is seq int32 ids and seq int32 mask values.
-	maxSeq = min(maxSeq, room/8)
-	perRow := 8 * maxSeq
+	// A request row is seq int32 values for each input.
+	inputs = max(inputs, 1)
+	maxSeq = min(maxSeq, room/(4*inputs))
+	perRow := 4 * inputs * maxSeq
 	// A result row is every output's elements past the batch dimension; an
 	// unknown dimension is assumed to be as long as the sequence.
 	resultRow := 0
@@ -400,15 +421,14 @@ func (w *worker) enqueue(payload []byte) {
 		w.out.error(req.ID, labeler.ErrCodeBadRequest, "%v", err)
 		return
 	}
+	// ValidateRun found every declared input once, and checkModel that the
+	// declared inputs are the model's.
 	j := job{id: req.ID, outputs: outputs}
-	for _, t := range req.Inputs {
-		j.batch, j.seq = t.Dims[0], t.Dims[1]
-		if t.Name == "input_ids" {
-			j.ids = t.Int32
-		} else {
-			j.mask = t.Int32
-		}
+	for _, in := range w.info.Inputs {
+		i := slices.IndexFunc(req.Inputs, func(t labeler.Tensor) bool { return t.Name == in.Name })
+		j.inputs = append(j.inputs, req.Inputs[i])
 	}
+	j.batch, j.seq = j.inputs[0].Dims[0], j.inputs[0].Dims[1]
 	select {
 	case w.queue <- j:
 	case <-w.out.broken:
@@ -453,8 +473,16 @@ func (w *worker) run(j job) {
 			w.out.error(j.id, labeler.ErrCodeInternal, "panic: %v", p)
 		}
 	}()
-	ids, mask := widen(j.ids), widen(j.mask)
-	tensors, err := w.sess.Run(ids, mask, j.batch, j.seq, j.outputs)
+	inputs := make([]modelInput, len(j.inputs))
+	for i, t := range j.inputs {
+		inputs[i].Name = t.Name
+		if w.info.Inputs[i].DType == "int32" {
+			inputs[i].Int32 = t.Int32
+		} else {
+			inputs[i].Int64 = widen(t.Int32)
+		}
+	}
+	tensors, err := w.sess.Run(inputs, j.batch, j.seq, j.outputs)
 	if err != nil {
 		w.out.error(j.id, labeler.ErrCodeRunFailed, "%v", err)
 		return

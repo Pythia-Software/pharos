@@ -283,6 +283,17 @@ func TestORTWorkerProcess(t *testing.T) {
 			t.Fatalf("exit %v", state)
 		}
 	})
+	t.Run("refuses an input the model lacks", func(t *testing.T) {
+		h, cmd := start(t, library)
+		hello := kestrelHello(t, dir)
+		hello.Inputs = append(slices.Clone(labeler.DefaultInputs), labeler.InputSpec{Name: "pooling_mask", Role: labeler.RolePool})
+		h.sendJSON(labeler.FrameHello, hello)
+		e := h.expectError(0, labeler.ErrCodeModel, true)
+		t.Logf("%s", e.Message)
+		if state := waitExit(t, cmd); state.ExitCode() != exitFatal {
+			t.Fatalf("exit %v", state)
+		}
+	})
 	t.Run("stops on SIGTERM during a run", func(t *testing.T) {
 		h, cmd := start(t, library)
 		h.sendJSON(labeler.FrameHello, kestrelHello(t, dir))

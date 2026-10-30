@@ -25,11 +25,27 @@ const wait = 10 * time.Second
 
 const pad = 50283
 
-// fakeCall is one Run of a fakeSession.
+// fakeCall is one Run of a fakeSession. ids and mask are its input_ids and
+// attention_mask as int64, whichever type the model takes.
 type fakeCall struct {
+	inputs     []modelInput
 	ids, mask  []int64
 	batch, seq int
 	outputs    []string
+}
+
+// values is the named input's data as int64, or nil.
+func (c fakeCall) values(name string) []int64 {
+	for _, in := range c.inputs {
+		if in.Name != name {
+			continue
+		}
+		if in.Int64 != nil {
+			return in.Int64
+		}
+		return widen(in.Int32)
+	}
+	return nil
 }
 
 // fakeSession is a model with outputs logits [batch, 2, 3] and probs
@@ -58,9 +74,10 @@ func fakeInfo() modelInfo {
 func (f *fakeSession) Info() modelInfo { return f.info }
 func (f *fakeSession) Close() error    { f.closed.Store(true); return nil }
 
-func (f *fakeSession) Run(ids, mask []int64, batch, seq int, outputs []string) ([]labeler.Tensor, error) {
+func (f *fakeSession) Run(inputs []modelInput, batch, seq int, outputs []string) ([]labeler.Tensor, error) {
 	f.calls.Add(1)
-	call := fakeCall{ids: ids, mask: mask, batch: batch, seq: seq, outputs: outputs}
+	call := fakeCall{inputs: inputs, batch: batch, seq: seq, outputs: outputs}
+	call.ids, call.mask = call.values("input_ids"), call.values("attention_mask")
 	if f.run != nil {
 		return f.run(call)
 	}
@@ -368,8 +385,8 @@ func TestHandshake(t *testing.T) {
 }
 
 func TestHelloRefusals(t *testing.T) {
-	wrongInput := fakeInfo()
-	wrongInput.Inputs[1].DType = "int32"
+	floatInput := fakeInfo()
+	floatInput.Inputs[1].DType = "float32"
 	extraInput := fakeInfo()
 	extraInput.Inputs = append(extraInput.Inputs, labeler.TensorInfo{Name: "token_type_ids", DType: "int64", Shape: []any{"batch", "seq"}})
 	intOutput := fakeInfo()
@@ -394,8 +411,18 @@ func TestHelloRefusals(t *testing.T) {
 		{name: "checksum mismatch", hello: func(h *harness) []byte { x := h.hello(); x.ModelSHA256 = strings.Repeat("0", 64); return mustJSON(x) },
 			code: labeler.ErrCodeModel, status: exitFatal},
 		{name: "runtime fails to load", open: errors.New("no runtime"), code: labeler.ErrCodeModel, status: exitFatal},
-		{name: "int32 model input", info: wrongInput, code: labeler.ErrCodeModel, status: exitFatal},
-		{name: "extra model input", info: extraInput, code: labeler.ErrCodeModel, status: exitFatal},
+		{name: "float model input", info: floatInput, code: labeler.ErrCodeModel, status: exitFatal},
+		{name: "model input not declared", info: extraInput, code: labeler.ErrCodeModel, status: exitFatal},
+		{name: "declared input not in the model", hello: declare(append(slices.Clone(labeler.DefaultInputs), labeler.InputSpec{Name: "pooling_mask", Role: labeler.RolePool})),
+			code: labeler.ErrCodeModel, status: exitFatal},
+		{name: "declared input renamed", hello: declare([]labeler.InputSpec{{Name: "input_ids", Role: labeler.RoleIDs}, {Name: "mask", Role: labeler.RoleAttention}}),
+			code: labeler.ErrCodeModel, status: exitFatal},
+		{name: "declaration without attention", hello: declare([]labeler.InputSpec{{Name: "input_ids", Role: labeler.RoleIDs}, {Name: "attention_mask", Role: labeler.RolePool}}),
+			code: labeler.ErrCodeProtocol, status: exitProtocol},
+		{name: "declaration with an unknown role", hello: declare([]labeler.InputSpec{{Name: "input_ids", Role: labeler.RoleIDs}, {Name: "attention_mask", Role: labeler.RoleAttention}, {Name: "segment", Role: "type"}}),
+			code: labeler.ErrCodeProtocol, status: exitProtocol},
+		{name: "declaration naming an input twice", hello: declare([]labeler.InputSpec{{Name: "input_ids", Role: labeler.RoleIDs}, {Name: "attention_mask", Role: labeler.RoleAttention}, {Name: "input_ids", Role: labeler.RolePool}}),
+			code: labeler.ErrCodeProtocol, status: exitProtocol},
 		{name: "integer model output", info: intOutput, code: labeler.ErrCodeModel, status: exitFatal},
 	}
 	for _, c := range cases {
@@ -411,7 +438,8 @@ func TestHelloRefusals(t *testing.T) {
 				payload = c.hello(h)
 			}
 			h.send(labeler.FrameHello, payload)
-			h.expectError(0, c.code, true)
+			e := h.expectError(0, c.code, true)
+			t.Logf("%s", e.Message)
 			h.expectExit(c.status)
 			if c.info.Inputs != nil && !sess.closed.Load() {
 				t.Fatal("a refused model was left open")
@@ -430,6 +458,15 @@ func TestHelloRefusals(t *testing.T) {
 		h.expectError(0, labeler.ErrCodeInternal, true)
 		h.expectExit(exitFatal)
 	})
+}
+
+// declare is a hello with inputs declared.
+func declare(inputs []labeler.InputSpec) func(*harness) []byte {
+	return func(h *harness) []byte {
+		x := h.hello()
+		x.Inputs = inputs
+		return mustJSON(x)
+	}
 }
 
 func mustJSON(v any) []byte {
@@ -481,6 +518,86 @@ func TestRun(t *testing.T) {
 	res = h.expectResult()
 	if res.Outputs[0].Name != "probs" || res.Outputs[1].Name != "logits" {
 		t.Fatalf("outputs in the order asked: %+v", res)
+	}
+}
+
+// TestDeclaredInputs runs a model with a third input, pooling_mask, that the
+// hello declares (in another order than the model's), and an attention mask
+// the model takes as int32.
+func TestDeclaredInputs(t *testing.T) {
+	info := fakeInfo()
+	info.Inputs[1].DType = "int32"
+	info.Inputs = append(info.Inputs, labeler.TensorInfo{Name: "pooling_mask", DType: "int64", Shape: []any{"batch", "seq"}})
+	var got []fakeCall
+	sess := &fakeSession{info: info}
+	sess.run = func(c fakeCall) ([]labeler.Tensor, error) {
+		got = append(got, c)
+		return fakeOutputs(c), nil
+	}
+	h := startWorker(t, sess)
+	hello := h.hello()
+	hello.Inputs = []labeler.InputSpec{
+		{Name: "pooling_mask", Role: labeler.RolePool},
+		{Name: "attention_mask", Role: labeler.RoleAttention},
+		{Name: "input_ids", Role: labeler.RoleIDs},
+	}
+	h.sendJSON(labeler.FrameHello, hello)
+	if kind, payload := h.recv(); kind != labeler.FrameReady {
+		t.Fatalf("frame %q %s", kind, payload)
+	}
+	tensor := func(name string, values ...int32) labeler.Tensor {
+		return labeler.Tensor{Name: name, DType: labeler.DTypeInt32, Dims: []int{2, 3}, Int32: values}
+	}
+	ids := tensor("input_ids", 50281, 9, 50282, 50281, 50282, pad)
+	mask := tensor("attention_mask", 1, 1, 1, 1, 1, 0)
+	pool := tensor("pooling_mask", 0, 1, 0, 1, 1, 0)
+	run := func(id uint64, inputs ...labeler.Tensor) []byte {
+		return encodeRun(t, &labeler.RunRequest{ID: id, Inputs: inputs})
+	}
+
+	h.send(labeler.FrameRun, run(1, pool, ids, mask))
+	if res := h.expectResult(); res.ID != 1 {
+		t.Fatalf("result %d", res.ID)
+	}
+	c := got[0]
+	var names []string
+	for _, in := range c.inputs {
+		names = append(names, in.Name)
+	}
+	if !slices.Equal(names, []string{"input_ids", "attention_mask", "pooling_mask"}) {
+		t.Fatalf("the model got inputs %v, not in its own order", names)
+	}
+	if c.inputs[0].Int64 == nil || c.inputs[1].Int32 == nil || c.inputs[1].Int64 != nil || c.inputs[2].Int64 == nil {
+		t.Fatalf("inputs not in the model's types: %+v", c.inputs)
+	}
+	if !slices.Equal(c.inputs[1].Int32, mask.Int32) || !slices.Equal(c.values("pooling_mask"), []int64{0, 1, 0, 1, 1, 0}) ||
+		!slices.Equal(c.ids, []int64{50281, 9, 50282, 50281, 50282, pad}) {
+		t.Fatalf("model call %+v", c)
+	}
+
+	bad := []struct {
+		name   string
+		inputs []labeler.Tensor
+	}{
+		{"declared input missing", []labeler.Tensor{ids, mask}},
+		{"undeclared input", []labeler.Tensor{ids, mask, pool, tensor("token_type_ids", 0, 0, 0, 0, 0, 0)}},
+		{"input twice", []labeler.Tensor{ids, mask, pool, pool}},
+		{"pooling padding", []labeler.Tensor{ids, mask, tensor("pooling_mask", 0, 1, 0, 1, 1, 1)}},
+		{"pooling nothing in a row", []labeler.Tensor{ids, mask, tensor("pooling_mask", 0, 1, 0, 0, 0, 0)}},
+		{"pool value 2", []labeler.Tensor{ids, mask, tensor("pooling_mask", 0, 2, 0, 1, 1, 0)}},
+	}
+	for i, b := range bad {
+		id := uint64(10 + i)
+		h.send(labeler.FrameRun, run(id, b.inputs...))
+		e := h.expectError(id, labeler.ErrCodeBadRequest, false)
+		t.Logf("%s: %s", b.name, e.Message)
+	}
+	if len(got) != 1 {
+		t.Fatalf("the model ran %d requests, want 1", len(got))
+	}
+	h.send(labeler.FrameRun, run(20, ids, mask, pool))
+	if res := h.expectResult(); res.ID != 20 {
+		t.Fatalf("result %d", res.ID)
 	}
 }
 
@@ -759,21 +876,23 @@ func TestLimits(t *testing.T) {
 		{Name: "probs", DType: "float32", Shape: []any{"batch", 54}},
 	}
 	perToken := []labeler.TensorInfo{{Name: "hidden", DType: "float32", Shape: []any{"batch", "seq", 768}}}
-	request := func(b, s int) int { return 8*b*s + 4096 }
 	cases := []struct {
 		name               string
 		hello              labeler.Hello
+		inputs             int
 		outputs            []labeler.TensorInfo
 		wantBatch, wantSeq int // 0: only check that frames fit
 	}{
-		{"defaults", labeler.Hello{}, kestrel, defaultMaxBatch, defaultMaxSeq},
-		{"as asked", labeler.Hello{MaxBatch: 64, MaxSeq: 256}, kestrel, 64, 256},
-		{"batch lowered to fit a request", labeler.Hello{MaxBatch: 1 << 20, MaxSeq: 512}, kestrel, 0, 512},
-		{"sequence lowered to fit one row", labeler.Hello{MaxBatch: 4, MaxSeq: 1 << 30}, kestrel, 1, 0},
-		{"batch lowered to fit a result", labeler.Hello{MaxBatch: 1024, MaxSeq: 512}, perToken, 0, 512},
+		{"defaults", labeler.Hello{}, 2, kestrel, defaultMaxBatch, defaultMaxSeq},
+		{"as asked", labeler.Hello{MaxBatch: 64, MaxSeq: 256}, 2, kestrel, 64, 256},
+		{"batch lowered to fit a request", labeler.Hello{MaxBatch: 1 << 20, MaxSeq: 512}, 2, kestrel, 0, 512},
+		{"batch lowered further for a third input", labeler.Hello{MaxBatch: 1 << 20, MaxSeq: 512}, 3, kestrel, 0, 512},
+		{"sequence lowered to fit one row", labeler.Hello{MaxBatch: 4, MaxSeq: 1 << 30}, 2, kestrel, 1, 0},
+		{"batch lowered to fit a result", labeler.Hello{MaxBatch: 1024, MaxSeq: 512}, 2, perToken, 0, 512},
 	}
 	for _, c := range cases {
-		batch, seq := limits(&c.hello, c.outputs)
+		request := func(b, s int) int { return 4*c.inputs*b*s + 4096 }
+		batch, seq := limits(&c.hello, c.inputs, c.outputs)
 		if (c.wantBatch != 0 && batch != c.wantBatch) || (c.wantSeq != 0 && seq != c.wantSeq) {
 			t.Errorf("%s: limits %d, %d, want %d, %d", c.name, batch, seq, c.wantBatch, c.wantSeq)
 		}
