@@ -10,7 +10,7 @@ import { defaultCardCover } from "../../../src/card-cover";
 import { cardLoadingPresentation } from "../../../src/card-loading-model";
 import { collectQuery, updateBookmark } from "../../../src/bookmarks";
 import { queryFromURL } from "../../../src/query-links";
-import { cardAnalysisJob } from "../../../src/card-analysis-model";
+import { savedCardPreviewJob } from "../../../src/saved-card-model";
 
 export const active = queryRecipes.filter(recipe => !recipe.retired);
 const now = Date.parse("2026-10-16T18:00:00Z");
@@ -68,7 +68,7 @@ export async function compare(recipe, days, values, { edit = false } = {}) {
   const catalog = await preview(item.query, catalogOptions), dashboard = await preview(spec.query, savedOptions);
   let analysis;
   if (item.destination) {
-    const job = cardAnalysisJob(bookmark.url, schemas[item.dataset], bookmark.query);
+    const job = savedCardPreviewJob(bookmark.url, schemas[item.dataset], bookmark.query);
     analysis = difference(catalog, await preview(job.query, job.options));
   }
   if (catalog.study && item.cover?.height !== undefined) assert.equal(catalog.coverHeight, item.cover.height, `${recipe.id}: customized study height`);

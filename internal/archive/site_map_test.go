@@ -417,7 +417,7 @@ func TestSiteLinkChangesACardAsItsDashboardDoes(t *testing.T) {
 	}
 	// The chart keeps the window's rolling sum, and takes the change.
 	chart := state.Chart.toMap()
-	if !state.Changed || state.Card != "human-word-total" || state.Days != 30 || chart["rollingPeriods"] != float64(30) || chart["scale"] != "logarithmic" {
+	if state.Page != "analyze/human" || state.Days != 30 || chart["rollingPeriods"] != float64(30) || chart["scale"] != "logarithmic" {
 		t.Fatalf("changed card reads as %+v %s", state, compactJSON(chart))
 	}
 	// An explicit setting wins over the window's.
@@ -459,7 +459,7 @@ func TestSiteLinkChangesACardAsItsDashboardDoes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if read, _ := site.parseURL(page["url"].(string)); !read.Changed || read.Days != 30 || read.Chart.toMap()["scale"] != "logarithmic" {
+	if read, _ := site.parseURL(page["url"].(string)); read.Page != "analyze/human" || read.Days != 30 || read.Chart.toMap()["scale"] != "logarithmic" {
 		t.Errorf("page-written change reads as %+v", read)
 	}
 	if again, err := site.linkTool(linkArgs(t, compactJSON(page["arguments"]))); err != nil || again["url"] != page["url"] {
@@ -872,8 +872,12 @@ func TestSiteLinkNativeValidationAndComposition(t *testing.T) {
 			t.Error("accepted incompatible state", input)
 		}
 	}
-	for _, page := range []string{"library", "analyze/query/usage"} {
-		result, err := site.linkTool(map[string]any{"page": page, "days": "today", "view": map[string]any{"window_timezone": "Asia/Tokyo"}})
+	for _, page := range []string{"library", "analyze/query/usage", "analyze/calls", "analyze/activity"} {
+		field := "window_timezone"
+		if site.Nodes[page].Dashboard != "" {
+			field = "dashboard_timezone"
+		}
+		result, err := site.linkTool(map[string]any{"page": page, "days": "today", "view": map[string]any{field: "Asia/Tokyo"}})
 		if err != nil {
 			t.Fatal(page, err)
 		}

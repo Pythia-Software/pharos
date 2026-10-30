@@ -1,4 +1,5 @@
 import { normalizeAnalysis, type AnalysisCatalog, type AnalysisState } from "./dashboard-analysis-model";
+import { conversationAnalysisCatalog } from "./conversation-analysis-catalog";
 import { tokenAnalysisCatalog } from "./token-analysis-catalog";
 import { toolsAnalysisCatalog } from "./tools-analysis-catalog";
 import { mcpAnalysisCatalog } from "./mcp-analysis-catalog";
@@ -11,7 +12,7 @@ import { parallelismAnalysisCatalog, parallelismCatalogShape, type ParallelismCo
 // their catalogs with the user's settings; these are their shapes, for
 // reading and comparing links.
 export const analysisCatalogs: Partial<Record<string, AnalysisCatalog>> = {
-  tokens: tokenAnalysisCatalog, tools: toolsAnalysisCatalog, mcp: mcpAnalysisCatalog, time: agentTimeAnalysisCatalog, skills: skillsAnalysisCatalog,
+  calls: agentTimeAnalysisCatalog, activity: conversationAnalysisCatalog, tokens: tokenAnalysisCatalog, tools: toolsAnalysisCatalog, mcp: mcpAnalysisCatalog, time: agentTimeAnalysisCatalog, skills: skillsAnalysisCatalog,
   human: humanAnalysisCatalog, carbon: carbonCatalogShape, parallelism: parallelismCatalogShape,
 };
 

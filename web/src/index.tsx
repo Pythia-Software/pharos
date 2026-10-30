@@ -101,6 +101,7 @@ import { UsageQueryIdeas } from "./usage-query-ideas";
 import { toolSummaryCallFilters } from "./tools-dashboard-model";
 import { readDashboardLink, readDashboardQuery, parallelismSelectionQuery } from "./usage-dashboard-model";
 import { dashboardChartURL } from "./dashboard-chart-links";
+import { conversationAnalysisCatalog } from "./conversation-analysis-catalog";
 import { DashboardAnalysis } from "./dashboard-analysis";
 import { AnalysisTrend, type AmountFormat } from "./dashboard-trend";
 import { analysisVersion, canonicalState, normalizeAnalysis, readAnalysisLink, switchView, validAnalysisState, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
@@ -1594,7 +1595,7 @@ function useUsageDashboardState<T extends object>(defaults: T, valid: (value: T)
   const onFilter: FilterChange = (change, preset) => {
     const where = change(live.current.where);
     const dates = (terms: WhereTerm[]) => JSON.stringify(terms.filter(term => predicatesOf(term).some(c => [time.first,time.last].includes(c.field))));
-    if (preset === "today") updateURI("analyze_window", "today");
+    if (preset === "today") { updateURI("analyze_window", "today"); updateURI("analyze_timezone", ""); }
     else if (preset || dates(where) !== dates(live.current.where)) updateURI("analyze_window", "");
     persist({ ...live.current, where }, "analyze_filters");
   };
@@ -1602,6 +1603,8 @@ function useUsageDashboardState<T extends object>(defaults: T, valid: (value: T)
 }
 
 function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
+  if (topic === "calls") return <CatalogDashboard catalog={agentTimeAnalysisCatalog} dataset="tool_calls" name="calls" defaults={dashboardDefaults.calls} />;
+  if (topic === "activity") return <CatalogDashboard catalog={conversationAnalysisCatalog} dataset="conversation_activity" name="activity" defaults={dashboardDefaults.activity} />;
   if (topic === "tokens") return <TokenUsageDashboard />;
   if (topic === "human") return <HumanUsageDashboard />;
   if (topic === "parallelism") return <ParallelismUsageDashboard />;
@@ -1821,7 +1824,7 @@ function UsagePage() {
   useLocationRevision();
   if (shared || location.pathname !== "/analyze" || !isUsageWorkspace()) return <LegacyUsagePage />;
   return <UsageChartColorsProvider>
-    <UsageWorkspace schemas={schemas} renderDashboard={topic => <GuidedUsageDashboard topic={topic} />} renderTable={dataset => <AnalyzeQueryTable key={dataset} dataset={dataset} />} />
+    <UsageWorkspace renderDashboard={topic => <GuidedUsageDashboard topic={topic} />} renderTable={dataset => <AnalyzeQueryTable key={dataset} dataset={dataset} />} />
   </UsageChartColorsProvider>;
 }
 

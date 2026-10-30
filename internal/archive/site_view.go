@@ -374,15 +374,17 @@ func (site *siteMap) linkFromArgs(args map[string]any) (siteState, error) {
 		}
 		state.View = site.completeViewArguments(value)
 	}
-	if pin, given := state.View["window_timezone"]; given {
-		zone, ok := pin.(string)
-		location, err := viewTimezone(zone)
-		if !ok || err != nil {
-			return state, linkError("view.window_timezone", "needs an IANA timezone")
-		}
-		if state.TodayFrom != "" {
-			state.TodayTimezone = zone
-			state.TodayFrom = localMidnight(time.Now(), location).UTC().Format(time.RFC3339Nano)
+	for _, field := range []string{"window_timezone", "dashboard_timezone"} {
+		if pin, given := state.View[field]; given {
+			zone, ok := pin.(string)
+			location, err := viewTimezone(zone)
+			if !ok || err != nil {
+				return state, linkError("view."+field, "needs an IANA timezone")
+			}
+			if state.TodayFrom != "" {
+				state.TodayTimezone = zone
+				state.TodayFrom = localMidnight(time.Now(), location).UTC().Format(time.RFC3339Nano)
+			}
 		}
 	}
 	if raw, ok := args["query"]; ok {
@@ -606,7 +608,11 @@ func (site *siteMap) arguments(state siteState) map[string]any {
 		for key, value := range state.View {
 			view[key] = value
 		}
-		view["window_timezone"] = state.TodayTimezone
+		field := "window_timezone"
+		if node := site.Nodes[state.Page]; node != nil && node.Dashboard != "" {
+			field = "dashboard_timezone"
+		}
+		view[field] = state.TodayTimezone
 		out["view"] = view
 	}
 	if state.Query != nil {
@@ -765,7 +771,7 @@ func validateViewShape(name string, value any) error {
 		if _, err := qt.DecodeQueryLink(text); err != nil {
 			return err
 		}
-	case "window_timezone":
+	case "window_timezone", "dashboard_timezone":
 		if name, ok := value.(string); !ok {
 			return fmt.Errorf("needs an IANA timezone")
 		} else if _, err := viewTimezone(name); err != nil {

@@ -902,24 +902,23 @@ test("Card Library restores saved covers while fresh queries are pending", { ski
 // window, and some at every window. Open the 7-day one where there is one.
 const cardLinks = JSON.parse(readFileSync(new URL('../../../testdata/site-map-cases.json', import.meta.url), 'utf8')).cards;
 
-// Card analyses use their own source grain and shared cover renderer. The
-// model/unit suite owns mathematical parity; the browser checks accessibility
-// of navigation and that every chart family fits the available viewport.
-for (const id of ['human-words', 'cost-repos', 'machine-time', 'skill-evidence', 'tool-failure-rates', 'mcp-response-size', 'carbon-trend', 'parallel-days', 'machine-latency-trend', 'session-input-output', 'human-message-lengths', 'writing-hours']) {
-  for (const width of [1504, 390, 320]) test(`Expanded card ${id} fits at ${width}px`, { skip }, async t => {
+// Card links open full dashboards. Check navigation into supporting queries
+// and back, and that each chart family fits the available viewport.
+for (const id of ['human-words', 'cost-repos', 'machine-time', 'skill-evidence', 'tool-failure-rates', 'mcp-response-size', 'carbon-trend', 'parallel-days', 'machine-latency-trend', 'session-input-output', 'human-message-lengths', 'writing-hours', 'session-human-output', 'error-signatures']) {
+  for (const width of [1504, 390, 320]) test(`Card dashboard ${id} fits at ${width}px`, { skip }, async t => {
     const item = cardLinks.find(card => card.id === id && card.days === 7) ?? cardLinks.find(card => card.id === id);
-    const app = await open(t, { url: item.url, viewport: { width, height: 933 }, ready: '.card-analysis' });
+    const app = await open(t, { url: item.url, viewport: { width, height: 933 }, ready: '.usage-query-destinations a' });
     const { page } = app;
     await app.settled();
     assert.equal(await page.getByRole('alert').count(), 0, 'the matching analysis is available');
     assert.deepEqual(await layoutProblems(page), []);
-    const details = page.getByRole('link', { name: 'View supporting query', exact: true });
+    const details = page.locator('.usage-query-destinations a').first();
     await details.waitFor();
-    await app.shot(`expanded-${id}`);
+    await app.shot(`card-dashboard-${id}`);
     await details.click();
     await page.locator('.usage-workspace-table').waitFor();
-    await page.getByRole('link', { name: 'Back to dashboard', exact: true }).click();
-    await page.getByRole('region', { name: 'Card analysis', exact: true }).waitFor();
+    await page.getByRole('link', { name: /^Back to dashboard/ }).click();
+    await page.locator('.usage-dashboard .usage-query-destinations a').first().waitFor();
     await app.settled();
     assert.deepEqual(await layoutProblems(page), []);
   });
@@ -936,4 +935,78 @@ for (const choice of ['today', '24h']) test(`Query time window picker keeps ${ch
   await app.settled();
   assert.equal(await picker.inputValue(), choice);
   assert.equal(new URL(app.page.url()).searchParams.get('window_mode'), choice === 'today' ? 'today' : 'relative');
+});
+
+
+test("Card dashboard opens from the Card Library and supports changing views and reloading", { skip }, async t => {
+  const app = await open(t, { url: '/cards?card_search=error-signatures&card_topic=all&card_window=7', ready: '.query-card-open' });
+  const { page } = app;
+  await page.locator('.query-card-open').first().click();
+  const view = page.getByRole('combobox', { name: 'View', exact: true });
+  await view.waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('analyze_topic'), 'calls');
+  await view.selectOption('trend');
+  await page.waitForFunction(() => JSON.parse(new URLSearchParams(location.search).get('analyze_chart')).view === 'trend');
+  await page.reload();
+  await page.getByRole('combobox', { name: 'View', exact: true }).waitFor();
+  assert.equal(await page.getByRole('combobox', { name: 'View', exact: true }).inputValue(), 'trend');
+  await app.settled();
+  assert.deepEqual(app.problems(), []);
+});
+
+
+const oldActivitySource = { ...EMPTY_QUERY, where: [
+  { field: "root_effort", op: "=", value: "high" },
+  { field: "event_at", op: ">=", value: "2026-10-01T15:00:00.000Z" },
+  { field: "event_at", op: "<", value: "+0s" },
+] };
+function oldActivityCard(token = encodeQuery(oldActivitySource)) {
+  return `/analyze?${new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: "human", analyze_data: "writing_messages",
+    analyze_chart: JSON.stringify({ view: "trend", metric: "words" }), analyze_filters: encodeQuery(EMPTY_QUERY),
+    card_id: "session-human-output", card_query: "conversation_activity", q_conversation_activity: token,
+    window_mode: "today", window_days: "1", window_dataset: "conversation_activity", window_field: "event_at", window_timezone: "Asia/Tokyo",
+  })}`;
+}
+for (const durable of [false, true]) test(`Older card dashboard restores ${durable ? "durable" : "inline"} sources before rendering`, { skip }, async t => {
+  const code = "eeeeeeeeeeeeeeeeeeeeee";
+  const app = await open(t, { url: oldActivityCard(durable ? `@${code}` : undefined), ready: '.usage-query-destinations a',
+    api: { "GET /api/query-snapshots": { version: 1, code, token: encodeQuery(oldActivitySource), createdAt: 0 } },
+  });
+  const { page } = app;
+  await page.getByRole('heading', { name: 'Conversation Input and Output', exact: true }).waitFor();
+  assert.equal(await page.getByRole('combobox', { name: 'View', exact: true }).inputValue(), 'scatter');
+  const params = new URL(page.url()).searchParams;
+  assert.equal(params.get('analyze_topic'), 'activity');
+  assert.equal(params.get('analyze_window'), 'today');
+  assert.equal(params.get('analyze_timezone'), 'Asia/Tokyo');
+  assert.ok(app.calls.filter(call => call.method === 'POST' && call.path.startsWith('/api/query/')).every(call => !call.path.startsWith('/api/query/writing_messages/')), 'the old dashboard never executes');
+  await page.locator('.usage-query-destinations a').first().click();
+  await page.locator('.usage-workspace-table').waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('window_timezone'), 'Asia/Tokyo');
+  await page.getByRole('link', { name: /^Back to dashboard/ }).click();
+  await page.locator('.usage-query-destinations a').first().waitFor();
+  await page.reload();
+  await page.getByRole('combobox', { name: 'View', exact: true }).waitFor();
+  assert.equal(await page.getByRole('combobox', { name: 'View', exact: true }).inputValue(), 'scatter');
+  await app.settled();
+});
+
+test('Older card dashboard restoration cannot overwrite a later route', { skip }, async t => {
+  let release, started;
+  const gate = new Promise(resolve => { release = resolve; }), requested = new Promise(resolve => { started = resolve; });
+  t.after(() => release());
+  const code = 'ffffffffffffffffffffff';
+  const app = await open(t, { url: '/analyze?analyze_topic=tokens', ready: '.usage-query-destinations a',
+    api: { 'GET /api/query-snapshots': async () => { started(); await gate; return { version: 1, code, token: encodeQuery(oldActivitySource), createdAt: 0 }; } },
+  });
+  const { page } = app;
+  await page.evaluate(url => window.pharosNavigate(url), oldActivityCard(`@${code}`));
+  await requested;
+  await page.getByRole('status').filter({ hasText: 'Opening dashboard' }).waitFor();
+  await page.evaluate(() => window.pharosNavigate('/analyze?analyze_mode=dashboards&analyze_topic=calls&analyze_data=tool_calls'));
+  await page.getByRole('heading', { name: 'Tool Calls', exact: true }).waitFor();
+  release();
+  await app.settled();
+  assert.equal(new URL(page.url()).searchParams.get('analyze_topic'), 'calls');
+  await page.getByRole('heading', { name: 'Tool Calls', exact: true }).waitFor();
 });

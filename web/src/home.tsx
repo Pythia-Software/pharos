@@ -144,7 +144,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
         return <QueryCard key={item.id} id={item.id} title={item.title} description={item.description ?? "A saved view of your work."} actionLabel={recipe?.action} url={item.url} windowLabel={recipe?.period ? suggestionWindowLabel(recipe) : spec?.window ? suggestionWindowLabel({ window: spec.window, dataset: spec.dataset }) : timeWindowValue(spec) === "all" ? "All time" : "Saved"} category={recipe?.category ?? categoryForQuery(spec?.dataset ?? item.dataset, spec?.query)}
           loadingSpec={spec ? cardLoadingPresentation(spec.query, { recipe, cover: item.cover, metricId: item.coverMetricId, days: spec.window?.days }) : undefined}
           preview={spec ? previews[item.id] : { state: "ready", total: 0, summary: "Bookmarked page", excerpt: item.url.split("?")[0].slice(1) || "Home" }} error={errors[item.id]} before={insertBefore === item.id}
-          onOpen={() => navigate(item.url)} onEdit={() => setEditing(item)} onRemove={() => remove(item)} onMove={direction => move(item.id, direction)}
+          onOpen={navigate} onEdit={() => setEditing(item)} onRemove={() => remove(item)} onMove={direction => move(item.id, direction)}
           onReload={spec ? () => reloadPreview({ id: item.id, dataset: spec.dataset, query: spec.query, schema: schemas[spec.dataset], options: { recipe, url: item.url, coverMetricId: item.coverMetricId, cover: item.cover, window: spec.window } }) : undefined}
           onDragStart={event => dragStart(event, { saved: item.id }, item.url)} onDragEnd={finishDrag} onDrop={event => drop(event, item.id)} />;
       })}

@@ -12,10 +12,10 @@ import toolCalls from "../../../../schemas/tool_calls.schema.json";
 import skillUsages from "../../../../schemas/skill_usages.schema.json";
 import parallelism from "../../../../schemas/parallelism.schema.json";
 import mcpCalls from "../../../../schemas/mcp_calls.schema.json";
-import { queryURL, queryFromURL } from "../../../src/query-links";
+import { queryURL, queryFromURL, readRollingWindow, resolveRollingQuery } from "../../../src/query-links";
 import { currentUsageAnalyses, isUsageWorkspace, readUsageWorkspace, usageAnalysisLink, usageDashboardReturn, usageDatasets, usageSearchQuery, usageTopics, usageWorkspaceURL } from "../../../src/usage-workspace-model.ts";
 import { toolSummaryCallFilters } from "../../../src/tools-dashboard-model.ts";
-import { readDashboardQuery, groupedDashboardQuery, parallelismSelectionQuery, toolDashboardWhere } from "../../../src/usage-dashboard-model.ts";
+import { readDashboardLink, readDashboardQuery, groupedDashboardQuery, parallelismSelectionQuery, toolDashboardWhere } from "../../../src/usage-dashboard-model.ts";
 import { trendQuery } from "../../../src/dashboard-trend-model.ts";
 import { analysisQuery } from "../../../src/dashboard-analysis-model.ts";
 import { mcpAnalysisCatalog } from "../../../src/mcp-analysis-catalog.ts";
@@ -678,25 +678,16 @@ test('grouped results end with their link summaries, then native group Detail', 
 });
 
 
-test("card dashboard returns retain Today and relative-window companions", async t => {
-  const previousLocation=globalThis.location;globalThis.location={origin:"http://localhost"};
-  t.after(()=>{if(previousLocation===undefined)delete globalThis.location;else globalThis.location=previousLocation;});
-  const {queryFromURL,resolveRollingQuery}=await import("../../../src/query-links");
-  const {todayBounds}=await import("../../../src/day-window");
-  const companions={window_field:"first_usage_at",window_until_field:"last_usage_at",window_dataset:"usage"};
-  for(const mode of ["today","relative"]){
-    const window={...companions,window_mode:mode,window_days:mode==="today"?"1":"30",...mode==="today"?{window_timezone:"Asia/Tokyo"}:{}};
-    const where=[{field:"first_usage_at",op:">=",value:mode==="today"?"2026-10-28T15:00:00Z":"-30d"},{field:"last_usage_at",op:"<",value:"+0s"}];
-    const current=new URLSearchParams({analyze_mode:"dashboards",analyze_data:"usage",analyze_topic:"tokens",card_id:"usage-models",card_query:"usage",q_usage:encodeQuery({...EMPTY_QUERY,where}),...window});
-    const source=new URL(usageWorkspaceURL({mode:"query",dataset:"usage"},current),"http://localhost");
-    const returned=new URL(usageDashboardReturn(source.searchParams).href,"http://localhost");
-    for(const [name,value]of Object.entries(window))assert.equal(returned.searchParams.get(name),value,`${mode}: ${name}`);
-    const spec=queryFromURL(returned.href);
-    assert.equal(spec.window.mode,mode);assert.equal(spec.window.days,mode==="today"?1:30);
-    const later=new Date("2026-11-03T18:00:00Z"),renewed=resolveRollingQuery(spec.query,spec.window,later);
-    assert.equal(renewed.where.find(term=>term.field==="first_usage_at").value,mode==="today"?todayBounds(later,"Asia/Tokyo")[0]:"-30d");
-    const switched=new URL(usageWorkspaceURL({topic:"human"},returned.searchParams),"http://localhost");
-    assert.equal(switched.searchParams.has("card_query"),false);assert.equal(switched.searchParams.has("window_mode"),false);
+test("card navigation and query returns retain the dashboard population and time intent", () => {
+  for (const mode of ["today", "relative"]) {
+    const where = [{ field: "first_usage_at", op: ">=", value: mode === "today" ? "2026-10-28T15:00:00Z" : "-30d" }, { field: "last_usage_at", op: "<", value: "+0s" }];
+    const current = new URLSearchParams({ analyze_mode: "dashboards", analyze_data: "usage", analyze_topic: "tokens", analyze_filters: encodeQuery({ ...EMPTY_QUERY, where }), card_id: "usage-models", card_query: "usage", q_usage: encodeQuery({ ...EMPTY_QUERY, where }), window_field: "first_usage_at", window_until_field: "last_usage_at", window_dataset: "usage", window_mode: mode, window_days: mode === "today" ? "1" : "30", ...mode === "today" ? { window_timezone: "Asia/Tokyo" } : {} });
+    const dashboard = new URL(usageWorkspaceURL({ mode: "dashboards" }, current), "http://localhost");
+    const source = new URL(usageWorkspaceURL({ mode: "query", dataset: "usage", query: { ...EMPTY_QUERY, where } }, dashboard.searchParams), "http://localhost");
+    const returned = new URL(usageDashboardReturn(source.searchParams).href, "http://localhost");
+    assert.deepEqual(decodeQueryStrict(returned.searchParams.get("analyze_filters")).where, where);
+    assert.equal(returned.searchParams.get("analyze_window"), mode === "today" ? "today" : null);
+    assert.equal(returned.searchParams.get("analyze_timezone"), mode === "today" ? "Asia/Tokyo" : null);
   }
 });
 
@@ -709,4 +700,24 @@ test('analysis navigation retains attention only while staying on the same page'
   const changed=new URL(usageWorkspaceURL(change,current),'http://localhost').searchParams;
   assert.equal(changed.has('highlight'),false);assert.equal(changed.has('reveal'),false);
  }
+});
+
+
+test("dashboard Today uses its pinned timezone and reports an invalid zone", () => {
+  const params = new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: "calls", analyze_data: "tool_calls", analyze_window: "today", analyze_timezone: "Asia/Tokyo" });
+  const clock = new Date("2026-11-03T18:00:00Z"), time = { first: "started_at", last: "started_at" };
+  const read = () => readDashboardLink(params, { view: "compare", metric: "calls", split: "none" }, () => true, time, undefined, clock);
+  assert.equal(read().where.find(term => term.op === ">=").value, "2026-11-03T15:00:00.000Z");
+  const dashboard = read();
+  params.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where: dashboard.where }));
+  const supporting = analysisQuery(agentTimeAnalysisCatalog, dashboard.view, dashboard.where).supporting;
+  const queryParams = new URL(usageWorkspaceURL({ mode: "query", dataset: "tool_calls", query: supporting }, params), "http://localhost").searchParams;
+  const window = readRollingWindow(queryParams, "tool_calls");
+  assert.equal(window.timezone, "Asia/Tokyo", "supporting queries keep the dashboard pin");
+  const restored = resolveRollingQuery(decodeQueryStrict(queryParams.get("q_tool_calls")), window, clock);
+  assert.deepEqual((restored.grouping?.source ?? restored).where, dashboard.where, "opening the query renews Today in Tokyo rather than the viewer timezone");
+  const returned = new URL(usageDashboardReturn(queryParams).href, "http://localhost").searchParams;
+  assert.equal(returned.get("analyze_timezone"), "Asia/Tokyo");
+  params.set("analyze_timezone", "Invalid/Timezone");
+  assert.match(read().error, /timezone/);
 });

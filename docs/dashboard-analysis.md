@@ -11,6 +11,36 @@ measures, and minimum-sample thresholds.
 This document describes the engine that supplies those capabilities, how a
 card maps onto it, and the phases that adopt it.
 
+## Direct card navigation (October 2026)
+
+The card-routing adoption is implemented. All 115 active analysis cards open a
+full dashboard, with the chart and source population encoded in its URL. Home,
+the conveyor, collected cards, the Card Library and agent card links share this
+behavior. The expanded-card component and its controls/styles are removed.
+The [destination audit](homepage-card-destinations.md) lists every mapping and
+remaining calculation differences. Findings and TL1 retain their native workflows.
+
+Tool Calls is a full record-level dashboard alongside Tool Summary and Agent
+Time. Its catalog supports error signatures, repository paths, research hosts
+and URLs, MCP server/method pairs, failure/truncation rates, reach and context
+attribution. Cards keep exact timestamp and evidence predicates instead of
+projecting them onto whole-day summaries. Conversation Input and Output is a
+full dashboard over conversation_activity, keeping estimated input tokens and
+recorded output in their source units. It offers comparisons, distributions,
+scatter, timestamp-based calendar trends and cycles. Whole-conversation
+observations combine delegated activity across repositories; repository
+breakdowns apply only to activity records. Older card URLs restore their exact
+retained source and calendar intent before opening the current dashboard mapping.
+
+Tokens and Cost also exposes root-model/effort and repository/model breakdowns,
+run-by-effort observations, delegation depth, delegated token share, and the
+share of conversations using delegation. Carbon restricts inherited units to
+its supported breakdowns. Source queries remain available for editing collected
+covers; dashboard drilldowns and return navigation use the dashboard's own state.
+
+The historical implementation phases and gap inventory below describe the audit
+that led to this adoption; consult the destination audit for current routing.
+
 ## Today and Last 24 hours
 
 Today runs from midnight in the viewing Mac's local timezone to the current
@@ -1025,10 +1055,10 @@ selections, which the sections above describe.
      Words dashboard are gone. The legacy Human Words page keeps
      `WritingPanel` over the series endpoint, since its table lists works;
      the legacy Carbon page draws the engine's trend.
-3. **Record-level Tools analysis.** Add `tool_calls` fields such as
+3. **Record-level Tools analysis (implemented).** Added `tool_calls` fields such as
    `error_signature`, `repo_path`, `host` and `url`, plus the card filters the
    `tools` rollup drops.
-4. **Card routing.**
+4. **Card routing (implemented; remaining differences documented in the destination audit).**
    - Map every card to a dashboard state.
    - Add a share of group incidences. `model-conversation-reach` divides
      each provider/model's distinct conversations by the sum of those group
@@ -1043,4 +1073,4 @@ selections, which the sections above describe.
    - Draw any card's state with `useAnalysisCatalog(topic)`, or check all
      cards with `analysisCatalogFor(topic, settings)`, which give Carbon's
      and Parallelism's complete catalogs outside their pages.
-   - Remove `CardAnalysis`, the stopgap that re-renders a card's own chart.
+   - `CardAnalysis`, the stopgap that re-rendered a card's own chart, is removed.

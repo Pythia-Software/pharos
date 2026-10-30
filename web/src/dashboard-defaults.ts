@@ -9,6 +9,8 @@ import type { UsageTopic } from "./usage-workspace-model";
 // The legacy Tokens page's saved chart starts from defaultTokenChart too.
 export const defaultTokenChart: TokenChartView = { metric: "cost", split: "model_family", period: "week", hours: 6, days: 3, rollingPeriods: 0, scale: defaultChartScale, display: "interval" };
 export const dashboardDefaults: Record<UsageTopic, AnalysisState> = {
+  calls: { metric: "calls", split: "tool_name", view: "compare" },
+  activity: { metric: "human_input", split: "provider_model", period: "day" },
   tokens: { ...defaultTokenChart, period: "day" },
   human: { metric: "typed", split: "none", period: "day" },
   parallelism: { metric: "agent_hours", split: "level_band", period: "day" },

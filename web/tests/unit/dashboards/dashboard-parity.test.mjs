@@ -204,3 +204,19 @@ for (const [name, filter, selected] of [["all usage", [], false], ["one provider
   assert.equal(built.normPoints, 30);
   assert.ok(Math.abs(built.norm - card.baseline) < 1e-9, `norm ${built.norm} != baseline ${card.baseline}`);
 });
+
+
+test("delegation shares count top-level conversations separately from delegated token volume", () => {
+  const records = [
+    { id: "r1", root_conversation_id: "one", delegated_run_depth: 0, total_tokens: 10 },
+    { id: "d1", root_conversation_id: "one", delegated_run_depth: 1, total_tokens: 30 },
+    { id: "d2", root_conversation_id: "one", delegated_run_depth: 2, total_tokens: 20 },
+    { id: "r2", root_conversation_id: "two", delegated_run_depth: 0, total_tokens: 40 },
+  ];
+  for (const [metric, expected] of [["delegating_share", 0.5], ["delegated_share", 0.5]]) {
+    const query = analysisQuery(tokenAnalysisCatalog, { view: "compare", metric, split: "none" }, []).query;
+    const result = core.evaluateMetrics(records, query, schema, { now }).metrics[0];
+    assert.equal(result.error, undefined);
+    assert.equal(result.buckets[0].value, expected);
+  }
+});

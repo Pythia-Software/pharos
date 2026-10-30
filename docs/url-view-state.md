@@ -37,6 +37,10 @@ For example:
 
 A native `query` includes its filters/time predicates; give it without `filters`, `days` or `card`. It carries ordered columns/widths, sort, grouping, summaries, metrics, page size/offset, item properties and host search. Host-state parameter mirrors must agree. Advanced Search uses `view.search_state` with a complete `TextSearchDraft`; Analyze record search uses `view.record_keyword`.
 
+Home card links open full dashboards directly with `analyze_chart` and `analyze_filters`. Collected-card source queries and cover metadata remain in storage for previews and editing, and are removed from navigation links. There is no expanded-card page. Dashboard Today links may pin an IANA zone with `analyze_timezone`.
+
+Analyze query pages accept `options.return_topic` (`analyze_topic`) independently of their dataset so a supporting query returns to the dashboard that opened it.
+
 Analysis source-query links also retain the dashboard chart/population and opened-query baseline. These are documented view fields so returning to a dashboard can reconcile user edits without dropping relative time intent. Specialized time companions (`window_mode/days/field/until_field/dataset/timezone`) remain discoverable and portable.
 
 `<page>/query` also publishes `schema_name`, an inspection template, and a `properties_path` to the paginated property catalogue. Use that schema name (for example `pharos_mcp_calls`) in each inspection scope. `JsonInspectionState`, `JsonMatchIdentity` and related types are generated from the installed core declarations. Returning a native `JsonValueView` directly from a property renderer lets Query Table bind its controlled state and semantic registry; wrapping that element in a host div hides it from the supported integration.

@@ -20,7 +20,7 @@ import { buildCardTrend, cardTrendDays, cardTrendQueries } from "../../../src/ca
 import { withTimeRange } from "../../../src/chart-range";
 import { answerQuery } from "../../support/query-server.mjs";
 
-const catalogs = { tools: toolsAnalysisCatalog, mcp: mcpAnalysisCatalog, time: agentTimeAnalysisCatalog, skills: skillsAnalysisCatalog };
+const catalogs = { calls: agentTimeAnalysisCatalog, tools: toolsAnalysisCatalog, mcp: mcpAnalysisCatalog, time: agentTimeAnalysisCatalog, skills: skillsAnalysisCatalog };
 const calls = toolCalls();
 const rows = { tool_calls: calls, tools: toolsRollup(calls), mcp_calls: mcpCalls(), skill_usages: skillUsages() };
 // The tools rollup holds whole local days, so a Tools card matches its
@@ -59,7 +59,7 @@ const sameBoxes = (id, recipe, card, dashboard) => {
 
 // ----- Tools: the daily rollup -----------------------------------------------
 
-test("tool-failures and tool-call-share: shares of failures and calls by tool, from the rollup", () => {
+test("tool-failures and tool-call-share: shares of failures and calls by tool, from individual calls", () => {
   for (const [id, metric] of [["tool-failures", "failures"], ["tool-call-share", "calls"]]) {
     const { card, dashboard, state, analysis } = pair(id, { at: midnight });
     assert.deepEqual([state.view, state.metric, state.split, state.compareAs], ["compare", metric, "tool_name", "share"]);
@@ -81,7 +81,7 @@ test("tool-failure-rates: pooled failure rates by tool, with the card's ten-call
   assert.ok(extra.length > 0 && extra.every(([, rate]) => rate === 0), "the only difference is zero-failure tools");
 });
 
-test("machine-call-trend: calls a day, a 7-day mean over complete days, with its norm, from the rollup", () => {
+test("machine-call-trend: calls a day, a 7-day mean over complete days, with its norm, from individual calls", () => {
   trailingCard("machine-call-trend", 1);
 });
 
@@ -95,16 +95,9 @@ test("truncated-outputs and mcp-methods: truncation rates by tool with ten calls
   assert.ok(Object.keys(byKeys(methods.card.buckets)).filter(key => key.includes("search")).length > 1, "one method on two servers stays two groups");
 });
 
-test("a Tools window starting mid-day counts that whole first day, as its note says", () => {
+test("a Tool Calls card retains its precise mid-day boundary on the dashboard", () => {
   const at = midnight + 12 * 3600000, { card, dashboard } = pair("tool-call-share", { at });
-  // The first day's calls before noon are in the dashboard, not the card.
-  const start = at - 7 * 86400000, first = new Date(start).toDateString();
-  const early = new Map();
-  for (const call of calls) if (new Date(call.started_at).toDateString() === first && Date.parse(call.started_at) < start) early.set(call.tool_name, (early.get(call.tool_name) ?? 0) + 1);
-  assert.ok(early.size > 0, "the fixture has calls before the card's start on its first day");
-  const cardCalls = byKeys(card.buckets), dashboardCalls = byKeys(dashboard.buckets);
-  for (const [key, value] of Object.entries(dashboardCalls)) assert.equal(value - (cardCalls[key] ?? 0), early.get(JSON.parse(key)[0]) ?? 0, key);
-  assert.match(analysisNote(toolsAnalysisCatalog, { view: "compare", metric: "calls", split: "tool_name" }), /snaps to whole days/);
+  sameGroups("tool-call-share", card, dashboard);
 });
 
 // ----- Pharos MCP: one record per request -----------------------------------
@@ -259,7 +252,7 @@ function trailingCard(id, scale, catalog = catalogs[recipeById(id).destination.t
   assert.ok(Math.abs(built.norm * scale - card.baseline) < 1e-9 * Math.max(1, card.baseline), `norm ${built.norm * scale} != baseline ${card.baseline}`);
 }
 
-test("machine-latency-trend: a pooled trailing mean call time over complete days, with its norm, on the rollup and on individual calls", () => {
+test("machine-latency-trend: a pooled trailing mean call time over complete days, with its norm, on individual calls and on the rollup", () => {
   // Its destination is Tools, the card's own rollup; Agent Time pools the
   // calls' own durations over calls with one, and agrees.
   trailingCard("machine-latency-trend", 0.001);

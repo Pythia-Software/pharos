@@ -44,7 +44,7 @@ const BeltCard = memo(function BeltCard({ item, preview, xray, lean, index, reve
 }) {
   return <QueryCard discovery xray={xray} id={item.instanceId} title={item.title} description={item.description} actionLabel={item.action} url={item.url} windowLabel={suggestionWindowLabel(item)} category={item.category} lean={lean}
     loadingSpec={cardLoadingPresentation(item.query, { recipe: item, cover: item.cover, days: item.window?.days })} preview={preview} onReveal={revealable ? () => actions.current!.reveal(index) : undefined}
-    onOpen={() => actions.current!.open(item.url)} onKeep={() => actions.current!.keep(item)} onDragStart={event => actions.current!.dragStart(event, item)} onDragEnd={() => actions.current!.dragEnd()} />;
+    onOpen={url => actions.current!.open(url)} onKeep={() => actions.current!.keep(item)} onDragStart={event => actions.current!.dragStart(event, item)} onDragEnd={() => actions.current!.dragEnd()} />;
 });
 
 export function QueryConveyor({ items, previews, loading, hasErrors, active, suspended, onAllCards, onRefresh, onOpen, onKeep, onDragStart, onDragEnd }: {
