@@ -37,7 +37,7 @@ For example:
 
 A native `query` includes its filters/time predicates; give it without `filters`, `days` or `card`. It carries ordered columns/widths, sort, grouping, summaries, metrics, page size/offset, item properties and host search. Host-state parameter mirrors must agree. Advanced Search uses `view.search_state` with a complete `TextSearchDraft`; Analyze record search uses `view.record_keyword`.
 
-Home card links open full dashboards directly with `analyze_chart` and `analyze_filters`. Collected-card source queries and cover metadata remain in storage for previews and editing, and are removed from navigation links. There is no expanded-card page. Dashboard Today links may pin an IANA zone with `analyze_timezone`.
+Home card links open full dashboards directly with `analyze_chart` and `analyze_filters`. Collected-card source queries and cover metadata remain in storage for previews and editing, and are removed from navigation links. There is no expanded-card page. Dashboard Today links may pin an IANA zone with `analyze_timezone`. **Create card** saves that canonical dashboard URL to the Home collection, including chart, filters, Today/timezone, Carbon assumptions and Parallelism counting/gap settings. Card names/descriptions and the creation dialog are authoring data/drafts; they do not add view parameters. Custom card previews resolve the saved URL and run the dashboard’s analysis/trend models again.
 
 Analyze query pages accept `options.return_topic` (`analyze_topic`) independently of their dataset so a supporting query returns to the dashboard that opened it.
 

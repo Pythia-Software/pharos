@@ -15,6 +15,14 @@ import { defaultCardCover } from "./card-cover";
 import { cardLoadingPresentation } from "./card-loading-model";
 import { loadCardPreviews, invalidateCardPreviews } from "./card-previews";
 import { usePreviewReload } from "./use-preview-reload";
+import { dashboardCardPresentation, dashboardCardWindow, readDashboardCard } from "./dashboard-card-model";
+import { EMPTY_QUERY } from "@pythia-software/query-table-core";
+
+function collectionSpec(item: Bookmark) {
+  if (!item.dashboard) return queryFromURL(item.url, item.query);
+  try { const { dataset, where } = readDashboardCard(item.url); return { dataset, query: { ...EMPTY_QUERY, where }, window: undefined }; }
+  catch { return { dataset: "usage" as const, query: EMPTY_QUERY, window: undefined }; } // The preview reports the invalid definition.
+}
 
 const welcomes = ["What will you discover in your work?", "How will you be more efficient today?", "What could your past work teach you?", "Which pattern is worth a closer look?", "Where will curiosity take you today?"];
 const isHome = () => ["/", "/home"].includes(location.pathname);
@@ -65,7 +73,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     setLoading(true);
     const saved = new Set(collection.map(item => item.templateId).filter(Boolean));
     const jobs = [
-      ...collection.map(item => ({ id: item.id, spec: queryFromURL(item.url, item.query), options: { recipe: queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]), url: item.url, coverMetricId: item.coverMetricId, cover: item.cover } })),
+      ...collection.map(item => ({ id: item.id, spec: collectionSpec(item), options: { recipe: queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]), url: item.url, coverMetricId: item.coverMetricId, cover: item.cover, dashboard: item.dashboard ? item.url : undefined } })),
       ...pool.filter(item => ![...saved].some(id => id!.split(":")[0] === item.id)).map(item => ({ id: item.instanceId, spec: { dataset: item.dataset, query: item.query, window: item.window }, options: { recipe: item, cover: item.cover, url: item.url, suggested: true } })),
     ];
     void loadCardPreviews(jobs.flatMap(job => job.spec ? [{ id: job.id, dataset: job.spec.dataset, query: job.spec.query, schema: schemas[job.spec.dataset], options: { ...job.options, window: job.spec.window } }] : []), (id, preview, error) => {
@@ -140,12 +148,15 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     <div className="home-intro"><h1>{welcome}</h1><AskPharosHome /></div>
     <div className={`home-collection${drag ? " accepting" : ""}`} role="region" aria-label="Your collection" onDragOver={event => { if (drag) { event.preventDefault(); const target = (event.target as Element).closest("[data-card-id]"); setInsertBefore(target?.getAttribute("data-card-id") ?? undefined); } }} onDrop={event => drop(event)}>
       {collection.map(item => {
-        const spec = queryFromURL(item.url, item.query), recipe = queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]);
-        return <QueryCard key={item.id} id={item.id} title={item.title} description={item.description ?? "A saved view of your work."} actionLabel={recipe?.action} url={item.url} windowLabel={recipe?.period ? suggestionWindowLabel(recipe) : spec?.window ? suggestionWindowLabel({ window: spec.window, dataset: spec.dataset }) : timeWindowValue(spec) === "all" ? "All time" : "Saved"} category={recipe?.category ?? categoryForQuery(spec?.dataset ?? item.dataset, spec?.query)}
-          loadingSpec={spec ? cardLoadingPresentation(spec.query, { recipe, cover: item.cover, metricId: item.coverMetricId, days: spec.window?.days }) : undefined}
+        const spec = collectionSpec(item), recipe = queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]);
+        let dashboardWindow = "Saved";
+        let dashboardPresentation: ReturnType<typeof dashboardCardPresentation> | undefined;
+        if (item.dashboard) try { dashboardWindow = dashboardCardWindow(item.url); dashboardPresentation = dashboardCardPresentation(item.url); } catch { /* The preview reports the invalid definition. */ }
+        return <QueryCard key={item.id} id={item.id} title={item.title} description={item.description ?? "A saved view of your work."} actionLabel={recipe?.action} url={item.url} windowLabel={item.dashboard ? dashboardWindow : recipe?.period ? suggestionWindowLabel(recipe) : spec?.window ? suggestionWindowLabel({ window: spec.window, dataset: spec.dataset }) : timeWindowValue(spec) === "all" ? "All time" : "Saved"} category={dashboardPresentation?.category ?? recipe?.category ?? categoryForQuery(spec?.dataset ?? item.dataset, spec?.query)}
+          loadingSpec={dashboardPresentation?.loading ?? (spec ? cardLoadingPresentation(spec.query, { recipe, cover: item.cover, metricId: item.coverMetricId, days: spec.window?.days }) : undefined)}
           preview={spec ? previews[item.id] : { state: "ready", total: 0, summary: "Bookmarked page", excerpt: item.url.split("?")[0].slice(1) || "Home" }} error={errors[item.id]} before={insertBefore === item.id}
           onOpen={navigate} onEdit={() => setEditing(item)} onRemove={() => remove(item)} onMove={direction => move(item.id, direction)}
-          onReload={spec ? () => reloadPreview({ id: item.id, dataset: spec.dataset, query: spec.query, schema: schemas[spec.dataset], options: { recipe, url: item.url, coverMetricId: item.coverMetricId, cover: item.cover, window: spec.window } }) : undefined}
+          onReload={spec ? () => reloadPreview({ id: item.id, dataset: spec.dataset, query: spec.query, schema: schemas[spec.dataset], options: { recipe, url: item.url, coverMetricId: item.coverMetricId, cover: item.cover, window: spec.window, dashboard: item.dashboard ? item.url : undefined } }) : undefined}
           onDragStart={event => dragStart(event, { saved: item.id }, item.url)} onDragEnd={finishDrag} onDrop={event => drop(event, item.id)} />;
       })}
       {!collection.length ? <div className="home-empty"><Icon name="bookmark" /><span>Make this space yours.<small>Collect cards that help you see your work from different angles</small></span></div> : null}

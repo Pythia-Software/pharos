@@ -289,12 +289,12 @@
     return {byCategory, byTier, terms, outputEquivalent, pue, wh: total, facilityWh: total * pue, grams, co2: grams(total)};
   }
 
-  function settings(factors) {
-    const scenario = SCENARIOS.some(([key]) => key === prefs.scenario) ? prefs.scenario : 'central';
-    const pueScenario = SCENARIOS.some(([key]) => key === prefs.pueScenario) ? prefs.pueScenario : 'central';
-    const inputSensitivity = INPUT_SENSITIVITIES.some(([key]) => key === prefs.inputSensitivity) ? prefs.inputSensitivity : 'current';
-    const grid = factors.grids.find(item => item.key === prefs.grid) || (prefs.grid === 'custom' ? null : factors.grids.find(item => item.key === factors.default_grid));
-    const gridValue = grid ? grid.g_co2e_per_kwh : Math.max(0, Number(prefs.customGrid) || 0);
+  function settings(factors, values = prefs) {
+    const scenario = SCENARIOS.some(([key]) => key === values.scenario) ? values.scenario : 'central';
+    const pueScenario = SCENARIOS.some(([key]) => key === values.pueScenario) ? values.pueScenario : 'central';
+    const inputSensitivity = INPUT_SENSITIVITIES.some(([key]) => key === values.inputSensitivity) ? values.inputSensitivity : 'current';
+    const grid = factors.grids.find(item => item.key === values.grid) || (values.grid === 'custom' ? null : factors.grids.find(item => item.key === factors.default_grid));
+    const gridValue = grid ? grid.g_co2e_per_kwh : Math.max(0, Number(values.customGrid) || 0);
     return {scenario, pueScenario, inputSensitivity, inputScale: inputSensitivity === 'third' ? 5 / 3 : 1,
       grid, gridValue, pue: pick(factors.pue, pueScenario)};
   }
@@ -1027,8 +1027,8 @@
     render();
   }
 
-  function estimate(factors, period) {
-    const setup = settings(factors);
+  function estimate(factors, period, values = prefs) {
+    const setup = settings(factors, values);
     return calculate(factors, period, setup.scenario, setup.pue, setup.gridValue, setup.inputScale);
   }
 

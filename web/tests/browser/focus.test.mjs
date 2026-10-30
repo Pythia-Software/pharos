@@ -2005,3 +2005,29 @@ test('Quick Stats disclosure and editing keep keyboard focus on the control bein
   await page.locator('#quickStatsOptions').waitFor({ state: 'hidden' });
   assert.ok(await disclosure.evaluate(element => document.activeElement === element));
 });
+
+test('dashboard card creation keeps focus in its dialog, restores it on cancel and opens the saved Home card', {skip}, async t => {
+  const chart = {metric:'tokens',split:'provider',period:'day',rollingPeriods:3};
+  const url = '/analyze?'+new URLSearchParams({analyze_topic:'tokens',analyze_chart:JSON.stringify(chart)});
+  const {page,shot} = await open(t,{url,ready:'.usage-dashboard .usage-chart'});
+  const create = page.getByRole('button',{name:'Create card',exact:true}).first();
+  await press(create);
+  const dialog = page.getByRole('dialog',{name:'Create dashboard card'});
+  assert.ok(await dialog.getByRole('textbox',{name:'Title',exact:true}).evaluate(el=>el===document.activeElement));
+  await holdsFocus(page,dialog,create);
+  await create.click();
+  await dialog.getByRole('textbox',{name:'Title',exact:true}).fill('My provider tokens');
+  await dialog.getByRole('textbox',{name:'Description',exact:true}).fill('A moving view of my token usage.');
+  for(const width of [1440,390,320]) {
+    await page.setViewportSize({width,height:900});
+    assert.ok(await dialog.evaluate(el=>{const r=el.getBoundingClientRect();return r.left>=0 && r.right<=innerWidth && el.scrollWidth<=el.clientWidth;}),'dialog fits the viewport');
+  }
+  await shot('create-dashboard-card');
+  await dialog.getByRole('button',{name:'Create card',exact:true}).click();
+  await page.getByRole('link',{name:'your Home dashboard',exact:true}).click();
+  const card = page.locator('.home-collection .query-card').filter({hasText:'My provider tokens'});
+  await card.locator('.query-cover[aria-busy]').waitFor({state:'detached'});
+  await shot('created-dashboard-card-home');
+  await card.getByRole('link').click();
+  await page.locator('.usage-dashboard .usage-chart').waitFor();
+});

@@ -45,8 +45,8 @@ export function compactMetricPresentation(preview: QueryPreview) {
     yFormat: compactAxisFormat(clause.display?.yFormat, result.buckets.slice(0, budget).map(bucket => bucket.y)),
   } : {};
   const axisScales: Pick<MetricDisplay, "xScale" | "yScale"> = {
-    xScale: { ...clause.display?.xScale, mode: kind === "scatter" ? clause.display?.xScale?.mode ?? "linear" : "linear" },
-    yScale: { ...clause.display?.yScale, mode: kind === "scatter" ? clause.display?.yScale?.mode ?? "linear" : "linear" },
+    xScale: { ...clause.display?.xScale, mode: kind === "scatter" || preview.preserveScale ? clause.display?.xScale?.mode ?? "linear" : "linear" },
+    yScale: { ...clause.display?.yScale, mode: kind === "scatter" || preview.preserveScale ? clause.display?.yScale?.mode ?? "linear" : "linear" },
   };
   const omittedLogPoints = kind === "scatter" ? result.buckets.slice(0, budget).filter(bucket =>
     !bucket.error && !bucket.yError && typeof bucket.value === "number" && Number.isFinite(bucket.value) && typeof bucket.y === "number" && Number.isFinite(bucket.y)
