@@ -931,6 +931,13 @@ func (r *labelsRun) produce(ctx context.Context, builder *labelsItemBuilder, job
 			items := unit.items()
 			r.stats.Items += len(items)
 			hash := labelsInputHash(items)
+			if r.opts.DryRun && r.opts.Export != nil {
+				// A dry run's export lists every item it built.
+				for _, item := range items {
+					seq, spans := r.model.Tokenizer.FrameWithSpans(labelrt.FrameInput{Segment: item.Segment, Cohort: item.Cohort, Sender: item.SenderRole, Context: item.Context, Text: item.Text})
+					r.export(item, seq, spans, nil, 0)
+				}
+			}
 			previous, had := stored[unit.messageID]
 			delete(stored, unit.messageID)
 			if had && previous == [3]string{hash, r.identity, labelsContract} {
@@ -951,9 +958,6 @@ func (r *labelsRun) produce(ctx context.Context, builder *labelsItemBuilder, job
 				seq, spans := r.model.Tokenizer.FrameWithSpans(labelrt.FrameInput{Segment: item.Segment, Cohort: item.Cohort, Sender: item.SenderRole, Context: item.Context, Text: item.Text})
 				empty = empty || r.model.Pools() && spans.Text.Len() == 0
 				message.spans = append(message.spans, spans)
-				if r.opts.DryRun {
-					r.export(item, seq, spans, nil, 0)
-				}
 				message.seqs = append(message.seqs, seq)
 				message.segments = append(message.segments, item.Segment)
 				message.tokens += len(seq)
