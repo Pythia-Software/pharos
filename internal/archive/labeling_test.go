@@ -197,6 +197,12 @@ func labelingRows(t *testing.T, db *sql.DB, query string, args ...any) []map[str
 func TestLabelingPrepareBuildsTheDatasetWithoutWritingTheCatalog(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	seedLabelingCatalog(t, catalog)
+	// A structured submission must record the same one action as its tool
+	// result, with source ranges in the original JSON message.
+	choice := "<send_user_message_question_reply>\n" + `[{"questionItemId":"call-3","question":"Which mode?","answer":"Records"}]` + "\n</send_user_message_question_reply>"
+	if _, err := catalog.DB.Exec(`UPDATE messages SET text=? WHERE id='m-o2'`, choice); err != nil {
+		t.Fatal(err)
+	}
 	before := catalogFileSums(t, catalog.Path)
 	dir := filepath.Join(t.TempDir(), "dataset")
 	var progress bytes.Buffer
@@ -415,6 +421,14 @@ func TestLabelingPrepareBuildsTheDatasetWithoutWritingTheCatalog(t *testing.T) {
 		actions[1]["actor_evidence"] != "delegated_or_unresolved_run" || actions[2]["actor_evidence"] != "flattened_question_form_message" ||
 		actions[1]["message_id"] != "m-c-ask-result" || actions[1]["actor"] != "unknown" || actions[1]["status"] != "tool_result_answer_unverified" {
 		t.Errorf("actions = %v", actions)
+	}
+
+	if len(actions) == 3 {
+		action := actions[2]
+		if choice[integer(action["title_start"]):integer(action["title_end"])] != "Which mode?" ||
+			choice[integer(action["answer_start"]):integer(action["answer_end"])] != "Records" {
+			t.Errorf("structured action ranges = %v", action)
+		}
 	}
 
 	// Every visible piece slices the stored message exactly, and items

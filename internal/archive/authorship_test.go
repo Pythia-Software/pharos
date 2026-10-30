@@ -72,6 +72,56 @@ func TestAuthorshipAttributesSenders(t *testing.T) {
 	}
 }
 
+func TestAuthorshipAutomationHeartbeats(t *testing.T) {
+	heartbeat := "<heartbeat>\n  <automation_id>hourly-progress</automation_id>\n  <current_time_iso>2026-10-29T16:03:58.670Z</current_time_iso>\n  <instructions>\nReport progress and continue the scheduled checks while preserving the original experiment plans and pending decisions.\n  </instructions>\n</heartbeat>"
+	for name, text := range map[string]string{
+		"scheduled":            heartbeat,
+		"CRLF":                 strings.ReplaceAll(heartbeat, "\n", "\r\n"),
+		"harness":              "<system_instruction>Generated instructions</system_instruction>\n" + heartbeat,
+		"literal instructions": strings.Replace(heartbeat, "Report progress and continue the scheduled checks while preserving the original experiment plans and pending decisions.", "Compare a < b & c > d, and inspect <status> values.", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			input := authorInput{ID: "m", ConversationID: "c", Text: text, SentAt: authorAt(0)}
+			c := newClassifier([]authorInput{input})
+			if len(c.templates) != 0 {
+				t.Fatal("heartbeat seeded prompt templates")
+			}
+			spans := c.classify(input)
+			if len(spans) != 1 || spans[0].Start != 0 || spans[0].End != len(text) || spans[0].Category != spanAutomated || spans[0].Reason != reasonAutomation.with("hourly-progress").text() {
+				t.Fatalf("heartbeat spans = %#v", spans)
+			}
+			if counts := countSpans(text, spans); counts.words[spanTyped] != 0 || counts.words[spanPasted] != 0 || counts.words[spanAutomated] == 0 {
+				t.Fatalf("counts = %#v", counts)
+			}
+		})
+	}
+	for name, text := range map[string]string{
+		"ordinary prose":     "Please explain how a heartbeat automation works.",
+		"fenced example":     "```xml\n" + heartbeat + "\n```",
+		"human prefix":       "Please review this scheduler payload.\n" + heartbeat,
+		"human suffix":       heartbeat + "\nPlease change the schedule.",
+		"missing ID":         strings.Replace(heartbeat, "hourly-progress", "", 1),
+		"missing timestamp":  strings.Replace(heartbeat, "<current_time_iso>2026-10-29T16:03:58.670Z</current_time_iso>", "", 1),
+		"invalid timestamp":  strings.Replace(heartbeat, "2026-10-29T16:03:58.670Z", "not a timestamp", 1),
+		"empty instructions": strings.Replace(heartbeat, "Report progress and continue the scheduled checks while preserving the original experiment plans and pending decisions.", "", 1),
+		"incomplete":         strings.TrimSuffix(heartbeat, "</heartbeat>"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			spans := newClassifier(nil).classify(authorInput{ID: "m", ConversationID: "c", Text: text, SentAt: authorAt(0)})
+			if got := categoryText(text, spans, spanAutomated); got != "" {
+				t.Fatalf("non-heartbeat counted as automated: %q", got)
+			}
+		})
+	}
+	// Scheduled instructions must not seed the person's re-send index.
+	c := newClassifier(nil)
+	c.classify(authorInput{ID: "scheduled", ConversationID: "c", Text: heartbeat, SentAt: authorAt(0)})
+	followup := "Report progress and continue the scheduled checks while preserving the original experiment plans and pending decisions."
+	if got := categoryText(followup, c.classify(authorInput{ID: "human", ConversationID: "c", Text: followup, SentAt: authorAt(1)}), spanTyped); got != followup {
+		t.Fatalf("heartbeat seeded re-send matching: %q", got)
+	}
+}
+
 func TestAuthorshipDetectsTemplatesButNotOneDayBroadcasts(t *testing.T) {
 	inputs := []authorInput{}
 	for day := 0; day < 5; day++ {
@@ -848,6 +898,88 @@ func TestAuthorshipQuestionForms(t *testing.T) {
 		if got := categoryText(text, spans, spanTyped); got != "Please also check mobile." {
 			t.Fatalf("nested question form leaked or follow-up lost: %q", got)
 		}
+	}
+}
+
+func TestAuthorshipStructuredQuestionReplies(t *testing.T) {
+	wrap := func(body string) string {
+		return "<send_user_message_question_reply>\n" + body + "\n</send_user_message_question_reply>"
+	}
+	body := `[{"questionItemId":"[\"request_user_input_async\",\"call_123\",0]","question":"Which scope should we support?","answer":"Café rooms and chairs"},{"answer":"Keep it flexible","question":"How much editing?","questionItemId":"second","metadata":{"answer":"Generated nested text"}}]`
+	for name, text := range map[string]string{
+		"compact":  wrap(body),
+		"indented": "  " + wrap(body),
+		"multiple": wrap(body) + "\n\n" + wrap(`[{"questionItemId":"third","question":"Last question","answer":"One more answer"}]`),
+		"pretty": func() string {
+			var v any
+			_ = json.Unmarshal([]byte(body), &v)
+			encoded, _ := json.MarshalIndent(v, "", "  ")
+			return wrap(string(encoded))
+		}(),
+		"CRLF":              strings.ReplaceAll(wrap(body), "\n", "\r\n"),
+		"harness and prose": "<system_instruction>Generated instructions</system_instruction>\nBefore this form.\n" + wrap(body) + "\nAfter this form.",
+	} {
+		t.Run(name, func(t *testing.T) {
+			spans := newClassifier(nil).classify(authorInput{ID: "m", ConversationID: "c", Text: text, SentAt: authorAt(0)})
+			want := "Café rooms and chairs|Keep it flexible"
+			if name == "multiple" {
+				want += "|One more answer"
+			}
+			if name == "harness and prose" {
+				want = "Before this form.|" + want + "|After this form."
+			}
+			if got := categoryText(text, spans, spanTyped); got != want {
+				t.Fatalf("typed = %q; want %q; spans = %#v", got, want, spans)
+			}
+			wantWords := 7
+			if name == "multiple" {
+				wantWords += 3
+			}
+			if name == "harness and prose" {
+				wantWords += 6
+			}
+			if counts := countSpans(text, spans); counts.words[spanTyped] != wantWords || counts.words[spanPasted] != 0 || counts.words[spanHarness] == 0 {
+				t.Fatalf("counts = %#v", counts)
+			}
+		})
+	}
+	text := wrap(`[{"questionItemId":"first","question":"Generated prompt","answer":"Café\nrooms\tand\u0020chairs \"please\""},{"questionItemId":"second","question":"Another prompt","answer":""}]`)
+	spans := newClassifier(nil).classify(authorInput{ID: "m", ConversationID: "c", Text: text, SentAt: authorAt(0)})
+	if got := countSpans(text, spans).words[spanTyped]; got != 5 {
+		t.Fatalf("escaped answer words = %d; spans = %#v", got, spans)
+	}
+	for _, text := range []string{body, wrap(`[{"question":"Which scope?","answer":"Some rooms"}]`), wrap(`[{"questionItemId":"id","question":"Which scope?","answer":42}]`), wrap(body)[:len(wrap(body))-1], "```xml\n" + wrap(body) + "\n```"} {
+		spans := newClassifier(nil).classify(authorInput{ID: "m", ConversationID: "c", Text: text, SentAt: authorAt(0)})
+		for _, span := range spans {
+			if spanRule(span) == reasonQuestionForm.rule {
+				t.Fatalf("unrecognized/example form claimed: %q", text)
+			}
+		}
+	}
+	// A form can carry a long, formatted human answer all at once. Generated
+	// fields do not seed re-send matching; the answer still can be copied.
+	answer := strings.Repeat("Please keep the room design flexible and easy to edit. ", 20) + "Use mainPanel.saveButton"
+	encoded, _ := json.Marshal(answer)
+	text = wrap(`[{"questionItemId":"id","question":"Which scope should we support when users want to model rooms and furniture together?","answer":` + string(encoded) + `}]`)
+	c := newClassifier(nil)
+	c.classify(authorInput{ID: "before", ConversationID: "c", Text: "Start", SentAt: authorAt(0)})
+	spans = c.classify(authorInput{ID: "m", ConversationID: "c", Text: text, SentAt: authorAt(0)})
+	if got := categoryText(text, spans, spanTyped); got != answer {
+		t.Fatalf("answer lost to heuristics: %q", got)
+	}
+	followup := "Which scope should we support when users want to model rooms and furniture together?"
+	if got := categoryText(followup, c.classify(authorInput{ID: "next", ConversationID: "other", Text: followup, SentAt: authorAt(1)}), spanTyped); got != followup {
+		t.Fatalf("generated question seeded matching: %q", got)
+	}
+	spans = c.classify(authorInput{ID: "copy", ConversationID: "third", Text: text, SentAt: authorAt(2)})
+	if got := categoryText(text, spans, spanResent); got != answer {
+		t.Fatalf("answer re-send lost: %q", got)
+	}
+	c = newClassifier(nil)
+	c.addAgentText(authorAt(0), textOrigin{"agent", "reply"}, answer, false)
+	spans = c.classify(authorInput{ID: "copy", ConversationID: "c", Text: text, SentAt: authorAt(1)})
+	if got := categoryText(text, spans, spanQuoted); got != answer {
+		t.Fatalf("copied answer lost: %q", got)
 	}
 }
 

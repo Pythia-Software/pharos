@@ -43,8 +43,8 @@ Rules run in this order, and the first rule to claim a character keeps it.
 
 | Category | Rule |
 |---|---|
-| **Automated** | The whole message, when a script or another agent sent it: headless runs linked to the command that launched them (the span links to that command), the senders above, TL1 workspaces, sub-agent conversations (which include forked copies of the parent's history), and Claude SDK sessions Conductor did not start. |
-| **Harness** | `<system_instruction>`, `<system-reminder>`, `<environment_context>`, `<user_instructions>`, or `<recommended_plugins>` blocks at the start of the message; generated fields and instructions in recognized page-feedback reports; question titles, selected prewritten options, and skipped markers in a recognized response to a question from the same conversation. Free-text answers remain eligible as human writing. The stored message keeps this text, since it is part of the prompt and counts toward context growth everywhere else; only this classification sets it apart. |
+| **Automated** | The whole message, when a script or another agent sent it: headless runs linked to the command that launched them (the span links to that command), the senders above, complete scheduled `<heartbeat>` envelopes containing an automation ID, valid timestamp, and instructions, TL1 workspaces, sub-agent conversations (which include forked copies of the parent's history), and Claude SDK sessions Conductor did not start. |
+| **Harness** | `<system_instruction>`, `<system-reminder>`, `<environment_context>`, `<user_instructions>`, or `<recommended_plugins>` blocks at the start of the message; generated fields and instructions in recognized page-feedback reports; question titles, selected prewritten options, and skipped markers in a recognized response to a question from the same conversation. In `<send_user_message_question_reply>` JSON blocks, the wrapper, questions, IDs, and JSON syntax are harness; only each reply item's `answer` string value remains eligible as human writing. Recorded selected options and skipped markers use the same provenance rules as flattened replies; selected options are recorded as actions. Free-text answers remain eligible as human writing. The stored message keeps this text, since it is part of the prompt and counts toward context growth everywhere else; only this classification sets it apart. |
 | **Template** | The whole message, when its normalized text (attachment references collapsed, case and whitespace ignored, at least 10 characters) was sent in 5 or more sessions on 3 or more days. This catches Conductor's buttons (Create a PR, Review, Rebase, Resolve conflicts) without a hard-coded list. Sending one prompt to many sessions on a single day is not a template: the first copy counts as typed and the rest as re-sent. A leading slash command such as `/compact` is also a template; its arguments stay typed. |
 | **Attachment** | Conductor attachment markers (`@⟦name⟧(path)`), `.context/attachments/…` paths, and image placeholders. |
 | **Quoted** | Contiguous runs of 12 or more words matching one agent source from the seven days before the message, in any conversation. Newly authored file contents, literal file-writing heredocs, and added patch lines from agent tool calls are compared too; removed/context lines and read-only commands are excluded. Short review items of at least four words can match only a source already established by a longer match, after removing formatting and file locations. A copied report header requires two verified items from that source. Lines starting with `>` and explicit pasted conversation blocks also count. |
@@ -134,8 +134,11 @@ A template crossing its threshold, or changing an existing template's session
 or day counts, also takes the full path: older messages' category or displayed
 reason can change. These conservative cases deliberately remain full passes;
 stream-local launch replay and targeted historical template replay are not
-implemented. Neither classification rules (`authorship-v8`) nor scheduling
-changed. The first changed-data rebuild populates the extra derived tables;
+implemented. This checkpoint work did not change classification rules or
+scheduling. Classification `authorship-v11` recognizes structured question
+replies, preserves their selected-option provenance, and recognizes scheduled
+automation heartbeats; upgrading rebuilds existing classifications. The first changed-data
+rebuild populates the extra derived tables;
 its production storage cost has not yet been measured.
 Checkpoint version 2 forces one full rebuild of version 1 state, which may
 have lost question history or restored an incompatible mirror message anchor.

@@ -2030,7 +2030,7 @@ func (p *labelingPass) messageSessionKind(id string) string {
 }
 
 // sourceTargets marks, byte by byte, which text of a user message is target
-// under human-pieces-v2, resolving its own re-sent pieces in turn. It returns
+// under human-pieces-v3, resolving its own re-sent pieces in turn. It returns
 // nil for a message without classification, an automated one, or a cycle.
 func (p *labelingPass) sourceTargets(id string, visiting map[string]bool) []bool {
 	if mask, ok := p.targetCache[id]; ok {
@@ -2046,6 +2046,7 @@ func (p *labelingPass) sourceTargets(id string, visiting map[string]bool) []bool
 	pieces, _, _ := cleanPieces(text, resolveReuse(text, mergeFeedbackJSON(text, result.Spans), func(text string, piece labelingPiece) []labelingPiece {
 		return p.reuseFrom(text, piece, visiting)
 	}), true)
+	pieces = transformQuestionReplies(text, pieces)
 	mask := make([]bool, len(text))
 	for _, piece := range pieces {
 		if piece.Role == pieceTarget {
