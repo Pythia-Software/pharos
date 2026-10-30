@@ -41,7 +41,8 @@ export const sourceNames = (run: SyncRecord): string[] => run.sources?.length ? 
 // A deferred run left sources a capture was using to the next run.
 export const resultLabel = (run: SyncRecord): string => run.state === "failed" ? "Failed" : run.state === "interrupted" ? "Stopped"
   : run.audit?.outcome === "mismatch" ? "Needs attention" : run.state === "deferred" ? "Capture was running" : run.state && run.state !== "complete" ? run.state
-  : run.audit?.outcome && run.audit.outcome !== "passed" ? "Check deferred" : run.changed_groups > 0 || run.conversations > 0 ? "Indexed" : "No changes";
+  : run.audit?.outcome === "deferred" ? "Success without verification" : run.audit?.outcome === "read_error" ? "Verification failed"
+  : run.audit?.outcome && run.audit.outcome !== "passed" ? "Verification incomplete" : run.changed_groups > 0 || run.conversations > 0 ? "Indexed" : "No changes";
 export const runKey = (run: SyncRecord): string => run.run_id || run.finished_at;
 const validDate = (value: unknown) => typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : null;
 const measured = (value: unknown): number | null => typeof value === "number" && Number.isFinite(value) ? value : null;

@@ -208,14 +208,44 @@ Settings → Background updates and integrity issues expose:
   each deleted session. Library/source scopes are supported. Targeted
   conversation/workspace repair remains the design's follow-up, not v1.
 
-Every completed automatic pass attempts one least-recently verified stable
-unit, including skipped and discoverable-but-unindexed units. JSONL/group
-inputs younger than thirty seconds defer. Automatic audits have a five-second
-wall deadline and 16 MiB evidence/comparison budget; **Verify all** has no
-per-unit size or wall-time budget and remains cancellable with **Stop**.
-Moving/unreadable inputs report deferred or
-read-error coverage, never an invented pass. Resource telemetry and opt-in
-regression gates are not hard per-process memory or CPU quotas.
+Each completed automatic pass tries up to three eligible candidates, stopping
+at the first completed check or read error. All attempts share one five-second
+wall deadline. Candidates rotate across sources and by completed verification;
+attempts and backoff do not advance that coverage. JSONL/group inputs younger
+than thirty seconds defer. Automatic audits retain the 16 MiB selected-evidence
+budget and Conductor's 2,000-message quick-check limit.
+
+Codex audits copy only the chosen rollout(s), matching raw naming-index entries,
+and the raw `threads.id/name/rollout_path` rows needed by their identities and
+rollout-path collisions. Metadata columns are streamed without copying the
+containing SQLite databases or WALs. Supported database/schema inventory, absent
+matches, duplicate occurrence order, newer-schema precedence and cleared names
+remain part of the evidence. The parser reads reconstructed inert scratch
+stores; catalog titles are never used as source evidence. Before accepting the
+snapshot, the verifier rereads the selected metadata closure and hashes the
+transcripts again. Unrelated database/index writes do not invalidate that
+closure. Source transactions are short read-only snapshots; cross-database/file
+validation does not claim one transaction spanning those independent stores.
+Live inputs and pinned native captures share this selection. Temporary evidence
+is not a durable preservation receipt and enables neither capture rollout flag.
+
+Size/time deferrals enter the host-local `sync_verification_progress` queue.
+Transient skips and read errors retain a fifteen-minute backoff; a changed input
+signature becomes eligible again. **Verify indexed data** runs queued checks
+hourly after the library is quiet, under the ordinary background ingest
+coordinator, power policy and on/pause/manual settings. A pass handles at most
+four inputs within thirty seconds, with a 128 MiB per-input evidence budget.
+Completed checks commit individually; cancellation/ejection/restart leaves the
+remaining queue intact. Still-oversized inputs stay visible and can be checked
+with **Verify all**, which has no per-unit size or wall deadline and remains
+cancellable with **Stop**. Missing or disabled sources remain pending rather
+than manufacturing coverage.
+
+Run details report each quick-check attempt, skip reason, selected evidence
+bytes and measured duration. Performance & verification details report the last
+completed check and pending larger work. Moving/unreadable inputs report
+deferred or read-error coverage, never an invented pass. Resource telemetry and
+opt-in regression gates are not hard per-process memory or CPU quotas.
 
 The verifier uses a pinned retained revision and creates an isolated reference catalog,
 seeded with identity/authority/retained-copy context and the catalog's global
