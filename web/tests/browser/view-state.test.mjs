@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {open,skip} from './harness.mjs';
+import {open,skip,activateHeaderTool} from './harness.mjs';
 import {workID,rootConversation,defaultApi} from './fixtures.mjs';
 import {EMPTY_QUERY,encodeQuery,decodeQueryStrict,loadSchema} from '@pythia-software/query-table-core';
 import toolCallsDocument from '../../../schemas/tool_calls.schema.json' with {type:'json'};
@@ -689,4 +689,16 @@ test('restored action previews remain below their action summary',{skip},async t
  await first.page.locator('.chip-preview:visible').first().waitFor();await first.settled();
  const fresh=await open(t,{url:path(first.page),ready:'.chip-preview:visible'});
  assert.equal(await fresh.page.locator('.chip-preview:visible').first().evaluate(element=>element.getBoundingClientRect().top>=element.closest('.action-row').querySelector('summary').getBoundingClientRect().bottom),true);
+});
+
+
+test('Quick Stats keeps URL overlay restoration alongside saved layout preferences',{skip},async t=>{
+ const app=await open(t,{url:'/cards',ready:'.card-library-page'}),{page}=app;
+ await activateHeaderTool(page,'usageSummaryToggle');
+ await page.getByRole('dialog',{name:'Quick Stats',exact:true}).waitFor();
+ assert.equal(new URL(page.url()).searchParams.get('overlay'),'usage');
+ const fresh=await open(t,{url:path(page),ready:'#usageSummary:not([hidden])'});
+ assert.equal(await fresh.page.getByRole('dialog',{name:'Quick Stats',exact:true}).isVisible(),true);
+ await fresh.page.keyboard.press('Escape');
+ await fresh.page.waitForFunction(()=>document.getElementById('usageSummary').hidden&&new URLSearchParams(location.search).get('overlay')==='none');
 });

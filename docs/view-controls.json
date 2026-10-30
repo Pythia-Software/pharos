@@ -1895,6 +1895,15 @@
       "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
     },
     {
+      "key": "html:e6e73d39f03ada85:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:settings>",
+      "tag": "button",
+      "control": "<button id=\"headerExpand\" class=\"menu-bar-expand\" type=\"button\" data-layout-disclosure aria-expanded=\"false\" aria-controls=\"headerOptions\" aria-label=\"Expand Header\">",
+      "contract": "settings",
+      "reason": "Disclosure for the saved Header configuration in Layout Preferences."
+    },
+    {
       "key": "html:e82c8e9c95103973:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:settings>",
@@ -1902,6 +1911,24 @@
       "control": "<select id=\"menuBarUsagePeriod\">",
       "contract": "settings",
       "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
+    },
+    {
+      "key": "html:f2498ac920929866:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:settings>",
+      "tag": "button",
+      "control": "<button id=\"quickStatsExpand\" class=\"menu-bar-expand\" type=\"button\" data-layout-disclosure aria-expanded=\"false\" aria-controls=\"quickStatsOptions\" aria-label=\"Expand Quick Stats\">",
+      "contract": "settings",
+      "reason": "Disclosure for saved Quick Stats layout configuration in Layout Preferences."
+    },
+    {
+      "key": "html:fece4257baf940c9:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:settings>",
+      "tag": "button",
+      "control": "<button id=\"quickStatsReset\" type=\"button\">",
+      "contract": "settings",
+      "reason": "Resets saved Quick Stats layout preferences; a settings action."
     },
     {
       "key": "html:ffbaafa6f1041afb:0",
@@ -2246,15 +2273,6 @@
       "reason": "Navigation, clipboard, refresh or bookmark/history mutation action; no applied content view state."
     },
     {
-      "key": "html:d5aa847313961932:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "<html:shell>",
-      "tag": "button",
-      "control": "<button id=\"usageSummaryToggle\" class=\"header-icon usage-summary-toggle\" type=\"button\" aria-label=\"Analyze summary\" title=\"Analyze summary\" aria-haspopup=\"dialog\" aria-expanded=\"false\" aria-controls=\"usageSummary\">",
-      "contract": "view.overlay",
-      "reason": "Read-only header overlay visibility is restored by restoreViewOverlay."
-    },
-    {
       "key": "html:d77e51aab8862932:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:shell>",
@@ -2280,6 +2298,15 @@
       "control": "<button id=\"headerMore\" class=\"header-icon header-more\" type=\"button\" aria-label=\"More tools\" aria-haspopup=\"dialog\" aria-controls=\"headerOverflow\" aria-expanded=\"false\" hidden>",
       "contract": "transient",
       "reason": "Opens an unapplied composer or transient navigation/tools menu."
+    },
+    {
+      "key": "html:e239e0906db1a77b:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:shell>",
+      "tag": "button",
+      "control": "<button id=\"usageSummaryToggle\" class=\"header-icon usage-summary-toggle\" type=\"button\" aria-label=\"Quick Stats\" title=\"Quick Stats\" aria-haspopup=\"dialog\" aria-expanded=\"false\" aria-controls=\"usageSummary\">",
+      "contract": "view.overlay",
+      "reason": "Quick Stats is the read-only usage overlay restored by restoreViewOverlay; its saved layout is configured separately in Settings."
     },
     {
       "key": "html:ebff249d8c4d1f91:0",

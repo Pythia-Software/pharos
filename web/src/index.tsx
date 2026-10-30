@@ -2186,8 +2186,8 @@ if (!shared && concurrencyPrototypeEnabled) {
   const modalHost = document.createElement("div");
   modalHost.id = "parallelismModal";document.body.append(modalHost);
   createRoot(modalHost).render(<ConcurrencyModal />);
-  startConcurrencySummary();
 }
+if (!shared) startConcurrencySummary();
 // Carbon and Parallelism settings shape Usage and parallelism values on the
 // server. Refresh their tables and cards once the saved settings have landed.
 window.addEventListener("pharos:preferences-saved", event => {

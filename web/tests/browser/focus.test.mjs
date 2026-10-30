@@ -475,7 +475,7 @@ test('Drive panel refresh preserves scrolling, focus and animation phase', {skip
 });
 
 test("summary value links retain keyboard focus when the summary rerenders", { skip }, async t => {
-  const { page } = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-usage-summary-links": true } });
+  const { page } = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-usage-summary-links": true, "pharos-quick-stats-v1": {metrics: ["cost_usd", "tokens"], windows: ["today", "6h"]} } });
   await activateHeaderTool(page, "usageSummaryToggle");
   const link = page.getByRole("link", { name: /^Tokens, 6h:/ });
   await link.focus();
@@ -1384,7 +1384,7 @@ test('Capture & index query editor retains focus and edits across live refreshes
 });
 
 test('Mac menu editing preserves focus when adding, moving, and removing items', { skip }, async t => {
-  const { page, shot } = await open(t, { url: '/settings/preferences', ready: '#showMacMenuBar', preferences: { 'pharos-menu-bar': { enabled: false } } });
+  const { page, shot } = await open(t, { url: '/settings/layout', ready: '#showMacMenuBar', preferences: { 'pharos-menu-bar': { enabled: false } } });
   const disclosure = page.locator('#menuBarExpand');
   const visibility = page.getByRole('switch', { name: 'macOS menu bar', exact: true });
   const options = page.locator('#menuBarOptions');
@@ -1961,4 +1961,47 @@ for (const browsing of [false,true]) test(`Ask Pharos ${browsing?'reopened brows
     await page.locator('.pharos-destination:not([hidden])').click();
   }
   await page.waitForURL(url=>url.pathname==='/settings');await modal.waitFor({state:'hidden'});
+});
+
+
+test('Quick Stats disclosure and editing keep keyboard focus on the control being used', { skip }, async t => {
+  const { page, shot } = await open(t, { url: '/settings/layout', ready: '#quickStatsExpand' });
+  const disclosure = page.locator('#quickStatsExpand');
+  await press(disclosure);
+  await page.locator('#quickStatsOptions').waitFor();
+  assert.ok(await disclosure.evaluate(element => document.activeElement === element));
+  const handle = page.getByRole('button', { name: 'Arrange Tokens', exact: true });
+  const focused = async locator => page.waitForFunction(element => document.activeElement === element, await locator.elementHandle());
+  await handle.focus();
+  await press(handle, 'Alt+ArrowUp');
+  await focused(handle);
+  await press(handle);
+  await page.locator('#quickStatsToolMenu:popover-open').waitFor();
+  await page.keyboard.press('Escape');
+  await focused(handle);
+  await press(handle);
+  await press(page.getByRole('button', { name: 'Move down Tokens', exact: true }));
+  await focused(handle);
+  await page.keyboard.press('Delete');
+  const add = page.getByRole('button', { name: 'Add Tokens', exact: true });
+  await focused(add);
+  await press(add);
+  await focused(handle);
+  const column = page.getByRole('button', { name: 'Arrange Today', exact: true });
+  await press(column, 'Alt+ArrowLeft');
+  await focused(column);
+  await press(column);
+  await press(page.getByRole('button', { name: 'Move right Today', exact: true }));
+  await focused(column);
+  await page.evaluate(() => dispatchEvent(new Event('pharos:carbon-settings')));
+  await focused(column);
+  await page.keyboard.press('Delete');
+  const addColumn = page.getByRole('button', { name: 'Add Today', exact: true });
+  await focused(addColumn);
+  await press(addColumn);
+  await focused(column);
+  await shot('quick-stats-editor');
+  await press(disclosure);
+  await page.locator('#quickStatsOptions').waitFor({ state: 'hidden' });
+  assert.ok(await disclosure.evaluate(element => document.activeElement === element));
 });
