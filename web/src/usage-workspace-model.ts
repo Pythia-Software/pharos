@@ -1,3 +1,4 @@
+import { localTimezone } from "./day-window";
 import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, predicatesOf, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisVersion } from "./dashboard-analysis-model";
 
@@ -12,6 +13,7 @@ export const usageDatasets = {
   tools: { label: "Tool summary", description: "Tool use grouped by work, tool, and command.", field: "tool_name", searchLabel: "Workspace Tool Names" },
   mcp_calls: { label: "MCP calls", description: "Calls to Pharos's MCP server, sanitized arguments, output estimates, and timing.", field: "arguments_json", searchLabel: "MCP Call Arguments" },
   skill_usages: { label: "Skill evidence", description: "Invocations, file loads, retained bodies, and source evidence.", field: "skill_name", searchLabel: "Skill Names" },
+  tl1_attempts: { label: "TL1 attempts", description: "Recorded task attempts, configurations, outcomes, and costs.", field: "title", searchLabel: "TL1 Task Titles" },
   parallelism: { label: "Parallel activity", description: "Hour-by-agent records with the existing counting assumptions.", field: "model", searchLabel: "Parallel Activity Model Names" },
 } as const;
 export type UsageDataset = keyof typeof usageDatasets;
@@ -29,7 +31,7 @@ export const usageTopics = {
 export type UsageTopic = keyof typeof usageTopics;
 export const usageDatasetTopics: Record<UsageDataset, UsageTopic> = {
   usage: "tokens", conversation_activity: "human", writing: "human", writing_messages: "human",
-  tools: "tools", tool_calls: "tools", mcp_calls: "mcp", skill_usages: "skills", parallelism: "parallelism",
+  tools: "tools", tool_calls: "tools", mcp_calls: "mcp", skill_usages: "skills", parallelism: "parallelism", tl1_attempts: "tokens",
 };
 export const usageTopicDatasets: Record<UsageTopic, UsageDataset> = {
   tokens: "usage", human: "writing_messages", time: "tool_calls", parallelism: "parallelism", tools: "tools", mcp: "mcp_calls", skills: "skill_usages", carbon: "usage",
@@ -38,6 +40,7 @@ export const usageTopicDatasets: Record<UsageTopic, UsageDataset> = {
 // Fields that hold a dashboard's dates, by dataset: its range, and the day
 // predicates a link may translate it into (the tools rollup's text day).
 const timeFields: Record<UsageDataset, string[]> = {
+  tl1_attempts: ["started_at"],
   usage: ["first_usage_at", "last_usage_at", "day", "hour", "week", "month"], conversation_activity: ["event_at"],
   writing: ["first_message_at", "last_message_at"], writing_messages: ["sent_at", "day", "week", "month"], tools: ["day", "week", "month"], tool_calls: ["started_at", "ended_at", "day", "week", "month"],
   mcp_calls: ["called_at", "day", "week", "month"], skill_usages: ["created_at", "day", "week", "month"], parallelism: ["started_at", "day", "hour_of_day", "week", "month"],
@@ -82,6 +85,10 @@ export function usageDashboardReturn(current: URLSearchParams) {
   // filters: Parallelism's counting and gap follow the saved settings.
   const settings = builtWith[state.dataset] ?? [];
   if (settings.length) returned.where = returned.where.filter(term => !termFields(term).some(field => settings.includes(field)));
+  if (returned.dates || !compatible) {
+    params.delete("analyze_window");
+    for (const key of [...params.keys()]) if (key.startsWith("window_")) params.delete(key);
+  }
   params.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where: returned.where }));
   return {
     href: usageWorkspaceURL({ mode: "dashboards", dataset, search: false }, params),
@@ -97,7 +104,7 @@ export function usageAnalysisLink(dataset: UsageDataset, query: QueryState, targ
   const resetsFilters = ["time", "parallelism"].includes(url.searchParams.get("machine_view") ?? "");
   if (!resetsFilters) {
     url.searchParams.set(dataset === "usage" && url.searchParams.get("analyze_view") === "carbon" ? "q_carbon" : `q_${dataset}`, encodeQuery(query));
-    for (const key of ["analyze_chart", "analyze_carbon"]) if (current.has(key)) url.searchParams.set(key, current.get(key)!);
+    for (const key of ["analyze_chart", "analyze_carbon", "window_mode", "window_days", "window_field", "window_dataset", "window_until_field", "window_timezone"]) if (current.has(key)) url.searchParams.set(key, current.get(key)!);
   }
   return { href: url.pathname + url.search, resetsFilters };
 }
@@ -121,7 +128,7 @@ export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?
   const previous = readUsageWorkspace(current), next = { ...previous, ...change };
   const mode = next.mode === "search" ? "query" : next.mode;
   const params = new URLSearchParams(current);
-  if (next.topic !== previous.topic) { params.delete("analyze_filters"); params.delete("analyze_chart"); params.delete("analyze_parallelism"); }
+  if (next.topic !== previous.topic) { params.delete("analyze_filters"); params.delete("analyze_window"); params.delete("analyze_chart"); params.delete("analyze_parallelism"); }
   for (const key of [...params.keys()]) {
     if (key.startsWith("record_") && (key !== `record_${next.dataset}` || next.dataset !== previous.dataset || mode === "dashboards")) params.delete(key);
     // A different dataset must never inherit another table's query/window.
@@ -149,6 +156,19 @@ export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?
   } else {
     if (params.has("card_query")) stampCardChart(params);
     for (const key of [...params.keys()]) if (key.startsWith("card_")) params.delete(key);
+  }
+  // Related overviews shed the card/query metadata, but keep its calendar
+  // intent in the dashboard's own range setting.
+  if (mode === "dashboards" && next.topic === previous.topic && current.get("window_mode") === "today" && !params.has("card_query") && params.has("analyze_filters")) {
+    params.set("analyze_window", "today");
+  }
+  if (mode === "query" && change.query && current.get("analyze_window") === "today") {
+    const where = (change.query.grouping?.source ?? change.query).where;
+    const lower = where.filter(term => "field" in term && term.op === ">=" && /T/.test(term.value));
+    const upper = where.filter(term => "field" in term && term.op === "<");
+    if (lower.length === 1 && upper.length === 1 && "field" in lower[0] && "field" in upper[0] && upper[0].value === "+0s") {
+      params.set("window_mode", "today"); params.set("window_days", "1"); params.set("window_field", lower[0].field); params.set("window_until_field", upper[0].field); params.set("window_dataset", next.dataset); params.set("window_timezone", localTimezone());
+    }
   }
   return `/analyze?${params}`;
 }

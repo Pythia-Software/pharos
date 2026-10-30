@@ -54,7 +54,7 @@ function normalizeMenuBarSettings(saved = {}) {
       return [...before, id];
     });
   }
-  return {enabled: typeof saved?.enabled === 'boolean' ? saved.enabled : true, layoutVersion: 2,
+  return {enabled: typeof saved?.enabled === 'boolean' ? saved.enabled : true, layoutVersion: 2, usagePeriod: saved?.usagePeriod === 'today' || !Object.keys(saved||{}).length ? 'today' : '24h',
     ...Object.fromEntries(MENU_BAR_TOOLS.map(tool => [tool.id, order.includes(tool.id)])), order};
 }
 // Destination is an insertion boundary in the original list; null removes.
@@ -137,6 +137,7 @@ function editMenuBarSettings(saved, id, destination) {
   async function refreshPreview() {
     if (loading || !settings.enabled || !root.getClientRects().length) return;
     loading = true;
+    const period = settings.usagePeriod;
     try {
       const response = await fetch('/api/menu-bar/status');
       if (!response.ok) throw new Error('Preview unavailable');
@@ -144,12 +145,13 @@ function editMenuBarSettings(saved, id, destination) {
       if (settings.order.some(id => definition(id).group === 'usage') && Date.now() - lastUsage >= 60000) {
         lastUsage = Date.now();
         try {
-          const response = await fetch('/api/menu-bar/usage');
-          usage = response.ok ? await response.json() : null;
+          const response = await fetch('/api/menu-bar/usage?period='+period);
+          const next = response.ok ? await response.json() : null;
+          if (settings.usagePeriod === period) usage = next;
         } catch { usage = null; }
       }
     } catch { previewError = true; }
-    finally { loading = false; syncFaces(); }
+    finally { loading = false; syncFaces(); if (period !== settings.usagePeriod) void refreshPreview(); }
   }
   function closeMenu() { if (menu.matches(':popover-open')) menu.hidePopover(); }
   function clearDrag() {
@@ -164,7 +166,7 @@ function editMenuBarSettings(saved, id, destination) {
     list.querySelector(`[data-tool="${target}"] button`)?.focus();
   }
   function commit(next, message, focusId) {
-    closeMenu(); settings = next;
+    closeMenu(); if(next.usagePeriod!==settings.usagePeriod){lastUsage=0;usage=null;} settings = next; get('menuBarUsagePeriod').value=settings.usagePeriod;
     window.pharosPrefs.set(MENU_BAR_KEY, settings); notify(); render();
     get('menuBarEditorStatus').textContent = message;
     if (focusId) focusTool(focusId);
@@ -212,7 +214,7 @@ function editMenuBarSettings(saved, id, destination) {
         const line = element('span', 'menu-bar-separator-line');
         line.setAttribute('role', 'separator'); line.setAttribute('aria-label', 'Menu separator'); face.append(line);
       } else {
-        if (group !== tool.group && ['usage', 'library'].includes(tool.group)) row.append(element('div', 'menu-bar-heading', tool.group === 'usage' ? 'Last 24 hours' : 'Library'));
+        if (group !== tool.group && ['usage', 'library'].includes(tool.group)) row.append(element('div', 'menu-bar-heading', tool.group === 'usage' ? (settings.usagePeriod==='today'?'Today':'Last 24 hours') : 'Library'));
         group = tool.group;
       }
       const handle = element('button', 'menu-bar-handle'); handle.type = 'button'; handle.append(glyph('grip'));
@@ -249,8 +251,8 @@ function editMenuBarSettings(saved, id, destination) {
       const row = element('li', 'menu-bar-available'), add = element('button', 'menu-bar-add');
       row.dataset.tool = tool.id; row.draggable = true;
       add.type = 'button'; add.setAttribute('aria-label', `Add ${tool.label}`);
-      add.title = tool.description;
-      add.setAttribute('aria-description', tool.description);
+      add.title = tool.description?.replace('last 24 hours',settings.usagePeriod==='today'?'today since local midnight':'last 24 hours');
+      add.setAttribute('aria-description', add.title);
       add.append(element('span', '', tool.label));
       if (tool.separator) add.append(element('span', 'menu-bar-separator-line'));
       add.append(glyph('plus'));
@@ -280,6 +282,9 @@ function editMenuBarSettings(saved, id, destination) {
       dragId = null; clearDrag();
     };
   }
+  get('menuBarUsagePeriod').value=settings.usagePeriod;
+  get('menuBarUsagePeriod').onchange=event=>commit({...settings,usagePeriod:event.target.value},'Usage period updated.');
+  window.addEventListener('pharos:day-change',()=>{lastUsage=0;usage=null;refreshPreview()});
   get('showMacMenuBar').onclick = () => commit({...settings, enabled: !settings.enabled}, settings.enabled ? 'Mac menu bar hidden.' : 'Mac menu bar shown.');
   get('menuBarExpand').onclick = () => {
     expanded = !expanded; closeMenu(); renderDisclosure();

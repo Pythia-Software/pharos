@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	qt "github.com/Pythia-Software/query-table/backends/go"
 	_ "modernc.org/sqlite"
 )
 
@@ -38,6 +39,9 @@ type Catalog struct {
 	transcripts  transcriptFindCache
 	derived      derivedCache
 	queryCounts  queryCountCache
+	// sourceProofs holds what Query Table proved about SQL datasets' whole
+	// sources, keyed by the data generation it was proven in.
+	sourceProofs qt.SQLiteSourceProofs
 	// quietVersion and warmVersion are the catalog versions warmCaches last
 	// saw and warmed; only the Library maintenance loop uses them.
 	quietVersion, warmVersion int64
@@ -374,6 +378,10 @@ func (c *Catalog) Initialize() error {
 	}
 	if err := c.migrateHosts(); err != nil {
 		return err
+	}
+	// Install guards only after all of their input columns have migrated.
+	if err := c.ensureAuthorshipState(); err != nil {
+		return fmt.Errorf("initialize authorship state: %w", err)
 	}
 	// Existing Python catalogs may contain duplicates created before the partial
 	// unique index was introduced. Preserve the newest row exactly as before.

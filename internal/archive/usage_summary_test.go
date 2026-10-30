@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -82,7 +83,7 @@ func TestUsageSummaryWindows(t *testing.T) {
 			t.Fatalf("%s: got %+v, want %+v", key, got, want)
 		}
 	}
-	if len(windows) != 6 {
+	if len(windows) != 7 {
 		t.Fatalf("windows: %#v", windows)
 	}
 }
@@ -165,8 +166,8 @@ func TestUsageSummaryLedgerMatchesUsagePage(t *testing.T) {
 	}
 	windows := summary["windows"].([]*usageSummaryWindow)
 	// Two 7-token rows and two 11-token rows, each rounded independently.
-	if windows[0].Tokens != 26 || windows[5].Tokens != 236 {
-		t.Fatalf("fractional/mirrored totals: 1h=%d all=%d", windows[0].Tokens, windows[5].Tokens)
+	if windows[0].Tokens != 26 || windows[6].Tokens != 236 {
+		t.Fatalf("fractional/mirrored totals: 1h=%d all=%d", windows[0].Tokens, windows[6].Tokens)
 	}
 }
 
@@ -215,5 +216,47 @@ func BenchmarkUsageSummary(b *testing.B) {
 		if _, err := catalog.UsageSummary(b.Context()); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func TestUsageSummaryTodayUsesLocalMidnight(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	catalog.background = func(OperationSpec, func(context.Context, *Op) error) bool { return false }
+	ingestUsageFixture(t, catalog)
+	for _, item := range []struct{ zone, now, from string }{
+		{"America/Denver", "2026-03-08T10:00:00Z", "2026-03-08T07:00:00Z"},
+		{"America/Denver", "2026-11-01T10:00:00Z", "2026-11-01T06:00:00Z"},
+		{"Asia/Kathmandu", "2026-10-29T05:00:00Z", "2026-10-28T18:15:00Z"},
+	} {
+		t.Run(item.zone+item.now, func(t *testing.T) {
+			zone, err := time.LoadLocation(item.zone)
+			if err != nil {
+				t.Fatal(err)
+			}
+			override(t, &time.Local, zone)
+			now, _ := time.Parse(time.RFC3339, item.now)
+			from, _ := time.Parse(time.RFC3339, item.from)
+			catalog.now = func() time.Time { return now }
+			if _, err := catalog.DB.Exec("DELETE FROM message_authorship"); err != nil {
+				t.Fatal(err)
+			}
+			for index, at := range []time.Time{from.Add(-time.Second), from, now.Add(-time.Second), now, now.Add(time.Hour)} {
+				if _, err := catalog.DB.Exec(`INSERT INTO message_authorship(message_id,conversation_id,workspace_id,sent_at,day,total_chars,typed_chars,typed_words,spans_json) VALUES(?,?,?,?,?,10,10,2,'[]')`, fmt.Sprint(index), "c", "w", at.UTC().Format(time.RFC3339), at.In(zone).Format("2006-01-02")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			summary, err := catalog.UsageSummary(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, window := range summary["windows"].([]*usageSummaryWindow) {
+				if window.Key != "today" {
+					continue
+				}
+				if window.From != item.from || window.Until != item.now || window.HumanWords != 4 || window.Messages != 2 {
+					t.Fatalf("Today: %+v", window)
+				}
+			}
+		})
 	}
 }

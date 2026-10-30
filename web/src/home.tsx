@@ -1,14 +1,15 @@
+import { readWindowChoice } from "./day-window";
 import React, { useEffect, useRef, useState } from "react";
 import type { FieldSchema } from "@pythia-software/query-table-core";
 import { collectDurableQuery, migrateSavedQueries, moveBookmark, readBookmarks, removeBookmark, updateBookmark, writeBookmarks, type Bookmark } from "./bookmarks";
-import { clearPreviewCache, instantiateRecipe, queryRecipes, suggestionPool, suggestionWindowLabel, type QueryPreview, type QuerySuggestion } from "./curiosity-data";
+import { clearPreviewCache, instantiateRecipe, queryRecipes, suggestionPool, suggestionWindowLabel, supportsToday, type QueryPreview, type QuerySuggestion } from "./curiosity-data";
 import { queryFromURL, queryHasTimeFilter, rollingWindowDays, rollingWindowField, type QueryDataset } from "./query-links";
 import { categoryForQuery } from "./query-categories";
 import { QueryCard } from "./query-card";
 import { QueryConveyor } from "./query-conveyor";
 import { Icon } from "./icons";
 import "./home.css";
-import { AskPharosSearch } from "./ask-pharos";
+import { AskPharosHome } from "./ask-pharos";
 import { cardTemplates } from "./card-library-model";
 import { defaultCardCover } from "./card-cover";
 import { cardLoadingPresentation } from "./card-loading-model";
@@ -19,7 +20,7 @@ const welcomes = ["What will you discover in your work?", "How will you be more 
 const isHome = () => ["/", "/home"].includes(location.pathname);
 function navigate(url: string) { window.pharosNavigate?.(url); }
 function timeWindowValue(spec: ReturnType<typeof queryFromURL>): string {
-  if (spec?.window) return String(spec.window.days);
+  if (spec?.window) return spec.window.mode === "today" ? "today" : String(spec.window.days);
   const field = spec && rollingWindowField(spec.dataset);
   return spec && field && !queryHasTimeFilter(spec.query, field) ? "all" : "";
 }
@@ -54,8 +55,8 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     const visibility = () => { setHidden(document.hidden); if (!document.hidden && stale) refresh(); };
     window.addEventListener("pharos:bookmarks", bookmarks); window.addEventListener("pharos:route", route);
     window.addEventListener("pharos:view", route);
-    window.addEventListener("pharos:data-refresh", refresh); document.addEventListener("visibilitychange", visibility);
-    return () => { window.removeEventListener("pharos:card-templates", templates); window.removeEventListener("pharos:bookmarks", bookmarks); window.removeEventListener("pharos:route", route); window.removeEventListener("pharos:view", route); window.removeEventListener("pharos:data-refresh", refresh); document.removeEventListener("visibilitychange", visibility); };
+    window.addEventListener("pharos:usage-refresh", refresh); window.addEventListener("pharos:data-refresh", refresh); document.addEventListener("visibilitychange", visibility);
+    return () => { window.removeEventListener("pharos:card-templates", templates); window.removeEventListener("pharos:bookmarks", bookmarks); window.removeEventListener("pharos:route", route); window.removeEventListener("pharos:view", route); window.removeEventListener("pharos:usage-refresh", refresh); window.removeEventListener("pharos:data-refresh", refresh); document.removeEventListener("visibilitychange", visibility); };
   }, []);
   useEffect(() => { if (active) setGeneration(value => value + 1); }, [active]);
   useEffect(() => {
@@ -80,7 +81,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     const controller = new AbortController();
     // Prepare default library covers before its page is opened, without
     // mounting hundreds of offscreen charts. Foreground work finishes first.
-    const items = cardTemplates().map(recipe => instantiateRecipe(recipe, recipe.days?.length === 1 ? recipe.days[0] : 7));
+    const items = cardTemplates().map(recipe => instantiateRecipe(recipe, recipe.defaultWindow ?? (recipe.days?.length === 1 ? recipe.days[0] : 7)));
     void (async () => {
       for (let at = 0; at < items.length && !controller.signal.aborted; at += 8) {
         await loadCardPreviews(items.slice(at, at + 8).map(item => ({ id: item.id, dataset: item.dataset, query: item.query, schema: schemas[item.dataset], options: { recipe: item, cover: item.cover, window: item.window, url: item.url } })), () => {}, controller.signal);
@@ -131,15 +132,16 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   const editingRecipe = queryRecipes.find(recipe => recipe.id === editing?.templateId?.split(":")[0]);
   // Current-state cards (findings) and all-time cards keep their population.
   const canEditWindow = editingSpec && !editingRecipe?.period && Boolean(editingSpec.window?.field ?? rollingWindowField(editingSpec.dataset));
+  const canChooseToday = editingRecipe ? supportsToday(editingRecipe) : editingSpec && !["tl1_attempts", "findings"].includes(editingSpec.dataset);
   const coverChoices = editingSpec?.query.grouping
     ? [...editingSpec.query.grouping.summaries.filter(column => column.op !== "row").map(column => ({ id: column.id, label: `${column.label ?? column.id} · grouped rows` })), ...(editingSpec.query.grouping.source.aggregations ?? []).map(metric => ({ id: metric.id, label: `${metric.label ?? metric.id} · observations` }))]
     : editingSpec?.query.aggregations?.map(metric => ({ id: metric.id, label: metric.label ?? metric.id })) ?? [];
   return <div className="curiosity-home" data-feedback-label="Home dashboard">
-    <div className="home-intro"><h1>{welcome}</h1><AskPharosSearch schema={schemas.library} /></div>
+    <div className="home-intro"><h1>{welcome}</h1><AskPharosHome /></div>
     <div className={`home-collection${drag ? " accepting" : ""}`} role="region" aria-label="Your collection" onDragOver={event => { if (drag) { event.preventDefault(); const target = (event.target as Element).closest("[data-card-id]"); setInsertBefore(target?.getAttribute("data-card-id") ?? undefined); } }} onDrop={event => drop(event)}>
       {collection.map(item => {
         const spec = queryFromURL(item.url, item.query), recipe = queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]);
-        return <QueryCard key={item.id} id={item.id} title={item.title} description={item.description ?? "A saved view of your work."} actionLabel={recipe?.action} url={item.url} windowLabel={recipe?.period ? suggestionWindowLabel(recipe) : spec?.window ? spec.window.days === 365 ? "Last year" : `Last ${spec.window.days}d` : timeWindowValue(spec) === "all" ? "All time" : "Saved"} category={recipe?.category ?? categoryForQuery(spec?.dataset ?? item.dataset, spec?.query)}
+        return <QueryCard key={item.id} id={item.id} title={item.title} description={item.description ?? "A saved view of your work."} actionLabel={recipe?.action} url={item.url} windowLabel={recipe?.period ? suggestionWindowLabel(recipe) : spec?.window ? suggestionWindowLabel({ window: spec.window, dataset: spec.dataset }) : timeWindowValue(spec) === "all" ? "All time" : "Saved"} category={recipe?.category ?? categoryForQuery(spec?.dataset ?? item.dataset, spec?.query)}
           loadingSpec={spec ? cardLoadingPresentation(spec.query, { recipe, cover: item.cover, metricId: item.coverMetricId, days: spec.window?.days }) : undefined}
           preview={spec ? previews[item.id] : { state: "ready", total: 0, summary: "Bookmarked page", excerpt: item.url.split("?")[0].slice(1) || "Home" }} error={errors[item.id]} before={insertBefore === item.id}
           onOpen={() => navigate(item.url)} onEdit={() => setEditing(item)} onRemove={() => remove(item)} onMove={direction => move(item.id, direction)}
@@ -156,7 +158,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     <dialog ref={editor} className="home-editor" aria-labelledby="homeEditorTitle" onCancel={() => setEditing(null)} onClose={() => setEditing(null)}><form onSubmit={event => {
       event.preventDefault(); if (!editing) return;
       try {
-        const updated = updateBookmark(editing.id, editTitle, editDescription, !canEditWindow ? undefined : editDays === "all" ? null : editDays ? Number(editDays) : undefined, editCover);
+        const updated = updateBookmark(editing.id, editTitle, editDescription, !canEditWindow ? undefined : editDays === "all" ? null : editDays ? readWindowChoice(editDays) : undefined, editCover);
         if (updated.url !== editing.url || updated.coverMetricId !== editing.coverMetricId) {
           setPreviews(current => { const next = { ...current }; delete next[editing.id]; return next; });
           setErrors(current => { const next = { ...current }; delete next[editing.id]; return next; });
@@ -173,13 +175,14 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
       </select><small id="homeCoverHelp">Choose the value shown on this bookmark. The full comparison stays in the saved view.</small></label> : null}
       {canEditWindow ? <label>Time window<select value={editDays} aria-describedby="homeWindowHelp" onChange={event => setEditDays(event.target.value)}>
         {!editingSpec?.window ? <option value="">Keep saved range</option> : null}
+        {canChooseToday ? <option value="today">Today</option> : null}
         {rollingWindowDays.map(days => <option key={days} value={days}>{days === 1 ? "Past 24 hours" : days === 365 ? "Last year" : days === 180 ? "Last 180d" : `Past ${days} days`}</option>)}
         <option value="all">All time</option>
-      </select><small id="homeWindowHelp">{editDays === "all" ? "Removes the saved date range. Other query filters stay in place." : editDays === "365" ? "Last 365 days, through now. Evaluated when this query runs." : editDays ? "Last N days, through now. Evaluated when this query runs." : "Keeps the dates and time filters already in this view."}</small></label>
+      </select><small id="homeWindowHelp">{editDays === "today" ? "Since local midnight, through now. Follows the current day when this query runs." : editDays === "all" ? "Removes the saved date range. Other query filters stay in place." : editDays === "365" ? "Last 365 days, through now. Evaluated when this query runs." : editDays ? "Last N days, through now. Evaluated when this query runs." : "Keeps the dates and time filters already in this view."}</small></label>
         : <p className="home-editor-window-note">This bookmarked page uses its own time controls.</p>}
       {editError ? <p role="alert">{editError}</p> : null}
       {editingRecipe?.exploration && !editingSpec?.query.grouping ? <div className="home-editor-upgrade"><button type="button" onClick={() => {
-        const next = instantiateRecipe(editingRecipe, Number(editDays) || 30);
+        const next = instantiateRecipe(editingRecipe, editDays === "today" ? "today" : Number(editDays) || 30);
         editor.current?.close(); navigate(next.url);
       }}>Try grouped comparison <Icon name="arrow-right" /></button><small>Open the latest version of this question. Save it from the table to keep it.</small></div> : null}
       <div className="home-editor-actions"><button type="button" onClick={() => editor.current?.close()}>Cancel</button><button type="submit">Save changes</button></div>

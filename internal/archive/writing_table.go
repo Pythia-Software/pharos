@@ -243,6 +243,10 @@ func roundTenth(value float64) float64 { return math.Round(value*10) / 10 }
 // only headless runs launched by commands in another work. launched holds the
 // latter.
 func foldedParents(ctx context.Context, q queryer) (parents map[string]string, launched map[string]bool, err error) {
+	return foldedParentsUsing(ctx, q, "conversation_launches")
+}
+
+func foldedParentsUsing(ctx context.Context, q queryer, launchesSQL string, args ...any) (parents map[string]string, launched map[string]bool, err error) {
 	rows, err := queryMapsContext(ctx, q, `SELECT c.workspace_id child,MIN(p.workspace_id) parent
 		FROM conversations c JOIN conversations p ON p.id=c.parent_id
 		WHERE p.workspace_id<>c.workspace_id
@@ -257,10 +261,10 @@ func foldedParents(ctx context.Context, q queryer) (parents map[string]string, l
 	}
 	// A run's own sub-agents live in its work, so only its root agents count.
 	runs, err := queryMapsContext(ctx, q, `SELECT c.workspace_id child,MIN(p.workspace_id) parent
-		FROM conversation_launches l JOIN conversations c ON c.id=l.child_id JOIN conversations p ON p.id=l.parent_id
+		FROM `+launchesSQL+` l JOIN conversations c ON c.id=l.child_id JOIN conversations p ON p.id=l.parent_id
 		WHERE p.workspace_id<>c.workspace_id
 		GROUP BY c.workspace_id
-		HAVING COUNT(*)=(SELECT COUNT(*) FROM conversations x WHERE x.workspace_id=c.workspace_id AND x.parent_id IS NULL)`)
+		HAVING COUNT(*)=(SELECT COUNT(*) FROM conversations x WHERE x.workspace_id=c.workspace_id AND x.parent_id IS NULL)`, args...)
 	if err != nil {
 		return nil, nil, err
 	}

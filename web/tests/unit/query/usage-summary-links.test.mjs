@@ -66,7 +66,23 @@ test("parallelism summary links retain counting assumptions and replace saved se
 });
 
 test("summary links reject unknown durations and invalid snapshot times", () => {
-  for (const window of ["", "2h", "today", "constructor"]) assert.equal(usageSummaryURL("tokens", window, generatedAt), undefined);
+  for (const window of ["", "2h", "constructor"]) assert.equal(usageSummaryURL("tokens", window, generatedAt), undefined);
   assert.equal(usageSummaryURL("tokens", "1h", "invalid"), undefined);
   assert.ok(usageSummaryURL("tokens", "all", "invalid"));
+});
+
+
+test("Today summary links use the service's midnight and freeze the displayed snapshot", () => {
+  const from = "2026-11-01T06:00:00.000Z";
+  for (const metric of ["human_words", "tokens", "cost_usd", "co2e_g", "parallelism"]) {
+    const params = urlFor(metric, "today", generatedAt, defaultConcurrencySettings, from).searchParams;
+    assert.equal(params.has("analyze_window"), false);
+    if (metric === "parallelism") assert.deepEqual(JSON.parse(params.get("analyze_parallelism")).zoom, [Date.parse(from), Date.parse(generatedAt)]);
+    else {
+      const where = decodeQueryStrict(params.get("analyze_filters")).where;
+      assert.equal(where.find(term => term.op === ">=").value, from);
+      assert.equal(where.find(term => term.op === "<").value, generatedAt);
+    }
+  }
+  assert.equal(usageSummaryURL("tokens", "today", "invalid"), undefined);
 });

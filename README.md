@@ -271,13 +271,13 @@ points:
 ### A note on TL1
 
 You'll find code here that refers to a project called **TL1**: the `tl1` and
-`tl1-export` source kinds, the TL1 tab, `internal/archive/tl1_*.go`,
-`web/src/tl1.tsx`, and the mothballed workspace-reclamation contract in
-[`docs/tl1-contract.md`](docs/tl1-contract.md). TL1 is a private agent
-orchestration tool I use, and it isn't publicly available. That code is
-customized for my use cases. Pharos works without it: with no TL1 source
-configured, the TL1 tab stays hidden. Delete it from your fork, or use it as a
-template for integrating your own tools.
+`tl1-export` source kinds, `internal/archive/tl1_*.go`, and the mothballed
+workspace-reclamation contract in [`docs/tl1-contract.md`](docs/tl1-contract.md).
+TL1 is a private agent orchestration tool I use, and it isn't publicly
+available. That code is customized for my use cases. Pharos works without it.
+Dedicated TL1 analysis pages are removed for now; ingestion, archived
+conversations, findings, APIs, MCP tools, and the attempts dataset remain
+available. Attempts can be queried through Analyze's shared query table.
 
 ## Contact
 

@@ -64,6 +64,94 @@ capabilities are adopted in later changes.
   cases as todo through its `KNOWN` entry. See
   [the fit handoff](handoffs/query-table-fit-wrapping-links.md).
 
+### Source proofs
+
+V2 executions over a SQL dataset that reach the adapter set
+`SQLiteV2Dataset.SourceGeneration` to `query_cache_generation`, read in the
+execution transaction, and share one `SQLiteSourceProofs` per catalog
+(`withSourceProofs`). Every write to a table a query reads advances that
+generation in its own transaction, so a proof describes exactly the snapshot
+that uses it. The first metric batch over a source in a generation proves its
+row count and integer bounds in one scan; later batches over the same source
+statement skip the per-row checks. Only metric requests set a generation; rows
+never use proofs. Query Table bounds a proof to the request's population and
+remembers a source too large to prove for the rest of the generation. Staged map
+copies are new in every request and are not proven. Query Table does not prove
+the tool ledger's joined source in practice: in an ad hoc experiment that pinned
+the generation, a stale proof was trusted for Human Words but not for tool
+calls (`TestAdapterMetricsFollowWritesBetweenRequests` covers Human Words with
+the real generation).
+
+`TestUsagePerformanceSQLHost` (`-tags probe`) times complete HTTP requests for
+Human Words' count and nine sums over 50,000 authored messages, with the host
+reducer (`nativeMetricsV2`) and through the adapter, within one generation
+(warm) and as the first request of a new one. Wall-clock medians of ten
+requests after a warmup, three process runs, on an Apple M3 Ultra (28 cores)
+under load average 7–15 from parallel work; responses were identical
+throughout:
+
+| Shape | Host reducer, warm | Host reducer, new generation | Adapter with proofs, warm | Adapter with proofs, new generation | Adapter without proofs |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Count and nine sums | 15.9 | 69.7 | 25.1 | 63.8 | 46.3 |
+| Grouped by day | 32.0 | 85.7 | 42.3 | 80.4 | 63.5 |
+| Grouped, filtered by provider | 33.7 | 88.1 | 43.8 | 94.1 | 65.0 |
+| Averages by day (host declines) | — | — | 47.1 | 86.1 | 68.9 |
+
+Milliseconds. Without proofs a new generation costs the adapter the same as a
+warm request (46.9, 63.9, 65.7 and 69.6 ms). `/query-v3` grouping does not use
+proofs and stayed at 53 ms.
+
+Generations advance in bursts. In the October 26–27 sync history, automatic
+syncs ran about every 5.5 minutes around the clock, each for about 25 seconds,
+and 185 of 193 wrote data; maintenance after a sync (authorship, rollups) writes
+again. A generation therefore lasts minutes, and the first request after each
+sync pays the proof.
+
+**Decision: `nativeMetricsV2` stays.** Within a generation the adapter is about
+10 ms (1.3–1.6×) behind it on these shapes; on a new generation the two cost
+the same, because the host reducer also rereads its bounds. Upstream's profile
+puts most of the remaining gap in Pharos's scratch lease and the adapter's
+compilation. Proofs are kept per source statement and arguments, so each
+projection and indexed window proves its own source once per generation, while
+the host's bounds cover a table's whole source and serve every filter. On this evidence the deletion is borderline and
+is left to a later decision. Proofs stay on for the adapter path: shapes the
+host declines, such as averages, run 1.5× faster warm and about 17–29 ms slower
+on a generation's first request, so proofs pay off from a source's second
+request in a generation.
+
+### Substring relations (measured, not adopted)
+
+0.9.7 lets a host give the SQLite executors a relation for a predicate. Pharos
+measured its trigram indexes over tool commands and authored text as exact
+relations for adapter V2 executions and `/query-v3`, in place of the host's
+narrowing of their sources, and kept the narrowing. `TestQueryTextPerformance`
+(`-tags probe`) times substring filters over 200,000 synthetic tool calls with
+60–500-byte commands: a selective needle (0.1% of calls), a broad one (14%) and
+the broad one negated. Wall-clock medians of ten requests after a warmup, two
+process runs each, alternating host narrowing (`15d7d34`) and relations on an
+Apple M3 Ultra under load average 7–14:
+
+| Request | Needle | Host narrowing | Relations |
+| --- | --- | ---: | ---: |
+| V2 count and average (adapter) | selective / broad / negated | 30 / 219 / 1,118 | 52 / 314 / 502 |
+| `/query-v3` grouping | selective / broad / negated | 32 / 343 / 1,810 | 52 / 407 / 1,292 |
+
+Milliseconds, mean of the two runs' medians. Rows and the host reducer use the
+host's own SQL and did not change.
+
+Relations made negated needles 1.4–2.2× faster but positive needles, the common
+case, 20–95 ms slower: in plain SQL the relation drives through the ID index in
+3 ms, while CPU profiles put the extra time in trigram phrase matching inside
+the adapter's population and reduction statements. They also removed no host
+code: the compile-only APIs never consult relations, so the indexed row window,
+`nativeMetricsV2`, the cube complement and record search's restricted source
+(`CompileSQLiteComputedRows`) still need the host's narrowing, and record search
+would have lost it. Revisit this when a release makes positive relations as
+cheap as narrowing inside the adapter.
+`TestQueryTextIndexesMatchTypedSubstringFilters` compares rows, adapter metrics
+(including a metric's own filter) and `/query-v3` groupings over narrowed
+sources with typed execution, ready and mid-backfill.
+
 ## 0.9.6 changes
 
 The Go query-link codec (`EncodeQueryLink`, `DecodeQueryLink`) lets the
@@ -104,10 +192,10 @@ older clients; current tables, previews and selection no longer need them.
 The synthetic HTTP probe at this upgrade measured ordinary V3 at 66 ms versus
 45 ms with the former host pre-reducer, with complete response parity. This
 trades about 22 ms on that 50,000-row fixture for removing the custom execution
-path. V2 still measured 49–77 ms through the adapter versus 16–33 ms through
-Pharos's cached reducer, so `nativeMetricsV2` remains enabled. The domain-specific
-Machine Time V2 cubes and indexed text complements also remain. These are local
-warm medians, not production or concurrent-dashboard guarantees. See
+path. V2 measured 49–77 ms through the adapter versus 16–33 ms through
+Pharos's cached reducer at that release; see [source proofs](#source-proofs)
+for the current comparison. These are local warm medians, not production or
+concurrent-dashboard guarantees. See
 [the release's direct grouping contract](https://github.com/Pythia-Software/query-table/blob/v0.9.4/docs/sqlite-direct-groups.md)
 and [preview migration](https://github.com/Pythia-Software/query-table/blob/v0.9.4/docs/computed-columns.md#modern-row-transports).
 
@@ -249,9 +337,9 @@ the adapter's values, and passes everything else to the adapter:
   and 20,000 over all time.
 - **Plain integer counts and sums** grouped by text fields (`nativeMetricsV2`)
   share one guarded SQL reduction and generation-scoped bounds/count caches.
-  Unsupported shapes and storage retain ordinary adapter execution. Upstream
-  cross-field fusion is available, but the measured residual strict-proof cost
-  still makes this host cache/reducer useful.
+  Unsupported shapes and storage retain ordinary adapter execution, with
+  per-generation source proofs. Within a generation the host reducer is still
+  about 10 ms ahead of the adapter; see [source proofs](#source-proofs).
 - **Usage metrics** run through Query Table's `ExecuteV2Rows` over authorized
   daily/hourly row maps, retaining exact decimal arithmetic without SQL staging.
 
@@ -324,12 +412,15 @@ quartiles and spread. Arbitrary scalar percentiles such as p95 remain unavailabl
 SQL datasets preserve Pharos's trusted joins, pricing boundary, and exclusion
 of mirrored tool work. Command-search candidates use the existing trigram index;
 day/week/month equality can use indexed timestamp bounds. The full upstream
-predicate still checks candidates. A separate, complete substring index can
-answer supported ASCII `contains` predicates of at least three characters
-exactly, including the compiler's nonempty guard for negation. Only an exact
-term is removed from residual filtering; other text operators and incomplete
-indexes retain the ordinary predicate. OR narrowing requires a safe relation
-for every branch.
+predicate still checks candidates. A separate, complete substring index
+answers supported ASCII `contains` predicates of at least three characters
+exactly. Sources narrow by it, and the host's own row window, reducer and cube
+complement drop an exact term from their residual filter; Query Table's
+predicate relations were measured and not adopted
+([substring relations](#substring-relations-measured-not-adopted)). Other text
+operators, short or non-ASCII needles
+and incomplete indexes retain the ordinary predicate, and an OR uses the index
+only when every branch has it.
 
 Tool calls also have a narrow, transactionally maintained fact projection for
 identity, timing, activity, category, provider, and local calendar. Eligible

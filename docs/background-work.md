@@ -618,6 +618,35 @@ blocker "Delivering history".
 
 ## 5. Freshness domains
 
+Identity reconciliation guards native harness inheritance and linked activity
+writes against unchanged values. It skips legacy `null` alias lists. Existing
+Search, MCP metric and findings triggers are retained: guarding these writers
+avoids a trigger migration and the full Search rebuild that changing the
+library trigger hash would cause. The one-time rebuild cost of this change is
+zero; existing aliases are not migrated. Workspace naming already compares its
+resolved values, Git checks only unresolved heads, Tools checks its generations,
+and findings partitions check their revisions. Findings completion timestamps
+may still advance. Scheduled indexes continue to defer the analysis chain.
+
+Authorship publishes changed rows in bounded writer turns; the built generation
+is recorded only after all turns complete. During publication readers can see
+a mixture of the previous and next classifications. A stopped run remains
+stale and its retry diffs against the committed rows. Agent replies are read
+in bounded pages, with no read statement held through the classification
+loop. Worker progress reports phase timings and direct row-write counts.
+
+Authorship's trigger-fed watermark and derived checkpoint select a suffix
+rebuild without changing admission or scheduling. User-message changes remain
+independent of tool activity. Question history survives suffixes in other
+conversations; checkpoint version 2 rebuilds older state once. The checkpoint
+is published only after output and state chunks, with a conditional
+input-revision check; cancellation or a concurrent write leaves the next
+rebuild eligible for the full fallback.
+Historical edits/backfills, oversized suffixes, graph/launch ambiguity and
+global template-count changes retain full replay. The original rules version
+stays unchanged. See [writing classification](human-authorship.md) for the
+checkpoint contents, conservative fallbacks and opt-in probes.
+
 Phase 3 implements these as one function over today's storage
 (`Catalog.freshness`, `freshness.go`). Storage changes only by two kinds of
 additive `meta` rows that record what a completion was for (below). Every

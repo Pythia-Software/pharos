@@ -42,8 +42,6 @@ test("the site map's routes are the ones the server and the page shell serve", (
   for (const name of shellRoutes) assert.ok(served.has(`/${name}`), `ROUTES has ${name}`);
   // And the shell routes every top-level page; / is home, and work pages route by prefix.
   for (const node of Object.values(map.nodes).filter(node => !node.path.includes("/") && node.route !== "/" && !node.route.includes("{"))) assert.ok(shellRoutes.includes(node.route.slice(1)), `ROUTES lacks ${node.route}`);
-  const tl1 = JSON.parse(/const TL1_PAGES=new Set\((\[[^\]]*\])\)/.exec(ui)[1].replaceAll("'", "\""));
-  assert.deepEqual(tl1, Object.values(map.nodes).filter(node => node.path.startsWith("tl1")).map(node => node.route));
   const settings = settingsPages(ui, readFileSync(join(assets, "managed-library.html"), "utf8"));
   assert.deepEqual(settings.map(page => page.route).sort(), Object.values(map.nodes).filter(node => node.path.startsWith("settings")).map(node => node.route).sort());
   assert.equal(viewTitles(ui).findings, map.nodes.findings.title);

@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, loadSchema, normalizeQueryState, parseHostQueryState } from '@pythia-software/query-table-core';
 import toolCalls from '../../../../schemas/tool_calls.schema.json';
-import { canonicalDraft, emptyHostState, libraryFind, libraryHostQuery, libraryHostState, messageFind, messageHostQuery, readLibraryHost, readMessageSearchHost, readRecordKeyword, recordKeywordFind, recordKeywordHostQuery, sameHostState, withMessageSearch, withRecordKeyword, withoutLibrarySearch } from '../../../src/host-query-state';
+import { refreshTodayHost, canonicalDraft, emptyHostState, libraryFind, libraryHostQuery, libraryHostState, messageFind, messageHostQuery, readLibraryHost, readMessageSearchHost, readRecordKeyword, recordKeywordFind, recordKeywordHostQuery, sameHostState, withMessageSearch, withRecordKeyword, withoutLibrarySearch } from '../../../src/host-query-state';
 import { freshRecordKeywordSearch } from '../../../src/record-keyword-model';
-import { chooseScope, emptyTextSearch, newGroup, newRule } from '../../../src/text-search-model';
+import { withSearchDateWindow, chooseScope, emptyTextSearch, newGroup, newRule } from '../../../src/text-search-model';
 import { queryFromURL, queryURL } from '../../../src/query-links';
 
 globalThis.location = new URL('http://localhost/analyze');
@@ -137,4 +137,23 @@ test('query links mirror host state in its own parameters and keep it in the enc
   assert.deepEqual(url.searchParams.getAll('record_tool_calls'), hostState.params.record_tool_calls);
   assert.deepEqual(queryFromURL(url.pathname + url.search).query.hostState, hostState);
   assert.equal(new URL(queryURL('tool_calls', EMPTY_QUERY), location.origin).searchParams.has('record_tool_calls'), false);
+});
+
+
+test('Today host searches normalize stably and renew only at execution boundaries', () => {
+  const clock = new Date(2026, 10, 1, 9), next = new Date(2026, 10, 2, 10);
+  const draft = withSearchDateWindow(emptyTextSearch(), 'today', clock); draft.root.children[0].text = 'migration';
+  for (const [host, initial, read] of [
+    [libraryHostQuery, libraryHostState({ kind: 'text', text: draft, file: '', fileCase: false, view: 'table' }), state => readLibraryHost(state).text],
+    [messageHostQuery, withMessageSearch(draft), readMessageSearchHost],
+  ]) {
+    const state = normalized(host, initial);
+    assert.deepEqual(normalized(host, state), state);
+    assert.equal(refreshTodayHost(state, new Date(+clock+1000), true), state);
+    const renewed = refreshTodayHost(state, next, true);
+    assert.notEqual(read(renewed).scope.from, draft.scope.from);
+    assert.equal(read(renewed).scope.to, next.toISOString());
+    assert.deepEqual(normalized(host, renewed), renewed);
+    assert.equal(read(state).scope.to, clock.toISOString());
+  }
 });

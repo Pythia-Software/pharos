@@ -67,6 +67,8 @@ search still takes about 2.2 seconds; following requests are about 105–118 ms.
    generation, dirty partitions, full revision, day and timezone all match in
    that transaction. Stale cubes fall back to authoritative raw rows. Pure COUNT
    metrics retain the normal adapter's validation/revision/result envelope.
+   Query Table's per-generation source proofs read the same generation in the
+   same transaction.
 6. Keep main connection caches at 32 MiB with a 256 MiB mmap window. Lease/restore
    scratch settings; small summary/map populations use memory scratch, while raw
    payload populations retain disk spill and the existing staging-byte guard.

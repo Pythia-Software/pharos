@@ -34,7 +34,7 @@ const providers: Record<string, string> = { claude: "Claude", codex: "Codex", ch
 function initialWhere(): WhereTerm[] {
   const encoded = new URLSearchParams(location.search).get("q_carbon") ?? preferences().get<string>(filtersKey, "");
   if (encoded) {
-    try { return decodeQuery(encoded).where; } catch { return []; }
+    try { const where = decodeQuery(encoded).where; return new URLSearchParams(location.search).get("carbon_window") === "today" || preferences().get<string>("pharos-carbon-window", "") === "today" && !new URLSearchParams(location.search).has("q_carbon") ? withTimeRange(where, usageTime, undefined, undefined, "today") : where; } catch { return []; }
   }
   // Preserve the old calculator's 30-day choice until new filters are saved.
   if (preferences().get<{ window?: string }>("pharos-carbon-v1", {}).window === "30d") {
@@ -79,13 +79,16 @@ export function useLegacyCarbonFilters(): [WhereTerm[], FilterChange] {
   const [where, setWhere] = useState(() => initialWhere());
   useEffect(() => {
     const restore = () => setWhere(initialWhere());
-    window.addEventListener("pharos:route", restore);
-    return () => window.removeEventListener("pharos:route", restore);
+    window.addEventListener("pharos:route", restore); window.addEventListener("pharos:day-change", restore);
+    return () => { window.removeEventListener("pharos:route", restore); window.removeEventListener("pharos:day-change", restore); };
   }, []);
-  const onFilter: FilterChange = change => setWhere(previous => {
+  const onFilter: FilterChange = (change, preset) => setWhere(previous => {
     const next = change(previous), encoded = encodeQuery({ ...EMPTY_QUERY, where: next });
     preferences().set(filtersKey, encoded);
     const url = new URL(location.href);
+    const dates = (terms: WhereTerm[]) => JSON.stringify(terms.filter(term => "field" in term && [usageTime.first, usageTime.last].includes(term.field)));
+    if (preset === "today") { url.searchParams.set("carbon_window", "today"); preferences().set("pharos-carbon-window", "today"); }
+    else if (preset || dates(next) !== dates(previous)) { url.searchParams.delete("carbon_window"); preferences().set("pharos-carbon-window", ""); }
     if (next.length) url.searchParams.set("q_carbon", encoded); else url.searchParams.delete("q_carbon");
     history.replaceState(null, "", url.pathname + url.search + url.hash);
     return next;

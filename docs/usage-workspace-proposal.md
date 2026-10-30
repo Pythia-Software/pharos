@@ -32,7 +32,7 @@ directions.
 
 ## Current implementation
 
-Analyze, Settings, and TL1 share `NestedPageLayout`: the same sidebar tree,
+Analyze and Settings share `NestedPageLayout`: the same sidebar tree,
 mobile menu, full breadcrumb trail, page heading, local link handling, and
 router subscription. Settings opens directly into its selected page without
 an overarching heading or introduction. Its panel metadata supplies both the

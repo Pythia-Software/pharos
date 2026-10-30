@@ -30,9 +30,32 @@ type queryCountCache struct {
 	counts map[queryCountKey]int64
 }
 
-func (c *Catalog) queryCount(ctx context.Context, tx *sql.Tx, statement string, args []any, fast ...func(context.Context, *sql.Tx) (int64, bool, error)) (int64, error) {
+// queryGeneration is the data generation tx reads: every write to a table
+// that a query or cached view reads advances it (see queryCacheTables).
+func queryGeneration(ctx context.Context, tx *sql.Tx) (int64, error) {
 	var generation int64
-	if err := tx.QueryRowContext(ctx, "SELECT value FROM query_cache_generation WHERE id=1").Scan(&generation); err != nil {
+	err := tx.QueryRowContext(ctx, "SELECT value FROM query_cache_generation WHERE id=1").Scan(&generation)
+	return generation, err
+}
+
+// withSourceProofs lets Query Table reuse what it proved about d's source
+// while tx reads the same data generation: the first metric batch over a
+// source in a generation proves its row count and that its summed integer
+// fields are safe, and later batches skip per-row checks. The generation is
+// read in tx itself, so the proofs describe tx's snapshot. Query Table bounds
+// a proof to a population of rows and remembers a source too large to prove.
+func (c *Catalog) withSourceProofs(ctx context.Context, tx *sql.Tx, d qt.SQLiteV2Dataset) (qt.SQLiteV2Dataset, error) {
+	generation, err := queryGeneration(ctx, tx)
+	if err != nil {
+		return d, err
+	}
+	d.SourceGeneration, d.SourceProofs = fmt.Sprint(generation), &c.sourceProofs
+	return d, nil
+}
+
+func (c *Catalog) queryCount(ctx context.Context, tx *sql.Tx, statement string, args []any, fast ...func(context.Context, *sql.Tx) (int64, bool, error)) (int64, error) {
+	generation, err := queryGeneration(ctx, tx)
+	if err != nil {
 		return 0, err
 	}
 	encoded, err := json.Marshal(args)

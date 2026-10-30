@@ -75,6 +75,23 @@ offered beside it. Typing a follow-up while waiting or changing to ordinary sear
 automatic navigation. Validate destinations through Pharos's own routing and URL
 builders.
 
+Ask Pharos is also a configurable, icon-only header tool, with a search glyph
+and ribbon edge. It opens the same chat in a modal over the current page. Every
+submitted question captures that page's local URI, including its filters and
+view settings, as private context. Retries retain the original URI; follow-ups
+capture the page currently being viewed. This context stays out of the indexed
+conversation text.
+
+A picture-in-picture icon moves the chat from either Home or the overlay into
+a draggable, dismissible progress panel. Drag the panel itself to move it, or
+tap it once to reopen the chat; drafts and active questions stay intact.
+The panel shows only the latest streamed activity or request state
+and announces a completed response, clarification, or error. Dismissing it keeps
+the request running; the header button marks a ready response and reopens the
+chat. Once browsing has been chosen, the request never automatically navigates,
+even if the chat is reopened before completion. Destination cards remain
+explicit links. Closing a pending modal also switches to browsing.
+
 Loading needs elapsed time, cancellation, retry, and preserved drafts. Suggestions
 prefill the editor without submitting and follow the existing card carousel's
 interaction patterns.
@@ -292,3 +309,26 @@ Runtime endpoints are under `/api/ask/` and use Pharos's existing authenticated,
 same-origin loopback boundary. They are deliberately absent from the MCP tool
 registry and general query datasets. The design-review prototype remains a
 separate simulated review surface.
+
+Ask streams progress to the UI while Codex, Claude, or Antigravity is running. Codex uses
+[`exec --json`](https://learn.chatgpt.com/docs/non-interactive-mode#make-output-machine-readable);
+Claude uses [`--output-format stream-json --verbose --include-partial-messages`](https://code.claude.com/docs/en/headless#stream-responses).
+Antigravity uses [`--output-format stream-json`](https://antigravity.google/docs/cli/headless/#streaming-json),
+reading `step_update` transitions for tool calls, response generation, and checkpoints.
+The browser requests newline-delimited JSON from
+`/api/ask/send`: `progress` events carry a timestamped activity label, and a
+`result` event carries the complete validated session. Clients without that
+Accept header retain the single JSON response. Partial model output is never
+used as a destination or final answer.
+
+The waiting indicator shows the latest action and elapsed time, including time
+since the last update after ten seconds of silence. An expandable Activity list
+retains the latest 40 updates, including startup, Pharos tool calls, private
+lookups, and answer saving. Labels are authored by Pharos; raw reasoning, model
+text, tool arguments/results, and CLI diagnostics do not enter the feed.
+Antigravity's `call_mcp_tool` routing identifies the Pharos operation, and its
+`tool_info.error` marks failed calls. Repeated active steps do not duplicate
+activity; routing details arriving later can refine a generic tool label.
+Running activity is held in memory and included when reopening a chat; it is saved with the finished
+turn, outside the conversation search index. A broken stream uses the existing
+session reconciliation path and never automatically repeats inference.

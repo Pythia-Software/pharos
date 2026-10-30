@@ -12,13 +12,15 @@ var usageSummaryWindows = []struct {
 	key  string
 	span time.Duration
 }{
-	{"1h", time.Hour}, {"6h", 6 * time.Hour}, {"24h", 24 * time.Hour},
+	{"1h", time.Hour}, {"6h", 6 * time.Hour}, {"today", 0}, {"24h", 24 * time.Hour},
 	{"7d", 7 * 24 * time.Hour}, {"30d", 30 * 24 * time.Hour}, {"all", 0},
 }
 
 // usageSummaryWindow is one window's topline totals.
 type usageSummaryWindow struct {
 	Key          string                        `json:"key"`
+	From         string                        `json:"from,omitempty"`
+	Until        string                        `json:"until,omitempty"`
 	HumanWords   int64                         `json:"human_words"`
 	Messages     int64                         `json:"messages"`
 	Tokens       int64                         `json:"tokens"`
@@ -55,9 +57,14 @@ func (c *Catalog) UsageSummary(ctx context.Context) (map[string]any, error) {
 	windows := make([]*usageSummaryWindow, len(usageSummaryWindows))
 	cutoffs := make([]time.Time, len(usageSummaryWindows))
 	for index, window := range usageSummaryWindows {
-		windows[index] = &usageSummaryWindow{Key: window.key}
+		windows[index] = &usageSummaryWindow{Key: window.key, Until: now.UTC().Format(time.RFC3339Nano)}
 		if window.span > 0 {
 			cutoffs[index] = now.Add(-window.span)
+		} else if window.key == "today" {
+			cutoffs[index] = localMidnight(now, time.Local)
+		}
+		if !cutoffs[index].IsZero() {
+			windows[index].From = cutoffs[index].UTC().Format(time.RFC3339Nano)
 		}
 	}
 
@@ -75,6 +82,9 @@ func (c *Catalog) UsageSummary(ctx context.Context) (map[string]any, error) {
 		}
 		sent, ok := parseTime(sentAt)
 		for index, window := range windows {
+			if window.Key == "today" && (!ok || !sent.Before(now)) {
+				continue
+			}
 			if cutoffs[index].IsZero() || ok && !sent.Before(cutoffs[index]) {
 				window.HumanWords += words
 				window.Messages++
@@ -112,6 +122,9 @@ func (c *Catalog) UsageSummary(ctx context.Context) (map[string]any, error) {
 			"output":         entry.tokens["output_tokens"],
 		}
 		for index, window := range windows {
+			if window.Key == "today" && (!ok || !hour.Before(now)) {
+				continue
+			}
 			share := 1.0
 			if !cutoffs[index].IsZero() {
 				if !ok {
@@ -138,7 +151,7 @@ func (c *Catalog) UsageSummary(ctx context.Context) (map[string]any, error) {
 			}
 		}
 	}
-	return map[string]any{"generated_at": now.UTC().Format(time.RFC3339), "windows": windows, "carbon_factors": carbon}, nil
+	return map[string]any{"generated_at": now.UTC().Format(time.RFC3339Nano), "windows": windows, "carbon_factors": carbon, "timezone": time.Local.String(), "local_day": now.In(time.Local).Format("2006-01-02")}, nil
 }
 
 type usageSummaryEntry struct {

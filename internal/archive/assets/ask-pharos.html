@@ -2,6 +2,8 @@
 <div id="pharos-ask">
     <section class="pharos-product" aria-label="Pharos landing page search">
       <div class="pharos-regular"><div class="pharos-search-host"></div><button type="button" class="pharos-mode-switch pharos-ai-mode" hidden>Ask Pharos <span aria-hidden="true">✦</span></button></div>
+      <div class="pharos-window-controls"><strong>Ask Pharos</strong><button type="button" class="pharos-browse pharos-icon-control" aria-label="Float Ask Pharos" title="Picture in picture · keep browsing"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><rect x="12" y="11" width="6" height="6" rx=".7" fill="currentColor" stroke="none"/></svg></button><button type="button" class="pharos-window-close pharos-plain" aria-label="Close Ask Pharos" hidden>&#215;</button></div>
+      <p class="pharos-page-context" hidden>About <a></a></p>
       <form class="pharos-ai" aria-label="Ask Pharos" hidden>
         <div class="pharos-ai-frame">
           <svg class="pharos-ai-surface" aria-hidden="true" focusable="false"><path/></svg>
@@ -105,9 +107,10 @@
       <div class="pharos-message pharos-agent-message"><span class="pharos-avatar pharos-agent-avatar" aria-hidden="true"></span><div class="pharos-message-body">
         <div class="pharos-agent-heading"><strong class="pharos-speaker pharos-agent-name"></strong></div>
         <section class="pharos-waiting" aria-label="AI request in progress" hidden>
-          <div class="pharos-wait-heading"><div><span class="pharos-wait-message">Starting&#8230;</span><small class="pharos-elapsed">0s</small></div><button type="button" class="pharos-plain pharos-stop cursor-interaction">Cancel</button></div>
+          <div class="pharos-wait-heading"><div><span class="pharos-wait-message" role="status">Starting&#8230;</span><small class="pharos-elapsed">0s</small></div><button type="button" class="pharos-plain pharos-stop cursor-interaction">Cancel</button></div>
           <div class="pharos-skeleton" aria-hidden="true"><span></span><span></span><span></span></div>
         </section>
+        <details class="pharos-activity" hidden><summary>Activity</summary><ol></ol></details>
         <section class="pharos-destinations" aria-label="Suggested destinations" hidden>
         <p class="pharos-results-label" role="status"></p>
         <a class="pharos-destination" href="/" hidden><span class="pharos-destination-kind"></span><strong></strong><span></span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M7 7h10v10M7 17 17 7"/></svg></a>

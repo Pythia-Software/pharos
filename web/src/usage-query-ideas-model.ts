@@ -43,6 +43,7 @@ const mcp = [sum("call_count", "Calls"), sum("error_count", "Failed calls"), rat
 const occupancy = [sum("unit_hours", "Agent/workspace hours"), distinct("unit_id", "Units"), { id: "idea_peak", op: "max" as const, field: "level", label: "Peak recorded concurrency" }];
 
 export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
+  tl1_attempts: [],
   usage: [...usageGroupPresets.map(preset => ({ preset, section: "Group by" })), ...usageComparisonPresets.map(preset => ({ preset, section: "Compare" }))].map(({ preset, section }) => finish("usage", { ...preset, id: `usage:${preset.label}`, section })),
   writing: [
     idea("writing", "repos", "Compare", "By repository", "Compare whole-work writing totals and weighted words per written turn by repository", ["repository_name"], written),

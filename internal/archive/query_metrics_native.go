@@ -19,15 +19,18 @@ import (
 // with the adapter's.
 var nativeMetrics = true
 
-// Query Table 0.9.3 fuses metrics across fields, replacing the repeated
-// reductions that originally motivated this path. The full HTTP probe still
-// measures the general adapter at about 2-3 times this path's warm latency on
-// Human Words' count and nine sums (TestUsagePerformanceSQLHost, -tags probe).
-// Keep the native path pending that performance/simplicity decision: one
-// statement per grouping over a SQL dataset's source or a staged copy.
-// Usage's rows in memory already use Query Table's in-memory executor; see
-// usageMetricsInMemory. The removal audit is documented in
-// docs/handoffs/query-table-manual-interventions.md.
+// Query Table fuses metrics across fields (0.9.3) and, with source proofs
+// (0.9.7, see withSourceProofs), skips per-row checks once a generation has
+// proven its source. The full HTTP probe (TestUsagePerformanceSQLHost, -tags
+// probe) still measures the adapter about 10 ms behind this path on Human
+// Words' count and nine sums within a generation, and the two alike on a new
+// generation's first request. Proofs are kept per source statement, so every
+// projection and window proves its own source, and the tool ledger's source
+// is not proven at all, while this path's bounds cover a table's whole
+// source. docs/query-table-integration.md records the
+// measurements and the decision to keep it: one statement per grouping over
+// a SQL dataset's source or a staged copy. Usage's rows in memory already use
+// Query Table's in-memory executor; see usageMetricsInMemory.
 //
 // It answers only what it computes exactly as the adapter does: every counted
 // or summed value is a stored integer and each sum's absolute total stays

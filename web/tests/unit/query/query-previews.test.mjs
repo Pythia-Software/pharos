@@ -819,3 +819,15 @@ test("a stalled browser cache cannot delay live card queries indefinitely", asyn
   store.put("live", { state: "ready", total: 1, summary: "Live" });
   assert.equal(store.get("live").fresh, true);
 });
+
+
+test("Today persisted preview identity changes at local midnight", async t => {
+  const before = new Date(2026, 9, 29, 23, 59, 59);
+  t.mock.timers.enable({ apis: ["Date"], now: before });
+  const item = { ...job("today", [{ id: "total", op: "sum", field: "duration_ms", groupBy: [] }]), options: { window: { mode: "today", days: 1, field: "started_at" } } };
+  const fixed = { ...item, options: { window: { mode: "relative", days: 1, field: "started_at" } } };
+  const [todayKey, elapsedKey] = await Promise.all([cardPreviewKey(item), cardPreviewKey(fixed)]);
+  t.mock.timers.setTime(+before + 2000);
+  assert.notEqual(await cardPreviewKey(item), todayKey);
+  assert.equal(await cardPreviewKey(fixed), elapsedKey);
+});

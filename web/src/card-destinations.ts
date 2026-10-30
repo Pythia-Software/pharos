@@ -136,7 +136,7 @@ function dashboardFor(recipe: QueryRecipe): CardDashboard {
 }
 
 export function refineCardDestination(recipe: QueryRecipe): QueryRecipe {
-  if (recipe.retired || !Object.hasOwn(usageDatasetTopics, recipe.dataset)) return recipe;
+  if (recipe.retired || recipe.dataset === "tl1_attempts" || !Object.hasOwn(usageDatasetTopics, recipe.dataset)) return recipe;
   const dashboard = dashboardFor(recipe);
   return { ...recipe, destination: { ...dashboard, dataset: usageTopicDatasets[dashboard.topic], detailAction: recipe.action }, action: `Explore ${usageTopics[dashboard.topic].label}` };
 }
@@ -161,7 +161,7 @@ export function cardDestination(recipe: QueryRecipe, query: QueryState, window?:
   if (target.topic === "parallelism") {
     // The record dataset uses saved counting/gap preferences. Inherit those
     // on entry, while resetting selections and setting the card's time range.
-    parsed.searchParams.set("analyze_parallelism", JSON.stringify(parallelismRibbon(window?.days)));
+    parsed.searchParams.set("analyze_parallelism", JSON.stringify(window?.mode === "today" ? { ...parallelismRibbon(1), range: "today" } : parallelismRibbon(window?.days)));
   }
   parsed.searchParams.set("card_query", recipe.dataset);
   parsed.searchParams.set("card_id", recipe.id);
