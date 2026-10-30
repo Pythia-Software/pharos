@@ -233,8 +233,12 @@ func TestSiteLinkAnswersThroughMCP(t *testing.T) {
 	call := func(args map[string]any) (map[string]any, bool) {
 		response := handleMCP(catalog, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "site_link", "arguments": args}})
 		result := response["result"].(map[string]any)
+		text := result["content"].([]map[string]any)[0]["text"].(string)
+		if strings.Contains(text, `\u0026`) {
+			t.Errorf("site_link query separators need to be directly copyable: %s", text)
+		}
 		var value map[string]any
-		_ = json.Unmarshal([]byte(result["content"].([]map[string]any)[0]["text"].(string)), &value)
+		_ = json.Unmarshal([]byte(text), &value)
 		return value, result["isError"] == true
 	}
 	value, failed := call(map[string]any{"page": "findings", "options": map[string]any{"list": "wins", "repo": "pharos"}})

@@ -73,7 +73,12 @@ including when the user phrases the request as a question. Multiple matches rema
 choices, and so does a lone card left after Pharos dropped others the agent
 offered beside it. Typing a follow-up while waiting or changing to ordinary search suppresses
 automatic navigation. Validate destinations through Pharos's own routing and URL
-builders.
+builders. If every returned destination fails validation, give the agent one
+automatic correction attempt with its previous response and the validation errors,
+within the original request deadline. Keep private lookup results and their
+remaining budget; correction must not repeat those lookups. If correction also
+fails, show the validation reason without dumping the URL. A response with some
+valid destinations keeps the existing choice behavior without a correction call.
 
 Ask Pharos is also a configurable, icon-only header tool, with a search glyph
 and ribbon edge. It opens the same chat in a modal over the current page. Every

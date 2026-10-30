@@ -116,7 +116,9 @@ func handleMCPContext(ctx context.Context, catalog *Catalog, request map[string]
 		if status == "disabled" {
 			isError = true
 		}
-		text := jsonText(value)
+		// This JSON is tool text, not HTML. Keep URL query separators literal
+		// so agents can copy site_link destinations without decoding escapes.
+		text := compactJSON(value)
 		truncated := false
 		if len(text) > 900_000 {
 			text = jsonText(map[string]any{"error": "response exceeds 900 KB; use pagination or a narrower query"})
