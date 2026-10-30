@@ -1,7 +1,7 @@
 // Deterministic, schema-aware cases for tools/audit-usage.mjs. Runtime samples
 // stay in the private run directory; this file contains no catalog data.
 import { EMPTY_QUERY, encodeQuery, loadSchema, type QueryState, type WhereTerm } from "../web/node_modules/@pythia-software/query-table-core/dist/index.js";
-import { usageDatasets, usageTopics, usageDatasetTopics, usageWorkspaceURL } from "../web/src/usage-workspace-model";
+import { usageDatasets, usageTopics, usageDatasetTopics, usageTopicDatasets, usageWorkspaceURL } from "../web/src/usage-workspace-model";
 import { defaultConcurrencySettings } from "../web/src/concurrency-settings";
 export { usageDatasets, usageTopics, usageWorkspaceURL, encodeQuery, EMPTY_QUERY, loadSchema };
 export type AuditCase = { id: string; page: string; label: string; url: string; dataset?: string; query?: QueryState; where?: WhereTerm[]; interaction?: string; expectedEmpty?: boolean };
@@ -65,7 +65,7 @@ export function queryCases(dataset: keyof typeof usageDatasets, document: any, s
     url: usageWorkspaceURL({ mode: "query", dataset, topic: usageDatasetTopics[dataset], query, search: i % 3 === 0 || i === 24 }) }));
 }
 export function dashboardCases(topic: keyof typeof usageTopics, documents: Record<string, any>, samples: Record<string, any[]>, concurrency: any): AuditCase[] {
-  const dataset = ({ tokens: "usage", human: "writing", time: "tool_calls", parallelism: "parallelism", tools: "tools", mcp: "mcp_calls", skills: "skill_usages", carbon: "usage" } as const)[topic];
+  const dataset = usageTopicDatasets[topic];
   const f = fieldsFor(documents[dataset]), sample = samples[dataset] ?? [], category = f.group!, value = String(sample.find(row => row[category] != null)?.[category] ?? "codex");
   const date = new Date(); date.setHours(0, 0, 0, 0); date.setDate(date.getDate() - 29);
   const time = topic === "tools" ? "day" : f.time!;
@@ -92,6 +92,8 @@ export function dashboardCases(topic: keyof typeof usageTopics, documents: Recor
     if (topic === "tokens") view = { metric: ["tokens", "cost", "percent", "percent_cost"][i % 4], split: tokenSplits[i % tokenSplits.length], period: periods[i % periods.length], hours: [1, 6, 12][i % 3], days: [1, 3, 7][i % 3], rollingPeriods: [0, 3, 7][i % 3], scale: scales[i % 3] };
     if (topic === "human") view = { scope: i % 2 ? "all" : "typed", split: humanSplits[i % humanSplits.length], period: periods[i % periods.length], hours: [1, 6, 12][i % 3], days: [1, 3, 7][i % 3], rollingPeriods: [0, 3, 7][i % 3], scale: scales[i % 3] };
     if (topic === "time" || topic === "skills") view = { metric: i % 2, split: (topic === "time" ? ["activity", "tool_category", "provider", "repository_name"] : ["skill_name", "evidence_type", "provider", "repository_name", "status"])[i % (topic === "time" ? 4 : 5)], period: ["day", "week", "month"][(i + (topic === "time" ? Math.floor(i / conditions.length) : 0)) % 3], scale: scales[i % 3] };
+    if (topic === "activity") view = { metric: i % 2 ? "output" : "human_input", split: ["provider", "model_family", "repository_name"][i % 3], view: "compare", period: ["day", "week", "month"][Math.floor(i / conditions.length)] };
+    if (topic === "calls") view = { metric: i % 2 ? "calls" : "failures", split: ["tool_name", "repository_name", "error_signature"][i % 3], view: i % 3 ? "compare" : "trend", period: ["day", "week", "month"][Math.floor(i / conditions.length)] };
     if (topic === "tools") view = { rollingPeriods: 0, metric: ["calls", "failures", "failure_rate", "time", "mean_time", "context_added", "context_carried"][i % 7], split: ["tool_category", "tool_name", "command_category", "program", "command_name", "mcp_server", "repository_name", "model_family", "session_kind"][i % 9], view: i % 2 ? "trend" : "compare", period: ["day", "week", "month"][i % 3] };
     if (topic === "mcp") view = { rollingPeriods: 0, metric: ["calls", "failures", "failure_rate", "output", "mean_output", "largest_output", "bytes", "truncated", "time", "mean_time"][i % 10], split: ["tool_name", "status", "query_source"][i % 3], view: i % 2 ? "trend" : "compare", period: ["day", "week", "month"][i % 3] };
     if (topic === "carbon") view = { metric: i % 2 ? "energy" : "co2", split: ["type", "provider", "repository_name", "tier"][i % 4], period: periods[i % 5], hours: [1, 6, 12][i % 3], days: [1, 3, 7][i % 3] };

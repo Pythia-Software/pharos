@@ -1,3 +1,4 @@
+import { useViewState } from "./view-state";
 import { windowLabel, readWindowChoice, type WindowChoice } from "./day-window";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { FieldSchema, MetricDisplay } from "@pythia-software/query-table-core";
@@ -101,10 +102,9 @@ function CardLibrary({ schemas, active, prewarm, generation, collected, message,
     return { params, linked, topic: valid(params.get("card_topic")) ?? (linked ? ALL : valid(saved.topic) ?? ALL), filters: filtered || saved.filters === true, edit: isCardLibraryLink() || saved.edit === true };
   });
   const [search, setSearch] = useState(initial.params.get("card_search") ?? ""), [dataset, setDataset] = useState(initial.params.get("card_data") ?? ""), [kind, setKind] = useState(initial.params.get("card_kind") ?? ""), [sort, setSort] = useState(initial.params.get("card_sort") ?? "topic");
-  const [chosen, setChosen] = useState(initial.topic), [days, setDays] = useState<WindowChoice | "default">("default");
-  const [filtersOpen, setFiltersOpen] = useState(initial.filters), [editMode, setEditMode] = useState(initial.edit);
-  // Preserve the plain page URL until a tab or filter is chosen.
-  const [inURL, setInURL] = useState(initial.linked);
+  const [chosen, setChosen] = useState(initial.topic), [days, setDaysValue] = useViewState<string>("card_window", "default", active);
+  const setDays = (value: WindowChoice | "default") => setDaysValue(String(value));
+  const [filtersOpen, setFiltersOpen] = useViewState("card_filters", initial.filters, active), [editMode, setEditMode] = useState(initial.edit);
   const [previews, setPreviews] = useState<Record<string, QueryPreview>>({}), [errors, setErrors] = useState<Record<string, string>>({}), [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<QueryRecipe | null>(null), [title, setTitle] = useState(""), [description, setDescription] = useState(""), [editDays, setEditDays] = useState<WindowChoice>(7), [metric, setMetric] = useState(""), [chart, setChart] = useState<MetricDisplay["kind"]>("auto"), [error, setError] = useState("");
   const [height, setHeight] = useState(""), [maxGroups, setMaxGroups] = useState(""), [showLegend, setShowLegend] = useState("auto"), [showOther, setShowOther] = useState("auto");
@@ -115,17 +115,17 @@ function CardLibrary({ schemas, active, prewarm, generation, collected, message,
     const key = (recipe: QueryRecipe) => sort === "data" ? cardDatasets[recipe.dataset] : sort === "kind" ? cardKind(recipe) : sort === "title" ? "" : queryCategories[recipe.category].label;
     return key(a).localeCompare(key(b)) || a.title.localeCompare(b.title);
   }), [matching, topic, sort]);
-  const cards = useMemo(() => visible.map(recipe => instantiateRecipe(recipe, cardDays(recipe, days))), [visible, days, generation]);
+  const cards = useMemo(() => visible.map(recipe => instantiateRecipe(recipe, cardDays(recipe, days === "default" ? "default" : readWindowChoice(days)))), [visible, days, generation]);
   const reloadPreview = usePreviewReload(setPreviews, setErrors, [cards, schemas, active]);
   const nearby = useRef(new Set<string>());
   const previousJobs = useRef(new Map<string, string>());
   const job = (item: QuerySuggestion) => ({ id: item.id, priority: () => nearby.current.has(item.id) ? 0 : 1, dataset: item.dataset, query: item.query, schema: schemas[item.dataset], options: { recipe: item, cover: item.cover, window: item.window, url: item.url } });
   useEffect(() => {
-    if (!active || !inURL || location.pathname !== "/cards") return;
+    if (!active || location.pathname !== "/cards") return;
     const url = new URL(location.href);
     for (const [key, value] of Object.entries({ card_search: search, card_data: dataset, card_topic: topic, card_kind: kind, card_sort: sort === "topic" ? "" : sort })) { if (value) url.searchParams.set(key, value); else url.searchParams.delete(key); }
     history.replaceState(history.state, "", `${url.pathname}${url.search}${url.hash}`);
-  }, [active, inURL, search, dataset, topic, kind, sort]);
+  }, [active, search, dataset, topic, kind, sort]);
   useEffect(() => {
     nearby.current.clear();
     if (!active) return;
@@ -157,7 +157,7 @@ function CardLibrary({ schemas, active, prewarm, generation, collected, message,
     const controller = new AbortController();
     // Warm the rest of the catalog after foreground cards. Small batches yield
     // between topics and are cancelled when the view or data changes.
-    const items = recipes.map(recipe => instantiateRecipe(recipe, cardDays(recipe, days)));
+    const items = recipes.map(recipe => instantiateRecipe(recipe, cardDays(recipe, days === "default" ? "default" : readWindowChoice(days))));
     void (async () => {
       for (let at = 0; at < items.length && !controller.signal.aborted; at += 8) {
         await loadCardPreviews(items.slice(at, at + 8).map(job), () => {}, controller.signal);
@@ -168,12 +168,12 @@ function CardLibrary({ schemas, active, prewarm, generation, collected, message,
   useEffect(() => {
     if (editing) dialog.current?.showModal();
   }, [editing]);
-  function filter<T>(set: (value: T) => void) { return (value: T) => { set(value); setInURL(true); }; }
+  function filter<T>(set: (value: T) => void) { return (value: T) => { set(value); }; }
   function choose(key: string, focus = false) {
-    setChosen(key); setInURL(true); saveCardLibraryView({ topic: key });
+    setChosen(key); saveCardLibraryView({ topic: key });
     if (focus) requestAnimationFrame(() => tabs.current?.querySelector<HTMLButtonElement>(`[data-topic="${key}"]`)?.focus());
   }
-  function clearFilters() { setSearch(""); setDataset(""); setKind(""); setInURL(true); }
+  function clearFilters() { setSearch(""); setDataset(""); setKind(""); }
   function openEditor(item: QueryRecipe) {
     const recipe = cardTemplates().find(recipe => recipe.id === item.id) ?? item;
     const cover = defaultCardCover(recipe);
@@ -210,7 +210,7 @@ function CardLibrary({ schemas, active, prewarm, generation, collected, message,
     <div className="card-library-head">
       <h1 id="card-library-title"><Icon name="read" />Card Library</h1>
       <div className="card-library-actions">
-        <button type="button" aria-expanded={filtersOpen} aria-controls="card-library-controls" onClick={() => { const open = !filtersOpen; setFiltersOpen(open); saveCardLibraryView({ filters: open }); }}><Icon name="search" />Filters{activeFilters ? <span className="card-library-badge">{activeFilters}</span> : null}</button>
+        <button data-view-field="card_filters" type="button" aria-expanded={filtersOpen} aria-controls="card-library-controls" onClick={() => { const open = !filtersOpen; setFiltersOpen(open); saveCardLibraryView({ filters: open }); }}><Icon name="search" />Filters{activeFilters ? <span className="card-library-badge">{activeFilters}</span> : null}</button>
         <button type="button" aria-pressed={editMode} onClick={() => { const edit = !editMode; setEditMode(edit); saveCardLibraryView({ edit }); }}><Icon name="edit" />Edit cards</button>
       </div>
     </div>
@@ -223,7 +223,7 @@ function CardLibrary({ schemas, active, prewarm, generation, collected, message,
       <label>Data source<select aria-label="Data source" value={dataset} onChange={event => filter(setDataset)(event.target.value)}><option value="">All data</option>{Object.entries(cardDatasets).filter(([key]) => recipes.some(recipe => recipe.dataset === key)).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
       <label>Card kind<select aria-label="Card kind" value={kind} onChange={event => filter(setKind)(event.target.value)}><option value="">All kinds</option>{[...new Set(recipes.map(cardKind))].sort().map(kind => <option key={kind}>{kind}</option>)}</select></label>
       <label>Sort by<select aria-label="Sort by" value={sort} onChange={event => filter(setSort)(event.target.value)}>{cardSorts.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-      <label>Preview window<select aria-label="Preview window" value={days} onChange={event => setDays(event.target.value === "default" ? "default" : readWindowChoice(event.target.value))}><option value="default">Card defaults</option><option value="today">Today (eligible cards)</option>{[1, 7, 30, 90].map(days => <option key={days} value={days}>Past {days === 1 ? "24 hours" : `${days} days`}</option>)}</select></label>
+      <label>Preview window<select data-view-field="card_window" aria-label="Preview window" value={days} onChange={event => setDays(event.target.value === "default" ? "default" : readWindowChoice(event.target.value))}><option value="default">Card defaults</option><option value="today">Today (eligible cards)</option>{[1, 7, 30, 90].map(days => <option key={days} value={days}>Past {days === 1 ? "24 hours" : `${days} days`}</option>)}</select></label>
     </div> : null}
     <div ref={tabs} className="card-library-tabs" role="tablist" aria-label="Card topics" onKeyDown={event => {
       const next = { ArrowLeft: index - 1, ArrowRight: index + 1, Home: 0, End: tabKeys.length - 1 }[event.key];
@@ -243,7 +243,7 @@ function CardLibrary({ schemas, active, prewarm, generation, collected, message,
     <p className="card-library-feedback" role="status">{message}</p>
     <div id="card-library-panel" className="card-library-grid" role="tabpanel" aria-labelledby={`card-library-tab-${topic}`} aria-busy={loading}>{cards.map(item => <div className="card-library-entry" id={`card-${item.id}`} data-card-definition={item.id} data-card-idea={item.idea} key={item.id}>
       <QueryCard discovery id={item.id} title={item.title} description={item.description} actionLabel={item.action} url={item.url} windowLabel={suggestionWindowLabel(item)} category={item.category} loadingSpec={cardLoadingPresentation(item.query, { recipe: item, cover: item.cover, days: item.window?.days })} preview={previews[item.id]} error={errors[item.id]}
-        onOpen={() => onOpen(item.url)} onKeep={() => onKeep(item)} onReload={() => reloadPreview(job(item))} />
+        onOpen={onOpen} onKeep={() => onKeep(item)} onReload={() => reloadPreview(job(item))} />
       {editMode ? <div className="card-library-meta"><code className="card-library-id" title={`Card definition: ${item.id} · Wishlist: ${item.idea}`}>ID: {item.id}</code><span>{cardDatasets[item.dataset]}</span><span>{cardKind(item)} · {new URL(item.url, location.origin).searchParams.get("analyze_mode") === "dashboards" ? "Analyze dashboard" : item.exploration ? "Grouped table" : "Records + metrics"}</span>{collected.has(item.id) ? <span className="card-library-collected"><Icon name="check" /> In your collection</span> : null}
         <button type="button" onClick={() => openEditor(item)} aria-label={`Edit card ${item.title}`}><Icon name="edit" /> Edit card</button>
       </div> : collected.has(item.id) ? <span className="card-library-collected"><Icon name="check" /> In your collection</span> : null}
@@ -262,7 +262,7 @@ function CardLibrary({ schemas, active, prewarm, generation, collected, message,
         <label>Visible rows / series<input type="number" aria-label="Visible rows / series" min={1} max={cardCoverGroupLimit(editing)} step={1} placeholder="Automatic" value={maxGroups} onChange={event => setMaxGroups(event.target.value)} /></label>
         <label>Chart key<select aria-label="Chart key" value={showLegend} onChange={event => setShowLegend(event.target.value)}><option value="auto">Automatic (multiple series only)</option><option value="true">Show</option><option value="false">Hide</option></select></label>
         <label>Other remainder<select aria-label="Other remainder" value={showOther} onChange={event => setShowOther(event.target.value)}><option value="auto">Automatic</option><option value="true">Show when exact and additive</option><option value="false">Hide</option></select></label></> : null}
-      {editing && editedItem ? <div className="card-template-destination"><strong>Opens {opensDashboard ? "the matching card analysis" : editing.exploration ? "a grouped table" : "source records"}</strong><p>{opensDashboard ? "The chart keeps this card’s calculation, filters, cadence and presentation." : editing.exploration ? destinationKeys?.length ? `Group by ${destinationKeys.map(key => schemas[editing.dataset].fields.find(field => field.name === key)?.label ?? key).join(", ")}.` : "One summary row for the whole window." : "Matched observations and their metrics."} Window: {editing.dataset === "tl1_attempts" ? `Last ${editDays} days` : windowLabel(editDays)}.</p><small>{editing.note}</small><button type="button" className="card-template-query" onClick={() => { dialog.current?.close(); onOpen(queryURL(editing.dataset, editedItem.query, editedItem.window)); }}>Open query to edit grouping and filters <Icon name="arrow-right" /></button></div> : null}
+      {editing && editedItem ? <div className="card-template-destination"><strong>Opens {opensDashboard ? "the full dashboard" : editing.exploration ? "a grouped table" : "source records"}</strong><p>{opensDashboard ? "Explore this card’s topic with the dashboard’s measures, breakdowns, views and filters." : editing.exploration ? destinationKeys?.length ? `Group by ${destinationKeys.map(key => schemas[editing.dataset].fields.find(field => field.name === key)?.label ?? key).join(", ")}.` : "One summary row for the whole window." : "Matched observations and their metrics."} Window: {editing.dataset === "tl1_attempts" ? `Last ${editDays} days` : windowLabel(editDays)}.</p><small>{editing.note}</small><button type="button" className="card-template-query" onClick={() => { dialog.current?.close(); onOpen(queryURL(editing.dataset, editedItem.query, editedItem.window)); }}>Open query to edit grouping and filters <Icon name="arrow-right" /></button></div> : null}
       {error ? <p role="alert">{error}</p> : null}<div className="home-editor-actions"><button type="button" onClick={() => { if (editing) saveCardTemplate(editing.id); dialog.current?.close(); }}>Reset template</button><button type="button" onClick={() => dialog.current?.close()}>Cancel</button><button type="submit">Save template</button></div>
     </form></dialog>
   </section>;

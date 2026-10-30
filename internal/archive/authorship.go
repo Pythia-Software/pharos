@@ -1766,7 +1766,7 @@ func (c *Catalog) messageAuthorshipAttacher(conversationID any) (func(map[string
 				break
 			}
 			value := strings.TrimSpace(text[span.Start:span.End])
-			part := map[string]any{"category": span.Category, "reason": nilIfEmpty(span.Reason), "words": wordCounts[position], "excerpt": excerpt(value, 120)}
+			part := map[string]any{"start": span.Start, "end": span.End, "category": span.Category, "reason": nilIfEmpty(span.Reason), "words": wordCounts[position], "excerpt": excerpt(value, 120)}
 			if source := workspaces[span.Source]; source != nil {
 				part["source"] = map[string]any{"workspace_id": source["workspace_id"], "conversation_id": span.Source, "message_id": nilIfEmpty(span.Message), "title": source["title"]}
 			}

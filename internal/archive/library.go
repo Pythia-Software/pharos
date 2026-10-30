@@ -798,18 +798,28 @@ func (c *Catalog) attachLibraryPreviews(ctx context.Context, page []map[string]a
 		}
 	}
 	texts := map[string]any{}
+	timestamps := map[string]time.Time{}
 	if len(messageIDs) > 0 {
-		messages, err := queryMapsContext(ctx, c.reader(), "SELECT id,text FROM messages WHERE id IN ("+placeholders(len(messageIDs))+")", messageIDs...)
+		messages, err := queryMapsContext(ctx, c.reader(), "SELECT id,text,created_at FROM messages WHERE id IN ("+placeholders(len(messageIDs))+")", messageIDs...)
 		if err != nil {
 			return err
 		}
 		for _, message := range messages {
 			texts[firstString(message["id"])] = message["text"]
+			if stamp, ok := parseTime(firstString(message["created_at"])); ok {
+				timestamps[firstString(message["id"])] = stamp
+			}
 		}
 	}
 	for _, row := range page {
 		preview := byWorkspace[firstString(row["id"])]
 		row["first_input"], row["last_response"] = texts[firstString(preview["first_input_id"])], texts[firstString(preview["last_response_id"])]
+		row["preview_elapsed_ms"] = nil
+		first, firstOK := timestamps[firstString(preview["first_input_id"])]
+		last, lastOK := timestamps[firstString(preview["last_response_id"])]
+		if firstOK && lastOK && !last.Before(first) {
+			row["preview_elapsed_ms"] = last.Sub(first).Milliseconds()
+		}
 	}
 	return nil
 }

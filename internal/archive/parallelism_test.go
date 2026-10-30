@@ -503,6 +503,31 @@ func TestParallelismSettingsAndHTTP(t *testing.T) {
 	if settings := c.parallelismSettings(t.Context()); settings != (parallelismSettings{60, "workspace"}) {
 		t.Fatal(settings)
 	}
+	linked, linkErr := withParallelismPreferences(t.Context(), `{"gap":15,"counting":"agent"}`)
+	if linkErr != nil {
+		t.Fatal(linkErr)
+	}
+	if linkedRows, err := c.parallelismQueryRows(linked, nil); err != nil || len(linkedRows) == 0 || linkedRows[0]["counting"] != "agent" || linkedRows[0]["gap_minutes"] != int64(15) {
+		t.Fatal(linkedRows, err)
+	}
+	if c.parallelismSettings(t.Context()) != (parallelismSettings{60, "workspace"}) {
+		t.Fatal("linked view changed saved preferences")
+	}
+	for _, bad := range []string{`{"gap":3,"counting":"agent"}`, `{"gap":15,"counting":"wrong"}`, `{}`} {
+		if _, err := withParallelismPreferences(t.Context(), bad); err == nil {
+			t.Fatal("accepted invalid assumptions", bad)
+		}
+	}
+	for _, operation := range []string{"rows-v2", "query-v3"} {
+		body := `{"version":2,"profile":"qt-sqlite-v1","select":["id","counting","gap_minutes"],"limit":1}`
+		if operation == "query-v3" {
+			body = `{"version":3,"profile":"qt-sqlite-v1","rows":true,"result":{"select":["id","counting","gap_minutes"],"limit":1}}`
+		}
+		response := queryExplorationCall(server, config.APIToken, http.MethodPost, "/api/query/parallelism/"+operation+"?"+url.Values{"parallelism_settings": {`{"gap":15,"counting":"agent"}`}}.Encode(), body)
+		if response.Code != 200 || !strings.Contains(response.Body.String(), `"agent"`) {
+			t.Fatal(operation, response.Code, response.Body.String())
+		}
+	}
 	w := queryExplorationCall(server, config.APIToken, http.MethodPost, "/api/query/parallelism/rows-v2", `{"version":2,"profile":"qt-sqlite-v1","select":["id","unit_label","elapsed_hours"],"limit":1}`)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"unit_label"`) {
 		t.Fatal(w.Code, w.Body.String())

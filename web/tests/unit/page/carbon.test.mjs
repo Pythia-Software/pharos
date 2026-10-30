@@ -133,3 +133,13 @@ test("the calculator and the dashboard's token-type split reproduce the shared e
     for (const [category, grams] of Object.entries(co2e_g_by_category)) close(parts[category], grams, `${name} ${category}`);
   }
 });
+
+test("each dashboard card estimates its own Carbon assumptions without changing the calculator", () => {
+  const calculator = carbon({scenario:"low",grid:"world"});
+  const period = counts("medium","cache_read",1e6);
+  const before = calculator.estimate(factors,period);
+  const settings = {scenario:"high",pueScenario:"high",inputSensitivity:"third",grid:"custom",customGrid:100};
+  close(calculator.estimate(factors,period,settings).co2,20.8,"card assumptions");
+  close(calculator.estimate(factors,period).co2,before.co2,"calculator assumptions stay intact");
+  assert.equal(calculator.settingsSnapshot(factors).scenario,"low");
+});

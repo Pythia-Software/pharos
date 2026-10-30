@@ -203,7 +203,7 @@
     return n;
   };
   const load = () => { const saved = window.pharosPrefs.get(STORE, {}); return saved && typeof saved === 'object' ? saved : {}; };
-  const save = () => window.pharosPrefs.set(STORE, prefs);
+  const save = change => window.pharosPrefs.set(STORE, {...load(), ...change});
   const routeSettings = () => {
     if (typeof location === 'undefined') return null;
     const encoded = new URLSearchParams(location.search).get('analyze_carbon');
@@ -289,12 +289,12 @@
     return {byCategory, byTier, terms, outputEquivalent, pue, wh: total, facilityWh: total * pue, grams, co2: grams(total)};
   }
 
-  function settings(factors) {
-    const scenario = SCENARIOS.some(([key]) => key === prefs.scenario) ? prefs.scenario : 'central';
-    const pueScenario = SCENARIOS.some(([key]) => key === prefs.pueScenario) ? prefs.pueScenario : 'central';
-    const inputSensitivity = INPUT_SENSITIVITIES.some(([key]) => key === prefs.inputSensitivity) ? prefs.inputSensitivity : 'current';
-    const grid = factors.grids.find(item => item.key === prefs.grid) || (prefs.grid === 'custom' ? null : factors.grids.find(item => item.key === factors.default_grid));
-    const gridValue = grid ? grid.g_co2e_per_kwh : Math.max(0, Number(prefs.customGrid) || 0);
+  function settings(factors, values = prefs) {
+    const scenario = SCENARIOS.some(([key]) => key === values.scenario) ? values.scenario : 'central';
+    const pueScenario = SCENARIOS.some(([key]) => key === values.pueScenario) ? values.pueScenario : 'central';
+    const inputSensitivity = INPUT_SENSITIVITIES.some(([key]) => key === values.inputSensitivity) ? values.inputSensitivity : 'current';
+    const grid = factors.grids.find(item => item.key === values.grid) || (values.grid === 'custom' ? null : factors.grids.find(item => item.key === factors.default_grid));
+    const gridValue = grid ? grid.g_co2e_per_kwh : Math.max(0, Number(values.customGrid) || 0);
     return {scenario, pueScenario, inputSensitivity, inputScale: inputSensitivity === 'third' ? 5 / 3 : 1,
       grid, gridValue, pue: pick(factors.pue, pueScenario)};
   }
@@ -470,9 +470,10 @@
 
   function disclosure(key, title, cls = '') {
     const details = node('details', cls), summary = node('summary', '', title);
-    details.open = disclosureState.get(key) || false;
+    // The shared disclosure binding captures the native closed default and
+    // restores URL overrides after insertion, including across rerenders.
+    details.dataset.viewKey='carbon:'+key;
     summary.dataset.carbonControl = `disclosure:${key}`;
-    details.ontoggle = () => { if (details.isConnected) disclosureState.set(key, details.open); };
     details.append(summary);
     return details;
   }
@@ -787,8 +788,7 @@
 
   function methodology(factors, result, setup) {
     const details = node('details', 'carbon-method');
-    details.open = disclosureState.get('reference') || false;
-    details.ontoggle = () => { if (details.isConnected) disclosureState.set('reference', details.open); };
+    details.dataset.viewKey='carbon:reference';
     const summary = node('summary', '', 'All factor settings and sources');
     summary.dataset.carbonControl = 'disclosure:reference';
     details.append(summary);
@@ -850,7 +850,9 @@
   }
 
   function updatePreferences(change) {
-    Object.assign(prefs, change); save(); syncSettingsURL(); render();
+    Object.assign(prefs, change);
+    save(change);
+    syncSettingsURL(); render();
     // Usage rows carry estimates under the saved settings, so listeners that
     // refetch must wait for the save rather than the debounced write.
     Promise.resolve(window.pharosPrefs.flush?.()).then(() => window.dispatchEvent(new Event('pharos:carbon-settings')));
@@ -1025,8 +1027,8 @@
     render();
   }
 
-  function estimate(factors, period) {
-    const setup = settings(factors);
+  function estimate(factors, period, values = prefs) {
+    const setup = settings(factors, values);
     return calculate(factors, period, setup.scenario, setup.pue, setup.gridValue, setup.inputScale);
   }
 

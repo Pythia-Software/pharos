@@ -1,8 +1,9 @@
+import { useViewEntry } from "./view-state";
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { chartPeriods, isHourly, localDay, nextPeriod, parseDay, periodKey, periodUnit, validPeriodCount, type ChartPeriod } from "./chart-period";
 import { chartRanges, rangeStart, withTimeRange, type ChartRange, type FilterChange, type RangeChange, type TimeBounds, type TimeFields } from "./chart-range";
-import { columnScale, defaultChartScale, type ChartScale } from "./chart-scale";
-import { cumulativeBuckets, rollingAverageBuckets, validRollingPeriods, type ChartBucket, type ChartDisplay, type ChartSeries } from "./chart-series";
+import { defaultChartScale, type ChartScale } from "./chart-scale";
+import { cumulativeBuckets, rollingAverageBuckets, timelineGeometry, timelinePath, validRollingPeriods, type ChartBucket, type ChartDisplay, type ChartSeries } from "./chart-series";
 import { ColumnMarks } from "./column-marks";
 import { ChartLegendChip } from "./chart-legend-chip";
 import { type LegendAction } from "./chart-selection";
@@ -168,7 +169,7 @@ export function ChartSelect<T extends string>({ label, ariaLabel = label, value,
   return <label className="usage-chart-field usage-chart-picker">
     <span className="usage-preset-label">{label}</span>
     <span className="usage-chart-select">
-      <select aria-label={ariaLabel} value={value} disabled={disabled} title={title} onChange={event => onChange(event.target.value as T)}>
+      <select data-pharos-target={`control:chart:${ariaLabel.toLowerCase().replace(/\s+/g,"-")}`} aria-label={ariaLabel} value={value} disabled={disabled} title={title} onChange={event => onChange(event.target.value as T)}>
         {options.map(([option, text, reason]) => <option key={option} value={option} disabled={Boolean(reason)} title={reason}>{text}</option>)}
       </select>
       <Icon name="chevron-down" className="usage-chart-caret" />
@@ -255,13 +256,14 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
 }) {
   const root = useRef<HTMLDivElement>(null), tipRef = useRef<HTMLDivElement>(null), bars = useRef<HTMLDivElement>(null);
   const [tip, setTip] = useState<{ bucket: ChartBucket; x: number; width: number; top: number; pinned: boolean; focus: boolean } | null>(null);
+  const [pin, setPin] = useViewEntry("chart_pins", title, "", location.pathname === "/analyze" && !new URLSearchParams(location.search).has("analyze_view"));
   const restoringFocus = useRef(false);
   const [drag, setDrag] = useState<{ anchor: number; current: number } | null>(null);
   // Pointer events can outrun rendering, so the handlers read the drag from a ref.
   const dragRef = useRef(drag);
   const moveDrag = (next: typeof drag) => { dragRef.current = next; setDrag(next); };
   const drawn = selected.length ? series.filter(item => excluded ? !selected.includes(item.key) : selected.includes(item.key)) : series;
-  const cumulative = display === "cumulative", linear = cumulative || lines;
+  const cumulative = display === "cumulative";
   // A cumulative line always shows exact totals. Retain the interval smoothing
   // setting in view state, but don't average away the accumulated amounts.
   const averagedBuckets = useMemo(() => (prepared ? sourceBuckets : cumulative ? cumulativeBuckets(sourceBuckets) : rollingAverageBuckets(sourceBuckets, rollingPeriods, { period, count: periodCount })).filter(bucket => !bucket.history), [sourceBuckets, rollingPeriods, cumulative, period, periodCount, prepared]);
@@ -276,8 +278,9 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
     return { ...bucket, values, parts };
   }) : averagedBuckets;
   const total = (bucket: ChartBucket) => drawn.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0);
-  const peaks = (linear ? buckets.map(bucket => drawn.reduce((peak, item) => Math.max(peak, bucket.values[item.key] ?? 0), 0)) : buckets.map(total)).concat(reference ? [reference.value] : []);
-  const { y, ticks, split } = percent ? { y: (value: number) => value, ticks: [25, 50, 75, 100], split: undefined } : columnScale(peaks, scale);
+  const geometry = timelineGeometry(buckets, drawn, { scale, lines: cumulative || lines, percent, reference: reference?.value });
+  const lineChart = geometry.lines;
+  const { y, ticks, split } = percent ? { y: (value: number) => value, ticks: [25, 50, 75, 100], split: undefined } : geometry;
   const unit = periodUnit(period, periodCount), stacked = drawn.length > 1 && additive;
   const averageDuration = (size: number) => `${size * periodCount}-${chartPeriods[period].unit}`;
   const averageLabel = !cumulative && rollingPeriods > 1 ? `${averageDuration(rollingPeriods)} rolling ${rolling}` : "";
@@ -296,20 +299,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
   const describe = (bucket: ChartBucket) => `${heading(bucket)}: `
     + (present(bucket).map(item => `${item.label} ${format(bucket.values[item.key])}`).join(", ") || "none")
     + (stacked ? `; ${format(total(bucket))}${suffix} in all` : suffix) + (reference ? `; ${reference.label} ${format(reference.value)}` : "") + (bucket.detail ? `; ${bucket.detail}` : "");
-  // Additive running totals start at zero; a series that does not add up
-  // breaks its line where it has no value.
-  const path = (key: string) => {
-    let pen = "M";
-    const steps = buckets.flatMap((bucket, index) => {
-      const value = bucket.values[key] ?? (additive ? 0 : undefined);
-      if (value === undefined) { pen = "M"; return []; }
-      const step = `${pen} ${1000 * (index + .5) / buckets.length} ${100 - y(value)}`;
-      pen = "L";
-      return [step];
-    });
-    const lone = buckets.length === 1 && steps.length ? ` L 1000 ${100 - y(buckets[0].values[key] ?? 0)}` : "";
-    return (additive && steps.length ? `M ${500 / buckets.length} ${100 - y(buckets[0].values[key] ?? 0)} ` : "") + steps.join(" ").replace(/^M/, additive ? "L" : "M") + lone;
-  };
+  const path = (key: string) => timelinePath(buckets, key, y, additive);
   const columnAt = (index: number) => bars.current?.querySelectorAll<HTMLButtonElement>(":scope > button")[index];
   useLayoutEffect(() => {
     const element = tipRef.current, box = root.current;
@@ -322,14 +312,20 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
   function show(index: number, pinned = false, focus = false) {
     if (restoringFocus.current || loading || error || !pinned && (tip?.pinned || dragRef.current)) return;
     const box = root.current?.getBoundingClientRect(), at = columnAt(index)?.getBoundingClientRect(), plot = bars.current?.getBoundingClientRect();
+    if(pinned)setPin(buckets[index].key);
     if (box && at && plot) setTip({ bucket: buckets[index], x: at.left - box.left + at.width / 2, width: at.width, top: plot.top - box.top, pinned, focus });
   }
+  useEffect(() => {
+    if(!pin||loading||error)return;
+    const index=buckets.findIndex(bucket=>bucket.key===pin);if(index<0)return;
+    const frame=requestAnimationFrame(()=>show(index,true));return()=>cancelAnimationFrame(frame);
+  }, [pin, sourceBuckets, percent, loading, error]);
   const hidePreview = () => { if (!tip?.pinned) setTip(null); };
   useEffect(() => {
     if (!tip && !drag) return;
     const cancel = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      moveDrag(null); setTip(null);
+      moveDrag(null); setTip(null);if(pin)setPin("");
       if (tip?.pinned) {
         restoringFocus.current = true;
         columnAt(buckets.findIndex(bucket => bucket.key === tip.bucket.key))?.focus();
@@ -337,14 +333,14 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
       }
     };
     const outside = (event: PointerEvent) => {
-      if (event.target instanceof Node && !bars.current?.contains(event.target) && !tipRef.current?.contains(event.target)) setTip(null);
+      if (event.target instanceof Node && !bars.current?.contains(event.target) && !tipRef.current?.contains(event.target)) {setTip(null);if(pin)setPin("");}
     };
     const resize = () => { moveDrag(null); setTip(null); };
     window.addEventListener("keydown", cancel);
     document.addEventListener("pointerdown", outside);
     window.addEventListener("resize", resize);
     return () => { window.removeEventListener("keydown", cancel); document.removeEventListener("pointerdown", outside); window.removeEventListener("resize", resize); };
-  }, [tip, Boolean(drag)]);
+  }, [tip, Boolean(drag), pin]);
   const indexAt = (x: number) => {
     const box = bars.current?.getBoundingClientRect();
     return box?.width ? Math.max(0, Math.min(buckets.length - 1, Math.floor((x - box.left) / box.width * buckets.length))) : 0;
@@ -377,7 +373,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
   const density = buckets.length > 300 ? "denser" : buckets.length > 120 ? "dense" : "";
   const middle = buckets[Math.floor(buckets.length / 2)], last = buckets[buckets.length - 1];
   const selectable = (item: ChartSeries) => Boolean(onSelect) && item.value !== undefined;
-  return <div className="usage-chart" ref={root}>
+  return <div className="usage-chart" ref={root} data-view-field="chart_pins" data-pharos-target={`section:chart:${title}`}>
     <div className="usage-chart-head"><h3>{title}{averageLabel ? <span className="usage-chart-average-label"> {averageLabel}</span> : null}</h3><div className="usage-chart-controls">{controls}</div></div>
     {series.length > 1 || legend || onRange || reference ? <div className="usage-chart-legend">
       {series.length > 1 || legend ? [...new Set(series.map(item => item.group))].map(group => {
@@ -393,14 +389,14 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
       }) : null}
       {reference ? <span className="usage-legend-item usage-legend-reference" title={reference.label}><span className="usage-swatch usage-reference-swatch" aria-hidden="true" />{reference.label} · {format(reference.value)}</span> : null}
       {selected.length > 0 ? <button type="button" className="usage-legend-item usage-legend-clear" onClick={() => onSelect?.(null, "clear")}>Show all</button> : null}
-      {onRange ? <span className="usage-chart-hint">{series.some(selectable) ? "Click a key for filter options · " : ""}Click to inspect · drag across 2+ {linear ? "points" : "columns"} to filter dates</span> : null}
+      {onRange ? <span className="usage-chart-hint">{series.some(selectable) ? "Click a key for filter options · " : ""}Click to inspect · drag across 2+ {lineChart ? "points" : "columns"} to filter dates</span> : null}
     </div> : null}
     {error ? <p className="query-table-error">{error}</p> : null}
     <div className={`usage-chart-plot${split ? " broken" : ""}`}>
       {split ? <div className="usage-chart-log" aria-hidden="true"><span>log scale</span></div> : null}
       {ticks.map(tick => <div key={tick} className="usage-chart-grid" style={{ bottom: `${y(tick)}%` }} aria-hidden="true"><span>{tickFormat(tick)}</span></div>)}
       <div ref={bars} className={`usage-chart-bars ${density} ${loading ? "loading" : ""} ${onRange ? "pickable" : ""} ${drag ? "picking" : ""}`} role="group" aria-busy={loading} aria-label={split ? `${chartLabel}; linear up to ${tickFormat(split)}, logarithmic above` : chartLabel} {...picking}>
-        {linear && buckets.length ? <svg className="usage-chart-lines" viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
+        {lineChart && buckets.length ? <svg className="usage-chart-lines" viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
           {drawn.map(item => <path key={item.key} fill="none" stroke={item.color} strokeWidth="2" vectorEffect="non-scaling-stroke" d={path(item.key)} />)}
         </svg> : null}
         {reference ? <div className="usage-chart-reference" style={{ bottom: `${y(reference.value)}%` }} aria-hidden="true" /> : null}
@@ -408,7 +404,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
           const className = [tip?.bucket.key === bucket.key && !drag ? "active" : "", tip?.pinned && tip.bucket.key === bucket.key && !drag ? "inspected" : "", picked && index >= picked.first && index <= picked.last ? "picked" : ""].filter(Boolean).join(" ");
           return <button key={bucket.key} type="button" aria-label={describe(bucket)} aria-pressed={Boolean(tip?.pinned && tip.bucket.key === bucket.key)} className={className} onMouseEnter={() => show(index)} onFocus={() => show(index)} onMouseLeave={hidePreview} onBlur={hidePreview}
             onClick={event => { if (event.detail === 0) show(index, true, true); }}>
-            {linear ? <>{tip?.bucket.key === bucket.key && !drag ? <span className="usage-chart-line-focus" aria-hidden="true">
+            {lineChart ? <>{tip?.bucket.key === bucket.key && !drag ? <span className="usage-chart-line-focus" aria-hidden="true">
               {drawn.filter(item => additive || bucket.values[item.key] !== undefined).map(item => <i key={item.key} className="usage-chart-line-point" style={{ bottom: `${y(bucket.values[item.key] ?? 0)}%`, background: item.color }} />)}
             </span> : null}</> : <ColumnMarks bucket={bucket} series={drawn} scale={y} percent={percent} />}
           </button>;

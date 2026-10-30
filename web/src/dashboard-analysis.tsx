@@ -12,6 +12,7 @@ import { usageWorkspaceURL, type UsageDataset } from "./usage-workspace-model";
 import { orderedUsageQuery } from "./usage-query-order";
 import { toolMetricPresentation } from "./tools-dashboard-model";
 import { useOriginMetadata } from "./origin-dimensions";
+import { CreateDashboardCard } from "./create-dashboard-card";
 
 // Runs an analysis query, again on Refresh, and tags results with their query
 // so a stale response never renders under new settings.
@@ -145,6 +146,7 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
   const controls = <AnalysisControls catalog={catalog} view={view} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onFilter(current => withTimeRange(current, catalog.time, from, to, preset), preset)} />;
 
   return <section className="usage-analysis-dashboard" aria-label="Dashboard analysis" aria-busy={result.loading}>
+    <CreateDashboardCard catalog={catalog} state={state} where={where} />
     {controls}
     {error ? <p className="query-table-error" role="alert">{error}</p>
       : empty ? <p className="usage-analysis-empty" role="status">{analysisEmptyLabel(catalog, view)}</p>
