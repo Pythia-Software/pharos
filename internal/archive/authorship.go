@@ -1317,20 +1317,30 @@ func (c *Catalog) authorshipRunning() bool {
 }
 
 // RebuildAuthorship links headless runs to the commands that launched them,
-// classifies every user message of the work each mirror group is represented
-// by, in send order, and replaces message_authorship and
-// conversation_launches.
+// classifies user messages in send order and stores only changed rows.
 func (c *Catalog) RebuildAuthorship(ctx context.Context, generation string) error {
+	started := time.Now()
 	reportWork(ctx, "reading authorship inputs", "", 0, -1)
 	inputs, launches, err := c.authorshipInputs(ctx)
 	if err != nil {
 		return err
 	}
+	inputsTook := time.Since(started)
+	classified := time.Now()
 	results, err := c.classifyInputs(ctx, inputs)
 	if err != nil {
 		return err
 	}
-	return c.storeAuthorship(ctx, results, launches, generation)
+	classifyTook := time.Since(classified)
+	stored := time.Now()
+	// Keep both timings and direct write counts in the final journal step.
+	progress := withWorkProgress(ctx, func(work activityWork) {
+		if strings.HasPrefix(work.Phase, "saved authorship:") {
+			work.Phase += fmt.Sprintf("; inputs=%s classify=%s store=%s", inputsTook.Round(time.Millisecond), classifyTook.Round(time.Millisecond), time.Since(stored).Round(time.Millisecond))
+		}
+		reportWork(ctx, work.Phase, work.Unit, int(work.Done), int(work.Total))
+	})
+	return c.storeAuthorship(progress, results, launches, generation)
 }
 
 // The user messages to classify, and the agent replies, in send order, that
@@ -1488,42 +1498,22 @@ func classifyInputsFrom(ctx context.Context, q queryer, inputs []authorInput) ([
 	if len(inputs) == 0 {
 		return results, nil
 	}
-	rows, err := q.QueryContext(ctx, authorshipRepliesQuery, formatTime(inputs[0].SentAt.Add(-authorshipWindow)))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
 	classifier := newClassifier(inputs)
-	var pending *struct {
-		at     time.Time
-		origin textOrigin
-		text   string
-		kind   string
-	}
+	cursor := authorshipReplyCursor{q: q, start: inputs[0].SentAt.Add(-authorshipWindow), stop: inputs[len(inputs)-1].SentAt.Add(time.Second)}
+	var pending *authorshipReply
 	next := func() error {
-		pending = nil
-		for rows.Next() {
-			var id, conversation, createdAt, text, kind string
-			if err := rows.Scan(&id, &conversation, &createdAt, &text, &kind); err != nil {
-				return err
-			}
-			if at, ok := parseTime(createdAt); ok {
-				pending = &struct {
-					at     time.Time
-					origin textOrigin
-					text   string
-					kind   string
-				}{at, textOrigin{conversation, id}, text, kind}
-				return nil
-			}
-		}
-		return rows.Err()
+		var err error
+		pending, err = cursor.next(ctx)
+		return err
 	}
 	if err := next(); err != nil {
 		return nil, err
 	}
 	reportWork(ctx, "classifying authorship", "message", 0, len(inputs))
 	for index, input := range inputs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		cutoff := input.SentAt.Add(-authorshipWindow)
 		for pending != nil && pending.at.Before(input.SentAt) {
 			if pending.kind == "tool_call" {
@@ -1544,84 +1534,6 @@ func classifyInputsFrom(ctx context.Context, q queryer, inputs []authorInput) ([
 		}
 	}
 	return results, nil
-}
-
-func (c *Catalog) storeAuthorship(ctx context.Context, results []authorResult, launches []conversationLaunch, generation string) error {
-	tx, err := c.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, "DELETE FROM conversation_launches"); err != nil {
-		return err
-	}
-	for _, launch := range launches {
-		if _, err := tx.ExecContext(ctx, "INSERT INTO conversation_launches(child_id,parent_id,tool_call_id,program) VALUES(?,?,?,?)",
-			launch.child, launch.parent, launch.toolCall, launch.program); err != nil {
-			return err
-		}
-	}
-	for _, table := range []string{"message_authorship", "message_authorship_spans"} {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
-			return err
-		}
-	}
-	// Launches are in place, so works folded into another can be found.
-	parents, _, err := foldedParents(ctx, tx)
-	if err != nil {
-		return err
-	}
-	columns := append([]string{"message_id", "conversation_id", "workspace_id", "sent_at", "day", "total_chars"}, authorshipColumns()...)
-	columns = append(columns, "spans_json", "work_id", "words", "main_category", "categories", "rules")
-	statement, err := tx.PrepareContext(ctx, "INSERT INTO message_authorship("+strings.Join(columns, ",")+") VALUES("+placeholders(len(columns))+")")
-	if err != nil {
-		return err
-	}
-	defer statement.Close()
-	spanStatement, err := tx.PrepareContext(ctx, `INSERT INTO message_authorship_spans(message_id,position,category,rule,reason,start_byte,end_byte,chars,words,
-		source_conversation_id,source_message_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
-	if err != nil {
-		return err
-	}
-	defer spanStatement.Close()
-	reportWork(ctx, "saving authorship", "message", 0, len(results))
-	for resultIndex, result := range results {
-		input := result.Input
-		counts := countSpans(input.Text, result.Spans)
-		spans, _ := json.Marshal(result.Spans)
-		values := []any{input.ID, input.ConversationID, input.WorkspaceID, formatTime(input.SentAt), input.SentAt.Local().Format("2006-01-02"),
-			utf8.RuneCountInString(strings.TrimSpace(input.Text))}
-		words := 0
-		for _, category := range authorshipCategories {
-			values = append(values, counts.chars[category], counts.words[category])
-			words += counts.words[category]
-		}
-		summary := summarizeSpans(input.Text, result.Spans)
-		values = append(values, string(spans), rootWorkspace(input.WorkspaceID, parents), words, nilIfEmpty(summary.main), summary.categories, summary.rules)
-		if _, err := statement.ExecContext(ctx, values...); err != nil {
-			return err
-		}
-		wordCounts := authorshipWordCounts(input.Text, result.Spans)
-		for position, span := range result.Spans {
-			value := input.Text[span.Start:span.End]
-			if _, err := spanStatement.ExecContext(ctx, input.ID, position, span.Category, spanRule(span), nilIfEmpty(span.Reason), span.Start, span.End,
-				utf8.RuneCountInString(strings.TrimSpace(value)), wordCounts[position], nilIfEmpty(span.Source), nilIfEmpty(span.Message)); err != nil {
-				return err
-			}
-		}
-		if resultIndex%100 == 0 || resultIndex+1 == len(results) {
-			reportWork(ctx, "saving authorship", "message", resultIndex+1, len(results))
-		}
-	}
-	for key, value := range map[string]string{"authorship_generation": generation, "authorship_built_at": now()} {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value); err != nil {
-			return err
-		}
-	}
-	if err := cacheAuthoredWorkspaceNames(tx, results); err != nil {
-		return err
-	}
-	return tx.Commit()
 }
 
 // AuthorshipStats summarizes user-turn text for Settings: all-time and
