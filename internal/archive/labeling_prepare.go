@@ -103,9 +103,20 @@ type labelingUnitStat struct {
 // labelingPass holds the snapshot's shared inputs and the counts as
 // conversations are read.
 type labelingPass struct {
-	tx             *sql.Tx
+	tx             labelingReader
 	writer         *labelingWriter
 	reasoningStore bool
+	// itemsOnly builds units and nothing else: no duplicate checks, actions,
+	// statistics or exclusion rows. The labels ledger reads a live catalog
+	// this way (labels_items.go); prepare keeps every record.
+	itemsOnly bool
+	// emit receives each unit once its context is set.
+	emit func(*labelingUnit) error
+	// loadAuthorship, when set, supplies classifications not in authorship:
+	// the labels ledger reads them from the stored ledger on demand, where
+	// prepare classifies the whole snapshot in memory first.
+	loadAuthorship func(id string) (*authorResult, error)
+	authorshipErr  error
 	// targetCache holds resolved target bytes of re-sent sources.
 	targetCache map[string][]bool
 	// automated marks conversations with a user message from automation.
@@ -143,6 +154,30 @@ type labelingPass struct {
 	counters   map[string]int
 	stats      []labelingUnitStat
 	firstAt    map[string]string
+}
+
+// labelingReader is a read connection or transaction the pass reads with.
+type labelingReader interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// author is the classification of a user message: from the in-memory map,
+// else from loadAuthorship (cached, including a miss). A load error is kept
+// in authorshipErr and ends the conversation's pass.
+func (p *labelingPass) author(id string) *authorResult {
+	if result, ok := p.authorship[id]; ok || p.loadAuthorship == nil {
+		return result
+	}
+	result, err := p.loadAuthorship(id)
+	if err != nil {
+		if p.authorshipErr == nil {
+			p.authorshipErr = err
+		}
+		return nil
+	}
+	p.authorship[id] = result
+	return result
 }
 
 // labelingDuplicateCheck compares a delegation, or its result, with the
@@ -340,7 +375,7 @@ func labelingCandidate(record labelingRecord) string {
 
 // readLabelingRecords reads one conversation's messages in transcript order,
 // with the embedded agent session each belongs to.
-func readLabelingRecords(ctx context.Context, tx *sql.Tx, conversation string) ([]labelingRecord, error) {
+func readLabelingRecords(ctx context.Context, tx labelingReader, conversation string) ([]labelingRecord, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT m.id,m.role,m.kind,m.selected,COALESCE(m.created_at,''),COALESCE(m.sender,''),COALESCE(m.reasoning_format,''),m.content_hash,COALESCE(m.call_id,''),
 		CASE WHEN m.kind IN ('message','delegation','delegation_result','reasoning','thinking','analysis')
 			OR (m.kind='metadata' AND substr(m.text,1,10)='{"reason":') THEN m.text END,
@@ -414,71 +449,20 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 	snapshot["build"] = labelingBuild()
 
 	progress("reading works, identity links and lineage")
-	p := &labelingPass{tx: tx, reasoningStore: present["reasoning_extraction_state"], targetCache: map[string][]bool{}, automated: map[string]bool{}, unparsedActor: map[string]string{}, laterCopies: map[string]string{}, userTimeline: map[string][]labelingUserMessage{}, shortHashes: map[string]bool{}, conversations: map[string]*labelingConversation{}, mainSession: map[string]string{}, sessionKind: map[string]string{},
-		childOwners: map[string]bool{}, current: map[string]bool{}, children: map[string]*labelingChild{}, parents: map[string][]labelingParentMessage{},
-		units:      map[[4]string]*[3]int{},
-		exclusions: map[[2]string]int{}, counters: map[string]int{}, firstAt: map[string]string{}}
-	workspaces, err := queryMapsContext(ctx, tx, `SELECT w.id,w.source_kind,w.activity_at FROM workspaces w`)
-	if err != nil {
-		return nil, err
-	}
-	links, err := queryMapsContext(ctx, tx, identityLinkWorkspacesSQL)
-	if err != nil {
-		return nil, err
-	}
-	p.representative = mirrorRepresentatives(workspaces, links)
-	kept := []map[string]any{}
-	for _, row := range workspaces {
-		if p.representative[firstString(row["id"])] == "" {
-			kept = append(kept, map[string]any{"workspace_id": row["id"]})
-		}
-	}
-	ids := []string{}
-	rows, err := tx.QueryContext(ctx, `SELECT id,workspace_id,provider,COALESCE(started_at,''),COALESCE(parent_id,''),agent_depth FROM conversations ORDER BY id`)
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		info := &labelingConversation{}
-		if err := rows.Scan(&info.id, &info.workspace, &info.provider, &info.started, &info.parent, &info.depth); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		p.conversations[info.id] = info
-		ids = append(ids, info.id)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	sessions, err := queryMapsContext(ctx, tx, `SELECT id,conversation_id,native_id,kind,COALESCE(child_conversation_id,'') child,COALESCE(delegation_message_id,'') delegation FROM agent_sessions`)
+	p := newLabelingPass(tx, present["reasoning_extraction_state"])
+	ids, kept, sessions, unavailableLedger, err := loadLabelingPass(ctx, tx, p)
 	if err != nil {
 		return nil, err
 	}
 	delegated := map[string][]string{} // delegation message: its child's owner keys
 	for _, row := range sessions {
-		id := firstString(row["id"])
-		p.sessionKind[id] = firstString(row["kind"])
-		if row["native_id"] == "main" {
-			p.mainSession[firstString(row["conversation_id"])] = id
-		}
 		if message := firstString(row["delegation"]); message != "" {
-			owner := "s:" + id
+			owner := "s:" + firstString(row["id"])
 			if child := firstString(row["child"]); child != "" {
 				owner = "c:" + child
 			}
 			delegated[message] = append(delegated[message], owner)
-			p.childOwners[owner] = true
 		}
-	}
-	reasoning, err := queryMapsContext(ctx, tx, `SELECT conversation_id,unavailable_count FROM reasoning_extraction_state WHERE version=?`, reasoningExtractionVersion)
-	if err != nil {
-		return nil, err
-	}
-	unavailableLedger := map[string]int64{}
-	for _, row := range reasoning {
-		p.current[firstString(row["conversation_id"])] = true
-		unavailableLedger[firstString(row["conversation_id"])] = integer(row["unavailable_count"])
 	}
 
 	scope, selection, err := labelingScope(ids, p, opts)
@@ -696,6 +680,85 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 	return manifest, nil
 }
 
+// newLabelingPass is an empty pass reading through tx.
+func newLabelingPass(tx labelingReader, reasoningStore bool) *labelingPass {
+	return &labelingPass{tx: tx, reasoningStore: reasoningStore, targetCache: map[string][]bool{}, automated: map[string]bool{}, unparsedActor: map[string]string{},
+		laterCopies: map[string]string{}, userTimeline: map[string][]labelingUserMessage{}, shortHashes: map[string]bool{}, conversations: map[string]*labelingConversation{},
+		mainSession: map[string]string{}, sessionKind: map[string]string{}, childOwners: map[string]bool{}, current: map[string]bool{}, children: map[string]*labelingChild{},
+		parents: map[string][]labelingParentMessage{}, units: map[[4]string]*[3]int{}, exclusions: map[[2]string]int{}, counters: map[string]int{}, firstAt: map[string]string{},
+		authorship: map[string]*authorResult{}, lineage: &usageConversationAttribution{}}
+}
+
+// loadLabelingPass reads what every conversation's pass needs from the whole
+// catalog: which works are mirrors (counted once, through their
+// representative), the conversations, the agent sessions (their kinds, each
+// conversation's main session, the children delegations started) and which
+// conversations' reasoning extraction is current. Prepare and the labels
+// ledger both start here, so they decide units alike.
+func loadLabelingPass(ctx context.Context, q labelingReader, p *labelingPass) (ids []string, kept, sessions []map[string]any, unavailable map[string]int64, err error) {
+	workspaces, err := queryMapsContext(ctx, q, `SELECT w.id,w.source_kind,w.activity_at FROM workspaces w`)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	links, err := queryMapsContext(ctx, q, identityLinkWorkspacesSQL)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	p.representative = mirrorRepresentatives(workspaces, links)
+	for _, row := range workspaces {
+		if p.representative[firstString(row["id"])] == "" {
+			kept = append(kept, map[string]any{"workspace_id": row["id"]})
+		}
+	}
+	rows, err := q.QueryContext(ctx, `SELECT id,workspace_id,provider,COALESCE(started_at,''),COALESCE(parent_id,''),agent_depth FROM conversations ORDER BY id`)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	for rows.Next() {
+		info := &labelingConversation{}
+		if err := rows.Scan(&info.id, &info.workspace, &info.provider, &info.started, &info.parent, &info.depth); err != nil {
+			rows.Close()
+			return nil, nil, nil, nil, err
+		}
+		p.conversations[info.id] = info
+		ids = append(ids, info.id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	sessions, err = queryMapsContext(ctx, q, `SELECT id,conversation_id,native_id,kind,COALESCE(child_conversation_id,'') child,COALESCE(delegation_message_id,'') delegation FROM agent_sessions`)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	for _, row := range sessions {
+		id := firstString(row["id"])
+		p.sessionKind[id] = firstString(row["kind"])
+		if row["native_id"] == "main" {
+			p.mainSession[firstString(row["conversation_id"])] = id
+		}
+		if message := firstString(row["delegation"]); message != "" {
+			owner := "s:" + id
+			if child := firstString(row["child"]); child != "" {
+				owner = "c:" + child
+			}
+			p.childOwners[owner] = true
+		}
+	}
+	unavailable = map[string]int64{}
+	if p.reasoningStore {
+		reasoning, err := queryMapsContext(ctx, q, `SELECT conversation_id,unavailable_count FROM reasoning_extraction_state WHERE version=?`, reasoningExtractionVersion)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		for _, row := range reasoning {
+			p.current[firstString(row["conversation_id"])] = true
+			unavailable[firstString(row["conversation_id"])] = integer(row["unavailable_count"])
+		}
+	}
+	return ids, kept, sessions, unavailable, nil
+}
+
 // labelingScope chooses the conversations to prepare: all of them, the named
 // ones, or a deterministic sample of those whose work is not a mirror.
 func labelingScope(ids []string, p *labelingPass, opts labelingPrepareOptions) ([]string, map[string]any, error) {
@@ -777,7 +840,11 @@ func (p *labelingPass) conversation(ctx context.Context, id string) error {
 	}
 	p.flattenedKeys = map[string]bool{}
 	for _, record := range records {
-		if result := p.authorship[record.id]; result != nil && record.selected {
+		// Only user messages are classified.
+		if record.role != "user" || !record.selected {
+			continue
+		}
+		if result := p.author(record.id); result != nil {
 			for _, answer := range result.Answers {
 				p.flattenedKeys[answer.Origin.message+"\x00"+answer.Title] = true
 			}
@@ -818,7 +885,9 @@ func (p *labelingPass) conversation(ctx context.Context, id string) error {
 		if copied[record.id] {
 			reason, detail, duplicate = "inherited_history", "copied from the parent conversation before the fork", inherited[record.id]
 		} else {
-			p.rememberChildText(id, record)
+			if !p.itemsOnly {
+				p.rememberChildText(id, record)
+			}
 			if unit, reason, detail, err = p.record(id, record, answers, calls); err != nil {
 				return err
 			}
@@ -856,7 +925,14 @@ func (p *labelingPass) conversation(ctx context.Context, id string) error {
 		if state.assistant != "" {
 			unit.contextRefs["prior_assistant"] = state.assistantRef
 		}
-		p.addUnit(unit)
+		if !p.itemsOnly {
+			p.addUnit(unit)
+		}
+		if p.emit != nil {
+			if err := p.emit(unit); err != nil {
+				return err
+			}
+		}
 		if p.writer != nil {
 			if err := p.writer.unit(unit); err != nil {
 				return err
@@ -873,6 +949,9 @@ func (p *labelingPass) conversation(ctx context.Context, id string) error {
 		if reply {
 			state.assistant, state.assistantRef = record.text.String, map[string]any{"message": record.id}
 		}
+	}
+	if p.authorshipErr != nil {
+		return fmt.Errorf("authorship of conversation %s: %w", id, p.authorshipErr)
 	}
 	return p.flushActions()
 }
@@ -906,7 +985,7 @@ func attachMarkerChunks(chunks []labelingChunk, pieces []labelingPiece) ([]label
 // requestVisible is the visible text a user-role record would have as a
 // unit, without recording anything: context for the records after a copy.
 func (p *labelingPass) requestVisible(record labelingRecord) string {
-	result := p.authorship[record.id]
+	result := p.author(record.id)
 	if result == nil || len(result.Spans) == 0 || !utf8.ValidString(record.text.String) {
 		return ""
 	}
@@ -1487,7 +1566,7 @@ func (p *labelingPass) record(conversation string, record labelingRecord, answer
 	var rendered humanUnit
 	switch candidate {
 	case "user":
-		result := p.authorship[record.id]
+		result := p.author(record.id)
 		if result == nil || len(result.Spans) == 0 {
 			if record.createdAt == "" {
 				return nil, "authorship_missing", "the message has no send time, which classification needs", nil
@@ -1537,7 +1616,7 @@ func (p *labelingPass) record(conversation string, record labelingRecord, answer
 		if candidate == "thinking" {
 			unit.channel = "analysis"
 		}
-		if candidate == "delegation" {
+		if candidate == "delegation" && !p.itemsOnly {
 			delegation := record.id
 			if record.kind == "delegation_result" {
 				delegation = calls[record.callID]
@@ -1560,7 +1639,7 @@ func (p *labelingPass) record(conversation string, record labelingRecord, answer
 	for _, chunk := range unit.chunks {
 		hash, short := itemTargetHash(unit.visible, chunk, unit.markers)
 		unit.hashes = append(unit.hashes, hash)
-		if short {
+		if short && !p.itemsOnly {
 			p.shortHashes[hash] = true
 		}
 	}
@@ -1944,7 +2023,7 @@ func (p *labelingPass) reusePieces(text string, piece labelingPiece) []labelingP
 }
 
 func (p *labelingPass) reuseFrom(text string, piece labelingPiece, visiting map[string]bool) []labelingPiece {
-	source := p.authorship[piece.SourceMessage]
+	source := p.author(piece.SourceMessage)
 	if source == nil {
 		return nil
 	}
@@ -2023,7 +2102,7 @@ func (p *labelingPass) messageSessionKind(id string) string {
 		return ""
 	}
 	var session sql.NullString
-	if err := p.tx.QueryRow(`SELECT MIN(agent_session_id) FROM agent_session_messages WHERE message_id=?`, id).Scan(&session); err != nil {
+	if err := p.tx.QueryRowContext(context.Background(), `SELECT MIN(agent_session_id) FROM agent_session_messages WHERE message_id=?`, id).Scan(&session); err != nil {
 		return ""
 	}
 	return p.sessionKind[session.String]
@@ -2036,7 +2115,7 @@ func (p *labelingPass) sourceTargets(id string, visiting map[string]bool) []bool
 	if mask, ok := p.targetCache[id]; ok {
 		return mask
 	}
-	result := p.authorship[id]
+	result := p.author(id)
 	if result == nil || visiting[id] || len(result.Spans) == 0 || result.Spans[0].Category == spanAutomated || p.messageSessionKind(id) == "subagent" {
 		return nil
 	}
