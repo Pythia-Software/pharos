@@ -145,11 +145,20 @@ func TestLabelsLedgerLabelsEveryUnitOnceAndThenOnlyChanges(t *testing.T) {
 	// back are restored.
 	execTx(t, catalog.DB, `DELETE FROM messages WHERE id='m-o8'`, `DELETE FROM message_labels WHERE message_id IN ('m-a1','m-h3')`)
 	healed, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{})
-	if err != nil || healed.MessagesRemoved != 1 || healed.MessagesLabeled != 2 || labelCount(t, catalog, "") != len(messages) {
+	// c-root (lost labels) and c-other (a deleted message): c-root's forks
+	// copy its history, but restoring labels changed none of its inputs.
+	if err != nil || healed.MessagesRemoved != 1 || healed.MessagesLabeled != 2 || healed.ConversationsBuilt != 2 || labelCount(t, catalog, "") != len(messages) {
 		t.Fatalf("healing run: %+v %v", healed, err)
 	}
 	if labelCount(t, catalog, "WHERE message_id='m-o8'") != 0 {
 		t.Fatal("a deleted message kept its label")
+	}
+	// A new message in a parent: its forks (six) are rebuilt with it, and
+	// only the new message is labeled.
+	execTx(t, catalog.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('m-a9','c-root','m-a9','assistant','message','Wrapped up.','hash-m-a9','2026-09-01T13:00:00.000Z',998)`)
+	parent, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{})
+	if err != nil || parent.ConversationsBuilt != 7 || parent.MessagesLabeled != 1 {
+		t.Fatalf("a parent's change: %+v %v", parent, err)
 	}
 	var dirty int
 	if err := catalog.DB.QueryRow(`SELECT COUNT(*) FROM message_labels_dirty`).Scan(&dirty); err != nil || dirty != 0 {

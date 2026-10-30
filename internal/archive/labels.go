@@ -459,16 +459,19 @@ func (c *Catalog) labelsWork(ctx context.Context, builder *labelsItemBuilder, id
 		ids = slices.DeleteFunc(slices.Clone(opts.Conversations), func(id string) bool { return p.conversations[id] == nil })
 		all = true
 	}
-	want := map[string]bool{}
+	want, changed := map[string]bool{}, map[string]bool{}
 	structures := map[string]string{}
 	for _, id := range ids {
 		structures[id] = labelsStructure(p, builder.sessions, id)
 		previous, built := stored[id]
-		if all || !built || previous != structures[id] || tokens[id] != "" || counts[id] != units[id] {
+		// Its inputs changed: its forks, which copy its history, follow.
+		changed[id] = all || built && previous != structures[id] || tokens[id] != ""
+		if changed[id] || !built || counts[id] != units[id] {
 			want[id] = true
 		}
 	}
-	// Forks copy their parent's history, so they follow it.
+	// Forks copy their parent's history, so they follow a parent whose
+	// inputs changed (not one only rebuilt to restore lost labels).
 	children := map[string][]string{}
 	for id, info := range p.conversations {
 		if info.parent != "" {
@@ -476,8 +479,10 @@ func (c *Catalog) labelsWork(ctx context.Context, builder *labelsItemBuilder, id
 		}
 	}
 	queue := []string{}
-	for id := range want {
-		queue = append(queue, id)
+	for id := range changed {
+		if changed[id] {
+			queue = append(queue, id)
+		}
 	}
 	for ; len(queue) > 0; queue = queue[1:] {
 		for _, child := range children[queue[0]] {
