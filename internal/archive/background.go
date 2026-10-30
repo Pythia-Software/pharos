@@ -129,7 +129,9 @@ type backgroundSettings struct {
 	HoldWhenBusy bool              `json:"hold_when_busy"`
 	Overrides    map[string]string `json:"overrides"`
 	Placements   map[string]string `json:"placements"`
-	sync         syncSettings
+	// Battery is what each cadence does on battery (power.go).
+	Battery batteryPolicy `json:"battery"`
+	sync    syncSettings
 }
 
 const defaultDailyAt = "03:00"
@@ -141,17 +143,20 @@ func (c *Catalog) backgroundSettings(ctx context.Context, at time.Time) (backgro
 	if err != nil {
 		return backgroundSettings{}, err
 	}
-	settings := backgroundSettings{Interval: indexing.Interval, DailyAt: defaultDailyAt, HoldWhenBusy: true, Overrides: map[string]string{}, Placements: map[string]string{}, sync: indexing}
+	settings := backgroundSettings{Interval: indexing.Interval, DailyAt: defaultDailyAt, HoldWhenBusy: true, Overrides: map[string]string{}, Placements: map[string]string{},
+		Battery: defaultBatteryPolicy(), sync: indexing}
 	var paused sql.NullString
 	var hold int
-	var overrides, placements string
-	err = c.reader().QueryRowContext(ctx, "SELECT paused_until,daily_at,hold_when_busy,overrides_json,placements_json FROM background_settings WHERE host_id=?", currentHost().ID).
-		Scan(&paused, &settings.DailyAt, &hold, &overrides, &placements)
+	var overrides, placements, battery string
+	err = c.reader().QueryRowContext(ctx, "SELECT paused_until,daily_at,hold_when_busy,overrides_json,placements_json,battery_json FROM background_settings WHERE host_id=?", currentHost().ID).
+		Scan(&paused, &settings.DailyAt, &hold, &overrides, &placements, &battery)
 	switch {
 	case err == nil:
 		settings.PausedUntil, settings.HoldWhenBusy = paused.String, hold != 0
 		_ = json.Unmarshal([]byte(overrides), &settings.Overrides)
 		_ = json.Unmarshal([]byte(placements), &settings.Placements)
+		// Stored choices over the defaults, so a new choice gets its default.
+		_ = json.Unmarshal([]byte(battery), &settings.Battery)
 	case !errors.Is(err, sql.ErrNoRows) && !strings.Contains(err.Error(), "no such table"):
 		return settings, err
 	}
@@ -414,6 +419,8 @@ type backgroundInputs struct {
 	backupDestination            string
 	lastBackup                   string
 	requested                    map[string]bool
+	// power is this Mac's power source, for the battery policy.
+	power powerState
 }
 
 func (c *Catalog) readBackgroundInputs(ctx context.Context) backgroundInputs {
@@ -448,8 +455,10 @@ type itemPlan struct {
 	Error  string
 	// Missed is daily work that did not run at its time.
 	Missed bool
-	// Quiet is when the library is next quiet enough for heavier work.
+	// Overdue is work late enough to run even while this Mac is busy.
 	Overdue bool
+	// WaitsForPower is work the battery policy holds until plugged in.
+	WaitsForPower bool
 }
 
 // backgroundPlan is every item's place in the schedule at at.
@@ -564,6 +573,16 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 				plan.Next = retry
 			}
 		}
+		if cadenceRank(plan.Cadence) < len(cadences) {
+			switch settings.Battery.onPower(plan.Cadence, in.power) {
+			case batteryWait:
+				plan.Next, plan.WaitsForPower = time.Time{}, plan.Pending || item.ID == "conversations" || item.continuous
+			case batterySlower:
+				if item.ID == "conversations" && !plan.Next.IsZero() {
+					plan.Next = plan.Next.Add(slowerBy(settings.Interval))
+				}
+			}
+		}
 		if plan.Cadence == cadenceManual || settings.Mode != "on" {
 			plan.Next = time.Time{}
 		}
@@ -574,6 +593,12 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 		plans = append(plans, plan)
 	}
 	return plans
+}
+
+// slowerBy is how much later scheduled indexing runs on battery when
+// Frequently runs slower: up to batterySlowerInterval after the last run.
+func slowerBy(intervalSeconds int) time.Duration {
+	return max(0, batterySlowerInterval-time.Duration(intervalSeconds)*time.Second)
 }
 
 func maxTime(a, b time.Time) time.Time {
@@ -598,6 +623,9 @@ type backgroundState struct {
 	wake      chan struct{}
 	costs     map[string]itemCost
 	costsAt   time.Time
+	// power is the last power reading (cachedPower).
+	power   powerState
+	powerAt time.Time
 	// backup is the last backup's destination and time, from backups.json.
 	backup   [2]string
 	backupAt time.Time
@@ -678,6 +706,7 @@ func (s *Server) backgroundInputsFor(ctx context.Context, requested map[string]b
 	}
 	in.backupDestination, in.lastBackup = s.cachedBackup(config)
 	in.requested = requested
+	in.power = s.cachedPower(ctx)
 	return in
 }
 

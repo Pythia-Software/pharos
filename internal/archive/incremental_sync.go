@@ -188,9 +188,19 @@ func (s *Server) automaticLoop(ctx context.Context) {
 	timer := time.NewTicker(time.Second)
 	defer timer.Stop()
 	for {
-		settings, err := s.Catalog.syncSettings(ctx)
-		if err == nil && settings.Enabled && !s.Catalog.backgroundPaused(ctx, time.Now()) {
+		background, err := s.Catalog.backgroundSettings(ctx, time.Now())
+		settings := background.sync
+		// On battery, Frequently may wait until plugged in or run less
+		// often (§11).
+		battery := batterySame
+		if err == nil && background.Mode == "on" {
+			battery = background.Battery.onPower(cadenceFrequent, s.cachedPower(ctx))
+		}
+		if err == nil && background.Mode == "on" && battery != batteryWait {
 			due, _ := time.Parse(time.RFC3339Nano, settings.NextAt)
+			if battery == batterySlower && !due.IsZero() {
+				due = due.Add(slowerBy(settings.Interval))
+			}
 			if due.IsZero() || !time.Now().Before(due) {
 				s.runAutomatic(ctx, settings)
 			}

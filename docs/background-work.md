@@ -1598,6 +1598,16 @@ the same schedule from one declaration (`backgroundItems`):
 - **Hold when busy.** With `hold_when_busy` (default), Hourly and Daily
   work waits while the one-minute load is over 80% of the cores, unless it
   is overdue (3 h past an hourly update, 12 h past the daily time).
+- **On battery** (`power.go`, read from `pmset` at most once a minute; a
+  Mac whose source cannot be read counts as plugged in). Each cadence has a
+  choice in `background_settings.battery_json`: Frequently runs as plugged
+  in, every 15 min (default: scheduled indexing waits until 15 min after its
+  last run) or waits until plugged in; Hourly and Daily run as plugged in or
+  wait (default). Below 20% charge or in Low Power Mode everything waits
+  (default on). Waiting work is `power` ("Waits until plugged in") in the
+  view, and the headline says what waits and what still runs. Run now runs
+  whatever the power source. The freshness ledger does not excuse waiting
+  for power: work past its cadence's window is `late`.
 - **Holding.** A pass holds the ingest coordinator as a scheduled index
   does: a manual index cancels it, and a scheduled index waits for it.
 - **Freshness.** Work waiting for its cadence is `scheduled`
@@ -1605,7 +1615,7 @@ the same schedule from one declaration (`backgroundItems`):
   `deferred-by-schedule` (behind) when the schedule will not run it (§5).
 - **Surfaces.** `/api/status` carries `background`: the headline, every
   item's state (`running`, `queued`, `failed`, `missed`, `never`,
-  `current`, `paused`, `manual`, `unavailable`) with `as_of` and
+  `power`, `current`, `paused`, `manual`, `unavailable`) with `as_of` and
   `next_at`, one row per cadence, and the cost of Update everything now.
   `GET /api/background` adds the settings, the placement rule and the last
   24 hours' cost (measured for scheduled indexing and journaled passes,

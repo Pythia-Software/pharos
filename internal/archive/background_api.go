@@ -175,10 +175,10 @@ func itemFailure(item backgroundItem, rows map[string]freshnessRow) string {
 
 // stateLabels are the item and cadence states' words.
 var stateLabels = map[string]string{"running": "Updating now", "queued": "Up next", "failed": "Failed", "missed": "Missed its daily time", "paused": "Paused",
-	"manual": "Only when you ask", "current": "Updated", "never": "Not run yet", "unavailable": "Not set up"}
+	"manual": "Only when you ask", "current": "Updated", "never": "Not run yet", "unavailable": "Not set up", "power": "Waits until plugged in"}
 
 // stateRank orders states from the one a cadence's row should show first.
-var stateRank = []string{"failed", "running", "missed", "queued", "never", "current", "paused", "manual", "unavailable"}
+var stateRank = []string{"failed", "running", "missed", "queued", "never", "power", "current", "paused", "manual", "unavailable"}
 
 // backgroundView is the schedule as surfaces show it.
 func (s *Server) backgroundView(ctx context.Context, views []opView, freshness []freshnessRow, at time.Time) map[string]any {
@@ -196,7 +196,7 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 	live, order := runningItems(views)
 	items := []map[string]any{}
 	byCadence := map[string][]map[string]any{}
-	failed, missed := []map[string]any{}, false
+	failed, missed, waiting := []map[string]any{}, false, false
 	for _, plan := range plans {
 		item, _ := backgroundItemByID(plan.ID)
 		cost, measured := costs[item.ID]
@@ -219,6 +219,8 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 			state = "manual"
 		case problem != "":
 			state = "failed"
+		case plan.WaitsForPower:
+			state = "power"
 		case plan.Due:
 			state = "queued"
 		case plan.Missed:
@@ -250,6 +252,7 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 			failed = append(failed, entry)
 		}
 		missed = missed || state == "missed"
+		waiting = waiting || state == "power"
 	}
 	rowsOut := []map[string]any{}
 	for _, cadence := range cadences {
@@ -305,7 +308,7 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 		everythingText += "."
 	}
 	return map[string]any{"mode": settings.Mode, "paused_until": nullable(settings.PausedUntil), "items": items, "cadences": rowsOut,
-		"headline":   backgroundHeadline(settings, items, order, failed, missed),
+		"headline": backgroundHeadline(settings, items, order, failed, missed, waiting, in.power), "power": in.power,
 		"everything": map[string]any{"seconds": everything, "text": everythingText}}
 }
 
@@ -353,7 +356,7 @@ func itemChoices(item backgroundItem, settings backgroundSettings) []map[string]
 
 // backgroundHeadline is the panel's first line: what is happening, and what
 // it means for the pages.
-func backgroundHeadline(settings backgroundSettings, items []map[string]any, running []string, failed []map[string]any, missed bool) map[string]any {
+func backgroundHeadline(settings backgroundSettings, items []map[string]any, running []string, failed []map[string]any, missed, waiting bool, power powerState) map[string]any {
 	byID := map[string]map[string]any{}
 	for _, item := range items {
 		byID[item["id"].(string)] = item
@@ -381,12 +384,48 @@ func backgroundHeadline(settings backgroundSettings, items []map[string]any, run
 			text += " Pharos tries again at " + clockWords(next) + "."
 		}
 		return map[string]any{"tone": "bad", "title": fmt.Sprintf("%s couldn’t update", item["label"]), "text": text, "tech": item["error"]}
+	case waiting:
+		return batteryHeadline(settings.Battery, power)
 	case missed:
 		return map[string]any{"tone": "behind", "title": "Catching up on daily work",
 			"text":   "Daily work didn’t run at its time, perhaps because this Mac was asleep or the library was away. It runs at the next quiet moment.",
 			"action": map[string]any{"label": "Run daily work now", "path": "/api/background/run", "body": map[string]any{"cadence": cadenceDaily}}}
 	}
 	return map[string]any{"tone": "good", "title": "Up to date", "text": "Everything is on schedule."}
+}
+
+// batteryHeadline says what waits on battery, and what still runs.
+func batteryHeadline(policy batteryPolicy, power powerState) map[string]any {
+	if policy.onPower(cadenceDaily, power) == batteryWait && policy.onPower(cadenceHourly, power) == batteryWait && policy.onPower(cadenceFrequent, power) == batteryWait {
+		title := "On battery"
+		if power.LowPower {
+			title = "Low Power Mode"
+		} else if power.Percent >= 0 && power.Percent < lowBatteryPercent {
+			title = fmt.Sprintf("Battery at %d%%", power.Percent)
+		}
+		return map[string]any{"tone": "paused", "title": title, "text": "Background updates wait until this Mac is plugged in."}
+	}
+	waits := []string{}
+	for _, cadence := range []string{cadenceHourly, cadenceDaily} {
+		if policy.of(cadence) == batteryWait {
+			waits = append(waits, cadence)
+		}
+	}
+	text := ""
+	if len(waits) > 0 {
+		text = strings.ToUpper(waits[0][:1]) + waits[0][1:]
+		if len(waits) > 1 {
+			text += " and " + waits[1]
+		}
+		text += " work waits until this Mac is plugged in."
+	}
+	switch policy.of(cadenceFrequent) {
+	case batterySlower:
+		text += fmt.Sprintf(" New conversations come in every %d min.", int(batterySlowerInterval.Minutes()))
+	case batterySame:
+		text += " New conversations come in as usual."
+	}
+	return map[string]any{"tone": "paused", "title": "On battery", "text": strings.TrimSpace(text)}
 }
 
 // backgroundDayCost is the last 24 hours of background work on this Mac:
@@ -469,10 +508,12 @@ func (s *Server) getBackground(w http.ResponseWriter, r *http.Request) {
 	freshness := s.freshness(r.Context(), views, false)
 	writeJSON(w, map[string]any{
 		"settings": map[string]any{"mode": settings.Mode, "paused_until": nullable(settings.PausedUntil), "interval_seconds": settings.Interval,
-			"daily_at": settings.DailyAt, "hold_when_busy": settings.HoldWhenBusy, "overrides": settings.Overrides},
-		"view": s.backgroundView(r.Context(), views, freshness, at),
-		"rule": map[string]any{"frequent_seconds": cadenceLimit[cadenceFrequent], "hourly_seconds": cadenceLimit[cadenceHourly]},
-		"cost": s.backgroundDayCost(r.Context(), settings, s.cachedCosts(r.Context()), at),
+			"daily_at": settings.DailyAt, "hold_when_busy": settings.HoldWhenBusy, "overrides": settings.Overrides, "battery": settings.Battery,
+			"battery_choices": batteryChoices, "battery_slower_minutes": int(batterySlowerInterval.Minutes()), "low_battery_percent": lowBatteryPercent},
+		"power": s.cachedPower(r.Context()),
+		"view":  s.backgroundView(r.Context(), views, freshness, at),
+		"rule":  map[string]any{"frequent_seconds": cadenceLimit[cadenceFrequent], "hourly_seconds": cadenceLimit[cadenceHourly]},
+		"cost":  s.backgroundDayCost(r.Context(), settings, s.cachedCosts(r.Context()), at),
 		"descriptions": map[string]any{cadenceFrequent: cadenceDescription(cadenceFrequent, settings), cadenceHourly: cadenceDescription(cadenceHourly, settings),
 			cadenceDaily: cadenceDescription(cadenceDaily, settings)},
 	}, 200)
@@ -538,6 +579,37 @@ func (s *Server) postBackgroundSettings(w http.ResponseWriter, r *http.Request, 
 		}
 		settings.HoldWhenBusy = value
 	}
+	if raw, ok := body["battery"]; ok {
+		values, valid := raw.(map[string]any)
+		if !valid {
+			writeError(w, errors.New(`battery must be an object such as {"hourly": "wait"}`), 400)
+			return
+		}
+		for key, value := range values {
+			if key == "low_battery_waits" {
+				waits, ok := value.(bool)
+				if !ok {
+					writeError(w, errors.New("low_battery_waits must be true or false"), 400)
+					return
+				}
+				settings.Battery.LowWaits = waits
+				continue
+			}
+			choice, _ := value.(string)
+			if !slices.Contains(batteryChoices[key], choice) {
+				writeError(w, fmt.Errorf("on battery, %q cannot be %q", key, choice), 400)
+				return
+			}
+			switch key {
+			case cadenceFrequent:
+				settings.Battery.Frequent = choice
+			case cadenceHourly:
+				settings.Battery.Hourly = choice
+			case cadenceDaily:
+				settings.Battery.Daily = choice
+			}
+		}
+	}
 	if raw, ok := body["overrides"]; ok {
 		values, valid := raw.(map[string]any)
 		if !valid {
@@ -569,10 +641,10 @@ func (s *Server) postBackgroundSettings(w http.ResponseWriter, r *http.Request, 
 			currentHost().ID, indexing.Enabled, indexing.Interval, jsonText(indexing.Sources), indexing.NextAt); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO background_settings(host_id,paused_until,daily_at,hold_when_busy,overrides_json,placements_json,updated_at) VALUES(?,?,?,?,?,?,?)
+		_, err := tx.ExecContext(ctx, `INSERT INTO background_settings(host_id,paused_until,daily_at,hold_when_busy,overrides_json,placements_json,battery_json,updated_at) VALUES(?,?,?,?,?,?,?,?)
 			ON CONFLICT(host_id) DO UPDATE SET paused_until=excluded.paused_until,daily_at=excluded.daily_at,hold_when_busy=excluded.hold_when_busy,
-			overrides_json=excluded.overrides_json,updated_at=excluded.updated_at`,
-			currentHost().ID, nilIfEmpty(paused), settings.DailyAt, settings.HoldWhenBusy, jsonText(settings.Overrides), jsonText(settings.Placements), now())
+			overrides_json=excluded.overrides_json,battery_json=excluded.battery_json,updated_at=excluded.updated_at`,
+			currentHost().ID, nilIfEmpty(paused), settings.DailyAt, settings.HoldWhenBusy, jsonText(settings.Overrides), jsonText(settings.Placements), jsonText(settings.Battery), now())
 		return err
 	})
 	s.auto.mu.Unlock()

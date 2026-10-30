@@ -1152,7 +1152,7 @@ CREATE TABLE IF NOT EXISTS sync_settings (
 CREATE TABLE IF NOT EXISTS background_settings (
   host_id TEXT PRIMARY KEY, paused_until TEXT, daily_at TEXT NOT NULL DEFAULT '03:00',
   hold_when_busy INTEGER NOT NULL DEFAULT 1, overrides_json TEXT NOT NULL DEFAULT '{}',
-  placements_json TEXT NOT NULL DEFAULT '{}', updated_at TEXT
+  placements_json TEXT NOT NULL DEFAULT '{}', battery_json TEXT NOT NULL DEFAULT '{}', updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS background_runs (
   host_id TEXT NOT NULL, item TEXT NOT NULL, started_at TEXT, finished_at TEXT,

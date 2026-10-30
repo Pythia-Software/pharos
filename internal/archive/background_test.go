@@ -288,7 +288,9 @@ func TestBackgroundSettingsAPI(t *testing.T) {
 			t.Fatalf("POST %s %v: %d %s, want %d", path, body, response.Code, response.Body.String(), want)
 		}
 	}
-	mode := func(document map[string]any) string { return firstString(document["settings"].(map[string]any)["mode"]) }
+	mode := func(document map[string]any) string {
+		return firstString(document["settings"].(map[string]any)["mode"])
+	}
 
 	document := get()
 	if mode(document) != "on" {
@@ -331,6 +333,17 @@ func TestBackgroundSettingsAPI(t *testing.T) {
 	} {
 		post("/api/background/settings", body, http.StatusBadRequest)
 	}
+	post("/api/background/settings", map[string]any{"battery": map[string]any{"frequent": "wait", "hourly": "same", "low_battery_waits": false}}, http.StatusOK)
+	if settings, _ := catalog.backgroundSettings(ctx, time.Now()); settings.Battery != (batteryPolicy{Frequent: batteryWait, Hourly: batterySame, Daily: batteryWait}) {
+		t.Fatalf("the battery policy was not stored: %+v", settings.Battery)
+	}
+	for _, body := range []map[string]any{
+		{"battery": map[string]any{"hourly": "slower"}}, // only Frequently runs slower
+		{"battery": map[string]any{"frequent": "sometimes"}},
+		{"battery": map[string]any{"low_battery_waits": "yes"}},
+	} {
+		post("/api/background/settings", body, http.StatusBadRequest)
+	}
 	post("/api/background/run", map[string]any{"item": "writing"}, http.StatusAccepted)
 	if !server.peekRequested()["writing"] {
 		t.Fatal("Run now asks the next pass for the item")
@@ -338,5 +351,103 @@ func TestBackgroundSettingsAPI(t *testing.T) {
 	post("/api/background/run", map[string]any{"item": "nothing"}, http.StatusBadRequest)
 	if status := getStatus(t, server, "/api/status"); status.raw["background"] == nil {
 		t.Fatal("the status snapshot carries the schedule")
+	}
+}
+
+// pmset's answers on a desktop, a laptop on battery, a laptop charging and
+// in Low Power Mode.
+func TestParsePowerReadsTheSourceAndCharge(t *testing.T) {
+	for _, test := range []struct {
+		name, batt, settings string
+		want                 powerState
+	}{
+		{"a Mac with no battery", "Now drawing from 'AC Power'\n", " lowpowermode         0\n", powerState{Percent: -1}},
+		{"on battery", "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=4653155)\t85%; discharging; 5:01 remaining present: true\n", "", powerState{Battery: true, OnBattery: true, Percent: 85}},
+		{"charging", "Now drawing from 'AC Power'\n -InternalBattery-0 (id=4653155)\t12%; charging; 1:10 remaining present: true\n", " lowpowermode         1\n", powerState{Battery: true, Percent: 12, LowPower: true}},
+	} {
+		if got := parsePower(test.batt, test.settings); got != test.want {
+			t.Errorf("%s: %+v, want %+v", test.name, got, test.want)
+		}
+	}
+	// Tests never run pmset: an unreadable source counts as plugged in.
+	if got := readPower(context.Background()); got.OnBattery || got.Battery {
+		t.Fatalf("an unreadable power source counts as plugged in: %+v", got)
+	}
+}
+
+// On battery each cadence runs as plugged in, less often or waits; a low
+// battery or Low Power Mode makes everything wait. Plugged in, nothing
+// changes.
+func TestBatteryPolicyByPowerSource(t *testing.T) {
+	policy := defaultBatteryPolicy()
+	plugged := powerState{Battery: true, Percent: 80}
+	battery := powerState{Battery: true, OnBattery: true, Percent: 80}
+	low := powerState{Battery: true, OnBattery: true, Percent: lowBatteryPercent - 1}
+	saving := powerState{Battery: true, OnBattery: true, Percent: 80, LowPower: true}
+	for _, test := range []struct {
+		name    string
+		power   powerState
+		cadence string
+		want    string
+	}{
+		{"plugged in", plugged, cadenceHourly, batterySame},
+		{"frequent on battery, by default", battery, cadenceFrequent, batterySlower},
+		{"hourly on battery, by default", battery, cadenceHourly, batteryWait},
+		{"daily on battery, by default", battery, cadenceDaily, batteryWait},
+		{"low battery", low, cadenceFrequent, batteryWait},
+		{"Low Power Mode", saving, cadenceFrequent, batteryWait},
+	} {
+		if got := policy.onPower(test.cadence, test.power); got != test.want {
+			t.Errorf("%s: %s, want %s", test.name, got, test.want)
+		}
+	}
+	policy.LowWaits, policy.Hourly = false, batterySame
+	if policy.onPower(cadenceFrequent, low) != batterySlower || policy.onPower(cadenceHourly, battery) != batterySame {
+		t.Fatal("the stored choices apply on battery")
+	}
+}
+
+// On battery, work the policy holds waits (and says so), Frequently's
+// scheduled index runs less often, and Run now still runs.
+func TestBackgroundPlanFollowsTheBatteryPolicy(t *testing.T) {
+	at := time.Date(2026, 10, 29, 15, 0, 0, 0, time.Local)
+	settings := backgroundSettings{Mode: "on", Interval: 300, DailyAt: "03:00", Overrides: map[string]string{}, Placements: map[string]string{}, Battery: defaultBatteryPolicy()}
+	settings.sync.NextAt = formatTime(at.Add(time.Minute))
+	in := backgroundInputs{runs: map[string]backgroundRunRow{}, power: powerState{Battery: true, OnBattery: true, Percent: 80},
+		deferred: map[string]deferredRow{"authorship": {generation: 2, completed: 1, changedAt: formatTime(at.Add(-time.Hour)), completedAt: formatTime(at.Add(-2 * time.Hour))}}}
+	find := func(id string) itemPlan {
+		for _, plan := range backgroundPlan(settings, in, at) {
+			if plan.ID == id {
+				return plan
+			}
+		}
+		t.Fatalf("%s is not in the plan", id)
+		return itemPlan{}
+	}
+	if writing := find("writing"); writing.Due || !writing.WaitsForPower || !writing.Next.IsZero() {
+		t.Fatalf("hourly work waits until plugged in: %+v", writing)
+	}
+	if conversations := find("conversations"); !conversations.Next.Equal(at.Add(time.Minute + batterySlowerInterval - 5*time.Minute)) {
+		t.Fatalf("scheduled indexing runs every %s on battery: next %s", batterySlowerInterval, conversations.Next)
+	}
+	in.requested = map[string]bool{"writing": true}
+	if !find("writing").Due {
+		t.Fatal("Run now runs on battery")
+	}
+	in.requested, in.power.OnBattery = nil, false
+	if writing := find("writing"); !writing.Due || writing.WaitsForPower {
+		t.Fatalf("plugged in, hourly work runs: %+v", writing)
+	}
+}
+
+// The headline says what waits on battery and what still runs.
+func TestBatteryHeadline(t *testing.T) {
+	battery := powerState{Battery: true, OnBattery: true, Percent: 80}
+	headline := batteryHeadline(defaultBatteryPolicy(), battery)
+	if headline["title"] != "On battery" || headline["text"] != "Hourly and daily work waits until this Mac is plugged in. New conversations come in every 15 min." {
+		t.Fatalf("on battery: %v", headline)
+	}
+	if low := batteryHeadline(defaultBatteryPolicy(), powerState{Battery: true, OnBattery: true, Percent: 9}); low["title"] != "Battery at 9%" {
+		t.Fatalf("a low battery says so: %v", low)
 	}
 }
