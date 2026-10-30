@@ -94,3 +94,67 @@ The rebuild stores each span in `message_authorship_spans` (one row per span, wi
 - An Antigravity print-mode run whose log the CLI rotated away before Pharos captured it cannot be told from an interactive run; its prompt usually counts as re-sent.
 - A headless run an app started in a work's folder (Conductor's `codex exec` title and summary runs) is linked to that work's conversation when it had started a command in the 30 seconds before, as if that command had launched it.
 - On a Mac whose Conductor Pharos does not read, Claude SDK sessions count as yours; on one whose Conductor it reads, a session another app ran through the Claude SDK counts as automated.
+
+Identity reconciliation inherits native harness versions only when a value
+changes. Empty aliases are stored as `[]`; legacy `null` aliases are skipped.
+An unchanged manual analysis chain leaves conversation rows and the Search,
+MCP metric and finding-message dirty sets alone.
+
+Rebuilding compares messages, individual spans, launches and cached authored
+workspace names with their stored values. Only changed rows are written, in
+writer-gated chunks of at most 250 row mutations. Until the final generation
+marker is saved, readers may see a mixture of generations; an interruption is
+retried by diffing against the chunks already committed. Unchanged messages
+keep their trigram index entries. The classifier reads agent replies in day
+windows and pages of 250 rows, closing each statement before classification.
+The operation's progress records input, classification and storage timings and
+counts direct writes for messages, spans, launches and authored name caches.
+`TestAuthorshipBackupProbe` (`-tags probe`) measures those phases and the
+would-write counts against an explicitly supplied immutable backup.
+
+The classifier also keeps a versioned, derived checkpoint: the latest source
+and offset for each copied-text candidate, the source shingles used to verify
+it, reused-line origins and their first distinct conversations, template
+session/day counts, last user-turn times, and question-form provenance.
+Triggers record the earliest changed input time, including user-only messages.
+A normal append reads and classifies only that suffix, looking up historical
+candidates and lines as needed. It reuses launches when all changed inputs
+postdate every existing headless start. Reply replay includes any idle gap
+since the previous user turn, so question forms remain recognizable beyond
+the seven-day copied-output window. Every conversation's replayed questions
+are saved with its earlier history, even when only another conversation has
+new user messages. Reused launch links retain a message anchor only when the
+command belongs to the attributed parent conversation; a suppressed mirror's
+message cannot anchor a link into its representative.
+
+The full classifier remains the fallback for missing/old/interrupted state,
+identity or mirror changes, launch overlap, historical edits/deletions or
+backfills, equal-time additions, and suffixes exceeding 2,000 user messages.
+A template crossing its threshold, or changing an existing template's session
+or day counts, also takes the full path: older messages' category or displayed
+reason can change. These conservative cases deliberately remain full passes;
+stream-local launch replay and targeted historical template replay are not
+implemented. Neither classification rules (`authorship-v8`) nor scheduling
+changed. The first changed-data rebuild populates the extra derived tables;
+its production storage cost has not yet been measured.
+Checkpoint version 2 forces one full rebuild of version 1 state, which may
+have lost question history or restored an incompatible mirror message anchor.
+
+Checkpoint publication is chunked too. Its version is invalidated before
+output writes and restored with the generation only after all state writes
+succeed and the input revision still matches. A concurrent input change keeps
+the dirty evidence and prevents reusing the obsolete checkpoint. The opt-in
+`TestAuthorshipIncrementalWorkProbe` measures suffix work on local fixtures;
+`TestAuthorshipBackupProbe` can compare the paged and original single-statement
+reply streams with `PHAROS_AUTHORSHIP_PROBE_REFERENCE=1`. Backups are opened
+immutable/read-only, and the probe reports when their stored results are stale.
+
+Checkpoint builders also hold a separate authorship file lease. It prevents
+two classifiers from reading/writing partial auxiliary state concurrently,
+while allowing ingest and ordinary readers between SQLite write chunks. The
+OS releases the lease if the builder exits.
+
+Activity advances in a mirrored work retain the suffix watermark when the
+same representative is still selected. A changed representative is detected
+by the graph fingerprint and takes the full fallback. A real ingest test
+covers appending to a linked native/Conductor pair.

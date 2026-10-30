@@ -287,20 +287,27 @@ func inheritHarnessAliasesTx(tx *sql.Tx) error {
 }
 
 func inheritHarnessAliasesTxContext(ctx context.Context, tx *sql.Tx) error {
-	_, err := tx.ExecContext(ctx, `UPDATE conversations AS wrapper SET
-  harness_version_first=COALESCE(wrapper.harness_version_first,peer.harness_version_first),
-  harness_version_last=peer.harness_version_last,harness_version_source='alias'
-  FROM (SELECT l.left_id wrapper_id,native.harness_version_first,native.harness_version_last
+	// Keep any already-compatible native peer. Filtering candidates before
+	// choosing a peer would otherwise alternate between disagreeing aliases.
+	_, err := tx.ExecContext(ctx, `WITH peers AS (
+   SELECT l.left_id wrapper_id,native.harness_version_first,native.harness_version_last
    FROM conversation_identity_links l JOIN conversations native ON native.id=l.right_id
    JOIN workspaces w ON w.id=native.workspace_id WHERE l.relationship='native-alias' AND w.source_kind IN ('claude','codex') AND native.harness_version_last IS NOT NULL
    UNION ALL
    SELECT l.right_id,native.harness_version_first,native.harness_version_last
    FROM conversation_identity_links l JOIN conversations native ON native.id=l.left_id
-   JOIN workspaces w ON w.id=native.workspace_id WHERE l.relationship='native-alias' AND w.source_kind IN ('claude','codex') AND native.harness_version_last IS NOT NULL) peer
+   JOIN workspaces w ON w.id=native.workspace_id WHERE l.relationship='native-alias' AND w.source_kind IN ('claude','codex') AND native.harness_version_last IS NOT NULL)
+ UPDATE conversations AS wrapper SET
+  harness_version_first=COALESCE(wrapper.harness_version_first,peer.harness_version_first),
+  harness_version_last=peer.harness_version_last,harness_version_source='alias'
+  FROM peers peer
   WHERE wrapper.id=peer.wrapper_id AND wrapper.harness='conductor'
-  -- Only rows that change: every update fires the Search view's, MCP
-  -- metrics' and findings' triggers for the conversation's workspace.
   AND (wrapper.harness_version_first IS NOT COALESCE(wrapper.harness_version_first,peer.harness_version_first)
-   OR wrapper.harness_version_last IS NOT peer.harness_version_last OR wrapper.harness_version_source IS NOT 'alias')`)
+   OR wrapper.harness_version_last IS NOT peer.harness_version_last
+   OR wrapper.harness_version_source IS NOT 'alias')
+  AND wrapper.id NOT IN (SELECT current.id FROM peers stable JOIN conversations current ON current.id=stable.wrapper_id
+   WHERE current.harness_version_first IS COALESCE(current.harness_version_first,stable.harness_version_first)
+   AND current.harness_version_last IS stable.harness_version_last AND current.harness_version_source='alias')`)
+
 	return err
 }

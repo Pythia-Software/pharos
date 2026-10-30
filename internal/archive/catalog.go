@@ -380,6 +380,10 @@ func (c *Catalog) Initialize() error {
 	if err := c.migrateHosts(); err != nil {
 		return err
 	}
+	// Install guards only after all of their input columns have migrated.
+	if err := c.ensureAuthorshipState(); err != nil {
+		return fmt.Errorf("initialize authorship state: %w", err)
+	}
 	// Existing Python catalogs may contain duplicates created before the partial
 	// unique index was introduced. Preserve the newest row exactly as before.
 	_, _ = c.DB.Exec(`DELETE FROM metrics WHERE conversation_id IS NULL AND id NOT IN (
