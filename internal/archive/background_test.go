@@ -149,6 +149,43 @@ func TestBackgroundPlanRunsEachCadenceWhenDue(t *testing.T) {
 	}
 }
 
+func TestBackgroundVerificationQueueRespectsCadence(t *testing.T) {
+	at := time.Date(2026, 10, 29, 15, 0, 0, 0, time.Local)
+	settings := backgroundSettings{Mode: "on", DailyAt: defaultDailyAt}
+	input := backgroundInputs{verificationNext: at.Add(-time.Minute)}
+	plan := func() itemPlan {
+		for _, plan := range backgroundPlan(settings, input, at) {
+			if plan.ID == "verification" {
+				return plan
+			}
+		}
+		t.Fatal("verification item missing")
+		return itemPlan{}
+	}
+	if got := plan(); !got.Due || got.Cadence != cadenceHourly {
+		t.Fatalf("queued work was not due on the larger cadence: %+v", got)
+	}
+	input.deferred = map[string]deferredRow{"tools": {generation: 2, completed: 1, changedAt: formatTime(at)}}
+	if got := plan(); got.Due || !got.Next.Equal(at.Add(hourlyQuiet)) {
+		t.Fatalf("larger verification did not wait for a quiet library: %+v", got)
+	}
+	input.deferred = nil
+	settings.Mode = "manual"
+	if got := plan(); got.Due {
+		t.Fatalf("only-when-I-ask mode started queued work: %+v", got)
+	}
+	settings.Mode = "on"
+	input.verificationNext = time.Time{}
+	if got := plan(); got.Due || got.Pending {
+		t.Fatalf("an empty queue scheduled verification: %+v", got)
+	}
+	input.verificationNext = at.Add(-time.Minute)
+	input.runs = map[string]backgroundRunRow{"verification": {succeeded: formatTime(at)}}
+	if got := plan(); got.Due || got.Next.Before(at.Add(hourlyEvery)) {
+		t.Fatalf("larger checks ran more than hourly: %+v", got)
+	}
+}
+
 // An override can only slow an item down; a fixed item has none; an
 // opt-in item runs only when chosen.
 func TestBackgroundOverridesOnlySlowItemsDown(t *testing.T) {

@@ -213,11 +213,15 @@ func TestAskConversationPersistenceAndSelection(t *testing.T) {
 		_, raw, _ := strings.Cut(prompt, "Context JSON:\n")
 		var data struct {
 			Conversation []struct {
-				CurrentURI string `json:"currentURI"`
+				CurrentURI   string    `json:"currentURI"`
+				Destinations []askCard `json:"destinations"`
 			} `json:"conversation"`
 		}
 		if err := json.Unmarshal([]byte(raw), &data); err != nil || len(data.Conversation) == 0 || data.Conversation[0].CurrentURI != pageURI {
 			t.Errorf("current page context missing from CLI conversation: %+v %v", data, err)
+		}
+		if calls > 1 && (len(data.Conversation) < 2 || len(data.Conversation[0].Destinations) != 2 || data.Conversation[0].Destinations[0].Href != "/analyze" || data.Conversation[0].Destinations[0].Title != "Review recorded model usage") {
+			t.Errorf("follow-up lost the earlier destination URLs: %+v", data.Conversation)
 		}
 		if strings.Contains(prompt, s.Config().APIToken) {
 			t.Error("passed service token to CLI")
