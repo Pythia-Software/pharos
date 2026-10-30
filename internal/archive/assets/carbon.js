@@ -203,7 +203,7 @@
     return n;
   };
   const load = () => { const saved = window.pharosPrefs.get(STORE, {}); return saved && typeof saved === 'object' ? saved : {}; };
-  const save = () => window.pharosPrefs.set(STORE, prefs);
+  const save = change => window.pharosPrefs.set(STORE, {...load(), ...change});
   const routeSettings = () => {
     if (typeof location === 'undefined') return null;
     const encoded = new URLSearchParams(location.search).get('analyze_carbon');
@@ -470,7 +470,8 @@
 
   function disclosure(key, title, cls = '') {
     const details = node('details', cls), summary = node('summary', '', title);
-    details.open = disclosureState.get(key) || false;
+    details.dataset.viewKey='carbon:'+key;
+    details.open = window.pharosView?.read('disclosures',{})[details.dataset.viewKey] ?? disclosureState.get(key) ?? false;
     summary.dataset.carbonControl = `disclosure:${key}`;
     details.ontoggle = () => { if (details.isConnected) disclosureState.set(key, details.open); };
     details.append(summary);
@@ -787,7 +788,8 @@
 
   function methodology(factors, result, setup) {
     const details = node('details', 'carbon-method');
-    details.open = disclosureState.get('reference') || false;
+    details.dataset.viewKey='carbon:reference';
+    details.open = window.pharosView?.read('disclosures',{})[details.dataset.viewKey] ?? disclosureState.get('reference') ?? false;
     details.ontoggle = () => { if (details.isConnected) disclosureState.set('reference', details.open); };
     const summary = node('summary', '', 'All factor settings and sources');
     summary.dataset.carbonControl = 'disclosure:reference';
@@ -850,7 +852,9 @@
   }
 
   function updatePreferences(change) {
-    Object.assign(prefs, change); save(); syncSettingsURL(); render();
+    Object.assign(prefs, change);
+    save(change);
+    syncSettingsURL(); render();
     // Usage rows carry estimates under the saved settings, so listeners that
     // refetch must wait for the save rather than the debounced write.
     Promise.resolve(window.pharosPrefs.flush?.()).then(() => window.dispatchEvent(new Event('pharos:carbon-settings')));

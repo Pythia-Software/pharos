@@ -1,4 +1,4 @@
-import { localTimezone } from "./day-window";
+import { retainPageView } from "./view-contract";
 import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, predicatesOf, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisVersion } from "./dashboard-analysis-model";
 
@@ -165,9 +165,13 @@ export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?
     const lower = where.filter(term => "field" in term && term.op === ">=" && /T/.test(term.value));
     const upper = where.filter(term => "field" in term && term.op === "<");
     if (lower.length === 1 && upper.length === 1 && "field" in lower[0] && "field" in upper[0] && upper[0].value === "+0s") {
-      params.set("window_mode", "today"); params.set("window_days", "1"); params.set("window_field", lower[0].field); params.set("window_until_field", upper[0].field); params.set("window_dataset", next.dataset); params.set("window_timezone", localTimezone());
+      params.set("window_mode", "today"); params.set("window_days", "1"); params.set("window_field", lower[0].field); params.set("window_until_field", upper[0].field); params.set("window_dataset", next.dataset); if(current.has("window_timezone"))params.set("window_timezone",current.get("window_timezone")!);
     }
   }
+  const page=mode==="query"?`analyze/query/${next.dataset}`:`analyze/${next.topic}`;
+  const cardWindow = params.has("card_query") ? [...params.keys()].filter(key => key.startsWith("window_")) : [];
+  retainPageView(params,page,[...cardWindow,...(mode==="dashboards"?["analyze_chart","analyze_filters","analyze_window","analyze_days"]:[])]);
+  if(mode!==previous.mode||next.topic!==previous.topic||next.dataset!==previous.dataset){params.delete("highlight");params.delete("reveal");}
   return `/analyze?${params}`;
 }
 

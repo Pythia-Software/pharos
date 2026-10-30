@@ -1,3 +1,4 @@
+import { fieldsForPage } from "./view-contract";
 import { nestedPageTrail, type NestedPage } from "./nested-pages-model";
 import { isUsageWorkspace, readUsageWorkspace, usageDatasets, usageDatasetTopics, usageTopics, usageWorkspaceURL, type UsageMode } from "./usage-workspace-model";
 
@@ -15,10 +16,20 @@ export const findingsPages: readonly NestedPage[] = [
   { id: "findings:settings", label: "Settings", href: "/findings?view=settings" },
 ];
 
-export function optimizePages(hasTL1: boolean): NestedPage[] {
+// TL1 reports share their project, Mac, definition scope and moving window.
+// Carry fields declared for the destination; report-specific fields stay local.
+export function tl1PageURL(path: string, params: URLSearchParams): string {
+  const retained = new URLSearchParams();
+  for (const [name, field] of Object.entries(fieldsForPage(path.slice(1)))) {
+    if (name.startsWith("tl1_")) for (const value of params.getAll(field.param)) retained.append(field.param, value);
+  }
+  return path + (retained.size ? `?${retained}` : "");
+}
+
+export function optimizePages(hasTL1: boolean, params = new URLSearchParams()): NestedPage[] {
   return [
     { id: "findings", label: "Findings", children: findingsPages },
-    ...(hasTL1 ? [{ id: "tl1", label: "TL1", children: tl1Pages.map(page => ({ ...page, id: page.path, href: page.path })) }] : []),
+    ...(hasTL1 ? [{ id: "tl1", label: "TL1", children: tl1Pages.map(page => ({ ...page, id: page.path, href: tl1PageURL(page.path, params) })) }] : []),
   ];
 }
 
@@ -48,7 +59,7 @@ export function appSections(settings: readonly NestedPage[], params: URLSearchPa
     { id: "home", label: "Home", href: "/", pages: [] },
     { id: "library", label: "Search", href: "/library", pages: [] },
     { id: "analyze", label: "Analyze", href: "/analyze", pages: analyzePages(params) },
-    { id: "findings", label: "Optimize", href: "/findings", pages: optimizePages(hasTL1) },
+    { id: "findings", label: "Optimize", href: "/findings", pages: optimizePages(hasTL1, params) },
     { id: "settings", label: "Settings", href: "/settings", pages: settings },
   ];
 }

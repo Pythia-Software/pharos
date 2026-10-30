@@ -373,3 +373,17 @@ test("Today parallelism includes elapsed idle time without substituting the last
   assert.equal(threadedSummaryWindow(old, 0, "", "today", +now), null);
   assert.equal(threadedSummaryWindow(data, 0, "", "today", +midnight), null);
 });
+
+test('linked parallelism restoration is read-only and deliberate changes save only chosen defaults',async t=>{
+ const {readConcurrencySettings,saveConcurrencyChanges,concurrencySettingsKey}=await import('../../../src/concurrency-settings');
+ const originals=new Map(['location','window'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
+ t.after(()=>{for(const[key,descriptor]of originals){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key]}});
+ let stored={gap:60,counting:'workspace',repository:'saved',range:'7d'};const writes=[];
+ globalThis.window={pharosPrefs:{get:()=>stored,set:(key,value)=>{assert.equal(key,concurrencySettingsKey);stored=value;writes.push(value)}},dispatchEvent(){}};
+ globalThis.location=new URL('https://pharos.test/analyze?'+new URLSearchParams({analyze_parallelism:JSON.stringify({gap:0,counting:'agent',repository:'linked',range:'30d'})}));
+ assert.equal(readConcurrencySettings().gap,0);assert.equal(writes.length,0);
+ saveConcurrencyChanges({gap:15});
+ assert.equal(stored.gap,15);assert.equal(stored.counting,'workspace');assert.equal(stored.repository,'saved');assert.equal(stored.range,'7d');
+ globalThis.location=new URL('https://pharos.test/analyze?analyze_topic=parallelism');
+ assert.equal(readConcurrencySettings().gap,15);
+});

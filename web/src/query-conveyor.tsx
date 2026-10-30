@@ -1,3 +1,4 @@
+import { useViewState } from "./view-state";
 import React, { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { suggestionWindowLabel, type QueryPreview, type QuerySuggestion } from "./curiosity-data";
 import { QueryCard } from "./query-card";
@@ -59,7 +60,7 @@ export function QueryConveyor({ items, previews, loading, hasErrors, active, sus
   const [entering, setEntering] = useState<string[]>([]), lastReveal = useRef(0), pendingFocus = useRef<string>();
   const [clockReset, setClockReset] = useState(0);
   const [reducedMotion, setReducedMotion] = useState(() => matchMedia("(prefers-reduced-motion: reduce)").matches);
-  const [paused, setPaused] = useState(reducedMotion), [interacting, setInteracting] = useState(false);
+  const [paused, setPaused] = useViewState("conveyor_paused", reducedMotion, location.pathname === "/"), [interacting, setInteracting] = useState(false);
   const [movement, setMovement] = useState<Movement | null>(null), running = useRef<Movement | null>(null), latestItems = useRef(items);
   // Whole cards the belt has travelled so far in a movement, so cards crossing
   // into the reading area become usable while it is still moving.
@@ -210,7 +211,7 @@ export function QueryConveyor({ items, previews, loading, hasErrors, active, sus
     <div ref={heading} className="home-conveyor-head"><h2><Icon name="compass" />Dashboard Catalog</h2><div className="home-conveyor-actions">
       <button type="button" className="home-all-cards" onClick={onAllCards}>All Cards<Icon name="arrow-right" /></button>
       <CarouselCountdown held={held} paused={paused} reset={clockReset} advance={() => step(1, false)} /><div className="home-conveyor-controls">
-      <button type="button" className="home-play" aria-label={paused ? "Play suggestions" : "Pause suggestions"} onClick={() => setPaused(value => !value)}>{paused ? "▶ Play" : "Ⅱ Pause"}</button>
+      <button data-view-field="conveyor_paused" type="button" className="home-play" aria-label={paused ? "Play suggestions" : "Pause suggestions"} onClick={() => setPaused(value => !value)}>{paused ? "▶ Play" : "Ⅱ Pause"}</button>
       <button type="button" aria-label={`Previous ${counted(navigationStep)} suggestions`} disabled={!canNavigate} onClick={() => step(-1)}><Icon name="chevron-left" /></button>
       <button type="button" aria-label={`Next ${counted(navigationStep)} suggestions`} disabled={!canNavigate} onClick={() => step(1)}><Icon name="chevron-right" /></button>
       <button type="button" aria-label="Refresh suggestions" onClick={() => { running.current = null; pendingFocus.current = undefined; leans.current.clear(); setMovement(null); setPublished([]); setCenter(undefined); setEntering([]); lastReveal.current = 0; setClockReset(value => value + 1); onRefresh(); }}><Icon name="refresh" /></button>

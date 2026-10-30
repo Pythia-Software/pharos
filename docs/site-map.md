@@ -32,7 +32,7 @@ under `example`.
    `npm run check` runs it. The map is data, not an algorithm. It lists what
    exists and which combinations are valid, so Go never re-derives
    TypeScript rules.
-2. **The link codec.** Query Table 0.9.6 adds `EncodeQueryLink` and
+2. **The link codec.** The published Query Table release supplies `EncodeQueryLink` and
    `DecodeQueryLink` to the Go module, for `2j.` and `2d.` tokens and the
    legacy form. Pharos uses the published release and keeps no copy of the
    format.
@@ -53,17 +53,17 @@ routes. Legacy aliases are not offered; only canonical routes are.
 
 | Page | What the map gives |
 |---|---|
-| Home | The page, with no options |
+| Home | Carousel state, card identities, disclosures and shared navigation controls |
 | Cards | Filters and sort, and every card (see Cards) |
-| Library | Text search parameters, and `q_library` where terms |
+| Library | Applied text searches and scope, result presentation, and full native `q_library` |
 | Analyze dashboards | Every topic, with chart, filters and window |
-| Analyze query | Each dataset, with a where-only `q_<dataset>` |
-| Findings | List, finding, tab, repo, and the table view with where-only `q_findings` |
-| TL1 | Each page; Runs takes where-only `q_tl1_attempts` |
+| Analyze query | Each dataset, with full native `q_<dataset>` |
+| Findings | List, finding, tab, repo, and the table view with full native `q_findings` |
+| TL1 | Each page; Runs takes full native `q_tl1_attempts` |
 | Work and reader | IDs, conversation, message, and the delegation explorer's options |
 | Settings | Each settings page |
 
-Arbitrary select, aggregation and grouping query states are out of scope.
+Native query state includes columns, sorting, predicates, grouping, metrics, pagination, item details and registered host state. The shared `view_contract` describes page controls and shared navigation state; `highlight` and `reveal` address content by stable identity or literal text. See [URL-addressable views](url-view-state.md) for the coverage ledger and dependency gaps.
 
 ## Where each fact comes from
 
@@ -77,6 +77,8 @@ Arbitrary select, aggregation and grouping query states are out of scope.
 | Filterable fields | `schemas/*.schema.json` through Query Table's `loadSchema`, `isFilterable` and `opsForField` |
 | Windows | `rollingWindowDays`, `chartRanges`, `withTimeRange`, `resolveRollingQuery`, `readUsageWorkspace` |
 | Cards | `queryRecipes`, `instantiateRecipe` (`cardDestination`), `describeRecipeText` |
+| Host view fields and attention families | `view-contract.ts`; static section IDs are discovered from page source by the generator |
+| Query defaults and virtual columns | Schema defaults, `freshSearch`, `usageQuerySchema` and `usageActionQuery` |
 | Page readers | `findings-route.ts`, `delegation-route.ts`, `card-library-model.ts`, `text-search-model.ts`, `search-composer-state.ts`, `conversationRowURL` |
 
 Some lists live only in Go or in the shell: `isUIPage`, `ROUTES`,
@@ -159,11 +161,10 @@ The kinds are:
 - `text_search`: the Library's `text_builder` (see Library);
 - `range`: a pair of epoch-millisecond parameters.
 
-Some pages depend on the viewer's settings, and their nodes say so:
-- Carbon estimates use the viewer's saved assumptions. A link cannot carry
-  them; `analyze_carbon` is not offered.
-- Parallelism records follow the saved counting and turn gap. Its Provider
-  and Model breakdowns need agent counting.
+Carbon and Parallelism use the viewer's saved assumptions unless the link
+supplies `view.carbon` or `view.parallelism`. These view overrides travel to
+rows, metrics and record details without changing saved defaults. Parallelism
+Provider and Model breakdowns need agent counting.
 
 ### `datasets` and `op_sets`
 
@@ -446,6 +447,11 @@ next:
 | `<node>/chart` | The dashboard's views and default chart, and the views it cannot show |
 | `<node>/chart/<view>` | Each setting of the view: values with labels, default, numeric range, and the constraints its rules impose, such as `type only with metric tokens` |
 | `<node>/chart/<view>/<setting>` | One setting in detail: measure units and notes, and what the page draws outside its constraints |
+| `<node>/view` | Page controls with parameter names, types and choices; `<node>/view/<field>` gives structured templates and examples |
+| `<node>/view/global` | Shared navigation, guide, History, overlay and disclosure controls |
+| `<node>/targets` | Attention target families, source-discovered section IDs, and the tools/endpoints yielding dynamic IDs |
+| `<node>/query` | Query-table page default, dataset columns, time-window example, and the full native QueryState |
+| `<node>/query/types[/<name>]` | Transitive public types from the pinned Query Table release |
 | `<node>/filters` | The dataset's filterable fields |
 | `<node>/filters/<field>` | The field's operators, value format, and its values: an enum's own, or for text up to 50 of the most frequent current values |
 | `cards` | Every card, under `cards/<id>`: its chart, filters and windows |
@@ -472,7 +478,43 @@ browsing never blocks on, starts or writes a derived build:
 
 A read past the deadline lists no values and says so.
 
-### `site_link({page?, card?, options?, filters?, days?, max_output_tokens?})` or `site_link({url})`
+### `site_link({page?, card?, options?, filters?, days?, query?, view?, highlight?, reveal?, max_output_tokens?})` or `site_link({url})`
+
+`view` takes the fields described by `<page>/view` and `<page>/view/global`.
+A supplied value overrides saved preferences. Numbers are accepted for numeric
+enums and for reader/session page numbers and sidebar width; URLs retain their
+canonical string spelling. Search state accepts partial drafts: omitted keys
+are filled from the field's published template, while invalid supplied values
+remain errors. For example, a Library literal search is
+`{page:"library",view:{search_state:{match:"literal",text:"failure"}}}`.
+
+`query` takes a native QueryState. Start from the page's `/query` default;
+`select` is an array of objects such as `[{field:"model"}]`. It can be combined
+with `days`, but not `filters` or `card`. For example:
+`{page:"analyze/query/usage",query:{select:[{field:"model"}],limit:20},days:7}`.
+The server adds `>= -7d` and `< +0s` on the page's published timestamp field,
+plus matching `window_*` metadata. Grouped queries receive these predicates on
+their source. `days:"today"` renews at local midnight; an optional
+`view.window_timezone` pins its timezone. Existing source time predicates
+conflict with `days` so they cannot be silently changed. For manual overlap or
+fixed calendar bounds, supply the explicit query and matching `window_*`
+metadata from `<page>/view` instead. Schema field names and native normalization
+diagnostics are checked before reporting success. Saved computed field IDs
+are resolved from the current library.
+
+`highlight` is an array of target references. `reveal` is one target to scroll
+to and highlight distinctively; it never moves browser focus. `<page>/targets`
+lists available families and ID sources. Card and control names are checked
+against the map; dynamic message/session/row IDs are not queried to check their
+existence, and targets must be present in the selected view. `text:<literal>`
+opens Find with literal matching, rather than assigning an ID to every token.
+
+The browser may store definitions in URLs exceeding 2,000 characters as
+immutable library snapshots. `site_link`, `browse_site`, and Ask destination
+validation are read-only: they leave new definitions inline and resolve/reuse
+existing references without saving. Copied URLs retain effective global
+presentation values, including false/empty values, because another viewer may
+have different saved defaults.
 
 Unknown arguments are an error; the schema says `additionalProperties: false`.
 `max_output_tokens` (1,000 by default) bounds an error's list of choices,
@@ -531,17 +573,18 @@ something: older names, chart keys the view does not draw, or a default
 written out. Every link it accepts draws as its canonical form does. It
 rejects:
 - another origin than a loopback host, a fragment, a legacy alias, or a
-  repeated parameter;
-- `excluded.params` (`ask_chat`, `token`, `fresh`), and snapshot references
-  (`q_*=@…`);
+  repeated single-valued parameter (`highlight` is a declared repeatable set);
+- private/sign-in parameters in `excluded.params` (`ask_chat`, `token`, `fresh`).
+  Library-backed `q_*=@…` references are resolved by the MCP tool; the pure parser
+  requires prior library resolution;
 - a parameter the page does not take;
-- a query token that carries more than where terms over the page's base
-  query;
+- an invalid native query token or unsupported host-state parameter;
 - window parameters that disagree with the where terms, or an `analyze_days`
   or Parallelism ribbon other than the window's;
 - a chart the page rejects, or coerces, except one in older names, which
   opens as its current chart;
-- a `text_builder` with settings beyond its rules and scope;
+- an invalid `text_builder`; complete advanced search is supported through
+  `view.search_state`;
 - option values, `requires` and `conflicts` the map does not allow.
 
 A card's own link parses as `{card, days}`: the link, compared parameter by

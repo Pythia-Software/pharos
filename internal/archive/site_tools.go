@@ -19,19 +19,23 @@ import (
 // and window against the map and returns the canonical link.
 
 var siteMCPTools = []map[string]any{
-	{"name": "browse_site", "description": "Browse the pages of the Pharos web UI, one level at a time, to find a view to link to: start with no path, then pass a path from items to drill down. A page lists its options (values, defaults and what each needs), and its children. A dashboard page has <page>/chart (its views, then each view's settings and which combinations it draws) and <page>/filters (its filterable fields; <page>/filters/<field> gives the operators and the most frequent current values). cards lists every prebuilt card, cards/<id> one card. query filters a long list by text. Then call site_link to build the link.",
+	{"name": "browse_site", "description": "Browse the pages of the Pharos web UI, one level at a time, to find a view to link to: start with no path, then pass a path from items to drill down. A page lists its options (values, defaults and what each needs), and its children. A dashboard page has <page>/chart (its views, then each view's settings and which combinations it draws) and <page>/filters (its filterable fields; <page>/filters/<field> gives the operators and the most frequent current values). cards lists every prebuilt card, cards/<id> one card. Every page has <page>/view for page controls, <page>/view/global for shared navigation controls, and <page>/targets for highlights, reveal targets and ID sources. Query-table pages have <page>/query with the page default, columns, a days example, and full QueryState type help. query filters a long list by text. Then call site_link to build the link.",
 		"inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{
 			"path":              map[string]any{"type": "string", "description": "A path from a previous answer's items, such as analyze, analyze/tokens, analyze/tokens/chart/trend or analyze/tokens/filters/model_family. Empty for the top level."},
 			"query":             map[string]any{"type": "string", "description": "Keep only the list items (pages, cards, fields, options or values) whose name, title or description contain this text."},
 			"limit":             map[string]any{"type": "integer", "minimum": 1, "maximum": 200, "description": "List items per answer; 50 by default."},
 			"offset":            map[string]any{"type": "integer", "minimum": 0, "description": "Skip this many list items; an answer with more gives next_offset."},
 			"max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
-	{"name": "site_link", "description": "Build a link to a Pharos page from the choices browse_site lists, and check it: returns {url, title, summary}, where summary says in one sentence what the page will show. page is a path from browse_site. On a dashboard (analyze/<topic>), options are the chart's settings for one view, such as {view: \"trend\", metric: \"tokens\", split: \"model_family\", rollingPeriods: 7}; settings left out take the dashboard's defaults. filters are where terms on the page's dataset, such as [{field: \"provider\", op: \"=\", value: \"claude\"}, {field: \"model_family\", op: \"contains\", value: \"opus\"}], with {any: [terms]} for an OR group. days is the time window (\"today\" since local midnight, \"all\" for all time; no window when left out). card starts from a prebuilt card: alone it gives the card's own link, and options, filters or days change it. An error names the argument at fault and lists the valid choices; correct it and call again. Given {url} alone, it checks a Pharos link and returns its canonical form and arguments, or says why the link cannot be expressed.",
+	{"name": "site_link", "description": "Build a link to a Pharos page from the choices browse_site lists, and check it: returns {url, title, summary}, where summary says in one sentence what the page will show. page is a path from browse_site. On a dashboard (analyze/<topic>), options are the chart's settings for one view, such as {view: \"trend\", metric: \"tokens\", split: \"model_family\", rollingPeriods: 7}; settings left out take the dashboard's defaults. filters are where terms on the page's dataset, such as [{field: \"provider\", op: \"=\", value: \"claude\"}, {field: \"model_family\", op: \"contains\", value: \"opus\"}], with {any: [terms]} for an OR group. days is the time window (\"today\" since local midnight, \"all\" for all time; no window when left out). card starts from a prebuilt card: alone it gives the card's own link, and options, filters or days change it. view chooses page controls from <page>/view. query supplies a full native QueryState (columns, filters, sorting, grouping, metrics and pagination) from <page>/query; days can add a moving window when it has no time predicates. highlight takes multiple target references and reveal scrolls to one with a distinctive highlight, without moving keyboard focus; browse <page>/targets for names and ID sources. Link construction and validation are read-only. Long definitions remain inline; existing library snapshot references are resolved and reused. An error names the argument at fault and lists valid choices when available; correct it and call again. Given {url} alone, it checks a Pharos link and returns its canonical form and arguments, or says why the link cannot be expressed.",
 		"inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{
 			"max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000, "description": "Bounds an error's list of choices; a link itself is small."},
 			"page":              map[string]any{"type": "string", "description": "A page path from browse_site, such as analyze/tokens, analyze/query/usage, findings or work."},
 			"card":              map[string]any{"type": "string", "description": "A card id from browse_site's cards list."},
 			"options":           map[string]any{"type": "object", "description": "The page's options by name, or on a dashboard the chart's settings (browse <page>/chart/<view>)."},
+			"view":              map[string]any{"type": "object", "description": "Host view fields from browse_site <page>/view. Overrides saved preferences without changing defaults."},
+			"query":             map[string]any{"type": "object", "description": "Complete native QueryState for query-table pages (columns, order, grouping, metrics, pagination, itemDetails and hostState). Give without filters/card. Optional days adds moving time bounds if the query has none; browse <page>/query for the page default and example."},
+			"highlight":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Target references from <page>/targets. Multiple persistent highlights."},
+			"reveal":            map[string]any{"type": "string", "description": "One target reference to scroll to and highlight distinctively; never browser focus. text:<literal> opens Find."},
 			"filters":           map[string]any{"type": "array", "description": "Where terms {field, op, value?, negated?}, or {any: [terms]}; browse <page>/filters for fields and operators. Times take ISO values or relative ones such as -30d.", "items": map[string]any{"type": "object"}},
 			"days":              map[string]any{"description": "The rolling window in days, one of the page's windows, \"today\" since local midnight where supported, or \"all\" for all time.", "anyOf": []any{map[string]any{"type": "integer"}, map[string]any{"type": "string", "enum": []string{"all", "today"}}}},
 			"url":               map[string]any{"type": "string", "description": "A Pharos link to check and make canonical, given alone."}}}},
@@ -48,8 +52,21 @@ func callSiteMCP(ctx context.Context, catalog *Catalog, name string, args map[st
 	if err != nil {
 		return nil, true, err
 	}
+	site, err = site.withCatalogFields(ctx, catalog)
+	if err != nil {
+		return nil, true, err
+	}
 	if name == "site_link" {
-		value, err := site.linkTool(args)
+		resolved, err := site.resolveViewLink(ctx, catalog, args)
+		if err != nil {
+			return nil, true, err
+		}
+		value, err := site.linkTool(resolved)
+		if err == nil {
+			if original, ok := args["url"].(string); ok {
+				reuseViewReferences(original, resolved["url"].(string), value)
+			}
+		}
 		return value, true, err
 	}
 	value, err := site.browseTool(ctx, catalog, args)
@@ -138,6 +155,7 @@ func (site *siteMap) browseTool(ctx context.Context, catalog *Catalog, args map[
 	// Shed list items from the end until the answer fits the budget.
 	for {
 		result["items"] = items
+		result["returned_count"] = len(items)
 		delete(result, "next_offset")
 		if offset+len(items) < total {
 			result["next_offset"] = offset + len(items)
@@ -173,12 +191,47 @@ func (site *siteMap) browse(ctx context.Context, catalog *Catalog, path, query s
 		}
 		parts := strings.Split(rest, "/")
 		switch {
+		case parts[0] == "query" && node.Dataset != "" && site.optionOfKind(node, "where") != nil && strings.HasPrefix(site.optionOfKind(node, "where").Param, "q_"):
+			if len(parts) == 1 {
+				return map[string]any{"path": node.Path + "/query", "argument": "query", "fields": site.QueryState, "default": site.nativeQueryDefault(node), "time_window": site.nativeWindowHelp(node), "columns": site.Datasets[node.Dataset].Columns, "type_reference": node.Path + "/query/types/QueryState"}, nil
+			}
+			if len(parts) == 2 && parts[1] == "types" {
+				names := make([]string, 0, len(site.QueryTypes.Types))
+				for name := range site.QueryTypes.Types {
+					names = append(names, name)
+				}
+				sort.Strings(names)
+				items := []map[string]any{}
+				for _, name := range names {
+					items = append(items, map[string]any{"path": node.Path + "/query/types/" + name, "name": name})
+				}
+				return map[string]any{"path": path, "version": site.QueryTypes.Version, "source": site.QueryTypes.Source, "items": items}, nil
+			}
+			if len(parts) == 3 && parts[1] == "types" {
+				if value, ok := site.QueryTypes.Types[parts[2]]; ok {
+					return map[string]any{"path": path, "version": site.QueryTypes.Version, "definition": value.Definition, "uses": value.Uses, "reference_prefix": node.Path + "/query/types/"}, nil
+				}
+			}
+		case parts[0] == "view":
+			if len(parts) == 2 && parts[1] == "global" {
+				return site.browseGlobalViewState(node), nil
+			}
+			if len(parts) == 1 {
+				return site.browseViewState(node), nil
+			}
+			if len(parts) == 2 {
+				if field, ok := site.viewFields(node.Path)[parts[1]]; ok {
+					return map[string]any{"path": path, "argument": "view." + parts[1], "field": field}, nil
+				}
+			}
+		case parts[0] == "targets" && len(parts) == 1:
+			return site.browseTargets(node), nil
 		case parts[0] == "filters" && node.Dataset != "" && site.optionOfKind(node, "where") != nil:
 			if len(parts) == 1 {
 				return site.browseFields(node), nil
 			}
-			if len(parts) == 2 {
-				return site.browseField(ctx, catalog, node, parts[1])
+			if len(parts) >= 2 {
+				return site.browseField(ctx, catalog, node, strings.TrimPrefix(rest, "filters/"))
 			}
 		case parts[0] == "chart" && node.Dashboard != "":
 			switch len(parts) {
@@ -230,10 +283,11 @@ func (site *siteMap) browseRoot() map[string]any {
 		}
 	}
 	return map[string]any{
-		"path":  "",
-		"title": "Pharos",
-		"about": "The pages of the Pharos web UI. Browse a path from items for its options and the pages below it; then call site_link with the page path and your choices. Analyze holds the dashboards (tokens and cost, tools, human words …) and query tables; cards holds every prebuilt question.",
-		"items": items,
+		"path":            "",
+		"title":           "Pharos",
+		"dependency_gaps": site.ViewContract.Dependencies,
+		"about":           "The pages of the Pharos web UI. Browse a path from items for its options and the pages below it; then call site_link with the page path and your choices. Analyze holds the dashboards (tokens and cost, tools, human words …) and query tables; cards holds every prebuilt question.",
+		"items":           items,
 	}
 }
 
@@ -250,12 +304,18 @@ func (site *siteMap) browseNode(node *siteNode) map[string]any {
 	if len(options) > 0 {
 		result["options"] = options
 	}
-	items := []map[string]any{}
+	items := []map[string]any{
+		{"path": node.Path + "/view", "title": "View state", "description": "Page controls; shared navigation controls are listed separately under view/global."},
+		{"path": node.Path + "/targets", "title": "Attention targets", "description": "Static targets, dynamic IDs and literal text; highlight many, reveal one."},
+	}
 	if node.Dashboard != "" {
 		items = append(items, map[string]any{"path": node.Path + "/chart", "title": "Chart", "description": "The dashboard's views, and each view's settings: site_link's options."})
 	}
 	if node.Dataset != "" && site.optionOfKind(node, "where") != nil {
 		dataset := site.Datasets[node.Dataset]
+		if strings.HasPrefix(site.optionOfKind(node, "where").Param, "q_") {
+			items = append(items, map[string]any{"path": node.Path + "/query", "title": "Full query state", "description": "Columns, sorting, grouping, metrics, pagination and native item details."})
+		}
 		items = append(items, map[string]any{"path": node.Path + "/filters", "title": "Filters", "description": fmt.Sprintf("The %d filterable fields of %s: site_link's filters.", len(dataset.Fields), dataset.Label)})
 	}
 	for _, child := range node.Children {

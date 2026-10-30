@@ -4,13 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	qt "github.com/Pythia-Software/query-table/backends/go"
 )
 
 // servedPages reads the paths isUIPage serves from its source, so the test
@@ -242,5 +246,160 @@ func TestSiteLinkAnswersThroughMCP(t *testing.T) {
 	}
 	if _, failed := call(map[string]any{"page": "findings", "options": map[string]any{"list": "everything"}}); !failed {
 		t.Error("an invalid list was accepted")
+	}
+}
+
+func TestSiteLinkLibrarySnapshotsAndAsk(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	site := testSiteMap(t)
+	terms := []any{}
+	for i := 0; i < 70; i++ {
+		terms = append(terms, map[string]any{"field": "model", "op": "!=", "value": fmt.Sprintf("model-%d-%s", i, strings.Repeat(fmt.Sprint(i), 40))})
+	}
+	args := map[string]any{"page": "analyze/query/usage", "query": map[string]any{"select": []any{map[string]any{"field": "model"}}, "where": terms, "limit": 5}, "reveal": "row:test"}
+	built, err := site.linkTool(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Exercise actual library storage even if this synthetic query compresses
+	// well: portable promotion uses the same endpoint store as the browser.
+	built["url"] = built["url"].(string) + "&highlight=text:" + strings.Repeat("x", 2500)
+	inline := built["url"].(string)
+	if _, err := askSiteCard(t.Context(), inline, catalog); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := callSiteMCP(t.Context(), catalog, "site_link", map[string]any{"url": inline}); err != nil || !ok {
+		t.Fatal(err)
+	}
+	refused := inline
+	for i := 0; i < 10; i++ {
+		refused += "&highlight=text:" + fmt.Sprint(i) + strings.Repeat("x", 2000)
+	}
+	if _, err := askSiteCard(t.Context(), refused, catalog); err == nil {
+		t.Fatal("oversized Ask destination accepted")
+	}
+	var count int
+	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM query_table_query_snapshots").Scan(&count); err != nil || count != 0 {
+		t.Fatal("agent link validation wrote snapshots", count, err)
+	}
+	// The browser's explicit snapshot endpoint still persists portable definitions.
+	address, _ := url.Parse(inline)
+	params := address.Query()
+	code := "abcdefghijklmnopqrstuv"
+	snapshot := qt.QuerySnapshot{Version: 1, Code: code, Token: params.Get("q_usage"), CreatedAt: time.Now().UnixMilli()}
+	if _, err := (pharosQuerySnapshotStore{catalog}).Save(t.Context(), queryTableScope, "pharos_usage", snapshot); err != nil {
+		t.Fatal(err)
+	}
+	params.Set("q_usage", "@"+code)
+	address.RawQuery = params.Encode()
+	built["url"] = address.String()
+	resolved, err := site.resolveViewLink(t.Context(), catalog, map[string]any{"url": built["url"]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := site.linkTool(resolved); err != nil {
+		t.Fatal(err)
+	}
+	card, err := askSiteCard(t.Context(), built["url"].(string), catalog)
+	if err != nil || !strings.Contains(card.Href, "%40") {
+		t.Fatal(card, err)
+	}
+	value, ok, err := callSiteMCP(t.Context(), catalog, "site_link", map[string]any{"url": built["url"]})
+	if err != nil || !ok {
+		t.Fatal(value, err)
+	}
+	view, _ := site.browseTool(t.Context(), catalog, map[string]any{"path": "work/view"})
+	if len(view) == 0 {
+		t.Fatal("view contract is not discoverable")
+	}
+	for _, path := range []string{"work/view/reader_search", "analyze/parallelism/view/parallelism", "analyze/query/usage/query/types", "analyze/query/usage/query/types/QueryState", "analyze/query/usage/query/types/GroupingDefinition", "analyze/query/usage/query/types/SummaryColumn", "analyze/query/usage/query/types/GroupKey", "analyze/query/usage/query/types/RepresentativeRow"} {
+		help, err := site.browseTool(t.Context(), catalog, map[string]any{"path": path})
+		if err != nil || len(help) == 0 {
+			t.Fatalf("missing detailed agent help at %s: %v", path, err)
+		}
+	}
+}
+
+func TestSiteMCPViewDiscoveryAndValidation(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	_, err := (qt.SQLiteComputedColumnStore{DB: catalog.DB}).Save(t.Context(), queryTableScope, "pharos_usage", qt.SaveComputedColumnRequest{Column: qt.ComputedColumn{ID: "scaled", Label: "Scaled", Expression: qt.ComputedExpression{Language: "qt-expr", Version: 1, Source: "[total_tokens]/1000"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, ok, err := callSiteMCP(t.Context(), catalog, "site_link", linkArgs(t, `{"page":"analyze/query/usage","query":{"select":[{"field":"@computed/scaled"},{"field":"usage_drill_source"},{"field":"__qt_item_details__"}],"where":[{"field":"@computed/scaled","op":">","value":"1"}]},"days":7}`))
+	if err != nil || !ok {
+		t.Fatal("saved/virtual columns rejected", built, err)
+	}
+	if _, err := askSiteCard(t.Context(), built.(map[string]any)["url"].(string), catalog); err != nil {
+		t.Fatal("Ask rejected a verified query", err)
+	}
+	for _, input := range []string{
+		`{"page":"library","query":{"select":[{"field":"title"}],"limit":5,"hostState":{"version":1,"params":{}}},"view":{"search_state":{"match":"literal","text":"failure"}}}`,
+		`{"page":"analyze/query/usage","query":{"select":[{"field":"model"}],"limit":5,"hostState":{"version":1,"params":{}}},"view":{"record_keyword":{"field":"model","draft":{"match":"literal","text":"failure"}}}}`,
+	} {
+		built, ok, err := callSiteMCP(t.Context(), catalog, "site_link", linkArgs(t, input))
+		if err != nil || !ok {
+			t.Fatal("host search composition failed", built, err)
+		}
+		link := built.(map[string]any)["url"].(string)
+		if _, ok, err := callSiteMCP(t.Context(), catalog, "site_link", map[string]any{"url": link}); err != nil || !ok {
+			t.Fatal("MCP rejected its own search link", err)
+		}
+		if _, err := askSiteCard(t.Context(), link, catalog); err != nil {
+			t.Fatal("Ask rejected a composed search link", err)
+		}
+	}
+	browseText(t, catalog, map[string]any{"path": "analyze/query/usage/filters/@computed/scaled"})
+	_, targetHelp := browseText(t, catalog, map[string]any{"path": "analyze/query/usage/targets"})
+	if !strings.Contains(targetHelp, "control:q_usage") {
+		t.Fatal("native query control is not discoverable", targetHelp)
+	}
+
+	for _, tool := range siteMCPTools {
+		description := tool["description"].(string)
+		for _, term := range []string{"/view", "/query", "/targets"} {
+			if !strings.Contains(description, term) {
+				t.Errorf("%s omits %s", tool["name"], term)
+			}
+		}
+	}
+	view, _ := browseText(t, catalog, map[string]any{"path": "cards/view"})
+	for _, raw := range view["items"].([]any) {
+		item := raw.(map[string]any)
+		if field, ok := item["field"].(map[string]any); ok {
+			if field["pages"] != nil || field["details"] != nil {
+				t.Error("view list repeats detail metadata", field)
+			}
+			if strings.HasPrefix(siteString(item["name"]), "nav_") {
+				t.Error("global field in page controls", item)
+			}
+		}
+	}
+	browseText(t, catalog, map[string]any{"path": "cards/view/global"})
+	help, _ := browseText(t, catalog, map[string]any{"path": "analyze/query/usage/query"})
+	if help["time_window"] == nil {
+		t.Fatal("missing native time help")
+	}
+	library, _ := browseText(t, catalog, map[string]any{"path": "library/query"})
+	site := testSiteMap(t)
+	if compactJSON(library["default"]) == compactJSON(json.RawMessage(site.EmptyQuery)) {
+		t.Fatal("library default is generic empty query")
+	}
+	targets, _ := browseText(t, catalog, map[string]any{"path": "cards/targets"})
+	if !strings.Contains(compactJSON(targets["sections"]), "card-library") {
+		t.Fatal("source sections are undiscoverable", targets)
+	}
+	for _, node := range site.Nodes {
+		if option := site.optionOfKind(node, "where"); option != nil && strings.HasPrefix(option.Param, "q_") {
+			example := site.nativeWindowHelp(node)["example"].(map[string]any)
+			if _, err := site.linkTool(example); err != nil {
+				t.Errorf("advertised example for %s: %v", node.Path, err)
+			}
+		}
+	}
+	response := handleMCP(catalog, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "site_link", "arguments": linkArgs(t, `{"page":"analyze/query/usage","query":{"aggregations":[{"id":"total","op":"total","groupBy":[]}]}}`)}})
+	result := response["result"].(map[string]any)
+	if result["isError"] != true {
+		t.Fatal("MCP reports an invalid metric as success", response)
 	}
 }

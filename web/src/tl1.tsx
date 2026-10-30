@@ -1,4 +1,6 @@
-import { tl1Pages } from "./app-navigation-model";
+import { ViewDisclosure } from "./view-disclosure";
+import { useViewState } from "./view-state";
+import { tl1Pages, tl1PageURL } from "./app-navigation-model";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./tl1.css";
 import { Icon } from "./icons";
@@ -108,8 +110,8 @@ const tl1Path = () => tl1Pages.some(item => item.path === window.location.pathna
 
 function Followups({ data, onFlavor }: { data?: Overview["followups"]; onFlavor: (name: string) => void }) {
   const next = data?.next ?? [], after = data?.after ?? [];
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  const [from, setFrom] = useViewState("tl1_from", "", location.pathname === "/tl1/followups");
+  const [to, setTo] = useViewState("tl1_to", "", location.pathname === "/tl1/followups");
   const sources = [...new Set(next.map(row => String(row.from_flavor)))].sort();
   const successors = [...new Set(next.map(row => String(row.next_flavor)))].sort();
   useEffect(() => { if (from && !sources.includes(from)) setFrom(""); if (to && !successors.includes(to)) setTo(""); }, [data, from, to]);
@@ -118,8 +120,8 @@ function Followups({ data, onFlavor }: { data?: Overview["followups"]; onFlavor:
   const agent = (flavor: string, configuration: string, model: string, effort = "—") => <><button type="button" className="tl1-link" onClick={() => onFlavor(flavor)}>{flavor}</button><small>{configuration === "—" ? "Human / procedural" : `${configuration} · ${model}${effort === "—" ? "" : ` · Effort: ${effort}`}`}</small></>;
   return <>
     <div className="tl1-followup-filters">
-      <label>From flavor <select value={from} onChange={event => setFrom(event.target.value)}><option value="">All flavors</option>{sources.map(name => <option key={name}>{name}</option>)}</select></label>
-      <label>Next flavor <select value={to} onChange={event => setTo(event.target.value)}><option value="">All flavors</option>{successors.map(name => <option key={name}>{name}</option>)}</select></label>
+      <label>From flavor <select data-view-field="tl1_from" value={from} onChange={event => setFrom(event.target.value)}><option value="">All flavors</option>{sources.map(name => <option key={name}>{name}</option>)}</select></label>
+      <label>Next flavor <select data-view-field="tl1_to" value={to} onChange={event => setTo(event.target.value)}><option value="">All flavors</option>{successors.map(name => <option key={name}>{name}</option>)}</select></label>
     </div>
     <Section id="followup-next" title="Next action" description="Each row counts direct parent → child handoffs. Agent names show the final attempt's configuration, model, and effort. Findings are linked to the child task; zero means none were recorded for that task.">
       {shownNext.length ? <div className="tl1-table-wrap"><table className="tl1-table tl1-followup-table"><thead><tr><th>Starting action · agent</th><th>Next action · agent</th><th>Next result</th><th className="num">Handoffs</th><th className="num">With findings</th><th className="num">Findings</th></tr></thead><tbody>{shownNext.map((row, index) => <tr key={index}><td>{agent(row.from_flavor, row.from_configuration, row.from_model, row.from_effort)}</td><td>{agent(row.next_flavor, row.next_configuration, row.next_model, row.next_effort)}</td><td>{row.next_outcome}</td><td className="num">{count(row.paths)}</td><td className="num">{count(row.with_findings)} / {count(row.paths)}</td><td className="num">{count(row.findings)}</td></tr>)}</tbody></table></div> : <p className="muted">No matching handoffs in this window.</p>}
@@ -249,10 +251,10 @@ function FlavorDialog({ query, name, onClose, copy, onRuns }: { query: string; n
         <button type="button" className="tl1-link" onClick={() => openWork(task.workspace_id)}>{task.title}</button> <span className="muted">{when(task.created_at)} · {task.configurations?.join(", ") || "no agent"}</span>
         <div className="tl1-signature">{task.error_signature}</div>
       </li>)}</ul></> : null}
-      <details className="tl1-evidence"><summary>Definition</summary>
+      <ViewDisclosure viewKey={`tl1:flavor:${name}:definition`} className="tl1-evidence"><summary>Definition</summary>
         {definition.template ? <><h4>Prompt template</h4><pre>{definition.template}</pre></> : null}
         {(["agent_configurations", "transitions", "outcomes", "budgets", "retry_config", "outputs_schema", "inputs_schema"] as const).map(key => definition[key] ? <div key={key}><h4>{key.replace(/_/g, " ")}</h4><pre>{JSON.stringify(definition[key], null, 2)}</pre></div> : null)}
-      </details>
+      </ViewDisclosure>
     </>}
   </Dialog>;
 }
@@ -295,7 +297,7 @@ function WindowControls({ value, onChange, enqueues, resolved }: { value: TimeWi
   const segment = value.mode === "enqueue" && value.segment;
   const pick = (item: Row, index: number) => onChange(index === 0 && !segment ? { mode: "latest" } : { mode: "enqueue", since: item.started_at, segment });
   const custom = value.mode === "custom" ? value : { since: resolved?.since ?? "", until: resolved?.until ?? "" };
-  return <div className="tl1-window">
+  return <div className="tl1-window" data-view-field="tl1_window">
     <div className="tl1-controls" role="group" aria-label="Analysis window">
       <div className="tl1-segmented" role="group" aria-label="Time window">
         <button type="button" aria-pressed={value.mode === "latest"} disabled={!enqueues.length} onClick={() => onChange({ mode: "latest" })}
@@ -341,21 +343,22 @@ function WindowSummary({ resolved, enqueues, onFlavor, onCurrent }: { resolved: 
 export function TL1Page({ attempts, filterAttempts, copy }: Props) {
   // TL1 runs as one installation per Mac, so a project may have several.
   const [projects, setProjects] = useState<Row[]>([]);
-  const [project, setProject] = useState(() => String(preferences().get("tl1-project", "")));
+  const active = location.pathname === "/tl1" || location.pathname.startsWith("/tl1/");
+  const [project, setProject] = useViewState("tl1_project", () => String(preferences().get("tl1-project", "")), active);
   // One Mac's installation, or "" for every Mac.
-  const [installation, setInstallation] = useState("");
-  const [timeWindow, setTimeWindowState] = useState<TimeWindow>(readWindow);
+  const [installation, setInstallation] = useViewState("tl1_installation", "", active);
+  const [timeWindow, setTimeWindowState] = useViewState<TimeWindow>("tl1_window", readWindow, active);
   const [enqueues, setEnqueues] = useState<Row[]>([]);
   const setTimeWindow = useCallback((next: TimeWindow) => {
     setTimeWindowState(next);
     preferences().set(windowStorage, next);
   }, []);
-  const [scope, setScope] = useState("all");
+  const [scope, setScope] = useViewState("tl1_scope", "all", active);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [flavor, setFlavor] = useState("");
-  const [candidate, setCandidate] = useState("");
+  const [flavor, setFlavor] = useViewState("tl1_flavor", "", active);
+  const [candidate, setCandidate] = useViewState("tl1_candidate", "", active);
   useLocationRevision();
   const page = tl1Path();
   const runsRef = useRef<HTMLDivElement>(null);
@@ -432,11 +435,11 @@ export function TL1Page({ attempts, filterAttempts, copy }: Props) {
 
   const showRuns = useCallback((filter: Row) => {
     filterAttempts([...Object.entries(filter).map(([field, value]) => ({ field, op: "=", value })), ...windowWhere(), ...projectWhere()]);
-    window.pharosNavigate?.("/tl1/runs");
+    window.pharosNavigate?.(tl1PageURL("/tl1/runs", new URLSearchParams(location.search)));
     window.requestAnimationFrame(() => runsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }, [filterAttempts, windowWhere, projectWhere]);
 
-  const pages = tl1Pages.map(item => ({ ...item, id: item.path, href: item.path }));
+  const pages = tl1Pages.map(item => ({ ...item, id: item.path, href: tl1PageURL(item.path, new URLSearchParams(location.search)) }));
   if (!projects.length) return <NestedPageLayout label="TL1" className="tl1-page" pages={pages} current={page}>
     <p className="muted">No TL1 installations are indexed. Enable the tl1 source in Settings and index it.</p>
   </NestedPageLayout>;
@@ -452,7 +455,7 @@ export function TL1Page({ attempts, filterAttempts, copy }: Props) {
 
   return <NestedPageLayout label="TL1" className="tl1-page" contentClassName="tl1-content" pages={pages} current={page}>
     <div className="tl1-controls" role="group" aria-label="TL1 filters">
-      <label>Project <select value={selected} onChange={event => {
+      <label>Project <select data-view-field="tl1_project" value={selected} onChange={event => {
         setProject(event.target.value);
         setInstallation("");
         preferences().set("tl1-project", event.target.value);
@@ -462,7 +465,7 @@ export function TL1Page({ attempts, filterAttempts, copy }: Props) {
       }}>
         {projects.map(item => <option key={item.project} value={item.project}>{item.project} · {count(item.tasks)} tasks{item.installations?.length > 1 ? ` · ${item.installations.length} Macs` : ""}</option>)}
       </select></label>
-      {macs.length > 1 ? <label>Mac <select value={mac} onChange={event => {
+      {macs.length > 1 ? <label>Mac <select data-view-field="tl1_installation" value={mac} onChange={event => {
         setInstallation(event.target.value);
         setEnqueues([]);
         if (timeWindow.mode === "enqueue") setTimeWindow({ mode: "latest" });
@@ -471,8 +474,8 @@ export function TL1Page({ attempts, filterAttempts, copy }: Props) {
         {macs.map(item => <option key={item.installation_id} value={item.installation_id}>{item.host_label || "Unknown Mac"} · {count(item.tasks)} tasks</option>)}
       </select></label> : null}
       <div className="tl1-segmented" role="group" aria-label="Flavor definitions" title="Current keeps only runs of each flavor's current definition (shape version)">
-        <button type="button" aria-pressed={scope === "all"} onClick={() => setScope("all")}>All definitions</button>
-        <button type="button" aria-pressed={scope === "current"} onClick={() => setScope("current")}>Current definitions</button>
+        <button data-view-field="tl1_scope" type="button" aria-pressed={scope === "all"} onClick={() => setScope("all")}>All definitions</button>
+        <button data-view-field="tl1_scope" type="button" aria-pressed={scope === "current"} onClick={() => setScope("current")}>Current definitions</button>
       </div>
       <button type="button" className="tl1-button" onClick={() => { void loadInstallations(); load(); }}>{loading ? "Loading…" : "Refresh"}</button>
     </div>
@@ -551,7 +554,7 @@ export function TL1Page({ attempts, filterAttempts, copy }: Props) {
         <div className="tl1-table-wrap"><table className="tl1-table">
           <thead><tr><th>Most expensive</th><th>Status</th><th className="num">Spend</th><th className="num">Tasks</th><th className="num">Steps</th><th className="num">Human tasks</th><th className="num">Errors</th><th>Started</th></tr></thead>
           <tbody>{(candidates.most_expensive ?? []).map((row: Row) => <tr key={row.candidate_id}>
-            <td><button type="button" className="tl1-link" onClick={() => setCandidate(row.candidate_id)}>{row.title || row.candidate_id}</button></td><td>{row.status}</td>
+            <td><button data-view-field="tl1_candidate" type="button" className="tl1-link" onClick={() => setCandidate(row.candidate_id)}>{row.title || row.candidate_id}</button></td><td>{row.status}</td>
             <td className="num">{usd(row.cost_usd)}</td><td className="num">{count(row.tasks)}</td><td className="num">{count(row.workflow_steps)}/{count(row.workflow_step_limit)}</td>
             <td className="num">{count(row.human_tasks)}</td><td className="num">{count(row.errors)}</td><td>{when(row.created_at)}</td>
           </tr>)}</tbody>

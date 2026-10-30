@@ -323,7 +323,8 @@ test('Dashboard chart pointer capture snaps to columns and treats a drag back to
   await chart.getByRole('status').filter({ hasText: /1 period.*Release to inspect/ }).waitFor();
   await page.mouse.up();
   await chart.getByRole('group', { name: /^Details for / }).waitFor();
-  assert.equal(page.url(), before, 'one-period inspection leaves date filters alone');
+  assert.equal(new URL(page.url()).searchParams.get('analyze_filters'),new URL(before).searchParams.get('analyze_filters'),'one-period inspection leaves date filters alone');
+  assert.ok(Object.keys(JSON.parse(new URL(page.url()).searchParams.get('chart_pins'))).length,'a deliberate pinned bucket is represented in the URL');
   await chart.locator('h3').click();
   await page.mouse.move(end.x + end.width / 2, end.y + 30);
   await page.mouse.down();
@@ -1649,7 +1650,7 @@ for (const moveFocus of [false, true]) test(`opening a saved chat ${moveFocus ? 
   await page.waitForFunction(element => document.activeElement === element, await target.elementHandle());
 });
 
-test('Ask Pharos chat links survive reload, new tabs and browser Back/Forward', {skip}, async t => {
+test('Ask Pharos chat links survive reload, new tabs and browser Back/Forward', {skip,timeout:60000}, async t => {
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   const saved={id:'saved-chat',createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:'saved-turn',prompt:'A prior question',cli:'Codex',model:'test-model',modelLabel:'Test Model',effort:'Low',status:'multiple',message:'',elapsedMs:1000,reply:'An earlier reply',cards:[]}]};
   saved.conversation.push({...saved.conversation[0],id:'later-turn',prompt:'A later topic',reply:'A later reply'});
@@ -1967,5 +1968,5 @@ for (const browsing of [false,true]) test(`Ask Pharos ${browsing?'reopened brows
     assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)));
     await page.locator('.pharos-destination:not([hidden])').click();
   }
-  await page.waitForURL('**/settings');await modal.waitFor({state:'hidden'});
+  await page.waitForURL(url=>url.pathname==='/settings');await modal.waitFor({state:'hidden'});
 });

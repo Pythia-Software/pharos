@@ -1,3 +1,6 @@
+import { CursorPagination } from "./cursor-pagination";
+import { ViewDisclosure } from "./view-disclosure";
+import { useViewState } from "./view-state";
 import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { createPortal } from "react-dom";
@@ -334,8 +337,8 @@ function ColumnPicker({
     commit(id, next);
   }
   return (
-    <details className="delegation-columns">
-      <summary>Columns · {columns.length}</summary>
+    <ViewDisclosure viewKey="delegation:columns" className="delegation-columns">
+      <summary data-pharos-target="control:delegation_columns">Columns · {columns.length}</summary>
       <div>
         <p>
           Choose columns. Drag handles to change their order in both families.
@@ -343,7 +346,7 @@ function ColumnPicker({
         <div
           className="delegation-column-list"
           role="list"
-          aria-label="Column order"
+          data-view-field="delegation_column_order" aria-label="Column order"
         >
           {metrics.map((m) => (
             <div
@@ -417,7 +420,7 @@ function ColumnPicker({
           {announcement}
         </span>
       </div>
-    </details>
+    </ViewDisclosure>
   );
 }
 
@@ -432,6 +435,8 @@ export function DelegationExplorer({
   onHierarchy,
 }: Props) {
   const contentID = useId();
+  const onWorkPage=()=>location.pathname===`/work/${encodeURIComponent(workspace)}`||location.pathname.startsWith(`/work/${encodeURIComponent(workspace)}/`);
+  const active=onWorkPage();
   const endpoint = `/api/work/${encodeURIComponent(workspace)}`;
   const initial = readDelegationRoute(new URLSearchParams(location.search));
   const [open, setOpen] = useState(initial.open);
@@ -440,10 +445,10 @@ export function DelegationExplorer({
   const [sort, setSort] = useState(initial.sort),
     [scope, setScope] = useState(initial.scope),
     [direction, setDirection] = useState(initial.direction);
-  const [tint, setTint] = useState<Tint>(
-    preferences().get("pharos-delegation-tint", "all"),
+  const [tint, setTint] = useViewState<Tint>("delegation_tint",
+    preferences().get("pharos-delegation-tint", "all"),active,
   );
-  const [columns, setColumns] = useState<string[]>(() => {
+  const [columns, setColumns] = useViewState<string[]>("delegation_columns", () => {
     const prefs = preferences();
     const saved = prefs.get("pharos-delegation-columns", defaultColumns);
     if (prefs.get("pharos-delegation-files-column-added", false)) return saved;
@@ -451,14 +456,16 @@ export function DelegationExplorer({
     prefs.set("pharos-delegation-files-column-added", true);
     prefs.set("pharos-delegation-columns", next);
     return next;
-  });
-  const [columnOrder, setColumnOrder] = useState<string[]>(
+  },active);
+  const [columnOrder, setColumnOrder] = useViewState<string[]>("delegation_column_order",
     preferences().get(
       "pharos-delegation-column-order",
       preferences().get("pharos-delegation-columns", defaultColumns),
-    ),
+    ),active,
   );
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set(initial.collapsed));
+  const [pageIndex, setPageIndex] = useViewState("delegation_page", "0",active);
+  const livePages = useRef(new CursorPagination());
   const [cursor, setCursor] = useState(""),
     [pages, setPages] = useState<string[]>([]);
   const [data, setData] = useState<Analysis | null>(null),
@@ -478,14 +485,15 @@ export function DelegationExplorer({
       setScope(route.scope);
       setDirection(route.direction);
       setCollapsed(new Set(route.collapsed));
-      setCursor("");
-      setPages([]);
+      livePages.current.reset();
       setRange(route.range);
     };
     window.addEventListener("pharos:workspace-history", restore);
     return () => window.removeEventListener("pharos:workspace-history", restore);
   }, []);
+  const collapsedKey = [...collapsed].sort().join(",");
   useEffect(() => {
+    if(!onWorkPage())return;
     const controller = new AbortController();
     setLoading(true);
     setError("");
@@ -495,11 +503,22 @@ export function DelegationExplorer({
       scope,
       direction,
       conversation,
-      collapsed: [...collapsed].sort().join(","),
+      collapsed: collapsedKey,
       cursor,
       limit: "40",
     });
-    readJSON<Analysis>(`${endpoint}/delegation?${params}`, controller.signal)
+    const loadPage = async () => {
+      params.set("cursor", "");
+      const execution = JSON.stringify([endpoint, params.toString(), revision]);
+      const wanted = Math.max(0, Math.min(250, Number(pageIndex) || 0));
+      const result = await livePages.current.load(execution, wanted, cursor => {
+        params.set("cursor", cursor);
+        return readJSON<Analysis>(`${endpoint}/delegation?${params}`, controller.signal);
+      }, controller.signal);
+      setPages(result.previous); setCursor(result.cursor);
+      return result.body;
+    };
+    loadPage()
       .then(
         (body) => {
           setData(body);
@@ -528,18 +547,20 @@ export function DelegationExplorer({
       });
     return () => controller.abort();
   }, [
+    active,
     endpoint,
     conversation,
     mode,
     sort,
     scope,
     direction,
-    collapsed,
-    cursor,
+    collapsedKey,
+    pageIndex,
     revision,
   ]);
   useEffect(() => {
     const refresh = () => {
+      livePages.current.reset();
       setRevision((v) => v + 1);
       setCursor("");
       setPages([]);
@@ -548,7 +569,7 @@ export function DelegationExplorer({
     return () => window.removeEventListener("pharos:data-refresh", refresh);
   }, []);
   useEffect(() => {
-    if (!data) return;
+    if (!data||!onWorkPage()) return;
     const url = new URL(location.href);
     const values = delegationRouteValues({ mode, sort, scope, direction, collapsed: [...collapsed], selected, range });
     for (const [key, value] of Object.entries(values)) {
@@ -565,8 +586,9 @@ export function DelegationExplorer({
       onHierarchy(data.session_count > 1 || data.rows.some((n) => n.context_only || n.parent_id || n.external_parent || n.external_child));
   }, [data]);
   function resetPage() {
+    livePages.current.reset();
     setCursor("");
-    setPages([]);
+    setPages([]);setPageIndex("0");
   }
   function showHierarchy() {
     setMode("hierarchy");
@@ -757,7 +779,7 @@ export function DelegationExplorer({
             .filter((n) => n.external_parent)
             .map((n) => (
               <button
-                key={n.id}
+                key={n.id} data-session-id={n.id}
                 onClick={() => openExternal(n.external_parent!)}
                 title="Parent conversation in another workspace"
               >
@@ -779,14 +801,14 @@ export function DelegationExplorer({
             </span>
           )}
           {childSessions.length > 0 && (
-            <details>
+            <ViewDisclosure viewKey="delegation:scope">
               <summary>
                 {childSessions.length}
                 {data?.focus_truncated ? "+" : ""} child sessions
               </summary>
               <div className="delegation-child-menu">
                 {childSessions.map((n) => (
-                  <button key={n.id} onClick={() => openNode(n)}>
+                  <button key={n.id} data-session-id={n.id} onClick={() => openNode(n)}>
                     <strong>{n.label}</strong>
                     <small>
                       {n.external_child ? "Another workspace · " : ""}
@@ -801,7 +823,7 @@ export function DelegationExplorer({
                   </small>
                 )}
               </div>
-            </details>
+            </ViewDisclosure>
           )}
         </div>
       </>,
@@ -886,7 +908,7 @@ export function DelegationExplorer({
             <>
               <span className="delegation-controls-spacer" />
               <select
-                aria-label="Cell tint"
+                data-view-field="delegation_tint" aria-label="Cell tint"
                 value={tint}
                 onChange={(e) => {
                   const value = e.target.value as Tint;
@@ -1045,7 +1067,7 @@ export function DelegationExplorer({
                             const frame = frames.get(n.id);
                             return (
                               <tr
-                                key={n.id}
+                                key={n.id} data-session-id={n.id}
                                 data-session={n.id}
                                 data-depth={n.depth}
                                 className={`${ancestor ? "delegation-ancestor" : ""} ${n.id === shownSession?.id ? "delegation-current" : ""} ${frame?.start != null ? "delegation-group-start" : ""} ${frame?.ends.length ? "delegation-group-end" : ""}`}
@@ -1234,28 +1256,28 @@ export function DelegationExplorer({
                       ? " · additional ancestors omitted"
                       : ""}
                   </span>
-                  <button
+                  <button data-view-field="delegation_page"
                     disabled={!pages.length || loading}
                     onClick={() => {
                       const previous = [...pages];
                       setCursor(previous.pop() || "");
-                      setPages(previous);
+                      setPages(previous);setPageIndex(String(previous.length));
                     }}
                   >
                     Previous
                   </button>
-                  <button
+                  <button data-view-field="delegation_page"
                     disabled={!data.next_cursor || loading}
                     onClick={() => {
                       setPages([...pages, cursor]);
-                      setCursor(data.next_cursor);
+                      setCursor(data.next_cursor);setPageIndex(String(pages.length+1));
                     }}
                   >
                     Next
                   </button>
                 </div>
               )}
-              <details className="delegation-definitions">
+              <ViewDisclosure viewKey="delegation:definitions" className="delegation-definitions">
                 <summary>Metric definitions & evidence</summary>
                 <p>
                   Self is one execution. Self + children includes distinct
@@ -1275,7 +1297,7 @@ export function DelegationExplorer({
                     </React.Fragment>
                   ))}
                 </dl>
-              </details>
+              </ViewDisclosure>
             </>
           )}
           {!data && !error && <p>Loading session analysis…</p>}
@@ -1326,7 +1348,7 @@ function InboxSessions({ rows, data, metrics, shown, mode, metric, scope, direct
       const maximum = data.maxima[family]?.[spec.id] || 0;
       const strength = tint !== "off" && (tint !== "sort" || ranked) && value?.value != null ? tintStrength(value.value, maximum) : 0;
       const frame = frames.get(n.id);
-      return <div key={n.id} data-session={n.id} data-depth={n.depth} className={`delegation-inbox-row ${n.context_only ? "delegation-ancestor" : ""} ${n.id === shown ? "current" : ""}`} onClick={event => { if (!(event.target as HTMLElement).closest("button")) openNode(n); }} style={{ paddingLeft: (ranked ? 0 : Math.min(n.depth, 8)) * 10 + 10, paddingTop: frame?.start != null ? 5 : undefined, paddingBottom: frame?.ends.length ? frame.ends.length * 6 + 3 : undefined }}>
+      return <div key={n.id} data-session-id={n.id} data-session={n.id} data-depth={n.depth} className={`delegation-inbox-row ${n.context_only ? "delegation-ancestor" : ""} ${n.id === shown ? "current" : ""}`} onClick={event => { if (!(event.target as HTMLElement).closest("button")) openNode(n); }} style={{ paddingLeft: (ranked ? 0 : Math.min(n.depth, 8)) * 10 + 10, paddingTop: frame?.start != null ? 5 : undefined, paddingBottom: frame?.ends.length ? frame.ends.length * 6 + 3 : undefined }}>
         <FrameEdges frame={frame} edge="left" />
         <FrameEdges frame={frame} edge="right" />
         <button className="delegation-chevron" aria-label={`${collapsed.has(n.id) ? "Expand" : "Collapse"} ${n.label}`} aria-expanded={!collapsed.has(n.id)} disabled={!n.child_count || ranked} onClick={() => toggle(n)}>{n.child_count && !ranked ? <Icon name={collapsed.has(n.id) ? "chevron-right" : "chevron-down"} /> : "·"}</button>
@@ -1557,7 +1579,9 @@ function ParallelActivity({
     [error, setError] = useState("");
   const [breadcrumbs, setBreadcrumbs] = useState<Range[]>([]);
   const [brush, setBrush] = useState<Range | null>(null);
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const [expandedIDs, setExpandedIDs] = useViewState<string[]>("delegation_expanded", [],location.pathname.startsWith("/work/"));
+  const expanded = useMemo(() => new Set(expandedIDs), [expandedIDs]);
+  const setExpanded = (change: (value: Set<string>) => Set<string>) => setExpandedIDs(previous => [...change(new Set(previous))].sort());
   const gesture = useRef<{
     pointer: number;
     capture: HTMLElement;
@@ -1573,7 +1597,8 @@ function ParallelActivity({
     mark: Mark;
     anchor: HTMLButtonElement;
   } | null>(null);
-  const closeMark = useCallback(() => setMark(null), []);
+  const [eventID,setEventID] = useViewState("delegation_event", "",location.pathname.startsWith("/work/"));
+  const closeMark = useCallback(() => {setMark(null);setEventID("");}, [setEventID]);
   const [pending, setPending] = useState(true);
   const track = useRef<HTMLDivElement>(null);
   const [trackWidth, setTrackWidth] = useState(900);
@@ -1845,7 +1870,7 @@ function ParallelActivity({
           if (!visible && !descendantsVisible) return null;
           return (
             <div
-              key={n.id}
+              key={n.id} data-session-id={n.id}
               data-session={n.id}
               className={`delegation-lane ${detailed ? "detailed" : ""} ${selected === n.id ? "delegation-lane-current" : ""} ${!visible ? "delegation-ancestor" : ""}`}
               onClick={(event) => {
@@ -1930,7 +1955,7 @@ function ParallelActivity({
                     </small>
                   ))}
                 {lane?.marks.map((m, i) => (
-                  <button
+                  <button data-view-field="delegation_event"
                     key={i}
                     className={`delegation-mark ${m.category} ${m.error ? "failed" : ""}`}
                     style={{
@@ -1944,8 +1969,11 @@ function ParallelActivity({
                     title={`${m.name}${m.count > 1 ? ` · ${m.count} grouped calls` : ""} · ${m.error ? "reported error · " : ""}${m.end_known ? duration(m.end - m.start) : "end unavailable"}\n${localTime(m.start)}${m.end_known ? ` → ${localTime(m.end)}` : ""}`}
                     aria-label={`${m.name}, ${m.count} call${m.count === 1 ? "" : "s"}${m.error ? ", error" : ""}`}
                     aria-haspopup="dialog"
+                    data-event-id={JSON.stringify([n.id,m.message_id||m.tool_id||m.name,m.start,m.end,m.category])}
+                    ref={anchor=>{if(anchor && !mark && eventID===anchor.dataset.eventId) setMark({node:n,mark:m,anchor});}}
                     aria-expanded={mark?.mark === m && mark?.node.id === n.id}
                     onClick={(event) => {
+                      setEventID(event.currentTarget.dataset.eventId!);
                       setMark({ node: n, mark: m, anchor: event.currentTarget });
                     }}
                   >
@@ -1980,7 +2008,7 @@ function ParallelActivity({
         />
       )}
       {selected && (
-        <details className="delegation-definitions">
+        <ViewDisclosure viewKey="delegation:definitions" className="delegation-definitions">
           <summary>Selected session · inferred evidence episodes</summary>
           <p>
             Clusters use tool/request timestamps and the first and last session
@@ -2002,7 +2030,7 @@ function ParallelActivity({
               {duration(episode.end - episode.start)}
             </button>
           ))}
-        </details>
+        </ViewDisclosure>
       )}
     </div>
   );

@@ -778,6 +778,13 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 			return queryV2ExecutionResult{}, fmt.Errorf("record keyword search requires query-v3")
 		}
 	}
+	if dataset == "parallelism" {
+		var err error
+		ctx, err = withParallelismPreferences(ctx, params.Get("parallelism_settings"))
+		if err != nil {
+			return queryV2ExecutionResult{}, err
+		}
+	}
 	if dataset == "usage" {
 		var err error
 		ctx, err = withCarbonPreferences(ctx, params.Get("carbon_settings"))

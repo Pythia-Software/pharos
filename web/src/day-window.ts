@@ -6,7 +6,7 @@ export function todayBounds(clock = new Date(), timezone = localTimezone()): [st
   const day = new Intl.DateTimeFormat("en-CA", { timeZone: timezone }).format(clock);
   return [new Date(zonedDayBounds(day, timezone)[0]).toISOString(), clock.toISOString()];
 }
-export const windowLabel = (choice: WindowChoice) => choice === "today" ? "Today" : choice === 1 ? "Last 24 hours" : choice === 365 ? "Last year" : `Last ${choice} days`;
+export const windowLabel = (choice: WindowChoice) => choice === "today" ? "Today" : choice === 1 ? "Last 24 hours" : choice === 365 ? "Last 365 days" : `Last ${choice} days`;
 export const readWindowChoice = (value: string): WindowChoice => value === "today" ? value : Number(value);
 
 // One calendar clock for open pages. Recheck on waking/focusing as timers can

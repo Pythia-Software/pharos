@@ -121,18 +121,43 @@ var askSections = sync.OnceValue(func() []askCard {
 // path and returns the card for its canonical form: the rebuilt URL, the
 // generated title, the summary as the description and the page's section as
 // the kind. A link the site map cannot express is an error.
-func askSiteCard(raw string) (askCard, error) {
+func askSiteCard(ctx context.Context, raw string, catalogs ...*Catalog) (askCard, error) {
+	if err := ctx.Err(); err != nil {
+		return askCard{}, err
+	}
 	site, err := loadedSiteMap()
 	if err != nil {
 		return askCard{}, err
 	}
-	state, err := site.linkFromArgs(map[string]any{"url": raw})
+	args := map[string]any{"url": raw}
+	var catalog *Catalog
+	if len(catalogs) > 0 {
+		catalog = catalogs[0]
+	}
+	ctx, cancel := context.WithTimeout(ctx, queryTableDeadline)
+	defer cancel()
+	if catalog != nil {
+		site, err = site.withCatalogFields(ctx, catalog)
+		if err != nil {
+			return askCard{}, err
+		}
+		args, err = site.resolveViewLink(ctx, catalog, args)
+		if err != nil {
+			return askCard{}, err
+		}
+	}
+	state, err := site.linkFromArgs(args)
 	if err != nil {
 		return askCard{}, err
 	}
 	link, err := site.build(state)
 	if err != nil {
 		return askCard{}, err
+	}
+	if catalog != nil {
+		result := map[string]any{"url": link}
+		reuseViewReferences(raw, args["url"].(string), result)
+		link = result["url"].(string)
 	}
 	if !askSafeURL(link) {
 		return askCard{}, fmt.Errorf("%s is not a page Pharos opens", link)
@@ -157,7 +182,10 @@ func askDestinationError(err error) error {
 // askDestination resolves one returned destination: a section, lookup or
 // earlier id from allowed, or a site link (askSiteCard), with the agent's
 // description when it gave one.
-func askDestination(allowed map[string]askCard, rawID, rawURL, description string) (askCard, error) {
+func askDestination(ctx context.Context, allowed map[string]askCard, rawID, rawURL, description string, catalogs ...*Catalog) (askCard, error) {
+	if err := ctx.Err(); err != nil {
+		return askCard{}, err
+	}
 	id, link := strings.TrimSpace(rawID), strings.TrimSpace(rawURL)
 	if (id == "") == (link == "") {
 		return askCard{}, fmt.Errorf("the agent returned a destination without exactly one of an id and a url; try again")
@@ -168,7 +196,7 @@ func askDestination(allowed map[string]askCard, rawID, rawURL, description strin
 	card, ok := allowed[id]
 	if link != "" {
 		var err error
-		if card, err = askSiteCard(link); err != nil {
+		if card, err = askSiteCard(ctx, link, catalogs...); err != nil {
 			return askCard{}, askDestinationError(err)
 		}
 	} else if !ok {
@@ -235,7 +263,7 @@ func (s *Server) answerAsk(ctx context.Context, p askProvider, session askSessio
 
 Return at most three destinations. Each has id, url and description: set exactly one of id and url and leave the other "". id is a section id from sections, or an id from a private lookup result or an earlier destination in the conversation. url is a link exactly as site_link returned it. description says briefly why the view fits; leave it "" to show the view's own summary.
 
-Find views with the Pharos MCP tools browse_site and site_link. sections lists the top-level pages; return one by id when the user only wants that page. For anything more specific, browse_site lists the site one level at a time, like a CLI's nested help: pages and their options, each dashboard's chart views and settings, filterable fields with their operators and frequent values, and the prebuilt cards. site_link checks a page or card with options, filters and a window and returns {url, title, summary}; if it reports an error, correct the argument it names and call it again. Prefer the exact view the user asked for (the right dashboard, chart, split, filters and window) over the closest prebuilt card. Say that no view can show something only after browsing confirms it. Pharos opens only links it can read back as a site view, so never write or edit a url yourself. Page visits and Ask chats are not in the site map; they come only from lookup ids.
+Find views with the Pharos MCP tools browse_site and site_link. sections lists the top-level pages; return one by id when the user only wants that page. For anything more specific, browse_site lists the site one level at a time, like a CLI's nested help: pages and their options, each dashboard's chart views and settings, filterable fields with their operators and frequent values, and the prebuilt cards. Each page also exposes /view for host view state and /targets for static, dynamic-ID and text attention targets. Full query-table definitions (columns, sorting, grouping, metrics, pagination and item details) use query. Applied advanced search and visibility/mode overrides use view. Preserve moving time intent (last N days or Today); never replace it with fixed dates unless requested. Use highlight for multiple targets and reveal for one scroll-and-highlight landing target; reveal never means keyboard focus. Text targets use text:<literal> and open the page Find UI. Durable query references resolve from this library. site_link checks a page or card with options, filters, a window, view, query and attention and returns {url, title, summary}; if it reports an error, correct the argument it names and call it again. Prefer the exact view the user asked for (the right dashboard, chart, split, filters and window) over the closest prebuilt card. Say that no view can show something only after browsing confirms it. Pharos opens only links it can read back as a site view, so never write or edit a url yourself. Page visits and Ask chats are not in the site map; they come only from lookup ids.
 
 You may ask the user a question before proceeding: when ambiguity would materially change the metric, scope, time range, or destination, return clarification with one focused question and usually two short, mutually exclusive options. For example, for ambiguous "use", ask whether the user means "Model tokens" or "API cost equivalent". Do not include letters or an Other option: Pharos adds A/B/C labels and an Other text box. Return destinations:[], lookup.kind:"none", and an empty message or a brief introduction that does not repeat the question. This ends the request and waits for the user's next message. Their chosen option or custom text arrives as an ordinary question in conversation, alongside your original clarification. Use that answer to proceed; do not ask the same question again. Never combine a clarification with destinations or a lookup. Set clarification:null for all other responses. Do not ask unnecessary questions when the request is already specific; return the useful destination directly. If several views are genuinely useful rather than mutually exclusive interpretations, offer multiple destinations instead.
 
@@ -294,8 +322,11 @@ You have a private Pharos interface through lookup. Choose kind "visits" to sear
 		seen := map[string]bool{}
 		var refused error
 		for _, choice := range response.Destinations {
-			card, err := askDestination(allowed, choice.ID, choice.URL, choice.Description)
+			card, err := askDestination(ctx, allowed, choice.ID, choice.URL, choice.Description, s.Catalog)
 			if err != nil {
+				if ctx.Err() != nil {
+					return askAnswer{}, ctx.Err()
+				}
 				answer.Omitted++
 				if refused == nil {
 					refused = err

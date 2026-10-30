@@ -324,6 +324,12 @@ export const defaultApi = {
     for (const key of body?.delete ?? []) delete state.preferences[key];
     return { values: state.preferences };
   },
+  "PUT /api/query-snapshots": ({body,query,state}) => {
+    state.querySnapshots ??= {};
+    state.querySnapshots[`${query.get("dataset")}:${body.code}`]=body;
+    return body;
+  },
+  "GET /api/query-snapshots": ({query,state}) => state.querySnapshots?.[`${query.get("dataset")}:${query.get("code")}`],
   "GET /api/query-computed-columns": [],
   "GET /api/query-object-references": { references: [] },
 

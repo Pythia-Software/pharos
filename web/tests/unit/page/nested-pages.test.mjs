@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { localPageNavigation, nestedPageTrail } from "../../../src/nested-pages-model";
-import { appLocation, appLocationLabel, appSections, isNavigationSectionExpanded, optimizePages, tl1Pages, toggleNavigationSection } from "../../../src/app-navigation-model";
+import { appLocation, appLocationLabel, appSections, isNavigationSectionExpanded, optimizePages, tl1PageURL, tl1Pages, toggleNavigationSection } from "../../../src/app-navigation-model";
 
 test("the app tree resolves global, nested, and legacy destinations without changing their queries", () => {
   const params = new URLSearchParams('analyze_mode=query&analyze_data=usage&q_usage=saved&analyze_days=7');
@@ -113,4 +113,23 @@ test("local page navigation preserves the complete destination and browser link 
   for (const external of ["https://example.com/settings", "mailto:owner@example.com"])
     assert.equal(localPageNavigation(external, base, { button: 0 }), null);
   assert.equal(localPageNavigation(href, base, { button: 0, target: "_self" }), href);
+});
+
+
+test("TL1 report links retain applicable shared URL state", () => {
+  const shared = {tl1_project:'two Macs',tl1_installation:'mac-b',tl1_scope:'current',tl1_window:JSON.stringify({mode:'days',days:7})};
+  const params = new URLSearchParams({...shared,tl1_from:'implement',tl1_to:'review',reader_collapsed:'[]',reveal:'section:overview'}),before=params.toString();
+  const pages=appSections([],params,true).find(section=>section.id==='findings').pages.find(page=>page.id==='tl1').children;
+  for(const page of pages) {
+    const url=new URL(page.href,'https://pharos.test');
+    assert.equal(page.href,tl1PageURL(url.pathname,params));
+    for(const [key,value] of Object.entries(shared))assert.equal(url.searchParams.get(key),value);
+    assert.equal(url.searchParams.has('tl1_from'),url.pathname==='/tl1/followups');
+    assert.equal(url.searchParams.has('tl1_to'),url.pathname==='/tl1/followups');
+    assert.equal(url.searchParams.has('reader_collapsed'),false);
+    assert.equal(url.searchParams.has('reveal'),false);
+  }
+  assert.equal(params.toString(),before);
+  const custom=new URLSearchParams({...shared,tl1_window:JSON.stringify({mode:'custom',since:'2026-10-01',until:'2026-10-15'})});
+  assert.equal(new URL(tl1PageURL('/tl1/quality',custom),'https://pharos.test').searchParams.get('tl1_window'),custom.get('tl1_window'));
 });

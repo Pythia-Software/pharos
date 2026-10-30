@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { clipIntervals, concurrencyAverage, concurrencyMetrics, concurrencySpans, concurrencyUnit, conversationTimings, formatConcurrencyDuration as duration, mergeIntervals, minute, ribbonPath, stackSegments, workSessions, zonedDayBounds, type ConcurrencyCounting, type ConcurrencyData, type ConcurrencyMetrics, type ConcurrencyMode, type ConcurrencyThread, type Interval, type Segment } from "./concurrency-data";
 import { SmoothingControl } from "./usage-chart";
-import { concurrencyRangePresets, readConcurrencySettings, readMachineConcurrencySettings, normalizeConcurrencySettings, resolveConcurrencyRange, saveConcurrencySettings, type ConcurrencyRange, type ConcurrencySettings } from "./concurrency-settings";
+import { concurrencyRangePresets, readConcurrencySettings, readMachineConcurrencySettings, normalizeConcurrencySettings, resolveConcurrencyRange, saveConcurrencySettings, saveConcurrencyChanges, type ConcurrencyRange, type ConcurrencySettings } from "./concurrency-settings";
 import { closeConcurrencyModal, loadConcurrencyData } from "./concurrency-store";
 import { pushMachineLocation } from "./machine-location";
 import { useDrilldownHistory, ZoomNavigation } from "./machine-navigation";
@@ -189,13 +189,15 @@ export function ConcurrencyPanel({ scope, activityWindow, routeParameter, onSele
       url.searchParams.set(routeParameter ?? "q_machine_parallelism", JSON.stringify(merged));
       pushMachineLocation(url);
     }
-    saveConcurrencySettings(merged); setHover(null);
+    if (routeParameter) saveConcurrencyChanges(next);
+    else saveConcurrencySettings(merged);
+    setHover(null);
   };
   useEffect(() => {
     const parameter = routeParameter ?? (scope ? "q_machine_parallelism" : "");
     const url = new URL(location.href);
     url.searchParams.delete("machine_demo");
-    if (parameter && !url.searchParams.has(parameter)) url.searchParams.set(parameter, JSON.stringify(readSettings()));
+    if (parameter) url.searchParams.set(parameter, JSON.stringify(readSettings()));
     history.replaceState(history.state, "", url);
     const restore = () => { setSettings(readSettings()); setHover(null); };
     window.addEventListener("pharos:concurrency-settings", restore);
