@@ -585,6 +585,10 @@ func (r *labelsRun) export(item labelingItem, seq []int32, spans labelrt.FrameSp
 
 type labelsBatch struct {
 	seqs []labelsSeq
+	// isolated batches (a crashed batch's items, one each) run with nothing
+	// else in flight, so an item that crashes the worker takes no other
+	// item down with it.
+	isolated bool
 }
 
 type labelsBatchResult struct {
@@ -692,7 +696,7 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 
 	var window []labelsSeq
 	var ready []labelsBatch
-	inflight, producing, pending := 0, true, 0
+	inflight, producing, pending, exclusive := 0, true, 0, false
 	finish := func(job *labelsJob) { writes <- job }
 	pack := func() {
 		if len(window) == 0 {
@@ -768,12 +772,13 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 				}
 				pack()
 			}
-			for len(ready) > 0 && inflight < r.capacity() {
+			for len(ready) > 0 && inflight < r.capacity() && !exclusive && (!ready[0].isolated || inflight == 0) {
 				if err := r.startPool(ctx); err != nil {
 					failure = err
 					cancel()
 					break
 				}
+				exclusive = ready[0].isolated
 				batches <- ready[0]
 				ready = ready[1:]
 				inflight++
@@ -807,6 +812,9 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 			}
 		case result := <-results:
 			inflight--
+			if result.batch.isolated {
+				exclusive = false
+			}
 			before := len(ready)
 			err := r.apply(result, &ready, finish)
 			pending -= len(result.batch.seqs) - (len(ready) - before)
@@ -849,8 +857,16 @@ func (r *labelsRun) apply(result labelsBatchResult, ready *[]labelsBatch, finish
 			return result.err
 		}
 		if len(result.batch.seqs) > 1 {
+			// A crash's items go first and alone; a rejection's are only split.
+			crashed := errors.Is(result.err, labelrt.ErrWorkerExited)
+			singles := []labelsBatch{}
 			for _, seq := range result.batch.seqs {
-				*ready = append(*ready, labelsBatch{seqs: []labelsSeq{seq}})
+				singles = append(singles, labelsBatch{seqs: []labelsSeq{seq}, isolated: crashed})
+			}
+			if crashed {
+				*ready = append(singles, *ready...)
+			} else {
+				*ready = append(*ready, singles...)
 			}
 			return nil
 		}
