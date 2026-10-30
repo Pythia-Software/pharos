@@ -240,6 +240,8 @@ type LabelsRunStats struct {
 	Conversations, ConversationsBuilt, ConversationsRemoved int
 	// ConversationsFailed could not be built and stay pending.
 	ConversationsFailed int
+	// MessagesEmptyTarget have no text tokens for a pooling model to pool.
+	MessagesEmptyTarget int
 	// Cut is set when the limit left messages for a later run.
 	Cut                                                bool
 	Units, Items, ItemsLabeled, MessagesLabeled        int
@@ -649,7 +651,7 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 					rows[i] = labelrt.Framed{IDs: seq.message.seqs[seq.chunk], Spans: seq.message.spans[seq.chunk]}
 				}
 				started := time.Now()
-				result, err := r.pool.Run(ctx, labelrt.BatchInputs(r.model.Inputs, rows, labelrt.PadMultiple), []string{"probs"})
+				result, err := r.pool.Run(ctx, labelrt.BatchInputs(r.model.Inputs, rows, r.model.PadMultiple), []string{"probs"})
 				out := labelsBatchResult{batch: batch, err: err, took: time.Since(started)}
 				if err == nil {
 					if probs := result.Tensor("probs"); probs == nil || len(probs.Float32) != len(rows)*r.model.Labels() {
@@ -676,7 +678,7 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 		for i, seq := range window {
 			lengths[i] = len(seq.message.seqs[seq.chunk])
 		}
-		for _, indices := range labelrt.PackBatches(lengths, r.settings.BatchTokens, r.maxBatch(), labelrt.PadMultiple) {
+		for _, indices := range labelrt.PackBatches(lengths, r.settings.BatchTokens, r.maxBatch(), r.model.PadMultiple) {
 			batch := labelsBatch{}
 			for _, index := range indices {
 				batch.seqs = append(batch.seqs, window[index])
@@ -841,7 +843,7 @@ func (r *labelsRun) apply(result labelsBatchResult, ready *[]labelsBatch, finish
 	for _, seq := range result.batch.seqs {
 		longest = max(longest, len(seq.message.seqs[seq.chunk]))
 	}
-	r.stats.PaddedTokens += len(result.batch.seqs) * labelrt.PadLength(longest, labelrt.PadMultiple)
+	r.stats.PaddedTokens += len(result.batch.seqs) * labelrt.PadLength(longest, r.model.PadMultiple)
 	for row, seq := range result.batch.seqs {
 		message := seq.message
 		probs := result.probs[row*labels : (row+1)*labels]
@@ -932,8 +934,10 @@ func (r *labelsRun) produce(ctx context.Context, builder *labelsItemBuilder, job
 			if r.opts.Export != nil {
 				message.items = items
 			}
+			empty := false
 			for _, item := range items {
 				seq, spans := r.model.Tokenizer.FrameWithSpans(labelrt.FrameInput{Segment: item.Segment, Cohort: item.Cohort, Sender: item.SenderRole, Context: item.Context, Text: item.Text})
+				empty = empty || r.model.Pools() && spans.Text.Len() == 0
 				message.spans = append(message.spans, spans)
 				if r.opts.DryRun {
 					r.export(item, seq, nil, 0)
@@ -941,6 +945,14 @@ func (r *labelsRun) produce(ctx context.Context, builder *labelsItemBuilder, job
 				message.seqs = append(message.seqs, seq)
 				message.segments = append(message.segments, item.Segment)
 				message.tokens += len(seq)
+			}
+			if empty {
+				// A pooling model has nothing to pool for a text with no
+				// tokens: the message cannot be labeled (status empty_target)
+				// and does not count among the conversation's labeled units.
+				r.stats.MessagesEmptyTarget++
+				job.units--
+				continue
 			}
 			job.messages = append(job.messages, message)
 		}

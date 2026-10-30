@@ -98,6 +98,7 @@ func TestModelRefusesWhatDoesNotVerify(t *testing.T) {
 		"missing variant":    func(m map[string]any) { delete(m["files"].(map[string]string), "onnx_int8") },
 		"short thresholds":   func(m map[string]any) { m["thresholds"] = map[string][]float64{"default": {0.5}} },
 		"input contract":     func(m map[string]any) { m["input_contract"] = "ids-attention-pool-v9" },
+		"input roles":        func(m map[string]any) { m["input_contract"] = "ids-attention-pool-v1"; m["inputs"] = DefaultInputs },
 	} {
 		if _, err := LoadModel(writeModelDir(t, mutate), "int8"); !errors.Is(err, ErrModelUnavailable) {
 			t.Errorf("%s: %v", name, err)
@@ -140,5 +141,23 @@ func TestPackBatchesKeepsTheTokenBudget(t *testing.T) {
 	pooled := BatchInputs(inputs, []Framed{{IDs: []int32{ClsID, 9, SepID, 5, 6, SepID}, Spans: FrameSpans{Tag: Span{1, 2}, Context: Span{2, 2}, Text: Span{3, 5}}}}, 8)
 	if !slices.Equal(pooled[2].Int32, []int32{0, 0, 0, 1, 1, 0, 0, 0}) || ValidateRun(&RunRequest{Inputs: pooled}, inputs, 50368, 8, 512) != nil {
 		t.Fatalf("pooling mask %v", pooled[2].Int32)
+	}
+}
+
+// A pooling model's manifest names its inputs and padding; the runtime takes
+// the names, checks the roles against the contract and pads to a common
+// multiple.
+func TestModelInputContracts(t *testing.T) {
+	model, err := LoadModel(writeModelDir(t, nil), "int8")
+	if err != nil || model.InputContract != InputContractIDsAttention || model.PadMultiple != 8 || model.Pools() {
+		t.Fatalf("kestrel-style manifest: %+v %v", model, err)
+	}
+	pooled, err := LoadModel(writeModelDir(t, func(m map[string]any) {
+		m["input_contract"] = InputContractIDsAttentionPool
+		m["inputs"] = []InputSpec{{"ids", RoleIDs}, {"mask", RoleAttention}, {"target", RolePool}}
+		m["padding"] = map[string]int{"multiple": 16}
+	}), "int8")
+	if err != nil || !pooled.Pools() || pooled.Inputs[2].Name != "target" || pooled.PadMultiple != 16 {
+		t.Fatalf("pooling manifest: %+v %v", pooled, err)
 	}
 }

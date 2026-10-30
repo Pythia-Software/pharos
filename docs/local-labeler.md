@@ -277,16 +277,28 @@ Loading a model verifies the chosen variant's file and the tokenizer against
 the manifest's SHA-256s, and refuses a manifest for a framing or input
 contract this build does not implement.
 
-**Input contracts** say which inputs a model takes and how Pharos makes them.
-`ids-attention-v1` is `input_ids` and `attention_mask` (mean pooling over
-every real token happens inside the model); `kestrel-68m`'s manifest predates
-the field and means it. A model that pools only the target text (experiment
-LAPWING) would add an input with role `pool`. Pharos makes it from the span
-the framing built for the text (`FrameSpans.Text`: framing returns the
-token spans of the tag, the context and the text as it builds the
-sequence), never by looking for separator ids. Adding such a contract is
-one entry in `labeler.InputContracts`; the protocol, the workers' loops and
-the ledger do not change (`TestLabelsCarryAPoolingInput`).
+**Input contracts** say which inputs a model takes, how Pharos makes them,
+and how they are padded (`labeler.InputContracts`):
+
+| Contract | Inputs (default names) | Padding |
+|---|---|---|
+| `ids-attention-v1` | `input_ids` (ids), `attention_mask` (attention); mean pooling over every real token happens inside the model. `kestrel-68m`'s manifest predates the field and means this. | multiple of 8 |
+| `ids-attention-pool-v1` | the same plus `pooling_mask` (pool): 1 on the target text's tokens, so the model averages only those while attending to everything (LAPWING's target-only pooling) | multiple of 8 |
+
+- The manifest may name the inputs (`inputs`, a list of `{name, role}`,
+  which must have the contract's roles) and raise the padding multiple
+  (`padding.multiple`); the runtime pads to a multiple of both.
+- The pooling mask comes from the span the framing built for the text
+  (`FrameSpans.Text`), never from looking for separator ids. Framing returns
+  the token spans of the tag, the context and the text as it builds the
+  sequence.
+- An item whose text yields no tokens has nothing to pool. It is never sent:
+  the message is counted as `MessagesEmptyTarget` and left unlabeled.
+- **Padding to a multiple of 8 is part of every contract:** the int8 models'
+  outputs change when the padded length is not a multiple of 4.
+- The protocol, the workers' loops and the ledger are the same for every
+  contract (`TestLabelsCarryAPoolingInput`, and the ONNX Runtime worker's
+  declared-input tests).
 A missing or failing model disables labeling with the reason in `labels
 status`.
 

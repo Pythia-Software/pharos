@@ -23,7 +23,15 @@ type Manifest struct {
 	// InputContract names the model's inputs and how they are made
 	// (InputContracts). Exports before the field (kestrel-68m) are
 	// ids-attention-v1.
-	InputContract   string            `json:"input_contract"`
+	InputContract string `json:"input_contract"`
+	// Inputs, when given, name the model's inputs for the contract's roles;
+	// otherwise the contract's default names are the model's.
+	Inputs []InputSpec `json:"inputs"`
+	// Padding.Multiple, when given, is the padded length's multiple the
+	// model needs; the runtime pads to a multiple of it and the contract's.
+	Padding struct {
+		Multiple int `json:"multiple"`
+	} `json:"padding"`
 	Files           map[string]string `json:"files"`
 	SHA256          map[string]string `json:"sha256"`
 	TokenizerSHA256 string            `json:"tokenizer_sha256"`
@@ -53,9 +61,11 @@ type Model struct {
 	SHA256, TokenizerSHA256 string
 	Manifest                Manifest
 	Tokenizer               *Tokenizer
-	// InputContract and Inputs are what every run request carries.
+	// InputContract and Inputs are what every run request carries;
+	// PadMultiple is what every batch's length is padded to.
 	InputContract string
 	Inputs        []InputSpec
+	PadMultiple   int
 	thresholds    map[string][]float32
 	// closure[j] is the bit mask of label j and its ancestors.
 	closure []uint64
@@ -89,11 +99,29 @@ func LoadModel(dir, variant string) (*Model, error) {
 	if m.InputContract == "" {
 		m.InputContract = InputContractIDsAttention
 	}
-	inputs, ok := InputContracts[m.InputContract]
+	contract, ok := InputContracts[m.InputContract]
 	if !ok {
 		return nil, fmt.Errorf("%w: the model needs input contract %q; this build implements %v", ErrModelUnavailable, m.InputContract, slices.Sorted(maps.Keys(InputContracts)))
 	}
-	m.Inputs = inputs
+	m.Inputs = contract.Inputs
+	if len(man.Inputs) > 0 {
+		roles := func(inputs []InputSpec) []string {
+			list := []string{}
+			for _, input := range inputs {
+				list = append(list, input.Role)
+			}
+			slices.Sort(list)
+			return list
+		}
+		if err := ValidateInputs(man.Inputs); err != nil || !slices.Equal(roles(man.Inputs), roles(contract.Inputs)) {
+			return nil, fmt.Errorf("%w: the manifest's inputs %v do not have the roles of %s %v", ErrModelUnavailable, man.Inputs, m.InputContract, contract.Inputs)
+		}
+		m.Inputs = man.Inputs
+	}
+	m.PadMultiple = contract.PadMultiple
+	if multiple := man.Padding.Multiple; multiple > 0 {
+		m.PadMultiple = lcm(m.PadMultiple, multiple)
+	}
 	file := man.Files["onnx_"+variant]
 	if file == "" || strings.ContainsAny(file, `/\`) {
 		return nil, fmt.Errorf("%w: the manifest names no %s model file", ErrModelUnavailable, variant)
@@ -127,15 +155,47 @@ func LoadModel(dir, variant string) (*Model, error) {
 	return m, nil
 }
 
-// Model input contracts. ids-attention-v1 is input_ids and attention_mask:
-// the framed tokens and their mask (mean pooling over every real token
-// happens inside the model). A contract that pools only the target text
-// adds an input with RolePool, made from the framing's text span
-// (FrameSpans.Text); it is one more entry here, not a protocol change.
-const InputContractIDsAttention = "ids-attention-v1"
+// InputContract is what a model's input contract requires: its inputs (by
+// default name and role) and the multiple its padded length must be.
+type InputContract struct {
+	Inputs      []InputSpec
+	PadMultiple int
+}
+
+// Model input contracts.
+//   - ids-attention-v1: input_ids and attention_mask, the framed tokens and
+//     their mask; mean pooling over every real token happens in the model.
+//   - ids-attention-pool-v1: the same plus pooling_mask, 1 on the framing's
+//     text span (FrameSpans.Text): the model averages only the target's
+//     vectors while attending to the whole input. An item whose text yields
+//     no tokens cannot be labeled and is never sent.
+//
+// Both pad to a multiple of 8: the int8 models' outputs change when the
+// padded length is not a multiple of 4 (PadMultiple).
+const (
+	InputContractIDsAttention     = "ids-attention-v1"
+	InputContractIDsAttentionPool = "ids-attention-pool-v1"
+)
 
 // InputContracts are the input contracts this build implements.
-var InputContracts = map[string][]InputSpec{InputContractIDsAttention: DefaultInputs}
+var InputContracts = map[string]InputContract{
+	InputContractIDsAttention:     {Inputs: DefaultInputs, PadMultiple: PadMultiple},
+	InputContractIDsAttentionPool: {Inputs: append(slices.Clone(DefaultInputs), InputSpec{Name: "pooling_mask", Role: RolePool}), PadMultiple: PadMultiple},
+}
+
+// Pools reports whether the model pools a role-pool input, so an item with
+// an empty text span cannot be labeled.
+func (m *Model) Pools() bool {
+	return slices.ContainsFunc(m.Inputs, func(input InputSpec) bool { return input.Role == RolePool })
+}
+
+func lcm(a, b int) int {
+	x, y := a, b
+	for y != 0 {
+		x, y = y, x%y
+	}
+	return a / x * b
+}
 
 // verifyFile hashes path and compares it with want.
 func verifyFile(path, want string) (string, error) {

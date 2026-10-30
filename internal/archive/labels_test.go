@@ -13,7 +13,6 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -304,16 +303,13 @@ func TestLabelsStatusAndExplain(t *testing.T) {
 // runs through the same protocol: one more named input, built from the
 // framing's text span. The fake worker pools what the mask marks.
 func TestLabelsCarryAPoolingInput(t *testing.T) {
-	inputs := append(slices.Clone(labelrt.DefaultInputs), labelrt.InputSpec{Name: "pooling_mask", Role: labelrt.RolePool})
-	labelrt.InputContracts["test-target-pool-v1"] = inputs
-	t.Cleanup(func() { delete(labelrt.InputContracts, "test-target-pool-v1") })
 	catalog := labeledCatalog(t)
-	settings := labelsTestSettings(t, "ok", map[string]any{"input_contract": "test-target-pool-v1"})
+	settings := labelsTestSettings(t, "ok", map[string]any{"input_contract": labelrt.InputContractIDsAttentionPool})
 	if _, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{Conversations: []string{"c-root"}}); err != nil {
 		t.Fatal(err)
 	}
 	model, err := labelrt.LoadModel(settings.ModelDir, "int8")
-	if err != nil {
+	if err != nil || !model.Pools() {
 		t.Fatal(err)
 	}
 	var item labelingItem
