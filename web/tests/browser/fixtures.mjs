@@ -20,6 +20,12 @@ export const sourceSetupCandidates = [
 ];
 const day = 86400000, iso = offset => new Date(now - offset).toISOString();
 
+// Fixed UTC calendar boundaries keep the fixture's calendar columns coherent.
+const summaryDay = new Date(now); summaryDay.setUTCHours(0, 0, 0, 0);
+const summaryWeek = new Date(summaryDay); summaryWeek.setUTCDate(summaryWeek.getUTCDate() - (summaryWeek.getUTCDay() + 6) % 7);
+const summaryMonth = new Date(summaryDay); summaryMonth.setUTCDate(1);
+const summaryFrom = { today: summaryDay.toISOString(), yesterday: new Date(+summaryDay - day).toISOString(), week: summaryWeek.toISOString(), month: summaryMonth.toISOString() };
+
 // Long values are where layouts break, so some rows carry them.
 const longTitle = "Investigate why the incremental indexer re-reads every capture after a laptop sleeps through a scheduled sync window";
 const datasets = Object.fromEntries(Object.entries(schemas).map(([name, schema]) => [name, population(schema, { now, count: 48 }).map((row, index) => index % 5 ? row
@@ -394,7 +400,7 @@ export const defaultApi = {
   },
   "GET /api/origins": { machines: [{ id: "machine-fixture", label: "Test Mac", kind: "device" }] },
   "GET /api/usage/history": { oldest_conversation_at: iso(180 * day) },
-  "GET /api/usage/summary": { generated_at: iso(0), windows: ["1h", "6h", "today", "24h", "7d", "30d", "all"].map((key, index) => ({ key, human_words: 100 * (index + 1), tokens: 1000 * (index + 1), cost_usd: index + 1, co2e_g: { central: 10 * (index + 1) } })), carbon_factors: carbonFactors },
+  "GET /api/usage/summary": { generated_at: iso(0), timezone: "UTC", windows: ["1h", "6h", "today", "24h", "7d", "30d", "all", "5m", "15m", "yesterday", "week", "month"].map((key, index) => ({ key, until: key === 'yesterday' ? summaryDay.toISOString() : iso(0), ...(summaryFrom[key] ? {from:summaryFrom[key]} : {}), human_words: 100 * (index + 1), tokens: 1000 * (index + 1), cost_usd: index + 1, co2e_g: { central: 10 * (index + 1) }, active_conversations: index + 2, message_count: 20 * (index + 1), user_messages: 8 * (index + 1), assistant_messages: 12 * (index + 1), tool_calls: 50 * (index + 1), failed_tool_calls: index + 1, tool_failure_rate: 2, tool_time_ms: (index + 1) * 240000, timed_tool_calls: 40 * (index + 1), delegated_runs: index + 1, active_repositories: Math.min(index + 1, 4) })), carbon_factors: carbonFactors },
   "GET /api/search/text/options": { providers: ["codex", "claude"], sources: ["conductor"] },
   "POST /api/search/text/validate": ({ body }) => ({ where: body.where ?? { op: ["literal", "regex", "phrase"].includes(body.mode) ? body.mode : "term", text: body.query } }),
   "GET /api/search/text/capabilities": { fuzzy: true, regex: true, case_sensitive: true },

@@ -290,7 +290,7 @@ func (s *Server) authorized(r *http.Request) bool {
 // of which serves the single-page UI.
 func isUIPage(path string) bool {
 	switch path {
-	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/preferences", "/settings/ask", "/sources", "/activity", "/analyze", "/tools", "/health", "/mcp", "/findings":
+	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/layout", "/settings/preferences", "/settings/ask", "/sources", "/activity", "/analyze", "/tools", "/health", "/mcp", "/findings":
 		return true
 	}
 	return strings.HasPrefix(path, "/work/")
@@ -310,6 +310,7 @@ var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/background.js":        {"background.js", "text/javascript; charset=utf-8"},
 	"/assets/carbon.js":            {"carbon.js", "text/javascript; charset=utf-8"},
 	"/assets/menu-bar.js":          {"menu-bar.js", "text/javascript; charset=utf-8"},
+	"/assets/quick-stats.js":       {"quick-stats.js", "text/javascript; charset=utf-8"},
 	"/assets/header.js":            {"header.js", "text/javascript; charset=utf-8"},
 	"/assets/ask-pharos.html":      {"ask-pharos.html", "text/html; charset=utf-8"},
 	"/assets/ask-pharos.css":       {"ask-pharos.css", "text/css; charset=utf-8"},
@@ -534,6 +535,9 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeResult(w, value, err)
 	case path == "/api/usage/summary":
 		value, err := s.Catalog.UsageSummary(r.Context())
+		if err == nil && r.URL.Query().Get("details") == "1" {
+			err = s.Catalog.addQuickStatsCounts(r.Context(), value)
+		}
 		writeResult(w, value, err)
 	case path == "/api/menu-bar/status":
 		value, err := s.menuBarStatus(r.Context())

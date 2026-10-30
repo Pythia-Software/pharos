@@ -269,7 +269,7 @@
    "title": "Settings · Library health",
    "description": "Check your library’s usage, storage, and recent activity.",
    "route": "/settings",
-   "children": ["settings/backups","settings/sources","settings/sync","settings/mcp","settings/header","settings/ask","settings/preferences","settings/libraries"]
+   "children": ["settings/backups","settings/sources","settings/sync","settings/mcp","settings/layout","settings/ask","settings/preferences","settings/libraries"]
   },
   "settings/backups": {
    "path": "settings/backups",
@@ -295,11 +295,11 @@
    "description": "Control agent access to Pharos and connect your agent clients.",
    "route": "/settings/mcp"
   },
-  "settings/header": {
-   "path": "settings/header",
-   "title": "Header",
-   "description": "Choose your header tools and their order. Smaller windows keep extra tools in More. Changes follow your library between Macs.",
-   "route": "/settings/header"
+  "settings/layout": {
+   "path": "settings/layout",
+   "title": "Layout Preferences",
+   "description": "Drag and drop to customize your macOS menu bar, header, and Quick Stats. Changes save automatically and follow your library between Macs.",
+   "route": "/settings/layout"
   },
   "settings/ask": {
    "path": "settings/ask",
@@ -310,7 +310,7 @@
   "settings/preferences": {
    "path": "settings/preferences",
    "title": "App preferences",
-   "description": "Customize the macOS menu bar, lighthouse behavior, and Analyze summary.",
+   "description": "Choose lighthouse behavior and activity preferences.",
    "route": "/settings/preferences"
   },
   "settings/libraries": {
@@ -352,6 +352,7 @@
    "/health": "/settings",
    "/mcp": "/analyze?analyze_topic=mcp",
    "/tools": "/analyze?analyze_mode=query&analyze_data=tool_calls",
+   "/settings/header": "/settings/layout",
    "/settings/optimization": "/findings?view=settings"
   },
   "params": [

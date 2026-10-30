@@ -244,7 +244,7 @@
   {"path":"settings/sources","url":"/settings/sources"},
   {"path":"settings/sync","url":"/settings/sync"},
   {"path":"settings/mcp","url":"/settings/mcp"},
-  {"path":"settings/header","url":"/settings/header"},
+  {"path":"settings/layout","url":"/settings/layout"},
   {"path":"settings/ask","url":"/settings/ask"},
   {"path":"settings/preferences","url":"/settings/preferences"},
   {"path":"settings/libraries","url":"/settings/libraries"},

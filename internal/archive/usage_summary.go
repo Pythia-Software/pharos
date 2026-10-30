@@ -14,6 +14,7 @@ var usageSummaryWindows = []struct {
 }{
 	{"1h", time.Hour}, {"6h", 6 * time.Hour}, {"today", 0}, {"24h", 24 * time.Hour},
 	{"7d", 7 * 24 * time.Hour}, {"30d", 30 * 24 * time.Hour}, {"all", 0},
+	{"5m", 5 * time.Minute}, {"15m", 15 * time.Minute}, {"yesterday", 0}, {"week", 0}, {"month", 0},
 }
 
 // usageSummaryWindow is one window's topline totals.
@@ -26,6 +27,7 @@ type usageSummaryWindow struct {
 	Tokens       int64                         `json:"tokens"`
 	CostUSD      any                           `json:"cost_usd"`
 	CarbonTokens map[string]map[string]float64 `json:"carbon_tokens"`
+	*quickStatsCounts
 }
 
 // UsageHistory gives charts the library's unfiltered conversation history.
@@ -56,13 +58,11 @@ func (c *Catalog) UsageSummary(ctx context.Context) (map[string]any, error) {
 	now := c.clock()
 	windows := make([]*usageSummaryWindow, len(usageSummaryWindows))
 	cutoffs := make([]time.Time, len(usageSummaryWindows))
+	ends := make([]time.Time, len(usageSummaryWindows))
 	for index, window := range usageSummaryWindows {
 		windows[index] = &usageSummaryWindow{Key: window.key, Until: now.UTC().Format(time.RFC3339Nano)}
-		if window.span > 0 {
-			cutoffs[index] = now.Add(-window.span)
-		} else if window.key == "today" {
-			cutoffs[index] = localMidnight(now, time.Local)
-		}
+		cutoffs[index], ends[index] = usageSummaryBounds(window.key, window.span, now)
+		windows[index].Until = ends[index].UTC().Format(time.RFC3339Nano)
 		if !cutoffs[index].IsZero() {
 			windows[index].From = cutoffs[index].UTC().Format(time.RFC3339Nano)
 		}
@@ -82,7 +82,7 @@ func (c *Catalog) UsageSummary(ctx context.Context) (map[string]any, error) {
 		}
 		sent, ok := parseTime(sentAt)
 		for index, window := range windows {
-			if window.Key == "today" && (!ok || !sent.Before(now)) {
+			if ok && !sent.Before(ends[index]) || !ok && !cutoffs[index].IsZero() {
 				continue
 			}
 			if cutoffs[index].IsZero() || ok && !sent.Before(cutoffs[index]) {
@@ -122,7 +122,7 @@ func (c *Catalog) UsageSummary(ctx context.Context) (map[string]any, error) {
 			"output":         entry.tokens["output_tokens"],
 		}
 		for index, window := range windows {
-			if window.Key == "today" && (!ok || !hour.Before(now)) {
+			if ok && !hour.Before(ends[index]) || !ok && !cutoffs[index].IsZero() {
 				continue
 			}
 			share := 1.0
@@ -130,7 +130,26 @@ func (c *Catalog) UsageSummary(ctx context.Context) (map[string]any, error) {
 				if !ok {
 					continue
 				}
-				share = min(max(hour.Add(time.Hour).Sub(cutoffs[index]).Hours(), 0), 1)
+				// A current-hour bucket only contains usage observed so far.
+				// Estimate overlap within that observed portion, never its
+				// future remainder. Completed hours retain hourly weighting.
+				observedEnd := hour.Add(time.Hour)
+				if now.Before(observedEnd) {
+					observedEnd = now
+				}
+				end := observedEnd
+				if ends[index].Before(end) {
+					end = ends[index]
+				}
+				start := hour
+				if cutoffs[index].After(start) {
+					start = cutoffs[index]
+				}
+				if observedEnd.After(hour) {
+					share = min(max(end.Sub(start).Seconds()/observedEnd.Sub(hour).Seconds(), 0), 1)
+				} else {
+					share = 0
+				}
 			}
 			if share == 0 {
 				continue
