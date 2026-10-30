@@ -113,6 +113,8 @@ No model is uniformly more robust:
 
 ## Next experiment, before choosing the shipped architecture
 
+*(Done in round 4: see [shipping-encoder.md](shipping-encoder.md). Diverse training lifted the encoder on unseen people, by +0.025, and not the linear model. The encoder was chosen.)*
+
 Train both models on several populations:
 - this library;
 - IBIS's prepared public sources (121k items), with about 10–20k of them

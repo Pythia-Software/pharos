@@ -2,7 +2,8 @@
 
 Each report in this folder is a sanitized copy of a research report from `~/pharos-labeling`. The full originals are
 archived on euclid at "Pharos Labeling/2026-10-28-student-research" (round 1, `r1-*`) and
-"Pharos Labeling/2026-10-29-bird-studies" (round 2, `r2-*`). Each redaction is replaced in place by a bracketed neutral
+"Pharos Labeling/2026-10-29-bird-studies" (round 2, `r2-*`); rounds 3 and 4 (`r3-*`, `r4-*`) are under
+"Pharos Labeling/2026-10-29-bird-studies/studies/". Each redaction is replaced in place by a bracketed neutral
 description. Numbers, tables, methods, model names, label IDs, paths, script names and taxonomy wording are unchanged.
 
 | file | redactions | kinds of content removed |
@@ -21,4 +22,10 @@ description. Numbers, tables, methods, model names, label IDs, paths, script nam
 | r2-DOTTEREL-PARITY.md | 0 | none (its Unicode test strings are invented fixtures, not corpus text) |
 | r2-EGRET.md | 0 | none |
 | r2-GANNET.md | 0 | none |
-| **total** | **39** | |
+| r3-HERON.md | 9 | private repository names in the fold table, replaced by repo cluster A / B / C with counts kept; the two largest repositories' names; a spreadsheet-automation project's automation name; a JSON task-payload snippet and its key name |
+| r3-IBIS.md | 0 | none (public Hugging Face dataset names, uploaders and licenses kept as provenance; no dataset conversation text was quoted) |
+| r4-KESTREL.md | 0 | none (public dataset names and licenses kept as provenance) |
+| r4-KESTREL-FRAMING.md | 0 | none (its tags and context headers are Pharos's own input format, not corpus text) |
+| **total** | **48** | |
+
+The frozen code snapshot in [../code/](../code/) needed no redactions; see its README.

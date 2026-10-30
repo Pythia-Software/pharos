@@ -97,3 +97,13 @@ tools/parity.sh models/V4-hybmaj
 
 Every study directory also has `CHECKPOINT.md`, which lists exact commands,
 queues and file maps.
+
+## 7. Rounds 3 and 4
+
+| Study | Where |
+|---|---|
+| HERON (group holdouts) | `studies/HERON/scripts/` (`hexp.py` linear, `hb_train.py` encoder, `adapt.py`); fold definitions and commands in `studies/HERON/CHECKPOINT.md` |
+| IBIS (public data) | Downloads and licenses in `studies/IBIS/downloads/` (`MANIFEST.json`). Conversion to session files, the throwaway library (`studies/IBIS/lib/`, CLI only, its own `--config`) and the prepared dataset `studies/IBIS/dataset/`. Steps in `studies/IBIS/CHECKPOINT.md`. |
+| KESTREL (shipping encoder) | `studies/KESTREL/scripts/` (`kdata.py`, `kes_train.py`, `kframe.py`, `export.py`, `make_fixture.py`); exports in `studies/KESTREL/export/<model>/`; queues and commands in `studies/KESTREL/CHECKPOINT.md` |
+
+A frozen copy of the key scripts is in [code/](code/).

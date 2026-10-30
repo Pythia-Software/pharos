@@ -1,5 +1,7 @@
 # Findings
 
+Rounds 1 and 2. Round 3 (generalization) is in [generalization.md](generalization.md), and round 4 (the shipping encoder) in [shipping-encoder.md](shipping-encoder.md).
+
 All scores are mean per-item Jaccard on hierarchy-closed label sets (empty
 versus empty counts as 1), on held-out conversation families. "Fair" or "LOO"
 means leave-one-out:

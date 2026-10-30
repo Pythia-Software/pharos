@@ -1,6 +1,8 @@
 # Plan: the Go linear labeler in Pharos
 
-Status: proposed, 2026-10-29. This follows the decision in the
+**Status: superseded (2026-10-30)** by the encoder decision in [shipping-encoder.md](shipping-encoder.md). It is kept for the record. Its pipeline phases (shared item builder, `message_labels` ledger, `analysis.labels` operation, flag, retraining loop) still describe the integration; only the model and runtime change.
+
+Originally proposed 2026-10-29. This follows the decision in the
 [README](README.md): label every message locally with DOTTEREL's pure-Go
 linear model, and accept about 0.06 Jaccard lower quality on typed human text
 in exchange for no native runtime, a small payload and near-instant labeling.

@@ -1,38 +1,38 @@
-# Local labeler research (2026-10-28/29)
+# Local labeler research (2026-10-28 to 10-30)
 
 Can a cheap local model reproduce the message-function labels that LLMs assign
-in [library labeling](../library-labeling.md)? Two research rounds answered
+in [library labeling](../library-labeling.md)? Four research rounds answered
 this, with several studies each, run by a director agent and researcher
 agents. The data was this library's labeling dataset: Haiku 5.5, Gemini 3.8
 Flash and Gemini 4 Argon labels, taxonomy `candidate-0.3`.
 
-**Decision under review (2026-10-29 evening).** The first decision was to ship the pure-Go linear labeler everywhere. A
-fine-tuned 68M-parameter encoder is better, by about 0.06 Jaccard on typed
-human text. But the linear model:
+**Decision (2026-10-30): ship `kestrel-68m`.** It is a fine-tuned 68M-parameter
+encoder, as int8 ONNX:
 
-- runs in pure Go with exact Python parity;
-- scores 17–32k items/s on four cores;
-- needs a 33–150 MB weight file and no native runtime.
+- trained on this library plus permissively licensed public data (AGPL
+  excluded);
+- run by Pharos in a separate, swappable worker process, ONNX Runtime first;
+- labeling in batches, incrementally.
 
-The quality gap was judged worth the engineering simplicity. The plan is in
-[linear-labeler-plan.md](linear-labeler-plan.md).
-
-Round 3 ([generalization.md](generalization.md)) then found that on other
-people's data the encoder generalizes clearly better on typed human text:
-about 0.12 ahead zero-shot, against about 0.06 in this library. Before the
-shipped architecture is chosen, both models should be retrained on data from
-several populations.
+See [shipping-encoder.md](shipping-encoder.md) for the result and
+[timeline.md](timeline.md) for how we got there. An earlier decision to ship
+the pure-Go linear labeler was reversed after the generalization study
+([generalization.md](generalization.md)) showed it holds up worse on other
+people's data.
 
 ## Files
 
 | File | What it is |
 |---|---|
-| [findings.md](findings.md) | Every result that matters, per round and per study, with the caveats |
+| [timeline.md](timeline.md) | What we did, in order, and why each decision was made |
+| [shipping-encoder.md](shipping-encoder.md) | Round 4 (KESTREL): the multi-population encoder Pharos will ship, the public-only alternative, the runtime cost and the input contract |
+| [findings.md](findings.md) | Results from rounds 1 and 2, per study, with the caveats |
 | [methodology.md](methodology.md) | Targets, splits, segments, the fair leave-one-out comparison, the harness, and pitfalls found along the way |
 | [reproduction.md](reproduction.md) | How to restore the data and code from the euclid archive and rerun each study |
-| [linear-labeler-plan.md](linear-labeler-plan.md) | The concrete plan for wiring the Go linear labeler into Pharos |
+| [linear-labeler-plan.md](linear-labeler-plan.md) | **Superseded.** The plan for the Go linear labeler, kept for the record; its pipeline parts (shared item builder, ledger, operation) carry over |
 | [generalization.md](generalization.md) | Round 3: holding out whole groups within the library (HERON), and other people's public data (IBIS) |
-| [reports/](reports/) | Sanitized copies of every study report and the Go parity contract (`r2-DOTTEREL-PARITY.md`) |
+| [reports/](reports/) | Sanitized copies of every study report, the Go parity contract (`r2-DOTTEREL-PARITY.md`) and the encoder framing spec (`r4-KESTREL-FRAMING.md`) |
+| [code/](code/) | Frozen snapshot of the research code: harnesses, trainers, export, evaluation. Not maintained. |
 
 ## What is not in the repository, and where it is
 
