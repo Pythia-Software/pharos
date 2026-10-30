@@ -301,8 +301,15 @@ and how they are padded (`labeler.InputContracts`):
 - The protocol, the workers' loops and the ledger are the same for every
   contract (`TestLabelsCarryAPoolingInput`, and the ONNX Runtime worker's
   declared-input tests).
+
 A missing or failing model disables labeling with the reason in `labels
 status`.
+
+**The shipped model** is LAPWING's target-pooling `kestrel-68m-tpool`
+(`ids-attention-pool-v1`). With no `labels_model_dir`, Pharos looks for it
+at `../Resources/labeler/kestrel-68m-tpool` beside its executable, as in an
+app bundle. Configuring another directory, such as `kestrel-68m`
+(`ids-attention-v1`), still works: the runtime serves both contracts.
 
 **Never commit weights.** The weights derive from this library's private
 conversations; the fixture's strings are invented. **For a release**:
@@ -310,12 +317,13 @@ conversations; the fixture's strings are invented. **For a release**:
   deployment Mac), and pin its manifest SHA-256 in the repository, as
   `macos/sparkle.json` pins Sparkle;
 - `build-app.sh` fetches and verifies it into
-  `Contents/Resources/labeler/kestrel-68m/`, with the worker in
+  `Contents/Resources/labeler/kestrel-68m-tpool/`, with the worker in
   `Contents/MacOS/pharos-labeler-ort` and ONNX Runtime's library and license
   in `Contents/Frameworks/` (fetched by `macos/fetch-onnxruntime.sh`, which
   pins version 1.31.1, the version the Python reference ran with, by URL and
   SHA-256);
-- the settings above then default to those paths, and Settings shows the
+- the settings above then default to those paths (the worker beside
+  `pharos`, the model under `Resources/labeler`), and Settings shows the
   labeler's state.
 
 The model is never stored on the library drive.

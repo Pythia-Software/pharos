@@ -188,12 +188,14 @@ func labelerSettingsFrom(root map[string]any, base string) LabelerSettings {
 		Threads:  intValue(root, "labels_threads", 4), Workers: intValue(root, "labels_workers", 1),
 		BatchTokens: intValue(root, "labels_batch_tokens", 16384), MaxBatch: intValue(root, "labels_max_batch", 64),
 	}
-	if settings.Worker == "" {
-		// Beside the pharos executable, as an app bundle would place it.
-		if exe := runningExecutable(); exe != "" {
-			if candidate := filepath.Join(filepath.Dir(exe), "pharos-labeler-ort"); fileExists(candidate) {
-				settings.Worker = candidate
-			}
+	if exe := runningExecutable(); exe != "" {
+		// Beside the pharos executable, as an app bundle would place them:
+		// Contents/MacOS/pharos-labeler-ort and Contents/Resources/labeler/<model>.
+		if candidate := filepath.Join(filepath.Dir(exe), "pharos-labeler-ort"); settings.Worker == "" && fileExists(candidate) {
+			settings.Worker = candidate
+		}
+		if candidate := filepath.Join(filepath.Dir(exe), "..", "Resources", "labeler", labelsDefaultModel); settings.ModelDir == "" && fileExists(filepath.Join(candidate, "manifest.json")) {
+			settings.ModelDir = candidate
 		}
 	}
 	return settings
@@ -203,6 +205,11 @@ func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
 }
+
+// labelsDefaultModel is the model the app ships: LAPWING's target-pooling
+// kestrel-68m (input contract ids-attention-pool-v1). Any model directory
+// can still be configured, kestrel-68m (ids-attention-v1) included.
+const labelsDefaultModel = "kestrel-68m-tpool"
 
 // labelsModelIdentity names what made a label: the model's name, its file's
 // SHA-256 and its manifest's (which holds the thresholds and tokenizer
