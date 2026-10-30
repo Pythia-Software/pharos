@@ -210,8 +210,14 @@ func TestAskConversationPersistenceAndSelection(t *testing.T) {
 	pageURI := "/analyze?analyze_topic=tokens&private_view=retainedscope"
 	override(t, &askRunCLI, func(ctx context.Context, p askProvider, selection askSelection, prompt string) ([]byte, error) {
 		calls++
-		if !strings.Contains(prompt, jsonText(pageURI)) {
-			t.Error("current page context missing from CLI conversation")
+		_, raw, _ := strings.Cut(prompt, "Context JSON:\n")
+		var data struct {
+			Conversation []struct {
+				CurrentURI string `json:"currentURI"`
+			} `json:"conversation"`
+		}
+		if err := json.Unmarshal([]byte(raw), &data); err != nil || len(data.Conversation) == 0 || data.Conversation[0].CurrentURI != pageURI {
+			t.Errorf("current page context missing from CLI conversation: %+v %v", data, err)
 		}
 		if strings.Contains(prompt, s.Config().APIToken) {
 			t.Error("passed service token to CLI")
@@ -1183,28 +1189,118 @@ func TestAskSiteLinkDestinations(t *testing.T) {
 		return example.Path + "?" + values.Encode()
 	}
 	for name, destination := range map[string]map[string]string{
-		"malformed URL":     {"id": "", "url": "/analyze?analyze_mode=%zz"},
-		"unknown parameter": {"id": "", "url": with(func(v url.Values) { v.Set("colour", "red") })},
-		"coercible state":   {"id": "", "url": with(func(v url.Values) { v.Set("analyze_chart", `{"v":2,"view":"trend","metric":"cost","split":"type"}`) })},
-		"Ask chat":          {"id": "", "url": "/?ask_chat=chat-1"},
-		"other site":        {"id": "", "url": "https://example.com/analyze"},
-		"both":              {"id": "analyze", "url": canonical},
-		"neither":           {"id": " ", "url": ""},
-		"unknown id":        {"id": "nope", "url": ""},
-		"long description":  {"id": "analyze", "url": "", "description": strings.Repeat("x", 1001)},
+		"malformed URL":      {"id": "", "url": "/analyze?analyze_mode=%zz"},
+		"control separators": {"id": "", "url": strings.ReplaceAll(canonical, "&", "\x1f")},
+		"unknown parameter":  {"id": "", "url": with(func(v url.Values) { v.Set("colour", "red") })},
+		"coercible state":    {"id": "", "url": with(func(v url.Values) { v.Set("analyze_chart", `{"v":2,"view":"trend","metric":"cost","split":"type"}`) })},
+		"Ask chat":           {"id": "", "url": "/?ask_chat=chat-1"},
+		"other site":         {"id": "", "url": "https://example.com/analyze"},
+		"both":               {"id": "analyze", "url": canonical},
+		"neither":            {"id": " ", "url": ""},
+		"unknown id":         {"id": "nope", "url": ""},
+		"long description":   {"id": "analyze", "url": "", "description": strings.Repeat("x", 1001)},
 	} {
 		if _, given := destination["description"]; !given {
 			destination["description"] = ""
 		}
-		override(t, &askRunCLI, reply(destination))
+		calls := 0
+		invalidReply := reply(destination)
+		override(t, &askRunCLI, func(ctx context.Context, p askProvider, selection askSelection, prompt string) ([]byte, error) {
+			calls++
+			if calls > 2 {
+				t.Fatal("invalid destinations caused repeated correction attempts")
+			}
+			return invalidReply(ctx, p, selection, prompt)
+		})
 		if answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC"); err == nil || !strings.HasSuffix(err.Error(), "try again") {
 			t.Errorf("%s: %+v accepted: %+v %v", name, destination, answer, err)
 		}
+		if calls != 2 {
+			t.Errorf("%s: got %d calls, want one correction attempt", name, calls)
+		}
 		// Beside a destination Pharos can open, it is only left out.
-		override(t, &askRunCLI, reply(destination, map[string]string{"id": "", "url": canonical, "description": ""}))
+		calls = 0
+		mixedReply := reply(destination, map[string]string{"id": "", "url": canonical, "description": ""})
+		override(t, &askRunCLI, func(ctx context.Context, p askProvider, selection askSelection, prompt string) ([]byte, error) {
+			calls++
+			return mixedReply(ctx, p, selection, prompt)
+		})
 		if answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC"); err != nil || len(answer.Cards) != 1 || answer.Cards[0].Href != canonical || answer.Omitted != 1 {
 			t.Errorf("%s beside a valid link: %+v %v", name, answer, err)
 		}
+		if calls != 1 {
+			t.Errorf("%s: retried a response with a valid destination", name)
+		}
+	}
+}
+
+func TestAskCorrectsInvalidDestinations(t *testing.T) {
+	for _, lookups := range []int{0, 2} {
+		t.Run(fmt.Sprintf("after %d private lookups", lookups), func(t *testing.T) {
+			s := askTestServer(t)
+			askEnable(t, s)
+			calls, link, broken := 0, "", ""
+			message := "Explore your parallelism over the last seven days."
+			override(t, &askRunCLI, func(ctx context.Context, p askProvider, selection askSelection, prompt string) ([]byte, error) {
+				calls++
+				_, raw, _ := strings.Cut(prompt, "Context JSON:\n")
+				var data struct {
+					LookupsRemaining     int               `json:"lookupsRemaining"`
+					PrivateLookupResults []json.RawMessage `json:"privateLookupResults"`
+					Correction           *struct {
+						Response askAgentResponse `json:"response"`
+						Errors   []string         `json:"errors"`
+					} `json:"destinationCorrection"`
+				}
+				if err := json.Unmarshal([]byte(raw), &data); err != nil {
+					t.Fatal(err)
+				}
+				if calls <= lookups {
+					if data.LookupsRemaining != 3-calls || data.Correction != nil {
+						t.Fatalf("incorrect lookup context: %+v", data)
+					}
+					return []byte(jsonText(askAgentResponse{Lookup: askLookup{Kind: []string{"visits", "chats"}[calls-1]}})), nil
+				}
+				if calls > lookups+2 {
+					t.Fatal("correction was not bounded")
+				}
+				if calls == lookups+2 {
+					if data.Correction == nil || data.Correction.Response.Message != message || len(data.Correction.Response.Destinations) != 1 || data.Correction.Response.Destinations[0].URL != broken || len(data.Correction.Errors) != 1 || !strings.Contains(data.Correction.Errors[0], "invalid control character") {
+						t.Fatalf("missing failed response or useful validation error: %+v", data.Correction)
+					}
+					if data.LookupsRemaining != 2-lookups || len(data.PrivateLookupResults) != lookups {
+						t.Fatalf("correction lost or consumed private lookups: %+v", data)
+					}
+				} else if data.Correction != nil {
+					t.Fatal("correction present before an invalid response")
+				}
+				value, _, err := callSiteMCP(ctx, s.Catalog, "site_link", map[string]any{
+					"page": "analyze/parallelism", "days": 7,
+					"options": map[string]any{"view": "trend", "metric": "agent_hours", "split": "level_band"},
+				})
+				if err != nil {
+					return nil, err
+				}
+				link = value.(map[string]any)["url"].(string)
+				given := link
+				if calls == lookups+1 {
+					broken = strings.ReplaceAll(link, "&", "\x1f")
+					given = broken
+				}
+				return []byte(jsonText(map[string]any{"message": message, "destinations": []map[string]string{{"id": "", "url": given, "description": ""}}, "lookup": askLookup{Kind: "none"}})), nil
+			})
+			input := askInput()
+			input["prompt"] = "Can you tell me a bit about my recent parallelism?"
+			askOK(t, s, "send", input)
+			session, err := s.askSession(t.Context(), "chat-1")
+			if err != nil || len(session.Conversation) != 1 {
+				t.Fatalf("session: %+v %v", session, err)
+			}
+			turn := session.Conversation[0]
+			if calls != lookups+2 || turn.Status != "single" || turn.Reply != message || len(turn.Cards) != 1 || turn.Cards[0].Href != link || turn.Omitted != 0 {
+				t.Fatalf("correction failed: %d calls, %+v", calls, turn)
+			}
+		})
 	}
 }
 
@@ -1552,5 +1648,18 @@ func TestAskSiteLinksRespectCancellation(t *testing.T) {
 		if _, err := call(); !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancelled Ask did destination work: %v", err)
 		}
+	}
+	// Cancellation after a rejected response stops before launching a repair.
+	s := askTestServer(t)
+	ctx, cancel = context.WithCancel(t.Context())
+	defer cancel()
+	calls := 0
+	override(t, &askRunCLI, func(context.Context, askProvider, askSelection, string) ([]byte, error) {
+		calls++
+		return askReply("unknown"), nil
+	})
+	p := askProvider{ID: "Codex", progress: func(string) { cancel() }}
+	if _, err := s.answerAsk(ctx, p, askSession{}, "UTC"); !errors.Is(err, context.Canceled) || calls != 1 {
+		t.Fatalf("cancelled correction: %d CLI calls, %v", calls, err)
 	}
 }
