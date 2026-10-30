@@ -376,6 +376,31 @@ func (s *Server) finishDeferredSync(ctx context.Context) error {
 // The chain is an analysis.chain stage of the run ctx carries, and each of
 // its stages a child of it (docs/background-work.md §2.4).
 func (s *Server) finishDeferredSyncPhases(ctx context.Context, forceFindings bool, runPhase func(string, func() error) error) (err error) {
+	findings := findingsAuto
+	if forceFindings {
+		findings = findingsForce
+	}
+	return s.finishDeferredStages(ctx, findings, nil, runPhase)
+}
+
+// findingsMode is what the chain's findings stage does: the full pass when
+// today's has not run (auto), the full pass anyway (force, a manual
+// index), or only measure the findings being watched (measure, a
+// background update's findings item, which leaves today's full pass to
+// the daily review).
+type findingsMode int
+
+const (
+	findingsAuto findingsMode = iota
+	findingsForce
+	findingsMeasure
+)
+
+// finishDeferredStages is the chain limited to the stages in only (all of
+// them when nil): background updates run each stage on its own cadence.
+// GitHub runs with identities.
+func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode, only map[string]bool, runPhase func(string, func() error) error) (err error) {
+	forceFindings := findings == findingsForce
 	ctx, chain := s.Catalog.beginOp(ctx, OperationSpec{Kind: "analysis.chain", Trigger: triggerChained})
 	defer func() { chain.Finish(err) }()
 	measure := runPhase
@@ -404,8 +429,10 @@ func (s *Server) finishDeferredSyncPhases(ctx context.Context, forceFindings boo
 			return err
 		}
 	}
-	if err := runPhase("github", func() error { return s.Catalog.RefreshRepositoryForgeIDs(ctx) }); err != nil {
-		return err
+	if only == nil || only["identities"] {
+		if err := runPhase("github", func() error { return s.Catalog.RefreshRepositoryForgeIDs(ctx) }); err != nil {
+			return err
+		}
 	}
 	// Repository merges can invalidate analyses, so snapshot dirty generations
 	// after GitHub resolution and before the remaining stages.
@@ -477,12 +504,18 @@ func (s *Server) finishDeferredSyncPhases(ctx context.Context, forceFindings boo
 				case <-time.After(50 * time.Millisecond):
 				}
 			}
+			if findings == findingsMeasure {
+				return s.Catalog.MeasureFindings(ctx)
+			}
 			return s.Catalog.RefreshFindings(ctx, forceFindings)
 		}},
 	}
 	for _, stage := range stages {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if only != nil && !only[stage.name] {
+			continue
 		}
 		if err := runPhase(stage.name, func() error {
 			if err := stage.work(); err != nil {
@@ -493,8 +526,11 @@ func (s *Server) finishDeferredSyncPhases(ctx context.Context, forceFindings boo
 			return err
 		}
 	}
-	// The freshness ledger's upgrade count (§5), cheap next to the chain.
-	s.Catalog.storeUpgradeCount(ctx)
+	// The freshness ledger's upgrade count (§5), cheap next to the whole
+	// chain; a background stage leaves it to the daily pass.
+	if only == nil {
+		s.Catalog.storeUpgradeCount(ctx)
+	}
 	return nil
 }
 

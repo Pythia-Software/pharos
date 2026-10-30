@@ -128,6 +128,7 @@ const ROUTES = [
   {name:"Ask Pharos settings",url:"/settings/ask",ready:"#askSettingsPage .ask-settings select",api:askAPI},
 
   ].map(route=>({...route,name:`${route.name} (${theme})`,preferences:{"pharos-theme":theme}}))),
+  { name: "TL1 attempts query", url: "/analyze?analyze_mode=query&analyze_data=tl1_attempts", ready: ".usage-workspace-table .qt-row" },
   { name: "Data guide", url: "/analyze?analyze_mode=query&analyze_data=tool_calls&analyze_topic=tools", ready: ".usage-workspace-table .qt-row", open: page => page.locator(".usage-workspace-table .data-source-link").click(), shown: ".data-guide[open]" },
   ...["usage", "writing", "writing_messages", "conversation_activity", "tool_calls", "tools", "skill_usages", "mcp_calls", "parallelism"].flatMap(dataset => [false, true].map(explore => ({
     name: `Query ideas ${explore ? "Explore " : ""}${dataset}`,
@@ -177,8 +178,10 @@ const ROUTES = [
     open: async page => {
       await page.evaluate(() => { window.webkit = {messageHandlers: {pharosLibrary: {postMessage: async () => {}}}}; });
       await activateHeaderTool(page, 'pharosDrive');
-      await page.locator('#pharosStatusPanel summary').click();
-    }, shown: '#pharosStatusPanel .pharos-status-domains',
+      // Every cadence row open, its items listed.
+      const closed = page.locator('#pharosStatusPanel .pharos-status-cadences details:not([open]) summary');
+      while (await closed.count()) await closed.first().click();
+    }, shown: '#pharosStatusPanel .pharos-status-items li',
   })),
   { name: "Home", url: "/", ready: ".home-belt-row .query-card" },
   { name: "Home search composer", url: "/", ready: ".home-search-trigger", open: page => page.getByRole("button", { name: "Search past work", exact: true }).click(), shown: ".home-search-disclosure.is-expanded" },
@@ -200,11 +203,6 @@ const ROUTES = [
   { name: "Search content editor", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("button", { name: "Messages", exact: true }).click(), shown: ".explore-search-modal" },
   { name: "Search grouped search", url: exploreGroupedSearch, ready: "#queryTableLibrary .qt-row" },
   { name: "Search grouped conversation display", url: exploreGroupedSearch, ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("group", { name: "Display results as" }).getByRole("button", { name: "Conversations", exact: true }).click(), shown: ".conversation-result-card" },
-  { name: "TL1 overview", url: "/tl1", ready: ".tl1-tiles" },
-  { name: "TL1 configurations", url: "/tl1/configurations", ready: "#tl1-matrix tbody tr" },
-  { name: "TL1 follow-ups", url: "/tl1/followups", ready: "#tl1-followup-next tbody tr" },
-  { name: "TL1 quality", url: "/tl1/quality", ready: "#tl1-errors" },
-  { name: "TL1 runs", url: "/tl1/runs", ready: "#tl1Page .qt-row" },
   { name: "Analyze tokens", url: "/analyze?analyze_view=tokens&machine_view=tokens", ready: "#queryTableUsage .usage-chart" },
   { name: "Analyze machine time", url: "/analyze?analyze_view=tokens&machine_view=time", ready: ".machine-call-surface .qt-row" },
   { name: "Analyze parallelism", url: "/analyze?analyze_view=tokens&machine_view=parallelism", ready: ".concurrency-chart svg" },
@@ -358,25 +356,32 @@ const ROUTES = [
     },shown:`#cloud-step-${step-1}`
   })),
   { name: "Sources", url: "/settings/sources", ready: "#sourceGrid .source-card" },
-  { name: "Capture & index", url: "/settings/sync", ready: "#syncHistoryTables .qt-row" },
-  { name: "Capture & index diagnostics", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByText("Performance & verification details", { exact: true }).click(), shown: "#syncDiagnosticTables .qt-row" },
-  { name: "Capture & index run details", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByRole("region", { name: "Recent run history", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" },
-  { name: "Capture & index empty", url: "/settings/sync", ready: "#syncHistoryTables .qt-empty", api: { "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [], source_states: [] } } },
+  { name: "Background updates", url: "/settings/sync", ready: "#syncHistoryTables .qt-row" },
+  { name: "Background updates schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Your writing" }).click(), shown: "#backgroundSchedule .bg-detail" },
+  { name: "Background updates sources", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "New conversations" }).click(), shown: "#backgroundSchedule .bg-sources" },
+  { name: "Background updates diagnostics", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByText("Performance & verification details", { exact: true }).click(), shown: "#syncDiagnosticTables .qt-row" },
+  { name: "Background updates run details", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByRole("region", { name: "Recent run history", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" },
+  { name: "Background updates empty", url: "/settings/sync", ready: "#syncHistoryTables .qt-empty", api: { "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [], source_states: [] } } },
   { name: "Legacy Findings settings", url: "/settings/optimization", ready: ".findings-settings .findings-panel" },
-  { name: "Header settings", url: "/settings/header", ready: "#headerActive .header-tool" },
-  { name: "App preferences", url: "/settings/preferences", ready: "#showMacMenuBar" },
-  { name: "Mac menu disabled", url: "/settings/preferences", ready: "#showMacMenuBar", preferences: { 'pharos-menu-bar': { enabled: false } } },
-  { name: "Mac menu expanded", url: "/settings/preferences", ready: "#showMacMenuBar", open: page => page.getByRole('button', { name: 'Expand', exact: true }).click(), shown: '#menuBarActive button' },
-  { name: "Mac menu syncing", url: "/settings/preferences", ready: "#showMacMenuBar", open: page => page.getByRole('button', { name: 'Expand', exact: true }).click(), shown: '#menuBarActive .menu-bar-detail', api: {
+  { name: "Layout Preferences", url: "/settings/layout", ready: "#headerExpand" },
+  { name: "Header settings", url: "/settings/layout", ready: "#headerExpand", open: page => page.locator('#headerExpand').click(), shown: '#headerActive .header-tool' },
+  { name: "Quick Stats settings", url: "/settings/layout", ready: "#quickStatsExpand", open: page => page.locator('#quickStatsExpand').click(), shown: '#quickStatsEditor button' },
+  { name: "Quick Stats toolbox", url: "/settings/layout", ready: "#quickStatsExpand", preferences: { "pharos-quick-stats-v1": { metrics: ['human_words', 'tokens'], windows: ['today', '24h'] } }, open: page => page.locator('#quickStatsExpand').click(), shown: '#quickStatsPreview td' },
+  { name: "App preferences", url: "/settings/preferences", ready: "#lighthouseSpinOnClick" },
+  { name: "Mac menu disabled", url: "/settings/layout", ready: "#showMacMenuBar", preferences: { 'pharos-menu-bar': { enabled: false } } },
+  { name: "Mac menu expanded", url: "/settings/layout", ready: "#showMacMenuBar", open: page => page.locator('#menuBarExpand').click(), shown: '#menuBarActive button' },
+  { name: "Mac menu syncing", url: "/settings/layout", ready: "#showMacMenuBar", open: page => page.locator('#menuBarExpand').click(), shown: '#menuBarActive .menu-bar-detail', api: {
     'GET /api/menu-bar/status': {...defaultApi['GET /api/menu-bar/status'], library: {activities: [{label: 'Manual sync: evaluating findings while checking every captured conversation and its retained tool results', progress: .22, estimated_completion_at: new Date(Date.now() + 60000).toISOString()}]}},
   } },
-  { name: "Mac menu with all items", url: "/settings/preferences", ready: "#showMacMenuBar", open: page => page.getByRole('button', { name: 'Expand', exact: true }).click(), shown: '#menuBarActive button', preferences: { 'pharos-menu-bar': { cost: true, backup: true, space: true, index: true, eject: true, search: true, analyze: true, optimize: true, capture: true, health: true, sources: true, finder: true } } },
+  { name: "Mac menu with all items", url: "/settings/layout", ready: "#showMacMenuBar", open: page => page.locator('#menuBarExpand').click(), shown: '#menuBarActive button', preferences: { 'pharos-menu-bar': { cost: true, backup: true, space: true, index: true, eject: true, search: true, analyze: true, optimize: true, capture: true, health: true, sources: true, finder: true } } },
   { name: "Workspace overview", url: work, ready: ".delegation-table tbody tr" },
   { name: "Workspace parallel activity", url: `${work}?explorer=parallel`, ready: ".delegation-parallel" },
   { name: "Long transcript", url: `${work}/conversation/${rootConversation}`, ready: ".conversation-panel .turn" },
   { name: "Child transcript", url: `${work}/conversation/conv-nested`, ready: ".conversation-panel .turn" },
   { name: "Quick search", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => page.keyboard.press("ControlOrMeta+k"), shown: "#searchDialog[open]" },
   { name: "Analyze summary", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => activateHeaderTool(page, "usageSummaryToggle"), shown: "#usageSummary" },
+  { name: "Extended Quick Stats", url: "/library", preferences: { "pharos-quick-stats-v1": {metrics:['active_conversations','message_count','user_messages','assistant_messages','tool_calls','failed_tool_calls','tool_failure_rate','delegated_runs','active_repositories','tool_time_ms','agent_time_ms','active_time_ms'], windows:['5m','15m','yesterday','week','month','all']}, "pharos-usage-summary-links":true }, ready: "#queryTableLibrary .qt-row", open: page => activateHeaderTool(page,"usageSummaryToggle"), shown: "#usageSummary" },
+  { name: "Customized Quick Stats", url: "/library", preferences: { "pharos-quick-stats-v1": { metrics: ['cost_usd', 'tokens'], windows: ['today', '6h'] } }, ready: "#queryTableLibrary .qt-row", open: page => activateHeaderTool(page, "usageSummaryToggle"), shown: "#usageSummary" },
   { name: "Clickable Analyze summary", url: "/library", preferences: { "pharos-usage-summary-links": true }, ready: "#queryTableLibrary .qt-row", open: page => activateHeaderTool(page, "usageSummaryToggle"), shown: "#usageSummary" },
   { name: "App navigation", url: "/analyze", ready: ".usage-dashboard .usage-chart", open: async page => {
     if (await page.locator('#appNavigationToggle').isVisible()) await page.locator('#appNavigationToggle').click();
@@ -897,24 +902,23 @@ test("Card Library restores saved covers while fresh queries are pending", { ski
 // window, and some at every window. Open the 7-day one where there is one.
 const cardLinks = JSON.parse(readFileSync(new URL('../../../testdata/site-map-cases.json', import.meta.url), 'utf8')).cards;
 
-// Card analyses use their own source grain and shared cover renderer. The
-// model/unit suite owns mathematical parity; the browser checks accessibility
-// of navigation and that every chart family fits the available viewport.
-for (const id of ['human-words', 'cost-repos', 'machine-time', 'skill-evidence', 'tool-failure-rates', 'mcp-response-size', 'carbon-trend', 'parallel-days', 'machine-latency-trend', 'session-input-output', 'human-message-lengths', 'writing-hours']) {
-  for (const width of [1504, 390, 320]) test(`Expanded card ${id} fits at ${width}px`, { skip }, async t => {
+// Card links open full dashboards. Check navigation into supporting queries
+// and back, and that each chart family fits the available viewport.
+for (const id of ['human-words', 'cost-repos', 'machine-time', 'skill-evidence', 'tool-failure-rates', 'mcp-response-size', 'carbon-trend', 'parallel-days', 'machine-latency-trend', 'session-input-output', 'human-message-lengths', 'writing-hours', 'session-human-output', 'error-signatures']) {
+  for (const width of [1504, 390, 320]) test(`Card dashboard ${id} fits at ${width}px`, { skip }, async t => {
     const item = cardLinks.find(card => card.id === id && card.days === 7) ?? cardLinks.find(card => card.id === id);
-    const app = await open(t, { url: item.url, viewport: { width, height: 933 }, ready: '.card-analysis' });
+    const app = await open(t, { url: item.url, viewport: { width, height: 933 }, ready: '.usage-query-destinations a' });
     const { page } = app;
     await app.settled();
     assert.equal(await page.getByRole('alert').count(), 0, 'the matching analysis is available');
     assert.deepEqual(await layoutProblems(page), []);
-    const details = page.getByRole('link', { name: 'View supporting query', exact: true });
+    const details = page.locator('.usage-query-destinations a').first();
     await details.waitFor();
-    await app.shot(`expanded-${id}`);
+    await app.shot(`card-dashboard-${id}`);
     await details.click();
     await page.locator('.usage-workspace-table').waitFor();
-    await page.getByRole('link', { name: 'Back to dashboard', exact: true }).click();
-    await page.getByRole('region', { name: 'Card analysis', exact: true }).waitFor();
+    await page.getByRole('link', { name: /^Back to dashboard/ }).click();
+    await page.locator('.usage-dashboard .usage-query-destinations a').first().waitFor();
     await app.settled();
     assert.deepEqual(await layoutProblems(page), []);
   });
@@ -931,4 +935,78 @@ for (const choice of ['today', '24h']) test(`Query time window picker keeps ${ch
   await app.settled();
   assert.equal(await picker.inputValue(), choice);
   assert.equal(new URL(app.page.url()).searchParams.get('window_mode'), choice === 'today' ? 'today' : 'relative');
+});
+
+
+test("Card dashboard opens from the Card Library and supports changing views and reloading", { skip }, async t => {
+  const app = await open(t, { url: '/cards?card_search=error-signatures&card_topic=all&card_window=7', ready: '.query-card-open' });
+  const { page } = app;
+  await page.locator('.query-card-open').first().click();
+  const view = page.getByRole('combobox', { name: 'View', exact: true });
+  await view.waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('analyze_topic'), 'calls');
+  await view.selectOption('trend');
+  await page.waitForFunction(() => JSON.parse(new URLSearchParams(location.search).get('analyze_chart')).view === 'trend');
+  await page.reload();
+  await page.getByRole('combobox', { name: 'View', exact: true }).waitFor();
+  assert.equal(await page.getByRole('combobox', { name: 'View', exact: true }).inputValue(), 'trend');
+  await app.settled();
+  assert.deepEqual(app.problems(), []);
+});
+
+
+const oldActivitySource = { ...EMPTY_QUERY, where: [
+  { field: "root_effort", op: "=", value: "high" },
+  { field: "event_at", op: ">=", value: "2026-10-01T15:00:00.000Z" },
+  { field: "event_at", op: "<", value: "+0s" },
+] };
+function oldActivityCard(token = encodeQuery(oldActivitySource)) {
+  return `/analyze?${new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: "human", analyze_data: "writing_messages",
+    analyze_chart: JSON.stringify({ view: "trend", metric: "words" }), analyze_filters: encodeQuery(EMPTY_QUERY),
+    card_id: "session-human-output", card_query: "conversation_activity", q_conversation_activity: token,
+    window_mode: "today", window_days: "1", window_dataset: "conversation_activity", window_field: "event_at", window_timezone: "Asia/Tokyo",
+  })}`;
+}
+for (const durable of [false, true]) test(`Older card dashboard restores ${durable ? "durable" : "inline"} sources before rendering`, { skip }, async t => {
+  const code = "eeeeeeeeeeeeeeeeeeeeee";
+  const app = await open(t, { url: oldActivityCard(durable ? `@${code}` : undefined), ready: '.usage-query-destinations a',
+    api: { "GET /api/query-snapshots": { version: 1, code, token: encodeQuery(oldActivitySource), createdAt: 0 } },
+  });
+  const { page } = app;
+  await page.getByRole('heading', { name: 'Conversation Input and Output', exact: true }).waitFor();
+  assert.equal(await page.getByRole('combobox', { name: 'View', exact: true }).inputValue(), 'scatter');
+  const params = new URL(page.url()).searchParams;
+  assert.equal(params.get('analyze_topic'), 'activity');
+  assert.equal(params.get('analyze_window'), 'today');
+  assert.equal(params.get('analyze_timezone'), 'Asia/Tokyo');
+  assert.ok(app.calls.filter(call => call.method === 'POST' && call.path.startsWith('/api/query/')).every(call => !call.path.startsWith('/api/query/writing_messages/')), 'the old dashboard never executes');
+  await page.locator('.usage-query-destinations a').first().click();
+  await page.locator('.usage-workspace-table').waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('window_timezone'), 'Asia/Tokyo');
+  await page.getByRole('link', { name: /^Back to dashboard/ }).click();
+  await page.locator('.usage-query-destinations a').first().waitFor();
+  await page.reload();
+  await page.getByRole('combobox', { name: 'View', exact: true }).waitFor();
+  assert.equal(await page.getByRole('combobox', { name: 'View', exact: true }).inputValue(), 'scatter');
+  await app.settled();
+});
+
+test('Older card dashboard restoration cannot overwrite a later route', { skip }, async t => {
+  let release, started;
+  const gate = new Promise(resolve => { release = resolve; }), requested = new Promise(resolve => { started = resolve; });
+  t.after(() => release());
+  const code = 'ffffffffffffffffffffff';
+  const app = await open(t, { url: '/analyze?analyze_topic=tokens', ready: '.usage-query-destinations a',
+    api: { 'GET /api/query-snapshots': async () => { started(); await gate; return { version: 1, code, token: encodeQuery(oldActivitySource), createdAt: 0 }; } },
+  });
+  const { page } = app;
+  await page.evaluate(url => window.pharosNavigate(url), oldActivityCard(`@${code}`));
+  await requested;
+  await page.getByRole('status').filter({ hasText: 'Opening dashboard' }).waitFor();
+  await page.evaluate(() => window.pharosNavigate('/analyze?analyze_mode=dashboards&analyze_topic=calls&analyze_data=tool_calls'));
+  await page.getByRole('heading', { name: 'Tool Calls', exact: true }).waitFor();
+  release();
+  await app.settled();
+  assert.equal(new URL(page.url()).searchParams.get('analyze_topic'), 'calls');
+  await page.getByRole('heading', { name: 'Tool Calls', exact: true }).waitFor();
 });

@@ -12,7 +12,7 @@ import (
 	"unicode/utf8"
 )
 
-// checkHumanUnit asserts human-pieces-v2's invariants: pieces tile the
+// checkHumanUnit asserts human-pieces-v3's invariants: pieces tile the
 // message in order, each visible target slices the original text exactly
 // (or decodes it, for a transformed one), and visible targets separated by
 // excluded material have a marker between them.
@@ -237,6 +237,131 @@ func TestQuestionFormAnswersAreActions(t *testing.T) {
 		t.Fatalf("visible = %q", unit.Visible)
 	}
 	checkHumanUnit(t, text, unit)
+	for name, value := range map[string]string{"selected": "Records", "recommended": "Records (recommended)", "free text": "Please use another mode", "skipped": "(Skipped)"} {
+		t.Run(name, func(t *testing.T) {
+			c := newClassifier(nil)
+			c.addAuthorshipTool(authorAt(0), textOrigin{"chat", "question"}, `{"tool":"request_user_input_async","input":{"questions":[{"title":"Which mode?","options":["Records (Recommended)","Text"]}]}}`)
+			encoded, _ := json.Marshal(value)
+			text := "<send_user_message_question_reply>\n" + `[{"questionItemId":"call-1","question":"Which mode?","answer":` + string(encoded) + "}]\n</send_user_message_question_reply>"
+			spans := classifyOne(c, "chat", text, 5)
+			if name == "free text" {
+				if got := categoryText(text, spans, spanTyped); got != value || len(c.answers) != 0 {
+					t.Fatalf("typed = %q, actions = %+v", got, c.answers)
+				}
+				return
+			}
+			if got := categoryText(text, spans, spanTyped); got != "" {
+				t.Fatalf("selected/skipped counted as typed: %q", got)
+			}
+			if name == "skipped" {
+				if len(c.answers) != 0 {
+					t.Fatalf("skipped action = %+v", c.answers)
+				}
+				return
+			}
+			if len(c.answers) != 1 {
+				t.Fatalf("actions = %+v", c.answers)
+			}
+			answer := c.answers[0]
+			if answer.Title != "Which mode?" || answer.Option != "Records (Recommended)" || text[answer.Start:answer.End] != value || text[answer.TitleStart:answer.TitleEnd] != "Which mode?" || answer.Origin.message != "question" {
+				t.Fatalf("action = %+v", answer)
+			}
+			if unit := humanPieces(text, spans, nil); unit.Exclude != "no_target_text" {
+				t.Fatalf("option is a target: %+v", unit)
+			}
+			// Matching option text needs a question from this conversation.
+			if other := classifyOne(c, "other", text, 6); categoryText(text, other, spanTyped) != value || len(c.answers) != 0 {
+				t.Fatalf("cross-conversation provenance: %+v, %+v", other, c.answers)
+			}
+		})
+	}
+
+	t.Run("encoded labels and latest matching source", func(t *testing.T) {
+		c := newClassifier(nil)
+		call := `{"tool":"request_user_input_async","input":{"questions":[{"title":"Which \"mode\"?","options":["The \"Records\" view (Recommended)"]}]}}`
+		c.addAuthorshipTool(authorAt(0), textOrigin{"chat", "first-question"}, call)
+		c.addAuthorshipTool(authorAt(1), textOrigin{"chat", "latest-question"}, call)
+		c.addAuthorshipTool(authorAt(2), textOrigin{"chat", "different-options"}, `{"tool":"request_user_input_async","input":{"questions":[{"title":"Which \"mode\"?","options":["Text"]}]}}`)
+		text := "<send_user_message_question_reply>\n" + `[{"questionItemId":"call-1","question":"Which \"mode\"?","answer":"The \"Records\" view"}]` + "\n</send_user_message_question_reply>"
+		spans := classifyOne(c, "chat", text, 5)
+		if len(c.answers) != 1 || c.answers[0].Origin.message != "latest-question" || c.answers[0].Option != `The "Records" view (Recommended)` || countSpans(text, spans).words[spanTyped] != 0 {
+			t.Fatalf("actions = %+v, spans = %+v", c.answers, spans)
+		}
+		var title, value string
+		answer := c.answers[0]
+		if json.Unmarshal([]byte(`"`+text[answer.TitleStart:answer.TitleEnd]+`"`), &title) != nil || title != `Which "mode"?` ||
+			json.Unmarshal([]byte(`"`+text[answer.Start:answer.End]+`"`), &value) != nil || value != `The "Records" view` {
+			t.Fatalf("encoded action ranges = %+v", answer)
+		}
+	})
+
+}
+
+func TestStructuredQuestionAnswersExportDecodedText(t *testing.T) {
+	for name, value := range map[string]string{
+		"quotes and newlines":          "Café \"Save\" needs work.\nMove\tthis left.",
+		"leading and trailing escapes": "\n\tKeep the room\n\nflexible.\n",
+		"literal backslashes":          `Keep the literal \n and "quoted" text.`,
+		"unicode escapes":              "Café\u0020rooms\nremain editable.",
+	} {
+		t.Run(name, func(t *testing.T) {
+			encoded, _ := json.Marshal(value)
+			if name == "unicode escapes" {
+				encoded = []byte(`"Caf\u00e9\u0020rooms\nremain editable."`)
+			}
+			var want string
+			if err := json.Unmarshal(encoded, &want); err != nil {
+				t.Fatal(err)
+			}
+			text := "<send_user_message_question_reply>\n" + `[{"questionItemId":"call-1","question":"What should change?","answer":` + string(encoded) + "}]\n</send_user_message_question_reply>"
+			unit := humanPieces(text, classifyOne(newClassifier(nil), "chat", text, 5), nil)
+			var targets []labelingPiece
+			for _, piece := range unit.Pieces {
+				if piece.Role == pieceTarget {
+					targets = append(targets, piece)
+				}
+			}
+			if len(targets) != 1 {
+				t.Fatalf("targets = %+v; visible = %q", targets, unit.Visible)
+			}
+			piece := targets[0]
+			if piece.Transform != feedbackJSONTransform || text[piece.Start:piece.End] != string(encoded[1:len(encoded)-1]) || unit.Visible[piece.VisibleStart:piece.VisibleEnd] != want {
+				t.Fatalf("piece = %+v; visible = %q; want %q", piece, unit.Visible, want)
+			}
+			checkHumanUnit(t, text, unit)
+			source, _ := json.Marshal([]map[string]any{{"start": piece.Start, "end": piece.End, "transform": piece.Transform}})
+			storedPieces := []map[string]any{{"start_byte": piece.Start, "end_byte": piece.End, "visible_start": piece.VisibleStart, "visible_end": piece.VisibleEnd}}
+			ranges, unverified, err := labelingExportSourceRanges("answer", string(source), text, unit.Visible, piece.VisibleStart, piece.VisibleEnd, storedPieces, map[string]int{})
+			if err != nil || unverified != 0 || len(ranges) != 1 || ranges[0]["transform_verified"] != true {
+				t.Fatalf("exported ranges = %v, unverified = %d, error = %v", ranges, unverified, err)
+			}
+		})
+	}
+	for name, answer := range map[string]string{
+		"copied context":  "The long copied passage describes why the export button disappears when the sidebar is collapsed on mobile devices\nUse \"blue\" instead.",
+		"redacted secret": "Keep \"blue\" here.\nUse sk-abcdefghijklmnopqrstuv then\nkeep \"green\" too.",
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := newClassifier(nil)
+			if name == "copied context" {
+				c.addAgentText(authorAt(0), textOrigin{"agent", "reply"}, "The long copied passage describes why the export button disappears when the sidebar is collapsed on mobile devices", false)
+			}
+			encoded, _ := json.Marshal(answer)
+			text := "<send_user_message_question_reply>\n" + `[{"questionItemId":"call-1","question":"What should change?","answer":` + string(encoded) + "}]\n</send_user_message_question_reply>"
+			unit := humanPieces(text, classifyOne(c, "chat", text, 5), nil)
+			checkHumanUnit(t, text, unit)
+			if strings.Contains(unit.Visible, `\"`) || strings.Contains(unit.Visible, `\n`) || strings.Contains(unit.Visible, "sk-abcdefghijklmnopqrstuv") {
+				t.Fatalf("encoded or secret target = %q", unit.Visible)
+			}
+			if name == "copied context" && (pieceWithStatus(unit, "quoted").SourceMessage != "reply" || !strings.Contains(unit.Visible, "quoted agent text") || !strings.Contains(unit.Visible, `Use "blue" instead.`)) {
+				t.Fatalf("copied context = %+v, %q", unit.Pieces, unit.Visible)
+			}
+			if name == "redacted secret" && unit.Secrets != 1 {
+				t.Fatalf("secrets = %d", unit.Secrets)
+			}
+		})
+	}
+
 }
 
 func TestChunkingKeepsEveryCharacterAtBoundaries(t *testing.T) {

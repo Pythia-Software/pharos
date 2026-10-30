@@ -1,4 +1,5 @@
-import { todayBounds, localTimezone, type WindowChoice } from "./day-window";
+import { schemaDocuments } from "./schema-documents";
+import { todayBounds, type WindowChoice } from "./day-window";
 import { EMPTY_QUERY, decodeQueryStrict, predicatesOf, localQuerySnapshotCache, encodeQuery, type QueryState } from "@pythia-software/query-table-core";
 import { isUsageWorkspace, readUsageWorkspace, usageDatasetTopics, type UsageDataset } from "./usage-workspace-model";
 import { cardDashboardWhere, cardSourceDataset } from "./card-exploration";
@@ -8,12 +9,14 @@ import { windowedChart } from "./card-windows";
 export const queryDatasets = ["library", "usage", "conversation_activity", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "parallelism", "findings"] as const;
 export type QueryDataset = typeof queryDatasets[number];
 export type RollingWindow = { days: number; field: string; mode?: "relative" | "calendar" | "today"; untilField?: string; timezone?: string };
-const timeFields: Partial<Record<QueryDataset, string[]>> = {
+const defaultTimeFields: Partial<Record<QueryDataset, string[]>> = {
   writing: ["first_message_at", "last_message_at"], conversation_activity: ["event_at"], mcp_calls: ["called_at"], library: ["activity_at"], usage: ["first_usage_at", "last_usage_at"], tool_calls: ["started_at"],
   skill_usages: ["created_at"], writing_messages: ["sent_at"], tl1_attempts: ["started_at"], parallelism: ["started_at"], findings: ["first_seen_at"],
 };
+const timeFields = Object.fromEntries(Object.entries(schemaDocuments).map(([dataset, schema]) =>
+  [dataset, schema.fields.filter(field => field.type === "datetime").map(field => field.name)])) as Record<QueryDataset, string[]>;
 export const rollingWindowDays = [1, 7, 30, 90, 180, 365] as const;
-export function rollingWindowField(dataset: QueryDataset): string | undefined { return timeFields[dataset]?.[0]; }
+export function rollingWindowField(dataset: QueryDataset): string | undefined { return defaultTimeFields[dataset]?.[0]; }
 
 export function queryHasTimeFilter(query: QueryState, field: string): boolean {
   const source = query.grouping?.source ?? query;
@@ -45,12 +48,13 @@ export function readRollingWindow(params: URLSearchParams, dataset: QueryDataset
 export function updateQueryWindowURL(url: string, days: WindowChoice | null, fallback?: QueryState): string {
   const spec = queryFromURL(url, fallback), field = spec && (spec.window?.field ?? rollingWindowField(spec.dataset));
   if (!spec || !field || days === "today" && ["tl1_attempts", "findings"].includes(spec.dataset) || (days !== null && days !== "today" && !rollingWindowDays.some(value => value === days))) throw new Error("This view does not support that time window.");
-  const window: RollingWindow | undefined = days === null ? undefined : { days: days === "today" ? 1 : days, field, mode: days === "today" ? "today" : "relative", ...(spec.window?.untilField ? { untilField: spec.window.untilField } : {}) };
+  const window: RollingWindow | undefined = days === null ? undefined : { days: days === "today" ? 1 : days, field, mode: days === "today" ? "today" : "relative", ...(spec.window?.untilField ? { untilField: spec.window.untilField } : {}), ...(days === "today" && spec.window?.timezone ? {timezone:spec.window.timezone} : {}) };
   // Replace direct date selections, including older fixed ranges. Leave other
   // predicates (and compound date expressions) intact rather than rewriting
   // the user's logical query. Relative bounds are renewed on every evaluation.
   const source = spec.query.grouping?.source ?? spec.query;
-  const adjusted = { ...source, where: source.where.filter(term => !("field" in term && (timeFields[spec.dataset]?.includes(term.field) ?? term.field === field) && !term.negated && ["=", ">", ">=", "<", "<="].includes(term.op))) };
+  const windowFields = spec.window ? [field, spec.window.untilField ?? field] : defaultTimeFields[spec.dataset] ?? [field];
+  const adjusted = { ...source, where: source.where.filter(term => !("field" in term && windowFields.includes(term.field) && !term.negated && ["=", ">", ">=", "<", "<="].includes(term.op))) };
   if (days === null && adjusted.where.length === source.where.length && !spec.window) return url;
   const query = resolveRollingQuery(spec.query.grouping ? { ...spec.query, offset: 0, grouping: { ...spec.query.grouping, source: { ...adjusted, offset: 0 } } } : { ...adjusted, offset: 0 }, window);
   const parsed = new URL(url, location.origin);
@@ -67,7 +71,7 @@ export function updateQueryWindowURL(url: string, days: WindowChoice | null, fal
       parsed.searchParams.set("analyze_parallelism", JSON.stringify({ ...settings, range: days === "today" ? "today" : concurrencyWindowRange(days) }));
     }
   }
-  if (window?.mode === "today") parsed.searchParams.set("window_timezone", localTimezone()); else parsed.searchParams.delete("window_timezone");
+  if (window?.mode === "today") window.timezone ? parsed.searchParams.set("window_timezone", window.timezone) : parsed.searchParams.delete("window_timezone"); else parsed.searchParams.delete("window_timezone");
   if (window?.untilField) parsed.searchParams.set("window_until_field", window.untilField); else parsed.searchParams.delete("window_until_field");
   if (window) {
     parsed.searchParams.set("window_mode", window.mode!); parsed.searchParams.set("window_days", String(window.days)); parsed.searchParams.set("window_field", field); parsed.searchParams.set("window_dataset", spec.dataset);
@@ -82,9 +86,9 @@ export function resolveRollingQuery(query: QueryState, window?: RollingWindow, c
   if (!window) return query;
   if (window.mode === "relative" && rollingQueryMatches(query, window)) return query;
   const source = query.grouping?.source ?? query;
-  if (window.mode === "today" && rollingQueryMatches(query, window) && source.where.some(term => "field" in term && term.field === window.field && term.op === ">=" && Date.parse(term.value) === Date.parse(todayBounds(clock)[0]))) return query;
+  if (window.mode === "today" && rollingQueryMatches(query, window) && source.where.some(term => "field" in term && term.field === window.field && term.op === ">=" && Date.parse(term.value) === Date.parse(todayBounds(clock, window.timezone)[0]))) return query;
   if (query.grouping) return { ...query, offset: 0, grouping: { ...query.grouping, source: resolveRollingQuery(query.grouping.source, window, clock) } };
-  const [from, to] = window.mode === "today" ? [todayBounds(clock)[0], "+0s"] : window.mode === "relative" ? [`-${window.days}d`, "+0s"] : rollingBounds(window.days, clock);
+  const [from, to] = window.mode === "today" ? [todayBounds(clock, window.timezone)[0], "+0s"] : window.mode === "relative" ? [`-${window.days}d`, "+0s"] : rollingBounds(window.days, clock);
   return { ...query, offset: 0, where: [
     ...query.where.filter(term => !("field" in term && (term.field === window.field || term.field === window.untilField) && !term.negated && [">=", "<"].includes(term.op))),
     { field: window.field, op: ">=", value: from }, { field: window.untilField ?? window.field, op: "<", value: to },
@@ -122,10 +126,9 @@ export function queryURL(dataset: QueryDataset, query: QueryState, window?: Roll
   } else if (dataset === "findings") {
     path = "/findings"; params.set("view", "table");
   }
-  else if (dataset === "tl1_attempts") path = "/tl1/runs";
   if (window) {
     if (window.mode === "relative" || window.mode === "today") params.set("window_mode", window.mode);
-    if (window.mode === "today") params.set("window_timezone", localTimezone());
+    if (window.mode === "today" && window.timezone) params.set("window_timezone", window.timezone);
     if (window.untilField) params.set("window_until_field", window.untilField);
     params.set("window_days", String(window.days)); params.set("window_field", window.field); params.set("window_dataset", dataset);
   }
@@ -149,7 +152,7 @@ export function queryFromURL(url: string, fallback?: QueryState): { dataset: Que
       : path === "/findings" ? params.get("view") === "table" ? "findings" : undefined
       : path === "/analyze" ? params.get("analyze_view") === "conversations" ? "conversation_activity" : params.get("analyze_view") === "writing" ? params.get("writing") === "messages" ? "writing_messages" : "writing" : "usage"
       : path === "/tools" ? params.get("tools_view") === "summary" ? "tools" : params.get("tools_view") === "skills" ? "skill_usages" : "tool_calls"
-      : path === "/mcp" ? "mcp_calls" : path.startsWith("/tl1") ? "tl1_attempts" : undefined;
+      : path === "/mcp" ? "mcp_calls" : undefined;
     if (dataset) {
       const token = params.get(`q_${dataset}`);
       if (token !== null) {
@@ -162,4 +165,21 @@ export function queryFromURL(url: string, fallback?: QueryState): { dataset: Que
       }
     }
   } catch { /* Old non-query bookmarks are still valid collection entries. */ }
+}
+
+// Reopening a Today definition can cross timezones. Its marker is authoritative
+// on open; editing its native datetime predicates releases that marker. Keep
+// both pre- and post-resolution signatures because native URL normalization
+// can run before the host's next render.
+export function restoreRollingDefinition(query: QueryState, opened: QueryState | undefined, window: RollingWindow, known: Map<string,Set<string>>, clock = new Date()): {query:QueryState; released:boolean} {
+  if(window.mode!=="today")return {query:rollingQueryMatches(query,window)?resolveRollingQuery(query,window,clock):query,released:!rollingQueryMatches(query,window)};
+  const signature=(value:QueryState)=>JSON.stringify((value.grouping?.source??value).where.filter(term=>"field" in term&&[window.field,window.untilField??window.field].includes(term.field)&&!term.negated&&["=",">",">=","<","<="].includes(term.op)));
+  const key=JSON.stringify(window),seen=known.get(key)??new Set<string>(),candidate=signature(query),original=opened&&signature(opened);
+  const restoring=original ? candidate===original || seen.has(candidate)&&seen.has(original) : seen.has(candidate)||rollingQueryMatches(query,window);
+  if(!restoring)return {query,released:true};
+  const resolved=resolveRollingQuery(query,window,clock);
+  seen.add(candidate);seen.add(signature(resolved));
+  while(seen.size>100)seen.delete(seen.values().next().value!);
+  known.set(key,seen);
+  return {query:resolved,released:false};
 }

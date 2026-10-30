@@ -1,3 +1,5 @@
+import { ViewDisclosure } from "./view-disclosure";
+import { useViewState } from "./view-state";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import "./findings.css";
 import { Icon } from "./icons";
@@ -648,7 +650,7 @@ function weekText(week: Week, kind: string, unit: string): string {
 
 function WeeksTable({ chart, unit }: { chart: NonNullable<Detail["chart"]>; unit: string }) {
   const format = (value: number | null | undefined) => value === null || value === undefined || !Number.isFinite(value) ? "—" : chart.kind === "mean" ? compact(value) : percent(value);
-  return <details className="findings-weeks">
+  return <ViewDisclosure viewKey="findings:weeks" className="findings-weeks">
     <summary>Show the weekly numbers</summary>
     <table><thead><tr><th>Week of</th><th className="num">{chart.kind === "mean" ? "Average" : "Share"}</th><th className="num">{chart.kind === "rate" ? "Hit it" : chart.kind === "mean" ? "Tokens" : "Tokens"}</th><th className="num">{chart.kind === "rate" ? `All ${unit}` : chart.kind === "mean" ? unit || "Calls" : "All tokens"}</th><th /></tr></thead>
       <tbody>{chart.weeks.map(week => <tr key={week.start} className={week.hollow ? "hollow" : ""}>
@@ -658,7 +660,7 @@ function WeeksTable({ chart, unit }: { chart: NonNullable<Detail["chart"]>; unit
         <td className="findings-muted">{week.after ? "after the copy" : ""}{week.hollow ? `${week.after ? " · " : ""}little work` : ""}</td>
       </tr>)}</tbody>
     </table>
-  </details>;
+  </ViewDisclosure>;
 }
 
 // ---------------------------------------------------------------- detail
@@ -1047,7 +1049,7 @@ function FindingsList({ overview, route, act, rank, setRank, onReview, newIds }:
             {places.map(place => <option key={place.key} value={place.key}>{place.label} ({place.count})</option>)}
           </select><Icon name="chevron-down" />
         </label> : null}
-        {route.list !== "wins" ? <div className="findings-rank"><span id="findingsRankLabel">Rank by</span>
+        {route.list !== "wins" ? <div className="findings-rank" data-view-field="findings_rank"><span id="findingsRankLabel">Rank by</span>
           <div className="findings-segmented" role="group" aria-labelledby="findingsRankLabel">
             {(Object.keys(rankLabels) as Rank[]).map(unit => <button key={unit} type="button" aria-pressed={rank === unit} onClick={() => setRank(unit)}>{rankLabels[unit]}</button>)}
           </div>
@@ -1075,7 +1077,7 @@ export function FindingsPage({ copy, table }: { copy: Copy; table?: React.ReactN
   const [newIds, setNewIds] = useState<Set<string>>(new Set());
   const [review, setReview] = useState<string>("");
   const [toast, setToast] = useState("");
-  const [rankOverride, setRankOverride] = useState<Rank | null>(null);
+  const [rankOverride, setRankOverride] = useViewState<Rank | "">("findings_rank", "", location.pathname === "/findings" && new URLSearchParams(location.search).get("view") !== "settings");
   const toastTimer = useRef<number>();
   const listScroll = useRef(0);
 
@@ -1135,10 +1137,11 @@ export function FindingsPage({ copy, table }: { copy: Copy; table?: React.ReactN
     } catch (failure) { say(`Couldn't do that: ${(failure as Error).message}`); return false; }
   }, [reload, say]);
 
-  const rank: Rank = rankOverride ?? overview?.settings?.rank ?? "usd";
+  useEffect(()=>{if(overview && !rankOverride && location.pathname==="/findings" && route.view!=="settings")setRankOverride(overview.settings?.rank||"usd");},[overview?.settings?.rank,rankOverride,route.view]);
+  const rank: Rank = rankOverride || overview?.settings?.rank || "usd";
   const setRank = (next: Rank) => {
     setRankOverride(next);
-    request("/api/findings/settings", { rank: next }).then(reload).then(() => setRankOverride(null)).catch(failure => say(`Couldn't save the ranking: ${failure.message}`));
+    void request("/api/findings/settings",{rank:next}).then(()=>reload()).catch(failure=>say(`Couldn’t save rank: ${failure.message}`));
   };
   const group = review ? overview?.cart?.find(item => item.target === review) : undefined;
 

@@ -14,7 +14,7 @@ import (
 // dataset records; changing what one of them produces needs a new version.
 const (
 	labelingUnitsVersion    = "labeling-units-v1"
-	humanPiecesVersion      = "human-pieces-v2"
+	humanPiecesVersion      = "human-pieces-v3"
 	labelingContextVersion  = "context-v3"
 	labelingChunkVersion    = "chunking-v1"
 	labelingSplitsVersion   = "splits-v1"
@@ -33,7 +33,7 @@ const (
 	// labelingChunkChars is the longest item, in code points. Longer target
 	// text is split, never truncated.
 	labelingChunkChars = 6000
-	// feedbackJSONTransform decodes a JSON-encoded page-feedback comment; the
+	// feedbackJSONTransform decodes a JSON-encoded human text field; the
 	// piece's byte range still names the encoded bytes.
 	feedbackJSONTransform = "json-string-v1"
 )
@@ -61,7 +61,7 @@ type labelingPiece struct {
 	SourceStart, SourceEnd int
 }
 
-// humanUnit is human-pieces-v2 applied to one message: its pieces in order,
+// humanUnit is human-pieces-v3 applied to one message: its pieces in order,
 // the text a teacher model sees with the visible byte ranges of its markers,
 // or the reason it is excluded.
 type humanUnit struct {
@@ -205,7 +205,7 @@ func cleanPieces(text string, pieces []labelingPiece, userRole bool) ([]labeling
 	return pieces, tags, len(secrets)
 }
 
-// pieceRole maps an authorship span to its human-pieces-v2 role and status.
+// pieceRole maps an authorship span to its human-pieces-v3 role and status.
 func pieceRole(span authorSpan) (role, status string) {
 	switch span.Category {
 	case spanTyped:
@@ -272,13 +272,14 @@ func markerExcerpt(text string, limit int) string {
 	return firstRunes(text, head) + "…" + lastRunes(text, limit-1-head)
 }
 
-// humanPieces applies human-pieces-v2 to a user message the classifier did
+// humanPieces applies human-pieces-v3 to a user message the classifier did
 // not attribute to automation. A unit whose targets hold no letter, number,
 // or symbol is kept when that is the whole message (a "?" or "+1" sent on
 // purpose) and excluded as residual punctuation when material around it was
 // excluded.
 func humanPieces(text string, spans []authorSpan, reuse labelingReuse) humanUnit {
 	pieces, tags, secrets := cleanPieces(text, resolveReuse(text, mergeFeedbackJSON(text, spans), reuse), true)
+	pieces = transformQuestionReplies(text, pieces)
 	unit := renderPieces(text, pieces)
 	unit.Secrets, unit.Unrecognized = secrets, tags
 	if unit.Exclude == "" && !meaningfulText(targetText(text, unit.Pieces)) && unit.Copied {
@@ -489,6 +490,92 @@ func mergeFeedbackJSON(text string, spans []authorSpan) []labelingPiece {
 		pieces = append(pieces, piece)
 	}
 	return pieces
+}
+
+// Apply after reuse resolution and redaction so exclusions keep their source
+// ranges and only the remaining target text is decoded.
+func transformQuestionReplies(text string, pieces []labelingPiece) []labelingPiece {
+	for _, reply := range structuredQuestionReplies(text, 0) {
+		for _, answer := range reply.answers {
+			pieces = transformQuestionAnswer(text, pieces, answer.answerRange)
+		}
+	}
+	return pieces
+}
+
+// Split at the exact JSON field boundaries, then join encoded whitespace to
+// adjoining target text. Generated fields and selected options stay dropped;
+// copied/context material keeps its own classification and source evidence.
+func transformQuestionAnswer(text string, pieces []labelingPiece, bounds [2]int) []labelingPiece {
+	start, end := bounds[0], bounds[1]
+	if start == end {
+		return pieces
+	}
+	var before, inside, after []labelingPiece
+	for _, piece := range pieces {
+		if piece.End <= start {
+			before = append(before, piece)
+			continue
+		}
+		if piece.Start >= end {
+			after = append(after, piece)
+			continue
+		}
+		if piece.Start < start {
+			prefix := piece
+			prefix.End = start
+			before = append(before, prefix)
+		}
+		if piece.End > end {
+			suffix := piece
+			suffix.Start = end
+			after = append(after, suffix)
+		}
+		piece.Start, piece.End = max(piece.Start, start), min(piece.End, end)
+		inside = append(inside, piece)
+	}
+	for i, piece := range inside {
+		if piece.Category != spanHarness || piece.Reason != reasonQuestionForm.text() {
+			continue
+		}
+		var decoded string
+		if json.Unmarshal([]byte(`"`+text[piece.Start:piece.End]+`"`), &decoded) != nil || strings.TrimSpace(decoded) != "" {
+			continue
+		}
+		var target *labelingPiece
+		if i > 0 && inside[i-1].Role == pieceTarget {
+			target = &inside[i-1]
+		} else if i+1 < len(inside) && inside[i+1].Role == pieceTarget {
+			target = &inside[i+1]
+		}
+		if target != nil {
+			inside[i] = *target
+			inside[i].Start, inside[i].End = piece.Start, piece.End
+		}
+	}
+	var joined []labelingPiece
+	for _, piece := range inside {
+		if len(joined) > 0 && piece.Role == pieceTarget {
+			last := &joined[len(joined)-1]
+			same := piece
+			same.Start, same.End = last.Start, last.End
+			if *last == same && last.End == piece.Start {
+				last.End = piece.End
+				continue
+			}
+		}
+		joined = append(joined, piece)
+	}
+	for i, piece := range joined {
+		if piece.Role != pieceTarget {
+			continue
+		}
+		var decoded string
+		if json.Unmarshal([]byte(`"`+text[piece.Start:piece.End]+`"`), &decoded) == nil {
+			joined[i].Transform = feedbackJSONTransform
+		}
+	}
+	return append(append(before, joined...), after...)
 }
 
 // feedbackJSONString reports whether spans[first], a feedback comment, starts

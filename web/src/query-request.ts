@@ -1,3 +1,20 @@
+import { normalizeConcurrencySettings } from "./concurrency-settings";
+// Linked assumptions apply to every request made by that view, including
+// dashboards, source tables, item details and computed metrics. Explicit
+// request assumptions (for a card preview) retain precedence.
+export function viewRequestURL(path: string, view = typeof location === "undefined" ? undefined : new URL(location.href)): string {
+  if (!view) return path;
+  const url=new URL(path,view.origin);
+  if(url.origin!==view.origin)return path;
+  if(url.pathname.startsWith("/api/query/usage")&&!url.searchParams.has("carbon_settings")&&view.searchParams.has("analyze_carbon"))url.searchParams.set("carbon_settings",view.searchParams.get("analyze_carbon")!);
+  if(url.pathname.startsWith("/api/query/parallelism")&&!url.searchParams.has("parallelism_settings")&&view.searchParams.has("analyze_parallelism")) {
+    let linked: unknown;try{linked=JSON.parse(view.searchParams.get("analyze_parallelism")!);}catch{linked=null;}
+    const ribbon=normalizeConcurrencySettings(linked);
+    url.searchParams.set("parallelism_settings",JSON.stringify({gap:ribbon.gap,counting:ribbon.counting}));
+  }
+  return /^https?:/.test(path)?url.href:url.pathname+url.search+url.hash;
+}
+
 // Query execution has a server budget, but a stalled connection (including a
 // response body that never finishes) must also stop showing Loading in the UI.
 export const queryRequestTimeoutMs = 45_000;
@@ -37,14 +54,14 @@ function requestSignal(caller: AbortSignal | null | undefined, deadline: AbortSi
 export const queryFetch: typeof fetch = (input, init = {}) => {
   const caller = init.signal ?? (input instanceof Request ? input.signal : undefined);
   const deadline = AbortSignal.timeout(queryRequestTimeoutMs);
-  return fetch(input, { ...init, signal: requestSignal(caller, deadline) });
+  return fetch(typeof input === "string" ? viewRequestURL(input) : input, { ...init, signal: requestSignal(caller, deadline) });
 };
 
 export async function queryRequest<T>(url: string, init: RequestInit = {}, timeoutMs = queryRequestTimeoutMs): Promise<T> {
   const deadline = AbortSignal.timeout(timeoutMs);
   const signal = requestSignal(init.signal, deadline);
   try {
-    const response = await fetch(url, { ...init, signal });
+    const response = await fetch(viewRequestURL(url), { ...init, signal });
     const body = await response.json().catch(error => {
       signal.throwIfAborted();
       if (response.ok) throw error;

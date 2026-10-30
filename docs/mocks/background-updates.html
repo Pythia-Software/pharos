@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Pharos — Background updates prototype</title>
+<style>
+:root{--bg:#10241b;--bg-top:#163226;--panel:#183529;--panel-2:#1d3d30;--ink:#f3ebdc;--muted:#b5ab93;--line:#2d4f40;--accent:#d8ae5e;--accent-deep:#f1d690;--good:#8cc6a0;--warn:#f0955a;--bad:#ef8c84;--mast-top:#2b5241;--mast-bottom:#1b3a2c;--brass:#d4a857;--sans:"Avenir Next",Avenir,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--serif:Charter,"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif}
+*{box-sizing:border-box}
+body{margin:0;background:linear-gradient(var(--bg-top),var(--bg) 420px) var(--bg);color:var(--ink);font:14px/1.5 var(--sans);min-height:100vh}
+button,select,input{font:inherit;color:inherit}
+button{cursor:pointer;border:1px solid var(--line);background:var(--panel-2);border-radius:6px;padding:6px 12px;min-height:32px}
+button:hover{border-color:var(--accent)}
+button.primary{background:var(--brass);border-color:var(--brass);color:#1b2a20;font-weight:650}
+button.link{border:0;background:none;padding:0;min-height:0;color:var(--accent);text-decoration:underline;text-underline-offset:3px}
+button:focus-visible,select:focus-visible,summary:focus-visible,input:focus-visible{outline:2px solid var(--accent-deep);outline-offset:2px}
+select{background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:5px 8px;min-height:32px}
+h1,h2,h3{font-family:var(--serif);font-weight:700;letter-spacing:-.01em;margin:0}
+.muted{color:var(--muted)}
+.preview{background:#3a3220;color:#f0cf7e;padding:6px 16px;text-align:center;font-size:12px}
+/* masthead */
+.mast{background:linear-gradient(var(--mast-top),var(--mast-bottom));border-bottom:1px solid #d4a85755;position:relative;z-index:5}
+.mast-inner{display:flex;align-items:center;gap:20px;padding:12px 24px;max-width:1440px;margin:auto}
+.brand{font:700 24px/1 var(--serif)}.brand small{display:block;font:600 9px/1 var(--sans);letter-spacing:.14em;color:var(--brass);margin-top:4px}
+.nav{display:flex;gap:6px;margin:auto}.nav button{border:0;background:none}.nav button[aria-current=page]{background:var(--brass);color:#1b2a20;font-weight:650}
+.chip-wrap{position:relative}
+.chip{display:flex;align-items:center;gap:8px;font-weight:650;background:#ffffff0f;border-color:#f3ebdc30;min-height:36px;padding:6px 12px}
+.chip[aria-expanded=true]{border-color:var(--brass)}
+.chip .sub{font-weight:400;color:var(--muted);font-size:12px}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--good);flex:none;display:inline-block}
+.dot.busy{background:var(--accent);animation:pulse 1.6s ease-in-out infinite}
+.dot.behind{background:var(--warn)}
+.dot.bad{background:var(--bad)}
+.dot.paused{background:transparent;border:2px solid var(--muted)}
+@keyframes pulse{50%{opacity:.5;box-shadow:0 0 0 5px #d8ae5e22}}
+@media(prefers-reduced-motion:reduce){.dot.busy{animation:none}}
+/* status panel */
+.panel{position:absolute;right:0;top:calc(100% + 10px);width:440px;max-width:calc(100vw - 24px);background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 18px 40px #0008;padding:18px 18px 14px}
+.p-head{display:flex;align-items:flex-start;gap:12px}
+.p-head h2{font-size:22px}
+.p-head .where{font-size:12px;color:var(--muted)}
+.p-head .eject{margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:3px}
+.p-head .eject small{font-size:11px;color:var(--muted);text-align:right;max-width:230px}
+.headline{margin:14px 0 12px;padding:12px 14px;border-radius:9px;background:var(--panel-2);border-left:3px solid var(--good)}
+.headline.busy{border-left-color:var(--accent)}.headline.behind{border-left-color:var(--warn)}.headline.bad{border-left-color:var(--bad)}.headline.paused{border-left-color:var(--muted)}
+.headline strong{display:block;font-size:15px}
+.headline p{margin:2px 0 0;color:var(--muted);font-size:13px}
+.headline .actions{margin-top:8px;display:flex;gap:8px}
+.headline details{margin-top:6px;font-size:12px;color:var(--muted)}.headline details summary{cursor:pointer}
+.now{margin:0 0 12px}
+.now-row{display:flex;align-items:center;gap:10px}
+.now-row strong{font-weight:650}
+.now-row button{margin-left:auto}
+.bar{height:6px;border-radius:3px;background:#ffffff14;margin:7px 0 4px;overflow:hidden}
+.bar>i{display:block;height:100%;background:var(--accent);border-radius:3px}
+.now small{color:var(--muted);font-size:12px}
+.cad{border-top:1px solid var(--line)}
+.cad details{border-bottom:1px solid var(--line)}
+.cad summary{list-style:none;display:grid;grid-template-columns:20px 92px minmax(0,1fr);gap:4px 8px;align-items:baseline;padding:9px 2px;cursor:pointer}
+.cad summary::-webkit-details-marker{display:none}
+.cad summary .ic{color:var(--muted);font-size:13px;transform:translateY(1px)}
+.cad summary .name{font-weight:650}
+.cad summary .st{font-size:13px;min-width:0}
+.cad summary .what{grid-column:3;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cad details[open] summary .what{display:none}
+.items{list-style:none;margin:0 0 8px;padding:0 0 0 28px}
+.items li{display:flex;gap:8px;align-items:baseline;padding:3px 0;font-size:13px}
+.items li .dot{position:relative;top:-1px;width:7px;height:7px}
+.items li span.t{margin-left:auto;color:var(--muted);font-size:12px;white-space:nowrap}
+.need{margin:12px 0 0;padding:10px 12px;border:1px solid #ef8c8466;border-radius:8px;background:#ef8c8410;font-size:13px}
+.need strong{color:var(--bad)}
+.need details{margin-top:6px;color:var(--muted);font-size:12px}
+.p-foot{display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap}
+.p-foot .right{margin-left:auto}
+.p-foot small{color:var(--muted);font-size:12px;flex-basis:100%}
+.others{margin-top:10px;font-size:12px;color:var(--muted)}
+.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#0e1f17;border:1px solid var(--brass);padding:10px 16px;border-radius:8px;max-width:560px;font-size:13px;z-index:20}
+/* settings */
+.page{display:grid;grid-template-columns:220px minmax(0,1fr);max-width:1440px;margin:auto;min-height:calc(100vh - 100px)}
+.side{border-right:1px solid var(--line);padding:28px 12px}
+.side h3{font:650 14px var(--sans);padding:0 14px 12px}
+.side a{display:block;padding:8px 14px;border-radius:6px;color:var(--ink);text-decoration:none}
+.side a[aria-current=page]{background:#d8ae5e1f;color:var(--accent-deep);font-weight:650;box-shadow:inset 3px 0 var(--brass)}
+.main{padding:30px 36px 80px;min-width:0}
+.main>h1{font-size:30px}
+.lede{color:var(--muted);max-width:760px;margin:8px 0 22px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px 22px;margin:0 0 18px}
+.card h2{font-size:19px;margin-bottom:4px}
+.mode{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{border:0;border-radius:0;background:transparent;padding:7px 14px}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed=true]{background:var(--brass);color:#1b2a20;font-weight:650}
+.cols{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:16px}
+.col{background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:14px;min-width:0;display:flex;flex-direction:column}
+.col-head{display:flex;align-items:baseline;gap:8px}
+.col-head h3{font-size:17px}
+.col-head .st{margin-left:auto;font-size:12px;white-space:nowrap}
+.col .when{font-size:12.5px;color:var(--muted);margin:2px 0 10px;min-height:38px}
+.col .when select{font-size:12.5px;min-height:26px;padding:2px 6px}
+.item{border-top:1px solid var(--line);padding:9px 0}
+.item:last-child{padding-bottom:0}
+.item-top{display:flex;gap:8px;align-items:baseline;width:100%;background:none;border:0;padding:0;min-height:0;text-align:left;border-radius:0}
+.item-top:hover{color:var(--accent-deep)}
+.item-top .dot{position:relative;top:-1px;width:8px;height:8px}
+.item-top b{font-weight:650}
+.cost{margin-left:auto;font-size:11px;padding:1px 7px;border-radius:10px;border:1px solid var(--line);white-space:nowrap;color:var(--muted)}
+.cost.light{color:var(--good);border-color:#8cc6a055}
+.cost.moderate{color:var(--accent);border-color:#d8ae5e55}
+.cost.heavy{color:var(--warn);border-color:#f0955a66}
+.item .feeds{font-size:12px;color:var(--muted);padding-left:16px}
+.item .detail{margin:8px 0 2px 16px;padding:10px 12px;border-radius:8px;background:#0000002a;font-size:12.5px}
+.item .detail p{margin:0 0 6px}
+.item .detail .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}
+.item .note{font-size:12px;color:var(--accent);padding-left:16px;margin-top:2px}
+.rule{display:flex;gap:18px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);margin-top:14px;padding-top:12px;border-top:1px dashed var(--line)}
+.rule b{color:var(--ink);font-weight:600}
+.budget{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:center}
+.stack{display:flex;height:14px;border-radius:7px;overflow:hidden;background:#ffffff10;margin:10px 0 6px}
+.stack i{display:block;height:100%}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.legend span::before{content:"";display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;background:var(--c)}
+.checks label{display:flex;gap:8px;align-items:flex-start;margin:8px 0;font-size:13.5px}
+.checks input{margin-top:3px;accent-color:var(--brass)}
+.runs{opacity:.75}
+.home{max-width:1100px;margin:60px auto;padding:0 24px;text-align:center}
+.home h1{font-size:40px}
+.cards-demo{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:40px;text-align:left}
+.card-demo{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;min-height:150px;display:flex;flex-direction:column}
+.card-demo .k{font-size:11px;color:var(--good)}
+.card-demo h3{font-size:16px;margin-top:auto}
+.card-demo .asof{font-size:11.5px;color:var(--muted);margin-top:4px}
+/* review controls */
+.review{position:fixed;left:16px;bottom:16px;z-index:30;background:#0c1b14ee;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:12px;max-width:340px}
+.review summary{cursor:pointer;color:var(--accent);font-weight:650}
+.review label{display:grid;gap:3px;margin-top:8px}
+.review select{width:100%;font-size:12px}
+.review p{margin:8px 0 0;color:var(--muted)}
+[hidden]{display:none!important}
+@media(max-width:900px){.cols{grid-template-columns:1fr}.page{grid-template-columns:1fr}.side{display:none}.main{padding:22px 16px 120px}.nav{display:none}.cards-demo{grid-template-columns:1fr}}
+@media(max-width:480px){.mast-inner{padding:10px 12px}.brand small{display:none}.panel{position:fixed;left:8px;right:8px;top:auto;bottom:8px;width:auto;max-height:82vh;overflow:auto;border-radius:14px}.chip .sub{display:none}.cad summary{grid-template-columns:20px 80px minmax(0,1fr)}.review{left:8px;right:8px;max-width:none}}
+</style>
+</head>
+<body>
+<div class="preview">INTERACTIVE PROTOTYPE · Example data (costs are measured from the euclid library, 2026-10-28/29) · Nothing runs · Resets on reload</div>
+<header class="mast"><div class="mast-inner">
+  <div class="brand">Pharos<small>TOKEN CATALOG AND OPTIMIZER</small></div>
+  <nav class="nav" id="nav"></nav>
+  <div class="chip-wrap" id="chip-wrap"></div>
+</div></header>
+<main id="main"></main>
+<details class="review" open><summary>Review controls</summary>
+  <label>Situation<select id="scenario"></select></label>
+  <label>Eject<select id="eject"><option value="safe">Safe to eject</option><option value="wait">Finishing a write</option></select></label>
+  <p>Open the drive chip (top right) for the status dropdown. Settings → Background updates shows the schedule. Both render from the same model, as the real ones would.</p>
+</details>
+<div class="toast" id="toast" hidden></div>
+<script>
+'use strict';
+// One declaration drives both surfaces: each item has a cadence, a measured cost
+// and what it feeds. Placement is adaptive: Pharos picks the most frequent
+// cadence whose budget the measured cost fits (rule shown in Settings).
+const ITEMS = [
+  {id:'conv', cad:'frequent', name:'New conversations', feeds:'Search, Home, Work pages', sub:'Claude Code, Codex, Conductor, Antigravity', cost:'light', typical:'~50 s with new work, ~10 s without', why:'It only reads what changed since the last check.'},
+  {id:'search', cad:'frequent', name:'Search', feeds:'Search, Library', cost:'light', typical:'a few seconds', why:'Only conversations that changed are re-indexed.'},
+  {id:'tools', cad:'frequent', name:'Tools & usage', feeds:'Analyze → Tools, Usage cards', cost:'light', typical:'~10 s', why:'It updates only the workspaces that changed.'},
+  {id:'repos', cad:'frequent', name:'Repositories & merges', feeds:'Work pages, repository filters', cost:'light', typical:'~10 s', why:'It asks Git only about repositories with new work.'},
+  {id:'writing', cad:'hourly', name:'Your writing', feeds:'Human Words cards, Analyze → Writing', cost:'heavy', typical:'~6 min · about 2 cores', why:'It re-reads all of your messages each time, so it runs at most hourly.', note:'Being made incremental; it moves to Frequently once a run takes under a minute.'},
+  {id:'findings', cad:'hourly', name:'Findings', feeds:'Optimize', cost:'moderate', typical:'~1 min', why:'Checks the findings you watch and today’s new data.'},
+  {id:'tl1', cad:'hourly', name:'TL1 runs', feeds:'TL1 pages', cost:'moderate', typical:'~1 min (estimate, not yet measured)', why:'TL1 can’t be checked for small changes, so it is read in full.'},
+  {id:'review', cad:'daily', name:'Findings review', feeds:'Optimize (new patterns, savings)', cost:'moderate', typical:'~3 min', why:'Re-examines the last 28 days for new patterns; the window moves once a day.'},
+  {id:'preserve', cad:'daily', name:'Preserve originals', feeds:'Recovery, history on other Macs', cost:'moderate', typical:'~4 min', why:'Copies this Mac’s raw transcripts into the library so they survive tools deleting them.'},
+  {id:'backup', cad:'daily', name:'Back up to “Archive SSD”', feeds:'Recovery', cost:'heavy', typical:'~12 min, when the SSD is connected', why:'Runs when the backup drive is connected; skipped otherwise.'},
+  {id:'upgrade', cad:'daily', name:'Library upgrade', feeds:'Everything, after a Pharos update', cost:'light', typical:'only when an update needs it', why:'Nothing pending right now.'},
+];
+const CADENCES = {
+  frequent:{label:'Frequently', icon:'↻', rule:'under 1 min', when:s=>`Every ${s.every} min, as soon as there’s new work`},
+  hourly:{label:'Hourly', icon:'◷', rule:'under 10 min', when:()=>`At most once an hour, after 10 quiet minutes`},
+  daily:{label:'Daily', icon:'☾', rule:'longer', when:s=>`Overnight at ${s.daily}, or the first quiet moment after`},
+};
+const ORDER = ['frequent','hourly','daily'];
+const base = () => Object.fromEntries(ITEMS.map(i => [i.id, {st:'current', last:{frequent:'2 min ago', hourly:'41 min ago', daily:'3:12 AM'}[i.cad]}]));
+// Each situation: the headline, per-item states, and what is running.
+const SCENARIOS = {
+  current:{label:'Everything up to date', make(){return {tone:'good', title:'Up to date', text:'Your pages include work from 2 minutes ago.', items:base()}}},
+  frequent:{label:'Adding new conversations (Frequently)', make(){const it=base();it.conv={st:'running'};it.search={st:'queued'};it.tools={st:'queued'};it.repos={st:'queued'};return {tone:'busy', title:'Adding new conversations', text:'14 new since 4:37 PM. Search and Home include them in about 40 s.', running:{item:'conv', step:'step 2 of 4', pct:45, left:'about 40 s', load:'~1 core · 5.8 GB'}, items:it}}},
+  hourly:{label:'Updating your writing (Hourly)', make(){const it=base();it.writing={st:'running'};it.findings={st:'queued'};it.tl1={st:'queued'};return {tone:'busy', title:'Updating your writing', text:'Human Words shows your writing up to 52 min ago until this finishes.', running:{item:'writing', step:'classifying 31,200 of 41,862 messages', pct:72, left:'about 2 min', load:'~2 cores · 9.1 GB'}, items:it}}},
+  missed:{label:'Drive was away overnight', make(){const it=base();for(const i of ITEMS) if(i.cad==='daily') it[i.id]={st:'missed', last:'yesterday 3:08 AM'};it.upgrade={st:'current', last:'nothing pending'};return {tone:'behind', title:'Catching up on last night', text:'euclid was disconnected at 3 AM, so the daily work didn’t run. It starts at the next quiet moment (about 10 min).', items:it, action:'Run daily work now'}}},
+  failed:{label:'One update failed', make(){const it=base();it.repos={st:'failed', last:'2 h ago'};return {tone:'bad', title:'Repositories & merges couldn’t update', text:'Git didn’t answer for 2 repositories. Everything else is current. Pharos tries again at 5:00 PM.', items:it, tech:'analysis.git · git rev-list timed out after 5 s in ~/code/pharos and ~/code/query-table · 3 attempts since 2:41 PM · until then Work pages may show merged pull requests as open'}}},
+  paused:{label:'Paused by you', make(){const it=base();for(const k in it) it[k]={st:'paused', last:it[k].last};return {tone:'paused', title:'Background updates paused until 6:00 PM', text:'New conversations aren’t being added. Your pages show work up to 4:12 PM.', items:it, action:'Resume now'}}},
+  update:{label:'After a Pharos update', make(){const it=base();it.search={st:'running'};it.upgrade={st:'queued', last:'pending'};return {tone:'busy', title:'Finishing the Pharos update', text:'Rebuilding search for version 0.42, about 25 min. Search works meanwhile but can miss messages from today.', running:{item:'search', step:'412,000 of 1.9 M messages', pct:22, left:'about 25 min', load:'~1 core · 4.2 GB'}, items:it}}},
+};
+const state = {scenario:'current', eject:'safe', open:false, view:'home', expanded:null, every:5, daily:'3:00 AM', mode:'on', busy:true, overrides:{}};
+const $ = id => document.getElementById(id);
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const cadOf = i => { const o = state.overrides[i.id]; return o && o !== 'manual' ? o : i.cad; };
+const model = () => { const m = SCENARIOS[state.scenario].make(); for (const [id, o] of Object.entries(state.overrides)) if (o === 'manual' && m.items[id].st === 'current') m.items[id] = {st:'manual', last:m.items[id].last}; return m; };
+const itemDot = st => ({current:'', running:'busy', queued:'busy', missed:'behind', failed:'bad', paused:'paused', manual:'paused'}[st] ?? '');
+const itemText = (st, last) => ({current:`updated ${last}`, running:'updating now', queued:'up next', missed:`missed · last ${last}`, failed:`failed · last ok ${last}`, paused:`paused · ${last}`, manual:`only when you ask · ${last}`}[st]);
+function cadenceStatus(cad, m) {
+  const list = ITEMS.filter(i => cadOf(i) === cad).map(i => m.items[i.id]);
+  if (list.some(s => s.st === 'failed')) return {dot:'bad', text:'1 failed · retrying at 5:00 PM'};
+  if (list.some(s => s.st === 'running')) return {dot:'busy', text:'Updating now'};
+  if (list.some(s => s.st === 'missed')) return {dot:'behind', text:'Missed last night · runs soon'};
+  if (list.every(s => s.st === 'paused')) return {dot:'paused', text:'Paused'};
+  return {dot:'', text:{frequent:`Updated 2 min ago · next in ${Math.max(1,state.every-2)} min`, hourly:'Updated 41 min ago · next ~5:00 PM', daily:`Updated 3:12 AM · next tonight`}[cad]};
+}
+function toast(text){const t=$('toast');t.textContent=text;t.hidden=false;clearTimeout(toast.t);toast.t=setTimeout(()=>t.hidden=true,4200);}
+
+function renderChip(m) {
+  const dot = {good:'', busy:'busy', behind:'behind', bad:'bad', paused:'paused'}[m.tone];
+  const sub = {busy:'updating', behind:'catching up', bad:'1 issue', paused:'paused'}[m.tone] || '';
+  $('chip-wrap').innerHTML = `<button class="chip" id="chip" aria-expanded="${state.open}" aria-haspopup="dialog"><span class="dot ${dot}"></span>euclid${sub ? `<span class="sub">${sub}</span>` : ''}</button>${state.open ? renderPanel(m) : ''}`;
+}
+function renderPanel(m) {
+  const ejectWait = state.eject === 'wait';
+  const run = m.running && ITEMS.find(i => i.id === m.running.item);
+  const cad = ORDER.map(c => {
+    const s = cadenceStatus(c, m), items = ITEMS.filter(i => cadOf(i) === c);
+    return `<details ${s.dot && s.dot !== 'paused' ? 'open' : ''}><summary><span class="ic" aria-hidden="true">${CADENCES[c].icon}</span><span class="name">${CADENCES[c].label}</span><span class="st"><span class="dot ${s.dot}" style="width:7px;height:7px;margin-right:6px"></span>${s.text}</span><span class="what">${items.map(i => i.name).join(', ')}</span></summary>
+      <ul class="items">${items.map(i => { const st = m.items[i.id]; return `<li><span class="dot ${itemDot(st.st)}"></span>${esc(i.name)}<span class="t">${esc(itemText(st.st, st.last))}</span></li>`; }).join('')}</ul></details>`;
+  }).join('');
+  return `<div class="panel" role="dialog" aria-label="euclid status">
+    <div class="p-head"><div><h2>euclid</h2><div class="where">External drive · 1.2 TB free</div></div>
+      <div class="eject"><button id="eject-btn">${ejectWait ? 'Eject when safe' : 'Eject'}</button><small>${ejectWait ? 'Finishing a write · safe in about 10 s' : 'Safe to eject · updates resume next time'}</small></div></div>
+    <div class="headline ${m.tone}"><strong>${esc(m.title)}</strong><p>${esc(m.text)}</p>${m.tech ? `<details><summary>Details for support</summary>${esc(m.tech)}</details>` : ''}${m.action ? `<div class="actions"><button class="primary" data-act="scenario-action">${esc(m.action)}</button></div>` : ''}</div>
+    ${run ? `<div class="now"><div class="now-row"><span class="dot busy"></span><strong>${esc(run.name)}</strong><span class="muted" style="font-size:12px">${CADENCES[cadOf(run)].label.toLowerCase()}</span><button data-act="stop">Stop</button></div>
+      <div class="bar"><i style="width:${m.running.pct}%"></i></div><small>${esc(m.running.step)} · ${esc(m.running.left)} · using ${esc(m.running.load)}</small></div>` : ''}
+    <div class="cad">${cad}</div>
+    <div class="p-foot"><button data-act="all">Update everything now</button><button class="link right" data-act="settings">Schedule settings</button><small>Everything now: about 9 min, mostly “Your writing”.</small></div>
+    <div class="others">Other libraries: My Library (not open)</div>
+  </div>`;
+}
+function renderNav(){ $('nav').innerHTML = ['Home','Search','Analyze','Optimize','Settings'].map(n => `<button data-nav="${n.toLowerCase()}" ${(n==='Settings') === (state.view==='settings') && (n==='Home' || n==='Settings') ? 'aria-current="page"' : ''}>${n}</button>`).join(''); }
+function renderHome(m) {
+  const asof = id => { const st = m.items[id]; const i = ITEMS.find(x => x.id === id); return st.st === 'running' ? 'updating now' : `as of ${st.last} · ${CADENCES[cadOf(i)].label.toLowerCase()}`; };
+  return `<div class="home"><h1>Where will curiosity take you today?</h1><p class="muted">Cards say how fresh their data is, in the same words as the dropdown.</p>
+    <div class="cards-demo">
+      <div class="card-demo"><span class="k">Human Words</span><h3>Last seven days of writing</h3><div class="asof">${esc(asof('writing'))}</div></div>
+      <div class="card-demo"><span class="k">Tools</span><h3>Which commands keep failing?</h3><div class="asof">${esc(asof('tools'))}</div></div>
+      <div class="card-demo"><span class="k">Optimize</span><h3>19 findings to review</h3><div class="asof">${esc(asof('findings'))}</div></div>
+    </div></div>`;
+}
+function renderSettings(m) {
+  const cols = ORDER.map(c => {
+    const s = cadenceStatus(c, m), items = ITEMS.filter(i => cadOf(i) === c);
+    const when = c === 'frequent' ? `Every <select data-set="every">${[2,5,15].map(v => `<option ${v===state.every?'selected':''}>${v}</option>`).join('')}</select> min, as soon as there’s new work`
+      : c === 'daily' ? `Overnight at <select data-set="daily">${['1:00 AM','3:00 AM','5:00 AM','12:00 PM'].map(v => `<option ${v===state.daily?'selected':''}>${v}</option>`).join('')}</select>, or the first quiet moment after` : CADENCES[c].when(state);
+    return `<section class="col" aria-label="${CADENCES[c].label}"><div class="col-head"><h3>${CADENCES[c].icon} ${CADENCES[c].label}</h3><span class="st"><span class="dot ${s.dot}" style="width:7px;height:7px;margin-right:5px"></span>${s.text}</span></div>
+      <div class="when">${when}</div>
+      ${items.map(i => { const st = m.items[i.id], open = state.expanded === i.id; return `<div class="item"><button class="item-top" data-expand="${i.id}" aria-expanded="${open}"><span class="dot ${itemDot(st.st)}"></span><b>${esc(i.name)}</b><span class="cost ${i.cost}">${i.cost === 'light' ? 'Light' : i.cost === 'moderate' ? 'Moderate' : 'Heavy'}</span></button>
+        <div class="feeds">${esc(i.sub || i.feeds)}</div>${i.note ? `<div class="note">${esc(i.note)}</div>` : ''}
+        ${open ? `<div class="detail"><p><b>Feeds:</b> ${esc(i.feeds)}</p><p><b>Usually takes:</b> ${esc(i.typical)} · last ${esc(itemText(st.st, st.last))}</p><p class="muted">${esc(i.why)}</p>
+          <div class="row"><label>Run <select data-override="${i.id}">${['auto','hourly','daily','manual'].map(o => `<option value="${o}" ${(state.overrides[i.id]||'auto')===o?'selected':''}>${o==='auto'?`Automatically (${CADENCES[i.cad].label.toLowerCase()})`:o==='manual'?'Only when I ask':CADENCES[o].label}</option>`).join('')}</select></label><button data-run="${i.id}">Run now</button></div></div>` : ''}</div>`; }).join('')}
+    </section>`;
+  }).join('');
+  return `<div class="page"><aside class="side"><h3>Settings</h3>${['Libraries','Library health','Backups','Sources','Background updates','MCP','Header','Ask Pharos','App preferences'].map(n => `<a href="#" ${n==='Background updates'?'aria-current="page"':''}>${n}</a>`).join('')}</aside>
+  <div class="main"><h1>Background updates</h1>
+    <p class="lede">Pharos keeps your library current on its own. Each kind of work runs as often as its cost allows: quick work every few minutes, heavier work hourly, the heaviest overnight. Pharos measures every run and moves work between schedules as it gets faster or slower.</p>
+    <div class="card"><div class="mode"><div><h2>Keep my library current</h2><div class="muted" style="font-size:13px">${{on:'Everything below runs automatically.',pause:'Paused until 6:00 PM, then everything resumes.',manual:'Nothing runs until you press Update everything now.'}[state.mode]}</div></div>
+      <div class="seg" role="group" aria-label="Background updates">${[['on','On'],['pause','Pause for 1 hour'],['manual','Only when I ask']].map(([v,l]) => `<button data-mode="${v}" aria-pressed="${state.mode===v}">${l}</button>`).join('')}</div>
+      <button data-act="all" style="margin-left:auto">Update everything now · ~9 min</button></div>
+      <div class="cols">${cols}</div>
+      <div class="rule"><span><b>How work is placed:</b></span><span>usually under 1 min → <b>Frequently</b></span><span>under 10 min → <b>Hourly</b></span><span>longer → <b>Daily</b></span><span>Click any item for its cost and to change it.</span></div>
+    </div>
+    <div class="card budget"><div><h2>What it costs</h2><div class="muted" style="font-size:13px">Background work on this Mac per day: about <b style="color:var(--ink)">5 h of one core</b> (about 21% of one core on average), peak memory 9.5 GB. Frequently is measured; Hourly and Daily are projected from their measured run times until they have a day of history.</div>
+      <div class="stack" role="img" aria-label="Frequently 3.0 hours, Hourly about 1.9 hours, Daily about 0.2 hours"><i style="width:59%;background:var(--good)"></i><i style="width:37%;background:var(--accent)"></i><i style="width:4%;background:#9db1d6"></i></div>
+      <div class="legend"><span style="--c:var(--good)">Frequently 3.0 h · 197 checks, 54 found nothing new</span><span style="--c:var(--accent)">Hourly ~1.9 h · mostly Your writing (6 min × ~14 active hours)</span><span style="--c:#9db1d6">Daily ~0.2 h</span></div></div></div>
+    <div class="card checks"><h2>Be considerate</h2>
+      <label><input type="checkbox" ${state.busy?'checked':''} data-set="busy"> Hold Hourly and Daily work while this Mac is busy (another app using most of the CPU)</label>
+      <label><input type="checkbox" checked> Stop background work at once when I eject or quit; it resumes where it left off</label>
+      <label><input type="checkbox"> Run Daily work only when this Mac is plugged in</label></div>
+    <div class="card runs"><h2>Recent runs</h2><div class="muted" style="font-size:13px">The existing runs table (when, what ran, elapsed, CPU, RAM) moves here, filterable by schedule.</div></div>
+  </div></div>`;
+}
+function render() {
+  const m = model();
+  renderNav(); renderChip(m);
+  $('main').innerHTML = state.view === 'settings' ? renderSettings(m) : renderHome(m);
+}
+$('scenario').innerHTML = Object.entries(SCENARIOS).map(([k,v]) => `<option value="${k}">${v.label}</option>`).join('');
+$('scenario').onchange = e => { state.scenario = e.target.value; state.open = true; render(); };
+$('eject').onchange = e => { state.eject = e.target.value; state.open = true; render(); };
+document.addEventListener('click', e => {
+  const t = e.target.closest('button,[data-nav]'); if (!t) { if (state.open && !e.target.closest('.panel')) { state.open = false; render(); } return; }
+  if (t.id === 'chip') { state.open = !state.open; return render(); }
+  if (t.dataset.nav) { state.view = t.dataset.nav === 'settings' ? 'settings' : 'home'; state.open = false; return render(); }
+  if (t.dataset.expand) { state.expanded = state.expanded === t.dataset.expand ? null : t.dataset.expand; return render(); }
+  if (t.dataset.mode) { state.mode = t.dataset.mode; state.scenario = t.dataset.mode === 'pause' ? 'paused' : 'current'; $('scenario').value = state.scenario; return render(); }
+  if (t.dataset.run) return toast(`${ITEMS.find(i => i.id === t.dataset.run).name} runs next, after the current step. It usually takes ${ITEMS.find(i => i.id === t.dataset.run).typical}.`);
+  const act = t.dataset.act;
+  if (act === 'settings') { state.view = 'settings'; state.open = false; return render(); }
+  if (act === 'all') return toast('Queued: new conversations, then hourly and daily work, in dependency order. About 9 min; you can keep working.');
+  if (act === 'stop') return toast('Stopped after the current step. It runs again at its next scheduled time; nothing is lost.');
+  if (act === 'scenario-action') { state.scenario = state.scenario === 'paused' ? 'current' : 'frequent'; $('scenario').value = state.scenario; state.mode = 'on'; return render(); }
+  if (t.id === 'eject-btn') return toast(state.eject === 'wait' ? 'euclid ejects in about 10 s, once the current write finishes.' : 'euclid ejected. Background updates resume when it is reconnected.');
+});
+document.addEventListener('change', e => {
+  const t = e.target;
+  if (t.dataset.override) { const v = t.value; if (v === 'auto') delete state.overrides[t.dataset.override]; else state.overrides[t.dataset.override] = v; render(); return; }
+  if (t.dataset.set === 'every') { state.every = Number(t.value); render(); }
+  if (t.dataset.set === 'daily') { state.daily = t.value; render(); }
+  if (t.dataset.set === 'busy') { state.busy = t.checked; }
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && state.open) { state.open = false; render(); $('chip').focus(); } });
+render();
+</script>
+</body>
+</html>

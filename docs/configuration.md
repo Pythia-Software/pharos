@@ -66,9 +66,44 @@ Existing `archive.toml` installations can be adopted without moving their data.
 The example above shows a legacy split layout; set `volume_id` when preserved
 data lives on a separate drive.
 
-## Header controls
+## Layout preferences
 
-**Settings → Header** configures the tools to the right of the page tabs.
+**Settings → Layout Preferences** brings the macOS menu bar, header, and Quick
+Stats editors together in expandable cards. Each editor saves changes immediately
+with the library and has its own **Reset to default** action.
+
+The **macOS menu bar** card controls whether the Mac app appears in your menu bar,
+which items its menu contains, and their order. Expand the card to arrange items
+and separators using its preview and toolbox.
+
+The **Quick Stats** card previews the actual header menu with live library values.
+Drag metric rows up or down and time-period columns left or right in the table.
+Drop a row or column in its toolbox to hide it; drag it back or click its name
+to add it again. The toolbox shows the same rows and columns, including their
+values. Click a handle for move and Remove actions. Alt+Up/Down moves rows,
+Alt+Left/Right moves columns, and Delete returns an item to the toolbox.
+Keep at least one metric and one time period. **Clickable Quick Stats** lets each
+value open its analysis for the selected period.
+
+Additional rows are available in the toolbox: active conversations, messages,
+your messages, agent replies, tool calls, delegated runs, failed calls, failure
+rate, active repositories, recorded tool time, estimated agent time, and estimated
+active time. Existing layouts and reset defaults stay compact. Conversation counts
+fold delegated work and continuations into the top-level conversation; mirrored
+transcripts count once. Tool time sums recorded durations, which can overlap and
+include waits; its tooltip reports timing coverage. Agent time sums top-level
+session time, while active time counts overlapping sessions once, using the saved
+turn gap. Missing coverage displays an em dash.
+
+Optional columns include **5m**, **15m**, **Yesterday**, **This week**, and **This
+month**. Calendar periods use the service's local timezone, weeks start Monday,
+and Yesterday ends at the following local midnight, including daylight-saving
+changes. Short-window token, cost and carbon totals are estimates from hourly
+usage buckets. Supported drill-down links retain the displayed interval.
+
+### Header controls
+
+Expand **Header** to configure the tools to the right of the page tabs.
 Drag buttons from **Toolbox** into the header preview, and drag them left or
 right to reorder them using the small handles below each control. Click a
 toolbox button to add it, or click a handle for move and Remove actions. With
@@ -76,7 +111,7 @@ a handle focused, Alt+Left/Right moves its control and Delete returns it to the
 toolbox. Settings stays available in every layout.
 
 Back/forward arrows appear first by default, followed by drive and sync status,
-search, usage summary, Settings, and theme. Navigation bar and agent annotations
+search, Quick Stats, Settings, and theme. Navigation bar and agent annotations
 can be added from the toolbox. **Back only** replaces the back/forward combo,
 and **Sync only** replaces the drive and sync group with just Index changes.
 Clicking either variant keeps the existing position; dragging chooses its new
@@ -430,7 +465,7 @@ copied, then says how much it captured, for example "Captured 4.3 GB from
 MacBook Air. You can eject euclid now; indexing can finish now or later on any
 Mac." **Index now** indexes those captures (see [Indexing
 captures](#indexing-captures)) with per-source progress; **Later** leaves them
-to be indexed from Settings → Capture & index (see below), on this Mac or any other. Either
+to be indexed from Settings → Background updates (see below), on this Mac or any other. Either
 step can be left to run in the background: the header shows its progress, and
 a message says when it finishes.
 
@@ -460,8 +495,10 @@ copied into `archive.toml` by hand.
 Pharos has two verbs for keeping the library current: **capture** copies
 this Mac's source files into the library, and **index** makes conversations
 searchable. Settings → Sources keeps **Configure sources on this Mac**, source
-configuration, and enable switches, with **Open Capture & index** linking to
-the controls. Settings → Capture & index offers **Capture & index**: capture
+configuration, and enable switches, with **Open Background updates** linking to
+the controls. Settings → Background updates shows what Pharos keeps current
+on its own, Frequently, Hourly and Daily, with each item's measured cost, and
+offers **Capture & index**: capture
 this Mac, index captures from every Mac, then any pending library upgrade.
 The same button is in the drive panel the header's library disk opens.
 Expand **Capture or index separately** for **Capture this Mac**, which copies
@@ -469,8 +506,9 @@ enabled local sources into the library, or **Index captured files**, which
 indexes captures from every Mac. Progress and the index **Stop** control are
 on that page too. The header button beside the library disk runs **Index
 changes**: it indexes what changed in this Mac's sources, without capturing
-them. Settings → Capture & index also offers opt-in automatic indexing,
-measured costs, integrity verification, and stoppable/resumable recovery. See
+them. Settings → Background updates also offers the schedule's controls
+(on, paused, only when I ask; the interval and the daily time), measured
+costs, integrity verification, and stoppable/resumable recovery. See
 [Index changes](incremental-sync.md) for controls, repair modes, and API
 details.
 The enable switch sits in each source card's header. Below the cards, **Macs and
@@ -867,7 +905,7 @@ the next run resumes it.
 **Stopping an index.** `POST /api/index/cancel` stops the running index, or the
 running Index changes (they share one lock), and answers `{"stopped": true}`, or
 `false` when nothing was running. The **Stop** button beside a running index in
-Settings → Capture & index and in the drive panel calls it. It stops the same way a
+Settings → Background updates and in the drive panel calls it. It stops the same way a
 release does, between records: the record being written finishes and commits, so
 everything already indexed stays. Unlike a release, the service carries on, so
 what the run did write is still linked across Macs, checkpointed and looked up

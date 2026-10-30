@@ -42,8 +42,6 @@ test("the site map's routes are the ones the server and the page shell serve", (
   for (const name of shellRoutes) assert.ok(served.has(`/${name}`), `ROUTES has ${name}`);
   // And the shell routes every top-level page; / is home, and work pages route by prefix.
   for (const node of Object.values(map.nodes).filter(node => !node.path.includes("/") && node.route !== "/" && !node.route.includes("{"))) assert.ok(shellRoutes.includes(node.route.slice(1)), `ROUTES lacks ${node.route}`);
-  const tl1 = JSON.parse(/const TL1_PAGES=new Set\((\[[^\]]*\])\)/.exec(ui)[1].replaceAll("'", "\""));
-  assert.deepEqual(tl1, Object.values(map.nodes).filter(node => node.path.startsWith("tl1")).map(node => node.route));
   const settings = settingsPages(ui, readFileSync(join(assets, "managed-library.html"), "utf8"));
   assert.deepEqual(settings.map(page => page.route).sort(), Object.values(map.nodes).filter(node => node.path.startsWith("settings")).map(node => node.route).sort());
   assert.equal(viewTitles(ui).findings, map.nodes.findings.title);
@@ -232,4 +230,13 @@ test("the site map leaves out legacy aliases, private and login parameters", () 
   for (const route of Object.keys(legacyRoutes)) assert.ok(!Object.values(map.nodes).some(node => node.route === route), route);
   for (const topic of ["carbon", "parallelism"]) assert.ok(map.nodes[`analyze/${topic}`].settings, `${topic} says it follows the viewer's settings`);
   assert.deepEqual(plain(map.empty_query), plain(EMPTY_QUERY));
+});
+
+
+test('native query help includes every referenced public type from the pinned release',()=>{
+ const {version,types}=map.query_types;
+ assert.ok(/^\d+\.\d+\.\d+/.test(version));assert.ok(types.QueryState);assert.ok(types.MetricDisplay);
+ for(const name of ['GroupingDefinition','SummaryColumn','GroupKey','RepresentativeRow'])assert.ok(types[name],`Undocumented inherited grouping type ${name}`);
+ assert.ok(types.GroupingState.uses.includes('GroupingDefinition'));
+ for(const type of Object.values(types)){assert.ok(type.definition);for(const name of type.uses)assert.ok(types[name],`Undocumented query type ${name}`);}
 });

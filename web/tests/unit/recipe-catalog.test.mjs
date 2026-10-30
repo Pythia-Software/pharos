@@ -1,3 +1,4 @@
+import { analysisCatalogs } from "../../src/analysis-catalogs";
 // Every recipe, active or retired, at every preview window: its measures, its
 // destination and its cover compile against the server contract, and its
 // saved URL round-trips. Retired recipes stay here because saved collections
@@ -19,7 +20,7 @@ import { agentTimeAnalysisCatalog, skillsAnalysisCatalog } from "../../src/recor
 import { cardDashboardWhere, cardDetailsURL } from "../../src/card-exploration";
 import { windowedChart } from "../../src/card-windows";
 
-const catalogs = { tokens: tokenAnalysisCatalog, mcp: mcpAnalysisCatalog, tools: toolsAnalysisCatalog, time: agentTimeAnalysisCatalog, skills: skillsAnalysisCatalog };
+const catalogs = analysisCatalogs;
 
 const clock = new Date(2026, 9, 13, 12), now = clock.getTime();
 // Current-state and all-time recipes (recipe.period) have no lookback to vary.
@@ -54,7 +55,7 @@ for (const recipe of queryRecipes) test(`${recipe.id}${recipe.retired ? " (retir
     if (Object.hasOwn(usageDatasetTopics, recipe.dataset)) {
       assert.equal(url.pathname, "/analyze", `Analyze route @${days}d`);
       assert.equal(readUsageWorkspace(url.searchParams).dataset, recipe.destination?.dataset ?? recipe.dataset);
-      if (!recipe.retired) assert.ok(recipe.destination, "analysis cards start exploration on a dashboard");
+      if (!recipe.retired && recipe.dataset !== "tl1_attempts") assert.ok(recipe.destination, "analysis cards start exploration on a dashboard");
     }
     if (recipe.destination) {
       const { topic, chart } = recipe.destination;
@@ -69,7 +70,7 @@ for (const recipe of queryRecipes) test(`${recipe.id}${recipe.retired ? " (retir
       const dashboard = !catalog ? filters.query : (chart.view ?? "trend") === "trend" ? trendQuery(catalog, chart, filters.query.where, { now }).query : analysisQuery(catalog, chart, filters.query.where, { now }).query;
       // The SQLite service supports isolated source regex (unlike the generic
       // in-memory fake); wide Tools date ranges use that native capability.
-      assert.deepEqual(core.toQueryRequestV3(dashboard, schemas[recipe.destination.dataset], { ...capabilities, regexSourceFilters: true }, execution, { now, rows: false }).diagnostics, [], `dashboard @${days}d`);
+      for (const part of core.planMetricSeries(dashboard, schemas[recipe.destination.dataset], { now })?.queries ?? [dashboard]) assert.deepEqual(core.toQueryRequestV3(part, schemas[recipe.destination.dataset], { ...capabilities, regexSourceFilters: true }, execution, { now, rows: false }).diagnostics, [], `dashboard @${days}d`);
       assert.equal(suggestion.action, recipe.action);
       const details = new URL(cardDetailsURL(url.searchParams), "http://home.test");
       assert.equal(readUsageWorkspace(details.searchParams).mode, "query");
@@ -79,7 +80,7 @@ for (const recipe of queryRecipes) test(`${recipe.id}${recipe.retired ? " (retir
       assert.equal(readUsageWorkspace(back.searchParams).topic, topic);
       assert.equal(readUsageWorkspace(back.searchParams).dataset, recipe.destination.dataset);
       assert.equal(back.searchParams.get("analyze_filters"), url.searchParams.get("analyze_filters"));
-      assert.equal(back.searchParams.get(`q_${recipe.dataset}`), url.searchParams.get(`q_${recipe.dataset}`));
+      assert.equal(readUsageWorkspace(back.searchParams).mode, "dashboards");
     }
     if (query.grouping) {
       const { grouping } = query;

@@ -1,8 +1,7 @@
 import { EMPTY_QUERY, encodeQuery, type QueryState } from "@pythia-software/query-table-core";
 import type { QueryRecipe } from "./curiosity-data";
 import { queryURL, type RollingWindow } from "./query-links";
-import type { TokenChartView } from "./usage-presets";
-import { usageDatasetTopics, usageTopicDatasets, usageTopics, type UsageDataset } from "./usage-workspace-model";
+import { usageDatasetTopics, usageTopicDatasets, usageTopics, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { cardDashboardWhere } from "./card-exploration";
 import { analysisVersion, type AnalysisState } from "./dashboard-analysis-model";
 import { concurrencyWindowRange, defaultConcurrencySettings } from "./concurrency-settings";
@@ -10,27 +9,54 @@ import { defaultCardCover } from "./card-cover";
 import { windowedChart } from "./card-windows";
 
 type DailyChart = { period: "day"; rollingPeriods: number; display: "interval"; scale: "linear"; seriesLimit: number };
-export type CardDashboard =
-  | { topic: "tokens"; chart: TokenChartView & { v?: number } }
-  // Engine dashboards take an analysis state, versioned so the card's own
-  // filters stay its population.
-  | { topic: "mcp" | "tools" | "time" | "skills" | "human" | "carbon" | "parallelism"; chart: AnalysisState & { v: number } };
+// Versioned chart states keep source filters as the dashboard population.
+export type CardDashboard = { topic: UsageTopic; chart: AnalysisState & { v: number } };
 export type CardDestination = CardDashboard & { dataset: UsageDataset; detailAction?: string };
 
 const daily: DailyChart = { period: "day", rollingPeriods: 0, display: "interval", scale: "linear", seriesLimit: 15 };
-const tokens = (metric: TokenChartView["metric"], split: TokenChartView["split"], extra: Partial<TokenChartView> = {}): CardDashboard => ({
+const tokens = (metric: string, split: string, extra: Partial<AnalysisState> = {}): CardDashboard => ({
   topic: "tokens", chart: { ...daily, v: analysisVersion, metric, split, hours: 6, days: 3, selection: { values: [], excluded: false }, ...extra },
 });
-const engine = (topic: "mcp" | "tools" | "time" | "skills" | "human" | "carbon" | "parallelism", view: AnalysisState["view"]) => (metric: string, split: string, extra: Partial<AnalysisState> = {}): CardDashboard => ({
+const engine = (topic: UsageTopic, view: AnalysisState["view"]) => (metric: string, split: string, extra: Partial<AnalysisState> = {}): CardDashboard => ({
   // Card charts were linear before the engine; their states say so, since
   // a trend without a scale draws the linear + log split.
   topic, chart: { v: analysisVersion, view, metric, split, period: "day", scale: "linear", ...extra },
 });
+const activity = engine("activity", "scatter");
 const mcp = engine("mcp", "compare"), time = engine("time", "trend"), skills = engine("skills", "trend"), human = engine("human", "trend"), carbon = engine("carbon", "compare"), parallel = engine("parallelism", "trend");
 // A card's trailing window with whole days and a norm (buildCardTrend).
 const trailing = { rollingPeriods: 7, completePeriods: true, norm: true };
-const tools = (metric: string, split = "tool_name", extra: Partial<AnalysisState> = {}) => engine("tools", "compare")(metric, split, extra);
+const calls = (metric: string, split = "tool_name", extra: Partial<AnalysisState> = {}) => engine("calls", "compare")(metric, split, extra);
 const dashboards: Record<string, CardDashboard> = {
+  "error-signatures": calls("calls", "error_signature", { minSamples: 2 }),
+  "error-reach": calls("repositories", "error_signature"),
+  "cross-repo-errors": calls("calls", "repository_error"),
+  "read-paths": calls("calls", "repository_path"),
+  "repeated-reads": calls("calls", "repository_path", { unit: "path_conversation", reduce: "max" }),
+  "primary-domains": calls("calls", "host"),
+  "primary-urls": calls("conversations", "url"),
+  "skill-reach": skills("repositories", "skill_name", { view: "compare" }),
+  "usage-work": tokens("tokens", "repository_name", { view: "distribution", unit: "conversation", scale: "logarithmic" }),
+  "delegation-depth": tokens("tokens", "delegated_run_depth", { view: "compare" }),
+  "model-session-costs": tokens("cost", "provider_model", { view: "distribution", unit: "conversation", scale: "logarithmic", minSamples: 3 }),
+  "largest-subagent-weight": tokens("delegated_runs", "provider_model_effort", { view: "compare", unit: "conversation", reduce: "max" }),
+  "session-delegation-count": tokens("delegated_runs", "provider_model_effort", { view: "distribution", unit: "conversation", scale: "logarithmic" }),
+  "model-agent-roles": tokens("agent_sessions", "provider_model_role", { view: "compare", compareAs: "bars" }),
+  "session-token-cost": tokens("tokens", "provider_model", { view: "scatter", unit: "conversation", metricY: "cost", scale: "logarithmic", scaleY: "logarithmic" }),
+  "session-input-output": tokens("input", "provider_model", { view: "scatter", unit: "conversation", metricY: "output", scale: "logarithmic", scaleY: "logarithmic" }),
+  "model-conversation-reach": tokens("conversations", "provider_model", { view: "compare" }),
+  "repository-model-use": tokens("tokens", "repository_provider_model", { view: "compare" }),
+  "api-cost-total": tokens("cost", "repository_name", { view: "compare" }),
+  "window-work-cost": tokens("cost", "repository_name", { view: "compare", unit: "conversation", reduce: "median" }),
+  "work-cost-distribution": tokens("cost", "repository_name", { view: "distribution", unit: "conversation", scale: "logarithmic" }),
+  "work-volume-cost": tokens("root_conversations", "root_repository_name", { view: "scatter", unit: "repository", metricY: "cost", scale: "logarithmic", scaleY: "logarithmic" }),
+  "task-token-ranges": tokens("tokens", "repository_name", { view: "distribution", unit: "conversation", scale: "logarithmic", minSamples: 3 }),
+  "task-output-ranges": tokens("output", "repository_name", { view: "distribution", unit: "conversation", scale: "logarithmic", minSamples: 3 }),
+  "task-model-token-ranges": tokens("tokens", "provider_model", { view: "distribution", unit: "conversation", scale: "logarithmic", minSamples: 3 }),
+  "repository-delegated-share": tokens("delegated_share", "root_repository_name", { view: "compare" }),
+  "delegating-task-share": tokens("delegating_share", "root_repository_name", { view: "compare" }),
+  "delegated-run-token-ranges": tokens("tokens", "repository_name", { view: "distribution", unit: "delegated_run", scale: "logarithmic", minSamples: 3 }),
+
   ...Object.fromEntries((["channel", "machine_id", "execution_machine_id"] as const).flatMap(field => [
     [`origin-tokens-${field}`, tokens("tokens", field)],
     [`origin-cost-${field}`, tokens("cost", field)],
@@ -49,12 +75,12 @@ const dashboards: Record<string, CardDashboard> = {
   "pharos-mcp-query-sources": mcp("calls", "query_source"),
   "pharos-mcp-durations": mcp("time", "tool_name", { view: "distribution", minSamples: 3, scale: "logarithmic" }),
   "archive-empty-search-rate": mcp("empty_rate", "tool_name", { minSamples: 10 }),
-  "tool-failures": tools("failures", "tool_name", { compareAs: "share" }),
-  "tool-call-share": tools("calls", "tool_name", { compareAs: "share" }),
-  "tool-failure-rates": tools("failure_rate", "tool_name", { minSamples: 10 }),
-  "repository-failure-rates": tools("failure_rate", "repository_name"),
-  "edit-failures": tools("failures", "repository_name"),
-  "test-failures": tools("failures", "command_name"),
+  "tool-failures": calls("failures", "tool_name", { compareAs: "share" }),
+  "tool-call-share": calls("calls", "tool_name", { compareAs: "share" }),
+  "tool-failure-rates": calls("failure_rate", "tool_name", { minSamples: 10 }),
+  "repository-failure-rates": calls("failure_rate", "repository_name"),
+  "edit-failures": calls("calls", "repository_path"),
+  "test-failures": calls("calls", "repository_command"),
   "large-outputs": time("result_tokens", "tool_source", { view: "compare", compareAs: "share" }),
   "output-distribution": time("result_tokens", "tool_source", { view: "distribution", minSamples: 3, scale: "logarithmic" }),
   "duration-distribution": time("time", "command_source", { view: "distribution", minSamples: 3, scale: "logarithmic" }),
@@ -67,26 +93,26 @@ const dashboards: Record<string, CardDashboard> = {
   "skill-evidence": skills("conversations", "skill_name", { view: "compare" }),
   "skill-body-sizes": skills("body", "skill_evidence", { view: "distribution", minSamples: 3, scale: "logarithmic" }),
   "skill-load-distribution": skills("loads", "skill_name", { view: "distribution", unit: "skill_path", minSamples: 3, scale: "logarithmic" }),
-  "mcp-methods": tools("calls", "mcp_server_method"),
-  "truncated-outputs": tools("truncation_rate", "tool_name", { minSamples: 10 }),
-  "pharos-mcp-sources": tools("calls", "source_kind"),
-  "machine-call-trend": tools("calls", "none", { view: "trend", rollingPeriods: 7, completePeriods: true, norm: true }),
-  // Its card reads the tools rollup, so its dashboard does too.
-  "machine-latency-trend": tools("mean_time", "none", { view: "trend", rollingPeriods: 7, completePeriods: true, norm: true }),
-  "cache-efficiency": tokens("tokens", "type"),
-  "cache-repositories": tokens("tokens", "type"),
-  "price-coverage": tokens("tokens", "provider"),
-  "models-needing-prices": tokens("tokens", "model_family"),
-  "repository-output-share": tokens("tokens", "type"),
-  "run-effort-token-ranges": tokens("tokens", "effort"),
-  "task-effort-token-ranges": tokens("tokens", "effort"),
-  "task-model-effort-token-ranges": tokens("tokens", "model_effort"),
-  "effort-cost-share": tokens("cost", "effort"),
-  "effort-cost": tokens("cost", "model_effort"),
-  "repository-token-share": tokens("percent", "repository_name"),
-  "model-token-share": tokens("percent", "model_family"),
-  "model-cost-share": tokens("percent_cost", "model_family"),
-  "repository-cost-share": tokens("percent_cost", "repository_name"),
+  "mcp-methods": calls("calls", "mcp_server_method"),
+  "truncated-outputs": calls("truncation_rate", "tool_name", { minSamples: 10 }),
+  "pharos-mcp-sources": calls("calls", "app_provider"),
+  "machine-call-trend": calls("calls", "none", { view: "trend", rollingPeriods: 7, completePeriods: true, norm: true }),
+  // Record-level trends retain the card's precise timestamp bounds.
+  "machine-latency-trend": calls("mean_time", "none", { view: "trend", rollingPeriods: 7, completePeriods: true, norm: true }),
+  "cache-efficiency": tokens("cache_read_share", "provider_model", { view: "compare" }),
+  "cache-repositories": tokens("cache_read_share", "repository_name", { view: "compare" }),
+  "price-coverage": tokens("tokens", "price_status", { view: "compare", compareAs: "share" }),
+  "models-needing-prices": tokens("tokens", "model", { view: "compare" }),
+  "repository-output-share": tokens("output_share", "repository_name", { view: "compare" }),
+  "run-effort-token-ranges": tokens("tokens", "effort", { view: "distribution", unit: "run_effort", scale: "logarithmic", minSamples: 3 }),
+  "task-effort-token-ranges": tokens("tokens", "effort", { view: "distribution", unit: "conversation", scale: "logarithmic", minSamples: 3 }),
+  "task-model-effort-token-ranges": tokens("tokens", "provider_model_effort", { view: "distribution", unit: "conversation", scale: "logarithmic", minSamples: 3 }),
+  "effort-cost-share": tokens("cost", "effort", { view: "compare", compareAs: "share" }),
+  "effort-cost": tokens("cost", "provider_model_effort", { view: "compare", unit: "conversation", reduce: "mean" }),
+  "repository-token-share": tokens("tokens", "repository_name", { view: "compare", compareAs: "share" }),
+  "model-token-share": tokens("tokens", "provider_model", { view: "compare", compareAs: "share" }),
+  "model-cost-share": tokens("cost", "provider_model", { view: "compare", compareAs: "share" }),
+  "repository-cost-share": tokens("cost", "repository_name", { view: "compare", compareAs: "share" }),
   // Human Words: messages (writing_messages).
   "human-words": human("typed", "none"),
   "human-word-total": human("typed", "none", { rollingPeriods: 7, rollingOp: "sum", norm: true }),
@@ -101,11 +127,11 @@ const dashboards: Record<string, CardDashboard> = {
   "human-words-per-message": human("words_per_message", "none", { view: "compare" }),
   "human-words-per-conversation": human("typed", "none", { view: "compare", unit: "conversation", reduce: "mean" }),
   "human-repo-conversation-depth": human("typed", "repository_name", { view: "compare", unit: "conversation", reduce: "mean" }),
-  "human-message-lengths": human("typed", "none", { view: "distribution", unit: "conversation" }),
+  "human-message-lengths": human("typed", "none", { view: "distribution", unit: "conversation", scale: "logarithmic" }),
   "human-words-per-work": human("typed", "none", { view: "compare", unit: "work", reduce: "mean" }),
   "human-example-phrases": human("words", "kind"),
   "human-specific-feedback": human("correction_share", "none", { rollingPeriods: 7 }),
-  "session-human-output": human("words", "provider"),
+  "session-human-output": activity("human_input", "provider_model", { unit: "conversation", metricY: "output", scale: "logarithmic", scaleY: "logarithmic" }),
   // Carbon: usage, under the user's assumptions.
   "carbon-trend": carbon("co2", "none", { view: "trend", rollingPeriods: 7, rollingOp: "sum", norm: true }),
   "carbon-tiers": carbon("co2", "carbon_tier", { compareAs: "share" }),
@@ -125,19 +151,13 @@ const dashboards: Record<string, CardDashboard> = {
 function dashboardFor(recipe: QueryRecipe): CardDashboard {
   const configured = dashboards[recipe.id];
   if (configured) return configured;
-  if (recipe.dataset === "writing_messages" || recipe.dataset === "writing" || recipe.dataset === "conversation_activity") return human("typed", recipe.id.includes("repo") ? "repository_name" : "none");
-  if (recipe.dataset === "parallelism") return parallel("agent_hours", "none");
-  if (recipe.category === "carbon") return carbon("co2", recipe.id.includes("repo") ? "repository_name" : recipe.id.includes("provider") ? "provider" : "type", { view: "trend" });
-  if (recipe.dataset === "skill_usages") return skills("records", "skill_name");
-  if (recipe.category === "machines") return time("time", "activity");
-  if (recipe.dataset === "mcp_calls") return mcp("calls", "tool_name");
-  if (recipe.dataset === "tool_calls" || recipe.dataset === "tools") return tools(recipe.category === "errors" ? "failures" : "calls", recipe.id.includes("repo") || recipe.id === "cross-repo-errors" ? "repository_name" : "tool_name");
-  return tokens(recipe.unit === "USD" || recipe.category === "cost" ? "cost" : "tokens", recipe.category === "delegation" ? "session_kind" : recipe.category === "models" ? "model_family" : "repository_name");
+  throw new Error(`Card ${recipe.id} needs an explicit dashboard destination.`);
 }
 
 export function refineCardDestination(recipe: QueryRecipe): QueryRecipe {
-  if (recipe.retired || !Object.hasOwn(usageDatasetTopics, recipe.dataset)) return recipe;
-  const dashboard = dashboardFor(recipe);
+  if (recipe.retired || recipe.dataset === "tl1_attempts" || !Object.hasOwn(usageDatasetTopics, recipe.dataset)) return recipe;
+  const mapped = dashboardFor(recipe);
+  const dashboard = mapped.chart.view === "distribution" && recipe.cover?.minSamples !== undefined ? { ...mapped, chart: { ...mapped.chart, minSamples: recipe.cover.minSamples } } : mapped;
   return { ...recipe, destination: { ...dashboard, dataset: usageTopicDatasets[dashboard.topic], detailAction: recipe.action }, action: `Explore ${usageTopics[dashboard.topic].label}` };
 }
 

@@ -15,6 +15,9 @@ const measures: Record<string, AnalysisMeasure> = {
   output: { label: "Output tokens", unit: "tokens", format: tokens, op: "sum", field: "output_tokens", value: "output_tokens", additive: true, note: "Output includes reported reasoning output." },
   cache_read_share: { label: "Cache-read share of input", unit: "percent", format: percent, op: "sum", ratio: ["cache_read_input_tokens", "input_tokens"], additive: false, note: "Cache reads divided by all input, cache writes included, weighted by tokens rather than averaging per-record percentages." },
   output_share: { label: "Output share of tokens", unit: "percent", format: percent, op: "sum", ratio: ["output_tokens", "total_tokens"], additive: false, note: "Output tokens divided by all recorded tokens, weighted by tokens." },
+  delegating_share: { label: "Conversations using delegation", unit: "percent", format: percent, op: "sum", expression: "COUNT_DISTINCT(IF([delegated_run_depth]>0,[root_conversation_id],NULL))/NULLIF(COUNT_DISTINCT([root_conversation_id]),0)", additive: false, note: "Top-level conversations with an active delegated execution divided by all top-level conversations with matching usage. Over time computes each period separately; smoothing averages those period shares." },
+  delegated_share: { label: "Delegated share of tokens", unit: "percent", format: percent, op: "sum", ratio: [{ op: "sum", expression: "IF([delegated_run_depth]>0,[total_tokens],0)", label: "delegated tokens" }, "total_tokens"], additive: false, note: "Tokens from delegated runs divided by all matching tokens, grouped by their root conversation when a conversation unit is chosen." },
+  root_conversations: { label: "Top-level conversations", unit: "conversations", format: tokens, op: "count_distinct", field: "root_conversation_id", additive: false, note: "Distinct top-level conversations with matching usage, delegated runs folded into their roots." },
   conversations: { label: "Conversations reached", unit: "conversations", format: tokens, op: "count_distinct", field: "conversation_id", additive: false, note: "Distinct conversations with usage. A conversation using several groups counts once in each, so groups do not add up to the total." },
   agent_sessions: { label: "Agent sessions", unit: "sessions", format: tokens, op: "count_distinct", field: "agent_session_id", additive: false, note: "Distinct agent sessions with usage. A session using several groups counts once in each." },
   delegated_runs: { label: "Delegated runs", unit: "runs", format: tokens, op: "count_distinct", field: "delegated_session_id", additive: false, note: "Distinct delegated executions with usage; the top-level run is not one. Handles and child transcripts count once." },
@@ -28,16 +31,20 @@ const breakdowns: AnalysisCatalog["breakdowns"] = {
   // several providers.
   provider_model: { label: "Provider + model", fields: ["provider", "model_family"] },
   ...Object.fromEntries(([
-    ["model_effort", "Model + effort"], ["effort", "Effort"], ["repository_name", "Repository"], ["session_kind", "Root agent/subagent"], ["price_status", "Price status"],
+    ["model_effort", "Model + effort"], ["effort", "Effort"], ["repository_name", "Repository"], ["session_kind", "Root agent/subagent"], ["price_status", "Price status"], ["session_role", "Session role"], ["run_role", "Run role"], ["delegated_run_depth", "Delegation depth"], ["model", "Recorded model"],
   ] as const).map(([name, label]) => [name, { label, fields: [name] }])),
 };
+breakdowns.root_repository_name = { label: "Top-level repository", fields: ["root_repository_name"] };
+breakdowns.repository_provider_model = { label: "Repository + provider + model", fields: ["repository_name", "provider", "model_family"] };
+breakdowns.provider_model_role = { label: "Provider + model + role", fields: ["provider", "model_family", "session_role"] };
+breakdowns.provider_model_effort = { label: "Provider + model + effort", fields: ["provider", "model_family", "effort"] };
 // Providers and agent kinds keep one color and place whatever the filters.
 breakdowns.provider.order = ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"];
 breakdowns.session_kind.order = ["root", "subagent"];
 breakdowns.session_kind.values = { root: "Root agent", subagent: "Sub-agent" };
 breakdowns.repository_name.empty = "No repository";
 
-const root = { provider: ["root_provider"], model_family: ["root_model_family"], provider_model: ["root_provider", "root_model_family"], effort: ["root_effort"], repository_name: ["root_repository_name"], channel: ["channel"], machine_id: ["machine_id"] };
+const root = { provider: ["root_provider"], model_family: ["root_model_family"], provider_model: ["root_provider", "root_model_family"], effort: ["root_effort"], provider_model_effort: ["root_provider", "root_model_family", "root_effort"], repository_name: ["root_repository_name"], channel: ["channel"], machine_id: ["machine_id"] };
 const present = (name: string): WhereTerm[] => [{ field: name, op: "is_not_null", value: "" }, { field: name, op: "!=", value: "" }];
 
 export const tokenAnalysisCatalog: AnalysisCatalog = {
@@ -49,6 +56,9 @@ export const tokenAnalysisCatalog: AnalysisCatalog = {
     agent_session: { label: "Agent session", plural: "Agent sessions", key: "agent_session_id", where: present("agent_session_id"),
       breakdowns: { provider: ["provider"], repository_name: ["repository_name"], session_kind: ["session_kind"], channel: ["channel"], machine_id: ["machine_id"], execution_machine_id: ["execution_machine_id"] },
       note: "An agent session is one recorded root agent or subagent session. Model and effort can change within a session, so sessions are not split by them." },
+    repository: { label: "Top-level repository", plural: "Top-level repositories", key: "root_repository_name", where: present("root_conversation_id"), breakdowns: { root_repository_name: ["root_repository_name"] }, note: "One repository groups its top-level conversations and their delegated usage in the selected range." },
+    run_effort: { label: "Run at one effort", plural: "Runs by effort", key: ["effort", "run_role", "root_conversation_id", "delegated_session_id"], where: present("root_conversation_id"),
+      breakdowns: { effort: ["effort"], run_role: ["run_role"] }, note: "One root run or delegated execution at one effort, with usage in the selected range pooled. A run that changes effort contributes once to each effort used." },
     delegated_run: { label: "Delegated run", plural: "Delegated runs", key: "delegated_session_id", where: [...present("delegated_session_id"), { field: "delegated_run_depth", op: ">", value: "0" }], breakdowns: root,
       note: "A delegated run is one delegated execution below a top-level conversation, nested and linked launches included, grouped by its top-level conversation’s provider, model, effort and repository." },
   },

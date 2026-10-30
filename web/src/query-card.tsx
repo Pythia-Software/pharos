@@ -1,3 +1,4 @@
+import { cardNavigationURL } from "./card-exploration";
 import React, { useRef } from "react";
 import { CompactColumns } from "./column-marks";
 import { compactMetricPresentation } from "./card-presentation";
@@ -18,8 +19,7 @@ export function QueryChip({ title, description, active, onClick }: { title: stri
 
 // Daily covers chart durations in hours (see previewOf) and carbon in kilograms.
 const columnUnit = (field = "") => field.includes("cost") ? "USD" : field.includes("words") ? "words" : field === "duration_ms" || field.endsWith("_hours") ? "h" : field === "co2e_kg" ? "kg" : field === "call_count" ? "calls" : "tokens";
-// Shared by the small cover and its expanded analysis. Presentation never
-// recomputes a metric or substitutes another population on navigation.
+// Homepage and collected cards share the same compact presentation.
 export function CardVisualization({ preview }: { preview: QueryPreview }) {
   const presentation = compactMetricPresentation(preview);
   const coverMetric = preview.metrics?.find(metric => metric.clause.id === preview.coverMetricId)?.clause;
@@ -51,7 +51,7 @@ export function QueryCard({ id, title, description, actionLabel, url, windowLabe
   id: string; title: string; description: string; actionLabel?: string; url: string; windowLabel: string; category: QueryCategory;
   preview?: QueryPreview; error?: string; discovery?: boolean; xray?: boolean; lean?: number; before?: boolean;
   loadingSpec?: CardLoadingSpec;
-  onOpen: () => void; onReveal?: () => void; onKeep?: () => void; onEdit?: () => void; onRemove?: () => void; onMove?: (direction: -1 | 1) => void; onReload?: () => void;
+  onOpen: (url: string) => void; onReveal?: () => void; onKeep?: () => void; onEdit?: () => void; onRemove?: () => void; onMove?: (direction: -1 | 1) => void; onReload?: () => void;
   onDragStart?: (event: React.DragEvent) => void; onDragEnd?: () => void; onDrop?: (event: React.DragEvent) => void;
 }) {
   const card = useRef<HTMLElement>(null);
@@ -68,9 +68,10 @@ export function QueryCard({ id, title, description, actionLabel, url, windowLabe
   const summary = ranked || preview?.study ? undefined : preview && (presentation ? presentation.summary : preview.summary);
   const headlineMetric = preview && (presentation ? presentation.headlineMetric : ranked ? undefined : preview.headlineMetric);
   const coverLabel = preview?.study ? `${preview.study.value === undefined ? "" : preview.study.value.toLocaleString(undefined, { ...(preview.study.format === "USD" ? { style: "currency" as const, currency: "USD" } : {}), ...(preview.study.format === "percent" || preview.study.kind === "composition" ? { style: "percent" as const } : {}), maximumFractionDigits: 1 })} ${preview.study.valueLabel}. ${preview.study.sampleLabel}` : headlineMetric ? [headlineMetric.value, headlineMetric.unit, headlineMetric.label].filter(Boolean).join(" ") : summary ?? (presentation?.scalar ? [presentation.metric.clause.label, presentation.metric.result.buckets[0].value, presentation.groupLabel].filter(value => value !== undefined).join(": ") : presentation?.metric.clause.label ?? preview?.headline ?? title);
+  const destination = cardNavigationURL(url);
   const linkProps: React.AnchorHTMLAttributes<HTMLAnchorElement> = {
-    href: url, "aria-hidden": xray || undefined, tabIndex: xray ? -1 : undefined, draggable: false,
-    onClick: event => { if (!event.metaKey && !event.ctrlKey && !event.shiftKey && event.button === 0) { event.preventDefault(); if (!xray) onOpen(); } },
+    href: destination, "aria-hidden": xray || undefined, tabIndex: xray ? -1 : undefined, draggable: false,
+    onClick: event => { if (!event.metaKey && !event.ctrlKey && !event.shiftKey && event.button === 0) { event.preventDefault(); if (!xray) onOpen(destination); } },
     onKeyDown: onMove ? event => { if (event.altKey && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) { event.preventDefault(); onMove(event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1); } } : undefined,
   };
   const cover = <ChartTooltip><span className={`query-cover${denseList ? " query-cover-dense-list" : ""}${presentation?.kind === "box" ? " query-cover-box" : ""}${headlineMetric ? " query-cover-headline" : ""}`} style={{ height: error || !preview ? loadingSpec?.height : coverHeight }} title={error} aria-busy={!preview && !error || undefined} aria-label={error ? "Preview unavailable" : preview ? `${coverLabel}${preview.note ? `. ${preview.note}` : ""}` : "Loading preview"}>
@@ -94,7 +95,7 @@ export function QueryCard({ id, title, description, actionLabel, url, windowLabe
   const caption = <span className="query-caption"><span className="query-title">{title}</span><span className="query-description">{description}</span>
         <span className="query-destination">{actionLabel ?? preview?.action ?? (preview?.buckets ? "Explore the timeline" : "Explore this view")}<Icon name="arrow-right" /></span>
       </span>;
-  return <article ref={card} className={`query-card${discovery ? " discovery" : ""}${before ? " insert-before" : ""}`} data-card-id={id} data-category={category} data-xray={xray ? "" : undefined} data-revealable={xray && onReveal ? "" : undefined} aria-hidden={xray && !onReveal || undefined}
+  return <article ref={card} className={`query-card${discovery ? " discovery" : ""}${before ? " insert-before" : ""}`} data-card-id={id} data-pharos-target={`card:${id.split(":")[0]}`} data-category={category} data-xray={xray ? "" : undefined} data-revealable={xray && onReveal ? "" : undefined} aria-hidden={xray && !onReveal || undefined}
     style={{ "--query-tone": style.tone, "--query-lean": `${lean}deg` } as React.CSSProperties}
     draggable={!xray && Boolean(onDragStart)} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragOver={onDrop ? event => event.preventDefault() : undefined} onDrop={onDrop}>
     {discovery && !xray ? <span className="query-drag-tip"><Icon name="arrow-up" /> Drag up to collect</span> : null}

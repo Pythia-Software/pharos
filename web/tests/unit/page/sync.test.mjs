@@ -78,6 +78,9 @@ test("Home refreshes only when a followed run finishes having indexed something"
   assert.equal(pharosSync.finishedRunsChanged(new Set(["a"]), [run("a", "complete", 2, 0)]), true);
   assert.equal(pharosSync.finishedRunsChanged(new Set(["a"]), [run("a", "failed", 0, 1)]), true);
   assert.equal(pharosSync.finishedRunsChanged(new Set(["a"]), [run("a", "running", 5)]), false);
+  // A background pass indexes nothing but says when it changed what pages show.
+  assert.equal(pharosSync.finishedRunsChanged(new Set(["a"]), [{ ...run("a", "complete"), kind: "background-update", changed: true }]), true);
+  assert.equal(pharosSync.finishedRunsChanged(new Set(["a"]), [{ ...run("a", "complete"), kind: "background-update" }]), false);
 });
 
 test("each poll announces a data refresh for the runs it saw finish", async () => {
@@ -102,6 +105,8 @@ test("Index changes is busy while, and only while, a run is running", () => {
     [{ runs: [] }, undefined],
     [{ runs: [run("done", "complete"), run("stopped", "interrupted"), run("broke", "failed")] }, undefined],
     [{ runs: [run("done", "complete"), run("external", "running")] }, "external"],
+    // A background pass leaves Index changes free: pressing it stops the pass.
+    [{ runs: [{ ...run("pass", "running"), kind: "background-update" }] }, undefined],
   ];
   for (const [activity, id] of cases) assert.equal(pharosSync.runningRun(activity)?.id, id, JSON.stringify(activity));
 });

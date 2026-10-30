@@ -23,10 +23,21 @@ import (
 // agents as browse_site and site_link.
 
 type siteMap struct {
-	Version   int                       `json:"version"`
-	Nodes     map[string]*siteNode      `json:"nodes"`
-	IDSources map[string][]siteIDSource `json:"id_sources"`
-	Excluded  struct {
+	QueryTypes struct {
+		Source  string `json:"source"`
+		Version string `json:"version"`
+		Types   map[string]struct {
+			Definition string   `json:"definition"`
+			Uses       []string `json:"uses"`
+		} `json:"types"`
+	} `json:"query_types"`
+	QueryState            map[string]string         `json:"query_state"`
+	JSONInspectionExample json.RawMessage           `json:"json_inspection_example"`
+	ViewContract          siteViewContract          `json:"view_contract"`
+	Version               int                       `json:"version"`
+	Nodes                 map[string]*siteNode      `json:"nodes"`
+	IDSources             map[string][]siteIDSource `json:"id_sources"`
+	Excluded              struct {
 		LegacyRoutes map[string]string `json:"legacy_routes"`
 		Params       []string          `json:"params"`
 	} `json:"excluded"`
@@ -68,6 +79,7 @@ type siteNode struct {
 		Lookup map[string]string `json:"lookup"`
 	} `json:"ribbon"`
 	BaseQuery           json.RawMessage `json:"base_query"`
+	QueryDefault        json.RawMessage `json:"query_default"`
 	TextBuilderTemplate orderedObject   `json:"text_builder_template"`
 	RuleTemplate        orderedObject   `json:"rule_template"`
 	ScopeSurfaces       map[string]struct {
@@ -197,10 +209,13 @@ type siteRule struct {
 }
 
 type siteDataset struct {
-	Label       string      `json:"label"`
-	Description string      `json:"description"`
-	WindowField string      `json:"window_field"`
-	Fields      []siteField `json:"fields"`
+	SchemaName  string           `json:"schema_name"`
+	Properties  []map[string]any `json:"properties"`
+	Columns     []map[string]any `json:"columns"`
+	Label       string           `json:"label"`
+	Description string           `json:"description"`
+	WindowField string           `json:"window_field"`
+	Fields      []siteField      `json:"fields"`
 }
 
 type siteField struct {
@@ -970,6 +985,14 @@ func sameSiteParams(a, b url.Values) bool {
 	}
 	for key, values := range a {
 		other, ok := b[key]
+		if key == "highlight" && ok {
+			left := slices.Compact(slices.Sorted(slices.Values(values)))
+			right := slices.Compact(slices.Sorted(slices.Values(other)))
+			if !slices.Equal(left, right) {
+				return false
+			}
+			continue
+		}
 		if !ok || len(values) != 1 || len(other) != 1 {
 			return false
 		}

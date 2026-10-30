@@ -1,3 +1,4 @@
+import { ViewDisclosure } from "./view-disclosure";
 import React from "react";
 import { originRenderers } from "./origin-dimensions";
 import { JsonValueView, type RenderRegistry } from "@pythia-software/query-table-ui";
@@ -39,14 +40,14 @@ export function usageRowRenderers(dataset: UsageDataset, shared = false): Render
       try { const url = new URL(item.url); if (["https:", "http:"].includes(url.protocol)) href = url.href; } catch { /* Retain the source text without an unsafe link. */ }
       return <li key={index}>{href ? <a href={href} target="_blank" rel="noopener noreferrer" onClick={event => event.stopPropagation()}>{item.url}</a> : String(item.url ?? "")} <span className="muted">· {item.source}</span></li>;
     })}</ul> : "—",
-    // Use the public native JSON component at full detail density. Wrapping it
-    // leaves its own search/copy/tree controls available inside the property.
-    usage_json: ({ value, field }) => <div><JsonValueView value={value} label={field.label} display={field.display?.kind === "json" ? field.display : { kind: "json", encoding: "auto" }} /></div>,
+    // Return the native element directly: ObjectProperties supplies its scoped
+    // inspection state, change callback and attention registry through this API.
+    usage_json: ({ value, field }) => <JsonValueView value={value} label={field.label} display={field.display?.kind === "json" ? field.display : { kind: "json", encoding: "auto" }} />,
     usage_payload: ({ value, row, field }) => {
       const text = String(value ?? ""), truncated = row[field.name === "input_text" ? "input_text_truncated" : "result_text_truncated"];
       if (!text) return <span className="muted">No retained text.</span>;
       if (text.length <= 600 && text.split("\n").length <= 8) return <pre className="usage-row-code">{text}</pre>;
-      return <div><pre className="usage-payload-preview">{text.split("\n").slice(0, 4).join("\n").slice(0, 350)}…</pre><details className="usage-payload"><summary>Read retained {field.name === "input_text" ? "input" : "result"} · {text.length.toLocaleString()} characters{truncated ? " · excerpt truncated" : ""}</summary><pre className="usage-row-code">{text}</pre></details></div>;
+      return <div><pre className="usage-payload-preview">{text.split("\n").slice(0, 4).join("\n").slice(0, 350)}…</pre><ViewDisclosure viewKey={`row:${dataset}:${row.id}:${field.name}`} className="usage-payload"><summary>Read retained {field.name === "input_text" ? "input" : "result"} · {text.length.toLocaleString()} characters{truncated ? " · excerpt truncated" : ""}</summary><pre className="usage-row-code">{text}</pre></ViewDisclosure></div>;
     },
     usage_sources: ({ row }) => shared ? null : <UsageRowActions dataset={dataset} row={row} />,
     usage_timestamp: ({ value }) => {

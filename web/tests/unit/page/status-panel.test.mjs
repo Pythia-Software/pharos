@@ -44,20 +44,12 @@ test("each top-level operation is one line: label, step N of M, its measured amo
   assert.deepEqual(plain(panel.operationLine(operation("d", { state: "blocked", state_label: "Label d" }))).primary, []);
 });
 
-test("Now shows foreground work; Show all reveals the rest without repeating it, and counts finished work apart", () => {
-  const index = operation("a", { children: [operation("stage", { kind: "analysis.chain" }), operation("done-stage", { state: "succeeded" })], children_count: 3 });
-  const busy = model(view({ operations: [index, operation("b", { priority: "background" }), operation("c", { priority: "background" }), operation("old", { state: "succeeded" })] }));
+test("Now shows foreground work, else the first background work", () => {
+  const busy = model(view({ operations: [operation("a"), operation("b", { priority: "background" }), operation("old", { state: "succeeded" })] }));
   assert.deepEqual(busy.lines.map(line => line.id), ["a"]);
-  assert.deepEqual(busy.tree.map(node => node.id), ["stage", "b", "c"], "a Now line is not repeated; its running stage is");
-  assert.equal(busy.moreCount, busy.tree.length, "the count is what Show all reveals");
-  assert.equal(busy.finished, 1);
   const background = model(view({ operations: [operation("b", { priority: "background" }), operation("c", { priority: "background" })] }));
   assert.deepEqual(background.lines.map(line => line.id), ["b"]);
-  assert.equal(background.moreCount, 1);
-  const idle = model(view());
-  assert.equal(idle.lines.length, 0);
-  assert.equal(idle.moreCount, 0);
-  assert.equal(idle.finished, 0);
+  assert.equal(model(view()).lines.length, 0);
 });
 
 test("the app's operations that touch the selected library are on the Now row and make the chip busy, even with the library's service stopped", () => {
@@ -87,19 +79,12 @@ test("the verdict row is the server's short headline, with the full sentence in 
   assert.match(verdict.tooltip, /L: O/);
 });
 
-test("the tree nests running children and counts the rest", () => {
-  const node = plain(panel.treeNode(operation("a", { children: [operation("child", { children: [] })], children_count: 3 })));
-  assert.equal(node.children.length, 1);
-  assert.equal(node.children[0].id, "child");
-  assert.equal(node.hidden, 2);
-});
-
-test("freshness and load rows stay out while the snapshot says null", () => {
+test("the schedule and load stay out while the snapshot has none", () => {
   const idle = model(view());
-  assert.equal(idle.freshness, null);
+  assert.equal(idle.schedule, null);
   assert.equal(idle.load, null);
-  const filled = model(view({ freshness: [{ domain: "conv:codex" }], freshness_summary: { groups: [] }, resources: { cpu_percent: 45 } }));
-  assert.ok(filled.freshness);
+  const filled = model(view({ background: { cadences: [], items: [] }, resources: { cpu_percent: 45 } }));
+  assert.ok(filled.schedule);
   assert.ok(filled.load);
 });
 
@@ -115,47 +100,45 @@ test("the load row is the server's line, each process's line in its tooltip; in 
   assert.equal(model(view({ resources: {} })).load, null);
 });
 
-test("Show all's headings are the snapshot's words", () => {
-  assert.deepEqual(model(view({ headings: { work: "Work words", data: "Data words" } })).headings, { work: "Work words", data: "Data words" });
-  assert.deepEqual(model(view()).headings, { work: "", data: "" });
-});
-
 const at = Date.parse("2026-10-27T12:00:00Z");
 const minutesAgo = minutes => new Date(at - minutes * 60000).toISOString();
-const ledger = {
-  freshness: [
-    { domain: "conv:codex", group: "conversations", label: "Conversations (codex)", as_of: minutesAgo(2), behind: { state: "current", count: null, unit: null }, state_label: "Current", reason: null, catching_up: null, next: null },
-    { domain: "an.tools", group: "analyses", label: "Tools rollup", as_of: minutesAgo(180), behind: { state: "behind", count: 2, unit: "scheduled index" }, state_label: "Behind",
-      reason: { code: "deferred-by-schedule", text: "Reason words" }, catching_up: null, next: "Next words" },
-    { domain: "findings", group: "findings", label: "Findings", as_of: null, behind: { state: "behind", count: null, unit: null }, state_label: "Behind",
-      reason: { code: "running", text: "Running words" }, catching_up: "op-1", catching_up_label: "Index changes", next: null },
+const background = {
+  mode: "on",
+  headline: { tone: "busy", title: "Title words", text: "Text words", tech: "Tech words", action: { label: "Action words", path: "/api/background/run", body: { cadence: "daily" } } },
+  items: [
+    { id: "conversations", label: "Item A", state: "current", state_label: "Updated", as_of: minutesAgo(2), next_at: minutesAgo(-3) },
+    { id: "writing", label: "Item B", state: "running", state_label: "Updating now", as_of: minutesAgo(50), next_at: null },
+    { id: "repositories", label: "Item C", state: "failed", state_label: "Failed", as_of: minutesAgo(120), next_at: minutesAgo(-15) },
+    { id: "preserve", label: "Item D", state: "paused", state_label: "Paused", as_of: minutesAgo(60 * 30), next_at: null },
   ],
-  freshness_summary: { all_current: false, checked_at: null, groups: [
-    { group: "conversations", label: "Conversations", state: "current", short: "", text: "current", as_of: minutesAgo(2), as_of_label: "", shown: false },
-    { group: "analyses", label: "Analyses", state: "behind", short: "short words", short_age: false, text: "behind, next words", as_of: minutesAgo(180), as_of_label: "last current", tooltip: "Tools rollup: behind", shown: true },
-    { group: "findings", label: "Findings", state: "behind", short: "behind", short_age: true, text: "behind", as_of: minutesAgo(180), as_of_label: "last current", shown: true },
-    { group: "backups", label: "Backups", state: "current", short: "", text: "current", as_of: null, shown: false },
-  ] },
+  cadences: [
+    { id: "frequent", label: "Row A", state: "failed", state_label: "1 failed", as_of: minutesAgo(2), next_at: minutesAgo(-15), items: ["conversations", "repositories"] },
+    { id: "hourly", label: "Row B", state: "running", state_label: "Updating now", as_of: null, next_at: null, items: ["writing", "missing"] },
+    { id: "daily", label: "Row C", state: "current", state_label: "Updated", as_of: minutesAgo(600), next_at: null, items: ["preserve"] },
+  ],
+  everything: { seconds: 540, text: "Everything words" },
 };
 
-test("the Data row lists the groups that are not current by their short state; the longer words are the tooltip; Show all lists every domain", () => {
-  const data = plain(panel.dataModel(ledger, at));
-  assert.deepEqual(data.line.map(group => group.group), ["analyses", "findings"]);
-  assert.equal(data.line[0].text, "short words");
-  assert.equal(data.line[1].text, "behind 3 h");
-  assert.equal(data.line[0].tooltip, "behind, next words\nlast current 3 h ago\nTools rollup: behind");
-  assert.deepEqual(data.domains.map(domain => domain.domain), ["conv:codex", "an.tools", "findings"]);
-  assert.equal(data.domains[1].text, "Behind · Reason words · 2 scheduled indexes · 3 h ago");
-  assert.equal(data.domains[1].tooltip, "Next words");
-  assert.equal(data.domains[2].text, "Behind · Running words (Index changes)");
+test("the schedule is the server's headline, one row per cadence with its items, and the cost of updating everything", () => {
+  const schedule = plain(panel.scheduleModel(background, at));
+  assert.deepEqual(schedule.headline, { tone: "busy", title: "Title words", text: "Text words", tech: "Tech words", action: { label: "Action words", path: "/api/background/run", body: { cadence: "daily" } } });
+  assert.deepEqual(schedule.rows.map(row => [row.id, row.dot, row.open]), [["frequent", "bad", true], ["hourly", "busy", true], ["daily", "", false]],
+    "a row opens when something in it is happening or wrong");
+  assert.equal(schedule.rows[0].text, "1 failed · retrying in 15 min");
+  assert.equal(schedule.rows[2].text, "Updated 10 h ago");
+  assert.deepEqual(schedule.rows[1].items.map(item => item.id), ["writing"], "an item the snapshot does not list is left out");
+  assert.equal(schedule.rows[0].what, "Item A, Item C");
+  assert.deepEqual(schedule.rows[0].items.map(item => item.text), ["Updated 2 min ago · next in 3 min", "Failed · retrying in 15 min"]);
+  assert.equal(schedule.rows[2].items[0].text, "Paused · 30 h ago");
+  assert.equal(schedule.everything, "Everything words");
+  assert.equal(model(view({ background })).schedule.rows.length, 3);
 });
 
-test("with every group current the row says so, with the last check", () => {
-  const data = plain(panel.dataModel({ freshness: [], freshness_summary: { all_current: true, text: "All words", checked_label: "checked", checked_at: minutesAgo(4), groups: [] } }, at));
-  assert.deepEqual(data.line.map(group => group.text), ["All words · checked 4 min ago"]);
-  const planned = plain(panel.dataModel({ freshness: [], freshness_summary: { all_current: true, text: "All words", checked_label: "checked", checked_at: minutesAgo(4),
-    groups: [{ group: "findings", label: "Findings", state: "scheduled", short: "updates tomorrow", text: "scheduled", shown: false, muted: true }] } }, at));
-  assert.deepEqual(planned.line.map(group => [group.label, group.text, Boolean(group.muted)]), [["", "All words · checked 4 min ago", false], ["Findings", "updates tomorrow", true]]);
+test("next times are minutes away, then a clock time", () => {
+  assert.equal(panel.until(minutesAgo(-0.5), at), "now");
+  assert.equal(panel.until(minutesAgo(-14), at), "in 14 min");
+  assert.match(panel.until(minutesAgo(-120), at), /^at /);
+  assert.match(panel.until(minutesAgo(-60 * 20), at), /^(at|tomorrow at) /);
 });
 
 test("ages are whole minutes, hours or days", () => {
@@ -165,12 +148,6 @@ test("ages are whole minutes, hours or days", () => {
   assert.equal(panel.ago(minutesAgo(59), at), "59 min ago");
   assert.equal(panel.ago(minutesAgo(60 * 47), at), "47 h ago");
   assert.equal(panel.ago(minutesAgo(60 * 72), at), "3 d ago");
-});
-
-test("Show all appears for the domains even with nothing running", () => {
-  const idle = model(view(ledger));
-  assert.equal(idle.moreCount, 0);
-  assert.equal(idle.freshness.domains.length, 3);
 });
 
 test("Stop reaches every stoppable top-level operation through its declared stop", () => {

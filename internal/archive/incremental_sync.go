@@ -126,7 +126,8 @@ func unitOf(source SourceConfig, parts []sourcePart, changed bool) syncUnit {
 }
 
 func (c *Catalog) syncSettings(ctx context.Context) (syncSettings, error) {
-	settings := syncSettings{Interval: 300, Sources: []string{}}
+	// Background updates are on until someone turns them off.
+	settings := syncSettings{Enabled: true, Interval: 300, Sources: []string{}}
 	var enabled int
 	var sources string
 	err := c.reader().QueryRowContext(ctx, "SELECT enabled,interval_seconds,sources_json,COALESCE(next_at,'') FROM sync_settings WHERE host_id=?", currentHost().ID).
@@ -187,12 +188,10 @@ func (s *Server) automaticLoop(ctx context.Context) {
 	timer := time.NewTicker(time.Second)
 	defer timer.Stop()
 	for {
-		settings, err := s.Catalog.syncSettings(ctx)
-		if err == nil && settings.Enabled {
-			due, _ := time.Parse(time.RFC3339Nano, settings.NextAt)
-			if due.IsZero() || !time.Now().Before(due) {
-				s.runAutomatic(ctx, settings)
-			}
+		background, err := s.Catalog.backgroundSettings(ctx, time.Now())
+		requested := s.indexRequested()
+		if err == nil && automaticDue(background, s.cachedPower(ctx), requested, time.Now()) && s.runAutomatic(ctx, background.sync) && requested {
+			s.takeIndexRequest()
 		}
 		select {
 		case <-ctx.Done():
@@ -200,6 +199,26 @@ func (s *Server) automaticLoop(ctx context.Context) {
 		case <-timer.C:
 		}
 	}
+}
+
+// automaticDue is whether the scheduled index runs now: Run now
+// (requested) whatever the mode, power or time; otherwise when background
+// updates are on, the battery policy lets Frequently run, and its time has
+// come, 15 min after the last run on battery when Frequently runs slower
+// (§11).
+func automaticDue(background backgroundSettings, power powerState, requested bool, at time.Time) bool {
+	if requested {
+		return true
+	}
+	battery := background.Battery.onPower(cadenceFrequent, power)
+	if background.Mode != "on" || battery == batteryWait {
+		return false
+	}
+	due, _ := time.Parse(time.RFC3339Nano, background.sync.NextAt)
+	if battery == batterySlower && !due.IsZero() {
+		due = due.Add(slowerBy(background.sync.Interval))
+	}
+	return due.IsZero() || !at.Before(due)
 }
 
 func (s *Server) runAutomatic(parent context.Context, settings syncSettings) bool {
@@ -458,6 +477,9 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 	}
 	if len(changedWorkspaces) == 0 {
 		op.skip("projections")
+	} else if !manual {
+		// The analyses placed Frequently follow the index that fed them.
+		defer s.wakeBackground()
 	}
 	if len(changedWorkspaces) > 0 && ctx.Err() == nil {
 		op.begin("projections")
@@ -548,7 +570,13 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 	}
 	s.Catalog.DB.Exec(`DELETE FROM sync_history WHERE host_id=? AND id NOT IN (SELECT id FROM sync_history WHERE host_id=? ORDER BY id DESC LIMIT 200)`, currentHost().ID, currentHost().ID)
 	next := time.Now().Add(time.Duration(settings.Interval) * time.Second).UTC().Format(time.RFC3339Nano)
-	s.Catalog.DB.Exec("UPDATE sync_settings SET next_at=? WHERE host_id=? AND interval_seconds=? AND enabled=1 AND COALESCE(next_at,'')=?", next, currentHost().ID, settings.Interval, settings.NextAt)
+	// With no row (background updates on by default) this stores the
+	// default schedule, so the next run waits its interval; with one, only
+	// a schedule nobody changed during the run moves on.
+	s.Catalog.DB.Exec(`INSERT INTO sync_settings(host_id,enabled,interval_seconds,sources_json,next_at) VALUES(?,1,?,'[]',?)
+		ON CONFLICT(host_id) DO UPDATE SET next_at=excluded.next_at
+		WHERE sync_settings.interval_seconds=excluded.interval_seconds AND sync_settings.enabled=1 AND COALESCE(sync_settings.next_at,'')=?`,
+		currentHost().ID, settings.Interval, next, settings.NextAt)
 	workMeter.release(state == "complete")
 	op.finish(state)
 	s.updateRun(run.ID, func(run *SyncRun) {
@@ -578,8 +606,11 @@ func conditionalString(condition bool, value string) any {
 
 func markSyncDeferred(tx *sql.Tx) error {
 	for _, name := range []string{"identities", "git", "tools", "authorship", "findings"} {
-		if _, err := tx.Exec(`INSERT INTO sync_deferred(name,generation,changed_at) VALUES(?,1,?)
-			ON CONFLICT(name) DO UPDATE SET generation=generation+1,changed_at=excluded.changed_at`, name, now()); err != nil {
+		// pending_since is when the work began waiting: the first change
+		// after the stage last caught up.
+		if _, err := tx.Exec(`INSERT INTO sync_deferred(name,generation,changed_at,pending_since) VALUES(?,1,?,?)
+			ON CONFLICT(name) DO UPDATE SET generation=generation+1,changed_at=excluded.changed_at,
+			pending_since=CASE WHEN sync_deferred.generation<=sync_deferred.completed_generation OR sync_deferred.pending_since IS NULL THEN excluded.changed_at ELSE sync_deferred.pending_since END`, name, now(), now()); err != nil {
 			return err
 		}
 	}

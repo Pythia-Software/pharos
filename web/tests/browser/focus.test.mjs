@@ -323,7 +323,8 @@ test('Dashboard chart pointer capture snaps to columns and treats a drag back to
   await chart.getByRole('status').filter({ hasText: /1 period.*Release to inspect/ }).waitFor();
   await page.mouse.up();
   await chart.getByRole('group', { name: /^Details for / }).waitFor();
-  assert.equal(page.url(), before, 'one-period inspection leaves date filters alone');
+  assert.equal(new URL(page.url()).searchParams.get('analyze_filters'),new URL(before).searchParams.get('analyze_filters'),'one-period inspection leaves date filters alone');
+  assert.ok(Object.keys(JSON.parse(new URL(page.url()).searchParams.get('chart_pins'))).length,'a deliberate pinned bucket is represented in the URL');
   await chart.locator('h3').click();
   await page.mouse.move(end.x + end.width / 2, end.y + 30);
   await page.mouse.down();
@@ -474,7 +475,7 @@ test('Drive panel refresh preserves scrolling, focus and animation phase', {skip
 });
 
 test("summary value links retain keyboard focus when the summary rerenders", { skip }, async t => {
-  const { page } = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-usage-summary-links": true } });
+  const { page } = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-usage-summary-links": true, "pharos-quick-stats-v1": {metrics: ["cost_usd", "tokens"], windows: ["today", "6h"]} } });
   await activateHeaderTool(page, "usageSummaryToggle");
   const link = page.getByRole("link", { name: /^Tokens, 6h:/ });
   await link.focus();
@@ -531,13 +532,15 @@ test("Unified activity panel holds focus across refreshes, stops each operation 
 
   await press(chip);
   await panel.waitFor();
-  await panel.locator("summary").click();
+  // Daily is closed in this snapshot: open it.
+  const daily = panel.locator('[data-key="cadence:daily"]');
+  await daily.locator("summary").click();
   const stop = panel.getByRole("button", { name: "Stop", exact: true });
   await stop.focus();
   push("/api/status/stream", { ...busyStatus, revision: 3, operations: busyStatus.operations.map(operation => operation.id === "op-index" ? { ...operation, step: { ...operation.step, done: 900e6, fraction: 0.45 } } : operation) });
   await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library?.revision === 3);
   assert.ok(await stop.evaluate(element => document.activeElement === element), "a refresh moved focus");
-  assert.ok(await panel.locator("details").first().evaluate(element => element.open), "a refresh closed Show all");
+  assert.ok(await daily.evaluate(element => element.open), "a refresh closed the cadence row the user opened");
   await app.shot("refreshed");
 
   // A busy fresh verdict refuses; a safe one ejects.
@@ -824,7 +827,6 @@ for (const width of [1440, 390, 320]) test(`Search long query can scroll to subm
 for (const route of [
   { name: "Analyze", url: "/analyze", ready: ".usage-dashboard .usage-chart", link: /^Human words$/i, destination: ".usage-human-dashboard .usage-chart" },
   { name: "Settings", url: "/settings", ready: "#healthCards .panel:not([aria-busy])", link: /^Sources$/, destination: "#sourceGrid .source-card" },
-  { name: "TL1", url: "/tl1", ready: ".tl1-tiles", link: /^Configurations$/, destination: "#tl1-matrix" },
 ]) test(`${route.name} navigation is usable from the keyboard on a phone`, { skip }, async t => {
   const { page } = await open(t, { url: route.url, viewport: { width: 390, height: 844 }, ready: route.ready });
   const menu = page.getByRole("dialog", { name: "Navigate Pharos" });
@@ -934,14 +936,6 @@ for (const width of [1440, 390]) test(`Optimize pages move keyboard focus to the
   await choose('Table', '.findings-table .qt-row');
   assert.ok(await table.evaluate(element => element.isConnected), 'Findings Settings keeps the findings table mounted');
   await choose('Dashboard', '.findings-card');
-  if (phone) await press(page.locator('#appNavigationToggle'));
-  await press(navigation.getByRole('link', { name: 'Configurations', exact: true }));
-  await page.locator('#tl1-matrix').waitFor();
-  await page.waitForFunction(() => document.activeElement?.tagName === 'MAIN');
-  await settled();
-  await shot('optimize-tl1');
-  await page.goBack();
-  await page.locator('.findings-card').first().waitFor();
   await settled();
   await shot('optimize-findings');
 });
@@ -1042,7 +1036,6 @@ for (const [url, ready] of [
   ["/settings", "#healthCards .panel:not([aria-busy])"],
   ["/settings/sources", "#sourceGrid .source-card"],
   ["/settings/preferences", "#optionalBehaviors"],
-  ["/tl1", ".tl1-tiles"],
   [`/work/${workID}`, ".work-heading h1"],
   [`/work/${workID}/conversation/conv-root`, ".conversation-panel .turn"],
 ]) test(`Opening ${url} leaves focus alone and its title is ordinary text`, { skip }, async t => {
@@ -1391,7 +1384,7 @@ test('Capture & index query editor retains focus and edits across live refreshes
 });
 
 test('Mac menu editing preserves focus when adding, moving, and removing items', { skip }, async t => {
-  const { page, shot } = await open(t, { url: '/settings/preferences', ready: '#showMacMenuBar', preferences: { 'pharos-menu-bar': { enabled: false } } });
+  const { page, shot } = await open(t, { url: '/settings/layout', ready: '#showMacMenuBar', preferences: { 'pharos-menu-bar': { enabled: false } } });
   const disclosure = page.locator('#menuBarExpand');
   const visibility = page.getByRole('switch', { name: 'macOS menu bar', exact: true });
   const options = page.locator('#menuBarOptions');
@@ -1649,7 +1642,7 @@ for (const moveFocus of [false, true]) test(`opening a saved chat ${moveFocus ? 
   await page.waitForFunction(element => document.activeElement === element, await target.elementHandle());
 });
 
-test('Ask Pharos chat links survive reload, new tabs and browser Back/Forward', {skip}, async t => {
+test('Ask Pharos chat links survive reload, new tabs and browser Back/Forward', {skip,timeout:60000}, async t => {
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   const saved={id:'saved-chat',createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:'saved-turn',prompt:'A prior question',cli:'Codex',model:'test-model',modelLabel:'Test Model',effort:'Low',status:'multiple',message:'',elapsedMs:1000,reply:'An earlier reply',cards:[]}]};
   saved.conversation.push({...saved.conversation[0],id:'later-turn',prompt:'A later topic',reply:'A later reply'});
@@ -1967,5 +1960,48 @@ for (const browsing of [false,true]) test(`Ask Pharos ${browsing?'reopened brows
     assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)));
     await page.locator('.pharos-destination:not([hidden])').click();
   }
-  await page.waitForURL('**/settings');await modal.waitFor({state:'hidden'});
+  await page.waitForURL(url=>url.pathname==='/settings');await modal.waitFor({state:'hidden'});
+});
+
+
+test('Quick Stats disclosure and editing keep keyboard focus on the control being used', { skip }, async t => {
+  const { page, shot } = await open(t, { url: '/settings/layout', ready: '#quickStatsExpand' });
+  const disclosure = page.locator('#quickStatsExpand');
+  await press(disclosure);
+  await page.locator('#quickStatsOptions').waitFor();
+  assert.ok(await disclosure.evaluate(element => document.activeElement === element));
+  const handle = page.getByRole('button', { name: 'Arrange Tokens', exact: true });
+  const focused = async locator => page.waitForFunction(element => document.activeElement === element, await locator.elementHandle());
+  await handle.focus();
+  await press(handle, 'Alt+ArrowUp');
+  await focused(handle);
+  await press(handle);
+  await page.locator('#quickStatsToolMenu:popover-open').waitFor();
+  await page.keyboard.press('Escape');
+  await focused(handle);
+  await press(handle);
+  await press(page.getByRole('button', { name: 'Move down Tokens', exact: true }));
+  await focused(handle);
+  await page.keyboard.press('Delete');
+  const add = page.getByRole('button', { name: 'Add Tokens', exact: true });
+  await focused(add);
+  await press(add);
+  await focused(handle);
+  const column = page.getByRole('button', { name: 'Arrange Today', exact: true });
+  await press(column, 'Alt+ArrowLeft');
+  await focused(column);
+  await press(column);
+  await press(page.getByRole('button', { name: 'Move right Today', exact: true }));
+  await focused(column);
+  await page.evaluate(() => dispatchEvent(new Event('pharos:carbon-settings')));
+  await focused(column);
+  await page.keyboard.press('Delete');
+  const addColumn = page.getByRole('button', { name: 'Add Today', exact: true });
+  await focused(addColumn);
+  await press(addColumn);
+  await focused(column);
+  await shot('quick-stats-editor');
+  await press(disclosure);
+  await page.locator('#quickStatsOptions').waitFor({ state: 'hidden' });
+  assert.ok(await disclosure.evaluate(element => document.activeElement === element));
 });

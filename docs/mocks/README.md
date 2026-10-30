@@ -41,3 +41,34 @@ The [plan](../onboarding-and-library-plan.md),
 [audit](../onboarding-and-library-audit.md), and
 [technical design](../onboarding-and-library-design.md) provide the corresponding
 product promises, code evidence, and production build stages.
+
+# Background updates prototype review
+
+Open [background-updates.html](background-updates.html) in a browser. It is
+self-contained and runs nothing. Its costs are measured on the euclid library
+(2026-10-28/29) where they exist, and are marked as projections where they
+don't.
+
+The prototype covers two surfaces, both rendered from one declaration of what
+runs Frequently, Hourly or Daily:
+
+- **The status dropdown** (the drive chip). It shows a headline in plain
+  words, the work running now, one row per cadence that expands to its items,
+  Eject as an action, and "Update everything now" with its cost.
+- **Settings → Background updates.** It shows the three cadences with each
+  item's cost class, what it feeds and why it sits where it does, an override
+  per item, the placement rule, and the daily cost of background work.
+
+Use **Review controls** to switch situations: up to date, frequent or hourly
+work running, the drive away overnight, a failed update, paused, and after a
+Pharos update. The Eject control there switches between safe and "finishing
+a write".
+
+## Review questions
+
+- **The dropdown:** can you tell, without reading Settings, whether a page
+  shows recent work, and when it will catch up?
+- **The cadence names:** are "Frequently / Hourly / Daily" and the placement
+  rule enough to explain why "Your writing" lags?
+- **The cost card:** is "5 h of one core per day" useful, or alarming?
+- **Overrides:** which per-item override, if any, should exist at all?

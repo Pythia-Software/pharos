@@ -1,3 +1,5 @@
+import { conversationAnalysisCatalog as activity } from "../../../src/conversation-analysis-catalog";
+import { population } from "../../support/query-server.mjs";
 // The Tools, Pharos MCP, Agent Time and Skills catalogs: what each offers and
 // why, how their older links read, and the engine rules they added (record
 // views without units, a minimum counted in calls, maxima kept off the trend,
@@ -5,7 +7,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { capabilities, core, execution, fullMatrix, instantiateRecipe, queryRecipes, schemas } from "../helpers/recipes.mjs";
-import { relatedCardDashboardURL } from "../../../src/card-analysis-model";
+import { cardDashboardURL } from "../../../src/saved-card-model";
 import { usageDashboardReturn, usageWorkspaceURL } from "../../../src/usage-workspace-model";
 import { dashboardQueryLinks } from "../../../src/dashboard-query-links";
 import { groupedDashboardQuery } from "../../../src/usage-dashboard-model";
@@ -23,8 +25,8 @@ import { withTimeRange } from "../../../src/chart-range";
 import { runAnalysisQuery } from "../../../src/analysis-request";
 import { answerQuery } from "../../support/query-server.mjs";
 
-const rows = { tools: toolsRollup(), mcp_calls: mcpCalls(), tool_calls: toolCalls(), skill_usages: skillUsages() };
-const catalogs = [tools, mcp, time, skills];
+const rows = { conversation_activity: population(schemas.conversation_activity, { now }), tools: toolsRollup(), mcp_calls: mcpCalls(), tool_calls: toolCalls(), skill_usages: skillUsages() };
+const catalogs = [tools, mcp, time, skills, activity];
 const month = catalog => withTimeRange([], catalog.time, new Date(now - 30 * 86400000), new Date(now));
 const run = (catalog, query) => core.evaluateMetrics(rows[catalog.dataset], query, schemas[catalog.dataset], { now }).metrics;
 // A cycle's per-occurrence clause is planned into plain calendar metrics
@@ -329,7 +331,7 @@ test("an unversioned saved card link opens its related dashboard with the card's
     const filters = core.decodeQueryStrict(url.searchParams.get("analyze_filters")).where;
     const field = catalog.breakdowns[normalizeAnalysis(catalog, chart).split].fields[0];
     assert.ok(filters.some(term => term.field === field), `${id}: the card filters its breakdown's own field`);
-    const related = new URL(relatedCardDashboardURL(url.searchParams), "http://localhost").searchParams;
+    const related = new URL(cardDashboardURL(url.searchParams), "http://localhost").searchParams;
     assert.equal(related.has("card_query"), false);
     const read = readAnalysisLink(catalog, JSON.parse(related.get("analyze_chart")), core.decodeQueryStrict(related.get("analyze_filters")).where);
     assert.deepEqual([read.where, read.state.selection], [filters, undefined], `${id}: the card's filters stay its population`);
@@ -458,4 +460,22 @@ test("a catalog's request: its parameters reach every request, and its note ever
   await runAnalysisQuery("mcp_calls", schemas.mcp_calls, trendQuery(catalog, { metric: "calls", split: "tool_name", period: "hour" }, where, { now }).query, { params: catalog.request.params });
   const encoded = new URLSearchParams(catalog.request.params).toString();
   assert.deepEqual(requests, [`/api/query/mcp_calls/metrics?${encoded}`, "/api/query/mcp_calls/capabilities", `/api/query/mcp_calls/query-v3?${encoded}`]);
+});
+
+
+test("whole conversations retain input and delegated output across event repositories", () => {
+  const records = [
+    { id: "root", root_conversation_id: "one", root_provider: "codex", root_model_family: "gpt", repository_name: "repo-a", human_input_tokens_estimate: 100, output_tokens: 0 },
+    { id: "delegate", root_conversation_id: "one", root_provider: "codex", root_model_family: "gpt", repository_name: "repo-b", human_input_tokens_estimate: 0, output_tokens: 200 },
+  ];
+  const state = { view: "scatter", unit: "conversation", metric: "human_input", metricY: "output" };
+  for (const split of ["none", "provider_model", "repository_name"]) {
+    const query = analysisQuery(activity, { ...state, split }, [], { now }).query;
+    const result = core.evaluateMetrics(records, query, schemas.conversation_activity, { now }).metrics[0];
+    assert.equal(result.error, undefined);
+    assert.deepEqual(result.buckets.map(bucket => [bucket.value, bucket.y]), [[100, 200]], split);
+  }
+  const byRepository = analysisQuery(activity, { view: "compare", unit: "records", metric: "output", split: "repository_name" }, [], { now }).query;
+  const result = core.evaluateMetrics(records, byRepository, schemas.conversation_activity, { now }).metrics[0];
+  assert.deepEqual(Object.fromEntries(result.buckets.map(bucket => [bucket.keys[0], bucket.value])), { "repo-a": 0, "repo-b": 200 }, "record views still offer event repositories");
 });

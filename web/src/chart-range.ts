@@ -13,7 +13,7 @@ export type RangeChange = (from?: Date, to?: Date, preset?: ChartRange | "all") 
 export type FilterChange = (change: (where: WhereTerm[]) => WhereTerm[], preset?: ChartRange | "all") => void;
 
 // Range presets the charts offer.
-export const chartRanges: Array<[ChartRange, string]> = [["today", "Today"], ["1d", "24 hours"], ["7d", "7 days"], ["30d", "30 days"], ["90d", "90 days"], ["6m", "6 months"], ["1y", "1 year"]];
+export const chartRanges: Array<[ChartRange, string]> = [["today", "Today"], ["1d", "24 hours"], ["7d", "7 days"], ["30d", "30 days"], ["90d", "90 days"], ["6m", "180 days"], ["1y", "365 days"]];
 
 const pad2 = (value: number) => String(value).padStart(2, "0");
 

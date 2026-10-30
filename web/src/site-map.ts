@@ -1,3 +1,9 @@
+import { cardNavigationURL } from "./card-exploration";
+import controlAudit from "../../docs/view-controls.json";
+import { usageDetailsSchema } from "./usage-row-model";
+import { jsonInspectionTemplate } from "./query-inspection-contract";
+import { usageQuerySchema,usageActionQuery } from "./usage-query-columns";
+import { viewContract } from "./view-contract";
 import { supportsToday } from "./curiosity-data";
 import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, isFilterable, loadSchema, opsForField, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisCatalogs } from "./analysis-catalogs";
@@ -21,20 +27,9 @@ import { emptyTextSearch, newRule, ruleLabels, scopes } from "./text-search-mode
 import { freshSearch } from "./search-composer-state";
 import { libraryHostParameters } from "./host-query-state";
 import { recordKeywordParameter } from "./record-keyword-model";
-import { appSections, findingsPages, tl1Pages } from "./app-navigation-model";
+import { appSections, findingsPages } from "./app-navigation-model";
 import { idSources, legacyRoutes, optionalSettingsPages, pageDescriptions, readerParams, siteSections } from "./site-routes";
-import libraryDocument from "../../schemas/library.schema.json";
-import usageDocument from "../../schemas/usage.schema.json";
-import writingDocument from "../../schemas/writing.schema.json";
-import conversationActivityDocument from "../../schemas/conversation_activity.schema.json";
-import writingMessagesDocument from "../../schemas/writing_messages.schema.json";
-import mcpCallsDocument from "../../schemas/mcp_calls.schema.json";
-import toolsDocument from "../../schemas/tools.schema.json";
-import toolCallsDocument from "../../schemas/tool_calls.schema.json";
-import skillUsagesDocument from "../../schemas/skill_usages.schema.json";
-import tl1AttemptsDocument from "../../schemas/tl1_attempts.schema.json";
-import parallelismDocument from "../../schemas/parallelism.schema.json";
-import findingsDocument from "../../schemas/findings.schema.json";
+import { schemaDocuments } from "./schema-documents";
 
 // The site map: every page the site serves, the options each one takes,
 // and, for the Analyze dashboards, which combinations of options the page
@@ -56,11 +51,6 @@ const fail = (message: string): never => { throw new Error(`site map: ${message}
 
 // ----- Datasets ----------------------------------------------------------------
 
-const schemaDocuments: Record<QueryDataset, unknown> = {
-  library: libraryDocument, usage: usageDocument, writing: writingDocument, conversation_activity: conversationActivityDocument,
-  writing_messages: writingMessagesDocument, mcp_calls: mcpCallsDocument, tools: toolsDocument, tool_calls: toolCallsDocument,
-  skill_usages: skillUsagesDocument, tl1_attempts: tl1AttemptsDocument, parallelism: parallelismDocument, findings: findingsDocument,
-};
 export const siteSchemas = Object.fromEntries(Object.entries(schemaDocuments).map(([name, document]) => [name, loadSchema(document)])) as Record<QueryDataset, FieldSchema>;
 
 type FieldValue = { value: string; label?: string };
@@ -476,12 +466,12 @@ type SiteCard = {
   url: { path: string; params: Array<[string, ParamSpec]> };
 };
 export const recipeTextWindows = Object.fromEntries(rollingWindowDays.map(days => [String(days), Object.fromEntries(["{days}", "{period}", "{lastDays}"].map(token => [token, describeRecipeText(token, days)]))]));
-const cardPage = (recipe: QueryRecipe) => recipe.destination ? `analyze/${recipe.destination.topic}` : recipe.dataset === "library" ? "library" : recipe.dataset === "findings" ? "findings/table" : recipe.dataset === "tl1_attempts" ? "tl1/runs" : `analyze/query/${recipe.dataset}`;
+const cardPage = (recipe: QueryRecipe) => recipe.destination ? `analyze/${recipe.destination.topic}` : recipe.dataset === "library" ? "library" : recipe.dataset === "findings" ? "findings/table" : `analyze/query/${recipe.dataset}`;
 
 export function siteCard(recipe: QueryRecipe, clock: Date): SiteCard {
   const windows = recipe.period ? [] : [...rollingWindowDays];
   const probe = windows.at(-1) ?? null;
-  const at = (days: number | null) => new URL(instantiateRecipe(recipe, days, clock).url, origin);
+  const at = (days: number | null) => new URL(cardNavigationURL(instantiateRecipe(recipe, days, clock).url), origin);
   const sample = at(probe), plain = recipe.period ? sample : at(null);
   if ([recipe.title, recipe.description, sample.search].some(text => decodeURIComponent(text).includes(placeholder))) fail(`${recipe.id} already holds ${placeholder}`);
   const card: SiteCard = { id: recipe.id, title: recipe.title, description: recipe.description, category: recipe.category, dataset: recipe.dataset, kind: cardKind(recipe), page: cardPage(recipe), url: { path: sample.pathname, params: [] } };
@@ -581,12 +571,17 @@ export function viewTitles(uiPy: string): Record<string, string> {
 export type SiteInputs = { settings: ReturnType<typeof settingsPages>; titles: Record<string, string>; clock?: Date };
 export function buildSiteMap(inputs: SiteInputs) {
   const clock = inputs.clock ?? new Date("2026-01-01T12:00:00Z");
-  const sections = appSections([], new URLSearchParams(), true);
+  const sections = appSections([], new URLSearchParams());
   const sectionTitle = (id: string) => sections.find(section => section.id === id)?.label;
   const nodes: SiteNode[] = [];
   const add = (node: SiteNode) => { nodes.push(node); return node; };
   const opSets = new Map<string, { types: Set<string>; ops: string[] }>();
-  const datasets = Object.fromEntries((Object.keys(schemaDocuments) as QueryDataset[]).map(name => [name, { ...datasetLabel(name), ...rollingWindowField(name) ? { window_field: rollingWindowField(name) } : {}, fields: datasetFields(siteSchemas[name], opSets) }]));
+  const datasets = Object.fromEntries((Object.keys(schemaDocuments) as QueryDataset[]).map(name => {
+    const schema = siteSchemas[name], detail = usageDetailsSchema(schema, name) ?? schema;
+    return [name, { ...datasetLabel(name), schema_name: detail.name,
+      properties: detail.fields.filter(field => field.property?.enabled !== false).map(field => ({ name: field.name, label: field.label ?? field.name, type: field.type, default: field.property?.default ?? false })),
+      ...rollingWindowField(name) ? { window_field: rollingWindowField(name) } : {}, columns: (Object.hasOwn(usageDatasets,name)?usageQuerySchema(schema,name as UsageDataset):schema).fields.map(field=>({name:field.name,label:field.label??field.name,type:field.type})), fields: datasetFields(schema, opSets) }];
+  }));
   const opKey = (signature: string) => [...opSets.get(signature)!.types].sort().join("|");
   for (const dataset of Object.values(datasets)) for (const field of dataset.fields) field.ops = opKey(field.ops);
   const cards = queryRecipes.filter(recipe => !recipe.retired).map(recipe => siteCard(recipe, clock));
@@ -639,17 +634,17 @@ export function buildSiteMap(inputs: SiteInputs) {
     if (section.path === "analyze") {
       for (const topic of topics) child({ path: `analyze/${topic}`, title: usageTopics[topic].label, description: usageTopics[topic].description, route: "/analyze",
         fixed: { analyze_mode: "dashboards", analyze_topic: topic, analyze_data: usageTopicDatasets[topic] }, dataset: usageTopicDatasets[topic], dashboard: topic,
-        ...topic === "carbon" ? { settings: "Estimates use the viewer's saved Carbon assumptions, which a link cannot carry." } : topic === "parallelism" ? { settings: "Records are built with the viewer's saved counting and turn gap, which a link cannot carry; the Provider and Model breakdowns need agent counting. The ribbon (analyze_parallelism) opens over the link's window.", ribbon: { param: "analyze_parallelism", ...ribbonTemplate() } } : {},
+        ...topic === "carbon" ? { settings: "Carbon assumptions can be carried as view.carbon; saving defaults is separate." } : topic === "parallelism" ? { settings: "Ribbon and source-query counting assumptions travel as view.parallelism; the Provider and Model breakdowns need agent counting.", ribbon: { param: "analyze_parallelism", ...ribbonTemplate() } } : {},
         options: [
           { name: "chart", param: "analyze_chart", kind: "dashboard_chart", description: `The chart: dashboards.${topic}.views lists each view's options and valid combinations.` },
           whereOption("analyze_filters", usageTopicDatasets[topic]),
-          windowOption("analyze_filters", dashboardWindows, "The dashboard's range: window_terms appended to the filters, or no terms for all time. analyze_days repeats 7, 30 or 90."),
+          windowOption("analyze_filters", dashboardWindows, "The dashboard's range: window_terms appended to the filters, or no terms for all time. analyze_days repeats the selected elapsed-day window."),
         ] });
       const query = child({ path: "analyze/query", title: "Query", description: pageDescriptions["analyze/query"], route: "/analyze", fixed: { analyze_mode: "query" }, children: [] });
       for (const dataset of Object.keys(usageDatasets) as UsageDataset[]) {
         const page = add({ path: `analyze/query/${dataset}`, title: usageDatasets[dataset].label, description: usageDatasets[dataset].description, route: "/analyze",
-          fixed: { analyze_mode: "query", analyze_topic: usageDatasetTopics[dataset], analyze_data: dataset }, dataset, builder: "queryURL",
-          options: [whereOption(`q_${dataset}`, dataset, [recordKeywordParameter(dataset)]), ...rollingWindowField(dataset) ? [windowOption("window_days", rollingWindowDays, `A rolling window on ${dataset}.window_field: its terms appended to the where terms, and window_mode=relative, window_days, window_field and window_dataset.`)] : []] });
+          fixed: { analyze_mode: "query", analyze_data: dataset }, dataset, builder: "queryURL",
+          options: [{ name: "return_topic", param: "analyze_topic", kind: "enum", default: usageDatasetTopics[dataset], values: Object.entries(usageTopics).map(([value, item]) => ({ value, label: item.label })), description: "Dashboard topic retained for return navigation, independent of the source dataset." }, whereOption(`q_${dataset}`, dataset, [recordKeywordParameter(dataset)]), ...rollingWindowField(dataset) ? [windowOption("window_days", rollingWindowDays, `A rolling window on ${dataset}.window_field: its terms appended to the where terms, and window_mode=relative, window_days, window_field and window_dataset.`)] : []] });
         query.children!.push(page.path);
       }
     }
@@ -667,9 +662,6 @@ export function buildSiteMap(inputs: SiteInputs) {
           ...view === "table" ? { dataset: "findings", builder: "queryURL", options: [whereOption("q_findings", "findings"), windowOption("window_days", rollingWindowDays, "A rolling window on findings.window_field, as for query tables.")] } : {} });
       }
     }
-    if (section.path === "tl1") for (const page of tl1Pages.slice(1)) child({ path: page.path.slice(1), title: page.title, description: page.description, route: page.path,
-      ...page.path === "/tl1/runs" ? { dataset: "tl1_attempts", builder: "queryURL", options: [whereOption("q_tl1_attempts", "tl1_attempts"), windowOption("window_days", rollingWindowDays, "A rolling window on tl1_attempts.window_field, as for query tables.")] } : {} });
-    if (section.path === "tl1") node.description = `${section.description} ${tl1Pages[0].description}`;
     if (section.path === "work") {
       node.builder = "conversationRowURL, then the delegation explorer's parameters (delegationRouteValues, empty ones left out), then explorer or sessions.";
       node.options = [
@@ -697,13 +689,19 @@ export function buildSiteMap(inputs: SiteInputs) {
     }
     if (!node.children!.length) delete node.children;
   }
+  for(const node of Object.values(nodes))if(node.dataset&&node.options?.some(option=>option.kind==="where"&&option.param.startsWith("q_"))){
+    const schema=siteSchemas[node.dataset as QueryDataset];
+    const initial={...EMPTY_QUERY,select:schema.defaultSelect??[],orderBy:schema.defaultSort??[],limit:schema.defaultLimit??EMPTY_QUERY.limit,fitToScreen:true};
+    Object.assign(node,{query_default:node.path==="library"?freshSearch(schema).query:Object.hasOwn(usageDatasets,node.dataset)?usageActionQuery(initial,usageQuerySchema(schema,node.dataset as UsageDataset),node.dataset as UsageDataset):initial});
+  }
   return {
     version: siteMapVersion,
+    view_contract: { ...viewContract, control_audit: {file:"docs/view-controls.json",version:controlAudit.version,controls:controlAudit.controls.length} },
     generated_by: "web/generate-site-map.mjs from web/src/site-map.ts",
     paths: "Nodes are addressed by path. An option is <node>/<option name>; a filter field is <node>/filters/<field>, taken from the node's dataset. A card is cards/<id>.",
     nodes: Object.fromEntries(nodes.map(node => [node.path, node])),
     id_sources: idSources,
-    excluded: { legacy_routes: legacyRoutes, params: ["ask_chat", "token", "fresh", "q_* snapshot references (@id)"] },
+    excluded: { legacy_routes: legacyRoutes, params: ["ask_chat", "token", "fresh"] },
     windows: { days: rollingWindowDays, dashboard: dashboardWindows, analyze_days: analyzeDays, analyze_days_default: readUsageWorkspace(new URLSearchParams()).days, labels: optionLabels.window, tables: windowTables, ...windowTemplates() },
     analyze: {
       version: analysisVersion, fill_defaults: fillDefaults, absent, fallback: viaFallback, labels: { view: optionLabels.view, reduce: optionLabels.reduce },
@@ -711,6 +709,18 @@ export function buildSiteMap(inputs: SiteInputs) {
       dashboards,
     },
     datasets, op_sets: Object.fromEntries([...opSets.keys()].map(signature => [opKey(signature), opSets.get(signature)!.ops])),
+    query_state: {
+      select:"Ordered columns: {field, width?, render?, display?}[]; [] uses dataset defaults.",
+      fitToScreen:"Boolean; false keeps explicit widths.",
+      where:"Native filter terms and AND/OR groups; timestamps can be relative (-7d, +0s).",
+      orderBy:"Ordered {field, dir:asc|desc, nulls?:first|last, extract?}[]",
+      limit:"Page size", offset:"Zero-based result offset",
+      aggregations:"Native metric definitions, including chart/display options. Each has id, op, field, groupBy and optional expression/dateGrouping/window/share/sort/topN/display.",
+      grouping:"{source:QueryState,keys:(field ID or calendar key)[],summaries:SummaryColumn[],representative:null|{orderBy:OrderBy[]}}; outer select/where/orderBy/offset apply to grouped rows.",
+      itemDetails:"Native item properties, modes, page template, active {id,mode:modal|expand}, and jsonInspections:[{dataset:<schema_name>,rowId:<typed ID>,field:<property name>,state:<JsonInspectionState>}]. All inspection choices travel in the query. Use query/types/JsonInspectionState for members and limits; dataset is schema_name, not the route dataset ID.",
+      hostState:"{version:1,params:{name:string[]}}. Search owns text_builder/kind/search/case/view; Analyze query owns record_<dataset>. Mirrored URL parameters must agree."
+    },
+    json_inspection_example: { modes: ["expand"], jsonInspections: [{ dataset: "<schema_name>", rowId: "<record ID>", field: "<property name>", state: jsonInspectionTemplate }] },
     empty_query: EMPTY_QUERY,
     cards: { text_windows: recipeTextWindows, items: cards },
   };

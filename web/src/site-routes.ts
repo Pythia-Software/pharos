@@ -4,11 +4,11 @@
 // parameters, which the page shell (ui.py) reads inline.
 //
 // The served routes are isUIPage in internal/archive/api.go; the shell's own
-// lists are ROUTES, TL1_PAGES and the data-settings-route panels in ui.py.
+// lists are ROUTES and the data-settings-route panels in ui.py.
 // web/tests/unit/site-map compares every one of them with these.
 
 // Top-level sections in browse order. Titles come from the page's own
-// navigation (appSections, tl1Pages, the settings panels); these say what a
+// navigation (appSections, the settings panels); these say what a
 // section is for.
 export const siteSections = [
   { path: "home", route: "/", description: "The home page: recent activity and suggested cards." },
@@ -16,7 +16,6 @@ export const siteSections = [
   { path: "library", route: "/library", description: "Search conversations and work: text search across messages, or filter the work table." },
   { path: "analyze", route: "/analyze", description: "Dashboards per topic (tokens, tools, human words …) and query tables per dataset." },
   { path: "findings", route: "/findings", description: "Optimization findings: open, watched, won and dismissed, with evidence and prompts." },
-  { path: "tl1", route: "/tl1", description: "TL1 workflow analytics: overview, configurations, follow-ups, quality and runs." },
   { path: "work", route: "/work/{work_id}", description: "One work item (a workspace) with its conversations, reader and delegation explorer." },
   { path: "settings", route: "/settings", description: "Library health and settings pages." },
 ] as const;
@@ -36,6 +35,7 @@ export const legacyRoutes: Record<string, string> = {
   "/health": "/settings",
   "/mcp": "/analyze?analyze_topic=mcp",
   "/tools": "/analyze?analyze_mode=query&analyze_data=tool_calls",
+  "/settings/header": "/settings/layout",
   "/settings/optimization": "/findings?view=settings",
 };
 // Settings pages a library may lack: Libraries exists only in the managed app.

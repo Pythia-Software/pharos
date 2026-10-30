@@ -1404,7 +1404,7 @@ func upsertConversation(tx *sql.Tx, workspaceID, workItemID string, value Conver
 			parent = found
 		}
 	}
-	_, err := tx.Exec(`INSERT INTO conversations(id,workspace_id,work_item_id,provider,model,effort,account,native_id,parent_id,agent_depth,agent_path,agent_nickname,origin,origin_host_id,coverage,started_at,ended_at,aliases_json,harness,harness_version_first,harness_version_last,harness_version_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(provider,account,native_id) DO UPDATE SET workspace_id=excluded.workspace_id,work_item_id=COALESCE(excluded.work_item_id,conversations.work_item_id),parent_id=COALESCE(excluded.parent_id,conversations.parent_id),agent_depth=excluded.agent_depth,agent_path=COALESCE(excluded.agent_path,conversations.agent_path),agent_nickname=COALESCE(excluded.agent_nickname,conversations.agent_nickname),origin=COALESCE(excluded.origin,conversations.origin),origin_host_id=excluded.origin_host_id,model=COALESCE(excluded.model,conversations.model),effort=excluded.effort,coverage=excluded.coverage,started_at=COALESCE(excluded.started_at,conversations.started_at),ended_at=MAX(excluded.ended_at,conversations.ended_at),aliases_json=excluded.aliases_json,harness=COALESCE(excluded.harness,conversations.harness),harness_version_first=COALESCE(conversations.harness_version_first,excluded.harness_version_first),harness_version_last=COALESCE(excluded.harness_version_last,conversations.harness_version_last),harness_version_source=CASE WHEN excluded.harness_version_last IS NOT NULL THEN excluded.harness_version_source ELSE conversations.harness_version_source END`, id, workspaceID, workItem, value.Provider, nilIfEmpty(value.Model), nilIfEmpty(value.Effort), value.Account, value.NativeID, parent, value.AgentDepth, nilIfEmpty(value.AgentPath), nilIfEmpty(value.AgentNickname), nilIfEmpty(value.Origin), host, defaultString(value.Coverage, "complete"), nilIfEmpty(value.StartedAt), nilIfEmpty(value.EndedAt), jsonText(value.Aliases), nilIfEmpty(value.Harness), nilIfEmpty(value.HarnessVersionFirst), nilIfEmpty(value.HarnessVersionLast), versionSource(value))
+	_, err := tx.Exec(`INSERT INTO conversations(id,workspace_id,work_item_id,provider,model,effort,account,native_id,parent_id,agent_depth,agent_path,agent_nickname,origin,origin_host_id,coverage,started_at,ended_at,aliases_json,harness,harness_version_first,harness_version_last,harness_version_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(provider,account,native_id) DO UPDATE SET workspace_id=excluded.workspace_id,work_item_id=COALESCE(excluded.work_item_id,conversations.work_item_id),parent_id=COALESCE(excluded.parent_id,conversations.parent_id),agent_depth=excluded.agent_depth,agent_path=COALESCE(excluded.agent_path,conversations.agent_path),agent_nickname=COALESCE(excluded.agent_nickname,conversations.agent_nickname),origin=COALESCE(excluded.origin,conversations.origin),origin_host_id=excluded.origin_host_id,model=COALESCE(excluded.model,conversations.model),effort=excluded.effort,coverage=excluded.coverage,started_at=COALESCE(excluded.started_at,conversations.started_at),ended_at=MAX(excluded.ended_at,conversations.ended_at),aliases_json=excluded.aliases_json,harness=COALESCE(excluded.harness,conversations.harness),harness_version_first=COALESCE(conversations.harness_version_first,excluded.harness_version_first),harness_version_last=COALESCE(excluded.harness_version_last,conversations.harness_version_last),harness_version_source=CASE WHEN excluded.harness_version_last IS NOT NULL THEN excluded.harness_version_source ELSE conversations.harness_version_source END`, id, workspaceID, workItem, value.Provider, nilIfEmpty(value.Model), nilIfEmpty(value.Effort), value.Account, value.NativeID, parent, value.AgentDepth, nilIfEmpty(value.AgentPath), nilIfEmpty(value.AgentNickname), nilIfEmpty(value.Origin), host, defaultString(value.Coverage, "complete"), nilIfEmpty(value.StartedAt), nilIfEmpty(value.EndedAt), jsonText(append([]string{}, value.Aliases...)), nilIfEmpty(value.Harness), nilIfEmpty(value.HarnessVersionFirst), nilIfEmpty(value.HarnessVersionLast), versionSource(value))
 	if err != nil {
 		return "", err
 	}
@@ -2096,7 +2096,7 @@ func (c *Catalog) reconcileIdentities(ctx context.Context) (int, error) {
 	if err := c.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM conversation_identity_links").Scan(&before); err != nil {
 		return 0, err
 	}
-	rows, err := queryMapsContext(ctx, c.DB, "SELECT id,aliases_json FROM conversations WHERE aliases_json<>'[]'")
+	rows, err := queryMapsContext(ctx, c.DB, "SELECT id,aliases_json FROM conversations WHERE aliases_json NOT IN ('[]','null')")
 	if err != nil {
 		return 0, err
 	}
@@ -2146,7 +2146,10 @@ func (c *Catalog) reconcileIdentities(ctx context.Context) (int, error) {
 			}
 			activity, hasActivity := parseTime(pair[2])
 			if !hasActivity || linked.After(activity) {
-				if _, err := c.DB.ExecContext(ctx, "UPDATE workspaces SET activity_at=?,activity_source=? WHERE id=?", formatTime(linked), "linked:"+pair[3]+":native-id", pair[0]); err != nil {
+				if err := c.writeTransaction(ctx, "linked workspace activity", func(tx *sql.Tx) error {
+					_, err := tx.ExecContext(ctx, "UPDATE workspaces SET activity_at=?,activity_source=? WHERE id=? AND (activity_at IS NULL OR activity_at<?)", formatTime(linked), "linked:"+pair[3]+":native-id", pair[0], formatTime(linked))
+					return err
+				}); err != nil {
 					return 0, err
 				}
 			}

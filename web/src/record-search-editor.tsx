@@ -1,3 +1,4 @@
+import { ViewDisclosure } from "./view-disclosure";
 import React, { useEffect, useState } from "react";
 import { type WhereTerm } from "@pythia-software/query-table-core";
 import type { QueryTableApi } from "@pythia-software/query-table-react";
@@ -39,7 +40,7 @@ export function RecordSearchEditor<Row>({ api, dataset, layout, target = recordS
           {where.length ? <button type="button" onClick={() => setWhere([])}>Clear</button> : null}
           <button type="submit" className="text-search-submit" disabled={!valid}><Icon name="search" />Search {target.label.toLowerCase()}</button>
         </div>
-        {layout ? <details><summary>Columns, metrics & saved queries</summary>{layout}</details> : null}
+        {layout ? <ViewDisclosure viewKey={`query:${dataset}:layout`}><summary>Columns, metrics & saved queries</summary>{layout}</ViewDisclosure> : null}
       </div>
     </form>
   </section>;
