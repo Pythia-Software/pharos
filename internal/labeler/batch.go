@@ -60,16 +60,19 @@ func BatchTensors(seqs [][]int32, padMult int) []Tensor {
 	return BatchInputs(DefaultInputs, rows, padMult)
 }
 
-// Framed is one framed item: its token ids and where its components are.
+// Framed is one framed item: its token ids, where kestrel-framing put its
+// components, and any further spans another framing contract builds (by
+// name, for its roles' fillers: sentence spans, say).
 type Framed struct {
 	IDs   []int32
 	Spans FrameSpans
+	Extra map[string][]Span
 }
 
 // BatchInputs makes a run request's inputs for rows, by the model's input
-// contract: ids right-padded with PadID, the attention mask over each row's
-// tokens, and a pooling mask over each row's text span (FrameSpans.Text),
-// all padded to the longest row rounded up to padMult.
+// contract: each input's role (see Role) fills its row; every input is
+// padded to the longest row rounded up to padMult, with zeros (PadID for
+// ids).
 func BatchInputs(inputs []InputSpec, rows []Framed, padMult int) []Tensor {
 	longest := 0
 	for _, row := range rows {
@@ -80,22 +83,9 @@ func BatchInputs(inputs []InputSpec, rows []Framed, padMult int) []Tensor {
 	tensors := make([]Tensor, 0, len(inputs))
 	for _, input := range inputs {
 		values := make([]int32, len(rows)*width)
-		for r, row := range rows {
-			at := r * width
-			switch input.Role {
-			case RoleIDs:
-				copy(values[at:], row.IDs)
-				for col := len(row.IDs); col < width; col++ {
-					values[at+col] = PadID
-				}
-			case RoleAttention:
-				for col := range row.IDs {
-					values[at+col] = 1
-				}
-			case RolePool:
-				for col := row.Spans.Text.Start; col < row.Spans.Text.End; col++ {
-					values[at+col] = 1
-				}
+		if role, ok := lookupRole(input.Role); ok && role.Fill != nil {
+			for r, row := range rows {
+				role.Fill(row, values[r*width:(r+1)*width])
 			}
 		}
 		tensors = append(tensors, Tensor{Name: input.Name, DType: DTypeInt32, Dims: dims, Int32: values})

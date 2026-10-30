@@ -116,24 +116,24 @@ func (h *Hello) RunInputs() []InputSpec {
 	return h.Inputs
 }
 
-// ValidateInputs checks a hello's inputs: unique names, known roles, one ids
-// and one attention input.
+// ValidateInputs checks a hello's inputs: unique names, registered roles,
+// and each required role (ids, attention) exactly once.
 func ValidateInputs(inputs []InputSpec) error {
-	seen, roles := map[string]bool{}, map[string]int{}
+	seen, counts := map[string]bool{}, map[string]int{}
 	for _, input := range inputs {
 		if input.Name == "" || len(input.Name) > 255 || seen[input.Name] {
 			return fmt.Errorf("input name %q is empty, too long or repeated", input.Name)
 		}
 		seen[input.Name] = true
-		switch input.Role {
-		case RoleIDs, RoleAttention, RolePool:
-		default:
+		if _, ok := lookupRole(input.Role); !ok {
 			return fmt.Errorf("input %s has unknown role %q", input.Name, input.Role)
 		}
-		roles[input.Role]++
+		counts[input.Role]++
 	}
-	if roles[RoleIDs] != 1 || roles[RoleAttention] != 1 {
-		return errors.New("inputs need exactly one ids and one attention input")
+	for _, role := range requiredRoles() {
+		if counts[role] != 1 {
+			return fmt.Errorf("inputs need exactly one %s input", role)
+		}
 	}
 	return nil
 }
@@ -555,6 +555,9 @@ func ValidateRun(req *RunRequest, inputs []InputSpec, vocab, maxBatch, maxSeq in
 			attention = t
 		}
 	}
+	if attention == nil {
+		return errors.New("the inputs declare no attention input")
+	}
 	if len(byName) != len(inputs) {
 		for name := range byName {
 			if !slices.ContainsFunc(inputs, func(input InputSpec) bool { return input.Name == name }) {
@@ -583,34 +586,15 @@ func ValidateRun(req *RunRequest, inputs []InputSpec, vocab, maxBatch, maxSeq in
 		return fmt.Errorf("sequence %d exceeds the limit %d", seq, maxSeq)
 	}
 	for _, input := range inputs {
-		t := byName[input.Name]
-		for row := 0; row < batch; row++ {
-			on := 0
-			for col := 0; col < seq; col++ {
-				k := row*seq + col
-				value := t.Int32[k]
-				switch input.Role {
-				case RoleIDs:
-					if value < 0 || (vocab > 0 && int(value) >= vocab) {
-						return fmt.Errorf("token id %d at [%d,%d] is outside [0,%d)", value, row, col, vocab)
-					}
-					continue
-				case RolePool:
-					if value == 1 && attention.Int32[k] != 1 {
-						return fmt.Errorf("%s pools padding at [%d,%d]", t.Name, row, col)
-					}
-				}
-				switch value {
-				case 1:
-					on++
-				case 0:
-				default:
-					return fmt.Errorf("%s value %d at [%d,%d]", t.Name, value, row, col)
-				}
-			}
-			if input.Role != RoleIDs && on == 0 {
-				return fmt.Errorf("row %d of %s is empty", row, t.Name)
-			}
+		role, ok := lookupRole(input.Role)
+		if !ok {
+			return fmt.Errorf("input %s has unknown role %q", input.Name, input.Role)
+		}
+		if role.Validate == nil {
+			continue
+		}
+		if err := role.Validate(RoleCheck{Name: input.Name, Values: byName[input.Name].Int32, Attention: attention.Int32, Batch: batch, Seq: seq, Vocab: vocab}); err != nil {
+			return err
 		}
 	}
 	for i, name := range req.Outputs {
