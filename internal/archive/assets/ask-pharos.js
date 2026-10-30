@@ -165,6 +165,7 @@ window.initPharosAsk = function(root, {chartPreviews} = {}) {
     const returning=presentation!=='home'||root.parentElement!==homeHost;
     if(!returning)return;
     presentation='home';if(root.parentElement!==homeHost)homeHost.append(root);
+    chartPreviews?.revalidate();
     if(!new URL(location.href).searchParams.has('ask_chat'))syncChatURL(activeSessionId);
     render();
   }
@@ -181,6 +182,7 @@ window.initPharosAsk = function(root, {chartPreviews} = {}) {
     regularOverride=false;
     delete overlay.dataset.positioned;overlay.style.removeProperty('height');overlay.style.removeProperty('--pharos-dialog-top');
     presentation='modal';overlay.append(root);overlay.showModal();
+    chartPreviews?.revalidate();
     render();sizeThread();sizeOverlay();question.focus({preventScroll:true});
     if(mode==='available'||mode==='declined')openModal(consent);
   }

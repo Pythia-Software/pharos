@@ -2335,9 +2335,9 @@ test('dashboard card creation keeps focus in its dialog, restores it on cancel a
 
 for (const [width, theme, count, unavailable, view='compare'] of [[1440,'dark',2,false],[390,'light',1,false],[320,'dark',1,true],[1440,'dark',1,false,'trend'],[390,'light',1,false,'distribution']]) test(`Ask Pharos chart previews keep links, page state and focus usable (${theme}, ${view}, ${unavailable?'unavailable':count+' charts'}) @ ${width}`, {skip}, async t => {
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
-  const cards=Array.from({length:count},(_,index)=>({id:'chart-'+index,title:index?'Tokens by model':'Tokens by provider',description:'Explore the selected token usage.',href:'/analyze?'+new URLSearchParams({analyze_mode:'dashboards',analyze_topic:'tokens',analyze_chart:JSON.stringify({v:2,view,metric:'tokens',split:index?'model':'provider',unit:'conversation',minSamples:0,...view==='trend'?{rollingPeriods:3,norm:true}:{}}),analyze_filters:encodeQuery({...EMPTY_QUERY,where:[]})})}));
+  const cards=Array.from({length:count},(_,index)=>({id:'chart-'+index,title:index?'Tokens by model':'Tokens by provider',description:'Explore the selected token usage.',href:'/analyze?'+new URLSearchParams({analyze_mode:'dashboards',analyze_topic:'tokens',...view==='trend'?{analyze_window:'today',analyze_timezone:'America/Denver'}:{},analyze_chart:JSON.stringify({v:2,view,metric:'tokens',split:index?'model':'provider',unit:'conversation',minSamples:0,...view==='trend'?{rollingPeriods:3,norm:true}:{}}),analyze_filters:encodeQuery({...EMPTY_QUERY,where:[]})})}));
   let session;
-  const {page,shot,settled}=await open(t,{url:'/library',ready:'body>header',viewport:{width,height:900},preferences:{'pharos-theme':theme},api:{
+  const {page,shot,settled,calls}=await open(t,{url:'/library',ready:'body>header',viewport:{width,height:900},preferences:{'pharos-theme':theme},api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
     'GET /api/ask/sessions':()=>({sessions:session?[session]:[]}),
@@ -2362,6 +2362,31 @@ for (const [width, theme, count, unavailable, view='compare'] of [[1440,'dark',2
   assert.equal(page.url(),before,'rendering a chart must leave the underlying page URL alone');
   assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)),'loading charts must not move focus out of Ask');
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'chart preview overflowed the viewport');
+  if(view==='trend'){
+    const metricRequest=response=>/\/api\/query\/usage\/(metrics|query-v3)(?:\?|$)/.test(response.url());
+    const queries=()=>calls.filter(call=>/^\/api\/query\/usage\/(metrics|query-v3)$/.test(call.path)).length;
+    const loaded=queries();
+    await page.getByRole('button',{name:'Close Ask Pharos',exact:true}).click();await modal.waitFor({state:'hidden'});
+    await page.clock.setFixedTime(new Date(await page.evaluate(()=>Date.now()+2*86400000)));
+    // Let the calendar clock observe the new day as it does on app focus.
+    await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await settled();
+    assert.equal(queries(),loaded,'hidden charts defer calendar refreshes until reopened');
+    let refreshed=page.waitForResponse(metricRequest);
+    await activateHeaderTool(page,'askPharosToggle');await refreshed;
+    await page.waitForFunction(()=>document.querySelector('figure[aria-label^="Chart preview:"]')?.getAttribute('aria-busy')==='false');
+    assert.ok(queries()>loaded,'reopening a retained Today chart must execute its new window');
+    // A data refresh must also bypass a just-filled cache within the same day.
+    refreshed=page.waitForResponse(metricRequest);
+    await page.evaluate(()=>window.dispatchEvent(new CustomEvent('pharos:data-refresh',{detail:'usage'})));await refreshed;
+    await page.waitForFunction(()=>document.querySelector('figure[aria-label^="Chart preview:"]')?.getAttribute('aria-busy')==='false');
+    // Reopening itself revalidates, even without a calendar or dataset event.
+    await page.getByRole('button',{name:'Close Ask Pharos',exact:true}).click();await modal.waitFor({state:'hidden'});
+    refreshed=page.waitForResponse(metricRequest);
+    await activateHeaderTool(page,'askPharosToggle');await refreshed;
+    await page.waitForFunction(()=>document.querySelector('figure[aria-label^="Chart preview:"]')?.getAttribute('aria-busy')==='false');
+    assert.equal(page.url(),before,'revalidation preserves the surrounding page state');
+    assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)),'revalidation preserves focus in Ask');
+  }
   await shot('ask-chart-previews');
   await page.getByRole('button',{name:'Clear',exact:true}).click();
   await settled();
@@ -2372,6 +2397,8 @@ for (const [width, theme, count, unavailable, view='compare'] of [[1440,'dark',2
   await page.goto(new URL('/?ask_chat='+encodeURIComponent(session.id),page.url()).href);await settled();
   await page.getByRole('figure',{name:'Chart preview: '+cards[0].title,exact:true}).waitFor();
   await activateHeaderTool(page,'askPharosToggle');
+  await page.waitForFunction(()=>document.querySelector('figure[aria-label^="Chart preview:"]')?.getAttribute('aria-busy')==='false');
+  await settled();
   const link=page.getByRole('link',{name:new RegExp(cards[0].title)});
   await link.click();
   await page.waitForURL(url=>url.pathname==='/analyze'&&url.searchParams.get('analyze_topic')==='tokens');

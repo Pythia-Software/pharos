@@ -1,5 +1,5 @@
 import { EMPTY_QUERY, encodeQuery } from '@pythia-software/query-table-core';
-import { askChartPreviewJob } from '../../src/ask-chart-model';
+import { askChartPreviewJob, onAskChartRefresh } from '../../src/ask-chart-model';
 import { dashboardDefaults } from '../../src/dashboard-defaults';
 import { usageTopicDatasets } from '../../src/usage-workspace-model';
 import { schemas } from './helpers/recipes.mjs';
@@ -401,4 +401,20 @@ test('Ask preview jobs keep each chart URL and its moving window intact', t => {
   const jobs = urls.map(address=>askChartPreviewJob(address,schemas));
   assert.notEqual(jobs[0].id,jobs[1].id);
   for (const [index,job] of jobs.entries()) assert.equal(job.options.dashboard,urls[index]);
+});
+
+test('retained Ask charts revalidate on reopening and their own data or calendar refresh until disposed', () => {
+  const openings = new EventTarget(), data = new EventTarget(), refreshes = [];
+  const stop = onAskChartRefresh('usage',openings,()=>refreshes.push('usage'),data);
+  openings.dispatchEvent(new Event('open'));
+  data.dispatchEvent(new CustomEvent('pharos:data-refresh',{detail:'tools'}));
+  assert.equal(refreshes.length,1,'unrelated datasets leave the chart alone');
+  data.dispatchEvent(new CustomEvent('pharos:data-refresh',{detail:'usage'}));
+  data.dispatchEvent(new Event('pharos:usage-refresh'));
+  assert.equal(refreshes.length,3,'both data and calendar changes invalidate the retained view');
+  stop();
+  openings.dispatchEvent(new Event('open'));
+  data.dispatchEvent(new CustomEvent('pharos:data-refresh',{detail:'usage'}));
+  data.dispatchEvent(new Event('pharos:usage-refresh'));
+  assert.equal(refreshes.length,3,'switching or clearing chats removes every refresh subscription');
 });

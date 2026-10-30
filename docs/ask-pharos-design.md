@@ -99,6 +99,8 @@ cards. Chart answers stay in the thread, including a single result; ordinary
 single-link answers retain automatic navigation. Previews load when visible,
 show their time range and update time, and retain the link for empty or unavailable results.
 Reopening a chat loads the addressed moving view rather than freezing its data.
+Retained previews also revalidate when Ask reopens and on dashboard calendar or
+dataset refreshes; hidden charts defer their queries until visible again.
 Preview loading must not change the surrounding page URL, preferences or focus.
 
 Validate destinations through Pharos's own routing and URL builders. If every
