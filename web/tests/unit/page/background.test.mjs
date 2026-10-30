@@ -81,3 +81,17 @@ test("durations and times", () => {
   assert.equal(background.until(minutesAgo(-30), at), "in 30 min");
   assert.equal(background.until("not a time", at), "");
 });
+
+test("on battery: each cadence's choice and the low-battery rule, only on a Mac with a battery", () => {
+  const settings = { ...document.settings, battery: { frequent: "slower", hourly: "wait", daily: "same", low_battery_waits: false },
+    battery_choices: { frequent: ["same", "slower", "wait"], hourly: ["same", "wait"], daily: ["same", "wait"] }, battery_slower_minutes: 15, low_battery_percent: 20 };
+  const model = plain(background.batteryModel({ settings, power: { battery: true, on_battery: true, percent: 64, low_power_mode: false } }));
+  assert.equal(model.onBattery, true);
+  assert.match(model.status, /64%/);
+  assert.deepEqual(model.rows.map(row => [row.cadence, row.value, row.choices.map(choice => choice.value)]),
+    [["frequent", "slower", ["same", "slower", "wait"]], ["hourly", "wait", ["same", "wait"]], ["daily", "same", ["same", "wait"]]]);
+  assert.match(model.rows[0].choices[1].label, /15/);
+  assert.equal(model.lowWaits, false);
+  assert.equal(background.batteryModel({ settings, power: { battery: false, on_battery: false, percent: -1 } }), null);
+  assert.equal(background.batteryModel({ settings }), null);
+});

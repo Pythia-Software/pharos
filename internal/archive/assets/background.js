@@ -60,11 +60,14 @@
 .bg-legend{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:var(--fs-sm);color:var(--muted)}
 .bg-legend span::before{content:"";display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;background:var(--swatch)}
 .bg-check{display:flex;gap:8px;align-items:flex-start;margin-top:10px;font-size:var(--fs-sm)}
+.bg-battery{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}
+.bg-battery-row{display:grid;gap:4px;font-size:var(--fs-sm);font-weight:600;min-width:0}
+.bg-battery-row select{font:inherit;font-weight:400;border:1px solid var(--line);border-radius:5px;padding:5px 6px;background:var(--bg);color:var(--ink);min-width:0}
 .bg-check input{margin-top:3px;accent-color:var(--accent)}
-@media(max-width:900px){.bg-cols{grid-template-columns:minmax(0,1fr)}}`;
+@media(max-width:900px){.bg-cols,.bg-battery{grid-template-columns:minmax(0,1fr)}}`;
 
   const CADENCE_ICONS = {frequent: '↻', hourly: '◷', daily: '☾'};
-  const DOTS = {current: 'current', running: 'busy', queued: 'busy', failed: 'bad', missed: 'behind', never: 'behind', paused: 'paused', manual: 'paused', unavailable: 'paused'};
+  const DOTS = {current: 'current', running: 'busy', queued: 'busy', failed: 'bad', missed: 'behind', never: 'behind', paused: 'paused', manual: 'paused', unavailable: 'paused', power: 'paused'};
   const SWATCHES = {frequent: '#8cc6a0', hourly: 'var(--accent)', daily: '#9db1d6'};
 
   // ---- times and durations (the only words this file makes)
@@ -130,7 +133,25 @@
       items: (row.items || []).map(id => byId[id]).filter(Boolean).map(item => itemModel(item, now)),
     }));
     return {mode: document.settings?.mode || view.mode, settings: document.settings || {}, columns, everything: view.everything?.text || '',
-      rule: document.rule || null, cost: costModel(document.cost), headline: view.headline || null};
+      rule: document.rule || null, cost: costModel(document.cost), headline: view.headline || null, battery: batteryModel(document)};
+  }
+
+  // On battery: each cadence's choice, and the low-battery rule. Null on a
+  // Mac with no battery, where it never applies.
+  function batteryModel(document) {
+    const power = document?.power, settings = document?.settings || {};
+    if (!power?.battery || !settings.battery) return null;
+    const words = {same: 'Same as plugged in', slower: `Every ${settings.battery_slower_minutes || 15} min`, wait: 'Wait until plugged in'};
+    const labels = {frequent: 'Frequently', hourly: 'Hourly', daily: 'Daily'};
+    const charge = Number.isFinite(power.percent) && power.percent >= 0 ? ` (${power.percent}%)` : '';
+    return {
+      status: `${power.on_battery ? 'This Mac is on battery' : 'This Mac is plugged in'}${charge}${power.low_power_mode ? ', in Low Power Mode' : ''}.`,
+      onBattery: Boolean(power.on_battery),
+      rows: ['frequent', 'hourly', 'daily'].map(cadence => ({cadence, label: labels[cadence], value: settings.battery[cadence] || 'same',
+        choices: (settings.battery_choices?.[cadence] || ['same', 'wait']).map(value => ({value, label: words[value] || value}))})),
+      lowWaits: settings.battery.low_battery_waits !== false,
+      lowText: `Below ${settings.low_battery_percent || 20}% or in Low Power Mode, everything waits until plugged in`,
+    };
   }
 
   function itemModel(item, now = Date.now()) {
@@ -318,6 +339,25 @@
       cost.append(stack, legend);
       content.append(cost);
     }
+    if (model.battery) {
+      const battery = node('section', 'bg-card');
+      battery.dataset.card = 'battery';
+      battery.append(node('h3', '', 'On battery'), node('p', 'muted', `${model.battery.status} Choose what keeps running when this Mac is unplugged; Update everything now and Run now always run.`));
+      const rows = node('div', 'bg-battery');
+      for (const row of model.battery.rows) {
+        const label = node('label', 'bg-battery-row');
+        label.append(node('span', '', row.label), select(row.choices.map(choice => [choice.value, choice.label]), row.value, value => save({battery: {[row.cadence]: value}}), `${row.label} on battery`));
+        rows.append(label);
+      }
+      const low = node('label', 'bg-check');
+      const lowBox = node('input');
+      lowBox.type = 'checkbox';
+      lowBox.checked = model.battery.lowWaits;
+      lowBox.onchange = () => save({battery: {low_battery_waits: lowBox.checked}}).catch(error => toast(error.message));
+      low.append(lowBox, model.battery.lowText);
+      battery.append(rows, low);
+      content.append(battery);
+    }
     const considerate = node('section', 'bg-card');
     const hold = node('label', 'bg-check');
     const box = node('input');
@@ -359,6 +399,6 @@
 
   window.pharosBackground = {refresh, render,
     // Pure helpers, for web/tests/unit/page/background.test.mjs.
-    scheduleModel, itemModel, costModel, stateText, ago, until, duration};
+    scheduleModel, itemModel, costModel, batteryModel, stateText, ago, until, duration};
   if (host()) start(); else document.addEventListener('DOMContentLoaded', start, {once: true});
 })();

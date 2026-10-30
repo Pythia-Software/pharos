@@ -281,7 +281,10 @@ const busyBackground = backgroundView([
   backgroundItem("preserve", "Preserve originals", "daily", "current"),
 ], { tone: "busy", title: "Updating your writing", text: "Human Words cards, and Analyze → Writing update when this finishes.", tech: null });
 export const backgroundDocument = {
-  settings: { mode: "on", paused_until: null, interval_seconds: 300, daily_at: "03:00", hold_when_busy: true, overrides: {} },
+  settings: { mode: "on", paused_until: null, interval_seconds: 300, daily_at: "03:00", hold_when_busy: true, overrides: {},
+    battery: { frequent: "slower", hourly: "wait", daily: "wait", low_battery_waits: true }, battery_choices: { frequent: ["same", "slower", "wait"], hourly: ["same", "wait"], daily: ["same", "wait"] },
+    battery_slower_minutes: 15, low_battery_percent: 20 },
+  power: { battery: true, on_battery: true, percent: 64, low_power_mode: false },
   view: idleBackground, rule: { frequent_seconds: 60, hourly_seconds: 600 },
   descriptions: { frequent: "Every 5 min, as soon as there’s new work", hourly: "At most once an hour, after 10 quiet minutes", daily: "Overnight at 3:00 AM, or the first quiet moment after" },
   cost: { window_hours: 24, seconds: 18000, text: "about 5 h", peak_bytes: 9.5e9, cadences: [

@@ -123,7 +123,7 @@
       default: return label;
     }
   }
-  const SCHEDULE_DOTS = {current: '', running: 'busy', queued: 'busy', failed: 'bad', missed: 'warn', never: 'warn', paused: 'paused', manual: 'paused', unavailable: 'paused'};
+  const SCHEDULE_DOTS = {current: '', running: 'busy', queued: 'busy', failed: 'bad', missed: 'warn', never: 'warn', paused: 'paused', manual: 'paused', unavailable: 'paused', power: 'paused'};
   const CADENCE_ICONS = {frequent: '↻', hourly: '◷', daily: '☾'};
 
   // The schedule's part of the panel: its headline, one row per cadence
