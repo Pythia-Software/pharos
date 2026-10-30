@@ -1,3 +1,9 @@
+import { EMPTY_QUERY, encodeQuery } from '@pythia-software/query-table-core';
+import { askChartPreviewJob } from '../../src/ask-chart-model';
+import { dashboardDefaults } from '../../src/dashboard-defaults';
+import { usageTopicDatasets } from '../../src/usage-workspace-model';
+import { schemas } from './helpers/recipes.mjs';
+import { fixture } from './helpers/parity.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadClassicScript, plain } from './helpers/classic-script.mjs';
@@ -152,7 +158,7 @@ test('a single destination opens for any question, while editing or search suppr
   const navigate = state => model.askShouldNavigate({enabled:true, regular:false, edited:false, prompt:'Open my token usage', cards:[{id:'tokens'}], ...state});
   assert.equal(navigate({}), true);
   for (const prompt of ['Where am I wasting time?', 'Please show me yesterday’s page', 'Take me to my earlier chat', 'Go to Settings', 'Find my work']) assert.equal(navigate({prompt}),true);
-  for (const state of [{cards:[]}, {cards:[{},{}]}, {omitted:1}, {draft:' '}, {draft:'Actually…'}, {edited:true}, {regular:true}, {enabled:false}]) assert.equal(navigate(state),false);
+  for (const state of [{cards:[]}, {cards:[{},{}]}, {hasPreview:true}, {omitted:1}, {draft:' '}, {draft:'Actually…'}, {edited:true}, {regular:true}, {enabled:false}]) assert.equal(navigate(state),false);
   // A lone card left after Pharos dropped others is a choice, and says so.
   assert.equal(model.askOmittedNote(0), '');
   assert.ok(model.askOmittedNote(1));
@@ -361,4 +367,38 @@ test('dragged progress stays reachable after moving or shrinking the window', ()
   const bounds={width:300,height:80,viewportWidth:390,viewportHeight:550};
   assert.deepEqual(plain(model.askFloatingPosition({...bounds,x:-100,y:999})),{x:8,y:462});
   assert.deepEqual(plain(model.askFloatingPosition({...bounds,x:60,y:100})),{x:60,y:100});
+});
+
+test('Ask previews resolve supported dashboard links independently of the current page and collection', t => {
+  const {values} = fixture(t);
+  global.location = new URL('http://parity.test/library?record_usage=unrelated');
+  const original = location.href;
+  for (const [topic, state] of Object.entries(dashboardDefaults)) {
+    const params = new URLSearchParams({analyze_mode:'dashboards', analyze_topic:topic, analyze_chart:JSON.stringify(state), analyze_filters:encodeQuery({...EMPTY_QUERY,where:[]})});
+    const address = '/analyze?' + params;
+    const job = askChartPreviewJob(address,schemas);
+    assert.equal(job.dataset,usageTopicDatasets[topic]);
+    assert.equal(job.options.dashboard,address);
+  }
+  assert.equal(location.href,original);
+  assert.equal(values.has('pharos-bookmarks-v1'),false);
+});
+
+test('Ask leaves unsupported, invalid and unavailable chart destinations as ordinary links', t => {
+  fixture(t);
+  const valid='/analyze?analyze_mode=dashboards&analyze_topic=tokens';
+  for (const address of ['/settings','/library','/analyze','/analyze?analyze_mode=query&analyze_topic=tokens',
+    'https://elsewhere.test'+valid, valid+'&analyze_chart=%7Bbad',valid+'&analyze_filters=bad',valid.replace('tokens','missing')]) {
+    assert.equal(askChartPreviewJob(address,schemas),undefined,address);
+  }
+  assert.equal(askChartPreviewJob(valid,{}),undefined);
+  assert.equal(askChartPreviewJob(valid,{usage:schemas.tools}),undefined);
+});
+
+test('Ask preview jobs keep each chart URL and its moving window intact', t => {
+  fixture(t);
+  const urls = ['claude','codex'].map(provider=>'/analyze?'+new URLSearchParams({analyze_mode:'dashboards',analyze_topic:'tokens',analyze_window:'today',analyze_timezone:'America/Denver',analyze_filters:encodeQuery({...EMPTY_QUERY,where:[{field:'provider',op:'=',value:provider}]})}));
+  const jobs = urls.map(address=>askChartPreviewJob(address,schemas));
+  assert.notEqual(jobs[0].id,jobs[1].id);
+  for (const [index,job] of jobs.entries()) assert.equal(job.options.dashboard,urls[index]);
 });

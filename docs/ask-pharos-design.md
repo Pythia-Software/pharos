@@ -86,12 +86,23 @@ exchange; updates follow the bottom only while the user is already there. Readin
 earlier messages preserves the scroll position and offers a “Latest reply” button.
 
 Responses can contain one or several destination cards with descriptive titles
-and explanations. A response with exactly one destination opens it immediately,
-including when the user phrases the request as a question. Multiple matches remain
+and explanations. A response with exactly one destination that has no chart
+preview opens it immediately, including when the user phrases the request as a
+question. Multiple matches remain
 choices, and so does a lone card left after Pharos dropped others the agent
 offered beside it. Typing a follow-up while waiting or changing to ordinary search suppresses
-automatic navigation. Validate destinations through Pharos's own routing and URL
-builders. If every returned destination fails validation, give the agent one
+automatic navigation.
+
+Supported Analyze dashboard destinations display a compact, read-only chart above
+the destination link, using the same URL-based preview loader as Home dashboard
+cards. Chart answers stay in the thread, including a single result; ordinary
+single-link answers retain automatic navigation. Previews load when visible,
+show their time range and update time, and retain the link for empty or unavailable results.
+Reopening a chat loads the addressed moving view rather than freezing its data.
+Preview loading must not change the surrounding page URL, preferences or focus.
+
+Validate destinations through Pharos's own routing and URL builders. If every
+returned destination fails validation, give the agent one
 automatic correction attempt with its previous response and the validation errors,
 within the original request deadline. Keep private lookup results and their
 remaining budget; correction must not repeat those lookups. If correction also
