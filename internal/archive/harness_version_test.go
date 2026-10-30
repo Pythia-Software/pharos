@@ -336,3 +336,81 @@ func TestHarnessBackfillRetriesCustomCaptureRoot(t *testing.T) {
 		t.Fatalf("compressed rollout version = %q %q (%d decoded copies): %v", harness, version, decodedOnDisk, err)
 	}
 }
+
+// Exercise the real stage and chain with legacy null aliases and a native
+// alias. A trigger observes actual writes, including updates to identical values.
+func TestIdentitiesAndChainLeaveUnchangedConversationsAlone(t *testing.T) {
+	c, config := testCatalog(t)
+	execTx(t, c.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES
+		('native','claude','local','native','Native','2026-09-01'),
+		('wrapper','conductor','local','wrapper','Wrapper','2026-09-01'),
+		('legacy','chatgpt','local','legacy','Legacy','2026-09-01')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,harness_version_first,harness_version_last,aliases_json) VALUES
+		('native','native','claude','local','native','claude-code/cli','2.1.1','2.1.2','[]'),
+		('wrapper','wrapper','claude','local','conductor:wrapper','conductor',NULL,NULL,'["native"]'),
+		('legacy','legacy','chatgpt','local','legacy','chatgpt-export',NULL,NULL,'null')`)
+	if _, err := c.ReconcileIdentitiesContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var version, source string
+	if err := c.DB.QueryRow(`SELECT harness_version_last,harness_version_source FROM conversations WHERE id='wrapper'`).Scan(&version, &source); err != nil || version != "2.1.2" || source != "alias" {
+		t.Fatalf("first alias inheritance: %q %q %v", version, source, err)
+	}
+	s := testServer(t, config, c)
+	if err := s.finishDeferredSyncPhases(t.Context(), false, nil); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, c.DB,
+		`DELETE FROM workspace_library_dirty`, `DELETE FROM mcp_metric_dirty`,
+		`CREATE TABLE conversation_update_probe(id TEXT)`,
+		`CREATE TRIGGER conversation_update_probe AFTER UPDATE ON conversations BEGIN INSERT INTO conversation_update_probe VALUES(NEW.id); END`)
+	before, err := queryMaps(c.DB, `SELECT * FROM finding_message_revisions ORDER BY conversation_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range []string{"identities", "chain"} {
+		started := time.Now()
+		if stage == "identities" {
+			_, err = c.ReconcileIdentitiesContext(t.Context())
+		} else {
+			err = s.finishDeferredSyncPhases(t.Context(), false, nil)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("unchanged %s: %s", stage, time.Since(started))
+		for _, table := range []string{"conversation_update_probe", "workspace_library_dirty", "mcp_metric_dirty"} {
+			var n int
+			if err := c.DB.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&n); err != nil || n != 0 {
+				t.Fatalf("%s changed %s: rows=%d err=%v", stage, table, n, err)
+			}
+		}
+		after, err := queryMaps(c.DB, `SELECT * FROM finding_message_revisions ORDER BY conversation_id`)
+		if err != nil || jsonText(before) != jsonText(after) {
+			t.Fatalf("%s invalidated findings: %v -> %v (%v)", stage, before, after, err)
+		}
+	}
+}
+
+func TestHarnessAliasKeepsACompatiblePeer(t *testing.T) {
+	c, _ := testCatalog(t)
+	execTx(t, c.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('n','claude','local','n','Native','t'),('w','conductor','local','w','Wrapper','t')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,harness_version_first,harness_version_last,harness_version_source) VALUES
+   ('a','n','claude','local','a','claude-code','1','2','transcript'),
+   ('b','n','claude','local','b','claude-code','3','4','transcript'),
+   ('w','w','claude','local','w','conductor','1','2','alias')`,
+		`INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('a','w','native-alias',1,'{}'),('b','w','native-alias',1,'{}')`,
+		`CREATE TABLE alias_write_probe(id TEXT)`,
+		`CREATE TRIGGER alias_write_probe AFTER UPDATE ON conversations BEGIN INSERT INTO alias_write_probe VALUES(NEW.id); END`)
+	for range 2 {
+		if err := c.inheritHarnessAliases(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := queryMaps(c.DB, `SELECT * FROM alias_write_probe`)
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("compatible alias rewrites: %v (%v)", rows, err)
+	}
+}

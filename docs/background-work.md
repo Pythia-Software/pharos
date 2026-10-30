@@ -618,6 +618,16 @@ blocker "Delivering history".
 
 ## 5. Freshness domains
 
+Identity reconciliation guards native harness inheritance and linked activity
+writes against unchanged values. It skips legacy `null` alias lists. Existing
+Search, MCP metric and findings triggers are retained: guarding these writers
+avoids a trigger migration and the full Search rebuild that changing the
+library trigger hash would cause. The one-time rebuild cost of this change is
+zero; existing aliases are not migrated. Workspace naming already compares its
+resolved values, Git checks only unresolved heads, Tools checks its generations,
+and findings partitions check their revisions. Findings completion timestamps
+may still advance. Scheduled indexes continue to defer the analysis chain.
+
 Phase 3 implements these as one function over today's storage
 (`Catalog.freshness`, `freshness.go`). Storage changes only by two kinds of
 additive `meta` rows that record what a completion was for (below). Every

@@ -253,7 +253,9 @@ func movePullRequest(tx *sql.Tx, oldID, repositoryID, newID string) error {
 func (c *Catalog) saveRepositoryEvidence(ctx context.Context, items []repositoryIdentity) error {
 	return c.writeTransaction(ctx, "repository-evidence", func(tx *sql.Tx) error {
 		for _, item := range items {
-			if _, err := tx.Exec(`UPDATE repositories SET normalized_remote=COALESCE(normalized_remote,?),root_commit=COALESCE(root_commit,?),forge_id=COALESCE(forge_id,?) WHERE id=?`, nilIfEmpty(item.Normalized), nilIfEmpty(item.Root), nilIfEmpty(item.Forge), item.ID); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE repositories SET normalized_remote=COALESCE(normalized_remote,?),root_commit=COALESCE(root_commit,?),forge_id=COALESCE(forge_id,?)
+ WHERE id=? AND (normalized_remote IS NOT COALESCE(normalized_remote,?) OR root_commit IS NOT COALESCE(root_commit,?) OR forge_id IS NOT COALESCE(forge_id,?))`,
+				nilIfEmpty(item.Normalized), nilIfEmpty(item.Root), nilIfEmpty(item.Forge), item.ID, nilIfEmpty(item.Normalized), nilIfEmpty(item.Root), nilIfEmpty(item.Forge)); err != nil {
 				return err
 			}
 		}
