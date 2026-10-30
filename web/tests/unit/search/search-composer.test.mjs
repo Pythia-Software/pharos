@@ -153,7 +153,7 @@ test("conversation card facts follow selected columns, order, accessors and disp
 });
 
 test("conversation outlines retain child conversations, orphaned sessions and malformed parent links", async () => {
- const { conversationForest, initialOutlineEntry } = await import("../../../src/conversation-results");
+ const { conversationForest, conversationSelection, findOutlineEntry, initialOutlineEntry } = await import("../../../src/conversation-results");
  const child = { id: "child", parent_id: "root" }, nested = { id: "nested", parent_id: "child" };
  const roots = conversationForest([nested, child, { id: "root" }, { id: "orphan", parent_id: "absent" }, { id: "cycle-a", parent_id: "cycle-b" }, { id: "cycle-b", parent_id: "cycle-a" }]);
  assert.deepEqual(roots.map(node => node.conversation.id), ["root", "orphan", "cycle-a", "cycle-b"]);
@@ -165,6 +165,26 @@ test("conversation outlines retain child conversations, orphaned sessions and ma
  assert.equal(initialOutlineEntry([firstTurn]), firstTurn);
  assert.equal(initialOutlineEntry([setup]), setup, "setup-only conversations remain inspectable");
  assert.equal(initialOutlineEntry([]), undefined);
+ const sessions = [{ id: "first" }, { id: "second" }], loaded = {};
+ const ready = entries => ({ loading: false, error: "", entries });
+ const secondTurn = { ...firstTurn, id: "second-prompt" };
+ let selection = conversationSelection(sessions, loaded, "", secondTurn.id);
+ assert.equal(selection.pending, true); assert.equal(selection.id, ""); assert.equal(selection.loadID, "first");
+ loaded.first = ready([firstTurn]);
+ selection = conversationSelection(sessions, loaded, "", secondTurn.id);
+ assert.equal(selection.pending, true); assert.equal(selection.id, "", "restoration must not preview the wrong session while searching");
+ assert.equal(selection.loadID, "second");
+ loaded.second = ready([secondTurn]);
+ selection = conversationSelection(sessions, loaded, "", secondTurn.id);
+ assert.equal(selection.id, "second"); assert.equal(selection.pending, false);
+ assert.equal(findOutlineEntry(loaded[selection.id].entries, secondTurn.id), secondTurn);
+ assert.equal(conversationSelection(sessions, loaded, "", firstTurn.id).id, "first", "Back restores a turn in the earlier session");
+ assert.equal(conversationSelection(sessions, loaded, "first", secondTurn.id).id, "first", "an explicit session remains authoritative");
+ assert.equal(conversationSelection(sessions, {}, "", "").id, "first", "fresh browsing keeps the first session default");
+ assert.match(conversationSelection(sessions, loaded, "", "deleted").error, /no longer available/);
+ loaded.first = { ...ready([]), error: "Unavailable" };
+ assert.equal(conversationSelection(sessions, loaded, "", secondTurn.id).id, "second", "a failed session must not hide a later match");
+ assert.match(conversationSelection(sessions, loaded, "", "deleted").error, /Could not load/);
 });
 
 test("compact conversation activity describes counts and elapsed time without inventing missing values", async () => {

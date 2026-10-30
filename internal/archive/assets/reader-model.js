@@ -183,7 +183,7 @@ function normalizeMessages(messages){
   const output=[],reports=contextTokenReports(messages,conversationTokenReports(messages));
   messages.forEach((message,index)=>{
     const original=message.raw_text||message.text,parsed=messageJSON(message),value=parsed?.payload&&typeof parsed.payload==='object'?parsed.payload:parsed;
-    const base={...message,...(message.authorship?{authorship_text:message.authorship_text??message.text}:{}),native_id:message.native_id||`event-${index}`,raw_text:original};
+    const base={...message,...(message.authorship?{authorship_text:message.authorship_text??message.text}:{}),native_id:message.native_id||message.id||`event-${index}`,raw_text:original};
     let emitted=false;
     const emit=(fields,suffix='')=>{const normalized={...base,...fields,tokenReport:emitted?null:reports[index],native_id:base.native_id+suffix};messageJSONCache.set(normalized,{...messageJSONCache.get(message)});output.push(normalized);emitted=true};
     if(['thinking','reasoning','analysis'].includes(message.kind)){emit({kind:'reasoning'});return}
@@ -236,7 +236,7 @@ function conversationOutline(conversation){
   const agents=events=>events.filter(message=>message.kind==='delegation'&&!seen.has(message)).map(message=>{
     seen.add(message);
     const {input}=toolPayload(message),children=[...new Set([message.native_id,message.call_id].filter(Boolean).flatMap(key=>graph.childrenByParent.get(key)||[]))],replies=children.filter(item=>item.kind==='message'),results=graph.delegationResultsByCall.get(message.call_id)||[];
-    return {id:message.id||message.native_id||message.call_id,kind:'agent',label:String(input.subagent_type||input.agent_type||input.name||'Sub-agent'),
+    return {id:message.native_id||message.call_id||message.id,kind:'agent',label:String(input.subagent_type||input.agent_type||input.name||'Sub-agent'),
       prompt:String(input.description||input.prompt||input.task||messageSummary(message)||'Sub-agent'),
       human:{role:'user',text:input.prompt||input.description||input.task||messageSummary(message)},
       response:replies.at(-1)||(results.length?{role:'assistant',text:readableValue(toolPayload(results.at(-1)).content)}:null),tools:children.filter(item=>item.kind==='tool_call').length,children:agents(children)};
@@ -459,6 +459,11 @@ function markdownLinkAllowed(href){
 function markdownLinkKind(href){
   if(!markdownLinkAllowed(href))return null;
   if(href.startsWith('#'))return {kind:'fragment',icon:'link',detail:'Jump within this page'};
+  if(href.startsWith('/')||href.startsWith('?')){
+    const path=new URL(href,'http://pharos.invalid/').pathname;
+    const pages=['/','/home','/cards','/library','/settings','/settings/backups','/settings/libraries','/settings/sources','/settings/sync','/settings/optimization','/settings/mcp','/settings/header','/settings/layout','/settings/preferences','/settings/ask','/sources','/activity','/analyze','/tools','/health','/mcp','/findings'];
+    if(pages.includes(path)||/^\/work\/[^/]+(?:\/conversation\/[^/]+)?$/.test(path)||/^\/conversation\/[^/]+$/.test(path))return {kind:'page',icon:'link',detail:'Open Pharos view'};
+  }
   if(/^mailto:/i.test(href))return {kind:'mail',icon:'mail',detail:'Open in your email app'};
   if(/^https?:/i.test(href)){
     try{

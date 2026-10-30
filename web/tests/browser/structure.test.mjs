@@ -22,6 +22,8 @@ const markdownLinkText = `## Implementation links
 - [Missing file](/Users/previous-mac/project/report.md)
 - [Running dev server](http://localhost:5173/)
 - [Stopped dev server](http://localhost:59999/)
+- [Library view](/library?view=conversation)
+- [Filtered usage](/analyze?analyze_topic=tokens)
 `;
 const markdownLinkAPI = {
   "GET /api/work/:id/conversations/:conversation": { id: rootConversation, workspace_id: workID, provider: "codex", messages: [
@@ -1202,5 +1204,14 @@ test("Markdown local destinations become navigable only after availability is co
   const checks=app.calls.filter(call=>call.path==='/api/markdown-link'&&call.query.get('href')==='internal/archive/api.go:12');
   assert.equal(checks.length,1,"repeated file links share one check");
   assert.equal(checks[0].query.get('workspace'),workID);
+  for(const [name,href] of [["Library view","/library?view=conversation"],["Filtered usage","/analyze?analyze_topic=tokens"]]){
+    const link=page.getByRole("link",{name,exact:true});
+    assert.equal(await link.getAttribute("href"),href);
+    assert.equal(await link.getAttribute("aria-disabled"),null);
+    assert.equal(app.calls.some(call=>call.path==='/api/markdown-link'&&call.query.get('href')===href),false,"Pharos routes must not be probed as files");
+  }
   await app.shot("link-states");
+  await page.getByRole("link",{name:"Library view",exact:true}).click();
+  await page.waitForURL(url=>url.pathname==='/library'&&url.searchParams.get('view')==='conversation');
+  await page.locator('.conversation-result-card').first().waitFor();
 });

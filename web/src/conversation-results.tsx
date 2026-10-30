@@ -84,6 +84,31 @@ export function conversationForest(conversations: Row[]): ConversationBranch[] {
 export const initialOutlineEntry = (entries: OutlineEntry[]): OutlineEntry | undefined => entries.find(entry => entry.kind === "turn" && entry.human) ?? entries[0];
 type ConversationState = { loading: boolean; error: string; entries: OutlineEntry[] };
 
+export function findOutlineEntry(entries: OutlineEntry[], id: string): OutlineEntry | undefined {
+  for (const item of entries) {
+    if (item.id === id) return item;
+    const child = findOutlineEntry(item.children, id);
+    if (child) return child;
+  }
+}
+
+// Older links identify a turn without its session. Search the root sessions
+// before displaying a preview, so a later session's turn never opens the first.
+export function conversationSelection(conversations: Row[], loaded: Record<string, ConversationState>, conversationID: string, entryID: string) {
+  const roots = conversationForest(conversations);
+  if (conversationID || !entryID) {
+    const id = conversationID || String(roots[0]?.conversation.id ?? "");
+    return { id, loadID: id, pending: false, error: "" };
+  }
+  for (const { conversation } of roots) {
+    const id = String(conversation.id), state = loaded[id];
+    if (!state || state.loading) return { id: "", loadID: id, pending: true, error: "" };
+    if (findOutlineEntry(state.entries, entryID)) return { id, loadID: id, pending: false, error: "" };
+  }
+  const failed = roots.some(({ conversation }) => loaded[String(conversation.id)]?.error);
+  return { id: "", loadID: "", pending: false, error: failed ? "Could not load the session for this saved turn." : "This saved turn is no longer available." };
+}
+
 export function ResultConversationBrowser({ workspaceID, readJSON }: { workspaceID: string; readJSON: (path: string, signal?: AbortSignal) => Promise<Row> }) {
   const [overview, setOverview] = useState<{ conversations: Row[]; loading: boolean; error: string }>({ conversations: [], loading: true, error: "" });
   const [reload, setReload] = useState(0);
@@ -115,24 +140,16 @@ export function ResultConversationBrowser({ workspaceID, readJSON }: { workspace
       if (controller.signal.aborted) return;
       const conversations: Row[] = work.conversations ?? [];
       setOverview({ conversations, loading: false, error: "" });
-      const first = conversationForest(conversations)[0]?.conversation;
-      if (first) void load(conversations.some(item => String(item.id) === conversationID) ? conversationID : String(first.id));
     }).catch(error => { if (!controller.signal.aborted) setOverview({ conversations: [], loading: false, error: error instanceof Error ? error.message : "Conversation unavailable" }); });
     return () => { controller.abort(); for (const request of requests.current.values()) request.abort(); requests.current.clear(); };
   }, [workspaceID, reload]);
   const forest = conversationForest(overview.conversations);
-  const currentID = conversationID || String(forest[0]?.conversation.id ?? "");
-  useEffect(() => { if (currentID) void load(currentID); }, [currentID]);
+  const selection = conversationSelection(overview.conversations, loaded, conversationID, entryID);
+  const currentID = selection.id;
+  useEffect(() => { if (selection.loadID && !overview.loading) void load(selection.loadID); }, [selection.loadID, overview.loading]);
   const state = loaded[currentID];
   const selectedEntry = entryID || initialOutlineEntry(state?.entries ?? [])?.id;
-  function findEntry(entries: OutlineEntry[]): OutlineEntry | undefined {
-    for (const item of entries) {
-      if (item.id === selectedEntry) return item;
-      const child = findEntry(item.children);
-      if (child) return child;
-    }
-  }
-  const entry = findEntry(state?.entries ?? []) ?? initialOutlineEntry(state?.entries ?? []);
+  const entry = findOutlineEntry(state?.entries ?? [], selectedEntry ?? "") ?? initialOutlineEntry(state?.entries ?? []);
   const current = overview.conversations.find(conversation => String(conversation.id) === currentID);
   const choose = (conversation: string, entry = "") => { setConversationID(conversation); setEntryID(entry); void load(conversation); };
   function entryList(id: string, entries: OutlineEntry[]): React.ReactNode {
@@ -163,8 +180,8 @@ export function ResultConversationBrowser({ workspaceID, readJSON }: { workspace
       <div className="conversation-outline-heading"><Icon name="tree" /> Conversation outline</div>
       {overview.loading ? <p role="status">Loading conversations…</p> : overview.error ? <p role="alert">{overview.error}</p> : forest.length ? branchList(forest) : <p>No retained conversations.</p>}
     </nav>
-    <section className="result-turn-content" id={regionID} aria-label="Selected turn preview" aria-busy={overview.loading || state?.loading}>
-      {overview.loading || state?.loading ? <p role="status">Loading turns…</p> : overview.error || state?.error ? <p role="alert">{overview.error || state?.error} <button type="button" onClick={() => overview.error ? setReload(value => value + 1) : void load(currentID)}>Retry</button></p> : entry ? <div className="result-exchange">
+    <section className="result-turn-content" id={regionID} aria-label="Selected turn preview" aria-busy={overview.loading || selection.pending || state?.loading}>
+      {overview.loading || selection.pending || state?.loading ? <p role="status">Loading turns…</p> : overview.error || selection.error || state?.error ? <p role="alert">{overview.error || selection.error || state?.error} <button type="button" onClick={() => overview.error || selection.error ? setReload(value => value + 1) : void load(currentID)}>Retry</button></p> : entry ? <div className="result-exchange">
         {entry.human ? <ResultMessage workspaceID={workspaceID} label={entry.kind === "agent" || current?.parent_id ? "Assignment" : "You"} message={entry.human} kind="human" /> : null}
         <ResultMessage workspaceID={workspaceID} label={entry.kind === "agent" ? entry.label : current?.provider || "Agent"} message={entry.response ?? { role: "assistant", text: "No retained response for this turn." }} kind="assistant" />
       </div> : <p className="muted">No retained turns are available.</p>}

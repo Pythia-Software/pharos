@@ -3921,13 +3921,13 @@
       "reason": "Summary belongs to ViewDisclosure with stable workspace, conversation and entry identities."
     },
     {
-      "key": "5989c1b4c64f1b6f:0",
+      "key": "71f63e383558595c:0",
       "file": "web/src/conversation-results.tsx",
       "owner": "ResultConversationBrowser",
       "tag": "button",
-      "control": "onClick={() => overview.error ? setReload(value => value + 1) : void load(currentID)}",
+      "control": "onClick={() => overview.error || selection.error ? setReload(value => value + 1) : void load(currentID)}",
       "contract": "action",
-      "reason": "Retries loading the same conversation or overview without changing the selected view."
+      "reason": "Retries loading the selected conversation or resolving the retained turn identity; the retry counter is transient."
     },
     {
       "key": "0b24f86fce417896:0",

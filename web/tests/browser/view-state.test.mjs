@@ -169,6 +169,38 @@ test('unavailable detail links retry when custom results switch to a native tabl
  assert.equal(new URL(app.page.url()).searchParams.get('reveal'),target,'the same linked target becomes available without navigation');
 });
 
+test('conversation result links restore their session and inline agent without taking focus',{skip},async t=>{
+ const message=(id,role,text)=>({id,native_id:id,role,kind:'message',text});
+ const api={
+  'POST /api/query/library/:operation':request=>{
+   const result=defaultApi['* /api/query/:dataset/:operation']({...request,params:{dataset:'library',operation:request.params.operation}});
+   return !result?.rows?result:{...result,total:1,rows:result.rows.slice(0,1).map(row=>({...row,id:workID}))};
+  },
+  'GET /api/work/:id':request=>({...defaultApi['GET /api/work/:id'](request),conversations:[{id:'first',provider:'codex'},{id:'second',provider:'codex'}]}),
+  'GET /api/work/:id/conversations/:conversation':({params})=>({id:params.conversation,workspace_id:workID,provider:'codex',messages:params.conversation==='first'?[message('first-prompt','user','First session prompt')]:[
+   message('second-prompt','user','Second session prompt'),
+   message('shared-envelope','assistant',JSON.stringify({content:[
+    {type:'tool_use',id:'configuration',name:'Task',input:{subagent_type:'Configuration auditor',prompt:'Check configuration'}},
+    {type:'tool_use',id:'timing',name:'Agent',input:{subagent_type:'Timing auditor',prompt:'Check timing'}},
+   ]})),
+   {...message('configuration-result','tool',JSON.stringify({content:'Configuration checked.'})),kind:'delegation_result',call_id:'configuration'},
+   {...message('timing-result','tool',JSON.stringify({content:'Timing checked.'})),kind:'delegation_result',call_id:'timing'},
+  ]}),
+ };
+ const state={[`${workID}/browse`]:true,[`${workID}/turn`]:'second-prompt'};
+ const app=await open(t,{url:'/library?'+new URLSearchParams({view:'conversation',search_cards:JSON.stringify(state)}),api,ready:'.conversation-result-card'});
+ const preview=app.page.getByRole('region',{name:'Selected turn preview',exact:true});
+ await preview.getByText('Second session prompt',{exact:true}).waitFor();
+ assert.equal(await preview.evaluate(element=>element.contains(document.activeElement)),false);
+ await app.page.getByRole('navigation',{name:'Conversation outline',exact:true}).getByRole('button',{name:/Sub-agent · Timing auditor/}).click();
+ await preview.getByText('Timing checked.',{exact:true}).waitFor();
+ const fresh=await open(t,{url:path(app.page),api,ready:'.conversation-result-card'});
+ const restored=fresh.page.getByRole('region',{name:'Selected turn preview',exact:true});
+ await restored.getByText('Check timing',{exact:true}).waitFor();
+ await restored.getByText('Timing checked.',{exact:true}).waitFor();
+ assert.equal(await restored.evaluate(element=>element.contains(document.activeElement)),false);
+});
+
 test('JSON display cells restore their inspector choices in a fresh browser',{skip,todo:'Query Table 0.9.8 DataTable does not wire cell display JsonCell to scoped state; docs/query-table-url-state-handoff.md'},async t=>{
  const fixture=jsonInspectorFixture(),query={...fixture.query,select:[{field:'id'},{field:'arguments_json',display:{kind:'json'}}],itemDetails:{modes:['expand']}};
  const first=await open(t,{url:fixture.route(query),api:fixture.api,ready:'.usage-workspace-table .qt-row'});

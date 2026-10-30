@@ -139,6 +139,21 @@ test("result outlines keep turns, setup and nested inline agents under their own
  assert.equal(agent.response.text, "Reviewing.");
  assert.equal(agent.children[0].prompt, "Check timing"); assert.equal(agent.children[0].response.text, "Timing checked.");
  assert.equal(outline[2].human.text, "Explain the fix."); assert.equal(outline[2].response, null);
+ // Two inline tool blocks share a stored message ID but remain separate agents.
+ const envelope = { id: "stored-envelope", role: "assistant", kind: "message", text: JSON.stringify({ content: [
+  { type: "tool_use", id: "audit-one", name: "Task", input: { prompt: "Audit configuration" } },
+  { type: "tool_use", id: "audit-two", name: "Agent", input: { prompt: "Audit timing" } },
+ ] }) };
+ const messages = [human(), envelope,
+  event("one-result", "delegation_result", { content: "Configuration checked." }, 1, { call_id: "audit-one" }),
+  event("two-result", "delegation_result", { content: "Timing checked." }, 2, { call_id: "audit-two" }),
+ ];
+ const agents = reader.conversationOutline({ messages })[0].children;
+ assert.equal(new Set(agents.map(agent => agent.id)).size, 2, "each normalized block must be selectable independently");
+ assert.equal(agents.find(agent => agent.id === agents[1].id).human.text, "Audit timing");
+ assert.equal(agents[1].response.text, "Timing checked.");
+ const restored = reader.conversationOutline({ messages: [event("context", "context", "Earlier metadata"), ...structuredClone(messages)] })[1].children;
+ assert.deepEqual(plain(restored.map(agent => agent.id)), plain(agents.map(agent => agent.id)), "stored identities survive reload and unrelated event insertions");
 });
 
 
