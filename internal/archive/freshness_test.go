@@ -120,6 +120,12 @@ func expectRow(t *testing.T, rows map[string]freshnessRow, domain, state, reason
 	return row
 }
 
+// todayAt is today at hour, local time.
+func todayAt(hour int) time.Time {
+	now := time.Now()
+	return time.Date(now.Year(), now.Month(), now.Day(), hour, 0, 0, 0, time.Local)
+}
+
 func keysOf[V any](values map[string]V) []string {
 	keys := []string{}
 	for key := range values {
@@ -183,6 +189,18 @@ func TestFreshnessConversations(t *testing.T) {
 		{name: "left to a running capture", schedule: true, in: freshnessInput{deferredToCapture: map[string]bool{"claude": true}},
 			seed:  []string{"INSERT INTO automatic_source_states(host_id,source_name,attempted_at,succeeded_at) VALUES(" + host + ",'claude'," + at(time.Minute) + "," + at(time.Minute) + ")"},
 			state: freshUnknown, reason: "capture-busy", next: nextScheduledIndex},
+		// Sources scheduled indexing cannot read (tl1) are read in full by
+		// the other-sources background item, on its own cadence.
+		{name: "a source read in full, read within its hourly update", schedule: true,
+			seed:  []string{"INSERT INTO source_states(host_id,source_name,kind,capability,coverage,last_attempt_at,last_success_at,updated_at) VALUES(" + host + ",'claude','tl1','full','complete'," + at(time.Hour) + "," + at(time.Hour) + "," + at(time.Hour) + ")"},
+			state: freshCurrent, asOfFromSeeding: true},
+		{name: "a source read in full, past its hourly update", schedule: true,
+			seed:  []string{"INSERT INTO source_states(host_id,source_name,kind,capability,coverage,last_attempt_at,last_success_at,updated_at) VALUES(" + host + ",'claude','tl1','full','complete'," + at(48*time.Hour) + "," + at(48*time.Hour) + "," + at(48*time.Hour) + ")"},
+			state: freshUnknown, reason: "overdue", next: nextHourlyUpdate, asOfFromSeeding: true},
+		{name: "a source read in full, set to only when you ask", schedule: true,
+			seed: []string{"INSERT INTO source_states(host_id,source_name,kind,capability,coverage,last_attempt_at,last_success_at,updated_at) VALUES(" + host + ",'claude','tl1','full','complete'," + at(48*time.Hour) + "," + at(48*time.Hour) + "," + at(48*time.Hour) + ")",
+				"INSERT INTO background_settings(host_id,overrides_json) VALUES(" + host + ",'{\"other-sources\":\"manual\"}')"},
+			state: freshUnknown, reason: "manual-only", next: nextManualIndex, asOfFromSeeding: true},
 		{name: "the schedule has not checked for days", schedule: true,
 			seed:  []string{"INSERT INTO automatic_source_states(host_id,source_name,attempted_at,succeeded_at) VALUES(" + host + ",'claude'," + at(48*time.Hour) + "," + at(48*time.Hour) + ")"},
 			state: freshUnknown, reason: "overdue", next: nextScheduledIndex},
@@ -243,7 +261,10 @@ func TestFreshnessDomains(t *testing.T) {
 		{name: "table search on an older version", domain: "search.query", seed: []string{setMetaSQL("tool_query_facts_ready", "old")}, state: freshBehind, reason: "version"},
 
 		{name: "identities current", domain: "an.identities", state: freshCurrent},
-		{name: "identities deferred", domain: "an.identities", seed: []string{"INSERT INTO sync_deferred(name,generation,completed_generation,changed_at,completed_at) VALUES('identities',5,3,'2026-10-27T10:00:00Z','2026-10-27T07:00:00Z')"},
+		{name: "identities deferred, late for its frequent update", domain: "an.identities", seed: []string{"INSERT INTO sync_deferred(name,generation,completed_generation,changed_at,completed_at) VALUES('identities',5,3,'2026-10-27T10:00:00Z','2026-10-27T07:00:00Z')"},
+			state: freshBehind, reason: "late", asOf: "2026-10-27T07:00:00Z"},
+		{name: "identities deferred, background updates off", domain: "an.identities", seed: []string{"INSERT INTO sync_deferred(name,generation,completed_generation,changed_at,completed_at) VALUES('identities',5,3,'2026-10-27T10:00:00Z','2026-10-27T07:00:00Z')",
+			"INSERT INTO sync_settings(host_id,enabled,interval_seconds) VALUES(" + sqlQuote(currentHost().ID) + ",0,300)"},
 			state: freshBehind, reason: "deferred-by-schedule", asOf: "2026-10-27T07:00:00Z"},
 		{name: "identities with no record for the current data", domain: "an.identities", seed: []string{"DELETE FROM meta WHERE key='analysis_inputs:identities'"}, state: freshUnknown, reason: "no-record"},
 		{name: "identities after a write outside the chain", domain: "an.identities", seed: []string{setMetaSQL("authorship_inputs_generation", "4"), setMetaSQL("authorship_generation", "7:4/"+authorshipVersion)},
@@ -267,7 +288,12 @@ func TestFreshnessDomains(t *testing.T) {
 		{name: "tools ledger stays counted after this build writes", domain: "an.ledger", setup: counted(""), seed: []string{setMetaSQL("authorship_inputs_generation", "9")}, state: freshCurrent},
 
 		{name: "findings current", domain: "findings", state: freshCurrent, asOf: "2026-10-27T08:05:00Z"},
-		{name: "findings daily pass due", domain: "findings", seed: []string{setMetaSQL("findings_generation", findingsVersion+"/2026-10-26")}, state: freshBehind, reason: "daily-pass-due"},
+		// Today's full pass is due 12 h past the daily time (03:00); before
+		// then it waits for the daily review (§11).
+		{name: "findings daily pass due", domain: "findings", seed: []string{setMetaSQL("findings_generation", findingsVersion+"/2026-10-26")},
+			in: freshnessInput{now: todayAt(23)}, state: freshBehind, reason: "daily-pass-due"},
+		{name: "findings daily pass waiting for the daily review", domain: "findings", seed: []string{setMetaSQL("findings_generation", findingsVersion+"/2026-10-26")},
+			in: freshnessInput{now: todayAt(10)}, state: freshScheduled, reason: "scheduled-daily"},
 		{name: "findings never built", domain: "findings", seed: []string{"DELETE FROM meta WHERE key='findings_generation'"}, state: freshBehind, reason: "never-built"},
 		// Within its daily cadence: scheduled, not behind.
 		{name: "findings after a Terminal ingest", domain: "findings", seed: []string{setMetaSQL("authorship_inputs_generation", "4")}, state: freshScheduled, reason: "changed"},
@@ -370,7 +396,7 @@ func TestFreshnessCloudBackups(t *testing.T) {
 // the chain after a manual index completes them. The summary says so in the
 // server's words. A stage that then fails outranks the deferral, and the
 // stages after it say they wait for it. The chain brings them current.
-func TestFreshnessAfterAutomaticIndexLeavesAnalysesBehind(t *testing.T) {
+func TestFreshnessAfterAutomaticIndexSchedulesAnalyses(t *testing.T) {
 	f := newFreshnessFixture(t)
 	server := testServer(t, f.config, f.catalog)
 	analyses := []string{"an.identities", "an.git", "an.tools", "an.authorship"}
@@ -393,7 +419,30 @@ func TestFreshnessAfterAutomaticIndexLeavesAnalysesBehind(t *testing.T) {
 		}
 		return rows, byDomain
 	}
+	// Background updates are on: each analysis waits for its item's
+	// cadence (§11), Frequently or Hourly before it has measurements.
 	rows, byDomain := ledger()
+	cadence := map[string]string{"an.identities": cadenceFrequent, "an.git": cadenceFrequent, "an.tools": cadenceFrequent, "an.authorship": cadenceHourly, "findings": cadenceHourly}
+	for _, domain := range append(analyses, "findings") {
+		row := expectRow(t, byDomain, domain, freshScheduled, "scheduled-"+cadence[domain], "")
+		if row.Next == nil || *row.Next != cadenceNext[cadence[domain]] || row.Behind.Count != nil {
+			t.Fatalf("%s: scheduled, with no count, until its cadence's next update: %+v", domain, row)
+		}
+	}
+	// (The group's state is the tools ledger's, which this fixture never
+	// counted.)
+	if group := summaryGroup(t, summarizeFreshness(rows), "analyses"); group.State == freshBehind || strings.Contains(group.Tooltip, "behind") {
+		t.Fatalf("analyses on schedule are not stale: %+v", group)
+	}
+	// Past its cadence's window, waiting work is late.
+	f.exec("UPDATE sync_deferred SET pending_since=" + sqlQuote(formatTime(time.Now().Add(-4*time.Hour))))
+	_, byDomain = ledger()
+	expectRow(t, byDomain, "an.authorship", freshBehind, "late", "")
+
+	// With background updates off, the analyses wait for the next manual
+	// update.
+	f.scheduled(false)
+	rows, byDomain = ledger()
 	for _, domain := range append(analyses, "findings") {
 		row := expectRow(t, byDomain, domain, freshBehind, "deferred-by-schedule", "")
 		// The generations count written records, not runs: no count.
@@ -402,7 +451,7 @@ func TestFreshnessAfterAutomaticIndexLeavesAnalysesBehind(t *testing.T) {
 		}
 	}
 	group := summaryGroup(t, summarizeFreshness(rows), "analyses")
-	if group.State != freshBehind || group.Short != shortManual || group.Text != "behind, "+nextManualIndex || !group.Shown || !strings.Contains(group.Tooltip, "scheduled indexing skips analyses") {
+	if group.State != freshBehind || group.Short != shortManual || group.Text != "behind, "+nextManualIndex || !group.Shown || !strings.Contains(group.Tooltip, "waits for Update everything now") {
 		t.Fatalf("the summary says analyses wait for the next manual index: %+v", group)
 	}
 
@@ -666,7 +715,8 @@ func TestStatusSnapshotCarriesTheLedger(t *testing.T) {
 	if err := json.Unmarshal(data, &rows); err != nil {
 		t.Fatal(err)
 	}
-	expectRow(t, find(rows, "findings"), "findings", freshBehind, "running", string(index.id))
+	// Its hourly update is under way.
+	expectRow(t, find(rows, "findings"), "findings", freshScheduled, "running", string(index.id))
 	summary := freshnessSummary{}
 	data, _ = json.Marshal(status.raw["freshness_summary"])
 	if err := json.Unmarshal(data, &summary); err != nil || len(summary.Groups) == 0 || summary.Groups[0].Group != "conversations" {

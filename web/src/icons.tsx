@@ -5,7 +5,7 @@ import React from "react";
 export type IconName =
   | "arrow-left" | "arrow-right" | "arrow-down" | "refresh" | "severity-high"
   | "severity-medium" | "severity-low" | "check" | "info" | "settings" | "chevron-down" | "copy"
-  | "search" | "grip" | "edit" | "close" | "plus" | "compass" | "arrow-up" | "read" | "web" | "bookmark" | "chevron-left" | "chevron-right" | "more" | "sidebar";
+  | "tree" | "search" | "grip" | "edit" | "close" | "plus" | "compass" | "arrow-up" | "read" | "web" | "bookmark" | "chevron-left" | "chevron-right" | "more" | "sidebar";
 
 export function Icon({ name, className = "" }: { name: IconName; className?: string }) {
   return <svg className={`app-icon ${className}`.trim()} viewBox="0 0 24 24" aria-hidden="true" focusable="false">

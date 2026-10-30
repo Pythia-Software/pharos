@@ -453,3 +453,17 @@ func TestLabelsRelabelOnAModelSwitch(t *testing.T) {
 		}
 	}
 }
+
+// A background update that classifies your writing labels what changed too.
+func TestLabelsFollowAuthorshipInBackgroundUpdates(t *testing.T) {
+	catalog, config := testCatalog(t)
+	seedLabelingCatalog(t, catalog)
+	config.Labels = labelsTestSettings(t, "ok")
+	server := testServer(t, config, catalog)
+	if err := server.finishDeferredStages(context.Background(), findingsAuto, map[string]bool{"authorship": true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := labelCount(t, catalog, ""); n < 20 {
+		t.Fatalf("a writing update labeled %d messages", n)
+	}
+}

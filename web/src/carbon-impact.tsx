@@ -20,7 +20,7 @@ declare global {
     pharosCarbon?: {
       show: (data: CarbonData, label: string, scope: string) => void;
       pending: (error?: string) => void;
-      estimate: (factors: CarbonFactors, period: CarbonTokens) => CarbonResult;
+      estimate: (factors: CarbonFactors, period: CarbonTokens, settings?: Record<string, unknown>) => CarbonResult;
       mass: (grams: number) => string;
       energy: (wh: number) => string;
       settingsSnapshot: (factors?: CarbonFactors) => Record<string, unknown>;

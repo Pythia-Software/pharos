@@ -5,7 +5,7 @@ import { validRollingPeriods } from "./chart-series";
 
 export const concurrencySettingsKey = "pharos-concurrency-v1";
 export type ConcurrencyRange = "today" | "day" | "3d" | "7d" | "30d" | "90d" | "180d" | "365d" | "all" | "custom";
-export const concurrencyRangePresets = [["3d", 3, "Last 3 days"], ["7d", 7, "Last 7 days"], ["30d", 30, "Last 30 days"], ["90d", 90, "Last 90 days"], ["180d", 180, "Last 180 days"], ["365d", 365, "Last year"]] as const;
+export const concurrencyRangePresets = [["3d", 3, "Last 3 days"], ["7d", 7, "Last 7 days"], ["30d", 30, "Last 30 days"], ["90d", 90, "Last 90 days"], ["180d", 180, "Last 180 days"], ["365d", 365, "Last 365 days"]] as const;
 
 export function concurrencyWindowRange(days?: number | null): ConcurrencyRange {
   if (days === 1) return "day";
@@ -76,7 +76,16 @@ export function normalizeConcurrencySettings(value: unknown): ConcurrencySetting
 }
 
 export function readConcurrencySettings(overrides: Partial<ConcurrencySettings> = {}): ConcurrencySettings {
-  return normalizeConcurrencySettings({ ...normalizeConcurrencySettings(preferences().get(concurrencySettingsKey, defaultConcurrencySettings)), ...overrides });
+  let source: unknown = preferences().get(concurrencySettingsKey, defaultConcurrencySettings);
+  if (typeof location !== "undefined" && location.pathname === "/analyze") {
+    const encoded = new URLSearchParams(location.search).get("analyze_parallelism");
+    if (encoded !== null) {
+      // A linked view starts from product defaults, including for fields the
+      // agent omitted. Never mix another viewer's saved assumptions into it.
+      try { source=JSON.parse(encoded); } catch { source=defaultConcurrencySettings; }
+    }
+  }
+  return normalizeConcurrencySettings({...normalizeConcurrencySettings(source),...overrides});
 }
 
 export function readMachineConcurrencySettings(): ConcurrencySettings {
@@ -91,4 +100,11 @@ export function readMachineConcurrencySettings(): ConcurrencySettings {
 export function saveConcurrencySettings(next: ConcurrencySettings): void {
   preferences().set(concurrencySettingsKey, normalizeConcurrencySettings(next));
   window.dispatchEvent(new Event("pharos:concurrency-settings"));
+}
+
+// A deliberate change in a linked view updates only the chosen defaults;
+// opening a link and its other overrides never overwrite library preferences.
+export function saveConcurrencyChanges(change: Partial<ConcurrencySettings>): void {
+  const saved=normalizeConcurrencySettings(preferences().get(concurrencySettingsKey,defaultConcurrencySettings));
+  saveConcurrencySettings(normalizeConcurrencySettings({...saved,...change}));
 }

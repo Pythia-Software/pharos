@@ -123,7 +123,7 @@ guard it.
 
 1. **One item builder.** The app builds its items with `labeling prepare`'s
    own per-conversation pass: cohort, human pieces and markers
-   (`human-pieces-v2`), context (`context-v3`, the 600-character prompt the
+   (`human-pieces-v3`), context (`context-v3`, the 600-character prompt the
    teachers saw), chunking (`chunking-v1`), and the message's role as the
    framing's sender (`units.sender_role`, never the sender identity: the
    FRAMING bug). Prepare classifies authorship in memory over its snapshot;
@@ -140,7 +140,7 @@ guard it.
    `TestLabelsItemsEqualPreparedItems` checks that the app's items equal
    prepare's, field for field, on the seeded fixture catalog. Codex
    continuations, which prepare once classified differently from the
-   stored ledger, are one rule in both since `authorship-v9`
+   stored ledger, are one rule in both since `authorship-v12`
    (`authorshipContinuations`).
 2. **Tokenizer and framing** (`internal/labeler/tokenizer.go`, `framing.go`):
    a pure-Go reading of the model's `tokenizer.json` (ModernBERT/ettin
@@ -220,7 +220,7 @@ Every row records it, so switching models in either direction
 (`kestrel-68m-tpool` and `kestrel-68m`) relabels every message, and a run
 after that has nothing to do (`TestLabelsRelabelOnAModelSwitch`). The
 contract is
-`kestrel-framing-v1+labeling-units-v1+human-pieces-v2+context-v3+chunking-v1+avocet-segments-v1+chunk-union-v1`.
+`kestrel-framing-v1+labeling-units-v1+human-pieces-v3+context-v3+chunking-v1+avocet-segments-v1+chunk-union-v1`.
 A new model or contract relabels every message.
 
 **One run at a time.** A process allows one run, and a lease beside the
@@ -236,6 +236,9 @@ run` apart. A second run reports that labeling is already running.
 - The stage labels at most 2,000 messages inline, so an index ends in bounded
   time. A larger backlog (the first run on a library) continues as a
   background `analysis.labels` run.
+- Background updates (Frequently, Hourly, Daily) run the chain's stages on
+  their own cadences; labels follow the writing classification
+  (`authorship`), so an update that classifies new messages labels them too.
 - No page read starts labeling. Pages read whatever ledger exists (none yet).
 
 | Event | What happens |

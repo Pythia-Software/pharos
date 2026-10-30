@@ -1,4 +1,4 @@
-import { localTimezone } from "./day-window";
+import { retainPageView } from "./view-contract";
 import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, predicatesOf, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisVersion } from "./dashboard-analysis-model";
 
@@ -19,10 +19,12 @@ export const usageDatasets = {
 export type UsageDataset = keyof typeof usageDatasets;
 export type UsageMode = "dashboards" | "query";
 export const usageTopics = {
+  activity: { label: "Conversation Input and Output", description: "Explore human-supplied text and model output across whole conversations, models, and repositories." },
   human: { label: "Human Words", description: "How much are you contributing? Explore your writing over time." },
   tokens: { label: "Tokens and Cost", description: "How much are agents consuming? Choose a measure, a breakdown, and a time range." },
   skills: { label: "Skills", description: "Where does skill evidence appear? Compare observed invocations and loads." },
-  tools: { label: "Tools", description: "Understand tool mix, reliability, and context overhead. Compare groups or follow changes over time." },
+  calls: { label: "Tool Calls", description: "Explore individual calls, failures, research, file paths, and context. Compare groups, distributions, and changes over time." },
+  tools: { label: "Tool Summary", description: "Understand tool mix, reliability, and context overhead. Compare groups or follow changes over time." },
   time: { label: "Agent Time", description: "Where is recorded tool time going? Compare activities over time." },
   parallelism: { label: "Parallelism", description: "Explore overlapping conversations and estimated model activity. Select a ribbon or drag to zoom." },
   mcp: { label: "Pharos MCP", description: "How are agents using Pharos? Explore calls, reliability, response sizes, and time spent serving requests." },
@@ -30,11 +32,11 @@ export const usageTopics = {
 } as const;
 export type UsageTopic = keyof typeof usageTopics;
 export const usageDatasetTopics: Record<UsageDataset, UsageTopic> = {
-  usage: "tokens", conversation_activity: "human", writing: "human", writing_messages: "human",
-  tools: "tools", tool_calls: "tools", mcp_calls: "mcp", skill_usages: "skills", parallelism: "parallelism", tl1_attempts: "tokens",
+  usage: "tokens", conversation_activity: "activity", writing: "human", writing_messages: "human",
+  tools: "tools", tool_calls: "calls", mcp_calls: "mcp", skill_usages: "skills", parallelism: "parallelism", tl1_attempts: "tokens",
 };
 export const usageTopicDatasets: Record<UsageTopic, UsageDataset> = {
-  tokens: "usage", human: "writing_messages", time: "tool_calls", parallelism: "parallelism", tools: "tools", mcp: "mcp_calls", skills: "skill_usages", carbon: "usage",
+  calls: "tool_calls", activity: "conversation_activity", tokens: "usage", human: "writing_messages", time: "tool_calls", parallelism: "parallelism", tools: "tools", mcp: "mcp_calls", skills: "skill_usages", carbon: "usage",
 };
 
 // Fields that hold a dashboard's dates, by dataset: its range, and the day
@@ -73,9 +75,6 @@ function returnedWhere(current: URLSearchParams, edited: WhereTerm[], dataset: U
 export function usageDashboardReturn(current: URLSearchParams) {
   const state = readUsageWorkspace(current), dataset = usageTopicDatasets[state.topic];
   const keywords = current.has(`record_${state.dataset}`);
-  if (!keywords && current.get("card_id") && current.get("card_query") === state.dataset && current.has(`q_${state.dataset}`)) return {
-    href: usageWorkspaceURL({ mode: "dashboards", dataset, search: false }, current), label: "Back to dashboard", resetsFilters: false,
-  };
   let query: QueryState | undefined;
   try { query = decodeQueryStrict(current.get(`q_${state.dataset}`) ?? "") ?? undefined; } catch { /* Explicitly reset an unavailable query. */ }
   const compatible = dataset === state.dataset && Boolean(query);
@@ -120,7 +119,7 @@ export function readUsageWorkspace(params: URLSearchParams) {
     dataset: (dataset && Object.hasOwn(usageDatasets, dataset) ? dataset : "usage") as UsageDataset,
     topic: (topic && Object.hasOwn(usageTopics, topic) ? topic : "tokens") as UsageTopic,
     report: params.get("analyze_report") ?? "",
-    days: [7, 30, 90].includes(Number(params.get("analyze_days"))) ? Number(params.get("analyze_days")) : 30,
+    days: [1, 7, 30, 90, 180, 365].includes(Number(params.get("analyze_days"))) ? Number(params.get("analyze_days")) : 30,
   };
 }
 
@@ -128,7 +127,7 @@ export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?
   const previous = readUsageWorkspace(current), next = { ...previous, ...change };
   const mode = next.mode === "search" ? "query" : next.mode;
   const params = new URLSearchParams(current);
-  if (next.topic !== previous.topic) { params.delete("analyze_filters"); params.delete("analyze_window"); params.delete("analyze_chart"); params.delete("analyze_parallelism"); }
+  if (next.topic !== previous.topic) { params.delete("analyze_filters"); params.delete("analyze_window"); params.delete("analyze_timezone"); params.delete("analyze_chart"); params.delete("analyze_parallelism"); }
   for (const key of [...params.keys()]) {
     if (key.startsWith("record_") && (key !== `record_${next.dataset}` || next.dataset !== previous.dataset || mode === "dashboards")) params.delete(key);
     // A different dataset must never inherit another table's query/window.
@@ -149,27 +148,29 @@ export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?
     } else if (next.dataset === previous.dataset && current.has(`q_${next.dataset}`)) params.set(`q_${next.dataset}`, current.get(`q_${next.dataset}`)!);
     if (current.get("window_dataset") === next.dataset) for (const [key, value] of current) if (key.startsWith("window_")) params.set(key, value);
   }
-  const cardDataset = current.get("card_query");
-  if (!change.query && current.get("card_id") && cardDataset && Object.hasOwn(usageDatasets, cardDataset) && current.has(`q_${cardDataset}`) && next.topic === previous.topic && (mode === "dashboards" || next.dataset === cardDataset)) {
-    params.set("card_query", cardDataset); params.set(`q_${cardDataset}`, current.get(`q_${cardDataset}`)!);
-    if (current.get("window_dataset") === cardDataset) for (const [key, value] of current) if (key.startsWith("window_")) params.set(key, value);
-  } else {
-    if (params.has("card_query")) stampCardChart(params);
-    for (const key of [...params.keys()]) if (key.startsWith("card_")) params.delete(key);
-  }
-  // Related overviews shed the card/query metadata, but keep its calendar
-  // intent in the dashboard's own range setting.
+  // A full dashboard owns its chart and filters. Source queries and covers
+  // remain in saved cards only, never in dashboard or drilldown navigation.
+  if (current.has("card_query")) stampCardChart(params);
+  for (const key of [...params.keys()]) if (key.startsWith("card_")) params.delete(key);
+  // Dashboard navigation sheds source metadata and keeps calendar intent
+  // in the dashboard's own range setting.
   if (mode === "dashboards" && next.topic === previous.topic && current.get("window_mode") === "today" && !params.has("card_query") && params.has("analyze_filters")) {
     params.set("analyze_window", "today");
+    if (current.has("window_timezone")) params.set("analyze_timezone", current.get("window_timezone")!);
   }
   if (mode === "query" && change.query && current.get("analyze_window") === "today") {
     const where = (change.query.grouping?.source ?? change.query).where;
     const lower = where.filter(term => "field" in term && term.op === ">=" && /T/.test(term.value));
     const upper = where.filter(term => "field" in term && term.op === "<");
     if (lower.length === 1 && upper.length === 1 && "field" in lower[0] && "field" in upper[0] && upper[0].value === "+0s") {
-      params.set("window_mode", "today"); params.set("window_days", "1"); params.set("window_field", lower[0].field); params.set("window_until_field", upper[0].field); params.set("window_dataset", next.dataset); params.set("window_timezone", localTimezone());
+      params.set("window_mode", "today"); params.set("window_days", "1"); params.set("window_field", lower[0].field); params.set("window_until_field", upper[0].field); params.set("window_dataset", next.dataset);
+      if (current.has("analyze_timezone")) params.set("window_timezone", current.get("analyze_timezone")!);
     }
   }
+  const page=mode==="query"?`analyze/query/${next.dataset}`:`analyze/${next.topic}`;
+  const sourcePage=previous.mode==="query"?`analyze/query/${previous.dataset}`:`analyze/${previous.topic}`;
+  retainPageView(params,page,[...(mode==="dashboards"?["analyze_chart","analyze_filters","analyze_window","analyze_days"]:[])],sourcePage);
+  if(mode!==previous.mode||next.topic!==previous.topic||next.dataset!==previous.dataset){params.delete("highlight");params.delete("reveal");}
   return `/analyze?${params}`;
 }
 
@@ -178,7 +179,7 @@ export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?
 // (readAnalysisLink). A card's filters are always its population, so where a
 // link stops being a card link its chart is marked current, and its filters
 // stay the population.
-const analysisTopics = new Set<string>(["tokens", "tools", "mcp", "time", "skills"]);
+const analysisTopics = new Set<string>(["tokens", "calls", "activity", "tools", "mcp", "time", "skills"]);
 export function stampCardChart(params: URLSearchParams) {
   if (!analysisTopics.has(params.get("analyze_topic") ?? "") || !params.has("analyze_chart")) return;
   try {

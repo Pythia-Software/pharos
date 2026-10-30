@@ -130,7 +130,7 @@ func sharedMessages(messages []map[string]any) []map[string]any {
 			spans, _ := authorship["spans"].([]map[string]any)
 			cleaned := make([]map[string]any, 0, len(spans))
 			for _, span := range spans {
-				cleaned = append(cleaned, pick(span, "category", "reason", "words", "excerpt"))
+				cleaned = append(cleaned, pick(span, "start", "end", "category", "reason", "words", "excerpt"))
 			}
 			item["authorship"] = map[string]any{"typed_words": authorship["typed_words"], "pasted_words": authorship["pasted_words"], "spans": cleaned}
 		}
@@ -231,7 +231,7 @@ func (c *Catalog) sharedDatasets(ctx context.Context, ids []string) (map[string]
 // sharedRowExtras are Library fields the tables' cells read beyond the schema's
 // columns: pull requests, merge links, and the previews of the card view.
 var sharedRowExtras = map[string][]string{
-	"library": {"pr_details", "canonical_remote", "main_merge_commit", "main_merge_url", "main_merge_method", "first_input", "last_response"},
+	"library": {"pr_details", "canonical_remote", "main_merge_commit", "main_merge_url", "main_merge_method", "first_input", "last_response", "preview_elapsed_ms"},
 }
 
 // sharedRowExcluded are schema fields whose values stay out of shared files.
@@ -385,6 +385,10 @@ func sharedPage(app string, payload []byte, title string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	quickStatsScript, err := assets.ReadFile("assets/quick-stats.js")
+	if err != nil {
+		return nil, err
+	}
 	head := fmt.Sprintf(`<head>
   <meta http-equiv="Content-Security-Policy" content="%s">
   <script>document.documentElement.classList.add('shared')</script>
@@ -393,6 +397,7 @@ func sharedPage(app string, payload []byte, title string) ([]byte, error) {
 	page := app
 	for _, edit := range []struct{ old, new string }{
 		// The reader's model, and the tables' bundle and styles, travel inside the file.
+		{`<script src="/assets/quick-stats.js"></script>`, "<script>" + strings.ReplaceAll(string(quickStatsScript), "</script", `<\/script`) + "</script>"},
 		{`<script src="/assets/header.js"></script>`, "<script>" + strings.ReplaceAll(string(headerScript), "</script", `<\/script`) + "</script>"},
 		{`<script src="/assets/reader-model.js"></script>`, "<script>" + strings.ReplaceAll(string(readerModel), "</script", `<\/script`) + "</script>"},
 		{`<script src="/assets/query-tables.js"></script>`, "<script>" + strings.ReplaceAll(string(tableScript), "</script", `<\/script`) + "</script>"},

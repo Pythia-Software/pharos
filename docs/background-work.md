@@ -275,6 +275,8 @@ the words here are the words surfaces show (§8).
 |---|---|---|---|---|---|---|---|---|---|---|
 | `index.changes.automatic` | Index changes · Indexing changes | schedule | svc | D:w W:w I:w | conv:\*, view | index | Stops between workspaces; the next index resumes it. | batch | >10 s | bg |
 | `index.changes.manual` | Index changes · Indexing changes | user | svc | D:w W:w I:w | conv:\*, view, an.\*, findings | index | Stops between workspaces; the next index resumes it. The chain after the sources ignores Stop and stops only on release. | batch | always | fg |
+| `background.update` (variants `frequent`, `hourly`, `daily`, `requested`) | Background update · Updating in the background | schedule (`backgroundLoop`, §11), user (Run now) | svc | D:w W:w I:w | capt:this/\*, conv:\*, an.\*, findings, upgrade | index | Stops after the record in progress; each item runs again at its next time. | batch | >10 s | bg |
+| `background.capture` (variants `sources`, `preserve`) | Capture & index · Capturing and indexing | step of `background.update` | svc | D:w W:w I:w C(this):w | capt:this/\*, conv:\* | index | Stops between files and records; what was captured stays valid, and the next run resumes it. | batch | step | bg |
 | `capture.this-mac` | Capture this Mac · Capturing | user, onboarding | svc | D:w I:w C(this):w | capt:this/\* | — (today) | Stops between files; the next capture resumes it, and what was captured stays valid. | record | always | fg |
 | `capture.cli` (variant `sqlite-records` for that command's writing subcommands) | Capture (Terminal) · Capturing | cli | cli (lease only; it never opens the catalog) | D:w C(this):w | capt:this/\* | — | Pharos cannot stop it; the drive stays busy until it ends. | none (to Pharos) | never (lease only) | fg |
 | `index.captures` | Index captures · Indexing captures | user, onboarding, cli | svc, cli | D:w W:w I:w X(c):w (`I` in the service only) | capt:\*, conv:\*, view, an.\*, findings | index | Stops between records; the next index resumes it. Waits for a running capture (`blocked(capture-running)`). | batch | always | fg |
@@ -748,7 +750,7 @@ additive index, `operation_journal_kind (host_id, kind, started_at DESC)`.
 
 | Domain | `as_of` from | Behind measured by | Reason codes (in order after the running code) | Caught up by |
 |---|---|---|---|---|
-| `conv:<source>` (this Mac's enabled sources) | max of `automatic_source_states.indexed_at`/`succeeded_at` and `source_states.last_success_at` for this host | count unknown | `indexing`, `never-indexed` (behind), `interrupted`, `source-error` (the latest attempt, across both tables), `capture-busy` (the latest index left it to a running capture), `needs-capture` (behind: `source_input_states.pending`), `schedule-off`, `overdue` (the schedule's last success is older than max(2 × interval, interval + 15 min)); all but the two marked are `unknown` | `index.changes.*`, `library.update`, `index.sources.legacy`, `index.captures`, `library.rebuild` |
+| `conv:<source>` (this Mac's enabled sources) | max of `automatic_source_states.indexed_at`/`succeeded_at` and `source_states.last_success_at` for this host | count unknown | `indexing`, `never-indexed` (behind), `interrupted`, `source-error` (the latest attempt, across both tables), `capture-busy` (the latest index left it to a running capture), `needs-capture` (behind: `source_input_states.pending`), `schedule-off`, `manual-only` (a source read in full, such as `tl1`, whose `other-sources` background item is set to only when you ask, §11), `overdue` (the schedule's last success is older than max(2 × interval, interval + 15 min); for a source read in full, older than its cadence's window); all but the two marked are `unknown` | `index.changes.*`, `library.update`, `index.sources.legacy`, `index.captures`, `library.rebuild` |
 | `capt:<host>/<source>` | the source's `source_states.last_success_at` on that host (when its captures were last indexed) | `needs_index` from `capturedHosts`; count unknown | `indexing`, `capture-running` (a `capture.*` operation is the one catching up), `unreadable` (the capture root cannot be read: the rows last read, all `unknown`, or one `capt:*` row when none were read; a root that does not exist and never had captures has no rows), `not-indexed` (detail: `capturedHosts`' `index_reason`) | `index.captures`, `library.update`, `capture.*` |
 | `view` (Search view rows) | — | `COUNT(*)` of `workspace_library_dirty` (capped at 100,000), unit workspace | `refreshing`, `version` (`workspace_library_version`; count unknown), `stopped` (`libraryRefreshStopped`) | `maintenance.library-view` |
 | `search.substring` | — | conversations past `message_trigram_cursor` (counted only while not ready) | `building`, `version` | `maintenance.search.substring` |
@@ -756,12 +758,12 @@ additive index, `operation_journal_kind (host_id, kind, started_at DESC)`.
 | `search.text` | — | `text_search_documents_version` not `1`; count unknown | `building`, `version` | `maintenance.search.text` |
 | `search.tools` | — | `tool_command_fts_version` not `1`; count unknown | `building`, `version` | `maintenance.search.tools` |
 | `search.query` | — | the three `*_ready` keys not at their index's version; count unknown | `building`, `version` | `maintenance.search.query` |
-| `an.identities` | the later of `sync_deferred[identities].completed_at` and its latest succeeded journal row | count unknown: `sync_deferred` generations count written records, not runs | `running`, `failed` / `blocked` (below), `deferred-by-schedule`, `no-record` (unknown), `changed` (the inputs moved since its completion: a write outside the chain, such as a Terminal ingest) | `analysis.chain`, `analysis.identities`, `analysis.github` |
+| `an.identities` | the later of `sync_deferred[identities].completed_at` and its latest succeeded journal row | count unknown: `sync_deferred` generations count written records, not runs | `running`, `failed` / `blocked` (below), `scheduled-frequent` / `scheduled-hourly` / `scheduled-daily` (`scheduled`: work waits for its background item's cadence, §11), `late` (behind: it has waited longer than its cadence's window, 30 min, 3 h or 30 h, since `sync_deferred.pending_since`), `deferred-by-schedule` (behind: background updates are off or paused, or the item is set to only when you ask), `no-record` (unknown), `changed` (the inputs moved since its completion: a write outside the chain, such as a Terminal ingest) | `analysis.chain`, `analysis.identities`, `analysis.github` |
 | `an.git` | as above, for `git` | as above | as above (`git-unavailable` is not detected: the 6 h retry timers are in memory) | `analysis.git`, `analysis.chain`, `analysis.refresh` |
-| `an.tools` (Tools rollup) | as above, for `tools` | `COUNT(*)` of `tool_rollup_dirty` (capped), unit workspace, when that is why | `running`, `failed` / `blocked`, `deferred-by-schedule`, `never-built`, `version` (an older layout), `changed` (a newer ledger generation, dirty workspaces, another day or timezone: the `toolRollupStale` rule) | `analysis.tools`, `library.upgrade`, `tools.ledger.build` |
-| `an.authorship` | `authorship_built_at` | `authorship_generation` ≠ `tool_ledger_generation:authorship_inputs_generation/version`; count unknown | `running`, `failed` / `blocked`, `deferred-by-schedule`, `never-built`, `changed` | `analysis.authorship` |
+| `an.tools` (Tools rollup) | as above, for `tools` | `COUNT(*)` of `tool_rollup_dirty` (capped), unit workspace, when that is why | `running`, `failed` / `blocked`, `scheduled-*` / `late` / `deferred-by-schedule` (as above), `never-built`, `version` (an older layout), `changed` (a newer ledger generation, dirty workspaces, another day or timezone: the `toolRollupStale` rule) | `analysis.tools`, `library.upgrade`, `tools.ledger.build` |
+| `an.authorship` | `authorship_built_at` | `authorship_generation` ≠ `tool_ledger_generation:authorship_inputs_generation/version`; count unknown | `running`, `failed` / `blocked`, `scheduled-*` / `late` / `deferred-by-schedule` (as above), `never-built`, `changed` | `analysis.authorship` |
 | `an.ledger` (tool ledger) | when it was last counted | the upgrade's `tools` step count, from the last `UpgradeSteps` | `running`, `not-counted` (unknown: not counted by this build), `version` | `tools.ledger.build`, `library.upgrade` |
-| `findings` | `findings_built_at` | count unknown | `running`, `failed` / `blocked`, `never-built`, `deferred-by-schedule`, `daily-pass-due` (`findings_generation` ≠ `findingsVersion/<today>`), `no-record` (unknown: today's pass ran on an older build), `changed` (`scheduled`: new data since today's full pass). Both say what runs the next full pass: "updates with Refresh findings now, or the first index tomorrow", or with scheduled indexing on (which defers findings) "…, or the next manual index", and the muted short "updates tomorrow" / "updates with manual index" | `analysis.findings`, `analysis.chain` |
+| `findings` | `findings_built_at` | count unknown | `running`, `failed` / `blocked`, `never-built`, `scheduled-*` / `late` / `deferred-by-schedule` (as above), `scheduled-daily` (today's full pass waits for the daily time, or ran less than 12 h past it), `daily-pass-due` (`findings_generation` ≠ `findingsVersion/<today>`), `no-record` (unknown: today's pass ran on an older build), `changed` (`scheduled`: new data since today's full pass). Both say what runs the next full pass: "updates with Refresh findings now, or the first index tomorrow", or with scheduled indexing on (which defers findings) "…, or the next manual index", and the muted short "updates tomorrow" / "updates with manual index" | `analysis.findings`, `analysis.chain` |
 | `upgrade` | when it was last counted | steps with pending units, from the last `UpgradeSteps` | `running`, `not-counted` (unknown), `upgrade-available` | `library.upgrade` |
 | `backup.local` | the newest non-partial backup in `backups.json` | age only | `running`, `failed` (this process's latest backup failed after `as_of`), `never` (unknown), `no-schedule` (unknown, with `as_of`) | `backup.local` |
 | `backup.cloud:<destination>` | the destination's newest complete, verified full run | against an enabled schedule: older than its cadence + 12 h | `running`, `retrying` (enabled, `failures > 0`), `failed`, `unverified`, `never`, `overdue`, `no-schedule` (unknown, with `as_of`); `paused` replaces any but `failed` when the schedule exists and is off | `cloud.upload`, `cloud.verify` |
@@ -1180,7 +1182,7 @@ recent rows and `freshness: []`; it has no stream. `GET /api/status?fresh=1`
                  "detail": "…", "action": {"label": "Open Backups", "path": "/settings/backups"}}],
   "freshness": [{"domain": "an.tools", "group": "analyses", "label": "Tools rollup", "as_of": "…",
                  "behind": {"state": "behind", "count": null, "unit": null}, "state_label": "Behind",
-                 "reason": {"code": "deferred-by-schedule", "text": "Scheduled indexing skips analyses"},
+                 "reason": {"code": "deferred-by-schedule", "text": "Waits for Update everything now"},
                  "catching_up": null, "catching_up_label": null, "next": "updates with the next manual index"}],
   "freshness_summary": {"all_current": false, "checked_at": null, "groups": [{"group": "analyses", "label": "Analyses", "state": "behind",
                          "short": "waits for manual index", "text": "behind, updates with the next manual index", "as_of": "…", "shown": true}]},
@@ -1583,6 +1585,107 @@ foreground and keeps the default tier: `analysis.tools` from a read,
 before findings exist, and `analysis.authorship` from a page. A background body holding the catalog writer
 at utility can make a foreground writer wait a little longer; the utility
 tier, unlike background, is not throttled hard.
+
+## 11. Background updates
+
+Every domain a page shows has an automatic owner. `backgroundLoop`
+(`background.go`) runs the work the scheduled index does not, on one of
+three cadences, and Settings → Background updates and the drive panel show
+the same schedule from one declaration (`backgroundItems`):
+
+| Item | Runs | Cadence before measurements | Measured by |
+|---|---|---|---|
+| New conversations | the scheduled index (`automaticLoop`) | Frequently (fixed) | `sync_history` |
+| Search | the Search view and search index daemons, continuously | Frequently (fixed) | — |
+| Other sources | capture and index of the sources scheduled indexing cannot read (`tl1`, …), in full | Hourly | `background.capture/sources` |
+| Preserve originals | capture this Mac, then index every Mac's captures | Daily | `background.capture/preserve` |
+| Repositories & merges | the chain's GitHub, identities and Git stages | Frequently, adaptive | the three stages |
+| Tools & usage | the chain's tools stage | Frequently, adaptive | `analysis.tools` |
+| Your writing | the chain's authorship stage | Hourly, adaptive | `analysis.authorship` |
+| Findings | the chain's findings stage, not forced | Hourly, adaptive | `analysis.findings` |
+| Findings review | the findings stage once today's full pass is due | Daily (fixed) | `analysis.findings` |
+| Library upgrade | `RunUpgrade`, when the stored count has pending steps | Daily (fixed) | `library.upgrade` |
+| Back up | a local backup to the last destination, when connected | only when chosen (opt-in Daily) | `backup.local` |
+
+- **Cadences.** Frequently follows each scheduled index that wrote
+  something (it wakes the loop). Hourly runs pending work at most once an
+  hour after its last completion, once the library has been quiet for
+  10 min (`sync_deferred.changed_at`), and no later than 90 min after its
+  last completion. Daily runs at the daily time (03:00 by default) or the
+  first quiet moment after, and regardless of quiet 12 h past it. A pass
+  runs the most frequent cadence with due work; the next pass takes the
+  next.
+- **Placement.** An adaptive item moves to the most frequent cadence whose
+  limit its median cost (of its latest 7 journaled runs, at least 3) fits:
+  under 1 min Frequently, under 10 min Hourly, else Daily. It moves faster
+  only with a quarter to spare and slower only a quarter over, so a cost
+  near a limit does not flap. Placements are stored in
+  `background_settings.placements_json`.
+- **Overrides** may permanently move an item to a slower cadence or to only
+  when you ask. Adaptive items also have **Promote/Demote … for a week**
+  actions: they move one bucket faster or slower, even beyond the measured
+  placement. The choice is stored per Mac in `background_temporary_cadences`
+  with a seven-day expiry and takes precedence over automatic placement and
+  permanent overrides until then. The usual schedule resumes at expiry or
+  when **End temporary schedule** is selected. Choosing a permanent schedule
+  ends the temporary choice too. Automatic cost measurements continue during
+  the week. Off, pause and battery rules still apply. Fixed and opt-in items
+  have no temporary moves.
+- **Sequencing.** A pass runs the items that bring in new data (captures)
+  first, then the stage items through `finishDeferredStages`, in chain
+  order. Earlier stages with pending work, read from `sync_deferred` after
+  the captures wrote, come along unless their own item is held: set to only
+  when you ask, waiting for power, or on a slower cadence than the pass
+  (Run now brings along all but the first). A held stage's dependents run
+  on what it last wrote; when it runs it moves the generations they read,
+  so they run again. The findings item only measures (`MeasureFindings`);
+  today's full pass is Findings review's, at the daily time (or the first
+  pass ever). A stage that fails records its error; the items after it
+  record that they waited for it. A failed item waits 15 min before it
+  runs again.
+- **Preserve originals** on a Mac with no enabled sources captures nothing
+  but still indexes what other Macs captured.
+- **Mode.** On (default), paused until a time (scheduled indexing waits
+  too), or only when I ask (`sync_settings.enabled` off). With no schedule
+  row, the first scheduled index stores the default one. Run now runs an
+  item whatever the mode or power source; for new conversations it asks
+  `automaticLoop` for one scheduled index, leaving the saved schedule as it
+  is. New conversations' details choose the sources scheduled indexing reads
+  (`sync_settings.sources_json`; all of them, stored as none, by default),
+  and its line names a chosen subset.
+- **Hold when busy.** With `hold_when_busy` (default), Hourly and Daily
+  work waits while the one-minute load is over 80% of the cores, unless it
+  is overdue (3 h past an hourly update, 12 h past the daily time).
+- **On battery** (`power.go`, read from `pmset` at most once a minute; a
+  Mac whose source cannot be read counts as plugged in). Each cadence has a
+  choice in `background_settings.battery_json`: Frequently runs as plugged
+  in, every 15 min (default: scheduled indexing waits until 15 min after its
+  last run) or waits until plugged in; Hourly and Daily run as plugged in or
+  wait (default). Below 20% charge or in Low Power Mode everything waits
+  (default on). Waiting work is `power` ("Waits until plugged in") in the
+  view, and the headline says what waits and what still runs. Run now runs
+  whatever the power source. The freshness ledger does not excuse waiting
+  for power: work past its cadence's window is `late`.
+- **Holding.** A pass holds the ingest coordinator as a scheduled index
+  does: a manual index cancels it, and a scheduled index waits for it. It
+  is also a `background-update` run in `/api/activity`, marked `changed`
+  when an item succeeded, so open pages refresh their data when it ends;
+  the header's Index changes stays free while one runs.
+- **Failures.** An item is `failed` when its last scheduled run failed, its
+  chain stage failed or was blocked, or (new conversations, other sources)
+  a source's latest index failed or was interrupted (`conv:<source>`).
+- **Freshness.** Work waiting for its cadence is `scheduled`
+  (`scheduled-<cadence>`), `late` past its window, and
+  `deferred-by-schedule` (behind) when the schedule will not run it (§5).
+- **Surfaces.** `/api/status` carries `background`: the headline, every
+  item's state (`running`, `queued`, `failed`, `missed`, `never`,
+  `power`, `current`, `paused`, `manual`, `unavailable`) with `as_of` and
+  `next_at`, one row per cadence, and the cost of Update everything now.
+  `GET /api/background` adds the settings, the placement rule and the last
+  24 hours' cost (measured for scheduled indexing and journaled passes,
+  else projected from the items' costs; Frequently counts scheduled
+  indexing and the journaled analysis passes after it). `POST /api/background/settings`
+  and `POST /api/background/run` change and run it.
 
 ## Known hazards this contract must not hide
 

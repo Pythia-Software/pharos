@@ -20,6 +20,12 @@ export const sourceSetupCandidates = [
 ];
 const day = 86400000, iso = offset => new Date(now - offset).toISOString();
 
+// Fixed UTC calendar boundaries keep the fixture's calendar columns coherent.
+const summaryDay = new Date(now); summaryDay.setUTCHours(0, 0, 0, 0);
+const summaryWeek = new Date(summaryDay); summaryWeek.setUTCDate(summaryWeek.getUTCDate() - (summaryWeek.getUTCDay() + 6) % 7);
+const summaryMonth = new Date(summaryDay); summaryMonth.setUTCDate(1);
+const summaryFrom = { today: summaryDay.toISOString(), yesterday: new Date(+summaryDay - day).toISOString(), week: summaryWeek.toISOString(), month: summaryMonth.toISOString() };
+
 // Long values are where layouts break, so some rows carry them.
 const longTitle = "Investigate why the incremental indexer re-reads every capture after a laptop sleeps through a scheduled sync window";
 const datasets = Object.fromEntries(Object.entries(schemas).map(([name, schema]) => [name, population(schema, { now, count: 48 }).map((row, index) => index % 5 ? row
@@ -247,10 +253,66 @@ const busyResources = statusResources("Pharos is using ~45% of one core · 1.2 G
   { pid: 4120, role: "service", cpu_percent: 38, memory_bytes: 1.1e9, sampled_at: iso(0), basis: "proc_pid_rusage", text: "Library service · ~38% of one core · 1.1 GB" },
   { pid: 5150, role: "cli:capture", cpu_percent: 7, memory_bytes: 64e6, sampled_at: iso(0), basis: "proc_pid_rusage", text: "pharos capture (Terminal) · ~7% of one core · 64 MB" }]);
 const statusHeadings = { work: "Work", data: "Data" };
+// The schedule (docs/background-work.md §11), as /api/status and GET
+// /api/background report it.
+const backgroundItem = (id, label, cadence, state, changes = {}) => ({
+  id, label, verb: `Updating ${label}`, feeds: "Pages it feeds", why: "Why it runs where it does.", sub: changes.sub ?? "Pages it feeds", cadence, cadence_label: cadence, column: cadence, placed: cadence,
+  adaptive: false, fixed: false, opt_in: false, override: "", state, state_label: { current: "Updated", running: "Updating now", failed: "Failed", queued: "Up next", unavailable: "Not set up" }[state],
+  as_of: iso(41 * 60000), next_at: iso(-19 * 60000), error: null, note: null, cost: { seconds: 40, runs: 7, class: "light", text: "about 40 s" },
+  choices: [{ value: "", label: "Automatically" }, { value: "daily", label: "Daily" }, { value: "manual", label: "Only when I ask" }], ...changes,
+});
+const backgroundView = (items, headline) => ({
+  mode: "on", paused_until: null, items, headline,
+  cadences: ["frequent", "hourly", "daily"].map(cadence => {
+    const members = items.filter(item => item.column === cadence);
+    const state = ["failed", "running", "queued"].find(state => members.some(item => item.state === state)) ?? "current";
+    return { id: cadence, label: { frequent: "Frequently", hourly: "Hourly", daily: "Daily" }[cadence], description: "When it runs", state, state_label: state === "failed" ? "1 failed" : members[0]?.state_label,
+      as_of: iso(41 * 60000), next_at: iso(-19 * 60000), items: members.map(item => item.id) };
+  }),
+  everything: { seconds: 540, text: "Everything now takes about 9 min, mostly “Your writing”." },
+});
+const idleBackground = backgroundView([
+  backgroundItem("conversations", "New conversations", "frequent", "current", { sub: "claude (1 of 2 sources)", fixed: true, choices: null,
+    sources: [{ name: "claude", selected: true }, { name: "codex-with-a-rather-long-source-name", selected: false }] }),
+  backgroundItem("repositories", "Repositories & merges", "frequent", "current"),
+  backgroundItem("writing", "Your writing", "hourly", "current", { adaptive: true,
+    cadence_moves: [{ cadence: "frequent", label: "Promote to Frequently for a week" }, { cadence: "daily", label: "Demote to Daily for a week" }],
+    cost: { seconds: 358, runs: 7, class: "heavy", text: "about 6 min" }, note: "Moves to Frequently once a run usually takes under a minute." }),
+  backgroundItem("findings", "Findings", "hourly", "current"),
+  backgroundItem("preserve", "Preserve originals", "daily", "current"),
+  backgroundItem("backup", "Back up to /Volumes/Backup Drive With A Long Name/Pharos Backup", "manual", "unavailable", { column: "daily", cost: null }),
+], { tone: "good", title: "Up to date", text: "Everything is on schedule." });
+const busyBackground = backgroundView([
+  backgroundItem("conversations", "New conversations", "frequent", "current", { fixed: true, choices: null }),
+  backgroundItem("repositories", "Repositories & merges", "frequent", "failed", { error: "git rev-list timed out after 5 s in ~/code/a-repository-with-a-very-long-name-that-has-to-wrap" }),
+  backgroundItem("writing", "Your writing", "hourly", "running"),
+  backgroundItem("findings", "Findings", "hourly", "queued"),
+  backgroundItem("preserve", "Preserve originals", "daily", "current"),
+], { tone: "busy", title: "Updating your writing", text: "Human Words cards, and Analyze → Writing update when this finishes.", tech: null });
+export const backgroundDocument = {
+  settings: { mode: "on", paused_until: null, interval_seconds: 300, daily_at: "03:00", hold_when_busy: true, overrides: {},
+    battery: { frequent: "slower", hourly: "wait", daily: "wait", low_battery_waits: true }, battery_choices: { frequent: ["same", "slower", "wait"], hourly: ["same", "wait"], daily: ["same", "wait"] },
+    battery_slower_minutes: 15, low_battery_percent: 20 },
+  power: { battery: true, on_battery: true, percent: 64, low_power_mode: false },
+  view: idleBackground, rule: { frequent_seconds: 60, hourly_seconds: 600 },
+  descriptions: { frequent: "Every 5 min, as soon as there’s new work", hourly: "At most once an hour, after 10 quiet minutes", daily: "Overnight at 3:00 AM, or the first quiet moment after" },
+  cost: { window_hours: 24, seconds: 18000, text: "about 5 h", peak_bytes: 9.5e9, cadences: [
+    { id: "frequent", label: "Frequently", seconds: 10800, measured: true, text: "197 checks, 54 found nothing new" },
+    { id: "hourly", label: "Hourly", seconds: 6840, measured: false, text: "projected: about 8 min × 14, mostly Your writing" },
+    { id: "daily", label: "Daily", seconds: 480, measured: false, text: "projected" }] },
+};
+export const temporaryBackgroundDocument = {
+  ...backgroundDocument,
+  view: backgroundView(idleBackground.items.map(item => item.id === "writing" ? {
+    ...item, placed: "daily", temporary_cadence: { cadence: "hourly", expires_at: iso(-7 * day) },
+    note: "Temporary schedule; your usual schedule resumes after one week.",
+  } : item), idleBackground.headline),
+};
 export const idleStatus = {
   version: 1, revision: 1, generated_at: iso(0), host: { id: "test-mac", label: "This Mac" }, library: statusLibrary,
   eject: { verdict: "safe", eta_seconds: null, checked: "polled", blockers: [], headline: "Safe to eject; checked again on eject", summary: "Nothing Pharos can see is writing to the library. Pharos checks everything again when you eject." },
   operations: [], attention: [], freshness: idleLedger, freshness_summary: idleSummary, resources: idleResources, headings: statusHeadings, features: { unified_activity: true }, journal: { dropped: 0 },
+  background: idleBackground,
 };
 const statusOperation = (id, changes) => ({
   id, kind: "index.changes.manual", variant: null, subject: null, label: "Index changes", verb: "Indexing changes", state: "running", state_label: "Indexing changes",
@@ -270,7 +332,7 @@ export const busyStatus = {
     statusOperation("op-backup", { kind: "backup.local", label: "Back up", state: "blocked", state_label: "Waiting", priority: "background", stoppable: true, stop: { method: "POST", path: "/api/operations/stop", body: { id: "op-backup" } }, detail: "Waiting for a capture to finish" }),
     statusOperation("op-old", { kind: "analysis.findings", label: "Update findings", state: "succeeded", state_label: "Done", stoppable: false, stop: undefined, ended_at: iso(60000) }),
   ],
-  freshness: busyLedger, freshness_summary: busySummary, resources: busyResources,
+  freshness: busyLedger, freshness_summary: busySummary, resources: busyResources, background: busyBackground,
   attention: [{ id: "backup-failed", rule: 6, severity: "error", title: "The last backup failed", detail: "The destination drive is full: /Volumes/Backup Drive With A Long Name/Pharos Backup", action: { label: "Open Backups", path: "/settings/backups" } }],
 };
 // The broker's document, with two other libraries. A broker operation
@@ -298,6 +360,10 @@ export const managedStatus = snapshot => ({
 });
 
 export const defaultApi = {
+  "GET /api/markdown-link": {status:"unavailable",detail:"File or local server unavailable on this Mac"},
+  // No remote image bytes in fixtures; the renderer uses its globe fallback.
+  "GET /api/markdown-favicon": {},
+
   "GET /api/app/state": {application:"/Applications/Pharos.app",selected:"local",mcp:"external",busy:false,libraries:[{id:"local",name:"Pending history",available:true,config:"/Users/test/Library/Application Support/Pharos/Libraries/Pending/library.toml"},{id:"external",name:"My archive",available:false,config:"/Volumes/Archive/Pharos/library.toml"}]},
   "GET /api/cloud-backup": {destinations:[],runs:[],schedules:[],active_run_id:"",setup_root:"/tmp/pharos/cloud-setup"},
   "POST /api/cloud-backup/schedule": {saved:true},
@@ -313,6 +379,12 @@ export const defaultApi = {
     for (const key of body?.delete ?? []) delete state.preferences[key];
     return { values: state.preferences };
   },
+  "PUT /api/query-snapshots": ({body,query,state}) => {
+    state.querySnapshots ??= {};
+    state.querySnapshots[`${query.get("dataset")}:${body.code}`]=body;
+    return body;
+  },
+  "GET /api/query-snapshots": ({query,state}) => state.querySnapshots?.[`${query.get("dataset")}:${query.get("code")}`],
   "GET /api/query-computed-columns": [],
   "GET /api/query-object-references": { references: [] },
 
@@ -347,7 +419,7 @@ export const defaultApi = {
   },
   "GET /api/origins": { machines: [{ id: "machine-fixture", label: "Test Mac", kind: "device" }] },
   "GET /api/usage/history": { oldest_conversation_at: iso(180 * day) },
-  "GET /api/usage/summary": { generated_at: iso(0), windows: ["1h", "6h", "today", "24h", "7d", "30d", "all"].map((key, index) => ({ key, human_words: 100 * (index + 1), tokens: 1000 * (index + 1), cost_usd: index + 1, co2e_g: { central: 10 * (index + 1) } })), carbon_factors: carbonFactors },
+  "GET /api/usage/summary": { generated_at: iso(0), timezone: "UTC", windows: ["1h", "6h", "today", "24h", "7d", "30d", "all", "5m", "15m", "yesterday", "week", "month"].map((key, index) => ({ key, until: key === 'yesterday' ? summaryDay.toISOString() : iso(0), ...(summaryFrom[key] ? {from:summaryFrom[key]} : {}), human_words: 100 * (index + 1), tokens: 1000 * (index + 1), cost_usd: index + 1, co2e_g: { central: 10 * (index + 1) }, active_conversations: index + 2, message_count: 20 * (index + 1), user_messages: 8 * (index + 1), assistant_messages: 12 * (index + 1), tool_calls: 50 * (index + 1), failed_tool_calls: index + 1, tool_failure_rate: 2, tool_time_ms: (index + 1) * 240000, timed_tool_calls: 40 * (index + 1), delegated_runs: index + 1, active_repositories: Math.min(index + 1, 4) })), carbon_factors: carbonFactors },
   "GET /api/search/text/options": { providers: ["codex", "claude"], sources: ["conductor"] },
   "POST /api/search/text/validate": ({ body }) => ({ where: body.where ?? { op: ["literal", "regex", "phrase"].includes(body.mode) ? body.mode : "term", text: body.query } }),
   "GET /api/search/text/capabilities": { fuzzy: true, regex: true, case_sensitive: true },
@@ -388,6 +460,9 @@ export const defaultApi = {
   "GET /api/sync/settings": syncSettings,
   "GET /api/sync/history": { history: syncHistory },
   "GET /api/sync/recovery": { jobs: [] },
+  "GET /api/background": backgroundDocument,
+  "POST /api/background/settings": backgroundDocument,
+  "POST /api/background/run": ({ body }) => ({ accepted: true, items: [body?.item].filter(Boolean) }),
   "GET /api/backup": { active: false, run: null, runs: [], last_success: { destination: "/Users/someone/Pharos Backup", finished_at: iso(2 * day) }, record: "/Volumes/Pharos SSD/Pharos/backups.json", suggested_destination: "/Users/someone/Pharos Backup" },
 
   // Findings and MCP.

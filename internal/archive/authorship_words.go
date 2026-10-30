@@ -15,7 +15,7 @@ var authorshipJSONSpace = regexp.MustCompile(`\\(?:[nrt]|u[0-9a-fA-F]{4})`)
 // and reader. A word is a whitespace field containing a letter or digit;
 // contractions and compounds stay together. A field crossing classifications
 // counts once, in the span holding most of its letters/digits (first on ties).
-// Generated JSON whitespace in feedback is a separator in the logical text,
+// Generated JSON whitespace in forms is a separator in the logical text,
 // while every offset continues to address the original bytes.
 func authorshipWordCounts(text string, spans []authorSpan) []int {
 	counts := make([]int, len(spans))
@@ -28,8 +28,20 @@ func authorshipWordCounts(text string, spans []authorSpan) []int {
 		if span.Start < 0 || span.End > len(text) || span.End < span.Start {
 			continue
 		}
-		if span.Category != spanHarness || span.Reason != reasonPageFeedback.text() {
+		if span.Category != spanHarness || (span.Reason != reasonPageFeedback.text() && span.Reason != reasonQuestionForm.text()) {
 			continue
+		}
+		// Compact JSON has no whitespace between an answer and its generated
+		// field names. The enclosing quotes delimit words as well as fields.
+		if span.Reason == reasonQuestionForm.text() && span.Start < span.End {
+			for _, at := range []int{span.Start, span.End - 1} {
+				if text[at] == '"' {
+					if masked == nil {
+						masked = []byte(text)
+					}
+					masked[at] = ' '
+				}
+			}
 		}
 		for _, loc := range authorshipJSONSpace.FindAllStringIndex(text[span.Start:span.End], -1) {
 			a, b := span.Start+loc[0], span.Start+loc[1]

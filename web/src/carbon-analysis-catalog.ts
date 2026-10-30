@@ -58,13 +58,16 @@ const legacy = (state: AnalysisState): AnalysisState => state.split === "tier" ?
 // sends no assumptions; it is never drawn.
 export function carbonAnalysisCatalog(assumptions?: CarbonAssumptions): AnalysisCatalog {
   const { breakdowns } = tokenAnalysisCatalog;
+  const availableBreakdowns = {
+    carbon_tier: { label: "Model tier", fields: ["carbon_tier"], order: assumptions?.factors.tiers.map(tier => tier.key) },
+    provider: breakdowns.provider, repository_name: breakdowns.repository_name, model_family: breakdowns.model_family, provider_model: breakdowns.provider_model, effort: breakdowns.effort, model_effort: breakdowns.model_effort,
+    channel: breakdowns.channel, machine_id: breakdowns.machine_id, execution_machine_id: breakdowns.execution_machine_id, session_kind: breakdowns.session_kind,
+  };
+
   return {
     ...tokenAnalysisCatalog, measures, legacy, legacySlices: false,
-    breakdowns: {
-      carbon_tier: { label: "Model tier", fields: ["carbon_tier"], order: assumptions?.factors.tiers.map(tier => tier.key) },
-      provider: breakdowns.provider, repository_name: breakdowns.repository_name, model_family: breakdowns.model_family, provider_model: breakdowns.provider_model, effort: breakdowns.effort, model_effort: breakdowns.model_effort,
-      channel: breakdowns.channel, machine_id: breakdowns.machine_id, execution_machine_id: breakdowns.execution_machine_id, session_kind: breakdowns.session_kind,
-    },
+    breakdowns: availableBreakdowns,
+    units: Object.fromEntries(Object.entries(tokenAnalysisCatalog.units).map(([id, unit]) => [id, { ...unit, breakdowns: Object.fromEntries(Object.entries(unit.breakdowns).filter(([split]) => Object.hasOwn(availableBreakdowns, split))) }])),
     components: { type: { label: "Token type", measures: ["co2", "energy"], fallback: "carbon_tier",
       parts: carbonCategories.map(({ key, label, color, fields }) => ({ key, label, color, fields })),
       derived: { inputs: { fields: inputs, groupBy: ["carbon_tier"] }, derive: (totals, metric) => deriveCarbon(assumptions, totals, metric) } } },

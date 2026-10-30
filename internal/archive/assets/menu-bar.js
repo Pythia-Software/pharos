@@ -14,7 +14,7 @@ const MENU_BAR_TOOLS = [
   {id: 'search', label: 'Search conversations…', group: 'navigation', description: 'Find a conversation or search the archive.'},
   {id: 'analyze', label: 'Analyze usage…', group: 'navigation', description: 'Open usage, cost, writing, and carbon analysis.'},
   {id: 'optimize', label: 'Optimize…', group: 'navigation', description: 'Review findings and opportunities to improve agent work.'},
-  {id: 'capture', label: 'Capture & index…', group: 'manage', description: 'Open capture and indexing controls, schedules, and recent runs.'},
+  {id: 'capture', label: 'Background updates…', group: 'manage', description: 'Open the background update schedule, capture and indexing controls, and recent runs.'},
   {id: 'health', label: 'Library health & backups…', group: 'manage', description: 'Check storage and recent activity, or choose a backup destination.'},
   {id: 'sources', label: 'Manage sources…', group: 'manage', description: 'Choose which conversation files Pharos reads on this Mac.'},
   {id: 'finder', label: 'Show library in Finder', group: 'manage', description: 'Reveal the connected library folder in Finder.'},

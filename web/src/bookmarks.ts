@@ -1,3 +1,5 @@
+import { queryRecipes } from "./curiosity-data";
+import { cardDestination } from "./card-destinations";
 import type { WindowChoice } from "./day-window";
 import { encodeQuery, normalizeQueryState, type QueryState, type SavedQuery, createQueryLinkService, httpQuerySnapshotStore } from "@pythia-software/query-table-core";
 import type { CardCover } from "./card-cover";
@@ -8,6 +10,7 @@ import { queryDatasets, queryFromURL, queryURL, resolveRollingQuery, rollingQuer
 export const BOOKMARKS_KEY = "pharos-bookmarks-v1";
 export type Bookmark = {
   id: string; title: string; url: string; description?: string; savedAt?: number;
+  dashboard?: boolean;
   query?: QueryState; dataset?: QueryDataset; savedQueryId?: string; templateId?: string; coverMetricId?: string; cover?: CardCover;
 };
 
@@ -27,14 +30,20 @@ export function writeBookmarks(items: Bookmark[]) {
 export function migrateSavedQueries() {
   let items = readBookmarks(), changed = false;
   items = items.map(item => {
-    const spec = queryFromURL(item.url, item.query);
+    let spec = queryFromURL(item.url, item.query);
     if (spec?.window && spec.window.mode === "calendar" && rollingQueryMatches(spec.query, spec.window)) {
       const url = updateQueryWindowURL(item.url, spec.window.days, item.query);
       changed = true; item = { ...item, url, query: queryFromURL(url)?.query };
+      spec = queryFromURL(item.url, item.query);
     }
     try {
       const url = new URL(item.url, location.origin);
       if (url.origin === location.origin && url.searchParams.has("card_id")) {
+        const recipe = queryRecipes.find(recipe => recipe.id === url.searchParams.get("card_id"));
+        if (recipe?.destination && spec) {
+          const destination = new URL(cardDestination(recipe, spec.query, spec.window), location.origin);
+          for (const [key, value] of destination.searchParams) if (key.startsWith("analyze_")) url.searchParams.set(key, value);
+        }
         if (item.cover) url.searchParams.set("card_cover", JSON.stringify(item.cover));
         if (item.coverMetricId) url.searchParams.set("card_metric", item.coverMetricId);
         url.searchParams.set("card_title", item.title);

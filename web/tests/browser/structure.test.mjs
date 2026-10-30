@@ -11,10 +11,84 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { layoutProblems, scrollProblems } from "./layout.mjs";
-import { defaultApi, cloudScheduledStatus, rootConversation, workID, eventStream, idleStatus, busyStatus, managedStatus } from "./fixtures.mjs";
+import { defaultApi, cloudScheduledStatus, rootConversation, workID, eventStream, idleStatus, busyStatus, managedStatus, temporaryBackgroundDocument } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
+const markdownLinkText = `## Implementation links
+
+[GitHub pull request](https://github.com/gbdubs/pharos/pull/42) · [Project documentation](https://example.com/docs)
+
+- [Source file](internal/archive/api.go:12)
+- [Missing file](/Users/previous-mac/project/report.md)
+- [Running dev server](http://localhost:5173/)
+- [Stopped dev server](http://localhost:59999/)
+- [Library view](/library?view=conversation)
+- [Filtered usage](/analyze?analyze_topic=tokens)
+`;
+const markdownLinkAPI = {
+  "GET /api/work/:id/conversations/:conversation": { id: rootConversation, workspace_id: workID, provider: "codex", messages: [
+    {id:"link-question",native_id:"link-question",role:"user",kind:"message",text:"Review [the source file](internal/archive/api.go:12) and [the change](https://github.com/gbdubs/pharos/pull/42)."},
+    {id:"link-response",native_id:"link-response",role:"assistant",kind:"message",text:markdownLinkText},
+  ]},
+  "GET /api/markdown-link": ({query}) => {
+    const href=query.get("href");
+    if(href==="internal/archive/api.go:12")return {status:"file",detail:"File available on this Mac",href:"/api/markdown-link?open=1&href=internal/archive/api.go%3A12"};
+    if(href==="http://localhost:5173/")return {status:"server",detail:"Local server returned HTTP 200"};
+    return {status:"unavailable",detail:href.startsWith('http')?"Local server unavailable on this Mac":"File unavailable on this Mac"};
+  },
+};
 const work = `/work/${workID}`;
+const conversationResultAPI = {
+  "POST /api/query/library/:operation": request => {
+    const result = defaultApi["* /api/query/:dataset/:operation"]({ ...request, params: { dataset: "library", operation: request.params.operation } });
+    if (!result?.rows) return result;
+    return { ...result, total: 1, rows: result.rows.length ? [{ ...result.rows[0], id: workID, title: "Investigate the incremental indexer", repository_name: "pharos", models: "claude-opus-5-5", efforts: "high", token_count: 190000, turn_count: 12, subagent_count: 2, preview_elapsed_ms: 4800000, cost_usd: 3.3, pr_numbers: "", first_input: `<system_instruction>Initialize the workspace</system_instruction>\n\nReview **the incremental indexer** and its nested agents. ${"Check the recovery path after sleep and preserve the existing index. ".repeat(12)}`, last_response: `The review is **complete**. ${"The index resumes after sleep without replaying retained captures. ".repeat(20)}` }] : [] };
+  },
+  "GET /api/work/:id": request => {
+    const work = defaultApi["GET /api/work/:id"](request);
+    return { ...work, conversations: work.conversations.map(conversation => ({ ...conversation,
+      ...(conversation.id === rootConversation ? { first_prompt: `<system_instruction>${"Initialize the workspace and load the project settings. ".repeat(80)}</system_instruction>` } : {}),
+      parent_id: conversation.id === "conv-child" ? rootConversation : conversation.id === "conv-nested" ? "conv-child" : null })) };
+  },
+  "GET /api/work/:id/conversations/:conversation": request => {
+    const conversation = defaultApi["GET /api/work/:id/conversations/:conversation"](request);
+    return request.params.conversation === rootConversation ? { ...conversation, messages: [{ id: "session-setup", native_id: "session-setup", role: "system", kind: "context", text: "Session context" }, ...conversation.messages] } : conversation;
+  },
+};
+
+// Mixed provenance in the same prompt: only the classified typed spans glow.
+const humanPromptParts = [
+  ["<system_instruction>Workspace context supplied by Conductor. Keep generated setup separate from the user's own request.</system_instruction>\n\n", "harness"],
+  ["Please **keep the sub-agents nested** inside the parent turn. I want to see which review belongs to which request.\n\n", "typed"],
+  ["Here is the output from the previous run:\n\n```text\n5 review workers started\n1 worker is checking the conversation reader\n```\n\n", "pasted"],
+  ["Make the relationship clear, and keep my written instructions easy to spot. The café example should still render correctly.", "typed"],
+];
+function classifiedPrompt(id, parts) {
+  let end=0;
+  return {id,native_id:id,role:"user",kind:"message",text:parts.map(([text])=>text).join(""),authorship:{typed_words:48,spans:parts.map(([text,category])=>{const start=end;end+=Buffer.byteLength(text);return {start,end,category,words:text.split(/\s+/).length};})}};
+}
+const authoredPrompt = classifiedPrompt("human-mixed",humanPromptParts);
+const authoredTurnMessages = [authoredPrompt,
+  ...Array.from({length:5},(_,index)=>[
+    {id:`review-${index}`,native_id:`review-${index}`,role:"assistant",kind:"delegation",call_id:`reviewer-${index}`,text:JSON.stringify({name:"Task",input:{subagent_type:`Reviewer ${index+1}`,prompt:["Review the parent turn structure","Check nested review groups","Verify human-written text highlighting","Check keyboard navigation","Check the narrow screen layout"][index]}})},
+    {id:`review-reply-${index}`,native_id:`review-reply-${index}`,role:"assistant",kind:"message",parent_native_id:`reviewer-${index}`,text:`Review ${index+1} complete. The assigned check passed.`},
+  ]).flat(),
+  {id:"nested-review",native_id:"nested-review",role:"assistant",kind:"delegation",call_id:"nested-reviewer",parent_native_id:"reviewer-0",text:JSON.stringify({name:"Task",input:{subagent_type:"Nested reviewer",prompt:"Check the child branch under Reviewer 1"}})},
+  {id:"nested-review-reply",native_id:"nested-review-reply",role:"assistant",kind:"message",parent_native_id:"nested-reviewer",text:"The nested review stays under Reviewer 1."},
+  {id:"parent-reply",native_id:"parent-reply",role:"assistant",kind:"message",text:"All five reviews are complete. The outline keeps each review inside the turn that requested it, including the nested review under Reviewer 1."},
+  classifiedPrompt("human-next",[["Now show me the next turn separately.","typed"]]),
+  {id:"next-reply",native_id:"next-reply",role:"assistant",kind:"message",text:"This turn has no sub-agents."},
+];
+const authoredTurnAPI = {
+  ...conversationResultAPI,
+  "POST /api/query/library/:operation": request => {
+    const result=conversationResultAPI["POST /api/query/library/:operation"](request);
+    return !result?.rows?result:{...result,rows:result.rows.map(row=>({...row,title:"Review the conversation reader",first_input:authoredPrompt.text,last_response:"All five reviews are complete.",turn_count:2,subagent_count:6}))};
+  },
+  "GET /api/work/:id": request => ({...defaultApi["GET /api/work/:id"](request),title:"Review the conversation reader",conversations:[{id:rootConversation,provider:"codex",title:"Keep reviews inside the parent turn"}]}),
+  "GET /api/work/:id/conversations/:conversation": {id:rootConversation,workspace_id:workID,provider:"codex",messages:authoredTurnMessages},
+};
+
 async function publishAppUpdate(page, state) {
   await page.evaluate(state => {
     window.pharosUpdateFixture = state;
@@ -121,8 +195,17 @@ const ROUTES = [
   {name:"Ask Pharos ready",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI},
   {name:"Ask Pharos model picker",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:page=>page.locator("#pharos-ask .pharos-model-trigger").click(),shown:"#pharos-model-menu:not([hidden])"},
   {name:"Ask Pharos history",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:page=>page.locator("#pharos-ask .pharos-history-trigger").click(),shown:"#pharos-chat-history:not([hidden])"},
-  {name:"Ask Pharos conversation",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-turn",api:askAPI},
-  {name:"Ask Pharos activity",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-activity:not([hidden])",api:{...askAPI,"GET /api/ask/session":{...askSession,conversation:askSession.conversation.map(turn=>({...turn,activity:[{message:"Browsing available views…",elapsedMs:1200},{message:"Browsing available views — done",elapsedMs:2500},{message:"Checking a destination link…",elapsedMs:3000}]}))}},open:page=>page.locator('#pharos-ask .pharos-activity summary').click(),shown:'#pharos-ask .pharos-activity[open]'},
+  {name:"Ask Pharos conversation",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-turn",api:askAPI,check:async page=>{
+    const visible=await page.locator('.pharos-user-question').first().evaluate(message=>{
+      const viewport=message.closest('.pharos-thread-viewport');
+      if(viewport.scrollHeight>parseFloat(getComputedStyle(viewport).maxHeight)+1)return true;
+      const box=message.getBoundingClientRect(),bounds=viewport.getBoundingClientRect();
+      return box.top>=bounds.top&&box.bottom<=bounds.bottom;
+    });
+    assert.ok(visible,'the first message must fit completely when the conversation fits on screen');
+  }},
+  ...['',' \n '].map(reply=>({name:`Ask Pharos destinations with ${reply?'blank':'empty'} intro`,url:'/?ask_chat=saved-chat',ready:'#pharos-ask .pharos-destinations:not([hidden])',api:{...askAPI,'GET /api/ask/session':{...askSession,conversation:askSession.conversation.map(turn=>({...turn,reply}))}}})),
+  {name:"Ask Pharos error activity",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-activity:not([hidden])",api:{...askAPI,"GET /api/ask/session":{...askSession,conversation:askSession.conversation.map(turn=>({...turn,status:'error',cards:[],reply:'Could not finish checking the destination. Try again.',activity:[{message:"Browsing available views…",elapsedMs:1200},{message:"Browsing available views — done",elapsedMs:2500},{message:"Checking a destination link…",elapsedMs:3000}]}))}},open:page=>page.locator('#pharos-ask .pharos-activity summary').click(),shown:'#pharos-ask .pharos-activity[open]'},
   {name:"Ask Pharos clarification",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-clarification:not([hidden])",api:{...askAPI,"GET /api/ask/session":askClarificationSession}},
   {name:"Ask Pharos opt-in",url:"/",ready:"#pharos-ask .pharos-invitation:not([hidden])",api:{"GET /api/ask/status":{settings:{enabled:false,showInvitation:true},providers:askProviders}},open:page=>page.locator("#pharos-ask .pharos-try").click(),shown:"#pharos-ask .pharos-consent[open]"},
   {name:"Ask Pharos settings",url:"/settings/ask",ready:"#askSettingsPage .ask-settings select",api:askAPI},
@@ -178,8 +261,10 @@ const ROUTES = [
     open: async page => {
       await page.evaluate(() => { window.webkit = {messageHandlers: {pharosLibrary: {postMessage: async () => {}}}}; });
       await activateHeaderTool(page, 'pharosDrive');
-      await page.locator('#pharosStatusPanel summary').click();
-    }, shown: '#pharosStatusPanel .pharos-status-domains',
+      // Every cadence row open, its items listed.
+      const closed = page.locator('#pharosStatusPanel .pharos-status-cadences details:not([open]) summary');
+      while (await closed.count()) await closed.first().click();
+    }, shown: '#pharosStatusPanel .pharos-status-items li',
   })),
   { name: "Home", url: "/", ready: ".home-belt-row .query-card" },
   { name: "Home search composer", url: "/", ready: ".home-search-trigger", open: page => page.getByRole("button", { name: "Search past work", exact: true }).click(), shown: ".home-search-disclosure.is-expanded" },
@@ -196,7 +281,41 @@ const ROUTES = [
   { name: "Daily repository writing", url: "/cards?cards=library&card_search=human-repository-words-trend", ready: '[data-card-id="human-repository-words-trend"] .query-cover-columns' },
   { name: "Weekday distributions", url: "/cards?cards=library&card_search=day%20of%20the%20week", ready: '[data-card-id="human-words-weekday"] .query-shared-box' },
   { name: "Search table", url: "/library", ready: "#queryTableLibrary .qt-row" },
+  { name: "Markdown links in transcript", url: `${work}/conversation/${rootConversation}`, api: markdownLinkAPI, ready: ".conversation-panel .markdown-link" },
+  { name: "Markdown links in Search", url: "/library?view=conversation", api: {...conversationResultAPI,...markdownLinkAPI}, ready: ".conversation-result-card", open: async page => {await page.getByRole("button",{name:/^Browse turns:/}).first().click();await page.getByRole("link",{name:"Running dev server",exact:true}).waitFor();}, shown: ".result-turn-content .markdown-link" },
+  { name: "Search nested reviews and human writing", url: "/library?view=conversation", api: authoredTurnAPI, ready: ".conversation-result-card", open: async page => {await page.getByRole("button",{name:/^Browse turns:/}).first().click();await page.getByRole("button",{name:/Sub-agent · Reviewer 5/}).waitFor();}, shown: ".result-turn-content .human-written" },
+  { name: "Transcript human writing", url: `${work}/conversation/${rootConversation}`, api: authoredTurnAPI, ready: ".conversation-panel .human-written" },
   { name: "Search conversations", url: "/library?view=conversation", ready: ".conversation-result-card" },
+  ...["turn", "sub-agent", "accordion", "summary"].map(selection => ({
+    name: `Search conversation outline ${selection}`, url: "/library?view=conversation", api: conversationResultAPI, ready: ".conversation-result-card",
+    open: async page => {
+      await page.getByRole("button", selection === "summary" ? { name: /^Browse turns: / } : { name: "Browse", exact: true }).click();
+      if (selection === "summary") assert.ok(await page.getByRole("button", { name: "Collapse turns", exact: true }).evaluate(button => button === document.activeElement), "opening from the compact summary keeps keyboard focus on the collapse control");
+      const outline = page.getByRole("navigation", { name: "Conversation outline", exact: true });
+      await outline.getByRole("button", { name: /^Turn 1/ }).first().waitFor();
+      if (selection === "sub-agent") {
+        await outline.locator("summary").filter({ hasText: "Sub-agent session · codex" }).click();
+        await outline.getByRole("button", { name: /Turn 1.*Review the change/ }).click();
+      } else await outline.getByRole("button", { name: /^Turn 3/ }).first().click();
+      await page.getByRole("region", { name: "Selected turn preview" }).locator(".result-message").first().waitFor();
+      if (selection === "accordion") {
+        const toggle = page.getByRole("button", { name: /^(Browse|Collapse turns)$/ });
+        await toggle.focus();
+        await page.keyboard.press("Enter");
+        assert.equal(await toggle.getAttribute("aria-expanded"), "false");
+        assert.ok(await toggle.evaluate(button => button === document.activeElement), "collapsing keeps focus on the disclosure control");
+        await page.keyboard.press("Enter");
+        assert.equal(await toggle.getAttribute("aria-expanded"), "true");
+        await outline.getByRole("button", { name: /^Turn 3/ }).first().waitFor();
+        assert.equal(await outline.getByRole("button", { name: /^Turn 3/ }).first().getAttribute("aria-current"), "true", "reopening preserves the selected turn");
+        await page.reload();
+        await page.getByRole("button", { name: "Collapse turns", exact: true }).waitFor();
+        await outline.getByRole("button", { name: /^Turn 3/ }).first().waitFor();
+        assert.equal(await outline.getByRole("button", { name: /^Turn 3/ }).first().getAttribute("aria-current"), "true", "the URL restores the selected turn after reload");
+      }
+    }, shown: ".conversation-outline",
+  })),
+  { name: "Search compact conversation previews", url: "/library?view=conversation", api: conversationResultAPI, ready: ".conversation-result-preview" },
   { name: "Search display switch", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("group", { name: "Display results as" }).getByRole("button", { name: "Conversations", exact: true }).click(), shown: ".conversation-result-card" },
   { name: "Search content editor", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("button", { name: "Messages", exact: true }).click(), shown: ".explore-search-modal" },
   { name: "Search grouped search", url: exploreGroupedSearch, ready: "#queryTableLibrary .qt-row" },
@@ -354,25 +473,33 @@ const ROUTES = [
     },shown:`#cloud-step-${step-1}`
   })),
   { name: "Sources", url: "/settings/sources", ready: "#sourceGrid .source-card" },
-  { name: "Capture & index", url: "/settings/sync", ready: "#syncHistoryTables .qt-row" },
-  { name: "Capture & index diagnostics", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByText("Performance & verification details", { exact: true }).click(), shown: "#syncDiagnosticTables .qt-row" },
-  { name: "Capture & index run details", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByRole("region", { name: "Recent run history", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" },
-  { name: "Capture & index empty", url: "/settings/sync", ready: "#syncHistoryTables .qt-empty", api: { "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [], source_states: [] } } },
+  { name: "Background updates", url: "/settings/sync", ready: "#syncHistoryTables .qt-row" },
+  { name: "Background updates schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Your writing" }).click(), shown: "#backgroundSchedule .bg-detail" },
+  { name: "Background updates temporary schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", api: { "GET /api/background": temporaryBackgroundDocument }, open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Your writing" }).click(), shown: "#backgroundSchedule .bg-detail" },
+  { name: "Background updates sources", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "New conversations" }).click(), shown: "#backgroundSchedule .bg-sources" },
+  { name: "Background updates diagnostics", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByText("Performance & verification details", { exact: true }).click(), shown: "#syncDiagnosticTables .qt-row" },
+  { name: "Background updates run details", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByRole("region", { name: "Recent run history", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" },
+  { name: "Background updates empty", url: "/settings/sync", ready: "#syncHistoryTables .qt-empty", api: { "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [], source_states: [] } } },
   { name: "Legacy Findings settings", url: "/settings/optimization", ready: ".findings-settings .findings-panel" },
-  { name: "Header settings", url: "/settings/header", ready: "#headerActive .header-tool" },
-  { name: "App preferences", url: "/settings/preferences", ready: "#showMacMenuBar" },
-  { name: "Mac menu disabled", url: "/settings/preferences", ready: "#showMacMenuBar", preferences: { 'pharos-menu-bar': { enabled: false } } },
-  { name: "Mac menu expanded", url: "/settings/preferences", ready: "#showMacMenuBar", open: page => page.getByRole('button', { name: 'Expand', exact: true }).click(), shown: '#menuBarActive button' },
-  { name: "Mac menu syncing", url: "/settings/preferences", ready: "#showMacMenuBar", open: page => page.getByRole('button', { name: 'Expand', exact: true }).click(), shown: '#menuBarActive .menu-bar-detail', api: {
+  { name: "Layout Preferences", url: "/settings/layout", ready: "#headerExpand" },
+  { name: "Header settings", url: "/settings/layout", ready: "#headerExpand", open: page => page.locator('#headerExpand').click(), shown: '#headerActive .header-tool' },
+  { name: "Quick Stats settings", url: "/settings/layout", ready: "#quickStatsExpand", open: page => page.locator('#quickStatsExpand').click(), shown: '#quickStatsEditor button' },
+  { name: "Quick Stats toolbox", url: "/settings/layout", ready: "#quickStatsExpand", preferences: { "pharos-quick-stats-v1": { metrics: ['human_words', 'tokens'], windows: ['today', '24h'] } }, open: page => page.locator('#quickStatsExpand').click(), shown: '#quickStatsPreview td' },
+  { name: "App preferences", url: "/settings/preferences", ready: "#lighthouseSpinOnClick" },
+  { name: "Mac menu disabled", url: "/settings/layout", ready: "#showMacMenuBar", preferences: { 'pharos-menu-bar': { enabled: false } } },
+  { name: "Mac menu expanded", url: "/settings/layout", ready: "#showMacMenuBar", open: page => page.locator('#menuBarExpand').click(), shown: '#menuBarActive button' },
+  { name: "Mac menu syncing", url: "/settings/layout", ready: "#showMacMenuBar", open: page => page.locator('#menuBarExpand').click(), shown: '#menuBarActive .menu-bar-detail', api: {
     'GET /api/menu-bar/status': {...defaultApi['GET /api/menu-bar/status'], library: {activities: [{label: 'Manual sync: evaluating findings while checking every captured conversation and its retained tool results', progress: .22, estimated_completion_at: new Date(Date.now() + 60000).toISOString()}]}},
   } },
-  { name: "Mac menu with all items", url: "/settings/preferences", ready: "#showMacMenuBar", open: page => page.getByRole('button', { name: 'Expand', exact: true }).click(), shown: '#menuBarActive button', preferences: { 'pharos-menu-bar': { cost: true, backup: true, space: true, index: true, eject: true, search: true, analyze: true, optimize: true, capture: true, health: true, sources: true, finder: true } } },
+  { name: "Mac menu with all items", url: "/settings/layout", ready: "#showMacMenuBar", open: page => page.locator('#menuBarExpand').click(), shown: '#menuBarActive button', preferences: { 'pharos-menu-bar': { cost: true, backup: true, space: true, index: true, eject: true, search: true, analyze: true, optimize: true, capture: true, health: true, sources: true, finder: true } } },
   { name: "Workspace overview", url: work, ready: ".delegation-table tbody tr" },
   { name: "Workspace parallel activity", url: `${work}?explorer=parallel`, ready: ".delegation-parallel" },
   { name: "Long transcript", url: `${work}/conversation/${rootConversation}`, ready: ".conversation-panel .turn" },
   { name: "Child transcript", url: `${work}/conversation/conv-nested`, ready: ".conversation-panel .turn" },
   { name: "Quick search", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => page.keyboard.press("ControlOrMeta+k"), shown: "#searchDialog[open]" },
   { name: "Analyze summary", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => activateHeaderTool(page, "usageSummaryToggle"), shown: "#usageSummary" },
+  { name: "Extended Quick Stats", url: "/library", preferences: { "pharos-quick-stats-v1": {metrics:['active_conversations','message_count','user_messages','assistant_messages','tool_calls','failed_tool_calls','tool_failure_rate','delegated_runs','active_repositories','tool_time_ms','agent_time_ms','active_time_ms'], windows:['5m','15m','yesterday','week','month','all']}, "pharos-usage-summary-links":true }, ready: "#queryTableLibrary .qt-row", open: page => activateHeaderTool(page,"usageSummaryToggle"), shown: "#usageSummary" },
+  { name: "Customized Quick Stats", url: "/library", preferences: { "pharos-quick-stats-v1": { metrics: ['cost_usd', 'tokens'], windows: ['today', '6h'] } }, ready: "#queryTableLibrary .qt-row", open: page => activateHeaderTool(page, "usageSummaryToggle"), shown: "#usageSummary" },
   { name: "Clickable Analyze summary", url: "/library", preferences: { "pharos-usage-summary-links": true }, ready: "#queryTableLibrary .qt-row", open: page => activateHeaderTool(page, "usageSummaryToggle"), shown: "#usageSummary" },
   { name: "App navigation", url: "/analyze", ready: ".usage-dashboard .usage-chart", open: async page => {
     if (await page.locator('#appNavigationToggle').isVisible()) await page.locator('#appNavigationToggle').click();
@@ -608,6 +735,64 @@ test("macOS window controls stay clear of the lighthouse when resizing", { skip 
     await settled();
     assert.ok((await brand.boundingBox()).x >= controls.x + controls.width, 'leaving fullscreen restores clearance');
   }
+});
+
+test('Ask Pharos suggestions stay readable, prefill the editor and remember being hidden', { skip }, async t => {
+  const {page,settled,shot,calls}=await open(t,{url:'/',ready:'.pharos-idea-toggle',viewport:{width:2133,height:1070},api:{
+    ...askAPI,
+    'POST /api/ask/session':({body,state})=>state.suggestionDraft={...askSession,...body,conversation:[]},
+    'GET /api/ask/session':({query,state})=>state.suggestionDraft||{...askSession,id:query.get('id'),conversation:[]},
+    'GET /api/query/library/distinct':({query})=>query.get('field')==='repository_name'?{values:['pharos','query-table'],hasMore:false}:undefined,
+  }});
+  const suggestions=page.getByRole('region',{name:'Prompt suggestions',exact:true});
+  const viewport=page.getByRole('region',{name:'Browse prompt suggestions',exact:true});
+  const toggle=suggestions.getByRole('button',{name:'Hide suggestions',exact:true});
+  const readable=async()=>{
+    const clipped=await viewport.locator('[data-reading] .pharos-idea-text').evaluateAll(labels=>labels.some(label=>{
+      const text=document.createRange();text.selectNodeContents(label);
+      const rect=text.getBoundingClientRect(),box=label.closest('button').getBoundingClientRect();
+      return rect.left<box.left||rect.right>box.right||rect.top<box.top||rect.bottom>box.bottom;
+    }));
+    assert.equal(clipped,false,'suggestion questions fit their cards');
+  };
+  for(const theme of ['dark','light']){
+    await page.evaluate(theme=>window.pharosPrefs.set('pharos-theme',theme),theme);
+    await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
+    for(const width of [2133,390,320]){
+      await page.setViewportSize({width,height:1070});await settled();
+      assert.deepEqual(await layoutProblems(page),[]);
+      await readable();
+      await shot(`expanded-${theme}-${width}`);
+    }
+  }
+  await page.setViewportSize({width:2133,height:1070});await settled();
+  for(let step=0;step<7;step++){
+    await suggestions.getByRole('button',{name:'Next suggestions',exact:true}).click();
+    await readable();
+  }
+  await suggestions.getByRole('button',{name:'Refresh suggestions',exact:true}).click();
+  await readable();
+  const card=viewport.locator('[data-reading]').filter({hasText:'repository'}).first();
+  const prompt=await card.locator('.pharos-idea-text').textContent();
+  await card.click();
+  const editor=page.getByRole('textbox',{name:'Ask a question',exact:true});
+  assert.equal(await editor.evaluate(element=>element.value),prompt);
+  assert.ok(await editor.evaluate(element=>element===document.activeElement));
+  assert.ok(!calls.some(call=>call.path==='/api/ask/send'),'choosing an idea does not send a question');
+  await toggle.focus();await page.keyboard.press('Enter');
+  await viewport.waitFor({state:'hidden'});
+  const show=suggestions.getByRole('button',{name:'Show suggestions',exact:true});
+  assert.equal(await show.getAttribute('aria-expanded'),'false');
+  assert.ok(await show.evaluate(element=>element===document.activeElement));
+  assert.equal(await editor.evaluate(element=>element.value),prompt,'collapsing preserves the draft');
+  await page.evaluate(()=>window.pharosPrefs.flush());await settled();
+  await page.reload();await show.waitFor();await settled();
+  assert.ok(await viewport.isHidden(),'the library preference survives reload');
+  await shot('collapsed');
+  await show.click();await viewport.waitFor();await settled();
+  await page.evaluate(()=>window.pharosPrefs.flush());
+  await page.reload();await toggle.waitFor();await viewport.waitFor();await settled();
+  assert.equal(await toggle.getAttribute('aria-expanded'),'true');
 });
 
 test("dashboard collection wraps after four bookmarked cards", { skip }, async t => {
@@ -893,24 +1078,23 @@ test("Card Library restores saved covers while fresh queries are pending", { ski
 // window, and some at every window. Open the 7-day one where there is one.
 const cardLinks = JSON.parse(readFileSync(new URL('../../../testdata/site-map-cases.json', import.meta.url), 'utf8')).cards;
 
-// Card analyses use their own source grain and shared cover renderer. The
-// model/unit suite owns mathematical parity; the browser checks accessibility
-// of navigation and that every chart family fits the available viewport.
-for (const id of ['human-words', 'cost-repos', 'machine-time', 'skill-evidence', 'tool-failure-rates', 'mcp-response-size', 'carbon-trend', 'parallel-days', 'machine-latency-trend', 'session-input-output', 'human-message-lengths', 'writing-hours']) {
-  for (const width of [1504, 390, 320]) test(`Expanded card ${id} fits at ${width}px`, { skip }, async t => {
+// Card links open full dashboards. Check navigation into supporting queries
+// and back, and that each chart family fits the available viewport.
+for (const id of ['human-words', 'cost-repos', 'machine-time', 'skill-evidence', 'tool-failure-rates', 'mcp-response-size', 'carbon-trend', 'parallel-days', 'machine-latency-trend', 'session-input-output', 'human-message-lengths', 'writing-hours', 'session-human-output', 'error-signatures']) {
+  for (const width of [1504, 390, 320]) test(`Card dashboard ${id} fits at ${width}px`, { skip }, async t => {
     const item = cardLinks.find(card => card.id === id && card.days === 7) ?? cardLinks.find(card => card.id === id);
-    const app = await open(t, { url: item.url, viewport: { width, height: 933 }, ready: '.card-analysis' });
+    const app = await open(t, { url: item.url, viewport: { width, height: 933 }, ready: '.usage-query-destinations a' });
     const { page } = app;
     await app.settled();
     assert.equal(await page.getByRole('alert').count(), 0, 'the matching analysis is available');
     assert.deepEqual(await layoutProblems(page), []);
-    const details = page.getByRole('link', { name: 'View supporting query', exact: true });
+    const details = page.locator('.usage-query-destinations a').first();
     await details.waitFor();
-    await app.shot(`expanded-${id}`);
+    await app.shot(`card-dashboard-${id}`);
     await details.click();
     await page.locator('.usage-workspace-table').waitFor();
-    await page.getByRole('link', { name: 'Back to dashboard', exact: true }).click();
-    await page.getByRole('region', { name: 'Card analysis', exact: true }).waitFor();
+    await page.getByRole('link', { name: /^Back to dashboard/ }).click();
+    await page.locator('.usage-dashboard .usage-query-destinations a').first().waitFor();
     await app.settled();
     assert.deepEqual(await layoutProblems(page), []);
   });
@@ -927,4 +1111,108 @@ for (const choice of ['today', '24h']) test(`Query time window picker keeps ${ch
   await app.settled();
   assert.equal(await picker.inputValue(), choice);
   assert.equal(new URL(app.page.url()).searchParams.get('window_mode'), choice === 'today' ? 'today' : 'relative');
+});
+
+
+test("Card dashboard opens from the Card Library and supports changing views and reloading", { skip }, async t => {
+  const app = await open(t, { url: '/cards?card_search=error-signatures&card_topic=all&card_window=7', ready: '.query-card-open' });
+  const { page } = app;
+  await page.locator('.query-card-open').first().click();
+  const view = page.getByRole('combobox', { name: 'View', exact: true });
+  await view.waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('analyze_topic'), 'calls');
+  await view.selectOption('trend');
+  await page.waitForFunction(() => JSON.parse(new URLSearchParams(location.search).get('analyze_chart')).view === 'trend');
+  await page.reload();
+  await page.getByRole('combobox', { name: 'View', exact: true }).waitFor();
+  assert.equal(await page.getByRole('combobox', { name: 'View', exact: true }).inputValue(), 'trend');
+  await app.settled();
+  assert.deepEqual(app.problems(), []);
+});
+
+
+const oldActivitySource = { ...EMPTY_QUERY, where: [
+  { field: "root_effort", op: "=", value: "high" },
+  { field: "event_at", op: ">=", value: "2026-10-01T15:00:00.000Z" },
+  { field: "event_at", op: "<", value: "+0s" },
+] };
+function oldActivityCard(token = encodeQuery(oldActivitySource)) {
+  return `/analyze?${new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: "human", analyze_data: "writing_messages",
+    analyze_chart: JSON.stringify({ view: "trend", metric: "words" }), analyze_filters: encodeQuery(EMPTY_QUERY),
+    card_id: "session-human-output", card_query: "conversation_activity", q_conversation_activity: token,
+    window_mode: "today", window_days: "1", window_dataset: "conversation_activity", window_field: "event_at", window_timezone: "Asia/Tokyo",
+  })}`;
+}
+for (const durable of [false, true]) test(`Older card dashboard restores ${durable ? "durable" : "inline"} sources before rendering`, { skip }, async t => {
+  const code = "eeeeeeeeeeeeeeeeeeeeee";
+  const app = await open(t, { url: oldActivityCard(durable ? `@${code}` : undefined), ready: '.usage-query-destinations a',
+    api: { "GET /api/query-snapshots": { version: 1, code, token: encodeQuery(oldActivitySource), createdAt: 0 } },
+  });
+  const { page } = app;
+  await page.getByRole('heading', { name: 'Conversation Input and Output', exact: true }).waitFor();
+  assert.equal(await page.getByRole('combobox', { name: 'View', exact: true }).inputValue(), 'scatter');
+  const params = new URL(page.url()).searchParams;
+  assert.equal(params.get('analyze_topic'), 'activity');
+  assert.equal(params.get('analyze_window'), 'today');
+  assert.equal(params.get('analyze_timezone'), 'Asia/Tokyo');
+  assert.ok(app.calls.filter(call => call.method === 'POST' && call.path.startsWith('/api/query/')).every(call => !call.path.startsWith('/api/query/writing_messages/')), 'the old dashboard never executes');
+  await page.locator('.usage-query-destinations a').first().click();
+  await page.locator('.usage-workspace-table').waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('window_timezone'), 'Asia/Tokyo');
+  await page.getByRole('link', { name: /^Back to dashboard/ }).click();
+  await page.locator('.usage-query-destinations a').first().waitFor();
+  await page.reload();
+  await page.getByRole('combobox', { name: 'View', exact: true }).waitFor();
+  assert.equal(await page.getByRole('combobox', { name: 'View', exact: true }).inputValue(), 'scatter');
+  await app.settled();
+});
+
+test('Older card dashboard restoration cannot overwrite a later route', { skip }, async t => {
+  let release, started;
+  const gate = new Promise(resolve => { release = resolve; }), requested = new Promise(resolve => { started = resolve; });
+  t.after(() => release());
+  const code = 'ffffffffffffffffffffff';
+  const app = await open(t, { url: '/analyze?analyze_topic=tokens', ready: '.usage-query-destinations a',
+    api: { 'GET /api/query-snapshots': async () => { started(); await gate; return { version: 1, code, token: encodeQuery(oldActivitySource), createdAt: 0 }; } },
+  });
+  const { page } = app;
+  await page.evaluate(url => window.pharosNavigate(url), oldActivityCard(`@${code}`));
+  await requested;
+  await page.getByRole('status').filter({ hasText: 'Opening dashboard' }).waitFor();
+  await page.evaluate(() => window.pharosNavigate('/analyze?analyze_mode=dashboards&analyze_topic=calls&analyze_data=tool_calls'));
+  await page.getByRole('heading', { name: 'Tool Calls', exact: true }).waitFor();
+  release();
+  await app.settled();
+  assert.equal(new URL(page.url()).searchParams.get('analyze_topic'), 'calls');
+  await page.getByRole('heading', { name: 'Tool Calls', exact: true }).waitFor();
+});
+
+test("Markdown local destinations become navigable only after availability is confirmed", { skip }, async t => {
+  const app=await open(t,{url:`${work}/conversation/${rootConversation}`,api:markdownLinkAPI,ready:".markdown-link"});
+  const {page}=app;
+  await page.waitForFunction(()=>!document.querySelector('[data-link-status="checking"]'));
+  const source=page.getByRole("link",{name:"Source file",exact:true});
+  assert.ok(await source.getAttribute("href"));
+  assert.equal(await source.getAttribute("aria-disabled"),null);
+  assert.equal(await page.getByRole("link",{name:"Running dev server",exact:true}).getAttribute("href"),"http://localhost:5173/");
+  for(const name of ["Missing file","Stopped dev server"]){
+    const link=page.getByRole("link",{name,exact:true});
+    assert.equal(await link.getAttribute("aria-disabled"),"true");
+    assert.equal(await link.getAttribute("href"),null);
+    await link.focus();await page.keyboard.press("Enter");
+    assert.equal(new URL(page.url()).pathname,`${work}/conversation/${rootConversation}`);
+  }
+  const checks=app.calls.filter(call=>call.path==='/api/markdown-link'&&call.query.get('href')==='internal/archive/api.go:12');
+  assert.equal(checks.length,1,"repeated file links share one check");
+  assert.equal(checks[0].query.get('workspace'),workID);
+  for(const [name,href] of [["Library view","/library?view=conversation"],["Filtered usage","/analyze?analyze_topic=tokens"]]){
+    const link=page.getByRole("link",{name,exact:true});
+    assert.equal(await link.getAttribute("href"),href);
+    assert.equal(await link.getAttribute("aria-disabled"),null);
+    assert.equal(app.calls.some(call=>call.path==='/api/markdown-link'&&call.query.get('href')===href),false,"Pharos routes must not be probed as files");
+  }
+  await app.shot("link-states");
+  await page.getByRole("link",{name:"Library view",exact:true}).click();
+  await page.waitForURL(url=>url.pathname==='/library'&&url.searchParams.get('view')==='conversation');
+  await page.locator('.conversation-result-card').first().waitFor();
 });

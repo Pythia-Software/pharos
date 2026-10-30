@@ -648,6 +648,15 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 		clauses = append(clauses, "c.workspace_id IN (SELECT value FROM json_each(?))")
 		arguments = append(arguments, jsonText(o.WorkspaceIDs))
 	}
+	if key == "d.message_rowid" && scoped {
+		// Surface scans stream documents before joining message bodies. A scope
+		// only on m/c still walks every document in the archive. Apply the same
+		// scope to the indexed projection so a conversation/workspace seek bounds
+		// that stream without changing its row order or continuation semantics.
+		scope, args := textScopeSQL(o)
+		clauses = append(clauses, strings.ReplaceAll(scope, "m.", "d."))
+		arguments = append(arguments, args...)
+	}
 	if o.Repository != "" {
 		clauses = append(clauses, `w.repository_id IN (SELECT id FROM repositories WHERE instr(lower(display_name),lower(?))>0 OR instr(lower(COALESCE(canonical_remote,'')),lower(?))>0)`)
 		arguments = append(arguments, o.Repository, o.Repository)

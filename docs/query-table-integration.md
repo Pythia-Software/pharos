@@ -1,16 +1,22 @@
-# Query Table 0.9.7 in Pharos
+# Query Table 0.9.8 in Pharos
 
-Pharos pins core, React, UI and codegen to the published npm **0.9.7** packages,
-and the Go adapter to the published **v0.9.7** module, with no replacement or
+Pharos pins core, React, UI and codegen to the published npm **0.9.8** packages,
+and the Go adapter to the published **v0.9.8** module, with no replacement or
 local copy. The npm lockfile records registry URLs and integrities; `go.sum`
 records the released Go module. Clean builds use these pinned sources without
 another Query Table checkout.
 
-The [upstream migration guide](https://github.com/Pythia-Software/query-table/blob/v0.9.7/docs/host-integration-next-release.md)
-and [release notes](https://github.com/Pythia-Software/query-table/blob/v0.9.7/CHANGELOG.md)
+The [upstream inspection guide](https://github.com/Pythia-Software/query-table/blob/v0.9.8/docs/json-inspection-state.md)
+and [release notes](https://github.com/Pythia-Software/query-table/blob/v0.9.8/CHANGELOG.md)
 define the release contract. Optional worktree linking is described in
 [local development](query-table-local-development.md). The earlier
 [next-release handoff](query-table-next-release-handoff.md) is a historical record.
+
+## 0.9.8 changes
+
+Native item property JSON inspectors now retain every inspection choice in `itemDetails.jsonInspections`. Pharos returns its custom JSON renderer directly so the published native property binding supplies controlled state and attention. The query surface passes one cancellable registry through native details; URL `detail:` reveal references load exact records/properties/paths, preserve focus and keep filters/pagination intact. See [URL view state](url-view-state.md) for the CLI contract, restoration tests and remaining upstream blockers.
+
+Core, React, UI, codegen and Go are pinned together; the completeness gate also checks codegen and the cross-language version. The [0.9.8 integration guide](https://github.com/Pythia-Software/query-table/blob/v0.9.8/docs/json-inspection-state.md) defines the supported API.
 
 ## 0.9.7 changes
 

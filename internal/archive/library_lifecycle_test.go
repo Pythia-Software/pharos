@@ -213,6 +213,15 @@ func TestLibraryTransferRetainedEvidence(t *testing.T) {
 	if catalogCount(t, recovered, "copy_evidence") != len(evidence) {
 		t.Fatal("recovery lost evidence authority")
 	}
+	// Background updates are on by default; a recovered library starts with
+	// them off until someone turns them on.
+	if c := reopenCatalog(t, recovered.CatalogPath); func() bool {
+		defer c.Close()
+		settings, err := c.syncSettings(t.Context())
+		return err != nil || settings.Enabled
+	}() {
+		t.Fatal("a recovered library starts with background updates on")
+	}
 	// A logical-only source still has a closure to validate without any native
 	// database snapshot. Missing row chunks must never publish a usable library.
 	logical, _ := lifecycleLibraries(t)
@@ -322,6 +331,22 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 	if err := c.SetMCPEnabled(false); err != nil {
 		t.Fatal(err)
 	}
+	expiresAt := formatTime(time.Now().Add(7 * 24 * time.Hour))
+	temporaryCadences := map[string]temporaryCadence{
+		"writing":  {Cadence: cadenceHourly, ExpiresAt: expiresAt},
+		"findings": {Cadence: cadenceDaily, ExpiresAt: expiresAt},
+	}
+	tx := seedTx(t, c.DB)
+	if _, err := tx.Exec(`INSERT INTO background_settings(host_id,placements_json) VALUES(?,?)
+	 ON CONFLICT(host_id) DO UPDATE SET placements_json=excluded.placements_json`, currentHost().ID, jsonText(map[string]string{"writing": cadenceDaily, "findings": cadenceHourly})); err != nil {
+		t.Fatal(err)
+	}
+	for item, temporary := range temporaryCadences {
+		if _, err := tx.Exec(`INSERT INTO background_temporary_cadences(host_id,item,cadence,expires_at) VALUES(?,?,?,?)`, currentHost().ID, item, temporary.Cadence, temporary.ExpiresAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commitSeed(t, tx)
 	for id, expression := range map[string]string{"seconds": "[duration_ms]/1000", "double_seconds": "[@computed/seconds]*2"} {
 		if _, err := (qt.SQLiteComputedColumnStore{DB: c.DB}).Save(context.Background(), queryTableScope, "pharos_tool_calls", qt.SaveComputedColumnRequest{Column: qt.ComputedColumn{ID: id, Label: id, Expression: qt.ComputedExpression{Language: "qt-expr", Version: 1, Source: expression}}}); err != nil {
 			t.Fatal(err)
@@ -424,6 +449,19 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 		}
 	}
 	c = reopenCatalog(t, a.CatalogPath)
+	settings, err := c.backgroundSettings(t.Context(), time.Now())
+	if err != nil || jsonText(settings.Temporary) != jsonText(temporaryCadences) {
+		t.Fatalf("move changed the source temporary schedules or their expiry: %+v (%v)", settings.Temporary, err)
+	}
+	for id, temporary := range temporaryCadences {
+		item, _ := backgroundItemByID(id)
+		if got := settings.cadence(item); got != temporary.Cadence {
+			t.Fatalf("move ended the temporary schedule for %s: got %s, want %s", id, got, temporary.Cadence)
+		}
+	}
+	if catalogCount(t, b, "background_temporary_cadences") != 0 {
+		t.Fatal("independent temporary schedules merged into the destination")
+	}
 	if enabled, err := c.MCPEnabled(); err != nil || enabled {
 		t.Fatal("move reset source MCP consent", err)
 	}

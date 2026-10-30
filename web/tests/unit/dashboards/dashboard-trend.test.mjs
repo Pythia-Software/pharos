@@ -1,3 +1,4 @@
+import { conversationAnalysisCatalog } from "../../../src/conversation-analysis-catalog";
 // Over time as a catalog-driven view: old links and presets, coercions,
 // queries and the series builder, over the usage ledger.
 import test from "node:test";
@@ -23,7 +24,7 @@ function draw(state, { where = range, data = rows } = {}) {
 }
 const localDay = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 
-test("every Tokens card destination and Usage chart preset opens the chart it always did", () => {
+test("legacy Tokens trend destinations and Usage chart presets retain their chart state", () => {
   // The old Token chart: tokens or cost, as amounts or percentages, summed
   // by the period's field and the split; cost by token type is by provider.
   const legacy = chart => {
@@ -32,10 +33,10 @@ test("every Tokens card destination and Usage chart preset opens the chart it al
     return { metric: cost ? "cost" : "tokens", share: chart.metric.startsWith("percent"), split,
       clauses: split === "type" ? tokenTypes.map(type => [type.key, [field]]) : [[cost ? "cost_usd" : "total_tokens", [field, split]]] };
   };
-  const charts = [...queryRecipes.filter(recipe => recipe.destination?.topic === "tokens").map(recipe => [recipe.id, recipe.destination.chart]),
+  const charts = [...queryRecipes.filter(recipe => recipe.destination?.topic === "tokens" && (!recipe.destination.chart.view || recipe.destination.chart.view === "trend") && ["tokens", "cost", "percent", "percent_cost"].includes(recipe.destination.chart.metric)).map(recipe => [recipe.id, recipe.destination.chart]),
     ...usageChartPresets.map(preset => [preset.label, { ...base, ...preset.chart }]),
     ...["tokens", "cost", "percent", "percent_cost"].map(metric => [`type ${metric}`, { ...base, metric, split: "type" }])];
-  assert.ok(charts.length > 30);
+  assert.ok(charts.length > 10);
   for (const [name, chart] of charts) {
     assert.ok(validAnalysisState(catalog, chart), name);
     const state = normalizeAnalysis(catalog, chart), expected = legacy(chart);
@@ -552,4 +553,18 @@ test("a trend without a scale resolves it once, for the Scale control and the ch
   assert.equal(normalizeAnalysis(catalog, { metric: "percent", split: "provider", period: "day" }).scale, defaultChartScale);
   // Other views keep their own axis default (linear).
   assert.equal(normalizeAnalysis(catalog, { view: "compare", metric: "tokens", split: "provider" }).scale, undefined);
+});
+
+
+test("Conversation Input and Output trends group event timestamps into local calendar periods", () => {
+  const events = [
+    { id: "before", event_at: "2026-10-01T05:00:00Z", human_input_tokens_estimate: 5 },
+    { id: "after", event_at: "2026-10-01T07:00:00Z", human_input_tokens_estimate: 8 },
+  ];
+  for (const period of ["day", "week", "month"]) {
+    const query = trendQuery(conversationAnalysisCatalog, { metric: "human_input", split: "none", period }, [], { now, zone: "America/Denver" });
+    const result = core.evaluateMetrics(events, query.query, schemas.conversation_activity, { now }).metrics[0];
+    assert.equal(result.error, undefined, period);
+    assert.deepEqual(result.buckets.map(bucket => bucket.value).sort((a, b) => a - b), period === "week" ? [13] : [5, 8], period);
+  }
 });

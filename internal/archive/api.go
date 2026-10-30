@@ -56,6 +56,9 @@ type SyncRun struct {
 	// StopRequested is set while a running run winds down after a stop
 	// request: it finishes the record in hand and keeps everything written.
 	StopRequested bool `json:"stop_requested,omitempty"`
+	// Changed is a run that indexed nothing but updated what pages show (a
+	// background pass), so they refresh when it ends.
+	Changed bool `json:"changed,omitempty"`
 }
 type Server struct {
 	Catalog  *Catalog
@@ -77,6 +80,8 @@ type Server struct {
 	estimator activityEstimator
 	forecasts forecastStore
 	auto      automaticSync
+	// background is the Hourly and Daily schedule's state (background.go).
+	background backgroundState
 	// Leave catalog connections available for rows/previews while metadata scans run.
 	queryMetadata chan struct{}
 	ask           askState
@@ -97,6 +102,7 @@ type Server struct {
 
 func NewServer(config Config, catalog *Catalog) *Server {
 	server := &Server{Catalog: catalog, config: config, runs: []*SyncRun{}, queryMetadata: make(chan struct{}, 1)}
+	server.background.wake = make(chan struct{}, 1)
 	server.life.init()
 	server.ops = newOpRegistry("service")
 	server.ops.releasing = server.releasing
@@ -170,6 +176,7 @@ func (s *Server) Serve() error {
 	s.daemon("maintainQueryTextIndexes", s.Catalog.maintainQueryTextIndexes)
 	s.daemon("keepWALSmall", func(ctx context.Context) { s.Catalog.keepWALSmall(ctx, 10*time.Second, walSizeLimit) })
 	s.daemon("automaticLoop", s.automaticLoop)
+	s.daemon("backgroundLoop", s.backgroundLoop)
 	s.daemon("cloudScheduleLoop", s.cloudScheduleLoop)
 	s.daemon("watchFeatureFlags", s.Catalog.watchFeatureFlags)
 	s.daemon("compressCaptures", s.compressCapturesLoop)
@@ -283,7 +290,7 @@ func (s *Server) authorized(r *http.Request) bool {
 // of which serves the single-page UI.
 func isUIPage(path string) bool {
 	switch path {
-	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/preferences", "/settings/ask", "/sources", "/activity", "/analyze", "/tools", "/health", "/mcp", "/findings":
+	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/layout", "/settings/preferences", "/settings/ask", "/sources", "/activity", "/analyze", "/tools", "/health", "/mcp", "/findings":
 		return true
 	}
 	return strings.HasPrefix(path, "/work/")
@@ -300,12 +307,16 @@ var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/status-panel.js":      {"status-panel.js", "text/javascript; charset=utf-8"},
 	"/assets/cloud-backup.js":      {"cloud-backup.js", "text/javascript; charset=utf-8"},
 	"/assets/sync.js":              {"sync.js", "text/javascript; charset=utf-8"},
+	"/assets/background.js":        {"background.js", "text/javascript; charset=utf-8"},
 	"/assets/carbon.js":            {"carbon.js", "text/javascript; charset=utf-8"},
 	"/assets/menu-bar.js":          {"menu-bar.js", "text/javascript; charset=utf-8"},
+	"/assets/quick-stats.js":       {"quick-stats.js", "text/javascript; charset=utf-8"},
 	"/assets/header.js":            {"header.js", "text/javascript; charset=utf-8"},
 	"/assets/ask-pharos.html":      {"ask-pharos.html", "text/html; charset=utf-8"},
 	"/assets/ask-pharos.css":       {"ask-pharos.css", "text/css; charset=utf-8"},
 	"/assets/ask-model.js":         {"ask-model.js", "text/javascript; charset=utf-8"},
+	"/assets/ask-glow.js":          {"ask-glow.js", "text/javascript; charset=utf-8"},
+	"/assets/ask-prompt.js":        {"ask-prompt.js", "text/javascript; charset=utf-8"},
 	"/assets/ask-pharos.js":        {"ask-pharos.js", "text/javascript; charset=utf-8"},
 	"/assets/reader-model.js":      {"reader-model.js", "text/javascript; charset=utf-8"},
 	"/assets/storage-breakdown.js": {"storage-breakdown.js", "text/javascript; charset=utf-8"},
@@ -317,6 +328,10 @@ var uiAssets = map[string]struct{ name, contentType string }{
 func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	switch {
+	case path == "/api/markdown-link":
+		s.markdownLink(w, r)
+	case path == "/api/markdown-favicon":
+		s.markdownFavicon(w, r)
 	case isUIPage(path):
 		writeHTML(w, appHTML())
 	case strings.HasPrefix(path, "/conversation/"):
@@ -526,6 +541,9 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeResult(w, value, err)
 	case path == "/api/usage/summary":
 		value, err := s.Catalog.UsageSummary(r.Context())
+		if err == nil && r.URL.Query().Get("details") == "1" {
+			err = s.Catalog.addQuickStatsCounts(r.Context(), value)
+		}
 		writeResult(w, value, err)
 	case path == "/api/menu-bar/status":
 		value, err := s.menuBarStatus(r.Context())
@@ -579,6 +597,8 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		s.serveOperations(w, r)
 	case path == "/api/status":
 		s.serveStatus(w, r)
+	case path == "/api/background":
+		s.getBackground(w, r)
 	case path == "/api/status/stream":
 		s.serveStatusStream(w, r)
 	case path == "/api/health/drive":
@@ -676,6 +696,10 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 
 	case strings.HasPrefix(path, "/api/sync/") || path == "/api/library/update":
 		s.postIncrementalSync(w, r, body)
+	case path == "/api/background/settings":
+		s.postBackgroundSettings(w, r, body)
+	case path == "/api/background/run":
+		s.postBackgroundRun(w, r, body)
 	case path == "/api/upgrade":
 		// The upgrade reads and rewrites much of the catalog, so it runs in the
 		// background; /api/upgrade and the library status report progress. A

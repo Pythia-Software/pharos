@@ -104,6 +104,13 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 		return qt.QueryResultV3{}, nil, recordErr
 	}
 	defer record.close()
+	if dataset == "parallelism" {
+		var err error
+		ctx, err = withParallelismPreferences(ctx, params.Get("parallelism_settings"))
+		if err != nil {
+			return qt.QueryResultV3{}, nil, err
+		}
+	}
 	if dataset == "usage" {
 		var err error
 		ctx, err = withCarbonPreferences(ctx, params.Get("carbon_settings"))

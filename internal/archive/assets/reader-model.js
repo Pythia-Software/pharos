@@ -183,7 +183,7 @@ function normalizeMessages(messages){
   const output=[],reports=contextTokenReports(messages,conversationTokenReports(messages));
   messages.forEach((message,index)=>{
     const original=message.raw_text||message.text,parsed=messageJSON(message),value=parsed?.payload&&typeof parsed.payload==='object'?parsed.payload:parsed;
-    const base={...message,native_id:message.native_id||`event-${index}`,raw_text:original};
+    const base={...message,...(message.authorship?{authorship_text:message.authorship_text??message.text}:{}),native_id:message.native_id||message.id||`event-${index}`,raw_text:original};
     let emitted=false;
     const emit=(fields,suffix='')=>{const normalized={...base,...fields,tokenReport:emitted?null:reports[index],native_id:base.native_id+suffix};messageJSONCache.set(normalized,{...messageJSONCache.get(message)});output.push(normalized);emitted=true};
     if(['thinking','reasoning','analysis'].includes(message.kind)){emit({kind:'reasoning'});return}
@@ -229,6 +229,27 @@ function conversationGraph(messages){
   let current=null;for(const message of top){if(message.role==='user'&&message.kind==='message'){if(current)turns.push(current);current={human:message,events:[]}}else{if(!current)current={human:null,events:[]};current.events.push(message)}}if(current)turns.push(current);
   return{childrenByParent,delegationResultsByCall,toolResultsByCall,consumed,turns};
 }
+// A compact outline for result cards, using the reader's normalized graph.
+// Inline delegations stay under their owning turn; paired results are not turns.
+function conversationOutline(conversation){
+  const graph=conversationGraph(conversationMessages(conversation)),seen=new Set();
+  const agents=events=>events.filter(message=>message.kind==='delegation'&&!seen.has(message)).map(message=>{
+    seen.add(message);
+    const {input}=toolPayload(message),children=[...new Set([message.native_id,message.call_id].filter(Boolean).flatMap(key=>graph.childrenByParent.get(key)||[]))],replies=children.filter(item=>item.kind==='message'),results=graph.delegationResultsByCall.get(message.call_id)||[];
+    return {id:message.native_id||message.call_id||message.id,kind:'agent',label:String(input.subagent_type||input.agent_type||input.name||'Sub-agent'),
+      prompt:String(input.description||input.prompt||input.task||messageSummary(message)||'Sub-agent'),
+      human:{role:'user',text:input.prompt||input.description||input.task||messageSummary(message)},
+      response:replies.at(-1)||(results.length?{role:'assistant',text:readableValue(toolPayload(results.at(-1)).content)}:null),tools:children.filter(item=>item.kind==='tool_call').length,children:agents(children)};
+  });
+  let turnNumber=0;
+  return graph.turns.map((turn,index)=>({id:turn.human?.id||turn.human?.native_id||'setup-'+index,kind:'turn',label:turn.human?'Turn '+(++turnNumber):'Session setup',
+    prompt:messageSummary(turn.human)||'Session setup',human:turn.human,response:turn.events.filter(message=>message.kind==='message').at(-1)||null,
+    tools:turn.events.filter(message=>message.kind==='tool_call').length,children:agents(turn.events)}));
+}
+// Publish the result-card model with the model script itself, independently of
+// the page shell's rendering and startup work.
+window.pharosConversationOutline=conversationOutline;
+
 // Messages a turn or sub-agent owns: its events, their results, and nested
 // agents' events. Token totals, search, and reveal all use this one walk.
 function ownedMessages(roots,context,visited=new Set()){const owned=[],queue=roots.filter(Boolean);for(let cursor=0;cursor<queue.length;cursor++){const message=queue[cursor];if(visited.has(message))continue;visited.add(message);owned.push(message);if(message.kind==='delegation')for(const key of new Set([message.native_id,message.call_id].filter(Boolean)))queue.push(...(context.childrenByParent.get(key)||[]));if(['tool_call','delegation'].includes(message.kind))queue.push(...(context.toolResultsByCall.get(message.call_id)||[]),...(context.delegationResultsByCall.get(message.call_id)||[]))}return owned}
@@ -292,6 +313,18 @@ function filePathParts(path,roots){
 // Transcript filter and find
 const TRANSCRIPT_CATEGORIES=[['prompts','Prompts','Messages you, or a parent agent, sent'],['response','Final responses','The last reply of each turn'],['replies','Interim replies','Agent messages before the final reply of a turn'],['thinking','Thinking','Reasoning the agent recorded'],['edits','File edits','Edits and writes'],['commands','Commands','Shell commands'],['reads','Reads & searches','File reads, listings, and searches'],['tools','Other tools','Browser, todo, MCP, and other tool calls'],['agents','Sub-agents','Delegated agent runs'],['events','System events','Injected context, attachments, run events, and errors'],['usage','Token usage','Token usage events']];
 const TRANSCRIPT_LEVELS=[['all','All','Every event',TRANSCRIPT_CATEGORIES.map(([key])=>key)],['all-minus-usage','All minus usage','Every event except token usage',TRANSCRIPT_CATEGORIES.map(([key])=>key).filter(key=>key!=='usage')],['thought','Chain of thought','Prompts, replies, and thinking; no tool activity',['prompts','response','replies','thinking']],['primary','Primary only','Prompts and each turn’s final response',['prompts','response']],['custom','Custom','Choose each kind of event',null]];
+// Named URL presets stand alone. A category list is required only for Custom;
+// older links with just a category list still select Custom.
+function transcriptFilterState(params,stored={}){
+  const level=params.get('reader_filter_level');
+  if(level!=='custom'&&TRANSCRIPT_LEVELS.some(([key])=>key===level))return{level,custom:Array.isArray(stored?.custom)?stored.custom.filter(key=>TRANSCRIPT_CATEGORIES.some(([id])=>id===key)):null};
+  const keys=TRANSCRIPT_CATEGORIES.map(([key])=>key);
+  if(params.has('reader_filter')){
+    try{const custom=JSON.parse(params.get('reader_filter'));if(Array.isArray(custom)&&custom.every(key=>keys.includes(key)))return{level:'custom',custom}}catch{}
+  }
+  const saved=stored&&typeof stored==='object'?stored:{};
+  return{level:TRANSCRIPT_LEVELS.some(([key])=>key===saved.level)?saved.level:'all',custom:Array.isArray(saved.custom)?saved.custom.filter(key=>keys.includes(key)):null};
+}
 function transcriptShown(state){return new Set(state.level==='custom'?state.custom||[]:TRANSCRIPT_LEVELS.find(([key])=>key===state.level)[3])}
 function transcriptCategory(message,context){
   if(message.kind==='delegation')return'agents';if(message.kind==='reasoning')return'thinking';
@@ -370,48 +403,119 @@ function dedentText(value){const lines=String(value).replace(/^\s*\n|\s+$/g,'').
 // A message's one-line summary: its prose, or the tags of its XML blocks.
 function proseSummary(text){const segments=xmlSegments(text),prose=segments.filter(segment=>!segment.tag).map(segment=>segment.text).join(' ');return prose.trim()?prose:segments.map(segment=>`<${segment.tag}>`).join(' ')}
 function messageSummary(message){return proseSummary(displayText(message))}
+function compactMessageSummary(message){
+  const inline=new Set(['a','span','strong','em','del','code']),text=item=>typeof item==='string'?item:(item.children||[]).map(text).join('')+(inline.has(item.tag)?'':' ');
+  return shortText(text(markdownTree(messageSummary(message))),640);
+}
+
+// Authorship offsets refer to UTF-8 bytes in the stored body. Keep that body
+// through normalization, then project only an exact display string (including
+// JSON escapes). Missing or ambiguous classification never implies human text.
+function humanWritingMask(message,text=displayText(message)){
+  if(message?.role!=='user')return '';
+  const source=String(message.authorship_text??message.text??''),spans=(message.authorship?.spans||[]).filter(span=>span.category==='typed');
+  if(!spans.length)return '';
+  const bytes=new TextEncoder().encode(source),decoder=new TextDecoder(),mask=Array(source.length).fill('0');
+  for(const span of spans){
+    if(!Number.isInteger(span.start)||!Number.isInteger(span.end)||span.start<0||span.end>bytes.length||span.end<=span.start)continue;
+    const start=decoder.decode(bytes.subarray(0,span.start)).length,end=decoder.decode(bytes.subarray(0,span.end)).length;
+    mask.fill('1',start,end);
+  }
+  const flags=mask.join('');if(source===text)return flags;
+  // Text blocks can be unwrapped from a JSON envelope. A unique matching
+  // literal preserves attribution even for escaped newlines and emoji.
+  const matches=[...source.matchAll(/"(?:\\.|[^"\\])*"/g)].filter(match=>{try{return JSON.parse(match[0])===text}catch{return false}});
+  if(matches.length!==1)return '';
+  const match=matches[0],body=match[0].slice(1,-1),result=[];
+  for(const part of body.matchAll(/\\(?:u[\da-fA-F]{4}|["\\/bfnrt])|[^\\]/g)){
+    const at=match.index+1+part.index,typed=flags.slice(at,at+part[0].length).split('').every(flag=>flag==='1');
+    result.push((typed?'1':'0').repeat(JSON.parse('"'+part[0]+'"').length));
+  }
+  return result.join('');
+}
+function hasHumanWriting(message){return humanWritingMask(message).includes('1')}
+function markdownText(text,mask=''){
+  if(!mask.includes('1'))return [text];
+  const result=[];let start=0;
+  while(start<text.length){const typed=mask[start]==='1';let end=start+1;while(end<text.length&&(mask[end]==='1')===typed)end++;
+    const part=text.slice(start,end);result.push(typed?markdownElement('mark','human-written',part):part);start=end;
+  }return result;
+}
 
 // Markdown
-// Agent prose is Markdown, parsed into a tree the page builds with text nodes
+// Message prose is Markdown, parsed into a tree the page builds with text nodes
 // and element properties only (markdownView in ui.py). An element is
 // {tag, className, children} plus the properties the page sets on it (href,
 // rel, target, start, and language for a code block's data-language); a
 // string is text and {icon} one of the page's icons. Embedded HTML therefore
 // stays text, and a link keeps its href only for the schemes below.
 function markdownElement(tag,className='',content){return{tag,className,children:content===undefined||content===''?[]:[content]}}
-function markdownLinkAllowed(href){return/^(https?:\/\/|mailto:|#|\/(?!\/)|\.{1,2}\/)/i.test(href)&&!/^\/\//.test(href)}
-function markdownInline(text,parent,depth=0){
-  if(depth>8){parent.children.push(text);return}
-  const tokens=/(\x60[^\x60\n]+\x60|!?\[[^\]\n]+\]\([^\s)]+(?:\s+"[^"]*")?\)|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|\*[^*\n]+\*|_[^_\n]+_)/g;
+function markdownLinkAllowed(href){
+  if(!href||/[\x00-\x1f\x7f\\]/.test(href)||href.startsWith('//'))return false;
+  if(/^[^/:]+\.[^/:]+:\d+(?::\d+)?(?:#.*)?$/.test(href))return true;
+  if(/^[a-z][a-z0-9+.-]*:/i.test(href))return /^(https?:\/\/|mailto:|file:\/\/)/i.test(href);
+  return !/[<>()[\]]/.test(href);
+}
+function markdownLinkKind(href){
+  if(!markdownLinkAllowed(href))return null;
+  if(href.startsWith('#'))return {kind:'fragment',icon:'link',detail:'Jump within this page'};
+  if(href.startsWith('/')||href.startsWith('?')){
+    const path=new URL(href,'http://pharos.invalid/').pathname;
+    const pages=['/','/home','/cards','/library','/settings','/settings/backups','/settings/libraries','/settings/sources','/settings/sync','/settings/optimization','/settings/mcp','/settings/header','/settings/layout','/settings/preferences','/settings/ask','/sources','/activity','/analyze','/tools','/health','/mcp','/findings'];
+    if(pages.includes(path)||/^\/work\/[^/]+(?:\/conversation\/[^/]+)?$/.test(path)||/^\/conversation\/[^/]+$/.test(path))return {kind:'page',icon:'link',detail:'Open Pharos view'};
+  }
+  if(/^mailto:/i.test(href))return {kind:'mail',icon:'mail',detail:'Open in your email app'};
+  if(/^https?:/i.test(href)){
+    try{
+      const url=new URL(href),host=url.hostname.toLowerCase();
+      if(url.username||url.password)return null;
+      const local=host==='localhost'||host.endsWith('.localhost')||host==='[::1]'||host==='0.0.0.0'||/^127(?:\.\d{1,3}){3}$/.test(host);
+      return {kind:local?'server':'web',icon:local?'server':'web',host,detail:local?'Checking local server on this Mac…':`Website · ${host} (page availability not checked)`};
+    }catch{return null}
+  }
+  return {kind:'file',icon:'file',detail:'Checking file on this Mac…'};
+}
+function markdownInline(text,parent,depth=0,mask=''){
+  if(depth>8){parent.children.push(...markdownText(text,mask));return}
+  const tokens=/(\x60[^\x60\n]+\x60|!?\[[^\]\n]+\]\((?:<[^>\n]+>|[^\s)]+)(?:\s+"[^"]*")?\)|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|\*[^*\n]+\*|_[^_\n]+_)/g;
   let offset=0;
   for(const match of text.matchAll(tokens)){
-    parent.children.push(text.slice(offset,match.index));const token=match[0];let element;
-    if(token.charCodeAt(0)===96)element=markdownElement('code','',token.slice(1,-1));
-    else if(/^!?\[/.test(token)){const link=token.match(/^!?\[([^\]]+)\]\((\S+?)(?:\s+"[^"]*")?\)$/),href=link?.[2]||'';element=markdownElement('span','',link?.[1]||token);if(markdownLinkAllowed(href)){element=markdownElement('a','',link[1]);element.href=href;element.rel='noreferrer noopener';if(/^https?:/.test(href))element.target='_blank'}}
-    else{const double=token.startsWith('**')||token.startsWith('__')||token.startsWith('~~'),size=double?2:1;element=markdownElement(token.startsWith('~~')?'del':double?'strong':'em','');markdownInline(token.slice(size,-size),element,depth+1)}
+    parent.children.push(...markdownText(text.slice(offset,match.index),mask.slice(offset,match.index)));const token=match[0],flags=mask.slice(match.index,match.index+token.length);let element;
+    if(token.charCodeAt(0)===96){element=markdownElement('code');element.children=markdownText(token.slice(1,-1),flags.slice(1,-1))}
+    else if(/^!?\[/.test(token)){
+      const link=token.match(/^!?\[([^\]]+)\]\((?:<([^>]+)>|(\S+?))(?:\s+"[^"]*")?\)$/),href=link?.[2]||link?.[3]||'',kind=markdownLinkKind(href),label=link?.[1]||token,labelStart=token.startsWith('!')?2:1;
+      element=markdownElement(kind?'a':'span',kind?'markdown-link':'');element.children=markdownText(label,flags.slice(labelStart,labelStart+label.length));
+      if(kind){element.href=href;element.link=kind;element.rel='noreferrer noopener';if(['web','server','file'].includes(kind.kind))element.target='_blank'}
+    }else{const double=token.startsWith('**')||token.startsWith('__')||token.startsWith('~~'),size=double?2:1;element=markdownElement(token.startsWith('~~')?'del':double?'strong':'em','');markdownInline(token.slice(size,-size),element,depth+1,flags.slice(size,-size))}
     parent.children.push(element);offset=match.index+token.length;
-  }parent.children.push(text.slice(offset));
+  }parent.children.push(...markdownText(text.slice(offset),mask.slice(offset)));
 }
-function markdownTree(text,depth=0){
-  const root=markdownElement('div','markdown-content'),lines=String(text).replace(/\r\n/g,'\n').split('\n'),inline=(tag,text)=>{const el=markdownElement(tag,'');markdownInline(text,el);return el};
-  if(depth>12)return markdownElement('div','markdown-content',String(text));
+function markdownTree(text,depth=0,mask=''){
+  let source=String(text);
+  if(source.includes('\r\n')){let at=0;mask=source.split('\r\n').map(part=>{const flags=mask.slice(at,at+part.length);at+=part.length+2;return flags}).join('0');source=source.replace(/\r\n/g,'\n')}
+  const root=markdownElement('div','markdown-content'),lines=source.split('\n'),flags=[];let at=0;
+  for(const line of lines){flags.push(mask.slice(at,at+line.length));at+=line.length+1}
+  const inline=(tag,text,mask='')=>{const el=markdownElement(tag);markdownInline(text,el,0,mask);return el};
+  if(depth>12){root.children=markdownText(source,mask);return root}
   let i=0;
   while(i<lines.length){
     const line=lines[i];if(!line.trim()){i++;continue}
     const fence=line.match(/^\s*(\x60{3,}|~{3,})(.*)$/);
-    if(fence){const body=[];i++;while(i<lines.length&&!lines[i].trim().startsWith(fence[1]))body.push(lines[i++]);if(i<lines.length)i++;const pre=markdownElement('pre',''),code=markdownElement('code','',body.join('\n'));if(fence[2].trim())code.language=fence[2].trim();pre.children.push(code);root.children.push(pre);continue}
-    const heading=line.match(/^(#{1,6})\s+(.+)$/);if(heading){root.children.push(inline('h'+heading[1].length,heading[2]));i++;continue}
-    if(/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)){root.children.push(markdownElement('hr',''));i++;continue}
-    if(/^\s*>/.test(line)){const body=[];while(i<lines.length&&/^\s*>/.test(lines[i]))body.push(lines[i++].replace(/^\s*>\s?/,''));const quote=markdownElement('blockquote','');quote.children.push(markdownTree(body.join('\n'),depth+1));root.children.push(quote);continue}
+    if(fence){const body=[],marks=[];i++;while(i<lines.length&&!lines[i].trim().startsWith(fence[1])){body.push(lines[i]);marks.push(flags[i++])}if(i<lines.length)i++;const pre=markdownElement('pre'),code=markdownElement('code');code.children=markdownText(body.join('\n'),marks.join('0'));if(fence[2].trim())code.language=fence[2].trim();pre.children.push(code);root.children.push(pre);continue}
+    const heading=line.match(/^(#{1,6})\s+(.+)$/);if(heading){root.children.push(inline('h'+heading[1].length,heading[2],flags[i].slice(line.length-heading[2].length)));i++;continue}
+    if(/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)){root.children.push(markdownElement('hr'));i++;continue}
+    if(/^\s*>/.test(line)){const body=[],marks=[];while(i<lines.length&&/^\s*>/.test(lines[i])){const prefix=lines[i].match(/^\s*>\s?/)[0].length;body.push(lines[i].slice(prefix));marks.push(flags[i].slice(prefix));i++}const quote=markdownElement('blockquote');quote.children.push(markdownTree(body.join('\n'),depth+1,marks.join('0')));root.children.push(quote);continue}
     const list=line.match(/^(\s*)([-+*]|\d+[.)])\s+(.*)$/);
-    if(list){const ordered=/^\d/.test(list[2]),indent=list[1].length,container=markdownElement(ordered?'ol':'ul','');if(ordered)container.start=parseInt(list[2],10);
-      while(i<lines.length){const item=lines[i].match(/^(\s*)([-+*]|\d+[.)])\s+(.*)$/);if(!item||item[1].length!==indent||/^\d/.test(item[2])!==ordered)break;const body=[item[3]],continuationIndent=indent+item[2].length+1;i++;
-        while(i<lines.length&&lines[i].trim()&&/^\s+/.test(lines[i])&&lines[i].search(/\S/)>indent)body.push(lines[i++].slice(continuationIndent));
-        const li=markdownElement('li',''),task=body[0].match(/^\[([ xX])\]\s+(.*)$/);if(task){li.children.push(markdownElement('span','markdown-task',{icon:task[1].toLowerCase()==='x'?'todo':'checkbox'}));body[0]=task[2]}li.children.push(markdownTree(body.join('\n'),depth+1));container.children.push(li);
+    if(list){const ordered=/^\d/.test(list[2]),indent=list[1].length,container=markdownElement(ordered?'ol':'ul');if(ordered)container.start=parseInt(list[2],10);
+      while(i<lines.length){const item=lines[i].match(/^(\s*)([-+*]|\d+[.)])\s+(.*)$/);if(!item||item[1].length!==indent||/^\d/.test(item[2])!==ordered)break;const body=[item[3]],marks=[flags[i].slice(lines[i].length-item[3].length)],continuationIndent=indent+item[2].length+1;i++;
+        while(i<lines.length&&lines[i].trim()&&/^\s+/.test(lines[i])&&lines[i].search(/\S/)>indent){body.push(lines[i].slice(continuationIndent));marks.push(flags[i].slice(continuationIndent));i++}
+        const li=markdownElement('li'),task=body[0].match(/^\[([ xX])\]\s+(.*)$/);if(task){li.children.push(markdownElement('span','markdown-task',{icon:task[1].toLowerCase()==='x'?'todo':'checkbox'}));marks[0]=marks[0].slice(body[0].length-task[2].length);body[0]=task[2]}li.children.push(markdownTree(body.join('\n'),depth+1,marks.join('0')));container.children.push(li);
         if(!lines[i]?.trim()&&lines[i+1]?.match(/^(\s*)([-+*]|\d+[.)])\s+/)?.[1].length===indent)i++;
       }root.children.push(container);continue}
-    if(line.includes('|')&&/^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[i+1]||'')){const cells=value=>value.trim().replace(/^\||\|$/g,'').split('|').map(x=>x.trim()),wrap=markdownElement('div','markdown-table'),table=markdownElement('table',''),head=markdownElement('thead',''),tr=markdownElement('tr','');cells(line).forEach(cell=>tr.children.push(inline('th',cell)));head.children.push(tr);table.children.push(head);const body=markdownElement('tbody','');i+=2;while(i<lines.length&&lines[i].includes('|')&&lines[i].trim()){const row=markdownElement('tr','');cells(lines[i++]).forEach(cell=>row.children.push(inline('td',cell)));body.children.push(row)}table.children.push(body);wrap.children.push(table);root.children.push(wrap);continue}
-    const paragraph=[line];i++;while(i<lines.length&&lines[i].trim()&&!/^\s*(?:#{1,6}\s|>|[-+*]\s|\d+[.)]\s|\x60{3,}|~{3,})/.test(lines[i])){if(lines[i].includes('|')&&/^\s*\|?\s*:?-{3,}/.test(lines[i+1]||''))break;paragraph.push(lines[i++])}root.children.push(inline('p',paragraph.join('\n')));
+    if(line.includes('|')&&/^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[i+1]||'')){
+      const cells=(tag,index)=>{const row=markdownElement('tr'),value=lines[index];let offset=0;for(const cell of value.split('|')){const start=offset;offset+=cell.length+1;if(start===0&&!cell.trim()||offset>value.length&&!cell.trim())continue;const left=cell.length-cell.trimStart().length,text=cell.trim();row.children.push(inline(tag,text,flags[index].slice(start+left,start+left+text.length)))}return row};
+      const wrap=markdownElement('div','markdown-table'),table=markdownElement('table'),head=markdownElement('thead');head.children.push(cells('th',i));table.children.push(head);const body=markdownElement('tbody');i+=2;while(i<lines.length&&lines[i].includes('|')&&lines[i].trim())body.children.push(cells('td',i++));table.children.push(body);wrap.children.push(table);root.children.push(wrap);continue}
+    const paragraph=[line],marks=[flags[i]];i++;while(i<lines.length&&lines[i].trim()&&!/^\s*(?:#{1,6}\s|>|[-+*]\s|\d+[.)]\s|\x60{3,}|~{3,})/.test(lines[i])){if(lines[i].includes('|')&&/^\s*\|?\s*:?-{3,}/.test(lines[i+1]||''))break;paragraph.push(lines[i]);marks.push(flags[i++])}root.children.push(inline('p',paragraph.join('\n'),marks.join('0')));
   }return root;
 }
 

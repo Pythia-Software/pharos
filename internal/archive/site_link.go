@@ -20,7 +20,11 @@ import (
 // is deterministic, and siteLinkFromURL reads a link back into the same
 // state, so build(parse(url)) == url for every link Go builds.
 type siteState struct {
-	Page string
+	View      map[string]any
+	Query     *qt.LinkQuery
+	Highlight []string
+	Reveal    string
+	Page      string
 	// Card is set for a card's own link, which keeps the card's parameters.
 	Card string
 	// Changed marks a card link whose chart and filters are Chart and
@@ -133,7 +137,7 @@ func intStrings(values []int) []string {
 
 // ----- Building ----------------------------------------------------------------
 
-func (site *siteMap) build(state siteState) (string, error) {
+func (site *siteMap) buildBase(state siteState) (string, error) {
 	if state.TodayFrom != "" {
 		anchor := state.TodayFrom
 		state.TodayFrom = ""
@@ -147,6 +151,8 @@ func (site *siteMap) build(state siteState) (string, error) {
 			values := parsed.Query()
 			if values.Has("window_days") {
 				values.Set("window_timezone", state.TodayTimezone)
+			} else {
+				values.Set("analyze_timezone", state.TodayTimezone)
 			}
 			parsed.RawQuery = values.Encode()
 			built = parsed.String()
@@ -277,6 +283,13 @@ func (site *siteMap) pageURL(node *siteNode, state siteState) (string, error) {
 		value, _ := node.Fixed.get(key)
 		params.add(key, siteString(value))
 	}
+	if topic := site.option(node, "return_topic"); topic != nil {
+		value := topic.Default
+		if selected, ok := state.Options[topic.Name]; ok {
+			value = selected
+		}
+		params.add(topic.Param, siteString(value))
+	}
 	if state.Days > 0 {
 		params.add(siteWindowMode, "relative")
 		params.add(siteWindowDays, strconv.Itoa(state.Days))
@@ -285,7 +298,7 @@ func (site *siteMap) pageURL(node *siteNode, state siteState) (string, error) {
 	}
 	for _, option := range node.Options {
 		value, given := state.Options[option.Name]
-		if !given || option.Key != "" || strings.HasPrefix(option.Param, "{") {
+		if !given || option.Name == "return_topic" || option.Key != "" || strings.HasPrefix(option.Param, "{") {
 			continue
 		}
 		switch option.Kind {
@@ -366,6 +379,17 @@ func mustGet(object orderedObject, key string) any {
 	return value
 }
 
+// The chart member of a card URL, including settings tied to its window.
+func cardURLChart(card *siteCard, days int) orderedObject {
+	chart := card.Chart.clone()
+	if days > 0 && card.Window != nil {
+		for _, name := range card.Window.ChartDays {
+			chart.set(name, days)
+		}
+	}
+	return chart
+}
+
 // cardURL rebuilds a card's own link at a window from its template
 // (docs/site-map.md, "Cards").
 func (site *siteMap) cardURL(card *siteCard, days int) (string, error) {
@@ -400,12 +424,7 @@ func (site *siteMap) cardURL(card *siteCard, days int) (string, error) {
 			}
 			params.add(param.Name, token)
 		case spec.CardChart:
-			chart := card.Chart.clone()
-			if days > 0 && card.Window != nil {
-				for _, name := range card.Window.ChartDays {
-					chart.set(name, days)
-				}
-			}
+			chart := cardURLChart(card, days)
 			text, _ := chart.MarshalJSON()
 			params.add(param.Name, string(text))
 		default:
@@ -481,7 +500,7 @@ func cardChartBase(card *siteCard, days int) map[string]any {
 
 // linkFromArgs reads site_link's arguments into a state, checking each
 // against the site map.
-func (site *siteMap) linkFromArgs(args map[string]any) (siteState, error) {
+func (site *siteMap) linkBaseFromArgs(args map[string]any) (siteState, error) {
 	if args["days"] != "today" {
 		return site.linkWindowFromArgs(args)
 	}
@@ -498,9 +517,6 @@ func (site *siteMap) linkFromArgs(args map[string]any) (siteState, error) {
 		return siteState{}, linkError("days", "Today is not available for this view.")
 	}
 	state.TodayFrom = localMidnight(time.Now(), time.Local).UTC().Format(time.RFC3339Nano)
-	if name := time.Local.String(); name != "Local" {
-		state.TodayTimezone = name
-	}
 	return state, nil
 }
 
@@ -1168,7 +1184,7 @@ func siteLinkFromURL(raw string) (siteState, error) {
 	return site.parseURL(raw)
 }
 
-func (site *siteMap) parseURL(raw string) (siteState, error) {
+func (site *siteMap) parseBaseURL(raw string) (siteState, error) {
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		return siteState{}, err
@@ -1197,9 +1213,12 @@ func (site *siteMap) parseURL(raw string) (siteState, error) {
 		return siteState{}, linkError("url", "Today is not available for this view.")
 	}
 	state.TodayTimezone = values.Get("window_timezone")
+	if values.Get("analyze_window") == "today" {
+		state.TodayTimezone = values.Get("analyze_timezone")
+	}
 	if state.TodayTimezone != "" {
-		if _, err := time.LoadLocation(state.TodayTimezone); err != nil {
-			return siteState{}, linkError("url", "window_timezone is not a named timezone.")
+		if _, err := viewTimezone(state.TodayTimezone); err != nil {
+			return siteState{}, linkError("url", "Today timezone is not a named timezone.")
 		}
 	}
 	// The parsed bound is retained so rebuilding the link is deterministic.
@@ -1343,7 +1362,7 @@ func (site *siteMap) parseWindowURL(raw string) (siteState, error) {
 			return siteState{}, linkError("url", fmt.Sprintf("carries %s, a private or sign-in parameter that a site link never holds.", key))
 		}
 		if strings.HasPrefix(key, "q_") && strings.HasPrefix(list[0], "@") {
-			return siteState{}, linkError("url", fmt.Sprintf("%s refers to a saved snapshot, which is private to this browser.", key))
+			return siteState{}, linkError("url", fmt.Sprintf("%s refers to a saved snapshot, which requires library resolution through site_link.", key))
 		}
 	}
 	path := parsed.Path
@@ -1359,13 +1378,20 @@ func (site *siteMap) parseWindowURL(raw string) (siteState, error) {
 		consumed[key] = true
 	}
 	if values.Has("card_id") {
-		return site.parseCard(parsed.Path, values)
+		return site.parseCard(parsed.Path, values, false)
+	}
+	// Primary card links are ordinary dashboard URLs. Recognize known card
+	// states before the generic page parser so agent round trips retain their
+	// title and window without a rendering-only parameter. Edited states use
+	// the ordinary dashboard contract because their origin is ambiguous.
+	if card, err := site.parseCard(parsed.Path, values, true); err == nil {
+		return card, nil
 	}
 	state, err := site.parsePageLink(node, values, pathValues, consumed)
 	if err != nil {
 		// A card's own link may carry a whole query table, which no page
 		// option expresses.
-		if card, cardErr := site.parseCard(parsed.Path, values); cardErr == nil {
+		if card, cardErr := site.parseCard(parsed.Path, values, false); cardErr == nil {
 			return card, nil
 		}
 	}
@@ -1421,6 +1447,11 @@ func (site *siteMap) nodeParams(node *siteNode) []string {
 	}
 	if node.Ribbon != nil {
 		out = append(out, node.Ribbon.Param)
+	}
+	for _, field := range site.viewFields(node.Path) {
+		if !slices.Contains(out, field.Param) {
+			out = append(out, field.Param)
+		}
 	}
 	return out
 }
@@ -1498,7 +1529,7 @@ func (site *siteMap) checkHostState(param string, host *qt.HostQueryState, node 
 	if host == nil {
 		return nil
 	}
-	if host.Version < 1 {
+	if host.Version != 1 {
 		return linkError("url", param+" carries host query state that cannot be read.")
 	}
 	var names []string
@@ -1787,7 +1818,7 @@ func withoutEditorIDs(text string) string {
 // parseCard reads a card's own link: the card's link at one of its
 // windows. A link with card_id names its card; one without is compared with
 // every card whose link has the same path and parameters.
-func (site *siteMap) parseCard(path string, values url.Values) (siteState, error) {
+func (site *siteMap) parseCard(path string, values url.Values, exactOnly bool) (siteState, error) {
 	candidates := site.Cards.Items
 	if id := values.Get("card_id"); values.Has("card_id") {
 		card := site.cardByID[id]
@@ -1800,9 +1831,32 @@ func (site *siteMap) parseCard(path string, values url.Values) (siteState, error
 		if card.URL.Path != path || len(card.URL.Params) != len(values) {
 			continue
 		}
+		// Literal route fields and the explicit window rule out unrelated
+		// cards before encoding any of their native queries.
+		if exactOnly {
+			matches := true
+			for _, param := range card.URL.Params {
+				if param.Literal != nil && values.Get(param.Name) != *param.Literal {
+					matches = false
+					break
+				}
+			}
+			if !matches {
+				continue
+			}
+		}
 		windows := []int{0}
 		if card.Window != nil {
 			windows = card.Window.Days
+			if exactOnly {
+				window := values.Get(siteWindowDays)
+				if window == "" {
+					window = values.Get(siteAnalyzeDays)
+				}
+				if days, err := strconv.Atoi(window); err == nil && slices.Contains(windows, days) {
+					windows = []int{days}
+				}
+			}
 		}
 		node := site.Nodes[card.Page]
 		var changeable []string
@@ -1810,6 +1864,13 @@ func (site *siteMap) parseCard(path string, values url.Values) (siteState, error
 			changeable = []string{site.option(node, "chart").Param, site.optionOfKind(node, "where").Param}
 		}
 		for _, days := range windows {
+			if exactOnly && card.State != nil {
+				chart := cardURLChart(card, days)
+				text, _ := chart.MarshalJSON()
+				if !sameJSONText(values.Get(site.option(node, "chart").Param), string(text)) {
+					continue
+				}
+			}
 			built, _ := site.cardURL(card, days)
 			expected, _ := url.Parse(built)
 			if expected.Path != path {
@@ -1819,7 +1880,7 @@ func (site *siteMap) parseCard(path string, values url.Values) (siteState, error
 			if sameSiteParams(values, want) {
 				return siteState{Page: card.Page, Card: card.ID, Days: days}, nil
 			}
-			if changeable == nil || !sameSiteParamsExcept(values, want, changeable) {
+			if exactOnly || changeable == nil || !sameSiteParamsExcept(values, want, changeable) {
 				continue
 			}
 			// The card with another chart or filters, as its dashboard writes it.
@@ -1854,6 +1915,9 @@ func (site *siteMap) parseCard(path string, values url.Values) (siteState, error
 // ----- Titles and summaries ----------------------------------------------------
 
 func (site *siteMap) title(state siteState) string {
+	if state.Query != nil {
+		return site.Nodes[state.Page].Title + " · Custom query"
+	}
 	if state.TodayFrom != "" && state.Card != "" {
 		return todayCardText(site.cardByID[state.Card].Title)
 	}
@@ -1901,7 +1965,7 @@ func (site *siteMap) cardText(text string, days int) string {
 }
 
 // summary is one plain sentence of what the link shows.
-func (site *siteMap) summary(state siteState) string {
+func (site *siteMap) baseSummary(state siteState) string {
 	node := site.Nodes[state.Page]
 	if state.Card != "" && !state.Changed {
 		card := site.cardByID[state.Card]
@@ -1938,7 +2002,11 @@ func (site *siteMap) summary(state siteState) string {
 	}
 	if site.optionOfKind(node, "window") != nil {
 		if state.TodayFrom != "" {
-			parts = append(parts, "today since local midnight")
+			if state.TodayTimezone != "" {
+				parts = append(parts, "today since midnight in "+state.TodayTimezone)
+			} else {
+				parts = append(parts, "today since local midnight")
+			}
 		} else if state.Changed && state.Days > 0 {
 			parts = append(parts, fmt.Sprintf("last %s of %s, as the card counts its window", site.Windows.Labels[strconv.Itoa(state.Days)], site.cardByID[state.Card].Window.Field))
 		} else if state.Days > 0 {
@@ -2170,7 +2238,7 @@ func (site *siteMap) libraryPhrase(node *siteNode, options map[string]any) strin
 
 // arguments are site_link's arguments for a state, so an agent can change
 // one and ask again.
-func (site *siteMap) arguments(state siteState) map[string]any {
+func (site *siteMap) baseArguments(state siteState) map[string]any {
 	out := map[string]any{"page": state.Page}
 	if state.Card != "" {
 		out["card"] = state.Card

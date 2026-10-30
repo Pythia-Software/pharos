@@ -2,14 +2,14 @@ import { createQueryLinkService, httpQuerySnapshotStore, type FieldSchema, type 
 import { describeRecipeText, instantiateRecipe, queryRecipes } from "./curiosity-data";
 import { cardSourceDataset } from "./card-exploration";
 import { defaultCardCover, type CardCover } from "./card-cover";
-import { queryFromURL, readRollingWindow, rollingWindowDays } from "./query-links";
+import { cardDestination } from "./card-destinations";
+import { queryFromURL, readRollingWindow, resolveRollingQuery, rollingWindowDays } from "./query-links";
 import type { PreviewJob } from "./query-previews";
 import { stampCardChart, usageWorkspaceURL } from "./usage-workspace-model";
 
-// The card's source query and presentation are the analysis contract. Dashboard
-// projections remain useful related context, but cannot replace this population,
-// staged calculation, distribution or specialized study.
-export function cardAnalysisJob(url: string, schema: FieldSchema, fallback?: QueryState): PreviewJob {
+// Saved cards retain their source query and cover for Home previews and editing.
+// Navigation opens the full dashboard; it does not execute this preview job.
+export function savedCardPreviewJob(url: string, schema: FieldSchema, fallback?: QueryState): PreviewJob {
   const params = new URL(url, location.origin).searchParams, dataset = cardSourceDataset(params);
   const recipe = queryRecipes.find(recipe => recipe.id === params.get("card_id") && recipe.dataset === dataset);
   const spec = queryFromURL(url, fallback);
@@ -34,16 +34,33 @@ export function cardAnalysisJob(url: string, schema: FieldSchema, fallback?: Que
     options: { recipe: item, window, cover, coverMetricId: params.get("card_metric") ?? undefined, url } };
 }
 
-export async function resolveCardAnalysisJob(url: string, schema: FieldSchema, signal?: AbortSignal): Promise<PreviewJob> {
+export async function resolveSavedCardPreviewJob(url: string, schema: FieldSchema, signal?: AbortSignal): Promise<PreviewJob> {
   const params = new URL(url, location.origin).searchParams, dataset = cardSourceDataset(params);
   if (!dataset) throw new Error("This card's source query is unavailable.");
   const service = createQueryLinkService(schema.name, httpQuerySnapshotStore("/api/query-snapshots"));
   const query = await service.resolve(new URL(url, location.origin).href, `q_${dataset}`, signal);
   if (!query) throw new Error("This card's source query is unavailable.");
-  return cardAnalysisJob(url, schema, query);
+  return savedCardPreviewJob(url, schema, query);
 }
 
-export function relatedCardDashboardURL(params: URLSearchParams): string {
+// Browser bookmarks and shared links can still contain the old card page's
+// mapping. Rebuild the dashboard from its exact retained source, resolving
+// durable links before discarding their source metadata. Never replace a
+// missing source with a newly instantiated recipe.
+export async function resolveCardDashboardURL(address: string, signal?: AbortSignal): Promise<string> {
+  const url = new URL(address, location.origin), params = url.searchParams, dataset = cardSourceDataset(params);
+  const recipe = queryRecipes.find(recipe => recipe.id === params.get("card_id") && recipe.dataset === dataset);
+  if (url.origin !== location.origin || url.pathname !== "/analyze" || params.get("analyze_mode") !== "dashboards" || !dataset || !recipe?.destination) throw new Error("This card's dashboard is unavailable.");
+  const service = createQueryLinkService(`pharos_${dataset}`, httpQuerySnapshotStore("/api/query-snapshots"));
+  const query = await service.resolve(url.href, `q_${dataset}`, signal);
+  if (!query) throw new Error("This card's source query is unavailable.");
+  const spec = queryFromURL(url.href, query);
+  if (!spec) throw new Error("This card's source query is unavailable.");
+  const destination = new URL(cardDestination(recipe, resolveRollingQuery(spec.query, spec.window), spec.window), location.origin);
+  return usageWorkspaceURL({ mode: "dashboards" }, destination.searchParams) + url.hash;
+}
+
+export function cardDashboardURL(params: URLSearchParams): string {
   const related = new URLSearchParams(params);
   stampCardChart(related);
   for (const key of [...related.keys()]) if (key.startsWith("card_")) related.delete(key);
