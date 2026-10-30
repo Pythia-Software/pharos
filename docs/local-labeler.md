@@ -260,13 +260,25 @@ A model directory holds:
 
 | File | What it is |
 |---|---|
-| `manifest.json` | name, base model, framing contract, files and their SHA-256s, label order, parents and ancestors, heads and scorer, segments, per-segment thresholds (`default` for the rest), training data and licenses, metrics |
+| `manifest.json` | name, base model, framing contract, input contract (`input_contract`), files and their SHA-256s, label order, parents and ancestors, heads and scorer, segments, per-segment thresholds (`default` for the rest), training data and licenses, metrics |
 | `model.int8.onnx`, `model.fp32.onnx` | inputs `input_ids`, `attention_mask` (int64 `[batch, seq]`); outputs `logits` `[batch, 5, 54]`, `probs` `[batch, 54]` |
 | `tokenizer.json` | the ettin-encoder-68m tokenizer, unchanged |
 | `FRAMING.md`, `reference.py`, `parity-fixture.json` | the framing contract, the Python oracle, the invented-string fixture |
 
 Loading a model verifies the chosen variant's file and the tokenizer against
-the manifest's SHA-256s, and refuses a manifest for another framing contract.
+the manifest's SHA-256s, and refuses a manifest for a framing or input
+contract this build does not implement.
+
+**Input contracts** say which inputs a model takes and how Pharos makes them.
+`ids-attention-v1` is `input_ids` and `attention_mask` (mean pooling over
+every real token happens inside the model); `kestrel-68m`'s manifest predates
+the field and means it. A model that pools only the target text (experiment
+LAPWING) would add an input with role `pool`. Pharos makes it from the span
+the framing built for the text (`FrameSpans.Text`: framing returns the
+token spans of the tag, the context and the text as it builds the
+sequence), never by looking for separator ids. Adding such a contract is
+one entry in `labeler.InputContracts`; the protocol, the workers' loops and
+the ledger do not change (`TestLabelsCarryAPoolingInput`).
 A missing or failing model disables labeling with the reason in `labels
 status`.
 
@@ -333,10 +345,18 @@ The first frame is `H`:
 
 ```json
 {"protocol": [1], "model": "/abs/path/model.int8.onnx", "model_sha256": "d95a…",
- "threads": 4, "vocab_size": 50368, "max_batch": 64, "max_seq": 512, "options": {}}
+ "threads": 4, "vocab_size": 50368, "max_batch": 64, "max_seq": 512,
+ "inputs": [{"name": "input_ids", "role": "ids"}, {"name": "attention_mask", "role": "attention"}],
+ "options": {}}
 ```
 
-`protocol` lists the versions Pharos speaks. The worker loads the model,
+`protocol` lists the versions Pharos speaks. `inputs` declares every input a
+run request will carry, by the model's input names, with their roles (from
+the model's input contract, below). A hello without `inputs` means
+`input_ids`/`ids` and `attention_mask`/`attention`. A worker refuses a
+declaration that is malformed (code `protocol`) or does not match the
+model's inputs (code `model`), both fatal. Pharos always sends `threads`;
+0 would mean the runtime's default, every core. The worker loads the model,
 verifies `model_sha256` when given, and replies `h`:
 
 ```json
@@ -362,9 +382,14 @@ bytes, u8 dtype (`1` int32, `2` float32), u8 rank (≤ 8), rank × u32 dims, the
 the elements row-major.
 
 - **`R` run:** u64 request id, u16 tensor count, the tensors, u16 output-name
-  count, the names (u8 length, bytes). Version 1 has exactly two inputs,
-  `input_ids` and `attention_mask`, both int32 `[batch, seq]`, right-padded,
-  mask 1 on real tokens and 0 on padding. Pharos pads `seq` to a multiple of
+  count, the names (u8 length, bytes). The tensors are exactly the declared
+  inputs, each int32 `[batch, seq]` with the same dims, right-padded. Their
+  values follow their roles:
+  - `ids`: token ids in `[0, vocab_size)` (exactly one input);
+  - `attention`: 1 on real tokens and 0 on padding, at least one 1 per row
+    (exactly one input);
+  - `pool`: 1 on the tokens the model pools, at least one per row and only
+    where `attention` is 1. Pharos pads `seq` to a multiple of
   8, which the int8 model needs (a multiple of 4 at least); a worker must not
   repad. The worker converts them to the
   model's input type (int64 for `kestrel-68m`). An empty name list asks for
@@ -386,7 +411,7 @@ when the error answers no request).
 
 | Code | When | Fatal |
 |---|---|---|
-| `bad_request` | a run request that decodes badly or breaks the rules: unknown or missing inputs, wrong dtype or rank, shapes that differ, a token id outside `[0, vocab_size)`, a mask value other than 0 or 1, a row with no tokens, batch or sequence over the limits, an unknown output name | no |
+| `bad_request` | a run request that decodes badly or breaks the rules: an undeclared, missing or repeated input, wrong dtype or rank, shapes that differ, a value its role does not allow, a token id outside `[0, vocab_size)`, a mask value other than 0 or 1, a row with no tokens, batch or sequence over the limits, an unknown output name | no |
 | `run_failed` | the runtime failed on a well-formed request | no |
 | `unsupported` | an unknown frame type (its payload is skipped) | no |
 | `bad_frame` | a frame length outside 1…64 MiB, or a stream that ends inside a frame: the stream cannot be resynchronized | yes |
@@ -401,8 +426,9 @@ rules, so every Go worker rejects the same requests.
 ### Compatibility
 
 A new version number is needed for any change an existing worker or Pharos
-would misread: a new required input, a different tensor encoding, a changed
-meaning of a field. Additive JSON fields, new optional capabilities and new
+would misread: a different tensor encoding, a new input role, a changed
+meaning of a field. A model with more inputs of the existing roles (a
+pooling mask) needs no new version: they are declared in the hello. Additive JSON fields, new optional capabilities and new
 frame types that a peer may ignore with `unsupported` keep version 1.
 
 ## Adding a worker for another platform
@@ -424,6 +450,9 @@ frame types that a peer may ignore with `unsupported` keep version 1.
    `pharos` changes.
 
 Notes for authors:
+- Feed the model exactly the inputs the hello declares, by name, converting
+  int32 to the model's element type; check the declaration against the
+  model's inputs once, at the hello.
 - The ONNX Runtime worker loads its library with `dlopen`/`dlsym` from
   `OrtGetApiBase`; a Windows build would use `LoadLibrary`/`GetProcAddress`
   in a file beside `ort_dlopen.go`.

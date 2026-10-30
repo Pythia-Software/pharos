@@ -184,6 +184,23 @@ func TestLabelsSurviveAWorkerCrash(t *testing.T) {
 	}
 }
 
+// The builder stays a bounded distance ahead of a slow worker: a backfill
+// holds a few windows of items, not the library.
+func TestLabelsBuilderWaitsForTheWorkers(t *testing.T) {
+	slowTest(t)
+	catalog := labeledCatalog(t)
+	settings := labelsTestSettings(t, "slow")
+	settings.MaxBatch = 1
+	stats, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{})
+	if err != nil || !stats.Complete {
+		t.Fatalf("run: %+v %v", stats, err)
+	}
+	// A window of 4 × 1 × 2 items, a few packed batches, one conversation.
+	if stats.PeakPending > 16 || stats.PeakPending >= stats.ItemsLabeled {
+		t.Fatalf("%d items were pending at once, of %d", stats.PeakPending, stats.ItemsLabeled)
+	}
+}
+
 func TestLabelsStopAndResume(t *testing.T) {
 	catalog := labeledCatalog(t)
 	settings := labelsTestSettings(t, "slow")

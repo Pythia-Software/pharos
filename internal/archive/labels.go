@@ -241,10 +241,13 @@ type LabelsRunStats struct {
 	Units, Items, ItemsLabeled, MessagesLabeled             int
 	MessagesUnchanged, MessagesRemoved, MessagesFailed      int
 	Batches, Tokens, PaddedTokens, Restarts                 int
-	Complete                                                bool
-	WorkerStart, Build, Infer, Write, Total                 time.Duration
-	Worker                                                  string
-	WorkerPIDs                                              []int
+	// PeakPending is the most items built and not yet labeled at once: how
+	// far the builder ran ahead of the workers.
+	PeakPending                             int
+	Complete                                bool
+	WorkerStart, Build, Infer, Write, Total time.Duration
+	Worker                                  string
+	WorkerPIDs                              []int
 }
 
 // labelsMessage is one message's pending work: its items' sequences, and the
@@ -640,7 +643,7 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 
 	var window []labelsSeq
 	var ready []labelsBatch
-	inflight, producing := 0, true
+	inflight, producing, pending := 0, true, 0
 	finish := func(job *labelsJob) { writes <- job }
 	pack := func() {
 		if len(window) == 0 {
@@ -675,17 +678,23 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 		for _, message := range job.messages {
 			for chunk := range message.seqs {
 				window = append(window, labelsSeq{message, chunk})
+				pending++
 			}
 		}
+		r.stats.PeakPending = max(r.stats.PeakPending, pending)
 	}
 	// A window of a few batches' worth sorts well enough by length; a short
-	// run fills no window and is packed as soon as the producer pauses.
+	// run fills no window and is packed as soon as the producer pauses. New
+	// jobs are taken only while the window has room and few packed batches
+	// wait, so the builder stays a bounded distance ahead of the workers
+	// (memory holds a few windows, not the library).
 	windowSize := 4 * r.maxBatch() * r.capacity()
+	room := func() bool { return len(window) < windowSize && len(ready) <= r.capacity() }
 	var failure error
 	for producing || inflight > 0 || len(window) > 0 || len(ready) > 0 {
 		if failure == nil {
 			// Take what the producer has ready without waiting.
-			for producing && len(window) < windowSize {
+			for producing && room() {
 				select {
 				case job, ok := <-built:
 					if !ok {
@@ -725,7 +734,7 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 		}
 		var jobs <-chan *labelsJob
 		done := ctx.Done()
-		if producing && failure == nil && len(window) < windowSize {
+		if producing && failure == nil && room() {
 			jobs = built
 		}
 		if failure != nil {
@@ -740,6 +749,7 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 			}
 		case result := <-results:
 			inflight--
+			pending -= len(result.batch.seqs)
 			if err := r.apply(result, &ready, finish); err != nil && failure == nil {
 				failure = err
 				cancel()
