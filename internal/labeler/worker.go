@@ -21,8 +21,11 @@ type WorkerConfig struct {
 	Args []string
 	Env  []string
 	// Model and ModelSHA256 go in the hello, with the limits below.
-	Model, ModelSHA256         string
-	Threads, VocabSize         int
+	Model, ModelSHA256 string
+	Threads, VocabSize int
+	// Inputs are the model's input contract (Model.Inputs); empty means
+	// DefaultInputs.
+	Inputs                     []InputSpec
 	MaxBatch, MaxSeq           int
 	Options                    map[string]any
 	StartTimeout, CloseTimeout time.Duration
@@ -118,7 +121,7 @@ func StartWorker(ctx context.Context, cfg WorkerConfig) (*Worker, error) {
 	}()
 	reader := NewFrameReader(stdout)
 	hello := Hello{Protocol: []int{ProtocolVersion}, Model: cfg.Model, ModelSHA256: cfg.ModelSHA256, Threads: cfg.Threads,
-		VocabSize: cfg.VocabSize, MaxBatch: cfg.MaxBatch, MaxSeq: cfg.MaxSeq, Options: cfg.Options}
+		VocabSize: cfg.VocabSize, MaxBatch: cfg.MaxBatch, MaxSeq: cfg.MaxSeq, Options: cfg.Options, Inputs: cfg.Inputs}
 	handshake := make(chan error, 1)
 	go func() {
 		if err := w.writeJSON(FrameHello, hello); err != nil {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -32,7 +33,7 @@ func TestRunRoundTrip(t *testing.T) {
 	if got.ID != 42 || len(got.Inputs) != 2 || got.Outputs[0] != "probs" || got.Inputs[1].Int32[5] != 0 || got.Inputs[0].Dims[1] != 3 {
 		t.Fatalf("decoded %+v", got)
 	}
-	if err := ValidateRun(got, 50368, 8, 512); err != nil {
+	if err := ValidateRun(got, nil, 50368, 8, 512); err != nil {
 		t.Fatal(err)
 	}
 	res := &RunResult{ID: 42, Outputs: []Tensor{{Name: "probs", DType: DTypeFloat32, Dims: []int{2, 2}, Float32: []float32{0.5, -1.25, 3e-9, 1}}}}
@@ -114,8 +115,40 @@ func TestMalformedFramesAndRequests(t *testing.T) {
 		if name == "over batch limit" {
 			maxBatch = 1
 		}
-		if err := ValidateRun(req, 50368, maxBatch, 512); err == nil {
+		if err := ValidateRun(req, nil, 50368, maxBatch, 512); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+// A model with a pooling input is one more named input; the rules come from
+// its role.
+func TestValidateRunWithAPoolingInput(t *testing.T) {
+	inputs := append(slices.Clone(DefaultInputs), InputSpec{Name: "pooling_mask", Role: RolePool})
+	if err := ValidateInputs(inputs); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range [][]InputSpec{{{"a", RoleIDs}}, {{"a", RoleIDs}, {"a", RoleAttention}}, {{"a", RoleIDs}, {"b", RoleAttention}, {"c", "weights"}}} {
+		if ValidateInputs(bad) == nil {
+			t.Errorf("inputs %v accepted", bad)
+		}
+	}
+	request := func(pool []int32) *RunRequest {
+		return &RunRequest{ID: 1, Inputs: []Tensor{
+			{Name: "input_ids", DType: DTypeInt32, Dims: []int{1, 4}, Int32: []int32{50281, 7, 50282, 50283}},
+			{Name: "attention_mask", DType: DTypeInt32, Dims: []int{1, 4}, Int32: []int32{1, 1, 1, 0}},
+			{Name: "pooling_mask", DType: DTypeInt32, Dims: []int{1, 4}, Int32: pool},
+		}}
+	}
+	if err := ValidateRun(request([]int32{0, 1, 0, 0}), inputs, 50368, 8, 512); err != nil {
+		t.Fatal(err)
+	}
+	for _, pool := range [][]int32{{0, 0, 0, 0}, {0, 1, 0, 1}, {0, 2, 0, 0}} {
+		if ValidateRun(request(pool), inputs, 50368, 8, 512) == nil {
+			t.Errorf("pool %v accepted", pool)
+		}
+	}
+	if ValidateRun(request([]int32{0, 1, 0, 0}), nil, 50368, 8, 512) == nil {
+		t.Error("an undeclared pooling input was accepted")
 	}
 }

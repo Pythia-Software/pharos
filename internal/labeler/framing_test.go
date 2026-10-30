@@ -186,3 +186,28 @@ func BenchmarkFrame(b *testing.B) {
 		})
 	}
 }
+
+// The spans tile the sequence around its three special tokens, and each
+// holds what was built for it.
+func TestFrameSpans(t *testing.T) {
+	tok := testTokenizer(t)
+	for _, c := range loadParityFixture(t).Cases {
+		in := FrameInput{Segment: c.Item.Segment, Cohort: c.Item.Cohort, Sender: c.Item.Sender, Context: c.Item.Context, Text: c.Item.Text}
+		ids, spans := tok.FrameWithSpans(in)
+		if !slices.Equal(ids, c.InputIDs) {
+			t.Fatalf("%s: ids differ from Frame's", c.Case)
+		}
+		if spans.Tag.Start != 1 || spans.Tag.End != spans.Context.Start || spans.Context.End+1 != spans.Text.Start || spans.Text.End != len(ids)-1 {
+			t.Fatalf("%s: spans %+v for %d ids", c.Case, spans, len(ids))
+		}
+		if !slices.Equal(ids[spans.Tag.Start:spans.Tag.End], tok.Encode(senderTag(in.Cohort, in.Sender))) {
+			t.Errorf("%s: the tag span is not the tag", c.Case)
+		}
+		if in.Text != "" && spans.Text.Len() == 0 || in.Context == "" && spans.Context.Len() != 0 {
+			t.Errorf("%s: spans %+v", c.Case, spans)
+		}
+		if text := tok.Encode(in.Text); len(text) <= spans.Text.Len() && !slices.Equal(ids[spans.Text.Start:spans.Text.End], text) {
+			t.Errorf("%s: an untruncated text span is not the text", c.Case)
+		}
+	}
+}

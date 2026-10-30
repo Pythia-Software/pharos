@@ -50,30 +50,55 @@ func PackBatches(lengths []int, budget, maxBatch, padMult int) [][]int {
 	return batches
 }
 
-// BatchTensors right-pads sequences with PadID to the longest one (rounded up
-// to padMult) and returns the run request's input_ids and attention_mask.
+// BatchTensors is BatchInputs for DefaultInputs: input_ids and
+// attention_mask.
 func BatchTensors(seqs [][]int32, padMult int) []Tensor {
+	rows := make([]Framed, len(seqs))
+	for i, seq := range seqs {
+		rows[i].IDs = seq
+	}
+	return BatchInputs(DefaultInputs, rows, padMult)
+}
+
+// Framed is one framed item: its token ids and where its components are.
+type Framed struct {
+	IDs   []int32
+	Spans FrameSpans
+}
+
+// BatchInputs makes a run request's inputs for rows, by the model's input
+// contract: ids right-padded with PadID, the attention mask over each row's
+// tokens, and a pooling mask over each row's text span (FrameSpans.Text),
+// all padded to the longest row rounded up to padMult.
+func BatchInputs(inputs []InputSpec, rows []Framed, padMult int) []Tensor {
 	longest := 0
-	for _, seq := range seqs {
-		longest = max(longest, len(seq))
+	for _, row := range rows {
+		longest = max(longest, len(row.IDs))
 	}
 	width := PadLength(longest, padMult)
-	ids := make([]int32, len(seqs)*width)
-	mask := make([]int32, len(seqs)*width)
-	for row, seq := range seqs {
-		at := row * width
-		copy(ids[at:], seq)
-		for col := range width {
-			if col < len(seq) {
-				mask[at+col] = 1
-			} else {
-				ids[at+col] = PadID
+	dims := []int{len(rows), width}
+	tensors := make([]Tensor, 0, len(inputs))
+	for _, input := range inputs {
+		values := make([]int32, len(rows)*width)
+		for r, row := range rows {
+			at := r * width
+			switch input.Role {
+			case RoleIDs:
+				copy(values[at:], row.IDs)
+				for col := len(row.IDs); col < width; col++ {
+					values[at+col] = PadID
+				}
+			case RoleAttention:
+				for col := range row.IDs {
+					values[at+col] = 1
+				}
+			case RolePool:
+				for col := row.Spans.Text.Start; col < row.Spans.Text.End; col++ {
+					values[at+col] = 1
+				}
 			}
 		}
+		tensors = append(tensors, Tensor{Name: input.Name, DType: DTypeInt32, Dims: dims, Int32: values})
 	}
-	dims := []int{len(seqs), width}
-	return []Tensor{
-		{Name: "input_ids", DType: DTypeInt32, Dims: dims, Int32: ids},
-		{Name: "attention_mask", DType: DTypeInt32, Dims: dims, Int32: mask},
-	}
+	return tensors
 }

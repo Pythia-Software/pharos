@@ -391,7 +391,7 @@ func (w *worker) enqueue(payload []byte) {
 		w.out.error(req.ID, labeler.ErrCodeBadRequest, "%v", err)
 		return
 	}
-	if err := labeler.ValidateRun(req, w.hello.VocabSize, w.ready.Limits.MaxBatch, w.ready.Limits.MaxSeq); err != nil {
+	if err := labeler.ValidateRun(req, w.hello.RunInputs(), w.hello.VocabSize, w.ready.Limits.MaxBatch, w.ready.Limits.MaxSeq); err != nil {
 		w.out.error(req.ID, labeler.ErrCodeBadRequest, "%v", err)
 		return
 	}

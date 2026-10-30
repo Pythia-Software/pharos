@@ -252,6 +252,7 @@ type LabelsRunStats struct {
 type labelsMessage struct {
 	id, conversation, hash, segment string
 	seqs                            [][]int32
+	spans                           []labelrt.FrameSpans
 	segments                        []string
 	tokens, done                    int
 	probs                           []float32
@@ -563,7 +564,7 @@ func (r *labelsRun) startPool(ctx context.Context) error {
 		workers, inflight = 1, 1
 	}
 	pool, err := labelrt.NewPool(ctx, labelrt.PoolConfig{Workers: workers, Worker: labelrt.WorkerConfig{Path: r.settings.Worker, Args: args,
-		Model: r.model.Path, ModelSHA256: r.model.SHA256, Threads: r.settings.Threads, VocabSize: r.model.Tokenizer.VocabSize(),
+		Model: r.model.Path, ModelSHA256: r.model.SHA256, Threads: r.settings.Threads, VocabSize: r.model.Tokenizer.VocabSize(), Inputs: r.model.Inputs,
 		MaxBatch: r.maxBatch(), MaxSeq: labelrt.MaxTokens, InFlight: inflight},
 		Backoff:   labelsWorkerBackoff,
 		OnRestart: func(slot int, cause error) { r.progress("labels: restarting worker %d after: %v", slot, cause) }})
@@ -617,16 +618,16 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 	for range r.capacity() {
 		go func() {
 			for batch := range batches {
-				seqs := make([][]int32, len(batch.seqs))
+				rows := make([]labelrt.Framed, len(batch.seqs))
 				for i, seq := range batch.seqs {
-					seqs[i] = seq.message.seqs[seq.chunk]
+					rows[i] = labelrt.Framed{IDs: seq.message.seqs[seq.chunk], Spans: seq.message.spans[seq.chunk]}
 				}
 				started := time.Now()
-				result, err := r.pool.Run(ctx, labelrt.BatchTensors(seqs, labelrt.PadMultiple), []string{"probs"})
+				result, err := r.pool.Run(ctx, labelrt.BatchInputs(r.model.Inputs, rows, labelrt.PadMultiple), []string{"probs"})
 				out := labelsBatchResult{batch: batch, err: err, took: time.Since(started)}
 				if err == nil {
-					if probs := result.Tensor("probs"); probs == nil || len(probs.Float32) != len(seqs)*r.model.Labels() {
-						out.err = fmt.Errorf("labeler worker returned no probs of shape [%d,%d]", len(seqs), r.model.Labels())
+					if probs := result.Tensor("probs"); probs == nil || len(probs.Float32) != len(rows)*r.model.Labels() {
+						out.err = fmt.Errorf("labeler worker returned no probs of shape [%d,%d]", len(rows), r.model.Labels())
 					} else {
 						out.probs = probs.Float32
 					}
@@ -879,7 +880,8 @@ func (r *labelsRun) produce(ctx context.Context, builder *labelsItemBuilder, job
 				message.items = items
 			}
 			for _, item := range items {
-				seq := r.model.Tokenizer.Frame(labelrt.FrameInput{Segment: item.Segment, Cohort: item.Cohort, Sender: item.SenderRole, Context: item.Context, Text: item.Text})
+				seq, spans := r.model.Tokenizer.FrameWithSpans(labelrt.FrameInput{Segment: item.Segment, Cohort: item.Cohort, Sender: item.SenderRole, Context: item.Context, Text: item.Text})
+				message.spans = append(message.spans, spans)
 				if r.opts.DryRun {
 					r.export(item, seq, nil, 0)
 				}

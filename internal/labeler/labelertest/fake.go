@@ -46,7 +46,8 @@ func fakeLabels(model string) int {
 }
 
 // FakeWorker speaks pharos-labeler/1 with a stand-in model: probs[j] of a row
-// is FakeProb of its real tokens, over the labels of the manifest.json beside
+// is FakeProb of its real tokens (those its pool input marks, when the hello
+// declares one), over the labels of the manifest.json beside
 // the hello's model file (4 without one). Modes:
 // "ok"; "crash-after:N" exits after N results (counted in the file named by
 // FakeCountEnv, so a restarted worker carries on counting);
@@ -102,7 +103,7 @@ func FakeWorker(mode string) int {
 		case labeler.FrameRun:
 			req, err := labeler.DecodeRun(payload)
 			if err == nil {
-				err = labeler.ValidateRun(req, hello.VocabSize, 64, 512)
+				err = labeler.ValidateRun(req, hello.RunInputs(), hello.VocabSize, 64, 512)
 			}
 			if err != nil {
 				writeJSON(labeler.FrameError, labeler.ErrorReply{ID: req.ID, Code: labeler.ErrCodeBadRequest, Message: err.Error()})
@@ -111,7 +112,25 @@ func FakeWorker(mode string) int {
 			if mode == "slow" {
 				time.Sleep(200 * time.Millisecond)
 			}
-			ids, mask := req.Inputs[0], req.Inputs[1]
+			// The fake pools what a pool input marks, else every real token.
+			var ids, mask *labeler.Tensor
+			for _, input := range hello.RunInputs() {
+				for i := range req.Inputs {
+					if req.Inputs[i].Name != input.Name {
+						continue
+					}
+					switch input.Role {
+					case labeler.RoleIDs:
+						ids = &req.Inputs[i]
+					case labeler.RoleAttention:
+						if mask == nil {
+							mask = &req.Inputs[i]
+						}
+					case labeler.RolePool:
+						mask = &req.Inputs[i]
+					}
+				}
+			}
 			batch, seq := ids.Dims[0], ids.Dims[1]
 			probs := make([]float32, batch*labels)
 			for row := range batch {

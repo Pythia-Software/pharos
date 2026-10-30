@@ -266,13 +266,13 @@ func (c *Catalog) LabelsExplain(ctx context.Context, settings LabelerSettings, m
 		return out, nil
 	}
 	shown := []map[string]any{}
-	seqs := [][]int32{}
+	rows := []labelrt.Framed{}
 	for _, item := range items {
-		seq := model.Tokenizer.Frame(labelrt.FrameInput{Segment: item.Segment, Cohort: item.Cohort, Sender: item.SenderRole, Context: item.Context, Text: item.Text})
-		seqs = append(seqs, seq)
+		seq, spans := model.Tokenizer.FrameWithSpans(labelrt.FrameInput{Segment: item.Segment, Cohort: item.Cohort, Sender: item.SenderRole, Context: item.Context, Text: item.Text})
+		rows = append(rows, labelrt.Framed{IDs: seq, Spans: spans})
 		shown = append(shown, map[string]any{"item_id": item.ID, "chunk": item.ChunkIndex, "segment": item.Segment, "cohort": item.Cohort, "sender_role": item.SenderRole,
 			"context": item.Context, "text": item.Text, "chars": item.Chars(), "tokens": len(seq), "text_tokens": len(model.Tokenizer.Encode(item.Text)),
-			"thresholds": thresholdRow(model, item.Segment)})
+			"spans": spans, "thresholds": thresholdRow(model, item.Segment)})
 	}
 	out["items"] = shown
 	hash := labelsInputHash(items)
@@ -295,12 +295,12 @@ func (c *Catalog) LabelsExplain(ctx context.Context, settings LabelerSettings, m
 	}
 	if infer {
 		pool, err := labelrt.NewPool(ctx, labelrt.PoolConfig{Worker: labelrt.WorkerConfig{Path: settings.Worker, Args: runtimeArgs(settings), Model: model.Path,
-			ModelSHA256: model.SHA256, Threads: settings.Threads, VocabSize: model.Tokenizer.VocabSize(), MaxSeq: labelrt.MaxTokens}})
+			ModelSHA256: model.SHA256, Threads: settings.Threads, VocabSize: model.Tokenizer.VocabSize(), MaxSeq: labelrt.MaxTokens, Inputs: model.Inputs}})
 		if err != nil {
 			return nil, err
 		}
 		defer pool.Close()
-		result, err := pool.Run(ctx, labelrt.BatchTensors(seqs, labelrt.PadMultiple), []string{"probs"})
+		result, err := pool.Run(ctx, labelrt.BatchInputs(model.Inputs, rows, labelrt.PadMultiple), []string{"probs"})
 		if err != nil {
 			return nil, err
 		}

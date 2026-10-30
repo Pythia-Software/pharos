@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 )
 
 // Worker protocol pharos-labeler/1 (docs/local-labeler.md, "Worker protocol").
@@ -72,6 +73,10 @@ type Hello struct {
 	Threads int `json:"threads,omitempty"`
 	// VocabSize bounds token ids: every id must be in [0, VocabSize).
 	VocabSize int `json:"vocab_size"`
+	// Inputs are the int32 [batch, seq] tensors every run request carries,
+	// by the model's input names, with their roles (the model's input
+	// contract). A hello without them means DefaultInputs.
+	Inputs []InputSpec `json:"inputs,omitempty"`
 	// MaxBatch and MaxSeq are the largest batch and sequence the main process
 	// will send; a worker may lower them in Ready.
 	MaxBatch int `json:"max_batch,omitempty"`
@@ -79,6 +84,58 @@ type Hello struct {
 	// Options are worker-specific settings (for example a provider name).
 	// A worker ignores options it does not know.
 	Options map[string]any `json:"options,omitempty"`
+}
+
+// Input roles. Every input is int32 [batch, seq], right-padded:
+//   - ids: token ids, each in [0, vocab_size); exactly one input has it;
+//   - attention: 1 on real tokens, 0 on padding, at least one 1 per row;
+//     exactly one input has it;
+//   - pool: 1 on the tokens the model pools, a non-empty subset of the
+//     attention mask's per row (for example the target text only).
+const (
+	RoleIDs       = "ids"
+	RoleAttention = "attention"
+	RolePool      = "pool"
+)
+
+// InputSpec is one input a run request carries.
+type InputSpec struct {
+	Name string `json:"name"`
+	Role string `json:"role"`
+}
+
+// DefaultInputs are input_ids and attention_mask: what a hello that names
+// no inputs means, and input contract ids-attention-v1.
+var DefaultInputs = []InputSpec{{Name: "input_ids", Role: RoleIDs}, {Name: "attention_mask", Role: RoleAttention}}
+
+// RunInputs are the inputs a hello declares, or DefaultInputs.
+func (h *Hello) RunInputs() []InputSpec {
+	if len(h.Inputs) == 0 {
+		return DefaultInputs
+	}
+	return h.Inputs
+}
+
+// ValidateInputs checks a hello's inputs: unique names, known roles, one ids
+// and one attention input.
+func ValidateInputs(inputs []InputSpec) error {
+	seen, roles := map[string]bool{}, map[string]int{}
+	for _, input := range inputs {
+		if input.Name == "" || len(input.Name) > 255 || seen[input.Name] {
+			return fmt.Errorf("input name %q is empty, too long or repeated", input.Name)
+		}
+		seen[input.Name] = true
+		switch input.Role {
+		case RoleIDs, RoleAttention, RolePool:
+		default:
+			return fmt.Errorf("input %s has unknown role %q", input.Name, input.Role)
+		}
+		roles[input.Role]++
+	}
+	if roles[RoleIDs] != 1 || roles[RoleAttention] != 1 {
+		return errors.New("inputs need exactly one ids and one attention input")
+	}
+	return nil
 }
 
 // TensorInfo describes one model input or output.
@@ -471,39 +528,53 @@ func (d *decoder) tensors() []Tensor {
 	return tensors
 }
 
-// ValidateRun checks a decoded run request against the protocol's v1 inputs
-// and the limits a worker announced: input_ids and attention_mask, int32
-// [batch, seq] with equal dims, ids in [0, vocab), mask values 0 or 1 with at
-// least one 1 per row, and batch and seq within limits. Workers use it so
+// ValidateRun checks a decoded run request against the inputs the hello
+// declared and the limits the worker announced: each declared input exactly
+// once and nothing else, all int32 [batch, seq] with the same dims, and each
+// input's values as its role requires (see RoleIDs). Workers use it so
 // every worker rejects the same malformed requests.
-func ValidateRun(req *RunRequest, vocab, maxBatch, maxSeq int) error {
-	var ids, mask *Tensor
+func ValidateRun(req *RunRequest, inputs []InputSpec, vocab, maxBatch, maxSeq int) error {
+	if len(inputs) == 0 {
+		inputs = DefaultInputs
+	}
+	byName := map[string]*Tensor{}
 	for i := range req.Inputs {
-		switch name := req.Inputs[i].Name; {
-		case name == "input_ids" && ids == nil:
-			ids = &req.Inputs[i]
-		case name == "attention_mask" && mask == nil:
-			mask = &req.Inputs[i]
-		case name == "input_ids" || name == "attention_mask":
+		name := req.Inputs[i].Name
+		if byName[name] != nil {
 			return fmt.Errorf("input %q given twice", name)
-		default:
-			return fmt.Errorf("unknown input %q", name)
+		}
+		byName[name] = &req.Inputs[i]
+	}
+	var attention *Tensor
+	for _, input := range inputs {
+		t := byName[input.Name]
+		if t == nil {
+			return fmt.Errorf("input %s is required", input.Name)
+		}
+		if input.Role == RoleAttention {
+			attention = t
 		}
 	}
-	if ids == nil || mask == nil {
-		return errors.New("input_ids and attention_mask are required")
+	if len(byName) != len(inputs) {
+		for name := range byName {
+			if !slices.ContainsFunc(inputs, func(input InputSpec) bool { return input.Name == name }) {
+				return fmt.Errorf("unknown input %q", name)
+			}
+		}
 	}
-	for _, t := range []*Tensor{ids, mask} {
+	first := byName[inputs[0].Name]
+	for _, input := range inputs {
+		t := byName[input.Name]
 		if t.DType != DTypeInt32 || len(t.Dims) != 2 {
 			return fmt.Errorf("%s must be int32 [batch, seq]", t.Name)
 		}
+		if t.Dims[0] != first.Dims[0] || t.Dims[1] != first.Dims[1] {
+			return fmt.Errorf("%s %v and %s %v differ in shape", first.Name, first.Dims, t.Name, t.Dims)
+		}
 	}
-	if ids.Dims[0] != mask.Dims[0] || ids.Dims[1] != mask.Dims[1] {
-		return fmt.Errorf("input_ids %v and attention_mask %v differ in shape", ids.Dims, mask.Dims)
-	}
-	batch, seq := ids.Dims[0], ids.Dims[1]
+	batch, seq := first.Dims[0], first.Dims[1]
 	if batch < 1 || seq < 1 {
-		return fmt.Errorf("empty batch %v", ids.Dims)
+		return fmt.Errorf("empty batch %v", first.Dims)
 	}
 	if maxBatch > 0 && batch > maxBatch {
 		return fmt.Errorf("batch %d exceeds the limit %d", batch, maxBatch)
@@ -511,23 +582,35 @@ func ValidateRun(req *RunRequest, vocab, maxBatch, maxSeq int) error {
 	if maxSeq > 0 && seq > maxSeq {
 		return fmt.Errorf("sequence %d exceeds the limit %d", seq, maxSeq)
 	}
-	for row := 0; row < batch; row++ {
-		real := 0
-		for col := 0; col < seq; col++ {
-			k := row*seq + col
-			if id := ids.Int32[k]; id < 0 || (vocab > 0 && int(id) >= vocab) {
-				return fmt.Errorf("token id %d at [%d,%d] is outside [0,%d)", id, row, col, vocab)
+	for _, input := range inputs {
+		t := byName[input.Name]
+		for row := 0; row < batch; row++ {
+			on := 0
+			for col := 0; col < seq; col++ {
+				k := row*seq + col
+				value := t.Int32[k]
+				switch input.Role {
+				case RoleIDs:
+					if value < 0 || (vocab > 0 && int(value) >= vocab) {
+						return fmt.Errorf("token id %d at [%d,%d] is outside [0,%d)", value, row, col, vocab)
+					}
+					continue
+				case RolePool:
+					if value == 1 && attention.Int32[k] != 1 {
+						return fmt.Errorf("%s pools padding at [%d,%d]", t.Name, row, col)
+					}
+				}
+				switch value {
+				case 1:
+					on++
+				case 0:
+				default:
+					return fmt.Errorf("%s value %d at [%d,%d]", t.Name, value, row, col)
+				}
 			}
-			switch mask.Int32[k] {
-			case 1:
-				real++
-			case 0:
-			default:
-				return fmt.Errorf("attention_mask value %d at [%d,%d]", mask.Int32[k], row, col)
+			if input.Role != RoleIDs && on == 0 {
+				return fmt.Errorf("row %d of %s is empty", row, t.Name)
 			}
-		}
-		if real == 0 {
-			return fmt.Errorf("row %d has no tokens", row)
 		}
 	}
 	for i, name := range req.Outputs {

@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -21,7 +23,7 @@ import (
 // labelsTestSettings is a model directory with four labels (P > P.request,
 // C > C.report), the committed tokenizer and a stand-in model file, served
 // by the fake worker in mode.
-func labelsTestSettings(t *testing.T, mode string) LabelerSettings {
+func labelsTestSettings(t *testing.T, mode string, manifestFields ...map[string]any) LabelerSettings {
 	t.Helper()
 	dir := t.TempDir()
 	raw, err := os.ReadFile(filepath.Join("..", "..", "testdata", "labeler", "kestrel-68m-tokenizer.json.gz"))
@@ -38,14 +40,18 @@ func labelsTestSettings(t *testing.T, mode string) LabelerSettings {
 	}
 	model := []byte("stand-in model")
 	sum := func(data []byte) string { s := sha256.Sum256(data); return hex.EncodeToString(s[:]) }
-	manifest, _ := json.Marshal(map[string]any{
+	fields := map[string]any{
 		"name": "fake", "framing_contract": labelrt.FramingContract,
 		"files":  map[string]string{"onnx_int8": "model.int8.onnx", "tokenizer": "tokenizer.json"},
 		"sha256": map[string]string{"model.int8.onnx": sum(model)}, "tokenizer_sha256": sum(tokenizer),
 		"labels": map[string]any{"order": []string{"P", "P.request", "C", "C.report"},
 			"ancestors": map[string][]string{"P": {}, "P.request": {"P"}, "C": {}, "C.report": {"C"}}},
 		"thresholds": map[string][]float64{"default": {0.5, 0.5, 0.5, 0.5}},
-	})
+	}
+	for _, extra := range manifestFields {
+		maps.Copy(fields, extra)
+	}
+	manifest, _ := json.Marshal(fields)
 	for name, data := range map[string][]byte{"tokenizer.json": tokenizer, "model.int8.onnx": model, "manifest.json": manifest} {
 		if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
 			t.Fatal(err)
@@ -272,5 +278,37 @@ func TestLabelsStatusAndExplain(t *testing.T) {
 	explained, err = catalog.LabelsExplain(t.Context(), settings, "m-branch", false)
 	if err != nil || explained["excluded"].(map[string]any)["reason"] != "unselected_branch" {
 		t.Fatalf("explain m-branch: %v %v", explained, err)
+	}
+}
+
+// A model whose input contract adds a pooling mask over the target text
+// runs through the same protocol: one more named input, built from the
+// framing's text span. The fake worker pools what the mask marks.
+func TestLabelsCarryAPoolingInput(t *testing.T) {
+	inputs := append(slices.Clone(labelrt.DefaultInputs), labelrt.InputSpec{Name: "pooling_mask", Role: labelrt.RolePool})
+	labelrt.InputContracts["test-target-pool-v1"] = inputs
+	t.Cleanup(func() { delete(labelrt.InputContracts, "test-target-pool-v1") })
+	catalog := labeledCatalog(t)
+	settings := labelsTestSettings(t, "ok", map[string]any{"input_contract": "test-target-pool-v1"})
+	if _, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{Conversations: []string{"c-root"}}); err != nil {
+		t.Fatal(err)
+	}
+	model, err := labelrt.LoadModel(settings.ModelDir, "int8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var item labelingItem
+	for _, candidate := range liveItems(t, catalog) {
+		if candidate.MessageID == "m-a1" {
+			item = candidate
+		}
+	}
+	ids, spans := model.Tokenizer.FrameWithSpans(labelrt.FrameInput{Segment: item.Segment, Cohort: item.Cohort, Sender: item.SenderRole, Context: item.Context, Text: item.Text})
+	var raw []byte
+	if err := catalog.DB.QueryRow(`SELECT probs FROM message_labels WHERE message_id='m-a1'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := decodeLabelProbs(raw)[0], labelertest.FakeProb(ids[spans.Text.Start:spans.Text.End], 0); got != want {
+		t.Fatalf("pooled prob %v, want %v (whole sequence %v)", got, want, labelertest.FakeProb(ids, 0))
 	}
 }

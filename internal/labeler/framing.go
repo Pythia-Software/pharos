@@ -47,10 +47,28 @@ func HumanSegment(segment string) bool {
 	return false
 }
 
+// Span is a half-open range of token positions in a framed sequence.
+type Span struct{ Start, End int }
+
+// Len is the span's token count.
+func (s Span) Len() int { return s.End - s.Start }
+
+// FrameSpans are where Frame put each component: the role tag, the context
+// and the text (head and tail together, the item's target). They come from
+// how the sequence was built, never from looking for separator ids, so an
+// input such as a pooling mask over the target can be made from them.
+type FrameSpans struct{ Tag, Context, Text Span }
+
 // Frame returns the model input for one item, unpadded:
 // [CLS] tag context [SEP] text [SEP]. Lengths and cuts of the strings count
 // code points, as Python does.
 func (t *Tokenizer) Frame(in FrameInput) []int32 {
+	ids, _ := t.FrameWithSpans(in)
+	return ids
+}
+
+// FrameWithSpans is Frame with the components' token spans.
+func (t *Tokenizer) FrameWithSpans(in FrameInput) ([]int32, FrameSpans) {
 	text, ctx := validUTF8(in.Text), validUTF8(in.Context)
 	if utf8.RuneCountInString(text) > frameTextCharCap {
 		text = headRunes(text, frameTextCharCap/2) + " … " + tailRunes(text, frameTextCharCap/2)
@@ -85,13 +103,19 @@ func (t *Tokenizer) Frame(in FrameInput) []int32 {
 	c = c[len(c)-cb:]
 
 	out := make([]int32, 0, 3+len(tag)+len(c)+len(head)+len(tail))
+	var spans FrameSpans
 	out = append(out, ClsID)
+	spans.Tag.Start = len(out)
 	out = append(out, tag...)
+	spans.Tag.End, spans.Context.Start = len(out), len(out)
 	out = append(out, c...)
+	spans.Context.End = len(out)
 	out = append(out, SepID)
+	spans.Text.Start = len(out)
 	out = append(out, head...)
 	out = append(out, tail...)
-	return append(out, SepID)
+	spans.Text.End = len(out)
+	return append(out, SepID), spans
 }
 
 // senderTag is f"{cohort} {sender}".strip() + " :", with an account:* sender

@@ -7,17 +7,23 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
 // Manifest is a model directory's manifest.json, the parts the labeler reads
 // (docs/local-labeler.md, "The model artifact").
 type Manifest struct {
-	Name            string            `json:"name"`
-	BaseModel       string            `json:"base_model"`
-	FramingContract string            `json:"framing_contract"`
+	Name            string `json:"name"`
+	BaseModel       string `json:"base_model"`
+	FramingContract string `json:"framing_contract"`
+	// InputContract names the model's inputs and how they are made
+	// (InputContracts). Exports before the field (kestrel-68m) are
+	// ids-attention-v1.
+	InputContract   string            `json:"input_contract"`
 	Files           map[string]string `json:"files"`
 	SHA256          map[string]string `json:"sha256"`
 	TokenizerSHA256 string            `json:"tokenizer_sha256"`
@@ -47,7 +53,10 @@ type Model struct {
 	SHA256, TokenizerSHA256 string
 	Manifest                Manifest
 	Tokenizer               *Tokenizer
-	thresholds              map[string][]float32
+	// InputContract and Inputs are what every run request carries.
+	InputContract string
+	Inputs        []InputSpec
+	thresholds    map[string][]float32
 	// closure[j] is the bit mask of label j and its ancestors.
 	closure []uint64
 }
@@ -76,6 +85,15 @@ func LoadModel(dir, variant string) (*Model, error) {
 	if man.FramingContract != FramingContract {
 		return nil, fmt.Errorf("%w: the model needs framing %q; this build implements %q", ErrModelUnavailable, man.FramingContract, FramingContract)
 	}
+	m.InputContract = man.InputContract
+	if m.InputContract == "" {
+		m.InputContract = InputContractIDsAttention
+	}
+	inputs, ok := InputContracts[m.InputContract]
+	if !ok {
+		return nil, fmt.Errorf("%w: the model needs input contract %q; this build implements %v", ErrModelUnavailable, m.InputContract, slices.Sorted(maps.Keys(InputContracts)))
+	}
+	m.Inputs = inputs
 	file := man.Files["onnx_"+variant]
 	if file == "" || strings.ContainsAny(file, `/\`) {
 		return nil, fmt.Errorf("%w: the manifest names no %s model file", ErrModelUnavailable, variant)
@@ -108,6 +126,16 @@ func LoadModel(dir, variant string) (*Model, error) {
 	}
 	return m, nil
 }
+
+// Model input contracts. ids-attention-v1 is input_ids and attention_mask:
+// the framed tokens and their mask (mean pooling over every real token
+// happens inside the model). A contract that pools only the target text
+// adds an input with RolePool, made from the framing's text span
+// (FrameSpans.Text); it is one more entry here, not a protocol change.
+const InputContractIDsAttention = "ids-attention-v1"
+
+// InputContracts are the input contracts this build implements.
+var InputContracts = map[string][]InputSpec{InputContractIDsAttention: DefaultInputs}
 
 // verifyFile hashes path and compares it with want.
 func verifyFile(path, want string) (string, error) {
