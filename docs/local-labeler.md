@@ -214,8 +214,12 @@ rejected, stays pending.
 **The generation.** A run that covered everything, with no dirty mark left
 and authorship unchanged meanwhile, records `labels_generation` =
 authorship generation | model identity | contract, and `labels_built_at`. The
-model identity is the model's name, its file's SHA-256 and its manifest's
-(which carries the thresholds and the tokenizer's hash). The contract is
+model identity is the model's name, its input contract, its file's SHA-256
+and its manifest's (which carries the thresholds and the tokenizer's hash).
+Every row records it, so switching models in either direction
+(`kestrel-68m-tpool` and `kestrel-68m`) relabels every message, and a run
+after that has nothing to do (`TestLabelsRelabelOnAModelSwitch`). The
+contract is
 `kestrel-framing-v1+labeling-units-v1+human-pieces-v2+context-v3+chunking-v1+avocet-segments-v1+chunk-union-v1`.
 A new model or contract relabels every message.
 
@@ -255,7 +259,9 @@ CREATE TABLE message_labels (
   labels INTEGER NOT NULL,        -- closed label set, bit j = manifest.labels.order[j]
   probs BLOB NOT NULL,            -- float32 little-endian per label (max over chunks)
   chunks INTEGER NOT NULL, tokens INTEGER NOT NULL,
-  input_hash TEXT NOT NULL, model TEXT NOT NULL, contract TEXT NOT NULL,
+  input_hash TEXT NOT NULL,
+  model TEXT NOT NULL,            -- name/input contract/model SHA-256/manifest SHA-256
+  contract TEXT NOT NULL,         -- framing and item contracts
   labeled_at TEXT NOT NULL);
 CREATE TABLE message_labels_conversations (conversation_id TEXT PRIMARY KEY, structure TEXT NOT NULL, units INTEGER NOT NULL, built_at TEXT NOT NULL);
 CREATE TABLE message_labels_dirty (conversation_id TEXT PRIMARY KEY, token TEXT NOT NULL);
