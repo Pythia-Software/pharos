@@ -551,7 +551,7 @@ type labelsRun struct {
 }
 
 // export writes one item's line (see LabelsRunOptions.Export).
-func (r *labelsRun) export(item labelingItem, seq []int32, probs []float32, mask uint64) {
+func (r *labelsRun) export(item labelingItem, seq []int32, spans labelrt.FrameSpans, probs []float32, mask uint64) {
 	if r.opts.Export == nil {
 		return
 	}
@@ -560,7 +560,7 @@ func (r *labelsRun) export(item labelingItem, seq []int32, probs []float32, mask
 		"chunks": item.ChunkCount, "segment": item.Segment, "cohort": item.Cohort, "sender": item.SenderRole, "context_sha": digest(item.Context),
 		"text_sha": digest(item.Text), "chars": item.Chars(), "tokens": len(seq)}
 	if r.opts.ExportText {
-		line["context"], line["text"], line["input_ids"] = item.Context, item.Text, seq
+		line["context"], line["text"], line["input_ids"], line["text_span"] = item.Context, item.Text, seq, [2]int{spans.Text.Start, spans.Text.End}
 	}
 	if probs != nil {
 		line["probs"], line["labels"] = probs, r.model.LabelNames(mask)
@@ -864,7 +864,7 @@ func (r *labelsRun) apply(result labelsBatchResult, ready *[]labelsBatch, finish
 		chunkMask := r.model.Decide(probs, message.segments[seq.chunk])
 		message.mask |= chunkMask
 		if message.items != nil {
-			r.export(message.items[seq.chunk], message.seqs[seq.chunk], probs, chunkMask)
+			r.export(message.items[seq.chunk], message.seqs[seq.chunk], message.spans[seq.chunk], probs, chunkMask)
 		}
 		if message.probs == nil {
 			message.probs = slices.Clone(probs)
@@ -952,7 +952,7 @@ func (r *labelsRun) produce(ctx context.Context, builder *labelsItemBuilder, job
 				empty = empty || r.model.Pools() && spans.Text.Len() == 0
 				message.spans = append(message.spans, spans)
 				if r.opts.DryRun {
-					r.export(item, seq, nil, 0)
+					r.export(item, seq, spans, nil, 0)
 				}
 				message.seqs = append(message.seqs, seq)
 				message.segments = append(message.segments, item.Segment)

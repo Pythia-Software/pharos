@@ -152,9 +152,11 @@ guard it.
 3. **Scores and labels.** The model's `probs` output is the scorer (the mean
    of the `y3` and `y_hf` heads' sigmoids). A label is on when its probability
    reaches the segment's threshold (float32, as in the reference), and every
-   label that is on adds its ancestors. A worker-backed test checks the
-   fixture's probabilities (within 1e-4), logits (1e-3) and closed sets with
-   the real model when `PHAROS_LABELER_MODEL_DIR`, `PHAROS_LABELER_WORKER` and
+   label that is on adds its ancestors. A worker-backed test
+   (`TestModelParityWithWorker`) checks a model directory's parity fixture:
+   token ids and text spans exactly, probabilities within 1e-4, logits within
+   1e-3, closed sets. It runs with the real model when
+   `PHAROS_LABELER_MODEL_DIR`, `PHAROS_LABELER_WORKER` and
    `PHAROS_ORT_LIBRARY` are set, and skips with a message otherwise.
 
 **Long messages** (more than 6,000 characters) are several items. Each chunk
@@ -491,7 +493,7 @@ Notes for authors:
 | Tokenizer and framing against the 187 fixture cases | `go test -run 'Tokenizer\|Frame' ./internal/labeler` |
 | Item equivalence with prepare; the segment rule; the ledger (backfill, incremental runs, healing, limit, one-at-a-time, worker crash, stop and resume, the chain with the setting on and off) | `go test -vet=off -run 'TestLabels\|TestLabelingSegment' ./internal/archive` |
 | The ONNX Runtime worker's protocol loop (a fake session) | `go test ./cmd/pharos-labeler-ort` |
-| Fixture parity with the real model (skipped without the variables) | `PHAROS_LABELER_MODEL_DIR=… PHAROS_LABELER_WORKER=build/pharos-labeler-ort PHAROS_ORT_LIBRARY=build/onnxruntime-1.31.1/lib/libonnxruntime.dylib go test -run 'Kestrel\|ORT' ./internal/labeler ./cmd/pharos-labeler-ort` |
+| Fixture parity with the real model (skipped without the variables) | `PHAROS_LABELER_MODEL_DIR=… PHAROS_LABELER_WORKER=build/pharos-labeler-ort PHAROS_ORT_LIBRARY=build/onnxruntime-1.31.1/lib/libonnxruntime.dylib go test -run 'ModelParity\|ORT' ./internal/labeler ./cmd/pharos-labeler-ort` (any model directory: it uses the directory's own `parity-fixture.json`, so it checks a pooling model's spans and inputs too) |
 
 ## Known limits
 
