@@ -300,7 +300,7 @@ func (c *Catalog) LabelsExplain(ctx context.Context, settings LabelerSettings, m
 			return nil, err
 		}
 		defer pool.Close()
-		result, err := pool.Run(ctx, labelrt.BatchTensors(seqs, 8), []string{"probs"})
+		result, err := pool.Run(ctx, labelrt.BatchTensors(seqs, labelrt.PadMultiple), []string{"probs"})
 		if err != nil {
 			return nil, err
 		}

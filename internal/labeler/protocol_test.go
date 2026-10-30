@@ -99,6 +99,8 @@ func TestMalformedFramesAndRequests(t *testing.T) {
 			r.Inputs[0] = Tensor{Name: "input_ids", DType: DTypeFloat32, Dims: []int{1, 2}, Float32: []float32{1, 2}}
 		},
 		"over batch limit": func(r *RunRequest) {},
+		"duplicate input":  func(r *RunRequest) { r.Inputs = append(r.Inputs, r.Inputs[0]) },
+		"duplicate output": func(r *RunRequest) { r.Outputs = []string{"probs", "probs"} },
 	}
 	for name, mutate := range cases {
 		req := good()

@@ -479,13 +479,15 @@ func (d *decoder) tensors() []Tensor {
 func ValidateRun(req *RunRequest, vocab, maxBatch, maxSeq int) error {
 	var ids, mask *Tensor
 	for i := range req.Inputs {
-		switch req.Inputs[i].Name {
-		case "input_ids":
+		switch name := req.Inputs[i].Name; {
+		case name == "input_ids" && ids == nil:
 			ids = &req.Inputs[i]
-		case "attention_mask":
+		case name == "attention_mask" && mask == nil:
 			mask = &req.Inputs[i]
+		case name == "input_ids" || name == "attention_mask":
+			return fmt.Errorf("input %q given twice", name)
 		default:
-			return fmt.Errorf("unknown input %q", req.Inputs[i].Name)
+			return fmt.Errorf("unknown input %q", name)
 		}
 	}
 	if ids == nil || mask == nil {
@@ -528,9 +530,14 @@ func ValidateRun(req *RunRequest, vocab, maxBatch, maxSeq int) error {
 			return fmt.Errorf("row %d has no tokens", row)
 		}
 	}
-	for _, name := range req.Outputs {
+	for i, name := range req.Outputs {
 		if name == "" {
 			return errors.New("empty output name")
+		}
+		for _, earlier := range req.Outputs[:i] {
+			if earlier == name {
+				return fmt.Errorf("output %q requested twice", name)
+			}
 		}
 	}
 	return nil

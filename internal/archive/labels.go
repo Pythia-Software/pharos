@@ -622,7 +622,7 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 					seqs[i] = seq.message.seqs[seq.chunk]
 				}
 				started := time.Now()
-				result, err := r.pool.Run(ctx, labelrt.BatchTensors(seqs, 8), []string{"probs"})
+				result, err := r.pool.Run(ctx, labelrt.BatchTensors(seqs, labelrt.PadMultiple), []string{"probs"})
 				out := labelsBatchResult{batch: batch, err: err, took: time.Since(started)}
 				if err == nil {
 					if probs := result.Tensor("probs"); probs == nil || len(probs.Float32) != len(seqs)*r.model.Labels() {
@@ -649,7 +649,7 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 		for i, seq := range window {
 			lengths[i] = len(seq.message.seqs[seq.chunk])
 		}
-		for _, indices := range labelrt.PackBatches(lengths, r.settings.BatchTokens, r.maxBatch(), 8) {
+		for _, indices := range labelrt.PackBatches(lengths, r.settings.BatchTokens, r.maxBatch(), labelrt.PadMultiple) {
 			batch := labelsBatch{}
 			for _, index := range indices {
 				batch.seqs = append(batch.seqs, window[index])
@@ -794,7 +794,7 @@ func (r *labelsRun) apply(result labelsBatchResult, ready *[]labelsBatch, finish
 	for _, seq := range result.batch.seqs {
 		longest = max(longest, len(seq.message.seqs[seq.chunk]))
 	}
-	r.stats.PaddedTokens += len(result.batch.seqs) * labelrt.PadLength(longest, 8)
+	r.stats.PaddedTokens += len(result.batch.seqs) * labelrt.PadLength(longest, labelrt.PadMultiple)
 	for row, seq := range result.batch.seqs {
 		message := seq.message
 		probs := result.probs[row*labels : (row+1)*labels]

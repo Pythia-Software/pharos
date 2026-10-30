@@ -179,8 +179,13 @@ union of the chunks' closed sets and its probabilities the per-label maximum
 - A short run fills no window: it is packed as soon as the builder pauses,
   so a few new messages go out as one batch.
 - Each worker has at most two batches in flight, so it never waits for the
-  next one and a stop waits for little. Padding is to a multiple of 8;
-  padding does not change the outputs.
+  next one and a stop waits for little.
+- **Padding is part of the contract.** Batches are right-padded to a
+  multiple of 8 (`labeler.PadMultiple`). For the int8 model the padded length
+  matters: at a length that is not a multiple of 4 its outputs move by up to
+  0.05 in a probability (ONNX Runtime does the same from Python). At any
+  multiple of 4 they equal the fixture's to 5e-7. FRAMING.md's "padding does
+  not change the outputs" holds for fp32 only.
 
 **Writes.** Finished conversations are stored in write transactions of
 about 500 rows or every 2 s. A conversation counts as built (its fingerprint
@@ -349,7 +354,9 @@ the elements row-major.
 - **`R` run:** u64 request id, u16 tensor count, the tensors, u16 output-name
   count, the names (u8 length, bytes). Version 1 has exactly two inputs,
   `input_ids` and `attention_mask`, both int32 `[batch, seq]`, right-padded,
-  mask 1 on real tokens and 0 on padding. The worker converts them to the
+  mask 1 on real tokens and 0 on padding. Pharos pads `seq` to a multiple of
+  8, which the int8 model needs (a multiple of 4 at least); a worker must not
+  repad. The worker converts them to the
   model's input type (int64 for `kestrel-68m`). An empty name list asks for
   every output.
 - **`r` result:** u64 request id, u16 tensor count, the output tensors,
@@ -425,7 +432,7 @@ Notes for authors:
 | Tokenizer and framing against the 187 fixture cases | `go test -run 'Tokenizer\|Frame' ./internal/labeler` |
 | Item equivalence with prepare; the segment rule; the ledger (backfill, incremental runs, healing, limit, one-at-a-time, worker crash, stop and resume, the chain with the setting on and off) | `go test -vet=off -run 'TestLabels\|TestLabelingSegment' ./internal/archive` |
 | The ONNX Runtime worker's protocol loop (a fake session) | `go test ./cmd/pharos-labeler-ort` |
-| Fixture parity with the real model (skipped without the variables) | `PHAROS_LABELER_MODEL_DIR=… PHAROS_LABELER_WORKER=build/pharos-labeler-ort PHAROS_ORT_LIBRARY=build/onnxruntime-1.31.1/lib/libonnxruntime.dylib go test -run Kestrel ./internal/labeler ./cmd/pharos-labeler-ort` |
+| Fixture parity with the real model (skipped without the variables) | `PHAROS_LABELER_MODEL_DIR=… PHAROS_LABELER_WORKER=build/pharos-labeler-ort PHAROS_ORT_LIBRARY=build/onnxruntime-1.31.1/lib/libonnxruntime.dylib go test -run 'Kestrel\|ORT' ./internal/labeler ./cmd/pharos-labeler-ort` |
 
 ## Known limits
 

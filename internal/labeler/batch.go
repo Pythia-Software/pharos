@@ -5,7 +5,15 @@ import "sort"
 // Batching: sequences are grouped by length so a batch wastes little on
 // padding, and each batch's padded size (rows × padded length) stays under a
 // token budget, so a batch of long items is small and one of short items is
-// large. Padding never changes the outputs (kestrel-framing-v1 §3).
+// large.
+
+// PadMultiple is the multiple every batch is padded to. Padding is not free
+// of effect for the int8 model: its outputs change (by up to 0.05 in a
+// probability) when the padded length is not a multiple of 4, as in the
+// Python reference with the same runtime; at any multiple of 4 they are the
+// fixture's to 5e-7. kestrel-framing-v1 says padding does not matter, which
+// holds for fp32 only. Pharos pads to 8.
+const PadMultiple = 8
 
 // PadLength rounds n up to a multiple of mult.
 func PadLength(n, mult int) int {

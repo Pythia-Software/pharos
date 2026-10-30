@@ -64,12 +64,12 @@ func TestKestrelParityWithWorker(t *testing.T) {
 		lengths[i] = len(seqs[i])
 	}
 	maxProb, maxLogit := 0.0, 0.0
-	for _, batch := range PackBatches(lengths, 16384, 32, 8) {
+	for _, batch := range PackBatches(lengths, 16384, 32, PadMultiple) {
 		rows := [][]int32{}
 		for _, index := range batch {
 			rows = append(rows, seqs[index])
 		}
-		result, err := pool.Run(context.Background(), BatchTensors(rows, 8), nil)
+		result, err := pool.Run(context.Background(), BatchTensors(rows, PadMultiple), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
