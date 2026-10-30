@@ -1,3 +1,4 @@
+import { useViewEntry } from "./view-state";
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { chartPeriods, isHourly, localDay, nextPeriod, parseDay, periodKey, periodUnit, validPeriodCount, type ChartPeriod } from "./chart-period";
 import { chartRanges, rangeStart, withTimeRange, type ChartRange, type FilterChange, type RangeChange, type TimeBounds, type TimeFields } from "./chart-range";
@@ -168,7 +169,7 @@ export function ChartSelect<T extends string>({ label, ariaLabel = label, value,
   return <label className="usage-chart-field usage-chart-picker">
     <span className="usage-preset-label">{label}</span>
     <span className="usage-chart-select">
-      <select aria-label={ariaLabel} value={value} disabled={disabled} title={title} onChange={event => onChange(event.target.value as T)}>
+      <select data-pharos-target={`control:chart:${ariaLabel.toLowerCase().replace(/\s+/g,"-")}`} aria-label={ariaLabel} value={value} disabled={disabled} title={title} onChange={event => onChange(event.target.value as T)}>
         {options.map(([option, text, reason]) => <option key={option} value={option} disabled={Boolean(reason)} title={reason}>{text}</option>)}
       </select>
       <Icon name="chevron-down" className="usage-chart-caret" />
@@ -255,6 +256,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
 }) {
   const root = useRef<HTMLDivElement>(null), tipRef = useRef<HTMLDivElement>(null), bars = useRef<HTMLDivElement>(null);
   const [tip, setTip] = useState<{ bucket: ChartBucket; x: number; width: number; top: number; pinned: boolean; focus: boolean } | null>(null);
+  const [pin, setPin] = useViewEntry("chart_pins", title, "", location.pathname === "/analyze" && !new URLSearchParams(location.search).has("analyze_view"));
   const restoringFocus = useRef(false);
   const [drag, setDrag] = useState<{ anchor: number; current: number } | null>(null);
   // Pointer events can outrun rendering, so the handlers read the drag from a ref.
@@ -322,14 +324,20 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
   function show(index: number, pinned = false, focus = false) {
     if (restoringFocus.current || loading || error || !pinned && (tip?.pinned || dragRef.current)) return;
     const box = root.current?.getBoundingClientRect(), at = columnAt(index)?.getBoundingClientRect(), plot = bars.current?.getBoundingClientRect();
+    if(pinned)setPin(buckets[index].key);
     if (box && at && plot) setTip({ bucket: buckets[index], x: at.left - box.left + at.width / 2, width: at.width, top: plot.top - box.top, pinned, focus });
   }
+  useEffect(() => {
+    if(!pin||loading||error)return;
+    const index=buckets.findIndex(bucket=>bucket.key===pin);if(index<0)return;
+    const frame=requestAnimationFrame(()=>show(index,true));return()=>cancelAnimationFrame(frame);
+  }, [pin, sourceBuckets, percent, loading, error]);
   const hidePreview = () => { if (!tip?.pinned) setTip(null); };
   useEffect(() => {
     if (!tip && !drag) return;
     const cancel = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      moveDrag(null); setTip(null);
+      moveDrag(null); setTip(null);if(pin)setPin("");
       if (tip?.pinned) {
         restoringFocus.current = true;
         columnAt(buckets.findIndex(bucket => bucket.key === tip.bucket.key))?.focus();
@@ -337,14 +345,14 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
       }
     };
     const outside = (event: PointerEvent) => {
-      if (event.target instanceof Node && !bars.current?.contains(event.target) && !tipRef.current?.contains(event.target)) setTip(null);
+      if (event.target instanceof Node && !bars.current?.contains(event.target) && !tipRef.current?.contains(event.target)) {setTip(null);if(pin)setPin("");}
     };
     const resize = () => { moveDrag(null); setTip(null); };
     window.addEventListener("keydown", cancel);
     document.addEventListener("pointerdown", outside);
     window.addEventListener("resize", resize);
     return () => { window.removeEventListener("keydown", cancel); document.removeEventListener("pointerdown", outside); window.removeEventListener("resize", resize); };
-  }, [tip, Boolean(drag)]);
+  }, [tip, Boolean(drag), pin]);
   const indexAt = (x: number) => {
     const box = bars.current?.getBoundingClientRect();
     return box?.width ? Math.max(0, Math.min(buckets.length - 1, Math.floor((x - box.left) / box.width * buckets.length))) : 0;
@@ -377,7 +385,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
   const density = buckets.length > 300 ? "denser" : buckets.length > 120 ? "dense" : "";
   const middle = buckets[Math.floor(buckets.length / 2)], last = buckets[buckets.length - 1];
   const selectable = (item: ChartSeries) => Boolean(onSelect) && item.value !== undefined;
-  return <div className="usage-chart" ref={root}>
+  return <div className="usage-chart" ref={root} data-view-field="chart_pins" data-pharos-target={`section:chart:${title}`}>
     <div className="usage-chart-head"><h3>{title}{averageLabel ? <span className="usage-chart-average-label"> {averageLabel}</span> : null}</h3><div className="usage-chart-controls">{controls}</div></div>
     {series.length > 1 || legend || onRange || reference ? <div className="usage-chart-legend">
       {series.length > 1 || legend ? [...new Set(series.map(item => item.group))].map(group => {

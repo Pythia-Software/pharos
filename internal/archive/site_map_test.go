@@ -1,15 +1,19 @@
 package archive
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
 )
@@ -158,6 +162,7 @@ func TestSiteMapBuildsAndReadsEveryDashboardCase(t *testing.T) {
 				t.Fatalf("%s: %v", name, err)
 			}
 			sameLink(t, name, built, item.URL)
+
 			read := roundTrip(t, site, name, item.URL)
 			if read.Days != days || compactJSON(read.Filters) != compactJSON(item.Filters) {
 				t.Errorf("%s: read days %d filters %s", name, read.Days, compactJSON(read.Filters))
@@ -182,6 +187,14 @@ func TestSiteMapBuildsAndReadsEveryCardCase(t *testing.T) {
 			t.Fatalf("%s: %v", name, err)
 		}
 		sameLink(t, name, built, item.URL)
+		withGlobals, _ := url.Parse(item.URL)
+		params := withGlobals.Query()
+		params.Set("nav_collapsed", "0")
+		params.Set("nav_expanded", "{}")
+		withGlobals.RawQuery = params.Encode()
+		if read, err := site.parseURL(withGlobals.String()); err != nil || read.Card != item.ID {
+			t.Errorf("%s with global view fields: %+v %v", name, read, err)
+		}
 		if read := roundTrip(t, site, name, item.URL); read.Card != item.ID || read.Days != days {
 			t.Errorf("%s: read %+v", name, read)
 		}
@@ -319,7 +332,6 @@ func TestSiteLinkRejectsWhatTheSiteMapCannotExpress(t *testing.T) {
 		"invalid chart":        with(func(v url.Values) { v.Set("analyze_chart", `{"v":2,"metric":"bogus"}`) }),
 		"window disagreement":  with(func(v url.Values) { v.Set("analyze_days", "90") }),
 		"unknown filter field": "/analyze?analyze_mode=query&analyze_topic=tokens&analyze_data=usage&q_usage=" + mustToken(t, site, `[{"field":"nope","op":"=","value":"x"}]`),
-		"query beyond where":   "/analyze?analyze_mode=query&analyze_topic=tokens&analyze_data=usage&q_usage=" + mustQuery(t, `{"select":[{"field":"model"}],"where":[]}`),
 		"tab without finding":  "/findings?tab=evidence",
 		"unknown list":         "/findings?list=everything",
 		"repeated parameter":   "/findings?list=wins&list=open",
@@ -612,6 +624,411 @@ func TestSiteLinkTodayWindows(t *testing.T) {
 		if node.Dataset == "tl1_attempts" || node.Dataset == "findings" {
 			if _, err := site.linkFromArgs(map[string]any{"page": node.Path, "days": "today"}); err == nil {
 				t.Fatalf("Today offered for %s", node.Path)
+			}
+		}
+	}
+}
+
+func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
+	site := testSiteMap(t)
+	args := linkArgs(t, `{"page":"analyze/query/usage","query":{"select":[{"field":"model","width":240}],"fitToScreen":false,"where":[{"field":"last_usage_at","op":">=","value":"-7d"}],"orderBy":[{"field":"model","dir":"desc"}],"limit":5,"offset":10,"aggregations":[{"id":"tokens","op":"sum","field":"total_tokens","groupBy":["model"]}]},"view":{"disclosures":{"query:usage:layout":true}},"highlight":["section:summary","row:usage-1"],"reveal":"control:disclosures"}`)
+	result, err := site.linkTool(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := roundTrip(t, site, "full query", result["url"].(string))
+	if read.Query == nil || read.Query.Offset != 10 || read.Query.Limit != 5 || len(read.Query.Select) != 1 || read.Query.FitToScreen || len(read.Query.Aggregations) != 1 || len(read.Highlight) != 2 || read.Reveal != "control:disclosures" {
+		t.Fatalf("lost view: %+v", read)
+	}
+	advanced := linkArgs(t, `{"page":"library","view":{"search_state":{"editor":"visual","match":"literal","mode":"advanced","text":"failure","root":{"kind":"group","join":"all","children":[],"exclude":false},"scope":{"surface":"prose","roles":[],"kinds":[],"repository":"pharos","provider":"","source":"","from":"","to":"","conversation_id":"","workspace_id":""},"fuzzy":false,"caseSensitive":true,"separators":false}}}`)
+	if result, err := site.linkTool(advanced); err != nil {
+		t.Fatal(err)
+	} else {
+		roundTrip(t, site, "advanced search", result["url"].(string))
+	}
+	metadata := linkArgs(t, `{"page":"analyze/query/usage","query":{"select":[{"field":"model"}],"where":[{"field":"last_usage_at","op":">=","value":"2026-10-29T06:00:00Z"},{"field":"first_usage_at","op":"<","value":"+0s"}],"limit":5},"view":{"window_mode":"today","window_days":"1","window_field":"last_usage_at","window_until_field":"first_usage_at","window_dataset":"usage","window_timezone":"America/Denver","query_days":"7","query_dashboard_chart":{"v":2,"view":"trend"}}}`)
+	// The registry preserves overlap fields and Today metadata even when the
+	// original compact days builder cannot represent this source query.
+	if result, err := site.linkTool(metadata); err != nil {
+		t.Fatal(err)
+	} else {
+		roundTrip(t, site, "source-query time intent", result["url"].(string))
+	}
+	metadata["page"] = "analyze/query/tool_calls"
+	metadata["query"].(map[string]any)["select"] = []any{map[string]any{"field": "id"}, map[string]any{"field": "started_at"}, map[string]any{"field": "ended_at"}}
+	metadata["query"].(map[string]any)["where"] = []any{map[string]any{"field": "ended_at", "op": ">=", "value": "2026-10-28T06:00:00Z"}, map[string]any{"field": "started_at", "op": "<", "value": "+0s"}}
+	window := metadata["view"].(map[string]any)
+	window["window_dataset"], window["window_field"], window["window_until_field"] = "tool_calls", "ended_at", "started_at"
+	if result, err := site.linkTool(metadata); err != nil {
+		t.Fatal(err)
+	} else {
+		roundTrip(t, site, "overlapping tool calls Today", result["url"].(string))
+	}
+	window["window_field"] = "id"
+	if _, err := site.linkTool(metadata); err == nil {
+		t.Fatal("non-timestamp window accepted")
+	}
+	for _, input := range []string{
+		`{"page":"cards","view":{"card_window":"today","card_filters":false},"highlight":["card:tool-failures"],"reveal":"text:failed command"}`,
+		`{"page":"work","options":{"work_id":"w","conversation":"c"},"view":{"reader_page":"1","reader_expanded":["message:m"],"reader_filter":["prompts","response"],"delegation_columns":["tokens","cost"],"delegation_tint":"sort"},"reveal":"message:m"}`,
+	} {
+		result, err := site.linkTool(linkArgs(t, input))
+		if err != nil {
+			t.Fatal(input, err)
+		}
+		roundTrip(t, site, "view", result["url"].(string))
+	}
+	nested, err := site.linkTool(map[string]any{"url": "/work/w/conversation/c?conversation=c&reveal=message%3Am"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nested["arguments"].(map[string]any)["options"].(map[string]any)["conversation"] != "c" {
+		t.Fatal(nested)
+	}
+	for _, raw := range []string{
+		"/cards?card_window=unknown", "/cards?card_filters=false",
+		"/cards?reveal=card:a&reveal=card:b", "/cards?highlight=message:m", "/library?text_builder=" + url.QueryEscape(`{}`),
+	} {
+		if _, err := site.linkTool(map[string]any{"url": raw}); err == nil {
+			t.Errorf("accepted invalid view %s", raw)
+		}
+	}
+}
+
+func TestSiteLinkJSONInspectionsAndDetailTargets(t *testing.T) {
+	site := testSiteMap(t)
+	copy := *site
+	copy.Nodes = maps.Clone(site.Nodes)
+	site = &copy
+	// Even a query-capable legacy node must obey the advertised target scope.
+	for _, page := range []string{"tl1/runs", "mcp", "tools"} {
+		legacy := *site.Nodes["analyze/query/tool_calls"]
+		legacy.Path = page
+		site.Nodes[page] = &legacy
+	}
+	for page, node := range site.Nodes {
+		advertised := false
+		for _, item := range site.browseTargets(node)["items"].([]map[string]any) {
+			advertised = advertised || item["pattern"] == "detail:<json>"
+		}
+		err := site.checkAttention(page, `detail:{"rowId":"a"}`, nil)
+		if (err == nil) != advertised {
+			t.Errorf("%s: advertised=%v, validation=%v", page, advertised, err)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "json-inspection-cases.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []struct {
+		Name        string
+		Valid       bool
+		Inspections []any
+		Token       string
+		Query       map[string]any
+	}
+	if err := json.Unmarshal(data, &cases); err != nil {
+		t.Fatal(err)
+	}
+	for _, sample := range cases {
+		t.Run(sample.Name, func(t *testing.T) {
+			query := map[string]any{"select": []map[string]string{{"field": "id"}, {"field": "tool_name"}}, "itemDetails": map[string]any{"modes": []string{"expand"}, "jsonInspections": sample.Inspections}}
+			result, err := site.linkTool(map[string]any{"page": "analyze/query/mcp_calls", "query": query})
+			if (err == nil) != sample.Valid {
+				t.Fatalf("valid=%v: %v", sample.Valid, err)
+			}
+			if !sample.Valid {
+				return
+			}
+			if sample.Name == "all inspection choices and quoted paths" && !strings.Contains(result["summary"].(string), `arguments_json find "needle"`) {
+				t.Fatal("summary omitted JSON search", result)
+			}
+			read := roundTrip(t, site, sample.Name, result["url"].(string))
+			expected, err := qt.DecodeQueryLink(sample.Token)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got, want any
+			encoded, _ := json.Marshal(read.Query)
+			_ = json.Unmarshal(encoded, &got)
+			encoded, _ = json.Marshal(expected)
+			_ = json.Unmarshal(encoded, &want)
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("Go and TypeScript disagree: got %s, want %s", compactJSON(got), compactJSON(want))
+			}
+		})
+	}
+	for _, target := range []string{`detail:{"rowId":"0"}`, `detail:{"rowId":0,"field":"arguments_json"}`, `detail:{"rowId":"call-1","field":"arguments_json","path":"$[\"quote\\\"key\"][21]"}`} {
+		result, err := site.linkTool(map[string]any{"page": "analyze/query/mcp_calls", "reveal": target})
+		if err != nil {
+			t.Fatal(target, err)
+		}
+		read := roundTrip(t, site, "semantic detail", result["url"].(string))
+		if read.Reveal != target {
+			t.Fatal(read.Reveal)
+		}
+	}
+	for _, target := range []string{`detail:{}`, `detail:{"rowId":null}`, `detail:{"rowId":false}`, `detail:{"rowId":"a","field":"not_a_property"}`, `detail:{"rowId":"a","path":"$"}`, `detail:{"rowId":"a","field":"arguments_json","path":"$.events"}`, `detail:{"rowId":"a","field":"arguments_json","unknown":true}`} {
+		if _, err := site.linkTool(map[string]any{"page": "analyze/query/mcp_calls", "reveal": target}); err == nil {
+			t.Error("accepted", target)
+		}
+	}
+	if _, err := site.linkTool(map[string]any{"page": "cards", "reveal": `detail:{"rowId":"a"}`}); err == nil {
+		t.Error("detail on non-query page accepted")
+	}
+	if _, err := site.linkTool(map[string]any{"page": "analyze/query/mcp_calls", "highlight": []string{`detail:{"rowId":"a"}`}}); err == nil {
+		t.Error("unsupported semantic multi-highlight accepted")
+	}
+	grouped := linkArgs(t, `{"page":"analyze/query/mcp_calls","query":{"grouping":{"source":{"select":[{"field":"tool_name"}]},"keys":["tool_name"],"summaries":[{"id":"calls","op":"count"}],"representative":null}},"reveal":"detail:{\"rowId\":\"group-id\",\"field\":\"calls\"}"}`)
+	if _, err := site.linkTool(grouped); err != nil {
+		t.Fatal("grouped property target", err)
+	}
+	help, err := site.browse(context.Background(), nil, "analyze/query/mcp_calls/query", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if help["schema_name"] != "pharos_mcp_calls" || help["properties_path"] != "analyze/query/mcp_calls/query/properties" {
+		t.Fatal("missing inspection help", help)
+	}
+	properties, err := site.browseTool(context.Background(), nil, map[string]any{"path": "analyze/query/mcp_calls/query/properties", "query": "arguments_json"})
+	if err != nil || len(properties["items"].([]map[string]any)) != 1 {
+		t.Fatal("missing paginated property help", properties, err)
+	}
+}
+
+func TestSiteLinkNativeValidationAndComposition(t *testing.T) {
+	site := testSiteMap(t)
+	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "search-draft-cases.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var searchCases []struct {
+		Name        string
+		Draft       map[string]any
+		Valid       bool
+		RecordValid *bool
+	}
+	if err := json.Unmarshal(data, &searchCases); err != nil {
+		t.Fatal(err)
+	}
+	for _, sample := range searchCases {
+		for _, owner := range []string{"search_state", "reader_search", "record_keyword"} {
+			t.Run(owner+" "+sample.Name, func(t *testing.T) {
+				page, value := "library", any(sample.Draft)
+				if owner == "reader_search" {
+					page = "work"
+				}
+				if owner == "record_keyword" {
+					page = "analyze/query/usage"
+					value = map[string]any{"field": "model", "draft": sample.Draft}
+				}
+				args := map[string]any{"page": page, "view": map[string]any{owner: value}}
+				if page == "work" {
+					args["options"] = map[string]any{"work_id": "w"}
+				}
+				_, err := site.linkTool(args)
+				valid := sample.Valid
+				if owner == "record_keyword" && sample.RecordValid != nil {
+					valid = *sample.RecordValid
+				}
+				if (err == nil) != valid {
+					t.Fatalf("valid=%v: %v", valid, err)
+				}
+			})
+		}
+	}
+	large := map[string]any{}
+	for key, value := range searchCases[0].Draft {
+		large[key] = value
+	}
+	large["editor"], large["text"] = "syntax", strings.Repeat("x", 24001)
+	for _, owner := range []string{"search_state", "reader_search", "record_keyword"} {
+		page, value := "library", any(large)
+		args := map[string]any{}
+		if owner == "reader_search" {
+			page = "work"
+			args["options"] = map[string]any{"work_id": "w"}
+		}
+		if owner == "record_keyword" {
+			page = "analyze/query/usage"
+			value = map[string]any{"field": "model", "draft": large}
+		}
+		args["page"], args["view"] = page, map[string]any{owner: value}
+		if _, err := site.linkTool(args); err == nil {
+			t.Error("oversized search accepted", owner)
+		}
+	}
+
+	for _, input := range []string{
+		`{"page":"work","options":{"work_id":"w"},"view":{"reader_page":"+5"}}`,
+		`{"page":"work","options":{"work_id":"w"},"view":{"reader_page":"-0"}}`,
+		`{"page":"work","options":{"work_id":"w"},"view":{"sidebar_width":"+400"}}`,
+		`{"page":"work","options":{"work_id":"w"},"view":{"reader_expanded":["m",null]}}`,
+		`{"page":"library","days":"today","view":{"window_timezone":"Local"}}`,
+		`{"page":"library","options":{"text":"foo"},"view":{"search_state":{"match":"literal","text":"bar"}}}`,
+		`{"page":"analyze/query/usage","highlight":["control:q_library"]}`,
+	} {
+		if _, err := site.linkTool(linkArgs(t, input)); err == nil {
+			t.Error("accepted incompatible state", input)
+		}
+	}
+	for _, page := range []string{"library", "analyze/query/usage"} {
+		result, err := site.linkTool(map[string]any{"page": page, "days": "today", "view": map[string]any{"window_timezone": "Asia/Tokyo"}})
+		if err != nil {
+			t.Fatal(page, err)
+		}
+		state := roundTrip(t, site, "pinned Today", result["url"].(string))
+		zone, _ := time.LoadLocation("Asia/Tokyo")
+		if state.TodayFrom != localMidnight(time.Now(), zone).UTC().Format(time.RFC3339Nano) {
+			t.Fatal("wrong pinned midnight", state.TodayFrom)
+		}
+		read, err := site.linkTool(map[string]any{"url": result["url"]})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rebuilt, err := site.linkTool(read["arguments"].(map[string]any))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameLink(t, "pinned arguments", rebuilt["url"].(string), result["url"].(string))
+		if !strings.Contains(result["summary"].(string), "Asia/Tokyo") {
+			t.Fatal("pin missing from summary", result)
+		}
+	}
+	if _, err := site.linkTool(map[string]any{"page": "analyze/query/usage", "highlight": []any{"control:q_usage"}}); err != nil {
+		t.Fatal(err)
+	}
+	// Native MIN/MAX and representative values retain their source type;
+	// counts, sums and averages produce numbers.
+	for _, op := range []string{"min", "max", "row", "count", "count_distinct", "sum", "avg"} {
+		fields := []struct{ field, predicate, value, invalid string }{
+			{"total_tokens", ">", "100", "not-a-number"},
+		}
+		if op == "min" || op == "max" || op == "row" {
+			fields = append(fields,
+				struct{ field, predicate, value, invalid string }{"last_usage_at", ">=", "2026-01-01T00:00:00Z", "not-a-date"},
+				struct{ field, predicate, value, invalid string }{"model", "=", "gpt-6", ""},
+				struct{ field, predicate, value, invalid string }{"provider", "=", "claude", ""})
+		}
+		for _, sample := range fields {
+			t.Run(op+" "+sample.field, func(t *testing.T) {
+				query := map[string]any{
+					"grouping": map[string]any{
+						"source": map[string]any{}, "keys": []string{"model"},
+						"summaries":      []any{map[string]any{"id": "summary_value", "op": op, "field": sample.field}},
+						"representative": map[string]any{"orderBy": []any{map[string]any{"field": "last_usage_at", "dir": "desc"}}},
+					},
+					"select": []any{map[string]any{"field": "model"}, map[string]any{"field": "summary_value"}},
+					"where":  []any{map[string]any{"field": "summary_value", "op": sample.predicate, "value": sample.value}},
+				}
+				args := map[string]any{"page": "analyze/query/usage", "query": query}
+				result, err := site.linkTool(args)
+				if err != nil {
+					t.Fatal(err)
+				}
+				roundTrip(t, site, "typed summary", result["url"].(string))
+				if sample.invalid != "" {
+					query["where"].([]any)[0].(map[string]any)["value"] = sample.invalid
+					if _, err := site.linkTool(args); err == nil {
+						t.Fatal("invalid summary filter value accepted")
+					}
+				}
+			})
+		}
+	}
+	for _, page := range []string{"library", "analyze/query/usage"} {
+		t.Run(page+" host search composition", func(t *testing.T) {
+			draft := map[string]any{"match": "literal", "text": "failure"}
+			key, param, column := "search_state", "text_builder", "title"
+			var search any = draft
+			if page != "library" {
+				key, param, column = "record_keyword", "record_usage", "model"
+				search = map[string]any{"field": "model", "draft": draft}
+			}
+			for _, suppliedHost := range []bool{false, true} {
+				query := map[string]any{"select": []any{map[string]any{"field": column}}, "limit": 5}
+				if suppliedHost {
+					query["hostState"] = map[string]any{"version": 1, "params": map[string]any{}}
+				}
+				args := map[string]any{"page": page, "query": query, "view": map[string]any{key: search}}
+				result, err := site.linkTool(args)
+				if err != nil {
+					t.Fatal(err)
+				}
+				link := result["url"].(string)
+				read := roundTrip(t, site, "host search", link)
+				if read.Query == nil {
+					t.Fatal("lost native query")
+				}
+				address, _ := url.Parse(link)
+				if address.Query().Get(param) == "" {
+					t.Fatal("lost search parameter", link)
+				}
+				if suppliedHost && !sameJSONText(read.Query.HostState.Params[param][0], address.Query().Get(param)) {
+					t.Fatal("native host and view search disagree", read.Query.HostState)
+				}
+				if _, err := site.linkTool(map[string]any{"url": link}); err != nil {
+					t.Fatal("successful link failed readback", err)
+				}
+				if suppliedHost && len(query["hostState"].(map[string]any)["params"].(map[string]any)) != 0 {
+					t.Fatal("composition mutated caller arguments")
+				}
+			}
+			conflict := map[string]any{"version": 1, "params": map[string]any{param: []string{`{}`}}}
+			if _, err := site.linkTool(map[string]any{"page": page, "query": map[string]any{"hostState": conflict}, "view": map[string]any{key: search}}); err == nil || !strings.Contains(err.Error(), "disagrees") {
+				t.Fatal("conflicting host search accepted", err)
+			}
+		})
+	}
+	invalid := []struct{ input, detail string }{
+		{`{"page":"analyze/query/usage","view":{"window_mode":"relative"}}`, "window_dataset"},
+		{`{"page":"analyze/query/usage","query":{"where":[{"field":"nonexistent","op":"=","value":"x"}]}}`, "query.where[0]"},
+		{`{"page":"analyze/query/usage","query":{"select":[{"field":"nonexistent"}]}}`, "query.select[0].field"},
+		{`{"page":"analyze/query/usage","query":{"orderBy":[{"field":"cost","dir":"desc"}]}}`, "query.orderBy[0].field"},
+		{`{"page":"analyze/query/usage","query":{"aggregations":[{"id":"a","op":"total","groupBy":[]}]}}`, "Choices:"},
+		{`{"page":"analyze/query/usage","query":{"aggregations":[{"id":"a","op":"sum","field":"total_tokens","groupBy":[],"diagnostics":["lost predicate"]}]}}`, "lost predicate"},
+		{`{"page":"analyze/query/usage","query":{"select":["model_family"]}}`, "column objects"},
+		{`{"page":"analyze/query/usage","query":{"where":[{"field":"model","op":"same_as","value":"x"}]}}`, "Choices:"},
+		{`{"page":"cards","highlight":["card:no-such-card"]}`, "Choices:"},
+		{`{"page":"cards","reveal":"control:nonexistent"}`, "Choices:"},
+		{`{"page":"cards","view":{"bad_field":true}}`, "Choices:"},
+		{`{"page":"cards","view":{"card_window":false}}`, "today"},
+		{`{"page":"analyze/query/usage","query":{"where":[{"field":"last_usage_at","op":">=","value":"-7d"}]},"days":30}`, "already has source time predicates"},
+		{`{"page":"analyze/query/usage","query":{"where":[{"field":"last_usage_at","op":">=","value":"-7d"},{"field":"last_usage_at","op":"<","value":"+0s"}]},"view":{"window_mode":"relative","window_days":"30","window_field":"last_usage_at","window_dataset":"usage"}}`, "disagrees"},
+	}
+	for _, item := range invalid {
+		_, err := site.linkTool(linkArgs(t, item.input))
+		if err == nil || !strings.Contains(err.Error(), item.detail) {
+			t.Errorf("%s: wanted %q, got %v", item.input, item.detail, err)
+		}
+	}
+	for _, raw := range []string{
+		`{"select":[{"field":"model"}],"where":[{"field":"nonexistent","op":"=","value":"x"}],"limit":5}`,
+		`{"select":[{"field":"model"}],"aggregations":[{"id":"a","op":"total","groupBy":[]}]}`,
+	} {
+		token := mustQuery(t, raw)
+		if _, err := site.linkTool(map[string]any{"url": "/analyze?analyze_mode=query&analyze_topic=tokens&analyze_data=usage&q_usage=" + url.QueryEscape(token)}); err == nil {
+			t.Error("accepted invalid native browser URL", raw)
+		}
+	}
+	for _, input := range []string{
+		`{"page":"analyze/query/usage","query":{"select":[{"field":"model"}],"where":[{"field":"provider","op":"=","value":"claude"}],"limit":5},"days":7,"reveal":"row:u"}`,
+		`{"page":"analyze/query/usage","query":{"select":[{"field":"model"}],"limit":5},"days":"today"}`,
+		`{"page":"analyze/query/usage","query":{"select":[{"field":"model"}],"limit":5},"days":"today","view":{"window_timezone":"Asia/Tokyo"}}`,
+		`{"page":"analyze/query/usage","query":{"grouping":{"source":{"where":[{"field":"provider","op":"=","value":"claude"}]},"keys":["model"],"summaries":[{"id":"sum_tokens","op":"sum","field":"total_tokens"}],"representative":null},"select":[{"field":"model"},{"field":"sum_tokens"}],"where":[{"field":"sum_tokens","op":">","value":"100"}],"orderBy":[{"field":"sum_tokens","dir":"desc"}]},"days":7}`,
+		`{"page":"library","view":{"search_state":{"match":"literal","text":"failure","scope":{"provider":"claude"}}}}`,
+		`{"page":"cards","view":{"card_window":30}}`,
+		`{"page":"work","options":{"work_id":"w"},"view":{"delegation_page":2,"reader_page":3,"sidebar_width":450}}`,
+	} {
+		result, err := site.linkTool(linkArgs(t, input))
+		if err != nil {
+			t.Error(input, err)
+			continue
+		}
+		roundTrip(t, site, "composed", result["url"].(string))
+		if strings.Contains(input, `"query"`) {
+			if !strings.Contains(result["title"].(string), "Custom query") || !strings.Contains(result["summary"].(string), "limit") {
+				t.Error("query description is not useful", result)
 			}
 		}
 	}

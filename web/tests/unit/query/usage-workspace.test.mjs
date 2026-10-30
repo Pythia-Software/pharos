@@ -676,3 +676,37 @@ test('grouped results end with their link summaries, then native group Detail', 
   assert.equal(usageActionQuery(ordered, loadSchema(toolCalls), 'tool_calls'), ordered, 'an ordered query is unchanged');
   assert.equal(withGroupDetail(EMPTY_QUERY), EMPTY_QUERY, 'record queries keep their own Detail placement');
 });
+
+
+test("card dashboard returns retain Today and relative-window companions", async t => {
+  const previousLocation=globalThis.location;globalThis.location={origin:"http://localhost"};
+  t.after(()=>{if(previousLocation===undefined)delete globalThis.location;else globalThis.location=previousLocation;});
+  const {queryFromURL,resolveRollingQuery}=await import("../../../src/query-links");
+  const {todayBounds}=await import("../../../src/day-window");
+  const companions={window_field:"first_usage_at",window_until_field:"last_usage_at",window_dataset:"usage"};
+  for(const mode of ["today","relative"]){
+    const window={...companions,window_mode:mode,window_days:mode==="today"?"1":"30",...mode==="today"?{window_timezone:"Asia/Tokyo"}:{}};
+    const where=[{field:"first_usage_at",op:">=",value:mode==="today"?"2026-10-28T15:00:00Z":"-30d"},{field:"last_usage_at",op:"<",value:"+0s"}];
+    const current=new URLSearchParams({analyze_mode:"dashboards",analyze_data:"usage",analyze_topic:"tokens",card_id:"usage-models",card_query:"usage",q_usage:encodeQuery({...EMPTY_QUERY,where}),...window});
+    const source=new URL(usageWorkspaceURL({mode:"query",dataset:"usage"},current),"http://localhost");
+    const returned=new URL(usageDashboardReturn(source.searchParams).href,"http://localhost");
+    for(const [name,value]of Object.entries(window))assert.equal(returned.searchParams.get(name),value,`${mode}: ${name}`);
+    const spec=queryFromURL(returned.href);
+    assert.equal(spec.window.mode,mode);assert.equal(spec.window.days,mode==="today"?1:30);
+    const later=new Date("2026-11-03T18:00:00Z"),renewed=resolveRollingQuery(spec.query,spec.window,later);
+    assert.equal(renewed.where.find(term=>term.field==="first_usage_at").value,mode==="today"?todayBounds(later,"Asia/Tokyo")[0]:"-30d");
+    const switched=new URL(usageWorkspaceURL({topic:"human"},returned.searchParams),"http://localhost");
+    assert.equal(switched.searchParams.has("card_query"),false);assert.equal(switched.searchParams.has("window_mode"),false);
+  }
+});
+
+
+test('analysis navigation retains attention only while staying on the same page',()=>{
+ const current=new URLSearchParams({analyze_mode:'query',analyze_data:'usage',highlight:'row:usage-1',reveal:'page'});
+ const same=new URL(usageWorkspaceURL({query:EMPTY_QUERY},current),'http://localhost').searchParams;
+ assert.equal(same.get('highlight'),'row:usage-1');assert.equal(same.get('reveal'),'page');
+ for(const change of [{dataset:'tool_calls'},{mode:'dashboards'},{topic:'human'}]){
+  const changed=new URL(usageWorkspaceURL(change,current),'http://localhost').searchParams;
+  assert.equal(changed.has('highlight'),false);assert.equal(changed.has('reveal'),false);
+ }
+});

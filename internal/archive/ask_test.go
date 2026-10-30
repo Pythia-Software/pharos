@@ -612,7 +612,7 @@ func TestAskModelCatalogs(t *testing.T) {
 			t.Errorf("invalid section %s", card.ID)
 		}
 		// The same page reached by url gets the same kind.
-		if byURL, err := askSiteCard(card.Href); err != nil || byURL.Kind != card.Kind {
+		if byURL, err := askSiteCard(t.Context(), card.Href); err != nil || byURL.Kind != card.Kind {
 			t.Errorf("section %s (%s) by url: %+v %v", card.ID, card.Kind, byURL, err)
 		}
 	}
@@ -1529,5 +1529,28 @@ func TestAskActivityIsBounded(t *testing.T) {
 	activity := session.Conversation[0].Activity
 	if len(activity) != askActivityLimit || activity[0].Message != "Action 6" || activity[len(activity)-1].Message != "Saving the answer…" {
 		t.Fatalf("activity was not bounded and deduplicated: %+v", activity)
+	}
+}
+
+func TestAskSiteLinksRespectCancellation(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	linked, err := testSiteMap(t).linkTool(linkArgs(t, `{"page":"analyze/query/usage","query":{"select":[{"field":"model"}]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	longURL := linked["url"].(string) + "&highlight=text:" + strings.Repeat("x", 2500)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	for _, call := range []func() (askCard, error){
+		func() (askCard, error) {
+			return askSiteCard(ctx, longURL, catalog)
+		},
+		func() (askCard, error) {
+			return askDestination(ctx, nil, "", longURL, "", catalog)
+		},
+	} {
+		if _, err := call(); !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled Ask did destination work: %v", err)
+		}
 	}
 }

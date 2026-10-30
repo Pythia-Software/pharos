@@ -583,13 +583,13 @@ test("Today query windows retain saved timezone identity while manual datetime e
     const linked = { ...query, where: [{ ...query.where[0], value: from }, query.where[1]] };
     assert.equal(rollingQueryMatches(linked, { ...window, timezone }), true, from);
   }
-  const openedAt = new Date("2026-10-29T15:00:00Z"), [midnight] = todayBounds(openedAt);
+  const openedAt = new Date("2026-10-29T15:00:00Z"), [midnight] = todayBounds(openedAt, window.timezone);
   const goQuery = { ...query, offset: 50, where: [{ ...query.where[0], value: midnight.replace(".000Z", "Z") }, query.where[1]] };
   assert.equal(resolveRollingQuery(goQuery, window, openedAt), goQuery, "equivalent timestamps preserve the current page");
   const tomorrow = new Date(openedAt); tomorrow.setDate(tomorrow.getDate() + 1);
   const renewed = resolveRollingQuery(goQuery, window, tomorrow);
   assert.equal(renewed.offset, 0);
-  assert.equal(renewed.where.find(term => term.op === ">=").value, todayBounds(tomorrow)[0]);
+  assert.equal(renewed.where.find(term => term.op === ">=").value, todayBounds(tomorrow, window.timezone)[0]);
   const manual = { ...query, where: [{ ...query.where[0], value: "2026-10-29T12:34:56.000Z" }, query.where[1]] };
   assert.equal(rollingQueryMatches(manual, window), false);
   const tl1 = queryURL("tl1_attempts", query, { days: 1, field: "started_at", mode: "relative" });

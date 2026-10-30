@@ -567,9 +567,28 @@ type parallelismSettings struct {
 	counting string
 }
 
+type parallelismPreferencesKey struct{}
+
+func withParallelismPreferences(ctx context.Context, encoded string) (context.Context, error) {
+	if encoded == "" {
+		return ctx, nil
+	}
+	var value struct {
+		Gap      *int64 `json:"gap"`
+		Counting string `json:"counting"`
+	}
+	if len(encoded) > 4096 || json.Unmarshal([]byte(encoded), &value) != nil || value.Gap == nil || !slices.Contains([]int64{0, 15, 30, 60}, *value.Gap) || !slices.Contains([]string{"workspace", "agent"}, value.Counting) {
+		return ctx, fmt.Errorf("invalid Parallelism counting assumptions")
+	}
+	return context.WithValue(ctx, parallelismPreferencesKey{}, parallelismSettings{gap: *value.Gap, counting: value.Counting}), nil
+}
+
 // parallelismSettings reads the Parallelism view's saved choices
 // (web/src/concurrency-settings.ts normalizeConcurrencySettings).
 func (c *Catalog) parallelismSettings(ctx context.Context) parallelismSettings {
+	if linked, ok := ctx.Value(parallelismPreferencesKey{}).(parallelismSettings); ok {
+		return linked
+	}
 	settings := parallelismSettings{gap: 60, counting: "workspace"}
 	var text string
 	if c.reader().QueryRowContext(ctx, "SELECT value FROM ui_preferences WHERE key=?", parallelismSettingsKey).Scan(&text) != nil {

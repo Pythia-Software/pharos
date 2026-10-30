@@ -1,3 +1,5 @@
+import { readViewState, writeViewState } from "./view-state";
+import { sidebarWidth } from "./workspace-inbox-model";
 import { preferences } from "./preferences";
 import { focusPageContent } from "./page-focus";
 import "./workspace-inbox.css";
@@ -58,7 +60,7 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
   overviewContent.append(navBar, ...props.overview);
   overview.append(overviewContent);
   const divider = button("", "Resize workspace sessions sidebar");
-  divider.className = "workspace-divider";
+  divider.className = "workspace-divider";divider.dataset.viewField="sidebar_width";
   divider.setAttribute("role", "separator");
   divider.setAttribute("aria-orientation", "vertical");
   divider.title = "Drag to resize · arrow keys resize · double-click resets";
@@ -86,8 +88,8 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
   page.classList.add("workspace-page");
   const mobile = matchMedia("(max-width: 959px)");
   const prefs = preferences();
-  let width = Number(prefs.get("pharos-workspace-sidebar-width", 400)) || 400;
-  let hidden = false;
+  let width = sidebarWidth(Number(readViewState("sidebar_width", String(prefs.get("pharos-workspace-sidebar-width", 400)))));
+  let hidden = !readViewState("sidebar_visible", true);
   let sheet = false;
   let lastCompact = false;
   let overviewScroll = 0;
@@ -95,10 +97,11 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
   let disposed = false;
   let drag: { pointer: number; x: number; width: number } | null = null;
   function clamped(value: number) {
-    return Math.max(300, Math.min(value, Math.max(300, Math.min(element.clientWidth * .6, element.clientWidth - 520))));
+    return sidebarWidth(value, Math.min(element.clientWidth * .6, element.clientWidth - 520));
   }
   function update() {
     if (disposed) return;
+    if (page.classList.contains("active")) {writeViewState("sidebar_visible", !hidden); writeViewState("sidebar_width", String(width));}
     const viewing = api.viewing;
     const split = viewing && !api.merged;
     const visible = split && (mobile.matches ? sheet : !hidden);
@@ -144,6 +147,8 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
       props.onCompact(compact);
     }
   }
+  const restoreView = () => {width=sidebarWidth(Number(readViewState("sidebar_width",String(width))));hidden=!readViewState("sidebar_visible",!hidden);update();};
+  window.addEventListener("popstate",restoreView);window.addEventListener("pharos:view",restoreView);
   function closeSheet() {
     if (mobile.matches) sheet = false;
     else hidden = true;
@@ -197,7 +202,7 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
       });
     },
     destroy() {
-      disposed = true;
+      disposed = true;window.removeEventListener("popstate",restoreView);window.removeEventListener("pharos:view",restoreView);
       observer.disconnect();
       mobile.removeEventListener("change", update);
       window.removeEventListener("resize", update);
@@ -207,6 +212,7 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
       if (libraryBack) page.insertBefore(libraryBack, root);
     },
   };
+  sessions.dataset.viewField="sidebar_visible";
   sessions.onclick = () => {
     if (mobile.matches ? sheet : !hidden) closeSheet();
     else api.showSessions();

@@ -38,6 +38,25 @@ around upstream behavior. Normal package upgrades, schema generation and
 frontend bundle rebuilds are part of the integration: pin all four npm
 packages and the Go module to the same release.
 
+## URL view-state contract
+
+Use `web/src/view-contract.ts` and the shared `useViewState` / `useViewEntry`
+bindings for view/query inputs. Use stable entity identities for repeated
+content and `ViewDisclosure` for durable content disclosures. Settings,
+drafts/actions, transient menus/hover/focus/scroll, and deferred legacy views
+need explicit classifications; do not use an exclusion to hide a missing
+canonical view control. Reveal means scroll + highlight, never keyboard focus.
+
+`npm --prefix web run generate-view-controls` updates the source-discovered
+review ledger and fails on unclassified controls. Review each new/changed
+entry in `docs/view-controls.json`, then regenerate the site map. Agent help
+comes from the same contract. Keep browser restoration and cross-language
+round trips covered. Record unavailable dependency capabilities as blockers,
+not opt-outs. See `docs/url-view-state.md` and the JSON-inspector handoff.
+
+Do not build frontend bundles concurrently with Go compilation; Go embeds
+those files. Finish the build before starting Go checks.
+
 ## Running tests
 
 The JS tooling needs Node 24 LTS, pinned in `.nvmrc` (`nvm use`) and in

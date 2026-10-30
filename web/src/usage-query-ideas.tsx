@@ -1,3 +1,4 @@
+import { useViewEntry } from "./view-state";
 import React, { useState } from "react";
 import type { QueryTableApi } from "@pythia-software/query-table-react";
 import { Icon } from "./icons";
@@ -8,7 +9,7 @@ import type { UsageDataset } from "./usage-workspace-model";
 
 export function UsageQueryIdeas({ dataset, api }: { dataset: UsageDataset; api: QueryTableApi<Record<string, any>> }) {
   const key = queryIdeasPreferenceKey(dataset);
-  const [open, setOpen] = useState(() => queryIdeasOpen(preferences().get<unknown>(key, undefined)));
+  const [open, setOpen] = useViewEntry("disclosures",`query:${dataset}:ideas`,queryIdeasOpen(preferences().get<unknown>(key, undefined)),true,{captureInitial:true});
   const ideas = usageQueryIdeas[dataset];
   const sections = [...new Set(ideas.map(idea => idea.section))];
   if (!ideas.length) return null;

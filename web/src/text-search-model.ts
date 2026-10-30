@@ -37,8 +37,8 @@ export function withSearchDateWindow(draft: TextSearchDraft, duration: string, c
 }
 export function refreshSearchToday(draft: TextSearchDraft, clock = new Date(), onlyNewDay = false): TextSearchDraft {
   const selected = searchDateWindow(draft);
-  if (selected?.duration !== "today" || onlyNewDay && selected.from === todayBounds(clock)[0]) return draft;
-  return withSearchDateWindow(draft, "today", clock);
+  if (!selected || onlyNewDay && (selected.duration !== "today" || selected.from === todayBounds(clock)[0])) return draft;
+  return withSearchDateWindow(draft, selected.duration, clock);
 }
 export function searchDateValue(value: string): string {
   if (!value || /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;

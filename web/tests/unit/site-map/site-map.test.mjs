@@ -231,3 +231,12 @@ test("the site map leaves out legacy aliases, private and login parameters", () 
   for (const topic of ["carbon", "parallelism"]) assert.ok(map.nodes[`analyze/${topic}`].settings, `${topic} says it follows the viewer's settings`);
   assert.deepEqual(plain(map.empty_query), plain(EMPTY_QUERY));
 });
+
+
+test('native query help includes every referenced public type from the pinned release',()=>{
+ const {version,types}=map.query_types;
+ assert.ok(/^\d+\.\d+\.\d+/.test(version));assert.ok(types.QueryState);assert.ok(types.MetricDisplay);
+ for(const name of ['GroupingDefinition','SummaryColumn','GroupKey','RepresentativeRow'])assert.ok(types[name],`Undocumented inherited grouping type ${name}`);
+ assert.ok(types.GroupingState.uses.includes('GroupingDefinition'));
+ for(const type of Object.values(types)){assert.ok(type.definition);for(const name of type.uses)assert.ok(types[name],`Undocumented query type ${name}`);}
+});

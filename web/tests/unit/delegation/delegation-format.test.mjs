@@ -69,3 +69,26 @@ test("hierarchy frames open at parents and close after their last visible descen
   assert.deepEqual(siblings.c.ends, [0]);
   assert.deepEqual(frames([session("x", "1"), session("y", "2")]), { x: { start: undefined, active: [], ends: [] }, y: { start: undefined, active: [], ends: [] } });
 });
+
+
+test("session pagination reuses live cursors and replays ordinals only for a new execution",async()=>{
+  const {CursorPagination}=await import("../../../src/cursor-pagination");
+  const pages=new CursorPagination(),calls=[],signal=new AbortController().signal;
+  let execution=0;
+  const load=async cursor=>{calls.push(cursor);if(!cursor)execution++;const page=cursor?Number(cursor.split(":")[1]):0;return {next_cursor:page<3?`${execution}:${page+1}`:"",value:page};};
+  const first=await pages.load("scope-a",0,load,signal);assert.equal(first.body.value,0);assert.deepEqual(calls,[""]);
+  for(const page of [1,2,1,0,1]){const before=calls.length;const result=await pages.load("scope-a",page,load,signal);assert.equal(result.body.value,page);assert.equal(calls.length-before,1);assert.equal(result.previous.length,page);}
+  pages.reset();calls.length=0;
+  await pages.load("scope-a",2,load,signal);assert.deepEqual(calls,["","3:1","3:2"]);
+  calls.length=0;await pages.load("scope-b",1,load,signal);assert.deepEqual(calls,["","4:1"]);
+  const short=await pages.load("scope-short",4,async()=>({next_cursor:""}),signal);assert.equal(short.page,0);
+});
+
+test("aborted session requests cannot extend the replacement execution's cursor chain",async()=>{
+  const {CursorPagination}=await import("../../../src/cursor-pagination");
+  const pages=new CursorPagination(),controller=new AbortController();let finish;
+  const pending=pages.load("scope",0,()=>new Promise(resolve=>finish=resolve),controller.signal);
+  controller.abort();pages.reset();finish({next_cursor:"expired"});await assert.rejects(pending,{name:"AbortError"});
+  const calls=[];await pages.load("scope",1,async cursor=>{calls.push(cursor);return {next_cursor:cursor?"":"fresh"};},new AbortController().signal);
+  assert.deepEqual(calls,["","fresh"]);
+});
