@@ -26,7 +26,7 @@ import (
 // docs/human-authorship.md.
 
 // authorshipVersion names the classification rules; a new version rebuilds.
-const authorshipVersion = "authorship-v8"
+const authorshipVersion = "authorship-v11"
 
 const (
 	// authorshipWindow bounds how far back agent output is looked for. Your
@@ -210,6 +210,7 @@ type authorshipState struct {
 
 var (
 	attachmentPattern = regexp.MustCompile(`@⟦[^⟧\n]*⟧\([^)\n]*\)|(?:/[^\s]*)?\.context/attachments/(?:[A-Za-z0-9_-]+/)?[^\n]*?\.(?:md|txt|png|jpe?g|gif|webp|pdf|json|csv|log|html|zip)\b|\(image attachment\)`)
+	heartbeatPattern  = regexp.MustCompile(`(?s)^<heartbeat>\s*<automation_id>([^<>\r\n]+)</automation_id>\s*<current_time_iso>([^<>\r\n]+)</current_time_iso>\s*<instructions>(.*?)</instructions>\s*</heartbeat>$`)
 	slashPattern      = regexp.MustCompile(`^/[A-Za-z][\w:-]*`)
 	fencePattern      = regexp.MustCompile("(?s)```.*?(?:```|$)")
 	timestampPattern  = regexp.MustCompile(`^\[?\d{4}[-/]\d{2}[-/]\d{2}[T ]\d{2}:\d{2}|^\[?\d{1,2}:\d{2}:\d{2}`)
@@ -593,7 +594,29 @@ func automatedReason(input authorInput) (spanReason, bool) {
 		// session inherits its sdk-ts entrypoint.
 		return reasonUnrecordedClaude, true
 	}
+	if id := heartbeatAutomation(input.Text); id != "" {
+		return reasonAutomation.with(id), true
+	}
 	return spanReason{}, false
+}
+
+// Scheduled tasks arrive as user turns even when no sender is recorded. A
+// complete heartbeat carries its automation ID, timestamp and instructions.
+// Require the whole body so quoted examples and human follow-ups stay under
+// the ordinary rules. Instructions are literal text, not necessarily XML.
+func heartbeatAutomation(text string) string {
+	if !strings.Contains(text, "<heartbeat>") {
+		return ""
+	}
+	_, body := splitHarnessText(text)
+	match := heartbeatPattern.FindStringSubmatch(strings.TrimSpace(body))
+	if match == nil || strings.TrimSpace(match[1]) == "" || strings.TrimSpace(match[3]) == "" {
+		return ""
+	}
+	if _, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(match[2])); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(match[1])
 }
 
 // lineUse records the first message a line was sent in and the distinct
@@ -670,8 +693,16 @@ func (c *classifier) classify(input authorInput) []authorSpan {
 	bodyStart += len(text[bodyStart:]) - len(strings.TrimLeft(text[bodyStart:], " \t\r\n"))
 	body := strings.TrimSpace(text[bodyStart:])
 	feedback := pageFeedbackReports(text, bodyStart)
-	claimFeedbackMetadata(l, feedback)
+	claimFormMetadata(l, feedback, reasonPageFeedback)
+	replies := structuredQuestionReplies(text, bodyStart)
+	questionReplies := make([]authorshipForm, 0, len(replies))
+	for _, reply := range replies {
+		questionReplies = append(questionReplies, reply.authorshipForm)
+	}
+	claimFormMetadata(l, questionReplies, reasonQuestionForm)
 	c.claimQuestionForms(l, input, bodyStart)
+	c.claimStructuredQuestionAnswers(l, input, replies)
+	sort.Slice(c.answers, func(i, j int) bool { return c.answers[i].Start < c.answers[j].Start })
 	if use := c.templates[templateKey(text)]; use != nil && use.template() {
 		l.claim(0, len(text), spanTemplate, reasonRepeatedPrompt.with(fmt.Sprintf("sent in %d sessions on %d days", len(use.sessions), len(use.days))), textOrigin{})
 	}
@@ -681,8 +712,8 @@ func (c *classifier) classify(input authorInput) []authorSpan {
 	for _, match := range attachmentPattern.FindAllStringIndex(text, -1) {
 		l.claim(match[0], match[1], spanAttachment, reasonAttachment, textOrigin{})
 	}
-	comparisonText := maskGeneratedAuthorship(maskFeedback(text, feedback, false), l)
-	heuristicText := maskGeneratedAuthorship(maskFeedback(text, feedback, true), l)
+	comparisonText := maskGeneratedAuthorship(maskAuthorshipForms(text, feedback, false), l)
+	heuristicText := maskGeneratedAuthorship(maskAuthorshipForms(maskAuthorshipForms(text, feedback, true), questionReplies, true), l)
 	lines := textLines(text)
 	// Harness text is left out of word runs, or its closing words and the
 	// first words typed after it would match every earlier session's.
@@ -724,6 +755,11 @@ func (c *classifier) classify(input authorInput) []authorSpan {
 	for _, report := range feedback {
 		for _, note := range report.notes {
 			l.claim(note[0], note[1], spanTyped, reasonFeedbackComment, textOrigin{})
+		}
+	}
+	for _, reply := range questionReplies {
+		for _, answer := range reply.notes {
+			l.claim(answer[0], answer[1], spanTyped, spanReason{}, textOrigin{})
 		}
 	}
 	claimStructuredBlocks(l, heuristicText, lines, repeated)
