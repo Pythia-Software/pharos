@@ -46,9 +46,9 @@ export function trendQuery(catalog: AnalysisCatalog, input: AnalysisState, where
   // Days, weeks and months are recorded calendar fields. Hours of a
   // timestamped dataset group the timestamp by UTC hour, as the hour cycle
   // does, and the chart places each at the viewer's hour.
-  const interval = periodField(state.period), hourly = timestampHours(catalog, state);
-  const count = trendPeriodCount(state), field = hourly ? catalog.timestamp! : catalog.periods[interval]!, cumulative = state.display === "cumulative";
-  const dateGrouping = hourly ? { dateGrouping: { field, interval, timeZone: "UTC", includeEmpty: false, range: "query" as const } } : {};
+  const interval = periodField(state.period), hourly = timestampHours(catalog, state), timestamped = !catalog.periods[interval] && Boolean(catalog.timestamp);
+  const count = trendPeriodCount(state), field = timestamped ? catalog.timestamp! : catalog.periods[interval]!, cumulative = state.display === "cumulative";
+  const dateGrouping = timestamped ? { dateGrouping: { field, interval, timeZone: hourly ? "UTC" : zone, includeEmpty: false, range: "query" as const } } : {};
   const slice = breakdown?.fields.length === 1 ? breakdown.fields[0] : undefined;
   const range = state.completePeriods ? completeStart(where, catalog.time, zone, now, periodField(state.period)) : where;
   const run = (terms: WhereTerm[]) => catalog.executable ? catalog.executable(terms, now) : terms;
@@ -284,6 +284,7 @@ export function trendNote(catalog: AnalysisCatalog, input: AnalysisState): strin
   if (catalog.rangeNote) parts.push(catalog.rangeNote);
   if (catalog.request?.note) parts.push(catalog.request.note);
   if (timestampHours(catalog, state)) parts.push("Hours are clock hours of each record's time, placed at your local hour, as in the hour cycle.");
+  else if (catalog.timestamp && !catalog.periods[periodField(state.period)]) parts.push("Calendar periods group each activity timestamp in your viewing time zone.");
   else if (catalog.timestamp) parts.push(`${periodLabel(state.period, 1)[0].toUpperCase()}${periodLabel(state.period, 1).slice(1)}s are the recorded calendar dates, as the cards count them; the hour and weekday cycles place each record in your time zone, so after a time-zone change a late-evening record can fall on different days in the two.`);
   const part = (index: 0 | 1) => partLabel(measure.ratio![index]);
   if (kind === "ratio") parts.push(`Each point pools its records: ${part(0)} divided by ${part(1)}, never an average of ratios.`);

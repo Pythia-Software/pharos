@@ -39,3 +39,14 @@ export function cardDetailsURL(params: URLSearchParams): string | undefined {
   if (!dataset || !params.get("card_id")) return;
   return usageWorkspaceURL({ mode: "query", dataset, search: false }, params);
 }
+
+// Card storage carries its source query so collected previews remain editable.
+// The actual link opens the dashboard's public, independently editable state.
+export function cardNavigationURL(address: string): string {
+  try {
+    const origin = typeof location === "undefined" ? "http://localhost" : location.origin;
+    const url = new URL(address, origin), params = url.searchParams;
+    if (url.origin !== origin || url.pathname !== "/analyze" || !params.get("card_id") || params.get("analyze_mode") !== "dashboards") return address;
+    return usageWorkspaceURL({ mode: "dashboards" }, params);
+  } catch { return address; }
+}

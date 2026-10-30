@@ -36,7 +36,9 @@ export function readDashboardLink<T extends object>(params: URLSearchParams, def
   const restored = readDashboardQuery(params, { ...EMPTY_QUERY, where: withTimeRange([], time, undefined, undefined, `${readUsageWorkspace(params).days}d` as "7d" | "30d" | "90d") });
   if (params.get("analyze_window") === "today" && !restored.error) {
     const where = restored.query.where.filter(term => !("field" in term && [time.first, time.last].includes(term.field) && !term.negated && [">", ">=", "<", "<="].includes(term.op)));
-    restored.query = { ...restored.query, where: [...where, { field: time.last, op: ">=", value: todayBounds(now)[0] }, { field: time.first, op: "<", value: "+0s" }] };
+    try {
+      restored.query = { ...restored.query, where: [...where, { field: time.last, op: ">=", value: todayBounds(now, params.get("analyze_timezone") ?? undefined)[0] }, { field: time.first, op: "<", value: "+0s" }] };
+    } catch { restored.error = "This dashboard link has an invalid Today timezone."; }
   }
   const read = migrate && !error && !restored.error ? migrate(view, restored.query.where) : { state: view, where: restored.query.where };
   return { view: read.state, where: read.where, error: error || restored.error, migrated: read.where !== restored.query.where || read.state !== view };

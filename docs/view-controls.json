@@ -3426,24 +3426,6 @@
       "reason": "Carbon assumptions and dashboard filters; save defaults is a separate settings action."
     },
     {
-      "key": "3b6fe5766b61b27f:0",
-      "file": "web/src/card-analysis.tsx",
-      "owner": "CardAnalysis",
-      "tag": "button",
-      "control": "onClick={refresh}",
-      "contract": "host-search",
-      "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
-    },
-    {
-      "key": "56e3a3675abdb0fc:0",
-      "file": "web/src/card-analysis.tsx",
-      "owner": "CardAnalysis",
-      "tag": "select",
-      "control": "aria-label={trailing ? \"Trailing window\" : \"Time window\"} value={job.options?.window?.mode === \"today\" ? \"today\" : job.options?.window?.days ?? \"all\"} onChange={event => { window.pharosNavigate?.(updateQueryWindowURL(url, event.target.value === \"all\" ? null : readWindowChoice(event.target.value), job.query)); }}",
-      "contract": "host-search",
-      "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
-    },
-    {
       "key": "02366ad58dfcddfb:0",
       "file": "web/src/card-library.tsx",
       "owner": "CardLibrary",
@@ -7753,6 +7735,15 @@
       "control": "onClick={event => { event.stopPropagation(); if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || link.href.startsWith(\"/conversation/\")) return; if (navigateLink(link.href)) event.preventDefault(); }}",
       "contract": "native-query",
       "reason": "Native item properties and source navigation; retained payload disclosures use stable dataset/row/field keys."
+    },
+    {
+      "key": "7e93b199393c67fc:0",
+      "file": "web/src/usage-workspace.tsx",
+      "owner": "UsageWorkspace",
+      "tag": "button",
+      "control": "onClick={() => setAttempt(value => value + 1)}",
+      "contract": "action",
+      "reason": "Retry resolves the retained card source again and replaces the URL with its canonical dashboard state; the attempt count is transient."
     },
     {
       "key": "ba8a589e824239d9:0",

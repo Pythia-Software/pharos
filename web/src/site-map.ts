@@ -1,3 +1,4 @@
+import { cardNavigationURL } from "./card-exploration";
 import controlAudit from "../../docs/view-controls.json";
 import { usageDetailsSchema } from "./usage-row-model";
 import { jsonInspectionTemplate } from "./query-inspection-contract";
@@ -470,7 +471,7 @@ const cardPage = (recipe: QueryRecipe) => recipe.destination ? `analyze/${recipe
 export function siteCard(recipe: QueryRecipe, clock: Date): SiteCard {
   const windows = recipe.period ? [] : [...rollingWindowDays];
   const probe = windows.at(-1) ?? null;
-  const at = (days: number | null) => new URL(instantiateRecipe(recipe, days, clock).url, origin);
+  const at = (days: number | null) => new URL(cardNavigationURL(instantiateRecipe(recipe, days, clock).url), origin);
   const sample = at(probe), plain = recipe.period ? sample : at(null);
   if ([recipe.title, recipe.description, sample.search].some(text => decodeURIComponent(text).includes(placeholder))) fail(`${recipe.id} already holds ${placeholder}`);
   const card: SiteCard = { id: recipe.id, title: recipe.title, description: recipe.description, category: recipe.category, dataset: recipe.dataset, kind: cardKind(recipe), page: cardPage(recipe), url: { path: sample.pathname, params: [] } };
@@ -637,13 +638,13 @@ export function buildSiteMap(inputs: SiteInputs) {
         options: [
           { name: "chart", param: "analyze_chart", kind: "dashboard_chart", description: `The chart: dashboards.${topic}.views lists each view's options and valid combinations.` },
           whereOption("analyze_filters", usageTopicDatasets[topic]),
-          windowOption("analyze_filters", dashboardWindows, "The dashboard's range: window_terms appended to the filters, or no terms for all time. analyze_days repeats 7, 30 or 90."),
+          windowOption("analyze_filters", dashboardWindows, "The dashboard's range: window_terms appended to the filters, or no terms for all time. analyze_days repeats the selected elapsed-day window."),
         ] });
       const query = child({ path: "analyze/query", title: "Query", description: pageDescriptions["analyze/query"], route: "/analyze", fixed: { analyze_mode: "query" }, children: [] });
       for (const dataset of Object.keys(usageDatasets) as UsageDataset[]) {
         const page = add({ path: `analyze/query/${dataset}`, title: usageDatasets[dataset].label, description: usageDatasets[dataset].description, route: "/analyze",
-          fixed: { analyze_mode: "query", analyze_topic: usageDatasetTopics[dataset], analyze_data: dataset }, dataset, builder: "queryURL",
-          options: [whereOption(`q_${dataset}`, dataset, [recordKeywordParameter(dataset)]), ...rollingWindowField(dataset) ? [windowOption("window_days", rollingWindowDays, `A rolling window on ${dataset}.window_field: its terms appended to the where terms, and window_mode=relative, window_days, window_field and window_dataset.`)] : []] });
+          fixed: { analyze_mode: "query", analyze_data: dataset }, dataset, builder: "queryURL",
+          options: [{ name: "return_topic", param: "analyze_topic", kind: "enum", default: usageDatasetTopics[dataset], values: Object.entries(usageTopics).map(([value, item]) => ({ value, label: item.label })), description: "Dashboard topic retained for return navigation, independent of the source dataset." }, whereOption(`q_${dataset}`, dataset, [recordKeywordParameter(dataset)]), ...rollingWindowField(dataset) ? [windowOption("window_days", rollingWindowDays, `A rolling window on ${dataset}.window_field: its terms appended to the where terms, and window_mode=relative, window_days, window_field and window_dataset.`)] : []] });
         query.children!.push(page.path);
       }
     }

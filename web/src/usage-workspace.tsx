@@ -1,13 +1,12 @@
 import { analyzePages } from "./app-navigation-model";
-import React from "react";
+import React, { useEffect, useState } from "react";
 import type { FieldSchema, QueryState } from "@pythia-software/query-table-core";
 import { dashboardQueryLinks } from "./dashboard-query-links";
 import { Icon } from "./icons";
 import { ResetPage } from "./query-recovery";
 import { readUsageWorkspace, usageAnalysisLink, usageDashboardReturn, usageDatasets, usageTopics, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
-import { NestedPageLayout, PageLink } from "./nested-pages";
-import { cardSourceDataset } from "./card-exploration";
-import { CardAnalysis } from "./card-analysis";
+import { NestedPageLayout, PageLink, useLocationRevision } from "./nested-pages";
+import { resolveCardDashboardURL } from "./saved-card-model";
 import "./usage-workspace.css";
 
 export const UsageWorkspaceLink = PageLink;
@@ -24,9 +23,31 @@ export function UsageDashboardLinks({ dataset, query, schema, currentURL }: { da
   </div>;
 }
 
-export function UsageWorkspace({ schemas, renderDashboard, renderTable }: { schemas: Record<UsageDataset, FieldSchema>; renderDashboard: (topic: UsageTopic) => React.ReactNode; renderTable: (dataset: UsageDataset) => React.ReactNode }) {
+export function UsageWorkspace({ renderDashboard, renderTable }: { renderDashboard: (topic: UsageTopic) => React.ReactNode; renderTable: (dataset: UsageDataset) => React.ReactNode }) {
+  useLocationRevision();
+  const address = location.href;
   const params = new URLSearchParams(location.search), { mode, dataset, topic } = readUsageWorkspace(params);
-  const source = cardSourceDataset(params);
+  const restoreCard = mode === "dashboards" && params.has("card_id");
+  const [failure, setFailure] = useState<{ address: string; message: string }>();
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    if (!restoreCard) return;
+    const controller = new AbortController();
+    setFailure(undefined);
+    void resolveCardDashboardURL(address, controller.signal).then(url => {
+      if (controller.signal.aborted || location.href !== address) return;
+      history.replaceState(history.state, "", url);
+      window.dispatchEvent(new Event("pharos:uri-changed"));
+    }).catch(error => {
+      if (!controller.signal.aborted && location.href === address) setFailure({ address, message: error instanceof Error ? error.message : String(error) });
+    });
+    return () => controller.abort();
+  }, [address, restoreCard, attempt]);
+  // Do not mount a dashboard (or issue its queries) using an obsolete card
+  // mapping while its retained source is still being restored.
+  if (restoreCard) return <section className="query-recovery" role={failure?.address === address ? "alert" : "status"}>
+    {failure?.address === address ? <><span>{failure.message}</span><button type="button" onClick={() => setAttempt(value => value + 1)}>Try again</button><ResetPage /></> : <span>Opening dashboard…</span>}
+  </section>;
   const back = usageDashboardReturn(params);
   const title = mode === "dashboards" ? usageTopics[topic].label : `Query · ${usageDatasets[dataset].label}`;
   const pages = analyzePages(params);
@@ -35,7 +56,7 @@ export function UsageWorkspace({ schemas, renderDashboard, renderTable }: { sche
     description={mode === "dashboards" ? usageTopics[topic].description : "Build your own analysis. Filter record fields with where, or search record text for words and phrases. Group the matches and use having to filter grouped results."}
     actions={<><ResetPage />{mode !== "dashboards" ? <UsageWorkspaceLink href={back.href}>{back.label}<Icon name="arrow-right" /></UsageWorkspaceLink> : null}</>}>
     {mode === "dashboards" ? <div className="usage-dashboard" key={topic}>
-      {params.get("card_id") ? <CardAnalysis url={location.href} schema={schemas[source ?? dataset]} /> : renderDashboard(topic)}</div>
+      {renderDashboard(topic)}</div>
       : <div className="usage-workspace-table" key={dataset}>{renderTable(dataset)}</div>}
   </NestedPageLayout>;
 }

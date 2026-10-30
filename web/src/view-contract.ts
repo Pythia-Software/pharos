@@ -26,7 +26,8 @@ export const viewFields: Record<string, ViewField> = {
   query_dashboard_filters: field("analyze_filters", ["analyze/query/*"], "text", "Retained dashboard population as a native query token."),
   query_dashboard_window: field("analyze_window", ["analyze/query/*"], "enum", "Retained moving dashboard time intent.", ["today"]),
   query_opened: field("analyze_opened", ["analyze/query/*"], "text", "Native query token recording the dashboard-to-query baseline; keeps return navigation from losing user filter/time edits."),
-  query_days: field("analyze_days", ["analyze/query/*"], "enum", "Retained dashboard window, in elapsed days.", ["7","30","90"]),
+  dashboard_timezone: field("analyze_timezone", ["analyze/*"], "text", "Pinned IANA timezone for the dashboard Today range. Omit to follow the viewer."),
+  query_days: field("analyze_days", ["analyze/query/*"], "enum", "Retained dashboard window, in elapsed days.", ["1","7","30","90","180","365"]),
   query_report: field("analyze_report", ["analyze/query/*"], "text", "Retained analysis report identity."),
   query_search: field("analyze_search", ["analyze/query/*"], "enum", "Retained search-entry route hint.", ["1"]),
   query_layout: field("query_layout", ["library","analyze/query/*","findings/table"], "json", "Query builder collapsed state by dataset ID."),
@@ -147,6 +148,7 @@ export function encodeViewValue(field: ViewField, value: unknown): string {
 // Existing composite owners implement their published codecs directly. Every
 // other host field must have a discovered useViewState/read/write binding.
 export const delegatedViewFields: Record<string,{file:string; symbol:string}> = {
+  dashboard_timezone:{file:"web/src/usage-dashboard-model.ts",symbol:"readDashboardLink"},
   carbon:{file:"internal/archive/assets/carbon.js",symbol:"syncSettingsURL"},
   parallelism:{file:"web/src/concurrency.tsx",symbol:"routeParameter"},
   record_keyword:{file:"web/src/host-query-state.ts",symbol:"recordKeywordHostQuery"},
