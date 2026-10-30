@@ -1,3 +1,4 @@
+import { ViewDisclosure } from "../view-disclosure";
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { loadSchema, memoryStorageAdapter } from "@pythia-software/query-table-core";
@@ -64,7 +65,7 @@ function Inbox() {
       {detail.email && <p>Contact: <a href={`mailto:${encodeURIComponent(detail.email)}`}>{detail.email}</a></p>}
       <p className="commentary">{detail.comment}</p>
       {detail.annotations.map((a, i) => <article key={a.id}><h3>{i + 1}. {a.label || "Annotation"}</h3><p className="commentary">{a.comment}</p><p><code>{a.selector}</code></p><p><time>{new Date(a.captured_at).toLocaleString()}</time> · {a.viewport.width} × {a.viewport.height}</p>{a.url && <p><a href={a.url} target="_blank" rel="noreferrer">{a.url}</a></p>}{a.text && <blockquote>{a.text}</blockquote>}{a.screenshot && <img alt={`Captured element: ${a.label || i + 1}`} src={`data:${a.screenshot.mime};base64,${a.screenshot.data}`} />}</article>)}
-      {detail.diagnostics && <details><summary>Diagnostic logs</summary>{Object.entries(detail.diagnostics).map(([kind, text]) => <section key={kind}><h3>{kind}</h3><pre>{text}</pre></section>)}</details>}
+      {detail.diagnostics && <ViewDisclosure viewKey={`feedback:logs:${detail.id}`} summary="Diagnostic logs">{Object.entries(detail.diagnostics).map(([kind, text]) => <section key={kind}><h3>{kind}</h3><pre>{text}</pre></section>)}</ViewDisclosure>}
       <div className="report-actions"><button onClick={() => { const blob = new Blob([JSON.stringify(detail, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `${detail.id}.json`; a.click(); URL.revokeObjectURL(url); }}>Download report</button><button onClick={() => void navigator.clipboard.writeText(JSON.stringify(detail, null, 2)).then(() => setNotice("Report copied."), () => setError("Could not copy. Download the report instead."))}>Copy report for an agent</button></div>
     </section>}
   </main>;

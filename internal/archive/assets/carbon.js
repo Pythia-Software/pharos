@@ -215,7 +215,6 @@
   };
   const prefs = {...(routeSettings() || load())};
   let data = null, factorsData = null, error = '', usageLabel = 'all time', usageScope = '';
-  const disclosureState = new Map();
 
   // Three significant figures, with the unit stepped so the number stays short.
   const sig = value => {
@@ -668,16 +667,14 @@
         const key = `row:${tier.key}:${category}`, row = node('tr', 'carbon-term-row'), name = node('th'); name.scope = 'row';
         row.dataset.category = category; row.dataset.tier = tier.key;
         const detailRow = node('tr', 'carbon-term-evidence'), detailCell = node('td'); detailCell.colSpan = 10;
-        detailRow.id = `carbon-row-${tier.key}-${term.category}`; detailRow.hidden = !disclosureState.get(key);
+        detailRow.id = `carbon-row-${tier.key}-${term.category}`; detailRow.hidden = window.pharosView?.read('disclosures', {})['carbon:' + key] !== true;
         const toggle = node('button', 'carbon-row-trigger', tierLabel(tier)); toggle.type = 'button';
         toggle.setAttribute('aria-label', `Explain ${CATEGORY_LABELS[category][0]} · ${tier.label}`);
         toggle.append(node('small', '', 'Details'));
         toggle.dataset.carbonControl = key; toggle.setAttribute('aria-expanded', String(!detailRow.hidden)); toggle.setAttribute('aria-controls', detailRow.id);
-        toggle.onclick = () => {
-          detailRow.hidden = !detailRow.hidden; disclosureState.set(key, !detailRow.hidden);
-          if (!detailRow.hidden && !detailCell.firstChild) detailCell.append(rowEvidence(factors, setup, term));
-          toggle.setAttribute('aria-expanded', String(!detailRow.hidden));
-        };
+        toggle.dataset.viewKey = 'carbon:' + key; toggle.dataset.viewDefault = 'false';
+        const populate = () => { if (!detailRow.hidden && !detailCell.firstChild) detailCell.append(rowEvidence(factors, setup, term)); };
+        toggle.addEventListener('pharos:disclosure', populate); populate();
         name.append(toggle); row.append(name);
         const ratio = Number(term.ratio.toPrecision(4));
         const ratioLink = factorLink('ratio', category, ledgerFraction(`${ratio === term.ratio ? '' : '≈ '}${precise(ratio)} OE`, '1 tok', `${precise(term.ratio)} OE tokens divided by 1 ${categoryUnit(category)} token`));

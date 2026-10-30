@@ -40,7 +40,7 @@ export function targetReference(kind: string, id: string): string {
   if (!attentionTargets.some(target => target.pattern.startsWith(`${kind}:<`)) || !id || id.length > 4000) throw new Error("Unknown attention target.");
   return `${kind}:${id}`;
 }
-declare global { interface Window { pharosView: { read: typeof readViewState; write: typeof writeViewState; register: typeof registerAttentionResolver; contract: typeof viewContract; refresh: () => void; globalParameters: () => string[]; retainPage: (params: URLSearchParams, path: string) => void }; } }
+declare global { interface Window { pharosView: { read: typeof readViewState; write: typeof writeViewState; register: typeof registerAttentionResolver; contract: typeof viewContract; refresh: () => void; restoreDisclosures: ReturnType<typeof installClassicDisclosures>; globalParameters: () => string[]; retainPage: (params: URLSearchParams, path: string) => void }; } }
 let frame = 0, navigation = "", textContext = "", landed = false;
 const opened = new Set<string>();
 let marked = new Set<HTMLElement>();
@@ -66,11 +66,15 @@ function resolve(reference: string): HTMLElement | null {
   return element && available(element) ? element : null;
 }
 function openAncestors(element: HTMLElement) {
-  for (let ancestor: HTMLElement | null = element; ancestor; ancestor = ancestor.parentElement) if (ancestor instanceof HTMLDetailsElement && !ancestor.open) ancestor.open = true;
+  // A disclosure's own summary is already visible when closed. Reveal must
+  // preserve its explicit URL state while opening ancestors that hide it.
+  for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) if (ancestor instanceof HTMLDetailsElement && !ancestor.open) ancestor.open = true;
 }
 function scroll(element: HTMLElement) {
   openAncestors(element);
-  element.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
+  // Center small targets, but keep the heading of a tall section on screen.
+  const viewport = element.closest("main")?.clientHeight ?? innerHeight;
+  element.scrollIntoView({ block: element.getBoundingClientRect().height > viewport ? "start" : "center", inline: "nearest", behavior: "instant" });
   // Reveal is intentionally independent of keyboard/browser focus.
 }
 function clearAttention() {
@@ -169,8 +173,8 @@ function update() {
 }
 function schedule(){if(!frame) frame=requestAnimationFrame(update);}
 export function installViewAttention() {
-  installClassicDisclosures();
-  window.pharosView={read:readClassicViewState,write:writeViewState,register:registerAttentionResolver,contract:viewContract,refresh:schedule,globalParameters:()=>Object.values(viewFields).filter(field=>field.pages.includes("*")).map(field=>field.param),retainPage:(params,path)=>retainPageView(params,viewPageForURL(new URL(path,location.origin)),path.startsWith("/work/")?libraryHostParameters:[])};
+  const restoreDisclosures=installClassicDisclosures();
+  window.pharosView={restoreDisclosures,read:readClassicViewState,write:writeViewState,register:registerAttentionResolver,contract:viewContract,refresh:schedule,globalParameters:()=>Object.values(viewFields).filter(field=>field.pages.includes("*")).map(field=>field.param),retainPage:(params,path)=>retainPageView(params,viewPageForURL(new URL(path,location.origin)),path.startsWith("/work/")?libraryHostParameters:[])};
   for(const event of ["popstate","pharos:route","pharos:view"])window.addEventListener(event,()=>{navigation="";textContext="";cancelDetailLanding();schedule();});
   for(const event of ["pharos:uri-changed","pharos:search-ready"])window.addEventListener(event,schedule);
   const observer=new MutationObserver(records=>{

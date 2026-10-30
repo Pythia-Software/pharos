@@ -6,8 +6,6 @@
   let activeRun = null;
   let runningIds = new Set();
   let openIssues = [];
-  const openPanels = new Set();
-  const initializedPanels = new Set();
   const node = (tag, text, className = '') => {
     const element = document.createElement(tag);
     element.textContent = text;
@@ -67,19 +65,14 @@
     return element;
   };
   const panel = (title, key, initiallyOpen = false) => {
-    if (!initializedPanels.has(key)) {
-      initializedPanels.add(key);
-      if (initiallyOpen) openPanels.add(key);
-    }
     const element = node('details', '', 'sync-panel sync-disclosure');
-    element.open = openPanels.has(key);
+    element.dataset.viewKey = 'sync:' + key;
+    element.dataset.viewDefault = String(Boolean(initiallyOpen));
+    element.setAttribute('data-view-capture-initial', '');
+    element.open = Boolean(initiallyOpen);
     const summary = node('summary', title);
     summary.dataset.syncFocus = key;
     element.append(summary);
-    element.ontoggle = () => {
-      if (!element.isConnected) return;
-      if (element.open) openPanels.add(key); else openPanels.delete(key);
-    };
     return element;
   };
   const style = node('style', `

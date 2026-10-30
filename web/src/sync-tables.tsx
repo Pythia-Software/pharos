@@ -1,3 +1,4 @@
+import { ViewDisclosure } from "./view-disclosure";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { inspectBucketQuery } from "@pythia-software/query-table-core";
@@ -68,22 +69,20 @@ function RunDetails({ run, onClose }: { run: SyncRecord; onClose: () => void }) 
 }
 
 function Diagnostics({ status, tables }: { status: SyncRecord; tables: ReturnType<typeof syncTables> }) {
-  return <details className="sync-panel sync-disclosure">
-    <summary>Performance &amp; verification details</summary>
+  return <ViewDisclosure viewKey="sync:diagnostics" className="sync-panel sync-disclosure" summary="Performance & verification details">
     <p className="muted">Measured cost by workload, across the last 200 runs. Median is the typical run; p95 covers 95% of runs.</p>
     <SyncQueryTable table={tables.costs} label="Measured indexing cost" />
     {tables.accuracy.rows.length ? <>
       <h3>Forecast accuracy</h3><SyncQueryTable table={tables.accuracy} label="Operation forecast accuracy" />
       <p className="muted">Availability includes runs without an estimate. Errors and range coverage use completed runs only, with one prediction per run at each checkpoint. Ranges widen using previous errors; coverage is measured rather than guaranteed.</p>
     </> : null}
-    {(status.forecast_runs ?? []).filter((run: SyncRecord) => run.model?.startsWith("library-update:") || run.model === "capture-index").slice(0, 5).map((run: SyncRecord) => <details key={runKey(run)} className="sync-separate">
-      <summary>{operationLabels[run.model] || run.model} · {format("when", run.finished_at)} · {run.state}</summary>
+    {(status.forecast_runs ?? []).filter((run: SyncRecord) => run.model?.startsWith("library-update:") || run.model === "capture-index").slice(0, 5).map((run: SyncRecord) => <ViewDisclosure key={runKey(run)} viewKey={`sync:forecast:${runKey(run)}`} className="sync-separate" summary={<>{operationLabels[run.model] || run.model} · {format("when", run.finished_at)} · {run.state}</>}>
       <SyncQueryTable table={runTables(run).forecasts} label="Operation forecasts" />
-    </details>)}
+    </ViewDisclosure>)}
     {status.measurement_limits ? <p className="muted">{status.measurement_limits}</p> : null}
     {tables.coverage.rows.length ? <><h3>Verification coverage</h3><SyncQueryTable table={tables.coverage} label="Verification coverage" /><p className="muted">Sampling does not verify the entire library.</p></> : null}
     {tables.deferred.rows.length ? <><h3>Pending library-wide work</h3><SyncQueryTable table={tables.deferred} label="Pending library-wide work" /></> : null}
-  </details>;
+  </ViewDisclosure>;
 }
 
 export function SyncTables() {

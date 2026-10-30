@@ -176,7 +176,7 @@
   }
 
   // ---- rendering
-  let document_ = null, expanded = null, inFlight = false, fetchedAt = 0, sheet = null;
+  let document_ = null, inFlight = false, fetchedAt = 0, sheet = null;
   const node = (tag, className = '', text) => {
     const element = document.createElement(tag);
     if (className) element.className = className;
@@ -255,17 +255,20 @@
   function renderItem(item) {
     const entry = node('div', 'bg-item');
     entry.dataset.item = item.id;
-    const open = expanded === item.id;
+    const open = window.pharosView?.read('disclosures', {})['background:' + item.id] === true;
     const head = node('button', 'bg-item-head');
     head.type = 'button';
+    head.dataset.viewKey = 'background:' + item.id;
+    head.dataset.viewDefault = 'false';
+    head.setAttribute('aria-controls', 'background-detail-' + item.id);
     head.setAttribute('aria-expanded', String(open));
     head.append(node('span', `bg-dot ${item.dot}`), node('span', 'bg-name', item.label));
     if (item.cost?.class) head.append(node('span', `bg-cost ${item.cost.class}`, {light: 'Light', moderate: 'Moderate', heavy: 'Heavy'}[item.cost.class]));
-    head.onclick = () => { expanded = open ? null : item.id; render(); };
     entry.append(head, node('span', 'bg-sub', item.sub), node('span', 'bg-state', item.text));
     if (item.note) entry.append(node('span', 'bg-note', item.note));
-    if (!open) return entry;
     const detail = node('div', 'bg-detail');
+    detail.id = 'background-detail-' + item.id;
+    detail.hidden = !open;
     const line = (label, value) => { const p = node('p'); p.append(node('strong', '', `${label}: `), value); return p; };
     detail.append(line('Feeds', item.feeds), line('Usually takes', item.cost?.text || 'not measured yet'));
     if (item.why) detail.append(node('p', 'muted', item.why));
