@@ -235,3 +235,5 @@
 .query-shared-box.is-dense .query-box-outlier { top:4px; }
 .query-role-values>span { display:inline-flex; align-items:center; gap:3px; white-space:nowrap; }
 .query-role-values i { display:inline-block; width:4px; height:4px; flex:none; border-radius:1px; }
+.query-cover-columns .query-timeline-point { position:absolute; left:50%; width:4px; height:4px; border-radius:50%; transform:translate(-50%,50%); }
+.query-cover-columns>.query-timeline-reference { height:0; position:absolute; left:0; right:0; border-top:1px dashed var(--muted); pointer-events:none; }

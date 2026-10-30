@@ -4022,6 +4022,60 @@
       "reason": "Applied reader_search and reader_order are URL state; unapplied edits, running search and result cursor batches are transient."
     },
     {
+      "key": "2da290a1c01e8a10:0",
+      "file": "web/src/create-dashboard-card.tsx",
+      "owner": "CreateDashboardCard",
+      "tag": "button",
+      "control": "",
+      "contract": "editing",
+      "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
+    },
+    {
+      "key": "3539ef4de8f33cc5:0",
+      "file": "web/src/create-dashboard-card.tsx",
+      "owner": "CreateDashboardCard",
+      "tag": "input",
+      "control": "value={draft.title} onChange={event => setDraft({ ...draft, title: event.target.value })}",
+      "contract": "editing",
+      "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
+    },
+    {
+      "key": "4ada7fc2fbb9ff79:0",
+      "file": "web/src/create-dashboard-card.tsx",
+      "owner": "CreateDashboardCard",
+      "tag": "button",
+      "control": "onClick={() => dialog.current?.close()}",
+      "contract": "editing",
+      "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
+    },
+    {
+      "key": "6a4e9253499dd22d:0",
+      "file": "web/src/create-dashboard-card.tsx",
+      "owner": "CreateDashboardCard",
+      "tag": "button",
+      "control": "onClick={() => { const url = dashboardCardURL(location.href, catalog, state, where); setDraft({ url, title: dashboardCardTitle(catalog, state), description: dashboardCardDescription(url) }); setError(\"\"); setSaved(false); dialog.current?.showModal(); }}",
+      "contract": "editing",
+      "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
+    },
+    {
+      "key": "b4d31e6a92c6f43b:0",
+      "file": "web/src/create-dashboard-card.tsx",
+      "owner": "CreateDashboardCard",
+      "tag": "a",
+      "control": "onClick={event => { event.preventDefault(); window.pharosNavigate?.(\"/home\"); }}",
+      "contract": "editing",
+      "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
+    },
+    {
+      "key": "eccae4db9182a984:0",
+      "file": "web/src/create-dashboard-card.tsx",
+      "owner": "CreateDashboardCard",
+      "tag": "textarea",
+      "control": "value={draft.description} onChange={event => setDraft({ ...draft, description: event.target.value })}",
+      "contract": "editing",
+      "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
+    },
+    {
       "key": "069920aa96aa07cd:0",
       "file": "web/src/dashboard-analysis.tsx",
       "owner": "AnalysisControls",
