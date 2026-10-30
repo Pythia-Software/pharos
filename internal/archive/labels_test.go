@@ -400,3 +400,56 @@ func TestLabelsIgnoreAStaleClassification(t *testing.T) {
 		t.Fatalf("stale classifications: %+v %v", stats, err)
 	}
 }
+
+// A pooling model never gets an item whose text has no tokens; a model that
+// pools every token does.
+func TestLabelsFrameRefusesAnEmptyTargetForAPoolingModel(t *testing.T) {
+	pooled, err := labelrt.LoadModel(labelsTestSettings(t, "ok", map[string]any{"input_contract": labelrt.InputContractIDsAttentionPool}).ModelDir, "int8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := labelrt.LoadModel(labelsTestSettings(t, "ok").ModelDir, "int8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty := labelingItem{Segment: segmentAR, Cohort: "agent_reply", SenderRole: "assistant", Context: "Previous user request:\nfix it"}
+	full := empty
+	full.Text = "Done."
+	if _, spans, ok := labelsFrame(pooled, empty); ok || spans.Text.Len() != 0 {
+		t.Fatalf("an empty target was framed for a pooling model: %+v", spans)
+	}
+	for _, c := range []struct {
+		model *labelrt.Model
+		item  labelingItem
+	}{{pooled, full}, {plain, empty}, {plain, full}} {
+		if _, _, ok := labelsFrame(c.model, c.item); !ok {
+			t.Fatalf("%s refused %q", c.model.InputContract, c.item.Text)
+		}
+	}
+}
+
+// Every label records its model, input contract included: switching models
+// either way relabels every message, and a run after that has nothing to do.
+func TestLabelsRelabelOnAModelSwitch(t *testing.T) {
+	catalog := labeledCatalog(t)
+	plain := labelsTestSettings(t, "ok")
+	pooled := labelsTestSettings(t, "ok", map[string]any{"name": "fake-pool", "input_contract": labelrt.InputContractIDsAttentionPool})
+	first, err := catalog.RunLabels(t.Context(), plain, LabelsRunOptions{})
+	if err != nil || !first.Complete {
+		t.Fatalf("first model: %+v %v", first, err)
+	}
+	for _, settings := range []LabelerSettings{pooled, plain} {
+		switched, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{})
+		if err != nil || !switched.Complete || switched.MessagesLabeled != first.MessagesLabeled || switched.MessagesUnchanged != 0 {
+			t.Fatalf("switch: %+v %v", switched, err)
+		}
+		model, _ := labelrt.LoadModel(settings.ModelDir, "int8")
+		if n := labelCount(t, catalog, "WHERE model=?", labelsModelIdentity(model)); n != first.MessagesLabeled || !strings.Contains(labelsModelIdentity(model), model.InputContract) {
+			t.Fatalf("%d rows carry %s", n, labelsModelIdentity(model))
+		}
+		again, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{})
+		if err != nil || again.MessagesLabeled != 0 || again.ConversationsBuilt != 0 {
+			t.Fatalf("after the switch: %+v %v", again, err)
+		}
+	}
+}

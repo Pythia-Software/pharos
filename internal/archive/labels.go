@@ -231,13 +231,22 @@ func (c *Catalog) labelerManager(settings LabelerSettings) *labelrt.Manager {
 // can still be configured, kestrel-68m (ids-attention-v1) included.
 const labelsDefaultModel = "kestrel-68m-tpool"
 
-// labelsModelIdentity names what made a label: the model's name, its file's
-// SHA-256 and its manifest's (which holds the thresholds and tokenizer
-// hash).
+// labelsModelIdentity names what made a label: the model's name, its input
+// contract, its file's SHA-256 and its manifest's (which holds the
+// thresholds and tokenizer hash). Every label row records it, so a model
+// switch, in either direction, relabels.
 func labelsModelIdentity(model *labelrt.Model) string {
 	manifest, _ := os.ReadFile(filepath.Join(model.Dir, "manifest.json"))
 	sum := sha256.Sum256(manifest)
-	return fmt.Sprintf("%s/%s/%s", model.Manifest.Name, model.SHA256[:16], hex.EncodeToString(sum[:8]))
+	return fmt.Sprintf("%s/%s/%s/%s", model.Manifest.Name, model.InputContract, model.SHA256[:16], hex.EncodeToString(sum[:8]))
+}
+
+// labelsFrame frames one item for model. It reports false for an item a
+// pooling model cannot take: a text with no tokens leaves nothing to pool,
+// so the item is never sent (status empty_target).
+func labelsFrame(model *labelrt.Model, item labelingItem) ([]int32, labelrt.FrameSpans, bool) {
+	seq, spans := model.Tokenizer.FrameWithSpans(labelrt.FrameInput{Segment: item.Segment, Cohort: item.Cohort, Sender: item.SenderRole, Context: item.Context, Text: item.Text})
+	return seq, spans, !model.Pools() || spans.Text.Len() > 0
 }
 
 // labelsGeneration is what a complete ledger was built for.
@@ -997,8 +1006,8 @@ func (r *labelsRun) produce(ctx context.Context, builder *labelsItemBuilder, job
 			}
 			empty := false
 			for _, item := range items {
-				seq, spans := r.model.Tokenizer.FrameWithSpans(labelrt.FrameInput{Segment: item.Segment, Cohort: item.Cohort, Sender: item.SenderRole, Context: item.Context, Text: item.Text})
-				empty = empty || r.model.Pools() && spans.Text.Len() == 0
+				seq, spans, ok := labelsFrame(r.model, item)
+				empty = empty || !ok
 				message.spans = append(message.spans, spans)
 				message.seqs = append(message.seqs, seq)
 				message.segments = append(message.segments, item.Segment)
