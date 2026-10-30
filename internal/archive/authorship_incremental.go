@@ -12,7 +12,9 @@ import (
 	"time"
 )
 
-const authorshipStateVersion = "authorship-state-v1/" + authorshipVersion
+// v2 invalidates checkpoints that may have dropped questions from conversations
+// without a user suffix or restored a suppressed mirror's launch message.
+const authorshipStateVersion = "authorship-state-v2/" + authorshipVersion
 
 var authorshipSuffixLimit = 2000
 
@@ -239,7 +241,11 @@ func (c *Catalog) incrementalAuthorship(ctx context.Context) (*authorshipIncreme
 	if err != nil {
 		return nil, err
 	}
-	rows, err := queryMapsContext(ctx, c.DB, `SELECT l.child_id,l.parent_id,l.tool_call_id,l.program,COALESCE(t.call_message_id,'') message FROM conversation_launches l LEFT JOIN tool_calls t ON t.id=l.tool_call_id`)
+	// A mirror's command can be attributed to its representative conversation.
+	// Match launchIndex.link: that parent cannot link to the mirror's message.
+	rows, err := queryMapsContext(ctx, c.DB, `SELECT l.child_id,l.parent_id,l.tool_call_id,l.program,
+	 CASE WHEN t.conversation_id=l.parent_id THEN COALESCE(t.call_message_id,'') ELSE '' END message
+	 FROM conversation_launches l LEFT JOIN tool_calls t ON t.id=l.tool_call_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -277,6 +283,29 @@ type storedAuthorshipQuestion struct {
 	Options               []string
 	Conversation, Message string
 	At                    time.Time
+}
+
+func (c *Catalog) loadAuthorshipQuestionsBefore(ctx context.Context, ids []string, before time.Time) (map[string][]authorshipQuestion, error) {
+	loaded := map[string][]authorshipQuestion{}
+	if len(ids) == 0 {
+		return loaded, nil
+	}
+	rows, err := queryMapsContext(ctx, c.DB, `SELECT conversation_id,questions_json FROM authorship_questions WHERE conversation_id IN (SELECT value FROM json_each(?))`, jsonText(ids))
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		var questions []storedAuthorshipQuestion
+		if err := json.Unmarshal([]byte(asString(row["questions_json"])), &questions); err != nil {
+			return nil, err
+		}
+		for _, question := range questions {
+			if question.At.Before(before) {
+				loaded[question.Conversation] = append(loaded[question.Conversation], authorshipQuestion{title: question.Title, options: question.Options, origin: textOrigin{question.Conversation, question.Message}, at: question.At})
+			}
+		}
+	}
+	return loaded, nil
 }
 
 func (c *Catalog) loadAuthorshipClassifier(ctx context.Context, inputs []authorInput, watermark time.Time) (*classifier, error) {
@@ -327,25 +356,14 @@ func (c *Catalog) loadAuthorshipClassifier(ctx context.Context, inputs []authorI
 		}
 		classifier.lastUserSent[asString(row["conversation_id"])] = at
 	}
-	rows, err = queryMapsContext(ctx, c.DB, `SELECT conversation_id,questions_json FROM authorship_questions WHERE conversation_id IN (SELECT value FROM json_each(?))`, jsonText(ids))
-	if err != nil {
-		return nil, err
-	}
 	start := inputs[0].SentAt.Add(-authorshipWindow)
 	if watermark.Before(start) {
 		start = watermark
 	}
 	classifier.replyStart = start
-	for _, row := range rows {
-		var questions []storedAuthorshipQuestion
-		if err := json.Unmarshal([]byte(asString(row["questions_json"])), &questions); err != nil {
-			return nil, err
-		}
-		for _, question := range questions {
-			if question.At.Before(start) {
-				classifier.questions[question.Conversation] = append(classifier.questions[question.Conversation], authorshipQuestion{title: question.Title, options: question.Options, origin: textOrigin{question.Conversation, question.Message}, at: question.At})
-			}
-		}
+	classifier.questions, err = c.loadAuthorshipQuestionsBefore(ctx, ids, start)
+	if err != nil {
+		return nil, err
 	}
 	loaded := map[uint64]bool{}
 	batches := map[string]*shingleBatch{}
@@ -534,10 +552,25 @@ func (c *Catalog) storeAuthorshipState(ctx context.Context, run *authorshipIncre
 	for _, result := range results {
 		targets[result.Input.ConversationID] = true
 	}
-	for id, questions := range classifier.questions {
-		if !full && !targets[id] {
-			continue
+	var questionPrefixes map[string][]authorshipQuestion
+	if !full {
+		// Replay also sees questions in conversations with no user suffix. Their
+		// older history was not needed for classification, but must survive when
+		// these replayed questions are saved and the global watermark advances.
+		missing := map[string]bool{}
+		for id := range classifier.questions {
+			if !targets[id] {
+				missing[id] = true
+			}
 		}
+		var err error
+		questionPrefixes, err = c.loadAuthorshipQuestionsBefore(ctx, sortedNameIDs(missing), classifier.replyStart)
+		if err != nil {
+			return err
+		}
+	}
+	for id, questions := range classifier.questions {
+		questions = append(questionPrefixes[id], questions...)
 		stored := []storedAuthorshipQuestion{}
 		for _, question := range questions {
 			stored = append(stored, storedAuthorshipQuestion{Title: question.title, Options: question.options, Conversation: question.origin.conversation, Message: question.origin.message, At: question.at})

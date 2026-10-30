@@ -1258,7 +1258,9 @@ func TestAuthorshipIncrementalFallbacks(t *testing.T) {
 			}
 			switch name {
 			case "version":
-				execSQL(t, c.DB, `UPDATE meta SET value='old-state' WHERE key='authorship_state_version'`)
+				if _, err := c.DB.Exec(`UPDATE meta SET value=? WHERE key='authorship_state_version'`, "authorship-state-v1/"+authorshipVersion); err != nil {
+					t.Fatal(err)
+				}
 			case "identity":
 				execSQL(t, c.DB, `INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('c','other','native-alias',1,'{}')`)
 			case "automation":
@@ -1301,40 +1303,111 @@ func TestAuthorshipIncrementalFallbacks(t *testing.T) {
 }
 
 func TestAuthorshipIncrementalRetainsQuestionsAcrossIdleGap(t *testing.T) {
-	c, _ := testCatalog(t)
-	execTx(t, c.DB,
-		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','codex','local','w','Work','2026-09-01')`,
-		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness) VALUES('c','w','codex','local','c','codex')`,
-		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('m','c','m','user','message','Please inspect the first parser carefully','2026-09-01T12:00:00.000Z','hash')`)
-	rebuild := func() {
-		t.Helper()
+	t.Run("no user suffix", func(t *testing.T) {
+		c, _ := testCatalog(t)
+		execTx(t, c.DB,
+			`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','codex','local','w','Work','2026-09-01')`,
+			`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness) VALUES('c','w','codex','local','c','codex')`,
+			`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('m','c','m','user','message','Please inspect the first parser carefully','2026-09-01T12:00:00.000Z','hash')`)
+		rebuild := func() {
+			t.Helper()
+			want, _, _ := c.authorshipGenerations()
+			if err := c.RebuildAuthorship(t.Context(), want); err != nil {
+				t.Fatal(err)
+			}
+		}
+		rebuild()
+		text := `{"tool":"request_user_input","input":{"questions":[{"question":"Should we publish the fix?","options":[{"label":"Publish the fix now"},{"label":"Wait for review"}]}]}}`
+		if _, err := c.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('q','c','q','assistant','tool_call',?,'2026-09-02T12:00:00.000Z','q')`, text); err != nil {
+			t.Fatal(err)
+		}
+		execSQL(t, c.DB, `INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,call_message_id,started_at,status) VALUES('q','w','c',1,'codex','tool_call','request_user_input','other','q','2026-09-02T12:00:00.000Z','ok')`)
+		rebuild() // No user suffix; keep the dirty evidence until a user consumes it.
+		execSQL(t, c.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('answer','c','answer','user','message','Should we publish the fix?
+Publish the fix now','2026-10-02T12:00:00.000Z','answer')`)
+		rebuild()
+		inputs, launches, err := c.authorshipInputs(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		results, err := c.classifyInputs(t.Context(), inputs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan, err := c.planAuthorship(t.Context(), results, launches)
+		if err != nil || len(plan) != 0 {
+			t.Fatalf("idle-gap answer differs: %v (%v)", plan, err)
+		}
+	})
+
+	t.Run("another conversation advances the checkpoint", func(t *testing.T) {
+		c, _ := testCatalog(t)
+		execTx(t, c.DB,
+			`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','codex','local','w','Work','2026-09-01')`,
+			`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness) VALUES('a','w','codex','local','a','codex'),('b','w','codex','local','b','codex')`)
+		message := func(id, conversation, role, kind, text string, day int) {
+			t.Helper()
+			if _, err := c.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES(?,?,?,?,?,?,?,?)`, id, conversation, id, role, kind, text, formatTime(authorAt(day*24*60)), hashBytes([]byte(text))); err != nil {
+				t.Fatal(err)
+			}
+		}
+		question := func(id, title, option string, day int) {
+			t.Helper()
+			text := jsonText(map[string]any{"tool": "request_user_input", "input": map[string]any{"questions": []any{map[string]any{"question": title, "options": []any{map[string]any{"label": option}}}}}})
+			message(id, "b", "assistant", "tool_call", text, day)
+			if _, err := c.DB.Exec(`INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,call_message_id,started_at,status) VALUES(?,'w','b',1,'codex','tool_call','request_user_input','other',?,?,'ok')`, id, id, formatTime(authorAt(day*24*60))); err != nil {
+				t.Fatal(err)
+			}
+		}
+		rebuild := func() {
+			t.Helper()
+			want, _, err := c.authorshipGenerations()
+			if err != nil {
+				t.Fatal(err)
+			}
+			mode := ""
+			ctx := withWorkProgress(t.Context(), func(work activityWork) {
+				if strings.HasPrefix(work.Phase, "authorship mode:") {
+					mode = work.Phase
+				}
+			})
+			if err := c.RebuildAuthorship(ctx, want); err != nil {
+				t.Fatal(err)
+			}
+			if mode != "authorship mode: suffix" {
+				t.Fatalf("expected suffix replay, got %s", mode)
+			}
+		}
+		message("first", "a", "user", "message", "Please inspect the parser", 0)
+		question("old-question", "Should we publish the parser?", "Publish the parser now", 1)
+		message("baseline", "a", "user", "message", "Inspect the second grammar rule", 2)
 		want, _, _ := c.authorshipGenerations()
 		if err := c.RebuildAuthorship(t.Context(), want); err != nil {
 			t.Fatal(err)
 		}
-	}
-	rebuild()
-	text := `{"tool":"request_user_input","input":{"questions":[{"question":"Should we publish the fix?","options":[{"label":"Publish the fix now"},{"label":"Wait for review"}]}]}}`
-	if _, err := c.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('q','c','q','assistant','tool_call',?,'2026-09-02T12:00:00.000Z','q')`, text); err != nil {
-		t.Fatal(err)
-	}
-	execSQL(t, c.DB, `INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,call_message_id,started_at,status) VALUES('q','w','c',1,'codex','tool_call','request_user_input','other','q','2026-09-02T12:00:00.000Z','ok')`)
-	rebuild() // No user suffix; keep the dirty evidence until a user consumes it.
-	execSQL(t, c.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('answer','c','answer','user','message','Should we publish the fix?
-Publish the fix now','2026-10-02T12:00:00.000Z','answer')`)
-	rebuild()
-	inputs, launches, err := c.authorshipInputs(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	results, err := c.classifyInputs(t.Context(), inputs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan, err := c.planAuthorship(t.Context(), results, launches)
-	if err != nil || len(plan) != 0 {
-		t.Fatalf("idle-gap answer differs: %v (%v)", plan, err)
-	}
+
+		// B still has no user turn. Preserve its old question as well as the
+		// new one replayed while only A advances the global watermark.
+		question("new-question", "Should we ship the formatter?", "Ship the formatter now", 3)
+		message("other-activity", "a", "user", "message", "Review the next parser stage", 20)
+		rebuild()
+		message("later-activity", "a", "user", "message", "Check the remaining grammar", 40)
+		rebuild()
+		message("answers", "b", "user", "message", "Should we publish the parser?\nPublish the parser now\n\nShould we ship the formatter?\nShip the formatter now", 60)
+		rebuild()
+		inputs, launches, err := c.authorshipInputs(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		results, err := c.classifyInputs(t.Context(), inputs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan, err := c.planAuthorship(t.Context(), results, launches)
+		if err != nil || len(plan) != 0 {
+			t.Fatalf("cross-conversation question history differs from full classifier: %v (%v)", plan, err)
+		}
+	})
 }
 
 func classifyAuthorshipUnpaged(ctx context.Context, q queryer, inputs []authorInput, classifier *classifier) ([]authorResult, error) {
@@ -1384,52 +1457,109 @@ func TestAuthorshipRebuildLease(t *testing.T) {
 }
 
 func TestAuthorshipIncrementalMirrorIngest(t *testing.T) {
-	c, _ := testCatalog(t)
-	native := WorkspaceRecord{SourceID: "native", SourceKind: "claude", Account: "local", Title: "Native", ActivityAt: formatTime(authorAt(0)), Conversations: []ConversationRecord{{NativeID: "native", Provider: "claude", Account: "local", Harness: "claude-code/cli", Coverage: "complete", StartedAt: formatTime(authorAt(0)), Messages: []MessageRecord{{NativeID: "first", Role: "user", Kind: "message", Text: "Please inspect the parser", CreatedAt: formatTime(authorAt(0)), Selected: true}}}}}
-	wrapper := WorkspaceRecord{SourceID: "wrapper", SourceKind: "conductor", Account: "local", Title: "Wrapper", ActivityAt: formatTime(authorAt(0)), Conversations: []ConversationRecord{{NativeID: "conductor:wrapper", Provider: "claude", Account: "local", Harness: "conductor", Coverage: "complete", Aliases: []string{"native"}, StartedAt: formatTime(authorAt(0))}}}
-	ingest := func(record WorkspaceRecord) {
-		t.Helper()
-		tx := seedTx(t, c.DB)
-		if _, _, err := ingestWorkspace(tx, record, false); err != nil {
+	t.Run("native append", func(t *testing.T) {
+		c, _ := testCatalog(t)
+		native := WorkspaceRecord{SourceID: "native", SourceKind: "claude", Account: "local", Title: "Native", ActivityAt: formatTime(authorAt(0)), Conversations: []ConversationRecord{{NativeID: "native", Provider: "claude", Account: "local", Harness: "claude-code/cli", Coverage: "complete", StartedAt: formatTime(authorAt(0)), Messages: []MessageRecord{{NativeID: "first", Role: "user", Kind: "message", Text: "Please inspect the parser", CreatedAt: formatTime(authorAt(0)), Selected: true}}}}}
+		wrapper := WorkspaceRecord{SourceID: "wrapper", SourceKind: "conductor", Account: "local", Title: "Wrapper", ActivityAt: formatTime(authorAt(0)), Conversations: []ConversationRecord{{NativeID: "conductor:wrapper", Provider: "claude", Account: "local", Harness: "conductor", Coverage: "complete", Aliases: []string{"native"}, StartedAt: formatTime(authorAt(0))}}}
+		ingest := func(record WorkspaceRecord) {
+			t.Helper()
+			tx := seedTx(t, c.DB)
+			if _, _, err := ingestWorkspace(tx, record, false); err != nil {
+				t.Fatal(err)
+			}
+			commitSeed(t, tx)
+		}
+		ingest(native)
+		ingest(wrapper)
+		want, _, _ := c.authorshipGenerations()
+		if err := c.RebuildAuthorship(t.Context(), want); err != nil {
 			t.Fatal(err)
 		}
-		commitSeed(t, tx)
-	}
-	ingest(native)
-	ingest(wrapper)
-	want, _, _ := c.authorshipGenerations()
-	if err := c.RebuildAuthorship(t.Context(), want); err != nil {
-		t.Fatal(err)
-	}
-	native.ActivityAt = formatTime(authorAt(20))
-	native.Conversations[0].Messages = append(native.Conversations[0].Messages, MessageRecord{NativeID: "next", Role: "user", Kind: "message", Text: "Now inspect the second grammar rule", CreatedAt: formatTime(authorAt(20)), Selected: true})
-	ingest(native)
-	want, _, _ = c.authorshipGenerations()
-	mode, classified := "", 0
-	ctx := withWorkProgress(t.Context(), func(work activityWork) {
-		if strings.HasPrefix(work.Phase, "authorship mode:") {
-			mode = work.Phase
+		native.ActivityAt = formatTime(authorAt(20))
+		native.Conversations[0].Messages = append(native.Conversations[0].Messages, MessageRecord{NativeID: "next", Role: "user", Kind: "message", Text: "Now inspect the second grammar rule", CreatedAt: formatTime(authorAt(20)), Selected: true})
+		ingest(native)
+		want, _, _ = c.authorshipGenerations()
+		mode, classified := "", 0
+		ctx := withWorkProgress(t.Context(), func(work activityWork) {
+			if strings.HasPrefix(work.Phase, "authorship mode:") {
+				mode = work.Phase
+			}
+			if work.Phase == "classifying authorship" {
+				classified = int(work.Total)
+			}
+		})
+		if err := c.RebuildAuthorship(ctx, want); err != nil {
+			t.Fatal(err)
 		}
-		if work.Phase == "classifying authorship" {
-			classified = int(work.Total)
+		if mode != "authorship mode: suffix" || classified != 1 {
+			t.Fatalf("native append in mirror: %s classified=%d", mode, classified)
+		}
+		inputs, launches, err := c.authorshipInputs(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		results, err := c.classifyInputs(t.Context(), inputs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan, err := c.planAuthorship(t.Context(), results, launches)
+		if err != nil || len(plan) != 0 {
+			t.Fatalf("mirror ingest differs: %v (%v)", plan, err)
 		}
 	})
-	if err := c.RebuildAuthorship(ctx, want); err != nil {
-		t.Fatal(err)
-	}
-	if mode != "authorship mode: suffix" || classified != 1 {
-		t.Fatalf("native append in mirror: %s classified=%d", mode, classified)
-	}
-	inputs, launches, err := c.authorshipInputs(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	results, err := c.classifyInputs(t.Context(), inputs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan, err := c.planAuthorship(t.Context(), results, launches)
-	if err != nil || len(plan) != 0 {
-		t.Fatalf("mirror ingest differs: %v (%v)", plan, err)
-	}
+
+	t.Run("launch command belongs to the suppressed mirror", func(t *testing.T) {
+		c, _ := testCatalog(t)
+		execTx(t, c.DB,
+			`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at,location) VALUES
+			 ('native','claude','local','native','Native','2026-09-01','/project'),
+			 ('mirror','conductor','local','mirror','Mirror','2026-09-01','/project'),
+			 ('run','claude','local','run','Run','2026-09-01','/project/run')`,
+			`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,origin_host_id,started_at) VALUES
+			 ('native','native','claude','local','native','claude-code/cli','host','2026-09-01T12:00:00.000Z'),
+			 ('mirror','mirror','claude','local','mirror','conductor','host','2026-09-01T12:00:00.000Z'),
+			 ('run','run','claude','local','run','claude-code/sdk-cli','host','2026-09-01T12:02:00.000Z')`,
+			`INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('mirror','native','native-alias',1,'{}')`,
+			`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES
+			 ('first','native','first','user','message','Please inspect the parser','2026-09-01T12:00:00.000Z','first'),
+			 ('launch','mirror','launch','assistant','tool_call','{"tool":"Bash","input":{"command":"claude -p inspect"}}','2026-09-01T12:01:00.000Z','launch'),
+			 ('headless-first','run','headless-first','user','message','Inspect the parser stage','2026-09-01T12:03:00.000Z','headless-first')`,
+			`INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,program,command,call_message_id,started_at,ended_at,status)
+			 VALUES('launch','mirror','mirror',1,'claude','tool_call','Bash','command','claude','claude -p inspect','launch','2026-09-01T12:01:00.000Z','2026-09-01T12:05:00.000Z','ok')`,
+			`INSERT INTO tool_commands(tool_call_id,position,program,subcommand,command) VALUES('launch',0,'claude','-p','claude -p inspect')`)
+		_, launches, err := c.authorshipInputs(t.Context())
+		if err != nil || len(launches) != 1 || launches[0].parent != "native" || launches[0].message != "" {
+			t.Fatalf("full classifier must attribute the mirror command to its representative without a message anchor: %+v (%v)", launches, err)
+		}
+		want, _, _ := c.authorshipGenerations()
+		if err := c.RebuildAuthorship(t.Context(), want); err != nil {
+			t.Fatal(err)
+		}
+		execSQL(t, c.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('next','run','next','user','message','Inspect the next parser stage','2026-09-01T12:10:00.000Z','next')`)
+		want, _, _ = c.authorshipGenerations()
+		mode := ""
+		ctx := withWorkProgress(t.Context(), func(work activityWork) {
+			if strings.HasPrefix(work.Phase, "authorship mode:") {
+				mode = work.Phase
+			}
+		})
+		if err := c.RebuildAuthorship(ctx, want); err != nil {
+			t.Fatal(err)
+		}
+		if mode != "authorship mode: suffix" {
+			t.Fatalf("expected suffix replay, got %s", mode)
+		}
+		inputs, launches, err := c.authorshipInputs(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		results, err := c.classifyInputs(t.Context(), inputs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan, err := c.planAuthorship(t.Context(), results, launches)
+		if err != nil || len(plan) != 0 {
+			t.Fatalf("mirror launch attribution differs from full classifier: %v (%v)", plan, err)
+		}
+	})
 }

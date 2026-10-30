@@ -637,9 +637,11 @@ loop. Worker progress reports phase timings and direct row-write counts.
 
 Authorship's trigger-fed watermark and derived checkpoint select a suffix
 rebuild without changing admission or scheduling. User-message changes remain
-independent of tool activity. The checkpoint is published only after output
-and state chunks, with a conditional input-revision check; cancellation or a
-concurrent write leaves the next rebuild eligible for the full fallback.
+independent of tool activity. Question history survives suffixes in other
+conversations; checkpoint version 2 rebuilds older state once. The checkpoint
+is published only after output and state chunks, with a conditional
+input-revision check; cancellation or a concurrent write leaves the next
+rebuild eligible for the full fallback.
 Historical edits/backfills, oversized suffixes, graph/launch ambiguity and
 global template-count changes retain full replay. The original rules version
 stays unchanged. See [writing classification](human-authorship.md) for the

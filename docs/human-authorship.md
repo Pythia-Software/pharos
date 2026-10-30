@@ -121,7 +121,11 @@ A normal append reads and classifies only that suffix, looking up historical
 candidates and lines as needed. It reuses launches when all changed inputs
 postdate every existing headless start. Reply replay includes any idle gap
 since the previous user turn, so question forms remain recognizable beyond
-the seven-day copied-output window.
+the seven-day copied-output window. Every conversation's replayed questions
+are saved with its earlier history, even when only another conversation has
+new user messages. Reused launch links retain a message anchor only when the
+command belongs to the attributed parent conversation; a suppressed mirror's
+message cannot anchor a link into its representative.
 
 The full classifier remains the fallback for missing/old/interrupted state,
 identity or mirror changes, launch overlap, historical edits/deletions or
@@ -133,6 +137,8 @@ stream-local launch replay and targeted historical template replay are not
 implemented. Neither classification rules (`authorship-v8`) nor scheduling
 changed. The first changed-data rebuild populates the extra derived tables;
 its production storage cost has not yet been measured.
+Checkpoint version 2 forces one full rebuild of version 1 state, which may
+have lost question history or restored an incompatible mirror message anchor.
 
 Checkpoint publication is chunked too. Its version is invalidated before
 output writes and restored with the generation only after all state writes
