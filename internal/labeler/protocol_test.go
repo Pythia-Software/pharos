@@ -88,14 +88,16 @@ func TestMalformedFramesAndRequests(t *testing.T) {
 		t.Fatal("oversized dims accepted")
 	}
 	cases := map[string]func(*RunRequest){
-		"id out of vocab":  func(r *RunRequest) { r.Inputs[0].Int32[1] = 60000 },
-		"negative id":      func(r *RunRequest) { r.Inputs[0].Int32[0] = -1 },
-		"mask value":       func(r *RunRequest) { r.Inputs[1].Int32[0] = 2 },
-		"empty row":        func(r *RunRequest) { r.Inputs[1].Int32 = []int32{0, 0} },
-		"missing mask":     func(r *RunRequest) { r.Inputs = r.Inputs[:1] },
-		"unknown input":    func(r *RunRequest) { r.Inputs[1].Name = "token_type_ids" },
-		"shape mismatch":   func(r *RunRequest) { r.Inputs[1].Dims = []int{2, 1} },
-		"float ids":        func(r *RunRequest) { r.Inputs[0] = Tensor{Name: "input_ids", DType: DTypeFloat32, Dims: []int{1, 2}, Float32: []float32{1, 2}} },
+		"id out of vocab": func(r *RunRequest) { r.Inputs[0].Int32[1] = 60000 },
+		"negative id":     func(r *RunRequest) { r.Inputs[0].Int32[0] = -1 },
+		"mask value":      func(r *RunRequest) { r.Inputs[1].Int32[0] = 2 },
+		"empty row":       func(r *RunRequest) { r.Inputs[1].Int32 = []int32{0, 0} },
+		"missing mask":    func(r *RunRequest) { r.Inputs = r.Inputs[:1] },
+		"unknown input":   func(r *RunRequest) { r.Inputs[1].Name = "token_type_ids" },
+		"shape mismatch":  func(r *RunRequest) { r.Inputs[1].Dims = []int{2, 1} },
+		"float ids": func(r *RunRequest) {
+			r.Inputs[0] = Tensor{Name: "input_ids", DType: DTypeFloat32, Dims: []int{1, 2}, Float32: []float32{1, 2}}
+		},
 		"over batch limit": func(r *RunRequest) {},
 	}
 	for name, mutate := range cases {
