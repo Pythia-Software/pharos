@@ -25,7 +25,7 @@ analysis chain automatically after scheduled indexes.
 
 | Handoff | Problem |
 |---|---|
-| [analysis-chain-rewrites.md](analysis-chain-rewrites.md) | Identities rewrites ~3,500 unchanged conversations, so every chain refreshes the whole Search view; writing classification rebuilds everything (≈6 min) on any new message |
+| [analysis-chain-rewrites.md](analysis-chain-rewrites.md) | Completed in #288–#290: identities rewrote ~3,500 unchanged conversations, so every chain refreshed the whole Search view; writing classification rebuilt everything (≈6 min) on any new message |
 
 ## Catalog size
 

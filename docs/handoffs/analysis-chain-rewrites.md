@@ -1,5 +1,8 @@
 # Handoff: stop the analysis chain rewriting what has not changed
 
+**Completed** in #288 (no-op rewrites), #289 (authorship diff store) and
+#290 (incremental authorship). Kept as the record of the request.
+
 ## Assignment
 
 A manual **Index changes** takes 8–13 minutes, about 95% of it in the
