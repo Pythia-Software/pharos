@@ -5,8 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"sort"
+	"strings"
+	"unicode/utf8"
 )
 
 // labelsItemBuilder builds the items the local labeler labels from a live
@@ -42,7 +43,7 @@ func newLabelsItemBuilder(ctx context.Context, db labelingReader) (*labelsItemBu
 	// Delegation duplicates are bookkeeping for training, not item inputs.
 	p.childOwners = map[string]bool{}
 	p.loadAuthorship = func(id string) (*authorResult, error) {
-		return loadStoredAuthorship(ctx, db, `SELECT m.id,m.conversation_id,m.text,a.spans_json FROM message_authorship a JOIN messages m ON m.id=a.message_id WHERE a.message_id=?`, id)
+		return loadStoredAuthorship(ctx, db, `SELECT m.id,m.conversation_id,m.text,a.spans_json,a.total_chars FROM message_authorship a JOIN messages m ON m.id=a.message_id WHERE a.message_id=?`, id)
 	}
 	return &labelsItemBuilder{p: p, sessions: byConversation}, nil
 }
@@ -57,7 +58,7 @@ func (b *labelsItemBuilder) conversation(ctx context.Context, id string) ([]*lab
 	// Classifications and resolved re-sent sources are read per conversation,
 	// so a long run holds only one conversation's.
 	p.authorship, p.targetCache, p.parents, p.authorshipErr = map[string]*authorResult{}, map[string][]bool{}, map[string][]labelingParentMessage{}, nil
-	rows, err := p.tx.QueryContext(ctx, `SELECT m.id,m.conversation_id,m.text,a.spans_json FROM messages m JOIN message_authorship a ON a.message_id=m.id
+	rows, err := p.tx.QueryContext(ctx, `SELECT m.id,m.conversation_id,m.text,a.spans_json,a.total_chars FROM messages m JOIN message_authorship a ON a.message_id=m.id
 		WHERE m.conversation_id=? AND m.role='user'`, id)
 	if err != nil {
 		return nil, err
@@ -68,7 +69,9 @@ func (b *labelsItemBuilder) conversation(ctx context.Context, id string) ([]*lab
 			rows.Close()
 			return nil, err
 		}
-		p.authorship[result.Input.ID] = result
+		if result != nil {
+			p.authorship[result.Input.ID] = result
+		}
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -89,15 +92,30 @@ func (b *labelsItemBuilder) conversation(ctx context.Context, id string) ([]*lab
 type rowScanner interface{ Scan(...any) error }
 
 // scanStoredAuthorship rebuilds what the pass reads of a classification: the
-// message's text and its spans as the ledger stored them.
+// message's text and its spans as the ledger stored them. A row whose spans
+// no longer fit the message (its text changed after it was classified, and
+// the ledger has not caught up) is no classification: the message counts as
+// unclassified until the next authorship run, which marks its conversation
+// dirty again.
 func scanStoredAuthorship(row rowScanner) (*authorResult, error) {
 	var result authorResult
 	var spans string
-	if err := row.Scan(&result.Input.ID, &result.Input.ConversationID, &result.Input.Text, &spans); err != nil {
+	var chars int
+	if err := row.Scan(&result.Input.ID, &result.Input.ConversationID, &result.Input.Text, &spans, &chars); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal([]byte(spans), &result.Spans); err != nil {
-		return nil, fmt.Errorf("message %s: stored spans: %w", result.Input.ID, err)
+		return nil, nil
+	}
+	if utf8.RuneCountInString(strings.TrimSpace(result.Input.Text)) != chars {
+		return nil, nil
+	}
+	at := 0
+	for _, span := range result.Spans {
+		if span.Start < at || span.End < span.Start || span.End > len(result.Input.Text) {
+			return nil, nil
+		}
+		at = span.End
 	}
 	return &result, nil
 }

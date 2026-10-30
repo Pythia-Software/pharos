@@ -117,19 +117,58 @@ func TestPoolRestartsACrashedWorker(t *testing.T) {
 	}
 }
 
-func TestPoolGivesUpOnAPoisonBatch(t *testing.T) {
+// A batch that keeps crashing workers fails as a crash, which its caller
+// can split; the pool keeps serving other batches. A worker that crashes on
+// everything exhausts the restarts in a row and stops the pool.
+func TestPoolSurvivesAPoisonBatchButNotAWorkerThatCannotRun(t *testing.T) {
 	pool, err := labeler.NewPool(t.Context(), labeler.PoolConfig{Worker: fakeConfig(t, "crash-on-id:777"), Backoff: func(int) time.Duration { return time.Millisecond }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	_, err = pool.Run(t.Context(), fakeBatch([]int32{labeler.ClsID, 777, labeler.SepID}), nil)
-	if !errors.Is(err, labeler.ErrWorkersUnavailable) || !strings.Contains(err.Error(), "exit status 4") {
-		t.Fatalf("poison batch: %v", err)
+	for range 3 {
+		_, err = pool.Run(t.Context(), fakeBatch([]int32{labeler.ClsID, 777, labeler.SepID}), nil)
+		if !errors.Is(err, labeler.ErrWorkerExited) || errors.Is(err, labeler.ErrWorkersUnavailable) || !strings.Contains(err.Error(), "exit status 4") {
+			t.Fatalf("poison batch: %v", err)
+		}
+		// Each success resets the restarts in a row.
+		if _, err := pool.Run(t.Context(), fakeBatch([]int32{labeler.ClsID, 1, labeler.SepID}), nil); err != nil {
+			t.Fatalf("after the poison batch: %v", err)
+		}
 	}
-	// The pool still serves other batches until its restart budget is spent.
-	if _, err := pool.Run(t.Context(), fakeBatch([]int32{labeler.ClsID, 1, labeler.SepID}), nil); err != nil {
-		t.Fatalf("after the poison batch: %v", err)
+	broken, err := labeler.NewPool(t.Context(), labeler.PoolConfig{Worker: fakeConfig(t, "crash-after:0"), MaxRestarts: 4, Backoff: func(int) time.Duration { return time.Millisecond }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer broken.Close()
+	for attempt := 0; ; attempt++ {
+		_, err := broken.Run(t.Context(), fakeBatch([]int32{labeler.ClsID, 1, labeler.SepID}), nil)
+		if errors.Is(err, labeler.ErrWorkersUnavailable) {
+			break
+		}
+		if attempt > 5 || !errors.Is(err, labeler.ErrWorkerExited) {
+			t.Fatalf("attempt %d: %v", attempt, err)
+		}
+	}
+	if broken.Restarts() != 4 {
+		t.Fatalf("%d restarts, want 4", broken.Restarts())
+	}
+}
+
+// A worker that stops answering is killed after the batch timeout and the
+// batch goes to a restarted one.
+func TestPoolKillsASilentWorker(t *testing.T) {
+	pool, err := labeler.NewPool(t.Context(), labeler.PoolConfig{Worker: fakeConfig(t, "slow"), BatchTimeout: 20 * time.Millisecond, Retries: 1,
+		Backoff: func(int) time.Duration { return time.Millisecond }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if _, err := pool.Run(t.Context(), fakeBatch([]int32{labeler.ClsID, labeler.SepID}), nil); !errors.Is(err, labeler.ErrWorkerExited) || !strings.Contains(err.Error(), "no reply within") {
+		t.Fatalf("silent worker: %v", err)
+	}
+	if pool.Restarts() == 0 {
+		t.Fatal("the silent worker was not replaced")
 	}
 }
 

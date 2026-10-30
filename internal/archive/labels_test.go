@@ -8,11 +8,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -327,5 +329,57 @@ func TestLabelsCarryAPoolingInput(t *testing.T) {
 	}
 	if got, want := decodeLabelProbs(raw)[0], labelertest.FakeProb(ids[spans.Text.Start:spans.Text.End], 0); got != want {
 		t.Fatalf("pooled prob %v, want %v (whole sequence %v)", got, want, labelertest.FakeProb(ids, 0))
+	}
+}
+
+// An item that crashes the worker every time fails only its own message:
+// the batch is split, the rest are labeled, and the next run retries it.
+func TestLabelsIsolateAnItemThatCrashesTheWorker(t *testing.T) {
+	override(t, &labelsWorkerBackoff, func(int) time.Duration { return time.Millisecond })
+	catalog := labeledCatalog(t)
+	settings := labelsTestSettings(t, "ok")
+	model, err := labelrt.LoadModel(settings.ModelDir, "int8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The thinking tag's first token appears in the one thinking item only.
+	poison := model.Tokenizer.Encode("thinking assistant :")[0]
+	settings = labelsTestSettings(t, fmt.Sprintf("crash-on-id:%d", poison))
+	stats, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{})
+	if err != nil || stats.MessagesFailed != 1 || stats.Complete || labelCount(t, catalog, "WHERE message_id='m-think'") != 0 || labelCount(t, catalog, "") < 20 {
+		t.Fatalf("run with a poison item: %+v %v", stats, err)
+	}
+	healed, err := catalog.RunLabels(t.Context(), labelsTestSettings(t, "ok"), LabelsRunOptions{})
+	if err != nil || !healed.Complete || healed.MessagesLabeled != 1 {
+		t.Fatalf("next run: %+v %v", healed, err)
+	}
+}
+
+// A writer that cannot store anything stops the run at once with its own
+// error, rather than labeling the rest of the library for nothing.
+func TestLabelsStopWhenTheyCannotBeStored(t *testing.T) {
+	override(t, &labelsFlushEvery, 10*time.Millisecond)
+	catalog := labeledCatalog(t)
+	if err := catalog.ensureLabelsSchema(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, catalog.DB, `CREATE TRIGGER labels_disk_full BEFORE INSERT ON message_labels BEGIN SELECT RAISE(ABORT,'disk full'); END`)
+	settings := labelsTestSettings(t, "slow")
+	settings.MaxBatch = 1
+	stats, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{})
+	if err == nil || !strings.Contains(err.Error(), "disk full") || stats.ItemsLabeled > 8 {
+		t.Fatalf("run that cannot store: %+v %v", stats, err)
+	}
+}
+
+// A stored classification that no longer fits its message (the text changed
+// and authorship has not caught up) counts as none: no panic, no label.
+func TestLabelsIgnoreAStaleClassification(t *testing.T) {
+	catalog := labeledCatalog(t)
+	execTx(t, catalog.DB, `UPDATE message_authorship SET spans_json='[{"start":0,"end":99999,"category":"typed"}]' WHERE message_id='m-h1'`,
+		`UPDATE message_authorship SET total_chars=total_chars+1 WHERE message_id='m-o1'`)
+	stats, err := catalog.RunLabels(t.Context(), labelsTestSettings(t, "ok"), LabelsRunOptions{})
+	if err != nil || labelCount(t, catalog, "WHERE message_id IN ('m-h1','m-o1')") != 0 || stats.MessagesLabeled < 20 {
+		t.Fatalf("stale classifications: %+v %v", stats, err)
 	}
 }

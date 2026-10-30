@@ -53,7 +53,8 @@ pharos [--config PATH] labels explain MESSAGE_ID [--infer]
   changed are labeled again either way. `--one-at-a-time` sends one item per
   batch, one batch at a time: the baseline batching is measured against.
   `--dry-run` builds and frames the items and counts what would be labeled,
-  with no worker and no label writes. Interrupt (Ctrl-C) stops between
+  with no worker and no label writes (it creates the empty ledger tables on
+  a catalog that has none). Interrupt (Ctrl-C) stops between
   batches and keeps what was stored. It runs as operation `analysis.labels`
   under a Terminal lease, like other writing commands. It runs even when
   `labels_enabled` is off, and says so.
@@ -229,7 +230,11 @@ run` apart. A second run reports that labeling is already running.
 | Event | What happens |
 |---|---|
 | Stop, eject or release | The run stops between batches and kills its workers rather than waiting for a batch in flight. Finished conversations are stored, and the next run resumes from the dirty marks and label counts. |
-| A worker crashes | Its batches in flight fail, the worker restarts after a backoff (0.5 s doubling, at most 30 s) and lost batches are sent again, at most twice. A batch the worker rejects (`bad_request`, `run_failed`) is split and sent one item at a time, so one bad item fails only its message. After 5 restarts in a run the run ends **interrupted**, keeping what it stored. |
+| A worker crashes, or does not answer a batch within 5 min (it is killed) | Its batches in flight fail, the worker restarts after a backoff (0.5 s doubling, at most 30 s) and lost batches are sent again, at most twice. |
+| A batch keeps crashing workers, or the worker rejects it (`bad_request`, `run_failed`) | The batch is split and sent one item at a time, so one bad item fails only its message, which stays pending for the next run. |
+| Workers keep crashing (8 restarts in a row with no batch succeeding) | The run ends **interrupted**, keeping what it stored. |
+| A conversation cannot be built (a damaged row; a panic is caught) | It keeps its dirty mark for the next run; the others go on. A stored classification that no longer fits its message counts as none until authorship catches up. |
+| The labels cannot be stored | The run stops at once with the write's error. |
 
 The worker holds no file on the library's drive, so it never delays an eject.
 

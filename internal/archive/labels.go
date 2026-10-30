@@ -238,9 +238,13 @@ type LabelsRunOptions struct {
 // LabelsRunStats describe a run.
 type LabelsRunStats struct {
 	Conversations, ConversationsBuilt, ConversationsRemoved int
-	Units, Items, ItemsLabeled, MessagesLabeled             int
-	MessagesUnchanged, MessagesRemoved, MessagesFailed      int
-	Batches, Tokens, PaddedTokens, Restarts                 int
+	// ConversationsFailed could not be built and stay pending.
+	ConversationsFailed int
+	// Cut is set when the limit left messages for a later run.
+	Cut                                                bool
+	Units, Items, ItemsLabeled, MessagesLabeled        int
+	MessagesUnchanged, MessagesRemoved, MessagesFailed int
+	Batches, Tokens, PaddedTokens, Restarts            int
 	// PeakPending is the most items built and not yet labeled at once: how
 	// far the builder ran ahead of the workers.
 	PeakPending                             int
@@ -487,15 +491,19 @@ func (c *Catalog) labelsWork(ctx context.Context, builder *labelsItemBuilder, id
 			gone = append(gone, id)
 		}
 	}
-	if len(gone) > 0 && len(opts.Conversations) == 0 {
+	if len(gone) > 0 && len(opts.Conversations) == 0 && !opts.DryRun {
 		stats.ConversationsRemoved = len(gone)
 		if err := c.writeTransaction(ctx, "remove labels of deleted conversations", func(tx *sql.Tx) error {
 			for _, id := range gone {
-				for _, statement := range []string{`DELETE FROM message_labels WHERE conversation_id=?`, `DELETE FROM message_labels_conversations WHERE conversation_id=?`,
-					`DELETE FROM message_labels_dirty WHERE conversation_id=?`} {
+				for _, statement := range []string{`DELETE FROM message_labels WHERE conversation_id=?`, `DELETE FROM message_labels_conversations WHERE conversation_id=?`} {
 					if _, err := tx.ExecContext(ctx, statement, id); err != nil {
 						return err
 					}
+				}
+				// Only the mark this run read: one written since (a conversation
+				// created after the builder read the catalog) stays.
+				if _, err := tx.ExecContext(ctx, `DELETE FROM message_labels_dirty WHERE conversation_id=? AND token=?`, id, tokens[id]); err != nil {
+					return err
 				}
 			}
 			return nil
@@ -520,7 +528,11 @@ type labelsRun struct {
 	progress func(string, ...any)
 	pool     *labelrt.Pool
 	// cut is set when the limit left work for a later run.
-	cut      bool
+	cut bool
+	// workerBatch is a smaller batch limit the worker announced.
+	workerBatch int
+	// cancel stops the run (the writer's failure does).
+	cancel   context.CancelFunc
 	exportMu sync.Mutex
 }
 
@@ -576,6 +588,13 @@ func (r *labelsRun) startPool(ctx context.Context) error {
 		return err
 	}
 	r.pool = pool
+	limits := pool.Ready().Limits
+	if limits.MaxSeq > 0 && limits.MaxSeq < labelrt.MaxTokens {
+		return fmt.Errorf("labeler worker takes sequences of at most %d tokens; the model's inputs need %d", limits.MaxSeq, labelrt.MaxTokens)
+	}
+	if limits.MaxBatch > 0 && limits.MaxBatch < r.maxBatch() {
+		r.workerBatch = limits.MaxBatch
+	}
 	ready := pool.Ready()
 	r.stats.Worker = fmt.Sprintf("%s %s (%s)", ready.Worker.Name, ready.Worker.Version, ready.Worker.Runtime)
 	r.stats.WorkerPIDs = pool.PIDs()
@@ -583,8 +602,11 @@ func (r *labelsRun) startPool(ctx context.Context) error {
 }
 
 func (r *labelsRun) maxBatch() int {
-	if r.opts.OneAtATime {
+	switch {
+	case r.opts.OneAtATime:
 		return 1
+	case r.workerBatch > 0:
+		return min(r.workerBatch, max(1, r.settings.MaxBatch))
 	}
 	return max(1, r.settings.MaxBatch)
 }
@@ -615,6 +637,7 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 	go func() { produced <- r.produce(ctx, builder, jobs, built) }()
 	writes := make(chan *labelsJob, 64)
 	written := make(chan error, 1)
+	r.cancel = cancel
 	go func() { written <- r.write(ctx, writes) }()
 	batches := make(chan labelsBatch, r.capacity())
 	results := make(chan labelsBatchResult, r.capacity())
@@ -708,6 +731,15 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 				break
 			}
 			if len(window) >= windowSize || !producing || len(ready) == 0 && inflight < r.capacity() {
+				// The worker's limits, which may lower the batch size, are
+				// known before the first batch is packed.
+				if len(window) > 0 && r.pool == nil {
+					if err := r.startPool(ctx); err != nil {
+						failure = err
+						cancel()
+						continue
+					}
+				}
 				pack()
 			}
 			for len(ready) > 0 && inflight < r.capacity() {
@@ -749,8 +781,10 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 			}
 		case result := <-results:
 			inflight--
-			pending -= len(result.batch.seqs)
-			if err := r.apply(result, &ready, finish); err != nil && failure == nil {
+			before := len(ready)
+			err := r.apply(result, &ready, finish)
+			pending -= len(result.batch.seqs) - (len(ready) - before)
+			if err != nil && failure == nil {
 				failure = err
 				cancel()
 			}
@@ -762,20 +796,22 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 		failure = err
 	}
 	close(writes)
-	if err := <-written; err != nil && failure == nil {
+	if err := <-written; err != nil && (failure == nil || errors.Is(failure, context.Canceled) && parent.Err() == nil) {
 		failure = err
 	}
+	r.stats.Cut = r.cut
 	if r.opts.DryRun {
 		r.stats.Complete = false
 		return failure
 	}
-	r.stats.Complete = failure == nil && !r.cut && r.stats.MessagesFailed == 0 && len(r.opts.Conversations) == 0
+	r.stats.Complete = failure == nil && !r.cut && r.stats.MessagesFailed == 0 && r.stats.ConversationsFailed == 0 && len(r.opts.Conversations) == 0
 	return failure
 }
 
 // apply merges a batch's results into its messages. A batch the worker
-// rejected is split and sent again one item at a time, so one bad item
-// fails only its own message.
+// rejected, or that kept crashing workers, is split and sent again one item
+// at a time, so one bad item fails only its own message (which stays
+// pending for a later run) and the rest are labeled.
 func (r *labelsRun) apply(result labelsBatchResult, ready *[]labelsBatch, finish func(*labelsJob)) error {
 	r.stats.Infer += result.took
 	if result.err != nil {
@@ -783,7 +819,7 @@ func (r *labelsRun) apply(result labelsBatchResult, ready *[]labelsBatch, finish
 			return result.err
 		}
 		var reply *labelrt.ErrorReply
-		if !errors.As(result.err, &reply) {
+		if !errors.As(result.err, &reply) && !errors.Is(result.err, labelrt.ErrWorkerExited) {
 			return result.err
 		}
 		if len(result.batch.seqs) > 1 {
@@ -855,9 +891,16 @@ func (r *labelsRun) produce(ctx context.Context, builder *labelsItemBuilder, job
 			break
 		}
 		building := time.Now()
-		units, err := builder.conversation(ctx, job.conversation)
+		units, err := r.buildConversation(ctx, builder, job.conversation)
 		if err != nil {
-			return err
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			// One conversation that cannot be built (a damaged row) keeps its
+			// dirty mark and is retried by the next run; the rest go on.
+			r.progress("labels: conversation %s skipped: %v", job.conversation, err)
+			r.stats.ConversationsFailed++
+			continue
 		}
 		stored := map[string][3]string{}
 		rows, err := queryMapsContext(ctx, r.c.DB, `SELECT message_id,input_hash,model,contract FROM message_labels WHERE conversation_id=?`, job.conversation)
@@ -920,6 +963,17 @@ func (r *labelsRun) produce(ctx context.Context, builder *labelsItemBuilder, job
 	return nil
 }
 
+// buildConversation is builder.conversation with a panic turned into an
+// error for that conversation alone.
+func (r *labelsRun) buildConversation(ctx context.Context, builder *labelsItemBuilder, id string) (units []*labelingUnit, err error) {
+	defer func() {
+		if value := recover(); value != nil {
+			units, err = nil, fmt.Errorf("building its items panicked: %v", value)
+		}
+	}()
+	return builder.conversation(ctx, id)
+}
+
 // write stores finished jobs in batched transactions: at most about 500
 // rows or two seconds' worth each.
 func (r *labelsRun) write(ctx context.Context, in <-chan *labelsJob) error {
@@ -939,7 +993,7 @@ func (r *labelsRun) write(ctx context.Context, in <-chan *labelsJob) error {
 		err := r.c.writeTransaction(writeCtx, "store message labels", func(tx *sql.Tx) error {
 			for _, job := range pending {
 				for _, id := range job.stale {
-					if _, err := tx.ExecContext(writeCtx, `DELETE FROM message_labels WHERE message_id=?`, id); err != nil {
+					if _, err := tx.ExecContext(writeCtx, `DELETE FROM message_labels WHERE message_id=? AND conversation_id=?`, id, job.conversation); err != nil {
 						return err
 					}
 				}
@@ -975,7 +1029,10 @@ func (r *labelsRun) write(ctx context.Context, in <-chan *labelsJob) error {
 		})
 		r.stats.Write += time.Since(started)
 		if err != nil {
+			// Nothing more can be stored: stop labeling now. The writer
+			// keeps draining (and dropping) so the run is never blocked on it.
 			failure = err
+			r.cancel()
 			return
 		}
 		for _, job := range pending {
@@ -1047,7 +1104,7 @@ func (s *Server) chainLabels(ctx context.Context, settings LabelerSettings) erro
 		return nil
 	case err != nil:
 		return err
-	case stats.Complete || stats.MessagesLabeled < labelsChainLimit:
+	case !stats.Cut:
 		return nil
 	}
 	s.Catalog.startBackground(OperationSpec{Kind: "analysis.labels", Trigger: triggerChained, Priority: priorityBackground}, func(ctx context.Context, op *Op) error {

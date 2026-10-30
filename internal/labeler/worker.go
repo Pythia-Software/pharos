@@ -79,6 +79,18 @@ type Worker struct {
 	failure error
 	done    chan struct{}
 	exited  chan struct{}
+	reaped  sync.Once
+}
+
+// reap waits for the process once its output has been read to the end
+// (exec.Cmd.Wait must not close the pipe under a reader), then closes exited.
+func (w *Worker) reap() {
+	w.reaped.Do(func() {
+		go func() {
+			_ = w.cmd.Wait()
+			close(w.exited)
+		}()
+	})
 }
 
 type workerReply struct {
@@ -115,10 +127,6 @@ func StartWorker(ctx context.Context, cfg WorkerConfig) (*Worker, error) {
 	if err := w.cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start labeler worker %s: %w", cfg.Path, err)
 	}
-	go func() {
-		_ = w.cmd.Wait()
-		close(w.exited)
-	}()
 	reader := NewFrameReader(stdout)
 	hello := Hello{Protocol: []int{ProtocolVersion}, Model: cfg.Model, ModelSHA256: cfg.ModelSHA256, Threads: cfg.Threads,
 		VocabSize: cfg.VocabSize, MaxBatch: cfg.MaxBatch, MaxSeq: cfg.MaxSeq, Options: cfg.Options, Inputs: cfg.Inputs}
@@ -156,6 +164,7 @@ func StartWorker(ctx context.Context, cfg WorkerConfig) (*Worker, error) {
 	}
 	if err != nil {
 		w.Kill()
+		w.reap()
 		<-w.exited
 		return nil, w.exitError(err)
 	}
@@ -201,9 +210,15 @@ func (w *Worker) readLoop(reader io.Reader) {
 				failure = fmt.Errorf("undecodable error frame: %w", err)
 				break
 			}
-			if reply.Fatal || reply.ID == 0 {
+			if reply.Fatal {
 				failure = reply
 				break
+			}
+			if reply.ID == 0 {
+				// A complaint about no request (an unsupported frame) is
+				// diagnostics, as the protocol allows; the worker carries on.
+				fmt.Fprintf(w.stderr, "\nworker: %s: %s\n", reply.Code, reply.Message)
+				continue
 			}
 			w.deliver(reply.ID, workerReply{err: reply})
 		case FramePong:
@@ -222,6 +237,7 @@ func (w *Worker) readLoop(reader io.Reader) {
 			// Unknown replies are ignored, as the protocol allows.
 		}
 	}
+	w.reap()
 	w.fail(failure)
 }
 
@@ -319,9 +335,16 @@ func (w *Worker) Run(ctx context.Context, inputs []Tensor, outputs []string) (*R
 		w.mu.Lock()
 		delete(w.pending, id)
 		w.mu.Unlock()
+		if errors.Is(err, ErrFrameTooLarge) {
+			return nil, err
+		}
 		// A broken pipe means the worker is gone; its reader reports why.
-		<-w.done
-		return nil, w.Err()
+		select {
+		case <-w.done:
+			return nil, w.Err()
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 	select {
 	case reply := <-ch:
@@ -418,11 +441,17 @@ type PoolConfig struct {
 	Worker  WorkerConfig
 	Workers int
 	// Retries is how many times a batch whose worker crashed is sent again,
-	// to a restarted worker (default 2).
+	// to a restarted worker (default 2). A batch that keeps crashing workers
+	// fails with an error matching ErrWorkerExited; its caller can split it.
 	Retries int
-	// MaxRestarts bounds restarts over the pool's life (default 5); past it
-	// the pool fails with ErrWorkersUnavailable.
+	// MaxRestarts bounds restarts in a row with no batch succeeding between
+	// them (default 8); past it the pool fails with ErrWorkersUnavailable.
+	// One bad input costs a few restarts, a worker that cannot run at all
+	// stops the pool.
 	MaxRestarts int
+	// BatchTimeout bounds one batch (default 5 min): a worker that stays
+	// alive but does not answer is killed, which counts as a crash.
+	BatchTimeout time.Duration
 	// Backoff is the wait before the nth restart of a worker (default 0.5 s,
 	// doubling, at most 30 s).
 	Backoff func(n int) time.Duration
@@ -436,12 +465,14 @@ var ErrWorkersUnavailable = errors.New("labeler workers keep failing")
 // Pool runs batches on a fixed number of workers, restarting a worker that
 // crashes (with backoff) and sending the batches it lost again.
 type Pool struct {
-	cfg      PoolConfig
-	slots    []*poolSlot
-	next     atomic.Uint64
-	mu       sync.Mutex
-	restarts int
-	closed   bool
+	cfg   PoolConfig
+	slots []*poolSlot
+	next  atomic.Uint64
+	mu    sync.Mutex
+	// restarts counts every restart; consecutive those since a batch last
+	// succeeded.
+	restarts, consecutive int
+	closed                bool
 }
 
 type poolSlot struct {
@@ -459,7 +490,10 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 		cfg.Retries = 2
 	}
 	if cfg.MaxRestarts <= 0 {
-		cfg.MaxRestarts = 5
+		cfg.MaxRestarts = 8
+	}
+	if cfg.BatchTimeout <= 0 {
+		cfg.BatchTimeout = 5 * time.Minute
 	}
 	if cfg.Backoff == nil {
 		cfg.Backoff = func(n int) time.Duration {
@@ -501,8 +535,9 @@ func (p *Pool) PIDs() []int {
 	return pids
 }
 
-// Run runs one batch on the next worker. A batch whose worker crashed is
-// sent again, up to Retries times; a worker's own error for the batch
+// Run runs one batch on the next worker. A batch whose worker crashed (or
+// timed out) is sent again, up to Retries times, and then fails with an
+// error matching ErrWorkerExited; a worker's own error for the batch
 // (bad_request, run_failed) is returned as is.
 func (p *Pool) Run(ctx context.Context, inputs []Tensor, outputs []string) (*RunResult, error) {
 	var last error
@@ -512,13 +547,26 @@ func (p *Pool) Run(ctx context.Context, inputs []Tensor, outputs []string) (*Run
 		if err != nil {
 			return nil, err
 		}
-		result, err := worker.Run(ctx, inputs, outputs)
+		runCtx, cancel := context.WithTimeout(ctx, p.cfg.BatchTimeout)
+		result, err := worker.Run(runCtx, inputs, outputs)
+		cancel()
+		if err != nil && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+			// Alive but silent: kill it, so it restarts like a crash.
+			worker.Kill()
+			<-worker.Done()
+			err = fmt.Errorf("%w: no reply within %s", worker.Err(), p.cfg.BatchTimeout)
+		}
 		if err == nil || ctx.Err() != nil || !errors.Is(err, ErrWorkerExited) {
+			if err == nil {
+				p.mu.Lock()
+				p.consecutive = 0
+				p.mu.Unlock()
+			}
 			return result, err
 		}
 		last = err
 	}
-	return nil, fmt.Errorf("%w: a batch failed %d times: %v", ErrWorkersUnavailable, p.cfg.Retries+1, last)
+	return nil, fmt.Errorf("a batch crashed its worker %d times: %w", p.cfg.Retries+1, last)
 }
 
 // worker returns slot index's worker, restarting it after a backoff when it
@@ -531,24 +579,18 @@ func (p *Pool) worker(ctx context.Context, index int) (*Worker, error) {
 		if slot.worker != nil && slot.worker.Err() == nil {
 			return slot.worker, nil
 		}
-		p.mu.Lock()
-		closed, restarts := p.closed, p.restarts
-		if !closed && restarts < p.cfg.MaxRestarts {
-			p.restarts++
-		}
-		p.mu.Unlock()
-		if closed {
-			return nil, errors.New("labeler pool is closed")
-		}
 		cause := errors.New("worker never started")
 		if slot.worker != nil {
 			cause = slot.worker.Err()
 		}
-		if restarts >= p.cfg.MaxRestarts {
-			return nil, fmt.Errorf("%w: %d restarts; last: %v", ErrWorkersUnavailable, restarts, cause)
+		p.mu.Lock()
+		closed, consecutive := p.closed, p.consecutive
+		p.mu.Unlock()
+		if closed {
+			return nil, errors.New("labeler pool is closed")
 		}
-		if p.cfg.OnRestart != nil {
-			p.cfg.OnRestart(index, cause)
+		if consecutive >= p.cfg.MaxRestarts {
+			return nil, fmt.Errorf("%w: %d restarts in a row; last: %v", ErrWorkersUnavailable, consecutive, cause)
 		}
 		timer := time.NewTimer(p.cfg.Backoff(slot.failures))
 		select {
@@ -556,6 +598,19 @@ func (p *Pool) worker(ctx context.Context, index int) (*Worker, error) {
 		case <-ctx.Done():
 			timer.Stop()
 			return nil, ctx.Err()
+		}
+		p.mu.Lock()
+		closed = p.closed
+		if !closed {
+			p.restarts++
+			p.consecutive++
+		}
+		p.mu.Unlock()
+		if closed {
+			return nil, errors.New("labeler pool is closed")
+		}
+		if p.cfg.OnRestart != nil {
+			p.cfg.OnRestart(index, cause)
 		}
 		slot.failures++
 		if slot.worker != nil {
