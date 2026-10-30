@@ -156,9 +156,10 @@
   // since finished having indexed something. A run that has left the list
   // can't say what it changed, so it counts.
   const finishedRunsChanged = (followed, runs) => [...followed].map(id => runs.find(run => run.id === id))
-    .filter(run => run?.state !== 'running').some(run => !run || run.workspaces > 0 || run.conversations > 0);
+    .filter(run => run?.state !== 'running').some(run => !run || run.workspaces > 0 || run.conversations > 0 || run.changed === true);
   // The header's Index changes is busy while a run is running.
-  const runningRun = activity => (activity.runs || []).find(run => run.state === 'running');
+  // A background pass is not one: Index changes stops it, so it stays free.
+  const runningRun = activity => (activity.runs || []).find(run => run.state === 'running' && run.kind !== 'background-update');
 
   // Home and the card pages rerun their queries when a run finishes having
   // indexed something. Runs that found no changes leave their results as they

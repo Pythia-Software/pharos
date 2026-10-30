@@ -358,6 +358,7 @@ const ROUTES = [
   { name: "Sources", url: "/settings/sources", ready: "#sourceGrid .source-card" },
   { name: "Background updates", url: "/settings/sync", ready: "#syncHistoryTables .qt-row" },
   { name: "Background updates schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Your writing" }).click(), shown: "#backgroundSchedule .bg-detail" },
+  { name: "Background updates sources", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "New conversations" }).click(), shown: "#backgroundSchedule .bg-sources" },
   { name: "Background updates diagnostics", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByText("Performance & verification details", { exact: true }).click(), shown: "#syncDiagnosticTables .qt-row" },
   { name: "Background updates run details", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByRole("region", { name: "Recent run history", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" },
   { name: "Background updates empty", url: "/settings/sync", ready: "#syncHistoryTables .qt-empty", api: { "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [], source_states: [] } } },

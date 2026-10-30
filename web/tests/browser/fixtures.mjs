@@ -266,7 +266,8 @@ const backgroundView = (items, headline) => ({
   everything: { seconds: 540, text: "Everything now takes about 9 min, mostly “Your writing”." },
 });
 const idleBackground = backgroundView([
-  backgroundItem("conversations", "New conversations", "frequent", "current", { sub: "Claude Code, Codex, Conductor and Antigravity", fixed: true, choices: null }),
+  backgroundItem("conversations", "New conversations", "frequent", "current", { sub: "claude (1 of 2 sources)", fixed: true, choices: null,
+    sources: [{ name: "claude", selected: true }, { name: "codex-with-a-rather-long-source-name", selected: false }] }),
   backgroundItem("repositories", "Repositories & merges", "frequent", "current"),
   backgroundItem("writing", "Your writing", "hourly", "current", { cost: { seconds: 358, runs: 7, class: "heavy", text: "about 6 min" }, note: "Moves to Frequently once a run usually takes under a minute." }),
   backgroundItem("findings", "Findings", "hourly", "current"),

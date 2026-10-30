@@ -54,6 +54,9 @@ test("an item carries its cost class, its choices and its state line", () => {
   assert.equal(writing.text, "Up next");
   const fixed = plain(background.scheduleModel(document, at)).columns[0].items[0];
   assert.deepEqual(fixed.choices, [], "a fixed item has no choices");
+  assert.equal(fixed.sources, null);
+  const filtered = plain(background.itemModel({ ...document.view.items[0], sources: [{ name: "claude", selected: true }, { name: "codex", selected: false }] }, at));
+  assert.deepEqual(filtered.sources, [{ name: "claude", selected: true }, { name: "codex", selected: false }], "the sources scheduled indexing reads, to choose from");
   assert.equal(plain(background.scheduleModel(document, at)).columns[2].items[0].cost, null);
 });
 

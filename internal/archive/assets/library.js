@@ -454,7 +454,8 @@
   function refreshIndexStatus() {
     if (!indexStatusRequest) {
       indexStatusRequest = call('/api/activity').then(value => {
-        recentIndex = (value.runs || []).find(run => run.state !== 'running') || null;
+        // The latest finished index; a background pass is not one.
+        recentIndex = (value.runs || []).find(run => run.state !== 'running' && run.kind !== 'background-update') || null;
       }, () => { recentIndex = null; }).finally(() => { indexStatusRequest = null; });
     }
     return indexStatusRequest;

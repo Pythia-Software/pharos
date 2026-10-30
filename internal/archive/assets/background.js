@@ -46,6 +46,9 @@
 .bg-detail .bg-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px}
 .bg-detail select{font:inherit;font-size:var(--fs-sm);border:1px solid var(--line);border-radius:5px;padding:4px 6px;background:var(--bg);color:var(--ink)}
 .bg-error{color:var(--bad)}
+.bg-sources{border:0;margin:6px 0 0;padding:0}
+.bg-sources legend{font-weight:600;padding:0}
+.bg-sources .bg-check{margin-top:4px}
 .bg-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--accent);flex:none;position:relative;top:-1px;margin-right:6px}
 .bg-dot.current{background:#8cc6a0}
 .bg-dot.busy{animation:bg-pulse 1.6s ease-in-out infinite}
@@ -158,7 +161,8 @@
     return {id: item.id, label: item.label, sub: item.sub || '', feeds: item.feeds || '', why: item.why || '', note: item.note || '',
       dot: DOTS[item.state] ?? '', state: item.state, text: stateText(item, now), error: item.error || '',
       cost: item.cost ? {class: item.cost.class || '', text: item.cost.text || ''} : null,
-      choices: item.choices || [], override: item.override || '', cadenceLabel: item.cadence_label || '', fixed: Boolean(item.fixed)};
+      choices: item.choices || [], override: item.override || '', cadenceLabel: item.cadence_label || '', fixed: Boolean(item.fixed),
+      sources: Array.isArray(item.sources) ? item.sources.map(source => ({name: source.name, selected: Boolean(source.selected)})) : null};
   }
 
   // The day's cost: each cadence's share of the total, measured or
@@ -266,6 +270,7 @@
     detail.append(line('Feeds', item.feeds), line('Usually takes', item.cost?.text || 'not measured yet'));
     if (item.why) detail.append(node('p', 'muted', item.why));
     if (item.error) detail.append(node('p', 'bg-error', item.error));
+    if (item.sources?.length) detail.append(sourcePicker(item.sources));
     const row = node('div', 'bg-row');
     if (item.choices.length) {
       const label = node('label', '', 'Run ');
@@ -280,6 +285,28 @@
     detail.append(row);
     entry.append(detail);
     return entry;
+  }
+
+  // The sources scheduled indexing reads: all of them (stored as none
+  // chosen, so a new source is read too) or the ones checked; at least one.
+  function sourcePicker(sources) {
+    const fieldset = node('fieldset', 'bg-sources');
+    fieldset.append(node('legend', '', 'Sources read on this schedule'));
+    for (const source of sources) {
+      const label = node('label', 'bg-check'), box = node('input');
+      box.type = 'checkbox';
+      box.checked = source.selected;
+      box.onchange = async () => {
+        const chosen = [...fieldset.querySelectorAll('input')].filter(input => input.checked).map(input => input.value);
+        if (!chosen.length) { box.checked = true; toast('Choose at least one source, or choose Only when I ask.'); return; }
+        try { await call('/api/sync/settings', {sources: chosen.length === sources.length ? [] : chosen}); await refresh(true); }
+        catch (error) { box.checked = !box.checked; toast(error.message); }
+      };
+      box.value = source.name;
+      label.append(box, source.name);
+      fieldset.append(label);
+    }
+    return fieldset;
   }
 
   function render() {
