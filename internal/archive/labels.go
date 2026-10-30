@@ -13,6 +13,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -170,6 +171,9 @@ type LabelerSettings struct {
 	Worker, Runtime string
 	// Threads per worker, workers, and the padded-token budget of a batch.
 	Threads, Workers, BatchTokens, MaxBatch int
+	// ThreadBudget and MemoryBudgetMB bound every model's workers together
+	// (labeler.Budget); IdleSeconds is how long finished workers stay warm.
+	ThreadBudget, MemoryBudgetMB, IdleSeconds int
 }
 
 func labelerSettingsFrom(root map[string]any, base string) LabelerSettings {
@@ -187,6 +191,8 @@ func labelerSettingsFrom(root map[string]any, base string) LabelerSettings {
 		Runtime:  env("PHAROS_ORT_LIBRARY", resolvePath(base, stringValue(root, "labels_runtime", ""))),
 		Threads:  intValue(root, "labels_threads", 4), Workers: intValue(root, "labels_workers", 1),
 		BatchTokens: intValue(root, "labels_batch_tokens", 16384), MaxBatch: intValue(root, "labels_max_batch", 64),
+		ThreadBudget: intValue(root, "labels_thread_budget", 0), MemoryBudgetMB: intValue(root, "labels_memory_budget_mb", 8192),
+		IdleSeconds: intValue(root, "labels_idle_seconds", 120),
 	}
 	if exe := runningExecutable(); exe != "" {
 		// Beside the pharos executable, as an app bundle would place them:
@@ -204,6 +210,20 @@ func labelerSettingsFrom(root map[string]any, base string) LabelerSettings {
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+// labelerManager is the process's labeler runtime: one runner per model,
+// within one thread and memory budget, workers kept warm between runs. It
+// is created from the first settings that ask for it.
+func (c *Catalog) labelerManager(settings LabelerSettings) *labelrt.Manager {
+	c.labelersOnce.Do(func() {
+		threads := settings.ThreadBudget
+		if threads <= 0 {
+			threads = max(max(1, settings.Workers)*max(1, settings.Threads), runtime.NumCPU()/2)
+		}
+		c.labelers = labelrt.NewManager(labelrt.Budget{Threads: threads, MemoryMB: settings.MemoryBudgetMB}, time.Duration(settings.IdleSeconds)*time.Second)
+	})
+	return c.labelers
 }
 
 // labelsDefaultModel is the model the app ships: LAPWING's target-pooling
@@ -552,11 +572,12 @@ type labelsRun struct {
 	identity string
 	stats    *LabelsRunStats
 	progress func(string, ...any)
-	pool     *labelrt.Pool
+	runner   *labelrt.Runner
+	release  func()
+	// restartsBefore is the warm runner's restarts when this run took it.
+	restartsBefore int
 	// cut is set when the limit left work for a later run.
 	cut bool
-	// workerBatch is a smaller batch limit the worker announced.
-	workerBatch int
 	// cancel stops the run (the writer's failure does).
 	cancel   context.CancelFunc
 	exportMu sync.Mutex
@@ -599,35 +620,26 @@ type labelsBatchResult struct {
 }
 
 func (r *labelsRun) startPool(ctx context.Context) error {
-	if r.pool != nil {
+	if r.runner != nil {
 		return nil
 	}
 	started := time.Now()
-	args := runtimeArgs(r.settings)
-	workers, inflight := max(1, r.settings.Workers), 2
+	cfg := labelrt.RunnerConfig{Worker: r.settings.Worker, Args: runtimeArgs(r.settings), Workers: max(1, r.settings.Workers), Threads: r.settings.Threads,
+		MaxBatch: max(1, r.settings.MaxBatch), Backoff: labelsWorkerBackoff,
+		OnRestart: func(slot int, cause error) { r.progress("labels: restarting worker %d after: %v", slot, cause) }}
 	if r.opts.OneAtATime {
-		workers, inflight = 1, 1
+		cfg.Workers, cfg.InFlight, cfg.MaxBatch = 1, 1, 1
 	}
-	pool, err := labelrt.NewPool(ctx, labelrt.PoolConfig{Workers: workers, Worker: labelrt.WorkerConfig{Path: r.settings.Worker, Args: args,
-		Model: r.model.Path, ModelSHA256: r.model.SHA256, Threads: r.settings.Threads, VocabSize: r.model.Tokenizer.VocabSize(), Inputs: r.model.Inputs,
-		MaxBatch: r.maxBatch(), MaxSeq: labelrt.MaxTokens, InFlight: inflight},
-		Backoff:   labelsWorkerBackoff,
-		OnRestart: func(slot int, cause error) { r.progress("labels: restarting worker %d after: %v", slot, cause) }})
+	runner, release, err := r.c.labelerManager(r.settings).Runner(ctx, r.model, cfg)
 	r.stats.WorkerStart += time.Since(started)
 	if err != nil {
 		return err
 	}
-	r.pool = pool
-	limits := pool.Ready().Limits
-	if limits.MaxSeq > 0 && limits.MaxSeq < labelrt.MaxTokens {
-		return fmt.Errorf("labeler worker takes sequences of at most %d tokens; the model's inputs need %d", limits.MaxSeq, labelrt.MaxTokens)
-	}
-	if limits.MaxBatch > 0 && limits.MaxBatch < r.maxBatch() {
-		r.workerBatch = limits.MaxBatch
-	}
-	ready := pool.Ready()
+	r.runner, r.release = runner, release
+	r.restartsBefore = runner.Pool().Restarts()
+	ready := runner.Pool().Ready()
 	r.stats.Worker = fmt.Sprintf("%s %s (%s)", ready.Worker.Name, ready.Worker.Version, ready.Worker.Runtime)
-	r.stats.WorkerPIDs = pool.PIDs()
+	r.stats.WorkerPIDs = runner.Pool().PIDs()
 	return nil
 }
 
@@ -635,8 +647,9 @@ func (r *labelsRun) maxBatch() int {
 	switch {
 	case r.opts.OneAtATime:
 		return 1
-	case r.workerBatch > 0:
-		return min(r.workerBatch, max(1, r.settings.MaxBatch))
+	case r.runner != nil:
+		// The settings' limit, lowered to what the worker announced.
+		return r.runner.MaxBatch()
 	}
 	return max(1, r.settings.MaxBatch)
 }
@@ -653,13 +666,14 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	defer func() {
-		if r.pool != nil {
-			r.stats.Restarts = r.pool.Restarts()
+		if r.runner != nil {
+			r.stats.Restarts = r.runner.Pool().Restarts() - r.restartsBefore
 			if parent.Err() != nil {
-				r.pool.Kill()
-			} else {
-				r.pool.Close()
+				// A stop: do not wait for batches in flight.
+				r.c.labelerManager(r.settings).Kill(r.runner)
 			}
+			// Otherwise the runner stays warm for the next run.
+			r.release()
 		}
 	}()
 	built := make(chan *labelsJob, 2)
@@ -679,7 +693,7 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 					rows[i] = labelrt.Framed{IDs: seq.message.seqs[seq.chunk], Spans: seq.message.spans[seq.chunk]}
 				}
 				started := time.Now()
-				result, err := r.pool.Run(ctx, labelrt.BatchInputs(r.model.Inputs, rows, r.model.PadMultiple), []string{"probs"})
+				result, err := r.runner.RunBatch(ctx, rows, []string{"probs"})
 				out := labelsBatchResult{batch: batch, err: err, took: time.Since(started)}
 				if err == nil {
 					if probs := result.Tensor("probs"); probs == nil || len(probs.Float32) != len(rows)*r.model.Labels() {
@@ -763,7 +777,7 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 			if len(window) >= windowSize || !producing || len(ready) == 0 && inflight < r.capacity() {
 				// The worker's limits, which may lower the batch size, are
 				// known before the first batch is packed.
-				if len(window) > 0 && r.pool == nil {
+				if len(window) > 0 && r.runner == nil {
 					if err := r.startPool(ctx); err != nil {
 						failure = err
 						cancel()

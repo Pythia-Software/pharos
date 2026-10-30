@@ -28,6 +28,8 @@ environment:
 | `labels_threads` | — | intra-op threads per worker (default 4) |
 | `labels_workers` | — | worker processes (default 1) |
 | `labels_batch_tokens`, `labels_max_batch` | — | a batch's padded-token budget (default 16,384) and row limit (64) |
+| `labels_thread_budget`, `labels_memory_budget_mb` | — | what every model's workers may use together: intra-op threads (default the larger of workers × threads and half the cores) and estimated memory (default 8,192 MB) |
+| `labels_idle_seconds` | — | how long finished workers stay warm for the next run (default 120) |
 
 Relative paths resolve against the configuration file's folder. To build the
 worker and fetch ONNX Runtime:
@@ -493,6 +495,92 @@ Notes for authors:
 - Pharos never sends a batch over the limits you announce in `Ready`; lower
   them there if your device needs smaller batches.
 
+## Adding a model
+
+The runtime is not tied to `message_labels`: a second model, with its own
+ledger and pass, uses the same pieces.
+
+**1. The model directory.** Each model has its own directory (in the app,
+`Contents/Resources/labeler/<model>/`) with a `manifest.json` that
+`labeler.LoadModel` verifies:
+- the variant's ONNX file and `tokenizer.json`, with their SHA-256s;
+- `framing_contract` and `input_contract`, which this build must implement;
+- `inputs`: names for the contract's roles;
+- `onnx.outputs`: the output names, as a map or a list;
+- `max_seq`: the longest sequence, at least the framing's maximum (512 for
+  `kestrel-framing-v1`) and at most 8,192;
+- `pad_multiple` (or `padding.multiple`): a padding multiple beyond the
+  contract's 8;
+- `memory_mb`: one worker's memory estimate (default 1,600);
+- labels, thresholds and so on, for a model that labels.
+
+The hello carries `max_seq` and the inputs. The worker must announce at
+least that `max_seq`, and batches never exceed a lower `max_batch` it
+announces.
+
+**2. Framing and roles.** A framing function returns `labeler.Framed`: the
+token ids, kestrel's tag/context/text spans (`Spans`), and any further named
+spans it builds (`Extra`, for example sentence spans). Each input role is
+registered (`labeler.RegisterRole`) with:
+- a **filler**, which writes one row of the role's tensor from a `Framed`;
+- a **validator**, composed from `AllOf`, `ValuesIn`, `ZeroWithoutAttention`,
+  `NonEmptyRows` and `ContiguousRuns`, or written from scratch.
+
+`BatchInputs` and `ValidateRun` dispatch through the registry, so a new role
+(a `segment` role numbering sentences 1…K, values in `[0, 16]`, zero on
+padding, one contiguous run each) is one registration in the main process
+and in the worker, with no change to the protocol, the batcher or the
+workers' loops. The tensors stay int32 `[batch, seq]`. Register the role
+and the input contract (`labeler.InputContracts`) in the PR that adds the
+model.
+
+**3. Running it.** `labeler.Runner` runs framed rows through one model's
+workers:
+- `RunBatch(ctx, rows, outputs)` sends one batch;
+- `Run(ctx, rows, outputs, tokenBudget)` packs any number of rows by length,
+  keeps the runner's capacity in flight, and returns each row's outputs by
+  name, in row order.
+
+Outputs must be ones the manifest declares. A second ledger builds its rows,
+runs them, and stores what it needs. The labels ledger is one such client
+(`RunBatch` inside its streaming pipeline). Reuse its patterns too:
+- a dirty table fed by triggers with `WHEN` value guards;
+- an input hash with model and contract identity per row;
+- an operation kind with holds `D:w W:w`, registered in the kinds table and
+  the contract;
+- stopping between batches and killing the runner on a stop.
+
+**4. Several models.** `labeler.Manager` (one per catalog, `labelerManager`)
+keeps one runner per model, and per worker configuration, under one budget:
+- **Threads and memory:** every runner's workers × threads and workers ×
+  `memory_mb` count against `labels_thread_budget` and
+  `labels_memory_budget_mb` together, not per model.
+- **Making room:** a runner that does not fit first stops idle runners of
+  other models (least recently used), then runs with fewer workers, down to
+  one. If it still does not fit while others are in use, it fails with
+  `ErrBudget`; its pass stays pending and retries.
+- **Idle runners:** they stay warm for `labels_idle_seconds`. Closing the
+  catalog stops them all.
+- **Sharing in practice:** two 68M int8 models (about 1.5 GB per worker
+  under load) share an 8 GB budget with room for two workers each, or one
+  each while a third model runs.
+
+One worker process per model keeps workers simple, with one model, one
+session and one set of limits each. Workers are cheap to start (0.5 s), and
+their memory is what the budget counts.
+
+**5. Parity.** Ship a parity fixture of invented strings with the
+directory's `parity-fixture.json`: token ids, spans (when the contract
+pools), logits, probabilities and labels per case.
+`TestModelParityWithWorker` checks any model directory through the real
+worker.
+
+**Padding:** int8 graphs may depend on the padded length, as
+`kestrel-68m`'s does unless it is a multiple of 4. Every contract pads to a
+multiple of 8, and a model can raise that with `pad_multiple`. Check a new
+model's outputs against padding (+0, +8, +64 positions) when exporting, for
+every output, as LAPWING did.
+
 ## Testing
 
 | What | Command |
@@ -518,9 +606,8 @@ Notes for authors:
   never predicts `P.frame.criteria`. See the research for per-segment scores.
 - **Long messages** use the unvalidated `chunk-union-v1`; a message's
   `segment` column is its first chunk's.
-- **Workers start per run.** A run that labels anything pays the worker's
-  start-up (loading the model, about a second) once; an idle pool kept
-  between runs would remove it for small runs.
+- **Warm workers last `labels_idle_seconds`.** A run after that pays the
+  worker's start-up again (about 0.5 s: process, 152 MB model, its SHA-256).
 - **Not yet on any page, query table or MCP tool**, and not in the freshness
   ledger (`an.labels` has no row in `Catalog.freshness`); `pharos labels
   status` reports it.

@@ -13,6 +13,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -64,7 +65,7 @@ func labelsTestSettings(t *testing.T, mode string, manifestFields ...map[string]
 	}
 	t.Setenv(labelertest.FakeWorkerEnv, mode)
 	t.Setenv(labelertest.FakeCountEnv, filepath.Join(t.TempDir(), "count"))
-	return LabelerSettings{Enabled: true, ModelDir: dir, Variant: "int8", Worker: exe, Threads: 1, Workers: 1, BatchTokens: 4096, MaxBatch: 16}
+	return LabelerSettings{Enabled: true, ModelDir: dir, Variant: "int8", Worker: exe, Threads: 1, Workers: 1, BatchTokens: 4096, MaxBatch: 16, IdleSeconds: 60}
 }
 
 // labeledCatalog is the labeling fixture with its authorship ledger built.
@@ -132,6 +133,10 @@ func TestLabelsLedgerLabelsEveryUnitOnceAndThenOnlyChanges(t *testing.T) {
 	small, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{})
 	if err != nil || small.ConversationsBuilt != 1 || small.MessagesLabeled != 1 || small.MessagesUnchanged == 0 {
 		t.Fatalf("incremental run: %+v %v", small, err)
+	}
+	// The first run's workers stayed warm: the same processes label it.
+	if !slices.Equal(small.WorkerPIDs, stats.WorkerPIDs) {
+		t.Fatalf("workers %v, then %v: not reused", stats.WorkerPIDs, small.WorkerPIDs)
 	}
 
 	// Rewriting a classification without changing it marks nothing.

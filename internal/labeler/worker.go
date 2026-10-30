@@ -473,6 +473,7 @@ type Pool struct {
 	// succeeded.
 	restarts, consecutive int
 	closed                bool
+	ready                 Ready
 }
 
 type poolSlot struct {
@@ -509,11 +510,13 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 		}
 		p.slots = append(p.slots, &poolSlot{worker: worker})
 	}
+	p.ready = p.slots[0].worker.Ready
 	return p, nil
 }
 
-// Ready is the first worker's handshake.
-func (p *Pool) Ready() Ready { return p.slots[0].worker.Ready }
+// Ready is the workers' handshake (the first worker's, when the pool
+// started; restarted workers run the same binary and model).
+func (p *Pool) Ready() Ready { return p.ready }
 
 // Restarts is how many times the pool restarted a worker.
 func (p *Pool) Restarts() int {
@@ -626,6 +629,13 @@ func (p *Pool) worker(ctx context.Context, index int) (*Worker, error) {
 		}
 		slot.worker = worker
 	}
+}
+
+// alive reports a pool that is neither closed nor past its restart budget.
+func (p *Pool) alive() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return !p.closed && p.consecutive < p.cfg.MaxRestarts
 }
 
 // Kill stops every worker at once: for a stop, where results in flight are

@@ -294,13 +294,13 @@ func (c *Catalog) LabelsExplain(ctx context.Context, settings LabelerSettings, m
 		}
 	}
 	if infer {
-		pool, err := labelrt.NewPool(ctx, labelrt.PoolConfig{Worker: labelrt.WorkerConfig{Path: settings.Worker, Args: runtimeArgs(settings), Model: model.Path,
-			ModelSHA256: model.SHA256, Threads: settings.Threads, VocabSize: model.Tokenizer.VocabSize(), MaxSeq: labelrt.MaxTokens, Inputs: model.Inputs}})
+		runner, release, err := c.labelerManager(settings).Runner(ctx, model, labelrt.RunnerConfig{Worker: settings.Worker, Args: runtimeArgs(settings),
+			Workers: 1, Threads: settings.Threads, MaxBatch: max(1, settings.MaxBatch)})
 		if err != nil {
 			return nil, err
 		}
-		defer pool.Close()
-		result, err := pool.Run(ctx, labelrt.BatchInputs(model.Inputs, rows, model.PadMultiple), []string{"probs"})
+		defer release()
+		result, err := runner.RunBatch(ctx, rows, []string{"probs"})
 		if err != nil {
 			return nil, err
 		}
@@ -313,7 +313,7 @@ func (c *Catalog) LabelsExplain(ctx context.Context, settings LabelerSettings, m
 			mask |= chunk
 			chunks = append(chunks, map[string]any{"labels": model.LabelNames(chunk), "probs": labelProbMap(model, p)})
 		}
-		out["inferred"] = map[string]any{"labels": model.LabelNames(mask), "chunks": chunks, "worker": pool.Ready().Worker}
+		out["inferred"] = map[string]any{"labels": model.LabelNames(mask), "chunks": chunks, "worker": runner.Pool().Ready().Worker}
 	}
 	return out, nil
 }

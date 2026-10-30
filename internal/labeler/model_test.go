@@ -99,6 +99,9 @@ func TestModelRefusesWhatDoesNotVerify(t *testing.T) {
 		"short thresholds":   func(m map[string]any) { m["thresholds"] = map[string][]float64{"default": {0.5}} },
 		"input contract":     func(m map[string]any) { m["input_contract"] = "ids-attention-pool-v9" },
 		"input roles":        func(m map[string]any) { m["input_contract"] = "ids-attention-pool-v1"; m["inputs"] = DefaultInputs },
+		"short max_seq":      func(m map[string]any) { m["max_seq"] = 256 },
+		"huge pad multiple":  func(m map[string]any) { m["pad_multiple"] = 1000 },
+		"outputs shape":      func(m map[string]any) { m["onnx"] = map[string]any{"outputs": 7} },
 	} {
 		if _, err := LoadModel(writeModelDir(t, mutate), "int8"); !errors.Is(err, ErrModelUnavailable) {
 			t.Errorf("%s: %v", name, err)
@@ -159,5 +162,16 @@ func TestModelInputContracts(t *testing.T) {
 	}), "int8")
 	if err != nil || !pooled.Pools() || pooled.Inputs[2].Name != "target" || pooled.PadMultiple != 16 {
 		t.Fatalf("pooling manifest: %+v %v", pooled, err)
+	}
+	// Per-model limits and declared outputs.
+	limited, err := LoadModel(writeModelDir(t, func(m map[string]any) {
+		m["max_seq"], m["pad_multiple"], m["memory_mb"] = 768, 32, 900
+		m["onnx"] = map[string]any{"outputs": []string{"probs", "logits", "target_tokens"}}
+	}), "int8")
+	if err != nil || limited.MaxSeq != 768 || limited.PadMultiple != 32 || limited.MemoryMB != 900 || limited.HasOutputs([]string{"probs"}) != nil || limited.HasOutputs([]string{"spans"}) == nil {
+		t.Fatalf("limits: %+v %v", limited, err)
+	}
+	if model.MaxSeq != MaxTokens || model.HasOutputs([]string{"anything"}) != nil {
+		t.Fatalf("defaults: %+v", model)
 	}
 }

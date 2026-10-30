@@ -48,8 +48,19 @@ type Manifest struct {
 	Segments   []string             `json:"segments"`
 	Thresholds map[string][]float64 `json:"thresholds"`
 	ONNX       struct {
-		Outputs map[string]string `json:"outputs"`
+		// Outputs names the model's outputs: a map of name to description
+		// or a list of names.
+		Outputs json.RawMessage `json:"outputs"`
 	} `json:"onnx"`
+	// MaxSeq is the longest sequence the model takes (the framing's
+	// maximum when absent: 512 for kestrel-framing-v1); PadMultiple a
+	// padding multiple it needs beyond its contract's.
+	MaxSeq      int `json:"max_seq"`
+	PadMultiple int `json:"pad_multiple"`
+	// MemoryMB estimates one worker's memory for this model, for the pool's
+	// budget (default 1,600 MB, what kestrel-68m int8 peaks at with 16k-token
+	// batches).
+	MemoryMB int `json:"memory_mb"`
 }
 
 // Model is a verified model directory: its manifest, the chosen variant's
@@ -66,7 +77,13 @@ type Model struct {
 	InputContract string
 	Inputs        []InputSpec
 	PadMultiple   int
-	thresholds    map[string][]float32
+	// MaxSeq is the longest sequence the model takes; Outputs its declared
+	// output names (nil when the manifest names none); MemoryMB one worker's
+	// estimated memory.
+	MaxSeq     int
+	Outputs    []string
+	MemoryMB   int
+	thresholds map[string][]float32
 	// closure[j] is the bit mask of label j and its ancestors.
 	closure []uint64
 }
@@ -119,8 +136,35 @@ func LoadModel(dir, variant string) (*Model, error) {
 		m.Inputs = man.Inputs
 	}
 	m.PadMultiple = contract.PadMultiple
-	if multiple := man.Padding.Multiple; multiple > 0 {
-		m.PadMultiple = lcm(m.PadMultiple, multiple)
+	for _, multiple := range []int{man.Padding.Multiple, man.PadMultiple} {
+		if multiple < 0 || multiple > 64 {
+			return nil, fmt.Errorf("%w: padding multiple %d is outside 1..64", ErrModelUnavailable, multiple)
+		}
+		if multiple > 0 {
+			m.PadMultiple = lcm(m.PadMultiple, multiple)
+		}
+	}
+	m.MaxSeq = MaxTokens
+	if man.MaxSeq != 0 {
+		if man.MaxSeq < MaxTokens || man.MaxSeq > 8192 {
+			return nil, fmt.Errorf("%w: max_seq %d: %s frames up to %d tokens, and at most 8192 are allowed", ErrModelUnavailable, man.MaxSeq, FramingContract, MaxTokens)
+		}
+		m.MaxSeq = man.MaxSeq
+	}
+	if m.MemoryMB = man.MemoryMB; m.MemoryMB <= 0 {
+		m.MemoryMB = 1600
+	}
+	if outputs := man.ONNX.Outputs; len(outputs) > 0 {
+		var named map[string]any
+		var listed []string
+		switch {
+		case json.Unmarshal(outputs, &named) == nil:
+			m.Outputs = slices.Sorted(maps.Keys(named))
+		case json.Unmarshal(outputs, &listed) == nil:
+			m.Outputs = slices.Sorted(slices.Values(listed))
+		default:
+			return nil, fmt.Errorf("%w: onnx.outputs is neither a map nor a list of names", ErrModelUnavailable)
+		}
 	}
 	file := man.Files["onnx_"+variant]
 	if file == "" || strings.ContainsAny(file, `/\`) {
@@ -213,6 +257,20 @@ func verifyFile(path, want string) (string, error) {
 		return "", fmt.Errorf("%w: %s has SHA-256 %s, the manifest %q", ErrModelUnavailable, filepath.Base(path), got, want)
 	}
 	return got, nil
+}
+
+// HasOutputs reports whether the model declares every one of names (true
+// when it declares none: nothing to check against).
+func (m *Model) HasOutputs(names []string) error {
+	if m.Outputs == nil {
+		return nil
+	}
+	for _, name := range names {
+		if !slices.Contains(m.Outputs, name) {
+			return fmt.Errorf("model %s has no output %q (it declares %v)", m.Manifest.Name, name, m.Outputs)
+		}
+	}
+	return nil
 }
 
 // Labels is the label count (the probs width).
