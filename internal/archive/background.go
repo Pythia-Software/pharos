@@ -536,9 +536,7 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 				daily()
 			}
 		case item.ID == "review":
-			if !in.findingsBuilt {
-				continue
-			}
+			// Today's full pass, or the first one ever.
 			plan.Pending = !in.findingsToday
 			// Today's pass waits for today's daily time.
 			if plan.Pending && dailyInstant(at, settings.DailyAt).Day() == at.In(time.Local).Day() {
@@ -874,7 +872,7 @@ func (s *Server) runBackgroundPass(parent context.Context, cadence string, ids [
 	}
 	handle.Run()
 	handle.Plan(backgroundSteps(ids)...)
-	changed, failure = s.runBackgroundItems(ctx, handle, run.ID, ids, plans)
+	changed, failure = s.runBackgroundItems(ctx, handle, run.ID, cadence, ids, plans)
 	return true
 }
 
@@ -891,69 +889,46 @@ func backgroundSteps(ids []string) []StepPlan {
 	return steps
 }
 
-// runBackgroundItems runs each item in turn, recording each one's outcome;
-// the chain's stages run together, in chain order, with the stages before
-// them that have work waiting.
-// It reports whether any item succeeded (and so may have changed what
-// pages show).
-func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID string, ids []string, plans []itemPlan) (bool, error) {
+// runBackgroundItems runs each item in turn, recording each one's outcome:
+// first the items that bring in new data (captures), then the chain's
+// stages together, in chain order. A stage reads what the stages before it
+// wrote, so those with work waiting come along, read after the captures
+// wrote their inputs, unless their own item is held: set to only when you
+// ask, waiting for power, or on a slower cadence than this pass (Run now
+// brings along all but the first). A held stage's dependents run on what
+// it last wrote; its own run later moves the generations they read, so
+// they run again. Findings only measure unless the daily review is in the
+// pass. It reports whether any item succeeded (and so may have changed
+// what pages show).
+func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence string, ids []string, plans []itemPlan) (bool, error) {
 	var failure error
 	succeeded := false
 	record := func(id string, started time.Time, err error) {
 		s.Catalog.recordBackgroundRun(context.WithoutCancel(ctx), id, started, true, err)
 		succeeded = succeeded || err == nil
 	}
-	pending := map[string]bool{}
-	for _, plan := range plans {
-		item, _ := backgroundItemByID(plan.ID)
-		if plan.Pending {
-			for _, stage := range item.Stages {
-				pending[stage] = true
-			}
-		}
-	}
-	stages := map[string]bool{}
-	for _, id := range ids {
-		item, _ := backgroundItemByID(id)
-		for _, stage := range item.Stages {
-			stages[stage] = true
-		}
-		if id == "review" {
-			stages["findings"] = true
-		}
-	}
-	// A stage reads what the stages before it wrote: bring those that have
-	// work waiting along.
-	last := -1
-	for index, stage := range stageOrder {
-		if stages[stage] {
-			last = index
-		}
-	}
-	for _, stage := range stageOrder[:last+1] {
-		if pending[stage] {
-			stages[stage] = true
-		}
-	}
-	chainItems := []string{}
-	for _, item := range backgroundItems {
-		if slices.Contains(ids, item.ID) && (len(item.Stages) > 0 || item.ID == "review") {
-			chainItems = append(chainItems, item.ID)
-		}
-	}
+	stepped := map[string]bool{}
 	next := func(id string) {
+		if stepped[id] {
+			return
+		}
+		stepped[id] = true
 		item, _ := backgroundItemByID(id)
 		op.Step(item.Label, "", -1)
 		s.updateRun(runID, func(run *SyncRun) { run.Phase = item.Verb })
+	}
+	chainItem := func(id string) bool {
+		item, _ := backgroundItemByID(id)
+		return len(item.Stages) > 0 || id == "review"
 	}
 	for _, id := range ids {
 		if ctx.Err() != nil {
 			break
 		}
-		item, _ := backgroundItemByID(id)
-		if len(item.Stages) > 0 || id == "review" {
+		if chainItem(id) {
 			continue
 		}
+		item, _ := backgroundItemByID(id)
 		next(id)
 		started := time.Now()
 		s.Catalog.recordBackgroundRun(ctx, id, started, false, nil)
@@ -966,51 +941,94 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID string, i
 			failure = fmt.Errorf("%s: %w", item.Label, err)
 		}
 	}
-	if len(stages) > 0 && ctx.Err() == nil {
-		started := time.Now()
-		for _, id := range chainItems {
-			s.Catalog.recordBackgroundRun(ctx, id, started, false, nil)
+	stages := map[string]bool{}
+	chainItems := []string{}
+	for _, item := range backgroundItems {
+		if !slices.Contains(ids, item.ID) || !chainItem(item.ID) {
+			continue
 		}
-		outcome := map[string]error{}
-		err := s.finishDeferredStages(ctx, false, stages, func(name string, work func() error) error {
-			for _, id := range chainItems {
-				item, _ := backgroundItemByID(id)
-				if slices.Contains(item.Stages, name) || id == "review" && name == "findings" {
-					if _, seen := outcome[id]; !seen {
-						next(id)
-					}
-				}
-			}
-			err := work()
-			outcome[name] = err
-			return err
-		})
+		chainItems = append(chainItems, item.ID)
+		for _, stage := range item.Stages {
+			stages[stage] = true
+		}
+		if item.ID == "review" {
+			stages["findings"] = true
+		}
+	}
+	if len(stages) == 0 || ctx.Err() != nil {
+		return succeeded, failure
+	}
+	plansByID := map[string]itemPlan{}
+	for _, plan := range plans {
+		plansByID[plan.ID] = plan
+	}
+	held := func(stage string) bool {
+		plan := plansByID[stageItems[stage]]
+		if plan.Cadence == cadenceManual {
+			return true
+		}
+		return cadence != "requested" && (plan.WaitsForPower || cadenceRank(plan.Cadence) > cadenceRank(cadence))
+	}
+	deferred, _ := s.Catalog.freshnessDeferred(ctx)
+	last := -1
+	for index, stage := range stageOrder {
+		if stages[stage] {
+			last = index
+		}
+	}
+	for _, stage := range stageOrder[:last+1] {
+		if row := deferred[stage]; row.generation > row.completed && !held(stage) {
+			stages[stage] = true
+		}
+	}
+	findings := findingsMeasure
+	if slices.Contains(ids, "review") {
+		findings = findingsAuto
+	}
+	started := time.Now()
+	for _, id := range chainItems {
+		s.Catalog.recordBackgroundRun(ctx, id, started, false, nil)
+	}
+	outcome := map[string]error{}
+	err := s.finishDeferredStages(ctx, findings, stages, func(name string, work func() error) error {
 		for _, id := range chainItems {
 			item, _ := backgroundItemByID(id)
-			names := item.Stages
-			if id == "review" {
-				names = []string{"findings"}
+			if slices.Contains(item.Stages, name) || id == "review" && name == "findings" {
+				next(id)
 			}
-			var itemErr error
-			for _, name := range names {
-				result, ran := outcome[name]
-				switch {
-				case ran && result != nil:
-					itemErr = result
-				case !ran && err != nil:
-					itemErr = fmt.Errorf("waiting for an earlier update that failed: %w", err)
-				case !ran:
-					itemErr = ctx.Err()
-				}
-				if itemErr != nil {
-					break
-				}
+		}
+		err := work()
+		outcome[name] = err
+		return err
+	})
+	for _, id := range chainItems {
+		item, _ := backgroundItemByID(id)
+		names := item.Stages
+		if id == "review" {
+			names = []string{"findings"}
+		}
+		var itemErr error
+		for _, name := range names {
+			result, ran := outcome[name]
+			switch {
+			case ran && result != nil:
+				itemErr = result
+			case !ran && err != nil:
+				itemErr = fmt.Errorf("waiting for an earlier update that failed: %w", err)
+			case !ran:
+				itemErr = ctx.Err()
 			}
-			record(id, started, itemErr)
+			if itemErr != nil {
+				break
+			}
 		}
-		if err != nil && failure == nil {
-			failure = err
-		}
+		record(id, started, itemErr)
+	}
+	if err != nil && failure == nil {
+		failure = err
 	}
 	return succeeded, failure
 }
+
+// stageItems is the background item each chain stage belongs to.
+var stageItems = map[string]string{"identities": "repositories", "git": "repositories", "tools": "tools", "authorship": "writing", "findings": "findings"}

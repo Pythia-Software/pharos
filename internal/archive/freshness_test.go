@@ -120,6 +120,12 @@ func expectRow(t *testing.T, rows map[string]freshnessRow, domain, state, reason
 	return row
 }
 
+// todayAt is today at hour, local time.
+func todayAt(hour int) time.Time {
+	now := time.Now()
+	return time.Date(now.Year(), now.Month(), now.Day(), hour, 0, 0, 0, time.Local)
+}
+
 func keysOf[V any](values map[string]V) []string {
 	keys := []string{}
 	for key := range values {
@@ -282,7 +288,12 @@ func TestFreshnessDomains(t *testing.T) {
 		{name: "tools ledger stays counted after this build writes", domain: "an.ledger", setup: counted(""), seed: []string{setMetaSQL("authorship_inputs_generation", "9")}, state: freshCurrent},
 
 		{name: "findings current", domain: "findings", state: freshCurrent, asOf: "2026-10-27T08:05:00Z"},
-		{name: "findings daily pass due", domain: "findings", seed: []string{setMetaSQL("findings_generation", findingsVersion+"/2026-10-26")}, state: freshBehind, reason: "daily-pass-due"},
+		// Today's full pass is due 12 h past the daily time (03:00); before
+		// then it waits for the daily review (§11).
+		{name: "findings daily pass due", domain: "findings", seed: []string{setMetaSQL("findings_generation", findingsVersion+"/2026-10-26")},
+			in: freshnessInput{now: todayAt(23)}, state: freshBehind, reason: "daily-pass-due"},
+		{name: "findings daily pass waiting for the daily review", domain: "findings", seed: []string{setMetaSQL("findings_generation", findingsVersion+"/2026-10-26")},
+			in: freshnessInput{now: todayAt(10)}, state: freshScheduled, reason: "scheduled-daily"},
 		{name: "findings never built", domain: "findings", seed: []string{"DELETE FROM meta WHERE key='findings_generation'"}, state: freshBehind, reason: "never-built"},
 		// Within its daily cadence: scheduled, not behind.
 		{name: "findings after a Terminal ingest", domain: "findings", seed: []string{setMetaSQL("authorship_inputs_generation", "4")}, state: freshScheduled, reason: "changed"},

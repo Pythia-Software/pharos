@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -559,5 +560,114 @@ func TestBackgroundPassIsAnActivityRun(t *testing.T) {
 	runs := server.activity()["runs"].([]map[string]any)
 	if len(runs) == 0 || runs[0]["kind"] != backgroundRunKind || runs[0]["state"] != "complete" || runs[0]["changed"] != true {
 		t.Fatalf("the pass is not a finished, changed run in /api/activity: %v", runs)
+	}
+}
+
+// Stages before a due one come along only when their own item could run in
+// this pass: not set to only when you ask, and not on a slower cadence.
+func TestBackgroundPassHonorsHeldPrerequisites(t *testing.T) {
+	catalog, config := testCatalog(t)
+	server := testServer(t, config, catalog)
+	ctx := context.Background()
+	host := sqlQuote(currentHost().ID)
+	stamp := func(d time.Duration) string { return sqlQuote(formatTime(time.Now().Add(-d))) }
+	pending := func(name string, changed time.Duration) string {
+		return "INSERT INTO sync_deferred(name,generation,completed_generation,changed_at,completed_at,pending_since) VALUES('" + name + "',2,1," + stamp(changed) + "," + stamp(10*time.Minute) + "," + stamp(changed) + ")"
+	}
+	execTx(t, catalog.DB, "DELETE FROM sync_deferred", pending("identities", time.Minute), pending("git", time.Minute), pending("tools", time.Minute),
+		// Your writing is hourly, and the library is not quiet.
+		pending("authorship", time.Minute), pending("findings", time.Minute),
+		"INSERT INTO background_runs(host_id,item,succeeded_at) VALUES("+host+",'preserve',"+stamp(0)+"),("+host+",'review',"+stamp(0)+")",
+		"INSERT INTO background_settings(host_id,overrides_json,placements_json) VALUES("+host+",'{\"repositories\":\"manual\"}','{\"findings\":\"frequent\"}')",
+		setMetaSQL("findings_generation", findingsVersion+"/2026-10-26"))
+	completed := func(name string) int64 {
+		var generation int64
+		if err := catalog.DB.QueryRow("SELECT completed_generation FROM sync_deferred WHERE name=?", name).Scan(&generation); err != nil {
+			t.Fatal(err)
+		}
+		return generation
+	}
+	if !server.backgroundPass(ctx, time.Now()) {
+		t.Fatal("the frequent pass ran nothing")
+	}
+	if completed("tools") != 2 || completed("findings") != 2 {
+		t.Fatalf("the frequent items did not run: tools %d, findings %d", completed("tools"), completed("findings"))
+	}
+	if completed("identities") != 1 || completed("git") != 1 {
+		t.Fatal("a pass brought along stages set to only when you ask")
+	}
+	if completed("authorship") != 1 {
+		t.Fatal("a frequent pass brought along an hourly stage that was not due")
+	}
+	// Findings measured; today's full pass is the daily review's.
+	if generation, _ := catalog.metaValue(ctx, "findings_generation"); generation != findingsVersion+"/2026-10-26" {
+		t.Fatalf("the findings item ran today's full pass: %s", generation)
+	}
+}
+
+// The daily review reads what the captures before it wrote: the stages
+// with work waiting come along, read from the catalog when the chain
+// starts, not from the plan made before the pass.
+func TestBackgroundReviewBringsAlongStagesPendingWhenTheChainStarts(t *testing.T) {
+	catalog, config := testCatalog(t)
+	server := testServer(t, config, catalog)
+	ctx := context.Background()
+	settings, _ := catalog.backgroundSettings(ctx, time.Now())
+	// The plan, made while nothing was waiting.
+	execTx(t, catalog.DB, "DELETE FROM sync_deferred")
+	plans := backgroundPlan(settings, server.backgroundInputsFor(ctx, nil), time.Now())
+	// What a capture in the same pass writes.
+	if err := catalog.writeTransaction(ctx, "test", markSyncDeferred); err != nil {
+		t.Fatal(err)
+	}
+	if !server.runBackgroundPass(ctx, cadenceDaily, []string{"review"}, plans) {
+		t.Fatal("the pass did not run")
+	}
+	var waiting int
+	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM sync_deferred WHERE generation>completed_generation").Scan(&waiting); err != nil || waiting != 0 {
+		t.Fatalf("%d stages were left waiting under today's review: %v", waiting, err)
+	}
+	if generation, _ := catalog.metaValue(ctx, "findings_generation"); generation != catalog.findingsGeneration() {
+		t.Fatalf("the review did not run today's full pass: %s", generation)
+	}
+}
+
+// Preserve originals on a Mac with no enabled sources still indexes what
+// is captured in the library.
+func TestPreserveIndexesCapturesWithoutLocalSources(t *testing.T) {
+	catalog, config := testCatalog(t)
+	ctx := context.Background()
+	claude := filepath.Join(t.TempDir(), "claude")
+	session := "11111111-1111-4111-8111-111111111111"
+	writeSourceFile(t, filepath.Join(claude, "-proj", session+".jsonl"), claudeLine(session, "u1", "captured before", "/proj", 1))
+	capturing := config
+	capturing.Sources = []SourceConfig{{Name: "claude", Kind: "claude", Path: claude, Enabled: true}}
+	if summary, err := Capture(ctx, capturing, capturing.Sources, nil); err != nil || !summary.OK {
+		t.Fatalf("capture: %+v %v", summary, err)
+	}
+	config.Sources = nil
+	server := testServer(t, config, catalog)
+	_, op := server.begin(ctx, OperationSpec{Kind: "background.update", Variant: cadenceDaily, Trigger: triggerSchedule})
+	err := server.captureAndIndex(ctx, op, nil)
+	op.Finish(err)
+	var found int
+	if err != nil || catalog.DB.QueryRow("SELECT COUNT(*) FROM messages WHERE text='captured before'").Scan(&found) != nil || found != 1 {
+		t.Fatalf("the captured conversation was not indexed: %d, %v", found, err)
+	}
+}
+
+// The day's Frequently cost counts the analysis passes after scheduled
+// indexing, not only the indexing.
+func TestBackgroundDayCostCountsFrequentPasses(t *testing.T) {
+	catalog, config := testCatalog(t)
+	server := testServer(t, config, catalog)
+	start := time.Now().Add(-time.Hour)
+	execTx(t, catalog.DB, fmt.Sprintf(`INSERT INTO operation_journal(id,root_id,kind,variant,trigger,host_id,process,pid,instance,state,started_at,updated_at,ended_at)
+		VALUES('p','p','background.update','frequent','schedule',%s,'service',1,'i','succeeded','%s','%s','%s')`, sqlQuote(currentHost().ID), formatTime(start), formatTime(start), formatTime(start.Add(time.Minute))))
+	settings, _ := catalog.backgroundSettings(context.Background(), time.Now())
+	cost := server.backgroundDayCost(context.Background(), settings, map[string]itemCost{}, time.Now())
+	frequent := cost["cadences"].([]map[string]any)[0]
+	if seconds := frequent["seconds"].(float64); seconds < 59 || seconds > 61 {
+		t.Fatalf("the frequent pass is not counted: %v", frequent)
 	}
 }

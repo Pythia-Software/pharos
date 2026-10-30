@@ -51,24 +51,25 @@ func (s *Server) captureAndIndex(ctx context.Context, op *Op, names []string) er
 			sources = append(sources, source)
 		}
 	}
-	if len(sources) == 0 {
-		return nil
-	}
 	op.Plan(StepPlan{Name: "Capture this Mac", Total: -1}, StepPlan{Name: "Index captures", Unit: "source", Total: -1})
-	op.Step("Capture this Mac", "", -1)
 	var failure error
-	summary, err := Capture(ctx, config, sources, func(result CaptureSourceResult) {
-		work := captureWork(result)
-		op.progress(work.Phase, result.Name, work.Unit, work.Done, work.Total, work.TotalKnown)
-	})
-	if err != nil {
-		return err
-	}
-	if !summary.OK {
-		failure = errors.New("some inputs could not be captured; what was captured is indexed")
-	}
-	if ctx.Err() != nil {
-		return ctx.Err()
+	// A Mac with no enabled sources (one that only browses a library)
+	// captures nothing, but still indexes what other Macs captured.
+	if len(sources) > 0 {
+		op.Step("Capture this Mac", "", -1)
+		summary, err := Capture(ctx, config, sources, func(result CaptureSourceResult) {
+			work := captureWork(result)
+			op.progress(work.Phase, result.Name, work.Unit, work.Done, work.Total, work.TotalKnown)
+		})
+		if err != nil {
+			return err
+		}
+		if !summary.OK {
+			failure = errors.New("some inputs could not be captured; what was captured is indexed")
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 	}
 	targets, err := captureTargets(config.CaptureRoot, nil, true, names)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {

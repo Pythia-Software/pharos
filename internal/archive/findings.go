@@ -797,6 +797,19 @@ func (c *Catalog) findingsGeneration() string {
 // the findings the user is watching. The service runs it after each index,
 // once the tool rollup is current.
 func (c *Catalog) RefreshFindings(ctx context.Context, force bool) error {
+	return c.refreshFindings(ctx, func(built, generation string) bool { return force || built != generation })
+}
+
+// MeasureFindings measures the watched findings without discovering new
+// ones, whatever day the last full pass was: background updates leave
+// today's full pass to the daily review.
+func (c *Catalog) MeasureFindings(ctx context.Context) error {
+	return c.refreshFindings(ctx, func(string, string) bool { return false })
+}
+
+// refreshFindings runs a pass, full when full says so for the built and
+// current generations.
+func (c *Catalog) refreshFindings(ctx context.Context, fullPass func(built, generation string) bool) error {
 	state := &c.findings
 	state.mu.Lock()
 	if state.running {
@@ -826,7 +839,7 @@ func (c *Catalog) RefreshFindings(ctx context.Context, force bool) error {
 	// midnight is the day before's.
 	generation := c.findingsGeneration()
 	built, _ := c.metaValue(ctx, "findings_generation")
-	full := force || built != generation
+	full := fullPass(built, generation)
 	err = c.runFindingsPass(ctx, full)
 	if err == nil && full {
 		err = c.writeTransaction(ctx, "findings-meta", func(tx *sql.Tx) error {

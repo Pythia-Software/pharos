@@ -498,8 +498,13 @@ func (s *Server) backgroundDayCost(ctx context.Context, settings backgroundSetti
 		}
 		return total, heaviest
 	}
-	cadenceCosts := []map[string]any{{"id": cadenceFrequent, "label": cadenceLabels[cadenceFrequent], "seconds": frequent, "measured": true,
-		"text": fmt.Sprintf("%d checks, %d found nothing new", checks, idle)}}
+	// Frequently is scheduled indexing and the analysis passes after it.
+	passes, passRuns := measured(cadenceFrequent)
+	frequentText := fmt.Sprintf("%d checks, %d found nothing new", checks, idle)
+	if passRuns > 0 {
+		frequentText += fmt.Sprintf(", %d analysis passes", passRuns)
+	}
+	cadenceCosts := []map[string]any{{"id": cadenceFrequent, "label": cadenceLabels[cadenceFrequent], "seconds": frequent + passes, "measured": true, "text": frequentText}}
 	for _, cadence := range []string{cadenceHourly, cadenceDaily} {
 		seconds, runs := measured(cadence)
 		entry := map[string]any{"id": cadence, "label": cadenceLabels[cadence], "seconds": seconds, "measured": runs > 0, "text": fmt.Sprintf("%d runs", runs)}

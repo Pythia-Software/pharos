@@ -1588,10 +1588,20 @@ the same schedule from one declaration (`backgroundItems`):
   `background_settings.placements_json`.
 - **Overrides** may move an item to a slower cadence or to only when you
   ask, never faster than its placement. Fixed items have none.
-- **Sequencing.** Stage items run through `finishDeferredStages`, in chain
-  order, bringing along earlier stages with pending work. A stage that
-  fails records its error; the items after it record that they waited for
-  it. A failed item waits 15 min before it runs again.
+- **Sequencing.** A pass runs the items that bring in new data (captures)
+  first, then the stage items through `finishDeferredStages`, in chain
+  order. Earlier stages with pending work, read from `sync_deferred` after
+  the captures wrote, come along unless their own item is held: set to only
+  when you ask, waiting for power, or on a slower cadence than the pass
+  (Run now brings along all but the first). A held stage's dependents run
+  on what it last wrote; when it runs it moves the generations they read,
+  so they run again. The findings item only measures (`MeasureFindings`);
+  today's full pass is Findings review's, at the daily time (or the first
+  pass ever). A stage that fails records its error; the items after it
+  record that they waited for it. A failed item waits 15 min before it
+  runs again.
+- **Preserve originals** on a Mac with no enabled sources captures nothing
+  but still indexes what other Macs captured.
 - **Mode.** On (default), paused until a time (scheduled indexing waits
   too), or only when I ask (`sync_settings.enabled` off). With no schedule
   row, the first scheduled index stores the default one. Run now runs an
@@ -1630,7 +1640,8 @@ the same schedule from one declaration (`backgroundItems`):
   `next_at`, one row per cadence, and the cost of Update everything now.
   `GET /api/background` adds the settings, the placement rule and the last
   24 hours' cost (measured for scheduled indexing and journaled passes,
-  else projected from the items' costs). `POST /api/background/settings`
+  else projected from the items' costs; Frequently counts scheduled
+  indexing and the journaled analysis passes after it). `POST /api/background/settings`
   and `POST /api/background/run` change and run it.
 
 ## Known hazards this contract must not hide
