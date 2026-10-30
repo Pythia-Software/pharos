@@ -476,6 +476,8 @@ func TestMCPArchiveStatusListsDomainsAndRunningWork(t *testing.T) {
 		`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c','w','codex','local','c')`,
 		"INSERT INTO source_states(host_id,source_name,kind,capability,coverage,last_attempt_at,last_success_at,updated_at) VALUES("+sqlQuote(host)+",'codex','codex','read','complete',"+sqlQuote(now())+","+sqlQuote(now())+","+sqlQuote(now())+")",
 		"INSERT INTO sync_deferred(name,generation,completed_generation,changed_at) VALUES('findings',3,1,"+sqlQuote(now())+")",
+		// Background updates (and scheduled indexing) turned off.
+		"INSERT INTO sync_settings(host_id,enabled,interval_seconds) VALUES("+sqlQuote(host)+",0,300)",
 		fmt.Sprintf(`INSERT INTO operation_journal(id,root_id,kind,trigger,host_id,process,pid,instance,state,started_at,updated_at,detail_json)
 			VALUES('op-live','op-live','index.changes.manual','user',%s,'service',%d,'svc','running',%s,%s,'{}')`, sqlQuote(host), os.Getpid(), sqlQuote(now()), sqlQuote(now())),
 		fmt.Sprintf(`INSERT INTO operation_journal(id,root_id,kind,trigger,host_id,process,pid,instance,state,started_at,updated_at,detail_json)

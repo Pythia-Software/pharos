@@ -82,7 +82,7 @@ file counts, input bytes or database
 message counts, time since the previous index, and one-minute machine load when
 available. Transcript bytes are file lengths; database byte measurements
 are the raw/decoded message-text bytes actually read, labeled separately.
-Settings → Capture & index → run Details exposes these measurements.
+Settings → Background updates → run Details exposes these measurements.
 Interrupted stages remain in run history without becoming completed ETA
 samples. Workload features also feed the operation model described below.
 

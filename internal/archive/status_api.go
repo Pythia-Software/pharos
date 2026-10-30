@@ -61,6 +61,12 @@ func (s *Server) statusDocument(ctx context.Context, fresh bool) map[string]any 
 	freshness := s.freshness(ctx, views, fresh)
 	document["freshness"] = freshness
 	document["freshness_summary"] = summarizeFreshness(freshness)
+	// The schedule (§11): what runs Frequently, Hourly and Daily, and how
+	// each is doing; the drive panel's headline and rows.
+	// The release path's fresh check (fresh) answers only whether to eject.
+	if !fresh {
+		document["background"] = s.backgroundView(ctx, views, freshness, time.Now())
+	}
 	// CPU and memory of this library's Pharos processes on this Mac (§10).
 	document["resources"] = s.serviceResources()
 	// The words over Show all's two parts: the operations, and the domains.

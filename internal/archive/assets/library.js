@@ -454,7 +454,8 @@
   function refreshIndexStatus() {
     if (!indexStatusRequest) {
       indexStatusRequest = call('/api/activity').then(value => {
-        recentIndex = (value.runs || []).find(run => run.state !== 'running') || null;
+        // The latest finished index; a background pass is not one.
+        recentIndex = (value.runs || []).find(run => run.state !== 'running' && run.kind !== 'background-update') || null;
       }, () => { recentIndex = null; }).finally(() => { indexStatusRequest = null; });
     }
     return indexStatusRequest;
@@ -648,7 +649,7 @@
       action.disabled = busy;
       action.setAttribute('aria-busy', String(busy));
     }
-    // Capture & index is on Settings → Capture & index and in the drive panel.
+    // Capture & index is on Settings → Background updates and in the drive panel.
     for (const update of document.querySelectorAll('#pharosUpdateLibrary, .pharos-panel-update')) {
       update.disabled = captureIndexDisabled(state);
       if (update.classList.contains('pharos-panel-update')) update.hidden = update.disabled;
@@ -1205,8 +1206,8 @@
     }
   }
 
-  // Index changes is the incremental run (Settings → Capture & index's
-  // Index changes now): it indexes only what changed in this Mac's sources,
+  // Index changes is the incremental run (Settings → Background updates'
+  // Update everything now): it indexes only what changed in this Mac's sources,
   // without capturing them.
   async function syncNow() {
     if (headerCaptureIndexRunning || hostsBusy) return;

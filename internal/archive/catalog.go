@@ -255,6 +255,7 @@ func (c *Catalog) Initialize() error {
 	}
 	for _, migration := range []struct{ table, column, statement string }{
 		{"tool_query_facts", "day", "ALTER TABLE tool_query_facts ADD COLUMN day TEXT"},
+		{"sync_deferred", "pending_since", "ALTER TABLE sync_deferred ADD COLUMN pending_since TEXT"},
 		{"source_item_states", "indexed_by", "ALTER TABLE source_item_states ADD COLUMN indexed_by TEXT NOT NULL DEFAULT 'intentional'"},
 		{"source_states", "index_version", "ALTER TABLE source_states ADD COLUMN index_version TEXT"},
 		{"messages", "raw_text", "ALTER TABLE messages ADD COLUMN raw_text TEXT"},
