@@ -1,3 +1,4 @@
+import { DashboardSelect } from "./dashboard-select";
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { clipIntervals, concurrencyAverage, concurrencyMetrics, concurrencySpans, concurrencyUnit, conversationTimings, formatConcurrencyDuration as duration, mergeIntervals, minute, ribbonPath, stackSegments, workSessions, zonedDayBounds, type ConcurrencyCounting, type ConcurrencyData, type ConcurrencyMetrics, type ConcurrencyMode, type ConcurrencyThread, type Interval, type Segment } from "./concurrency-data";
 import { SmoothingControl } from "./usage-chart";
@@ -270,23 +271,23 @@ export function ConcurrencyPanel({ scope, activityWindow, routeParameter, onSele
     {scope || routeParameter ? <p className="machine-parallelism-note">Captured timing: {data.period_start} – {data.period_end} · {data.timezone}. {scope?.days ? "Showing the captured portion of the selected period; averages use only this portion. " : ""}Model activity is estimated from response timing; tool waits are excluded.</p> : null}
     {incompleteToday ? <p role="status">Incomplete timing coverage for Today. Available: {data.period_start} – {data.period_end}.</p> : null}
     <div className="concurrency-controls">
-      <div className="concurrency-control"><div className="concurrency-control-label"><label htmlFor="parallelism-view">View</label><button type="button" className="concurrency-info-button" aria-label="About parallelism views" aria-haspopup="dialog" aria-controls="parallelism-calculation" title="How parallelism is calculated" onClick={() => setShowInfo(true)}><Icon name="info" /></button></div><select id="parallelism-view" aria-label="View" value={mode} onChange={event => update({ mode: event.target.value as ConcurrencyMode })}><option value="user">Threaded</option><option value="model">Model activity</option></select></div>
-      <label>Count by<select aria-label="Count by" value={counting} onChange={event => update({ counting: event.target.value as ConcurrencyCounting, workspace: "", agent: "" })}><option value="workspace">Workspaces</option><option value="agent">Sessions</option></select></label>
-      {!scope ? <div className={`usage-date-range${settings.range === "custom" ? " custom" : ""}`}><label className="concurrency-control usage-chart-picker">Range<select aria-label="Range" value={settings.range === "day" ? range.startDay : settings.range} title={`Presets end at the latest captured day, ${data.period_end}`} onChange={event => chooseRange(event.target.value)}>
+      <div className="concurrency-control"><div className="concurrency-control-label"><label htmlFor="parallelism-view">View</label><button type="button" className="concurrency-info-button" aria-label="About parallelism views" aria-haspopup="dialog" aria-controls="parallelism-calculation" title="How parallelism is calculated" onClick={() => setShowInfo(true)}><Icon name="info" /></button></div><DashboardSelect id="parallelism-view" aria-label="View" value={mode} onChange={event => update({ mode: event.target.value as ConcurrencyMode })}><option value="user">Threaded</option><option value="model">Model activity</option></DashboardSelect></div>
+      <label>Count by<DashboardSelect aria-label="Count by" value={counting} onChange={event => update({ counting: event.target.value as ConcurrencyCounting, workspace: "", agent: "" })}><option value="workspace">Workspaces</option><option value="agent">Sessions</option></DashboardSelect></label>
+      {!scope ? <div className={`usage-date-range${settings.range === "custom" ? " custom" : ""}`}><label className="concurrency-control usage-chart-picker">Range<DashboardSelect aria-label="Range" value={settings.range === "day" ? range.startDay : settings.range} title={`Presets end at the latest captured day, ${data.period_end}`} onChange={event => chooseRange(event.target.value)}>
         <option value="today">Today so far</option>
         {concurrencyRangePresets.map(([key, , label]) => <option key={key} value={key}>{label}</option>)}
         <option value="custom">Custom dates…</option>
         <optgroup label="Individual days">{data.days.slice().sort().map(date => <option key={date}>{date}</option>)}</optgroup>
         <option value="all">All captured time</option>
-      </select></label>
+      </DashboardSelect></label>
         {settings.range === "custom" ? <div className="usage-custom-dates">
           <label><span>From</span><input aria-label="From date" type="date" min={data.period_start} max={range.endDay} value={range.startDay} onChange={event => { if (event.target.value && event.currentTarget.validity.valid) update({ startDay: event.target.value, workspace: "", agent: "", zoom: null }); }} /></label>
           <label><span>Through</span><input aria-label="Through date" type="date" min={range.startDay} max={data.period_end} value={range.endDay} onChange={event => { if (event.target.value && event.currentTarget.validity.valid) update({ endDay: event.target.value, workspace: "", agent: "", zoom: null }); }} /></label>
           <span className="muted concurrency-range-note">Both dates included · {data.timezone}</span>
         </div> : null}
       </div> : null}
-      <label>Turn gap<select aria-label="Turn gap" value={gap} disabled={mode === "model"} onChange={event => update({ gap: Number(event.target.value) })}>{[0, 15, 30, 60].map(value => <option key={value} value={value}>{value === 0 ? "No bridging" : `${value} minutes`}</option>)}</select></label>
-      {!scope ? <label>Repository<select aria-label="Repository" value={repository} onChange={event => update({ repository: event.target.value, workspace: "", agent: "", zoom: null })}><option value="">All repositories</option>{repositories.map(repo => <option key={repo}>{repo}</option>)}</select></label> : null}
+      <label>Turn gap<DashboardSelect aria-label="Turn gap" value={gap} disabled={mode === "model"} onChange={event => update({ gap: Number(event.target.value) })}>{[0, 15, 30, 60].map(value => <option key={value} value={value}>{value === 0 ? "No bridging" : `${value} minutes`}</option>)}</DashboardSelect></label>
+      {!scope ? <label>Repository<DashboardSelect aria-label="Repository" value={repository} onChange={event => update({ repository: event.target.value, workspace: "", agent: "", zoom: null })}><option value="">All repositories</option>{repositories.map(repo => <option key={repo}>{repo}</option>)}</DashboardSelect></label> : null}
       <SmoothingControl value={settings.smoothingMinutes} unit="minutes" onChange={smoothingMinutes => update({ smoothingMinutes })} note="Average occupancy line" />
     </div>
     <ZoomNavigation canBack={navigation.canBack} zoomed={Boolean(zoom || selected)} onBack={() => navigation.back(snapshot => update(snapshot))} onReset={() => update({ zoom: null, workspace: "", agent: "" })}>

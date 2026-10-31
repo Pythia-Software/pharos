@@ -11,6 +11,7 @@ import { Icon } from "./icons";
 import { loadUsageHistory } from "./usage-history";
 import { chartGesture, chartInspectionRange, type ChartInspectionRange } from "./chart-inspection";
 import { PageLink } from "./nested-pages";
+import { DashboardSelect } from "./dashboard-select";
 
 export { chartSpan, smoothingWhere, timeBounds, usageTime, withTimeRange, writingTime, type ChartRange, type FilterChange, type TimeBounds, type TimeFields } from "./chart-range";
 
@@ -168,12 +169,9 @@ export function ChartSelect<T extends string>({ label, ariaLabel = label, value,
 }) {
   return <label className="usage-chart-field usage-chart-picker">
     <span className="usage-preset-label">{label}</span>
-    <span className="usage-chart-select">
-      <select data-pharos-target={`control:chart:${ariaLabel.toLowerCase().replace(/\s+/g,"-")}`} aria-label={ariaLabel} value={value} disabled={disabled} title={title} onChange={event => onChange(event.target.value as T)}>
-        {options.map(([option, text, reason]) => <option key={option} value={option} disabled={Boolean(reason)} title={reason}>{text}</option>)}
-      </select>
-      <Icon name="chevron-down" className="usage-chart-caret" />
-    </span>
+    <DashboardSelect data-pharos-target={`control:chart:${ariaLabel.toLowerCase().replace(/\s+/g,"-")}`} aria-label={ariaLabel} value={value} disabled={disabled} title={title} onChange={event => onChange(event.target.value as T)}>
+      {options.map(([option, text, reason]) => <option key={option} value={option} disabled={Boolean(reason)} title={reason}>{text}</option>)}
+    </DashboardSelect>
     {note ? <span className="usage-chart-control-note">{note}</span> : null}
   </label>;
 }
