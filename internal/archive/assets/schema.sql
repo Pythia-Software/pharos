@@ -1158,6 +1158,10 @@ CREATE TABLE IF NOT EXISTS background_runs (
   host_id TEXT NOT NULL, item TEXT NOT NULL, started_at TEXT, finished_at TEXT,
   succeeded_at TEXT, error TEXT, seconds REAL, PRIMARY KEY(host_id,item)
 );
+CREATE TABLE IF NOT EXISTS background_temporary_cadences (
+  host_id TEXT NOT NULL, item TEXT NOT NULL, cadence TEXT NOT NULL, expires_at TEXT NOT NULL,
+  PRIMARY KEY(host_id,item)
+);
 CREATE TABLE IF NOT EXISTS automatic_source_states (
   host_id TEXT NOT NULL, source_name TEXT NOT NULL, attempted_at TEXT, succeeded_at TEXT,
   error TEXT, indexed_at TEXT, preflight TEXT, counts_json TEXT NOT NULL DEFAULT '{}',
@@ -1182,6 +1186,15 @@ CREATE TABLE IF NOT EXISTS sync_integrity_issues (
   first_at TEXT NOT NULL, last_at TEXT NOT NULL, state TEXT NOT NULL,
   detail_json TEXT NOT NULL, occurrences INTEGER NOT NULL DEFAULT 1, resolved_at TEXT
 );
+-- Host-local attempt/backoff state and the durable queue of larger audits.
+CREATE TABLE IF NOT EXISTS sync_verification_progress (
+  host_id TEXT NOT NULL, source_name TEXT NOT NULL, unit TEXT NOT NULL,
+  signature TEXT NOT NULL, attempted_at TEXT NOT NULL, verified_at TEXT,
+  next_at TEXT, heavy INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0,
+  reason TEXT, evidence_bytes INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(host_id,source_name,unit)
+);
+CREATE INDEX IF NOT EXISTS sync_verification_pending ON sync_verification_progress(host_id,heavy,next_at);
 CREATE TABLE IF NOT EXISTS sync_recovery_jobs (
   id TEXT PRIMARY KEY, mode TEXT NOT NULL, scope_json TEXT NOT NULL, state TEXT NOT NULL,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL, progress_json TEXT NOT NULL DEFAULT '{}',

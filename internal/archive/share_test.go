@@ -293,7 +293,7 @@ func TestSharedMessagesKeepOnlyListedFields(t *testing.T) {
 		"id": "m1", "native_id": "n1", "role": "user", "kind": "message", "text": "hello", "created_at": "2026-09-01T00:00:00Z",
 		"evidence_locator": "/Users/gbw/x.jsonl:3", "content_hash": "abc", "sender": "someone", "future_column": "would leak",
 		"authorship": map[string]any{"typed_words": 1, "pasted_words": 0, "spans": []map[string]any{
-			{"category": "typed", "words": 1, "excerpt": "hello", "source": map[string]any{"title": "another conversation"}},
+			{"start": 0, "end": 5, "category": "typed", "words": 1, "excerpt": "hello", "source": map[string]any{"title": "another conversation"}},
 		}},
 	}})
 	encoded, _ := json.Marshal(kept)
@@ -301,6 +301,10 @@ func TestSharedMessagesKeepOnlyListedFields(t *testing.T) {
 		if strings.Contains(string(encoded), leaked) {
 			t.Errorf("shared message leaks %q: %s", leaked, encoded)
 		}
+	}
+	spans := kept[0]["authorship"].(map[string]any)["spans"].([]map[string]any)
+	if integer(spans[0]["start"]) != 0 || integer(spans[0]["end"]) != 5 {
+		t.Fatal("shared messages need exact authorship offsets", spans)
 	}
 	if kept[0]["text"] != "hello" || kept[0]["id"] != "m1" {
 		t.Errorf("shared message lost what the reader needs: %s", encoded)

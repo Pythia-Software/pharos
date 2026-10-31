@@ -149,6 +149,43 @@ func TestBackgroundPlanRunsEachCadenceWhenDue(t *testing.T) {
 	}
 }
 
+func TestBackgroundVerificationQueueRespectsCadence(t *testing.T) {
+	at := time.Date(2026, 10, 29, 15, 0, 0, 0, time.Local)
+	settings := backgroundSettings{Mode: "on", DailyAt: defaultDailyAt}
+	input := backgroundInputs{verificationNext: at.Add(-time.Minute)}
+	plan := func() itemPlan {
+		for _, plan := range backgroundPlan(settings, input, at) {
+			if plan.ID == "verification" {
+				return plan
+			}
+		}
+		t.Fatal("verification item missing")
+		return itemPlan{}
+	}
+	if got := plan(); !got.Due || got.Cadence != cadenceHourly {
+		t.Fatalf("queued work was not due on the larger cadence: %+v", got)
+	}
+	input.deferred = map[string]deferredRow{"tools": {generation: 2, completed: 1, changedAt: formatTime(at)}}
+	if got := plan(); got.Due || !got.Next.Equal(at.Add(hourlyQuiet)) {
+		t.Fatalf("larger verification did not wait for a quiet library: %+v", got)
+	}
+	input.deferred = nil
+	settings.Mode = "manual"
+	if got := plan(); got.Due {
+		t.Fatalf("only-when-I-ask mode started queued work: %+v", got)
+	}
+	settings.Mode = "on"
+	input.verificationNext = time.Time{}
+	if got := plan(); got.Due || got.Pending {
+		t.Fatalf("an empty queue scheduled verification: %+v", got)
+	}
+	input.verificationNext = at.Add(-time.Minute)
+	input.runs = map[string]backgroundRunRow{"verification": {succeeded: formatTime(at)}}
+	if got := plan(); got.Due || got.Next.Before(at.Add(hourlyEvery)) {
+		t.Fatalf("larger checks ran more than hourly: %+v", got)
+	}
+}
+
 // An override can only slow an item down; a fixed item has none; an
 // opt-in item runs only when chosen.
 func TestBackgroundOverridesOnlySlowItemsDown(t *testing.T) {
@@ -218,6 +255,7 @@ func TestBackgroundPassRunsDueStagesAndRecordsThem(t *testing.T) {
 	execTx(t, catalog.DB, "DELETE FROM sync_deferred",
 		// Today's daily work is done.
 		"INSERT INTO background_runs(host_id,item,succeeded_at) VALUES("+sqlQuote(currentHost().ID)+",'preserve',"+stamp(0)+")",
+		"INSERT INTO meta(key,value) VALUES('findings_generation',"+sqlQuote(catalog.findingsGeneration())+") ON CONFLICT(key) DO UPDATE SET value=excluded.value",
 		"INSERT INTO sync_deferred(name,generation,completed_generation,changed_at,completed_at,pending_since) VALUES('tools',2,1,"+stamp(time.Minute)+","+stamp(2*time.Hour)+","+stamp(time.Minute)+")",
 		// Hourly, and the library is not quiet: it waits.
 		"INSERT INTO sync_deferred(name,generation,completed_generation,changed_at,completed_at,pending_since) VALUES('authorship',2,1,"+stamp(time.Minute)+","+stamp(10*time.Minute)+","+stamp(time.Minute)+")")
@@ -342,6 +380,79 @@ func TestBackgroundSettingsAPI(t *testing.T) {
 		{"battery": map[string]any{"hourly": "slower"}}, // only Frequently runs slower
 		{"battery": map[string]any{"frequent": "sometimes"}},
 		{"battery": map[string]any{"low_battery_waits": "yes"}},
+	} {
+		post("/api/background/settings", body, http.StatusBadRequest)
+	}
+	t.Run("temporary promotion and demotion", func(t *testing.T) {
+		execSQL(t, catalog.DB, `UPDATE background_settings SET placements_json='{"writing":"daily"}' WHERE host_id=`+sqlQuote(currentHost().ID))
+		post("/api/background/settings", map[string]any{"temporary_cadences": map[string]any{"writing": cadenceHourly}}, http.StatusOK)
+		settings, err := catalog.backgroundSettings(ctx, time.Now())
+		if err != nil || settings.cadence(writing) != cadenceHourly {
+			t.Fatalf("promoted schedule: %+v (%v)", settings, err)
+		}
+		temporary := settings.Temporary["writing"]
+		expires, ok := parseTime(temporary.ExpiresAt)
+		if !ok || time.Until(expires) < temporaryCadenceDuration-time.Minute || time.Until(expires) > temporaryCadenceDuration {
+			t.Fatalf("temporary schedule must last one week: %+v", temporary)
+		}
+		// The scheduler and rendered column use the same effective cadence.
+		plans := backgroundPlan(settings, backgroundInputs{deferred: map[string]deferredRow{"authorship": {generation: 2, completed: 1, changedAt: formatTime(time.Now().Add(-2 * time.Hour))}}}, time.Now())
+		for _, plan := range plans {
+			if plan.ID == "writing" && plan.Cadence != cadenceHourly {
+				t.Fatalf("scheduler ignored the temporary cadence: %+v", plan)
+			}
+		}
+		items := get()["view"].(map[string]any)["items"].([]any)
+		for _, raw := range items {
+			item := raw.(map[string]any)
+			if item["id"] == "writing" && (item["column"] != cadenceHourly || item["temporary_cadence"] == nil || len(item["cadence_moves"].([]any)) != 2) {
+				t.Fatalf("temporary schedule missing from view: %+v", item)
+			}
+		}
+		// Normal settings saves and automatic placement changes cannot end or
+		// extend a temporary choice. Expiration is checked on read, after restart too.
+		post("/api/background/settings", map[string]any{"daily_at": "06:00"}, http.StatusOK)
+		execSQL(t, catalog.DB, `UPDATE background_settings SET placements_json='{"writing":"frequent"}' WHERE host_id=`+sqlQuote(currentHost().ID))
+		settings, err = catalog.backgroundSettings(ctx, time.Now())
+		if err != nil || settings.cadence(writing) != cadenceHourly || settings.Temporary["writing"] != temporary {
+			t.Fatalf("temporary schedule did not survive settings reload: %+v (%v)", settings, err)
+		}
+		settings, err = catalog.backgroundSettings(ctx, expires)
+		if err != nil || settings.cadence(writing) != cadenceFrequent || len(settings.Temporary) != 0 {
+			t.Fatalf("expiration did not restore automatic placement: %+v (%v)", settings, err)
+		}
+		post("/api/background/settings", map[string]any{"temporary_cadences": map[string]any{"writing": cadenceDaily}}, http.StatusOK)
+		settings, _ = catalog.backgroundSettings(ctx, time.Now())
+		if settings.cadence(writing) != cadenceDaily {
+			t.Fatal("temporary demotion was not applied")
+		}
+		post("/api/background/settings", map[string]any{"temporary_cadences": map[string]any{"writing": ""}}, http.StatusOK)
+		settings, _ = catalog.backgroundSettings(ctx, time.Now())
+		if settings.cadence(writing) != cadenceFrequent || len(settings.Temporary) != 0 {
+			t.Fatal("ending a temporary schedule did not restore automatic placement")
+		}
+		post("/api/background/settings", map[string]any{"overrides": map[string]any{"writing": cadenceDaily}, "temporary_cadences": map[string]any{"writing": cadenceHourly}}, http.StatusOK)
+		settings, _ = catalog.backgroundSettings(ctx, time.Now())
+		expires, _ = parseTime(settings.Temporary["writing"].ExpiresAt)
+		settings, _ = catalog.backgroundSettings(ctx, expires)
+		if settings.cadence(writing) != cadenceDaily {
+			t.Fatal("expiration did not restore the persistent override")
+		}
+		post("/api/background/settings", map[string]any{"overrides": map[string]any{"writing": cadenceManual}}, http.StatusOK)
+		settings, _ = catalog.backgroundSettings(ctx, time.Now())
+		if len(settings.Temporary) != 0 || settings.cadence(writing) != cadenceManual || len(itemCadenceMoves(writing, settings)) != 0 {
+			t.Fatal("a permanent choice must end the temporary schedule")
+		}
+		post("/api/background/settings", map[string]any{"overrides": map[string]any{"writing": ""}}, http.StatusOK)
+	})
+	for _, body := range []map[string]any{
+		{"temporary_cadences": "hourly"},
+		{"temporary_cadences": map[string]any{"writing": nil}},
+		{"temporary_cadences": map[string]any{"writing": cadenceManual}},
+		{"temporary_cadences": map[string]any{"writing": "sometimes"}},
+		{"temporary_cadences": map[string]any{"search": cadenceDaily}},
+		{"temporary_cadences": map[string]any{"backup": cadenceDaily}},
+		{"temporary_cadences": map[string]any{"nothing": cadenceHourly}},
 	} {
 		post("/api/background/settings", body, http.StatusBadRequest)
 	}

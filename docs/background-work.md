@@ -944,7 +944,12 @@ lag by seconds.
   source's state), or a gated writer that arrives after the last yield
   check, can wait for one short journal commit; a writer in another process
   meets the journal like any other SQLite writer. A round has a 250 ms
-  deadline. Measured on an internal SSD (`TestJournalGateHoldIsShort`, 20
+  deadline, checked between its statements: a statement is never
+  interrupted, since an interrupt landing on a statement of the open
+  transaction (a COMMIT waiting for an external drive's flush) could leave
+  the transaction open on the pooled connection and the catalog's write
+  lock held. A connection whose transaction cannot be rolled back is
+  discarded. Measured on an internal SSD (`TestJournalGateHoldIsShort`, 20
   rows per round, 200 rounds): the gate is held p50 0.6 ms / p95 0.7 ms
   with the tests' durability, and p50 5.2 ms / p95 6.2 ms (max 9.2 ms) with
   the service's (`fullfsync`); an external drive's fsync will be slower.
@@ -1616,8 +1621,16 @@ the same schedule from one declaration (`backgroundItems`):
   only with a quarter to spare and slower only a quarter over, so a cost
   near a limit does not flap. Placements are stored in
   `background_settings.placements_json`.
-- **Overrides** may move an item to a slower cadence or to only when you
-  ask, never faster than its placement. Fixed items have none.
+- **Overrides** may permanently move an item to a slower cadence or to only
+  when you ask. Adaptive items also have **Promote/Demote … for a week**
+  actions: they move one bucket faster or slower, even beyond the measured
+  placement. The choice is stored per Mac in `background_temporary_cadences`
+  with a seven-day expiry and takes precedence over automatic placement and
+  permanent overrides until then. The usual schedule resumes at expiry or
+  when **End temporary schedule** is selected. Choosing a permanent schedule
+  ends the temporary choice too. Automatic cost measurements continue during
+  the week. Off, pause and battery rules still apply. Fixed and opt-in items
+  have no temporary moves.
 - **Sequencing.** A pass runs the items that bring in new data (captures)
   first, then the stage items through `finishDeferredStages`, in chain
   order. Earlier stages with pending work, read from `sync_deferred` after

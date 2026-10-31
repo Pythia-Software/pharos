@@ -47,7 +47,7 @@ export function usageRowRenderers(dataset: UsageDataset, shared = false): Render
       const text = String(value ?? ""), truncated = row[field.name === "input_text" ? "input_text_truncated" : "result_text_truncated"];
       if (!text) return <span className="muted">No retained text.</span>;
       if (text.length <= 600 && text.split("\n").length <= 8) return <pre className="usage-row-code">{text}</pre>;
-      return <div><pre className="usage-payload-preview">{text.split("\n").slice(0, 4).join("\n").slice(0, 350)}…</pre><ViewDisclosure viewKey={`row:${dataset}:${row.id}:${field.name}`} className="usage-payload"><summary>Read retained {field.name === "input_text" ? "input" : "result"} · {text.length.toLocaleString()} characters{truncated ? " · excerpt truncated" : ""}</summary><pre className="usage-row-code">{text}</pre></ViewDisclosure></div>;
+      return <div><pre className="usage-payload-preview">{text.split("\n").slice(0, 4).join("\n").slice(0, 350)}…</pre><ViewDisclosure viewKey={`row:${dataset}:${row.id}:${field.name}`} className="usage-payload" summary={<>Read retained {field.name === "input_text" ? "input" : "result"} · {text.length.toLocaleString()} characters{truncated ? " · excerpt truncated" : ""}</>}><pre className="usage-row-code">{text}</pre></ViewDisclosure></div>;
     },
     usage_sources: ({ row }) => shared ? null : <UsageRowActions dataset={dataset} row={row} />,
     usage_timestamp: ({ value }) => {

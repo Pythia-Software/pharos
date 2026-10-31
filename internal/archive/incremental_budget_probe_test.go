@@ -5,12 +5,19 @@
 //
 //	PHAROS_INCREMENTAL_RESOURCE_GATES=1 go test -tags probe -run TestIncrementalScheduledResourceBudgets -v ./internal/archive
 //
+// Read-only Codex verification canary against an existing development catalog:
+//
+//	PHAROS_CODEX_AUDIT_INPUTS=/absolute/sample.json go test -tags probe -run TestCodexScopedAuditSample -v ./internal/archive
+//
+// sample.json contains root, catalog, account, host, and paths. Source files and
+// the selected catalog are read-only; only t.TempDir reference catalogs change.
 // BenchmarkIncrementalScheduled (incremental_bench_test.go) measures the same
 // workloads without budgets.
 
 package archive
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -18,6 +25,107 @@ import (
 	"testing"
 	"time"
 )
+
+func TestCodexScopedAuditSample(t *testing.T) {
+	input := os.Getenv("PHAROS_CODEX_AUDIT_INPUTS")
+	if input == "" {
+		t.Skip("set PHAROS_CODEX_AUDIT_INPUTS to an explicit read-only sample descriptor")
+	}
+	var sample struct {
+		Root, Catalog, Account, Host string
+		Paths                        []string
+	}
+	data, err := os.ReadFile(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = json.Unmarshal(data, &sample); err != nil {
+		t.Fatal(err)
+	}
+	if sample.Root == "" || sample.Catalog == "" || len(sample.Paths) == 0 {
+		t.Fatal("sample needs root, catalog and paths")
+	}
+	if os.Getenv("PHAROS_AUDIT_QUERY_TIMINGS") == "1" {
+		previous := auditQueryTiming
+		t.Cleanup(func() { auditQueryTiming = previous })
+		auditQueryTiming = func(statement string, elapsed time.Duration, rows int) {
+			if elapsed > 100*time.Millisecond {
+				t.Logf("scope-query seconds=%.3f rows=%d SQL=%s", elapsed.Seconds(), rows, statement)
+			}
+		}
+	}
+	catalog, err := openCatalogReadOnly(sample.Catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer catalog.Close()
+	source := SourceConfig{Name: "codex", Kind: "codex", Path: sample.Root, Account: sample.Account, Enabled: true}
+	adapter, err := MakeAdapter(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := map[string]bool{}
+	for _, path := range sample.Paths {
+		selected[path] = true
+	}
+	units := map[string]syncUnit{}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	setAdapterContext(adapter, ctx)
+	err = adapter.(partialAdapter).discoverParts(func(parts []sourcePart) bool {
+		unit := unitOf(source, parts, false)
+		if selected[unit.ID] {
+			unit.Host = sample.Host
+			units[unit.ID] = unit
+		}
+		return true
+	}, func(*WorkspaceRecord, []sourcePart) error { return fmt.Errorf("canary discovery attempted to parse") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, path := range sample.Paths {
+		unit, ok := units[path]
+		if !ok {
+			t.Fatalf("sample %d was not discovered", index)
+		}
+		t.Run(fmt.Sprintf("sample-%d", index), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), automaticAuditWall)
+			defer cancel()
+			started := time.Now()
+			record, parts, evidence, err := freezeCodexAuditRecord(ctx, unit, filepath.Join(t.TempDir(), "evidence"), automaticAuditBytes)
+			if err != nil {
+				t.Fatalf("sample %d evidence: %v", index, err)
+			}
+			if record == nil || partsSignature(parts) != partsSignature(unit.Parts) {
+				t.Fatalf("sample %d changed while acquired", index)
+			}
+			t.Logf("evidence_bytes=%d snapshot_seconds=%.3f", evidence, time.Since(started).Seconds())
+			comparison := filepath.Join(t.TempDir(), "comparison")
+			differences, err := catalog.compareRetainedAuditRecord(ctx, unit, *record, comparison, automaticAuditBytes)
+			if err == nil && len(differences) > 0 {
+				reference, openErr := openCatalogReadOnly(filepath.Join(comparison, "reference.sqlite3"))
+				if openErr == nil {
+					defer reference.Close()
+					actual, _ := snapshotAuditScope(ctx, catalog, *record, automaticAuditBytes)
+					expected, _ := snapshotAuditScope(ctx, reference, *record, automaticAuditBytes)
+					if len(actual["conversations"]) == len(expected["conversations"]) {
+						for i, row := range actual["conversations"] {
+							for key, value := range row {
+								if normalizeAuditRows("conversations", []map[string]any{{key: value}}) != normalizeAuditRows("conversations", []map[string]any{{key: expected["conversations"][i][key]}}) {
+									t.Logf("conversation field differs: %s", key)
+								}
+							}
+						}
+					}
+				}
+			}
+			if err != nil || len(differences) > 0 {
+				t.Fatalf("sample %d comparison: %v, categories=%v", index, err, differences)
+			}
+			t.Logf("sample=%d outcome=passed evidence_bytes=%d seconds=%.3f", index, evidence, time.Since(started).Seconds())
+		})
+	}
+}
 
 func TestIncrementalScheduledResourceBudgets(t *testing.T) {
 	if os.Getenv("PHAROS_INCREMENTAL_RESOURCE_GATES") != "1" {

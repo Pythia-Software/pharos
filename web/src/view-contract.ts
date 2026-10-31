@@ -6,7 +6,7 @@ import { emptyTextSearch, newRule, ruleLabels, readTextSearch } from "./text-sea
 export type ViewField = { param: string; pages: string[]; kind: "text" | "boolean" | "enum" | "json" | "strings"; description: string; values?: readonly string[]; default?: unknown; details?: Record<string,unknown>; captureEntries?: boolean };
 const field = (param: string, pages: string[], kind: ViewField["kind"], description: string, values?: readonly string[], fallback?: unknown): ViewField => ({ param, pages, kind, description, ...(values ? { values } : {}), ...(fallback !== undefined ? { default: fallback } : {}) });
 export const viewFields: Record<string, ViewField> = {
-  disclosures: field("disclosures", ["*"], "json", "Expanded content by stable section/record identity; values are booleans. Menus and editors are excluded."),
+  disclosures: field("disclosures", ["*"], "json", "Expanded content and settings sections by stable section/record identity; values are booleans. Transient menus and editor drafts are excluded."),
   nav_collapsed: field("nav_collapsed", ["*"], "boolean", "Collapse the application sidebar."),
   nav_expanded: field("nav_expanded", ["*"], "json", "Expanded sidebar branches by section and page ID."),
   guide_dataset: field("guide_dataset", ["*"], "enum", "Data Guide source dataset.", ["library","usage","conversation_activity","writing","writing_messages","tool_calls","tools","skill_usages","mcp_calls","tl1_attempts","parallelism","findings"]),
@@ -15,7 +15,7 @@ export const viewFields: Record<string, ViewField> = {
   guide_open: field("guide_open", ["*"], "boolean", "Show the Data Guide."),
   guide_entity: field("guide_entity", ["*"], "enum", "Selected Data Guide entity.", ["workspaces","conversations","agents","messages","tool_calls"]),
   guide_example: field("guide_example", ["*"], "enum", "Selected example conversation.", ["implementation","review"]),
-  overlay: field("overlay", ["*"], "enum", "Open read-only header content.", ["none","history","bookmarks","usage"]),
+  overlay: field("overlay", ["*"], "enum", "Open read-only header content.", ["none","history","bookmarks","usage","drive"]),
   window_mode: field("window_mode", ["library","analyze/query/*","findings/table"], "enum", "Native time intent companion for full queries.", ["relative","calendar","today"]),
   window_days: field("window_days", ["library","analyze/query/*","findings/table"], "enum", "Native time-window size.", ["1","7","30","90","180","365"]),
   window_field: field("window_field", ["library","analyze/query/*","findings/table"], "text", "Lower-bound timestamp field; preserve with the query."),
@@ -32,7 +32,7 @@ export const viewFields: Record<string, ViewField> = {
   query_search: field("analyze_search", ["analyze/query/*"], "enum", "Retained search-entry route hint.", ["1"]),
   query_layout: field("query_layout", ["library","analyze/query/*","findings/table"], "json", "Query builder collapsed state by dataset ID."),
   reader_content: field("reader_content", ["work","library"], "json", "Expanded prose, turn summaries, file paths, action previews and deliberately loaded events by stable message/conversation identity."),
-  search_cards: field("search_cards", ["library"], "json", "Conversation-result presentation keyed by work ID/browse or work ID/turn; browse is boolean and turn is a stable input message ID."),
+  search_cards: field("search_cards", ["library"], "json", "Conversation-result presentation keyed by work ID/browse, work ID/conversation and work ID/turn; browse is boolean, conversation is a stable session ID, and turn is a stable message or outline entry ID."),
   chart_pins: field("chart_pins", ["analyze/*"], "json", "Pinned chart bucket keys by chart title. Hover is transient."),
   conveyor_paused: field("conveyor_paused", ["home"], "boolean", "Pause the Home suggestion carousel."),
   delegation_page: field("delegation_page", ["work"], "text", "Zero-based session page number, 0–250 (site_link accepts a number or decimal string). Replays current cursors on open; does not store expiring server cursors."),
@@ -65,6 +65,14 @@ viewFields.query_layout.captureEntries=true;
 // Structured examples are exported with each field so an agent can construct
 // the same object the UI owns, without guessing names from prose descriptions.
 const searchTemplate = emptyTextSearch();
+viewFields.disclosures.details={
+  example:{quickStatsSettings:true},
+  layout_sections:["menuBarPreferences","headerSettings","quickStatsSettings"],
+  sections:{"sync:separate":"settings/sync", "sync:repairs":"settings/sync", "sync:diagnostics":"settings/sync", "library:drive-health":"settings", "library:application":"settings/libraries", "machine:methodology":"/analyze?analyze_view=tokens&machine_view=time"},
+  families:{"background:<item ID>":"settings/sync", "sync:forecast:<run ID>":"settings/sync", "cloud:schedule:<destination ID>":"settings/backups", "carbon:row:<tier>:<category>":"analyze/carbon", "status:cadence:<cadence ID>":"overlay=drive", "status:support":"overlay=drive", "library:activity:<activity ID>:<started_at>:details":"overlay=drive", "work:<work ID>:files":"work", "feedback:logs:<submission ID>":"feedback inbox"},
+  defaults:"Fixed defaults remain implicit; data-dependent initial defaults are captured only in their active view. Explicit false closes a section even when its normal default is open.",
+  note:"On settings/layout, true opens a section and false closes it. Combine with reveal=section:<identity> to scroll and highlight without moving focus. Settings values remain saved preferences.",
+};
 const searchDetails = {
   template: {...searchTemplate,root:{...searchTemplate.root,id:"group-1",children:[]}},
   rule_template: {...newRule(),id:"rule-1"}, rule_kinds:Object.keys(ruleLabels),
@@ -105,7 +113,7 @@ export const viewDependencyGaps = {
   query_table_attention: {status:"partial",version:"0.9.8",owner:"@pythia-software/query-table-core AttentionRegistry",reason:"Exact record/property/JSONPath reveal is integrated. The public API does not support highlight-only, multiple persistent semantic targets, or clearing/replacing prior property marks. detail: is reveal-only; existing host highlights remain supported.",handoff:"docs/query-table-url-state-handoff.md"},
 };
 export const viewExclusions = {
-  settings: "Settings and their read-only diagnostics; not view overrides.",
+  settings: "Settings values and their read-only diagnostics; section openness uses disclosures.",
   legacy: "Legacy Analyze/Tools controls are deferred; canonical pages cannot inherit this exclusion.",
   transient: "Hover, keyboard focus, menu openness, scroll offsets and automatic animation progress.",
   editing: "Unapplied drafts, editing and mutation/export/refresh actions. Applied searches are included."

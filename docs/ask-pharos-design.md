@@ -44,19 +44,37 @@ The active chat has an `ask_chat` ID in the landing-page URL, including drafts.
 Opening that URL restores the chat independently of this tab's remembered session.
 History entries are links that can be copied or opened in another tab. Opening
 history or clearing the current chat supports browser Back/Forward navigation.
+Reloading restores this tab's open overlay or floating progress panel, including
+the draft and page context. Closed or dismissed surfaces stay closed; restoring
+an overlay preserves the underlying page URI.
 
 ## Composer and responses
 
-The textarea expands automatically. Focus enlivens the whole composer and its SVG
+The prompt editor expands automatically. Focus enlivens the whole composer and its SVG
 ribbon border. Provide light and dark appearances, a paper-plane send button, and
 an icon beside it to switch to ordinary search.
+
+The expanded composer, floating progress panel and header button share the
+`createPharosGlow` effect in `assets/ask-glow.js` and the `.pharos-glow` styles.
+The effect owns its SVG contour, ribbon, aura, resizing and working state; attach
+it to another surface, call `setWorking` with the active request state, and
+`destroy` it when that surface is removed. Hue cycles slowly while idle and six
+times faster while working, preserving its current phase when speed changes.
+Only the decoration changes hue; content and panel fills retain their colors.
+Reduced motion keeps both hue and loading trace still, with loading still visible.
+For an icon, supply its 24×24 SVG outline path to the same effect. The header's
+chat glyph uses this mode so its glow and loading trace follow the bubble inside
+the button, leaving the button's ordinary border and background intact.
 
 Submitting creates a conversation inside the composer: the user's question,
 processing state, and agent reply all remain in the same thread. Follow-ups append
 to that thread. Keep each reply's original CLI, model, and effort identity. The
 Pharos lighthouse avatar has a rounded-square outline and an overlapping provider
 badge at its bottom-right corner. Use a human icon for the user in the same size
-and shape of frame. Show configuration in the composer selector rather than
+and shape of frame. Omit visible speaker labels ("You" and the agent name).
+Give the user's message a soft, theme-aware background with rounded corners
+and no border; keep the agent reply on the composer surface. Keep accessible
+message-group labels. Show configuration in the composer selector rather than
 repeating the model and effort alongside each agent reply. Keep ribbon corners
 smooth and round as the conversation grows.
 
@@ -68,27 +86,57 @@ exchange; updates follow the bottom only while the user is already there. Readin
 earlier messages preserves the scroll position and offers a “Latest reply” button.
 
 Responses can contain one or several destination cards with descriptive titles
-and explanations. A response with exactly one destination opens it immediately,
-including when the user phrases the request as a question. Multiple matches remain
+and explanations. A response with exactly one destination that has no chart
+preview opens it immediately, including when the user phrases the request as a
+question. Multiple matches remain
 choices, and so does a lone card left after Pharos dropped others the agent
 offered beside it. Typing a follow-up while waiting or changing to ordinary search suppresses
-automatic navigation. Validate destinations through Pharos's own routing and URL
-builders. If every returned destination fails validation, give the agent one
+automatic navigation.
+
+Supported Analyze dashboard destinations display a compact, read-only chart above
+the destination link, using the same URL-based preview loader as Home dashboard
+cards. Chart answers stay in the thread, including a single result; ordinary
+single-link answers retain automatic navigation. Previews load when visible,
+show their time range and update time, and retain the link for empty or unavailable results.
+Reopening a chat loads the addressed moving view rather than freezing its data.
+Retained previews also revalidate when Ask reopens and on dashboard calendar or
+dataset refreshes; hidden charts defer their queries until visible again.
+Preview loading must not change the surrounding page URL, preferences or focus.
+
+Validate destinations through Pharos's own routing and URL builders. If every
+returned destination fails validation, give the agent one
 automatic correction attempt with its previous response and the validation errors,
 within the original request deadline. Keep private lookup results and their
 remaining budget; correction must not repeat those lookups. If correction also
 fails, show the validation reason without dumping the URL. A response with some
 valid destinations keeps the existing choice behavior without a correction call.
 
-Ask Pharos is also a configurable, icon-only header tool, with a search glyph
-and ribbon edge. It opens the same chat in a modal over the current page. Every
-submitted question captures that page's local URI, including its filters and
-view settings, as private context. Retries retain the original URI; follow-ups
-capture the page currently being viewed. This context stays out of the indexed
+Ask Pharos is also a configurable, icon-only header tool, with a chat glyph
+and ribbon edge. It opens the same composer in a modal over the current page,
+without an outer card. The empty modal starts a quarter down the viewport. As the
+conversation grows, it expands equally above and below its original center until
+it reaches a viewport edge, then uses the remaining space, keeping the
+editor and controls visible while the transcript scrolls. Opening, height changes,
+and repositioning animate gently; reduced motion disables those animations.
+A dismissible context chip is an atomic inline part of
+the prompt, alongside ordinary text. Drag it to a caret position within the
+prompt, or focus it and use Alt+Left/Right to move it with the keyboard. Backspace
+or Delete removes a focused chip; undo and redo restore text edits and chip
+movement or removal. The editor supports multiple chips without merging their
+metadata into the question text. The page chip attaches that page's local URI,
+including its filters and view settings, to the request.
+Reloading the same chat in the same tab preserves chip placement with the draft;
+stale positions never replace a newer text draft.
+Removing the chip preserves the draft and omits that URI from subsequent requests
+in the open modal. Opening the modal again attaches the current page. Retries
+retain the original request's URI. This context stays out of the indexed
 conversation text.
 
 A picture-in-picture icon moves the chat from either Home or the overlay into
-a draggable, dismissible progress panel. Drag the panel itself to move it, or
+a draggable, dismissible progress panel. Keep the icon in the composer footer,
+immediately before Send/Stop. While processing, show “Browse while you wait”
+below the icon with a small gap. Clear the hint when processing ends or browsing
+is chosen, including when reopening that running request. Drag the panel itself to move it, or
 tap it once to reopen the chat; drafts and active questions stay intact.
 The panel shows only the latest streamed activity or request state
 and announces a completed response, clarification, or error. Dismissing it keeps
@@ -100,6 +148,20 @@ explicit links. Closing a pending modal also switches to browsing.
 Loading needs elapsed time, cancellation, retry, and preserved drafts. Suggestions
 prefill the editor without submitting and follow the existing card carousel's
 interaction patterns.
+
+The suggestion catalog in `assets/ask-model.js` interleaves questions about
+instructions, failures, tools, context, usage, models, delegation, prior work,
+findings and activity. Optional repository phrases use names from the Library's
+distinct repository values, and appear on only some eligible questions when
+at least two named repositories exist. Comparisons across repositories remain
+unqualified. Refresh changes both the page of ideas and the repository examples;
+missing metadata leaves the broad questions available. These are invitations to
+investigate, not claims that a pattern or a finding exists in the library.
+
+Hide/Show suggestions remains above the cards. Its collapsed state is stored in
+the library's UI preferences (`pharos-ask-suggestions-hidden`), survives reloads
+and follows the library between Macs. Collapsing also hides the carousel controls
+and pauses rotation. It does not affect the composer or the saved chat.
 
 When an ambiguity would materially change the destination, the agent can return
 a structured `clarification` containing one question and one to three suggested
@@ -162,11 +224,18 @@ accessible in History; Clear does not delete saved chats. Ordinary search remain
 available. Clear keeps the selected CLI/model/effort for the next chat.
 
 Place the icon buttons inside the composer in this order: switch to ordinary
-search, History, Clear, send. Show History only for an empty new composer, with no
+search, History, Clear, picture in picture, Send/Stop. Show History only for an empty new composer, with no
 submitted messages or draft. Show Clear whenever the composer has a draft or a
-conversation, using a reset icon and the short tooltip “Clear chat and start fresh”.
+conversation, as a text button floating in the composer's upper-right corner.
+In the modal, place a matching Close text button beside Clear. Their transparent
+container takes no height in the prompt layout. Text wraps around the controls
+on its first line; context chips flow inline with it. Use a transparent background
+and border, and the short tooltip “Clear chat and start fresh”. Keep the controls
+outside the scrollable transcript so they remain reachable while reading earlier
+replies.
 Disable and grey out Send when the draft is empty or contains only whitespace,
-and while a request is running.
+or while a conversation is loading. During a request, replace Send with an enabled
+square Stop button that cancels the request while preserving any follow-up draft.
 
 For a failed or canceled question, offer “Try Again with a different model”
 alongside retry, ordinary search, and Clear. Clear uses the same fresh-chat behavior
@@ -261,16 +330,21 @@ told to prefer the exact view asked for (dashboard, chart, split, filters
 and window) over the closest prebuilt card, and to say that no view can show
 something only after browsing confirms it.
 
-A destination is `{id, url, description}`, with exactly one of `id` and
+A destination is `{id, url, title, description}`, with exactly one of `id` and
 `url` non-empty; Codex's strict structured output needs every property, so
 the unused one is an empty string. At most three are returned. An `id` must
 be a section, a lookup result, or a card from an earlier turn of the chat. A
 `url` is read with `site_link`'s `{url}` path (`siteLinkFromURL`) in
 process: Pharos accepts it only when the site map parses it into a state and
-rebuilds it, and the card uses the rebuilt canonical URL, the generated
-title, and the generated summary unless the agent's description is
-non-empty. Its kind is the page's section. Anything else, including other
-origins, unknown parameters, charts the page would coerce, and `ask_chat`
+rebuilds it, and the card uses the rebuilt canonical URL. Non-empty agent titles
+and descriptions replace the generated title and summary; empty values retain
+the view's own text. Titles are limited to 300 bytes. When offering several
+links, the agent is instructed to give them clearly distinct contextual names
+and explain what each adds, highlighting differences in metric, grouping,
+repository, time range or purpose instead of repeating generic names. Names
+must describe the linked views faithfully. Its kind is the page's section.
+Anything else, including other origins, unknown parameters, charts the page
+would coerce, and `ask_chat`
 links, is left out of the answer, as is an unknown id, a destination without
 exactly one of `id` and `url`, or an over-long description. The turn records
 how many were left out (`omitted`) and the reply says so. Only a response
@@ -328,7 +402,8 @@ used as a destination or final answer.
 
 The waiting indicator shows the latest action and elapsed time, including time
 since the last update after ten seconds of silence. An expandable Activity list
-retains the latest 40 updates, including startup, Pharos tool calls, private
+is shown only for failed requests with recorded activity. It retains the latest
+40 updates, including startup, Pharos tool calls, private
 lookups, and answer saving. Labels are authored by Pharos; raw reasoning, model
 text, tool arguments/results, and CLI diagnostics do not enter the feed.
 Antigravity's `call_mcp_tool` routing identifies the Pharos operation, and its

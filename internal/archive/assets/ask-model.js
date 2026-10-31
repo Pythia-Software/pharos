@@ -1,4 +1,61 @@
 // DOM-free interaction rules shared by the composer and its unit tests.
+// Interleave subjects so each carousel page offers different ways into the
+// archive. {scope} is optional; comparisons deliberately stay library-wide.
+const askIdeaCatalog = [
+  {topic:'prompting',text:'What instructions am I repeating{scope}?'},
+  {topic:'errors',text:'Which errors recur across conversations{scope}?'},
+  {topic:'usage',text:'Where did most tokens go this week{scope}?'},
+  {topic:'memory',text:'Find past conversations that explain a design decision{scope}.'},
+  {topic:'tools',text:'Which commands keep failing{scope}?'},
+  {topic:'models',text:'How has my mix of models changed this month?'},
+  {topic:'prompting',text:'What did I have to correct more than once{scope}?'},
+  {topic:'context',text:'Which tool outputs fill the most context{scope}?'},
+  {topic:'delegation',text:'How much token usage comes from subagents{scope}?'},
+  {topic:'memory',text:'Find an earlier fix for a recurring test failure{scope}.'},
+  {topic:'tools',text:'Which commands account for the most recorded tool time{scope}?'},
+  {topic:'cost',text:'How does the API cost equivalent vary by model?'},
+  {topic:'prompting',text:'What could I turn into reusable project instructions{scope}?'},
+  {topic:'errors',text:'Which files have the most failed edits{scope}?'},
+  {topic:'usage',text:'Which repositories use the most tokens?'},
+  {topic:'memory',text:'What approaches have I already tried for flaky tests{scope}?'},
+  {topic:'context',text:'Which tool outputs get truncated{scope}?'},
+  {topic:'activity',text:'When do my agent sessions overlap the most?'},
+  {topic:'prompting',text:'Where am I writing the most explanations{scope}?'},
+  {topic:'skills',text:'Which skills have recorded invocations or loads{scope}?'},
+  {topic:'usage',text:'How has my cache reuse changed this month?'},
+  {topic:'memory',text:'Find conversations where I revisited the same decision{scope}.'},
+  {topic:'errors',text:'Which test commands fail most often{scope}?'},
+  {topic:'models',text:'Which models have the most recorded tool errors?'},
+  {topic:'findings',text:'Which recurring problems have findings I could act on{scope}?'},
+  {topic:'tools',text:'Which files do agents read repeatedly{scope}?'},
+  {topic:'cost',text:'Which conversations have the highest API cost equivalent{scope}?'},
+  {topic:'memory',text:'Find my longest conversations{scope}.'},
+  {topic:'context',text:'Which conversations have the most compactions{scope}?'},
+  {topic:'activity',text:'What changed in my work this week?'},
+  {topic:'prompting',text:'Find examples where a clearer prompt helped me change course{scope}.'},
+  {topic:'skills',text:'Which skill loads have recorded errors{scope}?'},
+  {topic:'usage',text:'How do input and output tokens compare across models?'},
+  {topic:'memory',text:'What have I already learned about slow builds{scope}?'},
+  {topic:'tools',text:'Which searches am I repeating{scope}?'},
+  {topic:'cost',text:'How has my estimated carbon footprint changed this month?'},
+  {topic:'findings',text:'Which findings are being watched for improvement{scope}?'},
+  {topic:'tools',text:'Which MCP methods do I use most{scope}?'},
+  {topic:'activity',text:'How does my activity differ across machines?'},
+  {topic:'memory',text:'Find work where I switched approaches after a failure{scope}.'},
+  {topic:'tools',text:'Which documentation hosts do agents consult most{scope}?'},
+  {topic:'usage',text:'Which days had unusually high token usage this month?'},
+];
+function askPromptSuggestions({repositories=[],variation=0}={}) {
+  const names=[...new Set(repositories.filter(name=>typeof name==='string'&&name.trim()))];
+  let eligible=0,scoped=0;
+  return askIdeaCatalog.map(idea=>{
+    // Keep a mixture of broad and scoped questions, even with many repos.
+    const qualify=idea.text.includes('{scope}')&&eligible++%2===1&&names.length>1;
+    const repository=qualify?names[(scoped++ + variation)%names.length]:'';
+    return idea.text.replace('{scope}',qualify?' in the “'+repository+'” repository':'');
+  });
+}
+
 async function askReadResponse(response, onProgress) {
   if (!response.ok || !response.headers.get('Content-Type')?.includes('application/x-ndjson')) {
     const result=await response.json();
@@ -24,6 +81,9 @@ async function askReadResponse(response, onProgress) {
     }
   } finally { reader.releaseLock(); }
 }
+function askShowActivity({status,activity=[]}) {
+  return status==='error'&&activity?.length>0;
+}
 function askWaitStatus({activity=[],elapsedMs=0,message='',cli=''}) {
   const latest=activity.at(-1),elapsed=Math.floor(elapsedMs/1000);
   const silent=latest?Math.max(0,Math.floor((elapsedMs-latest.elapsedMs)/1000)):elapsed;
@@ -32,9 +92,9 @@ function askWaitStatus({activity=[],elapsedMs=0,message='',cli=''}) {
     elapsed:elapsed+'s elapsed'+(silent>=10?' · '+silent+'s since last update':''),
   };
 }
-function askComposerActions({draft = '', turns = [], pending = false, enabled = false, model = ''}) {
+function askComposerActions({draft = '', turns = [], pending = false, opening = false, enabled = false, model = ''}) {
   const populated = turns.length > 0 || draft.length > 0;
-  return {send: enabled && !!model && !pending && !!draft.trim(), history: !populated, clear: populated, modelLocked: turns.length > 0};
+  return {send: enabled && !!model && !pending && !opening && !!draft.trim(), stop: pending, history: !populated, clear: populated, modelLocked: turns.length > 0};
 }
 // Carry the visible conversation into a fresh, editable prompt for another model.
 function askRetryDraft({turns = [], draft = ''}) {
@@ -76,10 +136,10 @@ function askRetryDraft({turns = [], draft = ''}) {
   }
   return notice+kept.join('\n\n');
 }
-// A lone card opens itself, unless Pharos left out other destinations the
-// agent offered with it: then the agent meant a choice.
-function askShouldNavigate({cards = [], omitted = 0, draft = '', enabled, regular, edited, browsing = false}) {
-  return enabled && !regular && !edited && !browsing && draft.length === 0 && cards.length === 1 && !omitted;
+// Chart previews stay in the answer for inspection. A lone ordinary link opens
+// itself unless the agent offered a choice or the user has started browsing.
+function askShouldNavigate({cards = [], omitted = 0, draft = '', enabled, regular, edited, browsing = false, hasPreview = false}) {
+  return enabled && !regular && !edited && !browsing && !hasPreview && draft.length === 0 && cards.length === 1 && !omitted;
 }
 function askOmittedNote(omitted = 0) {
   if (!omitted) return '';
@@ -117,6 +177,13 @@ function askThreadHeight({total, latest, previous = 0, gap = 0, available}) {
   const recent = latest + Math.min(previous, 64) + (previous > 0 ? gap : 0);
   return Math.max(0, Math.min(total, recent, available));
 }
+// Anchor the empty composer a quarter down, then share growth above and below
+// its original center. Once an edge reaches the viewport, use the remaining space.
+function askDialogLayout({viewportHeight,contentHeight,emptyHeight}) {
+  const height=Math.max(0,Math.min(contentHeight,viewportHeight));
+  const growth=Math.max(0,height-emptyHeight);
+  return {height,top:Math.max(0,Math.min(viewportHeight-height,viewportHeight/4-growth/2))};
+}
 function askClarificationActions({latest = false, status, pending = false, enabled = false, opening = false, draft = ''}) {
   const active = latest && status === 'clarification' && enabled && !pending && !opening;
   return {active, sendOther: active && !!draft.trim()};
@@ -127,6 +194,18 @@ function askPageURI(href) {
   const url = new URL(href);
   for (const key of [...url.searchParams.keys()]) if (key === 'ask_chat' || key.toLowerCase().includes('token')) url.searchParams.delete(key);
   return url.pathname + url.search + url.hash;
+}
+// A reload keeps this tab's surface. A different page or an explicit link to
+// another chat takes precedence over the surface remembered by the tab.
+function askRestorePresentation(href, saved) {
+  if (!saved || saved.page !== askPageURI(href)) return null;
+  const url = new URL(href), id = url.searchParams.get('ask_chat');
+  if (id && id !== saved.id) return null;
+  if (saved.presentation === 'home' && !['/', '/home'].includes(url.pathname)) return null;
+  return ['home', 'modal', 'floating', 'dismissed'].includes(saved.presentation) ? saved.presentation : null;
+}
+function askShowBrowseHint({pending=false,browsing=false,presentation='home'}) {
+  return pending&&!browsing&&['home','modal'].includes(presentation);
 }
 function askFloatingState(turn) {
   if (!turn) return {message: 'Ask a question', ready: false};

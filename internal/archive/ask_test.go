@@ -213,17 +213,23 @@ func TestAskConversationPersistenceAndSelection(t *testing.T) {
 		_, raw, _ := strings.Cut(prompt, "Context JSON:\n")
 		var data struct {
 			Conversation []struct {
-				CurrentURI string `json:"currentURI"`
+				CurrentURI   string    `json:"currentURI"`
+				Destinations []askCard `json:"destinations"`
 			} `json:"conversation"`
 		}
 		if err := json.Unmarshal([]byte(raw), &data); err != nil || len(data.Conversation) == 0 || data.Conversation[0].CurrentURI != pageURI {
 			t.Errorf("current page context missing from CLI conversation: %+v %v", data, err)
+		}
+		if calls > 1 && (len(data.Conversation) < 2 || len(data.Conversation[0].Destinations) != 2 || data.Conversation[0].Destinations[0].Href != "/analyze" || data.Conversation[0].Destinations[0].Title != "Review recorded model usage") {
+			t.Errorf("follow-up lost the earlier destination URLs: %+v", data.Conversation)
 		}
 		if strings.Contains(prompt, s.Config().APIToken) {
 			t.Error("passed service token to CLI")
 		}
 		var response askAgentResponse
 		_ = json.Unmarshal(askReply("analyze", "findings"), &response)
+		response.Destinations[0].Title = "Review recorded model usage"
+		response.Destinations[1].Title = "Find recurring agent failures"
 		response.Message = fmt.Sprintf("Navigation reply %d", calls)
 		return []byte(jsonText(response)), nil
 	})
@@ -288,11 +294,14 @@ func TestAskConversationPersistenceAndSelection(t *testing.T) {
 	if err != nil || len(got.Conversation) != 2 || got.Draft != "Keep this draft" {
 		t.Fatalf("restart lost chat: %+v %v", got, err)
 	}
+	if got.Conversation[0].Cards[0].Title != "Review recorded model usage" || got.Conversation[0].Cards[1].Title != "Find recurring agent failures" {
+		t.Fatalf("restart lost contextual destination names: %+v", got.Conversation[0].Cards)
+	}
 	summaries, err := s.askSessions(t.Context(), "wasting", 0)
 	if err != nil || len(summaries) != 1 || summaries[0].QuestionCount != 2 || len(summaries[0].Conversation) != 1 {
 		t.Fatalf("history summaries: %+v %v", summaries, err)
 	}
-	for _, query := range []string{"retries", "Navigation reply 2", "Explore the recorded evidence"} {
+	for _, query := range []string{"retries", "Navigation reply 2", "Explore the recorded evidence", "Review recorded model usage"} {
 		matches, err := s.askSessions(t.Context(), query, 0)
 		if err != nil || len(matches) != 1 || matches[0].ID != session.ID {
 			t.Fatalf("full-text history match %q missing: %+v %v", query, matches, err)
@@ -1183,6 +1192,36 @@ func TestAskSiteLinkDestinations(t *testing.T) {
 	if answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC"); err != nil || answer.Cards[0].Description != "Opus tokens by model." {
 		t.Fatalf("the agent's description was not kept: %+v %v", answer, err)
 	}
+	// Two windows of the same view have the same generated title. Keep the
+	// agent's contextual names while still resolving each link through the map.
+	destinations := []map[string]string{}
+	for _, days := range []int{7, 30} {
+		state, err := site.linkFromArgs(map[string]any{"page": "analyze/tokens", "days": days})
+		if err != nil {
+			t.Fatal(err)
+		}
+		link, err := site.build(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		destinations = append(destinations, map[string]string{"id": "", "url": link, "title": fmt.Sprintf("Tokens over the last %d days", days), "description": "Compare token volume across time windows."})
+	}
+	override(t, &askRunCLI, reply(destinations...))
+	answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC")
+	if err != nil || len(answer.Cards) != 2 {
+		t.Fatalf("distinct windows: %+v %v", answer, err)
+	}
+	for i, card := range answer.Cards {
+		if card.Title != destinations[i]["title"] || card.Href != destinations[i]["url"] || card.Kind != "Analyze" {
+			t.Fatalf("contextual destination %d: %+v", i, card)
+		}
+	}
+	for _, title := range []string{"", " \n "} {
+		override(t, &askRunCLI, reply(map[string]string{"id": "", "url": canonical, "title": title, "description": ""}))
+		if answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC"); err != nil || answer.Cards[0].Title != site.title(state) {
+			t.Fatalf("blank title should use the view title: %+v %v", answer, err)
+		}
+	}
 	with := func(change func(url.Values)) string {
 		values := example.Query()
 		change(values)
@@ -1199,6 +1238,7 @@ func TestAskSiteLinkDestinations(t *testing.T) {
 		"neither":            {"id": " ", "url": ""},
 		"unknown id":         {"id": "nope", "url": ""},
 		"long description":   {"id": "analyze", "url": "", "description": strings.Repeat("x", 1001)},
+		"long title":         {"id": "analyze", "url": "", "title": strings.Repeat("x", 301)},
 	} {
 		if _, given := destination["description"]; !given {
 			destination["description"] = ""
@@ -1642,7 +1682,7 @@ func TestAskSiteLinksRespectCancellation(t *testing.T) {
 			return askSiteCard(ctx, longURL, catalog)
 		},
 		func() (askCard, error) {
-			return askDestination(ctx, nil, "", longURL, "", catalog)
+			return askDestination(ctx, nil, "", longURL, "", "", catalog)
 		},
 	} {
 		if _, err := call(); !errors.Is(err, context.Canceled) {
