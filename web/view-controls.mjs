@@ -11,7 +11,7 @@ const root=fileURLToPath(new URL('..',import.meta.url));
 const ledgerPath=join(root,'docs/view-controls.json');
 const hash=text=>createHash('sha256').update(text).digest('hex').slice(0,16);
 const normalize=text=>text.replace(/\s+/g,' ').trim();
-const tags=new Set(['input','select','textarea','button','summary','details','SearchSelect','ChartSelect','RangeControl','DisplayControl','PeriodControl','ScaleControl','RollingControl','SmoothingControl','ViewDisclosure','DataTable','QueryBuilder','QueryFilterRow','MetricsPanel','JsonValueView','JsonCell','TextSearchEditor','SearchFilters','SourceQueryBuilder']);
+const tags=new Set(['input','select','textarea','button','summary','details','SearchSelect','DashboardSelect','ChartSelect','RangeControl','DisplayControl','PeriodControl','ScaleControl','RollingControl','SmoothingControl','ViewDisclosure','DataTable','QueryBuilder','QueryFilterRow','MetricsPanel','JsonValueView','JsonCell','TextSearchEditor','SearchFilters','SourceQueryBuilder']);
 function sources(dir){return readdirSync(dir,{withFileTypes:true}).flatMap(entry=>entry.isDirectory()?sources(join(dir,entry.name)):/\.(tsx|ts)$/.test(entry.name)?[join(dir,entry.name)]:[]);}
 const controls=[],bindings=[];
 export function discoverSourceControls(file,text,kind=ts.ScriptKind.TSX){
