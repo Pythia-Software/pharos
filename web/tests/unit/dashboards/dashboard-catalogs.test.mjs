@@ -18,6 +18,7 @@ import { trendNote, trendQuery, trendSeries } from "../../../src/dashboard-trend
 import { tokenAnalysisCatalog } from "../../../src/token-analysis-catalog";
 import { toolsAnalysisCatalog as tools } from "../../../src/tools-analysis-catalog";
 import { mcpAnalysisCatalog as mcp } from "../../../src/mcp-analysis-catalog";
+import { agentEventsAnalysisCatalog as agentEvents } from "../../../src/agent-events-analysis-catalog";
 import { agentTimeAnalysisCatalog as time, skillsAnalysisCatalog as skills } from "../../../src/record-analysis-catalogs";
 import { dashboardChartURL } from "../../../src/dashboard-chart-links";
 import { toolMetricPresentation } from "../../../src/tools-dashboard-model";
@@ -25,8 +26,8 @@ import { withTimeRange } from "../../../src/chart-range";
 import { runAnalysisQuery } from "../../../src/analysis-request";
 import { answerQuery } from "../../support/query-server.mjs";
 
-const rows = { conversation_activity: population(schemas.conversation_activity, { now }), tools: toolsRollup(), mcp_calls: mcpCalls(), tool_calls: toolCalls(), skill_usages: skillUsages() };
-const catalogs = [tools, mcp, time, skills, activity];
+const rows = { conversation_activity: population(schemas.conversation_activity, { now }), tools: toolsRollup(), mcp_calls: mcpCalls(), tool_calls: toolCalls(), skill_usages: skillUsages(), agent_events: population(schemas.agent_events, { now }) };
+const catalogs = [tools, mcp, time, skills, activity, agentEvents];
 const month = catalog => withTimeRange([], catalog.time, new Date(now - 30 * 86400000), new Date(now));
 const run = (catalog, query) => core.evaluateMetrics(rows[catalog.dataset], query, schemas[catalog.dataset], { now }).metrics;
 // A cycle's per-occurrence clause is planned into plain calendar metrics

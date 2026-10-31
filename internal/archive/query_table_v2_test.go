@@ -60,7 +60,7 @@ func metricRequest(specs ...qt.AggSpec) qt.MetricQuery {
 }
 
 func TestGeneratedQuerySchemas(t *testing.T) {
-	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings", "parallelism"} {
+	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings", "parallelism", "agent_events", "agent_event_messages"} {
 		t.Run(dataset, func(t *testing.T) {
 			doc, err := querySchemaDocument(dataset)
 			if err != nil {

@@ -1,0 +1,24 @@
+/* Agent Experience's events panel: the sentences behind the numbers. */
+.agent-event-examples{margin:22px 0 0;padding:18px 20px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+.agent-event-examples-header h3{margin:0 0 4px;font-size:var(--fs-lg)}
+.agent-event-examples-header p{margin:0 0 14px;font-size:var(--fs-sm)}
+.agent-event-list{list-style:none;margin:0;padding:0;display:grid;gap:14px}
+.agent-event{padding:0 0 0 12px;border-left:3px solid var(--line);min-width:0}
+.agent-event-kind{font-size:var(--fs-xs,11px);font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:var(--muted)}
+.agent-event-sentence{margin:2px 0 4px;font-weight:500;line-height:1.5;overflow-wrap:anywhere}
+.agent-event-context{margin:2px 0;font-size:var(--fs-sm);color:var(--muted);line-height:1.5;overflow-wrap:anywhere}
+.agent-event-role{display:inline-block;min-width:68px;margin-right:6px;font-size:var(--fs-xs,11px);text-transform:uppercase;letter-spacing:.03em}
+.agent-event-meta{margin:4px 0 0;font-size:var(--fs-sm);overflow-wrap:anywhere}
+.agent-event-examples-footer{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-top:16px;font-size:var(--fs-sm)}
+/* Events per 1,000 agent messages: stacked columns, one per period. */
+.agent-event-rates{margin:22px 0 0;padding:18px 20px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+.agent-event-rates h3{margin:0 0 4px;font-size:var(--fs-lg)}
+.agent-event-rates header p{margin:0 0 12px;font-size:var(--fs-sm)}
+.agent-event-rate-plot{position:relative;display:grid;grid-template-columns:auto 1fr;grid-template-rows:180px auto;column-gap:8px;margin-top:12px}
+.agent-event-rate-axis{font-size:var(--fs-xs,11px);color:var(--muted);align-self:start}
+.agent-event-rate-columns{display:flex;align-items:flex-end;gap:2px;height:100%;border-bottom:1px solid var(--line);min-width:0}
+.agent-event-rate-column{flex:1 1 0;min-width:2px;display:flex;flex-direction:column-reverse;gap:2px}
+.agent-event-rate-column>i{display:block;min-height:1px}
+.agent-event-rate-column>i:last-child{border-radius:4px 4px 0 0}
+.agent-event-rate-dates{grid-column:2;display:flex;justify-content:space-between;font-size:var(--fs-xs,11px);margin-top:4px}
+.agent-event-rates .query-chart-legend{font-size:var(--fs-sm)}

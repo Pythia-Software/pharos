@@ -278,6 +278,8 @@ func Run(arguments []string) error {
 			return runRepairExistingCLI(config, catalog, args)
 		case "build-tools":
 			return runBuildToolsCLI(ctx, catalog, op)
+		case "agent-events":
+			return runAgentEventsCLI(ctx, catalog, args)
 		case "refine-usage":
 			refined, err := catalog.RefineUsageTimeline(func(done, total int) {
 				op.progress("Refine usage", "", "conversation", float64(done), float64(total), total > 0)
@@ -340,6 +342,11 @@ func cliCatalogOperation(command string, args []string) OperationSpec {
 		return OperationSpec{Kind: "ingest.cli", Variant: "repair-existing"}
 	case "build-tools":
 		return OperationSpec{Kind: "tools.ledger.build"}
+	case "agent-events":
+		// status only reads; import (or anything else, which fails) writes.
+		if len(args) == 0 || args[0] != "status" {
+			return OperationSpec{Kind: "analysis.agent_events.import"}
+		}
 	case "refine-usage", "repair-usage-attribution":
 		return OperationSpec{Kind: "catalog.repair", Variant: command}
 	case "upgrade":
@@ -438,6 +445,34 @@ func runBuildToolsCLI(ctx context.Context, catalog *Catalog, op *Op) error {
 	return printJSON(map[string]any{"conversations_built": built, "status": status})
 }
 
+// runAgentEventsCLI: pharos agent-events import FILE | status. The import
+// loads predictions of the JAYHAWK study's model (agent_events.go) until the
+// model runs inside Pharos.
+func runAgentEventsCLI(ctx context.Context, catalog *Catalog, args []string) error {
+	if len(args) == 2 && args[0] == "import" {
+		result, err := catalog.ImportAgentEvents(ctx, args[1])
+		if err != nil {
+			return err
+		}
+		return printJSON(result)
+	}
+	if len(args) == 1 && args[0] == "status" {
+		status := map[string]any{}
+		var messages, events, atCutoff int
+		var first, last, models sql.NullString
+		if err := catalog.DB.QueryRowContext(ctx, `SELECT count(*), min(day), max(day), group_concat(DISTINCT model) FROM agent_event_messages`).Scan(&messages, &first, &last, &models); err != nil {
+			return err
+		}
+		if err := catalog.DB.QueryRowContext(ctx, `SELECT count(*), COALESCE(sum(probability>=?),0) FROM agent_events`, agentEventThreshold).Scan(&events, &atCutoff); err != nil {
+			return err
+		}
+		status["messages"], status["first_day"], status["last_day"], status["models"] = messages, first.String, last.String, models.String
+		status["events_scored"], status["events_at_threshold"], status["threshold"] = events, atCutoff, agentEventThreshold
+		return printJSON(status)
+	}
+	return fmt.Errorf("usage: pharos agent-events {import FILE | status}")
+}
+
 // applyRepositoryMergesCLI: pharos repositories --merge --apply.
 func applyRepositoryMergesCLI(config Config, catalog *Catalog) error {
 	items, err := loadRepositoryIdentities(catalog.DB)
@@ -468,7 +503,7 @@ func firstOf(args []string) string {
 }
 
 func usageError() error {
-	return fmt.Errorf("usage: pharos [--config PATH] {app,mcp-app,library-transfer,library-recover,init,init-library,add-this-mac,serve,capture,index,history-backfill,sqlite-records,backup,cloud-backup,cloud-restore,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,upgrade,build-tools,pricing,search,tl1,findings,labeling,health,doctor,dev-ui,mcp,probe,volume-id}")
+	return fmt.Errorf("usage: pharos [--config PATH] {app,mcp-app,library-transfer,library-recover,init,init-library,add-this-mac,serve,capture,index,history-backfill,sqlite-records,backup,cloud-backup,cloud-restore,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,upgrade,build-tools,agent-events,pricing,search,tl1,findings,labeling,health,doctor,dev-ui,mcp,probe,volume-id}")
 
 }
 func urlQueryEscape(value string) string {

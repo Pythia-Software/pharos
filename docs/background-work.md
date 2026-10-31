@@ -429,6 +429,7 @@ nothing.
 | `library.upgrade` | Upgrade the library · Upgrading the library | chained (after an index finds pending steps, or the browser after Capture & index), user (`POST /api/upgrade`), cli | svc, cli | D:w W:w | upgrade, an.tools, an.ledger | — | Stops after the unit in progress; starting the upgrade again resumes it. | record | always | fg |
 | `catalog.repair` (variants `refine-usage`, `repair-usage-attribution`) | Repair usage (Terminal) · Repairing usage | cli | cli | D:w W:w | an.tools, an.authorship | — | Pharos cannot stop it. | none (to Pharos) | always | fg |
 | `repositories.merge` | Merge repositories (Terminal) · Merging repositories | cli (`repositories --merge --apply`) | cli | D:w W:w | an.identities, an.git | — | Pharos cannot stop it. | none (to Pharos) | always | fg |
+| `analysis.agent_events.import` | Import agent events (Terminal) · Importing agent events | cli (`agent-events import FILE`) | cli | D:w W:w | an.agent_events | — | Pharos cannot stop it; the import is one transaction, so a kill leaves the previous events. | none (to Pharos) | always | fg |
 | `tools.ledger.build` | Build the Tools ledger · Building the Tools ledger | user (`POST /api/tools/backfill`), version, step of `library.upgrade` | svc, cli (`build-tools`) | D:w W:w | an.ledger, an.tools | — | Stops between conversations; building the ledger again resumes it. | record | always | fg |
 
 Notes:

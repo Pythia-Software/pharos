@@ -74,7 +74,7 @@ var operationKinds = []operationKind{
 		OnEject: "Stops between workspaces; the next index resumes it. The chain after the sources ignores Stop and stops only on release.", Latency: "batch", Journal: journalAlways, Priority: priorityForeground},
 	{Kind: "background.update", Label: "Background update", Verb: "Updating in the background",
 		VariantLabels: map[string]string{"frequent": "Frequent update", "hourly": "Hourly update", "daily": "Daily update", "requested": "Update now"},
-		Holds: "D:w W:w I:w", Affects: "capt:this/*, conv:*, an.*, findings, upgrade", Stop: "index",
+		Holds:         "D:w W:w I:w", Affects: "capt:this/*, conv:*, an.*, findings, upgrade", Stop: "index",
 		OnEject: "Stops after the record in progress; each item runs again at its next time.", Latency: "batch", Journal: journalLonger(10 * time.Second), Priority: priorityBackground},
 	{Kind: "background.capture", Label: "Capture & index", Verb: "Capturing and indexing", VariantLabels: map[string]string{"sources": "Read other sources", "preserve": "Preserve originals"},
 		Holds: "D:w W:w I:w C(this):w", Affects: "capt:this/*, conv:*", Stop: "index",
@@ -165,6 +165,8 @@ var operationKinds = []operationKind{
 		OnEject: "Pharos cannot stop it.", Latency: "none", Journal: journalAlways, Priority: priorityForeground},
 	{Kind: "repositories.merge", Label: "Merge repositories (Terminal)", Verb: "Merging repositories", Holds: "D:w W:w", Affects: "an.identities, an.git",
 		OnEject: "Pharos cannot stop it.", Latency: "none", Journal: journalAlways, Priority: priorityForeground},
+	{Kind: "analysis.agent_events.import", Label: "Import agent events (Terminal)", Verb: "Importing agent events", Holds: "D:w W:w", Affects: "an.agent_events",
+		OnEject: "Pharos cannot stop it; the import is one transaction, so a kill leaves the previous events.", Latency: "none", Journal: journalAlways, Priority: priorityForeground},
 	{Kind: "tools.ledger.build", Label: "Build the Tools ledger", Verb: "Building the Tools ledger", Holds: "D:w W:w", Affects: "an.ledger, an.tools",
 		OnEject: "Stops between conversations; building the ledger again resumes it.", Latency: "record", Journal: journalAlways, Priority: priorityForeground},
 

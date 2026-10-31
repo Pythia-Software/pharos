@@ -451,6 +451,9 @@ func (c *Catalog) prepareSQLDataset(ctx context.Context, dataset string) error {
 		c.ensureAuthorship()
 		return nil
 	}
+	if dataset == "agent_events" || dataset == "agent_event_messages" {
+		return nil // imported (agent_events.go); nothing to bring up to date
+	}
 	return c.currentToolRollup(ctx)
 }
 
