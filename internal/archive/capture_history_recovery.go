@@ -324,6 +324,9 @@ func (c *Catalog) applyHistoryRecovery(ctx context.Context, e historyRecovery) (
 	if e.Version != historyFormat || e.Tier != "catalog-derived" || e.Parser != "catalog-recovery-v1" {
 		return "", errors.New("unsupported catalog recovery contract")
 	}
+	if err := c.queries.wait(ctx); err != nil {
+		return "", err
+	}
 	outcome := "catalog-derived"
 	err := c.writeTransaction(ctx, "replay catalog-derived history", func(tx *sql.Tx) error {
 		if e.Kind == "catalog-exclusions" {
@@ -403,7 +406,7 @@ func (c *Catalog) applyHistoryRecovery(ctx context.Context, e historyRecovery) (
 		record := e.Record
 		record.Repository = nil
 		record.catalogRecovery = true
-		if _, _, err = ingestCopyModeContext(c.withIndexQueryWait(ctx), tx, record, false, host, source, true, false); err != nil {
+		if _, _, err = ingestCopyModeContext(ctx, tx, record, false, host, source, true, false); err != nil {
 			return err
 		}
 		id, err = storedWorkspaceID(tx, e.Record)

@@ -8,14 +8,13 @@ import (
 )
 
 // queryActivity gives interactive reads the drive while indexing waits at a
-// work boundary. Readers never acquire the writer gate or wait for an index.
+// work boundary, before acquiring any writer gate or SQLite transaction.
 // Pausing is opt-in, independent of the activity UI and manual/background
 // priority. Its zero value lets indexing continue during queries.
 type queryActivity struct {
 	mu      sync.Mutex
 	enabled bool
 	changed chan struct{}
-	saving  int
 	active  int
 	idle    chan struct{}
 	waiting int
@@ -34,21 +33,6 @@ func (q *queryActivity) setEnabled(on bool) {
 	if q.enabled != on {
 		q.enabled = on
 		q.notify()
-	}
-}
-
-// Saving preferences needs the writer that an index can hold while paused
-// inside a record. Let it progress until the save finishes, including when
-// the user is turning pausing off while a query is still running.
-func (q *queryActivity) savingPreferences() func() {
-	q.mu.Lock()
-	q.saving++
-	q.notify()
-	q.mu.Unlock()
-	return func() {
-		q.mu.Lock()
-		defer q.mu.Unlock()
-		q.saving--
 	}
 }
 
@@ -80,7 +64,7 @@ func (q *queryActivity) wait(ctx context.Context) error {
 			return err
 		}
 		q.mu.Lock()
-		if !q.enabled || q.saving > 0 || q.active == 0 {
+		if !q.enabled || q.active == 0 {
 			q.mu.Unlock()
 			return nil
 		}
@@ -115,19 +99,4 @@ func interactiveRead(r *http.Request) bool {
 	return path == "/api/search" || path == "/api/library/find" ||
 		strings.HasPrefix(path, "/api/work/") || strings.HasPrefix(path, "/api/messages/") ||
 		strings.HasPrefix(path, "/api/conversation/") || strings.HasPrefix(path, "/api/usage/")
-}
-
-type indexQueryWaitKey struct{}
-
-func (c *Catalog) withIndexQueryWait(ctx context.Context) context.Context {
-	return context.WithValue(ctx, indexQueryWaitKey{}, c.queries.wait)
-}
-
-// Large workspaces may contain thousands of messages. Yield inside the atomic
-// record too; WAL readers can still read its previous committed contents.
-func waitForIndexQuery(ctx context.Context) error {
-	if wait, ok := ctx.Value(indexQueryWaitKey{}).(func(context.Context) error); ok {
-		return wait(ctx)
-	}
-	return ctx.Err()
 }

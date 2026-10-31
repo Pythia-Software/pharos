@@ -69,12 +69,11 @@ func captureViewOf(adapter Adapter) *captureView {
 	return nil
 }
 
-// IngestContext yields to queries between records and messages. Cancellation
+// IngestContext yields to queries before acquiring a record's writer. Cancellation
 // rolls back any unfinished record; committed records remain and the next sync
 // resumes the source, as after a crash.
 func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress ProgressFunc) IngestResult {
-	ctx = c.withIndexQueryWait(ctx)
-	if err := waitForIndexQuery(ctx); err != nil {
+	if err := c.queries.wait(ctx); err != nil {
 		return IngestResult{Source: adapter.Config().Name, Error: err.Error()}
 	}
 	// Plans retain the acquired reader, never readers over a live inventory.
@@ -312,7 +311,6 @@ func sourceIndexVersion(adapter Adapter) string {
 // adapter those of the parts that changed, as host's copy. cursor records
 // progress every 25 workspaces written.
 func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, resume bool, result *IngestResult, report func(string), cursor func(string)) error {
-	ctx = c.withIndexQueryWait(ctx)
 	started := time.Now()
 	defer func() {
 		result.DiscoveryParseSeconds = result.DiscoverySeconds + time.Since(started).Seconds() - result.WriteSeconds
@@ -346,7 +344,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 	processRecord := func(record *WorkspaceRecord, parts []sourcePart) error {
 		started := time.Now()
 		defer func() { result.WriteSeconds += time.Since(started).Seconds() }()
-		if err := waitForIndexQuery(ctx); err != nil {
+		if err := c.queries.wait(ctx); err != nil {
 			return err
 		}
 		result.Parsed += physicalPartCount(parts)
@@ -730,6 +728,11 @@ func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, h
 }
 
 func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host, source string, fromCapture, force bool, repositoryOptions ...repositoryOptions) (int, int, error) {
+	// The caller already holds the catalog writer. Check cancellation within
+	// this atomic record, but never pause for queries while holding that lock.
+	if err := ctx.Err(); err != nil {
+		return 0, 0, err
+	}
 	// Native Ask Pharos transcripts contain private lookup context. Only the
 	// separately stored user-visible chat is indexed, never the agent protocol.
 	if len(record.Conversations) > 0 {
@@ -870,7 +873,7 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 	merged := map[string]bool{}
 	written := 0
 	for index, conversation := range record.Conversations {
-		if err := waitForIndexQuery(ctx); err != nil {
+		if err := ctx.Err(); err != nil {
 			return 0, 0, err
 		}
 		if authority.conversations[index].older {
@@ -918,7 +921,7 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 		}
 		retained := map[string]bool{}
 		for sourceOrder, message := range conversation.Messages {
-			if err := waitForIndexQuery(ctx); err != nil {
+			if err := ctx.Err(); err != nil {
 				messageWriter.statement.Close()
 				return 0, 0, err
 			}

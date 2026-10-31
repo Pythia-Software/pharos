@@ -94,7 +94,7 @@ func TestQueryPausingPreference(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			done := make(chan error, 1)
-			go func() { done <- waitForIndexQuery(catalog.withIndexQueryWait(ctx)) }()
+			go func() { done <- catalog.queries.wait(ctx) }()
 			if step.on {
 				waitForIndexPause(t, catalog)
 				cancel()
@@ -153,8 +153,43 @@ func TestInteractiveQueriesPauseIngest(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			writeIncrementalFixture(t, catalog, incrementalFixture(1))
 			server := testServer(t, config, catalog)
+			path := filepath.Join(t.TempDir(), "export.json")
+			if err := os.WriteFile(path, []byte(`{"workspaces":[{"id":"first","title":"First workspace","conversations":[{"id":"first-thread","provider":"codex","messages":[{"id":"one","role":"user","text":"hello"}]}]},{"id":"second","title":"Second workspace","conversations":[{"id":"second-thread","provider":"codex","messages":[{"id":"two","role":"user","text":"world"}]}]}]}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			adapter, err := MakeAdapter(SourceConfig{Name: "fixture", Kind: "canonical", Path: path, Account: "local", Enabled: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			firstRecord, continueIndex := make(chan struct{}), make(chan struct{})
+			first := true
+			work := withIngestMode(ctx, ingestMode{written: func(string) {
+				if !first {
+					return
+				}
+				first = false
+				close(firstRecord)
+				select {
+				case <-continueIndex:
+				case <-ctx.Done():
+				}
+			}})
+			indexed := make(chan IngestResult, 1)
+			indexDone := make(chan struct{})
+			go func() { defer close(indexDone); indexed <- catalog.IngestContext(work, adapter, nil) }()
+			defer func() { cancel(); <-indexDone }()
+			select {
+			case <-firstRecord:
+			case result := <-indexed:
+				t.Fatalf("index stopped before the first record: %+v", result)
+			case <-time.After(5 * time.Second):
+				t.Fatal("first record did not commit")
+			}
+
+			// A query arriving after the first commit must pause the next record
+			// without retaining either the writer gate or SQLite's write lock.
 			query := httptest.NewRequest(http.MethodPost, "/api/query/library/rows-v2", strings.NewReader(`{"version":2,"profile":"qt-sqlite-v1","limit":5}`))
 			query.Header.Set("Authorization", "Bearer "+config.APIToken)
 			w := &heldQueryResponse{httptest.NewRecorder(), make(chan struct{}), make(chan struct{})}
@@ -166,22 +201,11 @@ func TestInteractiveQueriesPauseIngest(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("query did not start")
 			}
-			path := filepath.Join(t.TempDir(), "export.json")
-			if err := os.WriteFile(path, []byte(`{"workspaces":[{"id":"work","title":"New workspace","conversations":[{"id":"thread","provider":"codex","messages":[{"id":"one","role":"user","text":"hello"}]}]}]}`), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			adapter, err := MakeAdapter(SourceConfig{Name: "fixture", Kind: "canonical", Path: path, Account: "local", Enabled: true})
-			if err != nil {
-				t.Fatal(err)
-			}
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			indexed := make(chan IngestResult, 1)
-			go func() { indexed <- catalog.IngestContext(ctx, adapter, nil) }()
+			close(continueIndex)
 			if !enabled {
 				select {
 				case result := <-indexed:
-					if result.Error != nil || result.Workspaces != 1 {
+					if result.Error != nil || result.Workspaces != 2 {
 						t.Fatalf("index with pausing off: %+v", result)
 					}
 				case <-time.After(5 * time.Second):
@@ -190,17 +214,34 @@ func TestInteractiveQueriesPauseIngest(t *testing.T) {
 				return
 			}
 			waitForIndexPause(t, catalog)
-			// A second read is admitted immediately even though an index is waiting.
+			writeCtx, stopWrites := context.WithTimeout(t.Context(), 5*time.Second)
+			defer stopWrites()
+			if err := catalog.writeTransaction(writeCtx, "interactive write during index pause", func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(writeCtx, "INSERT INTO meta(key,value) VALUES('local-during-pause','ok')")
+				return err
+			}); err != nil {
+				t.Fatalf("local writer blocked by paused index: %v", err)
+			}
+			other, err := sql.Open("sqlite", "file:"+catalog.Path+"?_pragma=busy_timeout(20)")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer other.Close()
+			if _, err := other.ExecContext(writeCtx, "INSERT INTO meta(key,value) VALUES('independent-during-pause','ok')"); err != nil {
+				t.Fatalf("independent SQLite writer blocked by paused index: %v", err)
+			}
+			if err := catalog.SetUIPreferences(writeCtx, map[string]any{"set": map[string]any{"pharos-theme": "dark"}}); err != nil {
+				t.Fatalf("preference save blocked by paused index: %v", err)
+			}
 			if response := serveTestBody(server, http.MethodGet, "/api/search", ""); response.Code != http.StatusOK {
 				t.Fatalf("read during paused index: %d %s", response.Code, response.Body.String())
 			}
 			waitForIndexPause(t, catalog)
-			// Cancellation must release a paused index without waiting for the query.
 			cancel()
 			select {
 			case result := <-indexed:
-				if result.Error == nil {
-					t.Fatal("cancelled index reported success")
+				if result.Error == nil || result.Workspaces != 1 {
+					t.Fatalf("cancelled index did not retain exactly the committed record: %+v", result)
 				}
 			case <-time.After(5 * time.Second):
 				t.Fatal("cancelled index still waiting for a query")
@@ -209,58 +250,50 @@ func TestInteractiveQueriesPauseIngest(t *testing.T) {
 	}
 }
 
-func TestIndexYieldsInsideAtomicWorkspace(t *testing.T) {
-	for _, finish := range []string{"complete", "cancel", "disable"} {
-		t.Run(finish, func(t *testing.T) {
+func TestIndexCompletesAtomicWorkspaceDuringQuery(t *testing.T) {
+	for _, stop := range []bool{false, true} {
+		t.Run(fmt.Sprint("cancel=", stop), func(t *testing.T) {
 			catalog, _ := testCatalog(t)
 			if err := catalog.SetUIPreferences(t.Context(), map[string]any{"set": map[string]any{pauseIndexingForQueriesFlag: true}}); err != nil {
 				t.Fatal(err)
 			}
-			stop := finish == "cancel"
 			writeIncrementalFixture(t, catalog, incrementalFixture(1))
 			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			paused := make(chan func(), 1)
+			inRecord, continueWriting := make(chan struct{}), make(chan struct{})
 			written := make(chan error, 1)
+			writeDone := make(chan struct{})
 			go func() {
-				tx, err := catalog.beginWrite(ctx)
+				defer close(writeDone)
+				tx, finish, err := catalog.beginTrackedWrite(ctx, "atomic ingest during query")
 				if err != nil {
 					written <- err
 					return
 				}
-				defer tx.Rollback()
-				started := false
-				work := context.WithValue(ctx, indexQueryWaitKey{}, func(ctx context.Context) error {
-					var messages int
-					if err := tx.QueryRow("SELECT COUNT(*) FROM messages").Scan(&messages); err != nil {
-						return err
-					}
-					if !started && messages > 1 {
-						started = true
-						paused <- catalog.queries.begin()
-					}
-					return catalog.queries.wait(ctx)
-				})
-				_, _, err = ingestCopyModeContext(work, tx, incrementalFixture(3), false, currentHost().ID, "fixture", false, false)
+				defer func() { _ = tx.Rollback(); finish() }()
+				if _, _, err = ingestCopyModeContext(ctx, tx, incrementalFixture(2), false, currentHost().ID, "fixture", false, false); err != nil {
+					written <- err
+					return
+				}
+				close(inRecord)
+				select {
+				case <-continueWriting:
+				case <-ctx.Done():
+				}
+				_, _, err = ingestCopyModeContext(ctx, tx, incrementalFixture(3), false, currentHost().ID, "fixture", false, false)
 				if err == nil {
 					err = tx.Commit()
 				}
 				written <- err
 			}()
-			var release func()
+			defer func() { cancel(); <-writeDone }()
 			select {
-			case release = <-paused:
+			case <-inRecord:
 			case err := <-written:
-				t.Fatalf("workspace completed without yielding: %v", err)
+				t.Fatalf("record failed before the query started: %v", err)
 			case <-time.After(5 * time.Second):
-				t.Fatal("index did not yield inside the workspace")
+				t.Fatal("record did not start writing")
 			}
-			defer func() {
-				if release != nil {
-					release()
-				}
-			}()
-			waitForIndexPause(t, catalog)
+			defer catalog.beginInteractiveRead(t.Context())()
 			var count int
 			if err := catalog.reader().QueryRow("SELECT COUNT(*) FROM messages").Scan(&count); err != nil || count != 1 {
 				t.Fatalf("query did not read the previous atomic record: count=%d err=%v", count, err)
@@ -269,40 +302,21 @@ func TestIndexYieldsInsideAtomicWorkspace(t *testing.T) {
 			if stop {
 				cancel()
 				want = 1
-			} else if finish == "disable" {
-				// Saving the toggle must release an index paused inside its
-				// writer transaction, even before the active query finishes.
-				saved := make(chan error, 1)
-				go func() {
-					saved <- catalog.SetUIPreferences(ctx, map[string]any{"set": map[string]any{pauseIndexingForQueriesFlag: false}})
-				}()
-				select {
-				case err := <-saved:
-					if err != nil {
-						t.Fatal(err)
-					}
-				case <-time.After(5 * time.Second):
-					cancel()
-					<-saved
-					t.Fatal("turning pausing off waited for the active query")
-				}
-			} else {
-				release()
-				release = nil
 			}
+			close(continueWriting)
 			select {
 			case err := <-written:
 				if stop && !errors.Is(err, context.Canceled) || !stop && err != nil {
 					t.Fatalf("index result: %v", err)
 				}
 			case <-time.After(5 * time.Second):
-				t.Fatal("index failed to resume or stop")
+				t.Fatal("an open record waited for the active query")
 			}
+			<-writeDone
 			if err := catalog.reader().QueryRow("SELECT COUNT(*) FROM messages").Scan(&count); err != nil || count != want {
 				t.Fatalf("atomic index result: count=%d want=%d err=%v", count, want, err)
 			}
 			if stop {
-				// The rolled-back record is safe to replay in the next run.
 				writeIncrementalFixture(t, catalog, incrementalFixture(3))
 				if err := catalog.reader().QueryRow("SELECT COUNT(*) FROM messages").Scan(&count); err != nil || count != 3 {
 					t.Fatalf("resumed record: count=%d err=%v", count, err)
