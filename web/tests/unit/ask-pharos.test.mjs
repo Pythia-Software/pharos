@@ -63,29 +63,34 @@ test('prompt replacement, selection and deletion preserve atomic chips and multi
 });
 
 test('shared Ask glow changes working speed without restarting its hue and cleans up motion', () => {
-  const rates=[],events=[];
-  const hue={currentTime:42000,play:()=>events.push('play'),pause:()=>events.push('pause'),cancel:()=>events.push('cancel'),updatePlaybackRate:rate=>rates.push(rate)};
-  let mediaChanged;
-  const media={matches:false,addEventListener:(name,listener)=>{mediaChanged=listener;},removeEventListener:(name,listener)=>{assert.equal(listener,mediaChanged);events.push('unsubscribe');}};
+  const rates=[[],[]],events=[[],[]];
+  const hues=events.map((log,index)=>({currentTime:42000,play:()=>log.push('play'),pause:()=>log.push('pause'),cancel:()=>log.push('cancel'),updatePlaybackRate:rate=>rates[index].push(rate)}));
+  let mediaChanged,unsubscribed=false;
+  const media={matches:false,addEventListener:(name,listener)=>{mediaChanged=listener;},removeEventListener:(name,listener)=>{assert.equal(listener,mediaChanged);unsubscribed=true;}};
   const glow=loadClassicScript('ask-glow.js',{matchMedia:()=>media});
   const writes=[];
-  const host={dataset:new Proxy({},{set:(target,key,value)=>{writes.push([key,value]);target[key]=value;return true;}}),animate:()=>hue};
-  const motion=glow.askGlowMotion(host);
+  const host={dataset:new Proxy({},{set:(target,key,value)=>{writes.push([key,value]);target[key]=value;return true;}})};
+  // Only the decorative layers can animate; the host contains unfiltered text
+  // and panel fills and deliberately has no animate() method.
+  const motion=glow.askGlowMotion(host,hues.map(hue=>({animate:()=>hue})));
   motion.setWorking(false);
   motion.setWorking(true);
   motion.setWorking(true); // Streamed progress must not restart the effect.
   assert.equal(host.dataset.glowWorking,'true');
   motion.setWorking(false);
   assert.equal(host.dataset.glowWorking,'false');
-  assert.equal(rates.length,2);
   assert.deepEqual(writes,[['glowWorking','false'],['glowWorking','true'],['glowWorking','false']],'streamed progress must not trigger redundant DOM mutations');
-  assert.ok(rates[0]>rates[1],'working cycles colors faster than idle');
-  assert.equal(hue.currentTime,42000,'speed changes preserve the hue phase');
+  for(let index=0;index<hues.length;index++){
+    assert.equal(rates[index].length,2);
+    assert.ok(rates[index][0]>rates[index][1],'working cycles colors faster than idle');
+    assert.equal(hues[index].currentTime,42000,'speed changes preserve each layer’s hue phase');
+  }
   media.matches=true;mediaChanged();
   media.matches=false;mediaChanged();
-  assert.deepEqual(events,['play','pause','play']);
+  for(const log of events)assert.deepEqual(log,['play','pause','play']);
   motion.destroy();
-  assert.deepEqual(events.slice(-2),['unsubscribe','cancel']);
+  assert.ok(unsubscribed);
+  for(const log of events)assert.equal(log.at(-1),'cancel');
   assert.equal(host.dataset.glowWorking,undefined);
 });
 
@@ -103,10 +108,10 @@ test('shared Ask glow respects reduced motion from startup, including while work
   const events=[];
   const hue={play:()=>events.push('play'),pause:()=>events.push('pause'),cancel(){},updatePlaybackRate(){}};
   const glow=loadClassicScript('ask-glow.js',{matchMedia:()=>({matches:true,addEventListener(){},removeEventListener(){}})});
-  const host={dataset:{},animate:()=>hue};
-  const motion=glow.askGlowMotion(host);
+  const host={dataset:{}};
+  const motion=glow.askGlowMotion(host,[{animate:()=>hue},{animate:()=>hue}]);
   motion.setWorking(true);
-  assert.deepEqual(events,['pause']);
+  assert.deepEqual(events,['pause','pause']);
   assert.equal(host.dataset.glowWorking,'true','loading remains visible with motion disabled');
   motion.destroy();
 });
