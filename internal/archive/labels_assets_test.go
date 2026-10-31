@@ -346,12 +346,12 @@ func TestBrokerFetchesLabelsAssetsThenAsksLibrariesToLabel(t *testing.T) {
 	defer cancel()
 	m := &applicationManager{ctx: ctx, client: &http.Client{Timeout: 5 * time.Second}, operations: newBrokerOperations(filepath.Join(t.TempDir(), "operations.json")),
 		children: map[string]*applicationChild{"lib": {endpoint: applicationEndpoint{URL: library.URL, Token: "token"}}}}
-	m.startLabelsFetch(LabelerSettings{Enabled: false})
-	m.startLabelsFetch(LabelerSettings{Enabled: true, ModelDir: t.TempDir()})
+	m.startLabelsFetch(LabelerSettings{Enabled: false}, AgentEventSettings{})
+	m.startLabelsFetch(LabelerSettings{Enabled: true, ModelDir: t.TempDir()}, AgentEventSettings{})
 	if len(m.operations.reg.views()) != 0 {
 		t.Fatal("a download started for a library without labels, or with its own model")
 	}
-	m.startLabelsFetch(LabelerSettings{Enabled: true})
+	m.startLabelsFetch(LabelerSettings{Enabled: true}, AgentEventSettings{})
 	if !waitFor(10*time.Second, func() {
 		for asked.Load() == 0 {
 			time.Sleep(10 * time.Millisecond)

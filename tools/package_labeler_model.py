@@ -3,6 +3,7 @@
 
     python3 tools/package_labeler_model.py MODEL_DIR --out DIR [--version N]
         [--variant int8] [--descriptor internal/archive/labels/assets.json]
+        [--key model|agent_events_model]
 
 Writes DIR/<name>-<version>.tar.gz holding what the app loads: the manifest,
 the variant's ONNX file and the tokenizer, at the archive's root. The archive
@@ -68,10 +69,14 @@ def package(model_dir: Path, out_dir: Path, version: str, variant: str) -> tuple
     return path, hashlib.sha256(data).hexdigest(), len(data), name
 
 
-def pin(descriptor: Path, name: str, version: str, sha256: str, size: int) -> None:
-    """Pins the model asset in the build's descriptor, keeping the rest."""
+def pin(descriptor: Path, name: str, version: str, sha256: str, size: int, key: str = "model") -> None:
+    """Pins the asset under key (the message labeler's "model", or
+    "agent_events_model") in the build's descriptor, keeping the rest. A new
+    key gets the labeler releases' URL pattern."""
     document = json.loads(descriptor.read_text())
-    model = document.setdefault("model", {})
+    model = document.setdefault(key, {})
+    if "url" not in model and "url" in document.get("model", {}):
+        model["url"] = document["model"]["url"]
     model.update({"name": name, "version": version, "sha256": sha256, "size": size})
     descriptor.write_text(json.dumps(document, indent=2) + "\n")
 
@@ -83,11 +88,12 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--version", default="1")
     parser.add_argument("--variant", default="int8")
     parser.add_argument("--descriptor", type=Path)
+    parser.add_argument("--key", default="model", help="the descriptor's entry to pin (model, agent_events_model)")
     args = parser.parse_args(argv)
     path, sha256, size, name = package(args.model_dir, args.out, args.version, args.variant)
     print(json.dumps({"path": str(path), "name": name, "version": args.version, "sha256": sha256, "size": size}, indent=2))
     if args.descriptor:
-        pin(args.descriptor, name, args.version, sha256, size)
+        pin(args.descriptor, name, args.version, sha256, size, args.key)
     return 0
 
 

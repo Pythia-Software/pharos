@@ -77,6 +77,9 @@ type AgentEventSettings struct {
 	Enabled bool
 	// ModelDir holds the verifier's manifest.json, ONNX files and tokenizer.
 	ModelDir, Variant string
+	// Days is how far back the pass reads (0: everything). Scoring is the
+	// cost, and the dashboard's windows are weeks and months.
+	Days int
 }
 
 func agentEventSettingsFrom(root map[string]any, base string) AgentEventSettings {
@@ -84,7 +87,54 @@ func agentEventSettingsFrom(root map[string]any, base string) AgentEventSettings
 	if dir == "" {
 		dir = resolvePath(base, stringValue(root, "agent_events_model_dir", ""))
 	}
-	return AgentEventSettings{Enabled: boolValue(root, "agent_events_enabled", false), ModelDir: dir, Variant: stringValue(root, "agent_events_variant", "int8")}
+	return AgentEventSettings{Enabled: boolValue(root, "agent_events_enabled", false), ModelDir: dir, Variant: stringValue(root, "agent_events_variant", "int8"),
+		Days: intValue(root, "agent_events_days", 90)}
+}
+
+// since is the horizon Days sets (zero: none).
+func (settings AgentEventSettings) since() time.Time {
+	if settings.Days <= 0 {
+		return time.Time{}
+	}
+	return time.Now().AddDate(0, 0, -settings.Days)
+}
+
+// withAssets fills in the verifier's directory from this Mac's download
+// when the configuration names none.
+func (settings AgentEventSettings) withAssets() AgentEventSettings {
+	if settings.ModelDir == "" && labelsAssets.AgentEventsModel.present() {
+		settings.ModelDir = labelsAssets.AgentEventsModel.target()
+	}
+	return settings
+}
+
+// missingAssets is what the pass still needs downloaded: the runtime the
+// labeler's worker loads, and the verifier.
+func (settings AgentEventSettings) missingAssets(labels LabelerSettings) []labelsAsset {
+	missing := []labelsAsset{}
+	if labels.withAssets().needsRuntime() {
+		missing = append(missing, labelsAssets.Runtime)
+	}
+	if settings.withAssets().ModelDir == "" {
+		missing = append(missing, labelsAssets.AgentEventsModel)
+	}
+	return missing
+}
+
+// waiting is why the pass waits for a download ("" when it does not).
+func (settings AgentEventSettings) waiting(labels LabelerSettings) string {
+	parts := []string{}
+	for _, asset := range settings.missingAssets(labels) {
+		what := "the agent events model"
+		if asset.Name == labelsAssets.Runtime.Name {
+			what = "ONNX Runtime"
+		}
+		parts = append(parts, what+": "+labelsAssetStatus(asset))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "waiting for the download (" + strings.Join(parts, "; ") + ")"
 }
 
 // agentEventVerifier is a loaded verifier and what its manifest says beyond
@@ -159,14 +209,17 @@ type AgentEventsRunOptions struct {
 	Conversations []string
 	// DryRun builds and frames candidates and counts them, but starts no
 	// worker and stores nothing.
-	DryRun   bool
+	DryRun bool
+	// Since, when set, leaves older messages unread: their stored rows stay,
+	// and conversations that ended before it are not looked at.
+	Since    time.Time
 	Progress io.Writer
 }
 
 // AgentEventsRunStats describe a run.
 type AgentEventsRunStats struct {
 	Conversations, ConversationsBuilt, ConversationsRemoved, ConversationsFailed int
-	MessagesScored, MessagesUnchanged, MessagesRemoved                           int
+	MessagesScored, MessagesUnchanged, MessagesRemoved, MessagesBefore           int
 	Candidates, Stored, Events                                                   int
 	Cut, Complete                                                                bool
 	Infer, Total                                                                 time.Duration
@@ -177,8 +230,9 @@ type agentEventsConversation struct {
 	id, token, structure string
 	messages             []*agentEventsMessage
 	stale                []string
-	// unchanged counts messages whose stored rows are current.
-	unchanged int
+	// unchanged counts messages whose stored rows are current; before
+	// messages older than the run's horizon.
+	unchanged, before int
 }
 
 // agentEventsMessage is one message to store: its candidates and their rows.
@@ -207,9 +261,10 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 	stats := &AgentEventsRunStats{}
 	defer func() { stats.Total = time.Since(started) }()
 	progress := labelingProgress(opts.Progress, started)
-	labels = labels.withAssets()
+	labels, settings = labels.withAssets(), settings.withAssets()
 	if settings.ModelDir == "" {
-		return stats, fmt.Errorf("%w: set agent_events_model_dir (PHAROS_AGENT_EVENTS_MODEL_DIR) to the verifier's directory", labelrt.ErrModelUnavailable)
+		return stats, fmt.Errorf("%w: the verifier is %s; run pharos agent-events fetch, or set agent_events_model_dir (PHAROS_AGENT_EVENTS_MODEL_DIR)",
+			labelrt.ErrModelUnavailable, labelsAssetStatus(labelsAssets.AgentEventsModel))
 	}
 	if labels.Worker == "" && !opts.DryRun {
 		return stats, fmt.Errorf("%w: set labels_worker (or PHAROS_LABELS_WORKER)", labelrt.ErrModelUnavailable)
@@ -292,7 +347,7 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 			stats.Cut = true
 			break
 		}
-		conversation, err := c.agentEventsConversation(ctx, builder, verifier, job)
+		conversation, err := c.agentEventsConversation(ctx, builder, verifier, job, opts.Since)
 		if err != nil {
 			if ctx.Err() != nil {
 				break
@@ -303,6 +358,7 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 		}
 		stats.ConversationsBuilt++
 		stats.MessagesUnchanged += conversation.unchanged
+		stats.MessagesBefore += conversation.before
 		for _, message := range conversation.messages {
 			stats.MessagesScored++
 			stats.Candidates += len(message.rows)
@@ -357,7 +413,15 @@ func (c *Catalog) agentEventsWork(ctx context.Context, builder *labelsItemBuilde
 	if err != nil {
 		return nil, err
 	}
-	other, err := read(`SELECT DISTINCT conversation_id k,'' v FROM agent_event_messages WHERE model<>? OR input_hash IS NULL`, identity)
+	since := ""
+	if !opts.Since.IsZero() {
+		since = formatTime(opts.Since)
+	}
+	other, err := read(`SELECT DISTINCT conversation_id k,'' v FROM agent_event_messages WHERE (model<>? OR input_hash IS NULL) AND (?='' OR occurred_at IS NULL OR occurred_at>=?)`, identity, since, since)
+	if err != nil {
+		return nil, err
+	}
+	ended, err := read(`SELECT id k,COALESCE(ended_at,started_at,'') v FROM conversations`)
 	if err != nil {
 		return nil, err
 	}
@@ -383,6 +447,10 @@ func (c *Catalog) agentEventsWork(ctx context.Context, builder *labelsItemBuilde
 		structure := labelsStructure(p, builder.sessions, id)
 		previous, built := stored[id]
 		_, otherModel := other[id]
+		if !all && tokens[id] == "" && since != "" && ended[id] != "" && ended[id] < since {
+			// It ended before the horizon and nothing in it changed.
+			continue
+		}
 		if all || !built || previous != structure || tokens[id] != "" || otherModel {
 			jobs = append(jobs, &agentEventsConversation{id: id, token: tokens[id], structure: structure})
 		}
@@ -425,7 +493,7 @@ func agentEventInputHash(source, text string) string {
 
 // agentEventsConversation builds one conversation's units and frames the
 // candidates of its agent replies and thinking whose inputs changed.
-func (c *Catalog) agentEventsConversation(ctx context.Context, builder *labelsItemBuilder, verifier *agentEventVerifier, job *agentEventsConversation) (conversation *agentEventsConversation, err error) {
+func (c *Catalog) agentEventsConversation(ctx context.Context, builder *labelsItemBuilder, verifier *agentEventVerifier, job *agentEventsConversation, since time.Time) (conversation *agentEventsConversation, err error) {
 	defer func() {
 		if value := recover(); value != nil {
 			conversation, err = nil, fmt.Errorf("building its units panicked: %v", value)
@@ -453,6 +521,10 @@ func (c *Catalog) agentEventsConversation(ctx context.Context, builder *labelsIt
 			continue
 		}
 		seen[unit.messageID] = true
+		if at, ok := parseTime(unit.createdAt); ok && at.Before(since) {
+			job.before++
+			continue
+		}
 		source := "reply"
 		if unit.cohort == "thinking" {
 			source = "thinking"
@@ -571,6 +643,16 @@ func (c *Catalog) storeAgentEvents(ctx context.Context, identity string, convers
 	})
 }
 
+// agentEventsFlag is the Settings switch for the Agent Experience preview
+// (App preferences): it lists the dashboard and turns the pass on, as
+// agent_events_enabled does in the configuration.
+const agentEventsFlag = "pharos-agent-events-v1"
+
+// agentEventsEnabled is whether this library finds agent events.
+func (s *Server) agentEventsEnabled(ctx context.Context) bool {
+	return s.Config().AgentEvents.Enabled || s.Catalog.featureFlag(ctx, agentEventsFlag)
+}
+
 // agentEventsChainLimit is the chain stage's share: about this many messages
 // scored per pass; a backlog continues as its own run when plugged in.
 var agentEventsChainLimit = 1000
@@ -578,13 +660,27 @@ var agentEventsChainLimit = 1000
 // chainAgentEvents is the analysis chain's agent events stage, after labels:
 // the same power rules (labelsForPower) and the same backlog handling.
 func (s *Server) chainAgentEvents(ctx context.Context, labels LabelerSettings, settings AgentEventSettings) error {
-	labels = labels.withAssets()
-	if labels.Worker == "" || labels.needsRuntime() {
-		// The worker or its runtime is still downloading (labels fetch).
+	if labels.Worker == "" {
+		// No worker is installed beside Pharos or configured.
 		return errStageContinues
 	}
+	if missing := settings.missingAssets(labels); len(missing) > 0 {
+		// The broker downloads for a library whose configuration turns the
+		// pass on; the Settings switch lives in the catalog, which the broker
+		// does not read, so the stage downloads what is missing itself, under
+		// the same per-Mac lock.
+		if slices.ContainsFunc(missing, func(asset labelsAsset) bool { return !asset.pinned() }) {
+			return errStageContinues
+		}
+		switch err := fetchLabelsAssets(ctx, missing, nil, nil); {
+		case errors.Is(err, errLabelsFetching):
+			return errStageContinues
+		case err != nil:
+			return err
+		}
+	}
 	labels, bulk := labelsForPower(labels, s.cachedPower(ctx))
-	stats, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Limit: agentEventsChainLimit})
+	stats, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Limit: agentEventsChainLimit, Since: settings.since()})
 	switch {
 	case errors.Is(err, errAgentEventsRunning):
 		return errStageContinues
@@ -618,7 +714,7 @@ func (s *Server) chainAgentEvents(ctx context.Context, labels LabelerSettings, s
 				}
 			}
 		}()
-		_, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{})
+		_, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Since: settings.since()})
 		switch {
 		case errors.Is(err, labelrt.ErrWorkersUnavailable), unplugged.Load():
 			op.legacyOutcome("interrupted", nil)
@@ -629,4 +725,42 @@ func (s *Server) chainAgentEvents(ctx context.Context, labels LabelerSettings, s
 		return err
 	})
 	return errStageContinues
+}
+
+// agentEventsStatus is pharos agent-events status: whether the pass is on,
+// what it would use or waits for, and what the tables hold.
+func (c *Catalog) agentEventsStatus(ctx context.Context, config Config) (map[string]any, error) {
+	labels, settings := config.Labels.withAssets(), config.AgentEvents.withAssets()
+	status := map[string]any{"enabled": settings.Enabled, "days": settings.Days, "threshold": agentEventThreshold,
+		"model_dir": settings.ModelDir, "model": labelsAssetStatus(labelsAssets.AgentEventsModel), "worker": labels.Worker,
+		"runtime": defaultString(labels.Runtime, labelsAssetStatus(labelsAssets.Runtime))}
+	if waiting := settings.waiting(config.Labels); waiting != "" {
+		status["waiting"] = waiting
+	}
+	if settings.ModelDir != "" {
+		if verifier, err := loadAgentEventVerifier(settings.ModelDir, settings.Variant); err != nil {
+			status["model_error"] = err.Error()
+		} else {
+			status["verifier"] = verifier.identity
+		}
+	}
+	var messages, events, scored int
+	var first, last, models sql.NullString
+	if err := c.DB.QueryRowContext(ctx, `SELECT count(*), COALESCE(sum(events),0), min(day), max(day), group_concat(DISTINCT model) FROM agent_event_messages`).Scan(&messages, &events, &first, &last, &models); err != nil {
+		return nil, err
+	}
+	if err := c.DB.QueryRowContext(ctx, `SELECT count(*) FROM agent_events`).Scan(&scored); err != nil {
+		return nil, err
+	}
+	status["messages"], status["events"], status["candidates_stored"] = messages, events, scored
+	status["first_day"], status["last_day"], status["models"] = first.String, last.String, models.String
+	var tables int
+	if err := c.DB.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('agent_events_conversations','agent_events_dirty')`).Scan(&tables); err == nil && tables == 2 {
+		var built, dirty int
+		if err := c.DB.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM agent_events_conversations), (SELECT count(*) FROM agent_events_dirty)`).Scan(&built, &dirty); err != nil {
+			return nil, err
+		}
+		status["conversations_built"], status["conversations_changed"] = built, dirty
+	}
+	return status, nil
 }

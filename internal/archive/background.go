@@ -461,8 +461,10 @@ type backgroundInputs struct {
 	// waits for a download.
 	labels        bool
 	labelsWaiting string
-	// agentEvents is whether agent_events_enabled is on.
-	agentEvents bool
+	// agentEvents is whether agent_events_enabled is on; agentEventsWaiting
+	// why the pass waits for a download.
+	agentEvents        bool
+	agentEventsWaiting string
 }
 
 func (c *Catalog) readBackgroundInputs(ctx context.Context) backgroundInputs {
@@ -790,7 +792,9 @@ func (s *Server) backgroundInputsFor(ctx context.Context, requested map[string]b
 	if config.Labels.Enabled {
 		in.labels, in.labelsWaiting = true, config.Labels.labelsWaiting()
 	}
-	in.agentEvents = config.AgentEvents.Enabled
+	if s.agentEventsEnabled(ctx) {
+		in.agentEvents, in.agentEventsWaiting = true, config.AgentEvents.waiting(config.Labels)
+	}
 	return in
 }
 

@@ -5,8 +5,8 @@ docs, surprises, confusion, discoveries, their own mistakes, workarounds, unchec
 getting around an instruction or safeguard, and more. Each event is one sentence in an agent's visible reply or its
 thinking, with what it was about and what the agent did about it, linked to the message in the reader.
 
-It is a preview. Settings → App preferences → **Agent Experience dashboard** lists its pages in Analyze; direct links
-work either way.
+It is a preview. Settings → App preferences → **Agent Experience (preview)** turns it on for a library: it lists the
+pages in Analyze and starts the pass that finds events on this Mac (below). Direct links work either way.
 
 ## How events are found
 
@@ -40,13 +40,29 @@ split only additive measures, so this panel computes the rate from two grouped c
 
 ## The pass
 
-With `agent_events_enabled = true` and `agent_events_model_dir` (or `PHAROS_AGENT_EVENTS_MODEL_DIR`) naming the
-verifier's directory, the analysis chain runs an **agent events** stage after labels, its own background item (Agent
-events, hourly and adaptive). `pharos agent-events run [--limit N] [--full] [--dry-run] [--conversation ID]...` runs
-it from Terminal. It uses the message labeler's worker, ONNX Runtime and budget (`labels_worker`, `labels_runtime`,
-`labels_threads`, …, and the runtime the labeler downloads), and the same power rules: each chain pass scores about
-1,000 messages (`agentEventsChainLimit`); a larger backlog continues as an `analysis.agent_events` `backlog` run when
-plugged in and stops if this Mac goes onto battery.
+With the Settings switch on (preference `pharos-agent-events-v1`, read as a feature flag, `agentEventsFlag`) or
+`agent_events_enabled = true` in a library's configuration, the analysis chain runs an **agent events** stage after
+labels, its own background item (Agent events, hourly and adaptive). It uses the message labeler's worker, ONNX
+Runtime and budget (`labels_worker`, `labels_runtime`, `labels_threads`, …), and the same power rules: each chain pass
+scores about 1,000 messages (`agentEventsChainLimit`); a larger backlog continues as an `analysis.agent_events`
+`backlog` run when plugged in and stops if this Mac goes onto battery.
+
+- **The verifier** is a pinned download, `agent_events_model` in `internal/archive/labels/assets.json`
+  (`jayhawk-68m`, version 1: the manifest, the int8 ONNX file and the tokenizer, 146 MB), unpacked into
+  `<support>/labeler/jayhawk-68m-1/` like the labeler's model. The broker's `labels.fetch` downloads it, and the
+  runtime, when a library whose configuration turns agent events on opens, even with labels off, then asks the
+  library to run the item. The broker does not read a library's preferences, so for the Settings switch the stage
+  downloads what is missing itself, under the same per-Mac lock; turning the switch on runs the item at once. Until
+  the download completes the item says it is waiting for it. `agent_events_model_dir` (or
+  `PHAROS_AGENT_EVENTS_MODEL_DIR`) names another directory; `PHAROS_AGENT_EVENTS_MODEL_URL` fetches from another URL,
+  the pinned digest and size still applying. Package a new version with
+  `python3 tools/package_labeler_model.py DIR --out build/labeler --version N --descriptor internal/archive/labels/assets.json --key agent_events_model`
+  and attach it to the release `labeler-jayhawk-68m-N`, as for the labeler's model.
+- **The horizon.** `agent_events_days` (default 90; 0 for everything) is how far back the pass reads: older messages
+  stay unread, conversations that ended before it are not looked at, and rows stored earlier stay.
+- **Terminal.** `pharos agent-events run [--limit N] [--days N] [--full] [--dry-run] [--conversation ID]...`,
+  `pharos agent-events fetch` (the verifier, and the runtime unless one is configured or bundled) and
+  `pharos agent-events status` (what the pass would use or waits for, and what the tables hold).
 
 `RunAgentEvents` (`agent_events_run.go`):
 
@@ -114,9 +130,8 @@ them.
 
 ## Next
 
-- **Shipping the verifier.** The pass needs the model on this Mac: a directory configured by hand today. Like
-  `kestrel-68m-tpool`, it is to be a pinned download (`internal/archive/labels/assets.json`) from its own Pharos
-  release, published from the deployment Mac, so that turning the item on is all a person does.
+- **Publishing the verifier.** The download is pinned, but its release (`labeler-jayhawk-68m-1`) is not published.
+  The weights were trained on labels of one person's conversations, and this repository's releases are public.
 - **Cost.** Scoring dominates: about 18 candidates a second on four CPU threads with the machine to itself, and the
   study's October (100,000 agent messages, 524,000 candidates) would take about eight hours, some seventeen minutes a
   day. The int8 export agrees with fp32 on 99.9% of decisions at the same F1.

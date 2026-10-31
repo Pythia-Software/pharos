@@ -426,6 +426,7 @@ The build pins the assets it downloads in `internal/archive/labels/assets.json`
 |---|---|---|
 | `model` | name `kestrel-68m-tpool`, version `1`, SHA-256 and size of the archive | the Pharos release `labeler-kestrel-68m-tpool-1`, asset `kestrel-68m-tpool-1.tar.gz` (URL pattern `…/releases/download/labeler-{name}-{version}/{name}-{version}.tar.gz`) |
 | `onnxruntime` | `onnxruntime-osx-arm64` 1.31.1, SHA-256, size, and the library's path inside | Microsoft's ONNX Runtime release, as `macos/fetch-onnxruntime.sh` pins it; only needed when no `libonnxruntime.dylib` sits beside the worker |
+| `agent_events_model` | name `jayhawk-68m`, version `1`, SHA-256 and size of the archive | the agent event verifier ([agent-events.md](agent-events.md)), from the release `labeler-jayhawk-68m-1` by the same URL pattern; fetched where `agent_events_enabled` is on |
 
 - **Where.** `<support>/labeler/<name>-<version>/`, where `<support>` is
   this Mac's support directory (`~/Library/Application Support/Pharos`, or

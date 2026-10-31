@@ -371,6 +371,10 @@ func itemSub(item backgroundItem, in backgroundInputs) string {
 		if in.labelsWaiting != "" {
 			return "Labeling is " + in.labelsWaiting
 		}
+	case "agent_events":
+		if in.agentEventsWaiting != "" {
+			return "Finding agent events is " + in.agentEventsWaiting
+		}
 	}
 	return item.Feeds
 }
@@ -794,7 +798,7 @@ func (s *Server) postBackgroundRun(w http.ResponseWriter, r *http.Request, body 
 		case item.requiresLabels && !s.Config().Labels.Enabled:
 			// Labels are off here (the broker asks every library after a
 			// download).
-		case item.requiresAgentEvents && !s.Config().AgentEvents.Enabled:
+		case item.requiresAgentEvents && !s.agentEventsEnabled(r.Context()):
 		default:
 			run = append(run, id)
 		}

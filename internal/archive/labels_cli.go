@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"slices"
 	"syscall"
 	"time"
 
@@ -360,15 +361,23 @@ func labelProbMap(model *labelrt.Model, probs []float32) map[string]float32 {
 // directory, printing progress; with nothing missing it says where each
 // asset is.
 func fetchLabelsCLI(ctx context.Context, settings LabelerSettings, stdout io.Writer) error {
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	missing := settings.missingAssets()
 	if len(missing) == 0 {
 		fmt.Fprintf(stdout, "model: %s\nruntime: %s\n", settings.ModelDir, defaultString(settings.Runtime, "bundled with the worker"))
 		return nil
 	}
+	return fetchLabelerAssetsCLI(ctx, missing, stdout)
+}
+
+// fetchLabelerAssetsCLI downloads assets with progress, then reports each:
+// labels fetch and agent-events fetch. An asset this build pins no download
+// for is reported, not fetched.
+func fetchLabelerAssetsCLI(ctx context.Context, assets []labelsAsset, stdout io.Writer) error {
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	pinned := slices.DeleteFunc(slices.Clone(assets), func(asset labelsAsset) bool { return !asset.pinned() })
 	last := time.Time{}
-	err := fetchLabelsAssets(ctx, missing, nil, func(asset labelsAsset, done, total int64) {
+	err := fetchLabelsAssets(ctx, pinned, nil, func(asset labelsAsset, done, total int64) {
 		if time.Since(last) > time.Second || done == total {
 			last = time.Now()
 			fmt.Fprintf(stdout, "%s: %d of %d MB\n", asset.Name, done>>20, total>>20)
@@ -377,8 +386,11 @@ func fetchLabelsCLI(ctx context.Context, settings LabelerSettings, stdout io.Wri
 	if err != nil {
 		return err
 	}
-	for _, asset := range missing {
+	for _, asset := range assets {
 		fmt.Fprintf(stdout, "%s: %s\n", asset.Name, labelsAssetStatus(asset))
+	}
+	if len(assets) == 0 {
+		fmt.Fprintln(stdout, "everything is downloaded or configured")
 	}
 	return nil
 }

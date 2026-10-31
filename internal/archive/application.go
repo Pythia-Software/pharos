@@ -243,7 +243,7 @@ func (m *applicationManager) childLocked(id string) (*applicationChild, error) {
 	child, err := m.startChildLocked(id, l, config, start)
 	start.Finish(err)
 	if err == nil {
-		m.startLabelsFetch(config.Labels)
+		m.startLabelsFetch(config.Labels, config.AgentEvents)
 	}
 	m.publishLocked()
 	return child, err

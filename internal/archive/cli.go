@@ -347,9 +347,10 @@ func cliCatalogOperation(command string, args []string) OperationSpec {
 	case "build-tools":
 		return OperationSpec{Kind: "tools.ledger.build"}
 	case "agent-events":
-		// status only reads; run scores; import (or anything else, which fails) writes.
+		// status only reads; fetch writes only this Mac's support directory;
+		// run scores; import (or anything else, which fails) writes.
 		switch firstOf(args) {
-		case "status":
+		case "status", "fetch":
 		case "run":
 			return OperationSpec{Kind: "analysis.agent_events"}
 		default:
@@ -464,6 +465,7 @@ func runAgentEventsCLI(ctx context.Context, config Config, catalog *Catalog, op 
 		flags := flag.NewFlagSet("agent-events run", flag.ContinueOnError)
 		limit := flags.Int("limit", 0, "score at most about N messages")
 		full := flags.Bool("full", false, "look at every conversation")
+		days := flags.Int("days", config.AgentEvents.Days, "read only the last N days (0: everything)")
 		dryRun := flags.Bool("dry-run", false, "find and frame candidates, score and store nothing")
 		flags.IntVar(&labels.Threads, "threads", labels.Threads, "threads per worker")
 		flags.IntVar(&labels.Workers, "workers", labels.Workers, "worker processes")
@@ -471,12 +473,13 @@ func runAgentEventsCLI(ctx context.Context, config Config, catalog *Catalog, op 
 		var conversations stringList
 		flags.Var(&conversations, "conversation", "only this conversation (repeatable)")
 		if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 {
-			return fmt.Errorf("usage: pharos agent-events run [--limit N] [--full] [--dry-run] [--conversation ID]... [--threads N] [--workers N] [--batch-tokens N]")
+			return fmt.Errorf("usage: pharos agent-events run [--limit N] [--days N] [--full] [--dry-run] [--conversation ID]... [--threads N] [--workers N] [--batch-tokens N]")
 		}
 		ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		ctx = withWorkProgress(ctx, op.mirrorWork)
-		stats, err := catalog.RunAgentEvents(ctx, labels, config.AgentEvents, AgentEventsRunOptions{Limit: *limit, Full: *full, DryRun: *dryRun, Conversations: conversations, Progress: os.Stderr})
+		stats, err := catalog.RunAgentEvents(ctx, labels, config.AgentEvents, AgentEventsRunOptions{Limit: *limit, Full: *full, DryRun: *dryRun, Conversations: conversations,
+			Since: AgentEventSettings{Days: *days}.since(), Progress: os.Stderr})
 		if stats != nil {
 			_ = printJSON(stats)
 		}
@@ -489,21 +492,20 @@ func runAgentEventsCLI(ctx context.Context, config Config, catalog *Catalog, op 
 		}
 		return printJSON(result)
 	}
+	if len(args) == 1 && args[0] == "fetch" {
+		// The verifier, and the runtime unless one is configured or bundled.
+		labels, events := config.Labels, config.AgentEvents
+		labels.Enabled, events.Enabled = false, true
+		return fetchLabelerAssetsCLI(ctx, labelerDownloads(labels, events), os.Stdout)
+	}
 	if len(args) == 1 && args[0] == "status" {
-		status := map[string]any{}
-		var messages, events, atCutoff int
-		var first, last, models sql.NullString
-		if err := catalog.DB.QueryRowContext(ctx, `SELECT count(*), min(day), max(day), group_concat(DISTINCT model) FROM agent_event_messages`).Scan(&messages, &first, &last, &models); err != nil {
+		status, err := catalog.agentEventsStatus(ctx, config)
+		if err != nil {
 			return err
 		}
-		if err := catalog.DB.QueryRowContext(ctx, `SELECT count(*), COALESCE(sum(probability>=?),0) FROM agent_events`, agentEventThreshold).Scan(&events, &atCutoff); err != nil {
-			return err
-		}
-		status["messages"], status["first_day"], status["last_day"], status["models"] = messages, first.String, last.String, models.String
-		status["events_scored"], status["events_at_threshold"], status["threshold"] = events, atCutoff, agentEventThreshold
 		return printJSON(status)
 	}
-	return fmt.Errorf("usage: pharos agent-events {run [flags] | import FILE | status}")
+	return fmt.Errorf("usage: pharos agent-events {run [flags] | fetch | status | import FILE}")
 }
 
 // applyRepositoryMergesCLI: pharos repositories --merge --apply.

@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"maps"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -255,11 +257,16 @@ func TestAgentEventVerifierMustMatchThisBuild(t *testing.T) {
 // The chain finds agent events only where they are turned on, as their own
 // background item after labels, and completes its stage.
 func TestAgentEventsAreAChainStageOnlyWhenEnabled(t *testing.T) {
-	for _, enabled := range []bool{false, true} {
+	for _, mode := range []string{"off", "configuration", "settings switch"} {
+		enabled := mode != "off"
 		catalog, config := testCatalog(t)
 		seedLabelingCatalog(t, catalog)
 		config.Labels, config.AgentEvents = agentEventsTestSettings(t)
-		config.Labels.Enabled, config.AgentEvents.Enabled = false, enabled
+		config.Labels.Enabled, config.AgentEvents.Enabled = false, mode == "configuration"
+		if mode == "settings switch" {
+			execTx(t, catalog.DB, `INSERT INTO ui_preferences(key,value) VALUES('`+agentEventsFlag+`','true')`)
+			catalog.flags.invalidate()
+		}
 		server := testServer(t, config, catalog)
 		if err := catalog.writeTransaction(t.Context(), "test", markSyncDeferred); err != nil {
 			t.Fatal(err)
@@ -273,16 +280,107 @@ func TestAgentEventsAreAChainStageOnlyWhenEnabled(t *testing.T) {
 		planned := slices.ContainsFunc(backgroundPlan(settings, server.backgroundInputsFor(t.Context(), nil), time.Now()), func(plan itemPlan) bool { return plan.ID == "agent_events" })
 		if !enabled {
 			if read != 0 || planned {
-				t.Fatalf("with agent events off: %d messages read, item planned %v", read, planned)
+				t.Fatalf("%s: %d messages read, item planned %v", mode, read, planned)
 			}
 			continue
 		}
 		if read == 0 || !planned {
-			t.Fatalf("with agent events on: %d messages read, item planned %v", read, planned)
+			t.Fatalf("on by the %s: %d messages read, item planned %v", mode, read, planned)
 		}
 		deferred, _ := catalog.freshnessDeferred(t.Context())
 		if row := deferred["agent_events"]; row.generation == 0 || row.generation > row.completed {
 			t.Fatalf("the agent events stage did not complete: %+v", row)
 		}
+	}
+}
+
+// A horizon leaves older messages unread and older conversations unbuilt,
+// and keeps rows already stored for them.
+func TestAgentEventsReadOnlyWithinTheHorizon(t *testing.T) {
+	catalog := agentEventsCatalog(t)
+	labels, settings := agentEventsTestSettings(t)
+	since := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	stats, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{Since: since})
+	if err != nil || !stats.Complete || stats.ConversationsBuilt == 0 || stats.ConversationsBuilt == stats.Conversations {
+		t.Fatalf("a run since October: %+v %v", stats, err)
+	}
+	var outside, root int
+	if err := catalog.DB.QueryRow(`SELECT (SELECT COUNT(*) FROM agent_event_messages WHERE occurred_at<?),
+		(SELECT COUNT(*) FROM agent_events_conversations WHERE conversation_id='c-root')`, formatTime(since)).Scan(&outside, &root); err != nil || outside != 0 || root != 0 {
+		t.Fatalf("%d messages read before the horizon; September's conversation built: %v (%v)", outside, root != 0, err)
+	}
+	// Without a horizon the rest is read; with it again, nothing is removed.
+	if _, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	var all int
+	_ = catalog.DB.QueryRow(`SELECT COUNT(*) FROM agent_event_messages`).Scan(&all)
+	again, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{Since: since, Full: true})
+	var after int
+	_ = catalog.DB.QueryRow(`SELECT COUNT(*) FROM agent_event_messages`).Scan(&after)
+	if err != nil || again.MessagesScored != 0 || again.MessagesBefore == 0 || after != all {
+		t.Fatalf("a full run with the horizon: %+v %v; %d messages, then %d", again, err, all, after)
+	}
+}
+
+// With no verifier configured the item says it waits for the download; the
+// stage downloads it under the per-Mac lock (the Settings switch is in the
+// catalog, which the broker does not read), then reads. The broker fetches
+// it for a library whose configuration turns agent events on, labels or not.
+func TestAgentEventsDownloadTheVerifier(t *testing.T) {
+	useSupportDir(t)
+	catalog, config := testCatalog(t)
+	seedLabelingCatalog(t, catalog)
+	labels, settings := agentEventsTestSettings(t)
+	entries := []tarEntry{}
+	for _, name := range []string{"manifest.json", "tokenizer.json", "model.int8.onnx"} {
+		data, err := os.ReadFile(filepath.Join(settings.ModelDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries = append(entries, tarEntry{name: name, body: string(data)})
+	}
+	archive := testArchive(t, entries...)
+	server := newAssetServer(t, archive)
+	override(t, &labelsAssets, labelsAssetSet{AgentEventsModel: server.asset(archive, "")})
+	config.Labels, config.AgentEvents = labels, settings
+	config.Labels.Enabled, config.AgentEvents.ModelDir = false, ""
+	srv := testServer(t, config, catalog)
+	if sub := itemSub(backgroundItem{ID: "agent_events"}, srv.backgroundInputsFor(t.Context(), nil)); !strings.Contains(sub, "the agent events model: not yet downloaded") {
+		t.Fatalf("the item says %q", sub)
+	}
+	if status, err := catalog.agentEventsStatus(t.Context(), config); err != nil || !strings.Contains(fmt.Sprint(status["waiting"]), "not yet downloaded") {
+		t.Fatalf("status: %v %v", status, err)
+	}
+	if err := catalog.writeTransaction(t.Context(), "test", markSyncDeferred); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.finishDeferredStages(t.Context(), findingsAuto, map[string]bool{"agent_events": true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var read int
+	_ = catalog.DB.QueryRow(`SELECT COUNT(*) FROM agent_event_messages`).Scan(&read)
+	if !labelsAssets.AgentEventsModel.present() || read == 0 {
+		t.Fatalf("the stage downloaded the verifier: %v; read %d messages", labelsAssets.AgentEventsModel.present(), read)
+	}
+
+	// The broker, for a library configured on, on a Mac without the verifier.
+	if err := os.RemoveAll(labelsAssets.AgentEventsModel.dir()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	m := &applicationManager{ctx: ctx, client: &http.Client{Timeout: 5 * time.Second}, operations: newBrokerOperations(filepath.Join(t.TempDir(), "operations.json"))}
+	m.startLabelsFetch(config.Labels, AgentEventSettings{})
+	if len(m.operations.reg.views()) != 0 {
+		t.Fatal("a download started for a library with neither labels nor agent events")
+	}
+	m.startLabelsFetch(config.Labels, config.AgentEvents)
+	if !waitFor(10*time.Second, func() {
+		for !labelsAssets.AgentEventsModel.present() {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}) {
+		t.Fatal("the broker never fetched the verifier")
 	}
 }

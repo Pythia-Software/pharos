@@ -526,7 +526,7 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 		}
 	}
 	// Agent events follow, also only where they are turned on.
-	if settings := s.Config().AgentEvents; settings.Enabled {
+	if settings := s.Config().AgentEvents; s.agentEventsEnabled(ctx) {
 		stages = append(stages, struct {
 			name string
 			work func() error
