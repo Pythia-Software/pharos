@@ -152,6 +152,121 @@ func TestMCPConversationSearchRanking(t *testing.T) {
 	}
 }
 
+func TestMCPWorkSearchPaginationAndBudget(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	tx := seedTx(t, catalog.DB)
+	preview := strings.Repeat("界 café \"quoted\"\n", 1000)
+	title := strings.Repeat("Parser work ", 200)
+	changedPath := strings.Repeat("nested/", 2500) + "parser.go"
+	if _, err := tx.Exec(`INSERT INTO repositories(id,display_name,created_at,updated_at) VALUES('repo','parser','x','x')`); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ {
+		id := fmt.Sprintf("work-%d", i)
+		if _, err := tx.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,purpose,outcome,activity_at,indexed_at)
+			VALUES(?,'canonical','local',?,?,?,?,'2026-10-01','x')`, id, id, title, preview, preview); err != nil {
+			t.Fatal(err)
+		}
+		// Imports also retain an explicit outcome in summaries. Keep that
+		// production path and the full change/PR payloads in the fixture, so
+		// bounding only the top-level purpose/outcome cannot hide the bug.
+		if err := upsertSummary(tx, id, WorkspaceRecord{Outcome: preview}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(`INSERT INTO change_sets(id,workspace_id,classification) VALUES(?,?,'attempted')`, id, id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(`INSERT INTO change_files(change_set_id,path,status,tracked) VALUES(?,?,'modified',1)`, id, changedPath); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(`INSERT INTO pull_requests(id,host,repository_id,number,title) VALUES(?,'github.com','repo',?,?)`, id, i+1, preview); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(`INSERT INTO work_pr_links(workspace_id,pr_id,relationship,confidence,evidence_json) VALUES(?,?,'associated',1,'{}')`, id, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ limit, budget, maxBytes int }{
+		{1, 4000, 12000},     // caller-limited pages
+		{100, 2000, 6000},    // output-limited pages
+		{100, 100000, 12000}, // the failing request's excessive budget is capped
+	} {
+		t.Run(fmt.Sprintf("limit=%d/budget=%d", tc.limit, tc.budget), func(t *testing.T) {
+			seen := map[string]bool{}
+			offset, cut := 0, false
+			for {
+				page := auditCall(t, catalog, "search_work", map[string]any{"limit": tc.limit, "offset": offset, "max_output_tokens": tc.budget})
+				items := page["items"].([]map[string]any)
+				if len(jsonText(page)) > tc.maxBytes || len(items) == 0 || integer(page["total"]) != 4 || integer(page["offset"]) != int64(offset) {
+					t.Fatalf("invalid page: %s", jsonText(page))
+				}
+				cut = cut || page["truncated"] == true
+				for _, item := range items {
+					id := firstString(item["workspace_id"])
+					if id == "" || seen[id] || item["title"] != title || item["freshness"] == nil {
+						t.Fatalf("repeated or unusable card: %s", jsonText(item))
+					}
+					seen[id] = true
+				}
+				if page["next_offset"] == nil {
+					break
+				}
+				next := int(integer(page["next_offset"]))
+				if next != offset+len(items) {
+					t.Fatalf("continuation skipped or repeated results: %d -> %d", offset, next)
+				}
+				offset = next
+			}
+			if len(seen) != 4 || tc.limit == 100 && !cut {
+				t.Fatalf("incomplete pagination or no budget cut: %v, cut=%v", seen, cut)
+			}
+		})
+	}
+	// Too-small budgets must fail clearly rather than claim no matches or
+	// return a continuation that never advances. Exhausted pages end cleanly.
+	if _, err := callMCP(catalog, "search_work", map[string]any{"max_output_tokens": 200}); err == nil {
+		t.Fatal("accepted a budget too small for one card")
+	}
+	end := auditCall(t, catalog, "search_work", map[string]any{"offset": 100})
+	if len(end["items"].([]map[string]any)) != 0 || end["next_offset"] != nil {
+		t.Fatalf("exhausted page: %s", jsonText(end))
+	}
+	// Preview clipping must leave the archived field available in full.
+	var original string
+	if err := catalog.DB.QueryRow("SELECT purpose FROM workspaces WHERE id='work-0'").Scan(&original); err != nil || original != preview {
+		t.Fatalf("search changed archived text: %v", err)
+	}
+	for _, tc := range []struct{ section, field, want string }{
+		{"outcomes", "outcome", preview},
+		{"changes", "path", changedPath},
+		{"prs", "title", preview},
+	} {
+		var recovered strings.Builder
+		offset := 0
+		for {
+			page := auditCall(t, catalog, "get_work_detail", map[string]any{
+				"workspace_id": "work-0", "section": tc.section, "field": tc.field,
+				"text_offset": offset, "max_output_tokens": 4000,
+			})
+			recovered.WriteString(asString(page["text"]))
+			if page["next_text_offset"] == nil {
+				break
+			}
+			next := int(integer(page["next_text_offset"]))
+			if next <= offset {
+				t.Fatalf("%s field continuation did not advance", tc.section)
+			}
+			offset = next
+		}
+		if recovered.String() != tc.want {
+			t.Fatalf("search lost full %s.%s field access", tc.section, tc.field)
+		}
+	}
+}
+
 func TestQueryMetricsMatchesItsFullScan(t *testing.T) {
 	catalog, _ := libraryFixture(t)
 	for _, statement := range []string{

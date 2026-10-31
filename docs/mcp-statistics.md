@@ -4,7 +4,11 @@ Use `list_metrics` to discover the ten initial metrics and their definitions.
 Use `query_statistics` for workspace/conversation IDs, selected numeric fields,
 or aggregate answers. Both `search_work` and `search_conversations` accept the
 same metric filters and sorting, plus `result_mode: "metadata"` to skip previews.
-Existing search calls keep their usual descriptive responses.
+Plain `search_work` cards honor `max_output_tokens` (200–4,000, estimated as
+three JSON bytes per token), defaulting to 4,000 and clamping oversized requests. Copy `next_offset` with the original filters to continue
+cards, including when the budget returns fewer than `limit`. A null offset ends
+the results. Work descriptions are short previews; use `get_work_detail` for
+full fields. A budget too small for one card returns an error.
 
 ## Workspace and conversation usage
 

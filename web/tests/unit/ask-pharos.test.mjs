@@ -1,3 +1,9 @@
+import { EMPTY_QUERY, encodeQuery } from '@pythia-software/query-table-core';
+import { askChartPreviewJob, onAskChartRefresh } from '../../src/ask-chart-model';
+import { dashboardDefaults } from '../../src/dashboard-defaults';
+import { usageTopicDatasets } from '../../src/usage-workspace-model';
+import { schemas } from './helpers/recipes.mjs';
+import { fixture } from './helpers/parity.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadClassicScript, plain } from './helpers/classic-script.mjs';
@@ -57,29 +63,34 @@ test('prompt replacement, selection and deletion preserve atomic chips and multi
 });
 
 test('shared Ask glow changes working speed without restarting its hue and cleans up motion', () => {
-  const rates=[],events=[];
-  const hue={currentTime:42000,play:()=>events.push('play'),pause:()=>events.push('pause'),cancel:()=>events.push('cancel'),updatePlaybackRate:rate=>rates.push(rate)};
-  let mediaChanged;
-  const media={matches:false,addEventListener:(name,listener)=>{mediaChanged=listener;},removeEventListener:(name,listener)=>{assert.equal(listener,mediaChanged);events.push('unsubscribe');}};
+  const rates=[[],[]],events=[[],[]];
+  const hues=events.map((log,index)=>({currentTime:42000,play:()=>log.push('play'),pause:()=>log.push('pause'),cancel:()=>log.push('cancel'),updatePlaybackRate:rate=>rates[index].push(rate)}));
+  let mediaChanged,unsubscribed=false;
+  const media={matches:false,addEventListener:(name,listener)=>{mediaChanged=listener;},removeEventListener:(name,listener)=>{assert.equal(listener,mediaChanged);unsubscribed=true;}};
   const glow=loadClassicScript('ask-glow.js',{matchMedia:()=>media});
   const writes=[];
-  const host={dataset:new Proxy({},{set:(target,key,value)=>{writes.push([key,value]);target[key]=value;return true;}}),animate:()=>hue};
-  const motion=glow.askGlowMotion(host);
+  const host={dataset:new Proxy({},{set:(target,key,value)=>{writes.push([key,value]);target[key]=value;return true;}})};
+  // Only the decorative layers can animate; the host contains unfiltered text
+  // and panel fills and deliberately has no animate() method.
+  const motion=glow.askGlowMotion(host,hues.map(hue=>({animate:()=>hue})));
   motion.setWorking(false);
   motion.setWorking(true);
   motion.setWorking(true); // Streamed progress must not restart the effect.
   assert.equal(host.dataset.glowWorking,'true');
   motion.setWorking(false);
   assert.equal(host.dataset.glowWorking,'false');
-  assert.equal(rates.length,2);
   assert.deepEqual(writes,[['glowWorking','false'],['glowWorking','true'],['glowWorking','false']],'streamed progress must not trigger redundant DOM mutations');
-  assert.ok(rates[0]>rates[1],'working cycles colors faster than idle');
-  assert.equal(hue.currentTime,42000,'speed changes preserve the hue phase');
+  for(let index=0;index<hues.length;index++){
+    assert.equal(rates[index].length,2);
+    assert.ok(rates[index][0]>rates[index][1],'working cycles colors faster than idle');
+    assert.equal(hues[index].currentTime,42000,'speed changes preserve each layer’s hue phase');
+  }
   media.matches=true;mediaChanged();
   media.matches=false;mediaChanged();
-  assert.deepEqual(events,['play','pause','play']);
+  for(const log of events)assert.deepEqual(log,['play','pause','play']);
   motion.destroy();
-  assert.deepEqual(events.slice(-2),['unsubscribe','cancel']);
+  assert.ok(unsubscribed);
+  for(const log of events)assert.equal(log.at(-1),'cancel');
   assert.equal(host.dataset.glowWorking,undefined);
 });
 
@@ -97,10 +108,10 @@ test('shared Ask glow respects reduced motion from startup, including while work
   const events=[];
   const hue={play:()=>events.push('play'),pause:()=>events.push('pause'),cancel(){},updatePlaybackRate(){}};
   const glow=loadClassicScript('ask-glow.js',{matchMedia:()=>({matches:true,addEventListener(){},removeEventListener(){}})});
-  const host={dataset:{},animate:()=>hue};
-  const motion=glow.askGlowMotion(host);
+  const host={dataset:{}};
+  const motion=glow.askGlowMotion(host,[{animate:()=>hue},{animate:()=>hue}]);
   motion.setWorking(true);
-  assert.deepEqual(events,['pause']);
+  assert.deepEqual(events,['pause','pause']);
   assert.equal(host.dataset.glowWorking,'true','loading remains visible with motion disabled');
   motion.destroy();
 });
@@ -152,7 +163,7 @@ test('a single destination opens for any question, while editing or search suppr
   const navigate = state => model.askShouldNavigate({enabled:true, regular:false, edited:false, prompt:'Open my token usage', cards:[{id:'tokens'}], ...state});
   assert.equal(navigate({}), true);
   for (const prompt of ['Where am I wasting time?', 'Please show me yesterday’s page', 'Take me to my earlier chat', 'Go to Settings', 'Find my work']) assert.equal(navigate({prompt}),true);
-  for (const state of [{cards:[]}, {cards:[{},{}]}, {omitted:1}, {draft:' '}, {draft:'Actually…'}, {edited:true}, {regular:true}, {enabled:false}]) assert.equal(navigate(state),false);
+  for (const state of [{cards:[]}, {cards:[{},{}]}, {hasPreview:true}, {omitted:1}, {draft:' '}, {draft:'Actually…'}, {edited:true}, {regular:true}, {enabled:false}]) assert.equal(navigate(state),false);
   // A lone card left after Pharos dropped others is a choice, and says so.
   assert.equal(model.askOmittedNote(0), '');
   assert.ok(model.askOmittedNote(1));
@@ -361,4 +372,54 @@ test('dragged progress stays reachable after moving or shrinking the window', ()
   const bounds={width:300,height:80,viewportWidth:390,viewportHeight:550};
   assert.deepEqual(plain(model.askFloatingPosition({...bounds,x:-100,y:999})),{x:8,y:462});
   assert.deepEqual(plain(model.askFloatingPosition({...bounds,x:60,y:100})),{x:60,y:100});
+});
+
+test('Ask previews resolve supported dashboard links independently of the current page and collection', t => {
+  const {values} = fixture(t);
+  global.location = new URL('http://parity.test/library?record_usage=unrelated');
+  const original = location.href;
+  for (const [topic, state] of Object.entries(dashboardDefaults)) {
+    const params = new URLSearchParams({analyze_mode:'dashboards', analyze_topic:topic, analyze_chart:JSON.stringify(state), analyze_filters:encodeQuery({...EMPTY_QUERY,where:[]})});
+    const address = '/analyze?' + params;
+    const job = askChartPreviewJob(address,schemas);
+    assert.equal(job.dataset,usageTopicDatasets[topic]);
+    assert.equal(job.options.dashboard,address);
+  }
+  assert.equal(location.href,original);
+  assert.equal(values.has('pharos-bookmarks-v1'),false);
+});
+
+test('Ask leaves unsupported, invalid and unavailable chart destinations as ordinary links', t => {
+  fixture(t);
+  const valid='/analyze?analyze_mode=dashboards&analyze_topic=tokens';
+  for (const address of ['/settings','/library','/analyze','/analyze?analyze_mode=query&analyze_topic=tokens',
+    'https://elsewhere.test'+valid, valid+'&analyze_chart=%7Bbad',valid+'&analyze_filters=bad',valid.replace('tokens','missing')]) {
+    assert.equal(askChartPreviewJob(address,schemas),undefined,address);
+  }
+  assert.equal(askChartPreviewJob(valid,{}),undefined);
+  assert.equal(askChartPreviewJob(valid,{usage:schemas.tools}),undefined);
+});
+
+test('Ask preview jobs keep each chart URL and its moving window intact', t => {
+  fixture(t);
+  const urls = ['claude','codex'].map(provider=>'/analyze?'+new URLSearchParams({analyze_mode:'dashboards',analyze_topic:'tokens',analyze_window:'today',analyze_timezone:'America/Denver',analyze_filters:encodeQuery({...EMPTY_QUERY,where:[{field:'provider',op:'=',value:provider}]})}));
+  const jobs = urls.map(address=>askChartPreviewJob(address,schemas));
+  assert.notEqual(jobs[0].id,jobs[1].id);
+  for (const [index,job] of jobs.entries()) assert.equal(job.options.dashboard,urls[index]);
+});
+
+test('retained Ask charts revalidate on reopening and their own data or calendar refresh until disposed', () => {
+  const openings = new EventTarget(), data = new EventTarget(), refreshes = [];
+  const stop = onAskChartRefresh('usage',openings,()=>refreshes.push('usage'),data);
+  openings.dispatchEvent(new Event('open'));
+  data.dispatchEvent(new CustomEvent('pharos:data-refresh',{detail:'tools'}));
+  assert.equal(refreshes.length,1,'unrelated datasets leave the chart alone');
+  data.dispatchEvent(new CustomEvent('pharos:data-refresh',{detail:'usage'}));
+  data.dispatchEvent(new Event('pharos:usage-refresh'));
+  assert.equal(refreshes.length,3,'both data and calendar changes invalidate the retained view');
+  stop();
+  openings.dispatchEvent(new Event('open'));
+  data.dispatchEvent(new CustomEvent('pharos:data-refresh',{detail:'usage'}));
+  data.dispatchEvent(new Event('pharos:usage-refresh'));
+  assert.equal(refreshes.length,3,'switching or clearing chats removes every refresh subscription');
 });

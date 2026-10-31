@@ -631,6 +631,26 @@ func TestSiteLinkTodayWindows(t *testing.T) {
 
 func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
 	site := testSiteMap(t)
+	for _, sample := range []struct{ page, key string }{
+		{"settings/layout", "quickStatsSettings"}, {"settings/layout", "headerSettings"}, {"settings/layout", "menuBarPreferences"},
+		{"settings/sync", "sync:diagnostics"}, {"settings/sync", "sync:forecast:run-1"}, {"settings/sync", "background:writing"},
+		{"settings/backups", "cloud:schedule:destination-1"}, {"settings", "library:drive-health"}, {"analyze/carbon", "carbon:row:large:output"},
+	} {
+		for _, open := range []bool{true, false} {
+			result, err := site.linkTool(map[string]any{"page": sample.page, "view": map[string]any{"disclosures": map[string]any{sample.key: open}}, "reveal": "section:" + sample.key})
+			if err != nil {
+				t.Fatal(err)
+			}
+			roundTrip(t, site, "disclosure "+sample.key, result["url"].(string))
+		}
+	}
+	for _, overlay := range []string{"none", "drive"} {
+		result, err := site.linkTool(map[string]any{"page": "settings", "view": map[string]any{"overlay": overlay, "disclosures": map[string]any{"status:cadence:hourly": true}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		roundTrip(t, site, "drive overlay "+overlay, result["url"].(string))
+	}
 	args := linkArgs(t, `{"page":"analyze/query/usage","query":{"select":[{"field":"model","width":240}],"fitToScreen":false,"where":[{"field":"last_usage_at","op":">=","value":"-7d"}],"orderBy":[{"field":"model","dir":"desc"}],"limit":5,"offset":10,"aggregations":[{"id":"tokens","op":"sum","field":"total_tokens","groupBy":["model"]}]},"view":{"disclosures":{"query:usage:layout":true}},"highlight":["section:summary","row:usage-1"],"reveal":"control:disclosures"}`)
 	result, err := site.linkTool(args)
 	if err != nil {

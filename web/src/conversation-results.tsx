@@ -2,7 +2,7 @@ import React, { useEffect, useId, useRef, useState } from "react";
 import { ITEM_DETAILS_COLUMN, readFieldValue, type FieldDef, type QueryState } from "@pythia-software/query-table-core";
 import { resolveRenderer, type RenderRegistry } from "@pythia-software/query-table-ui";
 import { Icon } from "./icons";
-import { useViewEntry } from "./view-state";
+import { useViewEntry, useViewState } from "./view-state";
 import { ViewDisclosure } from "./view-disclosure";
 import { formatConcurrencyDuration } from "./concurrency-data";
 
@@ -115,6 +115,7 @@ export function ResultConversationBrowser({ workspaceID, readJSON }: { workspace
   const [loaded, setLoaded] = useState<Record<string, ConversationState>>({});
   const [conversationID, setConversationID] = useViewEntry("search_cards", `${workspaceID}/conversation`, "");
   const [entryID, setEntryID] = useViewEntry("search_cards", `${workspaceID}/turn`, "");
+  const [disclosures] = useViewState<Record<string, boolean>>("disclosures", {});
   const requests = useRef(new Map<string, AbortController>());
   const loadedRef = useRef(loaded); loadedRef.current = loaded;
   const base = `/api/work/${encodeURIComponent(workspaceID)}`;
@@ -146,7 +147,17 @@ export function ResultConversationBrowser({ workspaceID, readJSON }: { workspace
   const forest = conversationForest(overview.conversations);
   const selection = conversationSelection(overview.conversations, loaded, conversationID, entryID);
   const currentID = selection.id;
-  useEffect(() => { if (selection.loadID && !overview.loading) void load(selection.loadID); }, [selection.loadID, overview.loading]);
+  useEffect(() => {
+    if (overview.loading) return;
+    if (selection.loadID) void load(selection.loadID);
+    // Materialize restored sessions as well as deliberate expansions. The
+    // standard accordion's onOpenChange callback is only for user changes.
+    for (const conversation of overview.conversations) {
+      const id = String(conversation.id), key = `search:${workspaceID}:conversation:${id}`;
+      const open = disclosures[key] ?? (id === String(forest[0]?.conversation.id) || id === currentID);
+      if (open) void load(id);
+    }
+  }, [selection.loadID, overview.loading, overview.conversations, currentID, workspaceID, disclosures]);
   const state = loaded[currentID];
   const selectedEntry = entryID || initialOutlineEntry(state?.entries ?? [])?.id;
   const entry = findOutlineEntry(state?.entries ?? [], selectedEntry ?? "") ?? initialOutlineEntry(state?.entries ?? []);
@@ -157,18 +168,15 @@ export function ResultConversationBrowser({ workspaceID, readJSON }: { workspace
       <button type="button" data-view-field="search_cards" className={item.kind === "turn" && !item.human ? "conversation-outline-setup" : undefined} title={item.prompt} aria-current={id === currentID && item.id === entry?.id ? "true" : undefined} onClick={() => choose(id, item.id)}>
         <span>{item.kind === "agent" ? "Sub-agent · " : ""}{item.label}{item.tools ? ` · ${item.tools} tool${item.tools === 1 ? "" : "s"}` : ""}</span>{item.prompt !== item.label ? <small>{item.prompt}</small> : null}
       </button>
-      {item.children.length ? <ViewDisclosure viewKey={`search:${workspaceID}:conversation:${id}:entry:${item.id}:children`} className="conversation-outline-children" open><summary>{item.children.length} sub-agent{item.children.length === 1 ? "" : "s"}<small>in {item.kind === "turn" ? item.label.toLowerCase() : item.label}</small></summary>{entryList(id, item.children)}</ViewDisclosure> : null}
+      {item.children.length ? <ViewDisclosure viewKey={`search:${workspaceID}:conversation:${id}:entry:${item.id}:children`} className="conversation-outline-children" defaultOpen summary={<>{item.children.length} sub-agent{item.children.length === 1 ? "" : "s"}<small>in {item.kind === "turn" ? item.label.toLowerCase() : item.label}</small></>}>{entryList(id, item.children)}</ViewDisclosure> : null}
     </li>)}</ul>;
   }
   function branchList(branches: ConversationBranch[]): React.ReactNode {
     return <ul>{branches.map(({ conversation, children }) => {
       const id = String(conversation.id), data = loaded[id];
       const turnCount = data?.entries.filter(item => item.human).length ?? 0;
-      return <li key={id}><ViewDisclosure viewKey={`search:${workspaceID}:conversation:${id}`} open={id === String(forest[0]?.conversation.id) || id === currentID} onToggle={event => {
-        const open = event.currentTarget.open;
-        if (open && !loadedRef.current[id]) void load(id);
-      }}>
-        <summary title="A session contains a sequence of prompts and replies. Select a turn below to preview it."><span>{conversation.parent_id ? "Sub-agent session" : "Session"} · {conversation.provider || "Agent"}{data && !data.loading && !data.error ? ` · ${turnCount} turn${turnCount === 1 ? "" : "s"}` : ""}</span></summary>
+      return <li key={id}><ViewDisclosure viewKey={`search:${workspaceID}:conversation:${id}`} defaultOpen={id === String(forest[0]?.conversation.id) || id === currentID}
+        summary={<span title="A session contains a sequence of prompts and replies. Select a turn below to preview it.">{conversation.parent_id ? "Sub-agent session" : "Session"} · {conversation.provider || "Agent"}{data && !data.loading && !data.error ? ` · ${turnCount} turn${turnCount === 1 ? "" : "s"}` : ""}</span>}>
         <p className="conversation-outline-session" title={conversation.title || conversation.first_prompt || id}>{conversation.title || conversation.first_prompt || id}</p>
         {data?.loading ? <p role="status">Loading turns…</p> : data?.error ? <p role="alert">{data.error} <button type="button" onClick={() => void load(id)}>Retry</button></p> : data ? data.entries.length ? entryList(id, data.entries) : <p>No retained turns.</p> : null}
         {children.length ? branchList(children) : null}

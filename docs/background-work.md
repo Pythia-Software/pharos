@@ -943,7 +943,12 @@ lag by seconds.
   source's state), or a gated writer that arrives after the last yield
   check, can wait for one short journal commit; a writer in another process
   meets the journal like any other SQLite writer. A round has a 250 ms
-  deadline. Measured on an internal SSD (`TestJournalGateHoldIsShort`, 20
+  deadline, checked between its statements: a statement is never
+  interrupted, since an interrupt landing on a statement of the open
+  transaction (a COMMIT waiting for an external drive's flush) could leave
+  the transaction open on the pooled connection and the catalog's write
+  lock held. A connection whose transaction cannot be rolled back is
+  discarded. Measured on an internal SSD (`TestJournalGateHoldIsShort`, 20
   rows per round, 200 rounds): the gate is held p50 0.6 ms / p95 0.7 ms
   with the tests' durability, and p50 5.2 ms / p95 6.2 ms (max 9.2 ms) with
   the service's (`fullfsync`); an external drive's fsync will be slower.

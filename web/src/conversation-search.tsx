@@ -113,7 +113,7 @@ function ConversationSearch({ options, host, register }: { options: Options; hos
         {result.stop_message ? <p role="status">{result.stop_message}</p> : null}
         {result.next_cursor && Number(pageIndex)<250 ? <button type="button" disabled={busy || !applied} onClick={() => applied && void run(applied, result.next_cursor,false,"",Number(pageIndex)+1)}>Next search batch</button> : null}
         {withheldBatch(result) ? <button type="button" disabled={busy || !applied} onClick={() => applied && void run(applied, result.cursor,false,"",Number(pageIndex))}>Retry this batch</button> : null}
-        <ViewDisclosure viewKey="reader:search-coverage"><summary>Search coverage</summary>{result.coverage}</ViewDisclosure>
+        <ViewDisclosure viewKey="reader:search-coverage" summary="Search coverage">{result.coverage}</ViewDisclosure>
       </> : null}
     </div>
   </div>;

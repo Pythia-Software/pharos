@@ -9,7 +9,7 @@ import modelRequestDocument from "../../schemas/model_requests.schema.json";
 import { dashboardQueryDetails } from "./dashboard-query-links";
 import { withTimeRange } from "./chart-range";
 import { ChartSelect, PeriodControl, RangeControl, presetPeriod, finerPeriod, chartPeriodCount } from "./usage-chart";
-import { useViewState } from "./view-state";
+import { useViewEntry, useViewState } from "./view-state";
 import { ViewDisclosure } from "./view-disclosure";
 import { PageLink } from "./nested-pages";
 import { SearchHelp } from "./search-help";
@@ -221,9 +221,9 @@ function Methodology() {
   return (
     <ViewDisclosure
       viewKey="thinking:methodology"
+      summary="Methodology, exclusions and production limits"
       className="usage-query-search thinking-disclosure"
     >
-      <summary>Methodology, exclusions and production limits</summary>
       <p>
         Think time is a coarse proxy: the first retained usage-bearing response
         event minus the latest linked tool-result timestamp. The request
@@ -349,7 +349,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
     [loading, setLoading] = useState(true),
     [refresh, setRefresh] = useState(0),
     [rangeVersion, setRangeVersion] = useState(0),
-    [evidenceOpen, setEvidenceOpen] = useState(false),
+    [evidenceOpen] = useViewEntry("disclosures", "thinking:validation", false, !detail),
     [validation, setValidation] = useState<ThinkingResponse["validation"]>(),
     [validationError, setValidationError] = useState("");
   // Capture effective viewer defaults even for partial card links.
@@ -986,9 +986,9 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
               </div>
               <ViewDisclosure
                 viewKey="thinking:coverage"
+                summary="Which models and agents have usable timing?"
                 className="usage-query-search thinking-disclosure"
               >
-                <summary>Which models and agents have usable timing?</summary>
                 <h3>By recorded model</h3>
                 <GroupTable
                   data={{ ...data, groups: data.coverage ?? [] }}
@@ -1035,9 +1035,9 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
               </p>
               <ViewDisclosure
                 viewKey="thinking:conversation"
+                summary="Follow a real conversation"
                 className="usage-query-search thinking-disclosure"
               >
-                <summary>Follow a real conversation</summary>
                 <p>
                   Context accumulates, compaction resets it, and waits settle or
                   spike. The twelve longest matching streams are available as
@@ -1093,10 +1093,9 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
               </ViewDisclosure>
               <ViewDisclosure
                 viewKey="thinking:validation"
+                summary="Can we trust the clock? Validation evidence"
                 className="usage-query-search thinking-disclosure"
-                onToggle={(e) => setEvidenceOpen(e.currentTarget.open)}
               >
-                <summary>Can we trust the clock? Validation evidence</summary>
                 {validationError ? (
                   <p role="alert">{validationError}</p>
                 ) : validation ? (

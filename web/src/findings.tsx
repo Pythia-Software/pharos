@@ -650,8 +650,7 @@ function weekText(week: Week, kind: string, unit: string): string {
 
 function WeeksTable({ chart, unit }: { chart: NonNullable<Detail["chart"]>; unit: string }) {
   const format = (value: number | null | undefined) => value === null || value === undefined || !Number.isFinite(value) ? "—" : chart.kind === "mean" ? compact(value) : percent(value);
-  return <ViewDisclosure viewKey="findings:weeks" className="findings-weeks">
-    <summary>Show the weekly numbers</summary>
+  return <ViewDisclosure viewKey="findings:weeks" className="findings-weeks" summary="Show the weekly numbers">
     <table><thead><tr><th>Week of</th><th className="num">{chart.kind === "mean" ? "Average" : "Share"}</th><th className="num">{chart.kind === "rate" ? "Hit it" : chart.kind === "mean" ? "Tokens" : "Tokens"}</th><th className="num">{chart.kind === "rate" ? `All ${unit}` : chart.kind === "mean" ? unit || "Calls" : "All tokens"}</th><th /></tr></thead>
       <tbody>{chart.weeks.map(week => <tr key={week.start} className={week.hollow ? "hollow" : ""}>
         <td>{fullDay(week.start)}</td><td className="num">{format(week.rate)}</td>

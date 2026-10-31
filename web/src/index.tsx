@@ -720,7 +720,7 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
     {!api.query.grouping || namespace ? header?.(api) : null}
     {!shared && !namespace && Object.hasOwn(usageDatasets, dataset) ? <UsageQueryIdeas key={dataset} dataset={dataset as UsageDataset} api={api} /> : null}
     {presets?.(api)}
-    {!shared && !namespace && !["library", "tl1_attempts", "findings"].includes(dataset) && rollingWindowField(dataset) ? <label className="usage-chart-field">Time window<select aria-label="Query time window" value={(() => { const choice = readRollingWindow(new URLSearchParams(location.search), dataset); return choice?.mode === "today" ? "today" : choice?.mode === "relative" && choice.days === 1 ? "24h" : "saved"; })()} onChange={event => {
+    {!shared && !namespace && !["library", "tl1_attempts", "findings", "parallelism"].includes(dataset) && rollingWindowField(dataset) ? <label className="usage-chart-field">Time window<select aria-label="Query time window" value={(() => { const choice = readRollingWindow(new URLSearchParams(location.search), dataset); return choice?.mode === "today" ? "today" : choice?.mode === "relative" && choice.days === 1 ? "24h" : "saved"; })()} onChange={event => {
       if (event.target.value === "saved") return;
       const selected = readRollingWindow(new URLSearchParams(location.search), dataset);
       const address = updateQueryWindowURL(queryURL(dataset, api.query, selected), event.target.value === "today" ? "today" : 1, api.query);
@@ -983,7 +983,7 @@ function LibraryPage() {
     {find && found ? <div className="library-find-status muted" role="status">
       <p>Limit controls workspace rows after filtering and sorting. Counts and metrics include the full matching population.</p>
       {found.workspaces === 0 ? <p>No messages matched these conditions. Try switching “and” to “or”, remove a condition, or choose a broader target.</p> : null}
-      {found.search ? <ViewDisclosure viewKey="library:search-details"><summary>Search details</summary><p>{found.search.count.toLocaleString()} matching messages; {found.search.elapsed_ms} ms. All eligible messages checked.</p><p>{found.search.coverage}</p>{found.search.expansions && Object.keys(found.search.expansions).length ? <p>Word variations: {Object.entries(found.search.expansions).map(([word, terms]) => `${word} → ${terms.join(", ")}`).join("; ")}</p> : null}</ViewDisclosure> : null}
+      {found.search ? <ViewDisclosure viewKey="library:search-details" summary="Search details"><p>{found.search.count.toLocaleString()} matching messages; {found.search.elapsed_ms} ms. All eligible messages checked.</p><p>{found.search.coverage}</p>{found.search.expansions && Object.keys(found.search.expansions).length ? <p>Word variations: {Object.entries(found.search.expansions).map(([word, terms]) => `${word} → ${terms.join(", ")}`).join("; ")}</p> : null}</ViewDisclosure> : null}
     </div> : null}
     </>} />
   </div>;
@@ -2074,7 +2074,7 @@ createRoot(dataGuideHost).render(<DataTaxonomyModal />);
 // Ask remains available before Home's first visit and while another page is active.
 if (!shared) {
   const host = document.createElement("div");host.hidden = true;document.body.append(host);
-  createRoot(host).render(<AskPharosSearch schema={schemas.library} />);
+  createRoot(host).render(<AskPharosSearch schemas={schemas} />);
 }
 
 const mounts: Array<[string, React.ReactNode]> = [

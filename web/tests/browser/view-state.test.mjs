@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {open,skip,activateHeaderTool} from './harness.mjs';
-import {workID,rootConversation,defaultApi} from './fixtures.mjs';
+import {workID,rootConversation,defaultApi,cloudScheduledStatus,busyStatus,eventStream} from './fixtures.mjs';
 import {EMPTY_QUERY,encodeQuery,decodeQueryStrict,loadSchema} from '@pythia-software/query-table-core';
 import toolCallsDocument from '../../../schemas/tool_calls.schema.json' with {type:'json'};
 import mcpCallsDocument from '../../../schemas/mcp_calls.schema.json' with {type:'json'};
@@ -188,9 +188,11 @@ test('conversation result links restore their session and inline agent without t
   ]}),
  };
  const state={[`${workID}/browse`]:true,[`${workID}/turn`]:'second-prompt'};
- const app=await open(t,{url:'/library?'+new URLSearchParams({view:'conversation',search_cards:JSON.stringify(state)}),api,ready:'.conversation-result-card'});
+ const disclosures={[`search:${workID}:conversation:first`]:true,[`search:${workID}:conversation:second`]:true};
+ const app=await open(t,{url:'/library?'+new URLSearchParams({view:'conversation',search_cards:JSON.stringify(state),disclosures:JSON.stringify(disclosures)}),api,ready:'.conversation-result-card'});
  const preview=app.page.getByRole('region',{name:'Selected turn preview',exact:true});
  await preview.getByText('Second session prompt',{exact:true}).waitFor();
+ await app.page.getByRole('navigation',{name:'Conversation outline',exact:true}).getByRole('button',{name:/First session prompt/}).waitFor();
  assert.equal(await preview.evaluate(element=>element.contains(document.activeElement)),false);
  await app.page.getByRole('navigation',{name:'Conversation outline',exact:true}).getByRole('button',{name:/Sub-agent · Timing auditor/}).click();
  await preview.getByText('Timing checked.',{exact:true}).waitFor();
@@ -198,6 +200,7 @@ test('conversation result links restore their session and inline agent without t
  const restored=fresh.page.getByRole('region',{name:'Selected turn preview',exact:true});
  await restored.getByText('Check timing',{exact:true}).waitFor();
  await restored.getByText('Timing checked.',{exact:true}).waitFor();
+ await fresh.page.getByRole('navigation',{name:'Conversation outline',exact:true}).getByRole('button',{name:/First session prompt/}).waitFor();
  assert.equal(await restored.evaluate(element=>element.contains(document.activeElement)),false);
 });
 
@@ -724,8 +727,8 @@ test('restored action previews remain below their action summary',{skip},async t
 });
 
 
-test('Quick Stats keeps URL overlay restoration alongside saved layout preferences',{skip},async t=>{
- const app=await open(t,{url:'/cards',ready:'.card-library-page'}),{page}=app;
+test('Quick Stats keeps URL overlay restoration and opens portable Layout accordions',{skip},async t=>{
+ const app=await open(t,{url:'/settings',viewport:{width:1485,height:791},ready:'#settings.active'}),{page}=app;
  await activateHeaderTool(page,'usageSummaryToggle');
  await page.getByRole('dialog',{name:'Quick Stats',exact:true}).waitFor();
  assert.equal(new URL(page.url()).searchParams.get('overlay'),'usage');
@@ -733,6 +736,165 @@ test('Quick Stats keeps URL overlay restoration alongside saved layout preferenc
  assert.equal(await fresh.page.getByRole('dialog',{name:'Quick Stats',exact:true}).isVisible(),true);
  await fresh.page.keyboard.press('Escape');
  await fresh.page.waitForFunction(()=>document.getElementById('usageSummary').hidden&&new URLSearchParams(location.search).get('overlay')==='none');
+ await app.shot('overlay-gear');
+ await page.getByRole('button',{name:'Configure Quick Stats',exact:true}).click();
+ await page.locator('#quickStatsOptions:not([hidden])').waitFor();await app.settled();
+ await page.waitForFunction(()=>{const panel=document.getElementById('quickStatsSettings'),rect=panel.getBoundingClientRect();return panel.classList.contains('pharos-reveal')&&rect.top>=document.querySelector('body>header').getBoundingClientRect().bottom&&rect.top<innerHeight;});
+ assert.equal(await page.locator('#usageSummary').isVisible(),false);
+ assert.equal(await page.locator('#quickStatsSettings').evaluate(panel=>panel.contains(document.activeElement)),false,'reveal leaves keyboard focus alone');
+ await app.shot('configuration-open');
+ const copied=await open(t,{url:path(page),ready:'#quickStatsOptions:not([hidden])'});
+ await copied.page.reload();await copied.page.locator('#quickStatsOptions:not([hidden])').waitFor();await copied.settled();
+ for(const button of ['headerExpand','menuBarExpand'])await copied.page.locator('#'+button).click();
+ const all=await open(t,{url:path(copied.page),ready:'#headerOptions:not([hidden])'});
+ for(const id of ['quickStatsOptions','headerOptions','menuBarOptions'])assert.equal(await all.page.locator('#'+id).isVisible(),true);
+ await copied.page.evaluate(()=>{history.pushState(null,'','/settings/layout');dispatchEvent(new PopStateEvent('popstate'));});
+ const collapsed=()=>copied.page.waitForFunction(()=>['quickStatsOptions','headerOptions','menuBarOptions'].every(id=>document.getElementById(id).hidden));
+ await collapsed();
+ await copied.page.goBack();
+ for(const id of ['quickStatsOptions','headerOptions','menuBarOptions'])await copied.page.locator('#'+id+':not([hidden])').waitFor();
+ await copied.page.goForward();await collapsed();
+ const legacy=await open(t,{url:'/settings/header',ready:'#headerOptions:not([hidden])'});
+ assert.equal(new URL(legacy.page.url()).pathname,'/settings/layout');
+ const disabled=await open(t,{url:'/settings/layout?'+new URLSearchParams({disclosures:JSON.stringify({menuBarPreferences:true})}),preferences:{'pharos-menu-bar':{enabled:false}},ready:'#headerExpand'});
+ assert.equal(await disabled.page.locator('#menuBarOptions').isVisible(),false,'a linked section cannot enable the native menu');
+});
+
+
+const accordionCases = [
+ {name:'capture/index diagnostics', route:'/settings/sync', keys:['sync:separate','sync:repairs','sync:diagnostics','sync:forecast:capture-forecast'], ready:'#syncDiagnosticTables details'},
+ {name:'background schedule rows', route:'/settings/sync', keys:['background:writing','background:conversations'], ready:'#backgroundSchedule .bg-item-head'},
+ {name:'connected cloud schedules', route:'/settings/backups', keys:['cloud:schedule:cloud-browser'], api:{'GET /api/cloud-backup':cloudScheduledStatus}, ready:'.cloud-schedule-settings'},
+ {name:'library health checks', route:'/settings', keys:['library:drive-health'], ready:'#pharosDriveHealth', defaults:{'library:drive-health':true}},
+ {name:'library application location', route:'/settings/libraries', keys:['library:application'], managedLibrary:{id:'local',name:'Pending history',config:'/Users/test/Libraries/Pending/library.toml'}, ready:'.library-settings-about'},
+];
+for(const sample of accordionCases)test(`accordion links restore ${sample.name} in fresh browsers and history`,{skip},async t=>{
+ const route=entries=>sample.route+'?'+new URLSearchParams({disclosures:JSON.stringify(entries)});
+ const entries=Object.fromEntries(sample.keys.map(key=>[key,true]));
+ const options={api:sample.api,managedLibrary:sample.managedLibrary,ready:sample.ready};
+ const app=await open(t,{...options,url:route(entries)}),{page}=app;
+ const state=(browser,expected)=>browser.waitForFunction(expected=>Object.entries(expected).every(([key,open])=>{
+  const element=[...document.querySelectorAll('[data-view-key],[data-pharos-target]')].find(element=>element.dataset.viewKey===key||element.dataset.pharosTarget==='section:'+key);
+  return element&&(element.tagName==='DETAILS'?element.open:element.getAttribute('aria-expanded')==='true')===open;
+ }),expected);
+ await state(page,entries);
+ await page.locator('[data-pharos-target="section:'+sample.keys.at(-1)+'"]').scrollIntoViewIfNeeded();await app.settled();await app.shot('opened-'+sample.name);
+ const first=page.locator('[data-view-key="'+sample.keys[0]+'"]');
+ if(await first.evaluate(element=>element.tagName==='DETAILS'))await first.locator('summary').first().click();else await first.click();
+ await state(page,{...entries,[sample.keys[0]]:false});
+ await page.waitForFunction(key=>JSON.parse(new URLSearchParams(location.search).get('disclosures')||'{}')[key]===false,sample.keys[0]);await app.settled();
+ const fresh=await open(t,{...options,url:await page.evaluate(()=>location.pathname+location.search)});
+ await state(fresh.page,{...entries,[sample.keys[0]]:false});
+ await fresh.page.reload();await fresh.page.locator(sample.ready).first().waitFor();await state(fresh.page,{...entries,[sample.keys[0]]:false});
+ await page.evaluate(url=>window.pharosNavigate(url),route({}));
+ await state(page,Object.fromEntries(sample.keys.map(key=>[key,sample.defaults?.[key]??false])));
+ await page.goBack();await state(page,{...entries,[sample.keys[0]]:false});
+ await page.goForward();await state(page,Object.fromEntries(sample.keys.map(key=>[key,sample.defaults?.[key]??false])));
+ assert.equal(app.calls.some(call=>call.method!=='GET'&&/^\/api\/(background\/(settings|run)|sync\/|cloud-backup\/(schedule|start))/.test(call.path)),false,'restoring sections must not run work or save settings');
+ await app.shot(sample.name);
+});
+
+test('classic disclosure restoration ignores detached nodes and restores same-page URL writes',{skip},async t=>{
+ const app=await open(t,{url:'/settings',ready:'#pharosDriveHealthDetails'}),{page}=app;
+ await page.evaluate(()=>{
+  const section=document.createElement('section');section.id='disclosure-fixture';
+  section.innerHTML='<details data-view-key="fixture:native"><summary>Native disclosure</summary><p>Content</p></details>';
+  document.querySelector('main').append(section);
+ });
+ await page.evaluate(()=>window.pharosView.write('disclosures',{'fixture:native':true}));
+ await page.waitForFunction(()=>document.querySelector('[data-view-key="fixture:native"]').open);
+ await page.evaluate(()=>{
+  const stale=document.querySelector('[data-view-key="fixture:native"]');stale.remove();stale.open=false;stale.dispatchEvent(new Event('toggle',{bubbles:true}));
+  const replacement=document.createElement('details');replacement.dataset.viewKey='fixture:native';replacement.innerHTML='<summary>Replacement disclosure</summary><p>Content</p>';
+  document.getElementById('disclosure-fixture').append(replacement);
+ });
+ await page.waitForFunction(()=>document.querySelector('[data-view-key="fixture:native"]').open);
+ await page.evaluate(()=>window.pharosView.write('disclosures',{'fixture:native':false}));
+ await page.waitForFunction(()=>!document.querySelector('[data-view-key="fixture:native"]').open);
+});
+
+test('drive-status accordion links restore the overlay without moving focus and survive polling',{skip},async t=>{
+ const entries={'status:cadence:frequent':false,'status:cadence:hourly':true};
+ const api={'GET /api/status':busyStatus,'GET /api/status/stream':eventStream(busyStatus)};
+ const target='section:status:cadence:hourly';
+ const app=await open(t,{url:'/library?'+new URLSearchParams({overlay:'drive',disclosures:JSON.stringify(entries),reveal:target}),preferences:{'pharos-unified-activity-v1':true},api,ready:'#pharosStatusPanel'}),{page}=app;
+ const expanded=()=>page.waitForFunction(()=>document.querySelector('[data-view-key="status:cadence:hourly"]')?.open===true&&document.querySelector('[data-view-key="status:cadence:frequent"]')?.open===false);
+ const highlighted=()=>page.waitForFunction(target=>document.documentElement.dataset.pharosAttentionMissing===''&&[...document.querySelectorAll('.pharos-reveal')].some(element=>element.dataset.pharosTarget===target),target);
+ await expanded();await highlighted();await app.settled();
+ assert.equal(await page.locator('#pharosStatusPanel').evaluate(panel=>panel.contains(document.activeElement)),false);
+ await page.evaluate(()=>{window.__disclosureScrolls=0;const original=Element.prototype.scrollIntoView;Element.prototype.scrollIntoView=function(...args){window.__disclosureScrolls++;return original.apply(this,args);};});
+ for(const revision of [busyStatus.revision+1,busyStatus.revision+2]){
+  app.push('/api/status/stream',{...busyStatus,revision});
+  await page.waitForFunction(revision=>window.pharosStatusStore.current()?.document?.revision===revision,revision);
+  await app.settled();await expanded();await highlighted();
+ }
+ assert.equal(await page.evaluate(()=>window.__disclosureScrolls),0,'polling reapplies highlights without repeating reveal scrolling');
+ const fresh=await open(t,{url:path(page),preferences:{'pharos-unified-activity-v1':true},api,ready:'#pharosStatusPanel'});
+ await fresh.page.waitForFunction(()=>document.querySelector('[data-view-key="status:cadence:hourly"]')?.open===true);
+ await app.shot('drive-status-portable');
+});
+
+test('Carbon evidence row disclosures restore independently of the calculation section',{skip},async t=>{
+ const app=await open(t,{url:'/analyze?analyze_topic=carbon',ready:'#carbonCard .carbon-calculation'}),{page}=app;
+ await page.locator('#carbonCard .carbon-calculation > summary').click();
+ const evidence=page.locator('#carbonCard button.carbon-row-trigger').first();
+ await evidence.click();await app.settled();
+ const key=await evidence.getAttribute('data-view-key');
+ const fresh=await open(t,{url:path(page),ready:'#carbonCard .carbon-calculation[open]'});
+ const restored=fresh.page.locator('[data-view-key="'+key+'"]');
+ await fresh.page.waitForFunction(key=>{const button=[...document.querySelectorAll('button[data-view-key]')].find(button=>button.dataset.viewKey===key);return button?.getAttribute('aria-expanded')==='true'&&document.getElementById(button.getAttribute('aria-controls'))?.hidden===false;},key);
+ assert.equal(await restored.evaluate(button=>document.getElementById(button.getAttribute('aria-controls')).textContent.trim().length>0),true,'restored evidence materializes its content');
+ await fresh.shot('carbon-evidence-portable');
+});
+
+test('workspace file-index accordion survives copying and reload by work identity',{skip},async t=>{
+ const original=defaultApi['GET /api/work/:id']({params:{id:workID}});
+ const api={'GET /api/work/:id':{...original,files:[{path:'src/app.ts',conversation_id:rootConversation}]}};
+ const key=`work:${workID}:files`,url=`/work/${workID}?`+new URLSearchParams({disclosures:JSON.stringify({[key]:true})});
+ const app=await open(t,{url,api,ready:'.file-index[open]'}),{page}=app;
+ await page.locator('.file-index > summary').click();
+ await page.waitForFunction(key=>JSON.parse(new URLSearchParams(location.search).get('disclosures')||'{}')[key]===false,key);
+ const fresh=await open(t,{url:await page.evaluate(()=>location.pathname+location.search),api,ready:'.file-index'});
+ assert.equal(await fresh.page.locator('.file-index').evaluate(element=>element.open),false);
+ await fresh.page.reload();await fresh.page.locator('.file-index').waitFor();await fresh.settled();
+ assert.equal(await fresh.page.locator('.file-index').evaluate(element=>element.open),false);
+});
+
+test('feedback inbox log accordions use the same URL syntax without the application shell',{skip},async t=>{
+ const {readFileSync}=await import('node:fs');
+ const {repo}=await import('./harness.mjs');
+ const id='00000000-0000-4000-8000-000000000001';
+ const entry={version:1,id,application:{name:'Fixture app'},kind:'feedback',comment:'A report',annotations:[],diagnostics:{browser:'Fixture log'},received_at:new Date().toISOString(),tags:[],revision:'1'};
+ const api={'GET /api/submissions':{submissions:[{...entry,annotation_count:0,screenshot_count:0,has_diagnostics:true}]},'GET /api/submissions/:id':entry};
+ const boot=async url=>{
+  const app=await open(t,{url:'/library',api,ready:'#queryTableLibrary .qt-row'});
+  await app.page.route('**/feedback-inbox*',route=>route.fulfill({contentType:'text/html',body:readFileSync(repo+'/internal/uifeedback/assets/index.html')}));
+  await app.page.route('**/assets/inbox.*',route=>{const name=new URL(route.request().url()).pathname.split('/').pop();return route.fulfill({contentType:name.endsWith('.js')?'text/javascript':'text/css',body:readFileSync(repo+'/internal/uifeedback/assets/'+name)});});
+  await app.page.goto(new URL(url,app.page.url()).href);await app.page.locator('.report-detail details').waitFor();await app.settled();return app;
+ };
+ const key='feedback:logs:'+id;
+ const app=await boot('/feedback-inbox?'+new URLSearchParams({submission:id,disclosures:JSON.stringify({[key]:true})}));
+ assert.equal(await app.page.locator('.report-detail details').evaluate(element=>element.open),true);
+ await app.page.locator('.report-detail summary').click();
+ await app.page.waitForFunction(key=>JSON.parse(new URLSearchParams(location.search).get('disclosures')||'{}')[key]===false,key);
+ const fresh=await boot(await app.page.evaluate(()=>location.pathname+location.search));
+ assert.equal(await fresh.page.locator('.report-detail details').evaluate(element=>element.open),false);
+});
+
+
+test('revealing a closed accordion highlights its summary without overriding explicit false',{skip},async t=>{
+ const entries={'sync:separate':false,'sync:diagnostics':false,'background:writing':false,'library:drive-health':false};
+ const url='/settings/sync?'+new URLSearchParams({disclosures:JSON.stringify(entries),reveal:'section:sync:separate'});
+ const app=await open(t,{url,ready:'[data-view-key="sync:separate"].pharos-reveal'}),{page}=app;
+ assert.equal(await page.locator('[data-view-key="sync:separate"]').evaluate(element=>element.open),false);
+ for(const [key,route]of [['sync:diagnostics','/settings/sync'],['background:writing','/settings/sync'],['library:drive-health','/settings']]){
+  await page.evaluate(({key,route,entries})=>window.pharosNavigate(route+'?'+new URLSearchParams({disclosures:JSON.stringify(entries),reveal:'section:'+key})),{key,route,entries});
+  const target=page.locator('[data-pharos-target="section:'+key+'"].pharos-reveal');await target.waitFor({state:'visible'});
+  assert.equal(await target.evaluate(element=>element.contains(document.activeElement)),false,'revealing a closed section does not move focus');
+  assert.equal(await page.locator('[data-view-key="'+key+'"],[data-pharos-target="section:'+key+'"]').first().evaluate(element=>element.tagName==='DETAILS'?element.open:element.getAttribute('aria-expanded')==='true'),false);
+  await page.waitForFunction(()=>document.documentElement.dataset.pharosAttentionMissing==='');
+  await app.shot('closed-'+key);
+ }
 });
 
 
@@ -767,6 +929,16 @@ test('Thinking shares filters, brushing and disclosures across pages and indepen
  await page.getByText('Methodology, exclusions and production limits',{exact:true}).click();await app.settled();
  const overview=path(page),copied=await open(t,{url:overview,ready});
  assert.equal(await copied.page.locator('[data-pharos-target="section:thinking:methodology"]').getAttribute('open')!==null,true);
+ // An already-open validation section must fetch its evidence on restoration,
+ // even though shared accordions notify onOpenChange only for deliberate toggles.
+ const validationURL=new URL(overview,'http://localhost');
+ validationURL.searchParams.set('disclosures',JSON.stringify({'thinking:validation':true}));
+ const validationCopy=await open(t,{url:validationURL.pathname+validationURL.search,ready});
+ const validationPanel=validationCopy.page.locator('[data-pharos-target="section:thinking:validation"]');
+ await validationPanel.locator('summary').scrollIntoViewIfNeeded();
+ await validationPanel.locator('svg').first().waitFor();
+ assert.ok(validationCopy.calls.some(call=>call.path==='/api/thinking'&&call.query.get('evidence')==='1'));
+
  await app.shot('overview');
  const evidenceLoaded=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/query/model_requests/rows-v2');
  await page.locator('.thinking-links').getByRole('link',{name:'Inspect model-request evidence →',exact:true}).click();await evidenceLoaded;await page.locator('.usage-workspace-table').waitFor();await app.settled();

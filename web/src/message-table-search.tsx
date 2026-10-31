@@ -1,3 +1,4 @@
+import { ViewDisclosure } from "./view-disclosure";
 import React, { useEffect, useState } from "react";
 import type { QueryTableApi } from "@pythia-software/query-table-react";
 import { TextSearchEditor } from "./text-search-editor";
@@ -17,6 +18,6 @@ export function MessageTableSearch<Row>({ api, value, active, initialError, onAp
       file={{ text: "", active: false, dirty: false, caseSensitive: false, onText() {}, onCase() {}, onApply() {}, onClear() {} }}
       workspaceScope={{ filters: [], reading: describeWhere(api.computed.catalogue, where), caption: "Message record", sentenceLead: "where ", inline: <SearchFilters fields={api.computed.catalogue} where={where} onChange={setWhere} subject="Message record" />, add: <SearchFilterFields fields={api.computed.catalogue.filter(f => f.name !== "text")} label="Record property" onAdd={clause => setWhere([...where, clause])} /> }}
       orderControl={<SearchOrderControl catalogue={api.computed.catalogue} subject="messages in this batch" order={order.length ? order : api.defaults.orderBy} onChange={setOrder} batched={active} />} />
-    <details className="message-search-layout"><summary>Table layout & saved queries</summary>{layout}</details>
+    <ViewDisclosure viewKey={`query:${api.schema?.name ?? "messages"}:layout`} className="message-search-layout" summary="Table layout & saved queries">{layout}</ViewDisclosure>
   </>;
 }
