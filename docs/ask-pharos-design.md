@@ -330,6 +330,20 @@ told to prefer the exact view asked for (dashboard, chart, split, filters
 and window) over the closest prebuilt card, and to say that no view can show
 something only after browsing confirms it.
 
+Only when the agent has already chosen a Query Table link as the destination is
+it encouraged to add a useful graph through Query Table's metric builder, even
+when the user did not explicitly request one. This encouragement does not apply
+to dashboard links: dashboards already offer higher-quality graphics. The agent
+keeps a suitable dashboard destination and its existing charts instead of switching
+to a Query Table link just to add a metric.
+It browses the page's query schema and metric/display type help, adds a small
+number of relevant `query.aggregations`, and passes the complete query to
+`site_link`. Metrics use `scope: "allMatching"` over the table's filtered
+population, preserving repository scope and the time window. Examples include
+tool-call counts by tool as a bar chart or token totals over time as a line chart
+with calendar grouping. A plain table or detail view still fits when no sensible
+graph helps or the user asks only for records.
+
 A destination is `{id, url, title, description}`, with exactly one of `id` and
 `url` non-empty; Codex's strict structured output needs every property, so
 the unused one is an empty string. At most three are returned. An `id` must
@@ -353,7 +367,8 @@ error naming the first problem. A card's id is derived from
 its canonical URL, so the same link in another parameter order is one card,
 and a follow-up can name an earlier card by id. Saved chats keep the
 canonical URL. This build does not generate arbitrary Query Table SQL: query
-tables take where terms only, as the site map describes.
+tables take native QueryState, including filters, grouping and metrics, as the
+site map describes.
 
 Chats and drafts live in the catalog and can be reopened by `/?ask_chat=ID`.
 History supports text search and pagination. Chats follow the library between
