@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import * as core from "@pythia-software/query-table-core";
 import { instantiateRecipe, queryRecipes } from "../../../src/curiosity-data";
 import { cardCoverQuery } from "../../../src/card-cover";
+import modelRequests from "../../../../schemas/model_requests.schema.json";
 import activity from "../../../../schemas/activity.schema.json";
 import conversationActivity from "../../../../schemas/conversation_activity.schema.json";
 import findings from "../../../../schemas/findings.schema.json";
@@ -23,7 +24,7 @@ export { core, instantiateRecipe, queryRecipes, cardCoverQuery };
 
 // Every dataset the repository defines a schema for.
 export const schemas = Object.fromEntries(Object.entries({
-  activity, conversation_activity: conversationActivity, findings, library, mcp_calls: mcpCalls, parallelism, skill_usages: skillUsages, tl1_attempts: tl1Attempts, tool_calls: toolCalls, tools, usage, writing, writing_messages: writingMessages,
+  model_requests: modelRequests, activity, conversation_activity: conversationActivity, findings, library, mcp_calls: mcpCalls, parallelism, skill_usages: skillUsages, tl1_attempts: tl1Attempts, tool_calls: toolCalls, tools, usage, writing, writing_messages: writingMessages,
 }).map(([dataset, document]) => [dataset, core.loadSchema(document)]));
 export { execution, queryCapabilities as capabilities } from "../../support/query-server.mjs";
 export const day = 86400000;

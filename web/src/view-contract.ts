@@ -1,3 +1,4 @@
+import { validateThinking,defaultThinking,thinkingViews,thinkingBreakdowns } from "./thinking-model";
 import carbonFactors from "../../carbon/co2_factors.json";
 import { defaultConcurrencySettings, concurrencyRangePresets } from "./concurrency-settings";
 import { emptyTextSearch, newRule, ruleLabels, readTextSearch } from "./text-search-model";
@@ -6,10 +7,12 @@ import { emptyTextSearch, newRule, ruleLabels, readTextSearch } from "./text-sea
 export type ViewField = { param: string; pages: string[]; kind: "text" | "boolean" | "enum" | "json" | "strings"; description: string; values?: readonly string[]; default?: unknown; details?: Record<string,unknown>; captureEntries?: boolean };
 const field = (param: string, pages: string[], kind: ViewField["kind"], description: string, values?: readonly string[], fallback?: unknown): ViewField => ({ param, pages, kind, description, ...(values ? { values } : {}), ...(fallback !== undefined ? { default: fallback } : {}) });
 export const viewFields: Record<string, ViewField> = {
+  thinking_filters: field("analyze_filters",["analyze/thinking-overview","analyze/thinking-detail"],"text","Additional native Model Requests population filters. The dashboard range and model controls intersect these filters; dates are replaced when Range changes."),
+  thinking: field("thinking",["analyze/thinking-overview","analyze/thinking-detail","analyze/query/model_requests"],"json","Thinking dashboard applied filters and presentation. All controls share one range; dates are half-open ISO bounds."),
   disclosures: field("disclosures", ["*"], "json", "Expanded content by stable section/record identity; values are booleans. Menus and editors are excluded."),
   nav_collapsed: field("nav_collapsed", ["*"], "boolean", "Collapse the application sidebar."),
   nav_expanded: field("nav_expanded", ["*"], "json", "Expanded sidebar branches by section and page ID."),
-  guide_dataset: field("guide_dataset", ["*"], "enum", "Data Guide source dataset.", ["library","usage","conversation_activity","writing","writing_messages","tool_calls","tools","skill_usages","mcp_calls","tl1_attempts","parallelism","findings"]),
+  guide_dataset: field("guide_dataset", ["*"], "enum", "Data Guide source dataset.", ["model_requests","library","usage","conversation_activity","writing","writing_messages","tool_calls","tools","skill_usages","mcp_calls","tl1_attempts","parallelism","findings"]),
   history_collapsed: field("history_collapsed", ["*"], "strings", "Collapsed History groups by displayed calendar date."),
   history_search: field("history_search", ["*"], "text", "Applied History drawer text filter."),
   guide_open: field("guide_open", ["*"], "boolean", "Show the Data Guide."),
@@ -64,6 +67,7 @@ viewFields.query_layout.captureEntries=true;
 
 // Structured examples are exported with each field so an agent can construct
 // the same object the UI owns, without guessing names from prose descriptions.
+viewFields.thinking.details={template:defaultThinking,views:thinkingViews,breakdowns:thinkingBreakdowns,range:"all, today, 1d, 7d, 30d, 90d, 6m (180 days), 1y (365 days), or custom with from/to ISO timestamps. Dates and buckets always use the viewer’s local time zone. Legacy timezone and minimum fields are accepted for link compatibility and normalized to the viewer’s zone and zero. Range presets choose readable time buckets; manual buckets remain adjustable.",ordering:"Effort is fixed low-to-high with Unreported last; model+effort fixes model panels too."};
 const searchTemplate = emptyTextSearch();
 const searchDetails = {
   template: {...searchTemplate,root:{...searchTemplate.root,id:"group-1",children:[]}},
@@ -133,6 +137,7 @@ export function parseViewValue(field: ViewField, raw: string): unknown {
       const scope=restored.draft.scope;
       if(Object.entries(emptyTextSearch().scope).some(([key,value])=>Array.isArray(value)?scope[key as keyof typeof scope].length!==0:scope[key as keyof typeof scope]!==value))throw new Error("Record keywords cannot carry message scope filters.");
     }
+    if(field.param==="thinking"&&!validateThinking(value))throw new Error("Invalid Thinking dashboard state.");
     return value;
   }
   if(["delegation_page","reader_page"].includes(field.param) && (!/^\d+$/.test(raw)||Number(raw)>250))throw new Error("Choose a session page from 0 to 250.");

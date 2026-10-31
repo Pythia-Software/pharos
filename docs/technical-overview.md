@@ -603,3 +603,6 @@ recovery envelopes rescue catalog-only entities. Fresh rebuilds use production
 parsers/writers before opening a separate rollback oracle for comparison. See
 [the operator contract](capture-history.md); this facility does not run on
 startup or authorize production migrations.
+
+See [Thinking dashboards](thinking-dashboards.md) for request timing semantics,
+statistical support, URL state and the native evidence-query integration.

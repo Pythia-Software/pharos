@@ -7,6 +7,7 @@ type DrilldownColumn = { kind: UsageDrilldown; label: string; dependencies: stri
 const source = (dependencies: string[]): DrilldownColumn => ({ kind: "source", label: "Source", dependencies });
 const conversation = ["workspace_id", "conversation_id"];
 export const usageDrilldownColumns: Record<UsageDataset, DrilldownColumn[]> = {
+  model_requests: [source([...conversation, "requested_at"])],
   tl1_attempts: [source(["workspace_id"])],
   usage: [source([...conversation, "first_usage_at"]), { kind: "calls", label: "Calls", dependencies: ["conversation_id"] }, { kind: "root", label: "Root", dependencies: ["conversation_id", "root_conversation_id"] }],
   conversation_activity: [source([...conversation, "message_id", "event_at"]), { kind: "root", label: "Root", dependencies: ["conversation_id", "root_conversation_id"] }],

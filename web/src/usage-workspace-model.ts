@@ -5,6 +5,7 @@ import { analysisVersion } from "./dashboard-analysis-model";
 // Analyze owns guided dashboards and the full query surfaces. Explicit older
 // analysis URLs remain available while their specialized controls migrate.
 export const usageDatasets = {
+  model_requests: { label: "Model requests", description: "Retained request usage and post-tool timing evidence.", field: "model", searchLabel: "Model request names" },
   usage: { label: "Token usage", description: "Tokens, API costs, models, cache, and pricing coverage.", field: "model", searchLabel: "Token Usage Model Names" },
   conversation_activity: { label: "Conversation activity", description: "Human input and recorded output across conversations.", field: "root_model_family", searchLabel: "Top-level Conversation Model Names" },
   writing: { label: "Human words by workspace", description: "Authorship totals across each workspace’s conversations and folded delegated work.", field: "title", searchLabel: "Workspace Titles" },
@@ -18,7 +19,7 @@ export const usageDatasets = {
 } as const;
 export type UsageDataset = keyof typeof usageDatasets;
 export type UsageMode = "dashboards" | "query";
-export const usageTopics = {
+export const engineUsageTopics = {
   activity: { label: "Conversation Input and Output", description: "Explore human-supplied text and model output across whole conversations, models, and repositories." },
   human: { label: "Human Words", description: "How much are you contributing? Explore your writing over time." },
   tokens: { label: "Tokens and Cost", description: "How much are agents consuming? Choose a measure, a breakdown, and a time range." },
@@ -30,18 +31,24 @@ export const usageTopics = {
   mcp: { label: "Pharos MCP", description: "How are agents using Pharos? Explore calls, reliability, response sizes, and time spent serving requests." },
   carbon: { label: "Carbon Impact", description: "Estimated electricity and emissions, with explicit assumptions." },
 } as const;
+export const usageTopics = { ...engineUsageTopics,
+  "thinking-overview": {label:"Waiting and Compaction",description:"Understand observed model waits, context associations, compaction and timing evidence."},
+  "thinking-detail": {label:"Thinking",description:"Compare complete request distributions across models, effort, workloads and dates."},
+} as const;
 export type UsageTopic = keyof typeof usageTopics;
 export const usageDatasetTopics: Record<UsageDataset, UsageTopic> = {
-  usage: "tokens", conversation_activity: "activity", writing: "human", writing_messages: "human",
+  model_requests: "thinking-detail", usage: "tokens", conversation_activity: "activity", writing: "human", writing_messages: "human",
   tools: "tools", tool_calls: "calls", mcp_calls: "mcp", skill_usages: "skills", parallelism: "parallelism", tl1_attempts: "tokens",
 };
 export const usageTopicDatasets: Record<UsageTopic, UsageDataset> = {
+  "thinking-overview":"model_requests", "thinking-detail":"model_requests",
   calls: "tool_calls", activity: "conversation_activity", tokens: "usage", human: "writing_messages", time: "tool_calls", parallelism: "parallelism", tools: "tools", mcp: "mcp_calls", skills: "skill_usages", carbon: "usage",
 };
 
 // Fields that hold a dashboard's dates, by dataset: its range, and the day
 // predicates a link may translate it into (the tools rollup's text day).
 const timeFields: Record<UsageDataset, string[]> = {
+  model_requests: ["requested_at"],
   tl1_attempts: ["started_at"],
   usage: ["first_usage_at", "last_usage_at", "day", "hour", "week", "month"], conversation_activity: ["event_at"],
   writing: ["first_message_at", "last_message_at"], writing_messages: ["sent_at", "day", "week", "month"], tools: ["day", "week", "month"], tool_calls: ["started_at", "ended_at", "day", "week", "month"],
@@ -88,6 +95,15 @@ export function usageDashboardReturn(current: URLSearchParams) {
     params.delete("analyze_window");
     for (const key of [...params.keys()]) if (key.startsWith("window_")) params.delete(key);
   }
+  const openedThinking = compatible && ["thinking-overview", "thinking-detail"].includes(state.topic) ? decodeQueryStrict(current.get("analyze_opened") ?? "") : null;
+  if (compatible && ["thinking-overview", "thinking-detail"].includes(state.topic) && (!openedThinking || JSON.stringify(openedThinking.where) !== JSON.stringify((query!.grouping?.source ?? query!).where))) {
+    // The edited evidence query now owns the entire population. Keep presentation,
+    // but rederive range/model controls so removed predicates cannot be reapplied.
+    returned.where = (query!.grouping?.source ?? query!).where;
+    const thinking = JSON.parse(params.get("thinking") || "{}");
+    for (const key of ["range", "from", "to"]) delete thinking[key];
+    params.set("thinking", JSON.stringify({ ...thinking, model: "all", effort: "all" }));
+  }
   params.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where: returned.where }));
   return {
     href: usageWorkspaceURL({ mode: "dashboards", dataset, search: false }, params),
@@ -127,7 +143,7 @@ export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?
   const previous = readUsageWorkspace(current), next = { ...previous, ...change };
   const mode = next.mode === "search" ? "query" : next.mode;
   const params = new URLSearchParams(current);
-  if (next.topic !== previous.topic) { params.delete("analyze_filters"); params.delete("analyze_window"); params.delete("analyze_timezone"); params.delete("analyze_chart"); params.delete("analyze_parallelism"); }
+  if (next.topic !== previous.topic && !(["thinking-overview","thinking-detail"].includes(next.topic)&&["thinking-overview","thinking-detail"].includes(previous.topic))) { params.delete("analyze_filters"); params.delete("analyze_window"); params.delete("analyze_timezone"); params.delete("analyze_chart"); params.delete("analyze_parallelism"); }
   for (const key of [...params.keys()]) {
     if (key.startsWith("record_") && (key !== `record_${next.dataset}` || next.dataset !== previous.dataset || mode === "dashboards")) params.delete(key);
     // A different dataset must never inherit another table's query/window.

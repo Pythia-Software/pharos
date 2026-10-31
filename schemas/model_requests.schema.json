@@ -1,0 +1,558 @@
+{
+  "name": "pharos_model_requests",
+  "version": 1,
+  "idField": "id",
+  "defaultLimit": 50,
+  "defaultSort": [
+    {
+      "field": "requested_at",
+      "dir": "desc"
+    }
+  ],
+  "tiebreakSort": [
+    {
+      "field": "id",
+      "dir": "desc"
+    }
+  ],
+  "defaultSelect": [
+    {
+      "field": "requested_at"
+    },
+    {
+      "field": "model"
+    },
+    {
+      "field": "effort"
+    },
+    {
+      "field": "gap_seconds"
+    },
+    {
+      "field": "input_tokens"
+    },
+    {
+      "field": "reasoning_output_tokens"
+    },
+    {
+      "field": "timing_quality"
+    }
+  ],
+  "fields": [
+    {
+      "name": "id",
+      "label": "Id",
+      "type": "text",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"id\""
+        }
+      }
+    },
+    {
+      "name": "conversation_id",
+      "label": "Conversation id",
+      "type": "text",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "conversation_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"conversation_id\""
+        }
+      }
+    },
+    {
+      "name": "agent_session_id",
+      "label": "Agent session id",
+      "type": "text",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "agent_session_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"agent_session_id\""
+        }
+      }
+    },
+    {
+      "name": "workspace_id",
+      "label": "Workspace id",
+      "type": "text",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "workspace_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"workspace_id\""
+        }
+      }
+    },
+    {
+      "name": "native_id",
+      "label": "Native id",
+      "type": "text",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "native_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"native_id\""
+        }
+      }
+    },
+    {
+      "name": "model",
+      "label": "Model",
+      "type": "text",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "model",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"model\""
+        }
+      },
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      }
+    },
+    {
+      "name": "effort",
+      "label": "Effort",
+      "type": "text",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "effort",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"effort\""
+        }
+      },
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      }
+    },
+    {
+      "name": "provider",
+      "label": "Provider",
+      "type": "text",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "provider",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"provider\""
+        }
+      },
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      }
+    },
+    {
+      "name": "harness",
+      "label": "Harness",
+      "type": "text",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "harness",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"harness\""
+        }
+      },
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      }
+    },
+    {
+      "name": "source_kind",
+      "label": "Source kind",
+      "type": "text",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "source_kind",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"source_kind\""
+        }
+      },
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      }
+    },
+    {
+      "name": "repository_name",
+      "label": "Repository name",
+      "type": "text",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "repository_name",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"repository_name\""
+        }
+      },
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      }
+    },
+    {
+      "name": "machine",
+      "label": "Machine",
+      "type": "text",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "machine",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"machine\""
+        }
+      },
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      }
+    },
+    {
+      "name": "preceding_tool",
+      "label": "Preceding tool",
+      "type": "text",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "preceding_tool",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"preceding_tool\""
+        }
+      },
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      }
+    },
+    {
+      "name": "timing_quality",
+      "label": "Timing quality",
+      "type": "text",
+      "group": "Timing",
+      "bindings": {
+        "postgres": {
+          "expr": "timing_quality",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"timing_quality\""
+        }
+      },
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      }
+    },
+    {
+      "name": "day",
+      "label": "Day",
+      "type": "text",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "day",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"day\""
+        }
+      },
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      }
+    },
+    {
+      "name": "week",
+      "label": "Week",
+      "type": "text",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "week",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"week\""
+        }
+      },
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      }
+    },
+    {
+      "name": "month",
+      "label": "Month",
+      "type": "text",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "month",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"month\""
+        }
+      },
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      }
+    },
+    {
+      "name": "sequence",
+      "label": "Sequence",
+      "type": "number",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "sequence",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"sequence\"",
+          "expressionNumeric": true
+        }
+      },
+      "select": {
+        "align": "right"
+      }
+    },
+    {
+      "name": "input_tokens",
+      "label": "Input tokens",
+      "type": "number",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "input_tokens",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"input_tokens\"",
+          "expressionNumeric": true
+        }
+      },
+      "select": {
+        "align": "right"
+      }
+    },
+    {
+      "name": "cache_read_input_tokens",
+      "label": "Cache read input tokens",
+      "type": "number",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "cache_read_input_tokens",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"cache_read_input_tokens\"",
+          "expressionNumeric": true
+        }
+      },
+      "select": {
+        "align": "right"
+      }
+    },
+    {
+      "name": "output_tokens",
+      "label": "Output tokens",
+      "type": "number",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "output_tokens",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"output_tokens\"",
+          "expressionNumeric": true
+        }
+      },
+      "select": {
+        "align": "right"
+      }
+    },
+    {
+      "name": "reasoning_output_tokens",
+      "label": "Reported reasoning tokens",
+      "type": "number",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "reasoning_output_tokens",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"reasoning_output_tokens\"",
+          "expressionNumeric": true
+        }
+      },
+      "select": {
+        "align": "right"
+      }
+    },
+    {
+      "name": "agent_depth",
+      "label": "Agent depth",
+      "type": "number",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "agent_depth",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"agent_depth\"",
+          "expressionNumeric": true
+        }
+      },
+      "select": {
+        "align": "right"
+      }
+    },
+    {
+      "name": "gap_seconds",
+      "label": "Observed wait (seconds)",
+      "type": "number",
+      "group": "Timing",
+      "bindings": {
+        "postgres": {
+          "expr": "gap_seconds",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"gap_seconds\"",
+          "expressionNumeric": true
+        }
+      },
+      "select": {
+        "align": "right"
+      }
+    },
+    {
+      "name": "requested_at",
+      "label": "Response event",
+      "type": "datetime",
+      "group": "Timing",
+      "bindings": {
+        "postgres": {
+          "expr": "requested_at",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"requested_at\"",
+          "datetimeFormat": "rfc3339"
+        }
+      }
+    },
+    {
+      "name": "tool_result_at",
+      "label": "Tool result at",
+      "type": "datetime",
+      "group": "Timing",
+      "bindings": {
+        "postgres": {
+          "expr": "tool_result_at",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"tool_result_at\"",
+          "datetimeFormat": "rfc3339"
+        }
+      }
+    },
+    {
+      "name": "compacted_before",
+      "label": "Compacted before",
+      "type": "bool",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "compacted_before",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"compacted_before\""
+        }
+      }
+    },
+    {
+      "name": "model_effort",
+      "label": "Model effort",
+      "type": "text",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "model_effort",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"model_effort\""
+        }
+      },
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      }
+    }
+  ]
+}

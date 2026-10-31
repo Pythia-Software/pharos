@@ -38,7 +38,9 @@ type Catalog struct {
 	find         libraryFindCache
 	transcripts  transcriptFindCache
 	derived      derivedCache
-	queryCounts  queryCountCache
+	// Initialized under derived.mu; caps simultaneous workload fits.
+	thinkingFitSlots chan struct{}
+	queryCounts      queryCountCache
 	// sourceProofs holds what Query Table proved about SQL datasets' whole
 	// sources, keyed by the data generation it was proven in.
 	sourceProofs qt.SQLiteSourceProofs
@@ -333,6 +335,14 @@ func (c *Catalog) Initialize() error {
 	}
 	for _, index := range []string{
 		"CREATE INDEX IF NOT EXISTS tool_query_facts_day_idx ON tool_query_facts(day)",
+		// Request-gap aggregation reads only these small timing fields, not tool bodies.
+		"CREATE INDEX IF NOT EXISTS tool_calls_next_request_timing_idx ON tool_calls(next_request_id,ended_at,agent_session_id,tool_category) WHERE next_request_id IS NOT NULL",
+		// Cover the timing projection so request reads never visit large
+		// conversation bodies or sort the entire ledger's window partitions.
+		"CREATE INDEX IF NOT EXISTS conversations_timing_idx ON conversations(id,workspace_id,provider,harness,agent_depth)",
+		"CREATE INDEX IF NOT EXISTS model_requests_timing_idx ON model_requests(conversation_id,COALESCE(agent_session_id,''),sequence,id,requested_at,native_id,model,effort,input_tokens,cache_read_input_tokens,output_tokens,reasoning_output_tokens,compacted_before,agent_session_id)",
+		"CREATE INDEX IF NOT EXISTS messages_timing_metadata_idx ON messages(conversation_id,source_order) WHERE kind='metadata'",
+
 		"CREATE INDEX IF NOT EXISTS messages_conversation_model_effort_idx ON messages(conversation_id,effort,model) WHERE model IS NOT NULL OR effort IS NOT NULL",
 		"DROP INDEX IF EXISTS messages_conversation_effort_idx",
 		"CREATE INDEX IF NOT EXISTS agent_sessions_child_conversation_idx ON agent_sessions(child_conversation_id)",

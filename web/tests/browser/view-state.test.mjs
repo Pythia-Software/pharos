@@ -734,3 +734,73 @@ test('Quick Stats keeps URL overlay restoration alongside saved layout preferenc
  await fresh.page.keyboard.press('Escape');
  await fresh.page.waitForFunction(()=>document.getElementById('usageSummary').hidden&&new URLSearchParams(location.search).get('overlay')==='none');
 });
+
+
+test('Thinking shares filters, brushing and disclosures across pages and independent browsers',{skip},async t=>{
+ const ready='.thinking-dashboard[aria-busy="false"] .thinking-population';
+ const app=await open(t,{url:'/analyze?analyze_topic=thinking-detail&analyze_data=model_requests',ready}),{page}=app;
+ const control=name=>page.locator('.thinking-controls').getByRole('combobox',{name,exact:true});
+ const state=()=>JSON.parse(new URL(page.url()).searchParams.get('thinking'));
+ for(const [range,period] of [['90d','day'],['7d','hours'],['1y','week'],['30d','day']]){
+  await control('Range').selectOption(range);await app.settled();
+  assert.equal(await control('Time Bucket').inputValue(),period);
+  assert.equal(app.calls.filter(c=>c.path==='/api/thinking').at(-1).query.get('period'),period);
+ }
+ const bucketCopy=await open(t,{url:path(page),ready});
+ assert.equal(await bucketCopy.page.getByRole('combobox',{name:'Time Bucket',exact:true}).inputValue(),'day');
+ await control('Breakdown').selectOption('model_effort');await app.settled();
+ // Wheel input over a tall, faceted plot must move the page scroller.
+ const wheelChart=page.locator('.thinking-brush').first();await wheelChart.scrollIntoViewIfNeeded();
+ const wheelRect=await wheelChart.boundingBox(),beforeWheel=await page.locator('main').evaluate(el=>el.scrollTop);
+ await page.mouse.move(wheelRect.x+wheelRect.width*.5,wheelRect.y+wheelRect.height*.5);await page.mouse.wheel(0,240);
+ await page.waitForFunction(before=>document.querySelector('main').scrollTop>before,beforeWheel);
+ await control('Model').selectOption('gpt-6.1-sol');await app.settled();
+ const chart=page.locator('.thinking-brush').first();await chart.scrollIntoViewIfNeeded();const rect=await chart.boundingBox();
+ await page.mouse.move(rect.x+rect.width*.3,rect.y+rect.height*.4);await page.mouse.down();await page.mouse.move(rect.x+rect.width*.65,rect.y+rect.height*.4,{steps:8});await page.mouse.up();
+ await page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('thinking')).range==='custom');await app.settled();
+ const selected=state();assert.ok(selected.from&&selected.to);assert.ok(['custom','custom-times'].includes(await control('Range').inputValue()));
+ for(const view of ['heatmap','histogram','reasoning','wait-box','calendar']){await control('View').selectOption(view);await app.settled();assert.equal(state().from,selected.from);assert.equal(state().to,selected.to);await app.shot(view)}
+ const linked=path(page),fresh=await open(t,{url:linked,ready});
+ assert.deepEqual(JSON.parse(new URL(fresh.page.url()).searchParams.get('thinking')),state());
+ await page.locator('.thinking-links').getByRole('link',{name:'Waiting and Compaction →',exact:true}).click();await page.locator(ready).waitFor();await app.settled();
+ assert.equal(state().from,selected.from);
+ await page.getByText('Methodology, exclusions and production limits',{exact:true}).click();await app.settled();
+ const overview=path(page),copied=await open(t,{url:overview,ready});
+ assert.equal(await copied.page.locator('[data-pharos-target="section:thinking:methodology"]').getAttribute('open')!==null,true);
+ await app.shot('overview');
+ const evidenceLoaded=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/query/model_requests/rows-v2');
+ await page.locator('.thinking-links').getByRole('link',{name:'Inspect model-request evidence →',exact:true}).click();await evidenceLoaded;await page.locator('.usage-workspace-table').waitFor();await app.settled();
+ await page.getByRole('link',{name:'Back to dashboard',exact:true}).click();await page.locator(ready).waitFor();await app.settled();assert.equal(state().model,'gpt-6.1-sol');assert.equal(state().from,selected.from);
+ await page.goBack();await page.locator('.usage-workspace-table').waitFor();
+ await page.goBack();await page.locator(ready).waitFor();
+ await page.goBack();await page.locator(ready).waitFor();assert.equal(state().view,'calendar');
+ await page.goForward();await page.locator(ready).waitFor();assert.equal(state().model,'gpt-6.1-sol');
+});
+
+// Date arithmetic is covered in node; here verify the shared editor is wired to
+// the viewer's local zone, restores in a fresh browser, and keeps API/URL in sync.
+test('Thinking custom date editor follows the viewer zone and restores absolute dates',{skip},async t=>{
+ const ready='.thinking-dashboard[aria-busy="false"] .thinking-population';
+ const thinking={timezone:'Asia/Tokyo',minimum:1000,range:'custom',from:'2026-10-20T06:00:00.000Z',to:'2026-10-21T06:00:00.000Z'};
+ const app=await open(t,{url:'/analyze?'+new URLSearchParams({analyze_topic:'thinking-detail',analyze_data:'model_requests',thinking:JSON.stringify(thinking)}),ready}),{page}=app;
+ const range=page.locator('.thinking-controls').getByRole('combobox',{name:'Range',exact:true});
+ assert.equal(await range.inputValue(),'custom');
+ assert.equal(await page.getByLabel('From date',{exact:true}).inputValue(),'2026-10-20');
+ assert.equal(await page.getByLabel('Through date',{exact:true}).inputValue(),'2026-10-20');
+ await page.getByLabel('Through date',{exact:true}).fill('2026-10-21');await app.settled();
+ await page.getByLabel('From date',{exact:true}).fill('2026-10-21');await app.settled();
+ const state=JSON.parse(new URL(page.url()).searchParams.get('thinking'));
+ assert.equal(state.from,'2026-10-21T06:00:00.000Z');assert.equal(state.to,'2026-10-22T06:00:00.000Z');
+ assert.equal(state.timezone,'America/Denver');assert.equal(state.minimum,0);
+ const calls=app.calls.filter(c=>c.path==='/api/thinking');
+ assert.equal(calls.at(-1).query.get('from'),state.from);assert.equal(calls.at(-1).query.get('to'),state.to);
+ assert.equal(calls.at(-1).query.get('timezone'),'America/Denver');assert.equal(calls.at(-1).query.get('minimum'),'0');
+ const fresh=await open(t,{url:path(page),ready});
+ assert.equal(await fresh.page.getByLabel('From date',{exact:true}).inputValue(),'2026-10-21');
+ assert.equal(await fresh.page.getByLabel('Through date',{exact:true}).inputValue(),'2026-10-21');
+ await range.selectOption('custom-times');await app.settled();
+ assert.equal(await page.getByLabel('From date and time',{exact:true}).inputValue(),'2026-10-21T00:00');
+ await page.getByLabel('From date and time',{exact:true}).fill('2026-10-21T12:30');await app.settled();
+ assert.equal(JSON.parse(new URL(page.url()).searchParams.get('thinking')).from,'2026-10-21T18:30:00.000Z');
+ await app.shot('thinking-local-dates');
+});

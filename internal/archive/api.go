@@ -533,6 +533,8 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = append(rows, map[string]any{"id": "environment:web", "label": "Web (device unknown)", "kind": "web"})
 		writeJSON(w, map[string]any{"machines": rows}, 200)
+	case path == "/api/thinking":
+		s.handleThinking(w, r)
 	case path == "/api/usage/history":
 		value, err := s.Catalog.UsageHistory(r.Context())
 		writeResult(w, value, err)

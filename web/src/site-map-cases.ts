@@ -51,7 +51,7 @@ const spread = <T,>(items: T[], count: number) => items.length <= count ? items 
 function chartCases(map: SiteMap): ChartCase[] {
   const cases: ChartCase[] = [];
   let turn = 0;
-  for (const topic of Object.keys(usageTopics) as UsageTopic[]) {
+  for (const topic of Object.keys(analysisCatalogs) as UsageTopic[]) {
     const facts = map.analyze.dashboards[topic], sets = filterSets(facts.dataset as UsageDataset), windows = [...dashboardWindows, null];
     for (const [view, info] of Object.entries(facts.views)) {
       // A spread of every enumerated combination, valid and coercible.
@@ -194,7 +194,7 @@ function nodeCases(map: SiteMap) {
 }
 
 export function buildSiteMapCases(map: SiteMap) {
-  for (const topic of Object.keys(usageTopics)) if (!analysisCatalogs[topic]) throw new Error(`site map cases: no catalog for ${topic}`);
+
   const charts = chartCases(map);
   for (const item of charts) {
     const facts = map.analyze.dashboards[item.topic];
@@ -218,7 +218,7 @@ export function buildSiteMapCases(map: SiteMap) {
     about: "Cases for the site map, from web/src/site-map-cases.ts. analyze: by topic, charts with the page's verdict (valid; coercible: opens but draws other settings; invalid: rejected). Partial charts are merged over the topic's merge_defaults, as the page does. Some valid charts carry their link. cards: every card at one window, and some at every window. nodes: a link per page with the state its reader reads. decoded: each query token's state.",
     example: motivatingExample(map),
     // By topic; a chart names its view, or takes the topic's.
-    analyze: Object.fromEntries(Object.keys(usageTopics).map(topic => [topic, charts.filter(item => item.topic === topic).map(({ topic: _topic, view: _view, partial: _partial, ...item }) => item)])),
+    analyze: Object.fromEntries(Object.keys(analysisCatalogs).map(topic => [topic, charts.filter(item => item.topic === topic).map(({ topic: _topic, view: _view, partial: _partial, ...item }) => item)])),
     cards: cardCases(map),
     nodes: nodeCases(map),
   };
