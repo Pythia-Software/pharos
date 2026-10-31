@@ -129,11 +129,12 @@ func TestLabelsLedgerLabelsEveryUnitOnceAndThenOnlyChanges(t *testing.T) {
 		t.Fatalf("second run: %+v %v", again, err)
 	}
 
-	// A new message in one conversation: that conversation is rebuilt, and
-	// only the new message is labeled.
+	// A new message in one conversation: that conversation is rebuilt, with
+	// c-late, which re-sends c-other's messages, and only the new message is
+	// labeled.
 	execTx(t, catalog.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('m-o8','c-other','m-o8','assistant','message','All checks pass now.','hash-m-o8','2026-09-03T13:00:00.000Z',999)`)
 	small, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{})
-	if err != nil || small.ConversationsBuilt != 1 || small.MessagesLabeled != 1 || small.MessagesUnchanged == 0 {
+	if err != nil || small.ConversationsBuilt != 2 || small.MessagesLabeled != 1 || small.MessagesUnchanged == 0 {
 		t.Fatalf("incremental run: %+v %v", small, err)
 	}
 	// The first run's workers stayed warm: the same processes label it.
@@ -152,24 +153,69 @@ func TestLabelsLedgerLabelsEveryUnitOnceAndThenOnlyChanges(t *testing.T) {
 	// back are restored.
 	execTx(t, catalog.DB, `DELETE FROM messages WHERE id='m-o8'`, `DELETE FROM message_labels WHERE message_id IN ('m-a1','m-h3')`)
 	healed, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{})
-	// c-root (lost labels) and c-other (a deleted message): c-root's forks
-	// copy its history, but restoring labels changed none of its inputs.
-	if err != nil || healed.MessagesRemoved != 1 || healed.MessagesLabeled != 2 || healed.ConversationsBuilt != 2 || labelCount(t, catalog, "") != len(messages) {
+	// c-root (lost labels) and c-other (a deleted message), with c-late,
+	// which re-sends c-other's messages: c-root's forks copy its history, but
+	// restoring labels changed none of its inputs.
+	if err != nil || healed.MessagesRemoved != 1 || healed.MessagesLabeled != 2 || healed.ConversationsBuilt != 3 || labelCount(t, catalog, "") != len(messages) {
 		t.Fatalf("healing run: %+v %v", healed, err)
 	}
 	if labelCount(t, catalog, "WHERE message_id='m-o8'") != 0 {
 		t.Fatal("a deleted message kept its label")
 	}
-	// A new message in a parent: its forks (six) are rebuilt with it, and
-	// only the new message is labeled.
+	// A new message in a parent: its forks (six) are rebuilt with it, and so
+	// are c-other, which re-sends its request, and c-late, which re-sends
+	// c-other's messages; only the new message is labeled.
 	execTx(t, catalog.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('m-a9','c-root','m-a9','assistant','message','Wrapped up.','hash-m-a9','2026-09-01T13:00:00.000Z',998)`)
 	parent, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{})
-	if err != nil || parent.ConversationsBuilt != 7 || parent.MessagesLabeled != 1 {
+	if err != nil || parent.ConversationsBuilt != 9 || parent.MessagesLabeled != 1 {
 		t.Fatalf("a parent's change: %+v %v", parent, err)
 	}
 	var dirty int
 	if err := catalog.DB.QueryRow(`SELECT COUNT(*) FROM message_labels_dirty`).Scan(&dirty); err != nil || dirty != 0 {
 		t.Fatalf("dirty marks left: %d %v", dirty, err)
+	}
+
+	// A message re-sent a month later is labeled from its source's
+	// classification. When the source becomes quoted agent text (an earlier
+	// reply is imported), the copy's own spans stay the same, yet its items
+	// change: the copy's conversation follows its source's.
+	reused := "Please add retry logic with exponential backoff to the upload client and cover the timeout path with a regression test"
+	execTx(t, catalog.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('ws-reuse','claude','local','ws-reuse','ws-reuse','2026-10-01')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,agent_depth,started_at) VALUES('c-src','ws-reuse','claude','local','c-src',0,'2026-09-10T12:00:00.000Z'),('c-copy','ws-reuse','claude','local','c-copy',0,'2026-10-12T12:00:00.000Z'),('c-earlier','ws-reuse','claude','local','c-earlier',0,'2026-09-09T12:00:00.000Z')`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('m-src','c-src','m-src','user','message','`+reused+`','hash-m-src','2026-09-10T12:00:00.000Z',1001),('m-copy','c-copy','m-copy','user','message','`+reused+`','hash-m-copy','2026-10-12T12:00:00.000Z',1002)`)
+	if err := catalog.RebuildAuthorship(t.Context(), "test-reuse"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{}); err != nil || labelCount(t, catalog, "WHERE message_id IN ('m-src','m-copy')") != 2 {
+		t.Fatalf("labeling the source and its copy: %v", err)
+	}
+	copySpans := func() string {
+		t.Helper()
+		var spans string
+		if err := catalog.DB.QueryRow(`SELECT group_concat(category||':'||COALESCE(source_message_id,''),',') FROM message_authorship_spans WHERE message_id='m-copy'`).Scan(&spans); err != nil {
+			t.Fatal(err)
+		}
+		return spans
+	}
+	before := copySpans()
+	if !strings.Contains(before, "resent:m-src") {
+		t.Fatalf("the copy is not re-sent from its source: %q", before)
+	}
+	execTx(t, catalog.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('m-earlier','c-earlier','m-earlier','assistant','message','`+reused+`','hash-m-earlier','2026-09-09T12:00:00.000Z',1003)`)
+	if err := catalog.RebuildAuthorship(t.Context(), "test-reuse-2"); err != nil {
+		t.Fatal(err)
+	}
+	if after := copySpans(); after != before {
+		t.Fatalf("the copy's own spans changed (%q to %q); the case needs them unchanged", before, after)
+	}
+	if _, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	// The incremental run reached what a full rebuild reaches.
+	full, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{Full: true})
+	if err != nil || full.MessagesLabeled != 0 || full.MessagesRemoved != 0 {
+		t.Fatalf("a full run still changed labels after the source's reclassification: %+v %v", full, err)
 	}
 }
 
@@ -355,7 +401,11 @@ func TestLabelsCarryAPoolingInput(t *testing.T) {
 // the batch is split, the rest are labeled, and the next run retries it.
 func TestLabelsIsolateAnItemThatCrashesTheWorker(t *testing.T) {
 	override(t, &labelsWorkerBackoff, func(int) time.Duration { return time.Millisecond })
-	catalog := labeledCatalog(t)
+	catalog, config := testCatalog(t)
+	seedLabelingCatalog(t, catalog)
+	if err := catalog.RebuildAuthorship(context.Background(), "test"); err != nil {
+		t.Fatal(err)
+	}
 	settings := labelsTestSettings(t, "ok")
 	model, err := labelrt.LoadModel(settings.ModelDir, "int8")
 	if err != nil {
@@ -368,9 +418,30 @@ func TestLabelsIsolateAnItemThatCrashesTheWorker(t *testing.T) {
 	if err != nil || stats.MessagesFailed != 1 || stats.Complete || labelCount(t, catalog, "WHERE message_id='m-think'") != 0 || labelCount(t, catalog, "") < 20 {
 		t.Fatalf("run with a poison item: %+v %v", stats, err)
 	}
+	// The background stage keeps a failed message pending, so the schedule
+	// retries it rather than completing the stage around it.
+	config.Labels = settings
+	server := testServer(t, config, catalog)
+	stage := func() deferredRow {
+		t.Helper()
+		if err := catalog.writeTransaction(t.Context(), "test", markSyncDeferred); err != nil {
+			t.Fatal(err)
+		}
+		if err := server.finishDeferredStages(t.Context(), findingsAuto, map[string]bool{"labels": true}, nil); err != nil {
+			t.Fatal(err)
+		}
+		deferred, _ := catalog.freshnessDeferred(t.Context())
+		return deferred["labels"]
+	}
+	if row := stage(); row.generation <= row.completed {
+		t.Fatalf("the labels stage completed with a failed message: %+v", row)
+	}
 	healed, err := catalog.RunLabels(t.Context(), labelsTestSettings(t, "ok"), LabelsRunOptions{})
 	if err != nil || !healed.Complete || healed.MessagesLabeled != 1 {
 		t.Fatalf("next run: %+v %v", healed, err)
+	}
+	if row := stage(); row.generation == 0 || row.generation > row.completed {
+		t.Fatalf("the labels stage did not complete once nothing failed: %+v", row)
 	}
 }
 

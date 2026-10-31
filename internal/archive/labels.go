@@ -548,8 +548,10 @@ func (c *Catalog) labelsWork(ctx context.Context, builder *labelsItemBuilder, id
 			want[id] = true
 		}
 	}
-	// Forks copy their parent's history, so they follow a parent whose
-	// inputs changed (not one only rebuilt to restore lost labels).
+	// Forks copy their parent's history, and a re-sent message's target
+	// text is resolved against its source's classification, so both follow
+	// a conversation whose inputs changed (not one only rebuilt to restore
+	// lost labels).
 	children := map[string][]string{}
 	for id, info := range p.conversations {
 		if info.parent != "" {
@@ -560,6 +562,19 @@ func (c *Catalog) labelsWork(ctx context.Context, builder *labelsItemBuilder, id
 	for id := range changed {
 		if changed[id] {
 			queue = append(queue, id)
+		}
+	}
+	if len(queue) > 0 && !all {
+		reusers, err := c.labelsReusers(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for source, users := range reusers {
+			for _, user := range users {
+				if p.conversations[user] != nil {
+					children[source] = append(children[source], user)
+				}
+			}
 		}
 	}
 	for ; len(queue) > 0; queue = queue[1:] {
@@ -1245,6 +1260,10 @@ func (s *Server) chainLabels(ctx context.Context, settings LabelerSettings) erro
 		return errStageContinues
 	case err != nil:
 		return err
+	case !stats.Cut && !stats.Complete:
+		// A failed message or an unbuildable conversation is retained for
+		// the next pass: completing the stage would stop its schedule.
+		return errStageContinues
 	case !stats.Cut:
 		return nil
 	case !bulk:
@@ -1284,4 +1303,27 @@ func (s *Server) chainLabels(ctx context.Context, settings LabelerSettings) erro
 		return err
 	})
 	return errStageContinues
+}
+
+// labelsReusers maps a conversation to the conversations that re-send one of
+// its messages. A re-sent message's target text is resolved against its
+// source's classification (labelingPass.reuseFrom), so when the source's
+// classification changes, the copy's items change although its own spans do
+// not. The source's conversation is taken from its message, so a mirror's
+// recorded source conversation cannot hide the dependency.
+func (c *Catalog) labelsReusers(ctx context.Context) (map[string][]string, error) {
+	rows, err := queryMapsContext(ctx, c.DB, `SELECT DISTINCT src.conversation_id source,m.conversation_id user
+		FROM message_authorship_spans s
+		JOIN messages m ON m.id=s.message_id
+		JOIN messages src ON src.id=s.source_message_id
+		WHERE s.category=? AND src.conversation_id<>m.conversation_id`, spanResent)
+	if err != nil {
+		return nil, err
+	}
+	reusers := map[string][]string{}
+	for _, row := range rows {
+		source := firstString(row["source"])
+		reusers[source] = append(reusers[source], firstString(row["user"]))
+	}
+	return reusers, nil
 }

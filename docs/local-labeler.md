@@ -185,7 +185,11 @@ union of the chunks' closed sets and its probabilities the per-label maximum
   - those never built;
   - those whose stored label count no longer matches their unit count, so
     labels deleted behind the ledger's back come back;
-  - forks of any of these, which copy their parent's history.
+  - forks of any whose inputs changed, which copy their parent's history,
+    and conversations that re-send one of their messages: a re-sent
+    message's target text is resolved against its source's classification,
+    so a source that becomes, say, quoted agent text changes the copy's items
+    although the copy's own spans stay the same. Both follow transitively.
 - Triggers on `messages`, `message_authorship`,
   `reasoning_extraction_state`, `agent_sessions`, `agent_session_messages` and
   `conversations` write the dirty marks (`message_labels_dirty`). Each mark
@@ -217,7 +221,9 @@ union of the chunks' closed sets and its probabilities the per-label maximum
 about 500 rows or every 2 s. A conversation counts as built (its fingerprint
 stored, its dirty mark cleared) only when all of its messages are stored. A
 conversation cut short by `--limit`, or holding a message the worker
-rejected, stays pending.
+rejected, stays pending. So does the background stage: a run that ends
+incomplete (a failed message, an unbuildable conversation) leaves the labels
+item pending, so the schedule tries again.
 
 **The generation.** A run that covered everything, with no dirty mark left
 and authorship unchanged meanwhile, records `labels_generation` =
@@ -697,11 +703,10 @@ every output, as LAPWING did.
 
 ## Known limits
 
-- **Re-sent text is resolved against its source's current classification,
-  but only conversations whose own inputs changed are rebuilt.** A change to
-  a source message's classification that leaves the re-sending message's
-  spans alone reaches the re-sending conversation's labels only through
-  `--full`, a new model or contract, or its next change.
+- **A source conversation's change rebuilds every conversation that re-sends
+  its messages,** whether or not the change touched the re-sent message.
+  That costs item building, not inference: messages whose inputs are
+  unchanged keep their labels.
 - **Unicode versions.** The tokenizer library's regex engine (Unicode 16)
   and NFC data are older than Go's and `x/text`'s. The tokenizer pins both to
   the library's, with generated tables (`onigClassFix`, `nfcUnknown`).
