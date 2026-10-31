@@ -20,6 +20,8 @@ import { apiCostRecipes, refineApiCostRecipe } from "./api-cost-recipes";
 import type { HumanStudy } from "./human-study";
 import type { CardTrend } from "./card-trend";
 import { coverageRecipes } from "./coverage-recipes";
+import type { ThinkingState } from "./thinking-model";
+import { thinkingCardRecipes } from "./thinking-card-recipes";
 import { dashboardCardRecipes } from "./dashboard-card-recipes";
 import { weekdayRecipes } from "./weekday-recipes";
 import { cardDestination, refineCardDestination, type CardDestination } from "./card-destinations";
@@ -43,6 +45,7 @@ export type QueryRecipe = {
   trend?: CardTrend;
   weekday?: { metricId: string; unit: string };
   destination?: CardDestination;
+  thinking?: {overview?:boolean; state:Partial<ThinkingState>};
 };
 export type QuerySuggestion = QueryRecipe & { query: QueryState; window?: RollingWindow; url: string; instanceId: string };
 export function suggestionWindowLabel(item: { window?: RollingWindow; period?: QueryRecipe["period"]; dataset?: QueryDataset }): string {
@@ -99,6 +102,7 @@ const baseRecipes: QueryRecipe[] = [
   ...steeringRecipes,
   ...coverageRecipes,
   ...dashboardCardRecipes,
+  ...thinkingCardRecipes,
   ...weekdayRecipes,
 ];
 export const queryRecipes = baseRecipes.map(enrichCardRecipe).map(refineHumanRecipe).map(applyHumanCardCopy).map(refineModelChoiceRecipe).map(refineContextCachingRecipe).map(refineErrorPatternRecipe).map(refineToolFlowRecipe).map(refineSkillsInstructionsRecipe).map(refineResearchRecipe).map(refineApiCostRecipe).map(refineTokenUsageRecipe).map(refineDelegationRecipe).map(refineSteeringRecipe).map(recipe => recipe.humanStudy ? { ...recipe, days: [7] } : recipe).map(refineCardDestination);

@@ -4,7 +4,7 @@ import type { FieldSchema, QueryState } from "@pythia-software/query-table-core"
 import { dashboardQueryLinks } from "./dashboard-query-links";
 import { Icon } from "./icons";
 import { ResetPage } from "./query-recovery";
-import { readUsageWorkspace, usageAnalysisLink, usageDashboardReturn, usageDatasets, usageTopics, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
+import { usageWorkspaceURL, readUsageWorkspace, usageAnalysisLink, usageDashboardReturn, usageDatasets, usageTopics, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { NestedPageLayout, PageLink, useLocationRevision } from "./nested-pages";
 import { resolveCardDashboardURL } from "./saved-card-model";
 import "./usage-workspace.css";
@@ -54,7 +54,7 @@ export function UsageWorkspace({ renderDashboard, renderTable }: { renderDashboa
   return <NestedPageLayout className="pharos-query-page usage-workspace" contentClassName="usage-workspace-content"
     label="Analyze" pages={pages} current={`${mode}:${mode === "dashboards" ? topic : dataset}`} title={title}
     description={mode === "dashboards" ? usageTopics[topic].description : "Build your own analysis. Filter record fields with where, or search record text for words and phrases. Group the matches and use having to filter grouped results."}
-    actions={<><ResetPage />{mode !== "dashboards" ? <UsageWorkspaceLink href={back.href}>{back.label}<Icon name="arrow-right" /></UsageWorkspaceLink> : null}</>}>
+    actions={<><ResetPage />{mode==="dashboards"&&["tokens","time","parallelism"].includes(topic)?<UsageWorkspaceLink href={usageWorkspaceURL({mode:"dashboards",topic:"thinking-overview",dataset:"model_requests"})}>Waiting and Compaction<Icon name="arrow-right" /></UsageWorkspaceLink>:null}{mode !== "dashboards" ? <UsageWorkspaceLink href={back.href}>{back.label}<Icon name="arrow-right" /></UsageWorkspaceLink> : null}</>}>
     {mode === "dashboards" ? <div className="usage-dashboard" key={topic}>
       {renderDashboard(topic)}</div>
       : <div className="usage-workspace-table" key={dataset}>{renderTable(dataset)}</div>}

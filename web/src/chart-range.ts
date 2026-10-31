@@ -17,6 +17,50 @@ export const chartRanges: Array<[ChartRange, string]> = [["today", "Today"], ["1
 
 const pad2 = (value: number) => String(value).padStart(2, "0");
 
+// Date editors use the dashboard's zone when pinned; other charts retain the
+// browser-local behavior. Stored/returned bounds are always absolute instants.
+const rangeZoneFormatters = new Map<string, Intl.DateTimeFormat>();
+function rangeZoneParts(date: Date, timezone: string): Record<string, string> {
+  let formatter = rangeZoneFormatters.get(timezone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("en-US", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23", timeZoneName: "longOffset" });
+    rangeZoneFormatters.set(timezone, formatter);
+  }
+  return Object.fromEntries(formatter.formatToParts(date).map(part => [part.type, part.value]));
+}
+export function rangeInputValue(date: Date, includeTime: boolean, timezone?: string): string {
+  if (!timezone) return includeTime ? `${localDay(date)}T${pad2(date.getHours())}:${pad2(date.getMinutes())}` : localDay(date);
+  const p = rangeZoneParts(date, timezone), day = `${p.year.padStart(4, "0")}-${p.month}-${p.day}`;
+  return includeTime ? `${day}T${p.hour}:${p.minute}` : day;
+}
+export function rangeHasTime(date: Date, timezone?: string): boolean {
+  const p = timezone ? rangeZoneParts(date, timezone) : undefined;
+  return Boolean(p ? Number(p.hour) || Number(p.minute) || Number(p.second) || date.getMilliseconds() : date.getHours() || date.getMinutes() || date.getSeconds() || date.getMilliseconds());
+}
+export function parseRangeInput(value: string, timezone?: string, throughDay = false): Date {
+  if (!timezone) {
+    const date = value.includes("T") ? new Date(value) : new Date(`${value}T00:00`);
+    if (throughDay) date.setDate(date.getDate() + 1);
+    return date;
+  }
+  const wall = new Date(`${value.includes("T") ? value : value + "T00:00"}Z`);
+  if (!Number.isFinite(wall.getTime())) return wall;
+  if (throughDay) wall.setUTCDate(wall.getUTCDate() + 1);
+  const stamp = wall.toISOString().slice(0, 16), offsets = new Set<number>();
+  // Probe both sides of a possible clock change. Choose the earlier occurrence
+  // of a repeated local time; advance a nonexistent time by the clock gap, as
+  // the browser's local Date constructor does.
+  for (const shift of [-86400000, 0, 86400000]) {
+    const name = rangeZoneParts(new Date(wall.getTime() + shift), timezone).timeZoneName;
+    const offset = /GMT([+-])(\d{2}):(\d{2})/.exec(name);
+    offsets.add(offset ? (Number(offset[2]) * 60 + Number(offset[3])) * (offset[1] === "-" ? -1 : 1) : 0);
+  }
+  const candidates = [...offsets].map(offset => new Date(wall.getTime() - offset * 60000)).sort((a, b) => a.getTime() - b.getTime());
+  return candidates.find(date => rangeInputValue(date, true, timezone) === stamp)
+    ?? candidates.find(date => rangeInputValue(date, true, timezone) > stamp)
+    ?? new Date(NaN);
+}
+
 // rangeStart is the local midnight a range preset starts from.
 export function rangeStart(range: ChartRange): Date {
   const start = new Date();

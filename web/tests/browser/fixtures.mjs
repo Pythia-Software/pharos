@@ -365,7 +365,34 @@ export const managedStatus = snapshot => ({
     { pid: 4300, role: "service", library: "archive", cpu_percent: 5, memory_bytes: 210e6, sampled_at: iso(0), basis: "proc_pid_rusage", text: "Library service (Archive) · ~5% of one core · 210 MB" }]),
 });
 
+// Synthetic numeric timing fixture: UI/layout tests never read a user library.
+export function thinkingFixture(query) {
+  const edges=[.1,.2,.3,.5,1,2,3,5,10,20,30,50,100,200,300,500,600];
+  const periods=Array.from({length:14},(_,i)=>new Date(+summaryDay-(13-i)*day).toISOString().slice(0,10));
+  const bounds=Object.fromEntries(periods.map(p=>[p,{From:p+"T00:00:00.000Z",To:new Date(Date.parse(p)+day).toISOString()}]));
+  const models=['gpt-6.1-sol','claude-opus-5-5'],efforts=['low','high'];
+  const stats=(factor=1)=>({n:320,median:8*factor,p75:15*factor,p90:30*factor,p95:45*factor,q1:3*factor,q3:15*factor,low:1*factor,high:30*factor});
+  const counts=[0,0,1,1,5,10,20,40,80,70,50,25,10,5,2,1];
+  const by=query.get('groupBy')??'none';
+  const labels=by==='model_effort'?models.flatMap(m=>efforts.map(e=>[m+' · '+e,m,e])):by==='model'?models.map(m=>[m,m,'']):by==='effort'?efforts.map(e=>[e,'',e]):[['All selected requests','','']];
+  const groups=labels.map(([label,model,effort],i)=>({key:label,label,model,effort,Retained:400,Timed:320,Adjusted:280,Conversations:16,RetainedConversations:20,stats:stats(1+i*.2),counts,
+    periods:Object.fromEntries(periods.map(p=>[p,{stats:stats(1+i*.2),retained:400,conversations:16,counts}])),
+    calendar:periods.flatMap(p=>Array.from({length:24},(_,hour)=>({day:p,hour,Raw:8+hour,Ratio:.6+hour/30,N:100,Adjusted:80,Conversations:8,AdjustedConversations:7}))),
+    bands:Array.from({length:8},(_,h)=>({hour:h*3,days:14,n:300,Ratio:.7+h*.08,Low:.6+h*.08,High:.8+h*.08})),comparison:{days:14,Ratio:.7,Low:.6,High:.8},
+    cdf:Array.from({length:101},(_,p)=>[.1+Math.pow(p/100,3)*150,p/100])}));
+  const response={periodBounds:bounds,calendarBounds:bounds,Retained:1600,Timed:1280,Adjusted:1120,Conversations:40,Hidden:0,Models:models,Efforts:efforts,edges,groups,summary:stats(),periods,calendarPeriods:periods,From:'',To:'',timezone:query.get('timezone')||'UTC'};
+  if(query.get('overview')==='1')Object.assign(response,{
+    coverage:groups,agentCoverage:[{...groups[0],key:'codex',label:'Codex'},{...groups[0],key:'claude',label:'Claude'}],
+    factors:models.flatMap(model=>['context','reasoning','other'].map((factor,i)=>({model,factor,Ratio:1.2+i*.1,Low:1.1+i*.1,High:1.3+i*.1,N:1200,Conversations:40}))),
+    compactions:Array.from({length:32},(_,i)=>({ID:'compact-'+i,Model:models[i%2],Effort:'high',Conversation:'conv-'+i,Gap:.2+i/40,Context:.3,Output:.7,Before:10,After:4})),
+    traces:[{ID:'stream-1',Model:models[0],Conversation:rootConversation,Workspace:workID,Count:36,Points:Array.from({length:36},(_,i)=>({ID:'request-'+i,At:iso((36-i)*60000),Rank:i,Context:i<18?10000+i*3000:12000+(i-18)*2000,Cache:1000,Output:100+i*7,Gap:2+i%12,Smooth:4+i%5,Compaction:i===18}))}],
+  });
+  if(query.get('evidence')==='1')response.validation={pairs:100,correlation:.8,medianRatio:.9,points:Array.from({length:30},(_,i)=>[i+1,i*.9+1]),counters:[[10,12],[30,27]],counterCount:2,counterOverlap:1};
+  return response;
+}
+
 export const defaultApi = {
+  "GET /api/thinking": ({query}) => thinkingFixture(query),
   "GET /api/markdown-link": {status:"unavailable",detail:"File or local server unavailable on this Mac"},
   // No remote image bytes in fixtures; the renderer uses its globe fallback.
   "GET /api/markdown-favicon": {},

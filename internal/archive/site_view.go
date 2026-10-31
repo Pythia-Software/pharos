@@ -745,6 +745,18 @@ func validSearchDuration(duration string) bool {
 func validateViewShape(name string, value any) error {
 	object, _ := value.(map[string]any)
 	switch name {
+	case "thinking":
+		return validateThinkingView(object)
+	case "thinking_filters":
+		text, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("needs a native query token")
+		}
+		if text == "" {
+			return nil
+		}
+		_, err := readThinkingOptions(url.Values{"filters": {text}}, time.Now())
+		return err
 	case "disclosures", "reader_content", "query_layout":
 		if object == nil {
 			return fmt.Errorf("needs booleans by stable identity")
