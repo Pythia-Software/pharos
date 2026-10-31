@@ -43,7 +43,7 @@ Rules run in this order, and the first rule to claim a character keeps it.
 
 | Category | Rule |
 |---|---|
-| **Automated** | The whole message, when a script or another agent sent it: headless runs linked to the command that launched them (the span links to that command), the senders above, complete scheduled `<heartbeat>` envelopes containing an automation ID, valid timestamp, and instructions, TL1 workspaces, sub-agent conversations (which include forked copies of the parent's history), and Claude SDK sessions Conductor did not start. |
+| **Automated** | The whole message, when a script or another agent sent it: headless runs linked to the command that launched them (the span links to that command), the senders above, complete scheduled `<heartbeat>` envelopes containing an automation ID, valid timestamp, and instructions, TL1 workspaces, sub-agent conversations (delegated children, and forks that copy the parent's history; a continuation is not a sub-agent: a Codex fork with no spawn record, that is depth 0, no agent path and no session or launch linking it as a delegation, whose lineage is the root's own execution; its new messages are classified like the root's. Codex's spawned threads carry a depth and stay sub-agents), and Claude SDK sessions Conductor did not start. |
 | **Harness** | `<system_instruction>`, `<system-reminder>`, `<environment_context>`, `<user_instructions>`, or `<recommended_plugins>` blocks at the start of the message; generated fields and instructions in recognized page-feedback reports; question titles, selected prewritten options, and skipped markers in a recognized response to a question from the same conversation. In `<send_user_message_question_reply>` JSON blocks, the wrapper, questions, IDs, and JSON syntax are harness; only each reply item's `answer` string value remains eligible as human writing. Recorded selected options and skipped markers use the same provenance rules as flattened replies; selected options are recorded as actions. Free-text answers remain eligible as human writing. The stored message keeps this text, since it is part of the prompt and counts toward context growth everywhere else; only this classification sets it apart. |
 | **Template** | The whole message, when its normalized text (attachment references collapsed, case and whitespace ignored, at least 10 characters) was sent in 5 or more sessions on 3 or more days. This catches Conductor's buttons (Create a PR, Review, Rebase, Resolve conflicts) without a hard-coded list. Sending one prompt to many sessions on a single day is not a template: the first copy counts as typed and the rest as re-sent. A leading slash command such as `/compact` is also a template; its arguments stay typed. |
 | **Attachment** | Conductor attachment markers (`@⟦name⟧(path)`), `.context/attachments/…` paths, and image placeholders. |
@@ -137,8 +137,10 @@ stream-local launch replay and targeted historical template replay are not
 implemented. This checkpoint work did not change classification rules or
 scheduling. Classification `authorship-v11` recognizes structured question
 replies, preserves their selected-option provenance, and recognizes scheduled
-automation heartbeats; upgrading rebuilds existing classifications. The first changed-data
-rebuild populates the extra derived tables;
+automation heartbeats; `authorship-v12` adds that a Codex continuation is its
+root's own execution rather than a sub-agent (the rule labeling prepare
+already applied). Upgrading rebuilds existing classifications. The first
+changed-data rebuild populates the extra derived tables;
 its production storage cost has not yet been measured.
 Checkpoint version 2 forces one full rebuild of version 1 state, which may
 have lost question history or restored an incompatible mirror message anchor.

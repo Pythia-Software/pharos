@@ -1,0 +1,14 @@
+ONNX Runtime C API headers, unmodified, from the official v1.31.1 release
+archive onnxruntime-osx-arm64-1.31.1.tgz (the one macos/onnxruntime.json pins,
+SHA-256 2e1344a1926ee50eb25b38153cb6992c3567515aef0e677a1a520a1798896d6f;
+ONNX Runtime commit 41d4d61f14b9c1dd0b2ccda1e9b85dd415fd0496):
+
+  onnxruntime_c_api.h
+  onnxruntime_error_code.h   (included by onnxruntime_c_api.h)
+  onnxruntime_ep_c_api.h     (included by onnxruntime_c_api.h)
+
+They are Copyright (c) Microsoft Corporation under the MIT License in LICENSE
+beside them. The worker only compiles against them: it loads the runtime
+library at run time with dlopen and asks for ORT_API_VERSION (31), so any
+ONNX Runtime 1.31 or newer works. To update, copy the same three files from a
+newer release, update this note and macos/onnxruntime.json together.

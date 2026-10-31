@@ -178,7 +178,10 @@
 .usage-chart-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 10px 16px; margin-bottom: 8px; }
 .usage-chart-head h3, .writing-mix h3 { margin: 2px 0 0; font-size: var(--fs-base); }
 .usage-chart-average-label { display: inline-block; margin-left: 10px; color: var(--muted); font-size: var(--fs-sm); font-weight: 400; }
-.usage-chart-controls { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: start; gap: 12px; width: 100%; }
+/* Keep dashboard controls at their natural width and wrap whole fields. */
+:is(.usage-chart-controls, .usage-tools-controls, .concurrency-controls) { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; }
+:is(.usage-chart-controls, .usage-tools-controls, .concurrency-controls) > * { flex: 0 0 auto; width: max-content; min-width: 0; max-width: 100%; }
+.usage-chart-controls { width: 100%; }
 .usage-chart-controls .usage-presets { margin: 0; }
 .usage-chart-controls .usage-preset-label { min-width: 0; margin-right: 2px; }
 .chart-toggle button[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel)); font-weight: 600; }
@@ -513,22 +516,24 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 
 .usage-chart-field { display: flex; flex-direction: column; align-items: stretch; gap: 5px; min-width: 0; }
 .usage-chart-field .usage-preset-label { color: var(--muted); font-size: var(--fs-2xs); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
-.usage-chart-select { position: relative; display: flex; }
-.usage-chart-select .usage-chart-caret { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: var(--muted); pointer-events: none; }
-.usage-chart-select select, .usage-period-custom input { box-sizing: border-box; height: 30px; margin: 0; padding: 3px 7px; border: 1px solid var(--line); border-radius: 4px; background-color: var(--panel); color: var(--ink); font: inherit; font-size: var(--fs-sm); }
-.usage-chart-select select { width: 100%; min-width: 0; padding-right: 28px; cursor: pointer; }
-/* Every ChartSelect supplies an SVG caret, including controls outside chart toolbars. */
-:root .usage-chart-select select:not([multiple]) { appearance: none; background-image: none; }
-.usage-chart-select select:hover:not(:disabled) { border-color: var(--accent); }
-.usage-chart-select select:disabled { opacity: .55; cursor: not-allowed; }
-.usage-chart-control-note { color: var(--muted); font-size: var(--fs-xs); line-height: 1.4; }
+.dashboard-select { position: relative; display: inline-grid; grid-template-columns: minmax(0, 1fr); width: max-content; min-width: 0; max-width: 100%; }
+.dashboard-select-caret { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: var(--muted); pointer-events: none; }
+.dashboard-select select, .dashboard-select-measure, .usage-period-custom input { box-sizing: border-box; height: 30px; margin: 0; padding: 3px 7px; border: 1px solid var(--line); border-radius: 4px; background-color: var(--panel); color: var(--ink); font: inherit; font-size: var(--fs-sm); }
+.dashboard-select-measure { visibility: hidden; pointer-events: none; white-space: pre; overflow: hidden; min-width: 0; }
+.dashboard-select select { position: absolute; inset: 0; width: 100%; min-width: 0; cursor: pointer; }
+.dashboard-select select, .dashboard-select-measure { padding-right: 28px; }
+/* DashboardSelect supplies an SVG caret, including outside chart toolbars. */
+:root .dashboard-select select:not([multiple]) { appearance: none; background-image: none; }
+.dashboard-select select:hover:not(:disabled) { border-color: var(--accent); }
+.dashboard-select select:disabled { opacity: .55; cursor: not-allowed; }
+.usage-chart-control-note { max-width: 30ch; color: var(--muted); font-size: var(--fs-xs); line-height: 1.4; }
 .usage-period-custom { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: var(--fs-sm); white-space: nowrap; }
 .usage-period-custom input { width: 5em; min-width: 0; height: 28px; }
 .usage-period-control { flex-direction: row; align-items: flex-end; gap: 8px; }
 .usage-period-control > .usage-chart-picker { flex: 1; }
 .usage-period-custom { flex: none; }
 .usage-period-custom input { width: 4.5em; height: 30px; }
-.usage-chart-select select:focus-visible, .usage-period-custom input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.dashboard-select select:focus-visible, .usage-period-custom input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .usage-smoothing-input { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--muted); font-size: var(--fs-sm); }
 .usage-smoothing-input input { box-sizing: border-box; width: 6em; min-width: 0; height: 30px; padding: 3px 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--ink); font: inherit; }
 .usage-smoothing-input input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -538,12 +543,6 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 .usage-smoothing-input { flex: 0 1 auto; }
 .usage-smoothing-input input { width: 4.5em; }
 .usage-smoothing-input > span { overflow-wrap: anywhere; }
-@media (max-width: 900px) {
-  .usage-chart-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-@media (max-width: 600px) {
-  .usage-chart-controls > :is(.usage-period-control, .usage-smoothing-control):has(input) { grid-column: 1 / -1; }
-}
 .usage-chart-lines { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .usage-chart-bars:has(> .usage-chart-lines) > button { position: relative; }
 /* The trend wraps its parts only to report loading; they lay out as before. */
@@ -565,7 +564,7 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 .carbon-filter-heading h3 { margin: 0; font-size: var(--fs-base); }
 .carbon-filter-heading button { font: inherit; font-size: var(--fs-sm); }
 .carbon-filter-heading { margin-bottom: 8px; }
-.carbon-filters .usage-chart-controls { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.carbon-filters .usage-chart-controls { gap: 10px; }
 .carbon-analysis > .carbon-summary { padding: 12px 16px; border: 0; border-radius: 0; background: none; }
 .carbon-analysis > .usage-chart { margin: 0; padding: 12px 16px; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: none; }
 .carbon-analysis > p, .carbon-analysis > button { margin: 0 16px 10px; }
@@ -577,7 +576,7 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 .usage-page:has(.carbon-impact) .usage-heading p { margin: 6px 0 0; }
 .usage-date-range { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 8px 10px; min-width: 0; }
 .usage-date-range > .usage-chart-picker { flex: 1; }
-:is(.usage-chart-controls, .usage-tools-controls, .concurrency-controls) > .usage-date-range.custom { grid-column: 1 / -1; }
+:is(.usage-chart-controls, .usage-tools-controls, .concurrency-controls) > .usage-date-range.custom { flex-basis: 100%; width: 100%; }
 .usage-date-range.custom > .usage-chart-picker { flex: 1 1 160px; }
 .usage-custom-dates { display: flex; flex: 2 1 320px; flex-wrap: wrap; gap: 6px 10px; min-width: 0; }
 .usage-custom-dates label { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 120px; font-size: var(--fs-xs); color: var(--muted); }
@@ -586,8 +585,6 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 .usage-custom-dates input[aria-invalid="true"] { border-color: var(--bad); }
 .usage-custom-dates .query-table-error { width: 100%; }
 @media (max-width: 760px) {
-  .carbon-filters .usage-chart-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .carbon-analysis .usage-chart-controls .usage-period-control { grid-column: 1 / -1; }
   .usage-page:has(.carbon-impact) .usage-heading { gap: 10px; margin-bottom: 12px; }
 }
 @media (max-width: 760px) {

@@ -3,7 +3,6 @@ package archive
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"net/url"
 	"os"
 	"unicode/utf8"
@@ -34,7 +33,7 @@ CREATE TABLE items(
   id TEXT PRIMARY KEY, unit_id TEXT NOT NULL, chunk_index INTEGER NOT NULL, chunk_count INTEGER NOT NULL,
   visible_start INTEGER NOT NULL, visible_end INTEGER NOT NULL, text TEXT NOT NULL, chars INTEGER NOT NULL, source_ranges TEXT NOT NULL,
   target_hash TEXT NOT NULL, cross_split_duplicate INTEGER NOT NULL DEFAULT 0, seen_in_train INTEGER NOT NULL DEFAULT 0,
-  common_short_text INTEGER NOT NULL DEFAULT 0);
+  common_short_text INTEGER NOT NULL DEFAULT 0, segment TEXT);
 CREATE INDEX items_hash_idx ON items(target_hash);
 CREATE INDEX items_unit_idx ON items(unit_id);
 CREATE TABLE sentences(
@@ -144,12 +143,10 @@ func (w *labelingWriter) unit(unit *labelingUnit) error {
 			sentence++
 		}
 	}
-	for index, chunk := range unit.chunks {
-		ranges, _ := json.Marshal(chunkSourceRanges(unit.pieces, chunk))
-		text := unit.visible[chunk.Start:chunk.End]
-		if err := w.exec(`INSERT INTO items(id,unit_id,chunk_index,chunk_count,visible_start,visible_end,text,chars,source_ranges,target_hash) VALUES(?,?,?,?,?,?,?,?,?,?)`,
-			labelingID("i_", labelingUnitsVersion, labelingChunkVersion, unit.messageID, fmt.Sprint(index)), unit.id, index, len(unit.chunks),
-			chunk.Start, chunk.End, text, utf8.RuneCountInString(text), string(ranges), unit.hashes[index]); err != nil {
+	for index, item := range unit.items() {
+		ranges, _ := json.Marshal(chunkSourceRanges(unit.pieces, unit.chunks[index]))
+		if err := w.exec(`INSERT INTO items(id,unit_id,chunk_index,chunk_count,visible_start,visible_end,text,chars,source_ranges,target_hash,segment) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+			item.ID, item.UnitID, item.ChunkIndex, item.ChunkCount, item.VisibleStart, item.VisibleEnd, item.Text, item.Chars(), string(ranges), item.TargetHash, item.Segment); err != nil {
 			return err
 		}
 	}

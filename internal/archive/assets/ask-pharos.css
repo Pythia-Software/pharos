@@ -1,25 +1,26 @@
 /* A reusable effect: the hue filter only touches the ribbon and its aura. */
-@property --pharos-glow-hue{syntax:"<angle>";inherits:true;initial-value:0deg}
 .pharos-glow,#pharos-ask .pharos-product{--pharos-bg:light-dark(#eee7d8,#10241b);--pharos-panel:light-dark(#fffaf0,#183529);--pharos-ink:light-dark(#2c2821,#f3ebdc);--pharos-muted:light-dark(#756c5f,#b5ab93);--pharos-line:light-dark(#d5c8b3,#2d4f40);--pharos-sea:light-dark(#315845,#8cc6a0);--pharos-gold:light-dark(#ad823b,#f0cf7e);--pharos-violet:light-dark(#9674c8,#bba2ef);--pharos-aqua:light-dark(#5bafa4,#83d4c0);}
 .pharos-glow{position:relative;isolation:isolate;--pharos-edge-opacity:.8;--pharos-glow-blur:14px;--pharos-glow-spread:7px}
-.pharos-glow::before{--pharos-glow-violet:light-dark(color-mix(in srgb,var(--pharos-violet) 38%,transparent),color-mix(in srgb,var(--pharos-violet) 15%,transparent));--pharos-glow-gold:light-dark(color-mix(in srgb,var(--pharos-gold) 30%,transparent),color-mix(in srgb,var(--pharos-gold) 10%,transparent));--pharos-glow-aqua:light-dark(color-mix(in srgb,var(--pharos-aqua) 25%,transparent),color-mix(in srgb,var(--pharos-aqua) 10%,transparent));content:"";position:absolute;inset:calc(-1 * var(--pharos-glow-spread));z-index:-2;border-radius:inherit;opacity:var(--pharos-edge-opacity);background:radial-gradient(ellipse at 12% 8%,var(--pharos-glow-violet),transparent 56%),radial-gradient(ellipse at 85% 95%,var(--pharos-glow-gold),transparent 55%),radial-gradient(ellipse at 50% 65%,var(--pharos-glow-aqua),transparent 75%);filter:blur(var(--pharos-glow-blur)) hue-rotate(var(--pharos-glow-hue));transition:opacity 250ms ease;pointer-events:none}
-.pharos-glow-paint{position:absolute;inset:0;pointer-events:none}
+.pharos-glow .pharos-glow-aura::before{--pharos-glow-violet:light-dark(color-mix(in srgb,var(--pharos-violet) 38%,transparent),color-mix(in srgb,var(--pharos-violet) 15%,transparent));--pharos-glow-gold:light-dark(color-mix(in srgb,var(--pharos-gold) 30%,transparent),color-mix(in srgb,var(--pharos-gold) 10%,transparent));--pharos-glow-aqua:light-dark(color-mix(in srgb,var(--pharos-aqua) 25%,transparent),color-mix(in srgb,var(--pharos-aqua) 10%,transparent));content:"";position:absolute;inset:0;border-radius:inherit;background:radial-gradient(ellipse at 12% 8%,var(--pharos-glow-violet),transparent 56%),radial-gradient(ellipse at 85% 95%,var(--pharos-glow-gold),transparent 55%),radial-gradient(ellipse at 50% 65%,var(--pharos-glow-aqua),transparent 75%);filter:blur(var(--pharos-glow-blur));pointer-events:none}
+.pharos-glow-paint{position:absolute;inset:0;border-radius:inherit;pointer-events:none}
+.pharos-glow-aura{position:absolute;inset:calc(-1 * var(--pharos-glow-spread));z-index:-2;border-radius:inherit;opacity:var(--pharos-edge-opacity);transition:opacity 250ms ease;pointer-events:none}
+.pharos-glow-edge{position:absolute;inset:0;z-index:2;pointer-events:none}
 .pharos-glow .pharos-glow-paint svg:is(.pharos-glow-surface,.pharos-edge-art){position:absolute;inset:-16px;width:calc(100% + 32px);height:calc(100% + 32px);overflow:visible;stroke:none}
 .pharos-glow .pharos-glow-paint .pharos-glow-surface{z-index:-1;fill:var(--pharos-panel)}
-.pharos-glow .pharos-glow-paint .pharos-edge-art{z-index:2;fill:none;opacity:var(--pharos-edge-opacity);filter:hue-rotate(var(--pharos-glow-hue));transition:opacity 350ms ease}
+.pharos-glow .pharos-glow-paint .pharos-edge-art{z-index:2;fill:none;opacity:var(--pharos-edge-opacity);transition:opacity 350ms ease}
 .pharos-glow .pharos-edge-hairline{stroke:color-mix(in srgb,var(--pharos-aqua) 24%,var(--pharos-line));stroke-width:1;fill:none;transition:stroke 250ms ease,stroke-width 250ms ease}
 .pharos-glow .pharos-edge-lines{stroke-width:.75;stroke-linecap:round;fill:none}
 .pharos-glow .pharos-edge-lines path:nth-child(even){stroke-width:.55;opacity:.58}
 .pharos-glow .pharos-edge-halo{stroke-width:5;opacity:.4;transition:opacity 250ms ease}
 .pharos-glow .pharos-edge-trace{stroke:var(--pharos-aqua);stroke-width:1.4;stroke-linecap:round;stroke-dasharray:64 1936;stroke-dashoffset:-780;opacity:0}
 .pharos-glow .pharos-edge-trace-halo{stroke-width:5}
-.pharos-glow:is(:focus-within,[data-glow-working="true"]) .pharos-edge-art,.pharos-glow:is(:focus-within,[data-glow-working="true"])::before{opacity:1}
+.pharos-glow:is(:focus-within,[data-glow-working="true"]) .pharos-edge-art,.pharos-glow:is(:focus-within,[data-glow-working="true"]) .pharos-glow-aura{opacity:1}
 .pharos-glow:is(:focus-within,[data-glow-working="true"]) .pharos-edge-halo{opacity:.85}
 .pharos-glow:focus-within .pharos-edge-hairline{stroke:var(--pharos-sea);stroke-width:1.6}
 .pharos-glow:has(:focus-visible) .pharos-edge-hairline{stroke-width:2}
 .pharos-glow[data-glow-working="true"] .pharos-edge-trace{opacity:.9;animation:pharos-signal-trace 6500ms linear infinite}
 .pharos-glow[data-glow-working="true"] .pharos-edge-trace-halo{opacity:.4}
-@media(prefers-reduced-motion:reduce){.pharos-glow::before,.pharos-glow .pharos-glow-paint *{animation:none!important;transition:none!important}}
+@media(prefers-reduced-motion:reduce){.pharos-glow .pharos-glow-paint *{animation:none!important;transition:none!important}}
 
 
 #pharos-ask:is(.pharos-composer-actions [data-tooltip],.pharos-save-default){position:relative}

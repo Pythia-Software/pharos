@@ -90,7 +90,7 @@ func (c *Catalog) SetUIPreferences(ctx context.Context, body map[string]any) err
 	})
 	c.flags.invalidate()
 	if err == nil {
-		c.flags.rememberSaved(updates, deletes)
+		c.rememberSavedFlags(updates, deletes)
 	}
 	return err
 }

@@ -321,7 +321,17 @@ const ROUTES = [
   { name: "Search grouped search", url: exploreGroupedSearch, ready: "#queryTableLibrary .qt-row" },
   { name: "Search grouped conversation display", url: exploreGroupedSearch, ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("group", { name: "Display results as" }).getByRole("button", { name: "Conversations", exact: true }).click(), shown: ".conversation-result-card" },
   { name: "Analyze tokens", url: "/analyze?analyze_view=tokens&machine_view=tokens", ready: "#queryTableUsage .usage-chart" },
-  { name: "Analyze machine time", url: "/analyze?analyze_view=tokens&machine_view=time", ready: ".machine-call-surface .qt-row" },
+  { name: "Analyze machine time", url: "/analyze?analyze_view=tokens&machine_view=time", ready: ".machine-call-surface .qt-row", check: async (page, app) => {
+    for (const [name, longer, shorter] of [['Activity period', '90', '0'], ['Trend measure', 'average', 'calls'], ['Analytics grouping', 'operation', 'activity']]) {
+      const select = page.getByRole('combobox', { name, exact: true });
+      await select.selectOption(longer);
+      await app.settled();
+      const expanded = await select.boundingBox();
+      await select.selectOption(shorter);
+      await app.settled();
+      assert.ok((await select.boundingBox()).width < expanded.width, `${name} shrinks with its selected label`);
+    }
+  } },
   { name: "Analyze parallelism", url: "/analyze?analyze_view=tokens&machine_view=parallelism", ready: ".concurrency-chart svg" },
   { name: "Analyze parallelism prototype", concurrency: true, url: "/analyze?analyze_view=tokens&machine_view=parallelism", ready: ".concurrency-chart svg" },
   { name: "Human Words", url: "/analyze?analyze_view=writing", ready: ".writing-panel .usage-chart" },
@@ -933,6 +943,13 @@ for (const dashboard of [
     }
     await app.shot(mode);
   }
+  const longer = await range.boundingBox();
+  await range.selectOption('7d');
+  await app.settled();
+  const shorter = await range.boundingBox();
+  assert.ok(shorter.width < longer.width, 'the range selector shrinks with a shorter selected label');
+  assert.deepEqual(await layoutProblems(page), []);
+  await app.shot('shorter-selected-range');
 });
 
 for (const width of [1504, 390, 320]) test(`Parallelism dashboard and inline ranges fit at ${width}px`, { skip }, async t => {
@@ -947,6 +964,11 @@ for (const width of [1504, 390, 320]) test(`Parallelism dashboard and inline ran
   assert.ok(stats.y >= chart.y + chart.height, 'summary statistics follow the graph');
   assert.deepEqual(await layoutProblems(page), []);
   await app.shot('relative-card-range');
+  const counting = page.getByRole('region', { name: 'Parallelism chart', exact: true }).getByRole('combobox', { name: 'Count by', exact: true });
+  const longer = await counting.boundingBox();
+  await counting.selectOption('agent');
+  await app.settled();
+  assert.ok((await counting.boundingBox()).width < longer.width, 'the counting selector shrinks from workspaces to sessions');
   // The ribbon's Range; the engine views below have their own.
   const range = page.getByRole('region', { name: 'Parallelism chart', exact: true }).getByRole('combobox', { name: 'Range', exact: true });
   await range.selectOption('custom');
@@ -989,7 +1011,7 @@ describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY
             if (size.scroll > size.client + 1) fitting.push(`fitted table still scrolls sideways: ${size.scroll}px wide in ${size.client}px`);
           });
         }
-        if (route.check) await route.check(app.page);
+        if (route.check) await route.check(app.page, app);
         await app.shot("top");
         const problems = await layoutProblems(app.page);
         if (!route.open) {

@@ -100,6 +100,8 @@ Run diagnostics with `dist/Pharos.app/Contents/MacOS/pharos --config "$HOME/Libr
 
 `pharos labeling` prepares a read-only snapshot of conversation text as a versioned dataset for offline labeling by a large model, runs labeling jobs and exports training data; see [`docs/library-labeling.md`](library-labeling.md).
 
+**Local labels** (a prototype, off unless `labels_enabled` is set) label every message's function (requests, steering, feedback, reports and so on, taxonomy `candidate-0.3`) on this Mac with the `kestrel-68m` encoder. Pharos builds each message's items with `labeling prepare`'s own code, tokenizes and frames them in pure Go, and runs the model in a separate worker process (`cmd/pharos-labeler-ort`, ONNX Runtime) over a small versioned stdin/stdout protocol, so the `pharos` binary stays pure Go. Labels are a derived ledger (`message_labels`) rebuilt after authorship in the analysis chain, incrementally, never by a page; see [`docs/local-labeler.md`](local-labeler.md).
+
 ## Sources and identity
 
 | Kind | Acquisition | Mutation capability |
@@ -140,12 +142,27 @@ The Library UI sends its text, file, and URL searches to the Library query table
 
 The workspace page loads a workspace in pieces, since one long session with many sub-agents can retain hundreds of megabytes. `/api/work/{id}` returns the workspace without messages, plus what the page used to derive from all of them: each conversation's message count and first prompt, pull request links found in any message, and the files its tool calls touched. `/api/work/{id}/conversations/{id}` returns one conversation for the reader. Its long tool outputs and event bodies are shortened past 2 KB, with JSON keeping its structure so error flags, exit codes, and token usage survive, and are marked `text_clipped`/`raw_clipped`. `/api/messages/{id}` returns a message's original when the reader opens it. Finding text across a workspace's conversations runs on the service (`/find`). In the reader, a turn initially renders 50 events and adds pages of 150 as it scrolls; event details are built when opened.
 
-Requests never wait for the catalog writer, which a sync holds for seconds at
-a time. They read through a read-only connection pool and never write:
+Catalog data reads use a read-only connection pool, so they do not wait for
+the catalog writer, which a sync can hold for seconds at a time. Requests
+that save data still use the serialized writer:
 
+- **Settings → App preferences → Pause indexing during queries** optionally lets
+  interactive query, search, reader and MCP requests pause ingestion before
+  each record, and search-index and Library maintenance between batches.
+  It defaults off so sustained browsing does not prevent indexing
+  progress. The saved library preference `pharos-pause-indexing-for-queries-v1`
+  applies without restarting, independently of the activity panel and manual or
+  automatic indexing. Pauses never hold the catalog writer or a SQLite
+  transaction: a record already being written finishes before yielding.
+  Turning the setting off releases paused work even during a query.
+  Status polls do not pause work.
+- Cached Library and derived views keep their last computed generation for the
+  entire ingest; cold values still compute on demand. Once the ingest ends,
+  reads observe the new generation and refresh. Freshness may lag throughout a
+  long ingest so pages remain usable without repeated whole-catalog rebuilds.
 - Conversation origins are published at the end of each ingest and by the
-  Library maintenance loop, at most once a minute while a sync runs, so pages
-  can show channel and machine up to a minute behind during a sync.
+  Library maintenance loop, at most once a minute while a sync runs. Cached
+  views may retain the previous origins until the ingest ends.
 - Dirty parallelism timings and MCP metric projections are computed in the
   request's snapshot without being stored; maintenance stores them.
 - The tool rollup rebuilds in the background. Until the first rollup in a new
@@ -155,6 +172,9 @@ a time. They read through a read-only connection pool and never write:
 
 `TestRequestReadsDoNotWaitForTheCatalogWriter` holds the writer, as a sync
 does, and checks page reads, query datasets and MCP tools against it.
+`TestInteractiveQueriesPauseIngest` and `TestIndexCompletesAtomicWorkspaceDuringQuery`
+check that indexing yields without blocking other writers, an open record keeps
+making progress during a query, and cancellation rolls it back for safe replay.
 
 The HTTP service binds only to loopback and requires either a bearer token or its HttpOnly UI cookie. Core endpoints are:
 

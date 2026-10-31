@@ -1,0 +1,17 @@
+{
+  "model": {
+    "name": "kestrel-68m-tpool",
+    "version": "1",
+    "url": "https://github.com/Pythia-Software/pharos/releases/download/labeler-{name}-{version}/{name}-{version}.tar.gz",
+    "sha256": "017597ebe228b094527cab44ecad52db1297225c02e2330c06ad64cad2e0d9b0",
+    "size": 142017459
+  },
+  "onnxruntime": {
+    "name": "onnxruntime-osx-arm64",
+    "version": "1.31.1",
+    "url": "https://github.com/microsoft/onnxruntime/releases/download/v{version}/{name}-{version}.tgz",
+    "sha256": "2e1344a1926ee50eb25b38153cb6992c3567515aef0e677a1a520a1798896d6f",
+    "size": 36936435,
+    "path": "onnxruntime-osx-arm64-1.31.1/lib/libonnxruntime.1.31.1.dylib"
+  }
+}

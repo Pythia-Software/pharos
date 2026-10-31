@@ -1,3 +1,4 @@
+import { DashboardSelect } from "./dashboard-select";
 import { originDimensions, originLabel, useOriginMetadata } from "./origin-dimensions";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { WhereTerm } from "@pythia-software/query-table-core";
@@ -82,11 +83,11 @@ export function MachineActivity({ tokens, calls, parallelism }: { tokens: (where
       {views.map(([key, label, description]) => <button key={key} type="button" aria-pressed={view === key} className={view === key ? "active" : ""} onClick={() => update({ view: key })}><span>{label}</span><small>{description}</small></button>)}
     </div>
     <div className="machine-scope" role="group" aria-label="Machine Activity filters">
-      <label>Period<select aria-label="Activity period" value={scope.days} onChange={event => filter({ days: Number(event.target.value) })}><option value="0">All recorded time</option>{[7, 14, 30, 90].map(days => <option key={days} value={days}>Last {days} complete days</option>)}</select></label>
-      <label>Repository<select aria-label="Activity repository" value={scope.repository} onChange={event => filter({ repository: event.target.value })}><option value="">All repositories</option>{choices("repository_name", scope.repository).map(repository => <option key={repository}>{repository}</option>)}</select></label>
-      {originDimensions.map(([field,label]) => <label key={field}>{label}<select aria-label={`Activity ${label.toLowerCase()}`} value={scope[field]} onChange={event => filter({ [field]: event.target.value })}><option value="">All {label.toLowerCase()} values</option>{choices(field, scope[field] ?? "").map(value => <option key={value} value={value}>{originLabel(field,value)}</option>)}</select></label>)}
-      <label>Provider<select aria-label="Activity provider" value={scope.provider} onChange={event => filter({ provider: event.target.value })}><option value="">All providers</option>{choices("provider", scope.provider).map(provider => <option key={provider}>{provider}</option>)}</select></label>
-      <label>Model<select aria-label="Activity model" value={scope.model} onChange={event => filter({ model: event.target.value })}><option value="">All models</option>{choices("model", scope.model).map(model => <option key={model}>{model}</option>)}</select></label>
+      <label>Period<DashboardSelect aria-label="Activity period" value={scope.days} onChange={event => filter({ days: Number(event.target.value) })}><option value="0">All recorded time</option>{[7, 14, 30, 90].map(days => <option key={days} value={days}>Last {days} complete days</option>)}</DashboardSelect></label>
+      <label>Repository<DashboardSelect aria-label="Activity repository" value={scope.repository} onChange={event => filter({ repository: event.target.value })}><option value="">All repositories</option>{choices("repository_name", scope.repository).map(repository => <option key={repository}>{repository}</option>)}</DashboardSelect></label>
+      {originDimensions.map(([field,label]) => <label key={field}>{label}<DashboardSelect aria-label={`Activity ${label.toLowerCase()}`} value={scope[field]} onChange={event => filter({ [field]: event.target.value })}><option value="">All {label.toLowerCase()} values</option>{choices(field, scope[field] ?? "").map(value => <option key={value} value={value}>{originLabel(field,value)}</option>)}</DashboardSelect></label>)}
+      <label>Provider<DashboardSelect aria-label="Activity provider" value={scope.provider} onChange={event => filter({ provider: event.target.value })}><option value="">All providers</option>{choices("provider", scope.provider).map(provider => <option key={provider}>{provider}</option>)}</DashboardSelect></label>
+      <label>Model<DashboardSelect aria-label="Activity model" value={scope.model} onChange={event => filter({ model: event.target.value })}><option value="">All models</option>{choices("model", scope.model).map(model => <option key={model}>{model}</option>)}</DashboardSelect></label>
     </div>
     <div className="machine-scope-note"><span>{scope.days ? `${machineDay(window.start)} – ${shiftMachineDay(machineDay(window.end), -1)} · ${Intl.DateTimeFormat().resolvedOptions().timeZone}` : "All recorded time"} · Filters follow you between machine views.</span></div>
     {optionsError ? <p className="muted">{optionsError}</p> : null}

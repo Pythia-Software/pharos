@@ -5,6 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { reader } from "../helpers/transcript.mjs";
+import { plain } from "../helpers/classic-script.mjs";
 
 const { markdownLinkAllowed, markdownLinkKind, markdownTree } = reader;
 const escape = text => String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -148,6 +149,32 @@ test("human writing projects escaped JSON text and survives message normalizatio
   assert.match(marked, /Keep "this" working\./);
   const ambiguous = { ...message, text: JSON.stringify({ first: display, second: display }) };
   assert.equal(reader.humanWritingMask(ambiguous, display), '', 'ambiguous source text must not invent attribution');
+});
+
+test("local labels name a message's most specific labels and mark the text they describe", () => {
+  const taxonomy = [{ id: 'P.control', name: 'Steer ongoing work' }, { id: 'P.control.continue', name: 'Continue', definition: 'Keep going.' },
+    { id: 'P.request.work', name: 'Request work' }];
+  const typed = 'Sync to main, then **continue**.', source = '<context>Pasted notes</context>\n' + typed;
+  const message = { role: 'user', kind: 'message', text: source,
+    authorship: { spans: [{ category: 'typed', start: Buffer.byteLength(source) - Buffer.byteLength(typed), end: Buffer.byteLength(source) }] },
+    labels: { segment: 'H-typed', ids: ['P', 'P.request', 'P.request.work', 'P.control', 'P.control.continue'], probs: { P: 0.99, 'P.request.work': 0.37, 'P.control.continue': 0.98 } } };
+  const view = reader.messageLabelView(message, taxonomy);
+  assert.equal(view.family, 'P.control', 'the likeliest specific label picks the hue');
+  assert.deepEqual(plain(view.labels.map(label => [label.id, label.title, label.prob])), [['P.control.continue', 'Control · Continue', 0.98], ['P.request.work', 'Request work', 0.37]]);
+  assert.equal(view.segmentName, 'Typed text');
+  // A person's typed pieces carry the labels; pasted context does not.
+  assert.equal(reader.labelMask(message, source), reader.humanWritingMask(message, source));
+  // An agent's message is labeled as a whole, through its formatting.
+  const reply = { role: 'assistant', kind: 'message', text: 'All **checks** pass.', labels: { segment: 'AR', ids: ['C', 'C.report', 'C.report.completion'], probs: {} } };
+  const marked = elements(reader.markdownTree(reply.text, 0, reader.labelMask(reply, reply.text))).filter(item => item.tag === 'mark');
+  assert.ok(marked.length && marked.every(item => item.className === 'labeled-text'));
+  assert.equal(marked.map(text).join(''), 'All checks pass.');
+  assert.equal(reader.messageLabelView(reply).labels[0].title, 'Report · C.report.completion', 'unnamed labels fall back to their ids, prefixed by family');
+  // Unlabeled messages mark nothing; a root alone has no family.
+  assert.equal(reader.messageLabelView({ role: 'assistant', text: 'Done.' }), null);
+  assert.equal(reader.labelMask({ role: 'assistant', text: 'Done.' }, 'Done.'), '');
+  const root = reader.messageLabelView({ labels: { ids: ['C'], probs: {} } });
+  assert.deepEqual(plain([root.family, root.labels[0].title]), ['', 'Responds or reports']);
 });
 
 test("missing classification, automated prompts and invalid ranges do not imply human writing", () => {
