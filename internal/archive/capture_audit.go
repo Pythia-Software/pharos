@@ -9,6 +9,9 @@ import (
 // source version. Its isolated authority must not hide that difference. The
 // production catalog's copy evidence and versions are never changed here.
 func (c *Catalog) compareRetainedAuditRecord(ctx context.Context, unit syncUnit, record WorkspaceRecord, dir string, budget int64) ([]string, error) {
+	if err := c.queries.wait(ctx); err != nil {
+		return nil, err
+	}
 	seed, err := snapshotAuditScope(ctx, c, record, budget)
 	if err != nil {
 		return nil, err
@@ -33,7 +36,7 @@ func (c *Catalog) compareRetainedAuditRecord(ctx context.Context, unit syncUnit,
 	comparison := record
 	comparison.EvidenceIdentity = ""
 	comparison.EvidenceRevision = ""
-	if _, _, err = ingestCopyMode(tx, comparison, false, unit.hostID(), unit.Source.Name, unit.Reader != nil && captureViewOf(unit.Reader) != nil, true, repositoryOptions{c.RepositoryAliases, c.RepositorySeparate}); err != nil {
+	if _, _, err = ingestCopyModeContext(ctx, tx, comparison, false, unit.hostID(), unit.Source.Name, unit.Reader != nil && captureViewOf(unit.Reader) != nil, true, repositoryOptions{c.RepositoryAliases, c.RepositorySeparate}); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(); err != nil {

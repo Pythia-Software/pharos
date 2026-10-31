@@ -4,10 +4,12 @@
 // destroy it with its owning UI. Text and surface fills never receive hue filters.
 let pharosGlowSerial=0;
 
-function askGlowMotion(host) {
+function askGlowMotion(host,layers) {
   const reduced=matchMedia('(prefers-reduced-motion: reduce)');
-  const hue=host.animate({'--pharos-glow-hue':['0deg','360deg']},{duration:120000,iterations:Infinity});
-  const syncMotion=()=>reduced.matches?hue.pause():hue.play();
+  // Animate compositor filters on decoration only. An inherited custom property
+  // on the host restyles and repaints its SVG/gradients every frame in WebKit.
+  const hues=layers.map(layer=>layer.animate({filter:['hue-rotate(0deg)','hue-rotate(360deg)']},{duration:120000,iterations:Infinity}));
+  const syncMotion=()=>hues.forEach(hue=>reduced.matches?hue.pause():hue.play());
   syncMotion();
   reduced.addEventListener('change',syncMotion);
   let working=false;
@@ -18,11 +20,11 @@ function askGlowMotion(host) {
       if(next===working)return;
       working=next;
       // Preserve the current hue when speed changes, including on completion.
-      hue.updatePlaybackRate(working?6:1);
+      hues.forEach(hue=>hue.updatePlaybackRate(working?6:1));
     },
     destroy() {
       reduced.removeEventListener('change',syncMotion);
-      hue.cancel();
+      hues.forEach(hue=>hue.cancel());
       delete host.dataset.glowWorking;
     },
   };
@@ -70,8 +72,8 @@ function createPharosGlow(host,{radius=17,outline=null}={}) {
   const paint=document.createElement('span');
   paint.className='pharos-glow-paint';
   paint.setAttribute('aria-hidden','true');
-  paint.innerHTML=`<svg class="pharos-glow-surface" aria-hidden="true" focusable="false"><path/></svg>
-  <svg class="pharos-edge-art" aria-hidden="true" focusable="false">
+  paint.innerHTML=`<span class="pharos-glow-aura"></span><svg class="pharos-glow-surface" aria-hidden="true" focusable="false"><path/></svg>
+  <span class="pharos-glow-edge"><svg class="pharos-edge-art" aria-hidden="true" focusable="false">
     <defs>
       <linearGradient id="KEY-edge-cool" x1="0" y1="1" x2="1" y2="0" gradientUnits="objectBoundingBox">
         <stop offset="0" stop-color="var(--pharos-aqua)" stop-opacity="0"/>
@@ -96,7 +98,7 @@ function createPharosGlow(host,{radius=17,outline=null}={}) {
     <g class="pharos-edge-lines pharos-edge-warm" stroke="url(#KEY-edge-warm)"><path/><path/><path/><path/></g>
     <path class="pharos-edge-trace pharos-edge-trace-halo" pathLength="2000" filter="url(#KEY-edge-trace-glow)"/>
     <path class="pharos-edge-trace" pathLength="2000"/>
-  </svg>`.replaceAll('KEY',key);
+  </svg></span>`.replaceAll('KEY',key);
   host.classList.add('pharos-glow');
   if(outline){
     host.classList.add('pharos-glow-icon');
@@ -105,7 +107,7 @@ function createPharosGlow(host,{radius=17,outline=null}={}) {
     paint.querySelector('.pharos-edge-trace-halo').style.filter=`var(--pharos-icon-halo-filter,url(#${key}-edge-trace-glow))`;
   }
   host.prepend(paint);
-  const motion=askGlowMotion(host);
+  const motion=askGlowMotion(host,[paint.querySelector('.pharos-glow-aura'),paint.querySelector('.pharos-glow-edge')]);
   let edgeSize='';
   function drawEdge() {
     const {width:w,height:h} = host.getBoundingClientRect();
