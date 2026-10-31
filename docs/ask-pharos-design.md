@@ -330,8 +330,12 @@ told to prefer the exact view asked for (dashboard, chart, split, filters
 and window) over the closest prebuilt card, and to say that no view can show
 something only after browsing confirms it.
 
-For query-table destinations, the agent is encouraged to add a useful graph through
-Query Table's metric builder, even when the user did not explicitly request one.
+Only when the agent has already chosen a Query Table link as the destination is
+it encouraged to add a useful graph through Query Table's metric builder, even
+when the user did not explicitly request one. This encouragement does not apply
+to dashboard links: dashboards already offer higher-quality graphics. The agent
+keeps a suitable dashboard destination and its existing charts instead of switching
+to a Query Table link just to add a metric.
 It browses the page's query schema and metric/display type help, adds a small
 number of relevant `query.aggregations`, and passes the complete query to
 `site_link`. Metrics use `scope: "allMatching"` over the table's filtered
