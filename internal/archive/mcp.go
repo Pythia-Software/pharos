@@ -189,39 +189,7 @@ func callMCPContext(ctx context.Context, catalog *Catalog, name string, args map
 		if metricCall(args) {
 			return catalog.queryStatistics(name, args)
 		}
-		options := SearchOptions{Query: firstString(args["query"]), Repository: firstString(args["repository"]), Source: firstString(args["source"]), File: firstString(args["file"]), Owner: firstString(args["owner"]), Provider: firstString(args["provider"]), Model: firstString(args["model"]), Effort: firstString(args["effort"]), From: firstString(args["from"]), To: firstString(args["to"]), Flavor: firstString(args["flavor"]), Version: firstString(args["version"]), Outcome: firstString(args["outcome"]), Error: firstString(args["error"]), Metric: firstString(args["metric"]), Limit: limit}
-		if args["pr"] != nil {
-			value := int(integer(args["pr"]))
-			options.PR = &value
-		}
-		if value, ok := number(args["minimum"]); ok {
-			options.Minimum = &value
-		}
-		if value, ok := number(args["maximum"]); ok {
-			options.Maximum = &value
-		}
-		result, err := catalog.Search(options)
-		if err != nil {
-			return nil, err
-		}
-		if err := catalog.attachWorkspaceFreshness(result["items"].([]map[string]any)); err != nil {
-			return nil, err
-		}
-		freshness, err := catalog.archiveSourceStatus()
-		if err != nil {
-			return nil, err
-		}
-		result["freshness"] = map[string]any{"status": freshness["status"], "stale_sources": freshness["stale_sources"]}
-		result["search_mode"] = "ranked_lexical_and_semantic"
-		if options.Query != "" {
-			result["coverage"] = toolOutputCoverage
-			// Library search results are cached, so whether this one's
-			// window was cut short is not known here: say it may be.
-			if left, err := catalog.toolOutputPostingsLeft(ctx); err == nil && left {
-				result["coverage"] = toolOutputCoverage + " Old tool-output postings are still being removed from the word index, so this search may rank fewer recent messages than usual."
-			}
-		}
-		return result, nil
+		return catalog.searchWorkContext(ctx, args)
 	case "get_work_detail":
 		return catalog.boundedWorkDetail(args)
 	case "get_conversation_excerpt":
