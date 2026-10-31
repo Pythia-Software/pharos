@@ -117,6 +117,8 @@ var operationKinds = []operationKind{
 		OnEject: "Stops; it runs again after the next index.", Latency: "batch", Journal: journalLonger(5 * time.Second), Priority: priorityBackground},
 	{Kind: "analysis.labels", Label: "Label messages", Verb: "Labeling messages", VariantLabels: map[string]string{"backlog": "Label earlier messages"}, Holds: "D:w W:w", Affects: "an.labels",
 		OnEject: "Stops between batches; the next run resumes it.", Latency: "batch", Journal: journalLonger(5 * time.Second), Priority: priorityBackground},
+	{Kind: "analysis.agent_events", Label: "Find agent events", Verb: "Finding agent events", VariantLabels: map[string]string{"backlog": "Find earlier agent events"}, Holds: "D:w W:w", Affects: "an.agent_events",
+		OnEject: "Stops between chunks of conversations; the next run resumes it.", Latency: "batch", Journal: journalLonger(5 * time.Second), Priority: priorityBackground},
 	{Kind: "analysis.findings", Label: "Update findings", Verb: "Updating findings", Holds: "D:w W:w", Affects: "findings",
 		OnEject: "Stops; it runs again after the next index.", Latency: "batch", Journal: journalLonger(5 * time.Second), Priority: priorityBackground},
 	{Kind: "analysis.refresh", Label: "Update analyses", Verb: "Updating analyses", Holds: "D:w W:w", Affects: "an.git, an.tools, findings",

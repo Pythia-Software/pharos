@@ -29,17 +29,46 @@ three quarters of the event sentences; the rest are phrased in ways no keyword a
 Two derived tables, created at catalog open (`agent_events.go`), with no schema version change:
 
 - `agent_event_messages`: every agent message the pass read, with or without events (the denominator for rates).
-- `agent_events`: one row per scored (message, sentence, kind), with its probability, sentence, subject and response
-  text and their UTF-8 byte ranges in `messages.text`.
+- `agent_events`: one row per scored (message, sentence, kind) at or above probability 0.3
+  (`agentEventStoreFloor`), with its probability, sentence, subject and response text and their UTF-8 byte ranges in
+  `messages.text`.
 
 They back two query datasets, `agent_events` (events at or above the threshold) and `agent_event_messages`, and the
 dashboard's catalog (`web/src/agent-events-analysis-catalog.ts`). The dashboard also draws **events per 1,000 agent
 messages** by day or week, dividing by the messages read in each period under the same filters: the engine's parts
 split only additive measures, so this panel computes the rate from two grouped counts.
 
+## The pass
+
+With `agent_events_enabled = true` and `agent_events_model_dir` (or `PHAROS_AGENT_EVENTS_MODEL_DIR`) naming the
+verifier's directory, the analysis chain runs an **agent events** stage after labels, its own background item (Agent
+events, hourly and adaptive). `pharos agent-events run [--limit N] [--full] [--dry-run] [--conversation ID]...` runs
+it from Terminal. It uses the message labeler's worker, ONNX Runtime and budget (`labels_worker`, `labels_runtime`,
+`labels_threads`, …, and the runtime the labeler downloads), and the same power rules: each chain pass scores about
+1,000 messages (`agentEventsChainLimit`); a larger backlog continues as an `analysis.agent_events` `backlog` run when
+plugged in and stops if this Mac goes onto battery.
+
+`RunAgentEvents` (`agent_events_run.go`):
+
+- **What it reads.** Each conversation's units from labeling prepare's own pass (`labelsItemBuilder`), the cohorts
+  `agent_reply` and `thinking`: what the study's data held, without inherited history, mirrored work or unextracted
+  thinking. Every such message gets an `agent_event_messages` row, with or without candidates.
+- **What it scores again.** A message whose source and text (`input_hash`) or verifier differ from its stored row's.
+  The verifier's identity is its model identity (as the labels ledger's) plus `jayhawk-window-v1`, the lexicon,
+  the units and the sentence versions; an imported row has no input hash, so the pass replaces it.
+- **Which conversations it looks at, newest first.** Those marked in `agent_events_dirty`, by the same triggers as
+  the labels ledger's (`itemDirtyTriggers`); those never built or whose structure fingerprint changed
+  (`agent_events_conversations`); and those with rows another verifier made. Conversations that left the catalog lose
+  their rows.
+- **How it stores.** Candidates are gathered across conversations (512 at a time), scored in batches packed by length,
+  and stored with each conversation's ledger row in one transaction. A stop between chunks keeps what was stored; the
+  next run resumes.
+- **What it refuses.** A verifier trained on another lexicon, deciding at another threshold than the datasets'
+  (0.5), lacking a kind's definition or the `verdict` and `sentences` outputs.
+
 ### Import
 
-Until the model runs inside Pharos, events are imported from the study's predictions:
+Events can also be imported from the study's predictions; the pass scores those messages again:
 
 ```sh
 pharos --config LIBRARY.toml agent-events import FILE.jsonl
@@ -85,8 +114,11 @@ them.
 
 ## Next
 
-The verifier is to run as a second model on the local-labeler runtime (`docs/local-labeler.md`), with its own pass
-writing the same tables. Its int8 export agrees with fp32 on 99.9% of decisions at the same F1, and a row's outputs are
-the same alone and in any batch padded to a multiple of 8. Scoring is the cost: about 18 candidates a second on four
-CPU threads, and the study's October (100,000 agent messages, 524,000 candidates) would take about eight hours, some
-seventeen minutes a day. Risky actions are left to the tool-call history, where the actions themselves are recorded.
+- **Shipping the verifier.** The pass needs the model on this Mac: a directory configured by hand today. Like
+  `kestrel-68m-tpool`, it is to be a pinned download (`internal/archive/labels/assets.json`) from its own Pharos
+  release, published from the deployment Mac, so that turning the item on is all a person does.
+- **Cost.** Scoring dominates: about 18 candidates a second on four CPU threads with the machine to itself, and the
+  study's October (100,000 agent messages, 524,000 candidates) would take about eight hours, some seventeen minutes a
+  day. The int8 export agrees with fp32 on 99.9% of decisions at the same F1.
+- **Not yet in the product:** how sure an event is, beyond the threshold, and highlighting an event's sentence in the
+  reader. Risky actions are left to the tool-call history, where the actions themselves are recorded.

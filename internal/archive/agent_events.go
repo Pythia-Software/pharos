@@ -44,7 +44,8 @@ CREATE TABLE IF NOT EXISTS agent_event_messages (
   events INTEGER NOT NULL,
   model TEXT NOT NULL,
   lexicon TEXT NOT NULL,
-  imported_at TEXT NOT NULL
+  imported_at TEXT NOT NULL,
+  input_hash TEXT
 );
 CREATE INDEX IF NOT EXISTS agent_event_messages_day_idx ON agent_event_messages(day);
 CREATE INDEX IF NOT EXISTS agent_event_messages_conversation_idx ON agent_event_messages(conversation_id);
@@ -128,7 +129,15 @@ func agentEventFamilySQL(column string, attribute func(agentEventFamily) string)
 }
 
 func (c *Catalog) ensureAgentEventsSchema() error {
-	_, err := c.DB.Exec(agentEventsSchemaSQL)
+	if _, err := c.DB.Exec(agentEventsSchemaSQL); err != nil {
+		return err
+	}
+	// input_hash came with the events pass (agent_events_run.go); an import
+	// leaves it empty, so the pass scores those messages again.
+	if ok, err := c.hasColumn("agent_event_messages", "input_hash"); err != nil || ok {
+		return err
+	}
+	_, err := c.DB.Exec(`ALTER TABLE agent_event_messages ADD COLUMN input_hash TEXT`)
 	return err
 }
 
