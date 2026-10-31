@@ -605,7 +605,7 @@ func conditionalString(condition bool, value string) any {
 }
 
 func markSyncDeferred(tx *sql.Tx) error {
-	for _, name := range []string{"identities", "git", "tools", "authorship", "findings"} {
+	for _, name := range stageOrder {
 		// pending_since is when the work began waiting: the first change
 		// after the stage last caught up.
 		if _, err := tx.Exec(`INSERT INTO sync_deferred(name,generation,changed_at,pending_since) VALUES(?,1,?,?)

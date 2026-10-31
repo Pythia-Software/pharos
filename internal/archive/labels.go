@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	labelrt "github.com/gbdubs/pharos/internal/labeler"
@@ -214,16 +215,53 @@ func fileExists(path string) bool {
 
 // labelerManager is the process's labeler runtime: one runner per model,
 // within one thread and memory budget, workers kept warm between runs. It
-// is created from the first settings that ask for it.
+// is created from the first settings that ask for it; each later call sets
+// the budget those settings give (labelsBudget), so a run on battery starts
+// its workers within the battery budget.
 func (c *Catalog) labelerManager(settings LabelerSettings) *labelrt.Manager {
 	c.labelersOnce.Do(func() {
-		threads := settings.ThreadBudget
-		if threads <= 0 {
-			threads = max(max(1, settings.Workers)*max(1, settings.Threads), runtime.NumCPU()/2)
-		}
-		c.labelers = labelrt.NewManager(labelrt.Budget{Threads: threads, MemoryMB: settings.MemoryBudgetMB}, time.Duration(settings.IdleSeconds)*time.Second)
+		c.labelers = labelrt.NewManager(labelsBudget(settings), time.Duration(settings.IdleSeconds)*time.Second)
 	})
+	c.labelers.SetBudget(labelsBudget(settings))
 	return c.labelers
+}
+
+// labelsBudget is what settings allow every model's workers together:
+// labels_thread_budget, else the run's own workers and threads or half the
+// cores, whichever is more; and labels_memory_budget_mb.
+func labelsBudget(settings LabelerSettings) labelrt.Budget {
+	threads := settings.ThreadBudget
+	if threads <= 0 {
+		threads = max(max(1, settings.Workers)*max(1, settings.Threads), runtime.NumCPU()/2)
+	}
+	return labelrt.Budget{Threads: threads, MemoryMB: settings.MemoryBudgetMB}
+}
+
+// The battery budget (docs/local-labeler.md, "Scheduling and power"): one
+// worker of at most labelsBatteryThreads threads, batches of at most
+// labelsBatteryBatchTokens padded tokens, and no backlog run.
+const (
+	labelsBatteryThreads     = 2
+	labelsBatteryBatchTokens = 4096
+)
+
+// labelsForPower is settings as this power allows. Plugged in (or on a Mac
+// without a battery) they are unchanged: the full budget. On battery a run
+// uses one small worker and small batches, unless labels_thread_budget is
+// set, which then holds on battery too. bulk is whether a backlog may
+// continue as its own run after the chain's bounded share; on battery it
+// waits for power.
+func labelsForPower(settings LabelerSettings, power powerState) (adjusted LabelerSettings, bulk bool) {
+	if !power.OnBattery {
+		return settings, true
+	}
+	if settings.ThreadBudget <= 0 {
+		settings.Workers = 1
+		settings.Threads = min(max(1, settings.Threads), labelsBatteryThreads)
+		settings.ThreadBudget = settings.Threads
+		settings.BatchTokens = min(settings.BatchTokens, labelsBatteryBatchTokens)
+	}
+	return settings, false
 }
 
 // labelsDefaultModel is the model the app ships: LAPWING's target-pooling
@@ -1172,31 +1210,69 @@ func decodeLabelProbs(raw []byte) []float32 {
 
 // labelsChainLimit bounds the messages the analysis chain labels inline, so
 // an index run ends in bounded time; a larger backlog continues as its own
-// background run (a few new messages after an index never get there).
+// background run when power allows (a few new messages after an index never
+// get there).
 var labelsChainLimit = 2000
 
-// chainLabels is the analysis chain's labels stage.
+// errStageContinues is a stage that did its share but leaves work waiting:
+// its deferred generation stays pending, so the schedule runs it again.
+var errStageContinues = errors.New("stage continues later")
+
+// labelsPowerCheck is how often a backlog run checks the power source.
+var labelsPowerCheck = time.Minute
+
+// chainLabels is the analysis chain's labels stage (background item
+// "labels"). It runs within the budget this power allows (labelsForPower): plugged in, a
+// backlog past the chain's share continues as its own analysis.labels run,
+// which stops if this Mac goes onto battery; on battery the backlog waits,
+// and the stage stays pending for the next pass.
 func (s *Server) chainLabels(ctx context.Context, settings LabelerSettings) error {
+	settings, bulk := labelsForPower(settings, s.cachedPower(ctx))
 	stats, err := s.Catalog.RunLabels(ctx, settings, LabelsRunOptions{Limit: labelsChainLimit})
 	switch {
 	case errors.Is(err, errLabelsRunning):
-		return nil
+		// A backlog run (or pharos labels run) is labeling; this pass
+		// checks again later.
+		return errStageContinues
 	case err != nil:
 		return err
 	case !stats.Cut:
 		return nil
+	case !bulk:
+		return errStageContinues
 	}
-	s.Catalog.startBackground(OperationSpec{Kind: "analysis.labels", Trigger: triggerChained, Priority: priorityBackground}, func(ctx context.Context, op *Op) error {
+	s.Catalog.startBackground(OperationSpec{Kind: "analysis.labels", Variant: "backlog", Trigger: triggerChained, Priority: priorityBackground}, func(ctx context.Context, op *Op) error {
 		ctx = withWorkProgress(ctx, op.mirrorWork)
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		var unplugged atomic.Bool
+		go func() {
+			ticker := time.NewTicker(labelsPowerCheck)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if _, bulk := labelsForPower(settings, s.cachedPower(ctx)); !bulk {
+						unplugged.Store(true)
+						cancel()
+						return
+					}
+				}
+			}
+		}()
 		_, err := s.Catalog.RunLabels(ctx, settings, LabelsRunOptions{})
-		if errors.Is(err, labelrt.ErrWorkersUnavailable) {
+		switch {
+		case errors.Is(err, labelrt.ErrWorkersUnavailable), unplugged.Load():
+			// Workers failing, or this Mac went onto battery: stored labels
+			// are kept and the next pass resumes.
 			op.legacyOutcome("interrupted", nil)
 			return nil
-		}
-		if errors.Is(err, errLabelsRunning) {
+		case errors.Is(err, errLabelsRunning):
 			return nil
 		}
 		return err
 	})
-	return nil
+	return errStageContinues
 }

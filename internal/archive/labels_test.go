@@ -454,16 +454,96 @@ func TestLabelsRelabelOnAModelSwitch(t *testing.T) {
 	}
 }
 
-// A background update that classifies your writing labels what changed too.
-func TestLabelsFollowAuthorshipInBackgroundUpdates(t *testing.T) {
+// Labels are their own background item, the chain's last stage: an
+// update of your writing alone leaves them waiting, and the labels item
+// labels what changed.
+func TestLabelsAreTheirOwnBackgroundItem(t *testing.T) {
 	catalog, config := testCatalog(t)
 	seedLabelingCatalog(t, catalog)
 	config.Labels = labelsTestSettings(t, "ok")
 	server := testServer(t, config, catalog)
+	if err := catalog.writeTransaction(t.Context(), "test", markSyncDeferred); err != nil {
+		t.Fatal(err)
+	}
 	if err := server.finishDeferredStages(context.Background(), findingsAuto, map[string]bool{"authorship": true}, nil); err != nil {
 		t.Fatal(err)
 	}
+	if catalog.hasLabelsLedger() {
+		t.Fatal("a writing update labeled messages")
+	}
+	if err := server.finishDeferredStages(context.Background(), findingsAuto, map[string]bool{"labels": true}, nil); err != nil {
+		t.Fatal(err)
+	}
 	if n := labelCount(t, catalog, ""); n < 20 {
-		t.Fatalf("a writing update labeled %d messages", n)
+		t.Fatalf("the labels item labeled %d messages", n)
+	}
+	deferred, _ := catalog.freshnessDeferred(t.Context())
+	if row := deferred["labels"]; row.generation == 0 || row.generation > row.completed {
+		t.Fatalf("the labels stage did not complete: %+v", row)
+	}
+	// The item exists only where labels are on.
+	settings, _ := catalog.backgroundSettings(t.Context(), time.Now())
+	has := func(in backgroundInputs) bool {
+		return slices.ContainsFunc(backgroundPlan(settings, in, time.Now()), func(plan itemPlan) bool { return plan.ID == "labels" })
+	}
+	if in := server.backgroundInputsFor(t.Context(), nil); !has(in) {
+		t.Fatal("no labels item with labels on")
+	}
+	if has(backgroundInputs{}) {
+		t.Fatal("a labels item with labels off")
+	}
+}
+
+// On battery a run gets one small worker and small batches, unless the
+// configuration sets a thread budget, and a backlog waits; plugged in
+// nothing changes.
+func TestLabelsForPower(t *testing.T) {
+	settings := LabelerSettings{Threads: 4, Workers: 3, BatchTokens: 16384, MemoryBudgetMB: 8192}
+	if got, bulk := labelsForPower(settings, powerState{Battery: true}); got != settings || !bulk {
+		t.Fatalf("plugged in: %+v %v", got, bulk)
+	}
+	got, bulk := labelsForPower(settings, powerState{Battery: true, OnBattery: true, Percent: 80})
+	if bulk || got.Workers != 1 || got.Threads != labelsBatteryThreads || got.BatchTokens != labelsBatteryBatchTokens || labelsBudget(got).Threads != labelsBatteryThreads {
+		t.Fatalf("on battery: %+v %v (budget %+v)", got, bulk, labelsBudget(got))
+	}
+	settings.ThreadBudget = 6
+	if got, bulk := labelsForPower(settings, powerState{Battery: true, OnBattery: true}); got != settings || bulk {
+		t.Fatalf("on battery with labels_thread_budget: %+v %v", got, bulk)
+	}
+}
+
+// A backlog continues as its own run only when plugged in; on battery the
+// chain labels its share and the stage stays pending.
+func TestLabelsBacklogWaitsForPower(t *testing.T) {
+	for _, battery := range []bool{true, false} {
+		catalog, config := testCatalog(t)
+		seedLabelingCatalog(t, catalog)
+		config.Labels = labelsTestSettings(t, "ok")
+		override(t, &labelsChainLimit, 3)
+		srv := testServer(t, config, catalog)
+		srv.background.power, srv.background.powerAt = powerState{Battery: true, OnBattery: battery, Percent: 90}, time.Now()
+		if err := catalog.writeTransaction(t.Context(), "test", markSyncDeferred); err != nil {
+			t.Fatal(err)
+		}
+		if err := srv.finishDeferredStages(t.Context(), findingsAuto, map[string]bool{"authorship": true, "labels": true}, nil); err != nil {
+			t.Fatal(err)
+		}
+		deferred, _ := catalog.freshnessDeferred(t.Context())
+		if row := deferred["labels"]; row.generation <= row.completed {
+			t.Fatalf("battery %v: a stage that left a backlog completed", battery)
+		}
+		if battery {
+			if n := labelCount(t, catalog, ""); n > labelsChainLimit {
+				t.Fatalf("on battery %d messages were labeled, past the chain's share", n)
+			}
+			continue
+		}
+		if !waitFor(20*time.Second, func() {
+			for labelCount(t, catalog, "") < 20 {
+				time.Sleep(20 * time.Millisecond)
+			}
+		}) {
+			t.Fatalf("plugged in, the backlog run labeled %d messages", labelCount(t, catalog, ""))
+		}
 	}
 }

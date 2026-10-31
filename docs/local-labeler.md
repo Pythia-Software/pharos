@@ -28,7 +28,7 @@ environment:
 | `labels_threads` | — | intra-op threads per worker (default 4) |
 | `labels_workers` | — | worker processes (default 1) |
 | `labels_batch_tokens`, `labels_max_batch` | — | a batch's padded-token budget (default 16,384) and row limit (64) |
-| `labels_thread_budget`, `labels_memory_budget_mb` | — | what every model's workers may use together: intra-op threads (default the larger of workers × threads and half the cores) and estimated memory (default 8,192 MB) |
+| `labels_thread_budget`, `labels_memory_budget_mb` | — | what every model's workers may use together: intra-op threads (default the larger of workers × threads and half the cores; on battery, see [Scheduling and power](#scheduling-and-power)) and estimated memory (default 8,192 MB). A thread budget set here holds on battery too |
 | `labels_idle_seconds` | — | how long finished workers stay warm for the next run (default 120) |
 
 Relative paths resolve against the configuration file's folder. To build the
@@ -235,11 +235,41 @@ run` apart. A second run reports that labeling is already running.
   no labels tables.
 - The stage labels at most 2,000 messages inline, so an index ends in bounded
   time. A larger backlog (the first run on a library) continues as a
-  background `analysis.labels` run.
-- Background updates (Frequently, Hourly, Daily) run the chain's stages on
-  their own cadences; labels follow the writing classification
-  (`authorship`), so an update that classifies new messages labels them too.
+  background `analysis.labels` run (variant `backlog`) when this Mac is
+  plugged in ([Scheduling and power](#scheduling-and-power)).
 - No page read starts labeling. Pages read whatever ledger exists (none yet).
+
+## Scheduling and power
+
+Labels follow the [background updates](background-work.md#11-background-updates)
+schedule rather than one of their own:
+
+- **Message labels** is a background item (Hourly before measurements,
+  adaptive like Your writing; measured by `analysis.labels` runs, not
+  `backlog` runs, so a backfill does not push it to Daily). It exists only
+  where `labels_enabled` is on. Settings' overrides, Run now, pause, hold
+  when busy and the battery policy apply to it as to every item; by default
+  Hourly work waits on battery.
+- Indexing marks it pending (`sync_deferred`), with the chain's other
+  stages. A pass that labels everything completes it. A pass that leaves a
+  backlog keeps it pending, so a later
+  pass carries on.
+- **The budget comes from the power source** (`labelsForPower`, read as the
+  schedule reads it, from `pmset` at most once a minute):
+
+  | | Plugged in (or no battery) | On battery |
+  |---|---|---|
+  | Workers × threads | `labels_workers` × `labels_threads` | 1 × at most 2 |
+  | Thread budget | `labels_thread_budget`, else the larger of workers × threads and half the cores | the run's threads |
+  | Batch | `labels_batch_tokens` | at most 4,096 padded tokens |
+  | Backlog past the chain's 2,000 | continues as a `backlog` run, which stops within a minute of unplugging | waits for power |
+
+  `labels_thread_budget`, when set, overrides the battery reduction too, and
+  `labels_memory_budget_mb` applies to both. The runtime's budget is set
+  before each run (`Manager.SetBudget`): a smaller one stops idle workers
+  over it at once; workers in use finish their run.
+- Low battery (under 20%) or Low Power Mode makes the item wait, as it does
+  all background work, unless you Run now.
 
 | Event | What happens |
 |---|---|

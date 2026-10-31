@@ -21,7 +21,7 @@ import (
 var runningItem = map[string]string{
 	"index.changes.automatic": "conversations", "index.changes.manual": "conversations", "index.sources.legacy": "conversations",
 	"maintenance.library-view": "search", "analysis.github": "repositories", "analysis.identities": "repositories", "analysis.git": "repositories",
-	"analysis.tools": "tools", "analysis.authorship": "writing", "analysis.findings": "findings",
+	"analysis.tools": "tools", "analysis.authorship": "writing", "analysis.findings": "findings", "analysis.labels": "labels",
 	"background.capture/sources": "other-sources", "background.capture/preserve": "preserve", "capture.this-mac": "preserve", "index.captures": "preserve", "library.update": "preserve",
 	"library.upgrade": "upgrade", "tools.ledger.build": "upgrade", "backup.local": "backup",
 }
@@ -787,6 +787,9 @@ func (s *Server) postBackgroundRun(w http.ResponseWriter, r *http.Request, body 
 			// the saved schedule is unchanged.
 			s.requestIndex()
 		case item.continuous:
+		case item.requiresLabels && !s.Config().Labels.Enabled:
+			// Labels are off here (the broker asks every library after a
+			// download).
 		default:
 			run = append(run, id)
 		}

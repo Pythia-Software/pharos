@@ -45,6 +45,7 @@ var unregisteredWorkAllowed = map[string]allowedWork{
 	"labeling_routes.go:runLabelingProcess":       {3, "subprocess pipe: feeds a labeling CLI its prompt, reads its stream and waits for it to exit, inside the offline `pharos labeling run` command"},
 	"labeling_routes.go:labelingCLIVersion":       {1, "subprocess: a labeling CLI's --version, bounded by a timeout; writes nothing"},
 	"labels.go:execute":                           {3, "pipeline stages inside a labels run (item building, the writer, batch runners), which is the analysis.labels operation"},
+	"labels.go:chainLabels":                       {1, "the power watch inside a backlog labels run (the analysis.labels operation), which stops it when this Mac goes onto battery"},
 	"worker.go:serve":                             {1, "the labeler worker binary's frame reader (cmd/pharos-labeler-ort): a separate process that never opens a catalog"},
 	"worker.go:start":                             {1, "the labeler worker binary's model runner (cmd/pharos-labeler-ort): a separate process that never opens a catalog"},
 	"labeling_run.go:loop":                        {1, "the offline `pharos labeling run` command's bounded worker pool; it runs outside the service and journals its work in the dataset's own ledger"},
