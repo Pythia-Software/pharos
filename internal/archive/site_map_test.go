@@ -689,6 +689,7 @@ func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
 		t.Fatal("non-timestamp window accepted")
 	}
 	for _, input := range []string{
+		`{"page":"analyze/thinking-detail","view":{"thinking":{"view":"calendar","groupBy":"model_effort","timezone":"America/Denver","range":"30d","hiddenPercentiles":["p95"],"hours":6}}}`,
 		`{"page":"cards","view":{"card_window":"today","card_filters":false},"highlight":["card:tool-failures"],"reveal":"text:failed command"}`,
 		`{"page":"work","options":{"work_id":"w","conversation":"c"},"view":{"reader_page":"1","reader_expanded":["message:m"],"reader_filter":["prompts","response"],"delegation_columns":["tokens","cost"],"delegation_tint":"sort"},"reveal":"message:m"}`,
 	} {
@@ -697,6 +698,11 @@ func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
 			t.Fatal(input, err)
 		}
 		roundTrip(t, site, "view", result["url"].(string))
+	}
+	for _, state := range []string{`{"view":"unknown"}`, `{"hours":0}`, `{"hourA":2}`, `{"hiddenPercentiles":["p99"]}`, `{"timezone":"unknown/zone"}`, `{"unknown":true}`} {
+		if _, err := site.linkTool(linkArgs(t, `{"page":"analyze/thinking-detail","view":{"thinking":`+state+`}}`)); err == nil {
+			t.Fatal("invalid Thinking view accepted", state)
+		}
 	}
 	nested, err := site.linkTool(map[string]any{"url": "/work/w/conversation/c?conversation=c&reveal=message%3Am"})
 	if err != nil {

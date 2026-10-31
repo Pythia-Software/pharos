@@ -10,6 +10,7 @@ export const dataEntities = {
 export type DataEntity = keyof typeof dataEntities;
 
 export const dataSources = {
+  model_requests: {label:"Individual Model Requests",entity:"agents",grain:"One retained usage-bearing response event, with linked post-tool timing evidence when available"},
   library: { label: "Workspaces", entity: "workspaces", grain: "One workspace" },
   usage: { label: "Agent Session Token Usage by Day, Model & Effort", entity: "agents", grain: "Daily tokens for one agent session, with a separate row for each model and effort level" },
   conversation_activity: { label: "Root Conversation Input & Usage Events", entity: "conversations", grain: "One human-input message or one daily agent-session usage record, attributed to a root conversation" },

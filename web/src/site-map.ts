@@ -466,7 +466,7 @@ type SiteCard = {
   url: { path: string; params: Array<[string, ParamSpec]> };
 };
 export const recipeTextWindows = Object.fromEntries(rollingWindowDays.map(days => [String(days), Object.fromEntries(["{days}", "{period}", "{lastDays}"].map(token => [token, describeRecipeText(token, days)]))]));
-const cardPage = (recipe: QueryRecipe) => recipe.destination ? `analyze/${recipe.destination.topic}` : recipe.dataset === "library" ? "library" : recipe.dataset === "findings" ? "findings/table" : `analyze/query/${recipe.dataset}`;
+const cardPage = (recipe: QueryRecipe) => recipe.thinking ? `analyze/${recipe.thinking.overview?"thinking-overview":"thinking-detail"}` : recipe.destination ? `analyze/${recipe.destination.topic}` : recipe.dataset === "library" ? "library" : recipe.dataset === "findings" ? "findings/table" : `analyze/query/${recipe.dataset}`;
 
 export function siteCard(recipe: QueryRecipe, clock: Date): SiteCard {
   const windows = recipe.period ? [] : [...rollingWindowDays];
@@ -475,6 +475,7 @@ export function siteCard(recipe: QueryRecipe, clock: Date): SiteCard {
   const sample = at(probe), plain = recipe.period ? sample : at(null);
   if ([recipe.title, recipe.description, sample.search].some(text => decodeURIComponent(text).includes(placeholder))) fail(`${recipe.id} already holds ${placeholder}`);
   const card: SiteCard = { id: recipe.id, title: recipe.title, description: recipe.description, category: recipe.category, dataset: recipe.dataset, kind: cardKind(recipe), page: cardPage(recipe), url: { path: sample.pathname, params: [] } };
+  if(recipe.thinking) card.filters=decode(plain.searchParams.get("analyze_filters")!).where;
   if (recipe.destination) {
     const chart = JSON.parse(plain.searchParams.get("analyze_chart")!), topic = recipe.destination.topic;
     const drawn = normalizeAnalysis(analysisCatalogs[topic]!, canonicalState(analysisCatalogs[topic]!, { ...dashboardDefaults[topic], ...chart })) as Record<string, unknown>;
@@ -586,7 +587,7 @@ export function buildSiteMap(inputs: SiteInputs) {
   for (const dataset of Object.values(datasets)) for (const field of dataset.fields) field.ops = opKey(field.ops);
   const cards = queryRecipes.filter(recipe => !recipe.retired).map(recipe => siteCard(recipe, clock));
   const topics = Object.keys(usageTopics) as UsageTopic[];
-  const dashboards = Object.fromEntries(topics.map(topic => [topic, dashboardFacts(topic)]));
+  const dashboards = Object.fromEntries(topics.filter(topic=>analysisCatalogs[topic]).map(topic => [topic, dashboardFacts(topic)]));
   // host_params: the parameters the page's table keeps as host query state
   // (host-query-state.ts). The app's query tokens carry that state, mirrored
   // in these parameters; a link's token may carry it only as they say it.
@@ -632,7 +633,8 @@ export function buildSiteMap(inputs: SiteInputs) {
       });
     }
     if (section.path === "analyze") {
-      for (const topic of topics) child({ path: `analyze/${topic}`, title: usageTopics[topic].label, description: usageTopics[topic].description, route: "/analyze",
+      for(const topic of topics.filter(topic=>!analysisCatalogs[topic])) child({path:`analyze/${topic}`,title:usageTopics[topic].label,description:usageTopics[topic].description,route:"/analyze",fixed:{analyze_mode:"dashboards",analyze_topic:topic,analyze_data:usageTopicDatasets[topic]},dataset:usageTopicDatasets[topic],options:[whereOption("analyze_filters","model_requests")]});
+      for (const topic of topics.filter(topic=>analysisCatalogs[topic])) child({ path: `analyze/${topic}`, title: usageTopics[topic].label, description: usageTopics[topic].description, route: "/analyze",
         fixed: { analyze_mode: "dashboards", analyze_topic: topic, analyze_data: usageTopicDatasets[topic] }, dataset: usageTopicDatasets[topic], dashboard: topic,
         ...topic === "carbon" ? { settings: "Carbon assumptions can be carried as view.carbon; saving defaults is separate." } : topic === "parallelism" ? { settings: "Ribbon and source-query counting assumptions travel as view.parallelism; the Provider and Model breakdowns need agent counting.", ribbon: { param: "analyze_parallelism", ...ribbonTemplate() } } : {},
         options: [

@@ -67,7 +67,7 @@ export async function compare(recipe, days, values, { edit = false } = {}) {
   }
   const catalog = await preview(item.query, catalogOptions), dashboard = await preview(spec.query, savedOptions);
   let analysis;
-  if (item.destination) {
+  if (item.destination || item.thinking) {
     const job = savedCardPreviewJob(bookmark.url, schemas[item.dataset], bookmark.query);
     analysis = difference(catalog, await preview(job.query, job.options));
   }

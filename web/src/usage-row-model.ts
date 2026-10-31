@@ -25,7 +25,7 @@ export function primaryUsageSource(dataset: UsageDataset, row: Row) {
   if (dataset === "parallelism" && !identifier(row.conversation_id) && identifier(row.location)) return queryURL("library", { ...EMPTY_QUERY, orderBy: [{ field: "activity_at", dir: "desc" }], where: [{ field: "location", op: "=", value: row.location }] });
   if (dataset === "writing") return conversationRowURL({ workspace_id: row.id });
   const message = dataset === "writing_messages" ? row.id : dataset === "tool_calls" ? row.call_message_id : dataset === "skill_usages" ? row.evidence_message_id : row.message_id;
-  const at = dataset === "usage" ? row.first_usage_at : dataset === "conversation_activity" ? row.event_at : dataset === "skill_usages" ? row.created_at : row.started_at;
+  const at = dataset === "model_requests" ? row.requested_at : dataset === "usage" ? row.first_usage_at : dataset === "conversation_activity" ? row.event_at : dataset === "skill_usages" ? row.created_at : row.started_at;
   return conversationRowURL(row, message, at, dataset === "tool_calls" ? row.call_id : undefined);
 }
 const filtered = (dataset: UsageDataset, where: WhereTerm[], current: URLSearchParams) => usageWorkspaceURL({ mode: "query", dataset, query: orderedUsageQuery(dataset, { ...EMPTY_QUERY, where }) }, current);
@@ -65,6 +65,7 @@ export function usageRowLinks(dataset: UsageDataset, row: Row, current = new URL
 // Order is intentional: content/evidence first, then measures and provenance.
 // All other fields remain available in the native property picker.
 export const usageDetailFields: Record<UsageDataset, string[]> = {
+  model_requests: ["source_links","requested_at","model","effort","gap_seconds","timing_quality","tool_result_at","input_tokens","cache_read_input_tokens","output_tokens","reasoning_output_tokens","provider","harness","repository_name","machine"],
   tl1_attempts: ["source_links", "title", "project", "flavor", "configuration", "disposition", "started_at", "duration_ms", "cost_usd", "error_signature"],
   usage: ["source_links", "title", "first_usage_at", "last_usage_at", "repository_name", "model_effort", "session_kind", "total_tokens", "cost_usd", "price_status", "uncached_input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens", "reasoning_output_tokens", "cache_read_share", "attribution", "root_title", "energy_wh", "co2e_g", "carbon_tier"],
   conversation_activity: ["channel", "machine_id", "execution_machine_id", "source_links", "title", "event_at", "event_kind", "human_input_tokens_estimate", "human_messages", "output_tokens", "repository_name", "root_title", "root_provider", "root_model_family", "root_effort"],

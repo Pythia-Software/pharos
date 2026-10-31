@@ -709,7 +709,7 @@ func TestLabelingPreparesAnOlderSnapshotCopy(t *testing.T) {
 		statements = append(statements, `DROP TRIGGER "`+firstString(row["name"])+`"`)
 	}
 	execTx(t, catalog.DB, statements...)
-	execTx(t, catalog.DB, `DROP TABLE reasoning_extraction_state`, `ALTER TABLE messages DROP COLUMN sender`, `DROP INDEX conversations_usage_idx`, `ALTER TABLE conversations DROP COLUMN harness`,
+	execTx(t, catalog.DB, `DROP TABLE reasoning_extraction_state`, `ALTER TABLE messages DROP COLUMN sender`, `DROP INDEX conversations_usage_idx`, `DROP INDEX conversations_timing_idx`, `ALTER TABLE conversations DROP COLUMN harness`,
 		`UPDATE meta SET value='14' WHERE key='schema_version'`)
 	if _, err := catalog.DB.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
 		t.Fatal(err)

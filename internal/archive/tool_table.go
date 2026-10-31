@@ -135,6 +135,8 @@ func sqlDatasetFor(dataset string) (sqlDataset, bool) {
 		return toolRollupDataset, true
 	case "tool_calls":
 		return toolCallDataset, true
+	case "model_requests":
+		return thinkingRequestDataset, true
 	case "skill_usages":
 		return skillUsageDataset, true
 	case "writing_messages":

@@ -50,7 +50,7 @@ export async function resolveSavedCardPreviewJob(url: string, schema: FieldSchem
 export async function resolveCardDashboardURL(address: string, signal?: AbortSignal): Promise<string> {
   const url = new URL(address, location.origin), params = url.searchParams, dataset = cardSourceDataset(params);
   const recipe = queryRecipes.find(recipe => recipe.id === params.get("card_id") && recipe.dataset === dataset);
-  if (url.origin !== location.origin || url.pathname !== "/analyze" || params.get("analyze_mode") !== "dashboards" || !dataset || !recipe?.destination) throw new Error("This card's dashboard is unavailable.");
+  if (url.origin !== location.origin || url.pathname !== "/analyze" || params.get("analyze_mode") !== "dashboards" || !dataset || !(recipe?.destination || recipe?.thinking)) throw new Error("This card's dashboard is unavailable.");
   const service = createQueryLinkService(`pharos_${dataset}`, httpQuerySnapshotStore("/api/query-snapshots"));
   const query = await service.resolve(url.href, `q_${dataset}`, signal);
   if (!query) throw new Error("This card's source query is unavailable.");
