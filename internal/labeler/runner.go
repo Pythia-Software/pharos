@@ -304,6 +304,28 @@ func (m *Manager) Kill(runner *Runner) {
 	}
 }
 
+// SetBudget changes the budget for runners started from now on (a power
+// change: fewer threads on battery). Idle runners over the new budget stop;
+// runners in use keep their workers until released, and a smaller budget
+// then holds the next start to it.
+func (m *Manager) SetBudget(budget Budget) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.budget = budget
+	over := func() bool {
+		return budget.Threads > 0 && m.threads > budget.Threads || budget.MemoryMB > 0 && m.memory > budget.MemoryMB
+	}
+	for over() && m.evictIdleLocked() {
+	}
+}
+
+// Budget is the current budget.
+func (m *Manager) Budget() Budget {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.budget
+}
+
 // Usage is the threads and memory the running workers hold.
 func (m *Manager) Usage() (threads, memoryMB, runners int) {
 	m.mu.Lock()

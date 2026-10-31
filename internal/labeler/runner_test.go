@@ -105,3 +105,40 @@ func TestManagerSharesOneBudgetAcrossModels(t *testing.T) {
 		t.Fatalf("%d runners, %d MB", runners, memory)
 	}
 }
+
+// A smaller budget (on battery) stops idle runners over it and holds the
+// next start to it; a larger one (plugged in) lets the next start use it.
+func TestManagerSetBudget(t *testing.T) {
+	model, err := LoadModel(writeModelDir(t, func(m map[string]any) { m["memory_mb"] = 10 }), "int8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(Budget{Threads: 4}, time.Minute)
+	defer manager.Close()
+	cfg := fakeRunnerConfig(t)
+	cfg.Workers, cfg.Threads = 2, 2
+	_, release, err := manager.Runner(t.Context(), model, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if threads, _, runners := manager.Usage(); threads != 4 || runners != 1 {
+		t.Fatalf("plugged in: %d threads in %d runners", threads, runners)
+	}
+	manager.SetBudget(Budget{Threads: 2})
+	if threads, _, runners := manager.Usage(); threads != 0 || runners != 0 {
+		t.Fatalf("the idle runner over the battery budget kept %d threads in %d runners", threads, runners)
+	}
+	_, release, err = manager.Runner(t.Context(), model, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if threads, _, _ := manager.Usage(); threads != 2 {
+		t.Fatalf("on battery the runner took %d threads of 2", threads)
+	}
+	release()
+	manager.SetBudget(Budget{Threads: 4})
+	if got := manager.Budget(); got.Threads != 4 {
+		t.Fatalf("budget %+v", got)
+	}
+}
