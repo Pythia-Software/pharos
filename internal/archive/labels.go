@@ -577,12 +577,37 @@ func (c *Catalog) labelsWork(ctx context.Context, builder *labelsItemBuilder, id
 			}
 		}
 	}
+	followed := []string{}
 	for ; len(queue) > 0; queue = queue[1:] {
 		for _, child := range children[queue[0]] {
 			if !want[child] && structures[child] != "" {
 				want[child] = true
 				queue = append(queue, child)
+				followed = append(followed, child)
 			}
+		}
+	}
+	// A conversation that follows another is wanted only because of this
+	// run's view of its source, whose dirty mark the source's own write
+	// clears. A run cut short (--limit, a stop) before reaching it would lose
+	// it for good, so it gets a dirty mark of its own first, which this run
+	// clears only once it is built.
+	if len(followed) > 0 && !opts.DryRun && len(opts.Conversations) == 0 {
+		if err := c.writeTransaction(ctx, "mark conversations that follow a changed one", func(tx *sql.Tx) error {
+			for _, id := range followed {
+				if tokens[id] != "" {
+					continue
+				}
+				var token string
+				if err := tx.QueryRowContext(ctx, `INSERT INTO message_labels_dirty(conversation_id,token) VALUES(?,hex(randomblob(8)))
+					ON CONFLICT(conversation_id) DO UPDATE SET token=message_labels_dirty.token RETURNING token`, id).Scan(&token); err != nil {
+					return err
+				}
+				tokens[id] = token
+			}
+			return nil
+		}); err != nil {
+			return nil, err
 		}
 	}
 	jobs := []*labelsJob{}

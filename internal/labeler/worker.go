@@ -186,6 +186,28 @@ func (w *Worker) write(kind byte, payload []byte) error {
 	return WriteFrame(w.stdin, kind, payload)
 }
 
+// writeCtx writes a frame, giving up when ctx ends. A worker that stops
+// reading its input lets a large frame fill the pipe and block the write, so
+// the write must not outlast a stop, an eject or a batch timeout. A frame cut
+// off midway leaves the stream unusable: the worker is killed and its input
+// closed, which also unblocks the write.
+func (w *Worker) writeCtx(ctx context.Context, kind byte, payload []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	written := make(chan error, 1)
+	go func() { written <- w.write(kind, payload) }()
+	select {
+	case err := <-written:
+		return err
+	case <-ctx.Done():
+		w.Kill()
+		_ = w.stdin.Close()
+		<-written
+		return ctx.Err()
+	}
+}
+
 // readLoop dispatches replies until the worker's output ends, then fails
 // everything still waiting.
 func (w *Worker) readLoop(reader io.Reader) {
@@ -331,7 +353,7 @@ func (w *Worker) Run(ctx context.Context, inputs []Tensor, outputs []string) (*R
 	}
 	w.pending[id] = ch
 	w.mu.Unlock()
-	if err := w.write(FrameRun, payload); err != nil {
+	if err := w.writeCtx(ctx, FrameRun, payload); err != nil {
 		w.mu.Lock()
 		delete(w.pending, id)
 		w.mu.Unlock()
@@ -370,7 +392,7 @@ func (w *Worker) Ping(ctx context.Context) (time.Duration, error) {
 	w.pings[nonce] = ch
 	w.mu.Unlock()
 	started := time.Now()
-	if err := w.write(FramePing, EncodeNonce(nonce)); err != nil {
+	if err := w.writeCtx(ctx, FramePing, EncodeNonce(nonce)); err != nil {
 		return 0, err
 	}
 	select {
@@ -387,7 +409,9 @@ func (w *Worker) Ping(ctx context.Context) (time.Duration, error) {
 // Close asks the worker to quit, closes its input and waits for it to exit,
 // killing it after CloseTimeout.
 func (w *Worker) Close() error {
-	_ = w.write(FrameQuit, nil)
+	quit, cancel := context.WithTimeout(context.Background(), w.cfg.CloseTimeout)
+	_ = w.writeCtx(quit, FrameQuit, nil)
+	cancel()
 	_ = w.stdin.Close()
 	select {
 	case <-w.exited:

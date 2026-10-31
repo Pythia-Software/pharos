@@ -17,6 +17,7 @@ import (
 	goruntime "runtime"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -66,8 +67,15 @@ var labelsAssets = func() labelsAssetSet {
 }()
 
 // labelsDownloadClient fetches assets; no overall timeout, since a model is
-// 150 MB, but a stalled connection fails (the transport's idle timeouts).
+// 150 MB. Headers must arrive within a minute, and a transfer that then
+// stops sending fails after labelsDownloadStall without data.
 var labelsDownloadClient = &http.Client{Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, ResponseHeaderTimeout: time.Minute, IdleConnTimeout: time.Minute}}
+
+// labelsDownloadStall is how long a download may receive nothing before it
+// is cancelled, keeping what arrived for the next attempt to resume. Neither
+// transport timeout covers a body that stops mid-way, and a stalled
+// transfer would hold the one-per-Mac download lock indefinitely.
+var labelsDownloadStall = time.Minute
 
 func (a labelsAsset) url() string {
 	return strings.NewReplacer("{name}", a.Name, "{version}", a.Version).Replace(a.URL)
@@ -162,6 +170,14 @@ func downloadLabelsAsset(ctx context.Context, asset labelsAsset, progress func(d
 	if offset >= asset.Size {
 		return nil
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var stalled atomic.Bool
+	watchdog := time.AfterFunc(labelsDownloadStall, func() {
+		stalled.Store(true)
+		cancel()
+	})
+	defer watchdog.Stop()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.url(), nil)
 	if err != nil {
 		return err
@@ -171,6 +187,9 @@ func downloadLabelsAsset(ctx context.Context, asset labelsAsset, progress func(d
 	}
 	response, err := labelsDownloadClient.Do(request)
 	if err != nil {
+		if stalled.Load() {
+			return fmt.Errorf("download %s: no response within %s", asset.Name, labelsDownloadStall)
+		}
 		return fmt.Errorf("download %s: %w", asset.Name, err)
 	}
 	defer response.Body.Close()
@@ -202,6 +221,7 @@ func downloadLabelsAsset(ctx context.Context, asset labelsAsset, progress func(d
 				return werr
 			}
 			done += int64(n)
+			watchdog.Reset(labelsDownloadStall)
 			if progress != nil {
 				progress(done, asset.Size)
 			}
@@ -211,6 +231,9 @@ func downloadLabelsAsset(ctx context.Context, asset labelsAsset, progress func(d
 		}
 		if err != nil {
 			// What arrived stays for the next attempt to resume.
+			if stalled.Load() {
+				return fmt.Errorf("download %s: no data for %s after %d of %d bytes", asset.Name, labelsDownloadStall, done, asset.Size)
+			}
 			return fmt.Errorf("download %s: %w", asset.Name, err)
 		}
 	}

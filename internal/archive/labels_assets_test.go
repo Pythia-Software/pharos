@@ -58,12 +58,14 @@ func testArchive(t *testing.T, entries ...tarEntry) []byte {
 
 // assetServer serves archive as a release asset. It honours range
 // requests unless noRanges, and cuts the first full response after cutAfter
-// bytes (0: never), as a dropped connection would.
+// bytes (0: never), as a dropped connection would, or, with stall, keeps
+// the connection open sending nothing more until the client gives up.
 type assetServer struct {
 	*httptest.Server
 	archive  []byte
 	noRanges bool
 	cutAfter int
+	stall    bool
 	mu       sync.Mutex
 	ranges   []string
 	cut      bool
@@ -92,6 +94,13 @@ func newAssetServer(t *testing.T, archive []byte) *assetServer {
 			w.Header().Set("Content-Length", fmt.Sprint(len(archive)))
 		}
 		body := archive[offset:]
+		if cut && server.stall {
+			// Promise everything, send part, then go quiet.
+			w.Write(body[:server.cutAfter])
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+			return
+		}
 		if cut {
 			// Promise everything, send part, and drop the connection.
 			w.Write(body[:server.cutAfter])
@@ -175,6 +184,27 @@ func TestLabelsAssetDownloadResumes(t *testing.T) {
 		if seen := server.seenRanges(); seen[1] != fmt.Sprintf("bytes=%d-", len(archive)/2) {
 			t.Fatalf("the second request asked %q", seen[1])
 		}
+	}
+	// A server that goes quiet mid-transfer is given up on, keeping what
+	// arrived, rather than holding the download (and its lock) forever.
+	override(t, &labelsDownloadStall, 200*time.Millisecond)
+	useSupportDir(t)
+	archive := testArchive(t, tarEntry{name: "manifest.json", body: strings.Repeat("weights ", 4096)})
+	server := newAssetServer(t, archive)
+	server.cutAfter, server.stall = len(archive)/2, true
+	asset := server.asset(archive, "")
+	started := time.Now()
+	if err := fetchLabelsAsset(t.Context(), asset, nil); err == nil || !strings.Contains(err.Error(), "no data for") {
+		t.Fatalf("a stalled download: %v", err)
+	}
+	if took := time.Since(started); took > 10*time.Second {
+		t.Fatalf("a stalled download took %s to give up", took)
+	}
+	if got := asset.downloaded(); got != int64(len(archive)/2) {
+		t.Fatalf("a stalled download kept %d of %d bytes", got, len(archive))
+	}
+	if err := fetchLabelsAsset(t.Context(), asset, nil); err != nil || !asset.present() {
+		t.Fatalf("resumed after a stall: %v", err)
 	}
 }
 

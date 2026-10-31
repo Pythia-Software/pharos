@@ -190,6 +190,10 @@ union of the chunks' closed sets and its probabilities the per-label maximum
     message's target text is resolved against its source's classification,
     so a source that becomes, say, quoted agent text changes the copy's items
     although the copy's own spans stay the same. Both follow transitively.
+    A conversation pulled in this way gets a dirty mark of its own before
+    the run starts work, cleared only once it is built: the source's own
+    mark is cleared when the source is stored, so a run cut short by
+    `--limit` or a stop would otherwise lose it.
 - Triggers on `messages`, `message_authorship`,
   `reasoning_extraction_state`, `agent_sessions`, `agent_session_messages` and
   `conversations` write the dirty marks (`message_labels_dirty`). Each mark
@@ -287,8 +291,8 @@ schedule rather than one of their own:
 
 | Event | What happens |
 |---|---|
-| Stop, eject or release | The run stops between batches and kills its workers rather than waiting for a batch in flight. Finished conversations are stored, and the next run resumes from the dirty marks and label counts. |
-| A worker crashes, or does not answer a batch within 5 min (it is killed) | Its batches in flight fail, the worker restarts after a backoff (0.5 s doubling, at most 30 s) and lost batches are sent again, at most twice. |
+| Stop, eject or release | The run stops between batches and kills its workers rather than waiting for a batch in flight, including one still being written to a worker's input. Finished conversations are stored, and the next run resumes from the dirty marks and label counts. |
+| A worker crashes, does not answer a batch within 5 min, or stops reading its input so a batch cannot even be sent (it is killed) | Its batches in flight fail, the worker restarts after a backoff (0.5 s doubling, at most 30 s) and lost batches are sent again, at most twice. |
 | A batch keeps crashing workers, or the worker rejects it (`bad_request`, `run_failed`) | The batch is split and sent one item at a time, so one bad item fails only its message, which stays pending for the next run. |
 | Workers keep crashing (8 restarts in a row with no batch succeeding) | The run ends **interrupted**, keeping what it stored. |
 | A conversation cannot be built (a damaged row; a panic is caught) | It keeps its dirty mark for the next run; the others go on. A stored classification that no longer fits its message counts as none until authorship catches up. |
@@ -388,7 +392,9 @@ The build pins the assets it downloads in `internal/archive/labels/assets.json`
   library on the Mac shares it.
 - **How.** `fetchLabelsAsset` downloads to `<name>-<version>.download`,
   resuming a partial file with a range request (a server without ranges
-  starts again), refuses more bytes than pinned, checks the size and SHA-256,
+  starts again), gives up on a transfer that receives nothing for a minute
+  (keeping what arrived, so the lock is freed and the retry resumes),
+  refuses more bytes than pinned, checks the size and SHA-256,
   unpacks into a new hidden directory (regular files, directories and links
   that stay inside it; anything else fails), writes `.verified-<sha256>`,
   and renames it into place. A reader sees all of it or none; a mismatch

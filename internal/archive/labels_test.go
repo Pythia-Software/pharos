@@ -230,6 +230,28 @@ func TestLabelsRunsInLimitedStepsAndOneAtATime(t *testing.T) {
 	if err != nil || !rest.Complete || rest.MessagesLabeled == 0 || rest.Batches != rest.ItemsLabeled {
 		t.Fatalf("one at a time: %+v %v", rest, err)
 	}
+	// A fork that sorts after its parent follows the parent's change. A run
+	// cut short once the parent is stored must not lose the fork: the next
+	// run still rebuilds it.
+	execTx(t, catalog.DB,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth,started_at) VALUES('c-zz-fork','ws-main','codex','local','c-zz-fork','c-root',0,'2026-09-02T13:00:00.000Z')`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('m-zz1','c-zz-fork','m-zz1','user','message','Now make the toolbar sticky on tablets as well','hash-m-zz1','2026-09-02T13:00:00.000Z',1100)`)
+	if _, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, catalog.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('m-a10','c-root','m-a10','assistant','message','Pushed the fix.','hash-m-a10','2026-09-01T14:00:00.000Z',1101)`)
+	cut, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{Limit: 1})
+	if err != nil || cut.MessagesLabeled != 1 || cut.Complete {
+		t.Fatalf("a run cut after the parent: %+v %v", cut, err)
+	}
+	after, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{})
+	if err != nil || !after.Complete || after.ConversationsBuilt == 0 {
+		t.Fatalf("the next run after a cut: %+v %v (the fork was lost)", after, err)
+	}
+	var dirty int
+	if err := catalog.DB.QueryRow(`SELECT COUNT(*) FROM message_labels_dirty`).Scan(&dirty); err != nil || dirty != 0 {
+		t.Fatalf("dirty marks left: %d %v", dirty, err)
+	}
 }
 
 func TestLabelsSurviveAWorkerCrash(t *testing.T) {

@@ -36,6 +36,21 @@ func fakeBatch(rows ...[]int32) []labeler.Tensor { return labeler.BatchTensors(r
 
 func fakeProb(ids []int32, j int) float32 { return labelertest.FakeProb(ids, j) }
 
+// bigBatch is 64 rows of 512 tokens: far more than a pipe holds, so writing
+// it to a worker that does not read blocks.
+func bigBatch() []labeler.Tensor {
+	rows := make([][]int32, 64)
+	for i := range rows {
+		row := make([]int32, 512)
+		for j := range row {
+			row[j] = 1000
+		}
+		row[0], row[511] = labeler.ClsID, labeler.SepID
+		rows[i] = row
+	}
+	return fakeBatch(rows...)
+}
+
 func TestWorkerRunsBatchesConcurrently(t *testing.T) {
 	worker, err := labeler.StartWorker(t.Context(), fakeConfig(t, "ok"))
 	if err != nil {
@@ -170,6 +185,21 @@ func TestPoolKillsASilentWorker(t *testing.T) {
 	if pool.Restarts() == 0 {
 		t.Fatal("the silent worker was not replaced")
 	}
+	// A worker that stops reading its input blocks the write itself; the
+	// batch timeout still ends it.
+	deaf, err := labeler.NewPool(t.Context(), labeler.PoolConfig{Worker: fakeConfig(t, "deaf"), BatchTimeout: 200 * time.Millisecond,
+		Backoff: func(int) time.Duration { return time.Millisecond }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer deaf.Close()
+	started := time.Now()
+	if _, err := deaf.Run(t.Context(), bigBatch(), nil); !errors.Is(err, labeler.ErrWorkerExited) || !strings.Contains(err.Error(), "no reply within") {
+		t.Fatalf("worker that does not read: %v", err)
+	}
+	if took := time.Since(started); took > 10*time.Second {
+		t.Fatalf("a blocked write held the batch for %s", took)
+	}
 }
 
 func TestWorkerStopsWithItsContext(t *testing.T) {
@@ -193,5 +223,32 @@ func TestWorkerStopsWithItsContext(t *testing.T) {
 	}
 	if took := time.Since(started); took > 3*time.Second {
 		t.Fatalf("close took %s", took)
+	}
+	// A stop also ends a write blocked on a worker that does not read, and
+	// Close then returns rather than blocking on its own quit frame.
+	deaf, err := labeler.StartWorker(t.Context(), fakeConfig(t, "deaf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel = context.WithCancel(t.Context())
+	go func() {
+		_, err := deaf.Run(ctx, bigBatch(), nil)
+		errs <- err
+	}()
+	time.AfterFunc(100*time.Millisecond, cancel)
+	select {
+	case err := <-errs:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled blocked write: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a cancelled run stayed blocked writing to a worker that does not read")
+	}
+	started = time.Now()
+	if err := deaf.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(started); took > 10*time.Second {
+		t.Fatalf("close of a worker that does not read took %s", took)
 	}
 }

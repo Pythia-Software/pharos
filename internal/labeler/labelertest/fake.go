@@ -52,7 +52,8 @@ func fakeLabels(model string) int {
 // "ok"; "crash-after:N" exits after N results (counted in the file named by
 // FakeCountEnv, so a restarted worker carries on counting);
 // "crash-on-id:K" exits on any batch holding token K; "refuse" fails the
-// hello; "slow" sleeps 200 ms per run.
+// hello; "slow" sleeps 200 ms per run; "deaf" answers the hello and never
+// reads its input again, so a large frame fills the pipe.
 func FakeWorker(mode string) int {
 	reader := labeler.NewFrameReader(os.Stdin)
 	var writeMu sync.Mutex
@@ -79,6 +80,10 @@ func FakeWorker(mode string) int {
 	ready := labeler.Ready{Protocol: labeler.ProtocolVersion, Worker: labeler.WorkerInfo{Name: "fake", Version: "1", Runtime: "none"}}
 	ready.Limits.MaxBatch, ready.Limits.MaxSeq = 64, 512
 	writeJSON(labeler.FrameReady, ready)
+	if mode == "deaf" {
+		time.Sleep(time.Hour) // until killed
+		return 0
+	}
 	crashAfter, crashOn := -1, int32(-1)
 	if value, ok := strings.CutPrefix(mode, "crash-after:"); ok {
 		crashAfter, _ = strconv.Atoi(value)
