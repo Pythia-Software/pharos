@@ -52,8 +52,31 @@ The import is one transaction. It keeps an event only when its message exists wi
 (SHA-256), its ranges fall on UTF-8 boundaries of that text, and its kind is one the product reports; it reports
 what it skipped. Importing a message again replaces its events.
 
+## Candidates and framing in Go
+
+`agent_event_candidates.go` is the first half of running the model inside Pharos, framing contract
+`jayhawk-window-v1`. The model's directory carries the contract (`FRAMING.md`), the Python oracle (`reference.py`) and
+an invented-string fixture, copied here as `testdata/agent-event-parity.json`:
+
+- `agentEventSentences`: a message's sentences, cut as `labeling prepare` cut the study's (`sentences-v1` over the
+  target pieces, secrets and unrecognized harness blocks left out).
+- `agentEventCandidates`: sentences outside fenced code with a cue for a product kind. The lexicon
+  (`agent_event_lexicon.json`, `jayhawk-lexicon-2`) is the model's `lexicon.json`. Cues are Python patterns with
+  Unicode `\w`, `\d` and `\b`; Go's are ASCII, so matching runs on a copy of the normalized sentence where non-ASCII
+  digits become `D` and other non-ASCII letters and numbers `X` (cues are lower-case ASCII, which the test checks).
+  A cue's pattern runs only when the sentence has one of the literals every match must contain.
+- `agentEventLines`: the header and window lines the verifier reads, before tokens.
+
+`TestAgentEventCandidatesMatchReference` and `TestAgentEventLinesMatchReference` check normalization, every cue's
+compiled pattern, matches, fences, clipping and lines against the fixture exactly. On 4,000 of the study's messages
+(about 104,000 sentences, checked locally and not kept), sentences, clips and all 84,636 candidates matched the
+Python. Token ids, the budget and padding, also in the fixture, wait for the labeler's tokenizer.
+
 ## Next
 
 The model is to run on the local-labeler runtime (`docs/local-labeler.md`) as a second model beside the message
 labeler, with its own input contract (a `segment` input marks each window sentence's tokens), its own pass and the
-same tables. Risky actions are left to the tool-call history, where the actions themselves are recorded.
+same tables. Its int8 export agrees with fp32 on 99.9% of decisions at the same F1, and a row's outputs are the same
+alone and in any batch padded to a multiple of 8. Scoring is the cost: about 18 candidates a second on four CPU
+threads, and the study's October (100,000 agent messages, 524,000 candidates) would take about eight hours, some
+seventeen minutes a day. Risky actions are left to the tool-call history, where the actions themselves are recorded.
