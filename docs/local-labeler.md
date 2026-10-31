@@ -8,9 +8,10 @@ in [library labeling](library-labeling.md) (taxonomy `candidate-0.3`; the
 research is in [labeler-research/](labeler-research/README.md), the decision
 in [shipping-encoder.md](labeler-research/shipping-encoder.md)).
 
-**Status: prototype, off by default.** Labels are stored in the catalog and
-shown by `pharos labels status` and `pharos labels explain`. No page, query
-table or MCP tool reads them yet.
+**Status: prototype, off by default.** Labels are stored in the catalog,
+shown by `pharos labels status` and `pharos labels explain`, and highlighted
+in the conversation reader when its **Labels** toggle is on
+([In the reader](#in-the-reader)). No query table or MCP tool reads them yet.
 
 ## Turning it on
 
@@ -255,7 +256,41 @@ run` apart. A second run reports that labeling is already running.
   time. A larger backlog (the first run on a library) continues as a
   background `analysis.labels` run (variant `backlog`) when this Mac is
   plugged in ([Scheduling and power](#scheduling-and-power)).
-- No page read starts labeling. Pages read whatever ledger exists (none yet).
+- No page read starts labeling. Pages read whatever ledger exists.
+
+## In the reader
+
+A conversation whose messages have labels gets a **Labels** toggle beside
+Show (`transcriptLabelsControl` in `ui.py`):
+
+- **On**, each labeled message's text is highlighted in its family's hue:
+  Report, Control, Deliberation, Input, Feedback, Request, Frame, Difficulty
+  (`LABEL_FAMILIES` in `reader-model.js`, the reference categorical palette's
+  eight hues in that order, stepped for each theme). A message labeled only at
+  a root (asks or steers, responds or reports) is grey. The family is that
+  of the message's likeliest specific label; a legend lists the families the
+  conversation uses.
+- **What is highlighted** is the text the labels describe: a person's typed
+  pieces when authorship finds them, otherwise the whole message
+  (`labelMask`). Pasted or quoted context in a typed message stays plain.
+- **Hovering** highlighted text shows the item's segment in words (typed
+  text, agent reply…) and its most specific labels, each with its family,
+  the model's probability and the taxonomy's definition (`messageLabelView`).
+- **The setting** is view state, `reader_labels` in the URL, so a copied link
+  keeps it; the last choice is saved as the fallback for links without it.
+  The toggle only shows or hides the highlight; nothing re-renders.
+- A conversation with a dirty mark, or never built, says "Still labeling
+  this conversation" or "Not labeled yet" (the toggle is disabled until it
+  has labels).
+- **Only prose messages** are highlighted. Thinking and delegations render as
+  activity rows and are labeled but not shown yet; shared exports carry no
+  labels.
+
+`WorkConversation` attaches them (`messageLabelsAttacher` in `labels.go`):
+each message's `labels` (`segment`, `ids` in the model's order, `probs` for
+those ids), and the conversation's `labels` (`labeled`, `pending`, and the
+taxonomy rows its labels name). It only reads, and attaches nothing to a
+catalog without a ledger.
 
 ## Scheduling and power
 
@@ -316,10 +351,16 @@ CREATE TABLE message_labels (
   labeled_at TEXT NOT NULL);
 CREATE TABLE message_labels_conversations (conversation_id TEXT PRIMARY KEY, structure TEXT NOT NULL, units INTEGER NOT NULL, built_at TEXT NOT NULL);
 CREATE TABLE message_labels_dirty (conversation_id TEXT PRIMARY KEY, token TEXT NOT NULL);
+CREATE TABLE message_labels_models (model TEXT PRIMARY KEY, labels_json TEXT NOT NULL); -- each model's label order
 ```
 
+A row's `labels` bits mean nothing without its model's label order, so each
+run records the order under the model's identity before it writes labels;
+readers decode every row with the order of the model that wrote it.
+
 The first labels run creates these tables and triggers (`labels_schema_version`
-1 in `meta`). There is no catalog schema version bump: the tables are
+3 in `meta`; a run on an older version adds what is missing and replaces the
+triggers). There is no catalog schema version bump: the tables are
 derived, older builds ignore them (and still mark conversations dirty through
 the triggers), and every row records the inputs it was made from.
 
@@ -701,9 +742,10 @@ every output, as LAPWING did.
 |---|---|
 | Protocol, model loading, batching, worker client and pool (a fake worker in the test binary: crashes, restarts, malformed requests, stop) | `go test ./internal/labeler/...` |
 | Tokenizer and framing against the 187 fixture cases | `go test -run 'Tokenizer\|Frame' ./internal/labeler` |
-| Item equivalence with prepare; the segment rule; the ledger (backfill, incremental runs, healing, limit, one-at-a-time, worker crash, stop and resume, the chain with the setting on and off) | `go test -vet=off -run 'TestLabels\|TestLabelingSegment' ./internal/archive` |
+| Item equivalence with prepare; the segment rule; the ledger (backfill, incremental runs, healing, limit, one-at-a-time, worker crash, stop and resume, the chain with the setting on and off, what the reader receives) | `go test -vet=off -run 'TestLabels\|TestLabelingSegment' ./internal/archive` |
 | The ONNX Runtime worker's protocol loop (a fake session) | `go test ./cmd/pharos-labeler-ort` |
 | Downloads (a local HTTP server: verify, unpack, resume, refuse a mismatch or an escaping archive, one per Mac, waiting, the broker's operation) and power (budget, backlog waits on battery) | `go test -vet=off -run 'TestLabelsAsset\|TestLabelsFetch\|TestLabelsWait\|TestBrokerFetches\|TestLabelsForPower\|TestLabelsBacklog' ./internal/archive` |
+| The reader's label view, highlight mask and marks | `npm --prefix web test -- reader/markdown` |
 | Packaging the release asset | `python3 -m unittest discover -s tools -p 'test_package_labeler_model.py'` |
 | Fixture parity with the real model (skipped without the variables) | `PHAROS_LABELER_MODEL_DIR=… PHAROS_LABELER_WORKER=build/pharos-labeler-ort PHAROS_ORT_LIBRARY=build/onnxruntime-1.31.1/lib/libonnxruntime.dylib go test -run 'ModelParity\|ORT' ./internal/labeler ./cmd/pharos-labeler-ort` (any model directory: it uses the directory's own `parity-fixture.json`, so it checks a pooling model's spans and inputs too) |
 
@@ -733,6 +775,10 @@ every output, as LAPWING did.
   which nothing removes yet (about 160 MB unpacked).
 - **Warm workers last `labels_idle_seconds`.** A run after that pays the
   worker's start-up again (about 0.5 s: process, 152 MB model, its SHA-256).
-- **Not yet on any page, query table or MCP tool**, and not in the freshness
+- **Only the conversation reader shows labels**: no query table or MCP tool
+  reads them yet, and the reader leaves thinking and delegations plain. Hues
+  are told apart by the legend and hover as well as colour, but past three
+  families on screen some pairs are hard to separate for colour-blind
+  readers. Labels are not in the freshness
   ledger (`an.labels` has no row in `Catalog.freshness`); `pharos labels
   status` reports it.

@@ -42,7 +42,7 @@ var labelsContract = strings.Join([]string{labelrt.FramingContract, labelingUnit
 // labels chunks separately too).
 const labelsMergeVersion = "chunk-union-v1"
 
-const labelsSchemaVersion = "2"
+const labelsSchemaVersion = "3"
 
 // labelsSchemaDDL is created by the first labels run, not when a catalog
 // opens: a library that never enables labeling has none of it. Older builds
@@ -73,6 +73,10 @@ CREATE TABLE IF NOT EXISTS message_labels_conversations (
 CREATE TABLE IF NOT EXISTS message_labels_dirty (
   conversation_id TEXT PRIMARY KEY,
   token TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS message_labels_models (
+  model TEXT PRIMARY KEY,
+  labels_json TEXT NOT NULL
 );
 `
 
@@ -136,7 +140,7 @@ func labelsDirtyTriggers() []string {
 
 // ensureLabelsSchema creates the ledger's tables and triggers once, and
 // replaces the triggers when labelsSchemaVersion changes (version 2 marks
-// only real changes).
+// only real changes; version 3 adds each model's label order).
 func (c *Catalog) ensureLabelsSchema(ctx context.Context) error {
 	if version, err := c.metaValue(ctx, "labels_schema_version"); err == nil && version == labelsSchemaVersion {
 		return nil
@@ -442,6 +446,17 @@ func (c *Catalog) RunLabels(ctx context.Context, settings LabelerSettings, opts 
 	_, authorship, err := c.authorshipGenerations()
 	if err != nil {
 		return stats, err
+	}
+	if !opts.DryRun {
+		// A row's labels are bits in its model's label order; readers decode
+		// them with the order recorded here (messageLabelsAttacher).
+		order, _ := json.Marshal(model.Manifest.Labels.Order)
+		if err := c.writeTransaction(ctx, "record the labels model", func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `INSERT INTO message_labels_models(model,labels_json) VALUES(?,?) ON CONFLICT(model) DO NOTHING`, identity, string(order))
+			return err
+		}); err != nil {
+			return stats, err
+		}
 	}
 	builder, err := newLabelsItemBuilder(ctx, c.DB)
 	if err != nil {
@@ -1351,4 +1366,84 @@ func (c *Catalog) labelsReusers(ctx context.Context) (map[string][]string, error
 		reusers[source] = append(reusers[source], firstString(row["user"]))
 	}
 	return reusers, nil
+}
+
+// messageLabelsAttacher adds a labeled message's labels to its reader row:
+// its segment, its closed label set in the model's order, and each label's
+// probability. summary describes the conversation: whether labeling still has
+// work there, and the taxonomy rows its labels name, so the reader can show
+// names and definitions. Without a ledger it attaches nothing and summary is
+// nil; it only reads, so a page never starts labeling.
+func (c *Catalog) messageLabelsAttacher(conversationID any) (attach func(map[string]any), summary func() (map[string]any, error), err error) {
+	attach, summary = func(map[string]any) {}, func() (map[string]any, error) { return nil, nil }
+	var tables int
+	if err := c.reader().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='message_labels_models'`).Scan(&tables); err != nil || tables == 0 {
+		return attach, summary, err
+	}
+	models, err := queryMaps(c.reader(), `SELECT model,labels_json FROM message_labels_models`)
+	if err != nil {
+		return attach, summary, err
+	}
+	orders := map[string][]string{}
+	for _, row := range models {
+		var order []string
+		if json.Unmarshal([]byte(firstString(row["labels_json"])), &order) == nil {
+			orders[firstString(row["model"])] = order
+		}
+	}
+	rows, err := queryMaps(c.reader(), `SELECT message_id,segment,labels,probs,model FROM message_labels WHERE conversation_id=?`, conversationID)
+	if err != nil {
+		return attach, summary, err
+	}
+	byID := map[string]map[string]any{}
+	named := map[string]bool{}
+	for _, row := range rows {
+		order := orders[firstString(row["model"])]
+		// queryMaps reads a BLOB as a string.
+		raw, _ := row["probs"].([]byte)
+		if text, ok := row["probs"].(string); ok {
+			raw = []byte(text)
+		}
+		probs, mask := decodeLabelProbs(raw), uint64(integer(row["labels"]))
+		ids, chances := []string{}, map[string]float64{}
+		for j, id := range order {
+			if j < 64 && mask&(1<<j) != 0 {
+				ids = append(ids, id)
+				named[id] = true
+				if j < len(probs) {
+					chances[id] = math.Round(float64(probs[j])*1000) / 1000
+				}
+			}
+		}
+		if len(order) > 0 {
+			byID[firstString(row["message_id"])] = map[string]any{"segment": row["segment"], "ids": ids, "probs": chances}
+		}
+	}
+	attach = func(message map[string]any) {
+		if labels := byID[firstString(message["id"])]; labels != nil {
+			message["labels"] = labels
+		}
+	}
+	summary = func() (map[string]any, error) {
+		var pending bool
+		if err := c.reader().QueryRow(`SELECT EXISTS(SELECT 1 FROM message_labels_dirty WHERE conversation_id=?)
+			OR NOT EXISTS(SELECT 1 FROM message_labels_conversations WHERE conversation_id=?)`, conversationID, conversationID).Scan(&pending); err != nil {
+			return nil, err
+		}
+		if len(byID) == 0 && !pending {
+			return nil, nil
+		}
+		taxonomy, err := labelingTaxonomyRows()
+		if err != nil {
+			return nil, err
+		}
+		shown := []map[string]any{}
+		for _, row := range taxonomy {
+			if named[row.ID] {
+				shown = append(shown, map[string]any{"id": row.ID, "name": row.Name, "definition": row.Definition})
+			}
+		}
+		return map[string]any{"labeled": len(byID), "pending": pending, "taxonomy": shown}, nil
+	}
+	return attach, summary, nil
 }

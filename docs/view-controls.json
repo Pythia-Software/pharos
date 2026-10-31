@@ -164,6 +164,10 @@
       "field": "reader_filter_level"
     },
     {
+      "file": "internal/archive/assets/ui.py",
+      "field": "reader_labels"
+    },
+    {
       "file": "web/src/conversation-search.tsx",
       "field": "reader_order"
     },
@@ -3521,6 +3525,15 @@
       "control": "'button', '', label",
       "contract": "reader",
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
+    },
+    {
+      "key": "a240ddf105d4c2db:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "transcriptLabelsControl",
+      "tag": "button",
+      "control": "'button', 'transcript-labels-toggle', 'Labels'",
+      "contract": "reader",
+      "reason": "The Labels toggle writes reader_labels through the view contract; its saved preference is only the fallback when a link carries none."
     },
     {
       "key": "0e18c887173fcc9b:0",

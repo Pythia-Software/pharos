@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -122,6 +123,40 @@ func TestLabelsLedgerLabelsEveryUnitOnceAndThenOnlyChanges(t *testing.T) {
 	if len(decoded) != 4 || (decoded[1] >= 0.5) != (mask&2 != 0) || mask&2 != 0 && mask&1 == 0 {
 		t.Fatalf("m-a1: mask %b probs %v", mask, decoded)
 	}
+	// The reader gets each message's stored labels, named in the order of
+	// the model that wrote them, and the taxonomy rows naming them.
+	model, err := labelrt.LoadModel(settings.ModelDir, "int8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	readerLabels := func(conversation, workspace, message string) (map[string]any, map[string]any) {
+		t.Helper()
+		page, err := catalog.WorkConversation(workspace, conversation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		summary, _ := page["labels"].(map[string]any)
+		for _, row := range page["messages"].([]map[string]any) {
+			if row["id"] == message {
+				labels, _ := row["labels"].(map[string]any)
+				return labels, summary
+			}
+		}
+		return nil, summary
+	}
+	shown, summary := readerLabels("c-root", "ws-main", "m-a1")
+	named := map[string]bool{}
+	for _, row := range summary["taxonomy"].([]map[string]any) {
+		named[row["id"].(string)] = row["name"] != ""
+	}
+	if shown == nil || !slices.Equal(shown["ids"].([]string), model.LabelNames(uint64(mask))) || summary["pending"] != false {
+		t.Fatalf("reader labels %v, summary %v", shown, summary)
+	}
+	for j, id := range shown["ids"].([]string) {
+		if p, ok := shown["probs"].(map[string]float64)[id]; !named[id] || !ok || math.Abs(p-float64(decoded[slices.Index(model.Manifest.Labels.Order, id)])) > 0.001 {
+			t.Fatalf("label %d %s: probability %v, taxonomy %v", j, id, shown["probs"], summary)
+		}
+	}
 
 	// Nothing changed: nothing is rebuilt or labeled.
 	again, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{})
@@ -133,6 +168,9 @@ func TestLabelsLedgerLabelsEveryUnitOnceAndThenOnlyChanges(t *testing.T) {
 	// c-late, which re-sends c-other's messages, and only the new message is
 	// labeled.
 	execTx(t, catalog.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('m-o8','c-other','m-o8','assistant','message','All checks pass now.','hash-m-o8','2026-09-03T13:00:00.000Z',999)`)
+	if _, summary := readerLabels("c-other", "ws-other", "m-o8"); summary["pending"] != true {
+		t.Fatalf("a changed conversation reads as labeled: %v", summary)
+	}
 	small, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{})
 	if err != nil || small.ConversationsBuilt != 2 || small.MessagesLabeled != 1 || small.MessagesUnchanged == 0 {
 		t.Fatalf("incremental run: %+v %v", small, err)

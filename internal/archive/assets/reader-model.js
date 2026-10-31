@@ -1,7 +1,7 @@
 // The conversation reader's model, without the DOM: message bodies, normalized
 // events, token accounting and context samples, tool calls and their results,
 // turns, file paths, the Show filter's categories, Find, harness XML blocks,
-// message summaries, and Markdown parsing.
+// message summaries, local labels, and Markdown parsing.
 // It is a classic script whose top-level declarations are globals: ui.py loads
 // it before its inline script, which renders with them, and a shared export
 // inlines it (sharedPage in share.go). Node tests load it with vm
@@ -434,11 +434,35 @@ function humanWritingMask(message,text=displayText(message)){
   return result.join('');
 }
 function hasHumanWriting(message){return humanWritingMask(message).includes('1')}
+
+// Local labels (labels.go, messageLabelsAttacher): a message's closed label
+// set, every label with its ancestors. The reader colors a message by its
+// family, a root's child, taken from its likeliest specific label; a message
+// with only a root label has none. Hues follow this fixed order.
+const LABEL_FAMILIES=[['C.report','Report'],['P.control','Control'],['C.deliberation','Deliberation'],['C.input','Input'],['C.feedback','Feedback'],['P.request','Request'],['P.frame','Frame'],['C.difficulty','Difficulty']];
+// The taxonomy's roots are role names; a message labeled only at a root says just this.
+const LABEL_ROOTS={P:'Asks or steers',C:'Responds or reports'};
+const LABEL_SEGMENTS={'H-typed':'Typed text','H-typed+ctx':'Typed text with quoted context','H-template':'Template or saved prompt','H-resent':'Re-sent text','H-feedback':'UI feedback','H-other':'Human message','AIUR':'Agent text sent as a user message','AR':'Agent reply','DEL':'Delegation','TH':'Thinking'};
+function labelFamily(id){const family=String(id).split('.').slice(0,2).join('.');return LABEL_FAMILIES.some(([key])=>key===family)?family:''}
+function messageLabelView(message,taxonomy=[]){
+  const ids=message?.labels?.ids;if(!Array.isArray(ids)||!ids.length)return null;
+  const rows=taxonomy instanceof Map?taxonomy:new Map((taxonomy||[]).map(row=>[row.id,row])),probs=message.labels.probs||{};
+  const labels=ids.filter(id=>!ids.some(other=>other.startsWith(id+'.'))).map(id=>{const family=labelFamily(id),familyName=LABEL_FAMILIES.find(([key])=>key===family)?.[1]||'',name=LABEL_ROOTS[id]||rows.get(id)?.name||id;
+    return{id,name,family,familyName,title:familyName&&id!==family&&!name.toLowerCase().startsWith(familyName.toLowerCase())?`${familyName} · ${name}`:name,definition:rows.get(id)?.definition||'',prob:typeof probs[id]==='number'?probs[id]:null}})
+    .sort((a,b)=>(b.prob??0)-(a.prob??0)||a.id.localeCompare(b.id));
+  const segment=message.labels.segment||'';
+  return{family:labels.find(label=>label.family)?.family||'',segment,segmentName:LABEL_SEGMENTS[segment]||segment,labels};
+}
+// The text a message's labels describe: a person's typed pieces when the
+// classification finds them, otherwise all of it. Typed text stays '1'
+// (human-written); the rest is '2'.
+function labelMask(message,text,mask=humanWritingMask(message,text)){return message?.labels?.ids?.length&&!mask.includes('1')?'2'.repeat(text.length):mask}
+const MARK_CLASSES={'1':'human-written','2':'labeled-text'};
 function markdownText(text,mask=''){
-  if(!mask.includes('1'))return [text];
+  if(!/[^0]/.test(mask))return [text];
   const result=[];let start=0;
-  while(start<text.length){const typed=mask[start]==='1';let end=start+1;while(end<text.length&&(mask[end]==='1')===typed)end++;
-    const part=text.slice(start,end);result.push(typed?markdownElement('mark','human-written',part):part);start=end;
+  while(start<text.length){const flag=mask[start]||'0';let end=start+1;while(end<text.length&&(mask[end]||'0')===flag)end++;
+    const part=text.slice(start,end);result.push(MARK_CLASSES[flag]?markdownElement('mark',MARK_CLASSES[flag],part):part);start=end;
   }return result;
 }
 
