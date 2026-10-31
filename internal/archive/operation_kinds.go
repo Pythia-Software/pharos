@@ -204,6 +204,8 @@ var operationKinds = []operationKind{
 		OnEject: "Not stoppable. The broker gives up after 2 min and SIGTERMs the child (§10, G2).", Latency: "none", Journal: journalAlways, Priority: priorityForeground, Broker: true},
 	{Kind: "library.release", Label: "Release the library", Verb: "Releasing the library", Holds: "D:w", Affects: "—",
 		OnEject: "Is the stop. Fails after 7 s with \"Pharos is finishing a write\".", Journal: journalAlways, Priority: priorityForeground},
+	{Kind: "labels.fetch", Label: "Download the labeling model", Verb: "Downloading the labeling model", Holds: "—", Affects: "—",
+		OnEject: "Stops; it touches no library, and the next attempt resumes the download.", Latency: "record", Journal: journalAlways, Priority: priorityBackground, Broker: true},
 	{Kind: "app.update", Label: "Update Pharos", Verb: "Updating Pharos", Holds: "update-lock:w", Affects: "—",
 		OnEject: "Native; bridged to the header ring as today.", Journal: journalNever, Priority: priorityBackground},
 }

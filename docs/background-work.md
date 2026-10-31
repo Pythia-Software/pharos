@@ -472,6 +472,7 @@ Notes:
 |---|---|---|---|---|---|---|---|---|---|---|
 | `service.start` | Open the library · Opening the library | user (select), startup, respawn | brk | M:w D:w (`M` today, for up to 2 min) | — | — | Not stoppable. The broker gives up after 2 min and SIGTERMs the child (§10, G2). | none | always (broker registry) | fg |
 | `library.release` | Release the library · Releasing the library | user (eject, quit, switch through the API), device (volume release), signal (SIGTERM/SIGINT), parent-exited, error | svc, brk | D:w | — | — | Is the stop. Fails after 7 s with "Pharos is finishing a write". | — | always | fg |
+| `labels.fetch` | Download the labeling model · Downloading the labeling model | startup (a library with `labels_enabled` opens on a Mac without the model or ONNX Runtime; retried 15 min after a failure), cli (`pharos labels fetch`) | brk, cli | — (network and this Mac's support directory only) | — | — | Stops; it touches no library, and the next attempt resumes the download. | record | always (broker registry) | bg |
 | `app.update` | Update Pharos · Updating Pharos | schedule, user (Sparkle) | app | update-lock:w (native) | — | — | Native; bridged to the header ring as today. | — | never (Sparkle keeps its own) | bg |
 
 Not kinds: the broker's 5 s maintain loop (a daemon whose respawns are
@@ -1649,9 +1650,10 @@ the same schedule from one declaration (`backgroundItems`):
   power source allows: plugged in, the full one, and a larger backlog
   continues as an `analysis.labels` `backlog` run that stops if this Mac
   goes onto battery; on battery, one worker of two threads and small
-  batches, and the backlog waits. A stage that leaves a backlog stays
-  pending (`sync_deferred` is not
-  completed), so a later pass continues it. With labels off there is no item, and indexing's
+  batches, and the backlog waits. A stage that leaves a backlog, or waits
+  for the model to download, stays pending (`sync_deferred` is not
+  completed), so a later pass continues it. The item's line says when it
+  waits for the download. With labels off there is no item, and indexing's
   mark is completed at once.
 - **Preserve originals** on a Mac with no enabled sources captures nothing
   but still indexes what other Macs captured.

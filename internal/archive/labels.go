@@ -410,8 +410,12 @@ func (c *Catalog) RunLabels(ctx context.Context, settings LabelerSettings, opts 
 	stats := &LabelsRunStats{}
 	defer func() { stats.Total = time.Since(started) }()
 	progress := labelingProgress(opts.Progress, started)
-	if settings.ModelDir == "" || settings.Worker == "" && !opts.DryRun {
-		return stats, fmt.Errorf("%w: set labels_model_dir and labels_worker (or PHAROS_LABELS_MODEL_DIR and PHAROS_LABELS_WORKER)", labelrt.ErrModelUnavailable)
+	settings = settings.withAssets()
+	if settings.ModelDir == "" {
+		return stats, fmt.Errorf("%w: the model is %s; run pharos labels fetch, or set labels_model_dir (PHAROS_LABELS_MODEL_DIR)", labelrt.ErrModelUnavailable, labelsAssetStatus(labelsAssets.Model))
+	}
+	if settings.Worker == "" && !opts.DryRun {
+		return stats, fmt.Errorf("%w: set labels_worker (or PHAROS_LABELS_WORKER)", labelrt.ErrModelUnavailable)
 	}
 	// One run at a time: in this process, and across processes (the
 	// service and pharos labels run) through a lease the OS releases if the
@@ -1222,11 +1226,16 @@ var errStageContinues = errors.New("stage continues later")
 var labelsPowerCheck = time.Minute
 
 // chainLabels is the analysis chain's labels stage (background item
-// "labels"). It runs within the budget this power allows (labelsForPower): plugged in, a
+// "labels"). It waits while the model or runtime is still downloading. It
+// runs within the budget this power allows (labelsForPower): plugged in, a
 // backlog past the chain's share continues as its own analysis.labels run,
 // which stops if this Mac goes onto battery; on battery the backlog waits,
 // and the stage stays pending for the next pass.
 func (s *Server) chainLabels(ctx context.Context, settings LabelerSettings) error {
+	settings = settings.withAssets()
+	if len(settings.missingAssets()) > 0 {
+		return errStageContinues
+	}
 	settings, bulk := labelsForPower(settings, s.cachedPower(ctx))
 	stats, err := s.Catalog.RunLabels(ctx, settings, LabelsRunOptions{Limit: labelsChainLimit})
 	switch {

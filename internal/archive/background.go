@@ -450,8 +450,10 @@ type backgroundInputs struct {
 	requested                    map[string]bool
 	// power is this Mac's power source, for the battery policy.
 	power powerState
-	// labels is whether labels_enabled is on.
-	labels bool
+	// labels is whether labels_enabled is on; labelsWaiting why labeling
+	// waits for a download.
+	labels        bool
+	labelsWaiting string
 }
 
 func (c *Catalog) readBackgroundInputs(ctx context.Context) backgroundInputs {
@@ -762,7 +764,9 @@ func (s *Server) backgroundInputsFor(ctx context.Context, requested map[string]b
 	in.backupDestination, in.lastBackup = s.cachedBackup(config)
 	in.requested = requested
 	in.power = s.cachedPower(ctx)
-	in.labels = config.Labels.Enabled
+	if config.Labels.Enabled {
+		in.labels, in.labelsWaiting = true, config.Labels.labelsWaiting()
+	}
 	return in
 }
 

@@ -65,6 +65,8 @@ func labelsTestSettings(t *testing.T, mode string, manifestFields ...map[string]
 	}
 	t.Setenv(labelertest.FakeWorkerEnv, mode)
 	t.Setenv(labelertest.FakeCountEnv, filepath.Join(t.TempDir(), "count"))
+	// The fake worker loads no ONNX Runtime, so none is downloaded for it.
+	override(t, &labelsRuntimePinned, false)
 	return LabelerSettings{Enabled: true, ModelDir: dir, Variant: "int8", Worker: exe, Threads: 1, Workers: 1, BatchTokens: 4096, MaxBatch: 16, IdleSeconds: 60}
 }
 

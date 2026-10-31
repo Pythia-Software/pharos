@@ -20,6 +20,7 @@ import (
 const labelsUsage = `usage:
   pharos [--config PATH] labels run [--limit N] [--batch-tokens N] [--max-batch N] [--workers N] [--threads N] [--full] [--one-at-a-time] [--dry-run] [--json] [--export-items FILE [--export-text]]
   pharos [--config PATH] labels status [--json]
+  pharos [--config PATH] labels fetch
   pharos [--config PATH] labels explain MESSAGE_ID [--infer]`
 
 // labelsCLIOperation is the operation a labels command runs as: run writes
@@ -36,8 +37,13 @@ func runLabelsCLI(ctx context.Context, config Config, catalog *Catalog, op *Op, 
 	if len(args) == 0 {
 		return errors.New(labelsUsage)
 	}
-	settings := config.Labels
+	settings := config.Labels.withAssets()
 	switch args[0] {
+	case "fetch":
+		if len(args) != 1 {
+			return errors.New(labelsUsage)
+		}
+		return fetchLabelsCLI(ctx, settings, stdout)
 	case "run":
 		flags := flag.NewFlagSet("labels run", flag.ContinueOnError)
 		flags.SetOutput(stderr)
@@ -109,6 +115,9 @@ func runLabelsCLI(ctx context.Context, config Config, catalog *Catalog, op *Op, 
 			fmt.Fprintln(stdout, string(data))
 			return nil
 		}
+		if waiting, ok := status["waiting"].(string); ok {
+			fmt.Fprintf(stdout, "labeling is %s\n", waiting)
+		}
 		fmt.Fprintf(stdout, "enabled: %v\nmodel: %s\nledger: %s\nlabeled messages: %d of %d units in %d built conversations (of %d)\ndirty conversations: %d\nbuilt at: %s\n",
 			status["enabled"], status["model"], status["state"], status["labeled_messages"], status["units"], status["built_conversations"],
 			status["conversations"], status["dirty_conversations"], status["built_at"])
@@ -157,9 +166,12 @@ func (c *Catalog) ensureAuthorshipForLabels(ctx context.Context, stderr io.Write
 func (c *Catalog) LabelsStatus(ctx context.Context, settings LabelerSettings) (map[string]any, error) {
 	status := map[string]any{"enabled": settings.Enabled, "model_dir": settings.ModelDir, "worker": settings.Worker, "runtime": settings.Runtime,
 		"contract": labelsContract}
+	if waiting := settings.labelsWaiting(); waiting != "" {
+		status["waiting"] = waiting
+	}
 	identity := ""
 	if settings.ModelDir == "" {
-		status["model"] = "not configured (labels_model_dir or PHAROS_LABELS_MODEL_DIR)"
+		status["model"] = "not present: " + labelsAssetStatus(labelsAssets.Model) + " (or set labels_model_dir or PHAROS_LABELS_MODEL_DIR)"
 	} else if model, err := labelrt.LoadModel(settings.ModelDir, settings.Variant); err != nil {
 		status["model"] = err.Error()
 	} else {
@@ -342,4 +354,31 @@ func labelProbMap(model *labelrt.Model, probs []float32) map[string]float32 {
 		}
 	}
 	return named
+}
+
+// fetchLabelsCLI downloads what settings still need into this Mac's support
+// directory, printing progress; with nothing missing it says where each
+// asset is.
+func fetchLabelsCLI(ctx context.Context, settings LabelerSettings, stdout io.Writer) error {
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	missing := settings.missingAssets()
+	if len(missing) == 0 {
+		fmt.Fprintf(stdout, "model: %s\nruntime: %s\n", settings.ModelDir, defaultString(settings.Runtime, "bundled with the worker"))
+		return nil
+	}
+	last := time.Time{}
+	err := fetchLabelsAssets(ctx, missing, nil, func(asset labelsAsset, done, total int64) {
+		if time.Since(last) > time.Second || done == total {
+			last = time.Now()
+			fmt.Fprintf(stdout, "%s: %d of %d MB\n", asset.Name, done>>20, total>>20)
+		}
+	})
+	if err != nil {
+		return err
+	}
+	for _, asset := range missing {
+		fmt.Fprintf(stdout, "%s: %s\n", asset.Name, labelsAssetStatus(asset))
+	}
+	return nil
 }

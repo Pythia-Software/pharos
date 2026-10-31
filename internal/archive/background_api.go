@@ -367,6 +367,10 @@ func itemSub(item backgroundItem, in backgroundInputs) string {
 		return "Claude Code, Codex, Conductor and Antigravity"
 	case "other-sources":
 		return strings.Join(in.otherSources, ", ")
+	case "labels":
+		if in.labelsWaiting != "" {
+			return "Labeling is " + in.labelsWaiting
+		}
 	}
 	return item.Feeds
 }

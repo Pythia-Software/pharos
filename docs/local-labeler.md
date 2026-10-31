@@ -14,17 +14,19 @@ table or MCP tool reads them yet.
 
 ## Turning it on
 
-The model and the worker are not in the repository. For the prototype they
-are located by configuration (`archive.toml` or `library.toml`) or by the
-environment:
+The model's weights are not in the repository or the app: each Mac
+downloads them once, after install, into its own support directory
+([Model download](#model-download)). Configuration (`archive.toml` or
+`library.toml`) or the environment can point at a model directory, worker or
+runtime instead, and comes first:
 
 | Key | Environment | Meaning |
 |---|---|---|
-| `labels_enabled` | — | `true` runs labeling after each manual index (default `false`) |
-| `labels_model_dir` | `PHAROS_LABELS_MODEL_DIR` | the model directory (below) |
+| `labels_enabled` | — | `true` labels messages as the chain's last stage and in the Message labels background item, and downloads the model when it is missing (default `false`) |
+| `labels_model_dir` | `PHAROS_LABELS_MODEL_DIR` | the model directory (below); default the app bundle's, then the download |
 | `labels_variant` | — | `int8` (default) or `fp32` |
 | `labels_worker` | `PHAROS_LABELS_WORKER` | the worker executable; default `pharos-labeler-ort` beside `pharos` |
-| `labels_runtime` | `PHAROS_ORT_LIBRARY` | the ONNX Runtime library the worker loads |
+| `labels_runtime` | `PHAROS_ORT_LIBRARY` | the ONNX Runtime library the worker loads; default the one beside the worker, then the download |
 | `labels_threads` | — | intra-op threads per worker (default 4) |
 | `labels_workers` | — | worker processes (default 1) |
 | `labels_batch_tokens`, `labels_max_batch` | — | a batch's padded-token budget (default 16,384) and row limit (64) |
@@ -45,6 +47,7 @@ CGO_ENABLED=1 go build -o build/pharos-labeler-ort ./cmd/pharos-labeler-ort
 pharos [--config PATH] labels run [--limit N] [--batch-tokens N] [--max-batch N] [--workers N] [--threads N] [--full] [--one-at-a-time] [--dry-run] [--json]
 pharos [--config PATH] labels status [--json]
 pharos [--config PATH] labels explain MESSAGE_ID [--infer]
+pharos [--config PATH] labels fetch
 ```
 
 - **run** brings the ledger up to date and prints what it did. It first
@@ -60,7 +63,12 @@ pharos [--config PATH] labels explain MESSAGE_ID [--infer]
   batches and keeps what was stored. It runs as operation `analysis.labels`
   under a Terminal lease, like other writing commands. It runs even when
   `labels_enabled` is off, and says so.
-- **status** reads only: labeled messages by segment, conversations built
+- **fetch** downloads what this Mac still needs (the model, and ONNX
+  Runtime when the worker has none beside it), resuming a partial download,
+  and prints progress; with nothing missing it prints where each is.
+- **status** reads only: whether labeling waits for a download (not yet
+  downloaded, downloading with progress, or partly downloaded), labeled
+  messages by segment, conversations built
   and dirty, whether the ledger is current for this authorship generation,
   model and contract, and whether the model verifies. A catalog that never
   ran labels reads as never built; status creates nothing.
@@ -252,7 +260,7 @@ schedule rather than one of their own:
   Hourly work waits on battery.
 - Indexing marks it pending (`sync_deferred`), with the chain's other
   stages. A pass that labels everything completes it. A pass that leaves a
-  backlog keeps it pending, so a later
+  backlog, or waits for the model download, keeps it pending, so a later
   pass carries on.
 - **The budget comes from the power source** (`labelsForPower`, read as the
   schedule reads it, from `pmset` at most once a minute):
@@ -353,21 +361,76 @@ app bundle. Configuring another directory, such as `kestrel-68m`
 (`ids-attention-v1`), still works: the runtime serves both contracts.
 
 **Never commit weights.** The weights derive from this library's private
-conversations; the fixture's strings are invented. **For a release**:
-- publish the model directory as a release asset (or keep it on the
-  deployment Mac), and pin its manifest SHA-256 in the repository, as
-  `macos/sparkle.json` pins Sparkle;
-- `build-app.sh` fetches and verifies it into
-  `Contents/Resources/labeler/kestrel-68m-tpool/`, with the worker in
-  `Contents/MacOS/pharos-labeler-ort` and ONNX Runtime's library and license
-  in `Contents/Frameworks/` (fetched by `macos/fetch-onnxruntime.sh`, which
-  pins version 1.31.1, the version the Python reference ran with, by URL and
-  SHA-256);
-- the settings above then default to those paths (the worker beside
-  `pharos`, the model under `Resources/labeler`), and Settings shows the
-  labeler's state.
+conversations; the fixture's strings are invented. The app does not carry
+them either: see [Model download](#model-download).
 
 The model is never stored on the library drive.
+
+## Model download
+
+The build pins the assets it downloads in `internal/archive/labels/assets.json`
+(embedded in `pharos`):
+
+| Asset | Pinned | Where it comes from |
+|---|---|---|
+| `model` | name `kestrel-68m-tpool`, version `1`, SHA-256 and size of the archive | the Pharos release `labeler-kestrel-68m-tpool-1`, asset `kestrel-68m-tpool-1.tar.gz` (URL pattern `…/releases/download/labeler-{name}-{version}/{name}-{version}.tar.gz`) |
+| `onnxruntime` | `onnxruntime-osx-arm64` 1.31.1, SHA-256, size, and the library's path inside | Microsoft's ONNX Runtime release, as `macos/fetch-onnxruntime.sh` pins it; only needed when no `libonnxruntime.dylib` sits beside the worker |
+
+- **Where.** `<support>/labeler/<name>-<version>/`, where `<support>` is
+  this Mac's support directory (`~/Library/Application Support/Pharos`, or
+  `PHAROS_SUPPORT_DIR`): never a library drive, never the repository. Every
+  library on the Mac shares it.
+- **How.** `fetchLabelsAsset` downloads to `<name>-<version>.download`,
+  resuming a partial file with a range request (a server without ranges
+  starts again), refuses more bytes than pinned, checks the size and SHA-256,
+  unpacks into a new hidden directory (regular files, directories and links
+  that stay inside it; anything else fails), writes `.verified-<sha256>`,
+  and renames it into place. A reader sees all of it or none; a mismatch
+  deletes the download.
+- **Who.** Operation `labels.fetch` in the broker's registry: when a library
+  with `labels_enabled` opens on a Mac that lacks an asset, the broker
+  downloads it once, then asks every open library's service to run its
+  Message labels item now. A failed download is retried 15 min later and
+  on the next open; an interrupted one resumes. `pharos labels fetch` does
+  the same from Terminal. A lock in the support directory
+  (`labeler/.fetch.lock`) keeps it to one download per Mac.
+- **Until then** labeling waits: the stage keeps its work pending, `pharos
+  labels status` and the Message labels item say "waiting for the download"
+  with each asset's state (not yet downloaded, downloading with progress,
+  partly downloaded), and `pharos labels run` fails saying so.
+- **Precedence.** `labels_model_dir` / `labels_runtime` (or their
+  environment variables), then the app bundle (the worker in
+  `Contents/MacOS`, its runtime beside it, a model in
+  `Contents/Resources/labeler/kestrel-68m-tpool`), then the download.
+- `PHAROS_LABELS_MODEL_URL` fetches the model from another URL, such as a
+  staged asset before its release is published; the pinned SHA-256 and size
+  still apply.
+
+### Attaching the model to a release
+
+The model's release is separate from the app's and changes only with the
+model. To publish a new model version:
+
+1. Package the model directory:
+   `python3 tools/package_labeler_model.py MODEL_DIR --out build/labeler --version N --descriptor internal/archive/labels/assets.json`.
+   It writes `build/labeler/<name>-N.tar.gz` with the manifest, the int8
+   ONNX file and the tokenizer at its root, checks them against the
+   manifest, and pins the archive's SHA-256 and size. The archive is
+   deterministic: packaging the same directory again gives the same bytes.
+2. On the deployment Mac, create the GitHub release `labeler-<name>-N` on
+   `Pythia-Software/pharos` and attach that archive under its own name, for
+   example `gh release create labeler-<name>-N build/labeler/<name>-N.tar.gz --title "Labeler model <name> N" --notes "…"`.
+   Never attach it to an app release (Sparkle's feed reads those), and never
+   commit it.
+3. Commit the descriptor. Builds from then on download that version; Macs
+   that have an older one keep it until they label again with the new
+   build, which downloads the new version beside it (rows record the model,
+   so a switch relabels).
+
+The app release itself needs nothing new: `pharos` embeds the descriptor,
+and the worker ships in `Contents/MacOS/pharos-labeler-ort` with or without
+ONNX Runtime beside it. Bundling the runtime (`Contents/MacOS/libonnxruntime.dylib`
+and its license) saves the 35 MB download.
 
 ## Worker protocol `pharos-labeler/1`
 
@@ -628,6 +691,8 @@ every output, as LAPWING did.
 | Tokenizer and framing against the 187 fixture cases | `go test -run 'Tokenizer\|Frame' ./internal/labeler` |
 | Item equivalence with prepare; the segment rule; the ledger (backfill, incremental runs, healing, limit, one-at-a-time, worker crash, stop and resume, the chain with the setting on and off) | `go test -vet=off -run 'TestLabels\|TestLabelingSegment' ./internal/archive` |
 | The ONNX Runtime worker's protocol loop (a fake session) | `go test ./cmd/pharos-labeler-ort` |
+| Downloads (a local HTTP server: verify, unpack, resume, refuse a mismatch or an escaping archive, one per Mac, waiting, the broker's operation) and power (budget, backlog waits on battery) | `go test -vet=off -run 'TestLabelsAsset\|TestLabelsFetch\|TestLabelsWait\|TestBrokerFetches\|TestLabelsForPower\|TestLabelsBacklog' ./internal/archive` |
+| Packaging the release asset | `python3 -m unittest discover -s tools -p 'test_package_labeler_model.py'` |
 | Fixture parity with the real model (skipped without the variables) | `PHAROS_LABELER_MODEL_DIR=… PHAROS_LABELER_WORKER=build/pharos-labeler-ort PHAROS_ORT_LIBRARY=build/onnxruntime-1.31.1/lib/libonnxruntime.dylib go test -run 'ModelParity\|ORT' ./internal/labeler ./cmd/pharos-labeler-ort` (any model directory: it uses the directory's own `parity-fixture.json`, so it checks a pooling model's spans and inputs too) |
 
 ## Known limits
@@ -649,6 +714,12 @@ every output, as LAPWING did.
   never predicts `P.frame.criteria`. See the research for per-segment scores.
 - **Long messages** use the unvalidated `chunk-union-v1`; a message's
   `segment` column is its first chunk's.
+- **The model's release is not published yet.** The descriptor pins
+  `kestrel-68m-tpool-1.tar.gz` (142,017,459 bytes); until the release
+  `labeler-kestrel-68m-tpool-1` carries it, downloads fail with 404 and are
+  retried, and labeling waits.
+- **Old downloads stay.** A new model version downloads beside the old one,
+  which nothing removes yet (about 160 MB unpacked).
 - **Warm workers last `labels_idle_seconds`.** A run after that pays the
   worker's start-up again (about 0.5 s: process, 152 MB model, its SHA-256).
 - **Not yet on any page, query table or MCP tool**, and not in the freshness
