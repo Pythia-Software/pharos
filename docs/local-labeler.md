@@ -657,7 +657,8 @@ ledger and pass, uses the same pieces.
 
 **1. The model directory.** Each model has its own directory (in the app,
 `Contents/Resources/labeler/<model>/`) with a `manifest.json` that
-`labeler.LoadModel` verifies:
+`labeler.LoadFramedModel` verifies against the caller's `labeler.Framing`
+(`LoadModel` is the message labeler's, `KestrelFraming`):
 - the variant's ONNX file and `tokenizer.json`, with their SHA-256s;
 - `framing_contract` and `input_contract`, which this build must implement;
 - `inputs`: names for the contract's roles;
@@ -667,7 +668,8 @@ ledger and pass, uses the same pieces.
 - `pad_multiple` (or `padding.multiple`): a padding multiple beyond the
   contract's 8;
 - `memory_mb`: one worker's memory estimate (default 1,600);
-- labels, thresholds and so on, for a model that labels.
+- labels, thresholds and so on, for a model that labels (`Framing.Labels`;
+  the agent event verifier does not).
 
 The hello carries `max_seq` and the inputs. The worker must announce at
 least that `max_seq`, and batches never exceed a lower `max_batch` it
@@ -682,10 +684,11 @@ registered (`labeler.RegisterRole`) with:
   `NonEmptyRows` and `ContiguousRuns`, or written from scratch.
 
 `BatchInputs` and `ValidateRun` dispatch through the registry, so a new role
-(a `segment` role numbering sentences 1…K, values in `[0, 16]`, zero on
-padding, one contiguous run each) is one registration in the main process
-and in the worker, with no change to the protocol, the batcher or the
-workers' loops. The tensors stay int32 `[batch, seq]`. Register the role
+is one registration in the main process and in the worker, with no change
+to the protocol, the batcher or the workers' loops. The `segment` role
+(`ids-attention-pool-segments-v1`, the agent event verifier's) is built in:
+it numbers a framing's sentences 1…K from `Framed.Extra[SegmentSpans]`,
+values in `[0, 16]`, zero on padding, one contiguous run each. The tensors stay int32 `[batch, seq]`. Register the role
 and the input contract (`labeler.InputContracts`) in the PR that adds the
 model.
 

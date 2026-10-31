@@ -11,6 +11,8 @@ import (
 	"sync"
 	"unicode"
 	"unicode/utf8"
+
+	labelrt "github.com/gbdubs/pharos/internal/labeler"
 )
 
 // Agent event candidates and their text (framing contract
@@ -430,4 +432,55 @@ func agentEventLines(definitions map[string]string, kind, source string, sentenc
 		}
 	}
 	return header, lines, anchor - lo
+}
+
+// agentEventFraming is the verifier's framing contract, jayhawk-window-v1.
+var agentEventFraming = labelrt.Framing{Contract: "jayhawk-window-v1", MaxTokens: 768}
+
+// agentEventFrame is the verifier's input for a candidate: [CLS], the
+// header's tokens, the window lines that fit, [SEP]. Lines are tokenized
+// one by one and kept whole within maxSeq, the anchor first, then by
+// distance from it, the earlier line first; a line that does not fit is
+// left out and a shorter, farther one may still fit. The anchor is always
+// kept, cut to the budget when it alone exceeds it. Spans.Text is the
+// anchor's tokens (the pool role); Extra[labelrt.SegmentSpans] has each
+// window line's tokens, empty for a line left out (the segment role).
+func agentEventFrame(tok *labelrt.Tokenizer, definitions map[string]string, kind, source string, sentences []string, anchor, maxSeq int) labelrt.Framed {
+	header, lines, at := agentEventLines(definitions, kind, source, sentences, anchor)
+	headerIDs := tok.Encode(header)
+	lineIDs := make([][]int32, len(lines))
+	for k, line := range lines {
+		lineIDs[k] = tok.Encode(line)
+	}
+	budget := maxSeq - 2 - len(headerIDs)
+	keep := make([]bool, len(lines))
+	used := 0
+	order := []int{at}
+	for distance := 1; distance < len(lines); distance++ {
+		for _, k := range []int{at - distance, at + distance} {
+			if k >= 0 && k < len(lines) {
+				order = append(order, k)
+			}
+		}
+	}
+	for _, k := range order {
+		if used+len(lineIDs[k]) > budget {
+			if k != at {
+				continue
+			}
+			lineIDs[k] = lineIDs[k][:budget]
+		}
+		keep[k] = true
+		used += len(lineIDs[k])
+	}
+	ids := append(append(make([]int32, 0, 2+len(headerIDs)+used), labelrt.ClsID), headerIDs...)
+	segments := make([]labelrt.Span, len(lines))
+	for k, kept := range keep {
+		if kept {
+			segments[k] = labelrt.Span{Start: len(ids), End: len(ids) + len(lineIDs[k])}
+			ids = append(ids, lineIDs[k]...)
+		}
+	}
+	ids = append(ids, labelrt.SepID)
+	return labelrt.Framed{IDs: ids, Spans: labelrt.FrameSpans{Text: segments[at]}, Extra: map[string][]labelrt.Span{labelrt.SegmentSpans: segments}}
 }

@@ -67,6 +67,16 @@ var (
 				}
 			},
 			Validate: AllOf(ValuesIn(0, 1), ZeroWithoutAttention, NonEmptyRows)},
+		// segment: k+1 on the k-th of the framing's sentence spans.
+		RoleSegment: {
+			Fill: func(row Framed, values []int32) {
+				for k, span := range row.Extra[SegmentSpans] {
+					for col := span.Start; col < span.End; col++ {
+						values[col] = int32(k + 1)
+					}
+				}
+			},
+			Validate: AllOf(ValuesIn(0, MaxSegments), ZeroWithoutAttention, ContiguousRuns)},
 	}
 )
 
