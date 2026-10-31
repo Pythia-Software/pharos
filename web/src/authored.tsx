@@ -1,3 +1,4 @@
+import { useViewEntry } from "./view-state";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { createSetFilter, isWhereGroup, loadSchema, readSetFilter, type AggregationClause, type WhereTerm } from "@pythia-software/query-table-core";
@@ -194,12 +195,12 @@ const collapsedChars = 1800;
 function AuthoredMessageCard({ row }: { row: Row }) {
   const segments = segmentsOf(row);
   const length = segments.reduce((sum, segment) => sum + (segment.text.length > foldAt(segment) ? foldedChars(segment) : segment.text.length), 0);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useViewEntry("disclosures", `authored:message:${row.id}`, false);
   const collapsible = length > collapsedChars;
   const typed = Number(row.typed_words) || 0, other = Number(row.other_words) || 0;
   const sent = row.sent_at ? new Date(row.sent_at) : null;
   const meta = [sent ? sent.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "", row.repository_name, row.source_kind, row.provider, row.subagent ? "Sub-agent" : ""].filter(Boolean);
-  return <article className="authored-card">
+  return <article className="authored-card" data-pharos-target={`section:authored:message:${row.id}`}>
     <div className="authored-head">
       <div className="authored-summary">
         <button type="button" className="authored-title" onClick={() => window.pharosOpenDetail?.(String(row.work_id ?? row.workspace_id))}>{String(row.title ?? "Untitled work")}</button>
@@ -218,7 +219,7 @@ function AuthoredMessageCard({ row }: { row: Row }) {
       <AuthoredText segments={segments} />
     </div>
     {collapsible || row.text_truncated ? <div className="authored-more">
-      {collapsible ? <button type="button" onClick={() => setExpanded(value => !value)} aria-expanded={expanded}>{expanded ? "Collapse" : `Show the whole message (${(Number(row.words) || 0).toLocaleString()} words)`}</button> : null}
+      {collapsible ? <button type="button" data-view-field="disclosures" onClick={() => setExpanded(value => !value)} aria-expanded={expanded}>{expanded ? "Collapse" : `Show the whole message (${(Number(row.words) || 0).toLocaleString()} words)`}</button> : null}
       {row.text_truncated && (expanded || !collapsible) ? <span className="muted">Only the start of this message is shown. <button type="button" className="authored-link" onClick={() => openMessage(String(row.workspace_id), row.conversation_id, row.id)}>Read the rest in its conversation</button></span> : null}
     </div> : null}
   </article>;

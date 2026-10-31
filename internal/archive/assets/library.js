@@ -330,7 +330,6 @@
       ? `Step ${activity.forecast.current_step}/${activity.forecast.total_steps}` : 'Step';
     return {title, stepLabel, context: unique(context).join(' · '), caption: unique([count, volume, percent, rate]).join(' · '), details};
   }
-  const expandedActivities = new Set();
   function activityLine(activity, {showTitle = true} = {}) {
     const item = node('div', 'pharos-activity');
     item.dataset.key = `activity:${activity.id || `${activity.kind}:${activity.label}`}:${activity.started_at || ''}`;
@@ -357,7 +356,9 @@
     item.append(overallLabel, overallBar, stepLabel, stepBar);
     const details = node('details', 'pharos-sub pharos-activity-details');
     details.dataset.activity = item.dataset.key;
-    details.open = expandedActivities.has(details.dataset.activity);
+    details.dataset.viewKey = 'library:' + details.dataset.activity + ':details';
+    details.dataset.viewDefault = 'false';
+    details.open = window.pharosView?.read('disclosures', {})[details.dataset.viewKey] === true;
     const summary = node('summary');
     const elapsed = timing.elapsed;
     summary.append(node('span', '', elapsed == null ? '' : `${elapsed < 60 ? `${elapsed} sec` : `${Math.floor(elapsed / 60)} min`} elapsed`), node('span', 'pharos-details-label', 'Details'));
@@ -800,10 +801,11 @@
     return driveSpaceRequest;
   }
 
-  function openPanel() {
-    if (unified()) return window.pharosStatusPanel?.open();
+  function openPanel({fromURL = false} = {}) {
+    if (unified()) return window.pharosStatusPanel?.open({fromURL, focus: !fromURL});
     if (!ensureChip()) return;
-    if (panel) closePanel();
+    if (panel) return;
+    if (!fromURL) window.pharosView?.write('overlay', 'drive');
     panel = node('section', 'pharos-drive-panel');
     panel.id = 'pharosDrivePanel';
     panel.setAttribute('role', 'dialog');
@@ -815,7 +817,8 @@
     refreshDriveSpace();
   }
 
-  function closePanel() {
+  function closePanel({fromURL = false} = {}) {
+    if (panel && !fromURL && window.pharosView?.read('overlay', 'none') === 'drive') window.pharosView.write('overlay', 'none');
     panel?.remove();
     panel = null;
     if (ejectState?.phase !== 'ejecting') ejectState = null;
@@ -831,8 +834,6 @@
 
   function renderPanel() {
     if (!panel || unified()) return;
-    expandedActivities.clear();
-    for (const details of panel.querySelectorAll('details[data-activity][open]')) expandedActivities.add(details.dataset.activity);
     const content = node('div');
     const scrollTop = panel.scrollTop, scrollLeft = panel.scrollLeft;
     const commit = () => {
@@ -1288,7 +1289,7 @@
   // ---- Settings → Health and Backups
   const CHECK_TITLES = {encryption: 'Encryption', spotlight: 'Spotlight', filesystem: 'File system', location: 'Location', free_space: 'Free space', volume_pin: 'Volume pin', backup: 'Backup'};
   const STATUS_DOT = {ok: '', info: 'idle', unknown: 'idle', warning: 'warn', problem: 'bad'};
-  let backupDraft = null, backupError = null, backupBusy = false, driveHealthExpanded = true;
+  let backupDraft = null, backupError = null, backupBusy = false;
 
   async function loadDriveHealth() {
     const [drive, backup] = await Promise.all([call('/api/health/drive'), call('/api/backup')]);
@@ -1312,6 +1313,7 @@
     }
     const cards = document.getElementById('healthCards');
     if (!cards) return;
+    const driveHealthExpanded = window.pharosView?.read('disclosures', {})['library:drive-health'] ?? true;
     const checks = (drive.checks || []).filter(check => check.id !== 'backup');
     let section = document.getElementById('pharosDriveHealth');
     if (!section) {
@@ -1338,15 +1340,19 @@
       attention.append(node('span', 'pharos-health-attention-label', 'Needs Attention:'));
       for (const check of attentionChecks) {
         const chip = button(CHECK_TITLES[check.id] || check.id, 'pharos-chip warn', () => {
-          driveHealthExpanded = true;
-          renderDriveHealth(drive, backup);
+          window.pharosView?.write('disclosures', {...window.pharosView.read('disclosures', {}), 'library:drive-health': true});
           section.querySelector(`[data-check="${check.id}"]`)?.scrollIntoView({block: 'center'});
         });
         attention.append(chip);
       }
       controls.append(attention);
     }
-    const toggle = button(driveHealthExpanded ? 'Collapse' : 'Expand', '', () => { driveHealthExpanded = !driveHealthExpanded; renderDriveHealth(drive, backup); });
+    const toggle = button('');
+    toggle.dataset.viewKey = 'library:drive-health';
+    toggle.dataset.viewDefault = 'true';
+    const action = node('span', '', driveHealthExpanded ? 'Collapse' : 'Expand');
+    action.setAttribute('data-view-action', '');
+    toggle.append(action);
     toggle.setAttribute('aria-expanded', String(driveHealthExpanded));
     toggle.setAttribute('aria-controls', 'pharosDriveHealthDetails');
     controls.append(toggle);
@@ -1480,13 +1486,17 @@
 
   window.addEventListener('pharos:unified-activity', () => { if (unified()) closePanel(); });
 
-  window.pharosLibrary = {closePanel, refresh: refreshStatus,
+  window.pharosLibrary = {closePanel, setPanelOpen(open) {
+    if (open) openPanel({fromURL: true});
+    else { closePanel({fromURL: true}); window.pharosStatusPanel?.close({fromURL: true}); }
+  }, refresh: refreshStatus,
     // For status-panel.js: the chip and Index changes it renders while the
     // unified activity preference is on, the in-place renderer, and whether
     // this page is starting a capture or index.
     ensureChip, updateLiveChildren, localBusy: () => Boolean(headerCaptureIndexRunning || hostsBusy), status: () => status, runs, refreshSettings, refreshSyncControls: renderSyncControls, renderAlerts: () => { renderChip(); renderPanel(); }, onStatus: listener => listeners.add(listener),
     // Pure helpers, for web/tests/unit/page/library.test.mjs.
     libraryUpdate, overviewActivities, indexFailed, activityTiming, activityProgress, activityOverallProgress, activityPresentation, estimateRate, workCount, headerBusy, captureIndexDisabled, stopTargets, appUpdatePresentation};
+  window.dispatchEvent(new Event('pharos:drive-view-ready'));
   const sheet = node('style');
   sheet.textContent = CSS;
   document.head.append(sheet);

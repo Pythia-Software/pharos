@@ -170,7 +170,12 @@ const syncHistory = Array.from({ length: 6 }, (_, index) => ({ run_id: `run-${in
 syncHistory[0].phases[0].work = [{ phase: "read", unit: "group", done: 2, total: 2, total_known: true, seconds: 4, features: { conversations: 8, messages: 130, bytes: 4096, bytes_basis: "message_text", since_last_index_seconds: 300, load_one_minute: 1.2 } }];
 syncHistory[0].forecasts = [{ reason: "launch", elapsed_seconds: 0, estimate: { point_seconds: 20, low_seconds: 10, high_seconds: 30, predicted_steps: 3, remaining_steps: 3 }, actual_remaining_seconds: 22.1 }];
 const syncSettings = { enabled: true, interval_seconds: 300, sources: [], next_at: new Date(now + 180000).toISOString() };
-const syncStatus = { settings: syncSettings, busy: false, library_empty: false, has_sources: true, available_sources: [{ name: "codex", preservation_mode: "filesystem-retained-sqlite-gated" }, { name: "claude" }], sources: [{ name: "codex" }, { name: "claude" }], history: syncHistory,
+syncHistory[0].audit.evidence_bytes = 32768;
+syncHistory[0].audit.attempts = [
+  { source: 'codex', unit: 'large-input', outcome: 'deferred', reason: 'evidence_size', detail: 'selected input exceeds quick verification budget', seconds: 0.01 },
+  { source: 'claude', unit: 'small-input', outcome: 'passed', seconds: 0.4, evidence_bytes: 32768 },
+];
+const syncStatus = { verification: { available: true, last_verified_at: syncHistory[0].finished_at, pending: [{ source_name: 'codex', reason: 'evidence_size', units: 2 }] }, settings: syncSettings, busy: false, library_empty: false, has_sources: true, available_sources: [{ name: "codex", preservation_mode: "filesystem-retained-sqlite-gated" }, { name: "claude" }], sources: [{ name: "codex" }, { name: "claude" }], history: syncHistory,
   source_states: [{ source_name: "codex", attempted_at: syncHistory[0].finished_at, succeeded_at: syncHistory[0].finished_at, preservation: {status:"legacy-gaps",legacy_preservation_gaps:2,pending_newer_inputs:true}, pending_preservation: true, last_capture_at: iso(3 * 3600000) }, { source_name: "claude", attempted_at: syncHistory[0].finished_at, succeeded_at: syncHistory[0].finished_at, last_capture_at: iso(3600000) }],
   statistics: { changes: { samples: 10, elapsed_seconds: { median: 22.1, p95: 61.8 }, cpu_seconds: { median: 8.7, p95: 11 }, rss_observed_peak_bytes: { last: 129 * 1048576 }, estimated_cpu_duty_percent_one_core: 2.9 } },
   forecast_accuracy: { 'automatic-sync': { launch: { attempts: 6, predicted: 5, evaluated: 4, covered: 3, median_absolute_error_seconds: 2.1, median_relative_error: 0.1, median_interval_width_seconds: 20 } } },
@@ -279,6 +284,7 @@ const idleBackground = backgroundView([
     cadence_moves: [{ cadence: "frequent", label: "Promote to Frequently for a week" }, { cadence: "daily", label: "Demote to Daily for a week" }],
     cost: { seconds: 358, runs: 7, class: "heavy", text: "about 6 min" }, note: "Moves to Frequently once a run usually takes under a minute." }),
   backgroundItem("findings", "Findings", "hourly", "current"),
+  backgroundItem("verification", "Verify indexed data", "hourly", "queued", { sub: "Integrity checks deferred by quick indexing", why: "Checks a bounded batch of larger inputs once the library is quiet.", cost: { seconds: 1, runs: 2, class: "light", text: "about 1 s" } }),
   backgroundItem("preserve", "Preserve originals", "daily", "current"),
   backgroundItem("backup", "Back up to /Volumes/Backup Drive With A Long Name/Pharos Backup", "manual", "unavailable", { column: "daily", cost: null }),
 ], { tone: "good", title: "Up to date", text: "Everything is on schedule." });

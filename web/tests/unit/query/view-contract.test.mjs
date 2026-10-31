@@ -117,7 +117,34 @@ test('the same contract is exported to agents, and each field has a runtime owne
   if(delegatedViewFields[name]){const owner=delegatedViewFields[name];assert.ok(readFileSync(join(root,owner.file),'utf8').includes(owner.symbol),name);}
   else assert.ok(runtimeBindings.has(name),`${name} has no discovered runtime binding`);
  }
- for(const control of ledger.controls){assert.notEqual(control.contract,'unclassified',control.key);assert.ok(control.reason,control.key);if(control.contract.startsWith('view.'))assert.ok(viewFields[control.contract.slice(5)],control.contract);}
+ for(const control of ledger.controls){if(['details','summary'].includes(control.tag)||control.disclosure)assert.notEqual(control.contract,'settings',`Unbound accordion: ${control.file} ${control.owner}`);assert.notEqual(control.contract,'unclassified',control.key);assert.ok(control.reason,control.key);if(control.contract.startsWith('view.'))assert.ok(viewFields[control.contract.slice(5)],control.contract);}
+});
+
+test('accordion validation rejects ledger-only bindings and accepts the shared React and classic APIs',async()=>{
+ const {join}=await import('node:path');
+ const {pathToFileURL}=await import('node:url');
+ const {assets}=await import('../helpers/classic-script.mjs');
+ const {discoverSourceControls,discoverHTMLControls,validateDisclosureControls}=await import(pathToFileURL(join(assets,'../../../web/view-controls.mjs')).href);
+ const reviewed=controls=>controls.map(control=>({...control,contract:'view.disclosures',reason:'Durable section.'}));
+ const jsx=source=>reviewed(discoverSourceControls('web/src/example.tsx',source).controls);
+ const classic=source=>reviewed(discoverSourceControls('internal/archive/assets/example.js',source).controls);
+ const html=source=>reviewed(discoverHTMLControls('internal/archive/assets/example.html',source,{fragment:true}));
+ assert.doesNotThrow(()=>validateDisclosureControls(jsx('<ViewDisclosure viewKey="sample:help" summary="Help">Body</ViewDisclosure>')));
+ for(const source of ['<ViewDisclosure summary="Help" />','<ViewDisclosure viewKey="" summary="Help" />'])assert.throws(()=>validateDisclosureControls(jsx(source)),/nonempty viewKey/);
+ assert.throws(()=>validateDisclosureControls(jsx('<details data-view-field="disclosures"><summary>Help</summary>Body</details>')),/Missing shared accordion binding/);
+ assert.throws(()=>validateDisclosureControls(jsx('<FutureAccordion aria-expanded={open} data-view-field="disclosures" />')),/Missing shared accordion binding/);
+ assert.doesNotThrow(()=>validateDisclosureControls(jsx('function Preview(){ const [open,setOpen]=useViewEntry("disclosures","message:stable-id",false); return <button data-view-field="disclosures" aria-expanded={open} onClick={()=>setOpen(!open)}>Read more</button>; }')));
+ assert.throws(()=>validateDisclosureControls(classic('function render(){ const help=node("details"); }')),/Missing shared accordion binding/);
+ assert.throws(()=>validateDisclosureControls(classic('function render(){ const help=node("details"); const other=node("div"); other.dataset.viewKey="other"; }')),/Missing shared accordion binding/);
+ assert.doesNotThrow(()=>validateDisclosureControls(classic('function render(){ const help=node("details"), summary=node("summary"); help.dataset.viewKey="sample:help"; help.append(summary); }')));
+ assert.doesNotThrow(()=>validateDisclosureControls(classic('function render(){ const toggle=node("button"); toggle.dataset.viewKey="sample:help"; toggle.setAttribute("aria-controls","help"); toggle.setAttribute("aria-expanded","false"); }')));
+ assert.throws(()=>validateDisclosureControls(classic('function render(){ const toggle=node("button"); toggle.dataset.viewKey="sample:help"; toggle.setAttribute("aria-expanded","false"); }')),/Missing shared accordion binding/);
+ assert.doesNotThrow(()=>validateDisclosureControls(html('<details data-view-key="sample:help"><summary>Help</summary>Body</details>')));
+ assert.doesNotThrow(()=>validateDisclosureControls(html("<details data-view-key='sample:help'><summary>Help</summary></details>")));
+ for(const source of ['<details data-view-field="disclosures"><summary>Help</summary></details>','<button data-view-key="sample:help" aria-expanded="false">Help</button>'])assert.throws(()=>validateDisclosureControls(html(source)),/Missing shared accordion binding/);
+ const raw=jsx('<details><summary>Help</summary>Body</details>');
+ for(const contract of ['settings','legacy'])assert.throws(()=>validateDisclosureControls(raw.map(control=>({...control,contract}))),/Accordion openness is view state/);
+ for(const contract of ['editing','transient','view.parallelism','view.nav_expanded'])assert.doesNotThrow(()=>validateDisclosureControls(raw.map(control=>({...control,contract}))));
 });
 
 

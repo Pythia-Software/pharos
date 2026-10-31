@@ -47,6 +47,16 @@ drafts/actions, transient menus/hover/focus/scroll, and deferred legacy views
 need explicit classifications; do not use an exclusion to hide a missing
 canonical view control. Reveal means scroll + highlight, never keyboard focus.
 
+Use `ViewDisclosure` as the standard React accordion, with a required stable
+`viewKey` and `summary` prop. It owns the native `<details>`/`<summary>`, URL
+state and attention target. Use `defaultOpen` for the fallback and
+`onOpenChange` for deliberate toggles; do not add local open state or toggle
+handlers. Classic HTML uses `data-view-key` on `<details>`, or on a button
+with `aria-controls`, so the shared disclosure runtime owns restoration.
+`data-view-field="disclosures"` or a ledger classification alone is not a
+binding. Raw disclosures with an existing specialized URL owner, editing
+drafts and transient menus require an explicit reviewed classification.
+
 `npm --prefix web run generate-view-controls` updates the source-discovered
 review ledger and fails on unclassified controls. Review each new/changed
 entry in `docs/view-controls.json`, then regenerate the site map. Agent help

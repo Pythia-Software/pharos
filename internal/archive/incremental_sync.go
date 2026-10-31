@@ -718,7 +718,7 @@ func (s *Server) getIncrementalSync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.URL.Path == "/api/sync/history" {
-		writeJSON(w, map[string]any{"samples": samples, "statistics": syncStatistics(samples, settings.Interval), "forecast_accuracy": forecastAccuracy, "forecast_runs": forecastRuns}, 200)
+		writeJSON(w, map[string]any{"samples": samples, "statistics": syncStatistics(samples, settings.Interval), "forecast_accuracy": forecastAccuracy, "forecast_runs": forecastRuns, "verification": s.Catalog.verificationStatus(r.Context())}, 200)
 		return
 	}
 	states, err := queryMapsContext(r.Context(), s.Catalog.reader(), `SELECT a.*,s.last_success_at AS intentional_index_at FROM automatic_source_states a LEFT JOIN source_states s ON s.host_id=a.host_id AND s.source_name=a.source_name WHERE a.host_id=?`, currentHost().ID)
@@ -734,7 +734,10 @@ func (s *Server) getIncrementalSync(w http.ResponseWriter, r *http.Request) {
 		row["pending_preservation"] = capturePending(firstString(row["indexed_at"]), lastCapture, preservation)
 	}
 	deferred, _ := queryMaps(s.Catalog.reader(), "SELECT * FROM sync_deferred WHERE generation>completed_generation")
-	coverage, _ := queryMaps(s.Catalog.reader(), "SELECT source_name,outcome,COUNT(*) units,MAX(checked_at) last_verification FROM sync_verifications WHERE host_id=? GROUP BY source_name,outcome", currentHost().ID)
+	coverage, _ := queryMaps(s.Catalog.reader(), `SELECT v.source_name,v.outcome,COUNT(*) units,
+		MAX(COALESCE(p.verified_at,CASE WHEN v.outcome IN ('passed','mismatch') THEN v.checked_at END)) last_verification,
+		MAX(v.checked_at) last_attempt FROM sync_verifications v LEFT JOIN sync_verification_progress p USING(host_id,source_name,unit)
+		WHERE v.host_id=? GROUP BY v.source_name,v.outcome`, currentHost().ID)
 	issues, _ := queryMaps(s.Catalog.reader(), "SELECT id,source_name,unit,last_at FROM sync_integrity_issues WHERE state='open' ORDER BY last_at DESC LIMIT 100")
 	jobs, _ := queryMapsContext(r.Context(), s.Catalog.reader(), "SELECT * FROM sync_recovery_jobs WHERE state!='complete' ORDER BY updated_at DESC LIMIT 30")
 	pause := ""
@@ -751,7 +754,7 @@ func (s *Server) getIncrementalSync(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err, 500)
 		return
 	}
-	writeJSON(w, map[string]any{"settings": settings, "sources": syncSourceChoices(s.autoSources(settings)), "available_sources": syncSourceChoices(s.autoSources(syncSettings{})), "source_states": states, "history": samples, "statistics": syncStatistics(samples, settings.Interval), "pause_reason": pause, "busy": s.syncActive() || s.captureActive(), "library_empty": libraryEmpty, "has_sources": slices.ContainsFunc(s.Config().Sources, func(source SourceConfig) bool { return source.Enabled }), "recovery_jobs": jobs, "deferred": deferred, "coverage": coverage, "issues": issues, "measurement_limits": syncMeasurementLimits, "forecast_accuracy": forecastAccuracy, "forecast_runs": forecastRuns}, 200)
+	writeJSON(w, map[string]any{"settings": settings, "sources": syncSourceChoices(s.autoSources(settings)), "available_sources": syncSourceChoices(s.autoSources(syncSettings{})), "source_states": states, "history": samples, "statistics": syncStatistics(samples, settings.Interval), "pause_reason": pause, "busy": s.syncActive() || s.captureActive(), "library_empty": libraryEmpty, "has_sources": slices.ContainsFunc(s.Config().Sources, func(source SourceConfig) bool { return source.Enabled }), "recovery_jobs": jobs, "deferred": deferred, "coverage": coverage, "issues": issues, "measurement_limits": syncMeasurementLimits, "forecast_accuracy": forecastAccuracy, "forecast_runs": forecastRuns, "verification": s.Catalog.verificationStatus(r.Context())}, 200)
 }
 
 // capturePending is the Sources table's "Needs capture": the source was indexed

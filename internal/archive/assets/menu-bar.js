@@ -83,7 +83,6 @@ function editMenuBarSettings(saved, id, destination) {
   if (!root) return;
   const active = get('menuBarActive'), toolbox = get('menuBarToolbox'), menu = get('menuBarToolMenu');
   let settings = normalizeMenuBarSettings(window.pharosPrefs.get(MENU_BAR_KEY, {})), dragId = null;
-  let expanded = false;
   let snapshot = null, usage = null, loading = false, lastUsage = 0, previewError = false;
   const native = () => window.webkit?.messageHandlers?.pharosMenuBar;
   const notify = () => { try { native()?.postMessage({...settings}); } catch {} };
@@ -192,13 +191,11 @@ function editMenuBarSettings(saved, id, destination) {
     menu.style.top = Math.max(8, Math.min(innerHeight - 100, rect.bottom + 6)) + 'px';
   }
   function renderDisclosure() {
-    if (!settings.enabled) expanded = false;
     root.classList.toggle('is-enabled', settings.enabled);
     const button = get('menuBarExpand');
     button.hidden = !settings.enabled;
-    button.setAttribute('aria-expanded', String(expanded));
-    button.querySelector('span').textContent = expanded ? 'Collapse' : 'Expand';
-    get('menuBarOptions').hidden = !settings.enabled || !expanded;
+    button.disabled = !settings.enabled;
+    window.pharosView?.restoreDisclosures(button);
   }
   function render() {
     get('showMacMenuBar').classList.toggle('on', settings.enabled);
@@ -286,10 +283,10 @@ function editMenuBarSettings(saved, id, destination) {
   get('menuBarUsagePeriod').onchange=event=>commit({...settings,usagePeriod:event.target.value},'Usage period updated.');
   window.addEventListener('pharos:day-change',()=>{lastUsage=0;usage=null;refreshPreview()});
   get('showMacMenuBar').onclick = () => commit({...settings, enabled: !settings.enabled}, settings.enabled ? 'Mac menu bar hidden.' : 'Mac menu bar shown.');
-  get('menuBarExpand').onclick = () => {
-    expanded = !expanded; closeMenu(); renderDisclosure();
-    if (expanded) refreshPreview();
-  };
+  get('menuBarExpand').addEventListener('pharos:disclosure', () => {
+    closeMenu();
+    if (get('menuBarExpand').getAttribute('aria-expanded') === 'true') refreshPreview();
+  });
   get('menuBarReset').onclick = () => commit({...normalizeMenuBarSettings(), enabled: settings.enabled}, 'Default menu restored.');
   addEventListener('resize', closeMenu);
   document.querySelector('main').addEventListener('scroll', closeMenu);

@@ -99,6 +99,8 @@ var backgroundItems = []backgroundItem{
 		Stages: []string{"tools"}, Kinds: []string{"analysis.tools"}, Why: "Adds the commands and tokens of the workspaces that changed."},
 	{ID: "writing", Label: "Your writing", Verb: "Updating your writing", Feeds: "Human Words cards, and Analyze → Writing", Cadence: cadenceHourly, Adaptive: true,
 		Stages: []string{"authorship"}, Kinds: []string{"analysis.authorship"}, Why: "Decides which messages you wrote. Today it reads all of your messages each time."},
+	{ID: "verification", Label: "Verify indexed data", Verb: "Verifying queued inputs", Feeds: "Integrity checks deferred by quick indexing", Cadence: cadenceHourly,
+		Kinds: []string{"index.verify"}, Why: "Checks a bounded batch of larger inputs once the library is quiet. Completed checks survive interruptions; remaining inputs stay queued."},
 	{ID: "findings", Label: "Findings", Verb: "Updating findings", Feeds: "Optimize", Cadence: cadenceHourly, Adaptive: true,
 		Stages: []string{"findings"}, Kinds: []string{"analysis.findings"}, Why: "Measures the findings you watch against new work."},
 	{ID: "labels", Label: "Message labels", Verb: "Labeling messages", Feeds: "Local labels (pharos labels)", Cadence: cadenceHourly, Adaptive: true, requiresLabels: true,
@@ -449,7 +451,8 @@ type backgroundInputs struct {
 	lastBackup                   string
 	requested                    map[string]bool
 	// power is this Mac's power source, for the battery policy.
-	power powerState
+	power            powerState
+	verificationNext time.Time
 	// labels is whether labels_enabled is on; labelsWaiting why labeling
 	// waits for a download.
 	labels        bool
@@ -458,6 +461,7 @@ type backgroundInputs struct {
 
 func (c *Catalog) readBackgroundInputs(ctx context.Context) backgroundInputs {
 	in := backgroundInputs{runs: c.backgroundRuns(ctx)}
+	in.verificationNext = c.queuedVerificationNext(ctx)
 	in.deferred, _ = c.freshnessDeferred(ctx)
 	generation, _ := c.metaValue(ctx, "findings_generation")
 	in.findingsBuilt, in.findingsToday = generation != "", generation == c.findingsGeneration()
@@ -535,6 +539,19 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 				plan.Next = next
 			}
 		case item.continuous:
+		case item.ID == "verification":
+			plan.Pending = !in.verificationNext.IsZero()
+			if plan.Pending {
+				if plan.Cadence == cadenceDaily {
+					daily()
+				} else {
+					plan.Next = maxTime(quiet, plan.LastDone.Add(hourlyEvery))
+					if !plan.LastDone.IsZero() && at.Sub(plan.LastDone) > 3*hourlyEvery {
+						plan.Next, plan.Overdue = at, true
+					}
+				}
+				plan.Next = maxTime(plan.Next, in.verificationNext)
+			}
 		case len(item.Stages) > 0:
 			plan.LastDone = time.Time{}
 			first := true

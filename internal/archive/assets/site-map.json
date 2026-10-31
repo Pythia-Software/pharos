@@ -3,7 +3,7 @@
  "view_contract": {
   "version": 1,
   "fields": {
-   "disclosures": {"param":"disclosures","pages":["*"],"kind":"json","description":"Expanded content by stable section/record identity; values are booleans. Menus and editors are excluded."},
+   "disclosures": {"param":"disclosures","pages":["*"],"kind":"json","description":"Expanded content and settings sections by stable section/record identity; values are booleans. Transient menus and editor drafts are excluded.","details":{"example":{"quickStatsSettings":true},"layout_sections":["menuBarPreferences","headerSettings","quickStatsSettings"],"sections":{"sync:separate":"settings/sync","sync:repairs":"settings/sync","sync:diagnostics":"settings/sync","library:drive-health":"settings","library:application":"settings/libraries","machine:methodology":"/analyze?analyze_view=tokens&machine_view=time"},"families":{"background:<item ID>":"settings/sync","sync:forecast:<run ID>":"settings/sync","cloud:schedule:<destination ID>":"settings/backups","carbon:row:<tier>:<category>":"analyze/carbon","status:cadence:<cadence ID>":"overlay=drive","status:support":"overlay=drive","library:activity:<activity ID>:<started_at>:details":"overlay=drive","work:<work ID>:files":"work","feedback:logs:<submission ID>":"feedback inbox"},"defaults":"Fixed defaults remain implicit; data-dependent initial defaults are captured only in their active view. Explicit false closes a section even when its normal default is open.","note":"On settings/layout, true opens a section and false closes it. Combine with reveal=section:<identity> to scroll and highlight without moving focus. Settings values remain saved preferences."}},
    "nav_collapsed": {"param":"nav_collapsed","pages":["*"],"kind":"boolean","description":"Collapse the application sidebar."},
    "nav_expanded": {"param":"nav_expanded","pages":["*"],"kind":"json","description":"Expanded sidebar branches by section and page ID."},
    "guide_dataset": {"param":"guide_dataset","pages":["*"],"kind":"enum","description":"Data Guide source dataset.","values":["library","usage","conversation_activity","writing","writing_messages","tool_calls","tools","skill_usages","mcp_calls","tl1_attempts","parallelism","findings"]},
@@ -12,7 +12,7 @@
    "guide_open": {"param":"guide_open","pages":["*"],"kind":"boolean","description":"Show the Data Guide."},
    "guide_entity": {"param":"guide_entity","pages":["*"],"kind":"enum","description":"Selected Data Guide entity.","values":["workspaces","conversations","agents","messages","tool_calls"]},
    "guide_example": {"param":"guide_example","pages":["*"],"kind":"enum","description":"Selected example conversation.","values":["implementation","review"]},
-   "overlay": {"param":"overlay","pages":["*"],"kind":"enum","description":"Open read-only header content.","values":["none","history","bookmarks","usage"]},
+   "overlay": {"param":"overlay","pages":["*"],"kind":"enum","description":"Open read-only header content.","values":["none","history","bookmarks","usage","drive"]},
    "window_mode": {"param":"window_mode","pages":["library","analyze/query/*","findings/table"],"kind":"enum","description":"Native time intent companion for full queries.","values":["relative","calendar","today"]},
    "window_days": {"param":"window_days","pages":["library","analyze/query/*","findings/table"],"kind":"enum","description":"Native time-window size.","values":["1","7","30","90","180","365"]},
    "window_field": {"param":"window_field","pages":["library","analyze/query/*","findings/table"],"kind":"text","description":"Lower-bound timestamp field; preserve with the query."},
@@ -73,7 +73,7 @@
    "reveal": "One landing target; scroll and distinctive highlight, never browser focus"
   },
   "excluded": {
-   "settings": "Settings and their read-only diagnostics; not view overrides.",
+   "settings": "Settings values and their read-only diagnostics; section openness uses disclosures.",
    "legacy": "Legacy Analyze/Tools controls are deferred; canonical pages cannot inherit this exclusion.",
    "transient": "Hover, keyboard focus, menu openness, scroll offsets and automatic animation progress.",
    "editing": "Unapplied drafts, editing and mutation/export/refresh actions. Applied searches are included."
@@ -85,7 +85,7 @@
   "control_audit": {
    "file": "docs/view-controls.json",
    "version": 1,
-   "controls": 856
+   "controls": 882
   },
   "sections": {
    "cards": ["section:card-library","section:card-library-controls","section:card-library-panel","section:card-library-title","section:cardLibraryPage","section:cards"],
