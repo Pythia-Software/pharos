@@ -252,6 +252,9 @@ func (c *Catalog) Initialize() error {
 	if err := c.ensureTL1Schema(); err != nil {
 		return fmt.Errorf("initialize TL1 tables: %w", err)
 	}
+	if err := c.ensureAgentEventsSchema(); err != nil {
+		return fmt.Errorf("initialize agent events: %w", err)
+	}
 	if err := c.ensureFindingsSchema(); err != nil {
 		return fmt.Errorf("initialize findings tables: %w", err)
 	}

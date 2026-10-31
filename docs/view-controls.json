@@ -2122,6 +2122,15 @@
       "reason": "Bound directly to the registered view field."
     },
     {
+      "key": "html:6d1477e845d198d5:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:settings>",
+      "tag": "button",
+      "control": "<button id=\"agentEvents\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"agentEventsTitle\" aria-describedby=\"agentEventsDescription\" aria-checked=\"false\">",
+      "contract": "settings",
+      "reason": "Library preference that lists the Agent Experience preview pages in Analyze; not view state."
+    },
+    {
       "key": "html:6f2936f3f335b6b5:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:settings>",
@@ -3579,6 +3588,15 @@
       "control": "'button', '', status.running || !status.needed ? 'Close' : 'Later'",
       "contract": "action",
       "reason": "Library upgrade/migration preview or mutation action, not an applied content query."
+    },
+    {
+      "key": "eca88c5aa1a147f6:0",
+      "file": "web/src/agent-event-examples.tsx",
+      "owner": "AgentEventExamples",
+      "tag": "button",
+      "control": "onClick={() => setShown(value => value + 24)}",
+      "contract": "transient",
+      "reason": "Shows more example events in the panel; how many are shown is not part of the view and resets on reload."
     },
     {
       "key": "103123ac664d233e:0",

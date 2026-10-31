@@ -19,4 +19,5 @@ export const dashboardDefaults: Record<UsageTopic, AnalysisState> = {
   carbon: { metric: "co2", split: "type", period: "day" },
   time: { metric: "time", split: "activity", period: "day" },
   skills: { metric: "records", split: "skill_name", period: "day" },
+  agent_experience: { metric: "events", split: "family_group", period: "day" },
 };

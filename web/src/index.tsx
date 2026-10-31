@@ -88,6 +88,8 @@ import skillUsagesDocument from "../../schemas/skill_usages.schema.json";
 import tl1AttemptsDocument from "../../schemas/tl1_attempts.schema.json";
 import parallelismDocument from "../../schemas/parallelism.schema.json";
 import findingsDocument from "../../schemas/findings.schema.json";
+import agentEventsDocument from "../../schemas/agent_events.schema.json";
+import agentEventMessagesDocument from "../../schemas/agent_event_messages.schema.json";
 import { FindingsPage, startFindingsChrome } from "./findings";
 import { Icon } from "./icons";
 import { AuthoredMessages, CategoryPill, MessageMix, authoredRenderers } from "./authored";
@@ -95,6 +97,10 @@ import { ConcurrencyModal, ConcurrencyPanel, concurrencyPrototypeEnabled, type C
 import { openConcurrencyModal, startConcurrencySummary } from "./concurrency-store";
 import { currentUsageAnalyses, isUsageWorkspace, readUsageWorkspace, usageDatasets, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { mcpAnalysisCatalog } from "./mcp-analysis-catalog";
+import { agentEventsAnalysisCatalog } from "./agent-events-analysis-catalog";
+import { AgentEventExamples } from "./agent-event-examples";
+import { AgentEventRates } from "./agent-event-rates";
+import { eventRates, ratePeriod } from "./agent-event-rates-model";
 import { toolsAnalysisCatalog } from "./tools-analysis-catalog";
 import { agentTimeAnalysisCatalog, skillsAnalysisCatalog } from "./record-analysis-catalogs";
 import { UsageWorkspace, UsageDashboardLinks, UsageWorkspaceLink } from "./usage-workspace";
@@ -120,7 +126,7 @@ const relationships: RelationshipAdapter = {
     return responseJSON(await fetch("/api/query-object-references", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ references }), signal }));
   },
 };
-type Dataset = "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "findings";
+type Dataset = "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "findings" | "agent_events" | "agent_event_messages";
 type MessageView = "table" | "text";
 function mainIntegrationLink(row: Row): React.ReactNode {
   const merge = mainIntegration(row);
@@ -210,6 +216,8 @@ const schemas: Record<Dataset, FieldSchema<Row>> = {
   tl1_attempts: loadSchema<Row>(tl1AttemptsDocument),
   parallelism: loadSchema<Row>(parallelismDocument),
   findings: loadSchema<Row>(findingsDocument),
+  agent_events: loadSchema<Row>(agentEventsDocument),
+  agent_event_messages: loadSchema<Row>(agentEventMessagesDocument),
 };
 
 const tableApis = new Map<Dataset | "machine_calls", QueryTableApi<Row>>();
@@ -362,6 +370,11 @@ const renderers: RenderRegistry<Row> = {
     const state = String(value ?? "unknown");
     return <span className={`mcp-call-state ${state}`}>{state}</span>;
   },
+  // An enum's schema label in place of its stored key (agent event kinds and sources).
+  option_label({ value, field }: CellContext<Row>) {
+    const options = (field.filter as { values?: { options?: Array<{ value: string; label: string }> } } | undefined)?.values?.options;
+    return <span>{options?.find(option => option.value === value)?.label ?? String(value ?? "")}</span>;
+  },
   tool_status({ value }: CellContext<Row>) {
     const state = String(value ?? "unknown");
     return <span className={`mcp-call-state ${state}`}>{state.replace("_", " ")}</span>;
@@ -408,6 +421,8 @@ const emptyMessages: Record<Dataset, string> = {
   tl1_attempts: "No TL1 runs match this query.",
   parallelism: "No agent activity matches this query.",
   findings: "No findings match this query.",
+  agent_events: "No agent events match this query.",
+  agent_event_messages: "No agent messages read for events match this query.",
 };
 
 // query-table-ui 0.3.0 formats metric values with a field's renderer only for
@@ -1535,6 +1550,7 @@ function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
   if (topic === "mcp") return <MCPUsageDashboard />;
   if (topic === "carbon") return <CarbonDashboard />;
   if (topic === "time") return <AgentTimeDashboard />;
+  if (topic === "agent_experience") return <AgentExperienceDashboard />;
   return <SkillsDashboard />;
 }
 
@@ -1721,6 +1737,61 @@ function CatalogDashboard({ catalog, linkCatalog = catalog, dataset, name, defau
     {frame ? frame(views, state.where, state.onFilter) : views(catalog)}
     {after}
   </section>;
+}
+
+// Agent Experience: events found in agents' replies and thinking (agent_events),
+// with rates over every agent message the pass read (agent_event_messages).
+// Until the model runs inside Pharos, events come from an import (pharos
+// agent-events import); an empty library says how to fill it.
+const agentEventMessageFields = new Set(agentEventMessagesDocument.fields.map(field => field.name));
+const agentEventSummaryMetrics: AggregationClause[] = [
+  { id: "events", op: "count", groupBy: [] },
+  { id: "messages", op: "count_distinct", field: "message_id", groupBy: [] },
+  { id: "conversations", op: "count_distinct", field: "conversation_id", groupBy: [] },
+  { id: "thinking", op: "sum", field: "in_thinking", groupBy: [] },
+];
+const agentEventReadMetrics: AggregationClause[] = [
+  { id: "read", op: "count", groupBy: [] },
+  { id: "conversations", op: "count_distinct", field: "conversation_id", groupBy: [] },
+];
+// The messages read share every field but the event's own (kind, sentence,
+// confidence); a filter on those narrows the events, never the messages.
+const readWhere = (where: WhereTerm[]) => where.filter(term => predicatesOf(term).every(clause => agentEventMessageFields.has(clause.field)));
+function AgentExperienceSummary({ where }: { where: WhereTerm[] }) {
+  const events = useMetrics("agent_events", where, agentEventSummaryMetrics);
+  const read = useMetrics("agent_event_messages", readWhere(where), agentEventReadMetrics);
+  const value = (result: typeof events, id: string) => Number(result.metrics.find(metric => metric.id === id)?.buckets[0]?.value) || 0;
+  const loading = events.loading || read.loading, error = events.error || read.error;
+  const messages = value(events, "messages"), scanned = value(read, "read"), total = value(events, "events");
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{loading ? "Loading…" : error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
+  if (!loading && !error && !scanned) return <p className="usage-dashboard-note" role="status">No agent messages have been read for events yet. Import a study's predictions with <code>pharos agent-events import FILE</code>.</p>;
+  return <div className="mcp-metrics dashboard-stats" aria-label="Agent Experience summary" aria-busy={loading}>
+    {card("Events", total.toLocaleString(), "matching sentences in agents' replies and thinking")}
+    {card("Messages with an event", scanned ? `${(100 * messages / scanned).toFixed(1)}%` : "—", `${messages.toLocaleString()} of ${scanned.toLocaleString()} agent messages read`)}
+    {card("Conversations with an event", value(events, "conversations").toLocaleString(), `of ${value(read, "conversations").toLocaleString()} conversations read`)}
+    {card("In thinking", total ? `${(100 * value(events, "thinking") / total).toFixed(0)}%` : "—", "of these events were in agents' private reasoning")}
+  </div>;
+}
+// The rate panel: events by day and kind group over messages read by day,
+// under the dashboard's filters (the event-only ones narrow the events).
+const agentEventDailyEvents: AggregationClause[] = [{ id: "events", op: "count", groupBy: ["day", "family_group"] }];
+const agentEventDailyRead: AggregationClause[] = [{ id: "read", op: "count", groupBy: ["day"] }];
+function AgentExperienceRates({ where }: { where: WhereTerm[] }) {
+  const events = useMetrics("agent_events", where, agentEventDailyEvents, true);
+  const read = useMetrics("agent_event_messages", readWhere(where), agentEventDailyRead, true);
+  const readBuckets = read.metrics.find(metric => metric.id === "read")?.buckets ?? [];
+  const period = ratePeriod(readBuckets.length);
+  const periods = eventRates(events.metrics.find(metric => metric.id === "events")?.buckets ?? [], readBuckets, period);
+  return <AgentEventRates periods={periods} period={period} loading={events.loading || read.loading} error={events.error || read.error} />;
+}
+function AgentExperienceDashboard() {
+  return <CatalogDashboard catalog={agentEventsAnalysisCatalog} dataset="agent_events" name="agent-experience" defaults={dashboardDefaults.agent_experience}
+    summary={where => <AgentExperienceSummary where={where} />}
+    panels={where => <>
+      <AgentExperienceRates where={where} />
+      <p className="usage-dashboard-note">Events are sentences a small model judged to express one kind of event, found from keyword candidates in agents' visible replies and thinking. It is model output, not review: expect some misses and false alarms, and compare rates rather than reading single counts. Confidence threshold 0.5.</p>
+      <AgentEventExamples where={where} queryURL={usageWorkspaceURL({ mode: "query", dataset: "agent_events", query: { ...EMPTY_QUERY, where } })} />
+    </>} />;
 }
 
 function MCPUsageDashboard() {

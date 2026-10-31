@@ -1,0 +1,444 @@
+{
+  "$schema": "https://github.com/Pythia-Software/query-table/schema/query-table.schema.json",
+  "name": "pharos_agent_event_messages",
+  "version": 1,
+  "idField": "id",
+  "defaultLimit": 50,
+  "defaultSort": [
+    {
+      "field": "occurred_at",
+      "dir": "desc",
+      "nulls": "last"
+    }
+  ],
+  "tiebreakSort": [
+    {
+      "field": "id",
+      "dir": "asc"
+    }
+  ],
+  "defaultSelect": [
+    {
+      "field": "occurred_at",
+      "width": 130
+    },
+    {
+      "field": "source",
+      "width": 100
+    },
+    {
+      "field": "events",
+      "width": 80
+    },
+    {
+      "field": "candidates",
+      "width": 100
+    },
+    {
+      "field": "title",
+      "width": 220
+    }
+  ],
+  "fields": [
+    {
+      "name": "id",
+      "label": "Message ID (row)",
+      "type": "text",
+      "group": "Message",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"id\""
+        }
+      }
+    },
+    {
+      "name": "candidates",
+      "label": "Keyword hits",
+      "type": "number",
+      "group": "Size",
+      "render": "number",
+      "select": {
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "candidates",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"candidates\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "events",
+      "label": "Events",
+      "type": "number",
+      "group": "Size",
+      "render": "number",
+      "select": {
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "events",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"events\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "has_event",
+      "label": "Has an event",
+      "type": "bool",
+      "group": "Message",
+      "bindings": {
+        "postgres": {
+          "expr": "has_event",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"has_event\""
+        }
+      }
+    },
+    {
+      "name": "message_count",
+      "label": "Messages",
+      "type": "number",
+      "group": "Size",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "message_count",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"message_count\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "occurred_at",
+      "label": "When",
+      "type": "datetime",
+      "group": "Time",
+      "render": "datetime_rel",
+      "bindings": {
+        "postgres": {
+          "expr": "occurred_at",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"occurred_at\"",
+          "datetimeFormat": "utc-millis"
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "day",
+      "label": "Day",
+      "type": "text",
+      "group": "Time",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "day",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"day\""
+        }
+      },
+      "aliases": [
+        "date"
+      ]
+    },
+    {
+      "name": "week",
+      "label": "Week (Mon)",
+      "type": "text",
+      "group": "Time",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "week",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"week\""
+        }
+      }
+    },
+    {
+      "name": "month",
+      "label": "Month",
+      "type": "text",
+      "group": "Time",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "month",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"month\""
+        }
+      }
+    },
+    {
+      "name": "source",
+      "label": "Source",
+      "type": "enum",
+      "group": "Message",
+      "render": "option_label",
+      "bindings": {
+        "postgres": {
+          "expr": "source",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"source\""
+        }
+      },
+      "filter": {
+        "editor": "set",
+        "values": {
+          "source": "static",
+          "options": [
+            {
+              "value": "reply",
+              "label": "Visible reply"
+            },
+            {
+              "value": "thinking",
+              "label": "Thinking"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "title",
+      "label": "Conversation",
+      "type": "text",
+      "group": "Context",
+      "render": "usage_conversation",
+      "bindings": {
+        "postgres": {
+          "expr": "title",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"title\""
+        }
+      }
+    },
+    {
+      "name": "repository_name",
+      "label": "Repository",
+      "type": "text",
+      "group": "Context",
+      "bindings": {
+        "postgres": {
+          "expr": "repository_name",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"repository_name\""
+        }
+      },
+      "aliases": [
+        "repo"
+      ]
+    },
+    {
+      "name": "provider",
+      "label": "Provider",
+      "type": "enum",
+      "group": "Context",
+      "render": "option_label",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "provider",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"provider\""
+        }
+      },
+      "filter": {
+        "editor": "set",
+        "values": {
+          "source": "static",
+          "options": [
+            {
+              "value": "claude",
+              "label": "Claude"
+            },
+            {
+              "value": "codex",
+              "label": "Codex"
+            },
+            {
+              "value": "tl1",
+              "label": "TL1"
+            },
+            {
+              "value": "chatgpt",
+              "label": "ChatGPT"
+            },
+            {
+              "value": "antigravity",
+              "label": "Antigravity"
+            },
+            {
+              "value": "canonical",
+              "label": "Canonical"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "subagent",
+      "label": "Sub-agent",
+      "type": "bool",
+      "group": "Context",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "subagent",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"subagent\""
+        }
+      }
+    },
+    {
+      "name": "conversation_id",
+      "label": "Conversation ID",
+      "type": "text",
+      "group": "Context",
+      "render": "conversation_link",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "conversation_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"conversation_id\""
+        }
+      },
+      "relationship": {
+        "objectType": "pharos_conversations",
+        "key": {
+          "id": "conversation_id"
+        }
+      }
+    },
+    {
+      "name": "workspace_id",
+      "label": "Conversation's work ID",
+      "type": "text",
+      "group": "Context",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "workspace_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"workspace_id\""
+        }
+      },
+      "relationship": {
+        "objectType": "pharos_library",
+        "key": {
+          "id": "workspace_id"
+        }
+      }
+    },
+    {
+      "name": "message_id",
+      "label": "Message ID",
+      "type": "text",
+      "group": "Context",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "message_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"message_id\""
+        }
+      }
+    },
+    {
+      "name": "event_model",
+      "label": "Model version",
+      "type": "text",
+      "group": "Context",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "event_model",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"event_model\""
+        }
+      }
+    }
+  ]
+}

@@ -396,7 +396,8 @@ const ROUTES = [
   { name: "Analyze workspace time dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=time", ready: ".usage-dashboard .usage-chart" },
   { name: "Analyze workspace parallelism dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=parallelism", ready: ".usage-dashboard .concurrency-chart svg" },
   { name: "Analyze workspace carbon dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=carbon", ready: ".usage-dashboard #carbonSummary" },
-  ...["usage", "conversation_activity", "writing", "writing_messages", "tool_calls", "tools", "mcp_calls", "skill_usages", "parallelism"].map(dataset => ({
+  { name: "Analyze workspace agent experience dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=agent_experience", ready: `.usage-agent-experience-dashboard ${overTimeReady}` },
+  ...["usage", "conversation_activity", "writing", "writing_messages", "tool_calls", "tools", "mcp_calls", "skill_usages", "parallelism", "agent_events", "agent_event_messages"].map(dataset => ({
     name: `Analyze workspace query ${dataset}`, url: `/analyze?analyze_mode=query&analyze_data=${dataset}`, ready: ".usage-workspace-table .qt-row", fitTable: true,
   })),
   { name: "Analyze record keyword editor", url: "/analyze?analyze_mode=query&analyze_data=tool_calls", ready: ".usage-workspace-table .qt-qb", open: page => page.getByRole("button", { name: /^Add keyword filter for / }).click(), shown: ".explore-search-modal" },
@@ -532,7 +533,7 @@ const WIDTHS = [{ width: 1440, height: 900 }, { width: 1280, height: 720 }, { wi
 // any other problem still fails it.
 const KNOWN = [{
   bug: "Query Table 0.9.7 fit-to-screen floors a column at its wrapping host link measured on one line, so Analyze's fitted tables scroll at desktop widths; docs/handoffs/query-table-fit-wrapping-links.md",
-  when: (route, viewport) => /^Analyze workspace query (usage|writing|writing_messages|tool_calls|skill_usages|conversation_activity)$/.test(route.name) && viewport.width >= 1024,
+  when: (route, viewport) => /^Analyze workspace query (usage|writing|writing_messages|tool_calls|skill_usages|conversation_activity|agent_events|agent_event_messages)$/.test(route.name) && viewport.width >= 1024,
   match: /^fitted table still scrolls sideways: \d+px wide in \d+px$/,
 }];
 

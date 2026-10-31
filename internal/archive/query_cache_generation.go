@@ -27,6 +27,7 @@ var queryCacheTables = []string{
 	"metrics", "metric_ledger", "text_search_documents", "reasoning_extraction_state",
 	"tl1_installations", "tl1_flavors", "tl1_tasks", "tl1_attempts", "tl1_candidates",
 	"tl1_events", "tl1_review_findings", "tl1_human_touches", "tl1_configuration_health",
+	"agent_events", "agent_event_messages",
 }
 
 // Re-observing unchanged inputs refreshes these bookkeeping fields without

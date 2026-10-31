@@ -42,6 +42,10 @@ const mcp = [sum("call_count", "Calls"), sum("error_count", "Failed calls"), rat
 // additive; elapsed occupancy is repeated across units and must not be summed.
 const occupancy = [sum("unit_hours", "Agent/workspace hours"), distinct("unit_id", "Units"), { id: "idea_peak", op: "max" as const, field: "level", label: "Peak recorded concurrency" }];
 
+// Agent events: each row is one event; agent_event_messages: one row per message read.
+const agentEvents: SummaryColumn[] = [count("idea_events", "Events"), distinct("conversation_id", "Conversations"), distinct("message_id", "Messages")];
+const agentEventMessages: SummaryColumn[] = [sum("message_count", "Messages read"), sum("candidates", "Keyword hits"), sum("events", "Events"), ratio("idea_events_per_message", "SUM([events])/NULLIF(SUM([message_count]),0)", "Events per message")];
+
 export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
   tl1_attempts: [],
   usage: [...usageGroupPresets.map(preset => ({ preset, section: "Group by" })), ...usageComparisonPresets.map(preset => ({ preset, section: "Compare" }))].map(({ preset, section }) => finish("usage", { ...preset, id: `usage:${preset.label}`, section })),
@@ -100,6 +104,16 @@ export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
     idea("parallelism", "weeks", "Over time", "Weekly activity", "Agent/workspace hours per week with each counting method and gap separate", ["week", "counting", "gap_minutes"], occupancy, "idea_unit_hours", true),
     idea("parallelism", "levels", "Compare", "Concurrency bands", "Compare unit-hours by concurrency band without summing repeated elapsed time", ["counting", "gap_minutes", "level_band"], occupancy),
     idea("parallelism", "threads", "Explore", "Conversation activity", "Inspect hourly occupancy records and open their source conversation when recorded", ["counting", "gap_minutes", "conversation_id"], [...occupancy, conversation]),
+  ],
+  agent_events: [
+    idea("agent_events", "kinds", "Compare", "Events by kind", "Compare how often each kind of event occurs, and in how many conversations", ["family"], agentEvents),
+    idea("agent_events", "weeks", "Over time", "Weekly events", "Events per week by kind group", ["week", "family_group"], agentEvents, "idea_events", true),
+    idea("agent_events", "repos", "Compare", "Events by repository", "Compare events and affected conversations across repositories", ["repository_name"], agentEvents),
+    idea("agent_events", "threads", "Explore", "Conversations with the most events", "Rank conversations by their events and open them in the reader", ["conversation_id"], [...agentEvents, conversation]),
+  ],
+  agent_event_messages: [
+    idea("agent_event_messages", "repos", "Compare", "Messages read by repository", "Compare messages read, keyword hits and events across repositories", ["repository_name"], agentEventMessages),
+    idea("agent_event_messages", "sources", "Compare", "Replies and thinking", "Compare events per message in visible replies and thinking", ["source"], agentEventMessages),
   ],
 };
 
