@@ -27,6 +27,7 @@ const map = {...buildSiteMap(inputs),query_types:publishedQueryTypes()};
 // maintained list. Runtime entity IDs remain documented target families.
 const sectionOwners = {
  "card-library.tsx":["cards"],
+ "thinking-dashboard.tsx":["analyze/thinking-overview","analyze/thinking-detail"],
  "findings.tsx":["findings","findings/*"], "delegation.tsx":["work"],
  "concurrency.tsx":["analyze/parallelism"],
 };
@@ -35,7 +36,7 @@ for(const [file,pages] of Object.entries(sectionOwners)){
  const source=readFileSync(path("src/"+file),"utf8");
  const tree=ts.createSourceFile(file,source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
  const visit=node=>{
-  if(ts.isJsxAttribute(node)&&node.name.getText(tree)==="id"&&node.initializer&&ts.isStringLiteral(node.initializer)){
+  if(ts.isJsxAttribute(node)&&["id","viewKey"].includes(node.name.getText(tree))&&node.initializer&&ts.isStringLiteral(node.initializer)){
    const id=node.initializer.text;
    // Editing dialogs and generated IDs are outside content navigation.
    if(!/dialog|template/i.test(id)){

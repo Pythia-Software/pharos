@@ -1,7 +1,7 @@
 import { useViewEntry } from "./view-state";
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { chartPeriods, isHourly, localDay, nextPeriod, parseDay, periodKey, periodUnit, validPeriodCount, type ChartPeriod } from "./chart-period";
-import { chartRanges, rangeStart, withTimeRange, type ChartRange, type FilterChange, type RangeChange, type TimeBounds, type TimeFields } from "./chart-range";
+import { chartPeriods, isHourly, nextPeriod, periodKey, periodUnit, validPeriodCount, type ChartPeriod } from "./chart-period";
+import { chartRanges, rangeStart, rangeInputValue, parseRangeInput, rangeHasTime, withTimeRange, type ChartRange, type FilterChange, type RangeChange, type TimeBounds, type TimeFields } from "./chart-range";
 import { defaultChartScale, type ChartScale } from "./chart-scale";
 import { cumulativeBuckets, rollingAverageBuckets, timelineGeometry, timelinePath, validRollingPeriods, type ChartBucket, type ChartDisplay, type ChartSeries } from "./chart-series";
 import { ColumnMarks } from "./column-marks";
@@ -15,7 +15,6 @@ import { DashboardSelect } from "./dashboard-select";
 
 export { chartSpan, smoothingWhere, timeBounds, usageTime, withTimeRange, writingTime, type ChartRange, type FilterChange, type TimeBounds, type TimeFields } from "./chart-range";
 
-const pad2 = (value: number) => String(value).padStart(2, "0");
 export const chartPeriodCount = (view: { period: ChartPeriod; hours: number; days: number }) => view.period === "hours" ? view.hours : view.period === "days" ? view.days : 1;
 
 // Preset changes reset manual bucket choices to a readable calendar grid.
@@ -76,32 +75,30 @@ export function finerPeriod(period: ChartPeriod, from: Date, to: Date, count = 1
   return period;
 }
 
-export function rangeLabel(bounds: TimeBounds): string {
+export function rangeLabel(bounds: TimeBounds, timezone?: string): string {
   if (bounds.preset === "today") return "Today";
-  const year = new Date().getFullYear();
-  const timed = [bounds.from, bounds.to].some(date => date && (date.getHours() || date.getMinutes() || date.getSeconds()));
+  const year = Number(rangeInputValue(new Date(), false, timezone).slice(0, 4));
+  const timed = [bounds.from, bounds.to].some(date => date && rangeHasTime(date, timezone));
   if (timed) {
-    const stamp = (date: Date) => date.toLocaleString(undefined, { month: "short", day: "numeric", ...(date.getFullYear() !== year ? { year: "numeric" } : {}), hour: "numeric", minute: "2-digit" });
+    const stamp = (date: Date) => date.toLocaleString(undefined, { timeZone: timezone, month: "short", day: "numeric", ...(Number(rangeInputValue(date, false, timezone).slice(0, 4)) !== year ? { year: "numeric" } : {}), hour: "numeric", minute: "2-digit" });
     if (bounds.from && bounds.to) return `${stamp(bounds.from)} – ${stamp(bounds.to)} (end exclusive)`;
     return bounds.from ? `Since ${stamp(bounds.from)}` : bounds.to ? `Before ${stamp(bounds.to)}` : "";
   }
-  const day = (date: Date) => date.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(date.getFullYear() !== year ? { year: "numeric" } : {}) });
+  const day = (date: Date) => date.toLocaleDateString(undefined, { timeZone: timezone, month: "short", day: "numeric", ...(Number(rangeInputValue(date, false, timezone).slice(0, 4)) !== year ? { year: "numeric" } : {}) });
   const last = bounds.to ? new Date(bounds.to.getTime() - 1) : undefined;
-  if (bounds.from && last) return localDay(bounds.from) === localDay(last) ? day(last) : `${day(bounds.from)} – ${day(last)}`;
+  if (bounds.from && last) return rangeInputValue(bounds.from, false, timezone) === rangeInputValue(last, false, timezone) ? day(last) : `${day(bounds.from)} – ${day(last)}`;
   return bounds.from ? `Since ${day(bounds.from)}` : last ? `Through ${day(last)}` : "";
 }
 
 // Calendar dates include the whole last day, even when switching from times.
-export function customDateBounds(bounds: TimeBounds): TimeBounds {
-  const from = bounds.from ? new Date(bounds.from) : undefined;
-  const to = bounds.to ? new Date(bounds.to.getTime() - 1) : undefined;
-  from?.setHours(0, 0, 0, 0);
-  if (to) { to.setHours(0, 0, 0, 0); to.setDate(to.getDate() + 1); }
+export function customDateBounds(bounds: TimeBounds, timezone?: string): TimeBounds {
+  const from = bounds.from ? parseRangeInput(rangeInputValue(bounds.from, false, timezone), timezone) : undefined;
+  const to = bounds.to ? parseRangeInput(rangeInputValue(new Date(bounds.to.getTime() - 1), false, timezone), timezone, true) : undefined;
   return { from, to };
 }
 
 // A date selection from the chart or table remains visible alongside presets.
-export function RangeControl({ bounds, onChange, onPresetChange, editable = true }: { bounds: TimeBounds; onChange: RangeChange; onPresetChange?: (range: ChartRange | "all", oldestConversation?: Date) => void; editable?: boolean }) {
+export function RangeControl({ bounds, onChange, onPresetChange, editable = true, timezone }: { bounds: TimeBounds; timezone?: string; onChange: RangeChange; onPresetChange?: (range: ChartRange | "all", oldestConversation?: Date) => void; editable?: boolean }) {
   const needsHistory = Boolean(onPresetChange);
   const [history, setHistory] = useState<{ ready: boolean; oldest?: Date }>({ ready: !needsHistory });
   useEffect(() => {
@@ -117,29 +114,29 @@ export function RangeControl({ bounds, onChange, onPresetChange, editable = true
     window.addEventListener("pharos:usage-refresh", load);
     return () => { mounted = false; window.removeEventListener("pharos:usage-refresh", load); };
   }, [needsHistory]);
-  const active = bounds.preset ?? (!bounds.from && !bounds.to ? "all" : bounds.from && !bounds.to ? chartRanges.find(([range]) => rangeStart(range).getTime() === bounds.from!.getTime())?.[0] : undefined);
+  const active = bounds.preset ?? (!bounds.from && !bounds.to ? "all" : !timezone && bounds.from && !bounds.to ? chartRanges.find(([range]) => rangeStart(range).getTime() === bounds.from!.getTime())?.[0] : undefined);
   const [custom, setCustom] = useState<"custom" | "custom-times" | null>(null);
   useEffect(() => { if (bounds.preset || !bounds.from && !bounds.to) setCustom(null); }, [bounds.preset, bounds.from?.getTime(), bounds.to?.getTime()]);
-  const timed = [bounds.from, bounds.to].some(date => date && (date.getHours() || date.getMinutes() || date.getSeconds() || date.getMilliseconds()));
+  const timed = [bounds.from, bounds.to].some(date => date && rangeHasTime(date, timezone));
   const mode = custom ?? (active ? null : timed ? "custom-times" : "custom");
   const picker = <ChartSelect label="Range" value={mode ?? active!}
-    options={[...chartRanges.map(([range, text]): [string, string] => [range, range === "today" ? text : `Last ${text}`]), ...(editable ? [["custom", "Custom dates…"], ["custom-times", "Custom times…"]] as Array<[string, string]> : active ? [] : [["custom", rangeLabel(bounds), "Dates selected in the chart or table"] as [string, string, string]]), ["all", "All time", history.ready ? undefined : "Loading conversation history…"]]}
+    options={[...chartRanges.map(([range, text]): [string, string] => [range, range === "today" ? text : `Last ${text}`]), ...(editable ? [["custom", "Custom dates…"], ["custom-times", "Custom times…"]] as Array<[string, string]> : active ? [] : [["custom", rangeLabel(bounds, timezone), "Dates selected in the chart or table"] as [string, string, string]]), ["all", "All time", history.ready ? undefined : "Loading conversation history…"]]}
     title="Dates included in this usage view. Choose All time to clear the date filter."
     onChange={range => {
       if (range === "custom" || range === "custom-times") {
         setCustom(range);
-        const fixed = range === "custom" ? customDateBounds(bounds) : bounds;
+        const fixed = range === "custom" ? customDateBounds(bounds, timezone) : bounds;
         onChange(fixed.from, fixed.to);
       } else {
         setCustom(null);
         selectChartRange(range as ChartRange | "all", onChange, preset => onPresetChange?.(preset, history.oldest));
       }
     }} />;
-  return editable ? <div className={`usage-date-range${mode ? " custom" : ""}`}>{picker}{mode ? <CustomDates key={mode} bounds={bounds} onChange={onChange} includeTime={mode === "custom-times"} /> : null}</div> : picker;
+  return editable ? <div className={`usage-date-range${mode ? " custom" : ""}`}>{picker}{mode ? <CustomDates key={mode} bounds={bounds} timezone={timezone} onChange={onChange} includeTime={mode === "custom-times"} /> : null}</div> : picker;
 }
 
-function CustomDates({ bounds, onChange, includeTime }: { bounds: TimeBounds; onChange: (from?: Date, to?: Date) => void; includeTime: boolean }) {
-  const inputValue = (date: Date) => includeTime ? `${localDay(date)}T${pad2(date.getHours())}:${pad2(date.getMinutes())}` : localDay(date);
+function CustomDates({ bounds, onChange, includeTime, timezone }: { bounds: TimeBounds; timezone?: string; onChange: (from?: Date, to?: Date) => void; includeTime: boolean }) {
+  const inputValue = (date: Date) => rangeInputValue(date, includeTime, timezone);
   const from = bounds.from ? inputValue(bounds.from) : "", to = bounds.to ? inputValue(includeTime ? bounds.to : new Date(bounds.to.getTime() - 1)) : "";
   const [draft, setDraft] = useState({ from, to });
   useEffect(() => setDraft({ from, to }), [from, to]);
@@ -149,10 +146,9 @@ function CustomDates({ bounds, onChange, includeTime }: { bounds: TimeBounds; on
     const next = { ...draft, [key]: value };
     setDraft(next);
     if (invalidRange(next)) return;
-    const parse = (value: string) => includeTime ? new Date(value) : parseDay(value);
-    const start = next.from ? parse(next.from) : undefined, end = next.to ? parse(next.to) : undefined;
+    const start = next.from ? includeTime && next.from === from ? bounds.from : parseRangeInput(next.from, timezone) : undefined;
+    const end = next.to ? includeTime && next.to === to ? bounds.to : parseRangeInput(next.to, timezone, !includeTime) : undefined;
     if (start && !Number.isFinite(start.getTime()) || end && !Number.isFinite(end.getTime())) return;
-    if (end && !includeTime) end.setDate(end.getDate() + 1);
     onChange(start, end);
   }
   return <div className="usage-custom-dates">

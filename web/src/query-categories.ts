@@ -36,6 +36,7 @@ export function categoryForQuery(dataset?: QueryDataset, query?: QueryState): Qu
   const has = (...names: string[]) => names.some(name => fields.has(name));
   if (dataset === "findings") return "findings";
   if (dataset === "parallelism") return "machines";
+  if (dataset === "model_requests") return "models";
   if (has("co2e_g", "co2e_kg", "energy_wh", "energy_kwh", "carbon_tier")) return "carbon";
   if (has("cost_usd", "cost_today_usd")) return "cost";
   if (has("error_count", "error_signature", "tool_error_count", "error_types", "test_failure") || predicates.some(term => term.field === "status" && term.op === "=" && term.value === "error")) return "errors";

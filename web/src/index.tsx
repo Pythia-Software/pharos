@@ -47,6 +47,8 @@ import { MetricRequestError, postMetrics, postQueryV3Metrics, type MetricResult 
 import { tokenSummaryMetrics } from "./token-chart-request";
 import { chartPeriods, earliestKey, isHourly, localDay, parseDay, periodLabel, validPeriodCount, type ChartPeriod } from "./chart-period";
 import { defaultChartScale, validChartScale } from "./chart-scale";
+import modelRequestsDocument from "../../schemas/model_requests.schema.json";
+import { ThinkingDashboard } from "./thinking-dashboard";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { useLocationRevision } from "./nested-pages";
@@ -120,7 +122,7 @@ const relationships: RelationshipAdapter = {
     return responseJSON(await fetch("/api/query-object-references", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ references }), signal }));
   },
 };
-type Dataset = "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "findings";
+type Dataset = "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "findings";
 type MessageView = "table" | "text";
 function mainIntegrationLink(row: Row): React.ReactNode {
   const merge = mainIntegration(row);
@@ -198,6 +200,7 @@ declare global {
 }
 
 const schemas: Record<Dataset, FieldSchema<Row>> = {
+  model_requests: loadSchema<Row>(modelRequestsDocument),
   conversation_activity: loadSchema<Row>(conversationActivityDocument),
   library: loadSchema<Row>(libraryDocument),
   usage: loadSchema<Row>(usageDocument),
@@ -396,6 +399,7 @@ const filterPresentations = Object.fromEntries(Object.entries(schemas).map(([dat
 const failedMessage = "No results: the query failed (see the error above).";
 
 const emptyMessages: Record<Dataset, string> = {
+  model_requests: "No model requests match this query.",
   library: "No work matches this query.",
   usage: "No token usage matches this query.",
   conversation_activity: "No recorded conversation activity matches this query.",
@@ -1526,6 +1530,7 @@ function useUsageDashboardState<T extends object>(defaults: T, valid: (value: T)
 }
 
 function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
+  if(topic==="thinking-overview"||topic==="thinking-detail") return <ThinkingDashboard detail={topic==="thinking-detail"}/>;
   if (topic === "calls") return <CatalogDashboard catalog={agentTimeAnalysisCatalog} dataset="tool_calls" name="calls" defaults={dashboardDefaults.calls} />;
   if (topic === "activity") return <CatalogDashboard catalog={conversationAnalysisCatalog} dataset="conversation_activity" name="activity" defaults={dashboardDefaults.activity} />;
   if (topic === "tokens") return <TokenUsageDashboard />;

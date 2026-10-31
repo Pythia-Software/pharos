@@ -6,10 +6,11 @@ import { cardDashboardWhere, cardSourceDataset } from "./card-exploration";
 import { concurrencyWindowRange } from "./concurrency-settings";
 import { windowedChart } from "./card-windows";
 
-export const queryDatasets = ["library", "usage", "conversation_activity", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "parallelism", "findings"] as const;
+export const queryDatasets = ["model_requests","library", "usage", "conversation_activity", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "parallelism", "findings"] as const;
 export type QueryDataset = typeof queryDatasets[number];
 export type RollingWindow = { days: number; field: string; mode?: "relative" | "calendar" | "today"; untilField?: string; timezone?: string };
 const defaultTimeFields: Partial<Record<QueryDataset, string[]>> = {
+  model_requests: ["requested_at"],
   writing: ["first_message_at", "last_message_at"], conversation_activity: ["event_at"], mcp_calls: ["called_at"], library: ["activity_at"], usage: ["first_usage_at", "last_usage_at"], tool_calls: ["started_at"],
   skill_usages: ["created_at"], writing_messages: ["sent_at"], tl1_attempts: ["started_at"], parallelism: ["started_at"], findings: ["first_seen_at"],
 };

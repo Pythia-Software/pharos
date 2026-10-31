@@ -155,6 +155,7 @@ function dashboardFor(recipe: QueryRecipe): CardDashboard {
 }
 
 export function refineCardDestination(recipe: QueryRecipe): QueryRecipe {
+  if (recipe.thinking) return recipe;
   if (recipe.retired || recipe.dataset === "tl1_attempts" || !Object.hasOwn(usageDatasetTopics, recipe.dataset)) return recipe;
   const mapped = dashboardFor(recipe);
   const dashboard = mapped.chart.view === "distribution" && recipe.cover?.minSamples !== undefined ? { ...mapped, chart: { ...mapped.chart, minSamples: recipe.cover.minSamples } } : mapped;
@@ -170,6 +171,17 @@ export function parallelismRibbon(days?: number | null) {
 
 export function cardDestination(recipe: QueryRecipe, query: QueryState, window?: RollingWindow): string {
   const url = queryURL(recipe.dataset, query, window), target = recipe.destination;
+  if(recipe.thinking) {
+    const parsed=new URL(url,"http://localhost");
+    parsed.searchParams.set("analyze_mode","dashboards");parsed.searchParams.set("analyze_topic",recipe.thinking.overview?"thinking-overview":"thinking-detail");parsed.searchParams.set("analyze_data","model_requests");
+    parsed.searchParams.set("thinking",JSON.stringify(recipe.thinking.state));
+    parsed.searchParams.set("analyze_filters",encodeQuery({...EMPTY_QUERY,where:(query.grouping?.source??query).where}));
+    parsed.searchParams.set("card_query",recipe.dataset);parsed.searchParams.set("card_id",recipe.id);
+    const cover=defaultCardCover(recipe);
+    if(cover)parsed.searchParams.set("card_cover",JSON.stringify(cover));
+    parsed.searchParams.set("card_title",recipe.title);parsed.searchParams.set("card_description",recipe.description);
+    return parsed.pathname+parsed.search;
+  }
   if (!target) return url;
   const parsed = new URL(url, "http://localhost");
   parsed.searchParams.set("analyze_mode", "dashboards");

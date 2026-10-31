@@ -92,6 +92,10 @@
       "field": "disclosures"
     },
     {
+      "file": "web/src/thinking-dashboard.tsx",
+      "field": "disclosures"
+    },
+    {
       "file": "web/src/view-disclosure.tsx",
       "field": "disclosures"
     },
@@ -194,6 +198,14 @@
     {
       "file": "web/src/workspace-inbox.ts",
       "field": "sidebar_width"
+    },
+    {
+      "file": "web/src/thinking-dashboard.tsx",
+      "field": "thinking"
+    },
+    {
+      "file": "web/src/thinking-dashboard.tsx",
+      "field": "thinking_filters"
     }
   ],
   "controls": [
@@ -7780,6 +7792,230 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
+      "key": "ea08a43f1bf2ce23:0",
+      "file": "web/src/thinking-charts.tsx",
+      "owner": "Brush",
+      "tag": "svg",
+      "control": "aria-label={ onBrush ? \"Chart. Drag to select dates; use Range for keyboard date selection.\" : \"Chart\" } onPointerDown={(e) => { if (!onBrush || e.button !== 0) return; const p = coordinate(e); start.current = p; setDrag([p, p]); e.currentTarget.setPointerCapture(e.pointerId); }} onPointerMove={(e) => { if (start.current !== null) setDrag([start.current, coordinate(e)]); }} onPointerCancel={() => { start.current = null; setDrag(null); }} onPointerUp={(e) => { if (start.current === null) return; const a = start.current, b = coordinate(e); start.current = null; setDrag(null); if (Math.abs(a - b) > 4) onBrush?.( (a / (vertical ? plotHeight : plotWidth)) * count, (b / (vertical ? plotHeight : plotWidth)) * count, ); }}",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "21b981f8da9180cc:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ComparisonHeatmap",
+      "tag": "button",
+      "control": "onClick={() => change({ sortBy: key as ThinkingState[\"sortBy\"], sortDirection: state.sortBy === key && state.sortDirection === \"desc\" ? \"asc\" : \"desc\", }) }",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "f51212849f3ab641:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "Methodology",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"thinking:methodology\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "015cd9065ff86555:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"thinking:coverage\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "0572b5fafef6e2f4:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "PeriodControl",
+      "control": "onChange={(next) => change(next)}",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "1fac7c724e757e67:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "RangeControl",
+      "control": "onPresetChange={(range, oldest) => change(presetPeriod(range, oldest))} onChange={(from, to, preset) => change({ range: preset ?? \"custom\", from: preset ? undefined : from?.toISOString(), to: preset ? undefined : to?.toISOString(), }) }",
+      "contract": "view.thinking",
+      "reason": "Range and preset-driven time buckets update the shared Thinking URL state. Date inputs use the viewer’s local zone; custom and brushed boundaries remain half-open ISO instants."
+    },
+    {
+      "key": "27abd21aa517ce02:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"thinking:conversation\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "283453809ca78e30:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={state.model} onChange={(model) => change({ model })}",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "396a6ea92106f794:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={state.traceScale} onChange={(v) => change({ traceScale: v as ThinkingState[\"traceScale\"], }) }",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "538df922144bc619:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "button",
+      "control": "onClick={() => setNativeFilters(\"\")}",
+      "contract": "view.thinking_filters",
+      "reason": "Clears the native population token through the shared view binding."
+    },
+    {
+      "key": "5757d2d092a88056:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "button",
+      "control": "onClick={() => change({ hiddenPercentiles: state.hiddenPercentiles.includes( r.key, ) ? state.hiddenPercentiles.filter((k) => k !== r.key) : [...state.hiddenPercentiles, r.key], }) }",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "59b4e8b59a53da9e:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={state.groupBy} onChange={(groupBy) => change({ groupBy: groupBy as ThinkingState[\"groupBy\"] }) }",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "5d6904418ef58251:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ThinkingDistribution",
+      "control": "onChange={change}",
+      "contract": "view.thinking",
+      "reason": "The reviewed composite forwards this control to ThinkingDashboard.change/setLinked, which writes the registered thinking field through useViewState. Chart brushing commits the shared range; pointer motion alone is transient."
+    },
+    {
+      "key": "5e087c6ac78c7728:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={String(state.hourB)} onChange={(v) => change({ hourB: Number(v) })}",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "668776650eb34bff:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={fixed ? \"fixed\" : state.sortBy + \":\" + state.sortDirection} onChange={(v) => { const [sortBy, sortDirection] = v.split(\":\"); change({ sortBy: sortBy as ThinkingState[\"sortBy\"], sortDirection: sortDirection as ThinkingState[\"sortDirection\"], }); }}",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "6b7f6a1ac85dd29f:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={String(state.hourA)} onChange={(v) => change({ hourA: Number(v) })}",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "6ce50e01d3b8c063:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={state.calendarMetric} onChange={(v) => change({ calendarMetric: v as ThinkingState[\"calendarMetric\"] }) }",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "6dc080c69a0eb8ad:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={state.view} onChange={(view) => change({ view: view as ThinkingState[\"view\"], ...((view === \"reasoning\" || view === \"wait-box\") && state.groupBy === \"none\" ? { groupBy: \"model_effort\" } : {}), }) }",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "7486c8b23f279860:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={trace?.ID ?? \"\"} onChange={(session) => change({ session })}",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "9252aa783492e0ed:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"thinking:validation\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "a8e71e144d56b31d:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={state.effort} onChange={(effort) => change({ effort })}",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "c64385755bdd4887:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={state.calendarRows} onChange={(v) => change({ calendarRows: v as ThinkingState[\"calendarRows\"] }) }",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "ec957894002037b5:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={state.normalization} onChange={(v) => change({ normalization: v as ThinkingState[\"normalization\"] }) }",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "fe037810cdd7016d:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "button",
+      "control": "onClick={() => setRefresh((n) => n + 1)}",
+      "contract": "editing",
+      "reason": "Refresh retries a read without changing the applied view."
+    },
+    {
       "key": "c2ef28fbea4ddd0a:0",
       "file": "web/src/uifeedback/inbox.tsx",
       "owner": "actions",
@@ -8097,13 +8333,13 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
-      "key": "5c889dfea8ddaf94:0",
+      "key": "4811596f82fa8c4f:0",
       "file": "web/src/usage-chart.tsx",
       "owner": "RangeControl",
       "tag": "ChartSelect",
-      "control": "value={mode ?? active!} onChange={range => { if (range === \"custom\" || range === \"custom-times\") { setCustom(range); const fixed = range === \"custom\" ? customDateBounds(bounds) : bounds; onChange(fixed.from, fixed.to); } else { setCustom(null); selectChartRange(range as ChartRange | \"all\", onChange, preset => onPresetChange?.(preset, history.oldest)); } }}",
+      "control": "value={mode ?? active!} onChange={range => { if (range === \"custom\" || range === \"custom-times\") { setCustom(range); const fixed = range === \"custom\" ? customDateBounds(bounds, timezone) : bounds; onChange(fixed.from, fixed.to); } else { setCustom(null); selectChartRange(range as ChartRange | \"all\", onChange, preset => onPresetChange?.(preset, history.oldest)); } }}",
       "contract": "dashboard",
-      "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
+      "reason": "The owning dashboard applies the range callback to its canonical state: Thinking uses view.thinking; other dashboards use analyze_chart/analyze_filters. Custom date/time drafts use the selected IANA zone when supplied, with absolute ISO bounds preserved in the URL."
     },
     {
       "key": "76e9a6585f9788fa:0",
@@ -8112,7 +8348,7 @@
       "tag": "CustomDates",
       "control": "onChange={onChange}",
       "contract": "dashboard",
-      "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
+      "reason": "The owning dashboard applies the range callback to its canonical state: Thinking uses view.thinking; other dashboards use analyze_chart/analyze_filters. Custom date/time drafts use the selected IANA zone when supplied, with absolute ISO bounds preserved in the URL."
     },
     {
       "key": "76fef118d5cb3303:0",

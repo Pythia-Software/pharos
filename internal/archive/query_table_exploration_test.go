@@ -24,7 +24,7 @@ func queryExplorationCall(server *Server, token, method, path, body string) *htt
 	return w
 }
 
-var queryDatasets = []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings", "parallelism"}
+var queryDatasets = []string{"model_requests", "library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings", "parallelism"}
 
 // TestQueryDatasetsHTTP calls each query endpoint for every dataset, on one
 // catalog: capabilities and V3 budgets, typed rows, an item, metrics over
