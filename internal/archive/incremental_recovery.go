@@ -510,6 +510,21 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 			return s.Catalog.RefreshFindings(ctx, forceFindings)
 		}},
 	}
+	// Local labels come last, and only where they are turned on: a backlog
+	// never delays findings, and a library without them runs the chain as
+	// before (docs/local-labeler.md).
+	if settings := s.Config().Labels; settings.Enabled {
+		stages = append(stages, struct {
+			name string
+			work func() error
+		}{"labels", func() error { return s.chainLabels(ctx, settings) }})
+	} else if generation["labels"] > 0 {
+		// With labels off there is nothing to label: what indexing marked
+		// is done, so it never reads as waiting.
+		if err := complete("labels"); err != nil {
+			return err
+		}
+	}
 	for _, stage := range stages {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -518,7 +533,12 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 			continue
 		}
 		if err := runPhase(stage.name, func() error {
-			if err := stage.work(); err != nil {
+			err := stage.work()
+			if errors.Is(err, errStageContinues) {
+				// Its share is done; the rest stays pending for later.
+				return nil
+			}
+			if err != nil {
 				return err
 			}
 			return complete(stage.name)

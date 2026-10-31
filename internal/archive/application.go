@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -70,6 +71,8 @@ type applicationManager struct {
 	// to match a lease's libraries.
 	canonicalCache map[string]string
 	startTrigger   string
+	// labelsFetching is a labeler download running (labels_assets.go).
+	labelsFetching atomic.Bool
 }
 
 func applicationRuntimePath(id string) string {
@@ -239,6 +242,9 @@ func (m *applicationManager) childLocked(id string) (*applicationChild, error) {
 	start := m.operations.begin(OperationSpec{Kind: "service.start", Trigger: trigger}, id)
 	child, err := m.startChildLocked(id, l, config, start)
 	start.Finish(err)
+	if err == nil {
+		m.startLabelsFetch(config.Labels)
+	}
 	m.publishLocked()
 	return child, err
 }

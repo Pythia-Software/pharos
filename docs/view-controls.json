@@ -168,6 +168,10 @@
       "field": "reader_filter_level"
     },
     {
+      "file": "internal/archive/assets/ui.py",
+      "field": "reader_labels"
+    },
+    {
       "file": "web/src/conversation-search.tsx",
       "field": "reader_order"
     },
@@ -3544,6 +3548,15 @@
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
     {
+      "key": "a240ddf105d4c2db:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "transcriptLabelsControl",
+      "tag": "button",
+      "control": "'button', 'transcript-labels-toggle', 'Labels'",
+      "contract": "reader",
+      "reason": "The Labels toggle writes reader_labels through the view contract; its saved preference is only the fallback when a link carries none."
+    },
+    {
       "key": "0e18c887173fcc9b:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "xmlTreeView",
@@ -4238,6 +4251,15 @@
       "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
     },
     {
+      "key": "00b8ca7063fb7202:0",
+      "file": "web/src/concurrency.tsx",
+      "owner": "ConcurrencyPanel",
+      "tag": "DashboardSelect",
+      "control": "aria-label=\"Repository\" value={repository} onChange={event => update({ repository: event.target.value, workspace: \"\", agent: \"\", zoom: null })}",
+      "contract": "view.parallelism",
+      "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
+    },
+    {
       "key": "1ba826d922a107fb:0",
       "file": "web/src/concurrency.tsx",
       "owner": "ConcurrencyPanel",
@@ -4256,20 +4278,20 @@
       "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
     },
     {
-      "key": "23c422988c1e32dc:0",
-      "file": "web/src/concurrency.tsx",
-      "owner": "ConcurrencyPanel",
-      "tag": "select",
-      "control": "aria-label=\"Count by\" value={counting} onChange={event => update({ counting: event.target.value as ConcurrencyCounting, workspace: \"\", agent: \"\" })}",
-      "contract": "view.parallelism",
-      "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
-    },
-    {
       "key": "367f6cbf3ae84728:0",
       "file": "web/src/concurrency.tsx",
       "owner": "ConcurrencyPanel",
       "tag": "summary",
       "control": "",
+      "contract": "view.parallelism",
+      "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
+    },
+    {
+      "key": "398e55aca2f68959:0",
+      "file": "web/src/concurrency.tsx",
+      "owner": "ConcurrencyPanel",
+      "tag": "DashboardSelect",
+      "control": "id=\"parallelism-view\" aria-label=\"View\" value={mode} onChange={event => update({ mode: event.target.value as ConcurrencyMode })}",
       "contract": "view.parallelism",
       "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
     },
@@ -4301,11 +4323,11 @@
       "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
     },
     {
-      "key": "6b97346377bae589:0",
+      "key": "6957713e4f0054a1:0",
       "file": "web/src/concurrency.tsx",
       "owner": "ConcurrencyPanel",
-      "tag": "select",
-      "control": "aria-label=\"Turn gap\" value={gap} onChange={event => update({ gap: Number(event.target.value) })}",
+      "tag": "DashboardSelect",
+      "control": "aria-label=\"Range\" value={settings.range === \"day\" ? range.startDay : settings.range} onChange={event => chooseRange(event.target.value)}",
       "contract": "view.parallelism",
       "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
     },
@@ -4319,15 +4341,6 @@
       "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
     },
     {
-      "key": "ce1d993d0f45edfb:0",
-      "file": "web/src/concurrency.tsx",
-      "owner": "ConcurrencyPanel",
-      "tag": "select",
-      "control": "aria-label=\"Range\" value={settings.range === \"day\" ? range.startDay : settings.range} onChange={event => chooseRange(event.target.value)}",
-      "contract": "view.parallelism",
-      "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
-    },
-    {
       "key": "d0391cb720be4f15:0",
       "file": "web/src/concurrency.tsx",
       "owner": "ConcurrencyPanel",
@@ -4337,29 +4350,29 @@
       "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
     },
     {
-      "key": "d1cfc38b1d0e76f3:0",
-      "file": "web/src/concurrency.tsx",
-      "owner": "ConcurrencyPanel",
-      "tag": "select",
-      "control": "aria-label=\"Repository\" value={repository} onChange={event => update({ repository: event.target.value, workspace: \"\", agent: \"\", zoom: null })}",
-      "contract": "view.parallelism",
-      "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
-    },
-    {
-      "key": "de7407e02c9f86ba:0",
-      "file": "web/src/concurrency.tsx",
-      "owner": "ConcurrencyPanel",
-      "tag": "select",
-      "control": "id=\"parallelism-view\" aria-label=\"View\" value={mode} onChange={event => update({ mode: event.target.value as ConcurrencyMode })}",
-      "contract": "view.parallelism",
-      "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
-    },
-    {
       "key": "e9e81a92cede5a13:0",
       "file": "web/src/concurrency.tsx",
       "owner": "ConcurrencyPanel",
       "tag": "button",
       "control": "onClick={() => chooseUnit(concurrencyUnit(thread, counting))}",
+      "contract": "view.parallelism",
+      "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
+    },
+    {
+      "key": "f1d8acea58644b6b:0",
+      "file": "web/src/concurrency.tsx",
+      "owner": "ConcurrencyPanel",
+      "tag": "DashboardSelect",
+      "control": "aria-label=\"Turn gap\" value={gap} onChange={event => update({ gap: Number(event.target.value) })}",
+      "contract": "view.parallelism",
+      "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
+    },
+    {
+      "key": "ff8fe79cc4b0a670:0",
+      "file": "web/src/concurrency.tsx",
+      "owner": "ConcurrencyPanel",
+      "tag": "DashboardSelect",
+      "control": "aria-label=\"Count by\" value={counting} onChange={event => update({ counting: event.target.value as ConcurrencyCounting, workspace: \"\", agent: \"\" })}",
       "contract": "view.parallelism",
       "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
     },
@@ -4757,6 +4770,15 @@
       "control": "onClick={() => set({ selection: { values: [], excluded: false } })}",
       "contract": "dashboard",
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
+    },
+    {
+      "key": "94c6e0900334d288:0",
+      "file": "web/src/dashboard-select.tsx",
+      "owner": "DashboardSelect",
+      "tag": "select",
+      "control": "",
+      "contract": "dashboard",
+      "reason": "Native select delegates value and changes to its dashboard caller; the hidden selected label only determines width."
     },
     {
       "key": "017af1e340829c8c:0",
@@ -6576,20 +6598,20 @@
       "reason": "Legacy view-state migration is explicitly deferred."
     },
     {
-      "key": "59afb5cd20ed97dd:0",
+      "key": "167c3030ecac74aa:0",
       "file": "web/src/machine-activity.tsx",
       "owner": "MachineActivity",
-      "tag": "select",
-      "control": "aria-label=\"Activity repository\" value={scope.repository} onChange={event => filter({ repository: event.target.value })}",
+      "tag": "DashboardSelect",
+      "control": "aria-label={`Activity ${label.toLowerCase()}`} value={scope[field]} onChange={event => filter({ [field]: event.target.value })}",
       "contract": "legacy",
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
     {
-      "key": "5eb4c775d57fc534:0",
+      "key": "28b31ea4f0f20ecd:0",
       "file": "web/src/machine-activity.tsx",
       "owner": "MachineActivity",
-      "tag": "select",
-      "control": "aria-label=\"Activity model\" value={scope.model} onChange={event => filter({ model: event.target.value })}",
+      "tag": "DashboardSelect",
+      "control": "aria-label=\"Activity repository\" value={scope.repository} onChange={event => filter({ repository: event.target.value })}",
       "contract": "legacy",
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
@@ -6603,29 +6625,29 @@
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
     {
-      "key": "bbb6a13686c0a204:0",
+      "key": "a04de5aa2e26d649:0",
       "file": "web/src/machine-activity.tsx",
       "owner": "MachineActivity",
-      "tag": "select",
-      "control": "aria-label={`Activity ${label.toLowerCase()}`} value={scope[field]} onChange={event => filter({ [field]: event.target.value })}",
+      "tag": "DashboardSelect",
+      "control": "aria-label=\"Activity model\" value={scope.model} onChange={event => filter({ model: event.target.value })}",
       "contract": "legacy",
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
     {
-      "key": "d913befc39deb7f9:0",
+      "key": "a217d747d436fb2b:0",
       "file": "web/src/machine-activity.tsx",
       "owner": "MachineActivity",
-      "tag": "select",
-      "control": "aria-label=\"Activity provider\" value={scope.provider} onChange={event => filter({ provider: event.target.value })}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "db7caed12f502143:0",
-      "file": "web/src/machine-activity.tsx",
-      "owner": "MachineActivity",
-      "tag": "select",
+      "tag": "DashboardSelect",
       "control": "aria-label=\"Activity period\" value={scope.days} onChange={event => filter({ days: Number(event.target.value) })}",
+      "contract": "legacy",
+      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
+    },
+    {
+      "key": "fe8a43fd544caa31:0",
+      "file": "web/src/machine-activity.tsx",
+      "owner": "MachineActivity",
+      "tag": "DashboardSelect",
+      "control": "aria-label=\"Activity provider\" value={scope.provider} onChange={event => filter({ provider: event.target.value })}",
       "contract": "legacy",
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
@@ -6711,15 +6733,6 @@
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
     {
-      "key": "65d7aab91be944e1:0",
-      "file": "web/src/machine-time.tsx",
-      "owner": "MachineTimeDashboard",
-      "tag": "select",
-      "control": "aria-label=\"Analytics grouping\" value={grouping} onChange={event => setGrouping(event.target.value as MachineGrouping)}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
       "key": "8c34e6240865923f:0",
       "file": "web/src/machine-time.tsx",
       "owner": "MachineTimeDashboard",
@@ -6738,11 +6751,29 @@
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
     {
+      "key": "b4230493e933ecec:0",
+      "file": "web/src/machine-time.tsx",
+      "owner": "MachineTimeDashboard",
+      "tag": "DashboardSelect",
+      "control": "aria-label=\"Trend command family\" value={operation} onChange={event => event.target.value ? filter([{ field: \"operation_key\", op: \"=\", value: event.target.value }]) : restore(where.filter(term => \"any\" in term || term.field !== \"operation_key\"))}",
+      "contract": "legacy",
+      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
+    },
+    {
       "key": "b44709cc2703e580:0",
       "file": "web/src/machine-time.tsx",
       "owner": "MachineTimeDashboard",
       "tag": "button",
       "control": "onClick={clear}",
+      "contract": "legacy",
+      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
+    },
+    {
+      "key": "b8d5399df513af1e:0",
+      "file": "web/src/machine-time.tsx",
+      "owner": "MachineTimeDashboard",
+      "tag": "DashboardSelect",
+      "control": "aria-label=\"Trend measure\" value={metric} onChange={event => setMetric(event.target.value as TimeMetric)}",
       "contract": "legacy",
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
@@ -6756,11 +6787,11 @@
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
     {
-      "key": "e5bf6a8c53241a5c:0",
+      "key": "d516ddeae252c053:0",
       "file": "web/src/machine-time.tsx",
       "owner": "MachineTimeDashboard",
-      "tag": "select",
-      "control": "aria-label=\"Trend measure\" value={metric} onChange={event => setMetric(event.target.value as TimeMetric)}",
+      "tag": "DashboardSelect",
+      "control": "aria-label=\"Analytics grouping\" value={grouping} onChange={event => setGrouping(event.target.value as MachineGrouping)}",
       "contract": "legacy",
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
@@ -6788,15 +6819,6 @@
       "owner": "MachineTimeDashboard",
       "tag": "button",
       "control": "onClick={() => document.getElementById(\"machineRawCalls\")?.scrollIntoView({ behavior: \"smooth\" })}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "f2dd1f2c9e0ae2f7:0",
-      "file": "web/src/machine-time.tsx",
-      "owner": "MachineTimeDashboard",
-      "tag": "select",
-      "control": "aria-label=\"Trend command family\" value={operation} onChange={event => event.target.value ? filter([{ field: \"operation_key\", op: \"=\", value: event.target.value }]) : restore(where.filter(term => \"any\" in term || term.field !== \"operation_key\"))}",
       "contract": "legacy",
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
@@ -8257,10 +8279,10 @@
       "reason": "Settings/diagnostic or feedback-editing disclosure, explicitly excluded from view URLs."
     },
     {
-      "key": "2432438d27b1f55a:0",
+      "key": "57c08b857d8535fe:0",
       "file": "web/src/usage-chart.tsx",
       "owner": "ChartSelect",
-      "tag": "select",
+      "tag": "DashboardSelect",
       "control": "aria-label={ariaLabel} value={value} onChange={event => onChange(event.target.value as T)}",
       "contract": "dashboard",
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."

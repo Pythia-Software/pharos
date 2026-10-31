@@ -67,6 +67,10 @@ type Config struct {
 	// uncompressed (docs/capture-compression.md).
 	CaptureCompressAfterDays int
 	CaptureRecoveryID        string
+
+	// Labels configures the local message labeler (docs/local-labeler.md),
+	// off unless labels_enabled is set.
+	Labels LabelerSettings
 }
 
 func defaultConfig(path string) Config {
@@ -198,6 +202,7 @@ func loadConfig(path string, hostSources bool) (Config, error) {
 	config.CPUIDLECeiling = floatValue(root, "cpu_idle_ceiling", config.CPUIDLECeiling)
 	config.IOMBPSCeiling = floatValue(root, "io_mbps_ceiling", config.IOMBPSCeiling)
 	config.YieldPollSeconds = floatValue(root, "yield_poll_seconds", config.YieldPollSeconds)
+	config.Labels = labelerSettingsFrom(root, base)
 	for index := range config.Sources {
 		config.Sources[index].File = path
 	}

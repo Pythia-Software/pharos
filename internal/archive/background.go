@@ -78,6 +78,8 @@ type backgroundItem struct {
 	Kinds             []string
 	continuous        bool
 	readsWholeSources bool
+	// requiresLabels items exist only where labels_enabled is on.
+	requiresLabels bool
 }
 
 // backgroundItems in the order they run within a pass: new data first, then
@@ -101,6 +103,8 @@ var backgroundItems = []backgroundItem{
 		Kinds: []string{"index.verify"}, Why: "Checks a bounded batch of larger inputs once the library is quiet. Completed checks survive interruptions; remaining inputs stay queued."},
 	{ID: "findings", Label: "Findings", Verb: "Updating findings", Feeds: "Optimize", Cadence: cadenceHourly, Adaptive: true,
 		Stages: []string{"findings"}, Kinds: []string{"analysis.findings"}, Why: "Measures the findings you watch against new work."},
+	{ID: "labels", Label: "Message labels", Verb: "Labeling messages", Feeds: "Local labels (pharos labels)", Cadence: cadenceHourly, Adaptive: true, requiresLabels: true,
+		Stages: []string{"labels"}, Kinds: []string{"analysis.labels/"}, Why: "Labels the messages that changed on this Mac, after your writing; a backlog continues when plugged in."},
 	{ID: "review", Label: "Findings review", Verb: "Reviewing findings", Feeds: "Optimize: new patterns and savings", Cadence: cadenceDaily, Fixed: true,
 		Kinds: []string{"analysis.findings"}, Why: "Looks at the last 28 days again for new patterns; the window moves once a day."},
 	{ID: "upgrade", Label: "Library upgrade", Verb: "Upgrading the library", Feeds: "Everything, after a Pharos update", Cadence: cadenceDaily, Fixed: true,
@@ -110,7 +114,7 @@ var backgroundItems = []backgroundItem{
 }
 
 // stageOrder is the analysis chain's order (finishDeferredStages).
-var stageOrder = []string{"identities", "git", "tools", "authorship", "findings"}
+var stageOrder = []string{"identities", "git", "tools", "authorship", "findings", "labels"}
 
 func backgroundItemByID(id string) (backgroundItem, bool) {
 	for _, item := range backgroundItems {
@@ -266,9 +270,11 @@ func (c *Catalog) backgroundCosts(ctx context.Context) map[string]itemCost {
 		}
 		total, runs := 0.0, -1
 		for _, kind := range item.Kinds {
-			name, variant, _ := strings.Cut(kind, "/")
+			// "kind/variant" is that variant; "kind/" only the plain kind
+			// (labels' bounded share, not its backlog runs); "kind" all.
+			name, variant, exact := strings.Cut(kind, "/")
 			rows, err := c.reader().QueryContext(ctx, `SELECT (julianday(ended_at)-julianday(started_at))*86400 FROM operation_journal
-				WHERE host_id=? AND kind=? AND (?='' OR variant=?) AND state='succeeded' AND ended_at IS NOT NULL ORDER BY started_at DESC LIMIT ?`, currentHost().ID, name, variant, variant, costRuns)
+				WHERE host_id=? AND kind=? AND (NOT ? OR COALESCE(variant,'')=?) AND state='succeeded' AND ended_at IS NOT NULL ORDER BY started_at DESC LIMIT ?`, currentHost().ID, name, exact, variant, costRuns)
 			if err != nil {
 				runs = 0
 				break
@@ -447,6 +453,10 @@ type backgroundInputs struct {
 	// power is this Mac's power source, for the battery policy.
 	power            powerState
 	verificationNext time.Time
+	// labels is whether labels_enabled is on; labelsWaiting why labeling
+	// waits for a download.
+	labels        bool
+	labelsWaiting string
 }
 
 func (c *Catalog) readBackgroundInputs(ctx context.Context) backgroundInputs {
@@ -501,6 +511,9 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 	nextDaily := instant.AddDate(0, 0, 1)
 	plans := []itemPlan{}
 	for _, item := range backgroundItems {
+		if item.requiresLabels && !in.labels {
+			continue
+		}
 		plan := itemPlan{ID: item.ID, Cadence: settings.cadence(item)}
 		run := in.runs[item.ID]
 		if value, ok := parseTime(run.succeeded); ok {
@@ -768,6 +781,9 @@ func (s *Server) backgroundInputsFor(ctx context.Context, requested map[string]b
 	in.backupDestination, in.lastBackup = s.cachedBackup(config)
 	in.requested = requested
 	in.power = s.cachedPower(ctx)
+	if config.Labels.Enabled {
+		in.labels, in.labelsWaiting = true, config.Labels.labelsWaiting()
+	}
 	return in
 }
 
@@ -1071,4 +1087,4 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 }
 
 // stageItems is the background item each chain stage belongs to.
-var stageItems = map[string]string{"identities": "repositories", "git": "repositories", "tools": "tools", "authorship": "writing", "findings": "findings"}
+var stageItems = map[string]string{"identities": "repositories", "git": "repositories", "tools": "tools", "authorship": "writing", "findings": "findings", "labels": "labels"}

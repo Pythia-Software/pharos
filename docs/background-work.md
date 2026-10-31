@@ -317,6 +317,7 @@ Scheduled indexing never runs it; it marks `sync_deferred` instead (§5).
 | `analysis.git` | Look up merges in Git · Looking up merges in Git | chained, startup (one-time backfill), after a legacy sync | svc (+`git`) | D:w W:w | an.git | — | Stops; it runs again after the next index. Each `git` call has a 5 s limit (Conductor's git has none). | batch | >5 s when not a stage | bg |
 | `analysis.tools` | Update the Tools rollup · Updating the Tools rollup | chained, read (a Query Table request), version | svc | D:w W:w | an.tools | — | Stops; it runs again on the next index or Tools request. | batch | >5 s when not a stage | bg; fg when read-started |
 | `analysis.authorship` | Classify your writing · Classifying your writing | chained, read (`/api/authorship`, usage summary, native menu usage poll) | svc | D:w W:w | an.authorship | — | Stops; it runs again after the next index. | batch | >5 s when not a stage | bg |
+| `analysis.labels` (variant `backlog`) | Label messages · Labeling messages | chained (the last stage, when `labels_enabled` is on; background item Message labels), cli (`pharos labels run`); `backlog` is chained after a stage that left more than its share, plugged in only, and stops if this Mac goes onto battery | svc, cli (+ worker process) | D:w W:w | an.labels | — | Stops between batches; the next run resumes it. | batch | >5 s when not a stage | bg |
 | `analysis.findings` | Update findings · Updating findings | chained, user ("Refresh findings now"), read (`GET /api/findings` before the first build) | svc | D:w W:w | findings | — | Stops; it runs again after the next index. | batch | >5 s when not a stage; always for `user` | bg; fg for `user` |
 | `analysis.refresh` | Update analyses · Updating analyses | chained (after a legacy source sync: Git, then tools, then findings) | svc | D:w W:w | an.git, an.tools, findings | — | Stops; it runs again after the next index. | batch | >5 s | bg |
 
@@ -471,6 +472,7 @@ Notes:
 |---|---|---|---|---|---|---|---|---|---|---|
 | `service.start` | Open the library · Opening the library | user (select), startup, respawn | brk | M:w D:w (`M` today, for up to 2 min) | — | — | Not stoppable. The broker gives up after 2 min and SIGTERMs the child (§10, G2). | none | always (broker registry) | fg |
 | `library.release` | Release the library · Releasing the library | user (eject, quit, switch through the API), device (volume release), signal (SIGTERM/SIGINT), parent-exited, error | svc, brk | D:w | — | — | Is the stop. Fails after 7 s with "Pharos is finishing a write". | — | always | fg |
+| `labels.fetch` | Download the labeling model · Downloading the labeling model | startup (a library with `labels_enabled` opens on a Mac without the model or ONNX Runtime; retried 15 min after a failure), cli (`pharos labels fetch`) | brk, cli | — (network and this Mac's support directory only) | — | — | Stops; it touches no library, and the next attempt resumes the download. | record | always (broker registry) | bg |
 | `app.update` | Update Pharos · Updating Pharos | schedule, user (Sparkle) | app | update-lock:w (native) | — | — | Native; bridged to the header ring as today. | — | never (Sparkle keeps its own) | bg |
 
 Not kinds: the broker's 5 s maintain loop (a daemon whose respawns are
@@ -1602,6 +1604,7 @@ the same schedule from one declaration (`backgroundItems`):
 | Tools & usage | the chain's tools stage | Frequently, adaptive | `analysis.tools` |
 | Your writing | the chain's authorship stage | Hourly, adaptive | `analysis.authorship` |
 | Findings | the chain's findings stage, not forced | Hourly, adaptive | `analysis.findings` |
+| Message labels | the chain's labels stage, only where `labels_enabled` is on (docs/local-labeler.md) | Hourly, adaptive | `analysis.labels` (not its `backlog` runs) |
 | Findings review | the findings stage once today's full pass is due | Daily (fixed) | `analysis.findings` |
 | Library upgrade | `RunUpgrade`, when the stored count has pending steps | Daily (fixed) | `library.upgrade` |
 | Back up | a local backup to the last destination, when connected | only when chosen (opt-in Daily) | `backup.local` |
@@ -1642,6 +1645,16 @@ the same schedule from one declaration (`backgroundItems`):
   pass ever). A stage that fails records its error; the items after it
   record that they waited for it. A failed item waits 15 min before it
   runs again.
+- **Message labels** is the chain's last stage, after Your writing, which
+  it reads. The stage labels at most 2,000 messages, within the budget the
+  power source allows: plugged in, the full one, and a larger backlog
+  continues as an `analysis.labels` `backlog` run that stops if this Mac
+  goes onto battery; on battery, one worker of two threads and small
+  batches, and the backlog waits. A stage that leaves a backlog, or waits
+  for the model to download, stays pending (`sync_deferred` is not
+  completed), so a later pass continues it. The item's line says when it
+  waits for the download. With labels off there is no item, and indexing's
+  mark is completed at once.
 - **Preserve originals** on a Mac with no enabled sources captures nothing
   but still indexes what other Macs captured.
 - **Mode.** On (default), paused until a time (scheduled indexing waits
