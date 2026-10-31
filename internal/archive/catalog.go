@@ -56,14 +56,16 @@ type Catalog struct {
 	findings findingsState
 	// labels allows one labels run at a time in this process (labels.go);
 	// labelers is the labeler runtime its runs share.
-	labels       sync.Mutex
-	labelers     *labelrt.Manager
-	labelersOnce sync.Once
-	mcpHistory   mcpHistory
-	wal          walBound
-	writers      catalogWriteTracker
-	queries      queryActivity
-	now          func() time.Time
+	labels sync.Mutex
+	// agentEventsRun keeps one agent events pass at a time in this process.
+	agentEventsRun sync.Mutex
+	labelers       *labelrt.Manager
+	labelersOnce   sync.Once
+	mcpHistory     mcpHistory
+	wal            walBound
+	writers        catalogWriteTracker
+	queries        queryActivity
+	now            func() time.Time
 	// background runs the catalog's own background work (the authorship
 	// rebuild) as an operation. The service sets it to its start, so a
 	// release cancels the work and waits for it before closing the catalog;

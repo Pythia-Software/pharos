@@ -85,13 +85,20 @@ CREATE TABLE IF NOT EXISTS message_labels_models (
 // extraction, agent-session membership and kinds, and the conversation row.
 // Each mark carries a fresh token, so a run clears only marks it has read.
 func labelsDirtyTriggers() []string {
+	return itemDirtyTriggers("message_labels_dirty", "labels_dirty_")
+}
+
+// itemDirtyTriggers are labelsDirtyTriggers for any ledger built from
+// labeling items: they mark dirty, a (conversation_id, token) table, and are
+// named with prefix.
+func itemDirtyTriggers(dirty, prefix string) []string {
 	mark := func(conversation string) string {
-		return `INSERT INTO message_labels_dirty(conversation_id,token) SELECT ` + conversation + `,hex(randomblob(8)) WHERE ` + conversation +
+		return `INSERT INTO ` + dirty + `(conversation_id,token) SELECT ` + conversation + `,hex(randomblob(8)) WHERE ` + conversation +
 			` IS NOT NULL ON CONFLICT(conversation_id) DO UPDATE SET token=excluded.token;`
 	}
 	statements := []string{}
 	add := func(table, event, columns, conversation string) {
-		name := "labels_dirty_" + table + "_" + strings.ToLower(event)
+		name := prefix + table + "_" + strings.ToLower(event)
 		of := ""
 		if columns != "" {
 			of = " OF " + columns

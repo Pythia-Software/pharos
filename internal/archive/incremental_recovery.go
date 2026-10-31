@@ -525,6 +525,17 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 			return err
 		}
 	}
+	// Agent events follow, also only where they are turned on.
+	if settings := s.Config().AgentEvents; settings.Enabled {
+		stages = append(stages, struct {
+			name string
+			work func() error
+		}{"agent_events", func() error { return s.chainAgentEvents(ctx, s.Config().Labels, settings) }})
+	} else if generation["agent_events"] > 0 {
+		if err := complete("agent_events"); err != nil {
+			return err
+		}
+	}
 	for _, stage := range stages {
 		if err := ctx.Err(); err != nil {
 			return err
