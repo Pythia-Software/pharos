@@ -69,10 +69,14 @@ func captureViewOf(adapter Adapter) *captureView {
 	return nil
 }
 
-// IngestContext stops between workspace records once ctx is cancelled. Each
-// record commits on its own, so the source is left "indexing" and the next
-// sync resumes it, as after a crash.
+// IngestContext yields to queries between records and messages. Cancellation
+// rolls back any unfinished record; committed records remain and the next sync
+// resumes the source, as after a crash.
 func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress ProgressFunc) IngestResult {
+	ctx = c.withIndexQueryWait(ctx)
+	if err := waitForIndexQuery(ctx); err != nil {
+		return IngestResult{Source: adapter.Config().Name, Error: err.Error()}
+	}
 	// Plans retain the acquired reader, never readers over a live inventory.
 	if plan := modeOf(ctx).plan; plan != nil && plan.reader != nil {
 		adapter = plan.reader
@@ -308,6 +312,7 @@ func sourceIndexVersion(adapter Adapter) string {
 // adapter those of the parts that changed, as host's copy. cursor records
 // progress every 25 workspaces written.
 func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, resume bool, result *IngestResult, report func(string), cursor func(string)) error {
+	ctx = c.withIndexQueryWait(ctx)
 	started := time.Now()
 	defer func() {
 		result.DiscoveryParseSeconds = result.DiscoverySeconds + time.Since(started).Seconds() - result.WriteSeconds
@@ -341,7 +346,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 	processRecord := func(record *WorkspaceRecord, parts []sourcePart) error {
 		started := time.Now()
 		defer func() { result.WriteSeconds += time.Since(started).Seconds() }()
-		if err := ctx.Err(); err != nil {
+		if err := waitForIndexQuery(ctx); err != nil {
 			return err
 		}
 		result.Parsed += physicalPartCount(parts)
@@ -421,7 +426,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 				}
 			}
 			if !copied {
-				conversations, messages, err = ingestCopyMode(tx, *record, adapter.Capability() == "tl1-release", host, config.Name, captureViewOf(adapter) != nil, mode.force, repositoryOptions{c.RepositoryAliases, c.RepositorySeparate})
+				conversations, messages, err = ingestCopyModeContext(ctx, tx, *record, adapter.Capability() == "tl1-release", host, config.Name, captureViewOf(adapter) != nil, mode.force, repositoryOptions{c.RepositoryAliases, c.RepositorySeparate})
 				if errors.Is(err, errOlderCopy) {
 					// Nothing is recorded, so the newer read's digest and parts stand.
 					older = true
@@ -721,6 +726,10 @@ func ingestCopy(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host,
 }
 
 func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host, source string, fromCapture, force bool, repositoryOptions ...repositoryOptions) (int, int, error) {
+	return ingestCopyModeContext(context.Background(), tx, record, allowReclamation, host, source, fromCapture, force, repositoryOptions...)
+}
+
+func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host, source string, fromCapture, force bool, repositoryOptions ...repositoryOptions) (int, int, error) {
 	// Native Ask Pharos transcripts contain private lookup context. Only the
 	// separately stored user-visible chat is indexed, never the agent protocol.
 	if len(record.Conversations) > 0 {
@@ -861,6 +870,9 @@ func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, h
 	merged := map[string]bool{}
 	written := 0
 	for index, conversation := range record.Conversations {
+		if err := waitForIndexQuery(ctx); err != nil {
+			return 0, 0, err
+		}
 		if authority.conversations[index].older {
 			continue
 		}
@@ -906,13 +918,19 @@ func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, h
 		}
 		retained := map[string]bool{}
 		for sourceOrder, message := range conversation.Messages {
+			if err := waitForIndexQuery(ctx); err != nil {
+				messageWriter.statement.Close()
+				return 0, 0, err
+			}
 			message.SourceOrder = sourceOrder
 			id, changed, err := messageWriter.write(message)
 			if err != nil {
 				messageWriter.statement.Close()
 				return 0, 0, err
 			}
-			if changed {
+			// A forced rebuild replaces the whole conversation's postings below.
+			// Updating them here as well doubles the index IO for changed text.
+			if changed && !force {
 				if err := replaceMessageFTS(tx, id); err != nil {
 					messageWriter.statement.Close()
 					return 0, 0, err

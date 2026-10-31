@@ -217,6 +217,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.life.requests.Done()
+	if interactiveRead(r) {
+		defer s.Catalog.queries.begin()()
+	}
 	debug.SetPanicOnFault(true) // see exitOnFault
 	defer func() {
 		if value := recover(); value != nil {

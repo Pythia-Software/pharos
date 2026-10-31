@@ -58,6 +58,9 @@ func (c *Catalog) maintainTextSearch(ctx context.Context) {
 	pass := c.beginPass(ctx, "maintenance.search.text", triggerVersion)
 	defer func() { pass.end(nil) }()
 	for {
+		if c.queries.wait(ctx) != nil {
+			return
+		}
 		var more bool
 		var err error
 		pass.runIO(func() { more, err = c.indexTextSearchBatch(ctx) })

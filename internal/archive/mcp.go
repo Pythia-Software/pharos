@@ -147,6 +147,7 @@ func callMCP(catalog *Catalog, name string, args map[string]any) (any, error) {
 	return callMCPContext(context.Background(), catalog, name, args)
 }
 func callMCPContext(ctx context.Context, catalog *Catalog, name string, args map[string]any) (any, error) {
+	defer catalog.queries.begin()()
 	limit := int(integer(valueOr(args["limit"], 50)))
 	if limit > 100 {
 		limit = 100

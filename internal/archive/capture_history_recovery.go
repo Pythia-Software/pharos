@@ -403,7 +403,7 @@ func (c *Catalog) applyHistoryRecovery(ctx context.Context, e historyRecovery) (
 		record := e.Record
 		record.Repository = nil
 		record.catalogRecovery = true
-		if _, _, err = ingestCopy(tx, record, false, host, source, true); err != nil {
+		if _, _, err = ingestCopyModeContext(c.withIndexQueryWait(ctx), tx, record, false, host, source, true, false); err != nil {
 			return err
 		}
 		id, err = storedWorkspaceID(tx, e.Record)

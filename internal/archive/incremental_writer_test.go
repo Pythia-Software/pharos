@@ -16,7 +16,7 @@ func incrementalFixture(count int) WorkspaceRecord {
 	return WorkspaceRecord{SourceID: "session", SourceKind: "codex", Account: "local", Title: "Incremental fixture", ActivityAt: "2026-10-01T10:00:00Z", Conversations: []ConversationRecord{conversation}}
 }
 
-func writeIncrementalFixture(t testing.TB, catalog *Catalog, record WorkspaceRecord) int64 {
+func writeIncrementalFixture(t testing.TB, catalog *Catalog, record WorkspaceRecord, force ...bool) int64 {
 	t.Helper()
 	tx, err := catalog.beginWrite(t.Context())
 	if err != nil {
@@ -27,7 +27,7 @@ func writeIncrementalFixture(t testing.TB, catalog *Catalog, record WorkspaceRec
 	if err := tx.QueryRow("SELECT total_changes()").Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := ingestCopy(tx, record, false, currentHost().ID, "fixture", false); err != nil {
+	if _, _, err := ingestCopyMode(tx, record, false, currentHost().ID, "fixture", false, len(force) > 0 && force[0]); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.QueryRow("SELECT total_changes()").Scan(&after); err != nil {
@@ -82,7 +82,7 @@ func TestIncrementalWriterSearchParity(t *testing.T) {
 			}
 			record.Conversations[0].Messages = messages
 			writeIncrementalFixture(t, catalog, record)
-			writeIncrementalFixture(t, reference, record)
+			writeIncrementalFixture(t, reference, record, true)
 			if actual, expected := writerSearchSnapshot(t, catalog.DB), writerSearchSnapshot(t, reference.DB); actual != expected {
 				t.Fatalf("incremental search differs from full ingest\nactual %s\nexpected %s", actual, expected)
 			}

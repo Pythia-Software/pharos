@@ -142,9 +142,17 @@ The workspace page loads a workspace in pieces, since one long session with many
 Requests never wait for the catalog writer, which a sync holds for seconds at
 a time. They read through a read-only connection pool and never write:
 
+- Interactive query, search, reader and MCP requests pause ingestion at record
+  and message boundaries. Search-index maintenance and Library maintenance wait
+  between batches too. This protection applies to manual and automatic indexing
+  regardless of the activity-panel feature flag. Status polls do not pause work.
+- Cached Library and derived views keep their last computed generation for the
+  entire ingest; cold values still compute on demand. Once the ingest ends,
+  reads observe the new generation and refresh. Freshness may lag throughout a
+  long ingest so pages remain usable without repeated whole-catalog rebuilds.
 - Conversation origins are published at the end of each ingest and by the
-  Library maintenance loop, at most once a minute while a sync runs, so pages
-  can show channel and machine up to a minute behind during a sync.
+  Library maintenance loop, at most once a minute while a sync runs. Cached
+  views may retain the previous origins until the ingest ends.
 - Dirty parallelism timings and MCP metric projections are computed in the
   request's snapshot without being stored; maintenance stores them.
 - The tool rollup rebuilds in the background. Until the first rollup in a new
@@ -154,6 +162,9 @@ a time. They read through a read-only connection pool and never write:
 
 `TestRequestReadsDoNotWaitForTheCatalogWriter` holds the writer, as a sync
 does, and checks page reads, query datasets and MCP tools against it.
+`TestInteractiveQueriesPauseIngest` and `TestIndexYieldsInsideAtomicWorkspace`
+check that indexing yields, readers see the previous atomic record, and a
+cancelled record rolls back and can be replayed.
 
 The HTTP service binds only to loopback and requires either a bearer token or its HttpOnly UI cookie. Core endpoints are:
 

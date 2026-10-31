@@ -33,7 +33,7 @@ func (c *Catalog) compareRetainedAuditRecord(ctx context.Context, unit syncUnit,
 	comparison := record
 	comparison.EvidenceIdentity = ""
 	comparison.EvidenceRevision = ""
-	if _, _, err = ingestCopyMode(tx, comparison, false, unit.hostID(), unit.Source.Name, unit.Reader != nil && captureViewOf(unit.Reader) != nil, true, repositoryOptions{c.RepositoryAliases, c.RepositorySeparate}); err != nil {
+	if _, _, err = ingestCopyModeContext(c.withIndexQueryWait(ctx), tx, comparison, false, unit.hostID(), unit.Source.Name, unit.Reader != nil && captureViewOf(unit.Reader) != nil, true, repositoryOptions{c.RepositoryAliases, c.RepositorySeparate}); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(); err != nil {

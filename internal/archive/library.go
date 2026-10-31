@@ -436,8 +436,8 @@ func (c *Catalog) libraryPass(ctx context.Context) (context.Context, func(), boo
 // originsRunInterval spaces origin publications while this process ingests:
 // each one reads every conversation, and the next commit leaves the projection
 // dirty again. Pages then show attribution up to this far behind, like their
-// cached values (see runCacheHold). Tests shorten it.
-var originsRunInterval = runCacheHold
+// cached values. Tests shorten it.
+var originsRunInterval = time.Minute
 
 // originsPass publishes conversation origins as a maintenance.origins pass,
 // an operation only when the projection was out of date (§3.4).
@@ -484,6 +484,9 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 	defer func() { settle(&view, false, nil); settle(&previews, false, nil); settle(&parallelism, false, nil) }()
 	var originsAt time.Time
 	for {
+		if c.queries.wait(ctx) != nil {
+			return
+		}
 		if !c.libraryRefreshStopped() && (c.ingestRuns.Load() == 0 || time.Since(originsAt) >= originsRunInterval) {
 			c.originsPass(ctx)
 			originsAt = time.Now()

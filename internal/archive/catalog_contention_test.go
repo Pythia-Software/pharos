@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +15,185 @@ import (
 	"testing"
 	"time"
 )
+
+type heldQueryResponse struct {
+	*httptest.ResponseRecorder
+	started chan struct{}
+	release chan struct{}
+}
+
+func (w *heldQueryResponse) Write(body []byte) (int, error) {
+	select {
+	case <-w.started:
+	default:
+		close(w.started)
+		<-w.release
+	}
+	return w.ResponseRecorder.Write(body)
+}
+
+func waitForIndexPause(t *testing.T, c *Catalog) {
+	t.Helper()
+	waitUntil(t, 5*time.Second, "indexing to yield to the query", func() bool {
+		c.queries.mu.Lock()
+		defer c.queries.mu.Unlock()
+		return c.queries.waiting > 0
+	})
+}
+
+func TestInteractiveReadDemand(t *testing.T) {
+	for _, route := range []struct {
+		method, path string
+		query        bool
+	}{
+		{http.MethodPost, "/api/query/library/rows-v2", true},
+		{http.MethodPost, "/api/query/usage/metrics", true},
+		{http.MethodPost, "/api/query/library/query-v3", true},
+		{http.MethodGet, "/api/search", true},
+		{http.MethodGet, "/api/library/find", true},
+		{http.MethodPost, "/api/search/text", true},
+		{http.MethodGet, "/api/work/id/conversations/id", true},
+		{http.MethodGet, "/api/usage/parallelism", true},
+		{http.MethodGet, "/api/status", false},
+		{http.MethodGet, "/api/operations", false},
+		{http.MethodGet, "/api/menu-bar/usage", false},
+		{http.MethodGet, "/api/ready", false},
+		{http.MethodGet, "/assets/query-tables.js", false},
+		{http.MethodPost, "/api/sync/run", false},
+		{http.MethodPost, "/api/query-computed-columns", false},
+	} {
+		if got := interactiveRead(httptest.NewRequest(route.method, route.path, nil)); got != route.query {
+			t.Errorf("%s %s: query demand=%t, want %t", route.method, route.path, got, route.query)
+		}
+	}
+}
+
+func TestInteractiveQueriesPauseIngest(t *testing.T) {
+	catalog, config := testCatalog(t)
+	writeIncrementalFixture(t, catalog, incrementalFixture(1))
+	server := testServer(t, config, catalog)
+	query := httptest.NewRequest(http.MethodPost, "/api/query/library/rows-v2", strings.NewReader(`{"version":2,"profile":"qt-sqlite-v1","limit":5}`))
+	query.Header.Set("Authorization", "Bearer "+config.APIToken)
+	w := &heldQueryResponse{httptest.NewRecorder(), make(chan struct{}), make(chan struct{})}
+	queryDone := make(chan struct{})
+	go func() { defer close(queryDone); server.ServeHTTP(w, query) }()
+	defer func() { close(w.release); <-queryDone }()
+	select {
+	case <-w.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("query did not start")
+	}
+	path := filepath.Join(t.TempDir(), "export.json")
+	if err := os.WriteFile(path, []byte(`{"workspaces":[{"id":"work","title":"New workspace","conversations":[{"id":"thread","provider":"codex","messages":[{"id":"one","role":"user","text":"hello"}]}]}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := MakeAdapter(SourceConfig{Name: "fixture", Kind: "canonical", Path: path, Account: "local", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	indexed := make(chan IngestResult, 1)
+	go func() { indexed <- catalog.IngestContext(ctx, adapter, nil) }()
+	waitForIndexPause(t, catalog)
+	// A second read is admitted immediately even though an index is waiting.
+	if response := serveTestBody(server, http.MethodGet, "/api/search", ""); response.Code != http.StatusOK {
+		t.Fatalf("read during paused index: %d %s", response.Code, response.Body.String())
+	}
+	waitForIndexPause(t, catalog)
+	// Cancellation must release a paused index without waiting for the query.
+	cancel()
+	select {
+	case result := <-indexed:
+		if result.Error == nil {
+			t.Fatal("cancelled index reported success")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled index still waiting for a query")
+	}
+}
+
+func TestIndexYieldsInsideAtomicWorkspace(t *testing.T) {
+	for _, stop := range []bool{false, true} {
+		t.Run(fmt.Sprint("cancel=", stop), func(t *testing.T) {
+			catalog, _ := testCatalog(t)
+			writeIncrementalFixture(t, catalog, incrementalFixture(1))
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			paused := make(chan func(), 1)
+			written := make(chan error, 1)
+			go func() {
+				tx, err := catalog.beginWrite(ctx)
+				if err != nil {
+					written <- err
+					return
+				}
+				defer tx.Rollback()
+				started := false
+				work := context.WithValue(ctx, indexQueryWaitKey{}, func(ctx context.Context) error {
+					var messages int
+					if err := tx.QueryRow("SELECT COUNT(*) FROM messages").Scan(&messages); err != nil {
+						return err
+					}
+					if !started && messages > 1 {
+						started = true
+						paused <- catalog.queries.begin()
+					}
+					return catalog.queries.wait(ctx)
+				})
+				_, _, err = ingestCopyModeContext(work, tx, incrementalFixture(3), false, currentHost().ID, "fixture", false, false)
+				if err == nil {
+					err = tx.Commit()
+				}
+				written <- err
+			}()
+			var release func()
+			select {
+			case release = <-paused:
+			case err := <-written:
+				t.Fatalf("workspace completed without yielding: %v", err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("index did not yield inside the workspace")
+			}
+			defer func() {
+				if release != nil {
+					release()
+				}
+			}()
+			waitForIndexPause(t, catalog)
+			var count int
+			if err := catalog.reader().QueryRow("SELECT COUNT(*) FROM messages").Scan(&count); err != nil || count != 1 {
+				t.Fatalf("query did not read the previous atomic record: count=%d err=%v", count, err)
+			}
+			want := 3
+			if stop {
+				cancel()
+				want = 1
+			} else {
+				release()
+				release = nil
+			}
+			select {
+			case err := <-written:
+				if stop && !errors.Is(err, context.Canceled) || !stop && err != nil {
+					t.Fatalf("index result: %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("index failed to resume or stop")
+			}
+			if err := catalog.reader().QueryRow("SELECT COUNT(*) FROM messages").Scan(&count); err != nil || count != want {
+				t.Fatalf("atomic index result: count=%d want=%d err=%v", count, want, err)
+			}
+			if stop {
+				// The rolled-back record is safe to replay in the next run.
+				writeIncrementalFixture(t, catalog, incrementalFixture(3))
+				if err := catalog.reader().QueryRow("SELECT COUNT(*) FROM messages").Scan(&count); err != nil || count != 3 {
+					t.Fatalf("resumed record: count=%d err=%v", count, err)
+				}
+			}
+		})
+	}
+}
 
 func TestIngestRetriesCatalogWriterContention(t *testing.T) {
 	catalog, _ := testCatalog(t)
