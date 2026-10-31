@@ -23,6 +23,10 @@ import (
 // its value.
 const unifiedActivityFlag = "pharos-unified-activity-v1"
 
+// pauseIndexingForQueriesFlag opts into yielding ingestion and maintenance
+// while interactive reads run. Off by default so browsing cannot starve indexing.
+const pauseIndexingForQueriesFlag = "pharos-pause-indexing-for-queries-v1"
+
 // featureFlagTTL bounds how stale a cached flag may be when another process
 // (a second service on the same catalog) saved it.
 var featureFlagTTL = 5 * time.Second
@@ -78,9 +82,7 @@ func (c *Catalog) featureFlag(ctx context.Context, key string) bool {
 			c.flags.values = map[string]featureFlagValue{}
 		}
 		c.flags.values[key] = featureFlagValue{on: on, at: time.Now()}
-		if key == unifiedActivityFlag {
-			c.flags.unified.Store(on)
-		}
+		c.applyFeatureFlag(key, on)
 	}
 	c.flags.mu.Unlock()
 	return on
@@ -101,24 +103,40 @@ func (c *Catalog) unifiedActivityNow() bool {
 	return c != nil && c.flags.unified.Load()
 }
 
-// rememberSaved records the flag's saved value, after a save's
-// invalidation, so a read that raced the save cannot overwrite it.
-func (f *featureFlagCache) rememberSaved(updates map[string]string, deletes []string) {
-	if value, ok := updates[unifiedActivityFlag]; ok {
-		on := false
-		_ = json.Unmarshal([]byte(value), &on)
-		f.unified.Store(on)
-	} else if slices.Contains(deletes, unifiedActivityFlag) {
-		f.unified.Store(false)
+// applyFeatureFlag updates work paths without a catalog read. Call with
+// flags.mu held so a stale flag read cannot overwrite a saved value.
+func (c *Catalog) applyFeatureFlag(key string, on bool) {
+	switch key {
+	case unifiedActivityFlag:
+		c.flags.unified.Store(on)
+	case pauseIndexingForQueriesFlag:
+		c.queries.setEnabled(on)
 	}
 }
 
-// watchFeatureFlags keeps unifiedActivityNow current while the service
+// rememberSavedFlags records the flags' saved values, after a save's
+// invalidation, so a read that raced the save cannot overwrite it.
+func (c *Catalog) rememberSavedFlags(updates map[string]string, deletes []string) {
+	c.flags.mu.Lock()
+	defer c.flags.mu.Unlock()
+	for _, key := range []string{unifiedActivityFlag, pauseIndexingForQueriesFlag} {
+		if slices.Contains(deletes, key) {
+			c.applyFeatureFlag(key, false)
+		} else if value, ok := updates[key]; ok {
+			on := false
+			_ = json.Unmarshal([]byte(value), &on)
+			c.applyFeatureFlag(key, on)
+		}
+	}
+}
+
+// watchFeatureFlags keeps work paths' flags current while the service
 // runs, for flags saved by another process on the same catalog. It is a
 // daemon (§3.4): it holds nothing and writes nothing.
 func (c *Catalog) watchFeatureFlags(ctx context.Context) {
 	for {
 		c.unifiedActivity(ctx)
+		c.featureFlag(ctx, pauseIndexingForQueriesFlag)
 		select {
 		case <-ctx.Done():
 			return

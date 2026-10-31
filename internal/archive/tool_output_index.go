@@ -479,6 +479,9 @@ func (c *Catalog) maintainToolOutputIndex(ctx context.Context) {
 	defer func() { pass.end(nil) }()
 	migration := newToolOutputMigration()
 	for {
+		if c.queries.wait(ctx) != nil {
+			return
+		}
 		var more bool
 		var err error
 		pass.runIO(func() { more, err = migration.step(ctx, c) })

@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +15,316 @@ import (
 	"testing"
 	"time"
 )
+
+type heldQueryResponse struct {
+	*httptest.ResponseRecorder
+	started chan struct{}
+	release chan struct{}
+}
+
+func (w *heldQueryResponse) Write(body []byte) (int, error) {
+	select {
+	case <-w.started:
+	default:
+		close(w.started)
+		<-w.release
+	}
+	return w.ResponseRecorder.Write(body)
+}
+
+func waitForIndexPause(t *testing.T, c *Catalog) {
+	t.Helper()
+	waitUntil(t, 5*time.Second, "indexing to yield to the query", func() bool {
+		c.queries.mu.Lock()
+		defer c.queries.mu.Unlock()
+		return c.queries.waiting > 0
+	})
+}
+
+func TestInteractiveReadDemand(t *testing.T) {
+	for _, route := range []struct {
+		method, path string
+		query        bool
+	}{
+		{http.MethodPost, "/api/query/library/rows-v2", true},
+		{http.MethodPost, "/api/query/usage/metrics", true},
+		{http.MethodPost, "/api/query/library/query-v3", true},
+		{http.MethodGet, "/api/search", true},
+		{http.MethodGet, "/api/library/find", true},
+		{http.MethodPost, "/api/search/text", true},
+		{http.MethodGet, "/api/work/id/conversations/id", true},
+		{http.MethodGet, "/api/usage/parallelism", true},
+		{http.MethodGet, "/api/status", false},
+		{http.MethodGet, "/api/operations", false},
+		{http.MethodGet, "/api/menu-bar/usage", false},
+		{http.MethodGet, "/api/ready", false},
+		{http.MethodGet, "/assets/query-tables.js", false},
+		{http.MethodPost, "/api/sync/run", false},
+		{http.MethodPost, "/api/query-computed-columns", false},
+	} {
+		if got := interactiveRead(httptest.NewRequest(route.method, route.path, nil)); got != route.query {
+			t.Errorf("%s %s: query demand=%t, want %t", route.method, route.path, got, route.query)
+		}
+	}
+}
+
+func TestQueryPausingPreference(t *testing.T) {
+	catalog, config := testCatalog(t)
+	server := testServer(t, config, catalog)
+	// Toggle the rule while the same query stays active throughout.
+	defer catalog.beginInteractiveRead(t.Context())()
+	for _, step := range []struct {
+		name, body string
+		on         bool
+	}{
+		{"default off", "", false},
+		{"enable", `{"set":{"pharos-pause-indexing-for-queries-v1":true}}`, true},
+		{"disable", `{"set":{"pharos-pause-indexing-for-queries-v1":false}}`, false},
+		{"enable again", `{"set":{"pharos-pause-indexing-for-queries-v1":true}}`, true},
+		{"nonboolean is off", `{"set":{"pharos-pause-indexing-for-queries-v1":"true"}}`, false},
+		{"enable before delete", `{"set":{"pharos-pause-indexing-for-queries-v1":true}}`, true},
+		{"delete is off", `{"delete":["pharos-pause-indexing-for-queries-v1"]}`, false},
+	} {
+		t.Run(step.name, func(t *testing.T) {
+			if step.body != "" {
+				if response := serveTestBody(server, http.MethodPost, "/api/preferences", step.body); response.Code != http.StatusOK {
+					t.Fatalf("save: %d %s", response.Code, response.Body.String())
+				}
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- catalog.queries.wait(ctx) }()
+			if step.on {
+				waitForIndexPause(t, catalog)
+				cancel()
+			}
+			select {
+			case err := <-done:
+				if step.on && !errors.Is(err, context.Canceled) || !step.on && err != nil {
+					t.Fatalf("index wait: %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("index failed to progress with query pausing off")
+			}
+		})
+	}
+
+	// A fresh service loads the saved opt-in before admitting its first read.
+	if err := catalog.SetUIPreferences(t.Context(), map[string]any{"set": map[string]any{pauseIndexingForQueriesFlag: true}}); err != nil {
+		t.Fatal(err)
+	}
+	other, err := OpenCatalog(catalog.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	defer other.beginInteractiveRead(t.Context())()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- other.queries.wait(ctx) }()
+	waitForIndexPause(t, other)
+	// A different process's saved toggle is applied by the flag watcher too.
+	if err := catalog.SetUIPreferences(t.Context(), map[string]any{"set": map[string]any{pauseIndexingForQueriesFlag: false}}); err != nil {
+		t.Fatal(err)
+	}
+	other.flags.invalidate()
+	watchCtx, stop := context.WithCancel(t.Context())
+	watched := make(chan struct{})
+	go func() { defer close(watched); other.watchFeatureFlags(watchCtx) }()
+	defer func() { stop(); <-watched }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("watcher did not release paused work after disabling")
+	}
+}
+
+func TestInteractiveQueriesPauseIngest(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprint("enabled=", enabled), func(t *testing.T) {
+			catalog, config := testCatalog(t)
+			if enabled {
+				if err := catalog.SetUIPreferences(t.Context(), map[string]any{"set": map[string]any{pauseIndexingForQueriesFlag: true}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			server := testServer(t, config, catalog)
+			path := filepath.Join(t.TempDir(), "export.json")
+			if err := os.WriteFile(path, []byte(`{"workspaces":[{"id":"first","title":"First workspace","conversations":[{"id":"first-thread","provider":"codex","messages":[{"id":"one","role":"user","text":"hello"}]}]},{"id":"second","title":"Second workspace","conversations":[{"id":"second-thread","provider":"codex","messages":[{"id":"two","role":"user","text":"world"}]}]}]}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			adapter, err := MakeAdapter(SourceConfig{Name: "fixture", Kind: "canonical", Path: path, Account: "local", Enabled: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			firstRecord, continueIndex := make(chan struct{}), make(chan struct{})
+			first := true
+			work := withIngestMode(ctx, ingestMode{written: func(string) {
+				if !first {
+					return
+				}
+				first = false
+				close(firstRecord)
+				select {
+				case <-continueIndex:
+				case <-ctx.Done():
+				}
+			}})
+			indexed := make(chan IngestResult, 1)
+			indexDone := make(chan struct{})
+			go func() { defer close(indexDone); indexed <- catalog.IngestContext(work, adapter, nil) }()
+			defer func() { cancel(); <-indexDone }()
+			select {
+			case <-firstRecord:
+			case result := <-indexed:
+				t.Fatalf("index stopped before the first record: %+v", result)
+			case <-time.After(5 * time.Second):
+				t.Fatal("first record did not commit")
+			}
+
+			// A query arriving after the first commit must pause the next record
+			// without retaining either the writer gate or SQLite's write lock.
+			query := httptest.NewRequest(http.MethodPost, "/api/query/library/rows-v2", strings.NewReader(`{"version":2,"profile":"qt-sqlite-v1","limit":5}`))
+			query.Header.Set("Authorization", "Bearer "+config.APIToken)
+			w := &heldQueryResponse{httptest.NewRecorder(), make(chan struct{}), make(chan struct{})}
+			queryDone := make(chan struct{})
+			go func() { defer close(queryDone); server.ServeHTTP(w, query) }()
+			defer func() { close(w.release); <-queryDone }()
+			select {
+			case <-w.started:
+			case <-time.After(5 * time.Second):
+				t.Fatal("query did not start")
+			}
+			close(continueIndex)
+			if !enabled {
+				select {
+				case result := <-indexed:
+					if result.Error != nil || result.Workspaces != 2 {
+						t.Fatalf("index with pausing off: %+v", result)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("default setting blocked indexing while a query was running")
+				}
+				return
+			}
+			waitForIndexPause(t, catalog)
+			writeCtx, stopWrites := context.WithTimeout(t.Context(), 5*time.Second)
+			defer stopWrites()
+			if err := catalog.writeTransaction(writeCtx, "interactive write during index pause", func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(writeCtx, "INSERT INTO meta(key,value) VALUES('local-during-pause','ok')")
+				return err
+			}); err != nil {
+				t.Fatalf("local writer blocked by paused index: %v", err)
+			}
+			other, err := sql.Open("sqlite", "file:"+catalog.Path+"?_pragma=busy_timeout(20)")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer other.Close()
+			if _, err := other.ExecContext(writeCtx, "INSERT INTO meta(key,value) VALUES('independent-during-pause','ok')"); err != nil {
+				t.Fatalf("independent SQLite writer blocked by paused index: %v", err)
+			}
+			if err := catalog.SetUIPreferences(writeCtx, map[string]any{"set": map[string]any{"pharos-theme": "dark"}}); err != nil {
+				t.Fatalf("preference save blocked by paused index: %v", err)
+			}
+			if response := serveTestBody(server, http.MethodGet, "/api/search", ""); response.Code != http.StatusOK {
+				t.Fatalf("read during paused index: %d %s", response.Code, response.Body.String())
+			}
+			waitForIndexPause(t, catalog)
+			cancel()
+			select {
+			case result := <-indexed:
+				if result.Error == nil || result.Workspaces != 1 {
+					t.Fatalf("cancelled index did not retain exactly the committed record: %+v", result)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("cancelled index still waiting for a query")
+			}
+		})
+	}
+}
+
+func TestIndexCompletesAtomicWorkspaceDuringQuery(t *testing.T) {
+	for _, stop := range []bool{false, true} {
+		t.Run(fmt.Sprint("cancel=", stop), func(t *testing.T) {
+			catalog, _ := testCatalog(t)
+			if err := catalog.SetUIPreferences(t.Context(), map[string]any{"set": map[string]any{pauseIndexingForQueriesFlag: true}}); err != nil {
+				t.Fatal(err)
+			}
+			writeIncrementalFixture(t, catalog, incrementalFixture(1))
+			ctx, cancel := context.WithCancel(t.Context())
+			inRecord, continueWriting := make(chan struct{}), make(chan struct{})
+			written := make(chan error, 1)
+			writeDone := make(chan struct{})
+			go func() {
+				defer close(writeDone)
+				tx, finish, err := catalog.beginTrackedWrite(ctx, "atomic ingest during query")
+				if err != nil {
+					written <- err
+					return
+				}
+				defer func() { _ = tx.Rollback(); finish() }()
+				if _, _, err = ingestCopyModeContext(ctx, tx, incrementalFixture(2), false, currentHost().ID, "fixture", false, false); err != nil {
+					written <- err
+					return
+				}
+				close(inRecord)
+				select {
+				case <-continueWriting:
+				case <-ctx.Done():
+				}
+				_, _, err = ingestCopyModeContext(ctx, tx, incrementalFixture(3), false, currentHost().ID, "fixture", false, false)
+				if err == nil {
+					err = tx.Commit()
+				}
+				written <- err
+			}()
+			defer func() { cancel(); <-writeDone }()
+			select {
+			case <-inRecord:
+			case err := <-written:
+				t.Fatalf("record failed before the query started: %v", err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("record did not start writing")
+			}
+			defer catalog.beginInteractiveRead(t.Context())()
+			var count int
+			if err := catalog.reader().QueryRow("SELECT COUNT(*) FROM messages").Scan(&count); err != nil || count != 1 {
+				t.Fatalf("query did not read the previous atomic record: count=%d err=%v", count, err)
+			}
+			want := 3
+			if stop {
+				cancel()
+				want = 1
+			}
+			close(continueWriting)
+			select {
+			case err := <-written:
+				if stop && !errors.Is(err, context.Canceled) || !stop && err != nil {
+					t.Fatalf("index result: %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("an open record waited for the active query")
+			}
+			<-writeDone
+			if err := catalog.reader().QueryRow("SELECT COUNT(*) FROM messages").Scan(&count); err != nil || count != want {
+				t.Fatalf("atomic index result: count=%d want=%d err=%v", count, want, err)
+			}
+			if stop {
+				writeIncrementalFixture(t, catalog, incrementalFixture(3))
+				if err := catalog.reader().QueryRow("SELECT COUNT(*) FROM messages").Scan(&count); err != nil || count != 3 {
+					t.Fatalf("resumed record: count=%d err=%v", count, err)
+				}
+			}
+		})
+	}
+}
 
 func TestIngestRetriesCatalogWriterContention(t *testing.T) {
 	catalog, _ := testCatalog(t)
