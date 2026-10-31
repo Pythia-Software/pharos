@@ -2181,6 +2181,15 @@
       "reason": "Bound directly to the registered view field."
     },
     {
+      "key": "html:c93fda6c25a2c2d9:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:settings>",
+      "tag": "button",
+      "control": "<button id=\"pauseIndexingForQueries\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"pauseIndexingForQueriesTitle\" aria-describedby=\"pauseIndexingForQueriesDescription\" aria-checked=\"false\">",
+      "contract": "settings",
+      "reason": "Saved library preference for query-driven indexing pauses; defaults off and applies independently of URL view state."
+    },
+    {
       "key": "html:e4a2ee823cd209b2:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:settings>",

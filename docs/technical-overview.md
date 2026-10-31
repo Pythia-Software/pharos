@@ -142,10 +142,15 @@ The workspace page loads a workspace in pieces, since one long session with many
 Requests never wait for the catalog writer, which a sync holds for seconds at
 a time. They read through a read-only connection pool and never write:
 
-- Interactive query, search, reader and MCP requests pause ingestion at record
-  and message boundaries. Search-index maintenance and Library maintenance wait
-  between batches too. This protection applies to manual and automatic indexing
-  regardless of the activity-panel feature flag. Status polls do not pause work.
+- **Settings → App preferences → Pause indexing during queries** optionally lets
+  interactive query, search, reader and MCP requests pause ingestion at record
+  and message boundaries, and search-index and Library maintenance between
+  batches. It defaults off so sustained browsing does not prevent indexing
+  progress. The saved library preference `pharos-pause-indexing-for-queries-v1`
+  applies without restarting, independently of the activity panel and manual or
+  automatic indexing. Turning it off releases paused work even during a query;
+  preference saves let the writer progress without waiting for queries to finish.
+  Status polls do not pause work.
 - Cached Library and derived views keep their last computed generation for the
   entire ingest; cold values still compute on demand. Once the ingest ends,
   reads observe the new generation and refresh. Freshness may lag throughout a

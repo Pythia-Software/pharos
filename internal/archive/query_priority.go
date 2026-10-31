@@ -9,13 +9,52 @@ import (
 
 // queryActivity gives interactive reads the drive while indexing waits at a
 // work boundary. Readers never acquire the writer gate or wait for an index.
-// This is independent of the activity UI's feature flag and of an index's
-// manual/background priority: even a manual index must leave queries usable.
+// Pausing is opt-in, independent of the activity UI and manual/background
+// priority. Its zero value lets indexing continue during queries.
 type queryActivity struct {
 	mu      sync.Mutex
+	enabled bool
+	changed chan struct{}
+	saving  int
 	active  int
 	idle    chan struct{}
 	waiting int
+}
+
+func (q *queryActivity) notify() {
+	if q.changed != nil {
+		close(q.changed)
+	}
+	q.changed = make(chan struct{})
+}
+
+func (q *queryActivity) setEnabled(on bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.enabled != on {
+		q.enabled = on
+		q.notify()
+	}
+}
+
+// Saving preferences needs the writer that an index can hold while paused
+// inside a record. Let it progress until the save finishes, including when
+// the user is turning pausing off while a query is still running.
+func (q *queryActivity) savingPreferences() func() {
+	q.mu.Lock()
+	q.saving++
+	q.notify()
+	q.mu.Unlock()
+	return func() {
+		q.mu.Lock()
+		defer q.mu.Unlock()
+		q.saving--
+	}
+}
+
+func (c *Catalog) beginInteractiveRead(ctx context.Context) func() {
+	c.featureFlag(ctx, pauseIndexingForQueriesFlag)
+	return c.queries.begin()
 }
 
 func (q *queryActivity) begin() func() {
@@ -41,15 +80,17 @@ func (q *queryActivity) wait(ctx context.Context) error {
 			return err
 		}
 		q.mu.Lock()
-		if q.active == 0 {
+		if !q.enabled || q.saving > 0 || q.active == 0 {
 			q.mu.Unlock()
 			return nil
 		}
 		idle := q.idle
+		changed := q.changed
 		q.waiting++
 		q.mu.Unlock()
 		select {
 		case <-idle:
+		case <-changed:
 		case <-ctx.Done():
 		}
 		q.mu.Lock()

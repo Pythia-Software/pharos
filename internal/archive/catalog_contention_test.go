@@ -68,55 +68,155 @@ func TestInteractiveReadDemand(t *testing.T) {
 	}
 }
 
-func TestInteractiveQueriesPauseIngest(t *testing.T) {
+func TestQueryPausingPreference(t *testing.T) {
 	catalog, config := testCatalog(t)
-	writeIncrementalFixture(t, catalog, incrementalFixture(1))
 	server := testServer(t, config, catalog)
-	query := httptest.NewRequest(http.MethodPost, "/api/query/library/rows-v2", strings.NewReader(`{"version":2,"profile":"qt-sqlite-v1","limit":5}`))
-	query.Header.Set("Authorization", "Bearer "+config.APIToken)
-	w := &heldQueryResponse{httptest.NewRecorder(), make(chan struct{}), make(chan struct{})}
-	queryDone := make(chan struct{})
-	go func() { defer close(queryDone); server.ServeHTTP(w, query) }()
-	defer func() { close(w.release); <-queryDone }()
-	select {
-	case <-w.started:
-	case <-time.After(5 * time.Second):
-		t.Fatal("query did not start")
+	// Toggle the rule while the same query stays active throughout.
+	defer catalog.beginInteractiveRead(t.Context())()
+	for _, step := range []struct {
+		name, body string
+		on         bool
+	}{
+		{"default off", "", false},
+		{"enable", `{"set":{"pharos-pause-indexing-for-queries-v1":true}}`, true},
+		{"disable", `{"set":{"pharos-pause-indexing-for-queries-v1":false}}`, false},
+		{"enable again", `{"set":{"pharos-pause-indexing-for-queries-v1":true}}`, true},
+		{"nonboolean is off", `{"set":{"pharos-pause-indexing-for-queries-v1":"true"}}`, false},
+		{"enable before delete", `{"set":{"pharos-pause-indexing-for-queries-v1":true}}`, true},
+		{"delete is off", `{"delete":["pharos-pause-indexing-for-queries-v1"]}`, false},
+	} {
+		t.Run(step.name, func(t *testing.T) {
+			if step.body != "" {
+				if response := serveTestBody(server, http.MethodPost, "/api/preferences", step.body); response.Code != http.StatusOK {
+					t.Fatalf("save: %d %s", response.Code, response.Body.String())
+				}
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- waitForIndexQuery(catalog.withIndexQueryWait(ctx)) }()
+			if step.on {
+				waitForIndexPause(t, catalog)
+				cancel()
+			}
+			select {
+			case err := <-done:
+				if step.on && !errors.Is(err, context.Canceled) || !step.on && err != nil {
+					t.Fatalf("index wait: %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("index failed to progress with query pausing off")
+			}
+		})
 	}
-	path := filepath.Join(t.TempDir(), "export.json")
-	if err := os.WriteFile(path, []byte(`{"workspaces":[{"id":"work","title":"New workspace","conversations":[{"id":"thread","provider":"codex","messages":[{"id":"one","role":"user","text":"hello"}]}]}]}`), 0o600); err != nil {
+
+	// A fresh service loads the saved opt-in before admitting its first read.
+	if err := catalog.SetUIPreferences(t.Context(), map[string]any{"set": map[string]any{pauseIndexingForQueriesFlag: true}}); err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := MakeAdapter(SourceConfig{Name: "fixture", Kind: "canonical", Path: path, Account: "local", Enabled: true})
+	other, err := OpenCatalog(catalog.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer other.Close()
+	defer other.beginInteractiveRead(t.Context())()
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	indexed := make(chan IngestResult, 1)
-	go func() { indexed <- catalog.IngestContext(ctx, adapter, nil) }()
-	waitForIndexPause(t, catalog)
-	// A second read is admitted immediately even though an index is waiting.
-	if response := serveTestBody(server, http.MethodGet, "/api/search", ""); response.Code != http.StatusOK {
-		t.Fatalf("read during paused index: %d %s", response.Code, response.Body.String())
+	done := make(chan error, 1)
+	go func() { done <- other.queries.wait(ctx) }()
+	waitForIndexPause(t, other)
+	// A different process's saved toggle is applied by the flag watcher too.
+	if err := catalog.SetUIPreferences(t.Context(), map[string]any{"set": map[string]any{pauseIndexingForQueriesFlag: false}}); err != nil {
+		t.Fatal(err)
 	}
-	waitForIndexPause(t, catalog)
-	// Cancellation must release a paused index without waiting for the query.
-	cancel()
+	other.flags.invalidate()
+	watchCtx, stop := context.WithCancel(t.Context())
+	watched := make(chan struct{})
+	go func() { defer close(watched); other.watchFeatureFlags(watchCtx) }()
+	defer func() { stop(); <-watched }()
 	select {
-	case result := <-indexed:
-		if result.Error == nil {
-			t.Fatal("cancelled index reported success")
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("cancelled index still waiting for a query")
+		t.Fatal("watcher did not release paused work after disabling")
+	}
+}
+
+func TestInteractiveQueriesPauseIngest(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprint("enabled=", enabled), func(t *testing.T) {
+			catalog, config := testCatalog(t)
+			if enabled {
+				if err := catalog.SetUIPreferences(t.Context(), map[string]any{"set": map[string]any{pauseIndexingForQueriesFlag: true}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			writeIncrementalFixture(t, catalog, incrementalFixture(1))
+			server := testServer(t, config, catalog)
+			query := httptest.NewRequest(http.MethodPost, "/api/query/library/rows-v2", strings.NewReader(`{"version":2,"profile":"qt-sqlite-v1","limit":5}`))
+			query.Header.Set("Authorization", "Bearer "+config.APIToken)
+			w := &heldQueryResponse{httptest.NewRecorder(), make(chan struct{}), make(chan struct{})}
+			queryDone := make(chan struct{})
+			go func() { defer close(queryDone); server.ServeHTTP(w, query) }()
+			defer func() { close(w.release); <-queryDone }()
+			select {
+			case <-w.started:
+			case <-time.After(5 * time.Second):
+				t.Fatal("query did not start")
+			}
+			path := filepath.Join(t.TempDir(), "export.json")
+			if err := os.WriteFile(path, []byte(`{"workspaces":[{"id":"work","title":"New workspace","conversations":[{"id":"thread","provider":"codex","messages":[{"id":"one","role":"user","text":"hello"}]}]}]}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			adapter, err := MakeAdapter(SourceConfig{Name: "fixture", Kind: "canonical", Path: path, Account: "local", Enabled: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			indexed := make(chan IngestResult, 1)
+			go func() { indexed <- catalog.IngestContext(ctx, adapter, nil) }()
+			if !enabled {
+				select {
+				case result := <-indexed:
+					if result.Error != nil || result.Workspaces != 1 {
+						t.Fatalf("index with pausing off: %+v", result)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("default setting blocked indexing while a query was running")
+				}
+				return
+			}
+			waitForIndexPause(t, catalog)
+			// A second read is admitted immediately even though an index is waiting.
+			if response := serveTestBody(server, http.MethodGet, "/api/search", ""); response.Code != http.StatusOK {
+				t.Fatalf("read during paused index: %d %s", response.Code, response.Body.String())
+			}
+			waitForIndexPause(t, catalog)
+			// Cancellation must release a paused index without waiting for the query.
+			cancel()
+			select {
+			case result := <-indexed:
+				if result.Error == nil {
+					t.Fatal("cancelled index reported success")
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("cancelled index still waiting for a query")
+			}
+		})
 	}
 }
 
 func TestIndexYieldsInsideAtomicWorkspace(t *testing.T) {
-	for _, stop := range []bool{false, true} {
-		t.Run(fmt.Sprint("cancel=", stop), func(t *testing.T) {
+	for _, finish := range []string{"complete", "cancel", "disable"} {
+		t.Run(finish, func(t *testing.T) {
 			catalog, _ := testCatalog(t)
+			if err := catalog.SetUIPreferences(t.Context(), map[string]any{"set": map[string]any{pauseIndexingForQueriesFlag: true}}); err != nil {
+				t.Fatal(err)
+			}
+			stop := finish == "cancel"
 			writeIncrementalFixture(t, catalog, incrementalFixture(1))
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
@@ -169,6 +269,23 @@ func TestIndexYieldsInsideAtomicWorkspace(t *testing.T) {
 			if stop {
 				cancel()
 				want = 1
+			} else if finish == "disable" {
+				// Saving the toggle must release an index paused inside its
+				// writer transaction, even before the active query finishes.
+				saved := make(chan error, 1)
+				go func() {
+					saved <- catalog.SetUIPreferences(ctx, map[string]any{"set": map[string]any{pauseIndexingForQueriesFlag: false}})
+				}()
+				select {
+				case err := <-saved:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-time.After(5 * time.Second):
+					cancel()
+					<-saved
+					t.Fatal("turning pausing off waited for the active query")
+				}
 			} else {
 				release()
 				release = nil
