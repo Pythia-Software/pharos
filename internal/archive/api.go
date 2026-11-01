@@ -750,6 +750,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		s.postFindings(w, r, body)
 	case path == "/api/preferences":
 		s.postPreferences(w, r, body)
+	case path == "/api/labels/settings":
+		s.postLabelsSettings(w, r, body)
 	case path == "/api/capture":
 		s.startCapture(w, body)
 	case path == "/api/index":

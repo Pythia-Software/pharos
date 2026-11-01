@@ -46,6 +46,15 @@ test("one column per cadence, each with its state, its description and its items
   assert.equal(background.scheduleModel({}, at), null);
 });
 
+test("label settings remain available when no labeling work is scheduled", () => {
+  for (const enabled of [false, true]) {
+    const labels = { enabled, can_change: true, status: enabled ? 'Waiting for model' : 'Off' };
+    const model = plain(background.scheduleModel({ ...document, labels }, at));
+    assert.deepEqual(model.labels, labels);
+    assert.ok(!model.columns.some(column => column.items.some(item => item.id === 'labels')));
+  }
+});
+
 test("an item carries its cost class, its choices and its state line", () => {
   const writing = plain(background.scheduleModel(document, at)).columns[1].items[0];
   assert.deepEqual(writing.cost, { class: "heavy", text: "Cost B" });

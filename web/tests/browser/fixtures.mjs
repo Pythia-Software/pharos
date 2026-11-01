@@ -296,6 +296,7 @@ const busyBackground = backgroundView([
   backgroundItem("preserve", "Preserve originals", "daily", "current"),
 ], { tone: "busy", title: "Updating your writing", text: "Human Words cards, and Analyze → Writing update when this finishes.", tech: null });
 export const backgroundDocument = {
+  labels: { enabled: false, can_change: true, status: 'Off. Turn on to label messages in this library.' },
   settings: { mode: "on", paused_until: null, interval_seconds: 300, daily_at: "03:00", hold_when_busy: true, overrides: {},
     battery: { frequent: "slower", hourly: "wait", daily: "wait", low_battery_waits: true }, battery_choices: { frequent: ["same", "slower", "wait"], hourly: ["same", "wait"], daily: ["same", "wait"] },
     battery_slower_minutes: 15, low_battery_percent: 20 },
@@ -495,6 +496,7 @@ export const defaultApi = {
   "GET /api/sync/recovery": { jobs: [] },
   "GET /api/background": backgroundDocument,
   "POST /api/background/settings": backgroundDocument,
+  "POST /api/labels/settings": ({ body }) => ({ ...backgroundDocument, labels: { enabled: body.enabled, can_change: true, status: body.enabled ? 'On, waiting for the labeling model.' : 'Off.' } }),
   "POST /api/background/run": ({ body }) => ({ accepted: true, items: [body?.item].filter(Boolean) }),
   "GET /api/backup": { active: false, run: null, runs: [], last_success: { destination: "/Users/someone/Pharos Backup", finished_at: iso(2 * day) }, record: "/Volumes/Pharos SSD/Pharos/backups.json", suggested_destination: "/Users/someone/Pharos Backup" },
 

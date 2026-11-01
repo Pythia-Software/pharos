@@ -606,15 +606,19 @@ func conditionalString(condition bool, value string) any {
 
 func markSyncDeferred(tx *sql.Tx) error {
 	for _, name := range stageOrder {
-		// pending_since is when the work began waiting: the first change
-		// after the stage last caught up.
-		if _, err := tx.Exec(`INSERT INTO sync_deferred(name,generation,changed_at,pending_since) VALUES(?,1,?,?)
-			ON CONFLICT(name) DO UPDATE SET generation=generation+1,changed_at=excluded.changed_at,
-			pending_since=CASE WHEN sync_deferred.generation<=sync_deferred.completed_generation OR sync_deferred.pending_since IS NULL THEN excluded.changed_at ELSE sync_deferred.pending_since END`, name, now(), now()); err != nil {
+		if err := markSyncDeferredStage(tx, name); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func markSyncDeferredStage(tx *sql.Tx, name string) error {
+	// pending_since is the first change after the stage last caught up.
+	_, err := tx.Exec(`INSERT INTO sync_deferred(name,generation,changed_at,pending_since) VALUES(?,1,?,?)
+		ON CONFLICT(name) DO UPDATE SET generation=generation+1,changed_at=excluded.changed_at,
+		pending_since=CASE WHEN sync_deferred.generation<=sync_deferred.completed_generation OR sync_deferred.pending_since IS NULL THEN excluded.changed_at ELSE sync_deferred.pending_since END`, name, now(), now())
+	return err
 }
 
 func (c *Catalog) sourceChanges(ctx context.Context, source SourceConfig) sourceChangeReport {
