@@ -334,8 +334,19 @@ func TestBrokerFetchesLabelsAssetsThenAsksLibrariesToLabel(t *testing.T) {
 	server := newAssetServer(t, archive)
 	override(t, &labelsAssets, labelsAssetSet{Model: server.asset(archive, "")})
 	override(t, &labelsRuntimePinned, false)
+	configPath := filepath.Join(t.TempDir(), "library.toml")
+	if err := os.WriteFile(configPath, []byte("labels_enabled = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	var asked atomic.Int32
 	library := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/labels/settings" {
+			if err := setRootValue(configPath, "labels_enabled", "true"); err != nil {
+				t.Error(err)
+			}
+			writeJSON(w, map[string]any{}, http.StatusOK)
+			return
+		}
 		if r.URL.Path == "/api/background/run" && r.Header.Get("Authorization") == "Bearer token" {
 			asked.Add(1)
 		}
@@ -346,12 +357,23 @@ func TestBrokerFetchesLabelsAssetsThenAsksLibrariesToLabel(t *testing.T) {
 	defer cancel()
 	m := &applicationManager{ctx: ctx, client: &http.Client{Timeout: 5 * time.Second}, operations: newBrokerOperations(filepath.Join(t.TempDir(), "operations.json")),
 		children: map[string]*applicationChild{"lib": {endpoint: applicationEndpoint{URL: library.URL, Token: "token"}}}}
+	m.token = "app-token"
+	m.registry.Selected = "lib"
+	m.registry.Libraries = []registeredLibrary{{LibraryDescriptor: LibraryDescriptor{ID: "lib"}, Config: configPath}}
 	m.startLabelsFetch(LabelerSettings{Enabled: false})
 	m.startLabelsFetch(LabelerSettings{Enabled: true, ModelDir: t.TempDir()})
 	if len(m.operations.reg.views()) != 0 {
 		t.Fatal("a download started for a library without labels, or with its own model")
 	}
-	m.startLabelsFetch(LabelerSettings{Enabled: true})
+	// Enabling from the UI starts the same download as opening an enabled
+	// library, without restarting the service.
+	request := httptest.NewRequest(http.MethodPost, "/api/labels/settings", strings.NewReader(`{"enabled":true}`))
+	request.Header.Set("Authorization", "Bearer app-token")
+	response := httptest.NewRecorder()
+	m.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("enable through the app: %d %s", response.Code, response.Body.String())
+	}
 	if !waitFor(10*time.Second, func() {
 		for asked.Load() == 0 {
 			time.Sleep(10 * time.Millisecond)

@@ -8,6 +8,23 @@ import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { defaultApi, workID, eventStream, busyStatus } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
+test('Message labels keeps keyboard focus after saving the Settings switch', {skip}, async t => {
+  const {page, shot} = await open(t, {url:'/settings/sync',ready:'#labelsEnabled'});
+  const toggle = page.getByRole('switch', {name:'Enable message labels',exact:true});
+  await toggle.focus();
+  for (const enabled of [true, false]) {
+    const saved = page.waitForResponse(response => response.url().endsWith('/api/labels/settings') && response.request().method() === 'POST');
+    await page.keyboard.press('Space');
+    await saved;
+    await page.waitForFunction(enabled => {
+      const box = document.getElementById('labelsEnabled');
+      return box?.checked === enabled && !box.disabled && document.activeElement === box;
+    }, enabled);
+    assert.ok(await toggle.evaluate(element => element === document.activeElement));
+    if (enabled) await shot('enabled');
+  }
+});
+
 test('Library setup keeps focus in its modal and returns to the choice after cancelling a flow', {skip}, async t => {
   let folderSelections=0;
   const {page, calls, shot} = await open(t, {url:'/app',ready:'#application-setup[open]',api:{

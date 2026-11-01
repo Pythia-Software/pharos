@@ -983,6 +983,15 @@
       "reason": "Background-update scheduling, power/source preferences, run actions and their operational diagnostics are excluded from content view URLs."
     },
     {
+      "key": "3327c32c534abd22:0",
+      "file": "internal/archive/assets/background.js",
+      "owner": "renderLabels",
+      "tag": "input",
+      "control": "'input'",
+      "contract": "settings",
+      "reason": "Persists the library labels_enabled setting through /api/labels/settings; it controls background processing, not the current URL view."
+    },
+    {
       "key": "c7b7dd6cbc73773b:0",
       "file": "internal/archive/assets/background.js",
       "owner": "select",

@@ -15,6 +15,16 @@ in the conversation reader when its **Labels** toggle is on
 
 ## Turning it on
 
+In **Settings → Background Updates → Message labels**, turn on **Enable
+message labels**. This saves `labels_enabled` in the library's configuration
+and applies it immediately, without restarting Pharos. The control stays
+visible while off, reports missing downloads or workers while on, and
+queues earlier messages for the background schedule. In the app, enabling
+also starts any missing model/runtime download. Turning it off prevents
+future automatic runs; a run already in progress finishes and existing
+labels remain available in the reader. The setting follows the library to
+its other Macs when they next open it.
+
 The model's weights are not in the repository or the app: each Mac
 downloads them once, after install, into its own support directory
 ([Model download](#model-download)). Configuration (`archive.toml` or
