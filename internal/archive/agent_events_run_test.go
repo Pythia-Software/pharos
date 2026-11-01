@@ -186,6 +186,19 @@ func TestAgentEventsPassScoresChangedMessagesOnly(t *testing.T) {
 		t.Fatalf("second run: %+v %v", again, err)
 	}
 
+	// A corrected time moves the reply's rows to its day without scoring it.
+	execTx(t, catalog.DB, `UPDATE messages SET created_at='2026-10-26T23:30:00.000Z' WHERE id='m-ev-reply'`)
+	retimed, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{})
+	if err != nil || retimed.ConversationsBuilt != 1 || retimed.MessagesScored != 0 || !retimed.Complete {
+		t.Fatalf("after a time correction: %+v %v", retimed, err)
+	}
+	want := agentEventDay("2026-10-26T23:30:00.000Z")
+	var stale int
+	if err := catalog.DB.QueryRow(`SELECT (SELECT COUNT(*) FROM agent_event_messages WHERE message_id='m-ev-reply' AND day IS NOT ?)+
+		(SELECT COUNT(*) FROM agent_events WHERE message_id='m-ev-reply' AND (day IS NOT ? OR occurred_at<>'2026-10-26T23:30:00.000Z'))`, want, want).Scan(&stale); err != nil || stale != 0 {
+		t.Fatalf("%d rows kept the old day (%v)", stale, err)
+	}
+
 	// An edited reply is scored again, alone; a deleted one loses its rows.
 	if _, err := catalog.DB.Exec(`UPDATE messages SET text=? WHERE id='m-ev-reply'`, "That workaround didn't help either."); err != nil {
 		t.Fatal(err)
@@ -299,19 +312,39 @@ func TestAgentEventsAreAChainStageOnlyWhenEnabled(t *testing.T) {
 func TestAgentEventsReadOnlyWithinTheHorizon(t *testing.T) {
 	catalog := agentEventsCatalog(t)
 	labels, settings := agentEventsTestSettings(t)
+	// A September reply in October's conversation; an October reply in a
+	// conversation that started in September and has no recorded end; and
+	// September's root conversation, which ended in September.
+	execTx(t, catalog.DB,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,selected,source_order) VALUES
+			('m-ev-old','c-events','m-ev-old','assistant','message','That workaround didn''t help.','h4','2026-09-20T12:00:00.000Z',1,1000),
+			('m-o-late','c-other','m-o-late','assistant','message','The build still fails on the runner.','h5','2026-10-26T12:00:00.000Z',1,1050)`,
+		`UPDATE conversations SET ended_at='2026-09-01T13:00:00.000Z' WHERE id='c-root'`)
 	since := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	stats, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{Since: since})
-	if err != nil || !stats.Complete || stats.ConversationsBuilt == 0 || stats.ConversationsBuilt == stats.Conversations {
+	if err != nil || !stats.Complete || stats.MessagesBefore == 0 {
 		t.Fatalf("a run since October: %+v %v", stats, err)
+	}
+	read := func(id string) bool {
+		var n int
+		_ = catalog.DB.QueryRow(`SELECT COUNT(*) FROM agent_event_messages WHERE message_id=?`, id).Scan(&n)
+		return n > 0
 	}
 	var outside, root int
 	if err := catalog.DB.QueryRow(`SELECT (SELECT COUNT(*) FROM agent_event_messages WHERE occurred_at<?),
 		(SELECT COUNT(*) FROM agent_events_conversations WHERE conversation_id='c-root')`, formatTime(since)).Scan(&outside, &root); err != nil || outside != 0 || root != 0 {
-		t.Fatalf("%d messages read before the horizon; September's conversation built: %v (%v)", outside, root != 0, err)
+		t.Fatalf("%d messages read before the horizon; the conversation that ended in September built: %v (%v)", outside, root != 0, err)
 	}
-	// Without a horizon the rest is read; with it again, nothing is removed.
+	if !read("m-o-late") {
+		t.Fatal("a recent reply in a conversation without a recorded end was skipped")
+	}
+	// A wider horizon reads what the narrower one left, in conversations
+	// already built too; the narrower one again removes nothing.
 	if _, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{}); err != nil {
 		t.Fatal(err)
+	}
+	if !read("m-ev-old") {
+		t.Fatal("widening the horizon left a built conversation's older reply unread")
 	}
 	var all int
 	_ = catalog.DB.QueryRow(`SELECT COUNT(*) FROM agent_event_messages`).Scan(&all)
@@ -382,5 +415,30 @@ func TestAgentEventsDownloadTheVerifier(t *testing.T) {
 		}
 	}) {
 		t.Fatal("the broker never fetched the verifier")
+	}
+}
+
+// A stop kills the verifier's workers instead of keeping them warm, so
+// batches queued at them do not run on; the next run resumes.
+func TestAgentEventsStopKillsTheWorkers(t *testing.T) {
+	catalog := agentEventsCatalog(t)
+	labels, settings := agentEventsTestSettings(t)
+	t.Setenv(labelertest.FakeWorkerEnv, "slow")
+	override(t, &agentEventsChunkRows, 1)
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	defer cancel()
+	if _, err := catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{}); err == nil {
+		t.Fatal("a stopped run reported no error")
+	}
+	if _, _, runners := catalog.labelerManager(labels).Usage(); runners != 0 {
+		t.Fatalf("%d runners kept after a stop", runners)
+	}
+	t.Setenv(labelertest.FakeWorkerEnv, "ok")
+	rest, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{})
+	if err != nil || !rest.Complete {
+		t.Fatalf("the run after a stop: %+v %v", rest, err)
+	}
+	if _, _, runners := catalog.labelerManager(labels).Usage(); runners != 1 {
+		t.Fatalf("a finished run kept %d runners warm, want 1", runners)
 	}
 }

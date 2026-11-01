@@ -59,7 +59,9 @@ scores about 1,000 messages (`agentEventsChainLimit`); a larger backlog continue
   `python3 tools/package_labeler_model.py DIR --out build/labeler --version N --descriptor internal/archive/labels/assets.json --key agent_events_model`
   and attach it to the release `labeler-jayhawk-68m-N`, as for the labeler's model.
 - **The horizon.** `agent_events_days` (default 90; 0 for everything) is how far back the pass reads: older messages
-  stay unread, conversations that ended before it are not looked at, and rows stored earlier stay.
+  stay unread, conversations whose recorded end is before it are not looked at (one without a recorded end is), and
+  rows stored earlier stay. Each conversation records the horizon it was read from (`agent_events_conversations.since`),
+  so a wider horizon, `--days 0` included, reads what a narrower one left.
 - **Terminal.** `pharos agent-events run [--limit N] [--days N] [--full] [--dry-run] [--conversation ID]...`,
   `pharos agent-events fetch` (the verifier, and the runtime unless one is configured or bundled) and
   `pharos agent-events status` (what the pass would use or waits for, and what the tables hold).
@@ -70,6 +72,7 @@ scores about 1,000 messages (`agentEventsChainLimit`); a larger backlog continue
   `agent_reply` and `thinking`: what the study's data held, without inherited history, mirrored work or unextracted
   thinking. Every such message gets an `agent_event_messages` row, with or without candidates.
 - **What it scores again.** A message whose source and text (`input_hash`) or verifier differ from its stored row's.
+  A message whose only change is its time keeps its events, moved to the new day in both tables.
   The verifier's identity is its model identity (as the labels ledger's) plus `jayhawk-window-v1`, the lexicon,
   the units and the sentence versions; an imported row has no input hash, so the pass replaces it.
 - **Which conversations it looks at, newest first.** Those marked in `agent_events_dirty`, by the same triggers as
@@ -77,8 +80,9 @@ scores about 1,000 messages (`agentEventsChainLimit`); a larger backlog continue
   (`agent_events_conversations`); and those with rows another verifier made. Conversations that left the catalog lose
   their rows.
 - **How it stores.** Candidates are gathered across conversations (512 at a time), scored in batches packed by length,
-  and stored with each conversation's ledger row in one transaction. A stop between chunks keeps what was stored; the
-  next run resumes.
+  and stored with each conversation's ledger row in one transaction. A stop between chunks keeps what was stored and
+  kills the verifier's workers, so batches queued at them do not run on; the next run resumes. A finished run leaves
+  them warm for `labels_idle_seconds`.
 - **What it refuses.** A verifier trained on another lexicon, deciding at another threshold than the datasets'
   (0.5), lacking a kind's definition or the `verdict` and `sentences` outputs.
 

@@ -35,7 +35,8 @@ const agentEventsLedgerDDL = `
 CREATE TABLE IF NOT EXISTS agent_events_conversations (
   conversation_id TEXT PRIMARY KEY,
   structure TEXT NOT NULL,
-  built_at TEXT NOT NULL
+  built_at TEXT NOT NULL,
+  since TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS agent_events_dirty (
   conversation_id TEXT PRIMARY KEY,
@@ -43,7 +44,9 @@ CREATE TABLE IF NOT EXISTS agent_events_dirty (
 );
 `
 
-const agentEventsLedgerVersion = "1"
+// agentEventsLedgerVersion 2 records each conversation's horizon (since:
+// the earliest time it was read from, ” for all of it).
+const agentEventsLedgerVersion = "2"
 
 // agentEventStoreFloor is the lowest probability stored: rows between it and
 // agentEventThreshold are not events, but let a later threshold be studied
@@ -60,6 +63,17 @@ func (c *Catalog) ensureAgentEventsLedger(ctx context.Context) error {
 	return c.writeTransaction(ctx, "create the agent events ledger", func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, agentEventsLedgerDDL); err != nil {
 			return err
+		}
+		var since int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('agent_events_conversations') WHERE name='since'`).Scan(&since); err != nil {
+			return err
+		}
+		if since == 0 {
+			// Version 1 did not record it; '' would claim a whole conversation
+			// was read, so its rows are rebuilt by the next run.
+			if _, err := tx.ExecContext(ctx, `ALTER TABLE agent_events_conversations ADD COLUMN since TEXT NOT NULL DEFAULT '~'`); err != nil {
+				return err
+			}
 		}
 		for _, statement := range itemDirtyTriggers("agent_events_dirty", "agent_events_dirty_") {
 			if _, err := tx.ExecContext(ctx, statement); err != nil {
@@ -228,8 +242,12 @@ type AgentEventsRunStats struct {
 // agentEventsConversation is one conversation's pending work.
 type agentEventsConversation struct {
 	id, token, structure string
-	messages             []*agentEventsMessage
-	stale                []string
+	// since is the horizon the conversation is read from ('' for all of it).
+	since    string
+	messages []*agentEventsMessage
+	stale    []string
+	// retimed are messages whose rows stand but whose time changed.
+	retimed []*agentEventsMessage
 	// unchanged counts messages whose stored rows are current; before
 	// messages older than the run's horizon.
 	unchanged, before int
@@ -300,7 +318,14 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 
 	var runner *labelrt.Runner
 	release := func() {}
-	defer func() { release() }()
+	defer func() {
+		if runner != nil && ctx.Err() != nil {
+			// A stop: batches already queued at the workers must not run on,
+			// and the workers' memory goes back to the budget now.
+			c.labelerManager(labels).Kill(runner)
+		}
+		release()
+	}()
 	pending, rows := []*agentEventsConversation{}, 0
 	flush := func() error {
 		defer func() { pending, rows = pending[:0], 0 }()
@@ -409,6 +434,10 @@ func (c *Catalog) agentEventsWork(ctx context.Context, builder *labelsItemBuilde
 	if err != nil {
 		return nil, err
 	}
+	horizons, err := read(`SELECT conversation_id k,since v FROM agent_events_conversations`)
+	if err != nil {
+		return nil, err
+	}
 	tokens, err := read(`SELECT conversation_id k,token v FROM agent_events_dirty`)
 	if err != nil {
 		return nil, err
@@ -421,7 +450,9 @@ func (c *Catalog) agentEventsWork(ctx context.Context, builder *labelsItemBuilde
 	if err != nil {
 		return nil, err
 	}
-	ended, err := read(`SELECT id k,COALESCE(ended_at,started_at,'') v FROM conversations`)
+	// An unknown end is not the start: such a conversation may run into the
+	// horizon, so it stays eligible.
+	ended, err := read(`SELECT id k,COALESCE(ended_at,'') v FROM conversations`)
 	if err != nil {
 		return nil, err
 	}
@@ -451,8 +482,11 @@ func (c *Catalog) agentEventsWork(ctx context.Context, builder *labelsItemBuilde
 			// It ended before the horizon and nothing in it changed.
 			continue
 		}
-		if all || !built || previous != structure || tokens[id] != "" || otherModel {
-			jobs = append(jobs, &agentEventsConversation{id: id, token: tokens[id], structure: structure})
+		// Built from a later horizon than this run's: its earlier messages
+		// were left unread ('~' is a version 1 row, horizon unknown).
+		widened := built && horizons[id] != since && (horizons[id] == "~" || since == "" || horizons[id] != "" && since < horizons[id])
+		if all || !built || previous != structure || tokens[id] != "" || otherModel || widened {
+			jobs = append(jobs, &agentEventsConversation{id: id, token: tokens[id], structure: structure, since: since})
 		}
 	}
 	gone := []string{}
@@ -503,8 +537,8 @@ func (c *Catalog) agentEventsConversation(ctx context.Context, builder *labelsIt
 	if err != nil {
 		return nil, err
 	}
-	stored := map[string]string{}
-	rows, err := queryMapsContext(ctx, c.DB, `SELECT message_id,COALESCE(input_hash,'') h,model FROM agent_event_messages WHERE conversation_id=?`, job.id)
+	stored, times := map[string]string{}, map[string]string{}
+	rows, err := queryMapsContext(ctx, c.DB, `SELECT message_id,COALESCE(input_hash,'') h,model,COALESCE(occurred_at,'') t FROM agent_event_messages WHERE conversation_id=?`, job.id)
 	if err != nil {
 		return nil, err
 	}
@@ -514,6 +548,7 @@ func (c *Catalog) agentEventsConversation(ctx context.Context, builder *labelsIt
 			hash = ""
 		}
 		stored[firstString(row["message_id"])] = hash
+		times[firstString(row["message_id"])] = firstString(row["t"])
 	}
 	seen := map[string]bool{}
 	for _, unit := range units {
@@ -532,6 +567,10 @@ func (c *Catalog) agentEventsConversation(ctx context.Context, builder *labelsIt
 		hash := agentEventInputHash(source, unit.text)
 		if stored[unit.messageID] == hash {
 			job.unchanged++
+			// Its events stand, but a corrected time moves them to its day.
+			if times[unit.messageID] != unit.createdAt {
+				job.retimed = append(job.retimed, &agentEventsMessage{id: unit.messageID, createdAt: unit.createdAt})
+			}
 			continue
 		}
 		message := &agentEventsMessage{id: unit.messageID, conversation: job.id, source: source, text: unit.text, createdAt: unit.createdAt, hash: hash,
@@ -574,11 +613,15 @@ func (c *Catalog) storeAgentEvents(ctx context.Context, identity string, convers
 				}
 				stats.MessagesRemoved++
 			}
-			for _, message := range conversation.messages {
-				var day any
-				if when, ok := parseTime(message.createdAt); ok {
-					day = when.Local().Format("2006-01-02")
+			for _, message := range conversation.retimed {
+				for _, table := range []string{"agent_event_messages", "agent_events"} {
+					if _, err := tx.ExecContext(ctx, `UPDATE `+table+` SET occurred_at=?, day=? WHERE message_id=?`, nilIfEmpty(message.createdAt), agentEventDay(message.createdAt), message.id); err != nil {
+						return err
+					}
 				}
+			}
+			for _, message := range conversation.messages {
+				day := agentEventDay(message.createdAt)
 				if _, err := tx.ExecContext(ctx, `DELETE FROM agent_events WHERE message_id=?`, message.id); err != nil {
 					return err
 				}
@@ -630,8 +673,8 @@ func (c *Catalog) storeAgentEvents(ctx context.Context, identity string, convers
 					return err
 				}
 			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO agent_events_conversations(conversation_id,structure,built_at) VALUES(?,?,?)
-				ON CONFLICT(conversation_id) DO UPDATE SET structure=excluded.structure, built_at=excluded.built_at`, conversation.id, conversation.structure, at); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO agent_events_conversations(conversation_id,structure,built_at,since) VALUES(?,?,?,?)
+				ON CONFLICT(conversation_id) DO UPDATE SET structure=excluded.structure, built_at=excluded.built_at, since=excluded.since`, conversation.id, conversation.structure, at, conversation.since); err != nil {
 				return err
 			}
 			// Only the mark this run read: one written since stays for the next run.
@@ -763,4 +806,12 @@ func (c *Catalog) agentEventsStatus(ctx context.Context, config Config) (map[str
 		status["conversations_built"], status["conversations_changed"] = built, dirty
 	}
 	return status, nil
+}
+
+// agentEventDay is a message time's local day, or NULL without a time.
+func agentEventDay(createdAt string) any {
+	if when, ok := parseTime(createdAt); ok {
+		return when.Local().Format("2006-01-02")
+	}
+	return nil
 }
