@@ -155,5 +155,5 @@ them.
 - **Cost.** Scoring dominates: about 18 candidates a second on four CPU threads with the machine to itself, and the
   study's October (100,000 agent messages, 524,000 candidates) would take about eight hours, some seventeen minutes a
   day. The int8 export agrees with fp32 on 99.9% of decisions at the same F1.
-- **Not yet in the product:** how sure an event is, beyond the threshold, and highlighting an event's sentence in the
-  reader. Risky actions are left to the tool-call history, where the actions themselves are recorded.
+- **Not yet in the product:** how sure an event is, beyond the threshold and the probability the reader shows. Risky
+  actions are left to the tool-call history, where the actions themselves are recorded.
