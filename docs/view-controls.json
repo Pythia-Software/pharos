@@ -161,6 +161,10 @@
     },
     {
       "file": "internal/archive/assets/ui.py",
+      "field": "reader_events"
+    },
+    {
+      "file": "internal/archive/assets/ui.py",
       "field": "reader_filter"
     },
     {
@@ -977,6 +981,15 @@
       "sharedDisclosure": true,
       "contract": "settings",
       "reason": "Background-update scheduling, power/source preferences, run actions and their operational diagnostics are excluded from content view URLs."
+    },
+    {
+      "key": "3327c32c534abd22:0",
+      "file": "internal/archive/assets/background.js",
+      "owner": "renderLabels",
+      "tag": "input",
+      "control": "'input'",
+      "contract": "settings",
+      "reason": "Persists the library labels_enabled setting through /api/labels/settings; it controls background processing, not the current URL view."
     },
     {
       "key": "c7b7dd6cbc73773b:0",
@@ -3537,6 +3550,15 @@
       "control": "'button', '', `Load full output · ${formatBytes(clippedBytes(clipped))}`",
       "contract": "reader",
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
+    },
+    {
+      "key": "17ca733baab56cf1:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "transcriptEventsControl",
+      "tag": "button",
+      "control": "'button', 'transcript-labels-toggle', 'Events'",
+      "contract": "reader",
+      "reason": "The Events toggle writes reader_events through the view contract; its saved preference is only the fallback when a link carries none."
     },
     {
       "key": "9b7112adc6a77699:0",

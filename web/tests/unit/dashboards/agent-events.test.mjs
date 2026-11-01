@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { eventRates, perThousand, ratePeriod, weekStart } from "../../../src/agent-event-rates-model";
-import { interleaveByKind } from "../../../src/agent-event-examples";
+import { eventReaderURL, interleaveByKind } from "../../../src/agent-event-examples";
 
 test("event rates divide each period's events by the messages read in it", () => {
   const events = [
@@ -38,4 +38,11 @@ test("examples take kinds in turn, most confident first within each", () => {
   ];
   assert.deepEqual(interleaveByKind(rows, 5).map(row => row.id), ["a1", "b1", "c1", "a2", "c2"]);
   assert.deepEqual(interleaveByKind(rows, 10).map(row => row.id), ["a1", "b1", "c1", "a2", "c2", "a3"]);
+});
+
+test("an example opens the reader at its message with Events highlighted", () => {
+  const url = new URL(eventReaderURL({ workspace_id: "w 1", conversation_id: "c1", message_id: "m1" }), "http://pharos.test");
+  assert.equal(url.pathname, "/work/w%201");
+  assert.deepEqual(Object.fromEntries(url.searchParams), { conversation: "c1", message: "m1", reader_events: "1" });
+  assert.equal(eventReaderURL({ message_id: "m1" }), undefined);
 });

@@ -4,6 +4,13 @@ import { agentEventKindLabel } from "./agent-events-analysis-catalog";
 import { onDatasetRefresh } from "./dataset-refresh";
 import { conversationRowURL } from "./usage-row-model";
 import "./agent-event-examples.css";
+import { encodeViewValue, viewFields } from "./view-contract";
+
+// The reader at the event's message, with Events highlighted.
+export function eventReaderURL(row: Record<string, unknown>): string | undefined {
+  const href = conversationRowURL(row, row.message_id);
+  return href && `${href}${href.includes("?") ? "&" : "?"}reader_events=${encodeViewValue(viewFields.reader_events, true)}`;
+}
 
 // The events behind the dashboard's numbers: for the current filters, the
 // ones the model is most confident about, each with what it was about, what
@@ -72,7 +79,7 @@ export function AgentEventExamples({ where, queryURL }: { where: WhereTerm[]; qu
     {!error && !loading && !rows.length ? <p className="muted">No events match these filters.</p> : null}
     <ol className="agent-event-list">
       {rows.map(row => {
-        const href = conversationRowURL(row, row.message_id);
+        const href = eventReaderURL(row);
         const subject = Number(row.has_subject) ? row.subject : "";
         return <li key={row.id} className="agent-event">
           <div className="agent-event-kind">{agentEventKindLabel(row.family)}</div>

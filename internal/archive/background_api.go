@@ -577,6 +577,7 @@ func (s *Server) getBackground(w http.ResponseWriter, r *http.Request) {
 	_, views := s.operationsDocumentViews(r.Context(), false)
 	freshness := s.freshness(r.Context(), views, false)
 	writeJSON(w, map[string]any{
+		"labels": s.labelsSettings(),
 		"settings": map[string]any{"mode": settings.Mode, "paused_until": nullable(settings.PausedUntil), "interval_seconds": settings.Interval,
 			"daily_at": settings.DailyAt, "hold_when_busy": settings.HoldWhenBusy, "overrides": settings.Overrides, "temporary_cadences": settings.Temporary, "battery": settings.Battery,
 			"battery_choices": batteryChoices, "battery_slower_minutes": int(batterySlowerInterval.Minutes()), "low_battery_percent": lowBatteryPercent},

@@ -527,6 +527,10 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c, err := m.childLocked(id)
+	var configPath string
+	if library := m.registry.library(id); library != nil {
+		configPath = library.resolve()
+	}
 	m.mu.Unlock()
 	if err != nil {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
@@ -550,6 +554,11 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		m.mu.Unlock()
 		if !current {
 			return fmt.Errorf("the application changed libraries; reopen this page")
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/labels/settings" && response.StatusCode == http.StatusOK {
+			if config, err := loadConfig(configPath, false); err == nil {
+				m.startLabelsFetch(config.Labels, config.AgentEvents)
+			}
 		}
 		if !isUIPage(r.URL.Path) || !strings.Contains(response.Header.Get("Content-Type"), "text/html") {
 			return nil
