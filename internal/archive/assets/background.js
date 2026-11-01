@@ -140,7 +140,7 @@
       items: (row.items || []).map(id => byId[id]).filter(Boolean).map(item => itemModel(item, now)),
     }));
     return {mode: document.settings?.mode || view.mode, settings: document.settings || {}, columns, everything: view.everything?.text || '',
-      rule: document.rule || null, cost: costModel(document.cost), headline: view.headline || null, battery: batteryModel(document)};
+      rule: document.rule || null, cost: costModel(document.cost), headline: view.headline || null, battery: batteryModel(document), labels: document.labels || null};
   }
 
   // On battery: each cadence's choice, and the low-battery rule. Null on a
@@ -181,7 +181,7 @@
   }
 
   // ---- rendering
-  let document_ = null, inFlight = false, fetchedAt = 0, sheet = null;
+  let document_ = null, inFlight = false, fetchedAt = 0, sheet = null, labelsSaving = false, labelsRevision = 0;
   const node = (tag, className = '', text) => {
     const element = document.createElement(tag);
     if (className) element.className = className;
@@ -331,13 +331,15 @@
 
   function render() {
     const target = host();
-    if (!target || !document_) return;
+    if (!target || !document_ || labelsSaving) return;
     // A select being used keeps its value until it is changed.
     if (target.contains(document.activeElement) && document.activeElement.matches('select')) return;
     const focused = document.activeElement?.closest?.('[data-item]')?.dataset.item;
+    const labelsFocused = document.activeElement?.id === 'labelsEnabled';
     const model = scheduleModel(document_);
     if (!model) return;
     const content = node('div');
+    if (model.labels) content.append(renderLabels(model.labels));
     const card = node('section', 'bg-card');
     const mode = node('div', 'bg-mode');
     const intro = node('div');
@@ -416,15 +418,59 @@
       node('p', 'muted', 'Background work stops as soon as you eject the library or quit Pharos, and carries on where it left off.'));
     content.append(considerate);
     target.replaceChildren(...content.childNodes);
+    if (labelsFocused) target.querySelector('#labelsEnabled')?.focus({preventScroll: true});
     if (focused) target.querySelector(`[data-item="${window.CSS.escape(focused)}"] .bg-item-head`)?.focus({preventScroll: true});
+  }
+
+  function renderLabels(settings) {
+    const card = node('section', 'bg-card');
+    const description = node('p', 'muted', 'Label messages locally and highlight requests, replies and feedback in the conversation reader. This setting follows the library. Turning it off keeps existing labels; a run in progress finishes.');
+    description.id = 'messageLabelsDescription';
+    const label = node('label', 'bg-check');
+    const box = node('input');
+    box.id = 'labelsEnabled';
+    box.type = 'checkbox';
+    box.setAttribute('role', 'switch');
+    box.setAttribute('aria-describedby', 'messageLabelsDescription messageLabelsStatus');
+    box.checked = settings.enabled;
+    box.disabled = !settings.can_change;
+    const status = node('p', 'muted', settings.status);
+    status.id = 'messageLabelsStatus';
+    status.setAttribute('role', 'status');
+    box.onchange = async () => {
+      const focused = document.activeElement === box;
+      labelsSaving = true;
+      labelsRevision++;
+      box.disabled = true;
+      let saved = false;
+      try {
+        document_ = await call('/api/labels/settings', {enabled: box.checked});
+        saved = true;
+      } catch (error) {
+        box.checked = settings.enabled;
+        status.textContent = error.message;
+        toast(error.message);
+      } finally {
+        labelsSaving = false;
+        box.disabled = !settings.can_change;
+      }
+      if (saved) render();
+      if (focused && (document.activeElement === box || document.activeElement === document.body)) host()?.querySelector('#labelsEnabled')?.focus({preventScroll: true});
+    };
+    label.append(box, 'Enable message labels');
+    card.append(node('h3', '', 'Message labels'), description, label, status);
+    return card;
   }
 
   async function refresh(force = false) {
     const target = host();
-    if (!target || inFlight || (!force && (!target.offsetParent || Date.now() - fetchedAt < 4000))) return;
+    if (!target || inFlight || labelsSaving || (!force && (!target.offsetParent || Date.now() - fetchedAt < 4000))) return;
     inFlight = true;
+    const revision = labelsRevision;
     try {
-      document_ = await call('/api/background');
+      const next = await call('/api/background');
+      if (revision !== labelsRevision || labelsSaving) return;
+      document_ = next;
       fetchedAt = Date.now();
       render();
     } catch (error) {

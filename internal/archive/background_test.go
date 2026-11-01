@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -305,6 +307,82 @@ func TestBackgroundPassRunsDueStagesAndRecordsThem(t *testing.T) {
 // The settings API: modes, the daily time, the interval, overrides within
 // the allowed choices, and Run now; the status snapshot carries the
 // schedule.
+func TestMessageLabelsSettings(t *testing.T) {
+	useSupportDir(t)
+	catalog, config := testCatalog(t)
+	original := "# Library settings\nlabels_threads = 2\n\n[[sources]]\nname = \"example\"\nkind = \"claude\"\npath = \"/nowhere\"\nenabled = true\n"
+	if err := os.WriteFile(config.Path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := testServer(t, config, catalog)
+	read := func() map[string]any {
+		t.Helper()
+		response := apiCall(t, server, config.APIToken, http.MethodGet, "/api/background", nil)
+		if response.Code != http.StatusOK {
+			t.Fatalf("read settings: %d %s", response.Code, response.Body.String())
+		}
+		var document map[string]any
+		if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+			t.Fatal(err)
+		}
+		return document
+	}
+	if labels := read()["labels"].(map[string]any); labels["enabled"] != false || labels["can_change"] != true {
+		t.Fatalf("disabled settings must remain visible: %v", labels)
+	}
+	for _, body := range []string{`{}`, `{"enabled":"true"}`, `{"enabled":null}`} {
+		if response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/labels/settings", body); response.Code != http.StatusBadRequest {
+			t.Fatalf("invalid setting %s: %d", body, response.Code)
+		}
+	}
+	for _, enabled := range []bool{true, false, true} {
+		response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/labels/settings", map[string]any{"enabled": enabled})
+		if response.Code != http.StatusOK {
+			t.Fatalf("toggle %t: %d %s", enabled, response.Code, response.Body.String())
+		}
+		reloaded, err := LoadConfig(config.Path)
+		if err != nil || reloaded.Labels.Enabled != enabled || server.Config().Labels.Enabled != enabled || reloaded.Labels.Threads != 2 {
+			t.Fatalf("toggle did not persist/apply: %+v %v", reloaded.Labels, err)
+		}
+		if len(reloaded.Sources) != 1 || !reloaded.Sources[0].Enabled {
+			t.Fatal("the setting changed a source")
+		}
+		document := read()
+		labels := document["labels"].(map[string]any)
+		if labels["enabled"] != enabled {
+			t.Fatalf("readback: %v", labels)
+		}
+		if enabled && (!strings.Contains(firstString(labels["status"]), "download") || !strings.Contains(firstString(labels["status"]), "worker")) {
+			t.Fatalf("missing runtime assets are not explained: %v", labels)
+		}
+		listed := false
+		for _, item := range document["view"].(map[string]any)["items"].([]any) {
+			listed = listed || item.(map[string]any)["id"] == "labels"
+		}
+		if listed != enabled {
+			t.Fatalf("scheduled labels listed = %t, enabled = %t", listed, enabled)
+		}
+	}
+	deferred, err := catalog.freshnessDeferred(t.Context())
+	if err != nil || deferred["labels"].generation <= deferred["labels"].completed {
+		t.Fatalf("earlier messages were not scheduled: %v %v", deferred, err)
+	}
+	if catalog.hasLabelsLedger() {
+		t.Fatal("changing settings ran inference")
+	}
+	text, _ := os.ReadFile(config.Path)
+	if !strings.HasPrefix(string(text), "# Library settings\n") || strings.Count(string(text), "labels_enabled =") != 1 {
+		t.Fatalf("configuration was not preserved: %s", text)
+	}
+	// A failed persistence must leave the running opt-in unchanged.
+	if err := os.Remove(config.Path); err != nil {
+		t.Fatal(err)
+	}
+	if response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/labels/settings", map[string]any{"enabled": false}); response.Code != http.StatusInternalServerError || !server.Config().Labels.Enabled {
+		t.Fatalf("failed save changed the running choice: %d", response.Code)
+	}
+}
+
 func TestBackgroundSettingsAPI(t *testing.T) {
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
