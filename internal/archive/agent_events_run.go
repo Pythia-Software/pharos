@@ -473,9 +473,58 @@ func (c *Catalog) agentEventsWork(ctx context.Context, builder *labelsItemBuilde
 		}
 		return ids[i] < ids[j]
 	})
+	structures := map[string]string{}
+	for _, id := range ids {
+		structures[id] = labelsStructure(p, builder.sessions, id)
+	}
+	// A fork's units depend on its parent's messages (inherited history), so
+	// a conversation whose inputs changed takes its forks along, as labelsWork
+	// does. A follower gets a dirty mark of its own first, which only its own
+	// build clears, so a limited run that stops before it keeps it pending.
+	children := map[string][]string{}
+	for id, info := range p.conversations {
+		if info.parent != "" {
+			children[info.parent] = append(children[info.parent], id)
+		}
+	}
+	queue, followed := []string{}, []string{}
+	for _, id := range ids {
+		if previous, built := stored[id]; tokens[id] != "" || built && previous != structures[id] {
+			queue = append(queue, id)
+		}
+	}
+	for seen := map[string]bool{}; len(queue) > 0; queue = queue[1:] {
+		for _, child := range children[queue[0]] {
+			if !seen[child] && tokens[child] == "" {
+				seen[child] = true
+				followed = append(followed, child)
+				queue = append(queue, child)
+			}
+		}
+	}
+	if opts.DryRun {
+		// Counted as work, marked by nothing.
+		for _, id := range followed {
+			tokens[id] = "dry-run"
+		}
+	} else if len(followed) > 0 && len(opts.Conversations) == 0 {
+		if err := c.writeTransaction(ctx, "mark forks of changed agent event conversations", func(tx *sql.Tx) error {
+			for _, id := range followed {
+				var token string
+				if err := tx.QueryRowContext(ctx, `INSERT INTO agent_events_dirty(conversation_id,token) VALUES(?,hex(randomblob(8)))
+					ON CONFLICT(conversation_id) DO UPDATE SET token=agent_events_dirty.token RETURNING token`, id).Scan(&token); err != nil {
+					return err
+				}
+				tokens[id] = token
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+	}
 	jobs := []*agentEventsConversation{}
 	for _, id := range ids {
-		structure := labelsStructure(p, builder.sessions, id)
+		structure := structures[id]
 		previous, built := stored[id]
 		_, otherModel := other[id]
 		if !all && tokens[id] == "" && since != "" && ended[id] != "" && ended[id] < since {
@@ -774,7 +823,8 @@ func (s *Server) chainAgentEvents(ctx context.Context, labels LabelerSettings, s
 // what it would use or waits for, and what the tables hold.
 func (c *Catalog) agentEventsStatus(ctx context.Context, config Config) (map[string]any, error) {
 	labels, settings := config.Labels.withAssets(), config.AgentEvents.withAssets()
-	status := map[string]any{"enabled": settings.Enabled, "days": settings.Days, "threshold": agentEventThreshold,
+	// On by the configuration or by the Settings switch, as agentEventsEnabled.
+	status := map[string]any{"enabled": settings.Enabled || c.featureFlag(ctx, agentEventsFlag), "days": settings.Days, "threshold": agentEventThreshold,
 		"model_dir": settings.ModelDir, "model": labelsAssetStatus(labelsAssets.AgentEventsModel), "worker": labels.Worker,
 		"runtime": defaultString(labels.Runtime, labelsAssetStatus(labelsAssets.Runtime))}
 	if waiting := settings.waiting(config.Labels); waiting != "" {

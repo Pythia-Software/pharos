@@ -77,7 +77,9 @@ scores about 1,000 messages (`agentEventsChainLimit`); a larger backlog continue
   the units and the sentence versions; an imported row has no input hash, so the pass replaces it.
 - **Which conversations it looks at, newest first.** Those marked in `agent_events_dirty`, by the same triggers as
   the labels ledger's (`itemDirtyTriggers`); those never built or whose structure fingerprint changed
-  (`agent_events_conversations`); and those with rows another verifier made. Conversations that left the catalog lose
+  (`agent_events_conversations`); those with rows another verifier made; and the forks of a conversation whose inputs
+changed, since what a fork inherited from its parent decides which replies are its own. A fork followed that way gets a
+dirty mark of its own, so a limited run that stops before it keeps it pending. Conversations that left the catalog lose
   their rows.
 - **How it stores.** Candidates are gathered across conversations (512 at a time), scored in batches packed by length,
   and stored with each conversation's ledger row in one transaction. A stop between chunks keeps what was stored and

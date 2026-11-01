@@ -88,6 +88,13 @@ func agentEventsCatalog(t *testing.T) *Catalog {
 			t.Fatal(err)
 		}
 	}
+	// A fork without a start time copies its parent's history in order: its
+	// copy of the root's first reply is inherited, not its own.
+	if _, err := tx.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,selected,source_order)
+		SELECT 'm-f3-a','c-fork3','m-f3-a','assistant','message','I will look into the export button.','h-f3a','2026-09-01T12:01:00.000Z',1,source_order
+		FROM messages WHERE id='m-f3-1'`); err != nil {
+		t.Fatal(err)
+	}
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
@@ -214,6 +221,31 @@ func TestAgentEventsPassScoresChangedMessagesOnly(t *testing.T) {
 		t.Fatalf("a deleted message kept events %v", got)
 	}
 
+	// A parent's corrected reply no longer matches its fork's copy, which
+	// becomes the fork's own reply: the fork is looked at again, even when a
+	// limited run stops before it (its own dirty mark keeps it pending).
+	readMessage := func(id string) bool {
+		var n int
+		_ = catalog.DB.QueryRow(`SELECT COUNT(*) FROM agent_event_messages WHERE message_id=?`, id).Scan(&n)
+		return n > 0
+	}
+	if readMessage("m-f3-a") {
+		t.Fatal("the fork's copy of its parent's reply was read as its own")
+	}
+	execTx(t, catalog.DB, `UPDATE messages SET text='I will look into the export button first.' WHERE id='m-a1'`)
+	if _, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{Limit: 1}); err != nil {
+		t.Fatal(err)
+	}
+	var pendingFork int
+	_ = catalog.DB.QueryRow(`SELECT COUNT(*) FROM agent_events_dirty WHERE conversation_id='c-fork3'`).Scan(&pendingFork)
+	if !readMessage("m-f3-a") && pendingFork == 0 {
+		t.Fatal("a limited run dropped the fork of a changed conversation")
+	}
+	forked, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{})
+	if err != nil || !forked.Complete || !readMessage("m-f3-a") {
+		t.Fatalf("after the parent's edit: %+v %v; the fork's reply read: %v", forked, err, readMessage("m-f3-a"))
+	}
+
 	// Rows another verifier made (an import's have no input hash) are
 	// scored again; so is everything when the verifier changes.
 	if _, err := catalog.DB.Exec(`UPDATE agent_event_messages SET input_hash=NULL WHERE message_id='m-ev-reply'`); err != nil {
@@ -224,9 +256,11 @@ func TestAgentEventsPassScoresChangedMessagesOnly(t *testing.T) {
 		t.Fatalf("after an import: %+v %v", imported, err)
 	}
 	_, other := agentEventsTestSettings(t, map[string]any{"name": "another-verifier"})
+	var current int
+	_ = catalog.DB.QueryRow(`SELECT COUNT(*) FROM agent_event_messages`).Scan(&current)
 	switched, err := catalog.RunAgentEvents(t.Context(), labels, other, AgentEventsRunOptions{})
-	if err != nil || switched.MessagesScored != read-1 || switched.MessagesUnchanged != 0 {
-		t.Fatalf("after a model switch: %+v %v (%d messages)", switched, err, read-1)
+	if err != nil || switched.MessagesScored != current || switched.MessagesUnchanged != 0 {
+		t.Fatalf("after a model switch: %+v %v (%d messages)", switched, err, current)
 	}
 }
 
@@ -299,6 +333,9 @@ func TestAgentEventsAreAChainStageOnlyWhenEnabled(t *testing.T) {
 		}
 		if read == 0 || !planned {
 			t.Fatalf("on by the %s: %d messages read, item planned %v", mode, read, planned)
+		}
+		if status, err := catalog.agentEventsStatus(t.Context(), config); err != nil || status["enabled"] != true {
+			t.Fatalf("on by the %s, status says enabled %v (%v)", mode, status["enabled"], err)
 		}
 		deferred, _ := catalog.freshnessDeferred(t.Context())
 		if row := deferred["agent_events"]; row.generation == 0 || row.generation > row.completed {
