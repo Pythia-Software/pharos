@@ -37,6 +37,20 @@ dashboard's catalog (`web/src/agent-events-analysis-catalog.ts`). The dashboard 
 messages** by day or week, dividing by the messages read in each period under the same filters: the engine's parts
 split only additive measures, so this panel computes the rate from two grouped counts.
 
+### In the reader
+
+A conversation the pass has read has an **Events** toggle beside Show and Labels (view field `reader_events`; the
+dashboard's example links turn it on). It marks each event's sentence in its kind group's hue and underlines what the
+event was about and what the agent did; hovering a marked sentence names its events, with probability and those
+sentences. Thinking is marked inside its Reasoning row, which shows a count of its events.
+
+- `agentEventsAttacher` (`agent_events.go`) attaches each agent message's events at or above the threshold to the
+  live reader's conversation, with ranges converted from UTF-8 bytes to UTF-16 code units (JavaScript's string
+  indexes), and a summary for the toggle. A shared export carries none.
+- `messageEventView`, `eventMask` and `eventsAtMark` (`reader-model.js`) turn them into marks and pick the events
+  under a hovered mark. Events apply only where the reader shows the text that was scored: a reply's card, or a
+  thinking block's own text.
+
 ### Import
 
 Until the model runs inside Pharos, events are imported from the study's predictions:

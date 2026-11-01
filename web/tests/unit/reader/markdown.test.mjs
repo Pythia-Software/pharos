@@ -177,6 +177,45 @@ test("local labels name a message's most specific labels and mark the text they 
   assert.deepEqual(plain([root.family, root.labels[0].title]), ['', 'Responds or reports']);
 });
 
+test("agent events mark each event's sentence by group and its context, in UTF-16 offsets", () => {
+  // An emoji is two UTF-16 units: offsets count them as JavaScript does.
+  const body = "The 🚧 endpoint doesn't support pagination. I'll work around it by fetching one day at a time. **Done.**";
+  const at = sentence => [body.indexOf(sentence), body.indexOf(sentence) + sentence.length];
+  const blocked = at("The 🚧 endpoint doesn't support pagination."), workaround = at("I'll work around it by fetching one day at a time.");
+  const message = { role: 'assistant', kind: 'message', text: body, agent_events: [
+    { kind: 'workaround', label: 'Workaround', group: 'Choices you may not see', probability: 0.91, sentence: workaround, subject: [blocked], response: [workaround] },
+    { kind: 'missing_capability', label: 'Missing tool or capability', group: 'Friction', probability: 0.62, sentence: blocked, subject: [], response: [] },
+    { kind: 'obstacle', label: 'Obstacle or roadblock', group: 'Friction', probability: 0.88, sentence: blocked, subject: [], response: [] },
+    { kind: 'surprise', label: 'Surprise', group: 'Reactions and learning', probability: 0.7, sentence: [0, body.length + 4], subject: [], response: [] },
+  ] };
+  const view = reader.messageEventView(message);
+  assert.deepEqual(plain(view.map(event => event.kind)), ['workaround', 'missing_capability', 'obstacle'], 'a range past the text is dropped');
+  assert.deepEqual(plain([view[0].sentenceText, view[0].subjectText, view[0].responseText]),
+    ["I'll work around it by fetching one day at a time.", "The 🚧 endpoint doesn't support pagination.", "I'll work around it by fetching one day at a time."]);
+  // An event's sentence keeps its group's mark over another event's context.
+  const marks = elements(reader.markdownTree(body, 0, reader.eventMask(body, view, ''))).filter(item => item.tag === 'mark');
+  assert.deepEqual(plain(marks.map(item => [item.className, text(item)])), [
+    ['agent-event event-friction', "The 🚧 endpoint doesn't support pagination."],
+    ['agent-event event-choices', "I'll work around it by fetching one day at a time."],
+  ]);
+  // Context that is no event's sentence is marked lighter; the likelier of
+  // two events on one sentence picks its hue.
+  const context = { ...message, agent_events: [{ ...message.agent_events[0], subject: [at("**Done.**")] }, { ...message.agent_events[2], group: 'Worth a second look', probability: 0.95 }, message.agent_events[1]] };
+  const contextMarks = elements(reader.markdownTree(body, 0, reader.eventMask(body, reader.messageEventView(context), ''))).filter(item => item.tag === 'mark');
+  assert.deepEqual(plain(contextMarks.map(item => item.className)), ['agent-event event-second-look', 'agent-event event-choices', 'event-context']);
+  // Text the reader shows differently from what was scored marks nothing.
+  assert.equal(reader.messageEventView({ ...message, text: JSON.stringify({ text: body }) }), null);
+  assert.equal(reader.messageEventView({ role: 'assistant', text: 'Done.' }), null);
+  // Hovering a mark names only the events of the sentence it is in.
+  const mark = (className, textContent) => ({ textContent, classList: { contains: name => className.split(' ').includes(name) } });
+  assert.deepEqual(plain(reader.eventsAtMark(view, mark('agent-event event-friction', "endpoint doesn't support")).map(event => event.kind)), ['missing_capability', 'obstacle']);
+  assert.deepEqual(plain(reader.eventsAtMark(view, mark('event-context', "The 🚧 endpoint doesn't support pagination.")).map(event => event.kind)), ['workaround']);
+  assert.deepEqual(plain(reader.eventsAtMark(view, mark('agent-event', 'nowhere')).map(event => event.kind)), []);
+  // Thinking is shown as its own text, so its events apply to it.
+  assert.equal(reader.messageEventView({ ...message, kind: 'reasoning' }).length, 3);
+  assert.equal(reader.eventMask('Done.', null, '01010'), '01010');
+});
+
 test("missing classification, automated prompts and invalid ranges do not imply human writing", () => {
   for (const message of [
     { role: 'user', text: 'Unknown provenance.' },

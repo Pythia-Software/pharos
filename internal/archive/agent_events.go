@@ -11,7 +11,9 @@ import (
 	"io"
 	"os"
 	"strings"
+	"math"
 	"time"
+	"unicode/utf16"
 	"unicode/utf8"
 )
 
@@ -446,4 +448,90 @@ func nonNilRanges(ranges [][2]int) [][2]int {
 		return [][2]int{}
 	}
 	return ranges
+}
+
+// agentEventsAttacher gives the conversation reader each agent message's
+// events (at or above agentEventThreshold): kind, label, group, probability,
+// and the sentence, subject and response as ranges of the message's text in
+// UTF-16 code units, JavaScript's string indexes. summary is nil for a
+// conversation the pass never read, so the reader shows no Events control.
+func (c *Catalog) agentEventsAttacher(conversationID any) (attach func(map[string]any), summary func() (map[string]any, error), err error) {
+	rows, err := queryMaps(c.reader(), `SELECT message_id,family,probability,sentence_start,sentence_end,subject_ranges,response_ranges
+		FROM agent_events WHERE conversation_id=? AND probability>=? ORDER BY message_id,sentence_start,probability DESC`, conversationID, agentEventThreshold)
+	if err != nil {
+		return nil, nil, err
+	}
+	byMessage := map[string][]map[string]any{}
+	for _, row := range rows {
+		byMessage[firstString(row["message_id"])] = append(byMessage[firstString(row["message_id"])], row)
+	}
+	attached := 0
+	attach = func(message map[string]any) {
+		events := byMessage[firstString(message["id"])]
+		text, ok := message["text"].(string)
+		if len(events) == 0 || !ok {
+			return
+		}
+		out := []map[string]any{}
+		for _, row := range events {
+			family, known := agentEventFamilyByKey(firstString(row["family"]))
+			if !known {
+				continue
+			}
+			ranges := func(raw any) ([][2]int, bool) {
+				var list [][2]int
+				if json.Unmarshal([]byte(firstString(raw)), &list) != nil {
+					return nil, false
+				}
+				return utf16Ranges(text, list)
+			}
+			sentence, ok1 := utf16Ranges(text, [][2]int{{int(integer(row["sentence_start"])), int(integer(row["sentence_end"]))}})
+			subject, ok2 := ranges(row["subject_ranges"])
+			response, ok3 := ranges(row["response_ranges"])
+			if !ok1 || !ok2 || !ok3 {
+				// Scored on text the message no longer has.
+				continue
+			}
+			probability, _ := row["probability"].(float64)
+			out = append(out, map[string]any{"kind": family.Key, "label": family.Label, "group": family.Group, "definition": family.Definition,
+				"probability": math.Round(probability*1000) / 1000, "sentence": sentence[0], "subject": subject, "response": response})
+		}
+		if len(out) > 0 {
+			message["agent_events"] = out
+			attached++
+		}
+	}
+	summary = func() (map[string]any, error) {
+		var read int
+		if err := c.reader().QueryRow(`SELECT COUNT(*) FROM agent_event_messages WHERE conversation_id=?`, conversationID).Scan(&read); err != nil {
+			return nil, err
+		}
+		if read == 0 {
+			return nil, nil
+		}
+		return map[string]any{"messages_read": read, "messages_with_events": attached, "threshold": agentEventThreshold}, nil
+	}
+	return attach, summary, nil
+}
+
+// utf16Ranges turns byte ranges of text into UTF-16 code unit ranges. ok is
+// false when a range is out of bounds or splits a character.
+func utf16Ranges(text string, ranges [][2]int) ([][2]int, bool) {
+	out := make([][2]int, 0, len(ranges))
+	for _, r := range ranges {
+		if r[0] < 0 || r[1] > len(text) || r[0] > r[1] || !utf8.ValidString(text[:r[0]]) || !utf8.ValidString(text[r[0]:r[1]]) {
+			return nil, false
+		}
+		start := utf16Length(text[:r[0]])
+		out = append(out, [2]int{start, start + utf16Length(text[r[0]:r[1]])})
+	}
+	return out, true
+}
+
+func utf16Length(text string) int {
+	n := 0
+	for _, r := range text {
+		n += utf16.RuneLen(r)
+	}
+	return n
 }
