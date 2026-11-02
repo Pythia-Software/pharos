@@ -1,9 +1,8 @@
 import { originDimensions, originLabel, isOriginDimension, useOriginMetadata } from "./origin-dimensions";
 import React, { useEffect, useLayoutEffect, useState } from "react";
-import { EMPTY_QUERY, decodeQuery, encodeQuery, type WhereTerm } from "@pythia-software/query-table-core";
-import { ChartSelect, rangeLabel, timeBounds, usageTime, withTimeRange, type FilterChange } from "./usage-chart";
+import {  type WhereTerm } from "@pythia-software/query-table-core";
+import { ChartSelect, rangeLabel, timeBounds, usageTime, type FilterChange } from "./usage-chart";
 import { readSlice, withSlice } from "./chart-selection";
-import { preferences } from "./preferences";
 import type { CarbonFactors } from "./carbon-analysis-catalog";
 
 type CarbonTokens = { tokens: Record<string, Record<string, number>> };
@@ -28,21 +27,7 @@ declare global {
   }
 }
 
-const filtersKey = "pharos-carbon-filters";
 const providers: Record<string, string> = { claude: "Claude", codex: "Codex", chatgpt: "ChatGPT", antigravity: "Antigravity", canonical: "Canonical", tl1: "TL1" };
-
-function initialWhere(): WhereTerm[] {
-  const encoded = new URLSearchParams(location.search).get("q_carbon") ?? preferences().get<string>(filtersKey, "");
-  if (encoded) {
-    try { const where = decodeQuery(encoded).where; return new URLSearchParams(location.search).get("carbon_window") === "today" || preferences().get<string>("pharos-carbon-window", "") === "today" && !new URLSearchParams(location.search).has("q_carbon") ? withTimeRange(where, usageTime, undefined, undefined, "today") : where; } catch { return []; }
-  }
-  // Preserve the old calculator's 30-day choice until new filters are saved.
-  if (preferences().get<{ window?: string }>("pharos-carbon-v1", {}).window === "30d") {
-    const from = new Date(); from.setHours(0, 0, 0, 0); from.setDate(from.getDate() - 29);
-    return withTimeRange([], usageTime, from);
-  }
-  return [];
-}
 
 function CarbonFilter({ field, choices, where, onFilter }: { field: "repository_name" | "provider" | "channel" | "machine_id" | "execution_machine_id"; choices: string[]; where: WhereTerm[]; onFilter: FilterChange }) {
   const selected = readSlice(where, field), values = [...new Set([...choices, ...selected.values.map(value => value ?? "")])].sort();
@@ -70,30 +55,6 @@ function useCarbonData(requestKey: string, refresh: number) {
     return () => controller.abort();
   }, [requestKey, refresh]);
   return { ...state, data: state.key === requestKey && !state.loading ? state.data : null, loading: state.key !== requestKey || state.loading, error: state.key === requestKey ? state.error : "" };
-}
-
-// The Carbon page's filters and legacy-page filter storage. The dashboard
-// keeps its filters in analyze_filters (useUsageDashboardState); the legacy
-// page in q_carbon and its saved preference.
-export function useLegacyCarbonFilters(): [WhereTerm[], FilterChange] {
-  const [where, setWhere] = useState(() => initialWhere());
-  useEffect(() => {
-    const restore = () => setWhere(initialWhere());
-    window.addEventListener("pharos:route", restore); window.addEventListener("pharos:day-change", restore);
-    return () => { window.removeEventListener("pharos:route", restore); window.removeEventListener("pharos:day-change", restore); };
-  }, []);
-  const onFilter: FilterChange = (change, preset) => setWhere(previous => {
-    const next = change(previous), encoded = encodeQuery({ ...EMPTY_QUERY, where: next });
-    preferences().set(filtersKey, encoded);
-    const url = new URL(location.href);
-    const dates = (terms: WhereTerm[]) => JSON.stringify(terms.filter(term => "field" in term && [usageTime.first, usageTime.last].includes(term.field)));
-    if (preset === "today") { url.searchParams.set("carbon_window", "today"); preferences().set("pharos-carbon-window", "today"); }
-    else if (preset || dates(next) !== dates(previous)) { url.searchParams.delete("carbon_window"); preferences().set("pharos-carbon-window", ""); }
-    if (next.length) url.searchParams.set("q_carbon", encoded); else url.searchParams.delete("q_carbon");
-    history.replaceState(null, "", url.pathname + url.search + url.hash);
-    return next;
-  });
-  return [where, onFilter];
 }
 
 // Carbon Impact: the usage filters and the page's own estimate and

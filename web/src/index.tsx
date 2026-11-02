@@ -6,18 +6,15 @@ import { nativeDetailsReady } from "./view-attention-model";
 import { revealQueryDetail } from "./query-attention";
 import { createAttentionRegistry } from "@pythia-software/query-table-core";
 import { portableLinkOptions, portableQueryLinks } from "./portable-query-link";
-import { rangeDays, type ChartRange } from "./chart-range";
-import { startDayClock, localTimezone } from "./day-window";
+import { startDayClock } from "./day-window";
 import "./visit-history";
 import { originLabel, originRenderers, useOriginMetadata, isOriginDimension } from "./origin-dimensions";
 import "./uifeedback/pharos-client";
 import { DataTaxonomyModal, SourceQueryBuilder } from "./data-taxonomy";
 import { installDelegationExplorer } from "./delegation";
 import { installWorkspaceInbox } from "./workspace-inbox";
-import { MessageTableSearch, newMessageSearch } from "./message-table-search";
 import { ConversationFacts, ResultConversationBrowser, ResultMessage, conversationActivitySummary } from "./conversation-results";
 import { TextSearchEditor } from "./text-search-editor";
-import { SearchHelp } from "./search-help";
 import { RecordSearchEditor, recordSearchTargets } from "./record-search-editor";
 import { usageDetailsSchema } from "./usage-row-model";
 import { fittedDefaultQuery, usageActionQuery, usageQuerySchema, withGroupDetail } from "./usage-query-columns";
@@ -27,26 +24,22 @@ import { createQueryMetadataLoader } from "./query-metadata";
 import { SearchDialog } from "./search-dialog";
 import { ExploreSearch } from "./explore-search";
 import { recordKeywordSummary, RecordKeywordClause } from "./record-keyword-clause";
-import { refreshTodayHost, changeLibrarySearch, libraryFind, libraryHostQuery, libraryHostState, messageFind, messageHostQuery, readLibraryHost, readMessageSearchHost, readRecordKeyword, recordKeywordFind, recordKeywordHostQuery, sameHostState, withMessageSearch, withoutLibrarySearch, withRecordKeyword, type LibraryHost } from "./host-query-state";
+import { refreshTodayHost, changeLibrarySearch, libraryFind, libraryHostQuery, libraryHostState, readLibraryHost, readRecordKeyword, recordKeywordFind, recordKeywordHostQuery, sameHostState, withoutLibrarySearch, withRecordKeyword, type LibraryHost } from "./host-query-state";
 import { SearchResultsDisplay } from "./search-results-view";
 import { highlightParts, matchFindState, summaryEntries, type WorkMatches, type WorkMatchItem } from "./find-match-model";
 import { writeFindParameters } from "./page-find-model";
-import { queryForSearchResultsView, searchResultsView, type SearchResultsView } from "./search-results-view-model";
-import { newKeywordSearch, searchSentence, withheldBatch, type TextSearchDraft } from "./text-search-model";
-import { CarbonImpact, useLegacyCarbonFilters } from "./carbon-impact";
-import { carbonCatalogShape, legacyCarbonChart } from "./carbon-analysis-catalog";
+import { queryForSearchResultsView, searchResultsView } from "./search-results-view-model";
+import { newKeywordSearch, searchSentence } from "./text-search-model";
+import { CarbonImpact } from "./carbon-impact";
+import { carbonCatalogShape } from "./carbon-analysis-catalog";
 import { usageSummaryURL } from "./usage-summary-links";
 import { readConcurrencySettings } from "./concurrency-settings";
-import { pushMachineLocation, useMachineQueryNavigation } from "./machine-location";
-import { MachineActivity } from "./machine-activity";
 import { activityPresentation } from "./machine-activity-data";
-import { ChartSelect, DisplayControl, PeriodControl, RangeControl, ScaleControl, RollingControl, StackedColumns, chartPeriodCount, chartSpan, pickRange, presetPeriod, smoothingWhere, timeBounds, withTimeRange, usageTime, writingTime, type FilterChange } from "./usage-chart";
-import { presetMatches, usageChartPresets, type TokenChartView, type UsagePreset } from "./usage-presets";
+import {  usageTime, type FilterChange } from "./usage-chart";
+import type { TokenChartView } from "./usage-presets";
 import { withComputedCapabilityRefresh } from "./computed-column-store";
 import { MetricRequestError, postMetrics, postQueryV3Metrics, type MetricResult } from "./metric-request";
 import { tokenSummaryMetrics } from "./token-chart-request";
-import { chartPeriods, earliestKey, isHourly, localDay, parseDay, periodLabel, validPeriodCount, type ChartPeriod } from "./chart-period";
-import { defaultChartScale, validChartScale } from "./chart-scale";
 import modelRequestsDocument from "../../schemas/model_requests.schema.json";
 import { ThinkingDashboard } from "./thinking-dashboard";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -56,7 +49,7 @@ import { LibraryContent } from "./library-content";
 import { SyncTables } from "./sync-tables";
 import { SettingsWorkspace } from "./settings-workspace";
 import { installAppNavigation } from "./app-navigation";
-import { EMPTY_QUERY, groupKeyField, groupKeyFields, groupSourceQuery, isWhereConjunction, isWhereGroup, predicatesOf, httpComputedColumnStore, inspectBucketQuery, encodeQuery, loadSchema, toAggregationQuery, type ComputedColumnStore, type HostQueryState, type QueryCapabilitiesV3, type QueryResultV3, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type FieldSchema, type Transport, type WhereBranch, type WhereClause, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, groupKeyField, groupKeyFields, groupSourceQuery, predicatesOf, httpComputedColumnStore, inspectBucketQuery, encodeQuery, loadSchema, type ComputedColumnStore, type HostQueryState, type QueryCapabilitiesV3, type QueryResultV3, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type FieldSchema, type Transport, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
 import { useQueryTable, type HostQueryOptions, type QueryTableApi, type QueryFilterApi } from "@pythia-software/query-table-react";
 import { DataTable, FilterValueProvider, MetricsPanel, QueryFilterRow, defaultRenderers, type CellContext, type FilterValuePresentation, type RenderRegistry } from "@pythia-software/query-table-ui";
 import "@pythia-software/query-table-ui/theme.css";
@@ -64,20 +57,17 @@ import "./pharos.css";
 import { savedRollingWindow } from "./bookmarks";
 import { acceptDefaultQuery, libraryStorageAdapter, rejectDefaultQuery, retryDefaultQuery } from "./storage";
 import { queryRequest, queryFetch, shouldSkipQueryOnRestore } from "./query-request";
-import { PageErrorBoundary, QueryRecovery, ResetPage, tableRecoveryQuery } from "./query-recovery";
+import { PageErrorBoundary, QueryRecovery, tableRecoveryQuery } from "./query-recovery";
 import { createMCPMonitor, type MCPStatus } from "./mcp-monitor";
 import { HomePage } from "./home";
 import { AskPharosSearch, AskPharosSettings } from "./ask-pharos";
 import { CardLibraryPage } from "./card-library";
 import { linkTargets, navigateLink } from "./query-link-targets";
-import { QueryChip } from "./query-card";
 import { queryFromURL, queryURL, rollingWindowField, updateQueryWindowURL, queryWindowChoice, withQueryWindow, readRollingWindow, resolveRollingQuery, rollingQueryMatches, restoreRollingDefinition } from "./query-links";
 import { mainIntegration, pullRequestLabel, pullRequestURL, pullRequests } from "./pull-requests";
 import { optionLabels } from "./option-labels";
 import { preferences } from "./preferences";
-import { chartBucketsWithHistory, foldSeries, plottedBucketKey, validChartDisplay, validRollingPeriods, type ChartDisplay } from "./chart-series";
-import { isSliceTerm, readSlice, updateSlice, withSlice, validChartPresentation, type ChartPresentation, type LegendAction, type SliceSelection } from "./chart-selection";
-import { UsageChartColorsProvider, useUsageChartPalette, useUsageTableRenderers } from "./usage-chart-colors";
+import { UsageChartColorsProvider, useUsageTableRenderers } from "./usage-chart-colors";
 import libraryDocument from "../../schemas/library.schema.json";
 import usageDocument from "../../schemas/usage.schema.json";
 import writingDocument from "../../schemas/writing.schema.json";
@@ -96,10 +86,10 @@ import agentEventMessagesDocument from "../../schemas/agent_event_messages.schem
 import { FindingsPage, startFindingsChrome } from "./findings";
 import { safetyDetailURL, safetyStateLabels } from "./safety-route";
 import { Icon } from "./icons";
-import { AuthoredMessages, CategoryPill, MessageMix, authoredRenderers } from "./authored";
+import {  CategoryPill, MessageMix, authoredRenderers } from "./authored";
 import { ConcurrencyModal, ConcurrencyPanel, concurrencyPrototypeEnabled, type ConcurrencySelection } from "./concurrency";
-import { openConcurrencyModal, startConcurrencySummary } from "./concurrency-store";
-import { isUsageWorkspace, readUsageWorkspace, usageDatasets, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
+import { startConcurrencySummary } from "./concurrency-store";
+import { canonicalAnalyzeURL, isUsageWorkspace, readUsageWorkspace, usageDatasets, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { mcpAnalysisCatalog } from "./mcp-analysis-catalog";
 import { agentEventsAnalysisCatalog } from "./agent-events-analysis-catalog";
 import { AgentEventExamples } from "./agent-event-examples";
@@ -109,16 +99,14 @@ import { toolsAnalysisCatalog } from "./tools-analysis-catalog";
 import { toolTimeAnalysisCatalog, skillsAnalysisCatalog } from "./record-analysis-catalogs";
 import { UsageWorkspace, UsageDashboardLinks, UsageWorkspaceLink } from "./usage-workspace";
 import { UsageQueryIdeas } from "./usage-query-ideas";
-import { toolSummaryCallFilters } from "./tools-dashboard-model";
-import { readDashboardLink, readDashboardQuery, parallelismSelectionQuery } from "./usage-dashboard-model";
-import { dashboardChartURL } from "./dashboard-chart-links";
+import { readDashboardLink, parallelismSelectionQuery } from "./usage-dashboard-model";
 import { conversationAnalysisCatalog } from "./conversation-analysis-catalog";
 import { DashboardAnalysis } from "./dashboard-analysis";
 import { AnalysisTrend, type AmountFormat } from "./dashboard-trend";
-import { analysisVersion, canonicalState, normalizeAnalysis, readAnalysisLink, switchView, validAnalysisState, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
-import { dashboardDefaults, defaultTokenChart } from "./dashboard-defaults";
+import { analysisVersion, canonicalState, readAnalysisLink, switchView, validAnalysisState, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { dashboardDefaults } from "./dashboard-defaults";
 import { tokenAnalysisCatalog } from "./token-analysis-catalog";
-import { describeTerm, humanAnalysisCatalog, humanLegacyURL, readHumanLink, writingGroups } from "./human-analysis-catalog";
+import { describeTerm, humanAnalysisCatalog, readHumanLink } from "./human-analysis-catalog";
 import { parallelismCatalogShape, parallelismSettingsNote, type ParallelismSettings } from "./parallelism-analysis-catalog";
 import { useCarbonCatalog, useParallelismCatalog } from "./analysis-catalog-hooks";
 import { datasetsForSavedPreferences, onDatasetRefresh, onSafetyChange } from "./dataset-refresh";
@@ -130,7 +118,6 @@ const relationships: RelationshipAdapter = {
   },
 };
 type Dataset = "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "findings" | "safety" | "agent_events" | "agent_event_messages";
-type MessageView = "table" | "text";
 function mainIntegrationLink(row: Row): React.ReactNode {
   const merge = mainIntegration(row);
   if (!merge) return "";
@@ -154,25 +141,15 @@ function usdCost(value: unknown, row: Row): React.ReactNode {
   return <span>{text}</span>;
 }
 
-const queryParameter = (dataset: Dataset) => `q_${dataset}`;
-function datasetIsVisible(dataset: Dataset | "machine_calls") {
+function datasetIsVisible(dataset: Dataset) {
   const params = new URLSearchParams(location.search), path = location.pathname;
-  if (path === "/analyze" && isUsageWorkspace(params)) {
+  if (path === "/analyze") {
     const workspace = readUsageWorkspace(params);
     return workspace.mode !== "dashboards" && workspace.dataset === dataset;
   }
-  if (dataset === "machine_calls") return path === "/analyze" && (params.get("analyze_view") ?? "tokens") === "tokens" && (params.get("machine_view") ?? preferences().get("pharos-machine-view", "tokens")) === "time";
   if (dataset === "library") return path === "/library";
-  if (dataset === "findings" || dataset === "safety") return path === "/findings" && params.get("view") === "table" && (params.get("optimize_area") === "safety") === (dataset === "safety");
-  if (dataset === "parallelism") return path === "/analyze" && (params.get("analyze_view") ?? "tokens") === "tokens" && (params.get("machine_view") ?? preferences().get("pharos-machine-view", "tokens")) === "parallelism";
-  const usageView = params.get("analyze_view") ?? preferences().get("pharos-usage-view", "tokens");
-  if (dataset === "conversation_activity") return path === "/analyze" && usageView === "conversations";
-  if (dataset === "usage") return path === "/analyze" && usageView === "tokens";
-  if (dataset === "writing" || dataset === "writing_messages") return path === "/analyze" && usageView === "writing" && (params.get("writing") === "messages") === (dataset === "writing_messages");
-  if (["tools", "tool_calls", "skill_usages"].includes(dataset)) return path === "/tools" && (params.get("tools_view") ?? "calls") === (dataset === "tools" ? "summary" : dataset === "skill_usages" ? "skills" : "calls");
-  return dataset === "mcp_calls" && path === "/mcp";
+  return (dataset === "findings" || dataset === "safety") && path === "/findings" && params.get("view") === "table" && (params.get("optimize_area") === "safety") === (dataset === "safety");
 }
-
 
 function updateURI(name: string, value: string) {
   const url = new URL(window.location.href);
@@ -217,7 +194,7 @@ const schemas: Record<Dataset, FieldSchema<Row>> = {
   agent_event_messages: loadSchema<Row>(agentEventMessagesDocument),
 };
 
-const tableApis = new Map<Dataset | "machine_calls", QueryTableApi<Row>>();
+const tableApis = new Map<Dataset, QueryTableApi<Row>>();
 // Host routes can reveal a previously mounted, inactive table. Restore the
 // destination directly: a synthetic popstate fires before React updates active
 // flags, so it can miss that table and restore the outgoing one instead.
@@ -465,18 +442,15 @@ function usageGroupFields(fields: FieldSchema<Row>["fields"], query: QueryState)
   });
 }
 
-// header renders between the filters and the metric panels, so a chart there
-// can follow the table's filters.
 // host registers clauses Pharos runs itself (host-query-state.ts) as part of
 // the table's definition; its find compiles them into each request. find
 // carries other request parameters, such as a message search cursor.
 // onFind receives Library message-search coverage when present.
 type SurfaceHost = { requiresV3?: boolean; query: HostQueryOptions; find: (state: HostQueryState | undefined) => string; onState?: (state: HostQueryState | undefined) => void };
-function QuerySurface({ dataset, host, usageActions = false, messageView = "table", find = "", onFind, trailing, header, controls, queryContent, querySummary, resultPresentation, presets, scopeWhere, appliedScope, namespace }: { dataset: Dataset; host?: SurfaceHost; usageActions?: boolean; messageView?: MessageView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode; queryContent?: (api: QueryTableApi<Row>) => React.ReactNode; querySummary?: (api: QueryTableApi<Row>) => React.ReactNode; resultPresentation?: (api: QueryTableApi<Row>) => React.ReactNode; presets?: (api: QueryTableApi<Row>) => React.ReactNode; scopeWhere?: WhereTerm[]; appliedScope?: React.MutableRefObject<WhereTerm[]>; namespace?: "machine_calls" }) {
-  const registryKey = namespace ?? dataset;
-  const attention = useMemo(() => createAttentionRegistry(), [registryKey]);
-  const visible = datasetIsVisible(registryKey);
-  const schema = useMemo(() => namespace ? { ...schemas[dataset], name: "pharos_machine_calls", defaultSelect: [{ field: "started_at", width: 155 }, { field: "repository_name", width: 140 }, { field: "operation_name", width: 180 }, { field: "tool_name", width: 140 }, { field: "command", width: 350 }, { field: "duration_ms", width: 105 }, { field: "status", width: 85 }, { field: "duration_source", width: 120 }, { field: "title", width: 240 }] } : usageActions ? usageQuerySchema(schemas[dataset], dataset as UsageDataset) : schemas[dataset], [dataset, namespace, usageActions]);
+function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, trailing, controls, queryContent, querySummary, resultPresentation, presets }: { dataset: Dataset; host?: SurfaceHost; usageActions?: boolean; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode; queryContent?: (api: QueryTableApi<Row>) => React.ReactNode; querySummary?: (api: QueryTableApi<Row>) => React.ReactNode; resultPresentation?: (api: QueryTableApi<Row>) => React.ReactNode; presets?: (api: QueryTableApi<Row>) => React.ReactNode }) {
+  const attention = useMemo(() => createAttentionRegistry(), [dataset]);
+  const visible = datasetIsVisible(dataset);
+  const schema = useMemo(() => usageActions ? usageQuerySchema(schemas[dataset], dataset as UsageDataset) : schemas[dataset], [dataset, usageActions]);
   const locationRevision = useLocationRevision();
   const usageRenderers = useMemo(() => Object.hasOwn(usageDatasets, dataset) ? { ...renderers, ...usageRowRenderers(dataset as UsageDataset) } : renderers, [dataset]);
   const tableRenderers = useUsageTableRenderers(usageRenderers);
@@ -539,10 +513,6 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
   const openedSearches = useRef(new Map<string, HostQueryState>());
   const openedWindows = useRef(new Map<string,Set<string>>());
   const releasedWindow = useRef(false);
-  const scopeSignature = JSON.stringify(scopeWhere);
-  const restoredScope = useRef<WhereTerm[]>(history.state?.pharosMachineScopes?.[`q_${registryKey}`] ?? []);
-  const scopeRemovals = useMemo(() => new Set([...restoredScope.current, ...(appliedScope?.current ?? []), ...(history.state?.pharosMachineScopes?.[`q_${registryKey}`] ?? []), ...(scopeWhere ?? [])].map(termKey)), [scopeSignature, locationRevision]);
-  useEffect(() => { if (appliedScope && scopeWhere) appliedScope.current = scopeWhere; }, [scopeSignature]);
   const canonicalizeQuery = useMemo(() => (query: QueryState) => {
     const hostKey = JSON.stringify(query.hostState);
     const opened = openedSearches.current.get(hostKey);
@@ -556,19 +526,14 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
     const restored = rolling ? restoreRollingDefinition(query,queryFromURL(location.href)?.query,rolling,openedWindows.current) : {query,released:false};
     releasedWindow.current=restored.released;
     const resolved=restored.query;
-    const presented = usageActions ? usageActionQuery(orderedUsageQuery(dataset as UsageDataset, resolved), schema, dataset as UsageDataset) : withGroupDetail(resolved);
-    if (!scopeWhere) return presented;
-    const source = presented.grouping?.source ?? presented;
-    const where = [...source.where.filter(term => !scopeRemovals.has(termKey(term))), ...scopeWhere];
-    if (JSON.stringify(where) === JSON.stringify(source.where)) return presented;
-    return presented.grouping ? { ...presented, grouping: { ...presented.grouping, source: { ...source, where } } } : { ...presented, where };
-  }, [dataset, locationRevision, scopeSignature, scopeRemovals, usageActions, schema]);
+    return usageActions ? usageActionQuery(orderedUsageQuery(dataset as UsageDataset, resolved), schema, dataset as UsageDataset) : withGroupDetail(resolved);
+  }, [dataset, locationRevision, usageActions, schema]);
   const api = useQueryTable<Row>({ schema, transport,
     computedColumnStore, computedExecution: capabilities?.computedExecution,
     active: Boolean(visible) && Boolean(capabilities || capabilityError),
     // Keep URL configuration stable; active pauses execution/synchronization
     // without resetting restoration or undo history when a table is hidden.
-    storage, links: portableLinkOptions, debounceMs: 100, syncUrl: true, queryParameter: `q_${registryKey}`, canonicalizeQuery,
+    storage, links: portableLinkOptions, debounceMs: 100, syncUrl: true, queryParameter: `q_${dataset}`, canonicalizeQuery,
     // A bare reload restores the last query that loaded, never one that
     // failed, timed out or was cancelled; that one stays on screen to retry.
     persistLast: "succeeded", hostQuery: host?.query,
@@ -577,13 +542,13 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
         const row = await transport.fetchRow!(id, signal);
         return row ? { row, loadedFields: Object.keys(row) } : null;
       } },
-    onRefresh: () => { openedSearches.current.clear(); const current=apiRef.current;const selectedWindow=readRollingWindow(new URLSearchParams(location.search),dataset);if(selectedWindow?.mode==="today")current.setQuery(previous=>resolveRollingQuery(previous,selectedWindow));const renewed=refreshTodayHost(apiRef.current.query.hostState); if(renewed && !sameHostState(renewed,apiRef.current.query.hostState))apiRef.current.setQuery(previous=>({...previous,hostState:renewed,offset:0})); if (namespace) window.dispatchEvent(new Event("pharos:machine-refresh")); },
+    onRefresh: () => { openedSearches.current.clear(); const current=apiRef.current;const selectedWindow=readRollingWindow(new URLSearchParams(location.search),dataset);if(selectedWindow?.mode==="today")current.setQuery(previous=>resolveRollingQuery(previous,selectedWindow));const renewed=refreshTodayHost(apiRef.current.query.hostState); if(renewed && !sameHostState(renewed,apiRef.current.query.hostState))apiRef.current.setQuery(previous=>({...previous,hostState:renewed,offset:0})); },
   });
   const promoteLink = useMemo(() => portableQueryLinks(schema.name, storage.snapshots), [schema.name, storage]);
   useEffect(() => {
     if (!visible || !api.restoration.ready) return;
     let cancelled = false;
-    const promote = () => { if (!cancelled) void promoteLink(`q_${registryKey}`, () => location.href, url => {
+    const promote = () => { if (!cancelled) void promoteLink(`q_${dataset}`, () => location.href, url => {
       if (cancelled) return;
       history.replaceState(history.state, "", url);
       window.dispatchEvent(new Event("pharos:uri-changed"));
@@ -612,7 +577,7 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
   const resultsView = searchResultsView(api.query, dataset === "library" ? readLibraryHost(hostState).view : "table");
   const attentionSchema = api.itemDetails?.schema.name;
   const detailsReady = nativeDetailsReady({ visible: Boolean(visible), restored: api.restoration.ready, loading: api.loading, rows: api.execution?.rows, schema: attentionSchema });
-  const nativeDetailSurface = resultsView === "table" && !(dataset === "writing_messages" && messageView === "text" && !api.query.grouping);
+  const nativeDetailSurface = resultsView === "table";
   useEffect(() => {
     if (!detailsReady || !attentionSchema) return;
     // Wait for the result page: otherwise native details can reveal in an
@@ -623,19 +588,9 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
       ? revealQueryDetail(attention, attentionSchema, reference, signal) : Promise.resolve("unavailable"));
     return () => { unregister(); attention.cancel(); };
   }, [detailsReady, attentionSchema, attention, nativeDetailSurface]);
-  useMachineQueryNavigation(api, Boolean(visible && (namespace || dataset === "usage")), JSON.stringify([scopeWhere, new URLSearchParams(location.search).get("machine_view")]), `q_${registryKey}`, scopeWhere);
   const apiRef = useRef(api);
   apiRef.current = api;
   useEffect(() => dataset === "safety" ? onSafetyChange(() => apiRef.current.refresh()) : undefined, [dataset]);
-  const priorScopeSignature = useRef(scopeSignature);
-  useEffect(() => {
-    if (priorScopeSignature.current !== scopeSignature) {
-      priorScopeSignature.current = scopeSignature;
-      // Persist the new scope too: a later local edit must not resurrect the
-      // previous period or repository from the table's stored query.
-      apiRef.current.setQuery(previous => ({ ...canonicalizeQuery(previous), offset: 0 }));
-    }
-  }, [scopeSignature]);
   // A new search starts from its first page.
   const searched = useRef(find);
   useEffect(() => {
@@ -657,7 +612,7 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
       return (current.query.grouping ? current.grouping!.source : current)[property as keyof QueryFilterApi<Row>];
     },
   }), []);
-  if (!namespace || visible) tableApis.set(registryKey, api);
+  tableApis.set(dataset, api);
   useEffect(() => {
     // Work-page links may run before Library's first mount or restoration.
     if (dataset !== "library" || !api.restoration.ready || !pendingLibraryFilter) return;
@@ -668,8 +623,8 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
     else api.setQuery(previous => ({ ...previous, where, offset: 0 }));
   }, [dataset, api.restoration.ready, locationRevision]);
   useEffect(() => {
-    return () => { tableApis.delete(registryKey); };
-  }, [registryKey]);
+    return () => { tableApis.delete(dataset); };
+  }, [dataset]);
   useEffect(() => {
     if (!visible || !api.restoration.ready || api.error) return;
     const rolling = readRollingWindow(new URLSearchParams(location.search), dataset);
@@ -720,20 +675,19 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
       }}
       onReset={() => {
         setRecovered(false);
-        const query = tableRecoveryQuery(schema, scopeWhere);
+        const query = tableRecoveryQuery(schema);
         // Reset clears host clauses too, as the native Reset does.
         if (api.setDefinition && host) api.setDefinition({ query, hostState: host.query.defaults }); else api.setQuery(query);
         if (capabilityError) setCapabilityRetry(value => value + 1);
       }} />
-    {!api.query.grouping || namespace ? header?.(api) : null}
-    {!namespace && Object.hasOwn(usageDatasets, dataset) ? <UsageQueryIdeas key={dataset} dataset={dataset as UsageDataset} api={api} /> : null}
+    {Object.hasOwn(usageDatasets, dataset) ? <UsageQueryIdeas key={dataset} dataset={dataset as UsageDataset} api={api} /> : null}
     {presets?.(api)}
-    {!namespace && !["library", "tl1_attempts", "findings", "safety", "parallelism"].includes(dataset) && rollingWindowField(dataset) ? <label className="usage-chart-field">Time window<select aria-label="Query time window" value={queryWindowChoice(new URLSearchParams(location.search), dataset)} onChange={event => {
+    {!["library", "tl1_attempts", "findings", "safety", "parallelism"].includes(dataset) && rollingWindowField(dataset) ? <label className="usage-chart-field">Time window<select aria-label="Query time window" value={queryWindowChoice(new URLSearchParams(location.search), dataset)} onChange={event => {
       if (event.target.value === "saved") return;
       const selected = readRollingWindow(new URLSearchParams(location.search), dataset);
       const address = updateQueryWindowURL(queryURL(dataset, api.query, selected), event.target.value === "today" ? "today" : 1, api.query);
       const adjusted = queryFromURL(address)!;
-      const nextURL=withQueryWindow(new URL(location.href),address,dataset,registryKey);
+      const nextURL=withQueryWindow(new URL(location.href),address,dataset,dataset);
       history.replaceState(history.state,"",nextURL);window.dispatchEvent(new Event("pharos:uri-changed"));
       api.setQuery(adjusted.query);
     }}><option value="saved">Query filters</option><option value="today">Today</option><option value="24h">Last 24 hours</option></select></label> : null}
@@ -742,14 +696,14 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
         {resultPresentation?.(api)}
         <QueryFilterRow api={stableSourceFilters} fields={api.query.grouping ? api.grouping!.source.schema.fields : api.computed.catalogue} />
         {queryContent?.(api)}
-      </>} /> : api.query.grouping ? <SourceQueryBuilder dataset={dataset} compact api={stableApi} fields={api.schema!.fields} total={api.total} running={api.loading} /> : controls ? controls(api, <SourceQueryBuilder dataset={dataset} compact defaultCollapsed={Boolean(namespace)} api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={stableApi} dataset={dataset} layout={<SourceQueryBuilder dataset={dataset} compact api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />} /> : <SourceQueryBuilder dataset={dataset} compact api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />}
+      </>} /> : api.query.grouping ? <SourceQueryBuilder dataset={dataset} compact api={stableApi} fields={api.schema!.fields} total={api.total} running={api.loading} /> : controls ? controls(api, <SourceQueryBuilder dataset={dataset} compact api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={stableApi} dataset={dataset} layout={<SourceQueryBuilder dataset={dataset} compact api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />} /> : <SourceQueryBuilder dataset={dataset} compact api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />}
     {queryContent ? controls?.(api, null) : null}
     <MetricsPanel api={stableApi} aggregations={api.aggregations} fields={metricFields(api.query.grouping ? usageGroupFields(api.schema!.fields, api.query) : api.computed.catalogue)} renderers={metricRenderers}
       onInspect={(bucket, clause) => { const records = inspectBucketQuery(api.query, bucket, clause, sourceSchema); if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, { ...records, orderBy: [], ...(usageActions ? { fitToScreen: true } : {}) }) : records); }} />
     {capabilityError && !capabilities ? <div className="query-table-error">Could not read this table's query capabilities: {capabilityError.message}</div> : null}
     {api.error ? <div className="query-table-error">{api.error?.message}</div> : null}
     {dataset === "library" && resultsView === "conversation" ? <ConversationResults api={api} searching={searching} failed={failed} renderers={tableRenderers} />
-      : dataset === "writing_messages" && messageView === "text" && !api.query.grouping ? <AuthoredMessages api={api} emptyMessage={failed ? failedMessage : emptyMessages[dataset]} /> : <DataTable
+      : <DataTable
       maxHeight={100000}
       fields={api.query.grouping ? usageGroupFields(api.visibleFields, api.query) : api.visibleFields}
       rows={api.rows}
@@ -915,64 +869,6 @@ function FindMatchCell({ row }: { row: Row }) {
   return <button type="button" className="library-find-cell" title={`${findHitText(hit)}\n\n${count.toLocaleString()} match${count === 1 ? "" : "es"} · ${findHitLabel(hit)}`} onClick={event => { event.stopPropagation(); openFindHit(hit); }}>Open match{count > 1 ? ` (${count.toLocaleString()})` : ""}</button>;
 }
 
-// The older Human messages table runs a message search; its definition is host
-// query state (message_query). A cursor continues one search's batches, so it
-// belongs to that search and stays out of the definition (message_cursor).
-// Each request takes the cursor only when it continues the request's own
-// search, so a request never pairs one search with another's cursor.
-function urlMessageSearch(): string {
-  const token = new URLSearchParams(location.search).get("message_query");
-  try { return token ? messageFind(messageHostQuery.normalize!({ version: 1, params: { message_query: [token] } })) : ""; } catch { return ""; }
-}
-const urlMessageCursor = () => ({ search: urlMessageSearch(), value: new URLSearchParams(location.search).get("message_cursor") ?? "" });
-type MessageCursor = { search: string; value: string };
-function UserMessageSurface({ header, messageView }: { messageView: MessageView; header: (api: QueryTableApi<Row>, searching: boolean) => React.ReactNode }) {
-  const [hostState, setHostState] = useState<HostQueryState>();
-  const [cursor, setCursorState] = useState<MessageCursor>(urlMessageCursor);
-  const cursorRef = useRef(cursor);
-  const setCursor = (next: MessageCursor) => { cursorRef.current = next; setCursorState(next); };
-  const host = useMemo((): SurfaceHost => ({ query: messageHostQuery, onState: setHostState, find: state => {
-    const search = messageFind(state), current = cursorRef.current;
-    return search && current.value && current.search === search ? `${search}&${new URLSearchParams({ find_cursor: current.value })}` : search;
-  } }), []);
-  const search = messageFind(hostState);
-  const activeCursor = search && cursor.search === search ? cursor.value : "";
-  // A cursor change runs the same definition again, from its first page.
-  const rerun = (api: QueryTableApi<Row>, next: MessageCursor) => { setCursor(next); if (api.query.offset) api.setQuery(previous => ({ ...previous, offset: 0 })); else api.refresh(); };
-  const [found, setFound] = useState<FindSummary | null>(null);
-  useEffect(() => {
-    const restore = () => { if (datasetIsVisible("writing_messages")) setCursor(urlMessageCursor()); };
-    window.addEventListener("pharos:route", restore); return () => window.removeEventListener("pharos:route", restore);
-  }, []);
-  useEffect(() => { if (datasetIsVisible("writing_messages")) updateURI("message_cursor", activeCursor); }, [activeCursor]);
-  useEffect(() => setFound(null), [search, activeCursor]);
-  return <QuerySurface dataset="writing_messages" host={host} messageView={messageView} header={api => header(api, !!search)} onFind={setFound} controls={(api, builder) => <>
-    <MessageSearchClause api={api} layout={builder} onSearch={() => setCursor({ search: "", value: "" })} />
-    {search && found?.search ? <div className="library-find-status" role="status"><p>{found.search.complete ? "All eligible messages checked." : "Partial search batch; more messages may match."} Table filters and metrics apply to the matching messages in this batch. Ordering is within this batch.</p><p>{found.search.elapsed_ms} ms · {found.search.candidates.toLocaleString()} candidates checked{found.search.skipped_oversize ? ` · ${found.search.skipped_oversize} oversized messages skipped` : ""}.</p>{found.search.stop_message ? <p>{found.search.stop_message}</p> : null}{found.search.next_cursor ? <button type="button" onClick={() => rerun(api, { search, value: found.search!.next_cursor })}>Next message search batch</button> : null}{withheldBatch(found.search) ? <button type="button" onClick={() => api.refresh()}>Retry this batch</button> : null}{activeCursor ? <button type="button" onClick={() => rerun(api, { search: "", value: "" })}>Restart message search</button> : null}</div> : null}
-  </>} />;
-}
-
-function MessageSearchClause({ api, layout, onSearch }: { api: QueryTableApi<Row>; layout: React.ReactNode; onSearch: () => void }) {
-  const state = api.query.hostState, key = JSON.stringify(state ?? null);
-  const applied = useMemo(() => readMessageSearchHost(state), [key]);
-  const value = useMemo(() => applied ?? newMessageSearch(), [applied]);
-  const [error, setError] = useState("");
-  // One edit, the search with its record filters and order, is one definition.
-  const commit = (next: TextSearchDraft | null, table: Partial<QueryState> = {}) => {
-    try {
-      const hostState = withMessageSearch(next);
-      const same = sameHostState(messageHostQuery.normalize!(hostState), state);
-      api.setDefinition?.(previous => ({ query: { ...previous.query, ...table, offset: 0 }, hostState }));
-      if (same && next) api.refresh();
-      onSearch(); setError("");
-    } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
-  };
-  return <>
-    <MessageTableSearch api={api} value={value} active={!!applied} onApply={(next, table) => commit(next, table)} onClear={() => commit(null)} layout={layout} />
-    {error ? <p className="query-table-error" role="alert">{error}</p> : null}
-  </>;
-}
-
 // Search's content search (messages, files or URLs) and its result view are
 // host query state (host-query-state.ts), saved and undone with the table query.
 function LibraryPage() {
@@ -1026,17 +922,6 @@ function LibrarySearchClause({ api }: { api: QueryTableApi<Row> }) {
   </ExploreSearch>;
 }
 
-const sum = (field: string, groupBy: string[], label: string): AggregationClause => ({ id: `${field}:${groupBy.join(",")}`, op: "sum", field, groupBy, label });
-
-type PricingModel = { model: string; provider: string; tokens: number; first_day: string; last_day: string };
-type PricingStatus = { prompt: string; unpriced_models: PricingModel[]; unpriced_tokens: number; confirmed_changes: number; proposed_changes: number };
-const acknowledgedPricingKey = "pharos-pricing-acknowledged-models";
-
-function acknowledgedModels(): Set<string> {
-  const saved = preferences().get<unknown>(acknowledgedPricingKey, []);
-  return new Set(Array.isArray(saved) ? saved.filter((model): model is string => typeof model === "string") : []);
-}
-
 async function copyText(text: string) {
   // The app shell's copy uses the native clipboard in the Mac app, where the web clipboard may be denied.
   if (window.pharosCopyText) return window.pharosCopyText(text);
@@ -1051,60 +936,6 @@ async function copyText(text: string) {
   area.remove();
   if (!copied) throw new Error("Clipboard unavailable");
 }
-
-// Copying acknowledges new models, but doesn't resolve missing prices. Keep
-// the refresh prompt available for retries and routine price-history updates.
-function RefreshPricesButton() {
-  const [status, setStatus] = useState<PricingStatus | null>(null);
-  const [acknowledged, setAcknowledged] = useState(acknowledgedModels);
-  const [copied, setCopied] = useState<"" | "copied" | "failed">("");
-  useEffect(() => {
-    const controller = new AbortController();
-    const load = () => void fetch("/api/pricing", { signal: controller.signal }).then(responseJSON<PricingStatus>).then(setStatus).catch(() => {});
-    load();
-    window.addEventListener("pharos:usage-refresh", load);
-    return () => { controller.abort(); window.removeEventListener("pharos:usage-refresh", load); };
-  }, []);
-  const unpriced = status?.unpriced_models ?? [];
-  const fresh = unpriced.filter((model) => !acknowledged.has(model.model));
-  async function copy() {
-    if (!status) return;
-    try {
-      await copyText(status.prompt);
-      const next = new Set([...acknowledged, ...unpriced.map((model) => model.model)]);
-      preferences().set(acknowledgedPricingKey, [...next]);
-      setAcknowledged(next);
-      setCopied("copied");
-    } catch { setCopied("failed"); }
-    window.setTimeout(() => setCopied(""), 2500);
-  }
-  if (!status) return null;
-  return <div className="refresh-prices-notice" role="status">
-    <button type="button" className={`refresh-prices${fresh.length ? " attention" : ""}`} title={unpriced.length ? `Unpriced models: ${unpriced.map((model) => model.model).join(", ")}` : "Research current API prices and model aliases"} onClick={() => void copy()}>
-      {copied === "copied" ? "Prompt copied" : copied === "failed" ? "Copy failed" : "Copy refresh prices prompt"}
-      {!copied && fresh.length ? <span className="refresh-prices-count" aria-label={`${fresh.length} new unpriced models`}>{fresh.length}</span> : null}
-    </button>
-    {unpriced.length ? <p>{fresh.length ? (fresh.length === 1 ? "A new model has" : `${fresh.length} new models have`) : (unpriced.length === 1 ? "A model still has" : `${unpriced.length} models still have`)} no confirmed price definition. Cost totals may be incomplete until pricing is updated.</p> : null}
-  </div>;
-}
-
-// Charts change their table's filters through this.
-function filterChange(api: QueryTableApi<Row>): FilterChange {
-  return (change, preset) => {
-    const dataset = [...tableApis.entries()].find(([, candidate]) => candidate === api)?.[0] as Dataset | undefined;
-    if (dataset && preset && rollingWindowField(dataset)) {
-      updateURI("window_mode", preset === "today" ? "today" : "relative");
-      updateURI("window_days", preset === "today" ? "1" : String(rangeDays(preset as ChartRange)));
-      updateURI("window_field", dataset === "usage" ? "last_usage_at" : dataset === "writing" ? "last_message_at" : rollingWindowField(dataset)!);
-      updateURI("window_until_field", dataset === "usage" ? "first_usage_at" : dataset === "writing" ? "first_message_at" : "");
-      updateURI("window_dataset", dataset);
-      updateURI("window_timezone", preset === "today" ? localTimezone() : "");
-      if (preset === "all") for (const key of ["window_mode", "window_days", "window_field", "window_until_field", "window_dataset", "window_timezone"]) updateURI(key, "");
-    }
-    api.setQuery(previous => ({ ...previous, where: change(previous.where), offset: 0 }));
-  };
-}
-
 
 function compactNumber(value: number): string {
   const n = Number(value) || 0, abs = Math.abs(n);
@@ -1121,29 +952,6 @@ function compactNumber(value: number): string {
   }
   if (abs >= 1e4) return `${Math.round(n / 1e3)}k`;
   return Math.round(n).toLocaleString();
-}
-
-function readStored<T extends object>(key: string, fallback: T, valid: (value: T) => boolean): T {
-  if (new URLSearchParams(location.search).get("fresh") === "1") return fallback;
-  let saved = preferences().get<unknown>(key, {});
-  const chart = new URLSearchParams(location.search).get("analyze_chart");
-  if (chart && [tokenChartKey, writingViewKey].includes(key)) {
-    try { saved = JSON.parse(chart); } catch { /* Keep the saved default for invalid chart state. */ }
-  }
-  if (!saved || typeof saved !== "object") return fallback;
-  const stored = { ...fallback, ...saved } as T;
-  return valid(stored) ? stored : fallback;
-}
-
-function store(key: string, value: unknown) {
-  preferences().set(key, value);
-}
-
-function Segmented<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: Array<[T, string, string?]>; onChange: (next: T) => void }) {
-  return <div className="usage-presets chart-toggle" role="group" aria-label={label}>
-    <span className="usage-preset-label">{label}</span>
-    {options.map(([option, text, disabledReason]) => <button key={option} type="button" aria-pressed={value === option} disabled={Boolean(disabledReason)} title={disabledReason} onClick={() => onChange(option)}>{text}</button>)}
-  </div>;
 }
 
 // Fetches metrics for the given filters from /metrics, refetching when they
@@ -1173,41 +981,10 @@ function useMetrics(dataset: Dataset, where: WhereTerm[], clauses: AggregationCl
   return { ...state, metrics: state.key === key ? state.metrics : [], loading: state.key !== key || state.refresh !== refresh || state.loading, error: state.key === key ? state.error : "" };
 }
 
-const tokenChartKey = "pharos-usage-chart";
 const costTick = (value: number) => Math.abs(value) >= 1e4 ? `$${compactNumber(value)}` : `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 // Tokens and Cost amounts; shares and ratios are formatted by the trend.
 const tokenAmount: AmountFormat = (value, measure) => measure.unit === "USD" ? formatUSD(value) : compactNumber(value);
 const tokenTick: AmountFormat = (value, measure) => measure.unit === "USD" ? costTick(value) : compactNumber(value);
-// The Usage page's chart shortcuts name a measure shown as values.
-const tokenChartPresets: UsagePreset[] = usageChartPresets.map(preset => ({ ...preset, chart: { ...preset.chart, share: false } }));
-
-function PresetRow({ label, presets, query, chart, onApply, clear }: { label: string; presets: UsagePreset[]; query: QueryTableApi<Row>["query"]; chart?: TokenChartView; onApply: (preset: UsagePreset | null) => void; clear?: boolean }) {
-  return <div className="usage-presets" role="group" aria-label={`${label} presets`}>
-    <span className="usage-preset-label">{label}</span>
-    {presets.map(preset => <QueryChip key={preset.label} title={preset.label} description={preset.title} active={presetMatches(preset, query, chart)} onClick={() => onApply(preset)} />)}
-    {clear ? <button type="button" className="usage-preset-clear" onClick={() => onApply(null)}>Clear metrics</button> : null}
-  </div>;
-}
-
-function TokenUsage({ scopeWhere, appliedScope, onTimeRangeChange }: { scopeWhere?: WhereTerm[]; appliedScope?: React.MutableRefObject<WhereTerm[]>; onTimeRangeChange?: () => void } = {}) {
-  const [chart, setChart] = useState<TokenTrendView>(() => readStored(tokenChartKey, defaultTokenChart as TokenTrendView, view => validAnalysisState(tokenAnalysisCatalog, { ...view, view: "trend" })));
-  const update = (next: Partial<TokenTrendView>) => setChart(previous => { const merged = { ...previous, ...next }; store(tokenChartKey, merged); return merged; });
-  return <QuerySurface dataset="usage" scopeWhere={scopeWhere} appliedScope={appliedScope} header={api => {
-    const where = toAggregationQuery({ ...api.query, aggregations: [] }, schemas.usage).where;
-    return <>
-      <p className="muted machine-token-note">Reconciled tokens by session, model, and effort. Input includes cached tokens. Cost is the API list-price equivalent at standard rates; subscriptions and long-context premiums are excluded. ≈ marks costs priced by assumption.</p>
-      <TokenSummary where={where} />
-      <AnalysisTrend catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={chart} where={where} onChange={update} onFilter={filterChange(api)} onTimeFilter={(change, preset) => {
-        // A chart date selection replaces the page period. Release its scope
-        // before updating the query so normalization cannot restore that limit.
-        onTimeRangeChange?.();
-        filterChange(api)(change, preset);
-      }} format={tokenAmount} tick={tokenTick} links={false} />
-      <PresetRow label="Chart" presets={tokenChartPresets} query={api.query} chart={normalizeAnalysis(tokenAnalysisCatalog, { ...chart, view: "trend" }) as TokenChartView} onApply={preset => { if (preset?.chart) update(preset.chart as Partial<TokenTrendView>); }} />
-    </>;
-  }} />;
-}
-
 
 function TokenSummary({ where }: { where: WhereTerm[] }) {
   const result = useMetrics("usage", where, tokenSummaryMetrics);
@@ -1247,11 +1024,7 @@ function ToolTimeSummary({ where, selected = false }: { where: WhereTerm[]; sele
   </div>;
 }
 
-type WritingCounts = Record<string, number | string | null>;
-type WritingSeries = { works: number; daily: WritingCounts[]; hourly?: WritingCounts[]; totals: WritingCounts };
 type AuthorshipStatus = { built_at: string | null; running: boolean; stale: boolean; error: string | null };
-const writingViewKey = "pharos-writing-view";
-const groupTotal = (counts: WritingCounts, group: typeof writingGroups[number], unit: "words" | "chars") => group.categories.reduce((sum, category) => sum + (Number(counts[`${category}_${unit}`]) || 0), 0);
 
 // Tracks the background classification, polling while it runs, and reports
 // each finished build so the page can reload.
@@ -1275,211 +1048,6 @@ function useAuthorshipStatus(onBuilt: () => void): AuthorshipStatus | null {
     return () => { live = false; window.clearTimeout(timer); window.removeEventListener("pharos:usage-refresh", load); };
   }, []);
   return status;
-}
-
-type WritingSplit = "channels" | "machines" | "execution_machines" | "kind" | "repository_name" | "source_kind" | "providers";
-const writingSplits: Array<[WritingSplit, string]> = [["kind", "Kind"], ["channels", "Channels"], ["machines", "Machines"], ["execution_machines", "Execution machines"], ["repository_name", "Repository"], ["source_kind", "App"], ["providers", "Provider"]];
-type WritingSplitDay = { day: string; value: string | null; typed_words: number; words: number };
-
-function writingSplitLabel(split: WritingSplit, value: string): string {
-  if (["channels", "machines", "execution_machines"].includes(split)) return value.split(", ").map(v => originLabel(split === "channels" ? "channel" : "machine_id", v === "Unknown" ? null : v)).join(" + ");
-  if (!value) return split === "repository_name" ? "No repository" : "Unknown";
-  const labels = (field: string) => optionLabels(schemas.writing.fields).get(field);
-  if (split === "source_kind") return labels("source_kind")?.get(value) ?? value;
-  if (split === "providers") return value.split(",").map(provider => labels("provider")?.get(provider) ?? optionLabels(schemas.usage.fields).get("provider")?.get(provider) ?? provider).join(" + ");
-  return value;
-}
-
-// Fetches the writing series for body, or nothing without one, again when
-// either changes or authorship is rebuilt.
-function useWritingSeries(body: object | null, reload: number) {
-  const key = body ? JSON.stringify(body) : "";
-  const [data, setData] = useState<{ key: string; series: (WritingSeries & { split?: WritingSplitDay[] }) | null; error: string; loading: boolean }>({ key: "", series: null, error: "", loading: true });
-  useEffect(() => {
-    if (!key) return;
-    const controller = new AbortController();
-    setData(previous => ({ ...previous, loading: true }));
-    fetch("/api/query/writing/series", { method: "POST", headers: { "Content-Type": "application/json" }, body: key, signal: controller.signal })
-      .then(responseJSON<WritingSeries & { split?: WritingSplitDay[] }>)
-      .then(series => setData({ key, series, error: "", loading: false }))
-      .catch(failure => { if (!controller.signal.aborted) setData({ key, series: null, error: failure instanceof Error ? failure.message : String(failure), loading: false }); });
-    return () => controller.abort();
-  }, [key, reload]);
-  return { ...data, series: data.key === key ? data.series : null, loading: data.key !== key || data.loading, error: data.key === key ? data.error : "" };
-}
-
-// The chart and totals cover only the days inside the time filter. Split by
-// a row field, the key filters the table as on the tokens chart; the input
-// kinds are not rows, so clicking one only narrows the chart.
-const defaultWritingChart = { period: "day" as ChartPeriod, scope: "typed" as "typed" | "all", split: "kind" as WritingSplit, hours: 6, days: 3, rollingPeriods: 0, scale: defaultChartScale, display: "interval" as ChartDisplay };
-type WritingChartView = typeof defaultWritingChart & ChartPresentation;
-const validWritingChart = (value: WritingChartView) => Object.hasOwn(chartPeriods, value.period) && validPeriodCount(value.hours) && validPeriodCount(value.days) && ["typed", "all"].includes(value.scope) && writingSplits.some(([option]) => option === value.split) && validRollingPeriods(value.rollingPeriods) && validChartScale(value.scale) && validChartDisplay(value.display) && validChartPresentation(value);
-// The legacy Human Words page's chart, over the series endpoint: its table
-// lists works (the writing dataset), whose filters the chart follows. The
-// Human Words dashboard reads messages through the analysis engine.
-function WritingPanel({ where, onFilter, status, reload }: { where: WhereTerm[]; onFilter: FilterChange; status: AuthorshipStatus | null; reload: number }) {
-  const originRevision = useOriginMetadata();
-  const [view, setView] = useState<WritingChartView>(() => readStored(writingViewKey, { ...defaultWritingChart, period: "week" as ChartPeriod }, validWritingChart));
-  const update = (next: Partial<typeof view>) => setView(previous => { const merged = { ...previous, ...next }; store(writingViewKey, merged); return merged; });
-  const kinds = view.selection ?? { values: [], excluded: false };
-  const seriesLimit = view.seriesLimit ?? 15;
-  const periodCount = chartPeriodCount(view);
-  const cumulative = view.display === "cumulative";
-  const hourly = isHourly(view.period);
-  // Resolved timestamps are part of the series request key. Keep one clock
-  // through loading/data renders; renew it when filters change or refresh.
-  const clock = useMemo(() => Date.now(), [JSON.stringify(where), reload]);
-  const bounds = timeBounds(where, writingTime, clock);
-  const window = { hourly, start: bounds.from?.toISOString(), end: bounds.to?.toISOString(), from: bounds.from ? localDay(bounds.from) : undefined, to: bounds.to ? localDay(new Date(bounds.to.getTime() - 1)) : undefined };
-  const split = view.split === "kind" ? null : view.split;
-  const selection = split ? readSlice(where, split) : kinds;
-  const chosen = selection.values.map(value => value ?? "");
-  const chartWhere = split ? where.filter(term => !isSliceTerm(term, split)) : where;
-  const requestedWhere = smoothingWhere(chartWhere, writingTime, view.period, cumulative ? 0 : view.rollingPeriods, periodCount, clock);
-  const requestedBounds = timeBounds(requestedWhere, writingTime, clock);
-  const chartWindow = { hourly, start: requestedBounds.from?.toISOString(), end: requestedBounds.to?.toISOString(), from: requestedBounds.from ? localDay(requestedBounds.from) : undefined, to: requestedBounds.to ? localDay(new Date(requestedBounds.to.getTime() - 1)) : undefined };
-  // Without a key filter, one request answers both the totals and the chart.
-  const separate = chartWhere.length !== where.length || requestedWhere !== chartWhere;
-  const data = useWritingSeries({ where, ...window, ...(split && !separate ? { split } : {}) }, reload);
-  const chart = useWritingSeries(separate ? { where: requestedWhere, ...(split ? { split } : {}), ...chartWindow } : null, reload);
-  const chartData = separate ? chart : data;
-  const series = data.series, totals = series?.totals ?? {};
-  const groups = view.scope === "typed" ? writingGroups.slice(0, 1) : writingGroups;
-  const { chartSeries, buckets, cumulativeStart } = useMemo(() => {
-    const timeline = hourly ? chartData.series?.hourly ?? [] : chartData.series?.daily ?? [];
-    const days = split ? (chartData.series?.split ?? []).map(entry => entry.day) : timeline.map(day => day.day);
-    const buckets = chartBucketsWithHistory(view.period, ...chartSpan(bounds, earliestKey(days)), periodCount, days.map(day => parseDay(String(day))),
-      !cumulative && view.rollingPeriods > 1 ? requestedBounds.from ?? earliestKey(days) : undefined), byKey = new Map(buckets.map(bucket => [bucket.key, bucket])), messages = new Map<string, number>();
-    const cumulativeStart = bounds.from ?? earliestKey(days);
-    const bucketOf = (day: unknown) => plottedBucketKey(parseDay(String(day)), view.period, periodCount, buckets, view.display);
-    for (const day of timeline) {
-      const bucket = byKey.get(bucketOf(day.day));
-      if (!bucket) continue;
-      messages.set(bucket.key, (messages.get(bucket.key) ?? 0) + (Number(day.typed_messages) || 0));
-      if (!split) for (const group of writingGroups) bucket.values[group.key] = (bucket.values[group.key] ?? 0) + groupTotal(day, group, "words");
-    }
-    for (const bucket of buckets) bucket.detail = `${(messages.get(bucket.key) ?? 0).toLocaleString()} messages with typed text`;
-    if (!split) return { chartSeries: groups.map(group => ({ key: group.key, label: group.label, color: group.color, value: group.key })), buckets, cumulativeStart };
-    const rows = (chartData.series?.split ?? []).map(entry => [bucketOf(entry.day), entry.value ?? "", Number(view.scope === "typed" ? entry.typed_words : entry.words) || 0] as [string, string, number]);
-    return { chartSeries: foldSeries(rows, byKey, name => writingSplitLabel(split, name), undefined, chosen, seriesLimit, `writing:${split}`), buckets, cumulativeStart };
-  }, [series, chartData.series, originRevision, split, view.scope, view.period, periodCount, hourly, bounds.from?.getTime(), bounds.to?.getTime(), chosen.join("\u0000"), seriesLimit, view.rollingPeriods, cumulative]);
-  useUsageChartPalette(split, chartSeries);
-  const selected = chartSeries.filter(item => item.value !== undefined && chosen.includes(item.value)).map(item => item.key);
-  function select(key: string | null, action: LegendAction) {
-    const value = key === null ? undefined : chartSeries.find(item => item.key === key)?.value;
-    if (!split) update({ selection: updateSlice(kinds, value ?? "", action) });
-    else onFilter(current => withSlice(current, split, updateSlice(readSlice(current, split), value || null, action)));
-  }
-  const typed = Number(totals.typed_words) || 0, pasted = Number(totals.pasted_words) || 0, typedMessages = Number(totals.typed_messages) || 0;
-  const since = localDay(new Date(Date.now() - 29 * 86_400_000));
-  const recent = (series?.daily ?? []).filter(day => String(day.day) >= since);
-  const recentTyped = recent.reduce((sum, day) => sum + (Number(day.typed_words) || 0), 0), recentMessages = recent.reduce((sum, day) => sum + (Number(day.typed_messages) || 0), 0);
-  const building = status !== null && !status.built_at;
-  const card = (label: string, value: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>;
-  const unit = periodLabel(view.period, periodCount);
-  const allChars = writingGroups.reduce((sum, group) => sum + groupTotal(totals, group, "chars"), 0);
-  return <section className="writing-panel" aria-label="Human Words">
-    {data.error ? <div className="query-table-error">{data.error}</div> : null}
-    <div className="mcp-metrics usage-cards">
-      {building ? card("Words you wrote", "Building…", "Classifying every retained user message") : <>
-        {card("Words you wrote", compactNumber(typed), `Up to ${compactNumber(typed + pasted)} including text that only looks pasted${totals.first_day ? ` · since ${totals.first_day}` : ""}`)}
-        {card("Last 30 days", compactNumber(recentTyped), `${recentMessages.toLocaleString()} messages with typed text`)}
-        {card("Messages with typed text", typedMessages.toLocaleString(), `of ${(Number(totals.messages) || 0).toLocaleString()} user turns in ${(series?.works ?? 0).toLocaleString()} conversations`)}
-        {card("Words per message", typedMessages ? Math.round(typed / typedMessages).toLocaleString() : "—", "average typed words, where any were typed")}
-        {card("Novels", (typed / 90000).toFixed(1), "at 90,000 words each")}
-      </>}
-    </div>
-    <StackedColumns title={`${cumulative ? "Cumulative " : ""}${view.scope === "typed" ? "Typed words" : "Words of user input"}${cumulative ? "" : ` per ${unit}`}${split ? ` by ${writingSplits.find(([value]) => value === split)?.[1].toLowerCase()}` : ""}`}
-      controls={<>
-        <ChartSelect label="Metric" value={view.scope} options={[["typed", "Typed words"], ["all", "All user input"]]} onChange={scope => update({ scope })} />
-        <ChartSelect label="Breakdown" value={view.split} options={writingSplits.map(([value, text]) => [value, value === "kind" ? "Text source" : text])}
-          title="How each chart column is divided" onChange={next => update({ split: next, seriesLimit: 15, selection: { values: [], excluded: false } })} />
-        <DisplayControl value={view.display} onChange={display => update({ display })} />
-        <RangeControl bounds={bounds} onPresetChange={(range, oldest) => update(presetPeriod(range, oldest))} onChange={(from, to, preset) => onFilter(current => withTimeRange(current, writingTime, from, to, preset), preset)} />
-        <ScaleControl value={view.scale} onChange={scale => update({ scale })} />
-        <PeriodControl view={view} onChange={update} />
-        <RollingControl value={view.rollingPeriods} display={view.display} period={view.period} count={periodCount} onChange={rollingPeriods => update({ rollingPeriods })} />
-      </>}
-      series={chartSeries} buckets={buckets} period={view.period} periodCount={periodCount} rollingPeriods={view.rollingPeriods} display={view.display} cumulativeStart={cumulativeStart} scale={view.scale} legend={chartSeries.length > 0}
-      format={value => value.toLocaleString()} tickFormat={compactNumber} noun="words" loading={chartData.loading} error={chartData.error}
-      selected={selected} excluded={selection.excluded} onSelect={select} onExpand={() => update({ seriesLimit: Math.min(1000, seriesLimit + 5) })} onRange={pickRange(onFilter, writingTime, view.period, periodCount, period => update({ period }))}
-      seriesHref={(range, item) => dashboardChartURL({ dataset: "writing", where: range.rolling ? requestedWhere : where, time: writingTime, range, series: item, split,
-        fields: split ? [view.scope === "typed" ? "typed_words" : "user_words"] : writingGroups.find(group => group.key === item.key)?.categories.map(category => `${category}_words`),
-        current: new URLSearchParams(location.search) })} />
-    <div className="writing-mix">
-      <h3>Where user-turn text came from</h3>
-      <p className="muted">All classified user-turn text in the selected dates and conversation filters. Shares use characters.</p>
-      {!allChars ? <p className="muted">{data.loading ? "Loading…" : "No classified user messages match these filters."}</p> : <>
-        <div className="writing-stack" role="img" aria-label={writingGroups.map(group => `${group.label} ${Math.round(100 * groupTotal(totals, group, "chars") / allChars)}%`).join(", ")}>
-          {writingGroups.map(group => { const value = groupTotal(totals, group, "chars"); return value ? <i key={group.key} style={{ flex: value, background: group.color }} title={`${group.label}: ${Math.round(100 * value / allChars)}%`} /> : null; })}
-        </div>
-        <div className="writing-table-scroll" role="region" aria-label="User-turn text sources" tabIndex={0}><table className="writing-table">
-          <thead><tr><th>Source</th><th className="num">Words</th><th className="num">Characters</th><th className="num">Share of text</th></tr></thead>
-          <tbody>{writingGroups.map(group => { const chars = groupTotal(totals, group, "chars"); return <tr key={group.key}>
-            <td><span className="usage-swatch" style={{ background: group.color }} /><strong>{group.label}</strong><div className="muted">{group.description}</div></td>
-            <td className="num">{groupTotal(totals, group, "words").toLocaleString()}</td><td className="num">{chars.toLocaleString()}</td><td className="num">{(100 * chars / allChars).toFixed(1)}%</td>
-          </tr>; })}</tbody>
-        </table></div>
-      </>}
-    </div>
-  </section>;
-}
-
-// Human Words lists conversations or single messages (?writing=messages), and
-// messages as a table or as highlighted text (?messages=text), like the
-// Library's Table and Conversations views.
-type WritingRows = "conversations" | "messages";
-const writingRows = (): WritingRows => new URLSearchParams(location.search).get("writing") === "messages" ? "messages" : "conversations";
-const messageView = (): MessageView => new URLSearchParams(location.search).get("messages") === "text" ? "text" : "table";
-
-function WritingUsage({ onStatus }: { onStatus: (status: AuthorshipStatus | null) => void }) {
-  const [reload, setReload] = useState(0);
-  const status = useAuthorshipStatus(() => { setReload(value => value + 1); tableApis.get("writing")?.refresh(); tableApis.get("writing_messages")?.refresh(); });
-  useEffect(() => onStatus(status), [status]);
-  const [rows, setRows] = useState<WritingRows>(writingRows);
-  const [view, setView] = useState<MessageView>(messageView);
-  useEffect(() => {
-    const restore = () => { setRows(writingRows()); setView(messageView()); };
-    window.addEventListener("pharos:route", restore);
-    return () => window.removeEventListener("pharos:route", restore);
-  }, []);
-  function chooseRows(next: WritingRows) { setRows(next); updateURI("writing", next === "messages" ? next : ""); }
-  function chooseView(next: MessageView) { setView(next); updateURI("messages", next === "text" ? next : ""); }
-  // A conversation's Messages button lists the messages counted toward it;
-  // the message table starts from the query in the URL.
-  function drill(row: Row) {
-    const where: WhereTerm[] = [{ field: "work_id", op: "=", value: String(row.id) }];
-    updateURI(queryParameter("writing_messages"), encodeQuery(orderedUsageQuery("writing_messages", { ...EMPTY_QUERY, limit: schemas.writing_messages.defaultLimit ?? EMPTY_QUERY.limit, where })));
-    chooseRows("messages");
-  }
-  const toggle = <div className="writing-rows-bar">
-    <Segmented label="List" value={rows} options={[["conversations", "Conversations"], ["messages", "Messages"]]} onChange={chooseRows} />
-    {rows === "messages" ? <div className="library-view-toggle" role="group" aria-label="Message result view">
-      <button type="button" className={view === "table" ? "active" : ""} aria-pressed={view === "table"} onClick={() => chooseView("table")}>Table</button>
-      <button type="button" className={view === "text" ? "active" : ""} aria-pressed={view === "text"} onClick={() => chooseView("text")}>Highlighted text</button>
-    </div> : null}
-  </div>;
-  if (rows === "messages") return <UserMessageSurface key="messages" messageView={view} header={(api, searching) => <>
-    {toggle}
-    {!searching ? <MessageMix where={toAggregationQuery({ ...api.query, aggregations: [] }, schemas.writing_messages).where} reload={reload} onFilter={filterChange(api)} /> : null}
-
-  </>} />;
-  return <QuerySurface key="conversations" dataset="writing" trailing={row => <button type="button" className="mcp-detail-button" title="List this conversation's messages, highlighted by where their text came from" onClick={() => drill(row)}>Messages</button>} header={api => <>
-    <WritingPanel where={toAggregationQuery({ ...api.query, aggregations: [] }, schemas.writing).where} onFilter={filterChange(api)} status={status} reload={reload} />
-    {toggle}
-
-  </>} />;
-}
-
-type UsageView = "tokens" | "writing" | "carbon" | "conversations";
-const usageViewKey = "pharos-usage-view";
-
-// ?analyze_view= picks the view; otherwise the last choice is kept.
-function initialUsageView(): UsageView {
-  const requested = new URLSearchParams(location.search).get("analyze_view");
-  if (requested === "tokens" || requested === "writing" || requested === "carbon" || requested === "conversations") { store(usageViewKey, requested); return requested; }
-  const saved = preferences().get<unknown>(usageViewKey, "tokens");
-  return saved === "writing" || saved === "carbon" || saved === "conversations" ? saved : "tokens";
 }
 
 // migrate reads an engine dashboard's link (readAnalysisLink): an older link
@@ -1552,25 +1120,6 @@ function CarbonDashboard() {
     frame={(views, where, onFilter) => <CarbonImpact where={where} onFilter={onFilter}>{carbon.catalog ? views(carbon.catalog, carbonAmount(carbon.format)) : carbonLoading}</CarbonImpact>} />;
 }
 
-// The legacy Carbon Impact page: the same chart over its own saved filters
-// and chart, without the dashboard's views or links. A link's chart
-// (analyze_chart, in the old page's vocabulary) wins over the saved one, on
-// entry and on route changes.
-const carbonChartKey = "pharos-carbon-chart";
-function LegacyCarbon() {
-  const [where, onFilter] = useLegacyCarbonFilters();
-  const carbon = useCarbonCatalog();
-  const read = () => legacyCarbonChart(new URLSearchParams(location.search).get("analyze_chart"), preferences().get<unknown>(carbonChartKey, null));
-  const [chart, setChart] = useState<AnalysisState>(read);
-  useEffect(() => {
-    const restore = () => setChart(read());
-    window.addEventListener("pharos:route", restore);
-    return () => window.removeEventListener("pharos:route", restore);
-  }, []);
-  const update = (next: Partial<AnalysisState>) => setChart(previous => { const merged = { ...previous, ...next }; store(carbonChartKey, merged); return merged; });
-  return <CarbonImpact where={where} onFilter={onFilter}>{carbon.catalog ? <AnalysisTrend catalog={carbon.catalog} schema={schemas.usage} dataset="usage" state={chart} where={where} onChange={update} onFilter={onFilter} format={carbonAmount(carbon.format)} links={false} /> : carbonLoading}</CarbonImpact>;
-}
-
 // Parallelism's views follow the saved counting and gap, with which the
 // service builds its records; the note names the settings the returned
 // records carry, and warns when another window saved others.
@@ -1637,7 +1186,7 @@ const readHumanWhere: ReadWhere = (where, state) => {
   const read = readHumanLink(where, state.v === analysisVersion);
   if (!read.unsupported.length) return read;
   const selection = (term: WhereTerm) => predicatesOf(term).some(clause => clause.field === state.split);
-  return { where: read.where, notice: <>This older link’s {read.unsupported.some(selection) ? "legend selection and filters" : "filters"} on whole works cannot keep their meaning for messages, so they are left out: {read.unsupported.map(describeTerm).join("; ")}. <a href={humanLegacyURL(where)}>Open them in the legacy Human words view</a>, where they still apply.</> };
+  return { where: read.where, notice: <>This older link’s {read.unsupported.some(selection) ? "legend selection and filters" : "filters"} on whole works cannot keep their meaning for messages, so they are left out: {read.unsupported.map(describeTerm).join("; ")}.</> };
 };
 
 // The dashboard's population, whatever the chart draws.
@@ -1789,9 +1338,12 @@ function SkillsDashboard() {
   return <CatalogDashboard catalog={skillsAnalysisCatalog} dataset="skill_usages" name="skills" defaults={dashboardDefaults.skills} />;
 }
 
+// An older Analyze or Tools link opens what replaced its page
+// (canonicalAnalyzeURL); the address says so before anything reads it.
 function UsagePage() {
   useLocationRevision();
-  if (location.pathname !== "/analyze" || !isUsageWorkspace()) return <LegacyUsagePage />;
+  if (location.pathname !== "/analyze") return null;
+  if (!isUsageWorkspace()) history.replaceState(history.state, "", canonicalAnalyzeURL(location.pathname, new URLSearchParams(location.search)) + location.hash);
   return <UsageChartColorsProvider>
     <UsageWorkspace renderDashboard={topic => <GuidedUsageDashboard topic={topic} />} renderTable={dataset => <AnalyzeQueryTable key={dataset} dataset={dataset} />} />
   </UsageChartColorsProvider>;
@@ -1831,53 +1383,6 @@ function AnalyzeRecordKeyword({ api, dataset, host }: { api: QueryTableApi<Row>;
     {error ? <p className="query-table-error" role="alert">{error}</p> : null}
   </>;
 }
-
-function LegacyUsagePage() {
-  useLocationRevision();
-  const [view, setView] = useState<UsageView>(initialUsageView);
-  const [status, setStatus] = useState<AuthorshipStatus | null>(null);
-  const [selectedCall, setSelectedCall] = useState<{ id: string } | null>(null);
-  useEffect(() => {
-    const restore = () => { if (location.pathname === "/analyze") setView(initialUsageView()); };
-    window.addEventListener("pharos:route", restore);
-    return () => window.removeEventListener("pharos:route", restore);
-  }, []);
-  function choose(next: UsageView) {
-    setView(next); store(usageViewKey, next);
-    const url = new URL(location.href);
-    url.searchParams.set("analyze_view", next);
-    if (next !== "writing") { url.searchParams.delete("writing"); url.searchParams.delete("messages"); }
-    pushMachineLocation(url);
-  }
-  const statusText = !status ? "" : status.error ? `Last update failed: ${status.error}` : status.running ? "Updating…" : status.built_at ? `Updated ${new Date(status.built_at).toLocaleString()}` : "Waiting to build";
-  // Machine controls fetch scope choices and canonicalize their route on mount.
-  // Keep them unmounted while another page (including Home) is active.
-  if (location.pathname !== "/analyze") return null;
-  return <UsageChartColorsProvider><div className="pharos-query-page usage-page">
-    <div className="view-heading library-heading usage-heading">
-      <div><h1>Analyze</h1><p className="muted">{view === "tokens"
-        ? "Understand how your agents use tokens, work in parallel, and spend their time across repositories."
-        : view === "writing"
-          ? <>Text you typed or dictated into agent chats, per conversation or per message. Harness instructions, one-click prompts, attachments, pastes, and copied agent output are counted separately; filter the table and the chart and breakdown follow. {statusText ? <span className="meta">{statusText}</span> : null}</>
-          : view === "conversations" ? "Compare human-supplied text estimates and recorded output across whole conversations, including delegated work. Human text is estimated once per classified message, excluding harness and automated spans; output retains the usage ledger’s time placement." : "Estimated inference electricity and CO₂e for the tokens in this library, using published research and explicit assumptions."}</p></div>
-      <div className="usage-heading-actions">
-        <ResetPage />
-        <div className="library-view-toggle" role="group" aria-label="Analyze view">
-          <button type="button" className={view === "writing" ? "active" : ""} aria-pressed={view === "writing"} onClick={() => choose("writing")}>Human Words</button>
-          <button type="button" className={view === "tokens" ? "active" : ""} aria-pressed={view === "tokens"} onClick={() => choose("tokens")}>Machine Activity</button>
-          <button type="button" className={view === "carbon" ? "active" : ""} aria-pressed={view === "carbon"} onClick={() => choose("carbon")}>Carbon Impact</button>
-        </div>
-        {view === "tokens" && (new URLSearchParams(location.search).get("machine_view") ?? preferences().get("pharos-machine-view", "tokens")) === "tokens" ? <div className="usage-heading-tools"><RefreshPricesButton /></div> : null}
-      </div>
-    </div>
-    {view === "conversations" ? <QuerySurface dataset="conversation_activity" /> : view === "tokens" ? <MachineActivity tokens={(where, applied, onTimeRangeChange) => <TokenUsage scopeWhere={where} appliedScope={applied} onTimeRangeChange={onTimeRangeChange} />} calls={props => <div className="machine-call-surface"><QuerySurface dataset="tool_calls" namespace="machine_calls" {...props}
-      controls={(api, builder) => <div id="machineRawCalls" className="machine-raw-calls"><div className="machine-panel-heading"><div><h3>Raw calls backing this selection</h3><p className="muted">{api.total?.toLocaleString() ?? "…"} matching calls · Full invocations, timings, statuses, and source conversations. Filters here also update the charts and analytics.</p></div></div>{builder}</div>}
-      trailing={row => <span className="machine-inline-actions"><button type="button" className="mcp-detail-button" onClick={() => setSelectedCall({ id: String(row.id) })}>Details</button>{row.workspace_id ? <a href={`/work/${encodeURIComponent(row.workspace_id)}?conversation=${encodeURIComponent(row.conversation_id ?? "")}`}>Conversation ↗</a> : null}</span>} /></div>}
-      parallelism={() => <div className="machine-call-surface"><QuerySurface dataset="parallelism" controls={(api, builder) => <div className="machine-raw-calls"><div className="machine-panel-heading"><div><h3>Parallel activity records</h3><p className="muted">{api.total?.toLocaleString() ?? "…"} hour-by-agent records · Estimated from transcript timestamps with your Parallelism counting and gap settings. Group, filter and chart them like any table.</p></div></div>{builder}</div>} /></div>} /> : view === "writing" ? <WritingUsage onStatus={setStatus} /> : <LegacyCarbon />}
-    {selectedCall ? <ToolCallDialog id={selectedCall.id} onClose={() => setSelectedCall(null)} /> : null}
-  </div></UsageChartColorsProvider>;
-}
-
 
 function MCPUsageNote() {
   return <p className="usage-dashboard-note">Calls to Pharos's own MCP server. The latest 5,000 calls are retained; the selected dates can include fewer. Output tokens are estimated from response size, and response text is not stored. <UsageWorkspaceLink href="/settings/mcp">MCP settings<Icon name="arrow-right" /></UsageWorkspaceLink></p>;
@@ -1947,69 +1452,12 @@ function MCPSettingsPage() {
 
 type ToolLedgerStatus = { conversations: number; current_conversations: number; pending_conversations: number; tool_calls: number; backfill: { running: boolean; done: number; total: number; error: string | null } };
 
-// Filters that select the calls behind one summary row.
-function drillFilters(row: Row): WhereTerm[] {
-  return toolSummaryCallFilters(row);
-}
-
 function formatDurationMS(value: unknown): string {
   const ms = Number(value);
   if (value === null || value === undefined || !Number.isFinite(ms)) return "—";
   if (ms < 1000) return `${Math.round(ms)} ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
   return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
-}
-
-const urlSourceLabels: Record<string, string> = { input: "Tool argument", command: "Shell command", result: "Opened", search_result: "Search result" };
-
-// Reached URLs first; the links a search returned follow, since the agent may not have opened them.
-function ToolCallURLs({ urls }: { urls: Row[] }) {
-  const reached = urls.filter(entry => entry.source !== "search_result"), results = urls.filter(entry => entry.source === "search_result");
-  const table = (rows: Row[]) => <div className="mcp-tool-table-wrap"><table className="tool-commands tool-urls"><thead><tr><th>Site</th><th>Source</th><th>URL</th></tr></thead><tbody>
-    {rows.map(entry => <tr key={entry.position}><td>{String(entry.host)}</td><td>{urlSourceLabels[String(entry.source)] ?? String(entry.source)}</td><td className="tool-command-text"><a href={String(entry.url)} target="_blank" rel="noopener noreferrer">{String(entry.url)}</a></td></tr>)}
-  </tbody></table></div>;
-  return <>
-    {reached.length ? <><h3>Sites reached</h3>{table(reached)}</> : null}
-    {results.length ? <><h3>Search results ({results.length.toLocaleString()})</h3>{table(results)}</> : null}
-  </>;
-}
-
-function ToolCallDialog({ id, onClose }: { id: string; onClose: () => void }) {
-  const [call, setCall] = useState<Row | null>(null);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    const controller = new AbortController();
-    fetch(`/api/tool-calls/${encodeURIComponent(id)}`, { signal: controller.signal }).then(responseJSON<Row>).then(setCall)
-      .catch(failure => { if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : "Call unavailable"); });
-    return () => controller.abort();
-  }, [id]);
-  const number = (value: unknown) => value === null || value === undefined ? "—" : Number(value).toLocaleString();
-  return <div className="mcp-dialog-backdrop" onClick={onClose}><div className="mcp-dialog tool-dialog" role="dialog" aria-modal="true" aria-label="Tool call details" onClick={event => event.stopPropagation()}>
-    <div className="mcp-card-heading"><div><h2>{call ? String(call.tool_name) : "Tool call"}</h2><p className="muted">{call ? `${new Date(String(call.started_at)).toLocaleString()} · ${call.status}${call.error_type ? ` · ${String(call.error_type).replace(/_/g, " ")}` : ""}` : error || "Loading…"}</p></div>
-      <div className="tool-dialog-actions">{call?.workspace_id ? <button type="button" onClick={() => { onClose(); window.pharosOpenDetail?.(String(call.workspace_id)); }}>Open work</button> : null}<button type="button" onClick={onClose}>Close</button></div></div>
-    {call ? <>
-      <dl className="tool-facts">
-        <div><dt>Duration</dt><dd>{formatDurationMS(call.duration_ms)}{call.duration_source === "timestamps" ? " (timestamps)" : ""}</dd></div>
-        <div><dt>Context added</dt><dd>{call.result_tokens == null ? "—" : compactNumber(Number(call.result_tokens))} tokens{call.result_tokens_source ? ` · ${call.result_tokens_source}` : ""}</dd></div>
-        <div><dt>Carried</dt><dd>{call.carried_tokens == null ? "—" : compactNumber(Number(call.carried_tokens))} tokens over {number(call.carried_requests)} requests</dd></div>
-        <div><dt>Cost</dt><dd>{call.tool_cost_usd === null || call.tool_cost_usd === undefined ? "—" : formatUSD(Number(call.tool_cost_usd))}</dd></div>
-        <div><dt>Exit code</dt><dd>{call.exit_code ?? "—"}</dd></div>
-        <div><dt>Calls in request</dt><dd>{number(call.parallel_count)}</dd></div>
-        {call.mcp_server || call.mcp_method ? <div><dt>MCP</dt><dd>{[call.mcp_server, call.mcp_method].filter(Boolean).join(" · ")}</dd></div> : null}
-        {call.skill_name ? <div><dt>Skills</dt><dd>{String(call.skill_name)}</dd></div> : null}
-      </dl>
-      {call.error_signature ? <p className="muted">Error signature: {String(call.error_signature)}</p> : null}
-      {call.title ? <p className="muted">{String(call.title)}{call.repository_name ? ` · ${call.repository_name}` : ""} · {String(call.provider)} {call.model ? `· ${call.model}` : ""}{call.effort ? ` · Effort: ${call.effort}` : ""}</p> : null}
-      {Array.isArray(call.commands) && call.commands.length ? <><h3>Commands</h3><div className="mcp-tool-table-wrap"><table className="tool-commands"><thead><tr><th>#</th><th>Program</th><th>Category</th><th>Exit</th><th>Duration</th><th>Command</th></tr></thead><tbody>
-        {call.commands.map((command: Row) => <tr key={command.position}><td>{command.operator && command.operator !== "script" ? command.operator : Number(command.position) + 1}</td><td>{[command.program, command.subcommand].filter(Boolean).join(" ")}</td><td>{command.category ?? ""}</td><td>{command.exit_code ?? ""}</td><td>{command.duration_ms === null || command.duration_ms === undefined ? "" : formatDurationMS(command.duration_ms)}</td><td className="tool-command-text">{String(command.command)}</td></tr>)}
-      </tbody></table></div></> : null}
-      {call.search_query ? <><h3>Search query</h3><p className="tool-search-query">{String(call.search_query)}</p></> : null}
-      {Array.isArray(call.urls) && call.urls.length ? <ToolCallURLs urls={call.urls} /> : null}
-      <h3>Input</h3><pre className="mcp-code">{String(call.input_text ?? "")}</pre>
-      <h3>Result{Number(call.result_text_bytes) > String(call.result_text ?? "").length ? ` (first ${String(call.result_text ?? "").length.toLocaleString()} of ${Number(call.result_text_bytes).toLocaleString()} characters)` : ""}</h3><pre className="mcp-code">{String(call.result_text ?? "") || "No result was recorded."}</pre>
-      {call.result_details ? <><h3>Result metadata</h3><pre className="mcp-code">{String(call.result_details)}</pre></> : null}
-    </> : null}
-  </div></div>;
 }
 
 function ToolLedgerBanner() {
@@ -2045,58 +1493,6 @@ function ToolLedgerBanner() {
   </div>;
 }
 
-function termKey(term: WhereTerm): string {
-  const clause = (item: WhereClause) => `${item.field}|${item.op}|${item.value}|${item.negated ? 1 : 0}`;
-  const branch = (member: WhereBranch) => isWhereConjunction(member) ? `all:${member.all.map(clause).join("+")}` : clause(member);
-  return isWhereGroup(term) ? `any:${term.any.map(branch).join("&")}` : clause(term);
-}
-
-function ToolsPage() {
-  const readView = (): "summary" | "calls" | "skills" => {
-    const selected = new URLSearchParams(location.search).get("tools_view");
-    return selected === "summary" || selected === "skills" ? selected : "calls";
-  };
-  const [view, setView] = useState(readView);
-  useEffect(() => {
-    const restore = () => { if (location.pathname === "/tools") setView(readView()); };
-    window.addEventListener("pharos:route", restore);
-    return () => window.removeEventListener("pharos:route", restore);
-  }, []);
-  const [selected, setSelected] = useState<string | null>(null);
-  function choose(next: "summary" | "calls" | "skills") { setView(next); updateURI("tools_view", next === "calls" ? "" : next); }
-  function drill(row: Row) {
-    tableApis.get("tool_calls")?.setQuery(previous => orderedUsageQuery("tool_calls", { ...previous, where: drillFilters(row), aggregations: [], orderBy: [], offset: 0 }));
-    choose("calls");
-  }
-  return <div className="pharos-query-page tools-page">
-    <div className="view-heading library-heading"><div><h1>Tool use</h1><p className="muted">Every tool call from retained transcripts, joined to its result. Shell commands are parsed into program, subcommand, and category. <b>Context added</b> is what a result grew the next request’s prompt by (measured from provider usage, or estimated from size at 4 bytes a token); <b>context carried</b> counts it again for every later request until compaction. Claude durations come from timestamps and include any wait for approval. Linked mirrors of the same work are counted once.</p></div>
-      <div className="library-view-toggle" role="group" aria-label="Tool view">
-        <button type="button" className={view === "calls" ? "active" : ""} aria-pressed={view === "calls"} onClick={() => choose("calls")}>Calls</button>
-        <button type="button" className={view === "summary" ? "active" : ""} aria-pressed={view === "summary"} onClick={() => choose("summary")}>Summary</button>
-        <button type="button" className={view === "skills" ? "active" : ""} aria-pressed={view === "skills"} onClick={() => choose("skills")}>Skills</button>
-      </div></div>
-    <ToolLedgerBanner />
-    <div hidden={view !== "summary"}>
-      <QuerySurface dataset="tools" trailing={row => <button type="button" className="mcp-detail-button" title="Show the calls behind this row" onClick={() => drill(row)}>Calls</button>} />
-    </div>
-    <div hidden={view !== "calls"}>
-      <QuerySurface dataset="tool_calls" trailing={row => <button type="button" className="mcp-detail-button" onClick={() => setSelected(String(row.id))}>Details</button>} />
-    </div>
-    <div className="skill-usages" hidden={view !== "skills"}>
-      <p className="muted">Explicit invocations, observed file-load attempts, and harness-reported loads. A listing is not usage, and a load does not prove the skill was followed. Status on file loads belongs to the parent tool call. Costs remain on that call and are not duplicated here.</p>
-      <QuerySurface dataset="skill_usages" trailing={row => <span className="skill-usage-actions">
-        {row.tool_call_id ? <button type="button" className="mcp-detail-button" onClick={() => setSelected(String(row.tool_call_id))}>Tool call</button> : null}
-        <button type="button" className="mcp-detail-button" onClick={() => openFindHit({ workspace_id: String(row.workspace_id), conversation_id: String(row.conversation_id), message_id: String(row.body_message_id ?? row.evidence_message_id), title: String(row.title), count: 1 })}>Evidence</button>
-      </span>} />
-    </div>
-    {selected ? <ToolCallDialog id={selected} onClose={() => setSelected(null)} /> : null}
-  </div>;
-}
-
-if (concurrencyPrototypeEnabled && location.pathname === "/analyze" && new URLSearchParams(location.search).get("analyze_view") === "concurrency") {
-  const url = new URL(location.href);url.searchParams.set("analyze_view", "tokens");url.searchParams.set("parallelism", "1");history.replaceState(null, "", url);
-}
-
 installAppNavigation();
 
 const dataGuideHost = document.createElement("div");
@@ -2119,7 +1515,6 @@ const mounts: Array<[string, React.ReactNode]> = [
   ["settingsPage", <SettingsWorkspace content={document.getElementById("settingsContent")!} />],
   ["queryTableLibrary", <LibraryPage />],
   ["queryTableUsage", <UsagePage />],
-  ["toolsPage", <ToolsPage />],
   ["mcpSettingsPage", <MCPSettings />],
   ["findingsPage", <FindingsPage copy={copyText} table={<QuerySurface dataset="findings" />} safetyTable={<QuerySurface dataset="safety" trailing={(row, api) => <a href={safetyDetailURL(String(api.rowId(row)), new URL(location.href))} onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(safetyDetailURL(String(api.rowId(row)), new URL(location.href))); }}>Open review</a>} />} />],
 ];
@@ -2133,7 +1528,7 @@ function LazyPage({ host, children }: { host: HTMLElement; children: React.React
   const visited = useRef(false);
   visited.current ||= Boolean(host.id === "searchComposerDialog" || host.closest(".view.active"));
   if (!visited.current) return null;
-  const libraryPage = ["queryTableLibrary", "queryTableUsage", "toolsPage", "findingsPage"].includes(host.id);
+  const libraryPage = ["queryTableLibrary", "queryTableUsage", "findingsPage"].includes(host.id);
   const settings = host.id === "findingsPage" && new URLSearchParams(location.search).get("view") === "settings";
   // Keep one element type across routes: Findings Settings bypasses the empty
   // state without remounting the dashboard and its retained table.
@@ -2163,7 +1558,7 @@ window.pharosQueryTables = {
     if (!entry) return { url: location.href };
     const [dataset, api] = entry, query = api.query;
     const link = await api.links.create(query);
-    return { url: link.url, query, dataset: dataset === "machine_calls" ? "tool_calls" : dataset };
+    return { url: link.url, query, dataset };
   },
   refresh(dataset) {
     window.dispatchEvent(new CustomEvent("pharos:data-refresh", { detail: dataset }));

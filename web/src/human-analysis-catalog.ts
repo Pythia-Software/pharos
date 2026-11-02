@@ -1,4 +1,4 @@
-import { EMPTY_QUERY, branchesOf, encodeQuery, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
+import {  branchesOf, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 import { mapTermPredicates } from "./where-terms";
 import writing from "../../schemas/writing.schema.json";
 import writingMessages from "../../schemas/writing_messages.schema.json";
@@ -116,7 +116,5 @@ export function readHumanLink(where: WhereTerm[], versioned: boolean): HumanLink
   }
   return { where: changed ? read : where, unsupported };
 }
-// The legacy Writing view of an older link's filters, where they still apply.
-export const humanLegacyURL = (where: WhereTerm[]) => `/analyze?${new URLSearchParams({ analyze_view: "writing", q_writing: encodeQuery({ ...EMPTY_QUERY, where }) })}`;
 const describeClause = (clause: WhereClause) => `${clause.negated ? "not " : ""}${clause.field} ${clause.op} ${clause.value}`.trim();
 export const describeTerm = (term: WhereTerm) => branchesOf(term).map(branch => branch.length > 1 ? `(${branch.map(describeClause).join(" and ")})` : describeClause(branch[0])).join(" or ");

@@ -536,8 +536,7 @@ go run ./cmd/pharos --config /Volumes/euclid/pharos-dev/library.toml dev-ui \
   --concurrency-data .context/concurrency-real-data.json
 ```
 
-Open `/analyze?analyze_view=tokens&parallelism=1` in that dev UI, or choose
-**Parallelism…** beside the pricing prompt in the Machine Tokens header. The URL opens a compact
+Open `/analyze?parallelism=1` in that dev UI. The URL opens a compact
 modal with one selectable view. The summary's **Parallelism** link opens it over
 the current page; adding `parallelism=1` to any page URL opens the same modal,
 and closing it preserves that page and its other URL parameters.
@@ -554,7 +553,7 @@ title highlights its workspace or session, according to Count by.
 The header's Usage summary includes **Parallelism**, using the saved counting
 unit, gap and repository for each full trailing window, including idle time. Timing windows
 outside the prototype export show unavailable instead of treating seven days as all time.
-The legacy `/analyze?analyze_view=concurrency` link redirects to the modal.
+The legacy `/analyze?analyze_view=concurrency` link opens the Parallelism dashboard.
 
 Ribbon rows prefer continuity: continuing workspaces keep their row while it
 fits within the active count, and arriving checkouts reuse rows last occupied

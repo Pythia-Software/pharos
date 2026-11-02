@@ -116,9 +116,39 @@ export function usageDashboardReturn(current: URLSearchParams) {
   };
 }
 
+// Parameters only the removed Analyze and Tools pages read.
+const legacyKeys = ["analyze_workspace", "analyze_view", "writing", "messages", "message_query", "message_cursor", "machine_view", "machine_demo", "tools_view", "usage", "parallelism"];
 export function isUsageWorkspace(params = new URLSearchParams(location.search)) {
   if (params.get("analyze_workspace") === "1" || ["analyze_mode", "analyze_data", "analyze_topic"].some(key => params.has(key))) return true;
-  return !["analyze_view", "writing", "machine_view", "q_usage", "q_writing", "q_writing_messages", "q_conversation_activity", "q_parallelism"].some(key => params.has(key));
+  return !["analyze_view", "writing", "machine_view", "tools_view", "q_usage", "q_writing", "q_writing_messages", "q_conversation_activity", "q_parallelism"].some(key => params.has(key));
+}
+
+// An older Analyze or Tools link (analyze_view, machine_view, writing,
+// tools_view) opens what replaced its page: a link holding its table's query
+// opens that query table, and otherwise the page's dashboard, with the chart
+// a dashboard reads through its catalog's legacy mapping. A workspace link is
+// returned as it is.
+export function canonicalAnalyzeURL(path: string, params: URLSearchParams): string {
+  if (path === "/analyze" && isUsageWorkspace(params)) return `/analyze?${params}`;
+  const table = (dataset: UsageDataset) => ({ mode: "query" as const, dataset, topic: usageDatasetTopics[dataset] });
+  const dashboard = (topic: UsageTopic) => ({ mode: "dashboards" as const, dataset: usageTopicDatasets[topic], topic });
+  const view = params.get("analyze_view"), machine = params.get("machine_view");
+  const target = path === "/tools" || params.has("tools_view") ? table(params.get("tools_view") === "summary" ? "tools" : params.get("tools_view") === "skills" ? "skill_usages" : "tool_calls")
+    : view === "conversations" ? table("conversation_activity")
+    : view === "writing" ? params.get("writing") === "messages" ? table("writing_messages") : params.has("q_writing") ? table("writing") : dashboard("human")
+    : view === "carbon" ? dashboard("carbon")
+    : machine === "time" ? dashboard("time")
+    : machine === "parallelism" || view === "concurrency" ? params.has("q_parallelism") ? table("parallelism") : dashboard("parallelism")
+    : params.has("q_usage") ? table("usage") : dashboard("tokens");
+  const next = new URLSearchParams();
+  for (const [key, value] of params) {
+    if (legacyKeys.includes(key) || key.startsWith("activity_") || key.startsWith("q_") && key !== `q_${target.dataset}`) continue;
+    if (key.startsWith("window_") && params.get("window_dataset") !== target.dataset) continue;
+    if (key === "analyze_chart" && target.mode === "query") continue;
+    next.append(key, value);
+  }
+  next.set("analyze_mode", target.mode); next.set("analyze_data", target.dataset); next.set("analyze_topic", target.topic);
+  return `/analyze?${next}`;
 }
 export function readUsageWorkspace(params: URLSearchParams) {
   const mode = params.get("analyze_mode"), dataset = params.get("analyze_data"), topic = params.get("analyze_topic");

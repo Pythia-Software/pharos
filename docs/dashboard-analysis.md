@@ -334,9 +334,6 @@ can:
 - **A share is of every group the filters define.** A legend selection only
   chooses which groups are drawn; it never changes the denominator. See
   [Selections and links](#selections-and-links).
-- **No legacy link.** No dashboard view links to the legacy pages.
-  That page has no analysis views, so it would show the grouped query under
-  its default chart.
 - **Groups drawn.** Bars and boxes show 12 groups and pies 8. The trend's
   `seriesLimit` belongs to the trend alone.
 - **Leaving for the trend.** The trend draws every measure and population
@@ -444,15 +441,15 @@ rewritten: a work's totals (`typed_words > 100` meant a work's total;
 `user_words` messages lack), a combined value (`providers = "claude,codex"`
 meant works holding exactly both) or its inequality or `contains`, and a
 legend selection of a combined group. The dashboard opens without them and
-a notice lists them, with a link to the legacy Human words view, where they
-still apply. A versioned link is already in message terms. Every engine
+a notice lists them. A versioned link is already in message terms. Every engine
 dashboard reads an older link in its
 catalog's terms once, when it opens, and rewrites it. Carbon's older filters
 came from its filter controls, never a legend, so they stay populations
 (`legacySlices: false`); its older charts (`co2`/`energy`, `tier`) read
-through its legacy mapping, on the dashboard and on the legacy Carbon page,
-where a link's `analyze_chart` wins over the saved chart on entry and on
-route changes (`legacyCarbonChart`).
+through its legacy mapping. An older Analyze or Tools link (`analyze_view`,
+`machine_view`, `writing`, `tools_view`) opens what replaced its page
+(`canonicalAnalyzeURL`): the query table its link holds a query for, or
+otherwise the page's dashboard, keeping its `analyze_chart`.
 Parallelism's ribbon selection keeps its own link (`analyze_parallelism`)
 and its "query view" link (`parallelismSelectionQuery`).
 
@@ -1051,9 +1048,8 @@ selections, which the sections above describe.
      (`dashboard`, `viewOverride`), Carbon's bespoke chart (`CarbonView`,
      its series builder, `initialView`, the history request and the
      custom supporting-query links) and the series request on the Human
-     Words dashboard are gone. The legacy Human Words page keeps
-     `WritingPanel` over the series endpoint, since its table lists works;
-     the legacy Carbon page draws the engine's trend.
+     Words dashboard are gone, and so, since 2026-11-02, are the legacy
+     pages themselves.
 3. **Record-level Tools analysis (implemented).** Added `tool_calls` fields such as
    `error_signature`, `repo_path`, `host` and `url`, plus the card filters the
    `tools` rollup drops.
