@@ -16,6 +16,8 @@ import { activityPresentation } from "./machine-activity-data";
 import { buildCardTrend, cardTrendDays, cardTrendQueries, trendSchemas, usesCardTrend } from "./card-trend";
 import { usesWeekdayCover, weekdayMetric } from "./weekday-cover";
 import { loadDashboardCardPreview } from "./dashboard-card-preview";
+import type { DashboardCardTarget } from "./dashboard-card-model";
+import { invalidateConcurrencyData } from "./concurrency-store";
 import type { CompactTimelineOptions } from "./column-marks";
 
 export type PreviewMetric = { clause: AggregationClause; result: AggregationResultEntry };
@@ -36,13 +38,13 @@ export type QueryPreview = {
   preserveScale?: boolean;
   study?: HumanStudyPreview;
 };
-type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean; dashboard?: string };
+type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean; dashboard?: string; dashboardTarget?: DashboardCardTarget };
 export type PreviewJob = { priority?: () => number; id: string; dataset: QueryDataset; query: QueryState; schema: FieldSchema; options?: PreviewOptions };
 type Context = { schema: FieldSchema; execution: ComputedExecution; capabilities: MetricCapabilities; queryCapabilities?: QueryCapabilitiesV3 };
 type Payload = { now?: number; metrics?: AggregationResult["metrics"]; rows?: Record<string, unknown>[]; total?: number; sourceTotal?: number; find?: { limited?: boolean; search?: { complete: boolean } } };
 type Cached = { at: number; payload: Payload; schema: FieldSchema };
 const cache = new Map<string, Cached>();
-export function clearPreviewCache() { cache.clear(); clearHumanStudyCache(); }
+export function clearPreviewCache() { cache.clear(); clearHumanStudyCache(); invalidateConcurrencyData(); }
 
 export function formatPreviewValue(value: number, unit: string): string {
   if (unit === "bytes") return value >= 1048576 ? `${(value / 1048576).toFixed(1)} MiB` : value >= 1024 ? `${(value / 1024).toFixed(1)} KiB` : `${value} B`;
@@ -347,7 +349,7 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
     const work = async () => {
       while (pending.length && !signal?.aborted) {
         const job = pending.shift()!;
-        try { const preview = await loadDashboardCardPreview(job.options!.dashboard!, job.schema, signal); if (!signal?.aborted) publish(job.id, preview); }
+        try { const preview = await loadDashboardCardPreview(job.options!.dashboard!, job.schema, signal, undefined, undefined, job.options!.dashboardTarget); if (!signal?.aborted) publish(job.id, preview); }
         catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
       }
     };

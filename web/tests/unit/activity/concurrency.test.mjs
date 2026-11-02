@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mergeIntervals, workspaceSpans, concurrencyAverage, concurrencySpans, concurrencyUnit, conversationTimings, formatConcurrencyDuration, clipIntervals, workSessions, concurrencyMetrics, stackSegments, zonedDayBounds } from "../../../src/concurrency-data";
-import { loadConcurrencyData, threadedSummaryWindow, quickStatsRuntimeWindow, openConcurrencyModal, closeConcurrencyModal } from "../../../src/concurrency-store";
+import { invalidateConcurrencyData, loadConcurrencyData, threadedSummaryWindow, quickStatsRuntimeWindow, openConcurrencyModal, closeConcurrencyModal } from "../../../src/concurrency-store";
 import { normalizeConcurrencySettings, resolveConcurrencyRange } from "../../../src/concurrency-settings";
 import { describeDataSource } from "../../../src/data-taxonomy-model";
 
@@ -25,6 +25,10 @@ test("timing data loads from the library, retries failures, and preserves explic
   assert.deepEqual(requests, ["/api/usage/parallelism", "/api/usage/parallelism"]);
   await loadConcurrencyData(true);
   assert.equal(requests.length, 3);
+  // A preview refresh reads a new snapshot once, then shares it again.
+  invalidateConcurrencyData();
+  await loadConcurrencyData(); await loadConcurrencyData();
+  assert.equal(requests.length, 4);
   captured.timezone = "Local";
   const local = await loadConcurrencyData(true);
   assert.equal(local.timezone, Intl.DateTimeFormat().resolvedOptions().timeZone);

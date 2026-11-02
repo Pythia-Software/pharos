@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EMPTY_QUERY } from '@pythia-software/query-table-core';
-import { dashboardCardURL, readDashboardCard, collectDashboardCard, dashboardCardCollected, dashboardCardWindow, dashboardCardPresentation } from '../../../src/dashboard-card-model';
+import { dashboardCardURL, readDashboardCard, collectDashboardCard, dashboardCardCollected, dashboardCardWindow, dashboardCardPresentation, dashboardCardTargets } from '../../../src/dashboard-card-model';
 import { fittedCoverHeight } from '../../../src/card-loading-model';
 import { loadDashboardCardPreview } from '../../../src/dashboard-card-preview';
 import { analysisCatalogs } from '../../../src/analysis-catalogs';
@@ -215,6 +215,41 @@ test('Parallelism cards carry their own counting and gap into Home preview reque
   assert.ok(settings.length>0);
   assert.ok(settings.every(value=>value.counting==='agent' && value.gap===15));
   assert.deepEqual(values.get('pharos-concurrency-v1'),{counting:'workspace',gap:60});
+});
+
+
+// Parallelism's URL holds two charts: its ribbon and its catalog chart.
+test('a Parallelism URL offers its ribbon and its chart as cards, each collected and previewed on its own', async t => {
+  fixture(t);
+  const hour = 3600000, start = Date.parse('2026-10-01T06:00:00Z');
+  const ribbon = {range:'day',day:'2026-10-01',counting:'workspace',gap:0,mode:'user'};
+  const url = dashboardCardURL('/analyze?'+new URLSearchParams({analyze_topic:'parallelism',analyze_parallelism:JSON.stringify(ribbon)}),analysisCatalogs.parallelism,dashboardDefaults.parallelism,[]);
+  assert.deepEqual(dashboardCardTargets(url).map(target=>target.id),['ribbon','chart']);
+  assert.deepEqual(dashboardCardTargets(makeURL(dashboardDefaults.tokens)).map(target=>target.id),['chart']);
+  assert.throws(()=>collectDashboardCard(makeURL(dashboardDefaults.tokens),'Ribbon','','ribbon'),/cannot/);
+  const card = collectDashboardCard(url,'Busy workspaces','','ribbon');
+  assert.equal(card.dashboardTarget,'ribbon');
+  assert.equal(dashboardCardCollected(url,'ribbon'),true);
+  assert.equal(dashboardCardCollected(url),false,'the chart on the same URL is still offered');
+  assert.equal(collectDashboardCard(url,'Chart','').dashboardTarget,undefined);
+  assert.equal(dashboardCardWindow(url,'ribbon'),'Saved range');
+  assert.equal(dashboardCardPresentation(url,'ribbon').category,'machines');
+  // Two workspaces in two repositories; one busy for two hours, one for half an hour.
+  const thread = (id,repository,turns) => ({id,conversation_id:id,work_id:id,workspace_id:id,workspace_name:id,repository,title:id,provider:'claude',model:'m',agent_depth:0,turns,model_spans:[]});
+  const timing = {generated_at:'',timezone:'UTC',period_start:'2026-10-01',period_end:'2026-10-01',days:['2026-10-01'],coverage:{},
+    threads:[thread('a','alpha',[[start,start+2*hour]]),thread('b','beta',[[start+hour,start+1.5*hour]])]};
+  const preview = await loadDashboardCardPreview(url,schemas.parallelism,undefined,undefined,start,'ribbon',timing);
+  assert.equal(preview.state,'ready');
+  assert.equal(preview.buckets.length,24,'a day is drawn by the hour');
+  assert.deepEqual(preview.series.map(item=>item.key),['alpha','beta']);
+  const at = time => preview.buckets.find(bucket=>bucket.date.getTime()===time).values;
+  assert.deepEqual(at(start),{alpha:1});
+  assert.deepEqual(at(start+hour),{alpha:1,beta:.5});
+  assert.deepEqual(at(start+2*hour),{});
+  const filtered = dashboardCardURL('/analyze?'+new URLSearchParams({analyze_topic:'parallelism',analyze_parallelism:JSON.stringify({...ribbon,repository:'beta',range:'7d'})}),analysisCatalogs.parallelism,dashboardDefaults.parallelism,[]);
+  assert.equal(dashboardCardWindow(filtered,'ribbon'),'Past 7 days');
+  const only = await loadDashboardCardPreview(filtered,schemas.parallelism,undefined,undefined,start,'ribbon',timing);
+  assert.deepEqual(only.series.map(item=>item.key),['beta']);
 });
 
 
