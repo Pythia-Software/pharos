@@ -71,7 +71,9 @@ scores about 1,000 messages (`agentEventsChainLimit`); a larger backlog continue
   `PHAROS_AGENT_EVENTS_MODEL_DIR`) names another directory; `PHAROS_AGENT_EVENTS_MODEL_URL` fetches from another URL,
   the pinned digest and size still applying. Package a new version with
   `python3 tools/package_labeler_model.py DIR --out build/labeler --version N --descriptor internal/archive/labels/assets.json --key agent_events_model`
-  and attach it to the release `labeler-jayhawk-68m-N`, as for the labeler's model.
+  and attach it to the release `labeler-jayhawk-68m-N`. A model release carries only the archive and is not an app
+  release: the cleanroom Mac that builds the app never needs the weights, only the pin in git, so it can be published
+  from any Mac with `gh` (`gh release create labeler-jayhawk-68m-N ARCHIVE --latest=false`). Version 1 is published.
 - **The horizon.** `agent_events_days` (default 90; 0 for everything) is how far back the pass reads: older messages
   stay unread, conversations whose recorded end is before it are not looked at (one without a recorded end is), and
   rows stored earlier stay. Each conversation records the horizon it was read from (`agent_events_conversations.since`),
@@ -150,8 +152,6 @@ them.
 
 ## Next
 
-- **Publishing the verifier.** The download is pinned, but its release (`labeler-jayhawk-68m-1`) is not published.
-  The weights were trained on labels of one person's conversations, and this repository's releases are public.
 - **Cost.** Scoring dominates: about 18 candidates a second on four CPU threads with the machine to itself, and the
   study's October (100,000 agent messages, 524,000 candidates) would take about eight hours, some seventeen minutes a
   day. The int8 export agrees with fp32 on 99.9% of decisions at the same F1.
