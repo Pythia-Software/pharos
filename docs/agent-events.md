@@ -5,8 +5,8 @@ docs, surprises, confusion, discoveries, their own mistakes, workarounds, unchec
 getting around an instruction or safeguard, and more. Each event is one sentence in an agent's visible reply or its
 thinking, with what it was about and what the agent did about it, linked to the message in the reader.
 
-It is a preview. Settings → App preferences → **Agent Experience dashboard** lists its pages in Analyze; direct links
-work either way.
+It is a preview. Settings → App preferences → **Agent Experience (preview)** turns it on for a library: it lists the
+pages in Analyze and starts the pass that finds events on this Mac (below). Direct links work either way.
 
 ## How events are found
 
@@ -29,8 +29,9 @@ three quarters of the event sentences; the rest are phrased in ways no keyword a
 Two derived tables, created at catalog open (`agent_events.go`), with no schema version change:
 
 - `agent_event_messages`: every agent message the pass read, with or without events (the denominator for rates).
-- `agent_events`: one row per scored (message, sentence, kind), with its probability, sentence, subject and response
-  text and their UTF-8 byte ranges in `messages.text`.
+- `agent_events`: one row per scored (message, sentence, kind) at or above probability 0.3
+  (`agentEventStoreFloor`), with its probability, sentence, subject and response text and their UTF-8 byte ranges in
+  `messages.text`.
 
 A message that is deleted, or whose text changes, loses both kinds of row at once (two triggers on `messages`): they
 were scored on text it no longer has. The datasets' day, week and month come from `occurred_at` in this Mac's time
@@ -63,9 +64,61 @@ sentences. Thinking is marked inside its Reasoning row, which shows a count of i
   text (Codex keeps the JSON event in `raw_text` and the prose in `text`). `normalizeMessages` drops them from blocks it
   splits out of a JSON message.
 
+## The pass
+
+With the Settings switch on (preference `pharos-agent-events-v1`, read as a feature flag, `agentEventsFlag`) or
+`agent_events_enabled = true` in a library's configuration, the analysis chain runs an **agent events** stage after
+labels, its own background item (Agent events, hourly and adaptive). It uses the message labeler's worker, ONNX
+Runtime and budget (`labels_worker`, `labels_runtime`, `labels_threads`, …), and the same power rules: each chain pass
+scores about 1,000 messages (`agentEventsChainLimit`); a larger backlog continues as an `analysis.agent_events`
+`backlog` run when plugged in and stops if this Mac goes onto battery.
+
+- **The verifier** is a pinned download, `agent_events_model` in `internal/archive/labels/assets.json`
+  (`jayhawk-68m`, version 1: the manifest, the int8 ONNX file and the tokenizer, 146 MB), unpacked into
+  `<support>/labeler/jayhawk-68m-1/` like the labeler's model. The broker's `labels.fetch` downloads it, and the
+  runtime, when a library whose configuration turns agent events on opens, even with labels off, then asks the
+  library to run the item. The broker does not read a library's preferences, so for the Settings switch the stage
+  downloads what is missing itself, under the same per-Mac lock; turning the switch on runs the item at once. Until
+  the download completes the item says it is waiting for it. `agent_events_model_dir` (or
+  `PHAROS_AGENT_EVENTS_MODEL_DIR`) names another directory; `PHAROS_AGENT_EVENTS_MODEL_URL` fetches from another URL,
+  the pinned digest and size still applying. Package a new version with
+  `python3 tools/package_labeler_model.py DIR --out build/labeler --version N --descriptor internal/archive/labels/assets.json --key agent_events_model`
+  and attach it to the release `labeler-jayhawk-68m-N`. A model release carries only the archive and is not an app
+  release: the cleanroom Mac that builds the app never needs the weights, only the pin in git, so it can be published
+  from any Mac with `gh` (`gh release create labeler-jayhawk-68m-N ARCHIVE --latest=false`). Version 1 is published.
+- **The horizon.** `agent_events_days` (default 90; 0 for everything) is how far back the pass reads: older messages
+  stay unread, conversations whose recorded end is before it are not looked at (one without a recorded end is), and
+  rows stored earlier stay. Each conversation records the horizon it was read from (`agent_events_conversations.since`),
+  so a wider horizon, `--days 0` included, reads what a narrower one left.
+- **Terminal.** `pharos agent-events run [--limit N] [--days N] [--full] [--dry-run] [--conversation ID]...`,
+  `pharos agent-events fetch` (the verifier, and the runtime unless one is configured or bundled) and
+  `pharos agent-events status` (what the pass would use or waits for, and what the tables hold).
+
+`RunAgentEvents` (`agent_events_run.go`):
+
+- **What it reads.** Each conversation's units from labeling prepare's own pass (`labelsItemBuilder`), the cohorts
+  `agent_reply` and `thinking`: what the study's data held, without inherited history, mirrored work or unextracted
+  thinking. Every such message gets an `agent_event_messages` row, with or without candidates.
+- **What it scores again.** A message whose source and text (`input_hash`) or verifier differ from its stored row's.
+  A message whose only change is its time keeps its events, moved to the new day in both tables.
+  The verifier's identity is its model identity (as the labels ledger's) plus `jayhawk-window-v1`, the lexicon,
+  the units and the sentence versions; an imported row has no input hash, so the pass replaces it.
+- **Which conversations it looks at, newest first.** Those marked in `agent_events_dirty`, by the same triggers as
+  the labels ledger's (`itemDirtyTriggers`); those never built or whose structure fingerprint changed
+  (`agent_events_conversations`); those with rows another verifier made; and the forks of a conversation whose inputs
+changed, since what a fork inherited from its parent decides which replies are its own. A fork followed that way gets a
+dirty mark of its own, so a limited run that stops before it keeps it pending. Conversations that left the catalog lose
+  their rows.
+- **How it stores.** Candidates are gathered across conversations (512 at a time), scored in batches packed by length,
+  and stored with each conversation's ledger row in one transaction. A stop between chunks keeps what was stored and
+  kills the verifier's workers, so batches queued at them do not run on; the next run resumes. A finished run leaves
+  them warm for `labels_idle_seconds`.
+- **What it refuses.** A verifier trained on another lexicon, deciding at another threshold than the datasets'
+  (0.5), lacking a kind's definition or the `verdict` and `sentences` outputs.
+
 ### Import
 
-Until the model runs inside Pharos, events are imported from the study's predictions:
+Events can also be imported from the study's predictions; the pass scores those messages again:
 
 ```sh
 pharos --config LIBRARY.toml agent-events import FILE.jsonl
@@ -84,8 +137,41 @@ It reads first and writes after: the file, then each message once in a short sta
 events' texts but never its whole text; then one tracked write transaction (`writeTransaction`: the write gate, busy
 retries and the lease audit), which skips a message whose text changed since it was read.
 
+## Candidates and framing in Go
+
+`agent_event_candidates.go` makes the verifier's inputs inside Pharos, framing contract `jayhawk-window-v1`. The
+model's directory carries the contract (`FRAMING.md`), the Python oracle (`reference.py`) and an invented-string
+fixture, copied here as `testdata/agent-event-parity.json`:
+
+- `agentEventSentences`: a message's sentences, cut as `labeling prepare` cut the study's (`sentences-v1` over the
+  target pieces, secrets and unrecognized harness blocks left out).
+- `agentEventCandidates`: sentences outside fenced code with a cue for a product kind. The lexicon
+  (`agent_event_lexicon.json`, `jayhawk-lexicon-2`) is the model's `lexicon.json`. Cues are Python patterns with
+  Unicode `\w`, `\d` and `\b`; Go's are ASCII, so matching runs on a copy of the normalized sentence where non-ASCII
+  digits become `D` and other non-ASCII letters and numbers `X` (cues are lower-case ASCII, which the test checks).
+  A cue's pattern runs only when the sentence has one of the literals every match must contain.
+- `agentEventLines`: the header and window lines the verifier reads.
+- `agentEventFrame`: their tokens within the model's 768, as a `labeler.Framed` whose text span is the anchor's
+  tokens (the `pool` role) and whose `labeler.SegmentSpans` are each window line's (the `segment` role).
+
+The model's input contract is `ids-attention-pool-segments-v1` (`labeler.InputContracts`): `input_ids`,
+`attention_mask`, `pooling_mask` and `segment_ids`, which numbers the window's sentences 1…9 (16 at most) so the
+model pools each one. `labeler.LoadFramedModel` loads it with `agentEventFraming`: a framing that does not label needs
+no labels or thresholds, and the message labeler's `LoadModel` refuses it.
+
+`TestAgentEventCandidatesMatchReference` and `TestAgentEventFramingMatchesReference` check normalization, every cue's
+compiled pattern, matches, fences, clipping, lines, token ids, the budget (an anchor cut to fit, neighbours left out,
+the earlier of two neighbours kept) and the pool and segment inputs against the fixture exactly. On 4,000 of the
+study's messages (about 104,000 sentences, checked locally and not kept), sentences, clips and all 84,636 candidates
+matched the Python. `TestAgentEventModelParityWithWorker` runs the real model through the real worker
+(`PHAROS_AGENT_EVENTS_MODEL_DIR`, `PHAROS_LABELER_WORKER`, `PHAROS_ORT_LIBRARY`) and compares every output with the
+reference's; with ONNX Runtime 1.31.1 both variants match it exactly, in batches packed and padded as the runtime packs
+them.
+
 ## Next
 
-The model is to run on the local-labeler runtime (`docs/local-labeler.md`) as a second model beside the message
-labeler, with its own input contract (a `segment` input marks each window sentence's tokens), its own pass and the
-same tables. Risky actions are left to the tool-call history, where the actions themselves are recorded.
+- **Cost.** Scoring dominates: about 18 candidates a second on four CPU threads with the machine to itself, and the
+  study's October (100,000 agent messages, 524,000 candidates) would take about eight hours, some seventeen minutes a
+  day. The int8 export agrees with fp32 on 99.9% of decisions at the same F1.
+- **Not yet in the product:** how sure an event is, beyond the threshold and the probability the reader shows. Risky
+  actions are left to the tool-call history, where the actions themselves are recorded.

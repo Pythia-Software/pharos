@@ -1751,8 +1751,8 @@ function CatalogDashboard({ catalog, linkCatalog = catalog, dataset, name, defau
 
 // Agent Experience: events found in agents' replies and thinking (agent_events),
 // with rates over every agent message the pass read (agent_event_messages).
-// Until the model runs inside Pharos, events come from an import (pharos
-// agent-events import); an empty library says how to fill it.
+// Events come from the agent events pass on this Mac (the Settings switch);
+// an empty library says what fills it.
 const agentEventMessageFields = agentEventMessagesDocument.fields.map(field => field.name);
 const agentEventSummaryMetrics: AggregationClause[] = [
   { id: "events", op: "count", groupBy: [] },
@@ -1773,7 +1773,7 @@ function AgentExperienceSummary({ where }: { where: WhereTerm[] }) {
   const loading = events.loading || read.loading, error = events.error || read.error;
   const messages = value(events, "messages"), scanned = value(read, "read"), total = value(events, "events");
   const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{loading ? "Loading…" : error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
-  if (!loading && !error && !scanned) return <p className="usage-dashboard-note" role="status">No agent messages have been read for events yet. Import a study's predictions with <code>pharos agent-events import FILE</code>.</p>;
+  if (!loading && !error && !scanned) return <p className="usage-dashboard-note" role="status">No agent messages have been read for events yet. They are read in the background once Agent Experience is turned on in Settings → App preferences; the first run downloads a small model.</p>;
   return <div className="mcp-metrics dashboard-stats" aria-label="Agent Experience summary" aria-busy={loading}>
     {card("Events", total.toLocaleString(), "matching sentences in agents' replies and thinking")}
     {card("Messages with an event", scanned ? `${(100 * messages / scanned).toFixed(1)}%` : "—", `${messages.toLocaleString()} of ${scanned.toLocaleString()} agent messages read`)}

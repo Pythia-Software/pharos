@@ -360,8 +360,8 @@ func TestBrokerFetchesLabelsAssetsThenAsksLibrariesToLabel(t *testing.T) {
 	m.token = "app-token"
 	m.registry.Selected = "lib"
 	m.registry.Libraries = []registeredLibrary{{LibraryDescriptor: LibraryDescriptor{ID: "lib"}, Config: configPath}}
-	m.startLabelsFetch(LabelerSettings{Enabled: false})
-	m.startLabelsFetch(LabelerSettings{Enabled: true, ModelDir: t.TempDir()})
+	m.startLabelsFetch(LabelerSettings{Enabled: false}, AgentEventSettings{})
+	m.startLabelsFetch(LabelerSettings{Enabled: true, ModelDir: t.TempDir()}, AgentEventSettings{})
 	if len(m.operations.reg.views()) != 0 {
 		t.Fatal("a download started for a library without labels, or with its own model")
 	}

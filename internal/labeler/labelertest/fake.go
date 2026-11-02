@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -45,6 +46,31 @@ func fakeLabels(model string) int {
 	return 4
 }
 
+// FakeOutputWidths are the shapes past the batch of the outputs the fake
+// answers besides probs, the agent event verifier's.
+var FakeOutputWidths = map[string][]int{"verdict": {3}, "families": {24}, "sentences": {16, 2}}
+
+// fakeOutputs answers outputs other than probs: value k of a row's output is
+// the row's probs[k mod labels], so the first is FakeProb(pooled ids, 0).
+func fakeOutputs(names []string, probs []float32, batch, labels int) []labeler.Tensor {
+	tensors := []labeler.Tensor{}
+	for _, name := range names {
+		widths := FakeOutputWidths[name]
+		size := 1
+		for _, width := range widths {
+			size *= width
+		}
+		values := make([]float32, batch*size)
+		for row := range batch {
+			for k := range size {
+				values[row*size+k] = probs[row*labels+k%labels]
+			}
+		}
+		tensors = append(tensors, labeler.Tensor{Name: name, DType: labeler.DTypeFloat32, Dims: append([]int{batch}, widths...), Float32: values})
+	}
+	return tensors
+}
+
 // FakeWorker speaks pharos-labeler/1 with a stand-in model: probs[j] of a row
 // is FakeProb of its real tokens (those its pool input marks, when the hello
 // declares one), over the labels of the manifest.json beside
@@ -78,7 +104,7 @@ func FakeWorker(mode string) int {
 		return 3
 	}
 	ready := labeler.Ready{Protocol: labeler.ProtocolVersion, Worker: labeler.WorkerInfo{Name: "fake", Version: "1", Runtime: "none"}}
-	ready.Limits.MaxBatch, ready.Limits.MaxSeq = 64, 512
+	ready.Limits.MaxBatch, ready.Limits.MaxSeq = 64, max(512, hello.MaxSeq)
 	writeJSON(labeler.FrameReady, ready)
 	if mode == "deaf" {
 		time.Sleep(time.Hour) // until killed
@@ -108,7 +134,7 @@ func FakeWorker(mode string) int {
 		case labeler.FrameRun:
 			req, err := labeler.DecodeRun(payload)
 			if err == nil {
-				err = labeler.ValidateRun(req, hello.RunInputs(), hello.VocabSize, 64, 512)
+				err = labeler.ValidateRun(req, hello.RunInputs(), hello.VocabSize, 64, ready.Limits.MaxSeq)
 			}
 			if err != nil {
 				writeJSON(labeler.FrameError, labeler.ErrorReply{ID: req.ID, Code: labeler.ErrCodeBadRequest, Message: err.Error()})
@@ -163,7 +189,11 @@ func FakeWorker(mode string) int {
 				}
 				_ = os.WriteFile(counter, []byte(strconv.Itoa(done+1)), 0o600)
 			}
-			out, _ := labeler.EncodeResult(&labeler.RunResult{ID: req.ID, Outputs: []labeler.Tensor{{Name: "probs", DType: labeler.DTypeFloat32, Dims: []int{batch, labels}, Float32: probs}}})
+			outputs := []labeler.Tensor{{Name: "probs", DType: labeler.DTypeFloat32, Dims: []int{batch, labels}, Float32: probs}}
+			if !slices.Contains(req.Outputs, "probs") && len(req.Outputs) > 0 {
+				outputs = fakeOutputs(req.Outputs, probs, batch, labels)
+			}
+			out, _ := labeler.EncodeResult(&labeler.RunResult{ID: req.ID, Outputs: outputs})
 			write(labeler.FrameResult, out)
 		default:
 			writeJSON(labeler.FrameError, labeler.ErrorReply{Code: labeler.ErrCodeUnsupported, Message: fmt.Sprintf("frame %q", kind)})
