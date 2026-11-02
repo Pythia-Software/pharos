@@ -11,6 +11,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -74,6 +75,16 @@ CREATE TABLE IF NOT EXISTS agent_events (
 CREATE INDEX IF NOT EXISTS agent_events_message_idx ON agent_events(message_id);
 CREATE INDEX IF NOT EXISTS agent_events_day_idx ON agent_events(day, family);
 CREATE INDEX IF NOT EXISTS agent_events_conversation_idx ON agent_events(conversation_id);
+-- A message that is deleted, or whose text changes, loses its rows: they
+-- were scored on text it no longer has (the pass reads it again).
+CREATE TRIGGER IF NOT EXISTS agent_events_message_deleted AFTER DELETE ON messages BEGIN
+  DELETE FROM agent_events WHERE message_id=OLD.id;
+  DELETE FROM agent_event_messages WHERE message_id=OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS agent_events_message_text AFTER UPDATE OF text ON messages WHEN OLD.text IS NOT NEW.text BEGIN
+  DELETE FROM agent_events WHERE message_id=OLD.id;
+  DELETE FROM agent_event_messages WHERE message_id=OLD.id;
+END;
 `
 
 // agentEventThreshold is the probability at or above which a scored
@@ -159,7 +170,8 @@ var agentEventDataset = func() sqlDataset {
 		"probability":  "e.probability",
 		"sentence":     "e.sentence", "subject": "e.subject", "response": "e.response",
 		"has_subject": "(e.subject<>'' AND e.subject<>e.sentence)", "has_response": "(e.response<>'')",
-		"occurred_at": "e.occurred_at", "day": "e.day", "week": "date(e.day,'-6 days','weekday 1')", "month": "substr(e.day,1,7)",
+		// Days in this Mac's time zone when read, as the other datasets.
+		"occurred_at": "e.occurred_at", "day": "date(e.occurred_at,'localtime')", "week": "date(e.occurred_at,'localtime','-6 days','weekday 1')", "month": "strftime('%Y-%m',e.occurred_at,'localtime')",
 		"event_count": "1",
 		"event_model": "e.model",
 	}
@@ -168,7 +180,7 @@ var agentEventDataset = func() sqlDataset {
 			LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id`,
 		base:      fmt.Sprintf("e.probability>=%g", agentEventThreshold),
 		countFrom: "FROM agent_events e", countAlias: "e",
-		lookups:    map[string]bool{"message_id": true, "conversation_id": true, "day": true},
+		lookups:    map[string]bool{"message_id": true, "conversation_id": true},
 		columns:    columns,
 		timestamps: map[string]string{"occurred_at": "e.occurred_at"},
 		optionalJoins: map[string]string{
@@ -193,14 +205,14 @@ var agentEventMessageDataset = func() sqlDataset {
 		"events":        "a.events",
 		"has_event":     "(a.events>0)",
 		"message_count": "1",
-		"occurred_at":   "a.occurred_at", "day": "a.day", "week": "date(a.day,'-6 days','weekday 1')", "month": "substr(a.day,1,7)",
+		"occurred_at":   "a.occurred_at", "day": "date(a.occurred_at,'localtime')", "week": "date(a.occurred_at,'localtime','-6 days','weekday 1')", "month": "strftime('%Y-%m',a.occurred_at,'localtime')",
 		"event_model": "a.model",
 	}
 	return sqlDataset{
 		from: `FROM agent_event_messages a JOIN conversations c ON c.id=a.conversation_id LEFT JOIN messages m ON m.id=a.message_id
 			LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id`,
 		countFrom: "FROM agent_event_messages a", countAlias: "a",
-		lookups:    map[string]bool{"id": true, "message_id": true, "conversation_id": true, "day": true},
+		lookups:    map[string]bool{"id": true, "message_id": true, "conversation_id": true},
 		columns:    columns,
 		timestamps: map[string]string{"occurred_at": "a.occurred_at"},
 		optionalJoins: map[string]string{
@@ -234,30 +246,49 @@ type agentEventImportLine struct {
 
 // AgentEventImport reports what an import wrote and what it skipped.
 type AgentEventImport struct {
-	Model            string         `json:"model"`
-	Lexicon          string         `json:"lexicon"`
-	Messages         int            `json:"messages"`
-	Events           int            `json:"events_scored"`
-	EventsAtCutoff   int            `json:"events_at_threshold"`
+	Model          string `json:"model"`
+	Lexicon        string `json:"lexicon"`
+	Messages       int    `json:"messages"`
+	Events         int    `json:"events_scored"`
+	EventsAtCutoff int    `json:"events_at_threshold"`
+	// Duplicates are lines for a message or event an earlier line in the
+	// file already gave; the last one counts.
+	Duplicates       int            `json:"duplicate_lines"`
 	SkippedMissing   int            `json:"skipped_missing_message"`
 	SkippedChanged   int            `json:"skipped_changed_text"`
 	SkippedFamily    int            `json:"skipped_family"`
 	SkippedRange     int            `json:"skipped_bad_range"`
+	SkippedInvalid   int            `json:"skipped_invalid"`
 	SkippedUnscanned int            `json:"skipped_event_without_message"`
 	ByFamily         map[string]int `json:"events_at_threshold_by_family"`
 }
 
-type agentEventMessage struct {
-	conversationID, occurredAt, day string
+// agentEventImportMessage is a message the file scanned, as checked against
+// the catalog: its row's metadata, and its events with their texts.
+type agentEventImportMessage struct {
+	line                                  agentEventImportLine
+	conversationID, occurredAt, day, hash string
+	length                                int64
+	events                                []agentEventImportEvent
+}
+
+type agentEventImportEvent struct {
+	line                        agentEventImportLine
+	sentence, subject, response string
 }
 
 // ImportAgentEvents replaces the events of every message in the file with the
 // file's. A message must exist with the same text (by SHA-256) it was scored
-// on; ranges must fall on UTF-8 boundaries of that text. A message the file
-// names that is gone or whose text changed loses the events an earlier import
-// stored for it. Blank lines are ignored. Everything is written in one
-// transaction. Only a message's metadata is kept while the file is read; its
-// text is read again, one message at a time, to check its events' ranges.
+// on and a source of reply or thinking; an event needs a reported kind, a
+// probability in [0, 1] and ranges on UTF-8 boundaries of that text. Of
+// repeated lines for one message, or one (message, sentence, kind), the last
+// counts. A message the file names that is gone or whose text changed loses
+// the events an earlier import stored for it. Blank lines are ignored.
+//
+// The file and the messages are read first, in short statements, keeping
+// each message's metadata and its events' texts, never its whole text; the
+// writes are then one tracked write transaction, which checks that no
+// message changed since it was read.
 func (c *Catalog) ImportAgentEvents(ctx context.Context, path string) (AgentEventImport, error) {
 	result := AgentEventImport{ByFamily: map[string]int{}}
 	file, err := os.Open(path)
@@ -294,50 +325,13 @@ func (c *Catalog) ImportAgentEvents(ctx context.Context, path string) (AgentEven
 	}
 	result.Model, result.Lexicon = header.Model, header.Lexicon
 
-	tx, err := c.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return result, err
+	// 1. The file: the last line for each message and each event.
+	type eventKey struct {
+		message, family string
+		start           int
 	}
-	defer tx.Rollback()
-	lookup, err := tx.PrepareContext(ctx, `SELECT conversation_id, text, COALESCE(created_at,'') FROM messages WHERE id=?`)
-	if err != nil {
-		return result, err
-	}
-	defer lookup.Close()
-	// messages holds what each resolved message's rows need; skipped the
-	// messages whose stored events must go.
-	messages, skipped := map[string]*agentEventMessage{}, map[string]bool{}
-	resolve := func(line agentEventImportLine) (*agentEventMessage, error) {
-		if cached, ok := messages[line.MessageID]; ok {
-			return cached, nil
-		}
-		if skipped[line.MessageID] {
-			return nil, nil
-		}
-		var m agentEventMessage
-		var text string
-		if err := lookup.QueryRowContext(ctx, line.MessageID).Scan(&m.conversationID, &text, &m.occurredAt); err != nil {
-			if err == sql.ErrNoRows {
-				result.SkippedMissing++
-				skipped[line.MessageID] = true
-				return nil, nil
-			}
-			return nil, fmt.Errorf("message %s: %w", line.MessageID, err)
-		}
-		sum := sha256.Sum256([]byte(text))
-		if hex.EncodeToString(sum[:]) != line.MessageSHA256 {
-			result.SkippedChanged++
-			skipped[line.MessageID] = true
-			return nil, nil
-		}
-		if at, ok := parseTime(m.occurredAt); ok {
-			m.day = at.Local().Format("2006-01-02")
-		}
-		messages[line.MessageID] = &m
-		return &m, nil
-	}
-	var events []agentEventImportLine
-	scanned := map[string]agentEventImportLine{}
+	scanned, hashes := map[string]agentEventImportLine{}, map[string]string{}
+	events, order := map[eventKey]agentEventImportLine{}, []eventKey{}
 	for {
 		line, ok, err := readLine()
 		if err != nil {
@@ -348,110 +342,171 @@ func (c *Catalog) ImportAgentEvents(ctx context.Context, path string) (AgentEven
 		}
 		switch line.Kind {
 		case "message":
-			if m, err := resolve(line); err != nil {
-				return result, err
-			} else if m != nil {
-				scanned[line.MessageID] = line
+			if line.Source != "reply" && line.Source != "thinking" {
+				result.SkippedInvalid++
+				continue
 			}
+			if _, seen := scanned[line.MessageID]; seen {
+				result.Duplicates++
+			}
+			scanned[line.MessageID], hashes[line.MessageID] = line, line.MessageSHA256
 		case "event":
 			if _, ok := agentEventFamilyByKey(line.Family); !ok {
 				result.SkippedFamily++
 				continue
 			}
-			if m, err := resolve(line); err != nil {
-				return result, err
-			} else if m != nil {
-				events = append(events, line)
+			if !(line.Probability >= 0 && line.Probability <= 1) {
+				result.SkippedInvalid++
+				continue
+			}
+			key := eventKey{line.MessageID, line.Family, line.Sentence[0]}
+			if _, seen := events[key]; seen {
+				result.Duplicates++
+			} else {
+				order = append(order, key)
+			}
+			events[key] = line
+			if hashes[line.MessageID] == "" {
+				hashes[line.MessageID] = line.MessageSHA256
 			}
 		}
 	}
+
+	// 2. The messages, one short read each: their metadata, and their
+	// events' texts checked against the text they were scored on.
+	ids := make([]string, 0, len(hashes))
+	for id := range hashes {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	byMessage := map[string][]agentEventImportLine{}
+	for _, key := range order {
+		byMessage[key.message] = append(byMessage[key.message], events[key])
+	}
+	messages, skipped := map[string]*agentEventImportMessage{}, []string{}
+	for _, id := range ids {
+		var m agentEventImportMessage
+		var text, contentHash string
+		err := c.DB.QueryRowContext(ctx, `SELECT conversation_id, text, COALESCE(created_at,''), COALESCE(content_hash,'') FROM messages WHERE id=?`, id).
+			Scan(&m.conversationID, &text, &m.occurredAt, &contentHash)
+		switch {
+		case err == sql.ErrNoRows:
+			result.SkippedMissing++
+			skipped = append(skipped, id)
+			continue
+		case err != nil:
+			return result, fmt.Errorf("message %s: %w", id, err)
+		}
+		sum := sha256.Sum256([]byte(text))
+		if hex.EncodeToString(sum[:]) != hashes[id] {
+			result.SkippedChanged++
+			skipped = append(skipped, id)
+			continue
+		}
+		line, ok := scanned[id]
+		if !ok {
+			result.SkippedUnscanned += len(byMessage[id])
+			continue
+		}
+		m.line, m.hash, m.length = line, contentHash, int64(len(text))
+		if at, ok := parseTime(m.occurredAt); ok {
+			m.day = at.Local().Format("2006-01-02")
+		}
+		for _, event := range byMessage[id] {
+			if event.MessageSHA256 != hashes[id] {
+				result.SkippedChanged++
+				continue
+			}
+			sentence, ok := agentEventText(text, [][2]int{event.Sentence})
+			subject, ok1 := agentEventText(text, event.Subject)
+			response, ok2 := agentEventText(text, event.Response)
+			if !ok || !ok1 || !ok2 {
+				result.SkippedRange++
+				continue
+			}
+			m.events = append(m.events, agentEventImportEvent{event, sentence, subject, response})
+		}
+		messages[id] = &m
+	}
+
+	// 3. One tracked write. A message that changed since step 2 is skipped
+	// like one that changed before it.
+	read := result
 	now := formatTime(time.Now())
-	// A skipped message keeps no events from an earlier import: they were
-	// scored on text it no longer has.
-	for id := range skipped {
-		for _, statement := range []string{`DELETE FROM agent_events WHERE message_id=?`, `DELETE FROM agent_event_messages WHERE message_id=?`} {
-			if _, err := tx.ExecContext(ctx, statement, id); err != nil {
-				return result, err
+	err = c.writeTransaction(ctx, "import agent events", func(tx *sql.Tx) error {
+		result = read
+		result.ByFamily = map[string]int{}
+		drop := func(id string) error {
+			for _, statement := range []string{`DELETE FROM agent_events WHERE message_id=?`, `DELETE FROM agent_event_messages WHERE message_id=?`} {
+				if _, err := tx.ExecContext(ctx, statement, id); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		for _, id := range skipped {
+			if err := drop(id); err != nil {
+				return err
 			}
 		}
-	}
-	clear, err := tx.PrepareContext(ctx, `DELETE FROM agent_events WHERE message_id=?`)
-	if err != nil {
-		return result, err
-	}
-	defer clear.Close()
-	insertMessage, err := tx.PrepareContext(ctx, `INSERT INTO agent_event_messages(message_id,conversation_id,source,occurred_at,day,candidates,events,model,lexicon,imported_at)
-		VALUES(?,?,?,?,?,?,0,?,?,?) ON CONFLICT(message_id) DO UPDATE SET conversation_id=excluded.conversation_id, source=excluded.source,
-		occurred_at=excluded.occurred_at, day=excluded.day, candidates=excluded.candidates, events=0, model=excluded.model, lexicon=excluded.lexicon, imported_at=excluded.imported_at`)
-	if err != nil {
-		return result, err
-	}
-	defer insertMessage.Close()
-	for id, line := range scanned {
-		m := messages[id]
-		if _, err := clear.ExecContext(ctx, id); err != nil {
-			return result, err
+		insertMessage, err := tx.PrepareContext(ctx, `INSERT INTO agent_event_messages(message_id,conversation_id,source,occurred_at,day,candidates,events,model,lexicon,imported_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(message_id) DO UPDATE SET conversation_id=excluded.conversation_id, source=excluded.source,
+			occurred_at=excluded.occurred_at, day=excluded.day, candidates=excluded.candidates, events=excluded.events, model=excluded.model,
+			lexicon=excluded.lexicon, imported_at=excluded.imported_at`)
+		if err != nil {
+			return err
 		}
-		if _, err := insertMessage.ExecContext(ctx, id, m.conversationID, line.Source, nilIfEmpty(m.occurredAt), nilIfEmpty(m.day), line.Candidates, header.Model, header.Lexicon, now); err != nil {
-			return result, err
+		defer insertMessage.Close()
+		insertEvent, err := tx.PrepareContext(ctx, `INSERT INTO agent_events(message_id,conversation_id,source,occurred_at,day,family,probability,
+			sentence_start,sentence_end,sentence,subject,response,subject_ranges,response_ranges,model) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+		if err != nil {
+			return err
 		}
-		result.Messages++
-	}
-	insertEvent, err := tx.PrepareContext(ctx, `INSERT INTO agent_events(message_id,conversation_id,source,occurred_at,day,family,probability,
-		sentence_start,sentence_end,sentence,subject,response,subject_ranges,response_ranges,model) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(message_id,sentence_start,family) DO UPDATE SET probability=excluded.probability, sentence_end=excluded.sentence_end,
-		sentence=excluded.sentence, subject=excluded.subject, response=excluded.response, subject_ranges=excluded.subject_ranges,
-		response_ranges=excluded.response_ranges, model=excluded.model`)
-	if err != nil {
-		return result, err
-	}
-	defer insertEvent.Close()
-	// One message's text at a time, its events together.
-	sort.SliceStable(events, func(i, j int) bool { return events[i].MessageID < events[j].MessageID })
-	textOf := struct{ id, text string }{}
-	for _, line := range events {
-		m := messages[line.MessageID]
-		scan, ok := scanned[line.MessageID]
-		if !ok {
-			result.SkippedUnscanned++
-			continue
-		}
-		if textOf.id != line.MessageID {
-			var conversation, at string
-			textOf.id = line.MessageID
-			if err := lookup.QueryRowContext(ctx, line.MessageID).Scan(&conversation, &textOf.text, &at); err != nil {
-				return result, fmt.Errorf("message %s: %w", line.MessageID, err)
+		defer insertEvent.Close()
+		for _, id := range ids {
+			m := messages[id]
+			if m == nil {
+				continue
 			}
+			var hash string
+			var length int64
+			if err := tx.QueryRowContext(ctx, `SELECT COALESCE(content_hash,''), length(CAST(text AS BLOB)) FROM messages WHERE id=?`, id).Scan(&hash, &length); err != nil || hash != m.hash || length != m.length {
+				if err != nil && err != sql.ErrNoRows {
+					return err
+				}
+				result.SkippedChanged++
+				if err := drop(id); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := drop(id); err != nil {
+				return err
+			}
+			atThreshold := 0
+			for _, event := range m.events {
+				subjectRanges, _ := json.Marshal(nonNilRanges(event.line.Subject))
+				responseRanges, _ := json.Marshal(nonNilRanges(event.line.Response))
+				if _, err := insertEvent.ExecContext(ctx, id, m.conversationID, m.line.Source, nilIfEmpty(m.occurredAt), nilIfEmpty(m.day), event.line.Family, event.line.Probability,
+					event.line.Sentence[0], event.line.Sentence[1], event.sentence, event.subject, event.response, string(subjectRanges), string(responseRanges), header.Model); err != nil {
+					return err
+				}
+				result.Events++
+				if event.line.Probability >= agentEventThreshold {
+					atThreshold++
+					result.EventsAtCutoff++
+					result.ByFamily[event.line.Family]++
+				}
+			}
+			if _, err := insertMessage.ExecContext(ctx, id, m.conversationID, m.line.Source, nilIfEmpty(m.occurredAt), nilIfEmpty(m.day), m.line.Candidates,
+				atThreshold, header.Model, header.Lexicon, now); err != nil {
+				return err
+			}
+			result.Messages++
 		}
-		text := textOf.text
-		sentence, ok := agentEventText(text, [][2]int{line.Sentence})
-		if !ok {
-			result.SkippedRange++
-			continue
-		}
-		subject, ok1 := agentEventText(text, line.Subject)
-		response, ok2 := agentEventText(text, line.Response)
-		if !ok1 || !ok2 {
-			result.SkippedRange++
-			continue
-		}
-		subjectRanges, _ := json.Marshal(nonNilRanges(line.Subject))
-		responseRanges, _ := json.Marshal(nonNilRanges(line.Response))
-		if _, err := insertEvent.ExecContext(ctx, line.MessageID, m.conversationID, scan.Source, nilIfEmpty(m.occurredAt), nilIfEmpty(m.day), line.Family, line.Probability,
-			line.Sentence[0], line.Sentence[1], sentence, subject, response, string(subjectRanges), string(responseRanges), header.Model); err != nil {
-			return result, err
-		}
-		result.Events++
-		if line.Probability >= agentEventThreshold {
-			result.EventsAtCutoff++
-			result.ByFamily[line.Family]++
-		}
-	}
-	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`UPDATE agent_event_messages SET events=(SELECT count(*) FROM agent_events e
-		WHERE e.message_id=agent_event_messages.message_id AND e.probability>=%g) WHERE imported_at=?`, agentEventThreshold), now); err != nil {
-		return result, err
-	}
-	return result, tx.Commit()
+		return nil
+	})
+	return result, err
 }
 
 // agentEventText joins the text of byte ranges in order, with a space
@@ -482,10 +537,12 @@ func nonNilRanges(ranges [][2]int) [][2]int {
 // agentEventsAttacher gives the conversation reader each agent message's
 // events (at or above agentEventThreshold): kind, label, group, probability,
 // and the sentence, subject and response as ranges of the message's text in
-// UTF-16 code units, JavaScript's string indexes. summary is nil for a
-// conversation the pass never read, so the reader shows no Events control.
+// UTF-16 code units, JavaScript's string indexes. An event whose sentence is
+// not where it was found (text changed since it was scored) is left out.
+// summary is nil for a conversation the pass never read, so the reader shows
+// no Events control.
 func (c *Catalog) agentEventsAttacher(conversationID any) (attach func(map[string]any), summary func() (map[string]any, error), err error) {
-	rows, err := queryMaps(c.reader(), `SELECT message_id,family,probability,sentence_start,sentence_end,subject_ranges,response_ranges
+	rows, err := queryMaps(c.reader(), `SELECT message_id,family,probability,sentence_start,sentence_end,sentence,subject_ranges,response_ranges
 		FROM agent_events WHERE conversation_id=? AND probability>=? ORDER BY message_id,sentence_start,probability DESC`, conversationID, agentEventThreshold)
 	if err != nil {
 		return nil, nil, err
@@ -501,29 +558,49 @@ func (c *Catalog) agentEventsAttacher(conversationID any) (attach func(map[strin
 		if len(events) == 0 || !ok {
 			return
 		}
-		out := []map[string]any{}
+		type found struct {
+			row               map[string]any
+			family            agentEventFamily
+			sentence          [2]int
+			subject, response [][2]int
+		}
+		kept, offsets := []found{}, []int{}
 		for _, row := range events {
 			family, known := agentEventFamilyByKey(firstString(row["family"]))
-			if !known {
-				continue
-			}
-			ranges := func(raw any) ([][2]int, bool) {
+			event := found{row: row, family: family, sentence: [2]int{int(integer(row["sentence_start"])), int(integer(row["sentence_end"]))}}
+			parse := func(raw any) ([][2]int, bool) {
 				var list [][2]int
-				if json.Unmarshal([]byte(firstString(raw)), &list) != nil {
-					return nil, false
-				}
-				return utf16Ranges(text, list)
+				return list, json.Unmarshal([]byte(firstString(raw)), &list) == nil
 			}
-			sentence, ok1 := utf16Ranges(text, [][2]int{{int(integer(row["sentence_start"])), int(integer(row["sentence_end"]))}})
-			subject, ok2 := ranges(row["subject_ranges"])
-			response, ok3 := ranges(row["response_ranges"])
-			if !ok1 || !ok2 || !ok3 {
+			var ok1, ok2 bool
+			event.subject, ok1 = parse(row["subject_ranges"])
+			event.response, ok2 = parse(row["response_ranges"])
+			sentence, inText := agentEventText(text, [][2]int{event.sentence})
+			if !known || !ok1 || !ok2 || !inText || sentence != firstString(row["sentence"]) {
 				// Scored on text the message no longer has.
 				continue
 			}
-			probability, _ := row["probability"].(float64)
-			out = append(out, map[string]any{"kind": family.Key, "label": family.Label, "group": family.Group, "definition": family.Definition,
-				"probability": math.Round(probability*1000) / 1000, "sentence": sentence[0], "subject": subject, "response": response})
+			kept = append(kept, event)
+			for _, r := range append(append([][2]int{event.sentence}, event.subject...), event.response...) {
+				offsets = append(offsets, r[0], r[1])
+			}
+		}
+		units, ok := utf16Offsets(text, offsets)
+		if !ok {
+			return
+		}
+		convert := func(ranges [][2]int) [][2]int {
+			out := make([][2]int, len(ranges))
+			for k, r := range ranges {
+				out[k] = [2]int{units[r[0]], units[r[1]]}
+			}
+			return out
+		}
+		out := []map[string]any{}
+		for _, event := range kept {
+			probability, _ := event.row["probability"].(float64)
+			out = append(out, map[string]any{"kind": event.family.Key, "label": event.family.Label, "group": event.family.Group, "definition": event.family.Definition,
+				"probability": math.Round(probability*1000) / 1000, "sentence": convert([][2]int{event.sentence})[0], "subject": convert(event.subject), "response": convert(event.response)})
 		}
 		if len(out) > 0 {
 			message["agent_events"] = out
@@ -543,24 +620,28 @@ func (c *Catalog) agentEventsAttacher(conversationID any) (attach func(map[strin
 	return attach, summary, nil
 }
 
-// utf16Ranges turns byte ranges of text into UTF-16 code unit ranges. ok is
-// false when a range is out of bounds or splits a character.
-func utf16Ranges(text string, ranges [][2]int) ([][2]int, bool) {
-	out := make([][2]int, 0, len(ranges))
-	for _, r := range ranges {
-		if r[0] < 0 || r[1] > len(text) || r[0] > r[1] || !utf8.ValidString(text[:r[0]]) || !utf8.ValidString(text[r[0]:r[1]]) {
+// utf16Offsets maps UTF-8 byte offsets of text to UTF-16 code unit offsets,
+// in one pass over text. ok is false when an offset is outside text or not
+// at the start of a character.
+func utf16Offsets(text string, offsets []int) (map[int]int, bool) {
+	wanted := slices.Clone(offsets)
+	slices.Sort(wanted)
+	wanted = slices.Compact(wanted)
+	units := make(map[int]int, len(wanted))
+	at, unit := 0, 0
+	for _, offset := range wanted {
+		if offset < 0 || offset > len(text) {
 			return nil, false
 		}
-		start := utf16Length(text[:r[0]])
-		out = append(out, [2]int{start, start + utf16Length(text[r[0]:r[1]])})
+		for at < offset {
+			r, size := utf8.DecodeRuneInString(text[at:])
+			at += size
+			unit += utf16.RuneLen(r)
+		}
+		if at != offset {
+			return nil, false
+		}
+		units[offset] = unit
 	}
-	return out, true
-}
-
-func utf16Length(text string) int {
-	n := 0
-	for _, r := range text {
-		n += utf16.RuneLen(r)
-	}
-	return n
+	return units, true
 }

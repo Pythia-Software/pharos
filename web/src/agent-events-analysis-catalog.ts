@@ -1,5 +1,6 @@
 import type { WhereTerm } from "@pythia-software/query-table-core";
 import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-model";
+import kinds from "./agent-event-kinds.json";
 
 // Agent Experience over agent_events: one record is one event, a sentence in
 // an agent's visible reply or thinking that a model judged to express one kind
@@ -11,31 +12,11 @@ import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-mode
 const count = { kind: "number", decimals: 0 } as const, percent = { kind: "percent", decimals: 1 } as const;
 const present = (field: string): WhereTerm[] => [{ field, op: "is_not_null", value: "" }, { field, op: "!=", value: "" }];
 
-// The kinds in the order the dashboard groups them, with their labels.
-export const agentEventGroups = ["Friction", "Reactions and learning", "Worth a second look", "Choices you may not see"] as const;
-export const agentEventKinds: Array<{ key: string; label: string; group: typeof agentEventGroups[number] }> = [
-  { key: "obstacle", label: "Obstacle or roadblock", group: "Friction" },
-  { key: "env_friction", label: "Environment friction", group: "Friction" },
-  { key: "stale_guidance", label: "Out-of-date docs or instructions", group: "Friction" },
-  { key: "preexisting_failure", label: "Pre-existing or flaky failure", group: "Friction" },
-  { key: "missing_capability", label: "Missing tool or capability", group: "Friction" },
-  { key: "ambiguous_request", label: "Unclear or conflicting instructions", group: "Friction" },
-  { key: "stuck", label: "Stuck", group: "Friction" },
-  { key: "gave_up", label: "Giving up or handing back", group: "Friction" },
-  { key: "discovery", label: "Discovery", group: "Reactions and learning" },
-  { key: "confusion", label: "Confusion", group: "Reactions and learning" },
-  { key: "surprise", label: "Surprise", group: "Reactions and learning" },
-  { key: "own_mistake", label: "Own mistake or correction", group: "Reactions and learning" },
-  { key: "unblocking_insight", label: "Lesson that unblocked progress", group: "Reactions and learning" },
-  { key: "circumventing_constraint", label: "Getting around an instruction or safeguard", group: "Worth a second look" },
-  { key: "risk_flagged", label: "Risk raised", group: "Choices you may not see" },
-  { key: "deferred", label: "Deferred or skipped work", group: "Choices you may not see" },
-  { key: "workaround", label: "Workaround", group: "Choices you may not see" },
-  { key: "unverified", label: "Unchecked claim", group: "Choices you may not see" },
-  { key: "assumption", label: "Assumption", group: "Choices you may not see" },
-  { key: "tech_debt", label: "Technical debt noticed", group: "Choices you may not see" },
-  { key: "pushback", label: "Disagreeing with the user", group: "Choices you may not see" },
-];
+// The kinds in the order the dashboard groups them, with their labels and
+// groups: Go's agentEventFamilies, which writes agent-event-kinds.json
+// (TestAgentEventKindsAgreeEverywhere).
+export const agentEventGroups: readonly string[] = kinds.groups;
+export const agentEventKinds: ReadonlyArray<{ key: string; label: string; group: string }> = kinds.kinds;
 const kindLabel = new Map(agentEventKinds.map(kind => [kind.key, kind.label]));
 export const agentEventKindLabel = (key: string) => kindLabel.get(key) ?? key;
 

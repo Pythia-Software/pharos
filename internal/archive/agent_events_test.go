@@ -49,6 +49,13 @@ func TestImportAgentEventsChecksMessagesAndRanges(t *testing.T) {
 			"sentence": [2]int{0, curly}, "subject": [][2]int{}, "response": [][2]int{}},
 		{"kind": "event", "message_id": "m1", "message_sha256": sum(text), "family": "risky_action", "probability": 0.99,
 			"sentence": [2]int{0, first}, "subject": [][2]int{}, "response": [][2]int{}},
+		// A repeated event counts once; a source or probability out of range
+		// is skipped.
+		{"kind": "event", "message_id": "m1", "message_sha256": sum(text), "family": "workaround", "probability": 0.92,
+			"sentence": [2]int{first + 1, len(text)}, "subject": [][2]int{{0, first}}, "response": [][2]int{{first + 1, len(text)}}},
+		{"kind": "message", "message_id": "m2", "message_sha256": sum(other), "source": "visible", "candidates": 1},
+		{"kind": "event", "message_id": "m1", "message_sha256": sum(text), "family": "stuck", "probability": 1.5,
+			"sentence": [2]int{0, first}, "subject": [][2]int{}, "response": [][2]int{}},
 	}
 	path := filepath.Join(t.TempDir(), "events.jsonl")
 	file, err := os.Create(path)
@@ -68,8 +75,12 @@ func TestImportAgentEventsChecksMessagesAndRanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result.Messages != 1 || result.Events != 2 || result.EventsAtCutoff != 1 || result.SkippedChanged != 1 || result.SkippedMissing != 1 ||
-		result.SkippedRange != 1 || result.SkippedFamily != 1 {
+		result.SkippedRange != 1 || result.SkippedFamily != 1 || result.Duplicates != 1 || result.SkippedInvalid != 2 {
 		t.Fatalf("import = %+v", result)
+	}
+	var stored int
+	if err := catalog.DB.QueryRow(`SELECT COUNT(*) FROM agent_events`).Scan(&stored); err != nil || stored != result.Events {
+		t.Fatalf("%d events stored, the import says %d (%v)", stored, result.Events, err)
 	}
 	var sentence, subject, day string
 	var events int
@@ -111,6 +122,19 @@ func TestImportAgentEventsChecksMessagesAndRanges(t *testing.T) {
 		}
 		if summary, _ := conversation["agent_events"].(map[string]any); summary["messages_read"] != 1 || summary["messages_with_events"] != 1 {
 			t.Fatalf("reader summary = %v", conversation["agent_events"])
+		}
+	}
+
+	// The reader leaves out an event whose sentence is no longer where it was
+	// found.
+	execTx(t, catalog.DB, `UPDATE agent_events SET sentence='Something else entirely.' WHERE message_id='m1'`)
+	conversation, err := catalog.workConversation("w", "c", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range conversation["messages"].([]map[string]any) {
+		if message["id"] == "m1" && message["agent_events"] != nil {
+			t.Fatalf("an event on moved text reached the reader: %v", message["agent_events"])
 		}
 	}
 
@@ -158,12 +182,62 @@ func TestImportAgentEventsChecksMessagesAndRanges(t *testing.T) {
 		left != 0 || changed.SkippedChanged != 1 {
 		t.Fatalf("after the text changed: %d rows left, import %+v (%v)", left, changed, err)
 	}
+
+	// A message whose text changes, or that is deleted, loses its rows at
+	// once, before any import: they were scored on text it no longer has.
+	if _, err := catalog.DB.Exec(`UPDATE messages SET text=? WHERE id='m1'`, text); err != nil {
+		t.Fatal(err)
+	}
+	write(lines)
+	if _, err := catalog.ImportAgentEvents(context.Background(), path); err != nil {
+		t.Fatal(err)
+	}
+	rows := func(id string) int {
+		var n int
+		_ = catalog.DB.QueryRow(`SELECT (SELECT COUNT(*) FROM agent_events WHERE message_id=?)+(SELECT COUNT(*) FROM agent_event_messages WHERE message_id=?)`, id, id).Scan(&n)
+		return n
+	}
+	if rows("m1") == 0 {
+		t.Fatal("the restored text's events were not imported")
+	}
+	execTx(t, catalog.DB, `UPDATE messages SET created_at='2026-10-22T15:00:00.000Z' WHERE id='m1'`)
+	if rows("m1") == 0 {
+		t.Fatal("a change other than the text dropped the events")
+	}
+	execTx(t, catalog.DB, `UPDATE messages SET text='Edited.' WHERE id='m1'`)
+	if n := rows("m1"); n != 0 {
+		t.Fatalf("an edited message kept %d rows", n)
+	}
+	if _, err := catalog.DB.Exec(`UPDATE messages SET text=? WHERE id='m1'`, text); err != nil {
+		t.Fatal(err)
+	}
+	write(lines)
+	if _, err := catalog.ImportAgentEvents(context.Background(), path); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, catalog.DB, `DELETE FROM messages WHERE id='m1'`)
+	if n := rows("m1"); n != 0 {
+		t.Fatalf("a deleted message kept %d rows", n)
+	}
+}
+
+func TestUTF16OffsetsFollowCharacters(t *testing.T) {
+	text := "a🚧b’c"
+	units, ok := utf16Offsets(text, []int{0, 1, 5, 6, 9, len(text), 5})
+	if !ok || units[0] != 0 || units[1] != 1 || units[5] != 3 || units[6] != 4 || units[9] != 5 || units[len(text)] != 6 {
+		t.Fatalf("offsets %v %v", units, ok)
+	}
+	for _, bad := range []int{2, len(text) + 1, -1} {
+		if _, ok := utf16Offsets(text, []int{bad}); ok {
+			t.Errorf("offset %d accepted", bad)
+		}
+	}
 }
 
 // agentEventFamilies is the one definition of the reported kinds. The
-// schemas' kind and group options, and testdata/agent-event-kinds.json, which
-// the dashboard's catalog and the reader's colours are checked against
-// (web/tests/unit/dashboards/agent-events.test.mjs), must follow it.
+// schemas' kind and group options must follow it, and it writes
+// web/src/agent-event-kinds.json, which the dashboard reads and the reader's
+// colours are checked against (web/tests/unit/dashboards/agent-events.test.mjs).
 // PHAROS_UPDATE_AGENT_EVENT_KINDS=1 rewrites the fixture.
 func TestAgentEventKindsAgreeEverywhere(t *testing.T) {
 	type kind struct {
@@ -183,7 +257,7 @@ func TestAgentEventKindsAgreeEverywhere(t *testing.T) {
 	}
 	data, _ := json.MarshalIndent(want, "", "  ")
 	data = append(data, '\n')
-	path := filepath.Join("..", "..", "testdata", "agent-event-kinds.json")
+	path := filepath.Join("..", "..", "web", "src", "agent-event-kinds.json")
 	if os.Getenv("PHAROS_UPDATE_AGENT_EVENT_KINDS") == "1" {
 		if err := os.WriteFile(path, data, 0o644); err != nil {
 			t.Fatal(err)

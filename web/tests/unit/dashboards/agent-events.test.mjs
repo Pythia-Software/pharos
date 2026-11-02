@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { agentEventReadWhere, eventRates, perThousand, ratePeriod, weekStart } from "../../../src/agent-event-rates-model";
+import { agentEventReadWhere, daySpan, eventRates, perThousand, ratePeriod, weekStart } from "../../../src/agent-event-rates-model";
 import messagesDocument from "../../../../schemas/agent_event_messages.schema.json";
-import kindsFixture from "../../../../testdata/agent-event-kinds.json";
+import kindsFixture from "../../../src/agent-event-kinds.json";
 import { agentEventGroups, agentEventKinds } from "../../../src/agent-events-analysis-catalog";
 import { reader } from "../helpers/transcript.mjs";
 import { plain } from "../helpers/classic-script.mjs";
@@ -34,6 +34,13 @@ test("weeks start on Monday, and long ranges switch to weeks", () => {
   assert.equal(weekStart("2026-10-26"), "2026-10-26");
   assert.equal(ratePeriod(30), "day");
   assert.equal(ratePeriod(90), "week");
+  // Thirty sampled days over six months span six months: weeks, not thirty
+  // touching daily columns.
+  const sampled = Array.from({ length: 30 }, (_, index) => ({ keys: [new Date(Date.UTC(2026, 4, 1 + index * 6)).toISOString().slice(0, 10)], value: 10 }));
+  assert.equal(daySpan(sampled), 175);
+  assert.equal(ratePeriod(daySpan(sampled)), "week");
+  assert.equal(daySpan([{ keys: ["2026-10-20"], value: 1 }]), 1);
+  assert.equal(daySpan([]), 0);
 });
 
 test("examples take kinds in turn, most confident first within each", () => {
@@ -61,9 +68,9 @@ test("the messages read take the shared filters, model included, and never an ev
   assert.deepEqual(agentEventReadWhere(where, fields).map(term => term.field), ["model", "provider"]);
 });
 
-// Go's agentEventFamilies writes testdata/agent-event-kinds.json
-// (TestAgentEventKindsAgreeEverywhere); the dashboard's kinds and the reader's
-// group colours follow it.
+// Go's agentEventFamilies writes web/src/agent-event-kinds.json
+// (TestAgentEventKindsAgreeEverywhere): the dashboard reads it, and the
+// reader's group colours, which CSS needs one by one, follow it.
 test("the dashboard's kinds and the reader's groups are Go's", () => {
   assert.deepEqual(agentEventKinds, kindsFixture.kinds);
   assert.deepEqual([...agentEventGroups], kindsFixture.groups);

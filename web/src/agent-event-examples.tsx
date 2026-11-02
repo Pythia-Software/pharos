@@ -54,12 +54,15 @@ const when = (value: string) => {
 // Takes the most confident remaining event of each kind in turn.
 export function interleaveByKind<Row extends { family: string }>(rows: Row[], count: number): Row[] {
   const queues = new Map<string, Row[]>();
-  for (const row of rows) queues.set(row.family, [...(queues.get(row.family) ?? []), row]);
-  const picked: Row[] = [];
-  while (picked.length < count && [...queues.values()].some(queue => queue.length)) {
-    for (const queue of queues.values()) {
-      const next = queue.shift();
-      if (next && picked.length < count) picked.push(next);
+  for (const row of rows) {
+    const queue = queues.get(row.family);
+    if (queue) queue.push(row);
+    else queues.set(row.family, [row]);
+  }
+  const picked: Row[] = [], lists = [...queues.values()];
+  for (let round = 0; picked.length < count && lists.some(list => round < list.length); round++) {
+    for (const list of lists) {
+      if (round < list.length && picked.length < count) picked.push(list[round]);
     }
   }
   return picked;
