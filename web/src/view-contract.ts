@@ -61,6 +61,7 @@ export const viewFields: Record<string, ViewField> = {
   reader_collapsed: field("reader_collapsed", ["work"], "strings", "Explicitly collapsed disclosure identities, overriding initially open content."),
   reader_expanded: field("reader_expanded", ["work"], "strings", "Expanded disclosure identities: message:<id>, call:<id>, or section:<key>."),
   reader_labels: field("reader_labels", ["work"], "boolean", "Highlight message text by its local labels (Message labels); hovering highlighted text names the message's labels."),
+  reader_events: field("reader_events", ["work"], "boolean", "Highlight agent events (Agent Experience) in the conversation: each event's sentence in its kind group's hue, what it was about and what the agent did underlined; hovering names the message's events."),
   sidebar_visible: field("sidebar_visible", ["work"], "boolean", "Show the workspace navigation sidebar."),
   sidebar_width: field("sidebar_width", ["work"], "text", "Workspace navigation sidebar width, 300–5000 pixels (site_link accepts a number or decimal string)."),
   search_state: field("text_builder", ["library"], "json", "Complete applied TextSearchDraft, including nested groups, syntax/literal/regex, match options and scope. Browse library/view/search_state for the template. Missing search fields are filled from that template by site_link."),

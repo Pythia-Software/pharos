@@ -146,8 +146,13 @@ func (c *Catalog) workConversation(workspaceID, conversationID string, clip bool
 	}
 	// Local labels are for the live reader; a shared export leaves them out.
 	attachLabels, labelsSummary := func(map[string]any) {}, func() (map[string]any, error) { return nil, nil }
+	attachEvents, eventsSummary := func(map[string]any) {}, func() (map[string]any, error) { return nil, nil }
 	if clip {
 		if attachLabels, labelsSummary, err = c.messageLabelsAttacher(conversationID); err != nil {
+			return nil, err
+		}
+		// Agent events (agent_events.go), likewise only in the live reader.
+		if attachEvents, eventsSummary, err = c.agentEventsAttacher(conversationID); err != nil {
 			return nil, err
 		}
 	}
@@ -158,6 +163,7 @@ func (c *Catalog) workConversation(workspaceID, conversationID string, clip bool
 	prepare := func(message map[string]any) {
 		attach(message)
 		attachLabels(message)
+		attachEvents(message)
 		if previewRows {
 			clipReaderMessage(message)
 		}
@@ -191,6 +197,11 @@ func (c *Catalog) workConversation(workspaceID, conversationID string, clip bool
 		return nil, err
 	} else if labels != nil {
 		conversation["labels"] = labels
+	}
+	if events, err := eventsSummary(); err != nil {
+		return nil, err
+	} else if events != nil {
+		conversation["agent_events"] = events
 	}
 	if len(sessions) > 0 {
 		usage := tokenCounts{}

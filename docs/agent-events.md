@@ -1,0 +1,91 @@
+# Agent events (preview)
+
+Analyze → **Agent Experience** shows what agents ran into while they worked: obstacles, environment friction, stale
+docs, surprises, confusion, discoveries, their own mistakes, workarounds, unchecked claims, deferred work, assumptions,
+getting around an instruction or safeguard, and more. Each event is one sentence in an agent's visible reply or its
+thinking, with what it was about and what the agent did about it, linked to the message in the reader.
+
+It is a preview. Settings → App preferences → **Agent Experience dashboard** lists its pages in Analyze; direct links
+work either way.
+
+## How events are found
+
+The JAYHAWK study (kept outside this repository) built the method:
+
+1. **Candidates.** Broad keyword lists, one per kind of event, find candidate sentences in agent replies and thinking.
+   Sentences inside fenced code are skipped. Keywords are a rough proxy: about one hit in five is a real event.
+2. **Verifier.** A small encoder (ettin 68M) reads the candidate sentence with up to six sentences before it and two
+   after, and the kind's definition. It answers whether the sentence really expresses that kind, which sentences say
+   what it was about, and which say what the agent did. A sentence can count under more than one kind.
+3. **Threshold.** An event is a candidate at or above probability 0.5 (`agentEventThreshold`). The threshold belongs
+   to the model; counts across a model change are not comparable, so compare rates within one model.
+
+On the study's held-out ground truth (Opus, Sol and Argon majority), the verifier's F1 was 0.79 for the original
+twenty kinds, close to the Haiku and Flash labels it learned from (0.82, 0.81). Keyword candidates reach roughly
+three quarters of the event sentences; the rest are phrased in ways no keyword anticipates.
+
+## Data
+
+Two derived tables, created at catalog open (`agent_events.go`), with no schema version change:
+
+- `agent_event_messages`: every agent message the pass read, with or without events (the denominator for rates).
+- `agent_events`: one row per scored (message, sentence, kind), with its probability, sentence, subject and response
+  text and their UTF-8 byte ranges in `messages.text`.
+
+A message that is deleted, or whose text changes, loses both kinds of row at once (two triggers on `messages`): they
+were scored on text it no longer has. The datasets' day, week and month come from `occurred_at` in this Mac's time
+zone when queried, as the other datasets' do; the stored `day` is only the import's or the pass's record.
+
+The reported kinds, their labels and groups are `agentEventFamilies` (`agent_events.go`). It writes
+`web/src/agent-event-kinds.json`, which the dashboard's catalog reads; the schemas' options and the reader's group
+colours are checked against it (`TestAgentEventKindsAgreeEverywhere`, `PHAROS_UPDATE_AGENT_EVENT_KINDS=1` rewrites
+the file).
+
+They back two query datasets, `agent_events` (events at or above the threshold) and `agent_event_messages`, and the
+dashboard's catalog (`web/src/agent-events-analysis-catalog.ts`). The dashboard also draws **events per 1,000 agent
+messages** by day or week, dividing by the messages read in each period under the same filters: the engine's parts
+split only additive measures, so this panel computes the rate from two grouped counts.
+
+### In the reader
+
+A conversation the pass has read has an **Events** toggle beside Show and Labels (view field `reader_events`; the
+dashboard's example links turn it on). It marks each event's sentence in its kind group's hue and underlines what the
+event was about and what the agent did; hovering a marked sentence names its events, with probability and those
+sentences. Thinking is marked inside its Reasoning row, which shows a count of its events.
+
+- `agentEventsAttacher` (`agent_events.go`) attaches each agent message's events at or above the threshold to the
+  live reader's conversation, with ranges converted from UTF-8 bytes to UTF-16 code units (JavaScript's string
+  indexes) in one pass per message, and a summary for the toggle. An event whose stored sentence is not where it was
+  found is left out. A shared export carries none.
+- `messageEventView`, `eventMask` and `eventsAtMark` (`reader-model.js`) turn them into marks and pick the events
+  under a hovered mark: each marked sentence is a mark of its own whose class names its span (`event-at-N`). Events
+  apply only where the reader shows the stored text they were scored on: a reply's card, or a thinking block's own
+  text (Codex keeps the JSON event in `raw_text` and the prose in `text`). `normalizeMessages` drops them from blocks it
+  splits out of a JSON message.
+
+### Import
+
+Until the model runs inside Pharos, events are imported from the study's predictions:
+
+```sh
+pharos --config LIBRARY.toml agent-events import FILE.jsonl
+pharos --config LIBRARY.toml agent-events status
+```
+
+`FILE.jsonl` (`pharos-agent-events-v1`) starts with a header line naming the model and lexicon, then one line per
+message read and one per scored event. Byte ranges are zero-based UTF-8 offsets into `messages.text`, end exclusive.
+Blank lines are ignored, and of repeated lines for one message or one (message, sentence, kind) the last counts. It
+keeps a message only when it exists with the text it was scored on (SHA-256) and its source is `reply` or `thinking`,
+and an event only when its kind is one the product reports, its probability is in [0, 1] and its ranges fall on UTF-8
+boundaries of that text; it reports what it skipped. Importing a message again replaces its events, and a message the
+file names that is gone or whose text changed loses those an earlier import stored.
+
+It reads first and writes after: the file, then each message once in a short statement, keeping its metadata and its
+events' texts but never its whole text; then one tracked write transaction (`writeTransaction`: the write gate, busy
+retries and the lease audit), which skips a message whose text changed since it was read.
+
+## Next
+
+The model is to run on the local-labeler runtime (`docs/local-labeler.md`) as a second model beside the message
+labeler, with its own input contract (a `segment` input marks each window sentence's tokens), its own pass and the
+same tables. Risky actions are left to the tool-call history, where the actions themselves are recorded.
