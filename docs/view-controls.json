@@ -551,6 +551,15 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
+      "key": "fragment:069af350652f6234:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-save-default cursor-interaction\" aria-label=\"Make this selection the default\" aria-pressed=\"false\" data-tooltip=\"Save this CLI, model, effort and speed as your default\">",
+      "contract": "editing",
+      "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
+    },
+    {
       "key": "fragment:06f5bec8efd6e3d2:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
@@ -579,11 +588,11 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
-      "key": "fragment:2095e9c1516aba27:0",
+      "key": "fragment:18322884faef50c0:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
       "tag": "button",
-      "control": "<button type=\"button\" class=\"pharos-save-default cursor-interaction\" aria-label=\"Make this selection the default\" aria-pressed=\"false\" data-tooltip=\"Save this CLI, model and effort as your default\">",
+      "control": "<button type=\"button\" class=\"pharos-picker-row pharos-fast-toggle cursor-interaction\" role=\"switch\" aria-checked=\"false\" data-tooltip=\"Faster answers; the CLI may bill this mode at a higher rate\" hidden>",
       "contract": "editing",
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
