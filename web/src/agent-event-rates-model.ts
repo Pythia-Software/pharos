@@ -59,3 +59,11 @@ export const perThousand = (count: number, read: number) => read > 0 ? 1000 * co
 
 // Days for up to about six weeks, weeks beyond.
 export const ratePeriod = (days: number): "day" | "week" => days > 45 ? "week" : "day";
+
+// The days from the first bucket's day to the last's, inclusive: what the
+// columns span, however few of those days had messages read.
+export function daySpan(buckets: Bucket[]): number {
+  const days = buckets.map(bucket => String(bucket.keys[0] ?? "")).filter(day => /^\d{4}-\d{2}-\d{2}$/.test(day)).sort();
+  if (!days.length) return 0;
+  return Math.round((Date.parse(`${days.at(-1)}T00:00:00Z`) - Date.parse(`${days[0]}T00:00:00Z`)) / 86400000) + 1;
+}

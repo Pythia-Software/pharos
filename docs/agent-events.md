@@ -32,9 +32,14 @@ Two derived tables, created at catalog open (`agent_events.go`), with no schema 
 - `agent_events`: one row per scored (message, sentence, kind), with its probability, sentence, subject and response
   text and their UTF-8 byte ranges in `messages.text`.
 
-The reported kinds, their labels and groups are `agentEventFamilies` (`agent_events.go`); the schemas' options, the
-dashboard's catalog and the reader's group colours are checked against it through `testdata/agent-event-kinds.json`
-(`TestAgentEventKindsAgreeEverywhere`).
+A message that is deleted, or whose text changes, loses both kinds of row at once (two triggers on `messages`): they
+were scored on text it no longer has. The datasets' day, week and month come from `occurred_at` in this Mac's time
+zone when queried, as the other datasets' do; the stored `day` is only the import's or the pass's record.
+
+The reported kinds, their labels and groups are `agentEventFamilies` (`agent_events.go`). It writes
+`web/src/agent-event-kinds.json`, which the dashboard's catalog reads; the schemas' options and the reader's group
+colours are checked against it (`TestAgentEventKindsAgreeEverywhere`, `PHAROS_UPDATE_AGENT_EVENT_KINDS=1` rewrites
+the file).
 
 They back two query datasets, `agent_events` (events at or above the threshold) and `agent_event_messages`, and the
 dashboard's catalog (`web/src/agent-events-analysis-catalog.ts`). The dashboard also draws **events per 1,000 agent
@@ -50,10 +55,13 @@ sentences. Thinking is marked inside its Reasoning row, which shows a count of i
 
 - `agentEventsAttacher` (`agent_events.go`) attaches each agent message's events at or above the threshold to the
   live reader's conversation, with ranges converted from UTF-8 bytes to UTF-16 code units (JavaScript's string
-  indexes), and a summary for the toggle. A shared export carries none.
+  indexes) in one pass per message, and a summary for the toggle. An event whose stored sentence is not where it was
+  found is left out. A shared export carries none.
 - `messageEventView`, `eventMask` and `eventsAtMark` (`reader-model.js`) turn them into marks and pick the events
-  under a hovered mark. Events apply only where the reader shows the text that was scored: a reply's card, or a
-  thinking block's own text.
+  under a hovered mark: each marked sentence is a mark of its own whose class names its span (`event-at-N`). Events
+  apply only where the reader shows the stored text they were scored on: a reply's card, or a thinking block's own
+  text (Codex keeps the JSON event in `raw_text` and the prose in `text`). `normalizeMessages` drops them from blocks it
+  splits out of a JSON message.
 
 ### Import
 
@@ -66,11 +74,15 @@ pharos --config LIBRARY.toml agent-events status
 
 `FILE.jsonl` (`pharos-agent-events-v1`) starts with a header line naming the model and lexicon, then one line per
 message read and one per scored event. Byte ranges are zero-based UTF-8 offsets into `messages.text`, end exclusive.
-The import is one transaction; blank lines are ignored. It keeps an event only when its message exists with the text
-it was scored on (SHA-256), its ranges fall on UTF-8 boundaries of that text, and its kind is one the product reports;
-it reports what it skipped. Importing a message again replaces its events, and a message the file names that is gone
-or whose text changed loses those an earlier import stored. While reading the file it keeps only each message's
-metadata, and reads a message's text again to check its events' ranges.
+Blank lines are ignored, and of repeated lines for one message or one (message, sentence, kind) the last counts. It
+keeps a message only when it exists with the text it was scored on (SHA-256) and its source is `reply` or `thinking`,
+and an event only when its kind is one the product reports, its probability is in [0, 1] and its ranges fall on UTF-8
+boundaries of that text; it reports what it skipped. Importing a message again replaces its events, and a message the
+file names that is gone or whose text changed loses those an earlier import stored.
+
+It reads first and writes after: the file, then each message once in a short statement, keeping its metadata and its
+events' texts but never its whole text; then one tracked write transaction (`writeTransaction`: the write gate, busy
+retries and the lease audit), which skips a message whose text changed since it was read.
 
 ## Next
 

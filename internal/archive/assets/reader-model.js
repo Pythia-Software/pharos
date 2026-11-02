@@ -185,7 +185,9 @@ function normalizeMessages(messages){
     const original=message.raw_text||message.text,parsed=messageJSON(message),value=parsed?.payload&&typeof parsed.payload==='object'?parsed.payload:parsed;
     const base={...message,...(message.authorship?{authorship_text:message.authorship_text??message.text}:{}),native_id:message.native_id||message.id||`event-${index}`,raw_text:original};
     let emitted=false;
-    const emit=(fields,suffix='')=>{const normalized={...base,...fields,tokenReport:emitted?null:reports[index],native_id:base.native_id+suffix};messageJSONCache.set(normalized,{...messageJSONCache.get(message)});output.push(normalized);emitted=true};
+    // Agent events' ranges index the stored text, so only an entry showing that
+    // text keeps them (a block split out of a JSON message does not).
+    const emit=(fields,suffix='')=>{const normalized={...base,...fields,tokenReport:emitted?null:reports[index],native_id:base.native_id+suffix};if(normalized.agent_events&&String(normalized.text??'')!==String(message.text??''))delete normalized.agent_events;messageJSONCache.set(normalized,{...messageJSONCache.get(message)});output.push(normalized);emitted=true};
     if(['thinking','reasoning','analysis'].includes(message.kind)){emit({kind:'reasoning'});return}
     const blocks=Array.isArray(value?.message?.content)?value.message.content:Array.isArray(value?.content)?value.content:Array.isArray(value)?value:null;
     if(!['tool_result','delegation_result','error'].includes(message.kind)&&blocks&&blocks.some(block=>['text','input_text','output_text','tool_use','tool_result','thinking'].includes(block?.type))){
@@ -461,9 +463,10 @@ function labelMask(message,text,mask=humanWritingMask(message,text)){return mess
 // Agent events (agent_events.go, agentEventsAttacher): sentences of an agent
 // message where something happened (an obstacle, a discovery, a workaround),
 // with what it was about (subject) and what the agent did (response). Ranges
-// are UTF-16 offsets of the message's stored text, so they apply only where
-// the reader shows that text unchanged: a reply's card, or thinking's own
-// text, never a block split out of a JSON message. Each event's sentence is
+// are UTF-16 offsets of the message's stored text (messages.text), so they
+// apply only where the reader shows that text unchanged: a reply's card, or
+// thinking's own text (Codex keeps the JSON event in raw_text and the prose
+// in text). normalizeMessages drops them from blocks it splits out. Each event's sentence is
 // marked in its group's hue; subject and response sentences that are not
 // themselves events get a lighter mark. Groups follow this fixed order, and
 // each has the class event-<suffix>.
@@ -473,7 +476,7 @@ function eventGroupClass(group){return 'event-'+(EVENT_GROUPS.find(([name])=>nam
 // Reasoning row), otherwise what the message card shows.
 function eventText(message){return ['thinking','reasoning','analysis'].includes(message?.kind)?String(message.text??''):displayText(message)}
 function messageEventView(message,text=eventText(message)){
-  const events=message?.agent_events;if(!Array.isArray(events)||!events.length||text!==String(message.raw_text??message.text??''))return null;
+  const events=message?.agent_events;if(!Array.isArray(events)||!events.length||text!==String(message.text??''))return null;
   const fits=range=>Array.isArray(range)&&Number.isInteger(range[0])&&Number.isInteger(range[1])&&range[0]>=0&&range[0]<range[1]&&range[1]<=text.length;
   const slice=ranges=>ranges.filter(fits).map(range=>text.slice(range[0],range[1]).trim()).join(' ');
   const view=events.filter(event=>fits(event.sentence)).map(event=>({kind:event.kind,label:event.label||event.kind,group:event.group||'',definition:event.definition||'',

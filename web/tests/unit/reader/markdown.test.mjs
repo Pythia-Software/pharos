@@ -219,9 +219,15 @@ test("agent events mark each event's sentence by group and its context, in UTF-1
   assert.deepEqual(plain(contextMarks.map(item => item.className)), ['agent-event event-second-look event-at-0', 'agent-event event-choices event-at-1', 'event-context event-at-1']);
   assert.deepEqual(plain(reader.eventsAtMark(context, contextMarks[2]).map(event => event.kind)), ['workaround']);
   assert.deepEqual(plain(reader.eventsAtMark(view, { className: 'agent-event event-friction' })), []);
-  // Only the text that was scored is marked: not a block split out of a JSON
-  // message (its offsets are the whole message's), nor text shown differently.
-  assert.equal(reader.messageEventView({ ...message, text: "I'll work around it", raw_text: body }), null);
+  // Only the text that was scored is marked: Codex reasoning keeps its JSON
+  // event in raw_text and its prose in text, and is marked; a block split out
+  // of a JSON message loses the events (its offsets are the whole message's).
+  assert.equal(reader.messageEventView({ ...message, kind: 'reasoning', raw_text: JSON.stringify({ type: 'reasoning', text: body }) }).length, 3);
+  const json = JSON.stringify({ message: { role: 'assistant', content: [{ type: 'text', text: "I'll work around it." }, { type: 'text', text: body }] } });
+  const split = reader.normalizeMessages([{ ...message, id: 'm-split', text: json }]);
+  assert.equal(split.length, 2);
+  assert.ok(split.every(entry => entry.agent_events === undefined && reader.messageEventView(entry) === null));
+  assert.equal(reader.normalizeMessages([message])[0].agent_events.length, 4, 'a message shown as stored keeps its events');
   assert.equal(reader.messageEventView({ ...message, text: JSON.stringify({ text: body }) }), null);
   assert.equal(reader.messageEventView({ role: 'assistant', text: 'Done.' }), null);
   assert.equal(reader.eventMask('Done.', null, '01010'), '01010');

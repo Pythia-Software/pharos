@@ -102,7 +102,7 @@ import { mcpAnalysisCatalog } from "./mcp-analysis-catalog";
 import { agentEventsAnalysisCatalog } from "./agent-events-analysis-catalog";
 import { AgentEventExamples } from "./agent-event-examples";
 import { AgentEventRates } from "./agent-event-rates";
-import { agentEventReadWhere, eventRates, ratePeriod } from "./agent-event-rates-model";
+import { agentEventReadWhere, daySpan, eventRates, ratePeriod } from "./agent-event-rates-model";
 import { toolsAnalysisCatalog } from "./tools-analysis-catalog";
 import { agentTimeAnalysisCatalog, skillsAnalysisCatalog } from "./record-analysis-catalogs";
 import { UsageWorkspace, UsageDashboardLinks, UsageWorkspaceLink } from "./usage-workspace";
@@ -1784,7 +1784,7 @@ function AgentExperienceRates({ where }: { where: WhereTerm[] }) {
   const events = useMetrics("agent_events", where, agentEventDailyEvents, true);
   const read = useMetrics("agent_event_messages", readWhere(where), agentEventDailyRead, true);
   const readBuckets = read.metrics.find(metric => metric.id === "read")?.buckets ?? [];
-  const period = ratePeriod(readBuckets.length);
+  const period = ratePeriod(daySpan(readBuckets));
   const periods = eventRates(events.metrics.find(metric => metric.id === "events")?.buckets ?? [], readBuckets, period);
   return <AgentEventRates periods={periods} period={period} loading={events.loading || read.loading} error={events.error || read.error} />;
 }
