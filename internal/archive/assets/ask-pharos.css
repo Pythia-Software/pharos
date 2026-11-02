@@ -218,9 +218,11 @@
 #pharos-ask .pharos-activity ol{margin:8px 0;padding-left:22px;max-height:150px;overflow:auto}
 #pharos-ask .pharos-activity li{padding:3px 0}
 #pharos-ask .pharos-skeleton{display:grid;gap:8px;padding:14px 0 5px}
-#pharos-ask .pharos-skeleton span{display:block;height:7px;border-radius:4px;background:linear-gradient(100deg,color-mix(in srgb,var(--pharos-violet) 10%,var(--pharos-panel)),color-mix(in srgb,var(--pharos-aqua) 23%,var(--pharos-panel)),color-mix(in srgb,var(--pharos-violet) 10%,var(--pharos-panel)));background-size:200% 100%;animation:pharos-wait-shimmer 2200ms linear infinite}
-#pharos-ask .pharos-skeleton span:nth-child(2){width:78%;animation-delay:160ms}
-#pharos-ask .pharos-skeleton span:nth-child(3){width:56%;animation-delay:320ms}
+/* The shimmer moves a wider copy of the gradient with transform, which the compositor runs; animating background-position repaints every frame. */
+#pharos-ask .pharos-skeleton span{position:relative;display:block;height:7px;overflow:hidden;border-radius:4px;background:color-mix(in srgb,var(--pharos-violet) 10%,var(--pharos-panel))}
+#pharos-ask .pharos-skeleton span::before{content:'';position:absolute;inset:0 auto 0 0;width:400%;background:linear-gradient(100deg,color-mix(in srgb,var(--pharos-violet) 10%,var(--pharos-panel)),color-mix(in srgb,var(--pharos-aqua) 23%,var(--pharos-panel)),color-mix(in srgb,var(--pharos-violet) 10%,var(--pharos-panel)));background-size:50% 100%;animation:pharos-wait-shimmer 2200ms linear infinite}
+#pharos-ask .pharos-skeleton span:nth-child(2){width:78%}#pharos-ask .pharos-skeleton span:nth-child(2)::before{animation-delay:160ms}
+#pharos-ask .pharos-skeleton span:nth-child(3){width:56%}#pharos-ask .pharos-skeleton span:nth-child(3)::before{animation-delay:320ms}
 #pharos-ask .pharos-send:disabled{filter:grayscale(1);opacity:.45;cursor:default}
 #pharos-ask .pharos-destinations{display:grid;gap:9px;margin-top:8px}
 #pharos-ask .pharos-destinations:has(>.pharos-results-label[hidden]){margin-top:0}
@@ -251,9 +253,8 @@
 #pharos-ask .pharos-other-send svg{width:17px;height:17px}
 #pharos-ask .pharos-other-send:disabled{opacity:.4;cursor:default}
 #pharos-ask .pharos-search-notice{font-size:12px;color:var(--pharos-sea);margin:12px 0 0}
-@keyframes pharos-breathe{50%{transform:scale(1.08);box-shadow:0 0 20px color-mix(in srgb,var(--pharos-violet) 25%,transparent)}}
 @keyframes pharos-lamp-pulse{50%{opacity:.4}}
-@keyframes pharos-wait-shimmer{to{background-position:-200% 50%}}
+@keyframes pharos-wait-shimmer{from{transform:translateX(-50%)}to{transform:none}}
 @keyframes pharos-signal-trace{to{stroke-dashoffset:-1780}}
 @media(prefers-reduced-motion:reduce){#pharos-ask .pharos-product *,#pharos-ask .pharos-product *::before{animation:none!important;transition:none!important}}
 @media(max-width:450px){#pharos-ask .pharos-search-head .pharos-ai-mode{margin:0 0 10px 16px}}

@@ -105,7 +105,7 @@ function createPharosSourceWizard() {
 .pharos-working{display:grid;gap:10px;margin:18px 0}.pharos-working>p{margin:0}
 .pharos-working .pharos-meter{height:6px;overflow:hidden;border-radius:6px;background:var(--line,#ccc)}
 .pharos-working .pharos-meter>span{display:block;width:35%;height:100%;background:var(--accent,#315845);animation:pharos-onboard-slide 1.6s ease-in-out infinite}
-@keyframes pharos-onboard-slide{from{margin-left:-35%}to{margin-left:100%}}
+@keyframes pharos-onboard-slide{from{transform:translateX(-100%)}to{transform:translateX(286%)}}
 @media(max-width:600px){.pharos-onboard{padding:24px;width:calc(100% - 24px);max-height:calc(100dvh - 24px)}.pharos-onboard>h2,.application-setup .pharos-onboard>h2{font-size:27px}.pharos-onboard-intro,.application-setup .pharos-onboard-intro{font-size:14px}.pharos-tool-options{grid-template-columns:1fr;gap:10px}.pharos-onboard .pharos-tool{padding:14px 12px;gap:12px}.pharos-tool>svg{width:48px}.pharos-tool strong{font-size:17px}.pharos-onboard-actions{gap:8px}.pharos-onboard .pharos-onboard-actions button{min-width:0;padding:7px 10px}.pharos-candidate-name{flex-wrap:wrap}.pharos-candidate-name input{max-width:100%;box-sizing:border-box}}
 @media(prefers-reduced-motion:reduce){.pharos-working .pharos-meter>span{animation:none;width:100%;opacity:.5}}`;
 
