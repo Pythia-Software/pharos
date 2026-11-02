@@ -1,0 +1,115 @@
+{
+  "groups": [
+    "Friction",
+    "Reactions and learning",
+    "Worth a second look",
+    "Choices you may not see"
+  ],
+  "kinds": [
+    {
+      "key": "obstacle",
+      "label": "Obstacle or roadblock",
+      "group": "Friction"
+    },
+    {
+      "key": "env_friction",
+      "label": "Environment friction",
+      "group": "Friction"
+    },
+    {
+      "key": "stale_guidance",
+      "label": "Out-of-date docs or instructions",
+      "group": "Friction"
+    },
+    {
+      "key": "preexisting_failure",
+      "label": "Pre-existing or flaky failure",
+      "group": "Friction"
+    },
+    {
+      "key": "missing_capability",
+      "label": "Missing tool or capability",
+      "group": "Friction"
+    },
+    {
+      "key": "ambiguous_request",
+      "label": "Unclear or conflicting instructions",
+      "group": "Friction"
+    },
+    {
+      "key": "stuck",
+      "label": "Stuck",
+      "group": "Friction"
+    },
+    {
+      "key": "gave_up",
+      "label": "Giving up or handing back",
+      "group": "Friction"
+    },
+    {
+      "key": "discovery",
+      "label": "Discovery",
+      "group": "Reactions and learning"
+    },
+    {
+      "key": "confusion",
+      "label": "Confusion",
+      "group": "Reactions and learning"
+    },
+    {
+      "key": "surprise",
+      "label": "Surprise",
+      "group": "Reactions and learning"
+    },
+    {
+      "key": "own_mistake",
+      "label": "Own mistake or correction",
+      "group": "Reactions and learning"
+    },
+    {
+      "key": "unblocking_insight",
+      "label": "Lesson that unblocked progress",
+      "group": "Reactions and learning"
+    },
+    {
+      "key": "circumventing_constraint",
+      "label": "Getting around an instruction or safeguard",
+      "group": "Worth a second look"
+    },
+    {
+      "key": "risk_flagged",
+      "label": "Risk raised",
+      "group": "Choices you may not see"
+    },
+    {
+      "key": "deferred",
+      "label": "Deferred or skipped work",
+      "group": "Choices you may not see"
+    },
+    {
+      "key": "workaround",
+      "label": "Workaround",
+      "group": "Choices you may not see"
+    },
+    {
+      "key": "unverified",
+      "label": "Unchecked claim",
+      "group": "Choices you may not see"
+    },
+    {
+      "key": "assumption",
+      "label": "Assumption",
+      "group": "Choices you may not see"
+    },
+    {
+      "key": "tech_debt",
+      "label": "Technical debt noticed",
+      "group": "Choices you may not see"
+    },
+    {
+      "key": "pushback",
+      "label": "Disagreeing with the user",
+      "group": "Choices you may not see"
+    }
+  ]
+}

@@ -3,7 +3,7 @@
 .agent-event-examples-header h3{margin:0 0 4px;font-size:var(--fs-lg)}
 .agent-event-examples-header p{margin:0 0 14px;font-size:var(--fs-sm)}
 .agent-event-list{list-style:none;margin:0;padding:0;display:grid;gap:14px}
-.agent-event{padding:0 0 0 12px;border-left:3px solid var(--line);min-width:0}
+.agent-event-item{padding:0 0 0 12px;border-left:3px solid var(--line);min-width:0}
 .agent-event-kind{font-size:var(--fs-xs,11px);font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:var(--muted)}
 .agent-event-sentence{margin:2px 0 4px;font-weight:500;line-height:1.5;overflow-wrap:anywhere}
 .agent-event-context{margin:2px 0;font-size:var(--fs-sm);color:var(--muted);line-height:1.5;overflow-wrap:anywhere}

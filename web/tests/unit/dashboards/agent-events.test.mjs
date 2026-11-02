@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { eventRates, perThousand, ratePeriod, weekStart } from "../../../src/agent-event-rates-model";
+import { agentEventReadWhere, eventRates, perThousand, ratePeriod, weekStart } from "../../../src/agent-event-rates-model";
+import messagesDocument from "../../../../schemas/agent_event_messages.schema.json";
+import kindsFixture from "../../../../testdata/agent-event-kinds.json";
+import { agentEventGroups, agentEventKinds } from "../../../src/agent-events-analysis-catalog";
+import { reader } from "../helpers/transcript.mjs";
+import { plain } from "../helpers/classic-script.mjs";
 import { eventReaderURL, interleaveByKind } from "../../../src/agent-event-examples";
 
 test("event rates divide each period's events by the messages read in it", () => {
@@ -45,4 +50,22 @@ test("an example opens the reader at its message with Events highlighted", () =>
   assert.equal(url.pathname, "/work/w%201");
   assert.deepEqual(Object.fromEntries(url.searchParams), { conversation: "c1", message: "m1", reader_events: "1" });
   assert.equal(eventReaderURL({ message_id: "m1" }), undefined);
+});
+
+test("the messages read take the shared filters, model included, and never an event's own", () => {
+  const fields = messagesDocument.fields.map(field => field.name);
+  const where = [
+    { field: "model", op: "=", value: "claude-opus-5-5" }, { field: "provider", op: "=", value: "claude" },
+    { field: "family", op: "=", value: "workaround" }, { field: "id", op: "=", value: "e12" },
+  ];
+  assert.deepEqual(agentEventReadWhere(where, fields).map(term => term.field), ["model", "provider"]);
+});
+
+// Go's agentEventFamilies writes testdata/agent-event-kinds.json
+// (TestAgentEventKindsAgreeEverywhere); the dashboard's kinds and the reader's
+// group colours follow it.
+test("the dashboard's kinds and the reader's groups are Go's", () => {
+  assert.deepEqual(agentEventKinds, kindsFixture.kinds);
+  assert.deepEqual([...agentEventGroups], kindsFixture.groups);
+  assert.deepEqual(plain(reader.EVENT_GROUPS.map(([group]) => group)), kindsFixture.groups);
 });

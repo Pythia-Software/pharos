@@ -9,9 +9,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
-	"strings"
 	"math"
+	"os"
+	"sort"
+	"strings"
 	"time"
 	"unicode/utf16"
 	"unicode/utf8"
@@ -177,16 +178,17 @@ var agentEventMessageDataset = func() sqlDataset {
 	columns := map[string]string{
 		"id": "a.message_id", "message_id": "a.message_id", "conversation_id": "a.conversation_id",
 		"workspace_id": "c.workspace_id", "title": "w.title", "repository_name": "r.display_name",
-		"provider": "c.provider", "subagent": "(c.parent_id IS NOT NULL)",
+		"provider": "c.provider", "model": "COALESCE(m.model,c.model)", "subagent": "(c.parent_id IS NOT NULL)",
+		// events is stored with the message's row: its events at the threshold.
 		"source": "a.source", "candidates": "a.candidates",
-		"events":        fmt.Sprintf("(SELECT count(*) FROM agent_events e WHERE e.message_id=a.message_id AND e.probability>=%g)", agentEventThreshold),
-		"has_event":     fmt.Sprintf("EXISTS(SELECT 1 FROM agent_events e WHERE e.message_id=a.message_id AND e.probability>=%g)", agentEventThreshold),
+		"events":        "a.events",
+		"has_event":     "(a.events>0)",
 		"message_count": "1",
 		"occurred_at":   "a.occurred_at", "day": "a.day", "week": "date(a.day,'-6 days','weekday 1')", "month": "substr(a.day,1,7)",
 		"event_model": "a.model",
 	}
 	return sqlDataset{
-		from: `FROM agent_event_messages a JOIN conversations c ON c.id=a.conversation_id
+		from: `FROM agent_event_messages a JOIN conversations c ON c.id=a.conversation_id LEFT JOIN messages m ON m.id=a.message_id
 			LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id`,
 		countFrom: "FROM agent_event_messages a", countAlias: "a",
 		lookups:    map[string]bool{"id": true, "message_id": true, "conversation_id": true, "day": true},
@@ -194,6 +196,7 @@ var agentEventMessageDataset = func() sqlDataset {
 		timestamps: map[string]string{"occurred_at": "a.occurred_at"},
 		optionalJoins: map[string]string{
 			"c": " JOIN conversations c ON c.id=a.conversation_id",
+			"m": " LEFT JOIN messages m ON m.id=a.message_id",
 			"w": " LEFT JOIN workspaces w ON w.id=c.workspace_id",
 			"r": " LEFT JOIN repositories r ON r.id=w.repository_id",
 		},
@@ -236,13 +239,16 @@ type AgentEventImport struct {
 }
 
 type agentEventMessage struct {
-	conversationID, text, occurredAt, day string
+	conversationID, occurredAt, day string
 }
 
 // ImportAgentEvents replaces the events of every message in the file with the
 // file's. A message must exist with the same text (by SHA-256) it was scored
-// on; ranges must fall on UTF-8 boundaries of that text. Everything is written
-// in one transaction.
+// on; ranges must fall on UTF-8 boundaries of that text. A message the file
+// names that is gone or whose text changed loses the events an earlier import
+// stored for it. Blank lines are ignored. Everything is written in one
+// transaction. Only a message's metadata is kept while the file is read; its
+// text is read again, one message at a time, to check its events' ranges.
 func (c *Catalog) ImportAgentEvents(ctx context.Context, path string) (AgentEventImport, error) {
 	result := AgentEventImport{ByFamily: map[string]int{}}
 	file, err := os.Open(path)
@@ -252,20 +258,23 @@ func (c *Catalog) ImportAgentEvents(ctx context.Context, path string) (AgentEven
 	defer file.Close()
 	reader := bufio.NewReaderSize(file, 1<<20)
 	readLine := func() (agentEventImportLine, bool, error) {
-		raw, err := reader.ReadBytes('\n')
-		if len(strings.TrimSpace(string(raw))) == 0 {
-			if err == io.EOF {
-				return agentEventImportLine{}, false, nil
+		for {
+			raw, err := reader.ReadBytes('\n')
+			if len(strings.TrimSpace(string(raw))) == 0 {
+				if err == io.EOF {
+					return agentEventImportLine{}, false, nil
+				}
+				if err != nil {
+					return agentEventImportLine{}, false, err
+				}
+				continue
 			}
-			if err != nil {
-				return agentEventImportLine{}, false, err
+			var line agentEventImportLine
+			if jerr := json.Unmarshal(raw, &line); jerr != nil {
+				return line, false, fmt.Errorf("import line: %w", jerr)
 			}
+			return line, true, nil
 		}
-		var line agentEventImportLine
-		if jerr := json.Unmarshal(raw, &line); jerr != nil {
-			return line, false, fmt.Errorf("import line: %w", jerr)
-		}
-		return line, true, nil
 	}
 	header, ok, err := readLine()
 	if err != nil {
@@ -286,33 +295,39 @@ func (c *Catalog) ImportAgentEvents(ctx context.Context, path string) (AgentEven
 		return result, err
 	}
 	defer lookup.Close()
-	messages := map[string]*agentEventMessage{}
-	resolve := func(line agentEventImportLine) (*agentEventMessage, string) {
+	// messages holds what each resolved message's rows need; skipped the
+	// messages whose stored events must go.
+	messages, skipped := map[string]*agentEventMessage{}, map[string]bool{}
+	resolve := func(line agentEventImportLine) (*agentEventMessage, error) {
 		if cached, ok := messages[line.MessageID]; ok {
-			return cached, ""
+			return cached, nil
+		}
+		if skipped[line.MessageID] {
+			return nil, nil
 		}
 		var m agentEventMessage
-		if err := lookup.QueryRowContext(ctx, line.MessageID).Scan(&m.conversationID, &m.text, &m.occurredAt); err != nil {
+		var text string
+		if err := lookup.QueryRowContext(ctx, line.MessageID).Scan(&m.conversationID, &text, &m.occurredAt); err != nil {
 			if err == sql.ErrNoRows {
-				return nil, "missing"
+				result.SkippedMissing++
+				skipped[line.MessageID] = true
+				return nil, nil
 			}
-			return nil, err.Error()
+			return nil, fmt.Errorf("message %s: %w", line.MessageID, err)
 		}
-		sum := sha256.Sum256([]byte(m.text))
+		sum := sha256.Sum256([]byte(text))
 		if hex.EncodeToString(sum[:]) != line.MessageSHA256 {
-			return nil, "changed"
+			result.SkippedChanged++
+			skipped[line.MessageID] = true
+			return nil, nil
 		}
 		if at, ok := parseTime(m.occurredAt); ok {
 			m.day = at.Local().Format("2006-01-02")
 		}
 		messages[line.MessageID] = &m
-		return &m, ""
+		return &m, nil
 	}
-	type pendingEvent struct {
-		line    agentEventImportLine
-		message *agentEventMessage
-	}
-	var events []pendingEvent
+	var events []agentEventImportLine
 	scanned := map[string]agentEventImportLine{}
 	for {
 		line, ok, err := readLine()
@@ -324,37 +339,33 @@ func (c *Catalog) ImportAgentEvents(ctx context.Context, path string) (AgentEven
 		}
 		switch line.Kind {
 		case "message":
-			if _, problem := resolve(line); problem != "" {
-				if problem == "missing" {
-					result.SkippedMissing++
-				} else if problem == "changed" {
-					result.SkippedChanged++
-				} else {
-					return result, fmt.Errorf("message %s: %s", line.MessageID, problem)
-				}
-				continue
+			if m, err := resolve(line); err != nil {
+				return result, err
+			} else if m != nil {
+				scanned[line.MessageID] = line
 			}
-			scanned[line.MessageID] = line
 		case "event":
 			if _, ok := agentEventFamilyByKey(line.Family); !ok {
 				result.SkippedFamily++
 				continue
 			}
-			m, problem := resolve(line)
-			if problem != "" {
-				if problem == "missing" {
-					result.SkippedMissing++
-				} else if problem == "changed" {
-					result.SkippedChanged++
-				} else {
-					return result, fmt.Errorf("message %s: %s", line.MessageID, problem)
-				}
-				continue
+			if m, err := resolve(line); err != nil {
+				return result, err
+			} else if m != nil {
+				events = append(events, line)
 			}
-			events = append(events, pendingEvent{line, m})
 		}
 	}
 	now := formatTime(time.Now())
+	// A skipped message keeps no events from an earlier import: they were
+	// scored on text it no longer has.
+	for id := range skipped {
+		for _, statement := range []string{`DELETE FROM agent_events WHERE message_id=?`, `DELETE FROM agent_event_messages WHERE message_id=?`} {
+			if _, err := tx.ExecContext(ctx, statement, id); err != nil {
+				return result, err
+			}
+		}
+	}
 	clear, err := tx.PrepareContext(ctx, `DELETE FROM agent_events WHERE message_id=?`)
 	if err != nil {
 		return result, err
@@ -386,21 +397,31 @@ func (c *Catalog) ImportAgentEvents(ctx context.Context, path string) (AgentEven
 		return result, err
 	}
 	defer insertEvent.Close()
-	counted := map[string]int{}
-	for _, event := range events {
-		line, m := event.line, event.message
+	// One message's text at a time, its events together.
+	sort.SliceStable(events, func(i, j int) bool { return events[i].MessageID < events[j].MessageID })
+	textOf := struct{ id, text string }{}
+	for _, line := range events {
+		m := messages[line.MessageID]
 		scan, ok := scanned[line.MessageID]
 		if !ok {
 			result.SkippedUnscanned++
 			continue
 		}
-		sentence, ok := agentEventText(m.text, [][2]int{line.Sentence})
+		if textOf.id != line.MessageID {
+			var conversation, at string
+			textOf.id = line.MessageID
+			if err := lookup.QueryRowContext(ctx, line.MessageID).Scan(&conversation, &textOf.text, &at); err != nil {
+				return result, fmt.Errorf("message %s: %w", line.MessageID, err)
+			}
+		}
+		text := textOf.text
+		sentence, ok := agentEventText(text, [][2]int{line.Sentence})
 		if !ok {
 			result.SkippedRange++
 			continue
 		}
-		subject, ok1 := agentEventText(m.text, line.Subject)
-		response, ok2 := agentEventText(m.text, line.Response)
+		subject, ok1 := agentEventText(text, line.Subject)
+		response, ok2 := agentEventText(text, line.Response)
 		if !ok1 || !ok2 {
 			result.SkippedRange++
 			continue
@@ -415,7 +436,6 @@ func (c *Catalog) ImportAgentEvents(ctx context.Context, path string) (AgentEven
 		if line.Probability >= agentEventThreshold {
 			result.EventsAtCutoff++
 			result.ByFamily[line.Family]++
-			counted[line.MessageID]++
 		}
 	}
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`UPDATE agent_event_messages SET events=(SELECT count(*) FROM agent_events e

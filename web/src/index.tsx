@@ -102,7 +102,7 @@ import { mcpAnalysisCatalog } from "./mcp-analysis-catalog";
 import { agentEventsAnalysisCatalog } from "./agent-events-analysis-catalog";
 import { AgentEventExamples } from "./agent-event-examples";
 import { AgentEventRates } from "./agent-event-rates";
-import { eventRates, ratePeriod } from "./agent-event-rates-model";
+import { agentEventReadWhere, eventRates, ratePeriod } from "./agent-event-rates-model";
 import { toolsAnalysisCatalog } from "./tools-analysis-catalog";
 import { agentTimeAnalysisCatalog, skillsAnalysisCatalog } from "./record-analysis-catalogs";
 import { UsageWorkspace, UsageDashboardLinks, UsageWorkspaceLink } from "./usage-workspace";
@@ -1748,7 +1748,7 @@ function CatalogDashboard({ catalog, linkCatalog = catalog, dataset, name, defau
 // with rates over every agent message the pass read (agent_event_messages).
 // Until the model runs inside Pharos, events come from an import (pharos
 // agent-events import); an empty library says how to fill it.
-const agentEventMessageFields = new Set(agentEventMessagesDocument.fields.map(field => field.name));
+const agentEventMessageFields = agentEventMessagesDocument.fields.map(field => field.name);
 const agentEventSummaryMetrics: AggregationClause[] = [
   { id: "events", op: "count", groupBy: [] },
   { id: "messages", op: "count_distinct", field: "message_id", groupBy: [] },
@@ -1759,9 +1759,8 @@ const agentEventReadMetrics: AggregationClause[] = [
   { id: "read", op: "count", groupBy: [] },
   { id: "conversations", op: "count_distinct", field: "conversation_id", groupBy: [] },
 ];
-// The messages read share every field but the event's own (kind, sentence,
-// confidence); a filter on those narrows the events, never the messages.
-const readWhere = (where: WhereTerm[]) => where.filter(term => predicatesOf(term).every(clause => agentEventMessageFields.has(clause.field)));
+// Filters that also apply to the messages read (agentEventReadWhere).
+const readWhere = (where: WhereTerm[]) => agentEventReadWhere(where, agentEventMessageFields);
 function AgentExperienceSummary({ where }: { where: WhereTerm[] }) {
   const events = useMetrics("agent_events", where, agentEventSummaryMetrics);
   const read = useMetrics("agent_event_messages", readWhere(where), agentEventReadMetrics);

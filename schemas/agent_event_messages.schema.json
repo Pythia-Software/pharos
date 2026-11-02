@@ -338,6 +338,24 @@
       }
     },
     {
+      "name": "model",
+      "label": "Model",
+      "type": "text",
+      "group": "Context",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "model",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"model\""
+        }
+      }
+    },
+    {
       "name": "subagent",
       "label": "Sub-agent",
       "type": "bool",

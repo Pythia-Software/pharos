@@ -81,7 +81,7 @@ export function AgentEventExamples({ where, queryURL }: { where: WhereTerm[]; qu
       {rows.map(row => {
         const href = eventReaderURL(row);
         const subject = Number(row.has_subject) ? row.subject : "";
-        return <li key={row.id} className="agent-event">
+        return <li key={row.id} className="agent-event-item">
           <div className="agent-event-kind">{agentEventKindLabel(row.family)}</div>
           <p className="agent-event-sentence">{row.sentence}</p>
           {subject ? <p className="agent-event-context"><span className="agent-event-role">About</span>{subject}</p> : null}
