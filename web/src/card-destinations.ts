@@ -175,7 +175,9 @@ export function cardDestination(recipe: QueryRecipe, query: QueryState, window?:
     const parsed=new URL(url,"http://localhost");
     parsed.searchParams.set("analyze_mode","dashboards");parsed.searchParams.set("analyze_topic",recipe.thinking.overview?"thinking-overview":"thinking-detail");parsed.searchParams.set("analyze_data","model_requests");
     parsed.searchParams.set("thinking",JSON.stringify(recipe.thinking.state));
-    parsed.searchParams.set("analyze_filters",encodeQuery({...EMPTY_QUERY,where:(query.grouping?.source??query).where}));
+    if(recipe.thinking.open)parsed.searchParams.set("disclosures",JSON.stringify({[recipe.thinking.open]:true}));
+    const own=new Set(recipe.thinking.coverWhere?(recipe.where??[]).map(term=>JSON.stringify(term)):[]);
+    parsed.searchParams.set("analyze_filters",encodeQuery({...EMPTY_QUERY,where:(query.grouping?.source??query).where.filter(term=>!own.has(JSON.stringify(term)))}));
     parsed.searchParams.set("card_query",recipe.dataset);parsed.searchParams.set("card_id",recipe.id);
     const cover=defaultCardCover(recipe);
     if(cover)parsed.searchParams.set("card_cover",JSON.stringify(cover));

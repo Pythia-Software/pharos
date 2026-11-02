@@ -804,6 +804,18 @@ func (site *siteMap) argChart(node *siteNode, base, options map[string]any) (ord
 		return orderedObject{}, linkError("options."+key, fmt.Sprintf("is not an option of the %s view; browse_site({path: %q}) lists them.", viewName, node.Path+"/chart/"+viewName), viewOptionNames(view)...)
 	}
 	chart := mergeChart(base, options)
+	// A setting left out takes the dashboard's default, unless this view
+	// does not accept it; then it takes the view's own default, as the
+	// page's View control switches it.
+	for _, key := range view.Keys {
+		fallback, ok := view.Defaults[key]
+		if _, given := chart[key]; given || !ok {
+			continue
+		}
+		if value, defaulted := dashboard.MergeDefaults[key]; defaulted && view.checkValue(key, value) != "" {
+			chart[key] = fallback
+		}
+	}
 	chart["v"] = float64(site.Analyze.Version)
 	chart["view"] = viewName
 	written := dashboard.viewChart(chart)
@@ -1973,6 +1985,9 @@ func (site *siteMap) baseSummary(state siteState) string {
 			return sentence(todayCardText(card.Description))
 		}
 		return sentence(site.cardText(card.Description, state.Days))
+	}
+	if thinkingPage(node.Path) {
+		return sentence(site.thinkingSummary(node, state))
 	}
 	parts := []string{}
 	switch {
