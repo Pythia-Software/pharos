@@ -22,11 +22,13 @@ const percent = (value: number) => `${value.toLocaleString(undefined, { maximumF
 // (dashboard-trend-model.ts); this component runs the query, wires the
 // legend, drill-downs and range picking, and draws prepared buckets.
 // Without onView it has no View control, and with links={false} no
-// supporting-query links.
-export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, dataset, state, where, onChange, onView, onFilter, onTimeFilter = onFilter, format, tick = format, links = true, children }: {
+// supporting-query links. With headline={false} it keeps its title beside
+// the chart rather than in the page's heading, for a dashboard whose first
+// chart is another (Parallelism's ribbon).
+export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, dataset, state, where, onChange, onView, onFilter, onTimeFilter = onFilter, format, tick = format, links = true, headline: titled = true, children }: {
   catalog: AnalysisCatalog; schema: FieldSchema<any>; dataset: UsageDataset; state: T; where: WhereTerm[];
   onChange: (next: Partial<T>) => void; onView?: (view: AnalysisView) => void; onFilter: FilterChange; onTimeFilter?: FilterChange;
-  format: AmountFormat; tick?: AmountFormat; links?: boolean; children?: React.ReactNode;
+  format: AmountFormat; tick?: AmountFormat; links?: boolean; headline?: boolean; children?: React.ReactNode;
 }) {
   const originRevision = useOriginMetadata();
   const headline = useDashboardHeadline();
@@ -83,14 +85,14 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
   const title = trendTitle(catalog, view);
   const controls = <AnalysisControls catalog={catalog} view={view} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onTimeFilter(current => withTimeRange(current, catalog.time, from, to, preset), preset)} />;
   return <section className="usage-analysis-trend" aria-label="Over time" aria-busy={result.loading}>
-    <StackedColumns title={title} controls={controls} action={onView ? <CreateDashboardCard catalog={catalog} state={state} where={where} /> : undefined} series={built.series.length ? built.series : [{ key: "none", label: title, color: "var(--heat-1)" }]} buckets={built.buckets} prepared
+    <StackedColumns title={title} controls={controls} action={onView ? <CreateDashboardCard source={{ catalog, state, where, schema }} /> : undefined} series={built.series.length ? built.series : [{ key: "none", label: title, color: "var(--heat-1)" }]} buckets={built.buckets} prepared
       period={view.period} periodCount={count} rollingPeriods={view.rollingPeriods} display={view.display} cumulativeStart={built.cumulativeStart} scale={view.scale}
       rolling={kind === "ratio" ? "pooled" : view.rollingOp === "sum" ? "sum" : "average"} lines={built.lines} additive={built.additive} nonzero={view.nonzero && !view.share}
       reference={built.norm === undefined ? undefined : { value: built.norm, label: "Norm" }}
       format={amount} tickFormat={tickAmount} noun={share || ratio || measure.unit === "USD" ? "" : view.display !== "cumulative" && view.rollingOp === "sum" && view.rollingPeriods > 1 ? rollingSumUnit(measure, view.period) : measure.unit}
       loading={result.loading} error={result.error || (result.loading ? "" : built.error ?? "")} legend={built.series.length > 0} percent={share}
       selected={built.selected} excluded={built.excluded} onSelect={select} onExpand={() => set({ seriesLimit: Math.min(1000, view.seriesLimit + 5) })}
-      onRange={pickRange(onTimeFilter, catalog.time, view.period, count, period => set({ period }))} seriesHref={href} titleSlot={links ? headline : undefined} />
+      onRange={pickRange(onTimeFilter, catalog.time, view.period, count, period => set({ period }))} seriesHref={href} titleSlot={links && titled ? headline : undefined} />
     {adjustments.length ? <p className="usage-dashboard-note" role="status">{adjustments.join(" ")}</p> : null}
     {children}
     {links ? <UsageDashboardLinks schema={schema} dataset={dataset} query={trend.supporting} /> : null}
