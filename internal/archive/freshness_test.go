@@ -419,7 +419,7 @@ func TestFreshnessAfterAutomaticIndexSchedulesAnalyses(t *testing.T) {
 		}
 		return rows, byDomain
 	}
-	// Background updates are on: each analysis waits for its item's
+	// Background Processing are on: each analysis waits for its item's
 	// cadence (§11), Frequently or Hourly before it has measurements.
 	rows, byDomain := ledger()
 	cadence := map[string]string{"an.identities": cadenceFrequent, "an.git": cadenceFrequent, "an.tools": cadenceFrequent, "an.authorship": cadenceHourly, "findings": cadenceHourly}

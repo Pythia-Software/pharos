@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// Background updates (docs/background-work.md §11): where measured cost
+// Background Processing (docs/background-work.md §11): where measured cost
 // places an item, when each cadence's work is due, the pass that runs it,
 // and the settings that steer it.
 
@@ -36,6 +36,26 @@ func TestPlaceCadenceMovesByMeasuredCostWithoutFlapping(t *testing.T) {
 	} {
 		if got := placeCadence(test.current, itemCost{Seconds: test.seconds, Runs: test.runs}); got != test.want {
 			t.Errorf("%s: placed %s, want %s", test.name, got, test.want)
+		}
+	}
+}
+
+// An item's typical time is the middle of its recent runs, in one unit, so
+// an outlier at either end does not widen it.
+func TestTypicalWordsSpanTheMiddleOfRecentRuns(t *testing.T) {
+	for _, test := range []struct {
+		runs []float64
+		want string
+	}{
+		{[]float64{3, 4, 5}, "Typically a few seconds"},
+		{[]float64{20, 25, 30}, "Typically 20–30 s"},
+		{[]float64{2, 30, 200}, "Typically up to 3 min"},
+		{[]float64{360, 370, 380}, "Typically about 6 min"},
+		{[]float64{60, 7200, 8000, 9000, 9500, 10800, 90000}, "Typically 2–3 h"},
+	} {
+		_, low, high := typicalRange(test.runs)
+		if got := typicalWords(itemCost{Low: low, High: high}); got != test.want {
+			t.Errorf("%v: %q, want %q", test.runs, got, test.want)
 		}
 	}
 }

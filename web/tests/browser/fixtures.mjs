@@ -363,9 +363,9 @@ const statusHeadings = { work: "Work", data: "Data" };
 // The schedule (docs/background-work.md §11), as /api/status and GET
 // /api/background report it.
 const backgroundItem = (id, label, cadence, state, changes = {}) => ({
-  id, label, verb: `Updating ${label}`, feeds: "Pages it feeds", why: "Why it runs where it does.", sub: changes.sub ?? "Pages it feeds", cadence, cadence_label: cadence, column: cadence, placed: cadence,
+  id, label, verb: `Updating ${label}`, feeds: "Pages it feeds", why: "Why it runs where it does.", sub: changes.sub ?? "Pages it feeds", cadence, cadence_label: cadence, column: cadence, placed: cadence, usual_cadence: cadence,
   adaptive: false, fixed: false, opt_in: false, override: "", state, state_label: { current: "Updated", running: "Updating now", failed: "Failed", queued: "Up next", unavailable: "Not set up" }[state],
-  as_of: iso(41 * 60000), next_at: iso(-19 * 60000), error: null, note: null, cost: { seconds: 40, runs: 7, class: "light", text: "about 40 s" },
+  as_of: iso(41 * 60000), next_at: iso(-19 * 60000), error: null, note: null, cost: { seconds: 40, runs: 7, class: "light", text: "about 40 s", typical: "Typically 30–45 s" },
   choices: [{ value: "", label: "Automatically" }, { value: "daily", label: "Daily" }, { value: "manual", label: "Only when I ask" }], ...changes,
 });
 const backgroundView = (items, headline) => ({
@@ -385,7 +385,7 @@ const idleBackground = backgroundView([
   backgroundItem("repositories", "Repositories & merges", "frequent", "current"),
   backgroundItem("writing", "Your writing", "hourly", "current", { adaptive: true,
     cadence_moves: [{ cadence: "frequent", label: "Promote to Frequently for a week" }, { cadence: "daily", label: "Demote to Daily for a week" }],
-    cost: { seconds: 358, runs: 7, class: "heavy", text: "about 6 min" }, note: "Moves to Frequently once a run usually takes under a minute." }),
+    cost: { seconds: 358, runs: 7, class: "heavy", text: "about 6 min", typical: "Typically 5–8 min" }, note: "Moves to Frequently once a run usually takes under a minute." }),
   backgroundItem("findings", "Findings", "hourly", "current"),
   backgroundItem("verification", "Verify indexed data", "hourly", "queued", { sub: "Integrity checks deferred by quick indexing", why: "Checks a bounded batch of larger inputs once the library is quiet.", cost: { seconds: 1, runs: 2, class: "light", text: "about 1 s" } }),
   backgroundItem("preserve", "Preserve originals", "daily", "current"),
@@ -415,7 +415,7 @@ export const backgroundDocument = {
 export const temporaryBackgroundDocument = {
   ...backgroundDocument,
   view: backgroundView(idleBackground.items.map(item => item.id === "writing" ? {
-    ...item, placed: "daily", temporary_cadence: { cadence: "hourly", expires_at: iso(-7 * day) },
+    ...item, placed: "daily", usual_cadence: "daily", temporary_cadence: { cadence: "hourly", expires_at: iso(-7 * day) },
     note: "Temporary schedule; your usual schedule resumes after one week.",
   } : item), idleBackground.headline),
 };

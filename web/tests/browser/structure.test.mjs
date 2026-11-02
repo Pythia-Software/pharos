@@ -448,21 +448,21 @@ const ROUTES = [
     },shown:`#cloud-step-${step-1}`
   })),
   { name: "Sources", url: "/settings/sources", ready: "#sourceGrid .source-card" },
-  { name: "Background updates", url: "/settings/sync", ready: "#syncHistoryTables .qt-row" },
-  ...[false, true].map(details => ({ name: `Background updates deferred verification${details ? ' details' : ''}`, url: "/settings/sync", ready: "#syncHistoryTables .qt-row", api: {
+  { name: "Background Processing", url: "/settings/sync", ready: "#syncHistoryTables .qt-row" },
+  ...[false, true].map(details => ({ name: `Background Processing deferred verification${details ? ' details' : ''}`, url: "/settings/sync", ready: "#syncHistoryTables .qt-row", api: {
     "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [{ ...defaultApi["GET /api/sync/status"].history[0], audit: { outcome: "deferred", discovered_units: 10, deferred_units: 1, detail: "large group queued for manual verification" } }] },
   }, ...(details ? { open: page => page.getByRole("region", { name: "Recent run history", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" } : {}) })),
-  { name: "Background updates schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Your writing" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
-  { name: "Background updates message labels waiting", url: "/settings/sync", ready: "#labelsEnabled", api: {
+  { name: "Background Processing schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Your writing" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
+  { name: "Background Processing message labels waiting", url: "/settings/sync", ready: "#labelsEnabled", api: {
     "GET /api/background": { ...defaultApi["GET /api/background"], labels: { enabled: true, can_change: true,
       status: "On, waiting for the labeling model: partly downloaded (64 of 142 MB, resumed on the next attempt). The labeling worker is missing; install a Pharos build that includes it, or configure a local worker." } },
   } },
-  { name: "Background updates temporary schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", api: { "GET /api/background": temporaryBackgroundDocument }, open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Your writing" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
-  { name: "Background updates sources", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "New conversations" }).click(), shown: "#backgroundSchedule .bg-sources" },
-  { name: "Background updates queued verification", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Verify indexed data" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
-  { name: "Background updates diagnostics", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByText("Performance & verification details", { exact: true }).click(), shown: "#syncDiagnosticTables .qt-row" },
-  { name: "Background updates run details", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByRole("region", { name: "Recent run history", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" },
-  { name: "Background updates empty", url: "/settings/sync", ready: "#syncHistoryTables .qt-empty", api: { "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [], source_states: [] } } },
+  { name: "Background Processing temporary schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", api: { "GET /api/background": temporaryBackgroundDocument }, open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Your writing" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
+  { name: "Background Processing sources", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "New conversations" }).click(), shown: "#backgroundSchedule .bg-sources" },
+  { name: "Background Processing queued verification", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Verify indexed data" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
+  { name: "Background Processing diagnostics", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByText("Performance & verification details", { exact: true }).click(), shown: "#syncDiagnosticTables .qt-row" },
+  { name: "Background Processing run details", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByRole("region", { name: "Recent run history", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" },
+  { name: "Background Processing empty", url: "/settings/sync", ready: "#syncHistoryTables .qt-empty", api: { "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [], source_states: [] } } },
   { name: "Legacy Findings settings", url: "/settings/optimization", ready: ".findings-settings .findings-panel" },
   { name: "Layout Preferences", url: "/settings/layout", ready: "#headerExpand" },
   { name: "Header settings", url: "/settings/layout", ready: "#headerExpand", open: page => page.locator('#headerExpand').click(), shown: '#headerActive .header-tool' },
@@ -771,6 +771,21 @@ test('Ask Pharos suggestions stay readable, prefill the editor and remember bein
   await page.evaluate(()=>window.pharosPrefs.flush());
   await page.reload();await toggle.waitFor();await viewport.waitFor();await settled();
   assert.equal(await toggle.getAttribute('aria-expanded'),'true');
+});
+
+test("Background Processing items drag to another schedule for a week", { skip }, async t => {
+  const { page, calls } = await open(t, { url: '/settings/sync', ready: '#backgroundSchedule .bg-col' });
+  const writing = page.locator('#backgroundSchedule .bg-item[data-item="writing"]');
+  const response = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/background/settings');
+  await writing.dragTo(page.locator('#backgroundSchedule .bg-col[data-cadence="frequent"]'));
+  await response;
+  const saved = calls.find(call => call.method === 'POST' && call.path === '/api/background/settings');
+  assert.deepEqual(saved?.body, { temporary_cadences: { writing: 'frequent' } });
+  assert.equal(await page.locator('#backgroundSchedule .bg-item[data-item="findings"]').getAttribute('draggable'), null, 'only adaptive work moves');
+  // A redraw keeps keyboard focus on the item's run button.
+  await page.getByRole('button', { name: 'Run Findings now', exact: true }).focus();
+  await page.evaluate(() => window.pharosBackground.render());
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Run Findings now');
 });
 
 test("dashboard collection wraps after four bookmarked cards", { skip }, async t => {
