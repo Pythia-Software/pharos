@@ -226,8 +226,11 @@ func conversationTokenReportsWithCostState(messages []MessageRecord, suppressCos
 	modelCounters := map[string]tokenCounts{}
 	resultIDs := map[string]bool{}
 	recordStreams := map[string]bool{}
-	for _, m := range messages {
-		raw, v := tokenObject(m)
+	// Each message is decoded once for both passes.
+	raws, values := make([]map[string]any, len(messages)), make([]map[string]any, len(messages))
+	for i, m := range messages {
+		raws[i], values[i] = tokenObject(m)
+		raw, v := raws[i], values[i]
 		if firstString(raw["type"], v["type"]) == "token_usage_record" {
 			stream := defaultString(firstNonNil(v["agent_id"], raw["parent_tool_use_id"], nilIfEmpty(m.ParentNativeID)), "main")
 			stream = defaultString(streamAliases[stream], stream)
@@ -235,7 +238,7 @@ func conversationTokenReportsWithCostState(messages []MessageRecord, suppressCos
 		}
 	}
 	for i, m := range messages {
-		raw, v := tokenObject(m)
+		raw, v := raws[i], values[i]
 		if v == nil {
 			continue
 		}
