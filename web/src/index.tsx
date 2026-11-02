@@ -29,7 +29,8 @@ import { ExploreSearch } from "./explore-search";
 import { recordKeywordSummary, RecordKeywordClause } from "./record-keyword-clause";
 import { refreshTodayHost, changeLibrarySearch, libraryFind, libraryHostQuery, libraryHostState, messageFind, messageHostQuery, readLibraryHost, readMessageSearchHost, readRecordKeyword, recordKeywordFind, recordKeywordHostQuery, sameHostState, withMessageSearch, withoutLibrarySearch, withRecordKeyword, type LibraryHost } from "./host-query-state";
 import { SearchResultsDisplay } from "./search-results-view";
-import { highlightParts, summaryEntries, type WorkMatches, type WorkMatchItem } from "./find-match-model";
+import { highlightParts, matchFindState, summaryEntries, type WorkMatches, type WorkMatchItem } from "./find-match-model";
+import { writeFindParameters } from "./page-find-model";
 import { queryForSearchResultsView, searchResultsView, type SearchResultsView } from "./search-results-view-model";
 import { newKeywordSearch, searchSentence, withheldBatch, type TextSearchDraft } from "./text-search-model";
 import { CarbonImpact, useLegacyCarbonFilters } from "./carbon-impact";
@@ -897,6 +898,7 @@ function openFindHit(hit: FindHit) {
   const params = new URLSearchParams();
   if (hit.conversation_id) params.set("conversation", hit.conversation_id);
   if (hit.message_id) params.set("message", hit.message_id);
+  if (!hit.url && !hit.path) writeFindParameters(params, matchFindState(hit.snippet ?? "", hit.highlights));
   history.pushState(null, "", `/work/${encodeURIComponent(hit.workspace_id)}${params.size ? `?${params}` : ""}`);
   (window as unknown as { routeFromLocation?: () => void }).routeFromLocation?.();
 }

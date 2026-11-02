@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { highlightParts, summaryEntries } from '../../../src/find-match-model';
+import { highlightParts, matchFindState, summaryEntries } from '../../../src/find-match-model';
 
 test('a keyword snippet splits at its highlight spans', () => {
   assert.deepEqual(highlightParts('…Running the dashboard in a browser', [[1, 22], [28, 35]]), [
@@ -27,4 +27,10 @@ test('a card summary interleaves its messages with the counts between them', () 
   ]);
   const one = { complete: true, between: [1, 1], items: [{ kind: 'first', message_id: 'a' }, { kind: 'match', message_id: 'm' }, { kind: 'last', message_id: 'z' }] };
   assert.deepEqual(summaryEntries(one, 1).map(entry => entry.label), ['First ask', '1 message between', 'Match', '1 message between', 'Latest response']);
+});
+
+test('opening a match hands its marked terms to page Find', () => {
+  assert.deepEqual(matchFindState('Running the dashboard, then running the Dashboard again', [[0, 21], [28, 49]]), { text: 'Running the dashboard', caseSensitive: false, regex: false });
+  assert.deepEqual(matchFindState('cache and buffer', [[0, 5], [10, 16]]), { text: 'cache|buffer', caseSensitive: false, regex: true });
+  assert.equal(matchFindState('no marks', []), null);
 });

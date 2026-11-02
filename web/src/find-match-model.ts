@@ -1,3 +1,5 @@
+import { findFromAttention, type FindState } from "./page-find-model";
+
 export type HighlightPart = { text: string; match: boolean };
 
 // Splits a keyword match's snippet at the service's highlight spans (UTF-16
@@ -41,4 +43,15 @@ export function summaryEntries(matches: WorkMatches, total: number): SummaryEntr
     entries.push({ type: "message", item, label });
   });
   return entries;
+}
+
+// Opening a match hands its marked terms to page Find on the work page, the
+// way `text:` attention targets do, so the reader shows the same matches.
+export function matchFindState(text: string, spans: unknown): FindState | null {
+  const seen = new Set<string>(), targets: string[] = [];
+  for (const part of highlightParts(text, spans)) {
+    const key = part.text.toLocaleLowerCase();
+    if (part.match && part.text.trim() && !seen.has(key)) { seen.add(key); targets.push(`text:${part.text}`); }
+  }
+  return findFromAttention(targets, "");
 }
