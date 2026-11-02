@@ -15,7 +15,7 @@ const scopeKey = "pharos-machine-scope";
 const views: Array<[MachineView, string, string]> = [
   ["tokens", "Machine Tokens", "What resources are agents consuming?"],
   ["parallelism", "Machine Parallelism", "How much work is happening concurrently?"],
-  ["time", "Machine Time", "Where is agent time going?"],
+  ["time", "Tool Time", "Where is tool time going?"],
 ];
 
 function readLocation(): { view: MachineView; scope: MachineScope } {

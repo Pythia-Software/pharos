@@ -54,7 +54,7 @@ function createPharosSourceWizard() {
 .pharos-onboard-body h3{font:600 19px/1.3 var(--serif);margin:16px 0 0}
 .pharos-onboard .pharos-muted{color:var(--muted,#666);font-weight:400}
 .pharos-onboard [hidden]{display:none!important}
-.pharos-onboard :focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.pharos-onboard :focus-visible{outline:2px solid var(--focus-ring, var(--accent));outline-offset:3px}
 .pharos-onboard>h2:focus{outline:none}
 .pharos-tool-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;border:0;margin:0;padding:0;min-width:0}
 .pharos-onboard .pharos-tool{display:flex;align-items:center;gap:16px;position:relative;padding:20px;margin:0;border:1px solid var(--line);border-radius:9px;background:var(--bg);font-weight:400;cursor:pointer}

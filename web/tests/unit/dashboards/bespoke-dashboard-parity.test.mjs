@@ -256,7 +256,11 @@ function hourPair(id, cardHours, { minutes = 0, inProgress = {} } = {}) {
   assert.deepEqual([state.view, state.cycle, state.reduce, analysis.native], ["cycle", "hour", "total", true], id);
   const result = nativeCycleResult(analysis, core.evaluateMetrics(dashboardRows[catalog.dataset], analysis.query, schemas[catalog.dataset], { now: at.getTime() }).metrics[0]).result;
   const expected = Object.fromEntries(Object.entries(cardHours(item, at.getTime())).map(([hour, value]) => [hour, round(value - (inProgress[hour] ?? 0))]).filter(([, value]) => value));
-  assert.deepEqual(Object.fromEntries(result.buckets.filter(bucket => bucket.value).map(bucket => [`${String(bucket.keys[0]).padStart(2, "0")}:00`, round(bucket.value)])), expected, id);
+  const actual = Object.fromEntries(result.buckets.filter(bucket => bucket.value).map(bucket => [`${String(bucket.keys[0]).padStart(2, "0")}:00`, bucket.value]));
+  assert.deepEqual(Object.keys(actual).sort(), Object.keys(expected).sort(), `${id}: the same hours`);
+  // Equivalent aggregations can round on opposite sides of the same decimal
+  // boundary, especially after subtracting the hour still in progress.
+  for (const [hour, value] of Object.entries(expected)) assert.ok(Math.abs(actual[hour] - value) <= 1e-9 * Math.max(1, Math.abs(value)), `${id} ${hour}: ${actual[hour]} != ${value}`);
   assert.ok(Object.keys(expected).length > 3);
 }
 test("writing-hours: typed words by local hour", () => {

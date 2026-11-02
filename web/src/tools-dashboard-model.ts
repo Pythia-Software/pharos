@@ -8,7 +8,7 @@ import { isOriginDimension, originLabel } from "./origin-dimensions";
 export function toolMetricPresentation(metric: MetricResult | undefined, groupBy: string[], labels: Record<string, (value: string) => string> = {}) {
   const source = new Map<string, MetricResult["buckets"][number]>();
   if (!metric) return { metric, sourceBucket: (bucket: MetricResult["buckets"][number]) => bucket };
-  // A label shared by two values (device names, or Agent Time's command:foo
+  // A label shared by two values (device names, or Tool Time's command:foo
   // and tool:foo) names its value too, so every group stays distinct and
   // opens its own records.
   const names = groupBy.map(field => {

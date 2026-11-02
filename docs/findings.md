@@ -1,5 +1,10 @@
 # Findings
 
+Optimize separates **Efficiency** (the measured findings described here) from
+**[Risky actions](safety.md)** (questions for an agent to investigate). They share the
+basket interaction and have separate prompts and lifecycles. Copying an
+efficiency prompt starts measurement; copying a risky action prompt records a handoff.
+
 Findings are recurring patterns in your agents' work that a change to a
 repository, its instructions, or a harness setting can fix. Each one says what
 happens, what it costs, and the change to make, in words about your own work.

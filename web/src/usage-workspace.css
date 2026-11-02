@@ -41,7 +41,7 @@
 .usage-query-destinations{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .usage-dashboard-links .usage-query-destination{display:flex;flex-direction:column;gap:5px;min-width:0;padding:9px 11px;border:1px solid var(--line);border-radius:7px;color:var(--ink);text-decoration:none;background:var(--panel)}
 .usage-dashboard-links .usage-query-destination:hover{border-color:var(--gold);text-decoration:none}
-.usage-query-destination:focus-visible{outline:2px solid var(--gold);outline-offset:3px}
+.usage-query-destination:focus-visible{outline:2px solid var(--focus-ring, var(--accent));outline-offset:3px}
 .usage-query-destination-heading{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;margin-bottom:2px;font-size:var(--fs-md)}
 .usage-query-destination-heading strong{flex:1;min-width:0;color:var(--gold);font-weight:600}
 .usage-query-destination-heading>.app-icon{margin-left:auto;flex:none;width:15px;height:15px;color:var(--gold)}
