@@ -51,3 +51,22 @@ func TestRegisteredRoleFillsAndValidates(t *testing.T) {
 		t.Error("an unregistered role was accepted")
 	}
 }
+
+// The segment role numbers a framing's sentences by their place in its
+// window, so a sentence left out leaves its number unused.
+func TestSegmentRoleNumbersSentences(t *testing.T) {
+	inputs := InputContracts[InputContractIDsAttentionPoolSegments].Inputs
+	row := Framed{IDs: []int32{ClsID, 5, 6, 7, 8, 9, SepID}, Spans: FrameSpans{Text: Span{3, 5}},
+		Extra: map[string][]Span{SegmentSpans: {{1, 3}, {}, {3, 5}, {5, 6}}}}
+	tensors := BatchInputs(inputs, []Framed{row}, 8)
+	if !slices.Equal(tensors[3].Int32, []int32{0, 1, 1, 3, 3, 4, 0, 0}) || !slices.Equal(tensors[2].Int32, []int32{0, 0, 0, 1, 1, 0, 0, 0}) {
+		t.Fatalf("segments %v, pool %v", tensors[3].Int32, tensors[2].Int32)
+	}
+	if err := ValidateRun(&RunRequest{Inputs: tensors}, inputs, 50368, 8, 768); err != nil {
+		t.Fatal(err)
+	}
+	tensors[3].Int32[1] = MaxSegments + 1
+	if ValidateRun(&RunRequest{Inputs: tensors}, inputs, 50368, 8, 768) == nil {
+		t.Fatal("a segment number past MaxSegments was accepted")
+	}
+}

@@ -21,7 +21,7 @@ import (
 var runningItem = map[string]string{
 	"index.changes.automatic": "conversations", "index.changes.manual": "conversations", "index.sources.legacy": "conversations",
 	"maintenance.library-view": "search", "analysis.github": "repositories", "analysis.identities": "repositories", "analysis.git": "repositories",
-	"analysis.tools": "tools", "analysis.authorship": "writing", "analysis.findings": "findings", "analysis.labels": "labels",
+	"analysis.tools": "tools", "analysis.authorship": "writing", "analysis.findings": "findings", "analysis.labels": "labels", "analysis.agent_events": "agent_events",
 	"background.capture/sources": "other-sources", "background.capture/preserve": "preserve", "capture.this-mac": "preserve", "index.captures": "preserve", "library.update": "preserve",
 	"library.upgrade": "upgrade", "tools.ledger.build": "upgrade", "backup.local": "backup",
 }
@@ -376,6 +376,10 @@ func itemSub(item backgroundItem, in backgroundInputs) string {
 	case "labels":
 		if in.labelsWaiting != "" {
 			return "Labeling is " + in.labelsWaiting
+		}
+	case "agent_events":
+		if in.agentEventsWaiting != "" {
+			return "Finding agent events is " + in.agentEventsWaiting
 		}
 	}
 	return item.Feeds
@@ -802,6 +806,7 @@ func (s *Server) postBackgroundRun(w http.ResponseWriter, r *http.Request, body 
 		case item.requiresLabels && !s.Config().Labels.Enabled:
 			// Labels are off here (the broker asks every library after a
 			// download).
+		case item.requiresAgentEvents && !s.agentEventsEnabled(r.Context()):
 		default:
 			run = append(run, id)
 		}

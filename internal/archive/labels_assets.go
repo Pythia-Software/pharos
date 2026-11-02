@@ -47,6 +47,8 @@ type labelsAsset struct {
 type labelsAssetSet struct {
 	Model   labelsAsset `json:"model"`
 	Runtime labelsAsset `json:"onnxruntime"`
+	// AgentEventsModel is the agent event verifier (docs/agent-events.md).
+	AgentEventsModel labelsAsset `json:"agent_events_model"`
 }
 
 //go:embed labels/assets.json
@@ -62,6 +64,9 @@ var labelsAssets = func() labelsAssetSet {
 	}
 	if url := os.Getenv("PHAROS_LABELS_MODEL_URL"); url != "" {
 		set.Model.URL = url
+	}
+	if url := os.Getenv("PHAROS_AGENT_EVENTS_MODEL_URL"); url != "" {
+		set.AgentEventsModel.URL = url
 	}
 	return set
 }()
@@ -447,6 +452,27 @@ func (settings LabelerSettings) labelsWaiting() string {
 	return "waiting for the download (" + strings.Join(parts, "; ") + ")"
 }
 
+// labelerDownloads is what a library's labeler work still needs downloaded,
+// each asset once: the labels' where labels are on, and the runtime and the
+// verifier where agent events are.
+func labelerDownloads(labels LabelerSettings, events AgentEventSettings) []labelsAsset {
+	missing := []labelsAsset{}
+	add := func(assets ...labelsAsset) {
+		for _, asset := range assets {
+			if !slices.ContainsFunc(missing, func(have labelsAsset) bool { return have.Name == asset.Name }) {
+				missing = append(missing, asset)
+			}
+		}
+	}
+	if labels.Enabled {
+		add(labels.missingAssets()...)
+	}
+	if events.Enabled {
+		add(events.missingAssets(labels)...)
+	}
+	return missing
+}
+
 // labelsFetchRetry is how long the broker waits to retry a failed download.
 var labelsFetchRetry = 15 * time.Minute
 
@@ -455,12 +481,14 @@ var labelsFetchRetry = 15 * time.Minute
 // downloads them once for every library, then asks the open libraries'
 // services to label now. A failed download is retried later; an interrupted
 // one resumes.
-func (m *applicationManager) startLabelsFetch(settings LabelerSettings) {
+func (m *applicationManager) startLabelsFetch(settings LabelerSettings, events AgentEventSettings) {
 	if m.ctx.Err() != nil {
 		return
 	}
-	missing := settings.missingAssets()
-	if !settings.Enabled || len(missing) == 0 || slices.ContainsFunc(missing, func(asset labelsAsset) bool { return !asset.pinned() }) {
+	// An asset this build pins no download for (a model whose release is not
+	// out yet) is left out; the rest still download.
+	missing := slices.DeleteFunc(labelerDownloads(settings, events), func(asset labelsAsset) bool { return !asset.pinned() })
+	if len(missing) == 0 {
 		return
 	}
 	if !m.labelsFetching.CompareAndSwap(false, true) {
@@ -475,7 +503,7 @@ func (m *applicationManager) startLabelsFetch(settings LabelerSettings) {
 			// Another process (pharos labels fetch) is downloading.
 			return nil
 		case err != nil && m.ctx.Err() == nil:
-			time.AfterFunc(labelsFetchRetry, func() { m.startLabelsFetch(settings) })
+			time.AfterFunc(labelsFetchRetry, func() { m.startLabelsFetch(settings, events) })
 			return err
 		case err != nil:
 			return err
@@ -485,8 +513,9 @@ func (m *applicationManager) startLabelsFetch(settings LabelerSettings) {
 	})
 }
 
-// requestLabels asks every open library's service to label now (Run now of
-// its labels item); a library without labels ignores it.
+// requestLabels asks every open library's service to label now and find
+// agent events now (Run now of those items); a library without them
+// ignores it.
 func (m *applicationManager) requestLabels() {
 	m.mu.Lock()
 	endpoints := []applicationEndpoint{}
@@ -495,14 +524,16 @@ func (m *applicationManager) requestLabels() {
 	}
 	m.mu.Unlock()
 	for _, endpoint := range endpoints {
-		request, err := http.NewRequestWithContext(m.ctx, "POST", endpoint.URL+"/api/background/run", strings.NewReader(`{"item":"labels"}`))
-		if err != nil {
-			continue
-		}
-		request.Header.Set("Authorization", "Bearer "+endpoint.Token)
-		request.Header.Set("Content-Type", "application/json")
-		if response, err := m.client.Do(request); err == nil {
-			response.Body.Close()
+		for _, item := range []string{"labels", "agent_events"} {
+			request, err := http.NewRequestWithContext(m.ctx, "POST", endpoint.URL+"/api/background/run", strings.NewReader(`{"item":"`+item+`"}`))
+			if err != nil {
+				continue
+			}
+			request.Header.Set("Authorization", "Bearer "+endpoint.Token)
+			request.Header.Set("Content-Type", "application/json")
+			if response, err := m.client.Do(request); err == nil {
+				response.Body.Close()
+			}
 		}
 	}
 }

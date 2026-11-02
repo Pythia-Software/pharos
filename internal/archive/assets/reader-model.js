@@ -1,7 +1,7 @@
 // The conversation reader's model, without the DOM: message bodies, normalized
 // events, token accounting and context samples, tool calls and their results,
 // turns, file paths, the Show filter's categories, Find, harness XML blocks,
-// message summaries, local labels, and Markdown parsing.
+// message summaries, local labels, agent events, and Markdown parsing.
 // It is a classic script whose top-level declarations are globals: ui.py loads
 // it before its inline script, which renders with them, and a shared export
 // inlines it (sharedPage in share.go). Node tests load it with vm
@@ -185,7 +185,9 @@ function normalizeMessages(messages){
     const original=message.raw_text||message.text,parsed=messageJSON(message),value=parsed?.payload&&typeof parsed.payload==='object'?parsed.payload:parsed;
     const base={...message,...(message.authorship?{authorship_text:message.authorship_text??message.text}:{}),native_id:message.native_id||message.id||`event-${index}`,raw_text:original};
     let emitted=false;
-    const emit=(fields,suffix='')=>{const normalized={...base,...fields,tokenReport:emitted?null:reports[index],native_id:base.native_id+suffix};messageJSONCache.set(normalized,{...messageJSONCache.get(message)});output.push(normalized);emitted=true};
+    // Agent events' ranges index the stored text, so only an entry showing that
+    // text keeps them (a block split out of a JSON message does not).
+    const emit=(fields,suffix='')=>{const normalized={...base,...fields,tokenReport:emitted?null:reports[index],native_id:base.native_id+suffix};if(normalized.agent_events&&String(normalized.text??'')!==String(message.text??''))delete normalized.agent_events;messageJSONCache.set(normalized,{...messageJSONCache.get(message)});output.push(normalized);emitted=true};
     if(['thinking','reasoning','analysis'].includes(message.kind)){emit({kind:'reasoning'});return}
     const blocks=Array.isArray(value?.message?.content)?value.message.content:Array.isArray(value?.content)?value.content:Array.isArray(value)?value:null;
     if(!['tool_result','delegation_result','error'].includes(message.kind)&&blocks&&blocks.some(block=>['text','input_text','output_text','tool_use','tool_result','thinking'].includes(block?.type))){
@@ -457,12 +459,73 @@ function messageLabelView(message,taxonomy=[]){
 // classification finds them, otherwise all of it. Typed text stays '1'
 // (human-written); the rest is '2'.
 function labelMask(message,text,mask=humanWritingMask(message,text)){return message?.labels?.ids?.length&&!mask.includes('1')?'2'.repeat(text.length):mask}
+
+// Agent events (agent_events.go, agentEventsAttacher): sentences of an agent
+// message where something happened (an obstacle, a discovery, a workaround),
+// with what it was about (subject) and what the agent did (response). Ranges
+// are UTF-16 offsets of the message's stored text (messages.text), so they
+// apply only where the reader shows that text unchanged: a reply's card, or
+// thinking's own text (Codex keeps the JSON event in raw_text and the prose
+// in text). normalizeMessages drops them from blocks it splits out. Each event's sentence is
+// marked in its group's hue; subject and response sentences that are not
+// themselves events get a lighter mark. Groups follow this fixed order, and
+// each has the class event-<suffix>.
+const EVENT_GROUPS=[['Friction','friction'],['Reactions and learning','learning'],['Worth a second look','second-look'],['Choices you may not see','choices']];
+function eventGroupClass(group){return 'event-'+(EVENT_GROUPS.find(([name])=>name===group)?.[1]||EVENT_GROUPS[0][1])}
+// The text events are shown on: thinking's own text (the reader shows it as a
+// Reasoning row), otherwise what the message card shows.
+function eventText(message){return ['thinking','reasoning','analysis'].includes(message?.kind)?String(message.text??''):displayText(message)}
+function messageEventView(message,text=eventText(message)){
+  const events=message?.agent_events;if(!Array.isArray(events)||!events.length||text!==String(message.text??''))return null;
+  const fits=range=>Array.isArray(range)&&Number.isInteger(range[0])&&Number.isInteger(range[1])&&range[0]>=0&&range[0]<range[1]&&range[1]<=text.length;
+  const slice=ranges=>ranges.filter(fits).map(range=>text.slice(range[0],range[1]).trim()).join(' ');
+  const view=events.filter(event=>fits(event.sentence)).map(event=>({kind:event.kind,label:event.label||event.kind,group:event.group||'',definition:event.definition||'',
+    probability:typeof event.probability==='number'?event.probability:null,sentence:event.sentence,subject:(event.subject||[]).filter(fits),response:(event.response||[]).filter(fits),
+    sentenceText:slice([event.sentence]),subjectText:slice(event.subject||[]),responseText:slice(event.response||[])}));
+  return view.length?view:null;
+}
+// The distinct sentences a message's events mark, in text order: the events'
+// own sentences, and their subject and response sentences (context).
+function eventSpans(events){
+  const distinct=ranges=>[...new Map(ranges.map(range=>[range[0]+':'+range[1],range])).values()].sort((a,b)=>a[0]-b[0]||a[1]-b[1]);
+  return{sentences:distinct(events.map(event=>event.sentence)),context:distinct(events.flatMap(event=>[...event.subject,...event.response]))};
+}
+// eventMask overlays a message's events on mask (a flag per character).
+// Each marked sentence gets its own flag, so Markdown keeps it a mark of its
+// own whose class names it (event-at-N, the Nth sentence or context span):
+// a flag is a private-use character, 8 per span, the low 3 bits the group
+// (7 for context). Context goes first, then each event's sentence, so a
+// sentence that is an event keeps its event's hue; of two events on one
+// sentence the likelier picks it.
+const EVENT_FLAG_BASE=0xE000,EVENT_FLAG_SPANS=800,EVENT_CONTEXT_GROUP=7;
+function eventMask(text,events,mask=''){
+  if(!events?.length)return mask;
+  const flags=Array.from({length:text.length},(_,index)=>mask[index]||'0'),spans=eventSpans(events),index=(list,range)=>list.findIndex(item=>item[0]===range[0]&&item[1]===range[1]);
+  const paint=(range,span,group)=>{if(span<0||span>=EVENT_FLAG_SPANS)return;const flag=String.fromCharCode(EVENT_FLAG_BASE+span*8+group);for(let at=range[0];at<range[1]&&at<flags.length;at++)flags[at]=flag};
+  for(const range of spans.context)paint(range,index(spans.context,range),EVENT_CONTEXT_GROUP);
+  for(const event of [...events].sort((a,b)=>(a.probability??0)-(b.probability??0))){const group=EVENT_GROUPS.findIndex(([name])=>name===event.group);paint(event.sentence,index(spans.sentences,event.sentence),Math.max(0,group))}
+  return flags.join('');
+}
+// The events a highlighted mark belongs to, by the span its class names: the
+// events of that sentence, or for a context mark, those whose subject or
+// response it is.
+function eventsAtMark(events,mark){
+  const classes=String(mark?.className??'').split(/\s+/),at=classes.find(name=>/^event-at-\d+$/.test(name));if(!at)return [];
+  const spans=eventSpans(events),span=Number(at.slice(9)),same=(a,b)=>a&&b&&a[0]===b[0]&&a[1]===b[1];
+  if(classes.includes('event-context')){const range=spans.context[span];return events.filter(event=>[...event.subject,...event.response].some(item=>same(item,range)))}
+  const range=spans.sentences[span];return events.filter(event=>same(event.sentence,range));
+}
 const MARK_CLASSES={'1':'human-written','2':'labeled-text'};
+function markClass(flag){
+  if(MARK_CLASSES[flag])return MARK_CLASSES[flag];
+  const code=flag.charCodeAt(0)-EVENT_FLAG_BASE;if(!(code>=0&&code<EVENT_FLAG_SPANS*8))return '';
+  const span=code>>3,group=code&7;return group===EVENT_CONTEXT_GROUP?`event-context event-at-${span}`:`agent-event ${eventGroupClass(EVENT_GROUPS[group]?.[0])} event-at-${span}`;
+}
 function markdownText(text,mask=''){
   if(!/[^0]/.test(mask))return [text];
   const result=[];let start=0;
   while(start<text.length){const flag=mask[start]||'0';let end=start+1;while(end<text.length&&(mask[end]||'0')===flag)end++;
-    const part=text.slice(start,end);result.push(MARK_CLASSES[flag]?markdownElement('mark',MARK_CLASSES[flag],part):part);start=end;
+    const part=text.slice(start,end),className=markClass(flag);result.push(className?markdownElement('mark',className,part):part);start=end;
   }return result;
 }
 

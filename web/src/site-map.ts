@@ -595,6 +595,7 @@ type DashboardLinks = { catalog: true } | { options: Option[]; days: Option };
 const dashboardLinks: Record<UsageTopic, DashboardLinks> = {
   activity: { catalog: true }, human: { catalog: true }, tokens: { catalog: true }, skills: { catalog: true }, calls: { catalog: true },
   tools: { catalog: true }, time: { catalog: true }, parallelism: { catalog: true }, mcp: { catalog: true }, carbon: { catalog: true },
+  agent_experience: { catalog: true },
   "thinking-overview": { options: thinkingOptions(false), days: thinkingDaysOption },
   "thinking-detail": { options: thinkingOptions(true), days: thinkingDaysOption },
 };

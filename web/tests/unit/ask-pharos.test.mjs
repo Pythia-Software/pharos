@@ -1,5 +1,7 @@
 import { EMPTY_QUERY, encodeQuery } from '@pythia-software/query-table-core';
 import { askChartPreviewJob, onAskChartRefresh } from '../../src/ask-chart-model';
+import { askWorkPreviewAddress, workPreviewEndpoint, workPreviewView } from '../../src/ask-work-model';
+import { combineAskPreviews } from '../../src/ask-link-previews';
 import { dashboardDefaults } from '../../src/dashboard-defaults';
 import { usageTopicDatasets } from '../../src/usage-workspace-model';
 import { schemas } from './helpers/recipes.mjs';
@@ -409,6 +411,49 @@ test('Ask preview jobs keep each chart URL and its moving window intact', t => {
   const jobs = urls.map(address=>askChartPreviewJob(address,schemas));
   assert.notEqual(jobs[0].id,jobs[1].id);
   for (const [index,job] of jobs.entries()) assert.equal(job.options.dashboard,urls[index]);
+});
+
+test('Ask previews work pages and their conversations in either link spelling, and nothing else', () => {
+  assert.deepEqual(askWorkPreviewAddress('/work/w%201'),{workspace:'w 1'});
+  assert.deepEqual(askWorkPreviewAddress('/work/w1?conversation=c1&reveal=m4'),{workspace:'w1',conversation:'c1'});
+  assert.deepEqual(askWorkPreviewAddress('/work/w1/conversation/c1?highlight=m1&highlight=m2'),{workspace:'w1',conversation:'c1'});
+  for (const address of ['/work','/work/','/work/w1/files','/work/w1/conversation/','/work/w1/conversation/c1?conversation=c2','/work/w1?find=retry','https://elsewhere.test/work/w1','/conversation/c1','/?ask_chat=w1','/analyze?analyze_mode=dashboards']) {
+    assert.equal(askWorkPreviewAddress(address),undefined,address);
+  }
+  assert.equal(workPreviewEndpoint({workspace:'w/1',conversation:'c&1'}),'/api/work/w%2F1/preview?conversation=c%261');
+  assert.equal(workPreviewEndpoint({workspace:'w1'}),'/api/work/w1/preview');
+});
+
+test('Ask combines preview kinds so each link renders with the first kind that claims it', () => {
+  const mounted = [], kind = (name, prefix) => ({canRender:address=>address.startsWith(prefix),revalidate:()=>mounted.push(name+' revalidated'),mount:(_host,card)=>{mounted.push(name+' '+card.href);return ()=>{};}});
+  const previews = combineAskPreviews(kind('chart','/analyze'),kind('work','/work/'));
+  assert.equal(previews.canRender('/settings'),false);
+  previews.mount(null,{href:'/work/w1',title:''});previews.mount(null,{href:'/analyze?x',title:''});previews.revalidate();
+  assert.deepEqual(mounted,['work /work/w1','chart /analyze?x','chart revalidated','work revalidated']);
+});
+
+test('work previews identify the run in two lines: where and when, then who and how much', () => {
+  const metric = (value, quality='observed') => ({value,quality,known:1,total:1});
+  const specs = [['cost','API cost','usd'],['clock','Clock span','ms'],['children','Children','count'],['turns','User turns','count'],['files','Files Edited','count']].map(([id,label,unit])=>({id,label,unit,definition:label+' definition'}));
+  const models = [{model:'claude-opus-4-5-20251101',provider:'claude',sessions:3,tokens:9},{model:'gpt-5',provider:'codex',sessions:1,tokens:5},{model:'gemini',provider:'antigravity',sessions:1,tokens:2}];
+  const now = Date.parse('2026-11-01T18:00:00Z'), start = Date.parse('2026-10-30T20:14:00Z');
+  const workspace = {start,end:null,sessions:7,models,totals:{cost:metric(41.2,'partial'),clock:metric(3_600_000*3+12*60_000),children:metric(6),turns:metric(1),files:metric(null)}};
+  const preview = {repository:'pharos',branch:'gbdubs/fix',metrics:specs,workspace};
+  const text = parts => parts.map(part=>part.text);
+  const work = workPreviewView(preview,now);
+  assert.match(work.where[0].text,/Oct 30/);assert.doesNotMatch(work.where[0].text,/2026/,'this year is implied');
+  assert.match(work.where[0].title,/2026/);
+  assert.equal(work.where[1].text,'3h 12m');
+  assert.equal(work.where[2].text,'pharos · gbdubs/fix','the place truncates first');
+  assert.deepEqual(text(work.what),['6 subagents','claude-opus-4-5, gpt-5 +1','1 turn','$41.20+'],'unknown measures are omitted; partial ones are marked');
+  assert.match(work.what[1].title,/claude-opus-4-5-20251101 \(claude\): 3 sessions/);
+  assert.match(workPreviewView(preview,Date.parse('2027-02-01T00:00:00Z')).where[0].text,/2026/,'other years are named');
+  // Independent top-level conversations are sessions, not subagents; partial
+  // counts keep their marker even when only one item was seen.
+  const conversation = {start:null,end:null,sessions:2,models:models.slice(1,2),totals:{children:metric(0),turns:metric(1,'partial'),files:metric(4,'partial')}};
+  const scoped = workPreviewView({metrics:specs,workspace,conversation},now);
+  assert.deepEqual(text(scoped.where),[],'nothing known about where or when is left out');
+  assert.deepEqual(text(scoped.what),['0 subagents','gpt-5','1+ turns','4+ files']);
 });
 
 test('retained Ask charts revalidate on reopening and their own data or calendar refresh until disposed', () => {

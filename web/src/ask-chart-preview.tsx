@@ -9,14 +9,9 @@ import { CardLoading } from "./card-loading";
 import { ChartTooltip } from "./chart-tooltip";
 import type { QueryDataset } from "./query-links";
 import type { PreviewJob, QueryPreview } from "./query-previews";
+import { PreviewBoundary, type AskLinkPreviews } from "./ask-link-previews";
 
-export type AskChartPreviews = {
-  canRender: (address: string) => boolean;
-  mount: (host: HTMLElement, card: { href: string; title: string }) => () => void;
-  revalidate: () => void;
-};
-
-export function createAskChartPreviews(schemas: Partial<Record<QueryDataset, FieldSchema>>): AskChartPreviews {
+export function createAskChartPreviews(schemas: Partial<Record<QueryDataset, FieldSchema>>): AskLinkPreviews {
   const openings = new EventTarget();
   return {
     canRender: address => Boolean(askChartPreviewJob(address, schemas)),
@@ -25,18 +20,13 @@ export function createAskChartPreviews(schemas: Partial<Record<QueryDataset, Fie
       const job = askChartPreviewJob(card.href, schemas);
       if (!job) return () => {};
       const root = createRoot(host);
-      root.render(<PreviewBoundary><AskChartPreview job={job} title={card.title} openings={openings} /></PreviewBoundary>);
+      root.render(<PreviewBoundary message={unavailable}><AskChartPreview job={job} title={card.title} openings={openings} /></PreviewBoundary>);
       return () => root.unmount();
     },
   };
 }
 
 const unavailable = "Chart preview unavailable. Open the linked view to explore it.";
-class PreviewBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
-  state = { failed: false };
-  static getDerivedStateFromError() { return { failed: true }; }
-  render() { return this.state.failed ? <p role="status">{unavailable}</p> : this.props.children; }
-}
 
 function AskChartPreview({ job, title, openings }: { job: PreviewJob; title: string; openings: EventTarget }) {
   const host = useRef<HTMLElement>(null);

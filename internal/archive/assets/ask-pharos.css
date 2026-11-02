@@ -334,3 +334,9 @@
 #pharos-ask .pharos-chart-preview{margin:0;padding:12px;min-width:0;--query-cover-bg:var(--pharos-panel);--query-tone:var(--pharos-sea)}
 #pharos-ask .pharos-chart-preview-meta{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 12px;margin-bottom:10px;color:var(--pharos-muted);font-size:11px}
 #pharos-ask .pharos-chart-preview-cover{height:auto;min-height:220px;padding:0;overflow:hidden}
+
+#pharos-ask .pharos-work-preview{box-sizing:content-box;min-height:36px;margin:0;padding:8px 12px;min-width:0;font-size:12px;line-height:18px}
+#pharos-ask .pharos-work-preview-line{margin:0;overflow:hidden;color:var(--pharos-ink);text-overflow:ellipsis;white-space:nowrap}
+#pharos-ask .pharos-work-preview-line+.pharos-work-preview-line{color:var(--pharos-muted)}
+#pharos-ask .pharos-work-preview-line span+span::before{content:"·";margin:0 6px;color:var(--pharos-muted)}
+#pharos-ask .pharos-work-preview-status{margin:0;color:var(--pharos-muted)}
