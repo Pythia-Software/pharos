@@ -118,8 +118,10 @@ it, reused-line origins and their first distinct conversations, template
 session/day counts, last user-turn times, and question-form provenance.
 Triggers record the earliest changed input time, including user-only messages.
 A normal append reads and classifies only that suffix, looking up historical
-candidates and lines as needed. It reuses launches when all changed inputs
-postdate every existing headless start. Reply replay includes any idle gap
+candidates and lines as needed. It reuses stored launches when no headless
+run starts after the watermark. When new runs arrive, it derives launches
+again and keeps the suffix path only if every stored launch is unchanged; the
+new links are stored with the suffix. Reply replay includes any idle gap
 since the previous user turn, so question forms remain recognizable beyond
 the seven-day copied-output window. Every conversation's replayed questions
 are saved with its earlier history, even when only another conversation has
@@ -144,6 +146,12 @@ changed-data rebuild populates the extra derived tables;
 its production storage cost has not yet been measured.
 Checkpoint version 2 forces one full rebuild of version 1 state, which may
 have lost question history or restored an incompatible mirror message anchor.
+Checkpoint version 3 fingerprints only the conversations that started by the
+watermark, plus any linked to another conversation or parent to an earlier
+one, so a new conversation, workspace or run no longer forces the full
+fallback. A new conversation dates its dirty evidence by its start rather than
+by the time it was indexed. Upgrading to version 3 runs one full pass (about four minutes on
+a 110 GB catalog).
 
 Checkpoint publication is chunked too. Its version is invalidated before
 output writes and restored with the generation only after all state writes
