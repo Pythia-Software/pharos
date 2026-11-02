@@ -1,12 +1,10 @@
 // status-store.js: the unified activity panel's one copy of the status
 // snapshot. It reads the stream, falls back to polling when the stream
-// fails, holds nothing open while the page is hidden, and never connects
-// while the preference is off (window.pharosStatusStore).
+// fails and holds nothing open while the page is hidden
+// (window.pharosStatusStore).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { loadClassicScript, plain } from "../helpers/classic-script.mjs";
-
-const FLAG = "pharos-unified-activity-v1";
 
 // A controllable browser: EventSource instances, fetch answers and timers.
 function fakeBrowser({ answers = [] } = {}) {
@@ -47,18 +45,10 @@ function fakeBrowser({ answers = [] } = {}) {
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
-test("with the preference off the store never connects", () => {
-  let connected = false;
-  const script = loadClassicScript("status-store.js", { EventSource: class { constructor() { connected = true; } }, fetch: () => { connected = true; return new Promise(() => {}); } });
-  assert.equal(script.window.pharosStatusStore.enabled(), false);
-  assert.equal(script.window.pharosStatusStore.current(), null);
-  assert.equal(connected, false);
-});
-
-test("with the preference on the store reads the stream and tells subscribers", () => {
+test("the store reads the stream on load and tells subscribers", () => {
   const sources = [];
   class Source { constructor(url) { this.url = url; this.listeners = {}; sources.push(this); } addEventListener(type, listener) { (this.listeners[type] ||= []).push(listener); } close() {} }
-  const script = loadClassicScript("status-store.js", { EventSource: Source, pharosPrefs: { get: key => key === FLAG ? true : undefined, set() {} } });
+  const script = loadClassicScript("status-store.js", { EventSource: Source });
   const store = script.window.pharosStatusStore;
   assert.equal(sources.length, 1);
   assert.equal(sources[0].url, "/api/status/stream");

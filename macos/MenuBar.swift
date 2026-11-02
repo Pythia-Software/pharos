@@ -140,8 +140,8 @@ struct ManagedLibraryStatus: Equatable {
 }
 
 /// The menu's status line from the status snapshot (docs/background-work.md
-/// §7), used only while the library's pharos-unified-activity-v1 preference
-/// is on. Every word is the server's: the first attention item's title, else
+/// §7), used while /api/menu-bar/status reports unified_activity, which it
+/// now always does. Every word is the server's: the first attention item's title, else
 /// the first top-level operation's line, else the eject verdict's headline.
 /// Pure, for the harness.
 struct UnifiedMenuStatus: Equatable {

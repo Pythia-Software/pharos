@@ -236,7 +236,7 @@ export function hierarchyFrames(rows: Session[], continues: boolean) {
 }
 type HierarchyFrame = { start?: number; active: Session[]; ends: number[] };
 const hierarchyColor = (depth: number) =>
-  ["var(--gold)", "var(--sea)", "var(--delegation-tint)"][depth % 3];
+  ["var(--sea)", "var(--delegation-tint)", "var(--muted)"][depth % 3];
 
 function FrameEdges({
   frame,

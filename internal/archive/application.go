@@ -243,7 +243,7 @@ func (m *applicationManager) childLocked(id string) (*applicationChild, error) {
 	child, err := m.startChildLocked(id, l, config, start)
 	start.Finish(err)
 	if err == nil {
-		m.startLabelsFetch(config.Labels)
+		m.startLabelsFetch(config.Labels, config.AgentEvents)
 	}
 	m.publishLocked()
 	return child, err
@@ -557,7 +557,7 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if r.Method == http.MethodPost && r.URL.Path == "/api/labels/settings" && response.StatusCode == http.StatusOK {
 			if config, err := loadConfig(configPath, false); err == nil {
-				m.startLabelsFetch(config.Labels)
+				m.startLabelsFetch(config.Labels, config.AgentEvents)
 			}
 		}
 		if !isUIPage(r.URL.Path) || !strings.Contains(response.Header.Get("Content-Type"), "text/html") {

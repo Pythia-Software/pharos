@@ -441,6 +441,12 @@ final class ArchiveService: ObservableObject {
         menuBar.webView?.pageZoom = pageZoom
     }
 
+    /// Edit → Find: the page's own Find bar (web/src/page-find.ts), which
+    /// also searches collapsed sections. `action` is open, next or previous.
+    func findInPage(_ action: String) {
+        menuBar.webView?.evaluateJavaScript("window.pharosFind?.\(action)()")
+    }
+
     var canSetUpHere: Bool {
         let readOnly = (try? installationFolder.resourceValues(forKeys: [.volumeIsReadOnlyKey]))?.volumeIsReadOnly == true
         return !readOnly
@@ -1882,6 +1888,25 @@ struct ViewCommands: Commands {
     }
 }
 
+/// Edit → Find: Find… (⌘F), Find Next (⌘G) and Find Previous (⇧⌘G) drive
+/// the page's Find bar; WKWebView has no find panel of its own here.
+struct FindCommands: Commands {
+    @ObservedObject var service: ArchiveService
+    var body: some Commands {
+        CommandGroup(after: .pasteboard) {
+            Divider()
+            Menu("Find") {
+                Button("Find…") { service.findInPage("open") }
+                    .keyboardShortcut("f", modifiers: .command)
+                Button("Find Next") { service.findInPage("next") }
+                    .keyboardShortcut("g", modifiers: .command)
+                Button("Find Previous") { service.findInPage("previous") }
+                    .keyboardShortcut("g", modifiers: [.command, .shift])
+            }
+        }
+    }
+}
+
 #if !PHAROS_NATIVE_TEST
 @main struct PharosApp: App {
     @NSApplicationDelegateAdaptor(PharosDelegate.self) private var delegate
@@ -1894,6 +1919,7 @@ struct ViewCommands: Commands {
         .commands {
             UpdateCommands(updates: delegate.updates)
             ViewCommands(service: delegate.service)
+            FindCommands(service: delegate.service)
         }
     }
 }

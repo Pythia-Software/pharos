@@ -78,8 +78,10 @@ type backgroundItem struct {
 	Kinds             []string
 	continuous        bool
 	readsWholeSources bool
-	// requiresLabels items exist only where labels_enabled is on.
-	requiresLabels bool
+	// requiresLabels items exist only where labels_enabled is on;
+	// requiresAgentEvents ones only where agent_events_enabled is.
+	requiresLabels      bool
+	requiresAgentEvents bool
 }
 
 // backgroundItems in the order they run within a pass: new data first, then
@@ -105,6 +107,8 @@ var backgroundItems = []backgroundItem{
 		Stages: []string{"findings"}, Kinds: []string{"analysis.findings"}, Why: "Measures the findings you watch against new work."},
 	{ID: "labels", Label: "Message labels", Verb: "Labeling messages", Feeds: "Local labels (pharos labels)", Cadence: cadenceHourly, Adaptive: true, requiresLabels: true,
 		Stages: []string{"labels"}, Kinds: []string{"analysis.labels/"}, Why: "Labels the messages that changed on this Mac, after your writing; a backlog continues when plugged in."},
+	{ID: "agent_events", Label: "Agent events", Verb: "Finding agent events", Feeds: "Analyze → Agent Experience", Cadence: cadenceHourly, Adaptive: true, requiresAgentEvents: true,
+		Stages: []string{"agent_events"}, Kinds: []string{"analysis.agent_events/"}, Why: "Finds what agents ran into in the replies and thinking that changed on this Mac; a backlog continues when plugged in."},
 	{ID: "review", Label: "Findings review", Verb: "Reviewing findings", Feeds: "Optimize: new patterns and savings", Cadence: cadenceDaily, Fixed: true,
 		Kinds: []string{"analysis.findings"}, Why: "Looks at the last 28 days again for new patterns; the window moves once a day."},
 	{ID: "upgrade", Label: "Library upgrade", Verb: "Upgrading the library", Feeds: "Everything, after a Pharos update", Cadence: cadenceDaily, Fixed: true,
@@ -114,7 +118,7 @@ var backgroundItems = []backgroundItem{
 }
 
 // stageOrder is the analysis chain's order (finishDeferredStages).
-var stageOrder = []string{"identities", "git", "tools", "authorship", "findings", "labels"}
+var stageOrder = []string{"identities", "git", "tools", "authorship", "findings", "labels", "agent_events"}
 
 func backgroundItemByID(id string) (backgroundItem, bool) {
 	for _, item := range backgroundItems {
@@ -457,6 +461,10 @@ type backgroundInputs struct {
 	// waits for a download.
 	labels        bool
 	labelsWaiting string
+	// agentEvents is whether agent_events_enabled is on; agentEventsWaiting
+	// why the pass waits for a download.
+	agentEvents        bool
+	agentEventsWaiting string
 }
 
 func (c *Catalog) readBackgroundInputs(ctx context.Context) backgroundInputs {
@@ -511,7 +519,7 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 	nextDaily := instant.AddDate(0, 0, 1)
 	plans := []itemPlan{}
 	for _, item := range backgroundItems {
-		if item.requiresLabels && !in.labels {
+		if item.requiresLabels && !in.labels || item.requiresAgentEvents && !in.agentEvents {
 			continue
 		}
 		plan := itemPlan{ID: item.ID, Cadence: settings.cadence(item)}
@@ -784,6 +792,9 @@ func (s *Server) backgroundInputsFor(ctx context.Context, requested map[string]b
 	if config.Labels.Enabled {
 		in.labels, in.labelsWaiting = true, config.Labels.labelsWaiting()
 	}
+	if s.agentEventsEnabled(ctx) {
+		in.agentEvents, in.agentEventsWaiting = true, config.AgentEvents.waiting(config.Labels)
+	}
 	return in
 }
 
@@ -892,8 +903,10 @@ func (s *Server) runBackgroundPass(parent context.Context, cadence string, ids [
 	s.auto.mu.Unlock()
 	// A run in /api/activity (not shadowing the operation, which has its
 	// own steps), so open pages refresh once a pass changed something, as
-	// after an index (sync.js, finishedRunsChanged).
+	// after an index (sync.js, finishedRunsChanged). The operation names it,
+	// so the eject verdict and Stop treat the run as the operation's.
 	run := s.startRunNamed(backgroundRunKind, ids)
+	handle.linkLegacy(run.ID)
 	registered, end := s.beginIngest(run.ID)
 	stop := context.AfterFunc(registered, cancel)
 	var failure error
@@ -1087,4 +1100,4 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 }
 
 // stageItems is the background item each chain stage belongs to.
-var stageItems = map[string]string{"identities": "repositories", "git": "repositories", "tools": "tools", "authorship": "writing", "findings": "findings", "labels": "labels"}
+var stageItems = map[string]string{"identities": "repositories", "git": "repositories", "tools": "tools", "authorship": "writing", "findings": "findings", "labels": "labels", "agent_events": "agent_events"}

@@ -25,7 +25,6 @@ type statusSnapshot struct {
 	Eject      ejectVerdict     `json:"eject"`
 	Operations []map[string]any `json:"operations"`
 	Attention  []attentionItem  `json:"attention"`
-	Features   map[string]any   `json:"features"`
 	raw        map[string]any
 }
 
@@ -102,9 +101,6 @@ func TestStatusSnapshotComposesVerdictOperationsAndPlaceholders(t *testing.T) {
 	if lockScans.Load() == scans {
 		t.Fatal("the fresh check scanned no lock")
 	}
-	if idle.Features["unified_activity"] != false {
-		t.Fatalf("the flag defaults to off: %#v", idle.Features)
-	}
 	if _, ok := idle.raw["journal"].(map[string]any)["recent"]; ok {
 		t.Fatal("journal history belongs to /api/operations, not the status snapshot")
 	}
@@ -174,33 +170,24 @@ func TestStatusSnapshotComposesVerdictOperationsAndPlaceholders(t *testing.T) {
 }
 
 // The flag is read through a short cache that saving preferences clears.
-func TestUnifiedActivityFlagFollowsSavedPreferences(t *testing.T) {
+// The library's storage comes from the last drive check, never measured by
+// the snapshot itself; before one there is none.
+func TestStatusSnapshotCarriesTheLastMeasuredStorage(t *testing.T) {
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
-	override(t, &featureFlagTTL, time.Hour)
-	ctx := context.Background()
-	if catalog.unifiedActivity(ctx) {
-		t.Fatal("the flag defaults to off")
+	t.Cleanup(func() { drives.mu.Lock(); drives.key, drives.state = "", nil; drives.mu.Unlock() })
+	drives.mu.Lock()
+	drives.key, drives.state = "", nil
+	drives.mu.Unlock()
+	library := func() map[string]any { return getStatus(t, server, "/api/status").raw["library"].(map[string]any) }
+	if _, ok := library()["storage_bytes"]; ok {
+		t.Fatal("storage before any drive check")
 	}
-	if response := serveTestBody(server, http.MethodPost, "/api/preferences", `{"set":{"pharos-unified-activity-v1":true}}`); response.Code != http.StatusOK {
-		t.Fatalf("saving: %d %s", response.Code, response.Body.String())
-	}
-	if !catalog.unifiedActivity(ctx) {
-		t.Fatal("a saved flag is read at once, not after the cache expires")
-	}
-	if getStatus(t, server, "/api/status").Features["unified_activity"] != true {
-		t.Fatal("the snapshot reports the flag")
-	}
-	var menu map[string]any
-	_ = json.Unmarshal(serveTest(server, http.MethodGet, "/api/menu-bar/status").Body.Bytes(), &menu)
-	if menu["unified_activity"] != true {
-		t.Fatalf("the native menu's poll carries the flag: %#v", menu)
-	}
-	if err := catalog.SetUIPreferences(ctx, map[string]any{"set": map[string]any{unifiedActivityFlag: "yes"}}); err != nil {
-		t.Fatal(err)
-	}
-	if catalog.unifiedActivity(ctx) {
-		t.Fatal("only the boolean true turns the flag on")
+	drives.cached(config)
+	drives.store(config, &driveState{sizes: librarySizes{LibraryBytes: 1_234_567}, checked: time.Now()})
+	override(t, &statusCoalesce, 0)
+	if got := library()["storage_bytes"]; got != float64(1_200_000) {
+		t.Fatalf("storage from the last drive check, to two figures: %v", got)
 	}
 }
 

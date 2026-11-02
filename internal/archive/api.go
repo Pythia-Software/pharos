@@ -111,9 +111,8 @@ func NewServer(config Config, catalog *Catalog) *Server {
 		server.ingestMu.path = catalog.Path
 		catalog.background = server.start
 		catalog.ops = server.ops
-		// Background work's IO follows the flag (§10); off, it is as before.
-		// From memory only: work never waits on a reader for the flag.
-		server.ops.lowerIO = catalog.unifiedActivityNow
+		// Background work's IO runs at the utility tier (§10).
+		server.ops.lowerIO = true
 		server.journal = newJournalWriter(catalog, server.ops)
 		catalog.recordInitialize(server.ops, triggerStartup)
 		server.leases.dirs = func() []string { return leaseDirs(server.Config()) }
@@ -410,6 +409,9 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case len(parts) == 2 && (parts[1] == "delegation" || parts[1] == "parallel"):
 			s.getDelegation(w, r, parts[0], parts[1] == "parallel")
+			return
+		case len(parts) == 2 && parts[1] == "preview":
+			s.getWorkPreview(w, r, parts[0])
 			return
 		case len(parts) == 1:
 			value, err = nilIfNoMap(s.Catalog.WorkOverview(parts[0]))

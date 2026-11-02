@@ -28,8 +28,9 @@ const summaryFrom = { today: summaryDay.toISOString(), yesterday: new Date(+summ
 
 // Long values are where layouts break, so some rows carry them.
 const longTitle = "Investigate why the incremental indexer re-reads every capture after a laptop sleeps through a scheduled sync window";
-const datasets = Object.fromEntries(Object.entries(schemas).map(([name, schema]) => [name, population(schema, { now, count: 48 }).map((row, index) => index % 5 ? row
+export const queryFixtureDatasets = Object.fromEntries(Object.entries(schemas).map(([name, schema]) => [name, population(schema, { now, count: 48 }).map((row, index) => index % 5 ? row
   : { ...row, title: longTitle, repository_name: "pythia-software/an-unusually-long-repository-name-for-layout", location: "/Users/someone/conductor/workspaces/pharos/a-deeply-nested-worktree-directory/internal/archive" })]));
+const datasets = queryFixtureDatasets;
 // Parallelism records are built with the saved counting and gap settings.
 for (const row of datasets.parallelism) Object.assign(row, { counting: "workspace", gap_minutes: 60 });
 // The service assigns every usage record a carbon factor tier.
@@ -123,6 +124,14 @@ function delegation(query) {
     metrics: metricSpecs, maxima: { self: Object.fromEntries(metricKeys.map(key => [key, key === "tokens" ? 100000 : 300000])), all: Object.fromEntries(metricKeys.map(key => [key, key === "tokens" ? 190000 : 300000])) },
     totals: { ...sessions[0].all, clock: metric(300000), total: metric(900000) }, start, end: sessionEnd, density: Array.from({ length: 120 }, (_, i) => i % 13), warnings: [] };
 }
+function workPreview(id, query) {
+  if (id !== workID) return;
+  const models = [{ model: "claude-opus-with-a-very-long-model-identifier", provider: "claude", sessions: sessions.length, tokens: 190000 }];
+  const scope = { start, end: sessionEnd, sessions: sessions.length, models, totals: { ...sessions[0].all, clock: metric(300000), total: metric(900000) } };
+  const conversation = query.get("conversation");
+  return { repository: "a-repository-with-a-long-name", branch: "gbdubs/a-very-long-branch-name-for-overflow", metrics: metricSpecs, workspace: scope,
+    ...conversation ? { conversation: { ...scope, sessions: 1 } } : {} };
+}
 function parallel(query) {
   const from = Number(query.get("start")) || start, to = Number(query.get("end")) || sessionEnd;
   return { snapshot: "fixture-v1", start: from, end: to, inference: "Inferred, not measured", lanes: (query.get("sessions") || "").split(",").filter(Boolean).map(id => ({ session: id,
@@ -156,6 +165,99 @@ const findingDetail = card => ({ ...card, chart: { title: "Codex conversations t
   evidence: [{ at: iso(day), workspace_id: workID, conversation_id: rootConversation, message_id: "m-1", where: "tl1 · Codex", did: "searched for `AGENTS.md`", happened: "found nothing" }],
   attempts: [{ attempt: 1, change: "A shared instructions file", copied_at: iso(12 * day), status: "watching", target_label: "tl1", savings: { usd: 3.2, added_usd: 0 } }],
   steps: [{ label: "A shared instructions file", change: "" }, { label: "A fallback setting", change: "" }], metric: { kind: "rate", unit: "conversations" }, prompt: `Pharos finding ${card.id} …` });
+
+// Synthetic examples for risky action layout; selection and lifecycle are tested in Go.
+const safetyCard = { id: "safety_sample", title: "Check where credentials were copied", explanation: "A command selected credential files or cloud configuration for copying to another location.", state: "open", target: repoTarget, target_label: "explo", first_seen_at: iso(day), last_seen_at: iso(day), calls: 3, material_change: false, cart: { target: repoTarget, target_label: "explo", ticked: true } };
+export const safetyFixtures = {
+  cases: [safetyCard, { ...safetyCard, id: "safety_delete", target: "machine:studio", target_label: "Mac Studio", calls: 7, material_change: true, handed_at: iso(3 * day), first_seen_at: iso(4 * day), last_seen_at: iso(2 * day), title: "Review a deletion outside this checkout", explanation: "A recursive deletion selects content outside the recorded checkout, or its target could not be resolved.", cart: undefined }, { ...safetyCard, id: "safety_handed", title: "Review a change to published Git history", explanation: "A command selects a force push or remote ref deletion.", state: "handed_off", handed_at: iso(day), cart: undefined }],
+  summary: { open: 2, handed_off: 1, dismissed: 0 },
+  cart: [{ target: repoTarget, label: "explo", ticked: 1, handoff: "review", handoff_reason: "Investigate and recommend; make no changes.", items: [{ id: safetyCard.id, title: safetyCard.title, ticked: true, change_label: "Investigate and recommend", suggested_target: repoTarget }] }],
+  targets: [{ target: repoTarget, label: "explo" }, { target: "machine:studio", label: "Mac Studio" }], built_at: iso(3600000), scanned_calls: "807",
+  coverage: "Supported shell commands in the last 28 days. Embedded interpreter code and arbitrary native/MCP mutations are not comprehensively interpreted. No open reviews is not a safety assessment.",
+};
+export const safetyDetailFixture = { ...safetyCard, subject: "/Users/example/repo/.build/gcloud", questions: ["Which sources contain credentials rather than configuration?", "Was the destination uploaded, published, or later cleaned up?"], evidence: [{ id: "safety_evidence_sample", call_id: "tool-call_sample", message_id: "m-1", at: iso(day), command: "cp -R ~/.config/gcloud .build/gcloud", cwd: "/Users/example/repo", cwd_basis: "tool input", status: "no_result", outcome: "Execution and effects need context", conditional: false, path: `/work/${workID}?conversation=${rootConversation}&message=m-1` }] };
+// Keep the sample settings catalog complete, even when there are only three example reviews.
+export const safetySettingsFixture = { rules: [
+  {
+    "id": "api",
+    "title": "Check what an API request changes",
+    "explanation": "An HTTP mutation needs its endpoint and payload semantics checked.",
+    "enabled": true
+  },
+  {
+    "id": "boundary-delete",
+    "title": "Review a deletion outside this checkout",
+    "explanation": "A recursive deletion selects content outside the recorded checkout, or its target could not be resolved.",
+    "enabled": true
+  },
+  {
+    "id": "cloud-delete",
+    "title": "Review a cloud deletion",
+    "explanation": "A command selects remote objects for deletion.",
+    "enabled": true
+  },
+  {
+    "id": "credentials",
+    "title": "Check where credentials were copied",
+    "explanation": "A command selected credential files or cloud configuration for copying to another location.",
+    "enabled": true
+  },
+  {
+    "id": "database",
+    "title": "Review a database change",
+    "explanation": "A command contains a database mutation. Its environment and affected records need checking.",
+    "enabled": true
+  },
+  {
+    "id": "delete",
+    "title": "Check content selected for deletion",
+    "explanation": "A command selects checkout content for deletion without establishing that it is disposable.",
+    "enabled": true
+  },
+  {
+    "id": "disk-image",
+    "title": "Check a disk image operation",
+    "explanation": "A command selects a disk image or mounted volume for a lifecycle operation.",
+    "enabled": true
+  },
+  {
+    "id": "local-history",
+    "title": "Check a change to saved Git work",
+    "explanation": "A command selects a reset, history rewrite, branch deletion, or stash discard.",
+    "enabled": true
+  },
+  {
+    "id": "permissions",
+    "title": "Review a permission change",
+    "explanation": "A command selects permissions outside the recorded checkout or against an unresolved path.",
+    "enabled": true
+  },
+  {
+    "id": "process",
+    "title": "Check which processes were selected",
+    "explanation": "A process signal uses a name or expression that may match more than this task's process.",
+    "enabled": true
+  },
+  {
+    "id": "publication",
+    "title": "Review a merge or publication",
+    "explanation": "A command selects a merge, release change, or tag publication.",
+    "enabled": true
+  },
+  {
+    "id": "remote-history",
+    "title": "Review a change to published Git history",
+    "explanation": "A command selects a force push or remote ref deletion.",
+    "enabled": false
+  },
+  {
+    "id": "system",
+    "title": "Review a system change",
+    "explanation": "A command selects a system service, installation, or disk change.",
+    "enabled": true
+  }
+], built_at: iso(3600000), scanned_calls: "807", window_days: 28, version: "safety-v1" };
+datasets.safety = safetyFixtures.cases.map(card => ({ ...card, rule_label: card.title, subject: card.id === "safety_sample" ? "/Users/example/repo/.build/gcloud" : card.id === "safety_delete" ? "/Users/example/archive" : "origin · work", material_change: false, in_prompt: Boolean(card.cart), review_count: 1 }));
 
 // Settings, sync and the header's library status.
 const hosts = [{ id: "studio", label: "Mac Studio", sources: [{ name: "Claude", captured_at: iso(3 * day), indexed_at: iso(3600000) }] }, { id: "air", label: "MacBook Air with a long machine name", sources: [{ name: "Codex", last_data_at: iso(125 * 60000) }] }, { id: "new", label: "New Mac", sources: [] }];
@@ -209,7 +311,7 @@ export const cloudScheduledStatus={
 // server-sent events: each document is one `snapshot` event, and the stream
 // stays open.
 export const eventStream = documents => ({ __eventStream: [documents].flat() });
-const statusLibrary = { id: "library-fixture", name: "Pharos SSD", drive: { name: "Pharos SSD", ejectable: true, location: "external", mounted: true }, portable: true, path: "/Volumes/Pharos SSD/Pharos" };
+const statusLibrary = { id: "library-fixture", name: "Pharos SSD", drive: { name: "Pharos SSD", ejectable: true, location: "external", mounted: true }, portable: true, path: "/Volumes/Pharos SSD/Pharos", storage_bytes: 48e9 };
 // The freshness ledger (§5) in the server's shape: rows, and the summary
 // groups the Data row shows.
 const domain = (id, group, label, state, changes = {}) => ({ domain: id, group, label, as_of: null, behind: { state, count: null, unit: null },
@@ -251,7 +353,7 @@ const busySummary = { all_current: false, checked_at: null, groups: [
   { group: "backups", label: "Backups", state: "behind", short: "behind", short_age: true, text: "behind, updates with the next scheduled cloud backup", as_of: iso(9 * day), as_of_label: "last current", catching_up: null, shown: false, muted: false },
 ] };
 // Resources as a service reports them (§10): itself and a Terminal command.
-const statusResources = (label, processes) => ({ cpu_percent: 3, memory_bytes: 340e6, sampled_at: iso(0), basis: "proc_pid_rusage", approximate: false, label, processes });
+const statusResources = (label, processes) => ({ cpu_percent: 3, memory_bytes: 340e6, disk_bytes_per_second: 4.2e6, sampled_at: iso(0), basis: "proc_pid_rusage", approximate: false, label, processes });
 const idleResources = statusResources("Pharos is using under 1% of one core · 180 MB", [
   { pid: 4120, role: "service", cpu_percent: 0, memory_bytes: 180e6, sampled_at: iso(0), basis: "proc_pid_rusage", text: "Library service · under 1% of one core · 180 MB" }]);
 const busyResources = statusResources("Pharos is using ~45% of one core · 1.2 GB", [
@@ -269,11 +371,12 @@ const backgroundItem = (id, label, cadence, state, changes = {}) => ({
 const backgroundView = (items, headline) => ({
   mode: "on", paused_until: null, items, headline,
   cadences: ["frequent", "hourly", "daily"].map(cadence => {
-    const members = items.filter(item => item.column === cadence);
+    const members = items.filter(item => item.column === cadence && item.cadence !== "manual");
     const state = ["failed", "running", "queued"].find(state => members.some(item => item.state === state)) ?? "current";
     return { id: cadence, label: { frequent: "Frequently", hourly: "Hourly", daily: "Daily" }[cadence], description: "When it runs", state, state_label: state === "failed" ? "1 failed" : members[0]?.state_label,
       as_of: iso(41 * 60000), next_at: iso(-19 * 60000), items: members.map(item => item.id) };
   }),
+  unscheduled: items.filter(item => item.cadence === "manual").map(item => item.id),
   everything: { seconds: 540, text: "Everything now takes about 9 min, mostly “Your writing”." },
 });
 const idleBackground = backgroundView([
@@ -294,6 +397,7 @@ const busyBackground = backgroundView([
   backgroundItem("writing", "Your writing", "hourly", "running"),
   backgroundItem("findings", "Findings", "hourly", "queued"),
   backgroundItem("preserve", "Preserve originals", "daily", "current"),
+  backgroundItem("backup", "Back up to /Users/someone/PharosBackup", "manual", "manual", { column: "daily", state_label: "Only when you ask", as_of: iso(26 * 3600000), next_at: null }),
 ], { tone: "busy", title: "Updating your writing", text: "Human Words cards, and Analyze → Writing update when this finishes.", tech: null });
 export const backgroundDocument = {
   labels: { enabled: false, can_change: true, status: 'Off. Turn on to label messages in this library.' },
@@ -318,7 +422,7 @@ export const temporaryBackgroundDocument = {
 export const idleStatus = {
   version: 1, revision: 1, generated_at: iso(0), host: { id: "test-mac", label: "This Mac" }, library: statusLibrary,
   eject: { verdict: "safe", eta_seconds: null, checked: "polled", blockers: [], headline: "Safe to eject; checked again on eject", summary: "Nothing Pharos can see is writing to the library. Pharos checks everything again when you eject." },
-  operations: [], attention: [], freshness: idleLedger, freshness_summary: idleSummary, resources: idleResources, headings: statusHeadings, features: { unified_activity: true }, journal: { dropped: 0 },
+  operations: [], attention: [], freshness: idleLedger, freshness_summary: idleSummary, resources: idleResources, headings: statusHeadings, journal: { dropped: 0 },
   background: idleBackground,
 };
 const statusOperation = (id, changes) => ({
@@ -351,8 +455,8 @@ export const managedStatus = snapshot => ({
   version: 1, revision: 3, generated_at: iso(0),
   libraries: [
     { id: "local", name: "Pending history", selected: true, connected: true, service: { state: "running" }, state_label: "Copying the library", snapshot, eject: brokerBusy(snapshot.eject), error: null },
-    { id: "archive", name: "Archive (Backup drive)", selected: false, connected: true, service: { state: "running" }, state_label: "Copying the library", eject: brokerBusy(idleStatus.eject), error: null, snapshot: idleStatus },
-    { id: "spare", name: "Spare", selected: false, connected: false, service: { state: "stopped" }, state_label: "Not open", snapshot: null, eject: idleStatus.eject, error: null },
+    { id: "archive", name: "Archive", drive: "Backup drive", selected: false, connected: true, service: { state: "running" }, state_label: "Copying the library", eject: brokerBusy(idleStatus.eject), error: null, snapshot: idleStatus },
+    { id: "spare", name: "Spare", drive: "", selected: false, connected: false, service: { state: "stopped" }, state_label: "Not open", snapshot: null, eject: idleStatus.eject, error: null },
   ],
   // As the broker reports its own work: in app.operations, naming the
   // libraries it touches (a copy from the selected library to Archive).
@@ -502,7 +606,13 @@ export const defaultApi = {
 
   // Findings and MCP.
   "GET /api/findings": findings,
+  "GET /api/findings/safety": safetyFixtures,
+  "GET /api/findings/safety/settings": safetySettingsFixture,
+  "POST /api/findings/safety/settings": ({ body }) => ({ ...safetySettingsFixture, rules: safetySettingsFixture.rules.map(rule => ({ ...rule, enabled: body?.rule_enabled?.[rule.id] ?? rule.enabled })) }),
+  "GET /api/findings/safety/:id": ({ params }) => ({ ...safetyDetailFixture, ...safetyFixtures.cases.find(item => item.id === params.id) }),
+  "POST /api/findings/safety/cart/prompt": ({ body }) => ({ target: body?.target, label: "explo", prompt: `Review these archived safety questions. Investigate and recommend; make no changes.\nUse get_safety_case for each case:\n${(body?.ids ?? []).join("\n")}`, count: body?.ids?.length ?? 0, preview_token: "sample-preview" }),
   "POST /api/findings/seen": { ok: true },
+  "POST /api/findings/refresh": { started: true },
   "POST /api/findings/cart/prompt": ({ body }) => ({ target: body?.target, label: "explo", handoff: body?.handoff ?? "pr", prompt: `Pharos findings for explo:\n${(body?.ids ?? []).join("\n")}`, count: body?.ids?.length ?? 0 }),
   "GET /api/findings/:id": ({ params }) => { const card = findingCards.find(item => item.id === params.id); return card && findingDetail(card); },
   "GET /api/mcp": ({ state }) => ({ enabled: state.mcpEnabled ?? true, transport: "stdio", command: "/Applications/Pharos.app/Contents/MacOS/pharos", args: ["--config", "/Users/someone/Library/Application Support/Pharos/archive.toml", "mcp"], note: "Agent clients launch this local command when they connect.", skill: { name: "search-prior-coding-sessions", text: "Search prior coding sessions with Pharos.", paths: { codex: "~/.codex/skills/search-prior-coding-sessions/SKILL.md" } } }),
@@ -517,5 +627,6 @@ export const defaultApi = {
   },
   "GET /api/work/:id/delegation": ({ query }) => delegation(query),
   "GET /api/work/:id/parallel": ({ query }) => parallel(query),
+  "GET /api/work/:id/preview": ({ params, query }) => workPreview(params.id, query),
   "GET /api/work/:id/find": { conversations: [] },
 };

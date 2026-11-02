@@ -28,7 +28,7 @@ import { emptyTextSearch, newRule, ruleLabels, scopes } from "./text-search-mode
 import { freshSearch } from "./search-composer-state";
 import { libraryHostParameters } from "./host-query-state";
 import { recordKeywordParameter } from "./record-keyword-model";
-import { appSections, findingsPages } from "./app-navigation-model";
+import { appSections, findingsPages, safetyPages } from "./app-navigation-model";
 import { idSources, legacyRoutes, optionalSettingsPages, pageDescriptions, readerParams, siteSections } from "./site-routes";
 import { schemaDocuments } from "./schema-documents";
 
@@ -595,6 +595,7 @@ type DashboardLinks = { catalog: true } | { options: Option[]; days: Option };
 const dashboardLinks: Record<UsageTopic, DashboardLinks> = {
   activity: { catalog: true }, human: { catalog: true }, tokens: { catalog: true }, skills: { catalog: true }, calls: { catalog: true },
   tools: { catalog: true }, time: { catalog: true }, parallelism: { catalog: true }, mcp: { catalog: true }, carbon: { catalog: true },
+  agent_experience: { catalog: true },
   "thinking-overview": { options: thinkingOptions(false), days: thinkingDaysOption },
   "thinking-detail": { options: thinkingOptions(true), days: thinkingDaysOption },
 };
@@ -711,6 +712,13 @@ export function buildSiteMap(inputs: SiteInputs) {
         const view = new URL(page.href!, origin).searchParams.get("view")!;
         child({ path: `findings/${view}`, title: page.label, description: pageDescriptions[`findings/${view}`], route: "/findings", fixed: { view },
           ...view === "table" ? { dataset: "findings", builder: "queryURL", options: [whereOption("q_findings", "findings"), windowOption("window_days", rollingWindowDays, "A rolling window on findings.window_field, as for query tables.")] } : {} });
+      }
+      const safety = child({ path: "findings/safety", title: "Risky actions", description: "Deterministically selected review questions with separate prompt baskets and handoff history.", route: "/findings", fixed: { optimize_area: "safety" }, children: [] });
+      for (const page of safetyPages.slice(1)) {
+        const view = new URL(page.href!, origin).searchParams.get("view")!;
+        const node = add({ path: `findings/safety/${view}`, title: page.label, description: pageDescriptions[`findings/safety/${view}`], route: "/findings", fixed: { optimize_area: "safety", view },
+          ...view === "table" ? { dataset: "safety", builder: "queryURL", options: [whereOption("q_safety", "safety")] } : {} });
+        safety.children!.push(node.path);
       }
     }
     if (section.path === "work") {

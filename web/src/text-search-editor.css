@@ -21,7 +21,7 @@
 :where(.text-search-editor > form, .text-workspace-editor-heading) :is(input:not([type=checkbox]), select, textarea) { box-sizing: border-box; min-width: 0; max-width: 100%; min-height: var(--query-control-height); border: 1px solid var(--query-border); border-radius: 6px; background-color: var(--query-field); color: var(--ink); font: inherit; line-height: var(--query-line-height); padding: 4px 8px; }
 /* Buttons outrank the shell's global button rules; specific variants below still win. */
 :is(.text-search-editor > form, .text-workspace-editor-heading) button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: var(--query-control-height); border: 0; border-radius: 6px; color: var(--muted); background: transparent; padding: 4px 8px; font: inherit; font-weight: 500; line-height: var(--query-line-height); cursor: pointer; }
-.text-search-editor :is(input, select, textarea, button, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.text-search-editor :is(input, select, textarea, button, summary):focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 1px; }
 .text-search-editor button:hover:not(:disabled) { background-color: var(--query-hover); color: var(--ink); }
 .text-search-editor button:disabled { opacity: .45; cursor: default; }
 .text-search-editor .app-icon { width: 14px; height: 14px; flex-shrink: 0; }
@@ -195,7 +195,7 @@
 .text-condition-popup select { box-sizing: border-box; width: 100%; min-width: 0; min-height: var(--query-control-height); border: 1px solid var(--query-border); border-radius: 6px; background: var(--query-field); color: var(--ink); font: inherit; }
 .text-condition-popup button { display: inline-flex; align-items: center; gap: 6px; min-height: var(--query-control-height); margin-top: 10px; padding: 5px 0; border: 0; background: transparent; color: var(--bad); font: inherit; cursor: pointer; }
 .text-condition-popup .app-icon { width: 14px; height: 14px; }
-.text-condition-popup :is(select, button, input):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.text-condition-popup :is(select, button, input):focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 2px; }
 .text-add-popup { width: 220px; padding: 6px; }
 .text-add-popup button { width: 100%; margin: 0; padding: 7px 9px; border-radius: 6px; text-align: left; color: var(--ink); }
 .text-add-popup hr { margin: 6px 4px; border: 0; border-top: 1px solid var(--line); }
@@ -249,7 +249,7 @@
 .home-search-disclosure:not(.is-expanded):focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
 .home-search-disclosure.is-expanded { box-shadow: 0 10px 30px #34230d14; }
 .home-search-trigger { display: flex; align-items: flex-start; gap: 12px; width: 100%; height: auto; min-height: 54px; padding: 15px 16px; border: 0; border-radius: 10px; background: transparent; color: var(--ink); font: var(--fs-base)/22px var(--sans); text-align: left; cursor: text; }
-.home-search-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.home-search-trigger:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 3px; }
 .home-search-trigger > .app-icon { width: 18px; height: 18px; flex-shrink: 0; margin-top: 2px; color: var(--muted); }
 .home-search-trigger > .app-icon:last-child { width: 14px; height: 14px; margin: 4px 0 0 auto; transition: transform 260ms ease; }
 .home-search-trigger > span { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
@@ -276,12 +276,3 @@
 .search-context { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 12px; font-size: var(--fs-sm); color: var(--muted); }
 .search-context strong { color: var(--ink); }
 @media(max-width:600px) { #searchDialog.search-dialog { padding: 12px; } #searchDialog .text-search-editor { --query-space: 12px; } .home-intro:has(.shared-search-composer) { margin-bottom: 24px; } }
-.conversation-search-host:empty { display: none; }
-.conversation-search-composer { margin: 16px 0; border-bottom: 1px solid var(--line); padding-bottom: 14px; }
-.conversation-search-composer > .search-context > button { margin-left: auto; }
-.conversation-search-composer .text-search-editor { margin-bottom: 10px; }
-.conversation-search-navigation { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); }
-.conversation-search-navigation svg { width: 16px; height: 16px; }
-.conversation-search-hits { display: grid; gap: 4px; max-height: 180px; overflow: auto; margin-top: 8px; }
-.conversation-search-hits > button { text-align: left; white-space: normal; font-size: var(--fs-sm); }
-.conversation-search-hits > button[aria-current=true] { border-color: var(--gold); }

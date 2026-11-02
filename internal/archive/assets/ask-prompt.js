@@ -202,6 +202,7 @@ function initAskPromptEditor(element){
     chips:()=>read().filter(part=>typeof part!=='string'),
     document:read,
     restore:parts=>{const restored=askPromptRestore(parts,element.value);if(!restored)return false;write(restored);history=[snapshot()];historyIndex=0;return true;},
+    removeChip:id=>{if(read().some(part=>part?.id===id))removeChip(id);},
     setChip:chip=>{
       const parts=read(),exists=parts.some(part=>part?.id===chip.id),position=document.activeElement===element?selection()[0]:undefined;
       write(exists?parts.map(part=>part?.id===chip.id?chip:part):[chip,...parts],position);remember();

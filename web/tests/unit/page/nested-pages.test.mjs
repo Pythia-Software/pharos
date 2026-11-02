@@ -31,23 +31,26 @@ test("the app tree resolves global, nested, and legacy destinations without chan
   ]) assert.equal(appLocation(path, new URLSearchParams(query)).current, current);
 });
 
-test("Optimize resolves Findings pages in its navigation", () => {
+test("Optimize resolves separate efficiency and safety pages", () => {
   const sections = appSections([], new URLSearchParams());
-  const optimize = sections.find(section => section.label === "Optimize");
-  assert.deepEqual(optimize.pages.map(page => page.label), ["Findings"]);
-  assert.deepEqual(optimizePages().map(page => page.label), ["Findings"]);
-  for (const [path, query, group, label] of [
-    ["/findings", "", "Findings", "Dashboard"],
-    ["/findings", "list=watching&repo=example", "Findings", "Dashboard"],
-    ["/findings", "finding=example&tab=evidence", "Findings", "Dashboard"],
-    ["/findings", "view=table&q_findings=saved", "Findings", "Table"],
-    ["/findings", "view=settings", "Findings", "Settings"],
-    ["/settings/optimization", "", "Findings", "Settings"],
+  const optimize = sections.find(section => section.id === "findings");
+  assert.deepEqual(optimize.pages.map(page => page.id), ["findings", "safety"]);
+  assert.deepEqual(optimizePages().map(page => page.id), ["findings", "safety"]);
+  for (const [path, query, trail] of [
+    ["/findings", "", ["findings", "findings:dashboard"]],
+    ["/findings", "list=watching&repo=example", ["findings", "findings:dashboard"]],
+    ["/findings", "finding=example&tab=evidence", ["findings", "findings:dashboard"]],
+    ["/findings", "view=table&q_findings=saved", ["findings", "findings:table"]],
+    ["/findings", "view=settings", ["findings", "findings:settings"]],
+    ["/settings/optimization", "", ["findings", "findings:settings"]],
+    ["/findings", "optimize_area=safety&view=table", ["safety", "safety:table"]],
+    ["/findings", "optimize_area=safety&view=settings", ["safety", "safety:settings"]],
+    ["/findings", "optimize_area=safety&safety_list=handed_off&safety_case=example", ["safety", "safety:dashboard"]],
   ]) {
     const params = new URLSearchParams(query), before = params.toString();
     const selected = appLocation(path, params);
     assert.equal(selected.section, optimize.id);
-    assert.deepEqual(nestedPageTrail(optimize.pages, selected.current).map(page => page.label), [group, label]);
+    assert.deepEqual(nestedPageTrail(optimize.pages, selected.current).map(page => page.id), trail);
     const destination = appLocationLabel(sections, selected).page;
     const url = new URL(destination.href, "https://pharos.test");
     assert.deepEqual(appLocation(url.pathname, url.searchParams), selected, "page links resolve back to their menu selection");

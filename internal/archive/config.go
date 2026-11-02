@@ -71,6 +71,9 @@ type Config struct {
 	// Labels configures the local message labeler (docs/local-labeler.md),
 	// off unless labels_enabled is set.
 	Labels LabelerSettings
+	// AgentEvents configures the agent events pass (docs/agent-events.md);
+	// it runs on the labeler's worker and budget.
+	AgentEvents AgentEventSettings
 }
 
 func defaultConfig(path string) Config {
@@ -203,6 +206,7 @@ func loadConfig(path string, hostSources bool) (Config, error) {
 	config.IOMBPSCeiling = floatValue(root, "io_mbps_ceiling", config.IOMBPSCeiling)
 	config.YieldPollSeconds = floatValue(root, "yield_poll_seconds", config.YieldPollSeconds)
 	config.Labels = labelerSettingsFrom(root, base)
+	config.AgentEvents = agentEventSettingsFrom(root, base)
 	for index := range config.Sources {
 		config.Sources[index].File = path
 	}

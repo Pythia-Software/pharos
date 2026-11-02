@@ -16,7 +16,7 @@ import (
 )
 
 func (s *Server) queryTableSchema(dataset string) (querytable.Schema, error) {
-	if _, ok := sqlDatasetFor(dataset); !ok && dataset != "library" && dataset != "activity" && dataset != "usage" && dataset != "conversation_activity" && dataset != "writing" && dataset != "mcp_calls" && dataset != "tl1_attempts" && dataset != "findings" && dataset != "parallelism" {
+	if _, ok := sqlDatasetFor(dataset); !ok && dataset != "library" && dataset != "activity" && dataset != "usage" && dataset != "conversation_activity" && dataset != "writing" && dataset != "mcp_calls" && dataset != "tl1_attempts" && dataset != "findings" && dataset != "safety" && dataset != "parallelism" {
 		return querytable.Schema{}, fmt.Errorf("unknown query-table dataset %q", dataset)
 	}
 	document, err := querySchemaDocument(dataset)
@@ -114,6 +114,8 @@ func (c *Catalog) datasetRows(ctx context.Context, dataset string, fields librar
 		rows, err = c.mcpQueryRows(ctx)
 	case "tl1_attempts":
 		rows, err = c.cachedTL1AttemptRows(ctx)
+	case "safety":
+		rows, err = c.safetyQueryRows(ctx)
 	case "findings":
 		rows, err = c.findingQueryRows(ctx)
 	case "parallelism":
@@ -450,6 +452,9 @@ func (c *Catalog) prepareSQLDataset(ctx context.Context, dataset string) error {
 	if dataset == "writing_messages" {
 		c.ensureAuthorship()
 		return nil
+	}
+	if dataset == "agent_events" || dataset == "agent_event_messages" {
+		return nil // imported (agent_events.go); nothing to bring up to date
 	}
 	return c.currentToolRollup(ctx)
 }

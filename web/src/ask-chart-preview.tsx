@@ -8,39 +8,30 @@ import { QueryCard } from "./query-card";
 import { Icon } from "./icons";
 import type { QueryDataset } from "./query-links";
 import type { PreviewJob, QueryPreview } from "./query-previews";
+import { PreviewBoundary, type AskLinkCard, type AskLinkPreviews } from "./ask-link-previews";
 
-export type AskChartCard = { href: string; title: string; description: string };
-export type AskChartPreviews = {
-  canRender: (address: string) => boolean;
-  mount: (host: HTMLElement, card: AskChartCard, options?: { eager?: boolean; onOpen?: (url: string) => void }) => () => void;
-  revalidate: () => void;
-};
-
-export function createAskChartPreviews(schemas: Partial<Record<QueryDataset, FieldSchema>>): AskChartPreviews {
+export function createAskChartPreviews(schemas: Partial<Record<QueryDataset, FieldSchema>>): AskLinkPreviews {
   const openings = new EventTarget();
   return {
     canRender: address => Boolean(askChartPreviewJob(address, schemas)),
+    // The chart is a card that carries its own title, description and link.
+    replacesLink: () => true,
     revalidate: () => openings.dispatchEvent(new Event("open")),
     mount(host, card, { eager = false, onOpen = (url: string) => window.pharosNavigate?.(url) } = {}) {
       const job = askChartPreviewJob(card.href, schemas);
       if (!job) return () => {};
       const root = createRoot(host);
-      root.render(<PreviewBoundary><AskChartPreview job={job} card={card} openings={openings} eager={eager} onOpen={onOpen} /></PreviewBoundary>);
+      root.render(<PreviewBoundary message={unavailable}><AskChartPreview job={job} card={card} openings={openings} eager={eager} onOpen={onOpen} /></PreviewBoundary>);
       return () => root.unmount();
     },
   };
 }
 
 const unavailable = "Chart preview unavailable. Open the linked view to explore it.";
-class PreviewBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
-  state = { failed: false };
-  static getDerivedStateFromError() { return { failed: true }; }
-  render() { return this.state.failed ? <p role="status">{unavailable}</p> : this.props.children; }
-}
 
 // The chart is a Card Library card for its own dashboard address: the plus
 // button collects that address to Home, which renders the same chart.
-function AskChartPreview({ job, card, openings, eager, onOpen }: { job: PreviewJob; card: AskChartCard; openings: EventTarget; eager: boolean; onOpen: (url: string) => void }) {
+function AskChartPreview({ job, card, openings, eager, onOpen }: { job: PreviewJob; card: AskLinkCard; openings: EventTarget; eager: boolean; onOpen: (url: string) => void }) {
   const host = useRef<HTMLElement>(null), loaded = useRef(false);
   const [visible, setVisible] = useState(false);
   const [revision, setRevision] = useState(0);

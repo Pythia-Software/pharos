@@ -15,7 +15,6 @@ import { DataTaxonomyModal, SourceQueryBuilder } from "./data-taxonomy";
 import { installDelegationExplorer } from "./delegation";
 import { installWorkspaceInbox } from "./workspace-inbox";
 import { MessageTableSearch, newMessageSearch } from "./message-table-search";
-import "./conversation-search";
 import { ConversationFacts, ResultConversationBrowser, ResultMessage, conversationActivitySummary } from "./conversation-results";
 import { TextSearchEditor } from "./text-search-editor";
 import { SearchHelp } from "./search-help";
@@ -89,14 +88,22 @@ import toolCallsDocument from "../../schemas/tool_calls.schema.json";
 import skillUsagesDocument from "../../schemas/skill_usages.schema.json";
 import tl1AttemptsDocument from "../../schemas/tl1_attempts.schema.json";
 import parallelismDocument from "../../schemas/parallelism.schema.json";
+import safetyDocument from "../../schemas/safety.schema.json";
 import findingsDocument from "../../schemas/findings.schema.json";
+import agentEventsDocument from "../../schemas/agent_events.schema.json";
+import agentEventMessagesDocument from "../../schemas/agent_event_messages.schema.json";
 import { FindingsPage, startFindingsChrome } from "./findings";
+import { safetyDetailURL, safetyStateLabels } from "./safety-route";
 import { Icon } from "./icons";
 import { AuthoredMessages, CategoryPill, MessageMix, authoredRenderers } from "./authored";
 import { ConcurrencyModal, ConcurrencyPanel, concurrencyPrototypeEnabled, type ConcurrencySelection } from "./concurrency";
 import { openConcurrencyModal, startConcurrencySummary } from "./concurrency-store";
 import { currentUsageAnalyses, isUsageWorkspace, readUsageWorkspace, usageDatasets, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { mcpAnalysisCatalog } from "./mcp-analysis-catalog";
+import { agentEventsAnalysisCatalog } from "./agent-events-analysis-catalog";
+import { AgentEventExamples } from "./agent-event-examples";
+import { AgentEventRates } from "./agent-event-rates";
+import { agentEventReadWhere, daySpan, eventRates, ratePeriod } from "./agent-event-rates-model";
 import { toolsAnalysisCatalog } from "./tools-analysis-catalog";
 import { toolTimeAnalysisCatalog, skillsAnalysisCatalog } from "./record-analysis-catalogs";
 import { UsageWorkspace, UsageDashboardLinks, UsageWorkspaceLink } from "./usage-workspace";
@@ -113,7 +120,7 @@ import { tokenAnalysisCatalog } from "./token-analysis-catalog";
 import { describeTerm, humanAnalysisCatalog, humanLegacyURL, readHumanLink, writingGroups } from "./human-analysis-catalog";
 import { parallelismCatalogShape, parallelismSettingsNote, type ParallelismSettings } from "./parallelism-analysis-catalog";
 import { useCarbonCatalog, useParallelismCatalog } from "./analysis-catalog-hooks";
-import { datasetsForSavedPreferences, onDatasetRefresh } from "./dataset-refresh";
+import { datasetsForSavedPreferences, onDatasetRefresh, onSafetyChange } from "./dataset-refresh";
 import type { LocalRows } from "./analysis-request";
 
 type Row = Record<string, any>;
@@ -122,7 +129,7 @@ const relationships: RelationshipAdapter = {
     return responseJSON(await fetch("/api/query-object-references", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ references }), signal }));
   },
 };
-type Dataset = "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "findings";
+type Dataset = "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "findings" | "safety" | "agent_events" | "agent_event_messages";
 type MessageView = "table" | "text";
 function mainIntegrationLink(row: Row): React.ReactNode {
   const merge = mainIntegration(row);
@@ -162,7 +169,7 @@ function datasetIsVisible(dataset: Dataset | "machine_calls") {
   }
   if (dataset === "machine_calls") return path === "/analyze" && (params.get("analyze_view") ?? "tokens") === "tokens" && (params.get("machine_view") ?? preferences().get("pharos-machine-view", "tokens")) === "time";
   if (dataset === "library") return path === "/library";
-  if (dataset === "findings") return path === "/findings" && params.get("view") === "table";
+  if (dataset === "findings" || dataset === "safety") return path === "/findings" && params.get("view") === "table" && (params.get("optimize_area") === "safety") === (dataset === "safety");
   if (dataset === "parallelism") return path === "/analyze" && (params.get("analyze_view") ?? "tokens") === "tokens" && (params.get("machine_view") ?? preferences().get("pharos-machine-view", "tokens")) === "parallelism";
   const usageView = params.get("analyze_view") ?? preferences().get("pharos-usage-view", "tokens");
   if (dataset === "conversation_activity") return path === "/analyze" && usageView === "conversations";
@@ -213,6 +220,9 @@ const schemas: Record<Dataset, FieldSchema<Row>> = {
   tl1_attempts: loadSchema<Row>(tl1AttemptsDocument),
   parallelism: loadSchema<Row>(parallelismDocument),
   findings: loadSchema<Row>(findingsDocument),
+  safety: loadSchema<Row>(safetyDocument),
+  agent_events: loadSchema<Row>(agentEventsDocument),
+  agent_event_messages: loadSchema<Row>(agentEventMessagesDocument),
 };
 
 const tableApis = new Map<Dataset | "machine_calls", QueryTableApi<Row>>();
@@ -306,6 +316,7 @@ const fetchCapabilities = async (dataset: Dataset, signal?: AbortSignal) => quer
 
 const renderers: RenderRegistry<Row> = {
   ...defaultRenderers,
+  safety_state: ({ value }) => safetyStateLabels[String(value) as keyof typeof safetyStateLabels] ?? String(value ?? ""),
   machine_activity: ({ value }) => activityPresentation(String(value ?? "")).label,
   bool_check(context: CellContext<Row>) {
     return context.value ? <Icon name="check" /> : defaultRenderers.bool_check(context);
@@ -365,6 +376,11 @@ const renderers: RenderRegistry<Row> = {
     const state = String(value ?? "unknown");
     return <span className={`mcp-call-state ${state}`}>{state}</span>;
   },
+  // An enum's schema label in place of its stored key (agent event kinds and sources).
+  option_label({ value, field }: CellContext<Row>) {
+    const options = (field.filter as { values?: { options?: Array<{ value: string; label: string }> } } | undefined)?.values?.options;
+    return <span>{options?.find(option => option.value === value)?.label ?? String(value ?? "")}</span>;
+  },
   tool_status({ value }: CellContext<Row>) {
     const state = String(value ?? "unknown");
     return <span className={`mcp-call-state ${state}`}>{state.replace("_", " ")}</span>;
@@ -412,6 +428,9 @@ const emptyMessages: Record<Dataset, string> = {
   tl1_attempts: "No TL1 runs match this query.",
   parallelism: "No agent activity matches this query.",
   findings: "No findings match this query.",
+  safety: "No risky action reviews match this query.",
+  agent_events: "No agent events match this query.",
+  agent_event_messages: "No agent messages read for events match this query.",
 };
 
 // query-table-ui 0.3.0 formats metric values with a field's renderer only for
@@ -619,6 +638,7 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
   useMachineQueryNavigation(api, Boolean(visible && !shared && (namespace || dataset === "usage")), JSON.stringify([scopeWhere, new URLSearchParams(location.search).get("machine_view")]), `q_${registryKey}`, scopeWhere);
   const apiRef = useRef(api);
   apiRef.current = api;
+  useEffect(() => dataset === "safety" ? onSafetyChange(() => apiRef.current.refresh()) : undefined, [dataset]);
   const priorScopeSignature = useRef(scopeSignature);
   useEffect(() => {
     if (priorScopeSignature.current !== scopeSignature) {
@@ -720,7 +740,7 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
     {!api.query.grouping || namespace ? header?.(api) : null}
     {!shared && !namespace && Object.hasOwn(usageDatasets, dataset) ? <UsageQueryIdeas key={dataset} dataset={dataset as UsageDataset} api={api} /> : null}
     {presets?.(api)}
-    {!shared && !namespace && !["library", "tl1_attempts", "findings", "parallelism"].includes(dataset) && rollingWindowField(dataset) ? <label className="usage-chart-field">Time window<select aria-label="Query time window" value={(() => { const choice = readRollingWindow(new URLSearchParams(location.search), dataset); return choice?.mode === "today" ? "today" : choice?.mode === "relative" && choice.days === 1 ? "24h" : "saved"; })()} onChange={event => {
+    {!shared && !namespace && !["library", "tl1_attempts", "findings", "safety", "parallelism"].includes(dataset) && rollingWindowField(dataset) ? <label className="usage-chart-field">Time window<select aria-label="Query time window" value={(() => { const choice = readRollingWindow(new URLSearchParams(location.search), dataset); return choice?.mode === "today" ? "today" : choice?.mode === "relative" && choice.days === 1 ? "24h" : "saved"; })()} onChange={event => {
       if (event.target.value === "saved") return;
       const selected = readRollingWindow(new URLSearchParams(location.search), dataset);
       const address = updateQueryWindowURL(queryURL(dataset, api.query, selected), event.target.value === "today" ? "today" : 1, api.query);
@@ -1540,6 +1560,7 @@ function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
   if (topic === "mcp") return <MCPUsageDashboard />;
   if (topic === "carbon") return <CarbonDashboard />;
   if (topic === "time") return <ToolTimeDashboard />;
+  if (topic === "agent_experience") return <AgentExperienceDashboard />;
   return <SkillsDashboard />;
 }
 
@@ -1726,6 +1747,60 @@ function CatalogDashboard({ catalog, linkCatalog = catalog, dataset, name, defau
     {frame ? frame(views, state.where, state.onFilter) : views(catalog)}
     {after}
   </section>;
+}
+
+// Agent Experience: events found in agents' replies and thinking (agent_events),
+// with rates over every agent message the pass read (agent_event_messages).
+// Events come from the agent events pass on this Mac (the Settings switch);
+// an empty library says what fills it.
+const agentEventMessageFields = agentEventMessagesDocument.fields.map(field => field.name);
+const agentEventSummaryMetrics: AggregationClause[] = [
+  { id: "events", op: "count", groupBy: [] },
+  { id: "messages", op: "count_distinct", field: "message_id", groupBy: [] },
+  { id: "conversations", op: "count_distinct", field: "conversation_id", groupBy: [] },
+  { id: "thinking", op: "sum", field: "in_thinking", groupBy: [] },
+];
+const agentEventReadMetrics: AggregationClause[] = [
+  { id: "read", op: "count", groupBy: [] },
+  { id: "conversations", op: "count_distinct", field: "conversation_id", groupBy: [] },
+];
+// Filters that also apply to the messages read (agentEventReadWhere).
+const readWhere = (where: WhereTerm[]) => agentEventReadWhere(where, agentEventMessageFields);
+function AgentExperienceSummary({ where }: { where: WhereTerm[] }) {
+  const events = useMetrics("agent_events", where, agentEventSummaryMetrics);
+  const read = useMetrics("agent_event_messages", readWhere(where), agentEventReadMetrics);
+  const value = (result: typeof events, id: string) => Number(result.metrics.find(metric => metric.id === id)?.buckets[0]?.value) || 0;
+  const loading = events.loading || read.loading, error = events.error || read.error;
+  const messages = value(events, "messages"), scanned = value(read, "read"), total = value(events, "events");
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{loading ? "Loading…" : error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
+  if (!loading && !error && !scanned) return <p className="usage-dashboard-note" role="status">No agent messages have been read for events yet. They are read in the background once Agent Experience is turned on in Settings → App preferences; the first run downloads a small model.</p>;
+  return <div className="mcp-metrics dashboard-stats" aria-label="Agent Experience summary" aria-busy={loading}>
+    {card("Events", total.toLocaleString(), "matching sentences in agents' replies and thinking")}
+    {card("Messages with an event", scanned ? `${(100 * messages / scanned).toFixed(1)}%` : "—", `${messages.toLocaleString()} of ${scanned.toLocaleString()} agent messages read`)}
+    {card("Conversations with an event", value(events, "conversations").toLocaleString(), `of ${value(read, "conversations").toLocaleString()} conversations read`)}
+    {card("In thinking", total ? `${(100 * value(events, "thinking") / total).toFixed(0)}%` : "—", "of these events were in agents' private reasoning")}
+  </div>;
+}
+// The rate panel: events by day and kind group over messages read by day,
+// under the dashboard's filters (the event-only ones narrow the events).
+const agentEventDailyEvents: AggregationClause[] = [{ id: "events", op: "count", groupBy: ["day", "family_group"] }];
+const agentEventDailyRead: AggregationClause[] = [{ id: "read", op: "count", groupBy: ["day"] }];
+function AgentExperienceRates({ where }: { where: WhereTerm[] }) {
+  const events = useMetrics("agent_events", where, agentEventDailyEvents, true);
+  const read = useMetrics("agent_event_messages", readWhere(where), agentEventDailyRead, true);
+  const readBuckets = read.metrics.find(metric => metric.id === "read")?.buckets ?? [];
+  const period = ratePeriod(daySpan(readBuckets));
+  const periods = eventRates(events.metrics.find(metric => metric.id === "events")?.buckets ?? [], readBuckets, period);
+  return <AgentEventRates periods={periods} period={period} loading={events.loading || read.loading} error={events.error || read.error} />;
+}
+function AgentExperienceDashboard() {
+  return <CatalogDashboard catalog={agentEventsAnalysisCatalog} dataset="agent_events" name="agent-experience" defaults={dashboardDefaults.agent_experience}
+    summary={where => <AgentExperienceSummary where={where} />}
+    panels={where => <>
+      <AgentExperienceRates where={where} />
+      <p className="usage-dashboard-note">Events are sentences a small model judged to express one kind of event, found from keyword candidates in agents' visible replies and thinking. It is model output, not review: expect some misses and false alarms, and compare rates rather than reading single counts. Confidence threshold 0.5.</p>
+      <AgentEventExamples where={where} queryURL={usageWorkspaceURL({ mode: "query", dataset: "agent_events", query: { ...EMPTY_QUERY, where } })} />
+    </>} />;
 }
 
 function MCPUsageDashboard() {
@@ -2088,7 +2163,7 @@ const mounts: Array<[string, React.ReactNode]> = [
   ["queryTableUsage", <UsagePage />],
   ["toolsPage", <ToolsPage />],
   ["mcpSettingsPage", <MCPSettings />],
-  ["findingsPage", <FindingsPage copy={copyText} table={<QuerySurface dataset="findings" />} />],
+  ["findingsPage", <FindingsPage copy={copyText} table={<QuerySurface dataset="findings" />} safetyTable={<QuerySurface dataset="safety" trailing={(row, api) => <a href={safetyDetailURL(String(api.rowId(row)), new URL(location.href))} onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(safetyDetailURL(String(api.rowId(row)), new URL(location.href))); }}>Open review</a>} />} />],
 ];
 
 // Mount a page on its first visit. Hidden pages used to load capabilities,

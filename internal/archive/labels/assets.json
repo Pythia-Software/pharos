@@ -13,5 +13,12 @@
     "sha256": "2e1344a1926ee50eb25b38153cb6992c3567515aef0e677a1a520a1798896d6f",
     "size": 36936435,
     "path": "onnxruntime-osx-arm64-1.31.1/lib/libonnxruntime.1.31.1.dylib"
+  },
+  "agent_events_model": {
+    "url": "https://github.com/Pythia-Software/pharos/releases/download/labeler-{name}-{version}/{name}-{version}.tar.gz",
+    "name": "jayhawk-68m",
+    "version": "1",
+    "sha256": "7418b84ab59ba8857cc0f2f60f18d22da3ebb6e753d8b9c1875489237013ec8d",
+    "size": 146303852
   }
 }

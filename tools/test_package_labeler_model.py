@@ -66,6 +66,12 @@ class PackageTest(unittest.TestCase):
         _, sha256, size, _ = packager.package(self.model, self.root / "again", "2", "int8")
         self.assertEqual(document["model"], {"name": "invented-model", "version": "2", "url": "https://example.invalid/{name}-{version}.tar.gz", "sha256": sha256, "size": size})
         self.assertEqual(document["onnxruntime"], runtime)
+        # Another model is pinned under its own key, with the releases' URL pattern.
+        packager.main([str(self.model), "--out", str(self.root / "out"), "--version", "3", "--descriptor", str(descriptor), "--key", "agent_events_model"])
+        document = json.loads(descriptor.read_text())
+        self.assertEqual(document["agent_events_model"]["version"], "3")
+        self.assertEqual(document["agent_events_model"]["url"], document["model"]["url"])
+        self.assertEqual(document["model"]["version"], "2")
 
 
 if __name__ == "__main__":

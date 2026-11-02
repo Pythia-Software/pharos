@@ -91,11 +91,22 @@ type Hello struct {
 //   - attention: 1 on real tokens, 0 on padding, at least one 1 per row;
 //     exactly one input has it;
 //   - pool: 1 on the tokens the model pools, a non-empty subset of the
-//     attention mask's per row (for example the target text only).
+//     attention mask's per row (for example the target text only);
+//   - segment: k on the tokens of the framing's k-th sentence, in
+//     [0, MaxSegments], one contiguous run each, 0 elsewhere.
 const (
 	RoleIDs       = "ids"
 	RoleAttention = "attention"
 	RolePool      = "pool"
+	RoleSegment   = "segment"
+)
+
+// SegmentSpans is the Framed.Extra key of the segment role's spans: span k
+// (from 0) is sentence k+1's tokens, empty for a sentence left out.
+// MaxSegments is the most sentences a row may number.
+const (
+	SegmentSpans = "segments"
+	MaxSegments  = 16
 )
 
 // InputSpec is one input a run request carries.

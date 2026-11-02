@@ -9,10 +9,12 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gbdubs/pharos/pricing"
@@ -278,6 +280,8 @@ func Run(arguments []string) error {
 			return runRepairExistingCLI(config, catalog, args)
 		case "build-tools":
 			return runBuildToolsCLI(ctx, catalog, op)
+		case "agent-events":
+			return runAgentEventsCLI(ctx, config, catalog, op, args)
 		case "refine-usage":
 			refined, err := catalog.RefineUsageTimeline(func(done, total int) {
 				op.progress("Refine usage", "", "conversation", float64(done), float64(total), total > 0)
@@ -342,6 +346,16 @@ func cliCatalogOperation(command string, args []string) OperationSpec {
 		return OperationSpec{Kind: "ingest.cli", Variant: "repair-existing"}
 	case "build-tools":
 		return OperationSpec{Kind: "tools.ledger.build"}
+	case "agent-events":
+		// status only reads; fetch writes only this Mac's support directory;
+		// run scores; import (or anything else, which fails) writes.
+		switch firstOf(args) {
+		case "status", "fetch":
+		case "run":
+			return OperationSpec{Kind: "analysis.agent_events"}
+		default:
+			return OperationSpec{Kind: "analysis.agent_events.import"}
+		}
 	case "refine-usage", "repair-usage-attribution":
 		return OperationSpec{Kind: "catalog.repair", Variant: command}
 	case "upgrade":
@@ -442,6 +456,58 @@ func runBuildToolsCLI(ctx context.Context, catalog *Catalog, op *Op) error {
 	return printJSON(map[string]any{"conversations_built": built, "status": status})
 }
 
+// runAgentEventsCLI: pharos agent-events import FILE | status. The import
+// loads predictions of the JAYHAWK study's model (agent_events.go) until the
+// model runs inside Pharos.
+func runAgentEventsCLI(ctx context.Context, config Config, catalog *Catalog, op *Op, args []string) error {
+	if len(args) >= 1 && args[0] == "run" {
+		labels := config.Labels
+		flags := flag.NewFlagSet("agent-events run", flag.ContinueOnError)
+		limit := flags.Int("limit", 0, "score at most about N messages")
+		full := flags.Bool("full", false, "look at every conversation")
+		days := flags.Int("days", config.AgentEvents.Days, "read only the last N days (0: everything)")
+		dryRun := flags.Bool("dry-run", false, "find and frame candidates, score and store nothing")
+		flags.IntVar(&labels.Threads, "threads", labels.Threads, "threads per worker")
+		flags.IntVar(&labels.Workers, "workers", labels.Workers, "worker processes")
+		flags.IntVar(&labels.BatchTokens, "batch-tokens", labels.BatchTokens, "padded tokens per batch")
+		var conversations stringList
+		flags.Var(&conversations, "conversation", "only this conversation (repeatable)")
+		if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 {
+			return fmt.Errorf("usage: pharos agent-events run [--limit N] [--days N] [--full] [--dry-run] [--conversation ID]... [--threads N] [--workers N] [--batch-tokens N]")
+		}
+		ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		ctx = withWorkProgress(ctx, op.mirrorWork)
+		stats, err := catalog.RunAgentEvents(ctx, labels, config.AgentEvents, AgentEventsRunOptions{Limit: *limit, Full: *full, DryRun: *dryRun, Conversations: conversations,
+			Since: AgentEventSettings{Days: *days}.since(), Progress: os.Stderr})
+		if stats != nil {
+			_ = printJSON(stats)
+		}
+		return err
+	}
+	if len(args) == 2 && args[0] == "import" {
+		result, err := catalog.ImportAgentEvents(ctx, args[1])
+		if err != nil {
+			return err
+		}
+		return printJSON(result)
+	}
+	if len(args) == 1 && args[0] == "fetch" {
+		// The verifier, and the runtime unless one is configured or bundled.
+		labels, events := config.Labels, config.AgentEvents
+		labels.Enabled, events.Enabled = false, true
+		return fetchLabelerAssetsCLI(ctx, labelerDownloads(labels, events), os.Stdout)
+	}
+	if len(args) == 1 && args[0] == "status" {
+		status, err := catalog.agentEventsStatus(ctx, config)
+		if err != nil {
+			return err
+		}
+		return printJSON(status)
+	}
+	return fmt.Errorf("usage: pharos agent-events {run [flags] | fetch | status | import FILE}")
+}
+
 // applyRepositoryMergesCLI: pharos repositories --merge --apply.
 func applyRepositoryMergesCLI(config Config, catalog *Catalog) error {
 	items, err := loadRepositoryIdentities(catalog.DB)
@@ -472,7 +538,7 @@ func firstOf(args []string) string {
 }
 
 func usageError() error {
-	return fmt.Errorf("usage: pharos [--config PATH] {app,mcp-app,library-transfer,library-recover,init,init-library,add-this-mac,serve,capture,index,history-backfill,sqlite-records,backup,cloud-backup,cloud-restore,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,upgrade,build-tools,pricing,search,tl1,findings,labeling,labels,health,doctor,dev-ui,mcp,probe,volume-id}")
+	return fmt.Errorf("usage: pharos [--config PATH] {app,mcp-app,library-transfer,library-recover,init,init-library,add-this-mac,serve,capture,index,history-backfill,sqlite-records,backup,cloud-backup,cloud-restore,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,upgrade,build-tools,agent-events,pricing,search,tl1,findings,labeling,labels,health,doctor,dev-ui,mcp,probe,volume-id}")
 
 }
 func urlQueryEscape(value string) string {
