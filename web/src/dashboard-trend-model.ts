@@ -2,8 +2,8 @@ import { EMPTY_QUERY, type AggregationClause, type AggregationResultEntry, type 
 import { earliestKey, nextPeriod, parseDay, periodBuckets, periodKey, periodLabel, periodStart, shiftPeriod } from "./chart-period";
 import { chartSpan, smoothingWhere, timeBounds, widenStart, withEnd, withStart } from "./chart-range";
 import { otherSeriesColor } from "./chart-colors";
-import { chartBucketsWithHistory, cumulativeBuckets, foldSeries, rollingBuckets, shareBuckets, type ChartBucket, type ChartSeries } from "./chart-series";
-import { aggregate, completeStart, partClause, predicateCount, selectionWhere, partLabel, periodField, measureExpression, noSplit, normalizeAnalysis, rollingSumUnit, trendKind, unique, type AnalysisCatalog, type AnalysisState, type DerivedTotals, type ResolvedAnalysis } from "./dashboard-analysis-model";
+import { chartBucketsWithHistory, cumulativeBuckets, foldSeries, rollingBuckets, shareBuckets, withoutZeroes, type ChartBucket, type ChartSeries } from "./chart-series";
+import { aggregate, completeStart, partClause, predicateCount, selectionWhere, periodField, measureExpression, normalizeAnalysis, trendKind, unique, type AnalysisCatalog, type AnalysisState, type DerivedTotals, type ResolvedAnalysis } from "./dashboard-analysis-model";
 
 // Over time, driven by a catalog: any measure, over its own population, by
 // any breakdown, a component breakdown or none. The query asks for interval
@@ -246,12 +246,13 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
     if (state.share) buckets = shareBuckets(buckets);
   }
   let norm: number | undefined, normPoints: number | undefined;
+  const nonzero = state.nonzero && !state.share;
   const selected = series.filter(item => item.value !== undefined && picked.includes(item.value)).map(item => item.key);
   const drawn = selected.length ? series.filter(item => chosen.excluded ? !selected.includes(item.key) : selected.includes(item.key)) : series;
   if (state.norm && trend.normFrom && trend.normTo) {
     const from = trend.normFrom.getTime(), to = trend.normTo.getTime();
     const points = buckets.filter(bucket => bucket.date.getTime() >= from && bucket.date.getTime() < to).map(bucket => additive ? drawn.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0)
-      : kind === "ratio" ? bucket.values[drawn[0]?.key] : bucket.values[drawn[0]?.key] ?? 0).filter((value): value is number => typeof value === "number");
+      : kind === "ratio" ? bucket.values[drawn[0]?.key] : bucket.values[drawn[0]?.key] ?? 0).filter((value): value is number => typeof value === "number" && !(nonzero && value === 0));
     normPoints = points.length;
     norm = points.length ? points.reduce((sum, value) => sum + value, 0) / points.length : undefined;
   }
@@ -261,6 +262,7 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
     const limit = Math.min(bounds.to?.getTime() ?? now, now);
     buckets = buckets.filter(bucket => { const next = new Date(bucket.date); nextPeriod(next, state.period, count); return next.getTime() <= limit; });
   }
+  if (nonzero) buckets = withoutZeroes(buckets, drawn.map(item => item.key));
 
   return { series, buckets, selected, excluded: chosen.excluded, norm, normPoints, cumulativeStart: bounds.from ?? earliest, lines: !additive && series.length > 1, additive };
 }
@@ -271,32 +273,4 @@ export function trendTitle(catalog: AnalysisCatalog, input: AnalysisState): stri
   const split = catalog.breakdowns[state.split]?.label ?? catalog.components?.[state.split]?.label;
   const cumulative = state.display === "cumulative", name = state.share ? `Share of ${measure.label.replace(/ \(USD\)$/, "").replace(/^(?!API)\w/, letter => letter.toLowerCase())}` : measure.label;
   return `${cumulative ? "Cumulative " : ""}${cumulative ? name[0].toLowerCase() + name.slice(1) : name}${cumulative ? "" : ` per ${periodLabel(state.period, trendPeriodCount(state))}`}${split ? ` by ${split.toLowerCase()}` : ""}`;
-}
-
-// How each point is computed: the measure, its window, any share, the
-// whole-period rule and the norm.
-export function trendNote(catalog: AnalysisCatalog, input: AnalysisState): string {
-  const state = normalizeAnalysis(catalog, { ...input, view: "trend" }), measure = catalog.measures[state.metric], kind = trendKind(measure);
-  const unit = periodLabel(state.period, trendPeriodCount(state)), window = `${state.rollingPeriods} ${state.rollingPeriods === 1 ? unit : `${unit}s`}`;
-  const rolling = state.display !== "cumulative" && state.rollingPeriods > 1, parts = [measure.note];
-  if (catalog.components?.[state.split]) parts.push(`${catalog.components[state.split].label} splits each ${unit}'s ${measure.label.toLowerCase()} into its parts.`);
-  if (catalog.breakdowns[state.split]?.note) parts.push(catalog.breakdowns[state.split].note!);
-  if (catalog.rangeNote) parts.push(catalog.rangeNote);
-  if (catalog.request?.note) parts.push(catalog.request.note);
-  if (timestampHours(catalog, state)) parts.push("Hours are clock hours of each record's time, placed at your local hour, as in the hour cycle.");
-  else if (catalog.timestamp && !catalog.periods[periodField(state.period)]) parts.push("Calendar periods group each activity timestamp in your viewing time zone.");
-  else if (catalog.timestamp) parts.push(`${periodLabel(state.period, 1)[0].toUpperCase()}${periodLabel(state.period, 1).slice(1)}s are the recorded calendar dates, as the cards count them; the hour and weekday cycles place each record in your time zone, so after a time-zone change a late-evening record can fall on different days in the two.`);
-  const part = (index: 0 | 1) => partLabel(measure.ratio![index]);
-  if (kind === "ratio") parts.push(`Each point pools its records: ${part(0)} divided by ${part(1)}, never an average of ratios.`);
-  if (kind === "count") parts.push(`Distinct ${measure.unit} are counted in each ${unit}.${state.split === noSplit ? "" : ` One active in several groups counts in each, so groups do not add up, and Other is not drawn.`}`);
-  if (state.display === "cumulative") parts.push(kind === "ratio" ? "Each point pools everything from the range start." : "Each point is the running total from the range start.");
-  else if (rolling) parts.push(kind === "ratio" ? `Each point pools the parts of its trailing ${window}, including history before the range.`
-    : kind === "count" && state.rollingOp === "mean" ? `Each point adds the distinct counts of its trailing ${window} and divides by ${state.rollingPeriods}, idle periods as zero; one active on several ${unit}s counts once in each.`
-    : kind === "count" ? `Each point adds the distinct counts of its trailing ${window}: ${rollingSumUnit(measure, state.period)}, so one active on several ${unit}s counts once in each.`
-    : state.rollingOp === "sum" ? `Each point is the total of its trailing ${window}, including history before the range.`
-    : `Each point is the mean of its trailing ${window}, idle ones as zero, including history before the range.`);
-  if (state.share) parts.push(`Shares divide each series by the ${unit}'s total of all series, Other included${rolling ? ", after smoothing" : ""}; a legend selection hides series without changing that total.`);
-  if (state.completePeriods) parts.push(`Only whole local ${periodLabel(state.period, 1)}s are drawn: the range starts at the next ${periodLabel(state.period, 1)} boundary, and the current ${periodLabel(state.period, 1)} is left out.`);
-  if (state.norm) parts.push(`The norm is the mean of the ${state.normPeriods} ${periodLabel(state.period, trendPeriodCount(state))}${state.normPeriods === 1 ? "" : "s"} before the latest point, over the drawn series, whatever the range.`);
-  return parts.join(" ");
 }

@@ -4622,11 +4622,11 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
-      "key": "a36c713739142100:0",
+      "key": "afca3b99369dd872:0",
       "file": "web/src/dashboard-analysis.tsx",
       "owner": "AnalysisControls",
       "tag": "ChartSelect",
-      "control": "value={view.share ? \"share\" : \"values\"} onChange={share => set({ share: share === \"share\" })}",
+      "control": "value={view.share ? \"share\" : view.nonzero ? \"nonzero\" : \"values\"} onChange={shown => set({ share: shown === \"share\", nonzero: shown === \"nonzero\" })}",
       "contract": "dashboard",
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
@@ -5877,15 +5877,6 @@
       "owner": "copyText",
       "tag": "textarea",
       "control": "\"textarea\"",
-      "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
-    },
-    {
-      "key": "16ff62de301395a2:0",
-      "file": "web/src/index.tsx",
-      "owner": "DashboardRefresh",
-      "tag": "button",
-      "control": "onClick={() => window.dispatchEvent(new Event(\"pharos:usage-refresh\"))}",
       "contract": "native-query",
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
@@ -8537,6 +8528,15 @@
       "control": "onClick={event => { event.stopPropagation(); if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || link.href.startsWith(\"/conversation/\")) return; if (navigateLink(link.href)) event.preventDefault(); }}",
       "contract": "native-query",
       "reason": "Native item properties and source navigation; retained payload disclosures use stable dataset/row/field keys."
+    },
+    {
+      "key": "1ec13b514454e60a:0",
+      "file": "web/src/usage-workspace.tsx",
+      "owner": "UsageWorkspace",
+      "tag": "button",
+      "control": "onClick={() => window.dispatchEvent(new Event(\"pharos:usage-refresh\"))}",
+      "contract": "action",
+      "reason": "Refresh reruns the open dashboard's queries; it changes no view state."
     },
     {
       "key": "7e93b199393c67fc:0",

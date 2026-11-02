@@ -116,17 +116,6 @@ export function usageDashboardReturn(current: URLSearchParams) {
   };
 }
 
-export function usageAnalysisLink(dataset: UsageDataset, query: QueryState, target: string, current: URLSearchParams) {
-  const url = new URL(target, "http://localhost");
-  // The older activity/ribbon analyses use different populations and controls.
-  // Their entry point is useful, but cannot claim to preserve an arbitrary query.
-  const resetsFilters = ["time", "parallelism"].includes(url.searchParams.get("machine_view") ?? "");
-  if (!resetsFilters) {
-    url.searchParams.set(dataset === "usage" && url.searchParams.get("analyze_view") === "carbon" ? "q_carbon" : `q_${dataset}`, encodeQuery(query));
-    for (const key of ["analyze_chart", "analyze_carbon", "window_mode", "window_days", "window_field", "window_dataset", "window_until_field", "window_timezone"]) if (current.has(key)) url.searchParams.set(key, current.get(key)!);
-  }
-  return { href: url.pathname + url.search, resetsFilters };
-}
 export function isUsageWorkspace(params = new URLSearchParams(location.search)) {
   if (params.get("analyze_workspace") === "1" || ["analyze_mode", "analyze_data", "analyze_topic"].some(key => params.has(key))) return true;
   return !["analyze_view", "writing", "machine_view", "q_usage", "q_writing", "q_writing_messages", "q_conversation_activity", "q_parallelism"].some(key => params.has(key));
@@ -215,15 +204,3 @@ export function usageSearchQuery(query: QueryState): QueryState {
   return { ...source, aggregations: [], offset: 0 };
 }
 
-export const currentUsageAnalyses = [
-  { label: "Tokens & cost", topic: "tokens", url: "/analyze?analyze_view=tokens&machine_view=tokens" },
-  { label: "Human words", topic: "human", url: "/analyze?analyze_view=writing" },
-  { label: "Human messages", topic: "human", url: "/analyze?analyze_view=writing&writing=messages" },
-  { label: "Conversation activity", topic: "human", url: "/analyze?analyze_view=conversations" },
-  { label: "Tool time", topic: "time", url: "/analyze?analyze_view=tokens&machine_view=time" },
-  { label: "Parallelism", topic: "parallelism", url: "/analyze?analyze_view=tokens&machine_view=parallelism" },
-  { label: "Carbon impact & assumptions", topic: "carbon", url: "/analyze?analyze_view=carbon" },
-  { label: "Tool calls", topic: "tools", url: "/tools?tools_view=calls" },
-  { label: "Tool summary", topic: "tools", url: "/tools?tools_view=summary" },
-  { label: "Skill evidence", topic: "skills", url: "/tools?tools_view=skills" },
-] as const;

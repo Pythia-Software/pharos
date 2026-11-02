@@ -20,17 +20,30 @@ export function timelineGeometry(buckets: ChartBucket[], series: ChartSeries[], 
 }
 
 // Missing additive amounts are idle periods; missing ratios break the line.
-// A single period gets a short horizontal segment so it remains visible.
-export function timelinePath(buckets: ChartBucket[], key: string, y: (value: number) => number, additive = true): string {
-  let pen = "M";
-  const steps = buckets.flatMap((bucket, index) => {
-    const value = bucket.values[key] ?? (additive ? 0 : undefined);
-    if (value === undefined) { pen = "M"; return []; }
-    const step = `${pen} ${1000 * (index + .5) / buckets.length} ${100 - y(value)}`;
-    pen = "L";
-    return [step];
+// Without zeroes (withoutZeroes), a missing value is passed over instead.
+// A point with no neighbour on its line, such as a single period or a series
+// with one value left, gets a horizontal segment across its period so it
+// remains visible.
+export function timelinePath(buckets: ChartBucket[], key: string, y: (value: number) => number, additive = true, nonzero = false): string {
+  const half = 500 / Math.max(1, buckets.length);
+  const lines: Array<Array<[number, number]>> = [[]];
+  buckets.forEach((bucket, index) => {
+    const value = bucket.values[key] ?? (additive && !nonzero ? 0 : undefined);
+    if (value === undefined) { if (!nonzero && lines.at(-1)!.length) lines.push([]); return; }
+    lines.at(-1)!.push([1000 * (index + .5) / buckets.length, 100 - y(value)]);
   });
-  return steps.join(" ") + (buckets.length === 1 && steps.length ? ` L 1000 ${100 - y(buckets[0].values[key] ?? 0)}` : "");
+  return lines.filter(points => points.length).map(points => points.length === 1
+    ? `M ${points[0][0] - half} ${points[0][1]} L ${points[0][0] + half} ${points[0][1]}`
+    : points.map(([x, top], index) => `${index ? "L" : "M"} ${x} ${top}`).join(" ")).join(" ");
+}
+
+// Values without zeroes: a zero is no value, and a period in which none of
+// the drawn series (any series, without keys) has a value is left out.
+export function withoutZeroes(buckets: ChartBucket[], keys?: string[]): ChartBucket[] {
+  return buckets.flatMap(bucket => {
+    const values = Object.fromEntries(Object.entries(bucket.values).filter(([, value]) => value !== 0));
+    return (keys ?? Object.keys(values)).some(key => values[key] !== undefined) ? [{ ...bucket, values }] : [];
+  });
 }
 
 // Accumulate original amounts within the visible range, including folded

@@ -112,7 +112,7 @@ export function viewChart(topic: UsageTopic, chart: Record<string, unknown>): Re
 // settings that view draws. A non-empty legend selection follows them.
 // Other keys are left out; the page fills them from its defaults.
 export const chartKeys: Record<AnalysisView, string[]> = {
-  trend: ["v", "view", "metric", "split", "period", "hours", "days", "rollingPeriods", "rollingOp", "display", "scale", "share", "completePeriods", "norm", "normPeriods", "seriesLimit"],
+  trend: ["v", "view", "metric", "split", "period", "hours", "days", "rollingPeriods", "rollingOp", "display", "scale", "share", "nonzero", "completePeriods", "norm", "normPeriods", "seriesLimit"],
   compare: ["v", "view", "unit", "metric", "split", "reduce", "compareAs", "minSamples", "scale"],
   distribution: ["v", "view", "unit", "metric", "split", "minSamples", "scale"],
   scatter: ["v", "view", "unit", "metric", "metricY", "split", "scale", "scaleY"],
@@ -178,7 +178,7 @@ function candidates(catalog: AnalysisCatalog, option: string): Scalar[] {
     case "display": return [...chartDisplays];
     case "rollingOp": return [...rollingOps];
     case "scale": case "scaleY": return [...chartScales];
-    case "share": case "norm": case "completePeriods": return [false, true];
+    case "share": case "nonzero": case "norm": case "completePeriods": return [false, true];
     default: return fail(`no candidates for ${option}`);
   }
 }

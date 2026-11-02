@@ -8,19 +8,21 @@ import { concurrencyWindowRange, defaultConcurrencySettings } from "./concurrenc
 import { defaultCardCover } from "./card-cover";
 import { windowedChart } from "./card-windows";
 
-type DailyChart = { period: "day"; rollingPeriods: number; display: "interval"; scale: "linear"; seriesLimit: number };
+type DailyChart = { period: "day"; rollingPeriods: number; display: "interval"; scale: "linear"; seriesLimit: number; nonzero: boolean };
 // Versioned chart states keep source filters as the dashboard population.
 export type CardDashboard = { topic: UsageTopic; chart: AnalysisState & { v: number } };
 export type CardDestination = CardDashboard & { dataset: UsageDataset; detailAction?: string };
 
-const daily: DailyChart = { period: "day", rollingPeriods: 0, display: "interval", scale: "linear", seriesLimit: 15 };
+// A card's chart keeps its zeroes, as its cover does, unless both leave
+// them out; the dashboards' own defaults do.
+const daily: DailyChart = { period: "day", rollingPeriods: 0, display: "interval", scale: "linear", seriesLimit: 15, nonzero: false };
 const tokens = (metric: string, split: string, extra: Partial<AnalysisState> = {}): CardDashboard => ({
   topic: "tokens", chart: { ...daily, v: analysisVersion, metric, split, hours: 6, days: 3, selection: { values: [], excluded: false }, ...extra },
 });
 const engine = (topic: UsageTopic, view: AnalysisState["view"]) => (metric: string, split: string, extra: Partial<AnalysisState> = {}): CardDashboard => ({
   // Card charts were linear before the engine; their states say so, since
   // a trend without a scale draws the linear + log split.
-  topic, chart: { v: analysisVersion, view, metric, split, period: "day", scale: "linear", ...extra },
+  topic, chart: { v: analysisVersion, view, metric, split, period: "day", scale: "linear", nonzero: false, ...extra },
 });
 const activity = engine("activity", "scatter");
 const mcp = engine("mcp", "compare"), time = engine("time", "trend"), skills = engine("skills", "trend"), human = engine("human", "trend"), carbon = engine("carbon", "compare"), parallel = engine("parallelism", "trend");
@@ -68,7 +70,7 @@ const dashboards: Record<string, CardDashboard> = {
   "model-cost-share-trend": tokens("percent_cost", "model_family", { rollingPeriods: 7 }),
   "provider-cost-share": tokens("percent_cost", "provider", { rollingPeriods: 7 }),
   "token-volume-trend": tokens("tokens", "provider", { rollingPeriods: 7 }),
-  "token-volume-log": tokens("tokens", "repository_name", { scale: "logarithmic" }),
+  "token-volume-log": tokens("tokens", "repository_name", { scale: "logarithmic", nonzero: true }),
   "cumulative-api-cost": tokens("cost", "provider", { display: "cumulative" }),
   "mcp-call-trend": mcp("calls", "tool_name", { view: "trend", rollingPeriods: 7 }),
   "mcp-response-size": mcp("bytes", "tool_name", { view: "distribution", minSamples: 3, scale: "logarithmic" }),

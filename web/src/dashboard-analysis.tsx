@@ -70,7 +70,8 @@ export function AnalysisControls({ catalog, view, set, onView, bounds, onRange }
     {view.view === "compare" && unit ? <ChartSelect label="Combine" value={view.reduce} options={analysisReductions.map(([id]): [AnalysisReduce, string, string?] => [id, reductionLabel(id, measure, unit), id === "total" && !unitTotal(measure) ? `${measure.label} does not add up across ${subjects}` : undefined])} title={`How each group's ${subjects} combine`} onChange={reduce => set({ reduce })} /> : null}
     {view.view === "cycle" ? <ChartSelect label="Summarize" value={view.reduce} options={[["median", "Distribution"], ["mean", measure.additive ? "Mean" : "Unweighted mean"], ["total", "Total", cycleTotal(measure) ? undefined : `${measure.label} does not add up across ${view.cycle === "hour" ? "hours" : "days"}`]]} title="Each bar summarizes every complete day or hour that falls on it" onChange={reduce => set({ reduce })} /> : null}
     {view.view === "compare" ? <ChartSelect label="Show as" value={view.compareAs} options={[["bars", "Bars"], ["share", "Share of total", shareable(catalog, { ...view, compareAs: "share" }) ? undefined : "Only additive totals and counts form shares"]]} onChange={compareAs => set({ compareAs })} /> : null}
-    {trend ? <ChartSelect label="Show as" value={view.share ? "share" : "values"} options={[["values", "Values"], ["share", "Share of total", limits.share]]} title="Values, or each series' share of its period's total" onChange={share => set({ share: share === "share" })} /> : null}
+    {trend ? <ChartSelect label="Show as" value={view.share ? "share" : view.nonzero ? "nonzero" : "values"} options={[["values", "Values"], ["nonzero", "Values without zeroes"], ["share", "Share of total", limits.share]]}
+      title="Values; values without zeroes, which leaves out periods with nothing drawn and passes lines over a series' zeroes; or each series' share of its period's total" onChange={shown => set({ share: shown === "share", nonzero: shown === "nonzero" })} /> : null}
     {trend ? <DisplayControl value={view.display} disabled={limits.cumulative} onChange={display => set({ display })} /> : null}
     {(view.view === "distribution" || view.view === "compare" && view.compareAs !== "share") && view.split !== noSplit ? <ChartSelect label="Minimum" value={String(view.minSamples)} options={minimum.map(value => [String(value), value ? `${value.toLocaleString()} ${sampleSubject(catalog, view)}` : "No minimum"])} title={`Hide groups with fewer ${sampleSubject(catalog, view)}`} onChange={value => set({ minSamples: Number(value) })} /> : null}
     {view.view === "cycle" ? <ChartSelect label="Cycle" value={view.cycle} options={[["hour", "Hour of day", cycleUnavailable(catalog, "hour")], ["weekday", "Day of week", cycleUnavailable(catalog, "weekday")]]} onChange={cycle => set({ cycle })} /> : null}
@@ -105,9 +106,9 @@ const axis = (value?: string) => value === "logarithmic" ? "logarithmic" : "line
 // Compare, distribution, scatter and cycle views over one catalog. Each view
 // shows only the controls it uses; changes are normalized so the saved state
 // always describes the chart on screen.
-export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, dataset, state, where, onChange, onView, onFilter, local, legacyURL, children }: {
+export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, dataset, state, where, onChange, onView, onFilter, local, children }: {
   catalog: AnalysisCatalog; schema: FieldSchema<any>; dataset: UsageDataset; state: T; where: WhereTerm[];
-  onChange: (next: Partial<T>) => void; onView: (view: AnalysisView) => void; onFilter: FilterChange; local?: LocalRows; legacyURL?: string; children?: React.ReactNode;
+  onChange: (next: Partial<T>) => void; onView: (view: AnalysisView) => void; onFilter: FilterChange; local?: LocalRows; children?: React.ReactNode;
 }) {
   const originRevision = useOriginMetadata();
   const view = normalizeAnalysis(catalog, state);
@@ -161,10 +162,7 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
     {hidden || slots || analysis.selection ? <p className="usage-dashboard-note" role="status">{[hidden, slots, analysis.selection ? selectionNote(catalog.breakdowns[view.split].label.toLowerCase(), unit, analysis.selection, selected?.missing) : ""].filter(Boolean).join(" ")}
       {analysis.selection ? <> <button type="button" className="usage-preset-clear" onClick={() => set({ selection: { values: [], excluded: false } })}>Show every group</button></> : null}</p> : null}
     {children}
-    {/* A legacy link only where that page still has something of its own
-        (Tools' failure kinds); otherwise it would show this query's table
-        under its default chart. */}
-    <UsageDashboardLinks schema={schema} dataset={dataset} query={analysis.supporting} currentURL={legacyURL} />
+    <UsageDashboardLinks schema={schema} dataset={dataset} query={analysis.supporting} />
     <p className="usage-dashboard-note">{analysisNote(catalog, view)}{view.view === "cycle" && !analysis.native ? "" : ` Select a ${view.view === "scatter" ? "point" : "bar or box"} to open its ${unit ? subjects : "records"}.`}</p>
   </section>;
 }

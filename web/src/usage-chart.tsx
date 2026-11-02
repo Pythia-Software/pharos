@@ -246,11 +246,13 @@ export function RollingControl({ value, period, count = 1, onChange, disabled, n
 // shares as fractions, and are only drawn: a pooled ratio or a rolling sum
 // must not be averaged again. Series that do not add up (lines) are drawn as
 // lines with no total, and a reference value draws a labelled level line.
-export function StackedColumns({ title, controls, series, buckets: sourceBuckets, period, periodCount = 1, rollingPeriods = 0, display = "interval", cumulativeStart, scale = defaultChartScale, format, tickFormat = format, noun, loading, error, legend = false, selected = [], excluded = false, percent = false, prepared = false, lines = false, additive = true, rolling = "average", reference, action, titleSlot, onSelect, onExpand, onRange, seriesHref }: {
+// Without zeroes (nonzero), prepared buckets hold no zero values, and lines
+// pass over a series' missing points.
+export function StackedColumns({ title, controls, series, buckets: sourceBuckets, period, periodCount = 1, rollingPeriods = 0, display = "interval", cumulativeStart, scale = defaultChartScale, format, tickFormat = format, noun, loading, error, legend = false, selected = [], excluded = false, percent = false, prepared = false, lines = false, additive = true, nonzero = false, rolling = "average", reference, action, titleSlot, onSelect, onExpand, onRange, seriesHref }: {
   title: string; controls: React.ReactNode; action?: React.ReactNode; series: ChartSeries[]; buckets: ChartBucket[]; period: ChartPeriod; periodCount?: number;
   format: (value: number) => string; tickFormat?: (value: number) => string; noun: string; loading: boolean; error: string; legend?: boolean;
   selected?: string[]; excluded?: boolean; percent?: boolean; rollingPeriods?: number; display?: ChartDisplay; cumulativeStart?: Date; scale?: ChartScale; onSelect?: (key: string | null, action: LegendAction) => void; onExpand?: () => void; onRange?: (first: ChartBucket, last: ChartBucket) => void;
-  prepared?: boolean; lines?: boolean; additive?: boolean; rolling?: "average" | "sum" | "pooled"; reference?: { value: number; label: string };
+  prepared?: boolean; lines?: boolean; additive?: boolean; nonzero?: boolean; rolling?: "average" | "sum" | "pooled"; reference?: { value: number; label: string };
   seriesHref?: (range: ChartInspectionRange, series: ChartSeries) => string | undefined;
   /** Draws the title and action there instead, such as in a page's heading. */
   titleSlot?: HTMLElement | null;
@@ -300,7 +302,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
   const describe = (bucket: ChartBucket) => `${heading(bucket)}: `
     + (present(bucket).map(item => `${item.label} ${format(bucket.values[item.key])}`).join(", ") || "none")
     + (stacked ? `; ${format(total(bucket))}${suffix} in all` : suffix) + (reference ? `; ${reference.label} ${format(reference.value)}` : "") + (bucket.detail ? `; ${bucket.detail}` : "");
-  const path = (key: string) => timelinePath(buckets, key, y, additive);
+  const path = (key: string) => timelinePath(buckets, key, y, additive, nonzero);
   const columnAt = (index: number) => bars.current?.querySelectorAll<HTMLButtonElement>(":scope > button")[index];
   useLayoutEffect(() => {
     const element = tipRef.current, box = root.current;
@@ -406,7 +408,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
           return <button key={bucket.key} type="button" aria-label={describe(bucket)} aria-pressed={Boolean(tip?.pinned && tip.bucket.key === bucket.key)} className={className} onMouseEnter={() => show(index)} onFocus={() => show(index)} onMouseLeave={hidePreview} onBlur={hidePreview}
             onClick={event => { if (event.detail === 0) show(index, true, true); }}>
             {lineChart ? <>{tip?.bucket.key === bucket.key && !drag ? <span className="usage-chart-line-focus" aria-hidden="true">
-              {drawn.filter(item => additive || bucket.values[item.key] !== undefined).map(item => <i key={item.key} className="usage-chart-line-point" style={{ bottom: `${y(bucket.values[item.key] ?? 0)}%`, background: item.color }} />)}
+              {drawn.filter(item => additive && !nonzero || bucket.values[item.key] !== undefined).map(item => <i key={item.key} className="usage-chart-line-point" style={{ bottom: `${y(bucket.values[item.key] ?? 0)}%`, background: item.color }} />)}
             </span> : null}</> : <ColumnMarks bucket={bucket} series={drawn} scale={y} percent={percent} />}
           </button>;
         })}

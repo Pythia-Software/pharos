@@ -101,7 +101,7 @@ import { Icon } from "./icons";
 import { AuthoredMessages, CategoryPill, MessageMix, authoredRenderers } from "./authored";
 import { ConcurrencyModal, ConcurrencyPanel, concurrencyPrototypeEnabled, type ConcurrencySelection } from "./concurrency";
 import { openConcurrencyModal, startConcurrencySummary } from "./concurrency-store";
-import { currentUsageAnalyses, isUsageWorkspace, readUsageWorkspace, usageDatasets, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
+import { isUsageWorkspace, readUsageWorkspace, usageDatasets, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { mcpAnalysisCatalog } from "./mcp-analysis-catalog";
 import { agentEventsAnalysisCatalog } from "./agent-events-analysis-catalog";
 import { AgentEventExamples } from "./agent-event-examples";
@@ -1611,7 +1611,7 @@ const carbonLoading = <p className="muted" role="status">Loading your Carbon ass
 // the Carbon page's filters and estimate. Older links read through the shape.
 function CarbonDashboard() {
   const carbon = useCarbonCatalog();
-  return <CatalogDashboard catalog={carbon.catalog ?? carbonCatalogShape} dataset="usage" name="carbon" defaults={dashboardDefaults.carbon} currentURL="/analyze?analyze_view=carbon"
+  return <CatalogDashboard catalog={carbon.catalog ?? carbonCatalogShape} dataset="usage" name="carbon" defaults={dashboardDefaults.carbon}
     frame={(views, where, onFilter) => <CarbonImpact where={where} onFilter={onFilter}>{carbon.catalog ? views(carbon.catalog, carbonAmount(carbon.format)) : carbonLoading}</CarbonImpact>} />;
 }
 
@@ -1641,11 +1641,11 @@ function ParallelismUsageDashboard() {
   const [selection, setSelection] = useState<ConcurrencySelection | null>(null);
   const { catalog, settings } = useParallelismCatalog();
   const ribbon = selection?.settings, differs = ribbon && (ribbon.counting !== settings.counting || ribbon.gap !== settings.gap);
-  return <CatalogDashboard catalog={catalog} linkCatalog={parallelismCatalogShape} dataset="parallelism" name="parallelism" defaults={dashboardDefaults.parallelism} currentURL="/analyze?analyze_view=tokens&machine_view=parallelism"
+  return <CatalogDashboard catalog={catalog} linkCatalog={parallelismCatalogShape} dataset="parallelism" name="parallelism" defaults={dashboardDefaults.parallelism}
     summary={where => <ParallelismSettingsNote where={where} believed={settings} />}
     before={<>
       <ConcurrencyPanel routeParameter="analyze_parallelism" onSelection={setSelection} />
-      {selection ? <UsageDashboardLinks schema={schemas.parallelism} dataset="parallelism" query={parallelismSelectionQuery(selection)} currentURL="/analyze?analyze_view=tokens&machine_view=parallelism" /> : null}
+      {selection ? <UsageDashboardLinks schema={schemas.parallelism} dataset="parallelism" query={parallelismSelectionQuery(selection)} /> : null}
       <p className="usage-dashboard-note">The query view contains the hourly occupancy records touching the selected range, with the same repository, counting, gap, and ribbon selection. Those records describe threaded activity; model-only timing remains in the chart.</p>
       <h3>Parallel activity over time</h3>
       {differs ? <p className="usage-dashboard-note" role="status">The ribbon uses this link’s counting and gap; the views below use your saved settings, with which the service builds its records. Change a setting in the ribbon to save it.</p> : null}
@@ -1666,22 +1666,15 @@ type TokenTrendView = Omit<TokenChartView, "metric" | "split"> & AnalysisState;
 const tokenSharedRows: LocalRows | undefined = shared ? { rows: shared.datasets.usage ?? [], hourly: shared.datasets.usage_hourly ?? [] } : undefined;
 const validTokenDashboard = (view: TokenTrendView) => validAnalysisState(tokenAnalysisCatalog, view);
 
-// New records arrive while a dashboard is open (Pharos MCP's own requests,
-// new usage); Refresh reruns its queries.
-function DashboardRefresh() {
-  return <p className="usage-dashboard-note usage-dashboard-refresh"><button type="button" onClick={() => window.dispatchEvent(new Event("pharos:usage-refresh"))}>Refresh</button></p>;
-}
-
 function TokenUsageDashboard() {
   const state = useUsageDashboardState<TokenTrendView>(dashboardDefaults.tokens as TokenTrendView, validTokenDashboard, usageTime, (view, where) => readAnalysisLink(tokenAnalysisCatalog, view, where));
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
   const choose = (next: AnalysisView) => state.update(switchView(tokenAnalysisCatalog, state.view, next));
-  if ((state.view.view ?? "trend") !== "trend") return <><DashboardAnalysis catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={state.view} where={state.where}
-    onChange={state.update} onView={choose} onFilter={state.onFilter} local={tokenSharedRows} />{tokenSharedRows ? null : <DashboardRefresh />}</>;
+  if ((state.view.view ?? "trend") !== "trend") return <DashboardAnalysis catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={state.view} where={state.where}
+    onChange={state.update} onView={choose} onFilter={state.onFilter} local={tokenSharedRows} />;
   return <AnalysisTrend catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter}
-    local={tokenSharedRows} format={tokenAmount} tick={tokenTick} currentURL="/analyze?analyze_view=tokens&machine_view=tokens">
+    local={tokenSharedRows} format={tokenAmount} tick={tokenTick}>
     <TokenSummary where={state.where} />
-    {tokenSharedRows ? null : <DashboardRefresh />}
   </AnalysisTrend>;
 }
 
@@ -1693,7 +1686,7 @@ function HumanUsageDashboard() {
   // Refresh, or a finished classification, reloads the message mix too.
   useEffect(() => onDatasetRefresh("writing_messages", () => setReload(value => value + 1)), []);
   const status = useAuthorshipStatus(() => window.dispatchEvent(new Event("pharos:usage-refresh")));
-  return <CatalogDashboard catalog={humanAnalysisCatalog} dataset="writing_messages" name="human" defaults={dashboardDefaults.human} readWhere={readHumanWhere} currentURL="/analyze?analyze_view=writing"
+  return <CatalogDashboard catalog={humanAnalysisCatalog} dataset="writing_messages" name="human" defaults={dashboardDefaults.human} readWhere={readHumanWhere}
     summary={where => <HumanWordsSummary where={where} status={status} />}
     panels={(where, onFilter) => <>
       <p className="usage-dashboard-note">Typed and dictated words are distinguished from pastes, copied agent output, templates, attachments, harness instructions and automated prompts. Select a column, bar or box to open its messages; each message is highlighted by where its text came from.</p>
@@ -1775,8 +1768,8 @@ type CatalogViews = (catalog: AnalysisCatalog, format?: AmountFormat) => React.R
 // any setting. readWhere reads an older link's filters, and may leave out
 // those it cannot keep, with a notice saying so.
 type ReadWhere = (where: WhereTerm[], state: AnalysisState) => { where: WhereTerm[]; notice?: React.ReactNode };
-function CatalogDashboard({ catalog, linkCatalog = catalog, dataset, name, defaults, currentURL, legacyInAnalysis = false, before, after, summary, panels, readWhere, format = catalogAmount, frame }: {
-  catalog: AnalysisCatalog; linkCatalog?: AnalysisCatalog; dataset: UsageDataset; name: string; defaults: AnalysisState; currentURL?: string; legacyInAnalysis?: boolean;
+function CatalogDashboard({ catalog, linkCatalog = catalog, dataset, name, defaults, before, after, summary, panels, readWhere, format = catalogAmount, frame }: {
+  catalog: AnalysisCatalog; linkCatalog?: AnalysisCatalog; dataset: UsageDataset; name: string; defaults: AnalysisState;
   before?: React.ReactNode; after?: React.ReactNode; summary?: (where: WhereTerm[], selected: boolean) => React.ReactNode;
   panels?: (where: WhereTerm[], onFilter: FilterChange) => React.ReactNode; readWhere?: ReadWhere; format?: AmountFormat;
   frame?: (views: CatalogViews, where: WhereTerm[], onFilter: FilterChange) => React.ReactNode;
@@ -1795,9 +1788,8 @@ function CatalogDashboard({ catalog, linkCatalog = catalog, dataset, name, defau
     const choose = (next: AnalysisView) => state.update(switchView(drawn, state.view, next));
     return <>
       {(state.view.view ?? "trend") !== "trend"
-        ? <DashboardAnalysis catalog={drawn} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter} legacyURL={legacyInAnalysis ? currentURL : undefined}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</DashboardAnalysis>
-        : <AnalysisTrend catalog={drawn} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter} format={amount} currentURL={currentURL}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</AnalysisTrend>}
-      <DashboardRefresh />
+        ? <DashboardAnalysis catalog={drawn} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</DashboardAnalysis>
+        : <AnalysisTrend catalog={drawn} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter} format={amount}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</AnalysisTrend>}
       {panels?.(state.where, state.onFilter)}
     </>;
   };
@@ -1870,24 +1862,23 @@ function MCPUsageDashboard() {
 // The Tools dashboard reads the daily rollup; its compare view opened by
 // default, as before.
 function ToolsUsageDashboard() {
-  return <CatalogDashboard catalog={toolsAnalysisCatalog} dataset="tools" name="tools" defaults={dashboardDefaults.tools} currentURL="/tools?tools_view=summary" legacyInAnalysis before={<ToolLedgerBanner />}
-    after={<p className="usage-dashboard-note">Select a bar or point to inspect its daily summaries, then follow a summary’s Calls link to individual calls and source conversations. The legacy view includes failure kinds and the existing command and context presets.</p>} />;
+  return <CatalogDashboard catalog={toolsAnalysisCatalog} dataset="tools" name="tools" defaults={dashboardDefaults.tools} before={<ToolLedgerBanner />} />;
 }
 
 function ToolTimeDashboard() {
-  return <CatalogDashboard catalog={toolTimeAnalysisCatalog} dataset="tool_calls" name="time" defaults={dashboardDefaults.time} currentURL={currentUsageAnalyses.find(item => item.topic === "time")!.url}
+  return <CatalogDashboard catalog={toolTimeAnalysisCatalog} dataset="tool_calls" name="time" defaults={dashboardDefaults.time}
     summary={(where, selected) => <ToolTimeSummary where={where} selected={selected} />} />;
 }
 
 function SkillsDashboard() {
-  return <CatalogDashboard catalog={skillsAnalysisCatalog} dataset="skill_usages" name="skills" defaults={dashboardDefaults.skills} currentURL={currentUsageAnalyses.find(item => item.topic === "skills")!.url} />;
+  return <CatalogDashboard catalog={skillsAnalysisCatalog} dataset="skill_usages" name="skills" defaults={dashboardDefaults.skills} />;
 }
 
 function UsagePage() {
   useLocationRevision();
   if (shared || location.pathname !== "/analyze" || !isUsageWorkspace()) return <LegacyUsagePage />;
   return <UsageChartColorsProvider>
-    <UsageWorkspace renderDashboard={topic => <GuidedUsageDashboard topic={topic} />} renderTable={dataset => <AnalyzeQueryTable key={dataset} dataset={dataset} />} />
+    <UsageWorkspace refresh={!shared} renderDashboard={topic => <GuidedUsageDashboard topic={topic} />} renderTable={dataset => <AnalyzeQueryTable key={dataset} dataset={dataset} />} />
   </UsageChartColorsProvider>;
 }
 

@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { capabilities, core, execution, queryRecipes, schemas } from "../helpers/recipes.mjs";
 import { now, usageLedger } from "../helpers/usage-ledger.mjs";
 import { analysisInspectQuery, analysisLimits, analysisQuery, selectionWhere, catalogProblems, changeState, selectGroups, normalizeAnalysis, readAnalysisLink, analysisVersion, switchView, trendAdjustments, trendLimits, validAnalysisState } from "../../../src/dashboard-analysis-model";
-import { trendNote, trendQuery, trendSeries, trendTitle } from "../../../src/dashboard-trend-model";
+import { trendQuery, trendSeries, trendTitle } from "../../../src/dashboard-trend-model";
 import { tokenAnalysisCatalog as catalog } from "../../../src/token-analysis-catalog";
 import { tokenTypes } from "../../../src/token-chart-request";
 import { usageChartPresets } from "../../../src/usage-presets";
@@ -134,8 +134,6 @@ test("distinct counts are per period: a rolling mean of daily counts, or a rolli
     assert.ok(Math.abs((mean.buckets[index].values.total ?? 0) - total / 3) < 1e-12, bucket.key);
   }
   assert.ok(sum.buckets.some(bucket => bucket.values.total > 0));
-  assert.match(trendNote(catalog, { ...base, metric: "conversations", split: "none", rollingPeriods: 3, rollingOp: "sum" }), /conversation-days/);
-  assert.match(trendNote(catalog, { ...base, metric: "conversations", split: "none", rollingPeriods: 7 }), /divides by 7/);
   // Groups of distinct counts do not add up, so they draw as lines and Other draws nothing.
   const folded = draw({ ...base, metric: "conversations", split: "repository_name", seriesLimit: 1 }).built;
   assert.equal(folded.lines, true);
@@ -159,6 +157,21 @@ test("shares divide by every series, after smoothing; a selection hides series w
   assert.ok(Math.abs(day.values.output_tokens - parts.reduce((n, row) => n + row.output_tokens, 0) / parts.reduce((n, row) => n + row.total_tokens, 0)) < 1e-12);
 });
 
+test("values without zeroes leave out periods with nothing drawn, and zeroes from the norm", () => {
+  const state = { ...base, metric: "tokens", split: "provider", selection: { values: ["codex"], excluded: false } };
+  const all = draw(state).built, kept = draw({ ...state, nonzero: true }).built;
+  const drawn = bucket => bucket.values["s:codex"] ?? 0;
+  assert.ok(all.buckets.some(bucket => !drawn(bucket)), "the ledger has days without codex");
+  assert.deepEqual(kept.buckets.map(bucket => bucket.key), all.buckets.filter(drawn).map(bucket => bucket.key), "only the selection's days remain");
+  assert.ok(kept.buckets.every(bucket => Object.values(bucket.values).every(value => value !== 0)));
+  // A share ignores it; the norm averages only the points with a value.
+  assert.deepEqual(draw({ ...state, nonzero: true, share: true }).built.buckets.length, draw({ ...state, share: true }).built.buckets.length);
+  const normed = { ...base, metric: "tokens", split: "none", norm: true, normPeriods: 20 };
+  const [zeroes, without] = [draw(normed).built, draw({ ...normed, nonzero: true }).built];
+  assert.ok(without.normPoints < zeroes.normPoints && without.norm > zeroes.norm);
+  assert.equal(validAnalysisState(catalog, { ...state, nonzero: "yes" }), false);
+});
+
 test("whole periods drop the current day and a partial first period, also from running totals", () => {
   const today = localDay(new Date(now));
   const all = draw({ ...base, metric: "tokens", split: "provider" }).built;
@@ -166,7 +179,6 @@ test("whole periods drop the current day and a partial first period, also from r
   assert.equal(all.buckets.at(-1).key, today);
   assert.notEqual(whole.buckets.at(-1).key, today);
   assert.equal(whole.buckets.length, all.buckets.length - 2, "the partial first day and today are left out");
-  assert.match(trendNote(catalog, { ...base, metric: "tokens", split: "none", completePeriods: true }), /whole local days.*current day is left out/);
   // Three-day buckets from a mid-day start. Independently of the chart: the
   // range starts at the next local midnight; three-day buckets are aligned to
   // calendar day numbers; the first whole one starts on or after that
@@ -215,7 +227,6 @@ test("a ratio may pool a sum over a count: a mean per timed record", () => {
   assert.deepEqual(query.query.aggregations.map(clause => [clause.op, clause.field]), [["sum", "cost_usd"], ["count", "cost_usd"]]);
   const built = trendSeries(means, state, query, core.evaluateMetrics(data, query.query, schema, { now }).metrics, { where: range, now });
   assert.ok(Math.abs(built.buckets.at(-1).values.total - 9910 / 100) < 1e-12, `pooled ${built.buckets.at(-1).values.total}, not the 55 of averaged means`);
-  assert.match(trendNote(means, state), /summed cost usd divided by the count of cost usd/);
   const units = analysisQuery(means, { view: "compare", unit: "conversation", metric: "mean_cost", split: "none", reduce: "total" }, []);
   assert.deepEqual(units.query.grouping.summaries.slice(1).map(column => [column.op, column.field]), [["sum", "cost_usd"], ["count", "cost_usd"]], "units pool the same parts");
 });
@@ -536,7 +547,6 @@ test("a derived component computes each period's parts from its input totals, be
     if (sums.codex + sums.rest) assert.ok(Math.abs(point.values.codex - sums.codex / (sums.codex + sums.rest)) < 1e-9, `${point.key}: the share is of the smoothed derived parts`);
   }
   assert.ok(window.buckets.some(bucket => bucket.values.codex > 0 && bucket.values.codex < 1));
-  assert.match(trendNote(derived, state), /Weighted splits each day's tokens into its parts/);
 });
 
 test("a trend without a scale resolves it once, for the Scale control and the chart alike", async () => {

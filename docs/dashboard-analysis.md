@@ -260,6 +260,7 @@ fields:
 | `rollingPeriods`, `rollingOp` | the trend's trailing window in buckets, and whether each point is its `mean` (default) or `sum` |
 | `display` | `interval` or `cumulative` |
 | `share` | each trend series as a share of its bucket's total |
+| `nonzero` | values without zeroes: buckets with nothing drawn are left out, and lines pass over a series' zeroes; ignored with `share` |
 | `completePeriods` | whole periods only |
 | `norm`, `normPeriods` | a reference line at the mean of the `normPeriods` (30) points before the latest |
 | `seriesLimit`, `selection` | series drawn before Other, and the legend selection: the breakdown's groups drawn (or hidden, when `excluded`) |
@@ -333,7 +334,7 @@ can:
 - **A share is of every group the filters define.** A legend selection only
   chooses which groups are drawn; it never changes the denominator. See
   [Selections and links](#selections-and-links).
-- **No legacy link.** The analysis views do not link to the legacy page.
+- **No legacy link.** No dashboard view links to the legacy pages.
   That page has no analysis views, so it would show the grouped query under
   its default chart.
 - **Groups drawn.** Bars and boxes show 12 groups and pies 8. The trend's
@@ -697,9 +698,7 @@ around it. Its default view is the one it always opened on.
   observation a person cares about, so there are no units or per-record
   values: Distribution and Scatter are disabled with that reason, and a
   minimum sums calls (`samples`) and reports the groups it hides; a bar
-  opens the group's daily summaries. Its
-  Compare view keeps the legacy-view link, since that page still shows
-  failure kinds. The
+  opens the group's daily summaries. The
   rollup's text `day` makes it the one catalog with `executable` bounds.
   - **Whole days.** The rollup records whole local days, so a range snaps to
     whole days: one starting mid-day counts that whole day, and the note
