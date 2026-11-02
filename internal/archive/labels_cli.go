@@ -170,6 +170,9 @@ func (c *Catalog) LabelsStatus(ctx context.Context, settings LabelerSettings) (m
 	if waiting := settings.labelsWaiting(); waiting != "" {
 		status["waiting"] = waiting
 	}
+	if problem := settings.labelerProblem(); problem != "" {
+		status["problem"] = problem
+	}
 	identity := ""
 	if settings.ModelDir == "" {
 		status["model"] = "not present: " + labelsAssetStatus(labelsAssets.Model) + " (or set labels_model_dir or PHAROS_LABELS_MODEL_DIR)"

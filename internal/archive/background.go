@@ -481,6 +481,8 @@ type backgroundInputs struct {
 	// why the pass waits for a download.
 	agentEvents        bool
 	agentEventsWaiting string
+	// labelerProblem is why neither can run, whatever is downloaded.
+	labelerProblem string
 }
 
 func (c *Catalog) readBackgroundInputs(ctx context.Context) backgroundInputs {
@@ -810,6 +812,9 @@ func (s *Server) backgroundInputsFor(ctx context.Context, requested map[string]b
 	}
 	if s.agentEventsEnabled(ctx) {
 		in.agentEvents, in.agentEventsWaiting = true, config.AgentEvents.waiting(config.Labels)
+	}
+	if in.labels || in.agentEvents {
+		in.labelerProblem = config.Labels.withAssets().labelerProblem()
 	}
 	return in
 }

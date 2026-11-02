@@ -47,6 +47,9 @@ done
 # Reinstall pinned packages and build the ignored frontend before embedding it.
 "$ROOT/tools/setup.sh"
 SPARKLE=$("$ROOT/macos/fetch-sparkle.sh")
+# The labeling worker loads ONNX Runtime beside itself. The pinned release is
+# arm64 only; an Intel Mac configures its own runtime (docs/local-labeler.md).
+ORT=$("$ROOT/macos/fetch-onnxruntime.sh")
 mkdir -p "$APP/Contents/Frameworks"
 rm -rf "$APP/Contents/Frameworks/Sparkle.framework"
 ditto "$SPARKLE/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
@@ -68,6 +71,9 @@ for goarch in $GOARCHES; do
     ARCHS="$ARCHS $arch"
     echo "Building the Go service ($arch)…"
     (cd "$ROOT" && GOOS=darwin GOARCH="$goarch" CGO_ENABLED="$CGO" go build -o "$WORK/pharos-$arch" ./cmd/pharos)
+    # The worker calls ONNX Runtime's C API, so it always needs cgo.
+    echo "Building the labeling worker ($arch)…"
+    (cd "$ROOT" && GOOS=darwin GOARCH="$goarch" CGO_ENABLED=1 go build -o "$WORK/pharos-labeler-ort-$arch" ./cmd/pharos-labeler-ort)
     echo "Building the Swift wrapper ($arch)…"
     swiftc -parse-as-library -target "$arch-apple-macos$MACOS_MIN" -framework SwiftUI -framework WebKit \
         -framework DiskArbitration -framework Security -F "$SPARKLE" -framework Sparkle \
@@ -77,13 +83,13 @@ for goarch in $GOARCHES; do
         "$ROOT/macos/UpdateLifecycle.swift" "$ROOT/macos/UpdateNotice.swift" \
         -o "$WORK/PharosApp-$arch"
 done
-for name in pharos PharosApp; do
+for name in pharos pharos-labeler-ort PharosApp; do
     target="$APP/Contents/MacOS/$name"
     # Replace rather than overwrite in place, so a running copy keeps its
     # mapped executable.
     rm -f "$target"
     if [ "${PHAROS_UNIVERSAL:-0}" = 1 ]; then
-        lipo -create "$WORK/$name"-* -output "$target"
+        lipo -create $(for arch in $ARCHS; do echo "$WORK/$name-$arch"; done) -output "$target"
     else
         cp "$WORK/$name-$arch" "$target"
     fi
@@ -98,6 +104,9 @@ for name in pharos PharosApp; do
     lipo -info "$target"
 done
 
+rm -f "$APP/Contents/MacOS/libonnxruntime.dylib"
+cp -L "$ORT/lib/libonnxruntime.dylib" "$APP/Contents/MacOS/libonnxruntime.dylib"
+
 # Regenerate with macos/make-icon.sh after editing macos/AppIcon.svg.
 cp "$ROOT/macos/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 # Keep license terms and the separately licensed Query Table notice with the app.
@@ -105,6 +114,8 @@ cp "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
 mkdir -p "$APP/Contents/Resources/licenses"
 cp "$ROOT/internal/querytable/LICENSE" "$APP/Contents/Resources/licenses/query-table-LICENSE"
 cp "$SPARKLE/LICENSE" "$APP/Contents/Resources/licenses/Sparkle-LICENSE"
+cp "$ORT/LICENSE" "$APP/Contents/Resources/licenses/onnxruntime-LICENSE"
+cp "$ORT/ThirdPartyNotices.txt" "$APP/Contents/Resources/licenses/onnxruntime-ThirdPartyNotices.txt"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -189,6 +200,9 @@ for code in "Versions/B/Autoupdate" "Versions/B/Updater.app" \
 done
 codesign "$@" "$FRAMEWORK"
 codesign "$@" --identifier "$SERVICE_ID" "$APP/Contents/MacOS/pharos"
+# Microsoft's runtime is ad hoc signed. Re-signed with the app's identity, the
+# worker's library validation accepts it.
+codesign "$@" "$APP/Contents/MacOS/libonnxruntime.dylib"
 if [ "${PHAROS_HARDENED_RUNTIME:-1}" != 0 ] && \
     ! codesign -dvv "$APP/Contents/MacOS/pharos" 2>&1 | grep -Eq '^Authority=(Apple Development|Developer ID Application):'; then
     # Ad hoc and self-signed development builds cannot pass library validation.
@@ -200,6 +214,7 @@ if [ "${PHAROS_HARDENED_RUNTIME:-1}" != 0 ] && \
 PLIST
     set -- "$@" --entitlements "$WORK/debug.entitlements"
 fi
+codesign "$@" --identifier "$SERVICE_ID.labeler" "$APP/Contents/MacOS/pharos-labeler-ort"
 codesign "$@" --identifier "$BUNDLE_ID" "$APP"
 if [ "${PHAROS_ENABLE_UPDATES:-0}" = 1 ]; then
     if ! codesign -dvv "$APP" 2>&1 | grep -q 'Authority=Developer ID Application:'; then
