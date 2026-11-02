@@ -89,10 +89,12 @@ import toolCallsDocument from "../../schemas/tool_calls.schema.json";
 import skillUsagesDocument from "../../schemas/skill_usages.schema.json";
 import tl1AttemptsDocument from "../../schemas/tl1_attempts.schema.json";
 import parallelismDocument from "../../schemas/parallelism.schema.json";
+import safetyDocument from "../../schemas/safety.schema.json";
 import findingsDocument from "../../schemas/findings.schema.json";
 import agentEventsDocument from "../../schemas/agent_events.schema.json";
 import agentEventMessagesDocument from "../../schemas/agent_event_messages.schema.json";
 import { FindingsPage, startFindingsChrome } from "./findings";
+import { safetyDetailURL, safetyStateLabels } from "./safety-route";
 import { Icon } from "./icons";
 import { AuthoredMessages, CategoryPill, MessageMix, authoredRenderers } from "./authored";
 import { ConcurrencyModal, ConcurrencyPanel, concurrencyPrototypeEnabled, type ConcurrencySelection } from "./concurrency";
@@ -104,7 +106,7 @@ import { AgentEventExamples } from "./agent-event-examples";
 import { AgentEventRates } from "./agent-event-rates";
 import { agentEventReadWhere, daySpan, eventRates, ratePeriod } from "./agent-event-rates-model";
 import { toolsAnalysisCatalog } from "./tools-analysis-catalog";
-import { agentTimeAnalysisCatalog, skillsAnalysisCatalog } from "./record-analysis-catalogs";
+import { toolTimeAnalysisCatalog, skillsAnalysisCatalog } from "./record-analysis-catalogs";
 import { UsageWorkspace, UsageDashboardLinks, UsageWorkspaceLink } from "./usage-workspace";
 import { UsageQueryIdeas } from "./usage-query-ideas";
 import { toolSummaryCallFilters } from "./tools-dashboard-model";
@@ -119,7 +121,7 @@ import { tokenAnalysisCatalog } from "./token-analysis-catalog";
 import { describeTerm, humanAnalysisCatalog, humanLegacyURL, readHumanLink, writingGroups } from "./human-analysis-catalog";
 import { parallelismCatalogShape, parallelismSettingsNote, type ParallelismSettings } from "./parallelism-analysis-catalog";
 import { useCarbonCatalog, useParallelismCatalog } from "./analysis-catalog-hooks";
-import { datasetsForSavedPreferences, onDatasetRefresh } from "./dataset-refresh";
+import { datasetsForSavedPreferences, onDatasetRefresh, onSafetyChange } from "./dataset-refresh";
 import type { LocalRows } from "./analysis-request";
 
 type Row = Record<string, any>;
@@ -128,7 +130,7 @@ const relationships: RelationshipAdapter = {
     return responseJSON(await fetch("/api/query-object-references", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ references }), signal }));
   },
 };
-type Dataset = "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "findings" | "agent_events" | "agent_event_messages";
+type Dataset = "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "findings" | "safety" | "agent_events" | "agent_event_messages";
 type MessageView = "table" | "text";
 function mainIntegrationLink(row: Row): React.ReactNode {
   const merge = mainIntegration(row);
@@ -168,7 +170,7 @@ function datasetIsVisible(dataset: Dataset | "machine_calls") {
   }
   if (dataset === "machine_calls") return path === "/analyze" && (params.get("analyze_view") ?? "tokens") === "tokens" && (params.get("machine_view") ?? preferences().get("pharos-machine-view", "tokens")) === "time";
   if (dataset === "library") return path === "/library";
-  if (dataset === "findings") return path === "/findings" && params.get("view") === "table";
+  if (dataset === "findings" || dataset === "safety") return path === "/findings" && params.get("view") === "table" && (params.get("optimize_area") === "safety") === (dataset === "safety");
   if (dataset === "parallelism") return path === "/analyze" && (params.get("analyze_view") ?? "tokens") === "tokens" && (params.get("machine_view") ?? preferences().get("pharos-machine-view", "tokens")) === "parallelism";
   const usageView = params.get("analyze_view") ?? preferences().get("pharos-usage-view", "tokens");
   if (dataset === "conversation_activity") return path === "/analyze" && usageView === "conversations";
@@ -219,6 +221,7 @@ const schemas: Record<Dataset, FieldSchema<Row>> = {
   tl1_attempts: loadSchema<Row>(tl1AttemptsDocument),
   parallelism: loadSchema<Row>(parallelismDocument),
   findings: loadSchema<Row>(findingsDocument),
+  safety: loadSchema<Row>(safetyDocument),
   agent_events: loadSchema<Row>(agentEventsDocument),
   agent_event_messages: loadSchema<Row>(agentEventMessagesDocument),
 };
@@ -314,6 +317,7 @@ const fetchCapabilities = async (dataset: Dataset, signal?: AbortSignal) => quer
 
 const renderers: RenderRegistry<Row> = {
   ...defaultRenderers,
+  safety_state: ({ value }) => safetyStateLabels[String(value) as keyof typeof safetyStateLabels] ?? String(value ?? ""),
   machine_activity: ({ value }) => activityPresentation(String(value ?? "")).label,
   bool_check(context: CellContext<Row>) {
     return context.value ? <Icon name="check" /> : defaultRenderers.bool_check(context);
@@ -425,6 +429,7 @@ const emptyMessages: Record<Dataset, string> = {
   tl1_attempts: "No TL1 runs match this query.",
   parallelism: "No agent activity matches this query.",
   findings: "No findings match this query.",
+  safety: "No risky action reviews match this query.",
   agent_events: "No agent events match this query.",
   agent_event_messages: "No agent messages read for events match this query.",
 };
@@ -634,6 +639,7 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
   useMachineQueryNavigation(api, Boolean(visible && !shared && (namespace || dataset === "usage")), JSON.stringify([scopeWhere, new URLSearchParams(location.search).get("machine_view")]), `q_${registryKey}`, scopeWhere);
   const apiRef = useRef(api);
   apiRef.current = api;
+  useEffect(() => dataset === "safety" ? onSafetyChange(() => apiRef.current.refresh()) : undefined, [dataset]);
   const priorScopeSignature = useRef(scopeSignature);
   useEffect(() => {
     if (priorScopeSignature.current !== scopeSignature) {
@@ -735,7 +741,7 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
     {!api.query.grouping || namespace ? header?.(api) : null}
     {!shared && !namespace && Object.hasOwn(usageDatasets, dataset) ? <UsageQueryIdeas key={dataset} dataset={dataset as UsageDataset} api={api} /> : null}
     {presets?.(api)}
-    {!shared && !namespace && !["library", "tl1_attempts", "findings", "parallelism"].includes(dataset) && rollingWindowField(dataset) ? <label className="usage-chart-field">Time window<select aria-label="Query time window" value={(() => { const choice = readRollingWindow(new URLSearchParams(location.search), dataset); return choice?.mode === "today" ? "today" : choice?.mode === "relative" && choice.days === 1 ? "24h" : "saved"; })()} onChange={event => {
+    {!shared && !namespace && !["library", "tl1_attempts", "findings", "safety", "parallelism"].includes(dataset) && rollingWindowField(dataset) ? <label className="usage-chart-field">Time window<select aria-label="Query time window" value={(() => { const choice = readRollingWindow(new URLSearchParams(location.search), dataset); return choice?.mode === "today" ? "today" : choice?.mode === "relative" && choice.days === 1 ? "24h" : "saved"; })()} onChange={event => {
       if (event.target.value === "saved") return;
       const selected = readRollingWindow(new URLSearchParams(location.search), dataset);
       const address = updateQueryWindowURL(queryURL(dataset, api.query, selected), event.target.value === "today" ? "today" : 1, api.query);
@@ -1246,7 +1252,7 @@ function TokenSummary({ where }: { where: WhereTerm[] }) {
 
 // The summary is of the dashboard's population: a legend selection only
 // chooses what the chart draws, and the summary says so.
-function AgentTimeSummary({ where, selected = false }: { where: WhereTerm[]; selected?: boolean }) {
+function ToolTimeSummary({ where, selected = false }: { where: WhereTerm[]; selected?: boolean }) {
   const result = useMetrics("tool_calls", where, [
     { id: "duration", op: "sum", field: "duration_ms", groupBy: [] },
     { id: "calls", op: "count", groupBy: [] },
@@ -1256,7 +1262,7 @@ function AgentTimeSummary({ where, selected = false }: { where: WhereTerm[]; sel
   const duration = value("duration"), calls = value("calls"), timed = value("timed");
   const time = (ms: number) => ms >= 3600000 ? `${(ms / 3600000).toLocaleString(undefined, { maximumFractionDigits: 1 })} h` : ms >= 60000 ? `${(ms / 60000).toLocaleString(undefined, { maximumFractionDigits: 1 })} min` : `${(ms / 1000).toLocaleString(undefined, { maximumFractionDigits: 1 })} s`;
   const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
-  return <div className="mcp-metrics dashboard-stats" aria-label="Agent Time summary" aria-busy={result.loading}>
+  return <div className="mcp-metrics dashboard-stats" aria-label="Tool Time summary" aria-busy={result.loading}>
     {card("Total recorded tool time", timed ? time(duration) : "—", `all activities in range${selected ? ", not only the legend selection" : ""} · concurrent calls can overlap`)}
     {card("Call volume", calls.toLocaleString(), "all matching calls, including those without timing")}
     {card("Time per timed run", timed ? time(duration / timed) : "—", `${timed.toLocaleString()} calls with a recorded duration`)}
@@ -1546,7 +1552,7 @@ function useUsageDashboardState<T extends object>(defaults: T, valid: (value: T)
 
 function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
   if(topic==="thinking-overview"||topic==="thinking-detail") return <ThinkingDashboard detail={topic==="thinking-detail"}/>;
-  if (topic === "calls") return <CatalogDashboard catalog={agentTimeAnalysisCatalog} dataset="tool_calls" name="calls" defaults={dashboardDefaults.calls} />;
+  if (topic === "calls") return <CatalogDashboard catalog={toolTimeAnalysisCatalog} dataset="tool_calls" name="calls" defaults={dashboardDefaults.calls} />;
   if (topic === "activity") return <CatalogDashboard catalog={conversationAnalysisCatalog} dataset="conversation_activity" name="activity" defaults={dashboardDefaults.activity} />;
   if (topic === "tokens") return <TokenUsageDashboard />;
   if (topic === "human") return <HumanUsageDashboard />;
@@ -1554,7 +1560,7 @@ function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
   if (topic === "tools") return <ToolsUsageDashboard />;
   if (topic === "mcp") return <MCPUsageDashboard />;
   if (topic === "carbon") return <CarbonDashboard />;
-  if (topic === "time") return <AgentTimeDashboard />;
+  if (topic === "time") return <ToolTimeDashboard />;
   if (topic === "agent_experience") return <AgentExperienceDashboard />;
   return <SkillsDashboard />;
 }
@@ -1695,7 +1701,7 @@ function HumanWordsSummary({ where, status }: { where: WhereTerm[]; status: Auth
 // over one catalog, with the dashboard's own panels around it. Its link is
 // read through readAnalysisLink, so an older link opens as it always did.
 const durationText = (ms: number) => Math.abs(ms) >= 3_600_000 ? `${(ms / 3_600_000).toLocaleString(undefined, { maximumFractionDigits: 1 })} h` : formatDurationMS(ms);
-// Durations in hours where the measure says so (Agent Time's recorded time),
+// Durations in hours where the measure says so (Tool Time's recorded time),
 // otherwise as a duration; counts compactly.
 const catalogAmount: AmountFormat = (value, measure) => measure.format.kind === "duration" ? measure.unit === "hours" ? compactNumber(value / 3_600_000) : durationText(value) : measure.unit === "USD" ? formatUSD(value) : compactNumber(value);
 // readWhere reads filters an older link wrote in another dataset's fields
@@ -1809,9 +1815,9 @@ function ToolsUsageDashboard() {
     after={<p className="usage-dashboard-note">Select a bar or point to inspect its daily summaries, then follow a summary’s Calls link to individual calls and source conversations. The legacy view includes failure kinds and the existing command and context presets.</p>} />;
 }
 
-function AgentTimeDashboard() {
-  return <CatalogDashboard catalog={agentTimeAnalysisCatalog} dataset="tool_calls" name="time" defaults={dashboardDefaults.time} currentURL={currentUsageAnalyses.find(item => item.topic === "time")!.url}
-    summary={(where, selected) => <AgentTimeSummary where={where} selected={selected} />} />;
+function ToolTimeDashboard() {
+  return <CatalogDashboard catalog={toolTimeAnalysisCatalog} dataset="tool_calls" name="time" defaults={dashboardDefaults.time} currentURL={currentUsageAnalyses.find(item => item.topic === "time")!.url}
+    summary={(where, selected) => <ToolTimeSummary where={where} selected={selected} />} />;
 }
 
 function SkillsDashboard() {
@@ -2158,7 +2164,7 @@ const mounts: Array<[string, React.ReactNode]> = [
   ["queryTableUsage", <UsagePage />],
   ["toolsPage", <ToolsPage />],
   ["mcpSettingsPage", <MCPSettings />],
-  ["findingsPage", <FindingsPage copy={copyText} table={<QuerySurface dataset="findings" />} />],
+  ["findingsPage", <FindingsPage copy={copyText} table={<QuerySurface dataset="findings" />} safetyTable={<QuerySurface dataset="safety" trailing={(row, api) => <a href={safetyDetailURL(String(api.rowId(row)), new URL(location.href))} onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(safetyDetailURL(String(api.rowId(row)), new URL(location.href))); }}>Open review</a>} />} />],
 ];
 
 // Mount a page on its first visit. Hidden pages used to load capabilities,

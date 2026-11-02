@@ -55,6 +55,11 @@ func (s *Server) statusDocument(ctx context.Context, fresh bool) map[string]any 
 		library["drive"] = map[string]any{"name": drive.Name, "ejectable": drive.Ejectable, "location": drive.Location, "mounted": drive.Mounted}
 		library["portable"] = config.Library
 		library["path"] = libraryDir(config)
+		// What the library keeps on its drive, from the last drive check
+		// (Health's, refreshed every few minutes); never measured here.
+		if state := drives.peek(config); state != nil && state.sizes.LibraryBytes > 0 {
+			library["storage_bytes"] = roundedBytes(uint64(state.sizes.LibraryBytes))
+		}
 	}
 	document["attention"] = s.attention(ctx)
 	// The freshness ledger (§5), and its one-line summary for the panel.
@@ -71,7 +76,6 @@ func (s *Server) statusDocument(ctx context.Context, fresh bool) map[string]any 
 	document["resources"] = s.serviceResources()
 	// The words over Show all's two parts: the operations, and the domains.
 	document["headings"] = map[string]any{"work": "Work", "data": "Data"}
-	document["features"] = map[string]any{"unified_activity": s.Catalog.unifiedActivity(ctx)}
 	return document
 }
 

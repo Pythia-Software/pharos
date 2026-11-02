@@ -281,6 +281,44 @@ func TestShadowOperationsCoverLibraryActivities(t *testing.T) {
 		waitUntil(t, 30*time.Second, "Capture & index to finish", func() bool { return !server.syncActive() && idleOperations(server) })
 	})
 
+	t.Run("background pass", func(t *testing.T) {
+		useHost(t, "host-a")
+		catalog, config := testCatalog(t)
+		claude := filepath.Join(t.TempDir(), "claude")
+		writeSourceFile(t, filepath.Join(claude, "p", "s.jsonl"), "{}\n")
+		config.CaptureRoot = filepath.Join(t.TempDir(), "captures")
+		config.Sources = []SourceConfig{{Name: "claude", Kind: "claude", Path: claude, Enabled: true}}
+		server := testServer(t, config, catalog)
+		release := make(chan struct{})
+		var released sync.Once
+		t.Cleanup(func() { released.Do(func() { close(release) }) })
+		var once atomic.Bool
+		override(t, &captureFault, func(stage, rel string) error {
+			if once.CompareAndSwap(false, true) {
+				<-release
+			}
+			return nil
+		})
+		server.requestBackground("preserve")
+		done := make(chan struct{})
+		go func() { server.backgroundPass(server.life.ctx, time.Now()); close(done) }()
+		waitUntil(t, 10*time.Second, "the pass's capture", func() bool { return once.Load() })
+		shadowParity(t, server, "background pass")
+		var pass opView
+		for _, view := range server.ops.views() {
+			if view.Spec.Kind == "background.update" && !opTerminal(view.State) {
+				pass = view
+			}
+		}
+		// Eject when safe stops what it can first: Stop reaches the pass.
+		if response := serveTestBody(server, http.MethodPost, "/api/operations/stop", `{"id":"`+string(pass.ID)+`"}`); response.Code != http.StatusOK {
+			t.Fatalf("Stop of a background pass: %d %s", response.Code, response.Body.String())
+		}
+		released.Do(func() { close(release) })
+		<-done
+		waitUntil(t, 30*time.Second, "the pass to end", func() bool { return idleOperations(server) })
+	})
+
 	t.Run("legacy source sync and the substring backfill", func(t *testing.T) {
 		catalog, config := testCatalog(t)
 		record := func(id string) WorkspaceRecord {

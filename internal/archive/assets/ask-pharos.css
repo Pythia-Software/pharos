@@ -1,5 +1,5 @@
 /* A reusable effect: the hue filter only touches the ribbon and its aura. */
-.pharos-glow,#pharos-ask .pharos-product{--pharos-bg:light-dark(#eee7d8,#10241b);--pharos-panel:light-dark(#fffaf0,#183529);--pharos-ink:light-dark(#2c2821,#f3ebdc);--pharos-muted:light-dark(#756c5f,#b5ab93);--pharos-line:light-dark(#d5c8b3,#2d4f40);--pharos-sea:light-dark(#315845,#8cc6a0);--pharos-gold:light-dark(#ad823b,#f0cf7e);--pharos-violet:light-dark(#9674c8,#bba2ef);--pharos-aqua:light-dark(#5bafa4,#83d4c0);}
+.pharos-glow,.pharos-pip-ghost,#pharos-ask .pharos-product{--pharos-bg:light-dark(#eee7d8,#10241b);--pharos-panel:light-dark(#fffaf0,#183529);--pharos-ink:light-dark(#2c2821,#f3ebdc);--pharos-muted:light-dark(#756c5f,#b5ab93);--pharos-line:light-dark(#d5c8b3,#2d4f40);--pharos-sea:light-dark(#315845,#8cc6a0);--pharos-gold:light-dark(#ad823b,#f0cf7e);--pharos-violet:light-dark(#9674c8,#bba2ef);--pharos-aqua:light-dark(#5bafa4,#83d4c0);}
 .pharos-glow{position:relative;isolation:isolate;--pharos-edge-opacity:.8;--pharos-glow-blur:14px;--pharos-glow-spread:7px}
 .pharos-glow .pharos-glow-aura::before{--pharos-glow-violet:light-dark(color-mix(in srgb,var(--pharos-violet) 38%,transparent),color-mix(in srgb,var(--pharos-violet) 15%,transparent));--pharos-glow-gold:light-dark(color-mix(in srgb,var(--pharos-gold) 30%,transparent),color-mix(in srgb,var(--pharos-gold) 10%,transparent));--pharos-glow-aqua:light-dark(color-mix(in srgb,var(--pharos-aqua) 25%,transparent),color-mix(in srgb,var(--pharos-aqua) 10%,transparent));content:"";position:absolute;inset:0;border-radius:inherit;background:radial-gradient(ellipse at 12% 8%,var(--pharos-glow-violet),transparent 56%),radial-gradient(ellipse at 85% 95%,var(--pharos-glow-gold),transparent 55%),radial-gradient(ellipse at 50% 65%,var(--pharos-glow-aqua),transparent 75%);filter:blur(var(--pharos-glow-blur));pointer-events:none}
 .pharos-glow-paint{position:absolute;inset:0;border-radius:inherit;pointer-events:none}
@@ -185,6 +185,7 @@
 #pharos-ask .pharos-turn{display:grid;gap:20px}
 #pharos-ask .pharos-message{display:grid;grid-template-columns:38px minmax(0,1fr);gap:12px;align-items:start}
 #pharos-ask .pharos-message-body{min-width:0}
+#pharos-ask .pharos-message-body>:not([hidden]):not(:not([hidden])~*){margin-top:0;padding-top:0}
 #pharos-ask .pharos-user-question{margin:0;padding:10px 13px;border:0;border-radius:12px;background:color-mix(in srgb,var(--pharos-ink) 7%,var(--pharos-panel));color:var(--pharos-ink);white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px}
 #pharos-ask .pharos-avatar{position:relative;display:grid;place-items:center;width:38px;height:38px;flex:none;border-radius:12px;border:1px solid color-mix(in srgb,currentColor 28%,var(--pharos-panel));background:color-mix(in srgb,currentColor 6%,var(--pharos-panel))}
 #pharos-ask .pharos-user-avatar{color:var(--pharos-muted)}
@@ -220,8 +221,8 @@
 #pharos-ask .pharos-destinations:has(>.pharos-results-label[hidden]){margin-top:0}
 #pharos-ask .pharos-results-label{font-size:13px;color:var(--pharos-ink);margin:0 0 4px}
 #pharos-ask .pharos-omitted{font-size:12px;color:var(--pharos-muted);margin:2px 0 0}
-#pharos-ask .pharos-destination{position:relative;display:flex;flex-direction:column;gap:3px;text-decoration:none;padding:13px 38px 14px 14px;border:1px solid var(--pharos-line);border-radius:9px;background:var(--pharos-panel);color:var(--pharos-ink);transition:transform 150ms ease}
-#pharos-ask .pharos-destination:hover{transform:translateY(-2px);border-color:var(--pharos-violet)}
+#pharos-ask .pharos-destination{position:relative;display:flex;flex-direction:column;gap:3px;text-decoration:none;padding:13px 38px 14px 14px;border:1px solid var(--pharos-line);border-radius:9px;background:var(--pharos-panel);color:var(--pharos-ink)}
+#pharos-ask .pharos-destination:hover{border-color:var(--pharos-violet)}
 #pharos-ask .pharos-destination strong{font-weight:500;font-size:15px;overflow-wrap:anywhere}
 /* Generated link summaries run to a sentence or two and may quote filter values. */
 #pharos-ask .pharos-destination>span:last-of-type{font-size:12px;line-height:1.45;color:var(--pharos-muted);overflow-wrap:anywhere;text-wrap:pretty}
@@ -320,6 +321,10 @@
 .pharos-floating-open strong,.pharos-floating-open span{display:block}
 .pharos-floating-open span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.8}
 .pharos-floating-dismiss{font-size:20px;cursor:pointer}
+.pharos-pip-ghost{position:fixed;z-index:101;box-sizing:border-box;display:flex;align-items:flex-end;padding:12px 16px;overflow:hidden;border:1px solid var(--pharos-line);background:var(--pharos-panel);color:var(--pharos-ink);box-shadow:0 8px 32px #0003;font:13px/1.4 "Avenir Next",Avenir,-apple-system,sans-serif;pointer-events:none}
+.pharos-pip-ghost .pharos-floating-copy{min-width:0}
+.pharos-pip-ghost strong,.pharos-pip-ghost span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pharos-pip-ghost span{opacity:.8}
 .pharos-floating-announcement{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
 
 #pharos-ask .pharos-destination-result{min-width:0}

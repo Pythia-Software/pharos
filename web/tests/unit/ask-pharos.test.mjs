@@ -334,7 +334,7 @@ test('Ask preserves progress and elapsed time, exposing activity details only fo
   const quiet=plain(model.askWaitStatus({activity,elapsedMs:24000,cli:'Codex'}));
   assert.equal(quiet.message,activity[0].message);
   assert.match(quiet.elapsed,/20s since last update/);
-  assert.match(model.askWaitStatus({cli:'Claude',elapsedMs:12000}).elapsed,/12s since last update/);
+  assert.equal(model.askWaitStatus({cli:'Claude',elapsedMs:12000}).elapsed,'');
   for(const status of ['loading','single','multiple','answer','none','clarification','canceled']) {
     assert.equal(model.askShowActivity({status,activity}),false,status);
   }
@@ -367,6 +367,9 @@ test('floating progress reflects the latest state and distinguishes completion f
   assert.equal(streaming.message,'Searching archived work…');assert.equal(streaming.ready,false);
   for (const status of ['single','multiple','clarification','error']) assert.equal(model.askFloatingState({status}).ready,true);
   assert.equal(model.askFloatingState({status:'canceled'}).ready,false);
+  const opened=model.askFloatingState({status:'single'},{navigated:true});
+  assert.match(opened.message,/follow-up/);assert.equal(opened.ready,false);
+  assert.equal(model.askFloatingState({status:'clarification'},{navigated:true}).ready,true);
 });
 test('dragged progress stays reachable after moving or shrinking the window', () => {
   const bounds={width:300,height:80,viewportWidth:390,viewportHeight:550};

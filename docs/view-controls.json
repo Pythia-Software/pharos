@@ -140,6 +140,10 @@
       "field": "nav_expanded"
     },
     {
+      "file": "web/src/findings.tsx",
+      "field": "optimize_area"
+    },
+    {
       "file": "internal/archive/assets/library.js",
       "field": "overlay"
     },
@@ -186,6 +190,22 @@
     {
       "file": "web/src/conversation-search.tsx",
       "field": "reader_search"
+    },
+    {
+      "file": "web/src/safety.tsx",
+      "field": "safety_case"
+    },
+    {
+      "file": "web/src/safety.tsx",
+      "field": "safety_list"
+    },
+    {
+      "file": "web/src/safety.tsx",
+      "field": "safety_place"
+    },
+    {
+      "file": "web/src/safety.tsx",
+      "field": "safety_rank"
     },
     {
       "file": "web/src/conversation-results.tsx",
@@ -2118,20 +2138,20 @@
       "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
     },
     {
+      "key": "html:0bab6dfe661d5b94:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:settings>",
+      "tag": "input",
+      "control": "<input id=\"feedbackContactEmail\" type=\"email\" maxlength=\"254\" autocomplete=\"email\" placeholder=\"you@example.com\" aria-labelledby=\"feedbackContactEmailTitle\" aria-describedby=\"feedbackContactEmailDescription\">",
+      "contract": "settings",
+      "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
+    },
+    {
       "key": "html:2de3664badf0dd59:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:settings>",
       "tag": "button",
       "control": "<button id=\"lighthouseSpinOnClick\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"lighthouseSpinOnClickTitle\" aria-describedby=\"lighthouseSpinOnClickDescription\" aria-checked=\"false\">",
-      "contract": "settings",
-      "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
-    },
-    {
-      "key": "html:3af61b3ea3e1ea68:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "<html:settings>",
-      "tag": "button",
-      "control": "<button id=\"unifiedActivity\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"unifiedActivityTitle\" aria-describedby=\"unifiedActivityDescription\" aria-checked=\"false\">",
       "contract": "settings",
       "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
     },
@@ -4578,20 +4598,20 @@
       "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
     },
     {
-      "key": "6a4e9253499dd22d:0",
-      "file": "web/src/create-dashboard-card.tsx",
-      "owner": "CreateDashboardCard",
-      "tag": "button",
-      "control": "onClick={() => { const url = dashboardCardURL(location.href, catalog, state, where); setDraft({ url, title: dashboardCardTitle(catalog, state), description: dashboardCardDescription(url) }); setError(\"\"); setSaved(false); dialog.current?.showModal(); }}",
-      "contract": "editing",
-      "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
-    },
-    {
       "key": "b4d31e6a92c6f43b:0",
       "file": "web/src/create-dashboard-card.tsx",
       "owner": "CreateDashboardCard",
       "tag": "a",
       "control": "onClick={event => { event.preventDefault(); window.pharosNavigate?.(\"/home\"); }}",
+      "contract": "editing",
+      "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
+    },
+    {
+      "key": "bd9c4bbde6c23fdf:0",
+      "file": "web/src/create-dashboard-card.tsx",
+      "owner": "CreateDashboardCard",
+      "tag": "button",
+      "control": "aria-label=\"Create card\" onClick={() => { const url = dashboardCardURL(location.href, catalog, state, where); setDraft({ url, title: dashboardCardTitle(catalog, state), description: dashboardCardDescription(url) }); setError(\"\"); setSaved(false); dialog.current?.showModal(); }}",
       "contract": "editing",
       "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
     },
@@ -5594,15 +5614,6 @@
       "reason": "List/repo/finding/tab route state, rank override and disclosures; action buttons mutate records and are excluded."
     },
     {
-      "key": "4a005640c466496f:0",
-      "file": "web/src/findings.tsx",
-      "owner": "FindingsList",
-      "tag": "select",
-      "control": "value={route.repo} onChange={event => replaceParams({ repo: event.target.value })} aria-label=\"Show findings for\"",
-      "contract": "findings",
-      "reason": "List/repo/finding/tab route state, rank override and disclosures; action buttons mutate records and are excluded."
-    },
-    {
       "key": "539c15646ab2ab3f:0",
       "file": "web/src/findings.tsx",
       "owner": "FindingsList",
@@ -5610,6 +5621,15 @@
       "control": "value={counts.open.toLocaleString()} onClick={() => setList(\"open\")}",
       "contract": "findings",
       "reason": "List/repo/finding/tab route state, rank override and disclosures; action buttons mutate records and are excluded."
+    },
+    {
+      "key": "7825e739c3f59359:0",
+      "file": "web/src/findings.tsx",
+      "owner": "FindingsList",
+      "tag": "OptimizePlaceFilter",
+      "control": "value={route.repo} onChange={repo => replaceParams({ repo })}",
+      "contract": "findings",
+      "reason": "Shared Optimize dashboard control; keeps the existing Efficiency rank binding or native repo route."
     },
     {
       "key": "7d84d07f4e7c6314:0",
@@ -5621,20 +5641,20 @@
       "reason": "List/repo/finding/tab route state, rank override and disclosures; action buttons mutate records and are excluded."
     },
     {
+      "key": "c2ab6b8270e972bc:0",
+      "file": "web/src/findings.tsx",
+      "owner": "FindingsList",
+      "tag": "OptimizeRank",
+      "control": "value={rank} onChange={setRank}",
+      "contract": "view.findings_rank",
+      "reason": "Shared Optimize dashboard control; keeps the existing Efficiency rank binding or native repo route."
+    },
+    {
       "key": "c2fa2ce28083bc17:0",
       "file": "web/src/findings.tsx",
       "owner": "FindingsList",
       "tag": "Tile",
       "control": "value={counts.watching.toLocaleString()} onClick={() => setList(\"watching\")}",
-      "contract": "findings",
-      "reason": "List/repo/finding/tab route state, rank override and disclosures; action buttons mutate records and are excluded."
-    },
-    {
-      "key": "f9b46636411523f5:0",
-      "file": "web/src/findings.tsx",
-      "owner": "FindingsList",
-      "tag": "button",
-      "control": "onClick={() => setRank(unit)}",
       "contract": "findings",
       "reason": "List/repo/finding/tab route state, rank override and disclosures; action buttons mutate records and are excluded."
     },
@@ -5901,6 +5921,15 @@
       "control": "value={editTitle} onChange={event => setEditTitle(event.target.value)}",
       "contract": "editing",
       "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
+    },
+    {
+      "key": "2973122a62468b5c:0",
+      "file": "web/src/index.tsx",
+      "owner": "<module>",
+      "tag": "a",
+      "control": "onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(safetyDetailURL(String(api.rowId(row)), new URL(location.href))); }}",
+      "contract": "view.safety_case",
+      "reason": "Opens the review by its stable record ID while retaining the source Safety table query and route."
     },
     {
       "key": "5e0ed74b4806d0d2:0",
@@ -6957,6 +6986,24 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
+      "key": "ffd6c787f400180f:0",
+      "file": "web/src/optimize-controls.tsx",
+      "owner": "OptimizePlaceFilter",
+      "tag": "select",
+      "control": "data-view-field={viewField} value={value} onChange={event => onChange(event.target.value)} aria-label={label}",
+      "contract": "optimize-dashboard",
+      "reason": "Shared presentational control delegates to audited caller bindings: findings_rank, safety_rank, safety_place, or Efficiency native repo. All are canonical view inputs; no state is excluded."
+    },
+    {
+      "key": "fef9cd82131aa37b:0",
+      "file": "web/src/optimize-controls.tsx",
+      "owner": "OptimizeRank",
+      "tag": "button",
+      "control": "onClick={() => onChange(option)}",
+      "contract": "optimize-dashboard",
+      "reason": "Shared presentational control delegates to audited caller bindings: findings_rank, safety_rank, safety_place, or Efficiency native repo. All are canonical view inputs; no state is excluded."
+    },
+    {
       "key": "518523774b3bb3cd:0",
       "file": "web/src/query-card.tsx",
       "owner": "QueryCard",
@@ -7194,6 +7241,140 @@
       "reason": "Bound by the shared view-state primitive."
     },
     {
+      "key": "0a853d8dd47f9c38:0",
+      "file": "web/src/safety.tsx",
+      "owner": "actions",
+      "tag": "button",
+      "control": "onClick={() => void act(card.id, { action: \"cart_remove\" }, \"Removed from risky action prompt.\")}",
+      "contract": "editing",
+      "reason": "Adds or removes a review from a persistent prompt basket; this is draft/action state, not a view filter."
+    },
+    {
+      "key": "2621838d3b1e866f:0",
+      "file": "web/src/safety.tsx",
+      "owner": "actions",
+      "tag": "button",
+      "control": "onClick={() => void act(card.id, { action: \"cart_add\" }, `Added to risky action prompt for ${card.target_label}.`)}",
+      "contract": "editing",
+      "reason": "Adds or removes a review from a persistent prompt basket; this is draft/action state, not a view filter."
+    },
+    {
+      "key": "9a4c889d09545973:0",
+      "file": "web/src/safety.tsx",
+      "owner": "actions",
+      "tag": "button",
+      "control": "onClick={() => void act(card.id, { action: \"dismiss\" }, \"Dismissed. You can bring it back at any time.\")}",
+      "contract": "editing",
+      "reason": "Mutates persistent safety basket membership or review disposition; does not alter the current view."
+    },
+    {
+      "key": "9f6fc49bad424044:0",
+      "file": "web/src/safety.tsx",
+      "owner": "actions",
+      "tag": "button",
+      "control": "onClick={() => void act(card.id, { action: \"restore\" }, \"Brought back to Open.\")}",
+      "contract": "editing",
+      "reason": "Mutates persistent safety basket membership or review disposition; does not alter the current view."
+    },
+    {
+      "key": "0b02d959799fef64:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "button",
+      "control": "data-view-field=\"safety_case\" onClick={() => select(\"\")}",
+      "binding": "safety_case",
+      "contract": "view.safety_case",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "18af2a203d110cda:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={`safety:${detail.id}:evidence:${entry.id}`}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "523d6cb74c489e92:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "OptimizeRank",
+      "control": "value={rank} onChange={setRank}",
+      "contract": "view.safety_rank",
+      "reason": "Dashboard view state is bound through useViewState; controls restore from the canonical URL without changing review records."
+    },
+    {
+      "key": "8db372c814d2d994:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "OptimizePlaceFilter",
+      "control": "value={place} onChange={setPlace}",
+      "contract": "view.safety_place",
+      "reason": "Dashboard view state is bound through useViewState; controls restore from the canonical URL without changing review records."
+    },
+    {
+      "key": "a9646855ca0dcbb5:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"safety:coverage\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "df39f809cdc2c8c1:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "button",
+      "control": "data-view-field=\"safety_case\" onClick={() => select(card.id)}",
+      "binding": "safety_case",
+      "contract": "view.safety_case",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "df39f809cdc2c8c1:1",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "button",
+      "control": "data-view-field=\"safety_case\" onClick={() => select(card.id)}",
+      "binding": "safety_case",
+      "contract": "view.safety_case",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "e0307aedafa343ef:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "button",
+      "control": "data-view-field=\"safety_list\" onClick={() => setList(state)}",
+      "binding": "safety_list",
+      "contract": "view.safety_list",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "2cdbc38b92746f90:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetySettings",
+      "tag": "input",
+      "control": "checked={rule.enabled} onChange={event => void save(rule.id, event.target.checked)}",
+      "contract": "settings",
+      "reason": "Saves library-wide discovery settings."
+    },
+    {
+      "key": "db9d7e4b52e357a6:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetySettings",
+      "tag": "button",
+      "control": "onClick={() => void refresh()}",
+      "contract": "editing",
+      "reason": "Requests an explicit background refresh; does not change view state."
+    },
+    {
       "key": "0f43a5c72d8a7da5:0",
       "file": "web/src/search-composer.tsx",
       "owner": "HomeSearch",
@@ -7348,11 +7529,11 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
-      "key": "81f40ca237262854:0",
+      "key": "3f3b82cf10958266:0",
       "file": "web/src/search-help.tsx",
       "owner": "SearchHelp",
       "tag": "button",
-      "control": "aria-label={`${label} help`} onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={() => setOpen(false)} onClick={show}",
+      "control": "aria-label={text ? undefined : `${label} help`} onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={() => setOpen(false)} onClick={show}",
       "contract": "host-search",
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
@@ -8193,20 +8374,11 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
-      "key": "06de8071311bc23f:0",
+      "key": "0b44ca3da1ae991b:0",
       "file": "web/src/uifeedback/pharos-client.tsx",
       "owner": "Composer",
       "tag": "input",
-      "control": "value={draft.email} onChange={e => update({ email: e.target.value })}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "0c97059d4406d606:0",
-      "file": "web/src/uifeedback/pharos-client.tsx",
-      "owner": "Composer",
-      "tag": "button",
-      "control": "onClick={() => { update({ email: \"\", remember: false }); localStorage.removeItem(contactKey); }}",
+      "control": "value={email} onChange={e => { setEmail(e.target.value); saveContact(e.target.value.trim()); }}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
@@ -8220,11 +8392,20 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
-      "key": "214dd45712932f85:0",
+      "key": "21c546ddb1da3f5d:0",
       "file": "web/src/uifeedback/pharos-client.tsx",
       "owner": "Composer",
-      "tag": "input",
-      "control": "checked={logs} onChange={() => void collect()}",
+      "tag": "details",
+      "control": "",
+      "contract": "editing",
+      "reason": "Settings/diagnostic or feedback-editing disclosure, explicitly excluded from view URLs."
+    },
+    {
+      "key": "22fa336466ad9c3b:0",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "button",
+      "control": "onClick={() => void keepDraft(() => window.pharosNavigate?.(\"/settings/preferences\"))} aria-label=\"Contact email settings\"",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
@@ -8234,33 +8415,6 @@
       "owner": "Composer",
       "tag": "button",
       "control": "onClick={() => void keepDraft()} aria-label=\"Close feedback\"",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "49f738c3387665ad:0",
-      "file": "web/src/uifeedback/pharos-client.tsx",
-      "owner": "Composer",
-      "tag": "select",
-      "control": "value={draft.kind} onChange={e => update({ kind: e.target.value as Draft[\"kind\"] })}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "5db26489d5d87a77:0",
-      "file": "web/src/uifeedback/pharos-client.tsx",
-      "owner": "Composer",
-      "tag": "button",
-      "control": "onClick={() => setAnnotations(items => items.filter(item => item.id !== a.id))}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "6b58402d298c6458:0",
-      "file": "web/src/uifeedback/pharos-client.tsx",
-      "owner": "Composer",
-      "tag": "input",
-      "control": "checked={draft.remember} onChange={e => update({ remember: e.target.checked })}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
@@ -8292,11 +8446,29 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
+      "key": "d50ef63da5300b1e:0",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "select",
+      "control": "value={draft.kind} onChange={e => { const kind = e.target.value as Draft[\"kind\"]; update({ kind }); if (kind === \"bug\" && !logs) void includeLogs(true); }}",
+      "contract": "settings",
+      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+    },
+    {
       "key": "d548e27480346e5b:0",
       "file": "web/src/uifeedback/pharos-client.tsx",
       "owner": "Composer",
       "tag": "button",
       "control": "onClick={() => void keepDraft()}",
+      "contract": "settings",
+      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+    },
+    {
+      "key": "e28978a9f272d38d:0",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "button",
+      "control": "onClick={() => setAnnotations(items => items.filter(item => item.id !== a.id))} aria-label={`Exclude ${a.label} from this report`}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
@@ -8310,13 +8482,13 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
-      "key": "f152a1ffe5ba736d:0",
+      "key": "eefcab6e11e3e40c:0",
       "file": "web/src/uifeedback/pharos-client.tsx",
       "owner": "Composer",
-      "tag": "details",
-      "control": "open",
-      "contract": "editing",
-      "reason": "Settings/diagnostic or feedback-editing disclosure, explicitly excluded from view URLs."
+      "tag": "input",
+      "control": "checked={logs} onChange={e => void includeLogs(e.target.checked)}",
+      "contract": "settings",
+      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
       "key": "57c08b857d8535fe:0",

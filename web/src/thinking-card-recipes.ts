@@ -3,10 +3,12 @@ const base = {
   dataset: "model_requests",
   field: "requested_at",
   days: [7, 30, 90],
-  category: "models",
+  category: "thinking",
   idea: "models-01",
   unit: "seconds",
 } as const;
+// Cards open Waiting and Compaction (overview: true) for the whole-library
+// questions, and Thinking for one comparison, already in its view.
 export const thinkingCardRecipes: QueryRecipe[] = [
   {
     ...base,
@@ -25,9 +27,32 @@ export const thinkingCardRecipes: QueryRecipe[] = [
         label: "Observed post-tool wait",
       },
     ],
-    thinking: { state: { view: "histogram", groupBy: "none" } },
-    action: "Explore Thinking",
-    note: "Same request population as Thinking. The compact native histogram uses automatic bins; the full dashboard uses shared rounded logarithmic edges. Neither measures pure inference or first-token latency.",
+    thinking: { overview: true, state: {} },
+    action: "Explore Waiting and Compaction",
+    note: "Same request population as Waiting and Compaction, which adds the typical wait, the slowest tenth, per-model curves and what each wait is associated with. The compact native histogram uses automatic bins. Neither measures pure inference or first-token latency.",
+  },
+  {
+    ...base,
+    days: [...base.days],
+    unit: "compactions",
+    id: "thinking-compactions",
+    title: "Context compactions",
+    description:
+      "Requests that follow a context compaction, day by day by model, over the last {days} days.",
+    where: [{ field: "compacted_before", op: "=", value: "true" }],
+    measures: [
+      {
+        id: "compactions_daily",
+        op: "count",
+        groupBy: ["day", "model"],
+        groupLimit: 10000,
+        label: "Compactions by day",
+      },
+    ],
+    cover: { mode: "source", metricId: "compactions_daily", kind: "auto", maxGroups: 6, showOther: true, showLegend: true, height: 240 },
+    thinking: { overview: true, state: {}, open: "thinking:conversation", coverWhere: true },
+    action: "Explore Waiting and Compaction",
+    note: "One compaction is a request whose stream compacted its context since the previous request. Waiting and Compaction pairs the waits, context and output before and after each compaction within one stream, model and effort.",
   },
   {
     ...base,
@@ -53,6 +78,32 @@ export const thinkingCardRecipes: QueryRecipe[] = [
     thinking: { state: { view: "wait-box", groupBy: "model_effort" } },
     action: "Explore Thinking",
     note: "Individual post-tool gaps. Compact native boxes use Tukey whiskers; Thinking uses p10–p90 whiskers. The full dashboard keeps every model/effort pair and exposes support counts.",
+  },
+  {
+    ...base,
+    days: [...base.days],
+    id: "thinking-preceding-tool",
+    title: "Wait by preceding tool",
+    description:
+      "Observed waits after each tool's result, by the tool that ran, over the last {days} days.",
+    measures: [
+      {
+        id: "wait_tools",
+        display: { kind: "box" },
+        op: "count",
+        groupBy: ["preceding_tool"],
+        distribution: {
+          kind: "box",
+          input: "[gap_seconds]",
+          whiskers: "tukey",
+        },
+        label: "Wait by preceding tool",
+      },
+    ],
+    cover: { mode: "source", metricId: "wait_tools", kind: "box", maxGroups: 8, density: "compact", minSamples: 20 },
+    thinking: { state: { view: "wait-box", groupBy: "preceding_tool", sortBy: "median", sortDirection: "desc" } },
+    action: "Explore Thinking",
+    note: "The gap from a tool result to the next response, grouped by the tool whose result arrived last. A large result adds context to read, so tools differ in more than speed. The cover keeps tools with at least 20 timed requests; Thinking shows every tool with its support counts.",
   },
   {
     ...base,
@@ -98,7 +149,7 @@ export const thinkingCardRecipes: QueryRecipe[] = [
         label: "Timing evidence coverage",
       },
     ],
-    thinking: { overview: true, state: {} },
+    thinking: { overview: true, state: {}, open: "thinking:coverage" },
     action: "Explore Waiting and Compaction",
     note: "Includes missing timestamps, stale anchors, cross-stream links and excluded durations. The overview explains how timing is reconstructed and provides source-specific validation.",
   },

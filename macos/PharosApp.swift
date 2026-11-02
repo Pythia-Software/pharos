@@ -137,6 +137,8 @@ final class ArchiveService: ObservableObject {
     @Published var disconnected: Disconnection?
     /// The Eject button's release and eject are under way.
     @Published var ejecting = false
+    /// View → Zoom In/Out/Actual Size: the page's zoom, kept across launches.
+    @Published private(set) var pageZoom = PageZoom.saved()
     @Published var setupNeeded = false
     @Published var settingUp = false
     @Published var setupError: String?
@@ -430,6 +432,13 @@ final class ArchiveService: ObservableObject {
         }
         guard let webView = menuBar.webView else { return }
         if webView.url == nil, let url { webView.load(URLRequest(url: url)) } else { webView.reload() }
+    }
+
+    /// Steps the page's zoom by `step` levels; 0 returns it to actual size.
+    func zoomPage(_ step: Int) {
+        pageZoom = step == 0 ? 1 : PageZoom.level(from: pageZoom, step: step)
+        PageZoom.save(pageZoom)
+        menuBar.webView?.pageZoom = pageZoom
     }
 
     var canSetUpHere: Bool {
@@ -1022,6 +1031,40 @@ final class ArchiveWKWebView: WKWebView {
         lastMouseDown = event
         super.mouseDown(with: event)
     }
+
+    // View → Zoom In shows ⌘+, which needs Shift on most layouts; take ⌘=
+    // too, as browsers do.
+    var onZoomIn: (() -> Void)?
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+           event.charactersIgnoringModifiers == "=", let onZoomIn {
+            onZoomIn()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+}
+
+/// The page zoom levels View → Zoom In and Zoom Out step through, as in Safari.
+enum PageZoom {
+    static let levels: [Double] = [0.5, 0.75, 0.85, 1, 1.15, 1.25, 1.5, 1.75, 2, 2.5, 3]
+    static let defaultsKey = "PharosPageZoom"
+
+    /// The level `step` levels from `zoom`, which need not be one of them.
+    static func level(from zoom: Double, step: Int) -> Double {
+        if step > 0 { return levels.first { $0 > zoom + 0.001 } ?? levels.last! }
+        if step < 0 { return levels.last { $0 < zoom - 0.001 } ?? levels.first! }
+        return zoom
+    }
+
+    static func saved(_ defaults: UserDefaults = .standard) -> Double {
+        let zoom = defaults.double(forKey: defaultsKey)
+        return zoom == 0 ? 1 : min(max(zoom, levels.first!), levels.last!)
+    }
+
+    static func save(_ zoom: Double, _ defaults: UserDefaults = .standard) {
+        if zoom == 1 { defaults.removeObject(forKey: defaultsKey) } else { defaults.set(zoom, forKey: defaultsKey) }
+    }
 }
 
 struct ArchiveWebView: NSViewRepresentable {
@@ -1464,6 +1507,8 @@ struct ArchiveWebView: NSViewRepresentable {
         let view = ArchiveWKWebView(frame: .zero, configuration: configuration)
         context.coordinator.webView = view
         service.menuBar.webView = view
+        view.pageZoom = service.pageZoom
+        view.onZoomIn = { [weak service] in service?.zoomPage(1) }
         view.onMoveToWindow = { [weak coordinator = context.coordinator] in coordinator?.observeFullScreen(of: $0) }
         view.uiDelegate = context.coordinator
         view.navigationDelegate = context.coordinator
@@ -1814,13 +1859,24 @@ struct PharosWindow: View {
 }
 
 /// View → Reload (⌘R): reloads the window's page, also after one that
-/// could not load.
+/// could not load. Actual Size (⌘0), Zoom In (⌘+) and Zoom Out (⌘−) scale
+/// the page.
 struct ViewCommands: Commands {
-    let service: ArchiveService
+    @ObservedObject var service: ArchiveService
     var body: some Commands {
         CommandGroup(before: .toolbar) {
             Button("Reload") { service.reloadPage() }
                 .keyboardShortcut("r", modifiers: .command)
+            Divider()
+            Button("Actual Size") { service.zoomPage(0) }
+                .keyboardShortcut("0", modifiers: .command)
+                .disabled(service.pageZoom == 1)
+            Button("Zoom In") { service.zoomPage(1) }
+                .keyboardShortcut("+", modifiers: .command)
+                .disabled(service.pageZoom >= PageZoom.levels.last!)
+            Button("Zoom Out") { service.zoomPage(-1) }
+                .keyboardShortcut("-", modifiers: .command)
+                .disabled(service.pageZoom <= PageZoom.levels.first!)
             Divider()
         }
     }

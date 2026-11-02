@@ -84,12 +84,14 @@ async function askReadResponse(response, onProgress) {
 function askShowActivity({status,activity=[]}) {
   return status==='error'&&activity?.length>0;
 }
+// Elapsed time is measured from the agent's start, so it stays hidden until the
+// first activity arrives rather than counting up and then snapping back.
 function askWaitStatus({activity=[],elapsedMs=0,message='',cli=''}) {
   const latest=activity.at(-1),elapsed=Math.floor(elapsedMs/1000);
-  const silent=latest?Math.max(0,Math.floor((elapsedMs-latest.elapsedMs)/1000)):elapsed;
+  const silent=latest?Math.max(0,Math.floor((elapsedMs-latest.elapsedMs)/1000)):0;
   return {
     message:latest?.message||message||'Starting '+cli+'…',
-    elapsed:elapsed+'s elapsed'+(silent>=10?' · '+silent+'s since last update':''),
+    elapsed:latest?elapsed+'s elapsed'+(silent>=10?' · '+silent+'s since last update':''):'',
   };
 }
 function askComposerActions({draft = '', turns = [], pending = false, opening = false, enabled = false, model = ''}) {
@@ -207,8 +209,10 @@ function askRestorePresentation(href, saved) {
 function askShowBrowseHint({pending=false,browsing=false,presentation='home'}) {
   return pending&&!browsing&&['home','modal'].includes(presentation);
 }
-function askFloatingState(turn) {
+function askFloatingState(turn, {navigated = false} = {}) {
   if (!turn) return {message: 'Ask a question', ready: false};
+  // The answer is the page now on screen, so the panel invites a follow-up instead of calling for attention.
+  if (navigated && turn.status === 'single') return {message: 'Opened · Ask a follow-up', ready: false};
   if (turn.status === 'loading') return {message: askWaitStatus(turn).message, ready: false};
   if (turn.status === 'error') return {message: 'Question failed · Review or retry', ready: true};
   if (turn.status === 'canceled') return {message: 'Question canceled', ready: false};

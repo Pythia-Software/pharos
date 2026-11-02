@@ -1,6 +1,6 @@
 import { conversationAnalysisCatalog as activity } from "../../../src/conversation-analysis-catalog";
 import { population } from "../../support/query-server.mjs";
-// The Tools, Pharos MCP, Agent Time and Skills catalogs: what each offers and
+// The Tools, Pharos MCP, Tool Time and Skills catalogs: what each offers and
 // why, how their older links read, and the engine rules they added (record
 // views without units, a minimum counted in calls, maxima kept off the trend,
 // timestamp cycles and compound unit keys).
@@ -19,7 +19,7 @@ import { tokenAnalysisCatalog } from "../../../src/token-analysis-catalog";
 import { toolsAnalysisCatalog as tools } from "../../../src/tools-analysis-catalog";
 import { mcpAnalysisCatalog as mcp } from "../../../src/mcp-analysis-catalog";
 import { agentEventsAnalysisCatalog as agentEvents } from "../../../src/agent-events-analysis-catalog";
-import { agentTimeAnalysisCatalog as time, skillsAnalysisCatalog as skills } from "../../../src/record-analysis-catalogs";
+import { toolTimeAnalysisCatalog as time, skillsAnalysisCatalog as skills } from "../../../src/record-analysis-catalogs";
 import { dashboardChartURL } from "../../../src/dashboard-chart-links";
 import { toolMetricPresentation } from "../../../src/tools-dashboard-model";
 import { withTimeRange } from "../../../src/chart-range";
@@ -255,7 +255,7 @@ test("a unit may combine fields: one observation per tool in a conversation, or 
   assert.equal(run(skills, loads.query)[0].error, undefined);
 });
 
-test("activities read as Agent Time names them, in the trend and in Compare", () => {
+test("activities read as Tool Time names them, in the trend and in Compare", () => {
   const state = { metric: "time", split: "activity" }, query = trendQuery(time, state, month(time), { now });
   const built = trendSeries(time, state, query, run(time, query.query), { now });
   assert.ok(built.series.some(item => item.value === "command:test" && item.label === "test"), JSON.stringify(built.series.map(item => item.label)));
