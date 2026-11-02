@@ -71,9 +71,11 @@ test("the page reports failed and stalled requests once each, and never its own 
   const stalled = loadReporter(() => new Promise(() => {}));
   void stalled.script.window.fetch("/api/slow");
   void stalled.script.window.fetch("/api/action", { method: "POST" });
+  void stalled.script.window.fetch("/api/query/usage/rows", { method: "POST" });
   stalled.run(15000);
   stalled.run(1000);
-  assert.deepEqual(plain(stalled.sent).map(event => event.message), ["GET /api/slow had not answered after 15 s"], "only reads stall; actions may run long");
+  assert.deepEqual(plain(stalled.sent).map(event => event.message), ["GET /api/slow had not answered after 15 s", "POST /api/query/usage/rows had not answered after 15 s"],
+    "only reads stall, including Query Table's POST queries; actions may run long");
 });
 
 test("the page reports uncaught errors, scripts that do not load, and what the app saw", () => {

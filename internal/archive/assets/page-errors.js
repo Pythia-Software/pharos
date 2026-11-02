@@ -36,6 +36,14 @@ function pageRequestMethod(input, init) {
   return String(init?.method || (typeof input === 'object' ? input?.method : '') || 'GET').toUpperCase();
 }
 
+// A request a page waits on to show anything: a GET, or a POST that only
+// reads (Query Table's queries, text search). diagnostic_logs.go's
+// diagnosticRead is the server's copy.
+function pageRequestIsRead(method, path) {
+  const pathname = path.split('?')[0];
+  return method === 'GET' || method === 'HEAD' || method === 'POST' && (pathname.startsWith('/api/query/') || pathname === '/api/search/text');
+}
+
 // One report per distinct event per page load, and at most PAGE_ERROR_LIMIT:
 // a failing render can throw on every frame.
 function createPageErrorQueue(send, schedule, limit = PAGE_ERROR_LIMIT) {
@@ -103,7 +111,7 @@ function createPageErrorQueue(send, schedule, limit = PAGE_ERROR_LIMIT) {
     if (path.startsWith('/api/logs/')) return originalFetch(input, init);
     // Actions (a sync, an export) may run long by design; a read that has
     // not answered is what leaves a page blank.
-    const stalled = method === 'GET' ? setTimeout(() => report({kind: 'stalled', message: `${method} ${path} had not answered after ${PAGE_REQUEST_STALL_MS / 1000} s`, path}), PAGE_REQUEST_STALL_MS) : 0;
+    const stalled = pageRequestIsRead(method, path) ? setTimeout(() => report({kind: 'stalled', message: `${method} ${path} had not answered after ${PAGE_REQUEST_STALL_MS / 1000} s`, path}), PAGE_REQUEST_STALL_MS) : 0;
     return originalFetch(input, init).then(response => {
       clearTimeout(stalled);
       if (response.status >= 500) report({kind: 'request', message: `${method} ${path} returned ${response.status}`, path, status: response.status, duration_ms: Date.now() - started});

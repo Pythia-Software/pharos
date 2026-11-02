@@ -66,8 +66,9 @@ func TestDiagnosticJournalStaysBounded(t *testing.T) {
 func TestRequestEventsKeepPanicsErrorsAndSlowReads(t *testing.T) {
 	started := time.Now()
 	trace := func(method string, status int) *requestTrace {
-		return &requestTrace{method: method, path: "/api/x", started: started, status: status}
+		return &requestTrace{method: method, path: "/api/x", read: method == "GET", started: started, status: status}
 	}
+	query := &requestTrace{method: "POST", path: "/api/query/usage/rows", read: true, started: started, status: 200}
 	if _, logged := requestEvent(trace("GET", 200), time.Second); logged {
 		t.Error("a quick answer was logged")
 	}
@@ -80,6 +81,7 @@ func TestRequestEventsKeepPanicsErrorsAndSlowReads(t *testing.T) {
 		{trace("GET", 200), 4 * time.Second, "warning", "slow"},
 		{trace("GET", 200), time.Minute, "error", "slow"},
 		{trace("POST", 200), time.Minute, "info", "slow"},
+		{query, 4 * time.Second, "warning", "slow"}, // Query Table reads with POST
 		{trace("GET", 503), time.Millisecond, "error", "failed"},
 		{&requestTrace{method: "GET", path: "/api/x", started: started, status: 500, panic: "boom\n\ngoroutine 1"}, time.Millisecond, "error", "panic"},
 	}
@@ -173,6 +175,32 @@ func TestServiceLogRotatesWhileARunWrites(t *testing.T) {
 	}
 }
 
+// A log that cannot be moved aside starts over instead of growing.
+func TestServiceLogStaysBoundedInAReadOnlyFolder(t *testing.T) {
+	t.Setenv("PHAROS_SUPPORT_DIR", t.TempDir())
+	override(t, &diagnosticLogBytes, 4096)
+	dir := libraryLogDir("lib")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "service.log")
+	if err := os.WriteFile(path, make([]byte, 10000), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	log, _ := openServiceLog("lib")
+	for i := range 400 {
+		fmt.Fprintf(log, "line %d: still working\n", i)
+	}
+	closeServiceLog(log, 1, nil)
+	if info, err := os.Stat(path); err != nil || info.Size() > 4096+200 {
+		t.Fatalf("service.log = %v, %v; want it bounded", info, err)
+	}
+}
+
 func TestCrashReportsListPharosAndItsWebProcesses(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
@@ -197,7 +225,15 @@ func TestCrashReportsListPharosAndItsWebProcesses(t *testing.T) {
 	report("pharos_2026-11-02-080000_Mac.cpu_resource.diag", "Command: pharos\nEvent: cpu usage\n", 3*time.Hour)
 	report("Pharos-2026-10-01-100000.ips", ips("Pharos", "local.pharos"), 30*24*time.Hour)
 	report("Safari-2026-11-02-100000.ips", ips("Safari", "com.apple.Safari"), time.Hour)
+	// A report larger than the head read to filter it is summarized whole.
+	large := strings.Replace(ips("pharos-labeler-ort", "local.pharos"), `"threads":[`, `"threads":[{"frames":[],"padding":"`+strings.Repeat("x", 400<<10)+`"},`, 1)
+	large = strings.Replace(large, `"faultingThread":1`, `"faultingThread":2`, 1)
+	report("pharos-labeler-ort-2026-11-02-110000.ips", large, 30*time.Minute)
 	reports := scanCrashReports(dir, now)
+	if len(reports) != 4 || reports[0].Summary != "EXC_BAD_ACCESS · SIGSEGV" || len(reports[0].Frames) != 1 {
+		t.Fatalf("large report = %+v", reports[0])
+	}
+	reports = reports[1:]
 	if len(reports) != 3 {
 		t.Fatalf("reports = %+v, want Pharos's, its web process's and its resource report", reports)
 	}
@@ -338,7 +374,8 @@ func TestRequestTraceListsSlowRequestsAndRunningOnes(t *testing.T) {
 	if len(requests.Events) != 1 || requests.Events[0].Path != "/api/menu-bar/status" || requests.Events[0].Kind != "slow" {
 		t.Fatalf("requests = %+v; the log's own reads are not traced", requests.Events)
 	}
-	read, readDone := server.traceRequest(httptest.NewRecorder(), mustRequest(t, "GET", "/api/search?q=x"))
+	// Query Table reads with POST; the page waits on it as on a GET.
+	read, readDone := server.traceRequest(httptest.NewRecorder(), mustRequest(t, "POST", "/api/query/usage/rows"))
 	read.started = time.Now().Add(-time.Minute)
 	action, actionDone := server.traceRequest(httptest.NewRecorder(), mustRequest(t, "POST", "/api/ask/send"))
 	action.started = time.Now().Add(-2 * time.Minute)
@@ -347,14 +384,14 @@ func TestRequestTraceListsSlowRequestsAndRunningOnes(t *testing.T) {
 	go func() { action.WriteHeader(http.StatusOK); close(written) }()
 	running := server.runningRequests(time.Now())
 	<-written
-	if len(running) != 2 || running[0]["path"] != "/api/ask/send" || running[1]["path"] != "/api/search?q=x" {
+	if len(running) != 2 || running[0]["path"] != "/api/ask/send" || running[1]["path"] != "/api/query/usage/rows" {
 		t.Errorf("running = %+v", running)
 	}
 	doc, err := server.diagnosticSource(t.Context(), "requests", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if doc.Summary.Attention != "error" || !strings.HasPrefix(doc.Summary.Headline, "GET /api/search") {
+	if doc.Summary.Attention != "error" || !strings.HasPrefix(doc.Summary.Headline, "POST /api/query/usage/rows") {
 		t.Errorf("summary = %+v; a long action is listed but only a stalled read is an alert", doc.Summary)
 	}
 	readDone()

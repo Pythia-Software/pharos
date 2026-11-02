@@ -312,7 +312,12 @@ final class RunLogFile {
         if !manager.fileExists(atPath: url.path) { manager.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]) }
         handle = try? FileHandle(forWritingTo: url)
         size = (try? handle?.seekToEnd()).flatMap { Int64(exactly: $0) } ?? 0
-        write(start)
+        // It could not be moved aside (the folder is read-only): start it
+        // over rather than grow it, or reopen it on every write.
+        if size > limit, (try? handle?.truncate(atOffset: 0)) != nil { size = 0 }
+        // Written directly: the start line never starts another rotation.
+        try? handle?.write(contentsOf: start)
+        size += Int64(start.count)
     }
 
     func write(_ chunk: Data) {

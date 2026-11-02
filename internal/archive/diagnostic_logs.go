@@ -54,6 +54,8 @@ var (
 	// how much of each log a page reads.
 	diagnosticLogBytes  int64 = 4 << 20
 	diagnosticTailBytes int64 = 1 << 20
+	// crashReportBytes is the most of a crash report read for its summary.
+	crashReportBytes int64 = 32 << 20
 )
 
 const diagnosticJournalLimit = 300
@@ -233,8 +235,10 @@ func (s *Server) diagnosticsState() *serviceDiagnostics {
 // error response's body, for the request journal.
 type requestTrace struct {
 	http.ResponseWriter
-	id      uint64
-	method  string
+	id     uint64
+	method string
+	// read is a request a page waits on to show anything (diagnosticRead).
+	read    bool
 	path    string
 	started time.Time
 	status  int
@@ -280,7 +284,7 @@ func (s *Server) traceRequest(w http.ResponseWriter, r *http.Request) (*requestT
 	if r.URL.RawQuery != "" {
 		path += "?" + truncateText(r.URL.RawQuery, 300)
 	}
-	trace := &requestTrace{ResponseWriter: w, method: r.Method, path: path, started: time.Now()}
+	trace := &requestTrace{ResponseWriter: w, method: r.Method, path: path, read: diagnosticRead(r), started: time.Now()}
 	d.mu.Lock()
 	d.next++
 	trace.id = d.next
@@ -296,12 +300,19 @@ func (s *Server) traceRequest(w http.ResponseWriter, r *http.Request) (*requestT
 	}
 }
 
+// diagnosticRead reports whether a page waits on r to show anything: a GET,
+// or a POST that only reads, such as Query Table's queries and text search
+// (interactiveRead). page-errors.js's pageRequestIsRead mirrors it.
+func diagnosticRead(r *http.Request) bool {
+	return r.Method == http.MethodGet || r.Method == http.MethodHead || interactiveRead(r)
+}
+
 // requestEvent is what the journal records for a finished request, if
 // anything: a panic, an error status, or a slow answer. A slow page read
 // can leave a page blank; a slow action (a sync, an export) is expected.
 func requestEvent(t *requestTrace, elapsed time.Duration) (diagnosticEvent, bool) {
 	event := diagnosticEvent{At: formatTime(t.started.Add(elapsed)), Method: t.method, Path: t.path, Status: t.status, Duration: elapsed.Milliseconds()}
-	read := t.method == http.MethodGet || t.method == http.MethodHead
+	read := t.read
 	switch {
 	case t.panic != "":
 		event.Level, event.Kind, event.Message = "error", "panic", fmt.Sprintf("%s %s stopped on an internal error", t.method, t.path)
@@ -343,7 +354,7 @@ func (s *Server) runningRequests(at time.Time) []map[string]any {
 	slices.SortFunc(traces, func(a, b *requestTrace) int { return a.started.Compare(b.started) })
 	rows := []map[string]any{}
 	for _, trace := range traces {
-		rows = append(rows, map[string]any{"method": trace.method, "path": trace.path, "started_at": formatTime(trace.started), "duration_ms": at.Sub(trace.started).Milliseconds()})
+		rows = append(rows, map[string]any{"method": trace.method, "path": trace.path, "read": trace.read, "started_at": formatTime(trace.started), "duration_ms": at.Sub(trace.started).Milliseconds()})
 	}
 	return rows
 }
@@ -554,6 +565,11 @@ func (l *runLog) openLocked() bool {
 	if info, err := file.Stat(); err == nil {
 		l.size = info.Size()
 	}
+	// It could not be moved aside (the folder is read-only): start it over
+	// rather than grow it, or reopen it on every write.
+	if l.size > diagnosticLogBytes && file.Truncate(0) == nil {
+		l.size = 0
+	}
 	n, _ := io.WriteString(file, l.start)
 	l.size += int64(n)
 	return true
@@ -668,6 +684,13 @@ func scanCrashReports(dir string, at time.Time) []crashReport {
 		head, err := readHead(path, 256<<10)
 		if err != nil || (webKit && !pharosCoalition.Match(head)) {
 			continue
+		}
+		// The summary needs the whole report: its body is one JSON document,
+		// and a process with many threads writes megabytes of it.
+		if info.Size() > int64(len(head)) {
+			if whole, err := readHead(path, crashReportBytes); err == nil {
+				head = whole
+			}
 		}
 		report := summarizeCrashReport(name, head)
 		report.Path, report.modified, report.At = path, info.ModTime(), formatTime(info.ModTime())
@@ -814,7 +837,7 @@ func (s *Server) diagnosticSource(ctx context.Context, id string, at time.Time) 
 		// a page blank (as requestEvent judges finished requests).
 		for _, running := range doc.Running {
 			elapsed := time.Duration(running["duration_ms"].(int64)) * time.Millisecond
-			if read := running["method"] == http.MethodGet || running["method"] == http.MethodHead; read && elapsed >= slowRequest {
+			if running["read"] == true && elapsed >= slowRequest {
 				level := map[bool]string{true: "error", false: "warning"}[elapsed >= stalledRequest]
 				raiseAttention(summary, level)
 				summary.Headline = fmt.Sprintf("%s %s has been running for %s", running["method"], running["path"], elapsedText(elapsed))
