@@ -1,6 +1,8 @@
 import searchCases from '../../../../testdata/search-draft-cases.json';
 import inspectionCases from '../../../../testdata/json-inspection-cases.json';
 import {parseDetailTarget,detailReference,revealQueryDetail} from '../../../src/query-attention';
+import {findingsRank} from '../../../src/findings-route';
+import {createDetailLanding,nativeDetailsReady,attentionMutationMatters} from '../../../src/view-attention-model';
 import {createAttentionRegistry,parseJsonInspections} from '@pythia-software/query-table-core';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -315,4 +317,77 @@ test('page navigation drops source attention while preserving global view contro
  assert.equal(samePage.get('highlight'),'control:query_days');assert.equal(samePage.get('reveal'),'page');
  retainPageView(samePage,'analyze/query/tools',[],'analyze/query/usage');
  assert.equal(samePage.has('highlight'),false);assert.equal(samePage.has('reveal'),false);
+});
+
+
+// A provider whose answers the test releases one at a time.
+function detailProvider(){
+ const calls=[];
+ const resolve=(reference,signal)=>new Promise(done=>calls.push({reference,signal,done}));
+ return {calls,resolve};
+}
+const settled=()=>new Promise(resolve=>setTimeout(resolve,0));
+
+test('native detail landings wait for a provider, retry when one registers, and cancel on navigation',async()=>{
+ let passes=0;const landing=createDetailLanding(()=>passes++),target='detail:{"rowId":"a"}';
+ assert.equal(landing.resolve(target),false,'without a provider the target waits');assert.equal(landing.pending,false);
+ const custom=detailProvider(),removeCustom=landing.register(custom.resolve);
+ assert.equal(landing.resolve(target),false);assert.equal(landing.pending,true);
+ assert.equal(landing.resolve(target),false);assert.equal(custom.calls.length,1,'repeated passes share one request');
+ custom.calls[0].done('unavailable');await settled();
+ assert.equal(landing.pending,false);assert.equal(landing.resolve(target),false);assert.equal(custom.calls.length,1,'an unavailable target is not retried every pass');
+ removeCustom();
+ const table=detailProvider(),before=passes;landing.register(table.resolve);
+ assert.ok(passes>before,'registration asks for another pass');
+ assert.equal(landing.resolve(target),false);assert.equal(table.calls.length,1,'a new provider retries the unavailable target');
+ table.calls[0].done('revealed');await settled();
+ assert.equal(landing.resolve(target),true);
+ const refreshed=detailProvider();landing.register(refreshed.resolve)();
+ assert.equal(landing.resolve(target),true,'a revealed landing survives a provider refresh without replaying');
+ assert.equal(refreshed.calls.length,0);
+
+ const other='detail:{"rowId":"b"}';
+ assert.equal(landing.resolve(other),false);const request=table.calls.at(-1);
+ assert.equal(request.reference,other,'a new target replaces the landed one');
+ landing.cancel();assert.equal(request.signal.aborted,true,'navigation aborts the pending request');
+ request.done('revealed');await settled();
+ assert.equal(landing.pending,false);
+ assert.equal(landing.resolve(other),false,'a late answer to a cancelled request cannot land');
+ assert.equal(table.calls.length,3);
+ table.calls[2].done(Promise.reject(new Error('lost')));await settled();
+ assert.equal(landing.pending,false,'a failed provider reports unavailable');
+ assert.equal(landing.resolve(other),false);
+});
+
+test('native details wait for the first result page of a visible, restored table',()=>{
+ const ready={visible:true,shared:false,restored:true,loading:false,rows:'succeeded',schema:'pharos_mcp_calls'};
+ assert.equal(nativeDetailsReady(ready),true);
+ assert.equal(nativeDetailsReady({...ready,rows:'failed'}),true);
+ for(const waiting of [{rows:'running'},{rows:undefined},{loading:true},{restored:false},{visible:false},{shared:true},{schema:undefined}])
+  assert.equal(nativeDetailsReady({...ready,...waiting}),false,JSON.stringify(waiting));
+});
+
+test("attention ignores its own status UI and class changes but follows the page's",()=>{
+ const element=(classes='',{owned=false,parent=null}={})=>({classes,parentElement:parent,closest:()=>owned?{}:null,getAttribute:()=>classes,matches(){return /pharos-(highlight|reveal)/.test(this.classes)}});
+ const text=parentElement=>({parentElement});
+ const status=element('',{owned:true}),page=element('card');
+ assert.equal(attentionMutationMatters({type:'characterData',target:text(status)},new Set()),false,'status text');
+ assert.equal(attentionMutationMatters({type:'childList',target:status,addedNodes:[text(status)],removedNodes:[]},new Set()),false,'status children');
+ assert.equal(attentionMutationMatters({type:'childList',target:element(''),addedNodes:[status],removedNodes:[]},new Set()),false,'adding the status UI');
+ assert.equal(attentionMutationMatters({type:'childList',target:element(''),addedNodes:[status,page],removedNodes:[]},new Set()),true,'page content arriving with it');
+ assert.equal(attentionMutationMatters({type:'childList',target:page,addedNodes:[text(page)],removedNodes:[]},new Set()),true,'page text');
+ assert.equal(attentionMutationMatters({type:'attributes',attributeName:'hidden',target:page},new Set()),true);
+ const marked=element('card pharos-reveal');
+ assert.equal(attentionMutationMatters({type:'attributes',attributeName:'class',oldValue:'card',target:marked},new Set([marked])),false,'marking an element');
+ assert.equal(attentionMutationMatters({type:'attributes',attributeName:'class',oldValue:'card',target:element('card active pharos-reveal')},new Set()),true,'an ordinary class change');
+ const cleared=element('card');
+ assert.equal(attentionMutationMatters({type:'attributes',attributeName:'class',oldValue:'card pharos-highlight',target:cleared},new Set()),false,'unmarking an element');
+ assert.equal(attentionMutationMatters({type:'attributes',attributeName:'class',oldValue:'card pharos-highlight',target:cleared},new Set([cleared])),true,'a re-render dropped the mark from a target');
+});
+
+test('a linked Findings rank applies without saving; a manual choice saves the default a new unlinked view uses',()=>{
+ assert.deepEqual(findingsRank('minutes','usd'),{rank:'minutes'},'restoring a link is read-only');
+ assert.deepEqual(findingsRank('','tokens'),{rank:'tokens'},'an unlinked view shows the saved default');
+ assert.deepEqual(findingsRank('',undefined),{rank:'usd'});
+ assert.deepEqual(findingsRank('minutes','usd','tokens'),{rank:'tokens',save:{rank:'tokens'}});
 });

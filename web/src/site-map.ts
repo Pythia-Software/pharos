@@ -2,7 +2,7 @@ import { cardNavigationURL } from "./card-exploration";
 import controlAudit from "../../docs/view-controls.json";
 import { usageDetailsSchema } from "./usage-row-model";
 import { jsonInspectionTemplate } from "./query-inspection-contract";
-import { usageQuerySchema,usageActionQuery } from "./usage-query-columns";
+import { usageQuerySchema,usageActionQuery,fittedDefaultQuery } from "./usage-query-columns";
 import { viewContract } from "./view-contract";
 import { supportsToday } from "./curiosity-data";
 import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, isFilterable, loadSchema, opsForField, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
@@ -750,7 +750,7 @@ export function buildSiteMap(inputs: SiteInputs) {
   }
   for(const node of Object.values(nodes))if(node.dataset&&node.options?.some(option=>option.kind==="where"&&option.param.startsWith("q_"))){
     const schema=siteSchemas[node.dataset as QueryDataset];
-    const initial={...EMPTY_QUERY,select:schema.defaultSelect??[],orderBy:schema.defaultSort??[],limit:schema.defaultLimit??EMPTY_QUERY.limit,fitToScreen:true};
+    const initial=fittedDefaultQuery(schema);
     Object.assign(node,{query_default:node.path==="library"?freshSearch(schema).query:Object.hasOwn(usageDatasets,node.dataset)?usageActionQuery(initial,usageQuerySchema(schema,node.dataset as UsageDataset),node.dataset as UsageDataset):initial});
   }
   return {

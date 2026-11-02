@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { capabilities, core, execution, schemas } from "../helpers/recipes.mjs";
 import tracker from "../../../../docs/homepage-query-cards.json";
 import { queryRecipes, supportsToday, instantiateRecipe, loadQueryPreview, clearPreviewCache, suggestionWindowLabel } from "../../../src/curiosity-data";
-import { queryFromURL, queryHasTimeFilter, queryURL, resolveRollingQuery, rollingQueryMatches } from "../../../src/query-links";
+import { queryFromURL, queryHasTimeFilter, queryURL, queryWindowChoice, readRollingWindow, resolveRollingQuery, rollingQueryMatches, withQueryWindow } from "../../../src/query-links";
 import { migrateSavedQueries, readBookmarks, removeBookmark, savedQueries, updateBookmark, replaceSavedQuery } from "../../../src/bookmarks";
 import { cardCoverQuery, defaultCardCover } from "../../../src/card-cover";
 import { wishlistCardRecipes } from "../../../src/wishlist-card-recipes";
@@ -627,6 +627,25 @@ test("selecting a time window returns a query that replaces every direct date co
       if (grouped) assert.deepEqual(adjusted.query.grouping.summaries, query.grouping.summaries);
     }
   }
+});
+
+test("the query time window picker shows the window it wrote into the page URL, after replacing a custom range", t => {
+  bookmarkFixture(t, []);
+  const dataset = "writing_messages", custom = { ...core.EMPTY_QUERY, where: [{ field: "sent_at", op: "<=", value: "2026-01-31" }] };
+  let page = new URL(`/analyze?analyze_mode=query&analyze_topic=human&analyze_data=${dataset}&q_${dataset}=${encodeURIComponent(core.encodeQuery(custom))}`, location.origin);
+  assert.equal(queryWindowChoice(page.searchParams, dataset), "saved");
+  for (const [choice, shown] of [["today", "today"], [1, "24h"], ["today", "today"]]) {
+    const query = core.decodeQueryStrict(page.searchParams.get(`q_${dataset}`));
+    const address = updateQueryWindowURL(queryURL(dataset, query, readRollingWindow(page.searchParams, dataset)), choice, query);
+    page = withQueryWindow(page, address, dataset, dataset);
+    assert.equal(queryWindowChoice(page.searchParams, dataset), shown, `after choosing ${choice}`);
+    assert.equal(page.searchParams.get("analyze_topic"), "human");
+    assert.ok(!core.decodeQueryStrict(page.searchParams.get(`q_${dataset}`)).where.some(term => term.op === "<="), "the custom range is replaced");
+  }
+  const scoped = withQueryWindow(page, updateQueryWindowURL(queryURL(dataset, custom), 1, custom), dataset, "machine:writing");
+  assert.ok(scoped.searchParams.has("q_machine:writing"));
+  assert.equal(queryWindowChoice(scoped.searchParams, dataset), "24h");
+  assert.equal(queryWindowChoice(new URLSearchParams({ window_dataset: "usage", window_days: "1", window_field: "sent_at", window_mode: "today" }), dataset), "saved", "another dataset's window is not this query's");
 });
 
 test("Today card navigation keeps advancing on full dashboards", t => {

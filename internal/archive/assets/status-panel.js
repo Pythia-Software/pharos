@@ -452,19 +452,22 @@
   // The operations Stop was pressed for, so a snapshot that arrives before
   // their state changes does not enable it again.
   const stopRequested = new Set();
+  async function sendStops(targets, requested, send = fetch, report = toast) {
+    for (const target of targets) {
+      try {
+        const response = await send(target.path, {method: target.method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(target.body)});
+        if (!response.ok) {
+          // Not stopped: let the user try again.
+          requested.delete(target.id);
+          report((await response.json().catch(() => ({}))).error || response.statusText);
+        }
+      } catch (error) { requested.delete(target.id); report(error.message); }
+    }
+  }
   async function stopAll(targets) {
     for (const target of targets) stopRequested.add(target.id);
     render();
-    for (const target of targets) {
-      try {
-        const response = await fetch(target.path, {method: target.method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(target.body)});
-        if (!response.ok) {
-          // Not stopped: let the user try again.
-          stopRequested.delete(target.id);
-          toast((await response.json().catch(() => ({}))).error || response.statusText);
-        }
-      } catch (error) { stopRequested.delete(target.id); toast(error.message); }
-    }
+    await sendStops(targets, stopRequested);
     render();
     window.pharosStatusStore?.refresh();
   }
@@ -875,7 +878,7 @@
   window.pharosStatusPanel = {
     open, close, toggle, render, renderHeader,
     // Pure helpers, for web/tests/unit/page/status-panel.test.mjs.
-    panelModel, chipModel, ejectLabel, operationLine, lineText, currentOperations, settleVerdict, ejectDecision, indexBusy, stepAmount, scheduleModel, scheduleText, ago, until, span,
+    panelModel, chipModel, ejectLabel, operationLine, lineText, currentOperations, settleVerdict, ejectDecision, indexBusy, sendStops, stepAmount, scheduleModel, scheduleText, ago, until, span,
   };
   const sheet = node('style');
   sheet.textContent = CSS;

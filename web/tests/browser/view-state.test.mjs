@@ -95,35 +95,6 @@ test('semantic JSON-path reveal materializes exact details, reports missing path
  await page.locator('.card-library-page').waitFor();assert.equal(await page.locator('.qt-attention-target:visible').count(),0);
 });
 
-test('semantic reveal waits for the initial result page instead of landing in a temporary fallback',{skip},async t=>{
- const fixture=jsonInspectorFixture();let release,requested,itemCalls=0;
- const started=new Promise(resolve=>requested=resolve),rowsReady=new Promise(resolve=>release=resolve);
- const respond=fixture.api['* /api/query/mcp_calls/:operation'];
- const api={
-  'POST /api/query/mcp_calls/rows-v2':async request=>{requested();await rowsReady;return respond({...request,params:{operation:'rows-v2'}})},
-  'GET /api/query/mcp_calls/item':request=>{itemCalls++;return respond({...request,params:{operation:'item'}})},
-  ...fixture.api,
- };
- const app=await open(t,{url:'/cards',api,ready:'.card-library-page'}),target='detail:'+JSON.stringify({rowId:'inspect-1',field:'arguments_json',path:'$["events"][41]["text"]'});
- await app.page.evaluate(url=>window.pharosNavigate(url),fixture.route({...fixture.query,itemDetails:{modes:['expand']}},target));await started;
- await app.page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
- assert.equal(itemCalls,0,'no native landing before its result surface is ready');
- release();await app.page.locator('.qt-attention-target').filter({hasText:'needle 41'}).first().waitFor();await app.settled();
- assert.equal(itemCalls>0,true);
-});
-
-test('unavailable detail links retry when custom results switch to a native table',{skip},async t=>{
- const target='detail:'+JSON.stringify({rowId:'row-0',field:'title'});
- const app=await open(t,{url:'/library?'+new URLSearchParams({view:'conversation',reveal:target}),ready:'.conversation-result-card'});
- await app.page.waitForFunction(target=>document.documentElement.dataset.pharosAttentionMissing===target&&document.documentElement.dataset.pharosAttentionPending==='',target);
- assert.equal(new URL(app.page.url()).searchParams.get('view'),'conversation');
- assert.equal(await app.page.locator('.qt-attention-target').count(),0);
- await app.page.getByRole('group',{name:'Display results as',exact:true}).getByRole('button',{name:'Table',exact:true}).click();
- await app.page.locator('[data-property-field="title"].qt-attention-target').first().waitFor();
- await app.page.waitForFunction(()=>document.documentElement.dataset.pharosAttentionMissing==='');
- assert.equal(new URL(app.page.url()).searchParams.get('reveal'),target,'the same linked target becomes available without navigation');
-});
-
 test('automatic oversized query references resolve in a fresh browser with no local cache, including JSON inspection state',{skip},async t=>{
  const fixture=jsonInspectorFixture(),state={version:1,open:true,search:'needle',searchMode:'find',raw:false,collapsedPaths:[],expandedBuckets:['$["events"]:bucket:20'],visibleEntryLimit:400,searchOverrides:[]};
  // Distinct nonrepeating values avoid a highly compressible artificial query.
@@ -187,18 +158,6 @@ test('copied Cards view overrides preferences in a fresh context and follows Bac
  await fresh.page.waitForFunction(()=>document.querySelector('select[aria-label="Preview window"]')?.value==='7');
  await fresh.page.goBack();
  await fresh.page.waitForFunction(()=>document.querySelector('select[aria-label="Preview window"]')?.value==='30');
-});
-
-test('an explicit query sizing choice survives native restoration', {skip},async t=>{
- const query={...EMPTY_QUERY,fitToScreen:false,select:[{field:'model',width:240}],limit:5};
- const opened=await open(t,{url:'/analyze?'+new URLSearchParams({analyze_mode:'query',analyze_data:'usage',q_usage:encodeQuery(query)}),ready:'.usage-workspace-table .qt-table'});
- await opened.settled();
- assert.equal(Boolean(decodeQueryStrict(new URL(opened.page.url()).searchParams.get('q_usage')).fitToScreen),false);
- const defaults=await open(t,{url:'/analyze?analyze_mode=query&analyze_data=usage',ready:'.usage-workspace-table .qt-table'});
- await defaults.settled();
- const effective=decodeQueryStrict(new URL(defaults.page.url()).searchParams.get('q_usage'));
- assert.equal(effective.limit,50,'a new fitted table retains the dataset page size');
- assert.equal(effective.fitToScreen,true);
 });
 
 test('reader category and disclosure state survive a fresh browser', {skip},async t=>{
@@ -377,40 +336,6 @@ test('page Find becomes idle and ignores its own and the status UI mutations',{s
  });
 });
 
-test('manual assumption changes save chosen defaults while restoring a link stays read-only',{skip},async t=>{
- const storedCarbon={scenario:'high',grid:'world',pueScenario:'high'},storedParallel={gap:60,counting:'workspace',repository:'saved',range:'7d'};
- const preferences={'pharos-carbon-v1':storedCarbon,'pharos-concurrency-v1':storedParallel};
- const carbon=await open(t,{url:'/analyze?'+new URLSearchParams({analyze_topic:'carbon',analyze_carbon:JSON.stringify({scenario:'low',grid:'world'})}),preferences,ready:'#carbonCard .carbon-calculation > summary'});
- assert.equal(await carbon.page.evaluate(()=>window.pharosPrefs.get('pharos-carbon-v1').scenario),'high');
- await carbon.page.locator('#carbonCard .carbon-calculation > summary').click();
- await carbon.page.getByRole('combobox',{name:'Electricity grid',exact:true}).selectOption('custom');
- await carbon.page.waitForFunction(()=>window.pharosPrefs.get('pharos-carbon-v1').grid==='custom');
- await carbon.page.evaluate(()=>window.pharosPrefs.flush());
- assert.equal(await carbon.page.evaluate(()=>window.pharosPrefs.get('pharos-carbon-v1').scenario),'high');
- assert.equal(JSON.parse(new URL(carbon.page.url()).searchParams.get('analyze_carbon')).scenario,'low');
- const parallel=await open(t,{url:'/analyze?'+new URLSearchParams({analyze_topic:'parallelism',analyze_parallelism:JSON.stringify({gap:0,counting:'workspace',range:'30d'})}),preferences,ready:'.concurrency-panel'});
- assert.equal(await parallel.page.evaluate(()=>window.pharosPrefs.get('pharos-concurrency-v1').gap),60);
- await parallel.page.getByRole('combobox',{name:'Count by',exact:true}).selectOption('agent');
- await parallel.page.waitForFunction(()=>window.pharosPrefs.get('pharos-concurrency-v1').counting==='agent');
- await parallel.page.evaluate(()=>window.pharosPrefs.flush());
- assert.equal(await parallel.page.evaluate(()=>window.pharosPrefs.get('pharos-concurrency-v1').gap),60);
- assert.equal(JSON.parse(new URL(parallel.page.url()).searchParams.get('analyze_parallelism')).gap,0);
-});
-
-test('manual Findings ranking saves the default and a new unlinked view uses it',{skip},async t=>{
- let rank='usd';const saves=[];
- const api={'GET /api/findings':()=>({...defaultApi['GET /api/findings'],settings:{...defaultApi['GET /api/findings'].settings,rank}}),'POST /api/findings/settings':({body})=>{rank=body.rank??rank;saves.push(body);return {ok:true}}};
- const first=await open(t,{url:'/findings?findings_rank=minutes',api,ready:'.findings-rank'});
- assert.equal(saves.length,0);
- const saved=first.page.waitForResponse(response=>new URL(response.url()).pathname==='/api/findings/settings'&&response.request().method()==='POST');
- await first.page.locator('.findings-rank').getByRole('button',{name:'Tokens',exact:true}).click();await saved;
- await first.settled();assert.equal(rank,'tokens');
- assert.equal(new URL(first.page.url()).searchParams.get('findings_rank'),'tokens');
- const fresh=await open(t,{url:'/findings',api,ready:'.findings-rank'});
- assert.equal(await fresh.page.locator('.findings-rank').getByRole('button',{name:'Tokens',exact:true}).getAttribute('aria-pressed'),'true');
-});
-
-
 test('header navigation clears source attention and explicit destination links retain their targets',{skip},async t=>{
  const params=new URLSearchParams({conversation:rootConversation,highlight:'text:Turn',reveal:'page',nav_collapsed:'0'});
  const app=await open(t,{url:`/work/${workID}?${params}`,ready:'.pharos-find'}),{page}=app;
@@ -447,26 +372,6 @@ test('page Find stepping moves the landing highlight without a server search',{s
  await page.getByRole('button',{name:'Previous match (Shift+Enter)',exact:true}).click();
  await page.waitForFunction(first=>{const range=[...(CSS.highlights.get('pharos-landing')||[])][0];return range?.startContainer.parentElement.closest('[data-message-id]')?.dataset.messageId===first},first);
  assert.equal(app.calls.filter(call=>call.path==='/api/search/text').length,0);
-});
-
-test('bookmarks ignore drawer state while preserving the page view',{skip},async t=>{
- const app=await open(t,{url:'/cards?card_window=30',ready:'.card-library-page'}),{page}=app;
- await app.settled();
- await page.evaluate(()=>document.getElementById('bookmarksToggle').click());
- await page.locator('#bookmarksDrawer.open').waitFor();
- await page.locator('#bookmarkAdd').click();
- await page.waitForFunction(()=>window.pharosPrefs.get('pharos-bookmarks-v1',[]).length>0);
- const saved=await page.evaluate(()=>window.pharosPrefs.get('pharos-bookmarks-v1',[])[0].url);
- const params=new URL(saved,'https://pharos.test').searchParams;
- for(const key of ['overlay','history_search','history_collapsed'])assert.equal(params.has(key),false);
- assert.equal(params.get('card_window'),'30');
- await page.evaluate(()=>document.getElementById('bookmarksClose').click());
- await page.evaluate(()=>document.getElementById('historyToggle').click());
- await page.locator('#historyFilter').fill('Cards');
- await page.evaluate(()=>document.getElementById('historyClose').click());
- assert.equal(await page.locator('#bookmarkStar').getAttribute('aria-label'),'Edit bookmark');
- await page.evaluate(url=>window.pharosNavigate(url),saved);await app.settled();
- assert.equal(await page.locator('#bookmarksDrawer').evaluate(element=>element.classList.contains('open')),false);
 });
 
 test('classic disclosure restoration ignores detached nodes and restores same-page URL writes',{skip},async t=>{

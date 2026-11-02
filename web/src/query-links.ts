@@ -45,6 +45,19 @@ export function readRollingWindow(params: URLSearchParams, dataset: QueryDataset
   return { ...(timezone ? { timezone } : {}), days, field, mode: mode === "today" ? "today" : mode === "relative" ? "relative" : "calendar", ...(untilField ? { untilField } : {}) };
 }
 
+// The Query time window select: Today, Last 24 hours, or the query's own filters.
+export function queryWindowChoice(params: URLSearchParams, dataset: QueryDataset): "today" | "24h" | "saved" {
+  const choice = readRollingWindow(params, dataset);
+  return choice?.mode === "today" ? "today" : choice?.mode === "relative" && choice.days === 1 ? "24h" : "saved";
+}
+// The page URL carrying a chosen window's address: its window and query, other parameters kept.
+export function withQueryWindow(page: URL, address: string, dataset: QueryDataset, registryKey: string): URL {
+  const params = new URL(address, location.origin).searchParams, next = new URL(page);
+  for (const key of ["window_mode", "window_days", "window_field", "window_dataset", "window_timezone", "window_until_field"]) { const value = params.get(key); if (value) next.searchParams.set(key, value); else next.searchParams.delete(key); }
+  next.searchParams.set(`q_${registryKey}`, params.get(`q_${dataset}`)!);
+  return next;
+}
+
 // null selects all time; undefined at the bookmark layer preserves a saved range.
 export function updateQueryWindowURL(url: string, days: WindowChoice | null, fallback?: QueryState): string {
   const spec = queryFromURL(url, fallback), field = spec && (spec.window?.field ?? rollingWindowField(spec.dataset));

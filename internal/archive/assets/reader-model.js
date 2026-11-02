@@ -312,6 +312,17 @@ function filePathParts(path,roots){
   return{root,inside,absolute,directory,filename};
 }
 
+// Linked disclosure and content state (reader_expanded, reader_collapsed and
+// reader_content). An identity the link leaves out keeps the reader's native
+// default, so an absent, [] or {} override agrees with a fresh reader.
+function readerDisclosureOpen(id,expanded,collapsed,initial){return expanded.has(id)?true:collapsed.has(id)?false:initial}
+function readerDisclosureToggle(id,open,expanded,collapsed){
+  const opened=new Set(expanded),closed=new Set(collapsed);
+  if(open){opened.add(id);closed.delete(id)}else{closed.add(id);opened.delete(id)}
+  return{expanded:[...opened].sort(),collapsed:[...closed].sort()};
+}
+function readerContentShown(state,key,fallback){return state&&Object.hasOwn(state,key)?state[key]===true:fallback}
+
 // Transcript filter and find
 const TRANSCRIPT_CATEGORIES=[['prompts','Prompts','Messages you, or a parent agent, sent'],['response','Final responses','The last reply of each turn'],['replies','Interim replies','Agent messages before the final reply of a turn'],['thinking','Thinking','Reasoning the agent recorded'],['edits','File edits','Edits and writes'],['commands','Commands','Shell commands'],['reads','Reads & searches','File reads, listings, and searches'],['tools','Other tools','Browser, todo, MCP, and other tool calls'],['agents','Sub-agents','Delegated agent runs'],['events','System events','Injected context, attachments, run events, and errors'],['usage','Token usage','Token usage events']];
 const TRANSCRIPT_LEVELS=[['all','All','Every event',TRANSCRIPT_CATEGORIES.map(([key])=>key)],['all-minus-usage','All minus usage','Every event except token usage',TRANSCRIPT_CATEGORIES.map(([key])=>key).filter(key=>key!=='usage')],['thought','Chain of thought','Prompts, replies, and thinking; no tool activity',['prompts','response','replies','thinking']],['primary','Primary only','Prompts and each turn’s final response',['prompts','response']],['custom','Custom','Choose each kind of event',null]];
@@ -561,6 +572,26 @@ function markdownLinkKind(href){
     }catch{return null}
   }
   return {kind:'file',icon:'file',detail:'Checking file on this Mac…'};
+}
+// Only local files and servers are checked on this Mac; Pharos routes,
+// fragments, mail and websites never are. Repeated links share a check for a
+// minute, and at most four run at once for long transcripts.
+function markdownLinkProbed(kind){return kind?.kind==='file'||kind?.kind==='server'}
+function markdownLinkChecker(check,{now=Date.now,concurrency=4,size=256,ttl=60000}={}){
+  const checks=new Map(),queue=[];let active=0;
+  const pump=()=>{
+    while(active<concurrency&&queue.length){
+      const {href,workspace,resolve}=queue.shift();active++;
+      new Promise(done=>done(check(href,workspace))).then(resolve,()=>resolve({status:'unknown',detail:'Could not check availability on this Mac'})).finally(()=>{active--;pump()});
+    }
+  };
+  return (href,workspace)=>{
+    const key=JSON.stringify([href,workspace]),cached=checks.get(key);
+    if(cached&&cached.until>now())return cached.promise;
+    const promise=new Promise(resolve=>queue.push({href,workspace,resolve}));
+    if(checks.size>=size)checks.delete(checks.keys().next().value);
+    checks.set(key,{promise,until:now()+ttl});pump();return promise;
+  };
 }
 function markdownInline(text,parent,depth=0,mask=''){
   if(depth>8){parent.children.push(...markdownText(text,mask));return}
