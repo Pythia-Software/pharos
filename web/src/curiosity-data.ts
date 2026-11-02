@@ -45,7 +45,10 @@ export type QueryRecipe = {
   trend?: CardTrend;
   weekday?: { metricId: string; unit: string };
   destination?: CardDestination;
-  thinking?: {overview?:boolean; state:Partial<ThinkingState>};
+  // open: a dashboard section (ViewDisclosure viewKey) the card opens expanded.
+  // coverWhere: the recipe's where narrows only the cover; the dashboard keeps
+  // the whole population (compaction pairs need the requests around each one).
+  thinking?: {overview?:boolean; state:Partial<ThinkingState>; open?: string; coverWhere?: boolean};
 };
 export type QuerySuggestion = QueryRecipe & { query: QueryState; window?: RollingWindow; url: string; instanceId: string };
 export function suggestionWindowLabel(item: { window?: RollingWindow; period?: QueryRecipe["period"]; dataset?: QueryDataset }): string {

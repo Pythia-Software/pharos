@@ -57,6 +57,16 @@ export type ThinkingState = {
   traceScale: "linear" | "log";
   timezone: string;
 };
+// Range presets by their elapsed days, as card windows and site_link's days
+// name them.
+export const thinkingRangeDays = {
+  1: "1d",
+  7: "7d",
+  30: "30d",
+  90: "90d",
+  180: "6m",
+  365: "1y",
+} as const satisfies Record<number, ThinkingState["range"]>;
 export const defaultThinking: ThinkingState = {
   view: "time",
   groupBy: "none",
@@ -180,17 +190,10 @@ export function initialThinking(params: URLSearchParams): ThinkingState {
       state = {
         ...state,
         range:
-          (
-            {
-              1: "1d",
-              7: "7d",
-              30: "30d",
-              90: "90d",
-              180: "6m",
-              365: "1y",
-            } as Record<number, ThinkingState["range"]>
-          )[days] ?? "custom",
-        ...(![1, 7, 30, 90, 180, 365].includes(days)
+          (thinkingRangeDays as Record<number, ThinkingState["range"]>)[
+            days
+          ] ?? "custom",
+        ...(!Object.hasOwn(thinkingRangeDays, days)
           ? { from: bounds.from?.toISOString(), to: bounds.to?.toISOString() }
           : {}),
       };
@@ -279,9 +282,9 @@ export function thinkingWhere(
         op: ">=",
         value:
           "-" +
-          { "1d": 1, "7d": 7, "30d": 30, "90d": 90, "6m": 180, "1y": 365 }[
-            state.range
-          ] +
+          Object.entries(thinkingRangeDays).find(
+            ([, range]) => range === state.range,
+          )![0] +
           "d",
       },
       { field: "requested_at", op: "<", value: "+0s" },

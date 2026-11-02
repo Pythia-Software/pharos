@@ -78,7 +78,7 @@ tested in node (`web/tests/unit/dashboards/`).
 
 A **catalog** describes one dashboard topic: Tokens and Cost
 (`web/src/token-analysis-catalog.ts`), Tools (`tools-analysis-catalog.ts`),
-Pharos MCP (`mcp-analysis-catalog.ts`), Agent Time and Skills
+Pharos MCP (`mcp-analysis-catalog.ts`), Tool Time and Skills
 (`record-analysis-catalogs.ts`), Human Words (`human-analysis-catalog.ts`),
 Carbon (`carbon-analysis-catalog.ts`) and Parallelism
 (`parallelism-analysis-catalog.ts`). See [The catalogs](#the-catalogs) for
@@ -116,7 +116,7 @@ what each offers and why.
   value (`empty`, "No repository"). A breakdown with an implied population
   says so in its `note` ("Commands count shell commands only"), which the
   view's note repeats. Values the schema cannot label take the catalog's
-  `labels` (Agent Time's activities), in the trend's series and in Compare.
+  `labels` (Tool Time's activities), in the trend's series and in Compare.
 - **Component breakdowns** (optional, `components`). These split a measure
   into its additive parts, which are fields rather than groups of records:
   Tokens' "Token type" is uncached input, cache reads, cache writes, output
@@ -148,7 +148,7 @@ what each offers and why.
   - `timestamp`: a datetime field. Query Table computes the cycle itself:
     hour of day or day of week in the viewer's zone (`dateGrouping`
     `hourOfDay` or `dayOfWeek`), over whole local hours or days. Pharos
-    MCP, Agent Time, Skills, Human Words and Parallelism read `called_at`,
+    MCP, Tool Time, Skills, Human Words and Parallelism read `called_at`,
     `started_at`, `created_at`, `sent_at` and `started_at` this way.
   - `recorded-date`: a date the recording Mac assigned in its own zone, such
     as usage `day`. It folds as a date.
@@ -213,13 +213,13 @@ what each offers and why.
   link asking for it draws days.
 - **The day boundary** (`timestamp`). Days, weeks and months are always
   the recorded calendar fields (`day`, `week`, `month`), as the cards group
-  them: the trend runs on `/metrics` (and Agent Time's accelerator), its
+  them: the trend runs on `/metrics` (and Tool Time's accelerator), its
   supporting query opens grouped rows, and a card's daily points are the
   dashboard's. A dataset whose records carry a true timestamp also offers
   hours: Over time groups the timestamp by UTC clock hour with
   `dateGrouping`, placed at the viewer's hour, and the hour and weekday
   cycles group it in the viewer's zone, as the weekday and hour cards do.
-  Pharos MCP, Agent Time, Skills, Human Words and Parallelism follow this
+  Pharos MCP, Tool Time, Skills, Human Words and Parallelism follow this
   rule; usage keeps its recorded `hour` too. The trade-off: a record's
   recorded day is the recording Mac's local date, so after a time-zone
   change a late-evening record can sit on one day in a day trend and on the
@@ -231,7 +231,7 @@ what each offers and why.
 - **Legacy mapping** (optional, `legacy`). A function that reads a link or
   saved state written in an older vocabulary into the catalog's terms, and
   leaves a current state unchanged. For Tokens, `percent` reads as tokens
-  shown as shares and `percent_cost` as cost shown as shares. Agent Time's
+  shown as shares and `percent_cost` as cost shown as shares. Tool Time's
   and Skills' numbered metrics (`0`, `1`) read as the measure at that
   position. Human Words' `scope` reads as its measure (`typed` as Typed
   words, alone as one total; `all` as All user words, by Text source), and
@@ -399,7 +399,7 @@ reads every link through `readAnalysisLink`:
 
 - With the marker, filters stay filters.
 - Without it, on a dashboard whose old chart wrote legend selections into the
-  filters (`legacySlices`: Tokens and Cost, Agent Time, Skills), a slice-form
+  filters (`legacySlices`: Tokens and Cost, Tool Time, Skills), a slice-form
   filter on the current breakdown's single field (`provider = codex`, an OR of
   such values, or their exclusion) becomes the selection and leaves `where`.
   Tools and Pharos MCP had no legend, so their old filters were always
@@ -682,7 +682,7 @@ around it. Its default view is the one it always opened on.
 | Tokens and Cost | `usage`: a session's usage of one model and effort on one recorded day | conversation, agent session, delegated run | every additive measure | usage `hour` (instant), `day` (recorded date) | Over time |
 | Tools | `tools`: one day's calls of one tool group (a rollup) | none | none | none | Compare |
 | Pharos MCP | `mcp_calls`: one request Pharos served | none | `output`, `bytes`, `time` | `called_at` (timestamp) | Compare |
-| Agent Time | `tool_calls`: one call | agent conversation; tool in a conversation | `time` (`duration_ms`), `result_tokens` | `started_at` (timestamp) | Over time |
+| Tool Time | `tool_calls`: one call | agent conversation; tool in a conversation | `time` (`duration_ms`), `result_tokens` | `started_at` (timestamp) | Over time |
 | Skills | `skill_usages`: one piece of skill evidence | conversation; skill path in a conversation | `body` (`content_bytes`) | `created_at` (timestamp) | Over time |
 | Human Words | `writing_messages`: one classified user message | conversation; work | `typed`, `words` | `sent_at` (timestamp) | Over time |
 | Carbon | `usage`, estimated under the user's assumptions | conversation, agent session, delegated run | `co2`, `energy`, `tokens` | usage `hour`, `day` | Over time |
@@ -730,17 +730,17 @@ around it. Its default view is the one it always opened on.
   (`empty_rate`) is a conditional ratio: requests with no results over
   requests with a recorded result count, among successful requests (its
   population).
-- **Agent Time** (`record-analysis-catalogs.ts`). Recorded tool time (shown
+- **Tool Time** (`record-analysis-catalogs.ts`). Recorded tool time (shown
   in hours, as before), tool calls, mean call duration (pooled over calls
   with a duration), failed calls and result tokens, by the old splits plus
   tool, operation, command, command + timing source and tool + result-size
   source. An agent conversation is one recorded transcript (`conversation_id`;
   delegated subagents are their own), split by what is constant within it.
   A tool in a conversation (`[conversation_id, tool_name]`) is the
-  observation of the per-conversation failure cards. `AgentTimeSummary`
+  observation of the per-conversation failure cards. `ToolTimeSummary`
   follows every view and covers the population: with a legend selection it
   says it counts all activities in range, not only the selection.
-  Activities read as Agent Time names them; two that
+  Activities read as Tool Time names them; two that
   share a name (`command:Edit` and `tool:Edit`) also show their value, stay
   separate groups and series keyed by the raw value, and open their own
   records.
@@ -893,19 +893,19 @@ from them, Pharos requests and skill evidence
 | `tool-failures`, `tool-call-share` | Tools, compare, share, failures or calls by tool |
 | `tool-failure-rates` | Tools, compare, failure rate by tool, minimum 10 calls (see below) |
 | `machine-call-trend` | Tools, trend, calls, 7-day mean, whole periods, norm (`buildCardTrend`) |
-| `machine-latency-trend` | Tools, trend, mean timed call duration, 7-day pooled, whole periods, norm (`buildCardTrend` over the same rollup; Agent Time's pooled mean over individual calls agrees) |
+| `machine-latency-trend` | Tools, trend, mean timed call duration, 7-day pooled, whole periods, norm (`buildCardTrend` over the same rollup; Tool Time's pooled mean over individual calls agrees) |
 | `truncated-outputs` | Tools, compare, truncation rate by tool, minimum 10 calls |
 | `mcp-methods` | Tools, compare, calls by MCP server + method, which implies the card's method population |
 | `mcp-response-size`, `pharos-mcp-durations` | Pharos MCP, distribution of bytes or request time by tool, minimum 3 |
 | `pharos-mcp-query-sources` | Pharos MCP, compare, calls by requested source |
 | `mcp-call-trend` | Pharos MCP, trend, calls by tool, 7-day rolling mean |
-| `machine-time` | Agent Time, trend, tool time by activity, 6 series (the cover's limit); compared by raw activity with the card's daily totals, since the card's preview names series by label |
-| `machine-activities` | Agent Time, compare, share, tool time by activity |
-| `large-outputs` | Agent Time, compare, share, result tokens by tool + result-size source |
-| `duration-distribution` | Agent Time, distribution, time by command + timing source, minimum 3 |
-| `output-distribution` | Agent Time, distribution, result tokens by tool + result-size source, minimum 3 |
-| `conversation-error-counts` | Agent Time, distribution, tool-in-conversation unit, calls by tool, minimum 3 |
-| `tool-calls-per-conversation`, `research-conversation-searches` | Agent Time, distribution, conversation unit, calls by repository, minimum 3 |
+| `machine-time` | Tool Time, trend, tool time by activity, 6 series (the cover's limit); compared by raw activity with the card's daily totals, since the card's preview names series by label |
+| `machine-activities` | Tool Time, compare, share, tool time by activity |
+| `large-outputs` | Tool Time, compare, share, result tokens by tool + result-size source |
+| `duration-distribution` | Tool Time, distribution, time by command + timing source, minimum 3 |
+| `output-distribution` | Tool Time, distribution, result tokens by tool + result-size source, minimum 3 |
+| `conversation-error-counts` | Tool Time, distribution, tool-in-conversation unit, calls by tool, minimum 3 |
+| `tool-calls-per-conversation`, `research-conversation-searches` | Tool Time, distribution, conversation unit, calls by repository, minimum 3 |
 | `skill-evidence` | Skills, compare, conversations reached by skill |
 | `skill-body-sizes` | Skills, distribution, body by skill + evidence type, minimum 3 |
 | `skill-load-distribution` | Skills, distribution, skill-path unit, distinct load calls by skill, minimum 3 |
@@ -955,7 +955,7 @@ The input to phase 4. Every other card in the parity tables above matches.
 | Card | Missing capability |
 |---|---|
 | `tool-failure-rates` | A second minimum: the card requires one failure as well as ten calls. The dashboard shows ten-call tools without failures at 0%; every tool the card shows has the card's rate. |
-| `error-signatures`, `edit-failures`, `read-paths`, `repeated-reads`, `primary-domains`, `primary-urls`, `cross-repo-errors`, `error-reach`, `test-failures` | Record-level Tools fields and filters (phase 3); some of them are Agent Time states once its catalog gains those breakdowns. |
+| `error-signatures`, `edit-failures`, `read-paths`, `repeated-reads`, `primary-domains`, `primary-urls`, `cross-repo-errors`, `error-reach`, `test-failures` | Record-level Tools fields and filters (phase 3); some of them are Tool Time states once its catalog gains those breakdowns. |
 | `model-conversation-reach` | A share of group incidences (phase 4). |
 | `human-words-per-work` | A workspace directory: the card joins each message's work to its Library location and combines works sharing a repository and directory. Messages carry no location, so the dashboard opens the mean per work (`work_id`), which is not a directory. |
 | `human-specific-feedback`, `human-example-phrases` | Human studies classify typed text in the browser (`human-study.ts`: feedback and detail cues, images, pastes, file references). No dataset field holds those classes; the dataset's own `correction_cue` and `positive_cue` are other rules. They open the correction-cue share and all words by Text source. Matching needs those classes as `writing_messages` fields (a Go change). |
@@ -1030,7 +1030,7 @@ selections, which the sections above describe.
      rolling sums as well as means, whole periods only, and a norm. Tokens
      and Cost and the legacy Usage page draw it; the bespoke Token chart is
      gone.
-   - **2b (done).** Tools, Pharos MCP, Agent Time and Skills are catalogs
+   - **2b (done).** Tools, Pharos MCP, Tool Time and Skills are catalogs
      over their Query Table datasets ([The catalogs](#the-catalogs)), with
      every view their data supports. Legend selections are in the view
      state, with versioned links (`v: 2`) and a migration for older ones;
@@ -1046,7 +1046,7 @@ selections, which the sections above describe.
      request seam (`request`: parameters every request carries),
      conditional ratio parts, one day boundary for timestamped records
      (`timestamp`: recorded days, timestamp hours and cycles, which also
-     gives Pharos MCP, Agent Time and Skills hourly trends), and derived
+     gives Pharos MCP, Tool Time and Skills hourly trends), and derived
      components, and the settings each catalog needs from reusable hooks. Pharos MCP's empty-search rate is a
      conditional ratio. The dashboard-only parts of `WritingPanel`
      (`dashboard`, `viewOverride`), Carbon's bespoke chart (`CarbonView`,

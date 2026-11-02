@@ -2,6 +2,7 @@ package archive
 
 import (
 	"path"
+	"strconv"
 	"strings"
 )
 
@@ -11,6 +12,9 @@ type shellSegment struct {
 	Text, Operator                string
 	Program, Subcommand, Category string
 	Assigned                      bool
+	// Scope identifies lexical subshell ancestry; an empty scope is the
+	// invoking shell. Consumers must not leak subshell directory changes.
+	Scope string
 }
 
 // shellCommand summarizes a command line for tool analytics. It is a lexical
@@ -43,7 +47,9 @@ func parseShellCommand(line string) shellCommand {
 		if text != "" {
 			if strings.HasPrefix(text, "(") && strings.HasSuffix(text, ")") && matchSubstitution(text, 0) == len(text) {
 				inner := parseShellCommand(text[1 : len(text)-1])
+				scope := strconv.Itoa(len(result.Segments)) + "/"
 				for index, part := range inner.Segments {
+					part.Scope = scope + part.Scope
 					if index == 0 {
 						part.Operator = operator
 					}
@@ -52,6 +58,7 @@ func parseShellCommand(line string) shellCommand {
 				result.HasPipe = result.HasPipe || inner.HasPipe
 				result.HasRedirect = result.HasRedirect || inner.HasRedirect
 				result.HasHeredoc = result.HasHeredoc || inner.HasHeredoc
+				result.IsBackgrounded = result.IsBackgrounded || inner.IsBackgrounded
 				operator = next
 				return
 			}

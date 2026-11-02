@@ -21,7 +21,7 @@ import { trendQuery } from "../../../src/dashboard-trend-model.ts";
 import { analysisQuery } from "../../../src/dashboard-analysis-model.ts";
 import { mcpAnalysisCatalog } from "../../../src/mcp-analysis-catalog.ts";
 import { toolsAnalysisCatalog } from "../../../src/tools-analysis-catalog.ts";
-import { agentTimeAnalysisCatalog, skillsAnalysisCatalog } from "../../../src/record-analysis-catalogs.ts";
+import { toolTimeAnalysisCatalog, skillsAnalysisCatalog } from "../../../src/record-analysis-catalogs.ts";
 // A dashboard's trend clause, as its supporting query carries it.
 const trendClause = (catalog, state) => trendQuery(catalog, state, [], { now: Date.parse("2026-10-20T12:00:00Z") }).supporting.aggregations[0];
 import { timeBounds, usageTime, withTimeRange, smoothingWhere } from "../../../src/usage-chart.tsx";
@@ -176,7 +176,7 @@ test("all eight dashboards offer four distinct native queries that retain source
     ["carbon", "usage", { op: "sum", field: "co2e_g", groupBy: ["day", "carbon_tier"], label: "Estimated CO₂e" }],
     ["human", "writing", { op: "sum", field: "typed_words", groupBy: ["repository_name"], label: "Typed words" }],
     ["skills", "skill_usages", trendClause(skillsAnalysisCatalog, { metric: "records", split: "skill_name" })],
-    ["time", "tool_calls", trendClause(agentTimeAnalysisCatalog, { metric: "time", split: "activity" })],
+    ["time", "tool_calls", trendClause(toolTimeAnalysisCatalog, { metric: "time", split: "activity" })],
     ["parallelism", "parallelism", { op: "sum", field: "unit_hours", groupBy: ["repository_name"], label: "Active unit hours" }],
     ["tools", "tools", analysisQuery(toolsAnalysisCatalog, { view: "compare", metric: "calls", split: "tool_category" }, []).clause],
     ["mcp", "mcp_calls", analysisQuery(mcpAnalysisCatalog, { view: "compare", metric: "calls", split: "tool_name" }, []).clause],
@@ -711,7 +711,7 @@ test("dashboard Today uses its pinned timezone and reports an invalid zone", () 
   assert.equal(read().where.find(term => term.op === ">=").value, "2026-11-03T15:00:00.000Z");
   const dashboard = read();
   params.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where: dashboard.where }));
-  const supporting = analysisQuery(agentTimeAnalysisCatalog, dashboard.view, dashboard.where).supporting;
+  const supporting = analysisQuery(toolTimeAnalysisCatalog, dashboard.view, dashboard.where).supporting;
   const queryParams = new URL(usageWorkspaceURL({ mode: "query", dataset: "tool_calls", query: supporting }, params), "http://localhost").searchParams;
   const window = readRollingWindow(queryParams, "tool_calls");
   assert.equal(window.timezone, "Asia/Tokyo", "supporting queries keep the dashboard pin");

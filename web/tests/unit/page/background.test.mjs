@@ -20,12 +20,14 @@ const document = {
         cost: { seconds: 50, runs: 50, class: "light", text: "Cost A" } },
       { id: "writing", label: "Item B", sub: "Sub B", state: "queued", state_label: "Up next", as_of: minutesAgo(50), next_at: minutesAgo(-1), note: "Note B",
         choices: [{ value: "", label: "Choice 1" }, { value: "daily", label: "Choice 2" }], override: "", cost: { seconds: 358, runs: 7, class: "heavy", text: "Cost B" } },
-      { id: "backup", label: "Item C", state: "unavailable", state_label: "Not set up", as_of: null, next_at: null, cost: null },
+      { id: "preserve", label: "Item C", state: "unavailable", state_label: "Not set up", as_of: null, next_at: null, cost: null },
+      { id: "backup", label: "Item D", state: "manual", state_label: "Only when you ask", as_of: minutesAgo(26 * 60), next_at: null, cost: null },
     ],
+    unscheduled: ["backup", "gone"],
     cadences: [
       { id: "frequent", label: "Row A", state: "current", state_label: "Updated", as_of: minutesAgo(2), next_at: minutesAgo(-3), items: ["conversations"] },
       { id: "hourly", label: "Row B", state: "queued", state_label: "Up next", as_of: null, next_at: null, items: ["writing"] },
-      { id: "daily", label: "Row C", state: "unavailable", state_label: "Not set up", items: ["backup", "gone"] },
+      { id: "daily", label: "Row C", state: "unavailable", state_label: "Not set up", items: ["preserve", "gone"] },
     ],
     everything: { seconds: 410, text: "Everything words" },
   },
@@ -41,7 +43,8 @@ test("one column per cadence, each with its state, its description and its items
   assert.equal(model.mode, "on");
   assert.deepEqual(model.columns.map(column => [column.id, column.description, column.dot]), [["frequent", "Frequent words", "current"], ["hourly", "Hourly words", "busy"], ["daily", "Daily words", "paused"]]);
   assert.equal(model.columns[0].text, "Updated 2 min ago · next in 3 min");
-  assert.deepEqual(model.columns[2].items.map(item => item.id), ["backup"], "an item the document does not list is left out");
+  assert.deepEqual(model.columns[2].items.map(item => item.id), ["preserve"], "an item the document does not list is left out");
+  assert.deepEqual(model.unscheduled.map(item => [item.id, item.text]), [["backup", "Only when you ask · 26 h ago"]], "only when you ask is apart from the columns");
   assert.equal(model.everything, "Everything words");
   assert.equal(background.scheduleModel({}, at), null);
 });

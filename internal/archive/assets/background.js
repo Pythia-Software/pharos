@@ -28,6 +28,8 @@
 .bg-col-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px}
 .bg-col-head h4{margin:0;font-size:var(--fs-md)}
 .bg-col-head .bg-state{margin-left:auto}
+.bg-unscheduled{margin-top:12px}
+.bg-unscheduled .bg-items{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(260px,100%),1fr));gap:0 12px}
 .bg-when{font-size:var(--fs-sm);color:var(--muted);margin:4px 0 8px}
 .bg-when select{font:inherit;font-size:var(--fs-sm);border:1px solid var(--line);border-radius:5px;padding:1px 4px;background:var(--panel);color:var(--ink)}
 .bg-state{font-size:var(--fs-sm);color:var(--muted);overflow-wrap:anywhere}
@@ -139,7 +141,9 @@
       dot: DOTS[row.state] ?? '', text: stateText(row, now),
       items: (row.items || []).map(id => byId[id]).filter(Boolean).map(item => itemModel(item, now)),
     }));
-    return {mode: document.settings?.mode || view.mode, settings: document.settings || {}, columns, everything: view.everything?.text || '',
+    // Only when you ask: on no schedule, so in none of the columns.
+    const unscheduled = (view.unscheduled || []).map(id => byId[id]).filter(Boolean).map(item => itemModel(item, now));
+    return {mode: document.settings?.mode || view.mode, settings: document.settings || {}, columns, unscheduled, everything: view.everything?.text || '',
       rule: document.rule || null, cost: costModel(document.cost), headline: view.headline || null, battery: batteryModel(document), labels: document.labels || null};
   }
 
@@ -257,6 +261,17 @@
     return columns;
   }
 
+  function renderUnscheduled(items) {
+    const section = node('section', 'bg-col bg-unscheduled');
+    section.setAttribute('aria-label', 'Only when you ask');
+    const head = node('div', 'bg-col-head');
+    head.append(node('h4', '', 'Only when you ask'));
+    const list = node('div', 'bg-items');
+    for (const item of items) list.append(renderItem(item));
+    section.append(head, node('div', 'bg-when', 'On no schedule: these run when you choose Run now, or once you give them a schedule.'), list);
+    return section;
+  }
+
   function renderItem(item) {
     const entry = node('div', 'bg-item');
     entry.dataset.item = item.id;
@@ -361,6 +376,7 @@
     mode.append(intro, seg, everything);
     if (model.everything) mode.append(node('p', 'bg-everything', model.everything));
     card.append(mode, renderColumns(model));
+    if (model.unscheduled?.length) card.append(renderUnscheduled(model.unscheduled));
     if (model.rule) {
       const rule = node('div', 'bg-rule');
       rule.append(node('strong', '', 'How work is placed:'), ...[`usually under ${duration(model.rule.frequent_seconds)} → Frequently`,

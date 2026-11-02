@@ -3,7 +3,7 @@
 .machine-zoom-actions button { padding: 5px 10px; border: 1px solid var(--line); border-radius: 4px; color: var(--ink); background: var(--panel); font: var(--fs-sm) var(--sans); }
 .machine-zoom-actions button:disabled { opacity: .45; cursor: default; }
 .machine-zoom-actions button:not(:disabled):hover { border-color: var(--accent); color: var(--accent); }
-.machine-zoom-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.machine-zoom-actions button:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 2px; }
 .machine-zoom-navigation .machine-breadcrumb { min-width: 0; overflow-wrap: anywhere; }
 .machine-zoom-status { color: var(--muted); font-size: var(--fs-xs); }
 .concurrency-panel > .machine-zoom-navigation { background: var(--panel); }

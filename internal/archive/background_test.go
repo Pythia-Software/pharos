@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -417,6 +418,15 @@ func TestBackgroundSettingsAPI(t *testing.T) {
 	if cadences, _ := view["cadences"].([]any); len(cadences) != 3 {
 		t.Fatalf("one row per cadence: %v", view["cadences"])
 	}
+	// Back up is off unless chosen: on no schedule, so in no cadence's row.
+	if unscheduled, _ := view["unscheduled"].([]any); !slices.Contains(unscheduled, any("backup")) {
+		t.Fatalf("back up is not listed as unscheduled: %v", view["unscheduled"])
+	}
+	for _, row := range view["cadences"].([]any) {
+		if items, _ := row.(map[string]any)["items"].([]any); slices.Contains(items, any("backup")) {
+			t.Fatalf("an unscheduled item is in a cadence's row: %v", row)
+		}
+	}
 	if headline, _ := view["headline"].(map[string]any); headline["tone"] == nil || headline["title"] == "" {
 		t.Fatalf("the view has a headline: %v", view["headline"])
 	}
@@ -543,6 +553,11 @@ func TestBackgroundSettingsAPI(t *testing.T) {
 		t.Fatal("Run now of new conversations asks for an index whatever the schedule")
 	}
 	post("/api/background/run", map[string]any{"item": "nothing"}, http.StatusBadRequest)
+	// Ad hoc's run: every item set to only when you ask.
+	post("/api/background/run", map[string]any{"cadence": cadenceManual}, http.StatusAccepted)
+	if requested := server.peekRequested(); !requested["backup"] || requested["findings"] {
+		t.Fatalf("running the manual cadence asks for exactly its items: %v", requested)
+	}
 	if status := getStatus(t, server, "/api/status"); status.raw["background"] == nil {
 		t.Fatal("the status snapshot carries the schedule")
 	}

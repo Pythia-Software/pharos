@@ -4,7 +4,8 @@ import { Icon } from "./icons";
 
 // Help remains available to pointer, keyboard, and touch users. Portaling keeps
 // it out of clipped panels; positioning also works at narrow viewport widths.
-export function SearchHelp({ label, children }: { label: string; children: React.ReactNode }) {
+// A text trigger (such as "Privacy") replaces the info icon and names itself.
+export function SearchHelp({ label, text, children }: { label: string; text?: string; children: React.ReactNode }) {
   const id = useId();
   const trigger = useRef<HTMLButtonElement>(null);
   const bubble = useRef<HTMLDivElement>(null);
@@ -31,7 +32,7 @@ export function SearchHelp({ label, children }: { label: string; children: React
     return () => { window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", escape); };
   }, [open, children]);
   return <>
-    <button ref={trigger} type="button" className="search-help" aria-label={`${label} help`} aria-describedby={open ? id : undefined} onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={() => setOpen(false)} onClick={show}><Icon name="info" /></button>
+    <button ref={trigger} type="button" className={text ? "search-help search-help-text" : "search-help"} aria-label={text ? undefined : `${label} help`} aria-describedby={open ? id : undefined} onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={() => setOpen(false)} onClick={show}>{text ?? <Icon name="info" />}</button>
     {open ? createPortal(<div ref={bubble} id={id} role="tooltip" className="search-help-bubble" style={position} onMouseEnter={show} onMouseLeave={hide}>{children}</div>, trigger.current?.closest("dialog") ?? document.body) : null}
   </>;
 }

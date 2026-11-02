@@ -691,7 +691,7 @@ func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
 	for _, input := range []string{
 		`{"page":"analyze/thinking-detail","view":{"thinking":{"view":"calendar","groupBy":"model_effort","timezone":"America/Denver","range":"30d","hiddenPercentiles":["p95"],"hours":6}}}`,
 		`{"page":"cards","view":{"card_window":"today","card_filters":false},"highlight":["card:tool-failures"],"reveal":"text:failed command"}`,
-		`{"page":"work","options":{"work_id":"w","conversation":"c"},"view":{"reader_page":"1","reader_expanded":["message:m"],"reader_filter":["prompts","response"],"delegation_columns":["tokens","cost"],"delegation_tint":"sort"},"reveal":"message:m"}`,
+		`{"page":"work","options":{"work_id":"w","conversation":"c"},"view":{"find":"failed command","find_case":true,"reader_expanded":["message:m"],"reader_filter":["prompts","response"],"delegation_columns":["tokens","cost"],"delegation_tint":"sort"},"reveal":"message:m"}`,
 	} {
 		result, err := site.linkTool(linkArgs(t, input))
 		if err != nil {
@@ -718,6 +718,138 @@ func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
 		if _, err := site.linkTool(map[string]any{"url": raw}); err == nil {
 			t.Errorf("accepted invalid view %s", raw)
 		}
+	}
+}
+
+// Every Analyze dashboard takes site_link's days and each of its options, and
+// reads them back as the same arguments. A dashboard that agents can reach
+// only through raw view state, or without its range, fails here.
+func TestSiteLinkEveryDashboardTakesItsOptionsAndDays(t *testing.T) {
+	site := testSiteMap(t)
+	dashboards := 0
+	for _, path := range site.nodeOrder {
+		node := site.Nodes[path]
+		if mode, _ := node.Fixed.get("analyze_mode"); mode != "dashboards" {
+			continue
+		}
+		dashboards++
+		links := []map[string]any{{"page": path, "days": 30}, {"page": path, "days": "today"}}
+		for _, option := range node.Options {
+			switch option.Kind {
+			case "where", "window", "days":
+			case "dashboard_chart":
+				for _, view := range site.Analyze.Dashboards[node.Dashboard].viewOrder {
+					links = append(links, map[string]any{"page": path, "options": map[string]any{"view": view}})
+				}
+			default:
+				values := []any{option.Default}
+				if len(option.Values) > 0 {
+					values = nil
+					for _, value := range option.Values {
+						values = append(values, value.Value)
+					}
+				}
+				for _, value := range values {
+					options := map[string]any{option.Name: siteString(value)}
+					for _, need := range option.Requires {
+						options[need.Option] = siteString(need.Values[0])
+					}
+					links = append(links, map[string]any{"page": path, "options": options})
+				}
+			}
+		}
+		if len(links) == 2 {
+			t.Errorf("%s takes no options: give it a catalog or options keyed into its state (dashboardLinks in site-map.ts)", path)
+		}
+		for _, args := range links {
+			name := path + " " + compactJSON(args)
+			result, err := site.linkTool(linkArgs(t, compactJSON(args)))
+			if err != nil {
+				t.Errorf("%s: %v", name, err)
+				continue
+			}
+			roundTrip(t, site, name, result["url"].(string))
+			read := result["arguments"].(map[string]any)
+			if days, given := args["days"]; given && siteString(read["days"]) != siteString(days) {
+				t.Errorf("%s: reads back days %v", name, read["days"])
+			}
+			if options, given := args["options"].(map[string]any); given {
+				for key, value := range options {
+					if got, _ := read["options"].(map[string]any); got == nil || siteString(got[key]) != siteString(value) {
+						t.Errorf("%s: reads back options %s", name, compactJSON(read["options"]))
+					}
+				}
+			}
+		}
+	}
+	if dashboards < len(site.Analyze.Dashboards)+2 {
+		t.Fatalf("%d dashboard pages", dashboards)
+	}
+}
+
+// The Thinking dashboards keep their controls in one JSON parameter;
+// site_link takes them as options and days, as on the other dashboards.
+func TestSiteLinkThinkingOptionsAndDays(t *testing.T) {
+	site := testSiteMap(t)
+	thinking := func(link string) map[string]any {
+		u, _ := url.Parse(link)
+		var state map[string]any
+		if err := json.Unmarshal([]byte(u.Query().Get("thinking")), &state); err != nil {
+			t.Fatal(link, err)
+		}
+		return state
+	}
+	result, err := site.linkTool(linkArgs(t, `{"page":"analyze/thinking-detail","options":{"view":"wait-box","groupBy":"preceding_tool","model":"claude-opus-5-5"},"days":30,"view":{"thinking":{"hiddenPercentiles":["p95"]}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := result["url"].(string)
+	if got := compactJSON(thinking(link)); got != `{"groupBy":"preceding_tool","hiddenPercentiles":["p95"],"model":"claude-opus-5-5","range":"30d","view":"wait-box"}` {
+		t.Fatal(got)
+	}
+	if summary := result["summary"].(string); !strings.Contains(summary, "box plots by Preceding tool") || !strings.Contains(summary, "model claude-opus-5-5") || !strings.Contains(summary, "last 30 days") {
+		t.Fatal(summary)
+	}
+	if args := result["arguments"].(map[string]any); compactJSON(args["options"]) != `{"groupBy":"preceding_tool","model":"claude-opus-5-5","view":"wait-box"}` || args["days"] != 30 {
+		t.Fatal(compactJSON(args))
+	}
+	roundTrip(t, site, "thinking options", link)
+	result, err = site.linkTool(linkArgs(t, `{"page":"analyze/thinking-overview","options":{"effort":"high"},"days":"today","filters":[{"field":"harness","op":"=","value":"claude-code"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := compactJSON(thinking(result["url"].(string))); got != `{"effort":"high","range":"today"}` {
+		t.Fatal(got)
+	}
+	roundTrip(t, site, "thinking today", result["url"].(string))
+	// The page writes every control, including calendar settings outside the
+	// calendar view; reading its link back gives arguments that resubmit.
+	full := `{"view":"time","groupBy":"none","model":"all","effort":"all","normalization":"share","minimum":0,"period":"day","hours":6,"days":3,"range":"30d","calendarRows":"day","calendarMetric":"raw","hourA":18,"hourB":9,"sortBy":"median","sortDirection":"desc","hiddenPercentiles":[],"session":"","traceScale":"linear","timezone":"America/Denver"}`
+	for _, page := range []string{"thinking-detail", "thinking-overview"} {
+		link := "/analyze?analyze_mode=dashboards&analyze_topic=" + page + "&analyze_data=model_requests&thinking=" + url.QueryEscape(full)
+		read, err := site.linkTool(map[string]any{"url": link})
+		if err != nil {
+			t.Fatal(page, err)
+		}
+		args := read["arguments"].(map[string]any)
+		if options, _ := args["options"].(map[string]any); options["calendarRows"] != nil || args["days"] != 30 {
+			t.Errorf("%s: dormant calendar rows read as an option: %s", page, compactJSON(args))
+		}
+		roundTrip(t, site, "full Thinking state on "+page, link)
+	}
+	for input, want := range map[string]string{
+		`{"page":"analyze/thinking-overview","options":{"view":"histogram"}}`:                                 "options.view",
+		`{"page":"analyze/thinking-detail","options":{"view":"pie"}}`:                                         "options.view",
+		`{"page":"analyze/thinking-detail","options":{"calendarRows":"week"}}`:                                "options.calendarRows",
+		`{"page":"analyze/thinking-detail","days":14}`:                                                        "days",
+		`{"page":"analyze/thinking-detail","options":{"view":"heatmap"},"view":{"thinking":{"view":"time"}}}`: "options.view",
+	} {
+		if _, err := site.linkTool(linkArgs(t, input)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want an error naming %s", input, err, want)
+		}
+	}
+	if _, err := site.linkTool(linkArgs(t, `{"page":"analyze/thinking-detail","options":{"view":"calendar","calendarRows":"week"}}`)); err != nil {
+		t.Error(err)
 	}
 }
 
@@ -838,20 +970,14 @@ func TestSiteLinkNativeValidationAndComposition(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, sample := range searchCases {
-		for _, owner := range []string{"search_state", "reader_search", "record_keyword"} {
+		for _, owner := range []string{"search_state", "record_keyword"} {
 			t.Run(owner+" "+sample.Name, func(t *testing.T) {
 				page, value := "library", any(sample.Draft)
-				if owner == "reader_search" {
-					page = "work"
-				}
 				if owner == "record_keyword" {
 					page = "analyze/query/usage"
 					value = map[string]any{"field": "model", "draft": sample.Draft}
 				}
 				args := map[string]any{"page": page, "view": map[string]any{owner: value}}
-				if page == "work" {
-					args["options"] = map[string]any{"work_id": "w"}
-				}
 				_, err := site.linkTool(args)
 				valid := sample.Valid
 				if owner == "record_keyword" && sample.RecordValid != nil {
@@ -868,13 +994,9 @@ func TestSiteLinkNativeValidationAndComposition(t *testing.T) {
 		large[key] = value
 	}
 	large["editor"], large["text"] = "syntax", strings.Repeat("x", 24001)
-	for _, owner := range []string{"search_state", "reader_search", "record_keyword"} {
+	for _, owner := range []string{"search_state", "record_keyword"} {
 		page, value := "library", any(large)
 		args := map[string]any{}
-		if owner == "reader_search" {
-			page = "work"
-			args["options"] = map[string]any{"work_id": "w"}
-		}
 		if owner == "record_keyword" {
 			page = "analyze/query/usage"
 			value = map[string]any{"field": "model", "draft": large}
@@ -886,8 +1008,9 @@ func TestSiteLinkNativeValidationAndComposition(t *testing.T) {
 	}
 
 	for _, input := range []string{
-		`{"page":"work","options":{"work_id":"w"},"view":{"reader_page":"+5"}}`,
-		`{"page":"work","options":{"work_id":"w"},"view":{"reader_page":"-0"}}`,
+		`{"page":"work","options":{"work_id":"w"},"view":{"delegation_page":"+5"}}`,
+		`{"page":"work","options":{"work_id":"w"},"view":{"delegation_page":"-0"}}`,
+		`{"page":"cards","view":{"find_regex":"yes"}}`,
 		`{"page":"work","options":{"work_id":"w"},"view":{"sidebar_width":"+400"}}`,
 		`{"page":"work","options":{"work_id":"w"},"view":{"reader_expanded":["m",null]}}`,
 		`{"page":"library","days":"today","view":{"window_timezone":"Local"}}`,
@@ -1048,7 +1171,7 @@ func TestSiteLinkNativeValidationAndComposition(t *testing.T) {
 		`{"page":"analyze/query/usage","query":{"grouping":{"source":{"where":[{"field":"provider","op":"=","value":"claude"}]},"keys":["model"],"summaries":[{"id":"sum_tokens","op":"sum","field":"total_tokens"}],"representative":null},"select":[{"field":"model"},{"field":"sum_tokens"}],"where":[{"field":"sum_tokens","op":">","value":"100"}],"orderBy":[{"field":"sum_tokens","dir":"desc"}]},"days":7}`,
 		`{"page":"library","view":{"search_state":{"match":"literal","text":"failure","scope":{"provider":"claude"}}}}`,
 		`{"page":"cards","view":{"card_window":30}}`,
-		`{"page":"work","options":{"work_id":"w"},"view":{"delegation_page":2,"reader_page":3,"sidebar_width":450}}`,
+		`{"page":"work","options":{"work_id":"w"},"view":{"delegation_page":2,"sidebar_width":450}}`,
 	} {
 		result, err := site.linkTool(linkArgs(t, input))
 		if err != nil {
