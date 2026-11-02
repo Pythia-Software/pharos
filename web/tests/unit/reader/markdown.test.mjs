@@ -200,6 +200,35 @@ test("local labels name a message's most specific labels and mark the text they 
   assert.deepEqual(plain([root.family, root.labels[0].title]), ['', 'Responds or reports']);
 });
 
+test("the reader offers each highlight the conversation has marks for, each shown on its own", () => {
+  const typed = 'Please fix it.', reply = 'The endpoint is down.';
+  const human = { role: 'user', kind: 'message', text: typed, authorship: { spans: [{ category: 'typed', start: 0, end: typed.length }] } };
+  const agent = { role: 'assistant', kind: 'message', text: reply, labels: { segment: 'AR', ids: ['C', 'C.report', 'C.report.completion'], probs: {} },
+    agent_events: [{ kind: 'obstacle', label: 'Obstacle', group: 'Friction', probability: 0.9, sentence: [0, reply.length], subject: [], response: [] }] };
+  const conversation = { labels: { labeled: true, pending: false }, agent_events: { messages_read: 1 } };
+  const options = reader.readerHighlightOptions(conversation, [human, agent]);
+  assert.deepEqual(plain(options.map(option => [option.id, option.field, option.available])),
+    [['writing', 'reader_writing', true], ['events', 'reader_events', true], ['labels', 'reader_labels', true]]);
+  assert.deepEqual(plain(options[1].legend), [{ name: 'Friction', className: 'event-friction' }]);
+  assert.equal(options[1].note, '1 event in 1 of 1 agent messages read');
+  assert.deepEqual(plain(options[2].legend), [{ name: 'Report', family: 'C.report' }]);
+  // Human writing is on by default and the classifiers are opt-in; a link
+  // wins over the saved choice, which wins over the default.
+  const shown = (linked, saved) => [...reader.readerHighlightsShown(options, linked, saved)].sort();
+  assert.deepEqual(shown(), ['writing']);
+  assert.deepEqual(shown(() => null, pref => pref === 'pharos-reader-events'), ['events']);
+  assert.deepEqual(shown(field => field === 'reader_labels' ? true : field === 'reader_writing' ? false : null), ['labels']);
+  // Human writing is offered only where there is some, and a classifier only
+  // once it has run; one with nothing here is offered but off.
+  const plainOptions = reader.readerHighlightOptions({ labels: { labeled: false, pending: true }, agent_events: { messages_read: 3 } }, [{ role: 'assistant', kind: 'message', text: 'Done.' }]);
+  assert.deepEqual(plain(plainOptions.map(option => [option.id, option.available, option.note])),
+    [['events', false, '0 events in 0 of 3 agent messages read'], ['labels', false, 'Not labeled yet']]);
+  assert.deepEqual(shown(() => true), ['events', 'labels', 'writing']);
+  assert.equal(reader.readerHighlightsShown(plainOptions, () => true).size, 0);
+  assert.deepEqual(plain(reader.readerHighlightOptions({}, [human]).map(option => option.id)), ['writing']);
+  assert.deepEqual(plain(reader.readerHighlightOptions({}, [agent])), []);
+});
+
 test("agent events mark each event's sentence by group and its context, in UTF-16 offsets", () => {
   // An emoji is two UTF-16 units: offsets count them as JavaScript does.
   const body = "The 🚧 endpoint doesn't support pagination. I'll work around it by fetching one day at a time. **Done.**";

@@ -572,6 +572,9 @@ export const defaultApi = {
 
   // Settings.
   "GET /api/feedback/diagnostics": { service: "Recent service diagnostics" },
+  "POST /api/logs/page": ({ body }) => ({ recorded: body?.events?.length ?? 0 }),
+  "GET /api/logs/summary": () => logsSummary,
+  "GET /api/logs/source": ({ query }) => logsSource(query.get("id")),
   "POST /api/feedback/submit": ({ body }) => ({ id: body.id, received: true }),
   "GET /api/health/counts": { workspaces: 1964, conversations: 2400, messages: 311120 },
   "GET /api/health/storage": { volume_name: "Pharos SSD", index_bytes: 2_000_000_000, internal_free_bytes: 100_000_000_000, free_bytes: 400_000_000_000, staging_bytes: 0, staging_cap_bytes: 1, path: "/Volumes/Pharos SSD/Pharos", status: "available" },
@@ -630,3 +633,29 @@ export const defaultApi = {
   "GET /api/work/:id/preview": ({ params, query }) => workPreview(params.id, query),
   "GET /api/work/:id/find": { conversations: [] },
 };
+
+// Settings → Logs: a crash in the service's last run and a page error. As
+// the API does, a quiet source omits its empty collection.
+const logsSources = [
+  { id: "page", title: "Page errors", attention: "warning", count: 2, latest_at: iso(120000), headline: "GET /api/query/usage/rows had not answered after 15 s", files: ["/Users/me/Library/Application Support/Pharos/logs/library-1/page-errors.jsonl"] },
+  { id: "requests", title: "Slow & failed requests", count: 0, files: ["/Users/me/Library/Application Support/Pharos/logs/library-1/requests.jsonl"] },
+  { id: "service", title: "Service output", attention: "error", count: 3, latest_at: iso(600000), headline: "A run ended in a crash: panic: runtime error: index out of range [3] with length 3", files: ["/Users/me/Library/Application Support/Pharos/logs/library-1/service.log"] },
+  { id: "app", title: "App output", count: 0 },
+  { id: "background", title: "Background work", count: 0 },
+  { id: "crashes", title: "Crash reports", count: 0, files: ["/Users/me/Library/Logs/DiagnosticReports"] },
+];
+export const logsSummary = { generated_at: iso(0), folder: "/Users/me/Library/Application Support/Pharos/logs", sources: logsSources };
+export function logsSource(id) {
+  const summary = logsSources.find(source => source.id === id);
+  if (!summary) return undefined;
+  const long = "pharos/internal/archive.(*Server).serveQueryWithAVeryLongFunctionNameThatMustWrapAtNarrowWidths(0x14000a2c000, {0x105f0c2a8, 0x14000b3e0f0}, 0x14000c81200) /Users/me/src/pharos/internal/archive/query_api.go:412 +0x1f4";
+  return {
+    summary,
+    ...id === "page" ? { events: [{ id: "a1", at: iso(120000), level: "warning", kind: "stalled", message: summary.headline, page: "/analyze", path: "/api/query/usage/rows", count: 2 }, { id: "a2", at: iso(900000), level: "error", kind: "render", message: "TypeError: undefined is not an object (evaluating 'rows.length')", detail: long, page: "/library" }] } : {},
+
+    ...id === "service" || id === "app" ? { runs: [
+      { started_at: iso(60000), running: true, crashed: false, problems: 0, lines: ["listening on 127.0.0.1:18765"] },
+      { started_at: iso(600000), ended_at: iso(300000), exit: "exit status 2", running: false, crashed: true, problems: 3, crash: "panic: runtime error: index out of range [3] with length 3", lines: ["listening on 127.0.0.1:18765", "panic: runtime error: index out of range [3] with length 3", "", "goroutine 1234 [running]:", long] },
+    ] } : {},
+  };
+}

@@ -1,5 +1,6 @@
 import { nestedPageTrail, type NestedPage } from "./nested-pages-model";
 import { safetyURL } from "./safety-route";
+import { logsRoute, logSourceFromParams, logSourceNavigationID } from "./logs-model";
 import { agentEventDatasets, agentEventTopics, agentEventsEnabled } from "./agent-events-flag";
 import { canonicalAnalyzeURL, readUsageWorkspace, usageDatasets, usageDatasetTopics, usageTopics, usageWorkspaceURL, type UsageMode } from "./usage-workspace-model";
 
@@ -57,6 +58,7 @@ export function appSections(settings: readonly NestedPage[], params: URLSearchPa
 export function appLocation(path: string, params: URLSearchParams) {
   if (path === "/cards") return { section: "home", current: "/cards" };
   if (path === "/settings/optimization") return { section: "findings", current: "findings:settings" };
+  if (path === logsRoute) return { section: "settings", current: logSourceNavigationID(logSourceFromParams(params)) };
   if (path.startsWith("/findings")) return { section: "findings", current: `${params.get("optimize_area") === "safety" ? "safety" : "findings"}:${params.get("view") === "settings" ? "settings" : params.get("view") === "table" ? "table" : "dashboard"}` };
   if (path.startsWith("/settings")) return { section: "settings", current: path };
   if (path === "/mcp") return { section: "analyze", current: "dashboards:mcp" };
