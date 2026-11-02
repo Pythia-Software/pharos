@@ -45,7 +45,7 @@
 .human-review-note,.human-review-section-note { display:block; color:var(--muted); font-size:10px; }
 .human-review textarea { box-sizing:border-box; display:block; width:100%; resize:vertical; min-height:83px; margin-top:7px; padding:10px; border:1px solid var(--line); border-radius:5px; background:var(--panel); color:var(--ink); font-family:inherit; font-size:12px; line-height:1.5; }
 .human-review textarea::placeholder { color:var(--muted); opacity:.7; }
-.human-review :is(button,a,summary,textarea,select):focus-visible { outline:2px solid var(--gold); outline-offset:3px; }
+.human-review :is(button,a,summary,textarea,select):focus-visible { outline:2px solid var(--focus-ring, var(--accent)); outline-offset:3px; }
 .human-review-section-note { margin-top:26px; padding:16px 20px; background:color-mix(in srgb,var(--gold) 3%,var(--panel)); border:1px solid var(--line); border-radius:7px; color:var(--ink); font-size:12px; }
 .human-review-section-note>span { margin-left:12px; color:var(--muted); font-size:11px; }
 .human-review-section-note textarea { min-height:68px; }

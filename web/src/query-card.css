@@ -7,7 +7,7 @@
 .query-card:active { cursor:grabbing; }
 /* A card stretched to its row's height gives the extra height to its cover. */
 .query-card-open { display:flex; flex-direction:column; flex:1 0 auto; text-decoration:none; color:inherit; border-radius:6px; overflow:hidden; cursor:pointer; }
-.query-card-open:focus-visible { outline:2px solid var(--gold); outline-offset:4px; }
+.query-card-open:focus-visible { outline:2px solid var(--focus-ring, var(--accent)); outline-offset:4px; }
 .query-xray-open { position:absolute; z-index:2; inset:0; width:100%; padding:0; border:0; border-radius:inherit; background:transparent; cursor:pointer; }
 .query-xray-open:focus-visible { outline:2px solid var(--query-tone); outline-offset:3px; }
 .query-card[data-revealable]:hover,.query-card[data-revealable]:focus-within { border-color:var(--sea); }
@@ -99,7 +99,7 @@
 .query-drag-tip svg { width:13px; height:13px; color:var(--gold); }
 .query-card.discovery:hover .query-drag-tip,.query-card.discovery:focus-within .query-drag-tip { opacity:1; }
 .home-belt-row>.query-card:first-child .query-drag-tip { left:0; transform:none; }
-.query-card.insert-before { box-shadow:-5px 0 0 var(--gold),1px 5px 9px #0003; }
+.query-card.insert-before { box-shadow:-5px 0 0 var(--sea),1px 5px 9px #0003; }
 .query-chip { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line); background:color-mix(in srgb,var(--gold) 4%,var(--panel)); color:var(--ink); padding:5px 8px; border-radius:5px; font:inherit; font-size:var(--fs-sm); cursor:pointer; }
 .query-chip svg { width:12px; height:12px; color:var(--muted); }
 .query-chip svg:first-child { color:var(--sea); }

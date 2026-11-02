@@ -11,6 +11,9 @@ export const viewFields: Record<string, ViewField> = {
   thinking_filters: field("analyze_filters",["analyze/thinking-overview","analyze/thinking-detail"],"text","Additional native Model Requests population filters. The dashboard range and model controls intersect these filters; dates are replaced when Range changes."),
   thinking: field("thinking",["analyze/thinking-overview","analyze/thinking-detail","analyze/query/model_requests"],"json","Thinking dashboard applied filters and presentation. All controls share one range; dates are half-open ISO bounds."),
   disclosures: field("disclosures", ["*"], "json", "Expanded content and settings sections by stable section/record identity; values are booleans. Transient menus and editor drafts are excluded."),
+  find: field("find", ["*"], "text", "Page Find term (Cmd/Ctrl+F). Searches the current page, including collapsed sections and unrendered conversation content; matches are highlighted and the first visible one is revealed. Present while Find is open."),
+  find_case: field("find_case", ["*"], "boolean", "Page Find matches case. Default off."),
+  find_regex: field("find_regex", ["*"], "boolean", "Page Find term is a JavaScript regular expression. Default off (literal)."),
   nav_collapsed: field("nav_collapsed", ["*"], "boolean", "Collapse the application sidebar."),
   nav_expanded: field("nav_expanded", ["*"], "json", "Expanded sidebar branches by section and page ID."),
   guide_dataset: field("guide_dataset", ["*"], "enum", "Data Guide source dataset.", ["model_requests","library","usage","conversation_activity","writing","writing_messages","tool_calls","tools","skill_usages","mcp_calls","tl1_attempts","parallelism","findings","safety"]),
@@ -57,9 +60,6 @@ export const viewFields: Record<string, ViewField> = {
   reader_filter: field("reader_filter", ["work"], "strings", "Visible transcript category IDs (reader-model TRANSCRIPT_CATEGORIES)."),
   reader_collapsed: field("reader_collapsed", ["work"], "strings", "Explicitly collapsed disclosure identities, overriding initially open content."),
   reader_expanded: field("reader_expanded", ["work"], "strings", "Expanded disclosure identities: message:<id>, call:<id>, or section:<key>."),
-  reader_page: field("reader_page", ["work"], "text", "Zero-based conversation Find batch, 0–250 (site_link accepts a number or decimal string). Replays fresh cursors on restore; expired cursor blobs never travel in the URL."),
-  reader_search: field("reader_search", ["work"], "json", "Applied conversation find definition: a TextSearchDraft; editor drafts are excluded."),
-  reader_order: field("reader_order", ["work"], "enum", "Conversation search result order.", ["asc", "desc"]),
   reader_labels: field("reader_labels", ["work"], "boolean", "Highlight message text by its local labels (Message labels); hovering highlighted text names the message's labels."),
   sidebar_visible: field("sidebar_visible", ["work"], "boolean", "Show the workspace navigation sidebar."),
   sidebar_width: field("sidebar_width", ["work"], "text", "Workspace navigation sidebar width, 300–5000 pixels (site_link accepts a number or decimal string)."),
@@ -93,7 +93,6 @@ const searchDetails = {
   literal_example:{...searchTemplate,root:{...searchTemplate.root,id:"group-1",children:[]},match:"literal",text:"failure"},
 };
 viewFields.search_state.details=searchDetails;
-viewFields.reader_search.details={...searchDetails,note:"Scope is fixed to the current conversation/workspace; {} closes the applied Find."};
 viewFields.record_keyword.details={field:"Source text field ID from the dataset columns",draft:searchDetails,note:"Record keywords do not support fuzzy matching or message scope filters."};
 viewFields.parallelism.details={
   template:defaultConcurrencySettings,
@@ -118,7 +117,7 @@ export const attentionTargets = [
   { pattern: "session:<id>", pages: ["work"], description: "Conversation/session ID in the delegation explorer." },
   { pattern: "row:<id>", pages: ["library", "analyze/query/*", "findings/table","findings/safety/table"], description: "Stable record ID in the current query result. Does not broaden filters." },
   { pattern: "detail:<json>", pages: ["library", "analyze/query/*", "findings/table","findings/safety/table"], revealOnly: true, description: 'Reveal an exact record/property/JSONPath via Query Table: detail:{"rowId":"id","field":"arguments_json","path":"$[\\"events\\"][21]"}. field/path are optional; preserve numeric versus string IDs. The page selects the dataset. Loads exact details without changing filters or pagination; disabled/absent properties are unavailable. This family supports reveal only.' },
-  { pattern: "text:<literal>", pages: ["*"], description: "Literal text search. Opens a prefilled Find box, highlights matches and reveals the first. No browser focus movement." }
+  { pattern: "text:<literal>", pages: ["*"], description: "Literal text search; an alias for view.find. Opens page Find, highlights matches and reveals the first. Several text targets become one escaped OR regex. No browser focus movement." }
 ];
 export const viewDependencyGaps = {
   query_table_json_cells: {status:"blocked",version:"0.9.8",owner:"@pythia-software/query-table-ui DataTable",reason:"Native property JSON is portable. JSON display cells created by DataTable still do not receive scoped controlled inspection state; requires a published upstream integration.",handoff:"docs/query-table-url-state-handoff.md"},
@@ -144,7 +143,7 @@ export function parseViewValue(field: ViewField, raw: string): unknown {
     if (field.kind === "strings" ? !Array.isArray(value) || value.some(item => typeof item !== "string") : value === null || typeof value !== "object") throw new Error(`${field.param} has invalid state.`);
     if (["disclosures","reader_content","query_layout"].includes(field.param) && (Array.isArray(value)||Object.values(value).some(item=>typeof item!=="boolean")))throw new Error(`${field.param} needs booleans by stable identity.`);
     if (field.param==="chart_pins" && (Array.isArray(value)||Object.values(value).some(item=>typeof item!=="string")))throw new Error("Chart pins need bucket keys by chart identity.");
-    if (["text_builder", "reader_search"].includes(field.param) && !(field.param === "reader_search" && !Object.keys(value).length)) {
+    if (field.param === "text_builder") {
       const restored=readTextSearch(new URLSearchParams({text_builder:raw}));if(restored.error||!restored.active)throw new Error(restored.error);
     }
     if (field.param.startsWith("record_")) {
@@ -156,7 +155,7 @@ export function parseViewValue(field: ViewField, raw: string): unknown {
     if(field.param==="thinking"&&!validateThinking(value))throw new Error("Invalid Thinking dashboard state.");
     return value;
   }
-  if(["delegation_page","reader_page"].includes(field.param) && (!/^\d+$/.test(raw)||Number(raw)>250))throw new Error("Choose a session page from 0 to 250.");
+  if(field.param==="delegation_page" && (!/^\d+$/.test(raw)||Number(raw)>250))throw new Error("Choose a session page from 0 to 250.");
   if(field.param==="window_timezone") {try {new Intl.DateTimeFormat("en",{timeZone:raw});}catch {throw new Error("Choose an IANA timezone.");}}
   if(field.param==="sidebar_width" && (!/^\d+$/.test(raw)||Number(raw)<300||Number(raw)>5000))throw new Error("Sidebar width must be 300 to 5000 pixels.");
   return raw;
@@ -187,9 +186,11 @@ export const delegatedViewFields: Record<string,{file:string; symbol:string}> = 
 for (const name of ["window_mode","window_days","window_field","window_until_field","window_dataset","window_timezone"]) delegatedViewFields[name]={file:"web/src/query-links.ts",symbol:"readRollingWindow"};
 for (const name of ["query_dashboard_chart","query_dashboard_filters","query_dashboard_window","query_opened","query_days","query_report","query_search"]) delegatedViewFields[name]={file:"web/src/usage-workspace-model.ts",symbol:"usageWorkspaceURL"};
 
+/** Attention and page Find describe one page's content; navigation drops them. */
+export const pageAttentionParameters = ["highlight", "reveal", "find", "find_case", "find_regex"] as const;
 /** Page navigation retains global view controls, but attention belongs to its source page. */
 export function retainPageView(params: URLSearchParams, page: string, nativeParameters: readonly string[] = [], sourcePage?: string) {
-  if(sourcePage!==page){params.delete("highlight");params.delete("reveal");}
+  if(sourcePage!==page)for(const name of pageAttentionParameters)params.delete(name);
   const allowed=new Set([...Object.values(fieldsForPage(page)).map(field=>field.param),...nativeParameters]);
   for(const field of Object.values(viewFields))if(!field.param.includes("{dataset}")&&!allowed.has(field.param))params.delete(field.param);
 }

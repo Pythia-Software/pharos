@@ -104,6 +104,18 @@
       "field": "disclosures"
     },
     {
+      "file": "web/src/page-find.ts",
+      "field": "find"
+    },
+    {
+      "file": "web/src/page-find.ts",
+      "field": "find_case"
+    },
+    {
+      "file": "web/src/page-find.ts",
+      "field": "find_regex"
+    },
+    {
       "file": "web/src/findings.tsx",
       "field": "findings_rank"
     },
@@ -174,18 +186,6 @@
     {
       "file": "internal/archive/assets/ui.py",
       "field": "reader_labels"
-    },
-    {
-      "file": "web/src/conversation-search.tsx",
-      "field": "reader_order"
-    },
-    {
-      "file": "web/src/conversation-search.tsx",
-      "field": "reader_page"
-    },
-    {
-      "file": "web/src/conversation-search.tsx",
-      "field": "reader_search"
     },
     {
       "file": "web/src/safety.tsx",
@@ -3355,24 +3355,6 @@
       "reason": "Content disclosure identity is supplied by bindReaderView, messageCard content keys or the work archive data-view-key. Diagnostics in source payloads follow their containing view."
     },
     {
-      "key": "a0036a86953f7789:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "search",
-      "tag": "button",
-      "control": "'button', 'conversation-find-marker'",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "e861c4e0a36f2fd2:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "searchOthers",
-      "tag": "button",
-      "control": "'button', item.shown?'':'hidden-only', item.shown?`#${item.index+1} · ${item.shown}`:`#${item.index+1}`",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
       "key": "34ee83a2e65ae313:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "setDrawer",
@@ -3408,78 +3390,6 @@
       "owner": "setupConversationMap",
       "tag": "button",
       "control": "'button', `conversation-map-turn ${turn.dataset.human==='true'?'human':''}`",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "59697c369aecf2cd:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "setupConversationSearch",
-      "tag": "button",
-      "control": "'button', '', icon('arrow-down')",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "7a2f0a4a729c23c2:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "setupConversationSearch",
-      "tag": "button",
-      "control": "'button', '', icon('arrow-up')",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "a183ad834b64c088:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "setupConversationSearch",
-      "tag": "button",
-      "control": "'button', '', icon('close')",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "bef2b64bf45f82e0:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "setupConversationSearch",
-      "tag": "input",
-      "control": "'input', ''",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "bef2b64bf45f82e0:1",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "setupConversationSearch",
-      "tag": "input",
-      "control": "'input', ''",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "bef2b64bf45f82e0:2",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "setupConversationSearch",
-      "tag": "input",
-      "control": "'input', ''",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "bef2b64bf45f82e0:3",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "setupConversationSearch",
-      "tag": "input",
-      "control": "'input', ''",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "c75ffa96b4fa174a:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "setupConversationSearch",
-      "tag": "button",
-      "control": "'button', '', 'Show'",
       "contract": "reader",
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
@@ -4454,90 +4364,6 @@
       "control": "onClick={() => overview.error || selection.error ? setReload(value => value + 1) : void load(currentID)}",
       "contract": "action",
       "reason": "Retries loading the selected conversation or resolving the retained turn identity; the retry counter is transient."
-    },
-    {
-      "key": "0b24f86fce417896:0",
-      "file": "web/src/conversation-search.tsx",
-      "owner": "ConversationSearch",
-      "tag": "button",
-      "control": "onClick={() => reveal(index)}",
-      "contract": "reader",
-      "reason": "Applied reader_search and reader_order are URL state; unapplied edits, running search and result cursor batches are transient."
-    },
-    {
-      "key": "194fcafba3e16562:0",
-      "file": "web/src/conversation-search.tsx",
-      "owner": "ConversationSearch",
-      "tag": "ViewDisclosure",
-      "control": "viewKey=\"reader:search-coverage\"",
-      "binding": "disclosures",
-      "sharedDisclosure": true,
-      "contract": "view.disclosures",
-      "reason": "Bound by the shared view-state primitive."
-    },
-    {
-      "key": "216d58696a6a866d:0",
-      "file": "web/src/conversation-search.tsx",
-      "owner": "ConversationSearch",
-      "tag": "button",
-      "control": "aria-label=\"Close conversation search\" onClick={close}",
-      "contract": "reader",
-      "reason": "Applied reader_search and reader_order are URL state; unapplied edits, running search and result cursor batches are transient."
-    },
-    {
-      "key": "2c1bafcc15859565:0",
-      "file": "web/src/conversation-search.tsx",
-      "owner": "ConversationSearch",
-      "tag": "button",
-      "control": "aria-label=\"Previous matching message\" onClick={() => reveal(active - 1)}",
-      "contract": "reader",
-      "reason": "Applied reader_search and reader_order are URL state; unapplied edits, running search and result cursor batches are transient."
-    },
-    {
-      "key": "33a364570a3c2f0c:0",
-      "file": "web/src/conversation-search.tsx",
-      "owner": "ConversationSearch",
-      "tag": "button",
-      "control": "aria-label=\"Next matching message\" onClick={() => reveal(active + 1)}",
-      "contract": "reader",
-      "reason": "Applied reader_search and reader_order are URL state; unapplied edits, running search and result cursor batches are transient."
-    },
-    {
-      "key": "973649fecf6c737c:0",
-      "file": "web/src/conversation-search.tsx",
-      "owner": "ConversationSearch",
-      "tag": "button",
-      "control": "onClick={() => applied && void run(applied, result.cursor,false,\"\",Number(pageIndex))}",
-      "contract": "reader",
-      "reason": "Applied conversation Find page is an ordinal in reader_page, replaying fresh cursors. Retry reuses the current live batch."
-    },
-    {
-      "key": "d786e12bf9371934:0",
-      "file": "web/src/conversation-search.tsx",
-      "owner": "ConversationSearch",
-      "tag": "TextSearchEditor",
-      "control": "value={scopedDraft} onKind={() => {}} onDraft={next => { pending.current?.abort(); setBusy(false); setDraft(next); }} onApply={next => void run(next)} onClear={() => { pending.current?.abort(); setBusy(false); setDraft(emptyTextSearch()); setResult(undefined); setApplied(undefined); writeViewState(\"reader_search\", {}); options.reveal(null); }}",
-      "contract": "reader",
-      "reason": "Applied reader_search and reader_order are URL state; unapplied edits, running search and result cursor batches are transient."
-    },
-    {
-      "key": "d9932cefd235128e:0",
-      "file": "web/src/conversation-search.tsx",
-      "owner": "ConversationSearch",
-      "tag": "button",
-      "control": "onClick={() => applied && void run(applied, result.next_cursor,false,\"\",Number(pageIndex)+1)}",
-      "contract": "reader",
-      "reason": "Applied conversation Find page is an ordinal in reader_page, replaying fresh cursors. Retry reuses the current live batch."
-    },
-    {
-      "key": "db1260fa93c780a6:0",
-      "file": "web/src/conversation-search.tsx",
-      "owner": "ConversationSearch",
-      "tag": "SearchSelect",
-      "control": "data-view-field=\"reader_order\" aria-label=\"Message order\" value={direction} onChange={e => { setDirection(e.target.value); setActive(-1); options.reveal(null); }}",
-      "binding": "reader_order",
-      "contract": "view.reader_order",
-      "reason": "Bound by the shared view-state primitive."
     },
     {
       "key": "2da290a1c01e8a10:0",
@@ -6973,6 +6799,24 @@
       "reason": "Shared presentational control delegates to audited caller bindings: findings_rank, safety_rank, safety_place, or Efficiency native repo. All are canonical view inputs; no state is excluded."
     },
     {
+      "key": "2ea640480a8d3ed2:0",
+      "file": "web/src/page-find.ts",
+      "owner": "button",
+      "tag": "button",
+      "control": "\"button\"",
+      "contract": "action",
+      "reason": "Page Find buttons: Match case and Regular expression write find_case/find_regex; Previous/Next/Expand all/Close and note actions navigate matches, open the disclosures holding them (through their own URL state) or close Find. The move grip drags the bar; its position is transient."
+    },
+    {
+      "key": "63e5a46ada2b07b3:0",
+      "file": "web/src/page-find.ts",
+      "owner": "showBar",
+      "tag": "input",
+      "control": "\"input\"",
+      "contract": "view.find",
+      "reason": "Page Find term; readFind/writeFind keep find, find_case and find_regex in the URL (writeFindParameters)."
+    },
+    {
       "key": "518523774b3bb3cd:0",
       "file": "web/src/query-card.tsx",
       "owner": "QueryCard",
@@ -8660,24 +8504,6 @@
       "control": "onClick={() => setAttempt(value => value + 1)}",
       "contract": "action",
       "reason": "Retry resolves the retained card source again and replaces the URL with its canonical dashboard state; the attempt count is transient."
-    },
-    {
-      "key": "ba8a589e824239d9:0",
-      "file": "web/src/view-attention.ts",
-      "owner": "button",
-      "tag": "button",
-      "control": "\"button\"",
-      "contract": "host-search",
-      "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
-    },
-    {
-      "key": "0cb0a2278b863d45:0",
-      "file": "web/src/view-attention.ts",
-      "owner": "findBox",
-      "tag": "input",
-      "control": "\"input\"",
-      "contract": "host-search",
-      "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
       "key": "a77d7bde4338f61f:0",

@@ -17,7 +17,7 @@ export function dashboardCardURL(address: string, catalog: AnalysisCatalog, stat
   url.searchParams.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where }));
   if (catalog.request?.params?.carbon_settings) url.searchParams.set("analyze_carbon", catalog.request.params.carbon_settings);
   if (topic === "parallelism" && !url.searchParams.has("analyze_parallelism")) url.searchParams.set("analyze_parallelism", JSON.stringify(readConcurrencySettings()));
-  for (const key of [...url.searchParams.keys()]) if (key.startsWith("card_") || ["overlay", "history_search", "history_collapsed", "highlight", "reveal", "chart_pins"].includes(key)) url.searchParams.delete(key);
+  for (const key of [...url.searchParams.keys()]) if (key.startsWith("card_") || ["overlay", "history_search", "history_collapsed", "highlight", "reveal", "find", "find_case", "find_regex", "chart_pins"].includes(key)) url.searchParams.delete(key);
   return usageWorkspaceURL({ mode: "dashboards", topic, dataset: usageTopicDatasets[topic] }, url.searchParams);
 }
 

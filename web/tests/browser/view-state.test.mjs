@@ -290,17 +290,38 @@ test('automatic oversized query references resolve in a fresh browser with no lo
  assert.ok(fresh.calls.some(call=>call.path==='/api/query-snapshots'&&call.method==='GET'));
 });
 
-test('literal text reveal opens the reader Find UI and reveals a match without focusing its input', {skip},async t=>{
- const api={'POST /api/search/text':({body})=>({items:[{message_id:'m-1',start_byte:0,end_byte:4,snippet:'Turn 0'}],complete:true,stop_reason:'complete',elapsed_ms:1,coverage:'Synthetic fixture'})};
- const opened=await open(t,{url:`/work/${workID}?conversation=${rootConversation}&reveal=text%3ATurn`,api,ready:'.conversation-search-composer'});
- await opened.page.waitForFunction(()=>!!document.querySelector('[data-message-id="m-1"].pharos-reveal'));
- const search=JSON.parse(new URL(opened.page.url()).searchParams.get('reader_search'));
- assert.equal(search.text,'Turn');assert.equal(search.match,'literal');
- assert.equal(await opened.page.locator('.conversation-search-composer').evaluate(element=>element.contains(document.activeElement)),false);
- await opened.page.getByRole('button',{name:'Clear highlights',exact:true}).click();
- await opened.page.waitForFunction(()=>!document.querySelector('[data-message-id="m-1"].pharos-reveal'));
- await opened.page.getByRole('button',{name:'Close conversation search',exact:true}).click();
- assert.equal(new URL(opened.page.url()).searchParams.has('reveal'),false);
+test('literal text reveal opens page Find on the reader and reveals a match without focusing its input', {skip},async t=>{
+ const opened=await open(t,{url:`/work/${workID}?conversation=${rootConversation}&reveal=text%3ATurn%201`,ready:'.pharos-find'});
+ await opened.page.waitForFunction(()=>[...(CSS.highlights.get('pharos-landing')||[])][0]?.toString()==='Turn 1');
+ const params=new URL(opened.page.url()).searchParams;
+ assert.equal(params.get('find'),'Turn 1');assert.equal(params.has('reveal'),false);
+ assert.equal(await opened.page.locator('.pharos-find').evaluate(element=>element.contains(document.activeElement)),false);
+ assert.equal(opened.calls.filter(call=>call.path==='/api/search/text').length,0,'page Find searches the loaded transcript');
+ await opened.page.getByRole('button',{name:'Close Find (Escape)',exact:true}).click();
+ await opened.page.waitForFunction(()=>!document.querySelector('.pharos-find')&&!new URLSearchParams(location.search).has('find'));
+});
+
+test('a revealed literal inside unrendered content lands there even when another literal is shown', {skip},async t=>{
+ const {page}=await open(t,{url:`/work/${workID}?conversation=${rootConversation}&highlight=text%3ATurn%201&reveal=text%3Acase_7_with`,ready:'.pharos-find'});
+ await page.waitForFunction(()=>[...(CSS.highlights.get('pharos-landing')||[])][0]?.toString()==='case_7_with');
+});
+
+test('page Find counts matches in unrendered tool details, then opens and marks the path to one', {skip},async t=>{
+ const app=await open(t,{url:`/work/${workID}?conversation=${rootConversation}&find=case_7_with`,ready:'[data-pharos-find="container"]'}),{page}=app;
+ assert.equal(await page.evaluate(()=>CSS.highlights.get('pharos-matches')?.size??0),0,'no match is rendered yet');
+ assert.match(await page.locator('.pharos-find-status').textContent(),/collapsed/);
+ await page.keyboard.press(process.platform==='darwin'?'Meta+f':'Control+f');
+ await page.waitForFunction(()=>document.activeElement===document.querySelector('.pharos-find input'));
+ await page.keyboard.press('Enter');
+ await page.waitForFunction(()=>[...(CSS.highlights.get('pharos-landing')||[])][0]?.toString()==='case_7_with');
+ assert.equal(await page.evaluate(()=>{const range=[...CSS.highlights.get('pharos-landing')][0];return range.startContainer.parentElement.closest('details.tool-event')?.open}),true);
+ assert.ok(await page.locator('[data-pharos-find-trail]').count()>0,'the opened path is marked');
+ assert.equal(await page.evaluate(()=>document.activeElement===document.querySelector('.pharos-find input')),true,'stepping keeps focus in Find');
+ assert.match(new URL(page.url()).searchParams.get('reader_content')??'',/loaded:/,'materialized content is recorded for copied URLs');
+ // Escape still closes Find after a click moves focus to one of its buttons.
+ await page.getByRole('button',{name:'Next match (Enter)',exact:true}).click();
+ await page.keyboard.press('Escape');
+ await page.waitForFunction(()=>!document.querySelector('[data-pharos-find-trail],[data-pharos-find]'));
 });
 
 test('a row identity can highlight its actual rendered row without opening a modal', {skip},async t=>{
@@ -313,7 +334,7 @@ test('a row identity can highlight its actual rendered row without opening a mod
 });
 
 
-test('section reveal opens content ancestors and clearing an empty Find removes attention', {skip},async t=>{
+test('section reveal opens content ancestors and closing Find removes its text attention', {skip},async t=>{
  const opened=await open(t,{url:'/cards?card_topic=all',ready:'.card-library-page'});
  await opened.page.evaluate(()=>{
   const details=document.createElement('details'),summary=document.createElement('summary'),target=document.createElement('p');
@@ -325,9 +346,9 @@ test('section reveal opens content ancestors and clearing an empty Find removes 
  await opened.page.evaluate(()=>{
   const url=new URL(location.href);url.searchParams.set('reveal','text:Attention fixture');history.replaceState(history.state,'',url);window.dispatchEvent(new Event('pharos:uri-changed'));
  });
- await opened.page.locator('.pharos-attention-find input').fill('');
- await opened.page.locator('.pharos-attention-find input').blur();
- await opened.page.waitForFunction(()=>!new URLSearchParams(location.search).has('reveal'));
+ await opened.page.waitForFunction(()=>new URLSearchParams(location.search).get('find')==='Attention fixture'&&!new URLSearchParams(location.search).has('reveal'));
+ await opened.page.locator('.pharos-find input').press('Escape');
+ await opened.page.waitForFunction(()=>!new URLSearchParams(location.search).has('find'));
 });
 
 
@@ -341,30 +362,9 @@ test('multiple literal attention targets are highlighted with a single reveal la
   const marks=[...(CSS.highlights.get('pharos-matches')||[])].map(range=>range.toString());
   return marks.includes('Alpha fixture')&&marks.includes('Beta fixture')&&[...(CSS.highlights.get('pharos-landing')||[])][0]?.toString()==='Beta fixture';
  });
- assert.equal(await opened.page.locator('.pharos-attention-find input').evaluate(input=>input===document.activeElement),false);
+ assert.equal(await opened.page.locator('.pharos-find input').evaluate(input=>input===document.activeElement),false);
 });
 
-
-test('conversation Find restores a later batch with fresh cursors and renews relative dates', {skip},async t=>{
- let execution=0;
- const api={'POST /api/search/text':({body})=>{
-  if(!body.cursor){execution++;return {items:[{message_id:'m-1',snippet:'First',start_byte:0,end_byte:4}],next_cursor:'execution-'+execution,complete:false,stop_reason:'limit',elapsed_ms:1,coverage:'Synthetic fixture'};}
-  return {items:[{message_id:'m-15',snippet:'Later',start_byte:0,end_byte:4}],complete:true,stop_reason:'complete',elapsed_ms:1,coverage:'Synthetic fixture'};
- }};
- const opened=await open(t,{url:`/work/${workID}?conversation=${rootConversation}&reveal=text%3ATurn`,api,ready:'.conversation-search-composer'});
- await opened.page.getByRole('button',{name:'Next search batch',exact:true}).click();
- await opened.page.waitForFunction(()=>new URLSearchParams(location.search).get('reader_page')==='1');
- await opened.page.getByRole('button',{name:'Later',exact:true}).waitFor();
- const url=new URL(opened.page.url()),saved=JSON.parse(url.searchParams.get('reader_search'));
- saved.scope.from='2020-01-01T00:00:00.000Z';saved.scope.to='';saved.dateWindow={duration:'7d',from:saved.scope.from};
- url.searchParams.set('reader_search',JSON.stringify(saved));url.searchParams.delete('reveal');
- const fresh=await open(t,{url:url.pathname+url.search,api,ready:'.conversation-search-composer'});
- await fresh.page.getByRole('button',{name:'Later',exact:true}).waitFor();
- assert.equal(new URL(fresh.page.url()).searchParams.get('reader_page'),'1');
- const requests=fresh.calls.filter(call=>call.path==='/api/search/text');
- assert.equal(requests[0].body.cursor,'');assert.ok(requests.some(call=>call.body.cursor==='execution-'+execution));
- assert.ok(Math.abs(Date.parse(requests[0].body.from)-(Date.now()-7*86400000))<60000);
-});
 
 test('Carbon factor disclosures survive copying into a fresh browser', {skip},async t=>{
  const first=await open(t,{url:'/analyze?analyze_topic=carbon',ready:'#carbonCard .carbon-calculation > summary'});
@@ -411,28 +411,34 @@ test('a transcript preset URL overrides preferences without a category list', {s
  assert.deepEqual(JSON.parse(new URL(opened.page.url()).searchParams.get('reader_filter')),['prompts','response']);
 });
 
-for(const empty of ['absent','empty'])test(`Find history restores its closed ${empty} state and cancels a pending request`,{skip},async t=>{
- let hold=false,release;
- const pending=new Promise(resolve=>release=resolve);t.after(()=>release());
- const api={'POST /api/search/text':async()=>{if(hold)await pending;return {items:[{message_id:'m-1',snippet:'Retained search result',start_byte:0,end_byte:4}],complete:true,stop_reason:'complete',elapsed_ms:1,coverage:'Synthetic fixture'};}};
- const initial=`/work/${workID}?conversation=${rootConversation}${empty==='empty'?'&reader_search=%7B%7D':''}`;
- const app=await open(t,{url:initial,api,ready:'.conversation-panel'}),{page}=app;
- await page.evaluate(()=>{
-  const url=new URL(location.href),draft=structuredClone(window.pharosView.contract.fields.reader_search.details.literal_example);
-  url.searchParams.set('reader_search',JSON.stringify(draft));window.pharosNavigate(url.pathname+url.search);
- });
- await page.getByRole('button',{name:'Retained search result',exact:true}).waitFor();
+test('page Find expands every collapsed match and can be dragged out of the way',{skip},async t=>{
+ const app=await open(t,{url:`/work/${workID}?conversation=${rootConversation}&find=case_7_with`,ready:'[data-pharos-find="container"]'}),{page}=app;
+ await page.getByRole('button',{name:'Open every collapsed section holding a match',exact:true}).click();
+ await page.waitForFunction(()=>!document.querySelector('[data-pharos-find="container"]')&&(CSS.highlights.get('pharos-matches')?.size??0)===4);
+ assert.equal(await page.locator('.pharos-find-expand').isHidden(),true);
+ const grip=page.getByRole('button',{name:/^Move Find/});
+ const before=await page.locator('.pharos-find').boundingBox(),handle=await grip.boundingBox();
+ await page.mouse.move(handle.x+handle.width/2,handle.y+handle.height/2);await page.mouse.down();
+ await page.mouse.move(handle.x-300,handle.y+200,{steps:4});await page.mouse.up();
+ const after=await page.locator('.pharos-find').boundingBox();
+ assert.ok(Math.abs(after.x-(before.x-300))<40&&after.y>before.y+150,'the bar follows the grip');
+ await grip.press('Home');
+ await page.waitForFunction(top=>Math.abs(document.querySelector('.pharos-find').getBoundingClientRect().top-top)<2,before.y);
+});
+
+test('page Find follows Back and Forward and closes on its own history entry',{skip},async t=>{
+ const app=await open(t,{url:`/work/${workID}?conversation=${rootConversation}`,ready:'.conversation-panel'}),{page}=app;
+ await page.evaluate(()=>{const url=new URL(location.href);url.searchParams.set('find','Turn');url.searchParams.set('find_case','1');window.pharosNavigate(url.pathname+url.search)});
+ await page.locator('.pharos-find').waitFor();
+ assert.equal(await page.locator('.pharos-find button[title="Match case"]').getAttribute('aria-pressed'),'true');
  await page.goBack();
- await page.locator('.conversation-search-composer').waitFor({state:'hidden'});
- assert.equal(new URL(page.url()).searchParams.get('reader_search'),empty==='empty'?'{}':null);
- hold=true;
- const started=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/search/text'&&request.method()==='POST');
- await page.goForward();await started;
- await page.locator('.conversation-search-composer').waitFor();
- await page.goBack();await page.locator('.conversation-search-composer').waitFor({state:'hidden'});
- release();await app.settled();
- assert.equal(await page.locator('.conversation-search-composer').count(),0);
- assert.equal(new URL(page.url()).searchParams.get('reader_search'),empty==='empty'?'{}':null);
+ await page.locator('.pharos-find').waitFor({state:'detached'});
+ await page.goForward();
+ await page.waitForFunction(()=>document.querySelector('.pharos-find input')?.value==='Turn'&&(CSS.highlights.get('pharos-matches')?.size??0)>0);
+ // A focused input still shows a term restored from the URL.
+ await page.locator('.pharos-find input').focus();
+ await page.evaluate(()=>{const url=new URL(location.href);url.searchParams.set('find','Session');window.pharosNavigate(url.pathname+url.search)});
+ await page.waitForFunction(()=>document.querySelector('.pharos-find input')?.value==='Session');
 });
 
 test('session Next and Previous use one live request while URL restoration replays the ordinal',{skip},async t=>{
@@ -464,22 +470,19 @@ test('session Next and Previous use one live request while URL restoration repla
  assert.deepEqual(cursors.slice(before),['',`${execution}:1`,`${execution}:2`]);
 });
 
-test('reader-owned text attention becomes idle and ignores its own status UI mutations',{skip},async t=>{
- const api={'POST /api/search/text':()=>({items:[{message_id:'m-1',snippet:'Turn 0',start_byte:0,end_byte:4}],complete:true,stop_reason:'complete',elapsed_ms:1,coverage:'Synthetic fixture'})};
- const app=await open(t,{url:'/cards?reveal=text:Card',api,ready:'.pharos-attention-find'}),{page}=app;
- await page.evaluate(url=>window.pharosNavigate(url),`/work/${workID}?conversation=${rootConversation}&reveal=text:Turn`);
- await page.locator('.conversation-search-composer').waitFor();
- await page.waitForFunction(()=>!!document.querySelector('.pharos-attention-find[hidden]'));
+test('page Find becomes idle and ignores its own and the status UI mutations',{skip},async t=>{
+ const app=await open(t,{url:'/cards?reveal=text:Card&highlight=page',ready:'.pharos-find'}),{page}=app;
  await app.settled();
  await page.evaluate(()=>{
-  const walk=document.createTreeWalker.bind(document);let walks=0;
-  document.createTreeWalker=(...args)=>{walks++;return walk(...args)};
-  window.attentionWalks=()=>walks;window.attentionPrevious=-1;window.attentionStable=0;
+  const style=window.getComputedStyle.bind(window);let walks=0;
+  window.getComputedStyle=(...args)=>{walks++;return style(...args)};
+  window.findWalks=()=>walks;window.findPrevious=-1;window.findStable=0;
+  document.querySelector('.pharos-find-status').textContent='Synthetic status update';
   document.querySelector('.pharos-attention-status span').textContent='Synthetic status update';
  });
  await page.waitForFunction(()=>{
-  const current=window.attentionWalks();window.attentionStable=current===window.attentionPrevious?window.attentionStable+1:0;window.attentionPrevious=current;
-  return window.attentionStable>=4;
+  const current=window.findWalks();window.findStable=current===window.findPrevious?window.findStable+1:0;window.findPrevious=current;
+  return window.findStable>=4;
  });
 });
 
@@ -497,15 +500,14 @@ test('linked message attention opens once and lets the user collapse its disclos
 });
 
 test('retained work and Find components cannot pollute another page URL',{skip},async t=>{
- const api={"POST /api/search/text":()=>({items:[],complete:true,stop_reason:"complete",elapsed_ms:1,coverage:"Synthetic fixture"})};
- const app=await open(t,{url:`/work/${workID}?conversation=${rootConversation}&explorer=parallel`,api,ready:'.conversation-panel'}),{page}=app;
- await page.evaluate(()=>{const url=new URL(location.href);url.searchParams.set('reveal','text:Turn');window.pharosNavigate(url.pathname+url.search)});
- await page.locator('.conversation-search-composer').waitFor();
+ const app=await open(t,{url:`/work/${workID}?conversation=${rootConversation}&explorer=parallel`,ready:'.conversation-panel'}),{page}=app;
+ await page.evaluate(()=>{const url=new URL(location.href);url.searchParams.set('find','Turn');window.pharosNavigate(url.pathname+url.search)});
+ await page.locator('.pharos-find').waitFor();
  await page.evaluate(()=>window.pharosNavigate('/analyze?analyze_topic=tokens&reveal=text:Tokens'));
  await page.locator('.usage-workspace').waitFor();await app.settled();
  const params=new URL(page.url()).searchParams;
  assert.deepEqual([...params.keys()].filter(key=>/^(delegation_|reader_)/.test(key)),[]);
- assert.equal(params.get('reveal'),'text:Tokens','closing the old reader must preserve the new page attention');
+ assert.equal(params.get('find'),'Tokens','the new page keeps its own Find, not the reader term');
  await page.goBack();await page.locator('.conversation-panel').waitFor();await app.settled();
  assert.equal(new URL(page.url()).pathname.includes('/work/'),true);
 });
@@ -636,14 +638,13 @@ for(const empty of ['absent','empty'])test(`reader content history restores ${em
 
 test('header navigation clears source attention and explicit destination links retain their targets',{skip},async t=>{
  const params=new URLSearchParams({conversation:rootConversation,highlight:'text:Turn',reveal:'page',nav_collapsed:'0'});
- const api={'POST /api/search/text':()=>({items:[],complete:true,stop_reason:'complete',elapsed_ms:1,coverage:'Synthetic fixture'})};
- const app=await open(t,{url:`/work/${workID}?${params}`,api,ready:'.conversation-panel'}),{page}=app;
+ const app=await open(t,{url:`/work/${workID}?${params}`,ready:'.pharos-find'}),{page}=app;
  await page.locator('header button[data-view="library"]').click();await page.locator('#library.active').waitFor();await app.settled();
  const destination=new URL(page.url()).searchParams;
  assert.deepEqual(destination.getAll('highlight'),[]);assert.equal(destination.has('reveal'),false);assert.equal(destination.get('nav_collapsed'),'0');
- assert.equal(await page.locator('.pharos-attention-find:visible').count(),0);
+ assert.equal(destination.has('find'),false);assert.equal(await page.locator('.pharos-find').count(),0);
  await page.goBack();await page.waitForFunction(()=>new URLSearchParams(location.search).get('reveal')==='page');
- assert.deepEqual(new URL(page.url()).searchParams.getAll('highlight'),['text:Turn']);
+ assert.equal(new URL(page.url()).searchParams.get('find'),'Turn','the text target opened Find on its own page');
  await page.evaluate(()=>window.pharosNavigate('/cards?highlight=page&reveal=page'));
  await page.locator('.card-library-page').waitFor();await app.settled();
  assert.deepEqual(new URL(page.url()).searchParams.getAll('highlight'),['page']);assert.equal(new URL(page.url()).searchParams.get('reveal'),'page');
@@ -675,18 +676,18 @@ test('opening work and returning to Search keeps the native Library search URL',
  assert.equal(JSON.parse(restored.get('text_builder')).text,'failure');
 });
 
-test('reader Find stepping keeps text highlights without rerunning the search',{skip},async t=>{
- const api={'POST /api/search/text':()=>({items:['m-1','m-5','m-9'].map(message_id=>({message_id,start_byte:0,end_byte:4,snippet:'Turn'})),complete:true,stop_reason:'complete',elapsed_ms:1,coverage:'Synthetic fixture'})};
- const app=await open(t,{url:`/work/${workID}?conversation=${rootConversation}&highlight=text:Turn`,api,ready:'.conversation-search-composer'}),{page}=app;
- await page.getByRole('button',{name:'Next matching message',exact:true}).waitFor();await app.settled();
- const requests=()=>app.calls.filter(call=>call.path==='/api/search/text').length,initial=requests();
- await page.getByRole('button',{name:'Next matching message',exact:true}).click();
- await page.getByRole('button',{name:'Next matching message',exact:true}).click();
- await page.waitForFunction(()=>new URLSearchParams(location.search).get('reveal')==='message:m-5');await app.settled();
- assert.equal(requests(),initial);
- await page.getByRole('button',{name:'Previous matching message',exact:true}).click();
- await page.waitForFunction(()=>new URLSearchParams(location.search).get('reveal')==='message:m-1');await app.settled();
- assert.equal(requests(),initial);
+test('page Find stepping moves the landing highlight without a server search',{skip},async t=>{
+ const app=await open(t,{url:`/work/${workID}?conversation=${rootConversation}&highlight=text:please look`,ready:'.pharos-find'}),{page}=app;
+ await page.waitForFunction(()=>(CSS.highlights.get('pharos-matches')?.size??0)>2);
+ const landing=()=>page.evaluate(()=>{const range=[...(CSS.highlights.get('pharos-landing')||[])][0];return range?range.startContainer.parentElement.closest('[data-message-id]')?.dataset.messageId:null});
+ await page.getByRole('button',{name:'Next match (Enter)',exact:true}).click();
+ await page.waitForFunction(()=>(CSS.highlights.get('pharos-landing')?.size??0)===1);
+ const first=await landing();
+ await page.getByRole('button',{name:'Next match (Enter)',exact:true}).click();
+ await page.waitForFunction(first=>{const range=[...(CSS.highlights.get('pharos-landing')||[])][0];return range&&range.startContainer.parentElement.closest('[data-message-id]')?.dataset.messageId!==first},first);
+ await page.getByRole('button',{name:'Previous match (Shift+Enter)',exact:true}).click();
+ await page.waitForFunction(first=>{const range=[...(CSS.highlights.get('pharos-landing')||[])][0];return range?.startContainer.parentElement.closest('[data-message-id]')?.dataset.messageId===first},first);
+ assert.equal(app.calls.filter(call=>call.path==='/api/search/text').length,0);
 });
 
 for(const invalid of ['{"a":1}','{'])test(`a malformed reader content link still opens the conversation (${invalid})`,{skip},async t=>{
