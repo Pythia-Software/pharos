@@ -12,7 +12,6 @@ import {withSearchDateWindow,emptyTextSearch,refreshSearchToday,readTextSearch} 
 import {restoreRollingDefinition} from '../../../src/query-links';
 import {readRollingWindow, resolveRollingQuery, updateQueryWindowURL, queryURL, queryFromURL} from '../../../src/query-links';
 import {todayBounds} from '../../../src/day-window';
-import {loadSearchPage} from '../../../src/search-pagination';
 import {readDashboardLink} from '../../../src/usage-dashboard-model';
 
 const query={...EMPTY_QUERY,where:Array.from({length:70},(_,i)=>({field:'model',op:'!=',value:`${i}-${Array.from({length:60},(_,n)=>String.fromCharCode(33+(i*31+n*17+i*n)%90)).join('')}`}))};
@@ -164,17 +163,6 @@ test('Today follows the viewer unless pinned, and native datetime edits release 
 });
 
 
-test('reader batch restoration replays fresh cursors and clamps a shortened result',async()=>{
- const calls=[];
- const load=async cursor=>{calls.push(cursor);return cursor===''?{items:['first'],next_cursor:'fresh-next'}:{items:['second']};};
- assert.deepEqual(await loadSearchPage(load,1),{batch:{items:['second']},cursor:'fresh-next',page:1});
- assert.deepEqual(calls,['','fresh-next']);
- const short=await loadSearchPage(async()=>({items:[]}),3);assert.equal(short.page,0);
- const retry=[];await loadSearchPage(async cursor=>{retry.push(cursor);return {items:[]};},1,'live-cursor');assert.deepEqual(retry,['live-cursor']);
- await assert.rejects(loadSearchPage(load,251),/0 to 250/);
-});
-
-
 test("partial linked parallelism views never inherit another viewer's saved counting assumptions",async()=>{
  const {readConcurrencySettings}=await import('../../../src/concurrency-settings');
  const savedWindow=globalThis.window,savedLocation=globalThis.location;
@@ -203,7 +191,7 @@ test('retained page bindings cannot write foreign URL fields after navigation',a
  writeViewState('delegation_page','2');assert.equal(location.searchParams.get('delegation_page'),'2');
  globalThis.location=new URL('https://pharos.test/analyze?analyze_topic=tokens');
  const before=location.href;
- for(const [name,value]of Object.entries({delegation_page:'0',delegation_event:'',delegation_expanded:[],reader_search:{},reader_page:'0',card_window:'default',findings_rank:'usd'}))writeViewState(name,value);
+ for(const [name,value]of Object.entries({delegation_page:'0',delegation_event:'',delegation_expanded:[],card_window:'default',findings_rank:'usd'}))writeViewState(name,value);
  assert.equal(location.href,before);
  writeViewState('nav_collapsed',false);assert.equal(location.searchParams.get('nav_collapsed'),'0');
 });
@@ -251,7 +239,7 @@ test('applied search codecs agree with shared cross-language validation cases',(
  for(const sample of searchCases){
   const restored=readTextSearch(new URLSearchParams({text_builder:JSON.stringify(sample.draft)}));
   assert.equal(!restored.error,sample.valid,sample.name);
-  for(const owner of ['search_state','reader_search','record_keyword']){
+  for(const owner of ['search_state','record_keyword']){
    const value=owner==='record_keyword'?{field:'model',draft:sample.draft}:sample.draft;
    if(owner==='record_keyword'?(sample.recordValid??sample.valid):sample.valid)assert.doesNotThrow(()=>encodeViewValue(viewFields[owner],value),`${owner}: ${sample.name}`);
    else assert.throws(()=>encodeViewValue(viewFields[owner],value),undefined,`${owner}: ${sample.name}`);
@@ -259,7 +247,7 @@ test('applied search codecs agree with shared cross-language validation cases',(
  }
  const large={...searchCases.find(item=>item.valid).draft,editor:'syntax',text:'x'.repeat(24001)};
  assert.throws(()=>encodeViewValue(viewFields.search_state,large));
- for(const [name,value]of [['reader_page','+5'],['reader_page','-0'],['sidebar_width','+400'],['reader_expanded',['m',null]],['window_timezone','Local'],['window_timezone','']])assert.throws(()=>encodeViewValue(viewFields[name],value));
+ for(const [name,value]of [['delegation_page','+5'],['delegation_page','-0'],['find_case','true'],['sidebar_width','+400'],['reader_expanded',['m',null]],['window_timezone','Local'],['window_timezone','']])assert.throws(()=>encodeViewValue(viewFields[name],value));
 });
 
 test('classic controls recover from invalid state while strict query readers still reject it',async()=>{

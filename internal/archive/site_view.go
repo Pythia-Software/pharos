@@ -667,7 +667,7 @@ func (site *siteMap) browseTargets(node *siteNode) map[string]any {
 		items = append(items, map[string]any{"pattern": "control:" + option.Param, "description": "The native query builder for this dataset."})
 	}
 
-	return map[string]any{"path": node.Path + "/targets", "items": items, "sections": site.ViewContract.Sections[node.Path], "controls_path": node.Path + "/view", "cards_path": "cards", "availability": "A target must be present in the selected view. Dynamic IDs are syntax-checked, not queried; matching filters remain your responsibility.", "highlight": "Multiple target references", "reveal": "One target: scroll + distinctive highlight; never browser focus. text: uses literal matching."}
+	return map[string]any{"path": node.Path + "/targets", "items": items, "sections": site.ViewContract.Sections[node.Path], "controls_path": node.Path + "/view", "cards_path": "cards", "availability": "A target must be present in the selected view. Dynamic IDs are syntax-checked, not queried; matching filters remain your responsibility.", "highlight": "Multiple target references", "reveal": "One target: scroll + distinctive highlight; never browser focus. text: opens page Find with a literal term (view.find)."}
 }
 
 // Resolve only library-backed references, with the same dataset/scope as the
@@ -789,19 +789,16 @@ func validateViewShape(name string, value any) error {
 		} else if _, err := viewTimezone(name); err != nil {
 			return fmt.Errorf("needs an IANA timezone")
 		}
-	case "delegation_page", "reader_page", "sidebar_width":
+	case "delegation_page", "sidebar_width":
 		text, ok := value.(string)
 		if !ok {
 			return fmt.Errorf("needs a decimal integer")
 		}
 		number, err := strconv.Atoi(text)
-		if err != nil || !plainDigits(text) || number < 0 || (name == "delegation_page" || name == "reader_page") && number > 250 || name == "sidebar_width" && (number < 300 || number > 5000) {
+		if err != nil || !plainDigits(text) || number < 0 || name == "delegation_page" && number > 250 || name == "sidebar_width" && (number < 300 || number > 5000) {
 			return fmt.Errorf("out of range")
 		}
-	case "search_state", "reader_search":
-		if name == "reader_search" && len(object) == 0 {
-			return nil
-		}
+	case "search_state":
 		return validateSearchDraft(object)
 	case "record_keyword":
 		if _, ok := object["field"].(string); !ok || object["field"] == "" {

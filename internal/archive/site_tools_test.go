@@ -316,7 +316,7 @@ func TestSiteLinkLibrarySnapshotsAndAsk(t *testing.T) {
 	if len(view) == 0 {
 		t.Fatal("view contract is not discoverable")
 	}
-	for _, path := range []string{"work/view/reader_search", "analyze/parallelism/view/parallelism", "analyze/query/usage/query/types", "analyze/query/usage/query/types/QueryState", "analyze/query/usage/query/types/GroupingDefinition", "analyze/query/usage/query/types/SummaryColumn", "analyze/query/usage/query/types/GroupKey", "analyze/query/usage/query/types/RepresentativeRow"} {
+	for _, path := range []string{"work/view/find", "analyze/parallelism/view/parallelism", "analyze/query/usage/query/types", "analyze/query/usage/query/types/QueryState", "analyze/query/usage/query/types/GroupingDefinition", "analyze/query/usage/query/types/SummaryColumn", "analyze/query/usage/query/types/GroupKey", "analyze/query/usage/query/types/RepresentativeRow"} {
 		help, err := site.browseTool(t.Context(), catalog, map[string]any{"path": path})
 		if err != nil || len(help) == 0 {
 			t.Fatalf("missing detailed agent help at %s: %v", path, err)

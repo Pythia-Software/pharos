@@ -533,10 +533,10 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 .usage-period-control > .usage-chart-picker { flex: 1; }
 .usage-period-custom { flex: none; }
 .usage-period-custom input { width: 4.5em; height: 30px; }
-.dashboard-select select:focus-visible, .usage-period-custom input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.dashboard-select select:focus-visible, .usage-period-custom input:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 2px; }
 .usage-smoothing-input { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--muted); font-size: var(--fs-sm); }
 .usage-smoothing-input input { box-sizing: border-box; width: 6em; min-width: 0; height: 30px; padding: 3px 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--ink); font: inherit; }
-.usage-smoothing-input input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.usage-smoothing-input input:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 2px; }
 .usage-smoothing-input input:disabled { opacity: .55; }
 .usage-smoothing-row { display: flex; align-items: flex-end; gap: 8px; min-width: 0; }
 .usage-smoothing-row > .usage-chart-picker { flex: 1; }
@@ -581,7 +581,7 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 .usage-custom-dates { display: flex; flex: 2 1 320px; flex-wrap: wrap; gap: 6px 10px; min-width: 0; }
 .usage-custom-dates label { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 120px; font-size: var(--fs-xs); color: var(--muted); }
 .usage-custom-dates input { box-sizing: border-box; width: 100%; min-width: 0; height: 30px; padding: 3px 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--ink); font: inherit; }
-.usage-custom-dates input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.usage-custom-dates input:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 2px; }
 .usage-custom-dates input[aria-invalid="true"] { border-color: var(--bad); }
 .usage-custom-dates .query-table-error { width: 100%; }
 @media (max-width: 760px) {

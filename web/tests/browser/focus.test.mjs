@@ -1139,6 +1139,24 @@ test("the findings prompt review takes focus, keeps it and returns it on Escape"
   await holdsFocus(page, dialog, review);
 });
 
+test("page Find inside an ARIA modal searches only the modal and Escape closes Find before the modal", { skip }, async t => {
+  const { page, settled } = await open(t, { url: "/findings", ready: ".findings-card" });
+  await press(page.locator(".findings-cart button.primary").first());
+  const dialog = page.locator('.findings-dialog[role="dialog"]');
+  await dialog.waitFor();
+  await settled();
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+f" : "Control+f");
+  await dialog.locator(".pharos-find input").waitFor();
+  await page.keyboard.type("the");
+  await page.waitForFunction(() => (CSS.highlights.get("pharos-matches")?.size ?? 0) > 0);
+  assert.ok(await page.evaluate(() => [...(CSS.highlights.get("pharos-matches") ?? [])].every(range => range.startContainer.parentElement.closest(".findings-dialog"))), "matches come only from the modal");
+  await page.keyboard.press("Tab");
+  assert.ok(await page.evaluate(() => !!document.activeElement.closest(".pharos-find")), "Tab stays in Find");
+  await page.keyboard.press("Escape");
+  await page.locator(".pharos-find").waitFor({ state: "detached" });
+  assert.equal(await dialog.isVisible(), true, "Escape closed Find, not the modal");
+});
+
 test("the delegation session sheet on a phone takes focus, keeps it and returns it on Escape", { skip }, async t => {
   const { page } = await open(t, { url: `/work/${workID}/conversation/conv-child`, viewport: { width: 390, height: 844 }, ready: ".conversation-panel .turn" });
   const show = page.locator('button[aria-label="Show workspace sessions"]');
@@ -1192,7 +1210,7 @@ for (const merged of [false, true]) test(`transcript rails follow layout changes
   await settled();
   const tops = await page.evaluate(() => {
     const header = document.querySelector("body > header").getBoundingClientRect().bottom;
-    return { header, rails: [...document.querySelectorAll(".conversation-map, .token-map, .conversation-find-rail, .conversation-map-window")].filter(rail => rail.getClientRects().length).map(rail => [rail.className, rail.getBoundingClientRect().top]) };
+    return { header, rails: [...document.querySelectorAll(".conversation-map, .token-map, .conversation-map-window")].filter(rail => rail.getClientRects().length).map(rail => [rail.className, rail.getBoundingClientRect().top]) };
   });
   assert.ok(tops.rails.length, "the rails are shown");
   for (const [name, top] of tops.rails) assert.ok(top >= tops.header - 1, `${name} starts at ${top}, above the header's bottom at ${tops.header}`);

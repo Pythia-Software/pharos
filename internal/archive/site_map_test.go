@@ -691,7 +691,7 @@ func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
 	for _, input := range []string{
 		`{"page":"analyze/thinking-detail","view":{"thinking":{"view":"calendar","groupBy":"model_effort","timezone":"America/Denver","range":"30d","hiddenPercentiles":["p95"],"hours":6}}}`,
 		`{"page":"cards","view":{"card_window":"today","card_filters":false},"highlight":["card:tool-failures"],"reveal":"text:failed command"}`,
-		`{"page":"work","options":{"work_id":"w","conversation":"c"},"view":{"reader_page":"1","reader_expanded":["message:m"],"reader_filter":["prompts","response"],"delegation_columns":["tokens","cost"],"delegation_tint":"sort"},"reveal":"message:m"}`,
+		`{"page":"work","options":{"work_id":"w","conversation":"c"},"view":{"find":"failed command","find_case":true,"reader_expanded":["message:m"],"reader_filter":["prompts","response"],"delegation_columns":["tokens","cost"],"delegation_tint":"sort"},"reveal":"message:m"}`,
 	} {
 		result, err := site.linkTool(linkArgs(t, input))
 		if err != nil {
@@ -838,20 +838,14 @@ func TestSiteLinkNativeValidationAndComposition(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, sample := range searchCases {
-		for _, owner := range []string{"search_state", "reader_search", "record_keyword"} {
+		for _, owner := range []string{"search_state", "record_keyword"} {
 			t.Run(owner+" "+sample.Name, func(t *testing.T) {
 				page, value := "library", any(sample.Draft)
-				if owner == "reader_search" {
-					page = "work"
-				}
 				if owner == "record_keyword" {
 					page = "analyze/query/usage"
 					value = map[string]any{"field": "model", "draft": sample.Draft}
 				}
 				args := map[string]any{"page": page, "view": map[string]any{owner: value}}
-				if page == "work" {
-					args["options"] = map[string]any{"work_id": "w"}
-				}
 				_, err := site.linkTool(args)
 				valid := sample.Valid
 				if owner == "record_keyword" && sample.RecordValid != nil {
@@ -868,13 +862,9 @@ func TestSiteLinkNativeValidationAndComposition(t *testing.T) {
 		large[key] = value
 	}
 	large["editor"], large["text"] = "syntax", strings.Repeat("x", 24001)
-	for _, owner := range []string{"search_state", "reader_search", "record_keyword"} {
+	for _, owner := range []string{"search_state", "record_keyword"} {
 		page, value := "library", any(large)
 		args := map[string]any{}
-		if owner == "reader_search" {
-			page = "work"
-			args["options"] = map[string]any{"work_id": "w"}
-		}
 		if owner == "record_keyword" {
 			page = "analyze/query/usage"
 			value = map[string]any{"field": "model", "draft": large}
@@ -886,8 +876,9 @@ func TestSiteLinkNativeValidationAndComposition(t *testing.T) {
 	}
 
 	for _, input := range []string{
-		`{"page":"work","options":{"work_id":"w"},"view":{"reader_page":"+5"}}`,
-		`{"page":"work","options":{"work_id":"w"},"view":{"reader_page":"-0"}}`,
+		`{"page":"work","options":{"work_id":"w"},"view":{"delegation_page":"+5"}}`,
+		`{"page":"work","options":{"work_id":"w"},"view":{"delegation_page":"-0"}}`,
+		`{"page":"cards","view":{"find_regex":"yes"}}`,
 		`{"page":"work","options":{"work_id":"w"},"view":{"sidebar_width":"+400"}}`,
 		`{"page":"work","options":{"work_id":"w"},"view":{"reader_expanded":["m",null]}}`,
 		`{"page":"library","days":"today","view":{"window_timezone":"Local"}}`,
@@ -1048,7 +1039,7 @@ func TestSiteLinkNativeValidationAndComposition(t *testing.T) {
 		`{"page":"analyze/query/usage","query":{"grouping":{"source":{"where":[{"field":"provider","op":"=","value":"claude"}]},"keys":["model"],"summaries":[{"id":"sum_tokens","op":"sum","field":"total_tokens"}],"representative":null},"select":[{"field":"model"},{"field":"sum_tokens"}],"where":[{"field":"sum_tokens","op":">","value":"100"}],"orderBy":[{"field":"sum_tokens","dir":"desc"}]},"days":7}`,
 		`{"page":"library","view":{"search_state":{"match":"literal","text":"failure","scope":{"provider":"claude"}}}}`,
 		`{"page":"cards","view":{"card_window":30}}`,
-		`{"page":"work","options":{"work_id":"w"},"view":{"delegation_page":2,"reader_page":3,"sidebar_width":450}}`,
+		`{"page":"work","options":{"work_id":"w"},"view":{"delegation_page":2,"sidebar_width":450}}`,
 	} {
 		result, err := site.linkTool(linkArgs(t, input))
 		if err != nil {

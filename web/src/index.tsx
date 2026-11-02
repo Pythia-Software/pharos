@@ -15,7 +15,6 @@ import { DataTaxonomyModal, SourceQueryBuilder } from "./data-taxonomy";
 import { installDelegationExplorer } from "./delegation";
 import { installWorkspaceInbox } from "./workspace-inbox";
 import { MessageTableSearch, newMessageSearch } from "./message-table-search";
-import "./conversation-search";
 import { ConversationFacts, ResultConversationBrowser, ResultMessage, conversationActivitySummary } from "./conversation-results";
 import { TextSearchEditor } from "./text-search-editor";
 import { SearchHelp } from "./search-help";
