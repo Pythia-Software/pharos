@@ -281,12 +281,12 @@ test('classic controls recover from invalid state while strict query readers sti
  globalThis.CustomEvent=class{constructor(type,props){this.type=type;Object.assign(this,props);}};
  globalThis.window={dispatchEvent:event=>warnings.push(event)};
  try{
-  for(const [name,raw,fallback]of [['reader_content','{"a":1}',{}],['history_collapsed','[null]',[]],['overlay','bad','none']]){
+  for(const [name,raw,fallback]of [['reader_content','{"a":1}',{}],['reader_content','{',{}],['history_collapsed','[null]',[]],['overlay','bad','none']]){
    const params=new URLSearchParams({[viewFields[name].param]:raw});
    assert.throws(()=>readViewState(name,fallback,params));
    assert.deepEqual(readClassicViewState(name,fallback,params),fallback);
   }
-  assert.equal(warnings.length,3);
+  assert.equal(warnings.length,4);
  }finally{globalThis.window=oldWindow;globalThis.CustomEvent=oldEvent;}
 });
 

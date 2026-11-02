@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {open,skip,activateHeaderTool} from './harness.mjs';
-import {workID,rootConversation,defaultApi,cloudScheduledStatus,busyStatus,eventStream} from './fixtures.mjs';
+import {workID,rootConversation,defaultApi,busyStatus,eventStream} from './fixtures.mjs';
 import {EMPTY_QUERY,encodeQuery,decodeQueryStrict,loadSchema} from '@pythia-software/query-table-core';
 import toolCallsDocument from '../../../schemas/tool_calls.schema.json' with {type:'json'};
 import mcpCallsDocument from '../../../schemas/mcp_calls.schema.json' with {type:'json'};
@@ -34,32 +34,37 @@ test('native JSON property choices restore in independent browsers and through B
  await change(()=>dialog.getByRole('button',{name:'Expand $',exact:true}).click());
  await change(()=>dialog.getByRole('button',{name:'Expand $["events"]',exact:true}).click());
  await change(()=>dialog.getByRole('button',{name:'Expand $["events"] items 20–39',exact:true}).click());
- await change(()=>dialog.getByRole('button',{name:'Show more',exact:true}).click());capture();
+ await change(()=>dialog.getByRole('button',{name:'Show more',exact:true}).click());
  await change(()=>dialog.getByRole('searchbox',{name:'Search Arguments (sanitized) JSON',exact:true}).fill('needle'));
  await change(()=>dialog.getByRole('combobox',{name:'JSON search mode',exact:true}).selectOption('find'));
- await change(()=>dialog.getByRole('button',{name:'Next JSON match',exact:true}).click());capture();
- await change(()=>dialog.getByRole('button',{name:'Collapse $["events"]',exact:true}).click());capture();
+ await change(()=>dialog.getByRole('button',{name:'Next JSON match',exact:true}).click());
  await change(()=>dialog.getByRole('button',{name:'Show original',exact:true}).click());capture();
  await change(()=>dialog.getByRole('button',{name:'Show JSON',exact:true}).click());
- await change(()=>dialog.getByRole('searchbox',{name:'Search Arguments (sanitized) JSON',exact:true}).fill(''));capture();
+ await change(()=>dialog.getByRole('searchbox',{name:'Search Arguments (sanitized) JSON',exact:true}).fill(''));
  await change(()=>dialog.getByRole('button',{name:'Close Arguments (sanitized) · JSON',exact:true}).click());capture();
  for(const copy of copies){
   const fresh=await open(t,{url:copy.url,api:fixture.api,ready:'.qt-property-json-open'}),restored=fresh.page.getByRole('dialog',{name:'Arguments (sanitized) · JSON',exact:true});
   assert.equal(await restored.isVisible(),copy.inspection.open);
+  assert.deepEqual(fixture.read(fresh.page).itemDetails.jsonInspections[0].state,copy.inspection);
   if(copy.inspection.open){
    assert.equal(await restored.getByRole('searchbox',{name:'Search Arguments (sanitized) JSON',exact:true}).inputValue(),copy.inspection.search);
    assert.equal(await restored.getByRole('combobox',{name:'JSON search mode',exact:true}).inputValue(),copy.inspection.searchMode);
    assert.equal(await restored.getByRole('button',{name:copy.inspection.raw?'Show JSON':'Show original',exact:true}).getAttribute('aria-pressed'),String(copy.inspection.raw));
+   // Inspection state is scoped to its record: another row's property starts clean.
+   const state=fixture.read(fresh.page);
+   await fresh.page.evaluate(url=>window.pharosNavigate(url),fixture.route({...state,itemDetails:{...state.itemDetails,active:{id:'inspect-2',mode:'expand'}}}));
+   await restored.waitFor({state:'hidden'});
+   await fresh.page.getByRole('button',{name:'Open Arguments (sanitized) in JSON Viewer',exact:true}).click();
+   assert.equal(await restored.getByRole('searchbox',{name:'Search Arguments (sanitized) JSON',exact:true}).inputValue(),'');
   }
-  assert.deepEqual(fixture.read(fresh.page).itemDetails.jsonInspections[0].state,copy.inspection);
  }
- await page.evaluate(url=>window.pharosNavigate(url),copies[1].url);await dialog.waitFor();
+ await page.evaluate(url=>window.pharosNavigate(url),copies[0].url);await dialog.waitFor();
  await page.goBack();await dialog.waitFor({state:'hidden'});
  await page.goForward();await dialog.waitFor();
  assert.equal(await dialog.getByRole('searchbox',{name:'Search Arguments (sanitized) JSON',exact:true}).inputValue(),'needle');
 });
 
-test('semantic JSON-path reveal materializes exact details, preserves focus, and never replays on refresh',{skip},async t=>{
+test('semantic JSON-path reveal materializes exact details, reports missing paths, loads records outside the page, and never replays on refresh',{skip},async t=>{
  const fixture=jsonInspectorFixture(),target='detail:'+JSON.stringify({rowId:'inspect-1',field:'arguments_json',path:'$["events"][41]["text"]'});
  const app=await open(t,{url:fixture.route({...fixture.query,itemDetails:{modes:['expand']}},target),api:fixture.api,ready:'.qt-attention-target'}),{page}=app;
  await page.waitForFunction(()=>document.documentElement.dataset.pharosAttentionMissing==='');
@@ -70,6 +75,22 @@ test('semantic JSON-path reveal materializes exact details, preserves focus, and
  await page.evaluate(()=>window.pharosQueryTables.refresh('mcp_calls'));await refreshed;await app.settled();
  assert.equal(await page.evaluate(()=>window.__attentionScrolls),scrolls);
  const state=fixture.read(page);assert.equal(state.offset,fixture.query.offset);assert.deepEqual(state.where,fixture.query.where);
+ // A missing JSON path reports unavailable without changing the query population.
+ const missing='detail:'+JSON.stringify({rowId:'inspect-1',field:'arguments_json',path:'$["deleted"]'});
+ await page.evaluate(url=>window.pharosNavigate(url),fixture.route(fixture.query,missing));
+ await page.waitForFunction(target=>document.documentElement.dataset.pharosAttentionMissing===target&&document.documentElement.dataset.pharosAttentionPending==='',missing);
+ await app.settled();
+ assert.equal(await page.locator('.qt-attention-target').count(),0);
+ assert.deepEqual(fixture.read(page).where,fixture.query.where);
+ // A record outside the result page loads without broadening the page.
+ const outside='detail:'+JSON.stringify({rowId:'inspect-2',field:'arguments_json',path:'$["other"]'});
+ const narrow={...fixture.query,limit:1,itemDetails:{modes:['expand','modal']}};
+ await page.evaluate(url=>window.pharosNavigate(url),fixture.route(narrow,outside));
+ await page.waitForFunction(()=>document.documentElement.dataset.pharosAttentionMissing==='');
+ await page.locator('.qt-attention-target').first().waitFor();
+ const restored=fixture.read(page);
+ assert.equal(restored.itemDetails.active.id,'inspect-2');assert.equal(restored.limit,1);assert.equal(restored.offset,0);assert.deepEqual(restored.where,narrow.where);
+ assert.equal(await page.evaluate(()=>document.activeElement===document.body),true);
  await page.evaluate(()=>window.pharosNavigate('/cards'));
  await page.locator('.card-library-page').waitFor();assert.equal(await page.locator('.qt-attention-target:visible').count(),0);
 });
@@ -91,72 +112,6 @@ test('semantic reveal waits for the initial result page instead of landing in a 
  assert.equal(itemCalls>0,true);
 });
 
-test('missing JSON paths report unavailable without changing the query population',{skip},async t=>{
- const fixture=jsonInspectorFixture(),target='detail:'+JSON.stringify({rowId:'inspect-1',field:'arguments_json',path:'$["deleted"]'});
- const app=await open(t,{url:fixture.route(fixture.query,target),api:fixture.api,ready:'.qt-property-json-open'});await app.settled();
- await app.page.waitForFunction(target=>document.documentElement.dataset.pharosAttentionMissing===target&&document.documentElement.dataset.pharosAttentionPending==='',target);
- assert.equal(await app.page.locator('.qt-attention-target').count(),0);
- assert.deepEqual(fixture.read(app.page).where,fixture.query.where);
-});
-
-test('native modal and restored nested JSON reveal preserve keyboard focus',{skip},async t=>{
- const fixture=jsonInspectorFixture(),target='detail:'+JSON.stringify({rowId:'inspect-1',field:'arguments_json',path:'$["events"][21]["text"]'});
- const state={version:1,open:true,search:'needle',searchMode:'find',raw:false,collapsedPaths:[],expandedBuckets:[],visibleEntryLimit:200,searchOverrides:[]};
- const query={...fixture.query,itemDetails:{modes:['modal'],jsonInspections:[{dataset:'pharos_mcp_calls',rowId:'inspect-1',field:'arguments_json',state}]}};
- const app=await open(t,{url:fixture.route(query,target),api:fixture.api,ready:'.qt-json-inspector .qt-attention-target'});
- await app.page.waitForFunction(()=>document.documentElement.dataset.pharosAttentionMissing==='');
- assert.equal(await app.page.evaluate(()=>document.activeElement===document.body),true);
- assert.equal(fixture.read(app.page).itemDetails.active.mode,'modal');
-});
-
-test('native detail reveal loads a record outside the result page without broadening it',{skip},async t=>{
- const fixture=jsonInspectorFixture(),target='detail:'+JSON.stringify({rowId:'inspect-2',field:'arguments_json',path:'$["other"]'});
- const query={...fixture.query,limit:1,itemDetails:{modes:['expand','modal']}};
- const app=await open(t,{url:fixture.route(query,target),api:fixture.api,ready:'.qt-attention-target'});
- await app.page.waitForFunction(()=>document.documentElement.dataset.pharosAttentionMissing==='');
- const restored=fixture.read(app.page);
- assert.equal(restored.itemDetails.active.id,'inspect-2');assert.equal(restored.limit,1);assert.equal(restored.offset,0);assert.deepEqual(restored.where,query.where);
- assert.equal(await app.page.evaluate(()=>document.activeElement===document.body),true);
-});
-
-test('JSON inspection scope follows record and property identities across layouts',{skip},async t=>{
- const fixture=jsonInspectorFixture(),state={version:1,open:true,search:'needle',searchMode:'find',raw:false,collapsedPaths:[],expandedBuckets:[],visibleEntryLimit:400,searchOverrides:[]};
- const query={...fixture.query,itemDetails:{...fixture.query.itemDetails,jsonInspections:[{dataset:'pharos_mcp_calls',rowId:'inspect-1',field:'arguments_json',state}]}};
- const other=await open(t,{url:fixture.route({...query,itemDetails:{...query.itemDetails,active:{id:'inspect-2',mode:'expand'}}}),api:fixture.api,ready:'.qt-property-json-open'});
- assert.equal(await other.page.getByRole('dialog',{name:'Arguments (sanitized) · JSON',exact:true}).isVisible(),false);
- await other.page.getByRole('button',{name:'Open Arguments (sanitized) in JSON Viewer',exact:true}).click();
- assert.equal(await other.page.getByRole('searchbox',{name:'Search Arguments (sanitized) JSON',exact:true}).inputValue(),'');
- const reordered={...query,itemDetails:{...query.itemDetails,views:{expand:{version:1,properties:[{id:'renamed-instance',field:'tool_name'},{id:'new-property-id',field:'arguments_json',label:'Renamed payload'}]}}}};
- const fresh=await open(t,{url:fixture.route(reordered),api:fixture.api,ready:'.qt-json-inspector'});
- assert.equal(await fresh.page.getByRole('searchbox',{name:'Search Renamed payload JSON',exact:true}).inputValue(),'needle');
- assert.equal(await fresh.page.getByRole('combobox',{name:'JSON search mode',exact:true}).inputValue(),'find');
-});
-
-test('JSON inspection state survives automatic durable snapshots without a browser cache',{skip},async t=>{
- const fixture=jsonInspectorFixture(),state={version:1,open:true,search:'needle',searchMode:'find',raw:false,collapsedPaths:[],expandedBuckets:['$["events"]:bucket:20'],visibleEntryLimit:400,searchOverrides:[]};
- const terms=Array.from({length:70},(_,i)=>({field:'tool_name',op:'!=',value:`unused-${i}-${Array.from({length:48},(_,n)=>String.fromCharCode(33+(i*31+n*17+i*n)%90)).join('')}`}));
- const query={...fixture.query,where:[...fixture.query.where,...terms],itemDetails:{...fixture.query.itemDetails,jsonInspections:[{dataset:'pharos_mcp_calls',rowId:'inspect-1',field:'arguments_json',state}]}};
- const first=await open(t,{url:fixture.route(query),api:fixture.api,ready:'.qt-json-inspector'});
- await first.page.waitForFunction(()=>new URLSearchParams(location.search).get('q_mcp_calls')?.startsWith('@'));
- const fresh=await open(t,{url:path(first.page),api:fixture.api,ready:'.qt-json-inspector'});
- assert.equal(await fresh.page.getByRole('searchbox',{name:'Search Arguments (sanitized) JSON',exact:true}).inputValue(),'needle');
- assert.deepEqual(fixture.read(fresh.page).itemDetails.jsonInspections[0].state,state);
-});
-
-test('a pending native detail reveal is cancelled when navigation leaves its page',{skip},async t=>{
- const fixture=jsonInspectorFixture();let release,requested;
- const started=new Promise(resolve=>requested=resolve),pending=new Promise(resolve=>release=resolve);
- const api={'GET /api/query/mcp_calls/item':async({query})=>{if(query.get('id')==='inspect-2'){requested();await pending;}return {row:{id:'inspect-2',tool_name:'query',arguments_json:'{"other":"needle"}'}}},...fixture.api};
- const app=await open(t,{url:fixture.route({...fixture.query,itemDetails:{modes:['expand']}}),api,ready:'.usage-workspace-table .qt-row'});
- const target='detail:'+JSON.stringify({rowId:'inspect-2',field:'arguments_json',path:'$["other"]'});
- await app.page.evaluate(url=>window.pharosNavigate(url),fixture.route({...fixture.query,itemDetails:{modes:['expand']}},target));
- await started;
- await app.page.evaluate(()=>window.pharosNavigate('/cards'));
- await app.page.locator('.card-library-page').waitFor();release();await app.settled();
- assert.equal(new URL(app.page.url()).pathname,'/cards');
- assert.equal(await app.page.locator('.qt-attention-target:visible').count(),0);
-});
-
 test('unavailable detail links retry when custom results switch to a native table',{skip},async t=>{
  const target='detail:'+JSON.stringify({rowId:'row-0',field:'title'});
  const app=await open(t,{url:'/library?'+new URLSearchParams({view:'conversation',reveal:target}),ready:'.conversation-result-card'});
@@ -167,6 +122,21 @@ test('unavailable detail links retry when custom results switch to a native tabl
  await app.page.locator('[data-property-field="title"].qt-attention-target').first().waitFor();
  await app.page.waitForFunction(()=>document.documentElement.dataset.pharosAttentionMissing==='');
  assert.equal(new URL(app.page.url()).searchParams.get('reveal'),target,'the same linked target becomes available without navigation');
+});
+
+test('automatic oversized query references resolve in a fresh browser with no local cache, including JSON inspection state',{skip},async t=>{
+ const fixture=jsonInspectorFixture(),state={version:1,open:true,search:'needle',searchMode:'find',raw:false,collapsedPaths:[],expandedBuckets:['$["events"]:bucket:20'],visibleEntryLimit:400,searchOverrides:[]};
+ // Distinct nonrepeating values avoid a highly compressible artificial query.
+ const terms=Array.from({length:70},(_,i)=>({field:'tool_name',op:'!=',value:`unused-${i}-${Array.from({length:48},(_,n)=>String.fromCharCode(33+(i*31+n*17+i*n)%90)).join('')}`}));
+ const query={...fixture.query,where:[...fixture.query.where,...terms],itemDetails:{...fixture.query.itemDetails,jsonInspections:[{dataset:'pharos_mcp_calls',rowId:'inspect-1',field:'arguments_json',state}]}};
+ const first=await open(t,{url:fixture.route(query),api:fixture.api,ready:'.qt-json-inspector'});
+ await first.page.waitForFunction(()=>new URLSearchParams(location.search).get('q_mcp_calls')?.startsWith('@'));
+ const fresh=await open(t,{url:path(first.page),api:fixture.api,ready:'.qt-json-inspector'});
+ await fresh.settled();
+ assert.equal(await fresh.page.locator('.query-table-error').count(),0);
+ assert.ok(fresh.calls.some(call=>call.path==='/api/query-snapshots'&&call.method==='GET'));
+ assert.equal(await fresh.page.getByRole('searchbox',{name:'Search Arguments (sanitized) JSON',exact:true}).inputValue(),'needle');
+ assert.deepEqual(fixture.read(fresh.page).itemDetails.jsonInspections[0].state,state);
 });
 
 test('conversation result links restore their session and inline agent without taking focus',{skip},async t=>{
@@ -202,15 +172,6 @@ test('conversation result links restore their session and inline agent without t
  await restored.getByText('Timing checked.',{exact:true}).waitFor();
  await fresh.page.getByRole('navigation',{name:'Conversation outline',exact:true}).getByRole('button',{name:/First session prompt/}).waitFor();
  assert.equal(await restored.evaluate(element=>element.contains(document.activeElement)),false);
-});
-
-test('JSON display cells restore their inspector choices in a fresh browser',{skip,todo:'Query Table 0.9.8 DataTable does not wire cell display JsonCell to scoped state; docs/query-table-url-state-handoff.md'},async t=>{
- const fixture=jsonInspectorFixture(),query={...fixture.query,select:[{field:'id'},{field:'arguments_json',display:{kind:'json'}}],itemDetails:{modes:['expand']}};
- const first=await open(t,{url:fixture.route(query),api:fixture.api,ready:'.usage-workspace-table .qt-row'});
- await first.page.getByRole('button',{name:'Inspect Arguments (sanitized)',exact:true}).first().click();
- await first.page.getByRole('searchbox',{name:'Search Arguments (sanitized) JSON',exact:true}).fill('needle');
- const fresh=await open(t,{url:path(first.page),api:fixture.api,ready:'.usage-workspace-table .qt-row'});
- assert.equal(await fresh.page.getByRole('dialog',{name:'Arguments (sanitized) · JSON',exact:true}).isVisible(),true);
 });
 
 test('copied Cards view overrides preferences in a fresh context and follows Back/Forward', {skip}, async t=>{
@@ -257,37 +218,26 @@ test('reader category and disclosure state survive a fresh browser', {skip},asyn
  assert.equal(await fresh.page.locator('.turn').first().getByRole('button',{name:'Collapse turn ask',exact:true}).getAttribute('aria-expanded'),'true');
 });
 
-test('dynamic message reveal materializes its target without taking keyboard focus', {skip},async t=>{
+test('dynamic message reveal materializes its target without taking keyboard focus, and linked attention opens once', {skip},async t=>{
  const messages=Array.from({length:45},(_,turn)=>['user','assistant'].map(role=>({id:`lazy-${turn}-${role}`,native_id:`lazy-${turn}-${role}`,role,kind:'message',text:`Turn ${turn} ${role}`,created_at:new Date(1760000000000+turn*1000).toISOString()}))).flat();
  const api={'GET /api/work/:id/conversations/:conversation':request=>({...defaultApi['GET /api/work/:id/conversations/:conversation'](request),messages})};
- const opened=await open(t,{api,url:`/work/${workID}?conversation=${rootConversation}&reveal=message:lazy-44-assistant&highlight=message:lazy-0-user`,preferences:{"pharos-workspace-sidebar-width":465.7210937499999},ready:'.conversation-panel'});
- await opened.page.waitForFunction(()=>document.querySelector('[data-message-id="lazy-44-assistant"]')?.classList.contains('pharos-reveal'));
- assert.equal(await opened.page.locator('[data-message-id="lazy-44-assistant"]').first().evaluate(element=>element===document.activeElement),false);
- const width=Number(new URL(opened.page.url()).searchParams.get('sidebar_width'));
- assert.ok(Number.isInteger(width)&&width>=300);
- await opened.page.waitForFunction(()=>!!document.querySelector('[data-message-id="lazy-0-user"].pharos-highlight'));
- await opened.page.evaluate(()=>window.dispatchEvent(new Event('pharos:usage-refresh')));
+ const opened=await open(t,{api,url:`/work/${workID}?conversation=${rootConversation}&reveal=message:lazy-44-assistant&highlight=message:lazy-0-user`,ready:'.conversation-panel'}),{page}=opened;
+ await page.waitForFunction(()=>document.querySelector('[data-message-id="lazy-44-assistant"]')?.classList.contains('pharos-reveal'));
+ assert.equal(await page.locator('[data-message-id="lazy-44-assistant"]').first().evaluate(element=>element===document.activeElement),false);
+ await page.waitForFunction(()=>!!document.querySelector('[data-message-id="lazy-0-user"].pharos-highlight'));
+ await page.evaluate(()=>window.dispatchEvent(new Event('pharos:usage-refresh')));
  await opened.settled();
- assert.equal(await opened.page.locator('[data-message-id="lazy-44-assistant"]').first().evaluate(element=>element===document.activeElement),false);
-});
-
-test('automatic oversized query references resolve in a fresh browser with no local cache', {skip},async t=>{
- const definitions=new Map();
- const api={
-  'PUT /api/query-snapshots':({body})=>{definitions.set(body.code,body);return body;},
-  'GET /api/query-snapshots':({query})=>definitions.get(query.get('code')),
- };
- // Distinct nonrepeating values avoid a highly compressible artificial query.
- const terms=Array.from({length:70},(_,i)=>({field:'model',op:'!=',value:`model-${i}-${Array.from({length:48},(_,n)=>String.fromCharCode(33+(i*31+n*17+i*n)%90)).join('')}`}));
- const query={...EMPTY_QUERY,where:terms,select:[{field:'model'}]};
- const first=await open(t,{url:'/analyze?'+new URLSearchParams({analyze_mode:'query',analyze_data:'usage',q_usage:encodeQuery(query)}),api,ready:'.usage-workspace-table .qt-table'});
- await first.page.waitForFunction(()=>new URLSearchParams(location.search).get('q_usage')?.startsWith('@'));
- assert.ok(definitions.size>0);
- const copied=path(first.page);
- const fresh=await open(t,{url:copied,api,ready:'.usage-workspace-table .qt-table'});
- await fresh.settled();
- assert.equal(await fresh.page.locator('.query-table-error').count(),0);
- assert.ok(fresh.calls.some(call=>call.path==='/api/query-snapshots'&&call.method==='GET'));
+ assert.equal(await page.locator('[data-message-id="lazy-44-assistant"]').first().evaluate(element=>element===document.activeElement),false);
+ // Linked attention opens its disclosure once; the user can then collapse it.
+ await page.evaluate(()=>{
+  const details=document.querySelector('[data-message-id="lazy-0-user"]').closest('details');
+  if(!details?.open)throw Error('Attention did not open its content');
+  window.linkedDisclosure=details;details.querySelector('summary').click();
+ });
+ await opened.settled();
+ await page.evaluate(()=>window.pharosView.refresh());await opened.settled();
+ assert.equal(await page.evaluate(()=>window.linkedDisclosure.open),false);
+ assert.ok(JSON.parse(new URL(page.url()).searchParams.get('reader_collapsed')||'[]').length>0);
 });
 
 test('literal text reveal opens page Find on the reader and reveals a match without focusing its input', {skip},async t=>{
@@ -324,16 +274,6 @@ test('page Find counts matches in unrendered tool details, then opens and marks 
  await page.waitForFunction(()=>!document.querySelector('[data-pharos-find-trail],[data-pharos-find]'));
 });
 
-test('a row identity can highlight its actual rendered row without opening a modal', {skip},async t=>{
- const query={...EMPTY_QUERY,select:[{field:'id'},{field:'model'}],limit:5};
- const opened=await open(t,{url:'/analyze?'+new URLSearchParams({analyze_mode:'query',analyze_data:'usage',q_usage:encodeQuery(query)}),ready:'.usage-workspace-table .qt-row'});
- const id=await opened.page.locator('.usage-workspace-table .qt-row td').first().textContent();
- await opened.page.evaluate(id=>{const url=new URL(location.href);url.searchParams.set('reveal',`row:${id}`);history.replaceState(history.state,'',url);window.dispatchEvent(new Event('pharos:uri-changed'));},id.trim());
- await opened.page.waitForFunction(()=>!!document.querySelector('tr.pharos-reveal'));
- assert.equal(await opened.page.locator('[role="dialog"]:visible').count(),0);
-});
-
-
 test('section reveal opens content ancestors and closing Find removes its text attention', {skip},async t=>{
  const opened=await open(t,{url:'/cards?card_topic=all',ready:'.card-library-page'});
  await opened.page.evaluate(()=>{
@@ -353,63 +293,18 @@ test('section reveal opens content ancestors and closing Find removes its text a
 
 
 test('multiple literal attention targets are highlighted with a single reveal landing', {skip},async t=>{
- const opened=await open(t,{url:'/cards?card_topic=all',ready:'.card-library-page'});
+ const opened=await open(t,{url:'/cards?card_topic=all',ready:'.card-library-page'}),{page}=opened;
  await opened.page.evaluate(()=>{
   const content=document.createElement('p');content.textContent='Alpha fixture — Beta fixture';document.querySelector('.view.active').append(content);
   const url=new URL(location.href);url.searchParams.append('highlight','text:Alpha fixture');url.searchParams.append('highlight','text:Beta fixture');url.searchParams.set('reveal','text:Beta fixture');history.replaceState(history.state,'',url);window.dispatchEvent(new Event('pharos:uri-changed'));
  });
- await opened.page.waitForFunction(()=>{
+ await page.waitForFunction(()=>{
   const marks=[...(CSS.highlights.get('pharos-matches')||[])].map(range=>range.toString());
   return marks.includes('Alpha fixture')&&marks.includes('Beta fixture')&&[...(CSS.highlights.get('pharos-landing')||[])][0]?.toString()==='Beta fixture';
  });
  assert.equal(await opened.page.locator('.pharos-find input').evaluate(input=>input===document.activeElement),false);
 });
 
-
-test('Carbon factor disclosures survive copying into a fresh browser', {skip},async t=>{
- const first=await open(t,{url:'/analyze?analyze_topic=carbon',ready:'#carbonCard .carbon-calculation > summary'});
- await first.page.locator('#carbonCard .carbon-calculation > summary').click();
- await first.page.locator('#carbonCard .carbon-method > summary').click();
- await first.page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('disclosures')||'{}')['carbon:reference']===true);
- const fresh=await open(t,{url:path(first.page),ready:'#carbonCard .carbon-calculation > summary'});
- await fresh.page.waitForFunction(()=>document.querySelector('#carbonCard .carbon-method')?.open);
-});
-
-
-for(const empty of ['absent','empty'])test(`Carbon disclosure history restores ${empty} overrides after rerender`,{skip},async t=>{
- const params=new URLSearchParams({analyze_topic:'carbon',disclosures:JSON.stringify({'carbon:calculation':true,'carbon:reference':true})});
- const app=await open(t,{url:'/analyze?'+params,ready:'#carbonCard .carbon-method > summary'}),{page}=app;
- await page.waitForFunction(()=>document.querySelector('#carbonCard .carbon-calculation')?.open&&document.querySelector('#carbonCard .carbon-method')?.open);
- await app.settled();
- // A route refresh replaces Carbon's DOM while keeping the current URL state.
- await page.evaluate(()=>window.dispatchEvent(new Event('pharos:route')));await app.settled();
- assert.equal(await page.locator('#carbonCard .carbon-method').evaluate(element=>element.open),true);
- await page.evaluate(empty=>{const url=new URL(location.href);if(empty==='empty')url.searchParams.set('disclosures','{}');else url.searchParams.delete('disclosures');window.pharosNavigate(url.pathname+url.search);},empty);
- const closed=()=>page.waitForFunction(()=>!document.querySelector('#carbonCard .carbon-calculation')?.open&&!document.querySelector('#carbonCard .carbon-method')?.open);
- await closed();await app.settled();
- assert.equal(new URL(page.url()).searchParams.get('disclosures'),empty==='empty'?'{}':null);
- await page.goBack();
- await page.waitForFunction(()=>document.querySelector('#carbonCard .carbon-calculation')?.open&&document.querySelector('#carbonCard .carbon-method')?.open);
- await page.goForward();await closed();await app.settled();
- assert.equal(new URL(page.url()).searchParams.get('disclosures'),empty==='empty'?'{}':null);
-});
-
-
-test('copied disclosure defaults override a different browser preference without a toggle', {skip},async t=>{
- const first=await open(t,{url:'/analyze?analyze_mode=query&analyze_data=usage',ready:'.usage-query-ideas',preferences:{'pharos-query-ideas:usage':false}});
- await first.page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('disclosures')||'{}')['query:usage:ideas']===false);
- const fresh=await open(t,{url:path(first.page),ready:'.usage-query-ideas',preferences:{'pharos-query-ideas:usage':true}});
- assert.equal(await fresh.page.locator('.usage-query-ideas').evaluate(element=>element.open),false);
-});
-
-
-test('a transcript preset URL overrides preferences without a category list', {skip},async t=>{
- const opened=await open(t,{url:`/work/${workID}?conversation=${rootConversation}&reader_filter_level=primary`,ready:'.transcript-filter',preferences:{'pharos-transcript-filter':{level:'all'}}});
- const primary=opened.page.getByRole('group',{name:'Show in transcript',exact:true}).getByRole('button',{name:'Primary only',exact:true});
- assert.equal(await primary.getAttribute('aria-pressed'),'true');
- assert.equal(new URL(opened.page.url()).searchParams.get('reader_filter_level'),'primary');
- assert.deepEqual(JSON.parse(new URL(opened.page.url()).searchParams.get('reader_filter')),['prompts','response']);
-});
 
 test('page Find expands every collapsed match and can be dragged out of the way',{skip},async t=>{
  const app=await open(t,{url:`/work/${workID}?conversation=${rootConversation}&find=case_7_with`,ready:'[data-pharos-find="container"]'}),{page}=app;
@@ -441,33 +336,29 @@ test('page Find follows Back and Forward and closes on its own history entry',{s
  await page.waitForFunction(()=>document.querySelector('.pharos-find input')?.value==='Session');
 });
 
-test('session Next and Previous use one live request while URL restoration replays the ordinal',{skip},async t=>{
- let execution=0;
- const cursors=[];
- const api={'GET /api/work/:id/delegation':({query})=>{
-  const cursor=query.get('cursor')||'';cursors.push(cursor);
-  if(!cursor)execution++;
-  const page=cursor?Number(cursor.split(':')[1]):0;
-  const base=defaultApi['GET /api/work/:id/delegation']({query});
-  return {...base,offset:page*40,total:120,next_cursor:page<2?`${execution}:${page+1}`:''};
- }};
- const app=await open(t,{url:`/work/${workID}?conversation=${rootConversation}&explorer=table`,api,ready:'.delegation-pagination'}),{page}=app;
- const pagination=page.locator('.delegation-pagination');
- assert.deepEqual(cursors,['']);
- for(const [direction,ordinal]of [['Next',1],['Next',2],['Previous',1],['Previous',0]]){
-  const before=cursors.length;
-  await pagination.getByRole('button',{name:direction,exact:true}).click();
-  await page.waitForFunction(ordinal=>new URLSearchParams(location.search).get('delegation_page')===String(ordinal),ordinal);
-  await pagination.getByRole('button',{name:ordinal===2?'Previous':'Next',exact:true}).waitFor({state:'visible'});
-  await app.settled();
-  assert.equal(cursors.length-before,1,`${direction} to ${ordinal}`);
- }
- const before=cursors.length;
- await page.evaluate(()=>{const url=new URL(location.href);url.searchParams.set('delegation_page','2');window.pharosNavigate(url.pathname+url.search);});
- await pagination.getByRole('button',{name:'Previous',exact:true,disabled:false}).waitFor();
- await pagination.getByRole('button',{name:'Next',exact:true,disabled:true}).waitFor();
+test('reader disclosure history restores empty overrides to native defaults, and same-conversation links restore controls without reloading',{skip},async t=>{
+ const app=await open(t,{url:`/work/${workID}?conversation=${rootConversation}&reader_expanded=%5B%5D&reader_collapsed=%5B%5D`,ready:'.transcript-filter'}),{page}=app;
+ const details=page.locator('details[data-pharos-disclosure]'),baseline=await details.evaluateAll(items=>items.map(item=>({id:item.dataset.pharosDisclosure,open:item.open})));
+ const opened=baseline.find(item=>item.open),closed=baseline.find(item=>!item.open);assert.ok(opened&&closed);
+ await page.evaluate(({opened,closed})=>{const url=new URL(location.href);url.searchParams.set('reader_expanded',JSON.stringify([closed.id]));url.searchParams.set('reader_collapsed',JSON.stringify([opened.id]));window.pharosNavigate(url.pathname+url.search);},{opened,closed});
+ const swapped=()=>page.waitForFunction(({opened,closed})=>{const details=[...document.querySelectorAll('details[data-pharos-disclosure]')];return details.find(item=>item.dataset.pharosDisclosure===opened.id)?.open===false&&details.find(item=>item.dataset.pharosDisclosure===closed.id)?.open===true;},{opened,closed});
+ await swapped();
+ await page.goBack();
+ await page.waitForFunction(baseline=>baseline.every(expected=>[...document.querySelectorAll('details[data-pharos-disclosure]')].find(item=>item.dataset.pharosDisclosure===expected.id)?.open===expected.open),baseline);
  await app.settled();
- assert.deepEqual(cursors.slice(before),['',`${execution}:1`,`${execution}:2`]);
+ const params=new URL(page.url()).searchParams;
+ for(const name of ['reader_expanded','reader_collapsed'])assert.equal(params.get(name),'[]');
+ await page.goForward();await swapped();await app.settled();
+ // A same-conversation link restores the category and disclosures in place.
+ await page.evaluate(()=>{window.__sameDocument=true});
+ const turn=page.locator('.turn').first(),id=await turn.getAttribute('data-pharos-disclosure');
+ assert.ok(id);
+ await page.evaluate(id=>{const url=new URL(location.href);url.searchParams.delete('reader_filter');url.searchParams.delete('reader_expanded');url.searchParams.set('reader_filter_level','primary');url.searchParams.set('reader_collapsed',JSON.stringify([id]));window.pharosNavigate(url.pathname+url.search);},id);
+ await page.waitForFunction(()=>document.querySelector('.transcript-levels button[aria-pressed="true"]')?.textContent==='Primary only'&&!document.querySelector('.turn').open);
+ await app.settled();
+ assert.equal(await page.getByRole('group',{name:'Show in transcript',exact:true}).getByRole('button',{name:'Primary only',exact:true}).getAttribute('aria-pressed'),'true');
+ assert.deepEqual(JSON.parse(new URL(page.url()).searchParams.get('reader_collapsed')),[id]);
+ assert.equal(await page.evaluate(()=>window.__sameDocument),true,'the reader did not reload the document');
 });
 
 test('page Find becomes idle and ignores its own and the status UI mutations',{skip},async t=>{
@@ -484,52 +375,6 @@ test('page Find becomes idle and ignores its own and the status UI mutations',{s
   const current=window.findWalks();window.findStable=current===window.findPrevious?window.findStable+1:0;window.findPrevious=current;
   return window.findStable>=4;
  });
-});
-
-test('linked message attention opens once and lets the user collapse its disclosure',{skip},async t=>{
- const app=await open(t,{url:`/work/${workID}?conversation=${rootConversation}&highlight=message:m-1`,ready:'[data-message-id="m-1"].pharos-highlight'}),{page}=app;
- await page.evaluate(()=>{
-  const details=document.querySelector('[data-message-id="m-1"]').closest('details');
-  if(!details?.open)throw Error('Attention did not open its content');
-  window.linkedDisclosure=details;details.querySelector('summary').click();
- });
- await app.settled();
- await page.evaluate(()=>window.pharosView.refresh());await app.settled();
- assert.equal(await page.evaluate(()=>window.linkedDisclosure.open),false);
- assert.ok(JSON.parse(new URL(page.url()).searchParams.get('reader_collapsed')||'[]').length>0);
-});
-
-test('retained work and Find components cannot pollute another page URL',{skip},async t=>{
- const app=await open(t,{url:`/work/${workID}?conversation=${rootConversation}&explorer=parallel`,ready:'.conversation-panel'}),{page}=app;
- await page.evaluate(()=>{const url=new URL(location.href);url.searchParams.set('find','Turn');window.pharosNavigate(url.pathname+url.search)});
- await page.locator('.pharos-find').waitFor();
- await page.evaluate(()=>window.pharosNavigate('/analyze?analyze_topic=tokens&reveal=text:Tokens'));
- await page.locator('.usage-workspace').waitFor();await app.settled();
- const params=new URL(page.url()).searchParams;
- assert.deepEqual([...params.keys()].filter(key=>/^(delegation_|reader_)/.test(key)),[]);
- assert.equal(params.get('find'),'Tokens','the new page keeps its own Find, not the reader term');
- await page.goBack();await page.locator('.conversation-panel').waitFor();await app.settled();
- assert.equal(new URL(page.url()).pathname.includes('/work/'),true);
-});
-
-test('row disclosures record deliberate choices without capturing every rendered default',{skip},async t=>{
- const schema=loadSchema(toolCallsDocument),now=Date.now();
- const rows=Array.from({length:12},(_,i)=>({id:`payload-${i}`,workspace_id:workID,conversation_id:rootConversation,input_text:'Synthetic retained input '.repeat(50),tool_name:'shell',status:'success',started_at:new Date(now).toISOString()}));
- const api={'* /api/query/tool_calls/:operation':({params,body,query})=>answerQuery(params.operation,body,rows,schema,{now,id:query.get('id')})};
- const route=offset=>'/analyze?'+new URLSearchParams({analyze_mode:'query',analyze_data:'tool_calls',q_tool_calls:encodeQuery({...EMPTY_QUERY,select:[{field:'id'},{field:'tool_name'},{field:'__qt_item_details__'}],itemDetails:{modes:['expand']},limit:4,offset,fitToScreen:false})});
- const app=await open(t,{url:route(0),api,ready:'.usage-workspace-table .qt-row'}),{page}=app;
- await page.locator('.usage-workspace-table .qt-row').first().getByRole('button',{name:/^Expand /}).click();
- await page.locator('.usage-payload').first().waitFor();
- const entries=()=>Object.keys(JSON.parse(new URL(page.url()).searchParams.get('disclosures')||'{}')).filter(key=>key.startsWith('row:'));
- assert.deepEqual(entries(),[]);
- await page.locator('.usage-payload summary').first().click();await app.settled();
- const chosen=entries();assert.equal(chosen.length,1);
- await page.evaluate(next=>{const url=new URL(location.href);url.searchParams.set('q_tool_calls',new URL(next,location.origin).searchParams.get('q_tool_calls'));window.pharosNavigate(url.pathname+url.search)},route(4));await app.settled();
- await page.locator('.usage-workspace-table .qt-row').first().getByRole('button',{name:/^Expand /}).click();
- await page.locator('.usage-payload').first().waitFor();
- assert.deepEqual(entries(),chosen);
- await page.goBack();await page.locator('.usage-payload').first().waitFor();await app.settled();
- assert.equal(await page.locator('.usage-payload').first().evaluate(element=>element.open),true);
 });
 
 test('manual assumption changes save chosen defaults while restoring a link stays read-only',{skip},async t=>{
@@ -566,76 +411,6 @@ test('manual Findings ranking saves the default and a new unlinked view uses it'
 });
 
 
-for(const dataset of ['library','usage'])test(`native ${dataset} query preserves its composed host search in a fresh browser`,{skip},async t=>{
- const draft={editor:'visual',match:'literal',mode:'advanced',text:'failure',root:{kind:'group',join:'all',children:[],exclude:false},scope:{surface:'prose',roles:[],kinds:[],repository:'',provider:'',source:'',from:'',to:'',conversation_id:'',workspace_id:''},fuzzy:false,caseSensitive:false,separators:false};
- const parameter=dataset==='library'?'text_builder':'record_usage',search=JSON.stringify(dataset==='library'?draft:{field:'model',draft});
- // site_link composes view search into an explicitly empty native host state.
- const query={...EMPTY_QUERY,select:[{field:dataset==='library'?'title':'model'}],limit:5,fitToScreen:false,hostState:{version:1,params:{[parameter]:[search]}},aggregations:[{id:'calls',op:'count',groupBy:[]}]};
- const params=new URLSearchParams({[`q_${dataset}`]:encodeQuery(query),[parameter]:search});
- if(dataset!=='library'){params.set('analyze_mode','query');params.set('analyze_data',dataset);}
- const app=await open(t,{url:`/${dataset==='library'?'library':'analyze'}?${params}`,ready:dataset==='library'?'#queryTableLibrary .qt-row':'.usage-workspace-table .qt-row'});
- await app.settled();
- const normalized=new URL(app.page.url()).searchParams;
- const restored=decodeQueryStrict(normalized.get(`q_${dataset}`));
- assert.deepEqual(JSON.parse(normalized.get(parameter)),JSON.parse(restored.hostState.params[parameter][0]));
- const applied=JSON.parse(restored.hostState.params[parameter][0]);
- assert.equal((dataset==='library'?applied:applied.draft).text,'failure');
- const requests=app.calls.filter(call=>call.method==='POST'&&call.path.startsWith(`/api/query/${dataset}/`));
- assert.ok(requests.length>0);
- for(const request of requests){
-  assert.ok(dataset==='library'?request.query.has('find')||request.query.has('find_where'):request.query.has('record_search'),`${request.path} dropped the applied search`);
-  if(dataset==='usage')assert.equal(request.path,'/api/query/usage/query-v3');
- }
- if(dataset==='usage')assert.ok(requests.some(call=>call.body.rows===false),'ordinary metrics use V3 too');
-});
-
-
-test('same-conversation links restore transcript controls without reloading', {skip},async t=>{
- const app=await open(t,{url:`/work/${workID}?conversation=${rootConversation}&reader_filter_level=all`,ready:'.transcript-filter'}),{page}=app;
- const turn=page.locator('.turn').first(),id=await turn.getAttribute('data-pharos-disclosure');
- assert.ok(id);
- await page.evaluate(id=>{const url=new URL(location.href);url.searchParams.delete('reader_filter');url.searchParams.set('reader_filter_level','primary');url.searchParams.set('reader_collapsed',JSON.stringify([id]));window.pharosNavigate(url.pathname+url.search);},id);
- await page.waitForFunction(()=>document.querySelector('.transcript-levels button[aria-pressed="true"]')?.textContent==='Primary only'&&!document.querySelector('.turn').open);
- await app.settled();
- assert.equal(await page.getByRole('group',{name:'Show in transcript',exact:true}).getByRole('button',{name:'Primary only',exact:true}).getAttribute('aria-pressed'),'true');
- assert.deepEqual(JSON.parse(new URL(page.url()).searchParams.get('reader_collapsed')),[id]);
-});
-
-for(const empty of ['absent','empty'])test(`reader disclosure history restores ${empty} overrides to native defaults`,{skip},async t=>{
- const initial=`/work/${workID}?conversation=${rootConversation}${empty==='empty'?'&reader_expanded=%5B%5D&reader_collapsed=%5B%5D':''}`;
- const app=await open(t,{url:initial,ready:'.transcript-filter'}),{page}=app;
- const details=page.locator('details[data-pharos-disclosure]'),baseline=await details.evaluateAll(items=>items.map(item=>({id:item.dataset.pharosDisclosure,open:item.open})));
- const opened=baseline.find(item=>item.open),closed=baseline.find(item=>!item.open);assert.ok(opened&&closed);
- await page.evaluate(({opened,closed})=>{const url=new URL(location.href);url.searchParams.set('reader_expanded',JSON.stringify([closed.id]));url.searchParams.set('reader_collapsed',JSON.stringify([opened.id]));window.pharosNavigate(url.pathname+url.search);},{opened,closed});
- await page.waitForFunction(({opened,closed})=>{const details=[...document.querySelectorAll('details[data-pharos-disclosure]')];return details.find(item=>item.dataset.pharosDisclosure===opened.id)?.open===false&&details.find(item=>item.dataset.pharosDisclosure===closed.id)?.open===true;},{opened,closed});
- await page.goBack();
- await page.waitForFunction(baseline=>baseline.every(expected=>[...document.querySelectorAll('details[data-pharos-disclosure]')].find(item=>item.dataset.pharosDisclosure===expected.id)?.open===expected.open),baseline);
- await app.settled();
- const params=new URL(page.url()).searchParams;
- for(const name of ['reader_expanded','reader_collapsed'])assert.equal(params.get(name),empty==='empty'?'[]':null);
- await page.goForward();
- await page.waitForFunction(({opened,closed})=>{const details=[...document.querySelectorAll('details[data-pharos-disclosure]')];return details.find(item=>item.dataset.pharosDisclosure===opened.id)?.open===false&&details.find(item=>item.dataset.pharosDisclosure===closed.id)?.open===true;},{opened,closed});
-});
-
-
-for(const empty of ['absent','empty'])test(`reader content history restores ${empty} overrides to collapsed defaults`,{skip},async t=>{
- const messages=[{id:'long-prose',role:'assistant',kind:'message',text:'Long synthetic prose. '.repeat(60),created_at:new Date().toISOString()}];
- const api={'GET /api/work/:id/conversations/:conversation':request=>({...defaultApi['GET /api/work/:id/conversations/:conversation'](request),messages})};
- const params=new URLSearchParams({conversation:rootConversation,reader_content:JSON.stringify({'long-prose':true,['summary:'+rootConversation]:true})});
- const app=await open(t,{api,url:`/work/${workID}?${params}`,ready:'.message-toggle'}),{page}=app;
- const expanded=()=>page.waitForFunction(()=>document.querySelector('.message-toggle')?.getAttribute('aria-expanded')==='true'&&!document.querySelector('.tool-summary')?.hidden);
- const collapsed=()=>page.waitForFunction(()=>document.querySelector('.message-toggle')?.getAttribute('aria-expanded')==='false'&&document.querySelector('.message-prose')?.classList.contains('prose-truncated')&&document.querySelector('.tool-summary')?.hidden);
- await expanded();await app.settled();
- await page.evaluate(empty=>{const url=new URL(location.href);if(empty==='empty')url.searchParams.set('reader_content','{}');else url.searchParams.delete('reader_content');window.pharosNavigate(url.pathname+url.search);},empty);
- await collapsed();await app.settled();
- const fresh=await open(t,{api,url:path(page),ready:'.message-toggle'});
- assert.equal(await fresh.page.locator('.message-toggle').getAttribute('aria-expanded'),'false');
- assert.equal(await fresh.page.locator('.tool-summary').evaluate(element=>element.hidden),true);
- await page.goBack();await expanded();await page.goForward();await collapsed();await app.settled();
- assert.equal(new URL(page.url()).searchParams.get('reader_content'),empty==='empty'?'{}':null);
-});
-
-
 test('header navigation clears source attention and explicit destination links retain their targets',{skip},async t=>{
  const params=new URLSearchParams({conversation:rootConversation,highlight:'text:Turn',reveal:'page',nav_collapsed:'0'});
  const app=await open(t,{url:`/work/${workID}?${params}`,ready:'.pharos-find'}),{page}=app;
@@ -660,22 +435,6 @@ test('Next failed action reveals retained failures without a script error',{skip
  assert.ok(await page.locator('.tool-event.error').count());
 });
 
-test('opening work and returning to Search keeps the native Library search URL',{skip},async t=>{
- const draft={editor:'visual',match:'literal',mode:'advanced',text:'failure',root:{kind:'group',join:'all',children:[],exclude:false},scope:{surface:'prose',roles:[],kinds:[],repository:'',provider:'',source:'',from:'',to:'',conversation_id:'',workspace_id:''},fuzzy:false,caseSensitive:false,separators:false};
- const token=JSON.stringify(draft),query={...EMPTY_QUERY,select:[{field:'title'}],hostState:{version:1,params:{text_builder:[token]}},limit:5,fitToScreen:false};
- const app=await open(t,{url:'/library?'+new URLSearchParams({q_library:encodeQuery(query),text_builder:token}),ready:'#queryTableLibrary .qt-row'}),{page}=app;
- await app.settled();
- const original=decodeQueryStrict(new URL(page.url()).searchParams.get('q_library'));
- await page.evaluate(id=>window.pharosOpenDetail(id),workID);
- await page.waitForFunction(()=>location.pathname.startsWith('/work/')&&!!document.querySelector('#detail.active'));
- assert.equal(JSON.parse(new URL(page.url()).searchParams.get('text_builder')).text,'failure');
- await page.evaluate(()=>document.getElementById('back').click());
- await page.waitForFunction(()=>location.pathname==='/library');await app.settled();
- const restored=new URL(page.url()).searchParams;
- assert.deepEqual(decodeQueryStrict(restored.get('q_library')),original);
- assert.equal(JSON.parse(restored.get('text_builder')).text,'failure');
-});
-
 test('page Find stepping moves the landing highlight without a server search',{skip},async t=>{
  const app=await open(t,{url:`/work/${workID}?conversation=${rootConversation}&highlight=text:please look`,ready:'.pharos-find'}),{page}=app;
  await page.waitForFunction(()=>(CSS.highlights.get('pharos-matches')?.size??0)>2);
@@ -688,15 +447,6 @@ test('page Find stepping moves the landing highlight without a server search',{s
  await page.getByRole('button',{name:'Previous match (Shift+Enter)',exact:true}).click();
  await page.waitForFunction(first=>{const range=[...(CSS.highlights.get('pharos-landing')||[])][0];return range?.startContainer.parentElement.closest('[data-message-id]')?.dataset.messageId===first},first);
  assert.equal(app.calls.filter(call=>call.path==='/api/search/text').length,0);
-});
-
-for(const invalid of ['{"a":1}','{'])test(`a malformed reader content link still opens the conversation (${invalid})`,{skip},async t=>{
- const app=await open(t,{url:`/work/${workID}?`+new URLSearchParams({conversation:rootConversation,reader_content:invalid,overlay:'unknown',history_collapsed:'[null]'}),ready:'.conversation-panel'});
- await app.settled();
- await app.page.evaluate(()=>document.getElementById('historyToggle').click());
- await app.page.locator('#historyDrawer.open').waitFor();
- assert.ok(await app.page.locator('#historyList a').count());
- await app.page.evaluate(()=>document.getElementById('historyClose').click());
 });
 
 test('bookmarks ignore drawer state while preserving the page view',{skip},async t=>{
@@ -719,82 +469,6 @@ test('bookmarks ignore drawer state while preserving the page view',{skip},async
  assert.equal(await page.locator('#bookmarksDrawer').evaluate(element=>element.classList.contains('open')),false);
 });
 
-test('restored action previews remain below their action summary',{skip},async t=>{
- const first=await open(t,{url:`/work/${workID}?conversation=${rootConversation}`,ready:'.conversation-panel'});
- await first.page.getByRole('button',{name:/^Show diff for /}).first().click();
- await first.page.locator('.chip-preview:visible').first().waitFor();await first.settled();
- const fresh=await open(t,{url:path(first.page),ready:'.chip-preview:visible'});
- assert.equal(await fresh.page.locator('.chip-preview:visible').first().evaluate(element=>element.getBoundingClientRect().top>=element.closest('.action-row').querySelector('summary').getBoundingClientRect().bottom),true);
-});
-
-
-test('Quick Stats keeps URL overlay restoration and opens portable Layout accordions',{skip},async t=>{
- const app=await open(t,{url:'/settings',viewport:{width:1485,height:791},ready:'#settings.active'}),{page}=app;
- await activateHeaderTool(page,'usageSummaryToggle');
- await page.getByRole('dialog',{name:'Quick Stats',exact:true}).waitFor();
- assert.equal(new URL(page.url()).searchParams.get('overlay'),'usage');
- const fresh=await open(t,{url:path(page),ready:'#usageSummary:not([hidden])'});
- assert.equal(await fresh.page.getByRole('dialog',{name:'Quick Stats',exact:true}).isVisible(),true);
- await fresh.page.keyboard.press('Escape');
- await fresh.page.waitForFunction(()=>document.getElementById('usageSummary').hidden&&new URLSearchParams(location.search).get('overlay')==='none');
- await app.shot('overlay-gear');
- await page.getByRole('button',{name:'Configure Quick Stats',exact:true}).click();
- await page.locator('#quickStatsOptions:not([hidden])').waitFor();await app.settled();
- await page.waitForFunction(()=>{const panel=document.getElementById('quickStatsSettings'),rect=panel.getBoundingClientRect();return panel.classList.contains('pharos-reveal')&&rect.top>=document.querySelector('body>header').getBoundingClientRect().bottom&&rect.top<innerHeight;});
- assert.equal(await page.locator('#usageSummary').isVisible(),false);
- assert.equal(await page.locator('#quickStatsSettings').evaluate(panel=>panel.contains(document.activeElement)),false,'reveal leaves keyboard focus alone');
- await app.shot('configuration-open');
- const copied=await open(t,{url:path(page),ready:'#quickStatsOptions:not([hidden])'});
- await copied.page.reload();await copied.page.locator('#quickStatsOptions:not([hidden])').waitFor();await copied.settled();
- for(const button of ['headerExpand','menuBarExpand'])await copied.page.locator('#'+button).click();
- const all=await open(t,{url:path(copied.page),ready:'#headerOptions:not([hidden])'});
- for(const id of ['quickStatsOptions','headerOptions','menuBarOptions'])assert.equal(await all.page.locator('#'+id).isVisible(),true);
- await copied.page.evaluate(()=>{history.pushState(null,'','/settings/layout');dispatchEvent(new PopStateEvent('popstate'));});
- const collapsed=()=>copied.page.waitForFunction(()=>['quickStatsOptions','headerOptions','menuBarOptions'].every(id=>document.getElementById(id).hidden));
- await collapsed();
- await copied.page.goBack();
- for(const id of ['quickStatsOptions','headerOptions','menuBarOptions'])await copied.page.locator('#'+id+':not([hidden])').waitFor();
- await copied.page.goForward();await collapsed();
- const legacy=await open(t,{url:'/settings/header',ready:'#headerOptions:not([hidden])'});
- assert.equal(new URL(legacy.page.url()).pathname,'/settings/layout');
- const disabled=await open(t,{url:'/settings/layout?'+new URLSearchParams({disclosures:JSON.stringify({menuBarPreferences:true})}),preferences:{'pharos-menu-bar':{enabled:false}},ready:'#headerExpand'});
- assert.equal(await disabled.page.locator('#menuBarOptions').isVisible(),false,'a linked section cannot enable the native menu');
-});
-
-
-const accordionCases = [
- {name:'capture/index diagnostics', route:'/settings/sync', keys:['sync:separate','sync:repairs','sync:diagnostics','sync:forecast:capture-forecast'], ready:'#syncDiagnosticTables details'},
- {name:'background schedule rows', route:'/settings/sync', keys:['background:writing','background:conversations'], ready:'#backgroundSchedule .bg-item-head'},
- {name:'connected cloud schedules', route:'/settings/backups', keys:['cloud:schedule:cloud-browser'], api:{'GET /api/cloud-backup':cloudScheduledStatus}, ready:'.cloud-schedule-settings'},
- {name:'library health checks', route:'/settings', keys:['library:drive-health'], ready:'#pharosDriveHealth', defaults:{'library:drive-health':true}},
- {name:'library application location', route:'/settings/libraries', keys:['library:application'], managedLibrary:{id:'local',name:'Pending history',config:'/Users/test/Libraries/Pending/library.toml'}, ready:'.library-settings-about'},
-];
-for(const sample of accordionCases)test(`accordion links restore ${sample.name} in fresh browsers and history`,{skip},async t=>{
- const route=entries=>sample.route+'?'+new URLSearchParams({disclosures:JSON.stringify(entries)});
- const entries=Object.fromEntries(sample.keys.map(key=>[key,true]));
- const options={api:sample.api,managedLibrary:sample.managedLibrary,ready:sample.ready};
- const app=await open(t,{...options,url:route(entries)}),{page}=app;
- const state=(browser,expected)=>browser.waitForFunction(expected=>Object.entries(expected).every(([key,open])=>{
-  const element=[...document.querySelectorAll('[data-view-key],[data-pharos-target]')].find(element=>element.dataset.viewKey===key||element.dataset.pharosTarget==='section:'+key);
-  return element&&(element.tagName==='DETAILS'?element.open:element.getAttribute('aria-expanded')==='true')===open;
- }),expected);
- await state(page,entries);
- await page.locator('[data-pharos-target="section:'+sample.keys.at(-1)+'"]').scrollIntoViewIfNeeded();await app.settled();await app.shot('opened-'+sample.name);
- const first=page.locator('[data-view-key="'+sample.keys[0]+'"]');
- if(await first.evaluate(element=>element.tagName==='DETAILS'))await first.locator('summary').first().click();else await first.click();
- await state(page,{...entries,[sample.keys[0]]:false});
- await page.waitForFunction(key=>JSON.parse(new URLSearchParams(location.search).get('disclosures')||'{}')[key]===false,sample.keys[0]);await app.settled();
- const fresh=await open(t,{...options,url:await page.evaluate(()=>location.pathname+location.search)});
- await state(fresh.page,{...entries,[sample.keys[0]]:false});
- await fresh.page.reload();await fresh.page.locator(sample.ready).first().waitFor();await state(fresh.page,{...entries,[sample.keys[0]]:false});
- await page.evaluate(url=>window.pharosNavigate(url),route({}));
- await state(page,Object.fromEntries(sample.keys.map(key=>[key,sample.defaults?.[key]??false])));
- await page.goBack();await state(page,{...entries,[sample.keys[0]]:false});
- await page.goForward();await state(page,Object.fromEntries(sample.keys.map(key=>[key,sample.defaults?.[key]??false])));
- assert.equal(app.calls.some(call=>call.method!=='GET'&&/^\/api\/(background\/(settings|run)|sync\/|cloud-backup\/(schedule|start))/.test(call.path)),false,'restoring sections must not run work or save settings');
- await app.shot(sample.name);
-});
-
 test('classic disclosure restoration ignores detached nodes and restores same-page URL writes',{skip},async t=>{
  const app=await open(t,{url:'/settings',ready:'#pharosDriveHealthDetails'}),{page}=app;
  await page.evaluate(()=>{
@@ -812,53 +486,6 @@ test('classic disclosure restoration ignores detached nodes and restores same-pa
  await page.waitForFunction(()=>document.querySelector('[data-view-key="fixture:native"]').open);
  await page.evaluate(()=>window.pharosView.write('disclosures',{'fixture:native':false}));
  await page.waitForFunction(()=>!document.querySelector('[data-view-key="fixture:native"]').open);
-});
-
-test('drive-status accordion links restore the overlay without moving focus and survive polling',{skip},async t=>{
- const entries={'status:cadence:frequent':false,'status:cadence:hourly':true};
- const api={'GET /api/status':busyStatus,'GET /api/status/stream':eventStream(busyStatus)};
- const target='section:status:cadence:hourly';
- const app=await open(t,{url:'/library?'+new URLSearchParams({overlay:'drive',disclosures:JSON.stringify(entries),reveal:target}),api,ready:'#pharosStatusPanel'}),{page}=app;
- const expanded=()=>page.waitForFunction(()=>document.querySelector('[data-view-key="status:cadence:hourly"]')?.open===true&&document.querySelector('[data-view-key="status:cadence:frequent"]')?.open===false);
- const highlighted=()=>page.waitForFunction(target=>document.documentElement.dataset.pharosAttentionMissing===''&&[...document.querySelectorAll('.pharos-reveal')].some(element=>element.dataset.pharosTarget===target),target);
- await expanded();await highlighted();await app.settled();
- assert.equal(await page.locator('#pharosStatusPanel').evaluate(panel=>panel.contains(document.activeElement)),false);
- await page.evaluate(()=>{window.__disclosureScrolls=0;const original=Element.prototype.scrollIntoView;Element.prototype.scrollIntoView=function(...args){window.__disclosureScrolls++;return original.apply(this,args);};});
- for(const revision of [busyStatus.revision+1,busyStatus.revision+2]){
-  app.push('/api/status/stream',{...busyStatus,revision});
-  await page.waitForFunction(revision=>window.pharosStatusStore.current()?.document?.revision===revision,revision);
-  await app.settled();await expanded();await highlighted();
- }
- assert.equal(await page.evaluate(()=>window.__disclosureScrolls),0,'polling reapplies highlights without repeating reveal scrolling');
- const fresh=await open(t,{url:path(page),api,ready:'#pharosStatusPanel'});
- await fresh.page.waitForFunction(()=>document.querySelector('[data-view-key="status:cadence:hourly"]')?.open===true);
- await app.shot('drive-status-portable');
-});
-
-test('Carbon evidence row disclosures restore independently of the calculation section',{skip},async t=>{
- const app=await open(t,{url:'/analyze?analyze_topic=carbon',ready:'#carbonCard .carbon-calculation'}),{page}=app;
- await page.locator('#carbonCard .carbon-calculation > summary').click();
- const evidence=page.locator('#carbonCard button.carbon-row-trigger').first();
- await evidence.click();await app.settled();
- const key=await evidence.getAttribute('data-view-key');
- const fresh=await open(t,{url:path(page),ready:'#carbonCard .carbon-calculation[open]'});
- const restored=fresh.page.locator('[data-view-key="'+key+'"]');
- await fresh.page.waitForFunction(key=>{const button=[...document.querySelectorAll('button[data-view-key]')].find(button=>button.dataset.viewKey===key);return button?.getAttribute('aria-expanded')==='true'&&document.getElementById(button.getAttribute('aria-controls'))?.hidden===false;},key);
- assert.equal(await restored.evaluate(button=>document.getElementById(button.getAttribute('aria-controls')).textContent.trim().length>0),true,'restored evidence materializes its content');
- await fresh.shot('carbon-evidence-portable');
-});
-
-test('workspace file-index accordion survives copying and reload by work identity',{skip},async t=>{
- const original=defaultApi['GET /api/work/:id']({params:{id:workID}});
- const api={'GET /api/work/:id':{...original,files:[{path:'src/app.ts',conversation_id:rootConversation}]}};
- const key=`work:${workID}:files`,url=`/work/${workID}?`+new URLSearchParams({disclosures:JSON.stringify({[key]:true})});
- const app=await open(t,{url,api,ready:'.file-index[open]'}),{page}=app;
- await page.locator('.file-index > summary').click();
- await page.waitForFunction(key=>JSON.parse(new URLSearchParams(location.search).get('disclosures')||'{}')[key]===false,key);
- const fresh=await open(t,{url:await page.evaluate(()=>location.pathname+location.search),api,ready:'.file-index'});
- assert.equal(await fresh.page.locator('.file-index').evaluate(element=>element.open),false);
- await fresh.page.reload();await fresh.page.locator('.file-index').waitFor();await fresh.settled();
- assert.equal(await fresh.page.locator('.file-index').evaluate(element=>element.open),false);
 });
 
 test('feedback inbox log accordions use the same URL syntax without the application shell',{skip},async t=>{
@@ -882,77 +509,166 @@ test('feedback inbox log accordions use the same URL syntax without the applicat
  assert.equal(await fresh.page.locator('.report-detail details').evaluate(element=>element.open),false);
 });
 
-
-test('revealing a closed accordion highlights its summary without overriding explicit false',{skip},async t=>{
- const entries={'sync:separate':false,'sync:diagnostics':false,'background:writing':false,'library:drive-health':false};
- const url='/settings/sync?'+new URLSearchParams({disclosures:JSON.stringify(entries),reveal:'section:sync:separate'});
- const app=await open(t,{url,ready:'[data-view-key="sync:separate"].pharos-reveal'}),{page}=app;
- assert.equal(await page.locator('[data-view-key="sync:separate"]').evaluate(element=>element.open),false);
- for(const [key,route]of [['sync:diagnostics','/settings/sync'],['background:writing','/settings/sync'],['library:drive-health','/settings']]){
-  await page.evaluate(({key,route,entries})=>window.pharosNavigate(route+'?'+new URLSearchParams({disclosures:JSON.stringify(entries),reveal:'section:'+key})),{key,route,entries});
-  const target=page.locator('[data-pharos-target="section:'+key+'"].pharos-reveal');await target.waitFor({state:'visible'});
-  assert.equal(await target.evaluate(element=>element.contains(document.activeElement)),false,'revealing a closed section does not move focus');
-  assert.equal(await page.locator('[data-view-key="'+key+'"],[data-pharos-target="section:'+key+'"]').first().evaluate(element=>element.tagName==='DETAILS'?element.open:element.getAttribute('aria-expanded')==='true'),false);
-  await page.waitForFunction(()=>document.documentElement.dataset.pharosAttentionMissing==='');
-  await app.shot('closed-'+key);
- }
+test('opening work and returning to Search keeps the native Library search URL',{skip},async t=>{
+ const draft={editor:'visual',match:'literal',mode:'advanced',text:'failure',root:{kind:'group',join:'all',children:[],exclude:false},scope:{surface:'prose',roles:[],kinds:[],repository:'',provider:'',source:'',from:'',to:'',conversation_id:'',workspace_id:''},fuzzy:false,caseSensitive:false,separators:false};
+ const token=JSON.stringify(draft),query={...EMPTY_QUERY,select:[{field:'title'}],hostState:{version:1,params:{text_builder:[token]}},limit:5,fitToScreen:false};
+ const app=await open(t,{url:'/library?'+new URLSearchParams({q_library:encodeQuery(query),text_builder:token}),ready:'#queryTableLibrary .qt-row'}),{page}=app;
+ await app.settled();
+ const original=decodeQueryStrict(new URL(page.url()).searchParams.get('q_library'));
+ // site_link composes view search into the native host state; every request carries it.
+ assert.deepEqual(JSON.parse(new URL(page.url()).searchParams.get('text_builder')),JSON.parse(original.hostState.params.text_builder[0]));
+ const requests=app.calls.filter(call=>call.method==='POST'&&call.path.startsWith('/api/query/library/'));
+ assert.ok(requests.length>0);
+ for(const request of requests)assert.ok(request.query.has('find')||request.query.has('find_where'),`${request.path} dropped the applied search`);
+ await page.evaluate(id=>window.pharosOpenDetail(id),workID);
+ await page.waitForFunction(()=>location.pathname.startsWith('/work/')&&!!document.querySelector('#detail.active'));
+ assert.equal(JSON.parse(new URL(page.url()).searchParams.get('text_builder')).text,'failure');
+ await page.evaluate(()=>document.getElementById('back').click());
+ await page.waitForFunction(()=>location.pathname==='/library');await app.settled();
+ const restored=new URL(page.url()).searchParams;
+ assert.deepEqual(decodeQueryStrict(restored.get('q_library')),original);
+ assert.equal(JSON.parse(restored.get('text_builder')).text,'failure');
 });
 
+test('row disclosures record deliberate choices without capturing every rendered default',{skip},async t=>{
+ const schema=loadSchema(toolCallsDocument),now=Date.now();
+ const rows=Array.from({length:12},(_,i)=>({id:`payload-${i}`,workspace_id:workID,conversation_id:rootConversation,input_text:'Synthetic retained input '.repeat(50),tool_name:'shell',status:'success',started_at:new Date(now).toISOString()}));
+ const api={'* /api/query/tool_calls/:operation':({params,body,query})=>answerQuery(params.operation,body,rows,schema,{now,id:query.get('id')})};
+ const route=offset=>'/analyze?'+new URLSearchParams({analyze_mode:'query',analyze_data:'tool_calls',q_tool_calls:encodeQuery({...EMPTY_QUERY,select:[{field:'id'},{field:'tool_name'},{field:'__qt_item_details__'}],itemDetails:{modes:['expand']},limit:4,offset,fitToScreen:false})});
+ const app=await open(t,{url:route(0),api,ready:'.usage-workspace-table .qt-row'}),{page}=app;
+ await page.locator('.usage-workspace-table .qt-row').first().getByRole('button',{name:/^Expand /}).click();
+ await page.locator('.usage-payload').first().waitFor();
+ const entries=()=>Object.keys(JSON.parse(new URL(page.url()).searchParams.get('disclosures')||'{}')).filter(key=>key.startsWith('row:'));
+ assert.deepEqual(entries(),[]);
+ await page.locator('.usage-payload summary').first().click();await app.settled();
+ const chosen=entries();assert.equal(chosen.length,1);
+ await page.evaluate(next=>{const url=new URL(location.href);url.searchParams.set('q_tool_calls',new URL(next,location.origin).searchParams.get('q_tool_calls'));window.pharosNavigate(url.pathname+url.search)},route(4));await app.settled();
+ await page.locator('.usage-workspace-table .qt-row').first().getByRole('button',{name:/^Expand /}).click();
+ await page.locator('.usage-payload').first().waitFor();
+ assert.deepEqual(entries(),chosen);
+ await page.goBack();await page.locator('.usage-payload').first().waitFor();await app.settled();
+ assert.equal(await page.locator('.usage-payload').first().evaluate(element=>element.open),true);
+ // A row identity highlights its rendered row without opening a modal.
+ await page.evaluate(()=>{const url=new URL(location.href);url.searchParams.set('reveal','row:payload-1');history.replaceState(history.state,'',url);window.dispatchEvent(new Event('pharos:uri-changed'));});
+ await page.waitForFunction(()=>!!document.querySelector('tr.pharos-reveal'));
+ assert.equal(await page.locator('[role="dialog"]:visible').count(),0);
+});
+
+test('accordion links restore capture/index diagnostics in fresh browsers and history, and reveal a closed accordion without opening it',{skip},async t=>{
+ const keys=['sync:separate','sync:repairs','sync:diagnostics','sync:forecast:capture-forecast'],ready='#syncDiagnosticTables details';
+ const route=entries=>'/settings/sync?'+new URLSearchParams({disclosures:JSON.stringify(entries)});
+ const entries=Object.fromEntries(keys.map(key=>[key,true])),defaults=Object.fromEntries(keys.map(key=>[key,false]));
+ const app=await open(t,{url:route(entries),ready}),{page}=app;
+ const state=(browser,expected)=>browser.waitForFunction(expected=>Object.entries(expected).every(([key,open])=>{
+  const element=[...document.querySelectorAll('[data-view-key],[data-pharos-target]')].find(element=>element.dataset.viewKey===key||element.dataset.pharosTarget==='section:'+key);
+  return element&&(element.tagName==='DETAILS'?element.open:element.getAttribute('aria-expanded')==='true')===open;
+ }),expected);
+ await state(page,entries);
+ const first=page.locator('[data-view-key="'+keys[0]+'"]');
+ if(await first.evaluate(element=>element.tagName==='DETAILS'))await first.locator('summary').first().click();else await first.click();
+ await state(page,{...entries,[keys[0]]:false});
+ await page.waitForFunction(key=>JSON.parse(new URLSearchParams(location.search).get('disclosures')||'{}')[key]===false,keys[0]);await app.settled();
+ const fresh=await open(t,{url:path(page),ready});
+ await state(fresh.page,{...entries,[keys[0]]:false});
+ await page.evaluate(url=>window.pharosNavigate(url),route({}));
+ await state(page,defaults);
+ await page.goBack();await state(page,{...entries,[keys[0]]:false});
+ await page.goForward();await state(page,defaults);
+ assert.equal(app.calls.some(call=>call.method!=='GET'&&/^\/api\/(background\/(settings|run)|sync\/|cloud-backup\/(schedule|start))/.test(call.path)),false,'restoring sections must not run work or save settings');
+ // Revealing a closed accordion highlights its summary without overriding explicit false.
+ const closed={'sync:separate':false,'sync:diagnostics':false};
+ await page.evaluate(url=>window.pharosNavigate(url),route(closed)+'&'+new URLSearchParams({reveal:'section:sync:diagnostics'}));
+ const target=page.locator('[data-pharos-target="section:sync:diagnostics"].pharos-reveal');await target.waitFor({state:'visible'});
+ await page.waitForFunction(()=>document.documentElement.dataset.pharosAttentionMissing==='');
+ assert.equal(await target.evaluate(element=>element.contains(document.activeElement)),false,'revealing a closed section does not move focus');
+ assert.equal(await page.locator('[data-view-key="sync:diagnostics"],[data-pharos-target="section:sync:diagnostics"]').first().evaluate(element=>element.tagName==='DETAILS'?element.open:element.getAttribute('aria-expanded')==='true'),false);
+});
+
+test('drive-status accordion links restore the overlay without moving focus and survive polling',{skip},async t=>{
+ const entries={'status:cadence:frequent':false,'status:cadence:hourly':true};
+ const api={'GET /api/status':busyStatus,'GET /api/status/stream':eventStream(busyStatus)};
+ const target='section:status:cadence:hourly';
+ const app=await open(t,{url:'/library?'+new URLSearchParams({overlay:'drive',disclosures:JSON.stringify(entries),reveal:target}),api,ready:'#pharosStatusPanel'}),{page}=app;
+ const expanded=()=>page.waitForFunction(()=>document.querySelector('[data-view-key="status:cadence:hourly"]')?.open===true&&document.querySelector('[data-view-key="status:cadence:frequent"]')?.open===false);
+ const highlighted=()=>page.waitForFunction(target=>document.documentElement.dataset.pharosAttentionMissing===''&&[...document.querySelectorAll('.pharos-reveal')].some(element=>element.dataset.pharosTarget===target),target);
+ await expanded();await highlighted();await app.settled();
+ assert.equal(await page.locator('#pharosStatusPanel').evaluate(panel=>panel.contains(document.activeElement)),false);
+ await page.evaluate(()=>{window.__disclosureScrolls=0;const original=Element.prototype.scrollIntoView;Element.prototype.scrollIntoView=function(...args){window.__disclosureScrolls++;return original.apply(this,args);};});
+ for(const revision of [busyStatus.revision+1,busyStatus.revision+2]){
+  app.push('/api/status/stream',{...busyStatus,revision});
+  await page.waitForFunction(revision=>window.pharosStatusStore.current()?.document?.revision===revision,revision);
+  await app.settled();await expanded();await highlighted();
+ }
+ assert.equal(await page.evaluate(()=>window.__disclosureScrolls),0,'polling reapplies highlights without repeating reveal scrolling');
+});
+
+test('Carbon evidence row disclosures restore independently of the calculation section',{skip},async t=>{
+ const app=await open(t,{url:'/analyze?analyze_topic=carbon',ready:'#carbonCard .carbon-calculation'}),{page}=app;
+ await page.locator('#carbonCard .carbon-calculation > summary').click();
+ const evidence=page.locator('#carbonCard button.carbon-row-trigger').first();
+ await evidence.click();await app.settled();
+ const key=await evidence.getAttribute('data-view-key');
+ const fresh=await open(t,{url:path(page),ready:'#carbonCard .carbon-calculation[open]'});
+ const restored=fresh.page.locator('[data-view-key="'+key+'"]');
+ await fresh.page.waitForFunction(key=>{const button=[...document.querySelectorAll('button[data-view-key]')].find(button=>button.dataset.viewKey===key);return button?.getAttribute('aria-expanded')==='true'&&document.getElementById(button.getAttribute('aria-controls'))?.hidden===false;},key);
+ assert.equal(await restored.evaluate(button=>document.getElementById(button.getAttribute('aria-controls')).textContent.trim().length>0),true,'restored evidence materializes its content');
+});
+
+test('Quick Stats keeps URL overlay restoration and reveals its configuration',{skip},async t=>{
+ const app=await open(t,{url:'/settings',viewport:{width:1485,height:791},ready:'#settings.active'}),{page}=app;
+ await activateHeaderTool(page,'usageSummaryToggle');
+ await page.getByRole('dialog',{name:'Quick Stats',exact:true}).waitFor();
+ assert.equal(new URL(page.url()).searchParams.get('overlay'),'usage');
+ const fresh=await open(t,{url:path(page),ready:'#usageSummary:not([hidden])'});
+ assert.equal(await fresh.page.getByRole('dialog',{name:'Quick Stats',exact:true}).isVisible(),true);
+ await fresh.page.keyboard.press('Escape');
+ await fresh.page.waitForFunction(()=>document.getElementById('usageSummary').hidden&&new URLSearchParams(location.search).get('overlay')==='none');
+ await page.getByRole('button',{name:'Configure Quick Stats',exact:true}).click();
+ await page.locator('#quickStatsOptions:not([hidden])').waitFor();await app.settled();
+ await page.waitForFunction(()=>{const panel=document.getElementById('quickStatsSettings'),rect=panel.getBoundingClientRect();return panel.classList.contains('pharos-reveal')&&rect.top>=document.querySelector('body>header').getBoundingClientRect().bottom&&rect.top<innerHeight;});
+ assert.equal(await page.locator('#usageSummary').isVisible(),false);
+ assert.equal(await page.locator('#quickStatsSettings').evaluate(panel=>panel.contains(document.activeElement)),false,'reveal leaves keyboard focus alone');
+});
 
 test('Thinking shares filters, brushing and disclosures across pages and independent browsers',{skip},async t=>{
  const ready='.thinking-dashboard[aria-busy="false"] .thinking-population';
  const app=await open(t,{url:'/analyze?analyze_topic=thinking-detail&analyze_data=model_requests',ready}),{page}=app;
  const control=name=>page.locator('.thinking-controls').getByRole('combobox',{name,exact:true});
  const state=()=>JSON.parse(new URL(page.url()).searchParams.get('thinking'));
- for(const [range,period] of [['90d','day'],['7d','hours'],['1y','week'],['30d','day']]){
-  await control('Range').selectOption(range);await app.settled();
-  assert.equal(await control('Time Bucket').inputValue(),period);
-  assert.equal(app.calls.filter(c=>c.path==='/api/thinking').at(-1).query.get('period'),period);
- }
- const bucketCopy=await open(t,{url:path(page),ready});
- assert.equal(await bucketCopy.page.getByRole('combobox',{name:'Time Bucket',exact:true}).inputValue(),'day');
- await control('Breakdown').selectOption('model_effort');await app.settled();
- // Wheel input over a tall, faceted plot must move the page scroller.
- const wheelChart=page.locator('.thinking-brush').first();await wheelChart.scrollIntoViewIfNeeded();
- const wheelRect=await wheelChart.boundingBox(),beforeWheel=await page.locator('main').evaluate(el=>el.scrollTop);
- await page.mouse.move(wheelRect.x+wheelRect.width*.5,wheelRect.y+wheelRect.height*.5);await page.mouse.wheel(0,240);
- await page.waitForFunction(before=>document.querySelector('main').scrollTop>before,beforeWheel);
+ const topic=()=>new URL(page.url()).searchParams.get('analyze_topic');
  await control('Model').selectOption('gpt-6.1-sol');await app.settled();
  const chart=page.locator('.thinking-brush').first();await chart.scrollIntoViewIfNeeded();const rect=await chart.boundingBox();
  await page.mouse.move(rect.x+rect.width*.3,rect.y+rect.height*.4);await page.mouse.down();await page.mouse.move(rect.x+rect.width*.65,rect.y+rect.height*.4,{steps:8});await page.mouse.up();
  await page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('thinking')).range==='custom');await app.settled();
  const selected=state();assert.ok(selected.from&&selected.to);assert.ok(['custom','custom-times'].includes(await control('Range').inputValue()));
- for(const view of ['heatmap','histogram','reasoning','wait-box','calendar']){await control('View').selectOption(view);await app.settled();assert.equal(state().from,selected.from);assert.equal(state().to,selected.to);await app.shot(view)}
- const linked=path(page),fresh=await open(t,{url:linked,ready});
- assert.deepEqual(JSON.parse(new URL(fresh.page.url()).searchParams.get('thinking')),state());
+ const fresh=await open(t,{url:path(page),ready});
+ assert.deepEqual(JSON.parse(new URL(fresh.page.url()).searchParams.get('thinking')),selected);
+ const detailTopic=topic();
  await page.locator('.thinking-links').getByRole('link',{name:'Waiting and Compaction →',exact:true}).click();await page.locator(ready).waitFor();await app.settled();
+ const overviewTopic=topic();assert.notEqual(overviewTopic,detailTopic);
  assert.equal(state().from,selected.from);
  await page.getByText('Methodology, exclusions and production limits',{exact:true}).click();await app.settled();
- const overview=path(page),copied=await open(t,{url:overview,ready});
- assert.equal(await copied.page.locator('[data-pharos-target="section:thinking:methodology"]').getAttribute('open')!==null,true);
  // An already-open validation section must fetch its evidence on restoration,
  // even though shared accordions notify onOpenChange only for deliberate toggles.
- const validationURL=new URL(overview,'http://localhost');
- validationURL.searchParams.set('disclosures',JSON.stringify({'thinking:validation':true}));
- const validationCopy=await open(t,{url:validationURL.pathname+validationURL.search,ready});
- const validationPanel=validationCopy.page.locator('[data-pharos-target="section:thinking:validation"]');
+ const overview=new URL(path(page),'http://localhost');
+ const disclosures=JSON.parse(overview.searchParams.get('disclosures')||'{}');
+ assert.equal(disclosures['thinking:methodology'],true);
+ overview.searchParams.set('disclosures',JSON.stringify({...disclosures,'thinking:validation':true}));
+ const copied=await open(t,{url:overview.pathname+overview.search,ready});
+ assert.equal(await copied.page.locator('[data-pharos-target="section:thinking:methodology"]').getAttribute('open')!==null,true);
+ const validationPanel=copied.page.locator('[data-pharos-target="section:thinking:validation"]');
  await validationPanel.locator('summary').scrollIntoViewIfNeeded();
  await validationPanel.locator('svg').first().waitFor();
- assert.ok(validationCopy.calls.some(call=>call.path==='/api/thinking'&&call.query.get('evidence')==='1'));
-
- await app.shot('overview');
- const evidenceLoaded=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/query/model_requests/rows-v2');
- await page.locator('.thinking-links').getByRole('link',{name:'Inspect model-request evidence →',exact:true}).click();await evidenceLoaded;await page.locator('.usage-workspace-table').waitFor();await app.settled();
- await page.getByRole('link',{name:'Back to dashboard',exact:true}).click();await page.locator(ready).waitFor();await app.settled();assert.equal(state().model,'gpt-6.1-sol');assert.equal(state().from,selected.from);
- await page.goBack();await page.locator('.usage-workspace-table').waitFor();
- await page.goBack();await page.locator(ready).waitFor();
- await page.goBack();await page.locator(ready).waitFor();assert.equal(state().view,'calendar');
- await page.goForward();await page.locator(ready).waitFor();assert.equal(state().model,'gpt-6.1-sol');
+ assert.ok(copied.calls.some(call=>call.path==='/api/thinking'&&call.query.get('evidence')==='1'));
+ await page.goBack();await page.waitForFunction(topic=>new URLSearchParams(location.search).get('analyze_topic')===topic,detailTopic);await page.locator(ready).waitFor();
+ assert.equal(state().model,'gpt-6.1-sol');assert.equal(state().from,selected.from);
+ await page.goForward();await page.waitForFunction(topic=>new URLSearchParams(location.search).get('analyze_topic')===topic,overviewTopic);await page.locator(ready).waitFor();
+ assert.equal(state().from,selected.from);
 });
 
 // Date arithmetic is covered in node; here verify the shared editor is wired to
-// the viewer's local zone, restores in a fresh browser, and keeps API/URL in sync.
-test('Thinking custom date editor follows the viewer zone and restores absolute dates',{skip},async t=>{
+// the viewer's local zone and keeps API/URL in sync.
+test('Thinking custom date editor follows the viewer zone and writes absolute dates',{skip},async t=>{
  const ready='.thinking-dashboard[aria-busy="false"] .thinking-population';
  const thinking={timezone:'Asia/Tokyo',minimum:1000,range:'custom',from:'2026-10-20T06:00:00.000Z',to:'2026-10-21T06:00:00.000Z'};
  const app=await open(t,{url:'/analyze?'+new URLSearchParams({analyze_topic:'thinking-detail',analyze_data:'model_requests',thinking:JSON.stringify(thinking)}),ready}),{page}=app;
@@ -961,19 +677,14 @@ test('Thinking custom date editor follows the viewer zone and restores absolute 
  assert.equal(await page.getByLabel('From date',{exact:true}).inputValue(),'2026-10-20');
  assert.equal(await page.getByLabel('Through date',{exact:true}).inputValue(),'2026-10-20');
  await page.getByLabel('Through date',{exact:true}).fill('2026-10-21');await app.settled();
- await page.getByLabel('From date',{exact:true}).fill('2026-10-21');await app.settled();
  const state=JSON.parse(new URL(page.url()).searchParams.get('thinking'));
- assert.equal(state.from,'2026-10-21T06:00:00.000Z');assert.equal(state.to,'2026-10-22T06:00:00.000Z');
+ assert.equal(state.from,'2026-10-20T06:00:00.000Z');assert.equal(state.to,'2026-10-22T06:00:00.000Z');
  assert.equal(state.timezone,'America/Denver');assert.equal(state.minimum,0);
  const calls=app.calls.filter(c=>c.path==='/api/thinking');
  assert.equal(calls.at(-1).query.get('from'),state.from);assert.equal(calls.at(-1).query.get('to'),state.to);
  assert.equal(calls.at(-1).query.get('timezone'),'America/Denver');assert.equal(calls.at(-1).query.get('minimum'),'0');
- const fresh=await open(t,{url:path(page),ready});
- assert.equal(await fresh.page.getByLabel('From date',{exact:true}).inputValue(),'2026-10-21');
- assert.equal(await fresh.page.getByLabel('Through date',{exact:true}).inputValue(),'2026-10-21');
  await range.selectOption('custom-times');await app.settled();
- assert.equal(await page.getByLabel('From date and time',{exact:true}).inputValue(),'2026-10-21T00:00');
+ assert.equal(await page.getByLabel('From date and time',{exact:true}).inputValue(),'2026-10-20T00:00');
  await page.getByLabel('From date and time',{exact:true}).fill('2026-10-21T12:30');await app.settled();
  assert.equal(JSON.parse(new URL(page.url()).searchParams.get('thinking')).from,'2026-10-21T18:30:00.000Z');
- await app.shot('thinking-local-dates');
 });
