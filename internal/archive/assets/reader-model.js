@@ -233,6 +233,7 @@ function conversationGraph(messages){
 }
 // A compact outline for result cards, using the reader's normalized graph.
 // Inline delegations stay under their owning turn; paired results are not turns.
+// Each entry lists the messages it owns, so a search match opens its entry.
 function conversationOutline(conversation){
   const graph=conversationGraph(conversationMessages(conversation)),seen=new Set();
   const agents=events=>events.filter(message=>message.kind==='delegation'&&!seen.has(message)).map(message=>{
@@ -241,11 +242,11 @@ function conversationOutline(conversation){
     return {id:message.native_id||message.call_id||message.id,kind:'agent',label:String(input.subagent_type||input.agent_type||input.name||'Sub-agent'),
       prompt:String(input.description||input.prompt||input.task||messageSummary(message)||'Sub-agent'),
       human:{role:'user',text:input.prompt||input.description||input.task||messageSummary(message)},
-      response:replies.at(-1)||(results.length?{role:'assistant',text:readableValue(toolPayload(results.at(-1)).content)}:null),tools:children.filter(item=>item.kind==='tool_call').length,children:agents(children)};
+      response:replies.at(-1)||(results.length?{role:'assistant',text:readableValue(toolPayload(results.at(-1)).content)}:null),messages:ownedMessages([message],graph),tools:children.filter(item=>item.kind==='tool_call').length,children:agents(children)};
   });
   let turnNumber=0;
   return graph.turns.map((turn,index)=>({id:turn.human?.id||turn.human?.native_id||'setup-'+index,kind:'turn',label:turn.human?'Turn '+(++turnNumber):'Session setup',
-    prompt:messageSummary(turn.human)||'Session setup',human:turn.human,response:turn.events.filter(message=>message.kind==='message').at(-1)||null,
+    prompt:messageSummary(turn.human)||'Session setup',human:turn.human,response:turn.events.filter(message=>message.kind==='message').at(-1)||null,messages:ownedMessages([turn.human,...turn.events],graph),
     tools:turn.events.filter(message=>message.kind==='tool_call').length,children:agents(turn.events)}));
 }
 // Publish the result-card model with the model script itself, independently of

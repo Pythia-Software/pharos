@@ -110,7 +110,7 @@ test('automatic oversized query references resolve in a fresh browser with no lo
  assert.deepEqual(fixture.read(fresh.page).itemDetails.jsonInspections[0].state,state);
 });
 
-test('conversation result links restore their session and inline agent without taking focus',{skip},async t=>{
+test('conversation result links restore their session, matched message and inline agent without taking focus',{skip},async t=>{
  const message=(id,role,text)=>({id,native_id:id,role,kind:'message',text});
  const api={
   'POST /api/query/library/:operation':request=>{
@@ -120,19 +120,24 @@ test('conversation result links restore their session and inline agent without t
   'GET /api/work/:id':request=>({...defaultApi['GET /api/work/:id'](request),conversations:[{id:'first',provider:'codex'},{id:'second',provider:'codex'}]}),
   'GET /api/work/:id/conversations/:conversation':({params})=>({id:params.conversation,workspace_id:workID,provider:'codex',messages:params.conversation==='first'?[message('first-prompt','user','First session prompt')]:[
    message('second-prompt','user','Second session prompt'),
+   message('second-note','assistant','Intermediate note'),
    message('shared-envelope','assistant',JSON.stringify({content:[
     {type:'tool_use',id:'configuration',name:'Task',input:{subagent_type:'Configuration auditor',prompt:'Check configuration'}},
     {type:'tool_use',id:'timing',name:'Agent',input:{subagent_type:'Timing auditor',prompt:'Check timing'}},
    ]})),
    {...message('configuration-result','tool',JSON.stringify({content:'Configuration checked.'})),kind:'delegation_result',call_id:'configuration'},
    {...message('timing-result','tool',JSON.stringify({content:'Timing checked.'})),kind:'delegation_result',call_id:'timing'},
+   message('second-reply','assistant','Final reply'),
   ]}),
  };
- const state={[`${workID}/browse`]:true,[`${workID}/turn`]:'second-prompt'};
+ // A Search match's message within the turn (an intermediate reply) restores with it.
+ const state={[`${workID}/browse`]:true,[`${workID}/turn`]:'second-prompt',[`${workID}/message`]:'second-note'};
  const disclosures={[`search:${workID}:conversation:first`]:true,[`search:${workID}:conversation:second`]:true};
  const app=await open(t,{url:'/library?'+new URLSearchParams({view:'conversation',search_cards:JSON.stringify(state),disclosures:JSON.stringify(disclosures)}),api,ready:'.conversation-result-card'});
  const preview=app.page.getByRole('region',{name:'Selected turn preview',exact:true});
  await preview.getByText('Second session prompt',{exact:true}).waitFor();
+ await preview.getByText('Intermediate note',{exact:true}).waitFor();
+ await preview.getByText('Final reply',{exact:true}).waitFor();
  await app.page.getByRole('navigation',{name:'Conversation outline',exact:true}).getByRole('button',{name:/First session prompt/}).waitFor();
  assert.equal(await preview.evaluate(element=>element.contains(document.activeElement)),false);
  await app.page.getByRole('navigation',{name:'Conversation outline',exact:true}).getByRole('button',{name:/Sub-agent · Timing auditor/}).click();
@@ -400,7 +405,7 @@ test('feedback inbox log accordions use the same URL syntax without the applicat
  const entry={version:1,id,application:{name:'Fixture app'},kind:'feedback',comment:'A report',annotations:[],diagnostics:{browser:'Fixture log'},received_at:new Date().toISOString(),tags:[],revision:'1'};
  const api={'GET /api/submissions':{submissions:[{...entry,annotation_count:0,screenshot_count:0,has_diagnostics:true}]},'GET /api/submissions/:id':entry};
  const boot=async url=>{
-  const app=await open(t,{url:'/library',api,ready:'#queryTableLibrary .qt-row'});
+  const app=await open(t,{url:'/library?view=table',api,ready:'#queryTableLibrary .qt-row'});
   await app.page.route('**/feedback-inbox*',route=>route.fulfill({contentType:'text/html',body:readFileSync(repo+'/internal/uifeedback/assets/index.html')}));
   await app.page.route('**/assets/inbox.*',route=>{const name=new URL(route.request().url()).pathname.split('/').pop();return route.fulfill({contentType:name.endsWith('.js')?'text/javascript':'text/css',body:readFileSync(repo+'/internal/uifeedback/assets/'+name)});});
   await app.page.goto(new URL(url,app.page.url()).href);await app.page.locator('.report-detail details').waitFor();await app.settled();return app;
@@ -416,7 +421,7 @@ test('feedback inbox log accordions use the same URL syntax without the applicat
 
 test('opening work and returning to Search keeps the native Library search URL',{skip},async t=>{
  const draft={editor:'visual',match:'literal',mode:'advanced',text:'failure',root:{kind:'group',join:'all',children:[],exclude:false},scope:{surface:'prose',roles:[],kinds:[],repository:'',provider:'',source:'',from:'',to:'',conversation_id:'',workspace_id:''},fuzzy:false,caseSensitive:false,separators:false};
- const token=JSON.stringify(draft),query={...EMPTY_QUERY,select:[{field:'title'}],hostState:{version:1,params:{text_builder:[token]}},limit:5,fitToScreen:false};
+ const token=JSON.stringify(draft),query={...EMPTY_QUERY,select:[{field:'title'}],hostState:{version:1,params:{text_builder:[token],view:['table']}},limit:5,fitToScreen:false};
  const app=await open(t,{url:'/library?'+new URLSearchParams({q_library:encodeQuery(query),text_builder:token}),ready:'#queryTableLibrary .qt-row'}),{page}=app;
  await app.settled();
  const original=decodeQueryStrict(new URL(page.url()).searchParams.get('q_library'));
