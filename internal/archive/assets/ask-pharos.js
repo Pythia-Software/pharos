@@ -1,5 +1,5 @@
 
-window.initPharosAsk = function(root, {chartPreviews} = {}) {
+window.initPharosAsk = function(root, {previews} = {}) {
   const product = root.querySelector('.pharos-product');
   const cleanup=[];
   const listen=(target,name,fn,options)=>{target.addEventListener(name,fn,options);cleanup.push(()=>target.removeEventListener(name,fn,options));};
@@ -165,7 +165,7 @@ window.initPharosAsk = function(root, {chartPreviews} = {}) {
     const returning=presentation!=='home'||root.parentElement!==homeHost;
     if(!returning)return;
     presentation='home';if(root.parentElement!==homeHost)homeHost.append(root);
-    chartPreviews?.revalidate();
+    previews?.revalidate();
     if(!new URL(location.href).searchParams.has('ask_chat'))syncChatURL(activeSessionId);
     render();
   }
@@ -185,7 +185,7 @@ window.initPharosAsk = function(root, {chartPreviews} = {}) {
     regularOverride=false;
     delete overlay.dataset.positioned;overlay.style.removeProperty('height');overlay.style.removeProperty('--pharos-dialog-top');
     presentation='modal';overlay.append(root);overlay.showModal();
-    chartPreviews?.revalidate();
+    previews?.revalidate();
     render();sizeThread();sizeOverlay();question.focus({preventScroll:true});
     if(mode==='available'||mode==='declined')openModal(consent);
   }
@@ -535,7 +535,7 @@ window.initPharosAsk = function(root, {chartPreviews} = {}) {
     const badge=document.createElement('span');badge.className='pharos-agent-badge';
     badge.append(find('#pharos-logo-'+turn.cli.toLowerCase()).content.firstElementChild.cloneNode(true));avatar.append(badge);
     avatar.setAttribute('aria-label','Pharos with '+turn.cli);avatar.removeAttribute('aria-hidden');avatar.setAttribute('role','img');
-    const view={element,get,previews:new Map(),hasChartPreview:false};turnViews.set(turn.id,view);thread.append(element);
+    const view={element,get,previews:new Map(),hasPreview:false};turnViews.set(turn.id,view);thread.append(element);
     get('.pharos-retry').addEventListener('click',()=>startRequest(turn));
     get('.pharos-retry-model').addEventListener('click',retryWithDifferentModel);
     get('.pharos-recovery-search').addEventListener('click',useRegular);
@@ -567,18 +567,18 @@ window.initPharosAsk = function(root, {chartPreviews} = {}) {
     get('.pharos-destinations').hidden=!hasResults;
     get('.pharos-results-label').hidden=!hasResults||!turn.reply?.trim();get('.pharos-results-label').textContent=turn.reply;
     const omitted=askOmittedNote(hasResults?turn.omitted:0);get('.pharos-omitted').hidden=!omitted;get('.pharos-omitted').textContent=omitted;
-    view.hasChartPreview=false;
+    view.hasPreview=false;
     element.querySelectorAll('.pharos-destination').forEach((link,index)=>{
-      const card=response.cards[index],result=link.parentElement,slot=result.querySelector('.pharos-chart-preview-slot');
+      const card=response.cards[index],result=link.parentElement,slot=result.querySelector('.pharos-preview-slot');
       result.hidden=link.hidden=!hasResults||!card;
-      const key=hasResults&&card&&chartPreviews?.canRender(card.href)?JSON.stringify([card.href,card.title]):'';
+      const key=hasResults&&card&&previews?.canRender(card.href)?JSON.stringify([card.href,card.title]):'';
       const previous=view.previews.get(link);
       if(previous?.key!==key){
         previous?.dispose();view.previews.delete(link);
-        if(key)view.previews.set(link,{key,dispose:chartPreviews.mount(slot,card)});
+        if(key)view.previews.set(link,{key,dispose:previews.mount(slot,card)});
       }
       slot.hidden=!key;result.classList.toggle('has-preview',!!key);
-      view.hasChartPreview ||= !!key;
+      view.hasPreview ||= !!key;
       if(!card)return;
       link.dataset.destination=card.title;link.href=card.href;
       link.querySelector('strong').textContent=card.title;
@@ -972,7 +972,7 @@ window.initPharosAsk = function(root, {chartPreviews} = {}) {
       if(pending?.request!==request)return;
       activeCreatedAt=session.createdAt;activeUpdatedAt=session.updatedAt;const edited=pending.edited,browsing=pending.browsing;const final=session.conversation.find(t=>t.id===turn.id);Object.assign(turn,final);stop(false);updateTurn(turn);syncComposer();sessions=sessionRecords();
       window.dispatchEvent(new Event('pharos:data-refresh'));
-      if(askShouldNavigate({hasPreview:turnViews.get(turn.id)?.hasChartPreview,cards:turn.cards,omitted:turn.omitted,draft:question.value,enabled:mode==='enabled',regular:regularOverride,edited,browsing}))openDestination(turn,turn.cards[0].href);else notifyCompletion(turn);
+      if(askShouldNavigate({hasPreview:turnViews.get(turn.id)?.hasPreview,cards:turn.cards,omitted:turn.omitted,draft:question.value,enabled:mode==='enabled',regular:regularOverride,edited,browsing}))openDestination(turn,turn.cards[0].href);else notifyCompletion(turn);
     }catch(error){
       if(pending?.request!==request)return;
       // A lost response is not permission to repeat a billable request.
