@@ -515,13 +515,14 @@ window.initPharosAsk = function(root, {chartPreviews} = {}) {
     get('.pharos-recovery-clear').addEventListener('click',()=>clearChat());
     element.querySelectorAll('.pharos-destination').forEach(link=>link.addEventListener('click',event=>{
       if(event.metaKey||event.ctrlKey||event.shiftKey||event.altKey||event.button)return;
-      event.preventDefault();stop();if(presentation==='modal')closeOverlay();window.pharosNavigate?.(link.getAttribute('href'));
+      event.preventDefault();openDestination(link.getAttribute('href'));
     }));
     updateTurn(turn);
   }
+  function openDestination(href){stop();if(presentation==='modal')closeOverlay();window.pharosNavigate?.(href);}
   function updateTurn(turn) {
     const view=turnViews.get(turn.id);if(!view)return;
-    const {element,get}=view,loading=turn.status==='loading';
+    const {element,get}=view,loading=turn.status==='loading',answered=element.dataset.status==='loading'&&!loading;
     element.dataset.status=turn.status;
     get('.pharos-agent-message').setAttribute('aria-busy',String(loading));
     get('.pharos-waiting').hidden=!loading;
@@ -543,14 +544,15 @@ window.initPharosAsk = function(root, {chartPreviews} = {}) {
     view.hasChartPreview=false;
     element.querySelectorAll('.pharos-destination').forEach((link,index)=>{
       const card=response.cards[index],result=link.parentElement,slot=result.querySelector('.pharos-chart-preview-slot');
-      result.hidden=link.hidden=!hasResults||!card;
-      const key=hasResults&&card&&chartPreviews?.canRender(card.href)?JSON.stringify([card.href,card.title]):'';
+      const key=hasResults&&card&&chartPreviews?.canRender(card.href)?JSON.stringify([card.href,card.title,card.description]):'';
+      // A chart's card carries its own title, description and link.
+      result.hidden=!hasResults||!card;link.hidden=result.hidden||!!key;
       const previous=view.previews.get(link);
       if(previous?.key!==key){
         previous?.dispose();view.previews.delete(link);
-        if(key)view.previews.set(link,{key,dispose:chartPreviews.mount(slot,card)});
+        if(key)view.previews.set(link,{key,dispose:chartPreviews.mount(slot,{href:card.href,title:card.title,description:card.description||''},{eager:answered,onOpen:openDestination})});
       }
-      slot.hidden=!key;result.classList.toggle('has-preview',!!key);
+      slot.hidden=!key;
       view.hasChartPreview ||= !!key;
       if(!card)return;
       link.dataset.destination=card.title;link.href=card.href;

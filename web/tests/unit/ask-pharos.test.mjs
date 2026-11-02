@@ -410,13 +410,13 @@ test('Ask preview jobs keep each chart URL and its moving window intact', t => {
 
 test('retained Ask charts revalidate on reopening and their own data or calendar refresh until disposed', () => {
   const openings = new EventTarget(), data = new EventTarget(), refreshes = [];
-  const stop = onAskChartRefresh('usage',openings,()=>refreshes.push('usage'),data);
+  const stop = onAskChartRefresh('usage',openings,stale=>refreshes.push(stale),data);
   openings.dispatchEvent(new Event('open'));
   data.dispatchEvent(new CustomEvent('pharos:data-refresh',{detail:'tools'}));
-  assert.equal(refreshes.length,1,'unrelated datasets leave the chart alone');
+  assert.deepEqual(refreshes,[false],'reopening keeps a fresh preview and unrelated datasets leave the chart alone');
   data.dispatchEvent(new CustomEvent('pharos:data-refresh',{detail:'usage'}));
   data.dispatchEvent(new Event('pharos:usage-refresh'));
-  assert.equal(refreshes.length,3,'both data and calendar changes invalidate the retained view');
+  assert.deepEqual(refreshes,[false,true,true],'both data and calendar changes invalidate the retained view');
   stop();
   openings.dispatchEvent(new Event('open'));
   data.dispatchEvent(new CustomEvent('pharos:data-refresh',{detail:'usage'}));

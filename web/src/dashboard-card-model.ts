@@ -44,6 +44,11 @@ export function collectDashboardCard(url: string, title: string, description: st
   return item;
 }
 
+// Ask offers a chart's own address as a card; the same address is collected once.
+export function dashboardCardCollected(url: string): boolean {
+  return readBookmarks().some(item => item.dashboard && item.url === url);
+}
+
 export function dashboardCardDescription(address: string): string {
   return usageTopics[readDashboardCard(address).topic].description;
 }

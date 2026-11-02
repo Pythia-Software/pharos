@@ -16,9 +16,12 @@ export function askChartPreviewJob(address: string, schemas: Partial<Record<Quer
 }
 
 // Reopening Ask and the dashboard's calendar/data refreshes revalidate the
-// retained chart. Other datasets and disposed chats must not wake it.
-export function onAskChartRefresh(dataset: string, openings: EventTarget, refresh: () => void, data: EventTarget = window): () => void {
-  openings.addEventListener("open", refresh);
-  const stop = onDatasetRefresh(dataset, refresh, data);
-  return () => { openings.removeEventListener("open", refresh); stop(); };
+// retained chart. Reopening reuses a preview still fresh in the cache, such
+// as one loaded while Ask floated; data refreshes make it stale. Other
+// datasets and disposed chats must not wake it.
+export function onAskChartRefresh(dataset: string, openings: EventTarget, refresh: (stale: boolean) => void, data: EventTarget = window): () => void {
+  const reopened = () => refresh(false);
+  openings.addEventListener("open", reopened);
+  const stop = onDatasetRefresh(dataset, () => refresh(true), data);
+  return () => { openings.removeEventListener("open", reopened); stop(); };
 }

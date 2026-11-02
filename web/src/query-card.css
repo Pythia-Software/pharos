@@ -165,7 +165,8 @@
 @keyframes query-preview-drift { to { opacity:.35; transform:translate(var(--drift-x),var(--drift-y)); } }
 @media(prefers-reduced-motion:reduce) { .query-preview-spinner,.query-preview-loading .query-preview-loading-shape * { animation:none; } }
 
-.query-cover-dense-list .qt-metric-bars { justify-content:flex-start; gap:5px; }
+/* Top-aligned rows leave room for the first value label above its bar. */
+.query-cover-dense-list .qt-metric-bars { justify-content:flex-start; gap:5px; padding-top:3px; }
 
 /* The shared portal supplies unclipped tooltips for native metric marks. */
 .query-compact-metric .qt-metric-tooltip { display:none; }
