@@ -5,7 +5,7 @@ import {createAttentionRegistry,parseJsonInspections} from '@pythia-software/que
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {EMPTY_QUERY,encodeQuery,decodeQueryStrict} from '@pythia-software/query-table-core';
-import {viewFields,fieldsForPage,encodeViewValue,parseViewValue,retainPageView} from '../../../src/view-contract';
+import {viewFields,fieldsForPage,encodeViewValue,parseViewValue,retainPageView,viewPageForURL} from '../../../src/view-contract';
 import {portableQueryLinks} from '../../../src/portable-query-link';
 import {viewRequestURL} from '../../../src/query-request';
 import {withSearchDateWindow,emptyTextSearch,refreshSearchToday,readTextSearch} from '../../../src/text-search-model';
@@ -45,6 +45,31 @@ test('host view codecs preserve explicit false, empty values, ordered IDs and re
  assert.equal(fieldsForPage('findings/settings').findings_rank,undefined);
  assert.equal(fieldsForPage('analyze/query/tool_calls','tool_calls').record_keyword.param,'record_tool_calls');
  for(const [key,raw]of [['card_filters','false'],['card_window','forever'],['delegation_columns','[1]'],['search_state','{}']])assert.throws(()=>parseViewValue(viewFields[key],raw),key);
+});
+
+test('Safety links restore their own section, lifecycle, case and evidence disclosures',()=>{
+ const url=new URL('https://pharos.test/findings?optimize_area=safety');
+ const values={optimize_area:'safety',safety_list:'handed_off',safety_place:'machine:host-1',safety_rank:'calls',safety_case:'safety_stable',disclosures:{'safety:safety_stable:evidence:source-1':true}};
+ for(const [name,value]of Object.entries(values)){
+  const field=viewFields[name];url.searchParams.set(field.param,encodeViewValue(field,value));
+  assert.deepEqual(parseViewValue(field,url.searchParams.get(field.param)),value);
+ }
+ assert.equal(viewPageForURL(url),'findings/safety');
+ const fields=fieldsForPage('findings/safety');
+ for(const name of Object.keys(values))assert.ok(fields[name],name);
+ assert.equal(fields.findings_rank,undefined);
+ assert.equal(fieldsForPage('findings').safety_case,undefined);
+ assert.throws(()=>parseViewValue(viewFields.safety_list,'won'));
+ assert.equal(viewPageForURL(new URL('https://pharos.test/findings?optimize_area=safety&view=table')),'findings/safety/table');
+ assert.equal(viewPageForURL(new URL('https://pharos.test/findings?optimize_area=safety&view=settings')),'findings/safety/settings');
+ assert.ok(fieldsForPage('findings/safety/table').safety_case);
+ assert.equal(fieldsForPage('findings/safety/settings').safety_case,undefined);
+ assert.equal(fieldsForPage('findings/safety/table').findings_rank,undefined);
+ assert.equal(fieldsForPage('findings/safety/table').safety_rank,undefined);
+ assert.equal(fieldsForPage('findings/safety/settings').safety_rank,undefined);
+ assert.equal(fieldsForPage('findings').safety_rank,undefined);
+ for(const rank of ['recent','calls','evidence'])assert.equal(parseViewValue(viewFields.safety_rank,encodeViewValue(viewFields.safety_rank,rank)),rank);
+ assert.throws(()=>parseViewValue(viewFields.safety_rank,'usd'));
 });
 
 test('large links remain self-contained until immutable library persistence succeeds',async()=>{

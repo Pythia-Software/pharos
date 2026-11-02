@@ -6,12 +6,12 @@ import { cardDashboardWhere, cardSourceDataset } from "./card-exploration";
 import { concurrencyWindowRange } from "./concurrency-settings";
 import { windowedChart } from "./card-windows";
 
-export const queryDatasets = ["library", "usage", "conversation_activity", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "parallelism", "findings"] as const;
+export const queryDatasets = ["library", "usage", "conversation_activity", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "parallelism", "findings", "safety"] as const;
 export type QueryDataset = typeof queryDatasets[number];
 export type RollingWindow = { days: number; field: string; mode?: "relative" | "calendar" | "today"; untilField?: string; timezone?: string };
 const defaultTimeFields: Partial<Record<QueryDataset, string[]>> = {
   writing: ["first_message_at", "last_message_at"], conversation_activity: ["event_at"], mcp_calls: ["called_at"], library: ["activity_at"], usage: ["first_usage_at", "last_usage_at"], tool_calls: ["started_at"],
-  skill_usages: ["created_at"], writing_messages: ["sent_at"], tl1_attempts: ["started_at"], parallelism: ["started_at"], findings: ["first_seen_at"],
+  skill_usages: ["created_at"], writing_messages: ["sent_at"], tl1_attempts: ["started_at"], parallelism: ["started_at"], findings: ["first_seen_at"], safety: ["last_seen_at"],
 };
 const timeFields = Object.fromEntries(Object.entries(schemaDocuments).map(([dataset, schema]) =>
   [dataset, schema.fields.filter(field => field.type === "datetime").map(field => field.name)])) as Record<QueryDataset, string[]>;
@@ -123,8 +123,8 @@ export function queryURL(dataset: QueryDataset, query: QueryState, window?: Roll
     params.set("analyze_mode", "query");
     params.set("analyze_topic", usageDatasetTopics[dataset as UsageDataset]);
     params.set("analyze_data", dataset);
-  } else if (dataset === "findings") {
-    path = "/findings"; params.set("view", "table");
+  } else if (dataset === "findings" || dataset === "safety") {
+    path = "/findings"; params.set("view", "table"); if (dataset === "safety") params.set("optimize_area", "safety");
   }
   if (window) {
     if (window.mode === "relative" || window.mode === "today") params.set("window_mode", window.mode);
@@ -149,7 +149,7 @@ export function queryFromURL(url: string, fallback?: QueryState): { dataset: Que
     const dataset: QueryDataset | undefined = workspace ? workspace.mode === "dashboards" ? cardSourceDataset(params) : workspace.dataset
       : path === "/library" || path === "/" ? "library"
       : path === "/analyze" && params.get("machine_view") === "parallelism" && params.has("q_parallelism") ? "parallelism"
-      : path === "/findings" ? params.get("view") === "table" ? "findings" : undefined
+      : path === "/findings" ? params.get("view") === "table" ? params.get("optimize_area") === "safety" ? "safety" : "findings" : undefined
       : path === "/analyze" ? params.get("analyze_view") === "conversations" ? "conversation_activity" : params.get("analyze_view") === "writing" ? params.get("writing") === "messages" ? "writing_messages" : "writing" : "usage"
       : path === "/tools" ? params.get("tools_view") === "summary" ? "tools" : params.get("tools_view") === "skills" ? "skill_usages" : "tool_calls"
       : path === "/mcp" ? "mcp_calls" : undefined;

@@ -112,6 +112,10 @@
       "field": "nav_expanded"
     },
     {
+      "file": "web/src/findings.tsx",
+      "field": "optimize_area"
+    },
+    {
       "file": "internal/archive/assets/ui.py",
       "field": "overlay"
     },
@@ -142,6 +146,22 @@
     {
       "file": "web/src/conversation-search.tsx",
       "field": "reader_search"
+    },
+    {
+      "file": "web/src/safety.tsx",
+      "field": "safety_case"
+    },
+    {
+      "file": "web/src/safety.tsx",
+      "field": "safety_list"
+    },
+    {
+      "file": "web/src/safety.tsx",
+      "field": "safety_place"
+    },
+    {
+      "file": "web/src/safety.tsx",
+      "field": "safety_rank"
     },
     {
       "file": "web/src/index.tsx",
@@ -4968,15 +4988,6 @@
       "reason": "List/repo/finding/tab route state, rank override and disclosures; action buttons mutate records and are excluded."
     },
     {
-      "key": "4a005640c466496f:0",
-      "file": "web/src/findings.tsx",
-      "owner": "FindingsList",
-      "tag": "select",
-      "control": "value={route.repo} onChange={event => replaceParams({ repo: event.target.value })} aria-label=\"Show findings for\"",
-      "contract": "findings",
-      "reason": "List/repo/finding/tab route state, rank override and disclosures; action buttons mutate records and are excluded."
-    },
-    {
       "key": "539c15646ab2ab3f:0",
       "file": "web/src/findings.tsx",
       "owner": "FindingsList",
@@ -4984,6 +4995,15 @@
       "control": "value={counts.open.toLocaleString()} onClick={() => setList(\"open\")}",
       "contract": "findings",
       "reason": "List/repo/finding/tab route state, rank override and disclosures; action buttons mutate records and are excluded."
+    },
+    {
+      "key": "7825e739c3f59359:0",
+      "file": "web/src/findings.tsx",
+      "owner": "FindingsList",
+      "tag": "OptimizePlaceFilter",
+      "control": "value={route.repo} onChange={repo => replaceParams({ repo })}",
+      "contract": "findings",
+      "reason": "Shared Optimize dashboard control; keeps the existing Efficiency rank binding or native repo route."
     },
     {
       "key": "7d84d07f4e7c6314:0",
@@ -4995,20 +5015,20 @@
       "reason": "List/repo/finding/tab route state, rank override and disclosures; action buttons mutate records and are excluded."
     },
     {
+      "key": "c2ab6b8270e972bc:0",
+      "file": "web/src/findings.tsx",
+      "owner": "FindingsList",
+      "tag": "OptimizeRank",
+      "control": "value={rank} onChange={setRank}",
+      "contract": "view.findings_rank",
+      "reason": "Shared Optimize dashboard control; keeps the existing Efficiency rank binding or native repo route."
+    },
+    {
       "key": "c2fa2ce28083bc17:0",
       "file": "web/src/findings.tsx",
       "owner": "FindingsList",
       "tag": "Tile",
       "control": "value={counts.watching.toLocaleString()} onClick={() => setList(\"watching\")}",
-      "contract": "findings",
-      "reason": "List/repo/finding/tab route state, rank override and disclosures; action buttons mutate records and are excluded."
-    },
-    {
-      "key": "f9b46636411523f5:0",
-      "file": "web/src/findings.tsx",
-      "owner": "FindingsList",
-      "tag": "button",
-      "control": "onClick={() => setRank(unit)}",
       "contract": "findings",
       "reason": "List/repo/finding/tab route state, rank override and disclosures; action buttons mutate records and are excluded."
     },
@@ -5282,6 +5302,15 @@
       "control": "value={editTitle} onChange={event => setEditTitle(event.target.value)}",
       "contract": "editing",
       "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
+    },
+    {
+      "key": "2973122a62468b5c:0",
+      "file": "web/src/index.tsx",
+      "owner": "<module>",
+      "tag": "a",
+      "control": "onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(safetyDetailURL(String(api.rowId(row)), new URL(location.href))); }}",
+      "contract": "view.safety_case",
+      "reason": "Opens the review by its stable record ID while retaining the source Safety table query and route."
     },
     {
       "key": "5e0ed74b4806d0d2:0",
@@ -6366,6 +6395,24 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
+      "key": "ffd6c787f400180f:0",
+      "file": "web/src/optimize-controls.tsx",
+      "owner": "OptimizePlaceFilter",
+      "tag": "select",
+      "control": "data-view-field={viewField} value={value} onChange={event => onChange(event.target.value)} aria-label={label}",
+      "contract": "optimize-dashboard",
+      "reason": "Shared presentational control delegates to audited caller bindings: findings_rank, safety_rank, safety_place, or Efficiency native repo. All are canonical view inputs; no state is excluded."
+    },
+    {
+      "key": "fef9cd82131aa37b:0",
+      "file": "web/src/optimize-controls.tsx",
+      "owner": "OptimizeRank",
+      "tag": "button",
+      "control": "onClick={() => onChange(option)}",
+      "contract": "optimize-dashboard",
+      "reason": "Shared presentational control delegates to audited caller bindings: findings_rank, safety_rank, safety_place, or Efficiency native repo. All are canonical view inputs; no state is excluded."
+    },
+    {
       "key": "518523774b3bb3cd:0",
       "file": "web/src/query-card.tsx",
       "owner": "QueryCard",
@@ -6609,6 +6656,156 @@
       "binding": "disclosures",
       "contract": "view.disclosures",
       "reason": "Bound by the shared view-state primitive."
+    },
+    {
+      "key": "0a853d8dd47f9c38:0",
+      "file": "web/src/safety.tsx",
+      "owner": "actions",
+      "tag": "button",
+      "control": "onClick={() => void act(card.id, { action: \"cart_remove\" }, \"Removed from risky action prompt.\")}",
+      "contract": "editing",
+      "reason": "Adds or removes a review from a persistent prompt basket; this is draft/action state, not a view filter."
+    },
+    {
+      "key": "2621838d3b1e866f:0",
+      "file": "web/src/safety.tsx",
+      "owner": "actions",
+      "tag": "button",
+      "control": "onClick={() => void act(card.id, { action: \"cart_add\" }, `Added to risky action prompt for ${card.target_label}.`)}",
+      "contract": "editing",
+      "reason": "Adds or removes a review from a persistent prompt basket; this is draft/action state, not a view filter."
+    },
+    {
+      "key": "9a4c889d09545973:0",
+      "file": "web/src/safety.tsx",
+      "owner": "actions",
+      "tag": "button",
+      "control": "onClick={() => void act(card.id, { action: \"dismiss\" }, \"Dismissed. You can bring it back at any time.\")}",
+      "contract": "editing",
+      "reason": "Mutates persistent safety basket membership or review disposition; does not alter the current view."
+    },
+    {
+      "key": "9f6fc49bad424044:0",
+      "file": "web/src/safety.tsx",
+      "owner": "actions",
+      "tag": "button",
+      "control": "onClick={() => void act(card.id, { action: \"restore\" }, \"Brought back to Open.\")}",
+      "contract": "editing",
+      "reason": "Mutates persistent safety basket membership or review disposition; does not alter the current view."
+    },
+    {
+      "key": "0b02d959799fef64:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "button",
+      "control": "data-view-field=\"safety_case\" onClick={() => select(\"\")}",
+      "binding": "safety_case",
+      "contract": "view.safety_case",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "18af2a203d110cda:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={`safety:${detail.id}:evidence:${entry.id}`}",
+      "binding": "disclosures",
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "523d6cb74c489e92:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "OptimizeRank",
+      "control": "value={rank} onChange={setRank}",
+      "contract": "view.safety_rank",
+      "reason": "Dashboard view state is bound through useViewState; controls restore from the canonical URL without changing review records."
+    },
+    {
+      "key": "8db372c814d2d994:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "OptimizePlaceFilter",
+      "control": "value={place} onChange={setPlace}",
+      "contract": "view.safety_place",
+      "reason": "Dashboard view state is bound through useViewState; controls restore from the canonical URL without changing review records."
+    },
+    {
+      "key": "a9646855ca0dcbb5:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"safety:coverage\"",
+      "binding": "disclosures",
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "c350839c450d64cf:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "summary",
+      "control": "",
+      "contract": "view.disclosures",
+      "reason": "Toggles the containing ViewDisclosure, keyed by stable safety case/evidence identity or the coverage section."
+    },
+    {
+      "key": "c350839c450d64cf:1",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "summary",
+      "control": "",
+      "contract": "view.disclosures",
+      "reason": "Toggles the containing ViewDisclosure, keyed by stable safety case/evidence identity or the coverage section."
+    },
+    {
+      "key": "df39f809cdc2c8c1:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "button",
+      "control": "data-view-field=\"safety_case\" onClick={() => select(card.id)}",
+      "binding": "safety_case",
+      "contract": "view.safety_case",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "df39f809cdc2c8c1:1",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "button",
+      "control": "data-view-field=\"safety_case\" onClick={() => select(card.id)}",
+      "binding": "safety_case",
+      "contract": "view.safety_case",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "e0307aedafa343ef:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "button",
+      "control": "data-view-field=\"safety_list\" onClick={() => setList(state)}",
+      "binding": "safety_list",
+      "contract": "view.safety_list",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "2cdbc38b92746f90:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetySettings",
+      "tag": "input",
+      "control": "checked={rule.enabled} onChange={event => void save(rule.id, event.target.checked)}",
+      "contract": "settings",
+      "reason": "Saves library-wide discovery settings."
+    },
+    {
+      "key": "db9d7e4b52e357a6:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetySettings",
+      "tag": "button",
+      "control": "onClick={() => void refresh()}",
+      "contract": "editing",
+      "reason": "Requests an explicit background refresh; does not change view state."
     },
     {
       "key": "0f43a5c72d8a7da5:0",

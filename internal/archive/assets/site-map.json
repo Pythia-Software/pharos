@@ -6,19 +6,19 @@
    "disclosures": {"param":"disclosures","pages":["*"],"kind":"json","description":"Expanded content by stable section/record identity; values are booleans. Menus and editors are excluded."},
    "nav_collapsed": {"param":"nav_collapsed","pages":["*"],"kind":"boolean","description":"Collapse the application sidebar."},
    "nav_expanded": {"param":"nav_expanded","pages":["*"],"kind":"json","description":"Expanded sidebar branches by section and page ID."},
-   "guide_dataset": {"param":"guide_dataset","pages":["*"],"kind":"enum","description":"Data Guide source dataset.","values":["library","usage","conversation_activity","writing","writing_messages","tool_calls","tools","skill_usages","mcp_calls","tl1_attempts","parallelism","findings"]},
+   "guide_dataset": {"param":"guide_dataset","pages":["*"],"kind":"enum","description":"Data Guide source dataset.","values":["library","usage","conversation_activity","writing","writing_messages","tool_calls","tools","skill_usages","mcp_calls","tl1_attempts","parallelism","findings","safety"]},
    "history_collapsed": {"param":"history_collapsed","pages":["*"],"kind":"strings","description":"Collapsed History groups by displayed calendar date."},
    "history_search": {"param":"history_search","pages":["*"],"kind":"text","description":"Applied History drawer text filter."},
    "guide_open": {"param":"guide_open","pages":["*"],"kind":"boolean","description":"Show the Data Guide."},
    "guide_entity": {"param":"guide_entity","pages":["*"],"kind":"enum","description":"Selected Data Guide entity.","values":["workspaces","conversations","agents","messages","tool_calls"]},
    "guide_example": {"param":"guide_example","pages":["*"],"kind":"enum","description":"Selected example conversation.","values":["implementation","review"]},
    "overlay": {"param":"overlay","pages":["*"],"kind":"enum","description":"Open read-only header content.","values":["none","history","bookmarks","usage"]},
-   "window_mode": {"param":"window_mode","pages":["library","analyze/query/*","findings/table"],"kind":"enum","description":"Native time intent companion for full queries.","values":["relative","calendar","today"]},
-   "window_days": {"param":"window_days","pages":["library","analyze/query/*","findings/table"],"kind":"enum","description":"Native time-window size.","values":["1","7","30","90","180","365"]},
-   "window_field": {"param":"window_field","pages":["library","analyze/query/*","findings/table"],"kind":"text","description":"Lower-bound timestamp field; preserve with the query."},
-   "window_until_field": {"param":"window_until_field","pages":["library","analyze/query/*","findings/table"],"kind":"text","description":"Upper-bound timestamp field for interval overlap."},
-   "window_dataset": {"param":"window_dataset","pages":["library","analyze/query/*","findings/table"],"kind":"text","description":"Dataset owning the time intent."},
-   "window_timezone": {"param":"window_timezone","pages":["library","analyze/query/*","findings/table"],"kind":"text","description":"Pinned IANA timezone for Today. Omit to follow the viewer."},
+   "window_mode": {"param":"window_mode","pages":["library","analyze/query/*","findings/table","findings/safety/table"],"kind":"enum","description":"Native time intent companion for full queries.","values":["relative","calendar","today"]},
+   "window_days": {"param":"window_days","pages":["library","analyze/query/*","findings/table","findings/safety/table"],"kind":"enum","description":"Native time-window size.","values":["1","7","30","90","180","365"]},
+   "window_field": {"param":"window_field","pages":["library","analyze/query/*","findings/table","findings/safety/table"],"kind":"text","description":"Lower-bound timestamp field; preserve with the query."},
+   "window_until_field": {"param":"window_until_field","pages":["library","analyze/query/*","findings/table","findings/safety/table"],"kind":"text","description":"Upper-bound timestamp field for interval overlap."},
+   "window_dataset": {"param":"window_dataset","pages":["library","analyze/query/*","findings/table","findings/safety/table"],"kind":"text","description":"Dataset owning the time intent."},
+   "window_timezone": {"param":"window_timezone","pages":["library","analyze/query/*","findings/table","findings/safety/table"],"kind":"text","description":"Pinned IANA timezone for Today. Omit to follow the viewer."},
    "query_dashboard_chart": {"param":"analyze_chart","pages":["analyze/query/*"],"kind":"json","description":"Retained dashboard chart used when returning from its source query."},
    "query_dashboard_filters": {"param":"analyze_filters","pages":["analyze/query/*"],"kind":"text","description":"Retained dashboard population as a native query token."},
    "query_dashboard_window": {"param":"analyze_window","pages":["analyze/query/*"],"kind":"enum","description":"Retained moving dashboard time intent.","values":["today"]},
@@ -27,7 +27,7 @@
    "query_days": {"param":"analyze_days","pages":["analyze/query/*"],"kind":"enum","description":"Retained dashboard window, in elapsed days.","values":["1","7","30","90","180","365"]},
    "query_report": {"param":"analyze_report","pages":["analyze/query/*"],"kind":"text","description":"Retained analysis report identity."},
    "query_search": {"param":"analyze_search","pages":["analyze/query/*"],"kind":"enum","description":"Retained search-entry route hint.","values":["1"]},
-   "query_layout": {"param":"query_layout","pages":["library","analyze/query/*","findings/table"],"kind":"json","description":"Query builder collapsed state by dataset ID.","captureEntries":true},
+   "query_layout": {"param":"query_layout","pages":["library","analyze/query/*","findings/table","findings/safety/table"],"kind":"json","description":"Query builder collapsed state by dataset ID.","captureEntries":true},
    "reader_content": {"param":"reader_content","pages":["work","library"],"kind":"json","description":"Expanded prose, turn summaries, file paths, action previews and deliberately loaded events by stable message/conversation identity."},
    "search_cards": {"param":"search_cards","pages":["library"],"kind":"json","description":"Conversation-result presentation keyed by work ID/browse or work ID/turn; browse is boolean and turn is a stable input message ID."},
    "chart_pins": {"param":"chart_pins","pages":["analyze/*"],"kind":"json","description":"Pinned chart bucket keys by chart title. Hover is transient."},
@@ -36,6 +36,11 @@
    "card_window": {"param":"card_window","pages":["cards"],"kind":"enum","description":"Preview lookback; moving windows remain relative. Numeric day values are also accepted by site_link.","values":["default","today","1","7","30","90"],"default":"default"},
    "card_filters": {"param":"card_filters","pages":["cards"],"kind":"boolean","description":"Show the card filters.","default":false},
    "findings_rank": {"param":"findings_rank","pages":["findings","findings/table"],"kind":"enum","description":"Linked rank override; restoring a URL does not save settings. Manual Rank by changes also save the library default.","values":["","usd","tokens","minutes","failures"]},
+   "optimize_area": {"param":"optimize_area","pages":["findings","findings/*"],"kind":"enum","description":"Optimize section. Efficiency measures improvements; Risky actions collects review questions for an agent in separate prompts.","values":["efficiency","safety"],"default":"efficiency"},
+   "safety_list": {"param":"safety_list","pages":["findings/safety"],"kind":"enum","description":"Risky action review lifecycle. Copying a prompt moves selected reviews to handed_off.","values":["open","handed_off","dismissed"],"default":"open"},
+   "safety_place": {"param":"safety_place","pages":["findings/safety"],"kind":"text","description":"Filter risky action reviews by their stable repository, machine, or unresolved workspace target.","default":""},
+   "safety_rank": {"param":"safety_rank","pages":["findings/safety"],"kind":"enum","description":"Order risky action reviews by latest activity, call count, or new execution evidence. Ties use latest activity, then stable review ID.","values":["recent","calls","evidence"],"default":"recent"},
+   "safety_case": {"param":"safety_case","pages":["findings/safety","findings/safety/table"],"kind":"text","description":"Open a safety case by stable ID; evidence and source links live inside Details.","default":""},
    "delegation_columns": {"param":"delegation_columns","pages":["work"],"kind":"strings","description":"Visible metric column IDs in display order."},
    "delegation_column_order": {"param":"delegation_column_order","pages":["work"],"kind":"strings","description":"Metric column ordering, including hidden columns."},
    "delegation_tint": {"param":"delegation_tint","pages":["work"],"kind":"enum","description":"Tint session metric cells.","values":["all","sort","off"]},
@@ -56,6 +61,7 @@
    "record_keyword": {"param":"record_{dataset}","pages":["analyze/query/*"],"kind":"json","description":"Record keyword clause: {field:<text field ID>,draft:<TextSearchDraft>}.","details":{"field":"Source text field ID from the dataset columns","draft":{"template":{"editor":"visual","match":"rules","root":{"id":"group-1","kind":"group","join":"all","children":[],"exclude":false},"text":"","mode":"advanced","scope":{"surface":"prose","roles":[],"kinds":[],"repository":"","provider":"","source":"","from":"","to":"","conversation_id":"","workspace_id":""},"fuzzy":false,"caseSensitive":false,"separators":false},"rule_template":{"id":"rule-1","kind":"words","text":"","other":"","distance":"8","exclude":false},"rule_kinds":["words","anyWords","phrase","prefix","near","pre"],"editor":["visual","syntax"],"match":["rules","literal","regex"],"mode":["advanced","terms","phrase","literal","regex"],"groups":"{id,kind:group,join:all|any,exclude:boolean,children:(rule|group)[]}; root is not excluded. At most 32 conditions, depth 4.","dates":"scope.from/to are ISO bounds or dates. For last N days retain dateWindow:{duration:7d,from:<same bound as scope.from>} and an empty scope.to. Today also retains to. Omit dateWindow for fixed custom dates.","literal_example":{"editor":"visual","match":"literal","root":{"id":"group-1","kind":"group","join":"all","children":[],"exclude":false},"text":"failure","mode":"advanced","scope":{"surface":"prose","roles":[],"kinds":[],"repository":"","provider":"","source":"","from":"","to":"","conversation_id":"","workspace_id":""},"fuzzy":false,"caseSensitive":false,"separators":false}},"note":"Record keywords do not support fuzzy matching or message scope filters."}}
   },
   "targets": [
+   {"pattern":"safety:<id>","pages":["findings/safety"],"description":"A risky action review card or its open Details, by stable case ID. Reveal scrolls and highlights without focusing."},
    {"pattern":"page","pages":["*"],"description":"Main page content."},
    {"pattern":"control:<field>","pages":["*"],"description":"A registered view field or control wrapper."},
    {"pattern":"control:chart:<label>","pages":["analyze/*"],"description":"Chart control identified by its lower-case accessible label, with spaces replaced by hyphens (metric, breakdown, scale)."},
@@ -64,8 +70,8 @@
    {"pattern":"message:<id>","pages":["work"],"description":"Message ID; materializes the message and opens its ancestors."},
    {"pattern":"call:<id>","pages":["work"],"description":"Tool-call ID; reveals its owning message."},
    {"pattern":"session:<id>","pages":["work"],"description":"Conversation/session ID in the delegation explorer."},
-   {"pattern":"row:<id>","pages":["library","analyze/query/*","findings/table"],"description":"Stable record ID in the current query result. Does not broaden filters."},
-   {"pattern":"detail:<json>","pages":["library","analyze/query/*","findings/table"],"revealOnly":true,"description":"Reveal an exact record/property/JSONPath via Query Table: detail:{\"rowId\":\"id\",\"field\":\"arguments_json\",\"path\":\"$[\\\"events\\\"][21]\"}. field/path are optional; preserve numeric versus string IDs. The page selects the dataset. Loads exact details without changing filters or pagination; disabled/absent properties are unavailable. This family supports reveal only."},
+   {"pattern":"row:<id>","pages":["library","analyze/query/*","findings/table","findings/safety/table"],"description":"Stable record ID in the current query result. Does not broaden filters."},
+   {"pattern":"detail:<json>","pages":["library","analyze/query/*","findings/table","findings/safety/table"],"revealOnly":true,"description":"Reveal an exact record/property/JSONPath via Query Table: detail:{\"rowId\":\"id\",\"field\":\"arguments_json\",\"path\":\"$[\\\"events\\\"][21]\"}. field/path are optional; preserve numeric versus string IDs. The page selects the dataset. Loads exact details without changing filters or pagination; disabled/absent properties are unavailable. This family supports reveal only."},
    {"pattern":"text:<literal>","pages":["*"],"description":"Literal text search. Opens a prefilled Find box, highlights matches and reveals the first. No browser focus movement."}
   ],
   "attention": {
@@ -85,13 +91,16 @@
   "control_audit": {
    "file": "docs/view-controls.json",
    "version": 1,
-   "controls": 845
+   "controls": 864
   },
   "sections": {
    "cards": ["section:card-library","section:card-library-controls","section:card-library-panel","section:card-library-title","section:cardLibraryPage","section:cards"],
-   "findings": ["section:findings","section:findingsAttemptsTitle","section:findingsCart","section:findingsCartTitle","section:findingsChartTitle","section:findingsDetectorsTitle","section:findingsHandoffTitle","section:findingsPage","section:findingsRankLabel","section:findingsRankTitle","section:findingsTabPanel","section:findingsThresholdTitle","section:findingsUpdateTitle"],
-   "findings/table": ["section:findings","section:findingsAttemptsTitle","section:findingsCart","section:findingsCartTitle","section:findingsChartTitle","section:findingsDetectorsTitle","section:findingsHandoffTitle","section:findingsPage","section:findingsRankLabel","section:findingsRankTitle","section:findingsTabPanel","section:findingsThresholdTitle","section:findingsUpdateTitle"],
-   "findings/settings": ["section:findings","section:findingsAttemptsTitle","section:findingsCart","section:findingsCartTitle","section:findingsChartTitle","section:findingsDetectorsTitle","section:findingsHandoffTitle","section:findingsPage","section:findingsRankLabel","section:findingsRankTitle","section:findingsTabPanel","section:findingsThresholdTitle","section:findingsUpdateTitle"],
+   "findings": ["section:findings","section:findingsAttemptsTitle","section:findingsCart","section:findingsCartTitle","section:findingsChartTitle","section:findingsDetectorsTitle","section:findingsHandoffTitle","section:findingsPage","section:findingsRankTitle","section:findingsTabPanel","section:findingsThresholdTitle","section:findingsUpdateTitle"],
+   "findings/table": ["section:findings","section:findingsAttemptsTitle","section:findingsCart","section:findingsCartTitle","section:findingsChartTitle","section:findingsDetectorsTitle","section:findingsHandoffTitle","section:findingsPage","section:findingsRankTitle","section:findingsTabPanel","section:findingsThresholdTitle","section:findingsUpdateTitle"],
+   "findings/settings": ["section:findings","section:findingsAttemptsTitle","section:findingsCart","section:findingsCartTitle","section:findingsChartTitle","section:findingsDetectorsTitle","section:findingsHandoffTitle","section:findingsPage","section:findingsRankTitle","section:findingsTabPanel","section:findingsThresholdTitle","section:findingsUpdateTitle"],
+   "findings/safety": ["section:findings","section:findingsAttemptsTitle","section:findingsCart","section:findingsCartTitle","section:findingsChartTitle","section:findingsDetectorsTitle","section:findingsHandoffTitle","section:findingsPage","section:findingsRankTitle","section:findingsTabPanel","section:findingsThresholdTitle","section:findingsUpdateTitle"],
+   "findings/safety/table": ["section:findings","section:findingsAttemptsTitle","section:findingsCart","section:findingsCartTitle","section:findingsChartTitle","section:findingsDetectorsTitle","section:findingsHandoffTitle","section:findingsPage","section:findingsRankTitle","section:findingsTabPanel","section:findingsThresholdTitle","section:findingsUpdateTitle"],
+   "findings/safety/settings": ["section:findings","section:findingsAttemptsTitle","section:findingsCart","section:findingsCartTitle","section:findingsChartTitle","section:findingsDetectorsTitle","section:findingsHandoffTitle","section:findingsPage","section:findingsRankTitle","section:findingsTabPanel","section:findingsThresholdTitle","section:findingsUpdateTitle"],
    "analyze/parallelism": ["section:analyze","section:parallelism-calculation","section:parallelism-calculation-title","section:parallelism-title","section:parallelism-view","section:queryTableUsage"],
    "home": ["section:home","section:homePage"],
    "library": ["section:library","section:queryTableLibrary"],
@@ -391,9 +400,9 @@
   "findings": {
    "path": "findings",
    "title": "Findings",
-   "description": "Optimization findings: open, watched, won and dismissed, with evidence and prompts.",
+   "description": "Optimize: Efficiency findings with measured improvements, and Risky action review questions, in separate prompt baskets.",
    "route": "/findings",
-   "children": ["findings/table","findings/settings"],
+   "children": ["findings/table","findings/settings","findings/safety"],
    "builder": "findingDetailURL for one finding; otherwise list and repo, each left out at its default.",
    "options": [{"name":"list","param":"list","kind":"enum","values":[{"value":"open"},{"value":"watching"},{"value":"wins"},{"value":"dismissed"}],"default":"open","description":"The default, open, is left out of the link."},{"name":"repo","param":"repo","kind":"text","id":"repository","description":"A repository name."},{"name":"finding","param":"finding","kind":"id","id":"finding_id","description":"Open one finding."},{"name":"tab","param":"tab","kind":"enum","values":[{"value":"overview"},{"value":"evidence"},{"value":"prompt"}],"default":"overview","requires":[{"option":"finding"}],"description":"A finding's tab; needs finding. The default, overview, is left out."}]
   },
@@ -414,6 +423,32 @@
    "description": "Which detectors run and how findings are ranked.",
    "route": "/findings",
    "fixed": {"view":"settings"}
+  },
+  "findings/safety": {
+   "path": "findings/safety",
+   "title": "Risky actions",
+   "description": "Deterministically selected review questions with separate prompt baskets and handoff history.",
+   "route": "/findings",
+   "fixed": {"optimize_area":"safety"},
+   "children": ["findings/safety/table","findings/safety/settings"]
+  },
+  "findings/safety/table": {
+   "path": "findings/safety/table",
+   "title": "Table",
+   "description": "Every risky action review, filterable and groupable by resource, check, location, handoff state, or recorded activity.",
+   "route": "/findings",
+   "fixed": {"optimize_area":"safety","view":"table"},
+   "dataset": "safety",
+   "builder": "queryURL",
+   "options": [{"name":"filters","param":"q_safety","kind":"where","description":"Where terms on safety's filterable fields (datasets.safety.fields), encoded with encodeQuery as a where-only query. Browse <node>/filters/<field> for one field."}],
+   "query_default": {"select":[{"field":"state","width":110},{"field":"title","width":300},{"field":"subject","width":250},{"field":"target_label","width":140},{"field":"calls","width":100},{"field":"last_seen_at","width":130}],"where":[],"orderBy":[{"field":"last_seen_at","dir":"desc"}],"limit":50,"offset":0,"fitToScreen":true}
+  },
+  "findings/safety/settings": {
+   "path": "findings/safety/settings",
+   "title": "Settings",
+   "description": "Enable or disable safety discovery checks, review coverage and handoff behavior, and refresh reviews.",
+   "route": "/findings",
+   "fixed": {"optimize_area":"safety","view":"settings"}
   },
   "work": {
    "path": "work",
@@ -708,6 +743,14 @@
    "window_field": "first_seen_at",
    "columns": [{"name":"id","label":"Finding ID","type":"text"},{"name":"title","label":"Finding","type":"text"},{"name":"detector","label":"Detector key","type":"text"},{"name":"detector_label","label":"Detector","type":"text"},{"name":"state","label":"State","type":"enum"},{"name":"is_new","label":"New","type":"bool"},{"name":"regressed","label":"Regressed","type":"bool"},{"name":"rate","label":"Rate","type":"text"},{"name":"lever","label":"Lever key","type":"text"},{"name":"lever_label","label":"Kind of fix","type":"text"},{"name":"change_label","label":"Change","type":"text"},{"name":"target_label","label":"Target","type":"text"},{"name":"scope_label","label":"Scope","type":"text"},{"name":"repository_name","label":"Repository","type":"text"},{"name":"first_seen_at","label":"First seen","type":"datetime"},{"name":"day","label":"Day first seen","type":"text"},{"name":"rank_unit","label":"Rank unit","type":"enum"},{"name":"likely_ranked","label":"Likely saving / month","type":"number"},{"name":"likely_usd","label":"Likely saving / month (USD)","type":"number"},{"name":"likely_tokens","label":"Likely saving / month (tokens)","type":"number"},{"name":"likely_minutes","label":"Likely saving / month (minutes)","type":"number"},{"name":"likely_failures","label":"Likely saving / month (failures)","type":"number"},{"name":"at_stake_ranked","label":"At stake / month","type":"number"},{"name":"at_stake_usd","label":"At stake (USD)","type":"number"},{"name":"at_stake_tokens","label":"At stake (tokens)","type":"number"},{"name":"at_stake_minutes","label":"At stake (minutes)","type":"number"},{"name":"at_stake_failures","label":"At stake (failures)","type":"number"},{"name":"saved_net_usd","label":"Saved, net (USD)","type":"number"},{"name":"saved_usd","label":"Saved (USD)","type":"number"},{"name":"saved_added_usd","label":"Added context cost (USD)","type":"number"},{"name":"saved_tokens","label":"Saved (tokens)","type":"number"},{"name":"saved_added_tokens","label":"Added context (tokens)","type":"number"},{"name":"saved_minutes","label":"Saved (minutes)","type":"number"},{"name":"saved_failures","label":"Saved (failures)","type":"number"},{"name":"saved_weeks","label":"Weeks measured","type":"number"},{"name":"wins","label":"Verified wins","type":"number"},{"name":"finding_count","label":"Findings","type":"number"}],
    "fields": [{"name":"id","label":"Finding ID","type":"text","ops":"text"},{"name":"title","label":"Finding","type":"text","ops":"text"},{"name":"detector","label":"Detector key","type":"text","ops":"text"},{"name":"detector_label","label":"Detector","type":"text","ops":"text"},{"name":"state","label":"State","type":"enum","ops":"bool|enum","values":[{"value":"open","label":"Open"},{"value":"watching","label":"Watching"},{"value":"won","label":"Won"},{"value":"dismissed","label":"Dismissed"},{"value":"snoozed","label":"Snoozed"}]},{"name":"is_new","label":"New","type":"bool","ops":"bool|enum"},{"name":"regressed","label":"Regressed","type":"bool","ops":"bool|enum"},{"name":"rate","label":"Rate","type":"text","ops":"text"},{"name":"lever","label":"Lever key","type":"text","ops":"text"},{"name":"lever_label","label":"Kind of fix","type":"text","ops":"text"},{"name":"change_label","label":"Change","type":"text","ops":"text"},{"name":"target_label","label":"Target","type":"text","ops":"text"},{"name":"scope_label","label":"Scope","type":"text","ops":"text"},{"name":"repository_name","label":"Repository","type":"text","ops":"text"},{"name":"first_seen_at","label":"First seen","type":"datetime","ops":"datetime|number"},{"name":"day","label":"Day first seen","type":"text","ops":"text"},{"name":"rank_unit","label":"Rank unit","type":"enum","ops":"bool|enum","values":[{"value":"usd","label":"Cost (USD)"},{"value":"tokens","label":"Tokens"},{"value":"minutes","label":"Minutes"},{"value":"failures","label":"Failures"}]},{"name":"likely_ranked","label":"Likely saving / month","type":"number","ops":"datetime|number"},{"name":"likely_usd","label":"Likely saving / month (USD)","type":"number","ops":"datetime|number"},{"name":"likely_tokens","label":"Likely saving / month (tokens)","type":"number","ops":"datetime|number"},{"name":"likely_minutes","label":"Likely saving / month (minutes)","type":"number","ops":"datetime|number"},{"name":"likely_failures","label":"Likely saving / month (failures)","type":"number","ops":"datetime|number"},{"name":"at_stake_ranked","label":"At stake / month","type":"number","ops":"datetime|number"},{"name":"at_stake_usd","label":"At stake (USD)","type":"number","ops":"datetime|number"},{"name":"at_stake_tokens","label":"At stake (tokens)","type":"number","ops":"datetime|number"},{"name":"at_stake_minutes","label":"At stake (minutes)","type":"number","ops":"datetime|number"},{"name":"at_stake_failures","label":"At stake (failures)","type":"number","ops":"datetime|number"},{"name":"saved_net_usd","label":"Saved, net (USD)","type":"number","ops":"datetime|number"},{"name":"saved_usd","label":"Saved (USD)","type":"number","ops":"datetime|number"},{"name":"saved_added_usd","label":"Added context cost (USD)","type":"number","ops":"datetime|number"},{"name":"saved_tokens","label":"Saved (tokens)","type":"number","ops":"datetime|number"},{"name":"saved_added_tokens","label":"Added context (tokens)","type":"number","ops":"datetime|number"},{"name":"saved_minutes","label":"Saved (minutes)","type":"number","ops":"datetime|number"},{"name":"saved_failures","label":"Saved (failures)","type":"number","ops":"datetime|number"},{"name":"saved_weeks","label":"Weeks measured","type":"number","ops":"datetime|number"},{"name":"wins","label":"Verified wins","type":"number","ops":"datetime|number"},{"name":"finding_count","label":"Findings","type":"number","ops":"datetime|number"}]
+  },
+  "safety": {
+   "label": "Risky action reviews",
+   "schema_name": "pharos_safety",
+   "properties": [{"name":"id","label":"Review ID","type":"text","default":false},{"name":"title","label":"Review","type":"text","default":false},{"name":"state","label":"State","type":"enum","default":false},{"name":"rule_label","label":"Check","type":"text","default":false},{"name":"subject","label":"Selected resource","type":"text","default":false},{"name":"target_label","label":"Location","type":"text","default":false},{"name":"calls","label":"Calls in discovery window","type":"number","default":false},{"name":"material_change","label":"New execution evidence","type":"bool","default":false},{"name":"in_prompt","label":"In a prompt","type":"bool","default":false},{"name":"first_seen_at","label":"First seen","type":"datetime","default":false},{"name":"last_seen_at","label":"Last seen","type":"datetime","default":false},{"name":"handed_at","label":"Handed off","type":"datetime","default":false},{"name":"review_count","label":"Reviews","type":"number","default":false}],
+   "window_field": "last_seen_at",
+   "columns": [{"name":"id","label":"Review ID","type":"text"},{"name":"title","label":"Review","type":"text"},{"name":"state","label":"State","type":"enum"},{"name":"rule_label","label":"Check","type":"text"},{"name":"subject","label":"Selected resource","type":"text"},{"name":"target_label","label":"Location","type":"text"},{"name":"calls","label":"Calls in discovery window","type":"number"},{"name":"material_change","label":"New execution evidence","type":"bool"},{"name":"in_prompt","label":"In a prompt","type":"bool"},{"name":"first_seen_at","label":"First seen","type":"datetime"},{"name":"last_seen_at","label":"Last seen","type":"datetime"},{"name":"handed_at","label":"Handed off","type":"datetime"},{"name":"review_count","label":"Reviews","type":"number"}],
+   "fields": [{"name":"id","label":"Review ID","type":"text","ops":"text"},{"name":"title","label":"Review","type":"text","ops":"text"},{"name":"state","label":"State","type":"enum","ops":"bool|enum","values":[{"value":"open","label":"Open"},{"value":"handed_off","label":"Handed off"},{"value":"dismissed","label":"Dismissed"}]},{"name":"rule_label","label":"Check","type":"text","ops":"text"},{"name":"subject","label":"Selected resource","type":"text","ops":"text"},{"name":"target_label","label":"Location","type":"text","ops":"text"},{"name":"calls","label":"Calls in discovery window","type":"number","ops":"datetime|number"},{"name":"material_change","label":"New execution evidence","type":"bool","ops":"bool|enum"},{"name":"in_prompt","label":"In a prompt","type":"bool","ops":"bool|enum"},{"name":"first_seen_at","label":"First seen","type":"datetime","ops":"datetime|number"},{"name":"last_seen_at","label":"Last seen","type":"datetime","ops":"datetime|number"},{"name":"handed_at","label":"Handed off","type":"datetime","ops":"datetime|number"},{"name":"review_count","label":"Reviews","type":"number","ops":"datetime|number"}]
   }
  },
  "op_sets": {

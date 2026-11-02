@@ -789,7 +789,7 @@ func (stats findingStats) mainProvider() (string, float64) {
 // version and the local day. Every index between full passes only measures
 // the findings being watched.
 func (c *Catalog) findingsGeneration() string {
-	return findingsVersion + "/" + c.clock().Local().Format("2006-01-02")
+	return findingsVersion + "/" + safetyVersion + "/" + c.clock().Local().Format("2006-01-02")
 }
 
 // RefreshFindings runs the full findings pass when the day or detectors
@@ -841,6 +841,10 @@ func (c *Catalog) refreshFindings(ctx context.Context, fullPass func(built, gene
 	built, _ := c.metaValue(ctx, "findings_generation")
 	full := fullPass(built, generation)
 	err = c.runFindingsPass(ctx, full)
+	if err == nil && full {
+		c.setFindingsPhase("reviewing safety selections")
+		err = c.refreshSafety(ctx)
+	}
 	if err == nil && full {
 		err = c.writeTransaction(ctx, "findings-meta", func(tx *sql.Tx) error {
 			for key, value := range map[string]string{"findings_generation": generation, "findings_built_at": formatTime(c.clock()),

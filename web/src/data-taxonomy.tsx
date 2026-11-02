@@ -35,7 +35,7 @@ function SourceStatement({ dataset }: { dataset: DataSource }) {
 export function SourceQueryBuilder<Row>({ dataset, ...props }: QueryBuilderProps<Row> & { dataset: DataSource }) {
   const [collapsed,setCollapsed]=useViewEntry("query_layout",dataset,Boolean(props.defaultCollapsed));
   return <div className="data-source-query" data-pharos-target={`control:q_${dataset}`}>
-    <SourceStatement dataset={dataset} />
+    {dataset !== "findings" && dataset !== "safety" ? <SourceStatement dataset={dataset} /> : null}
     <QueryBuilder {...props} collapsed={props.collapsed??collapsed} onCollapsedChange={props.onCollapsedChange??setCollapsed} />
   </div>;
 }
