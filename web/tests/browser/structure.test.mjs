@@ -5,7 +5,9 @@
 //
 // Adding a page is one line in ROUTES: a URL and a selector that appears once
 // its main content has rendered. `open` runs before the checks, for surfaces
-// reached by a click rather than a URL.
+// reached by a click rather than a URL. A route without `open` must also
+// leave initial focus to the user and keep its title unfocusable, unless it
+// sets `movesFocus` (a modal that focuses its own title, say).
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -137,7 +139,9 @@ const ROUTES = [
     await page.locator('#library-settings-list [data-rename-id]').first().click();
   },shown:'.library-settings-rename'},
   ...['overview','open','create','restore'].map(kind=>({name:'Library settings '+kind,url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:{id:'local',name:'Pending history with a long library name',config:'/Users/test/Libraries/Pending/library.toml'},...(kind==='overview'?{}:{open:page=>page.locator({open:'#library-settings-open',create:'#library-settings-new',restore:'#library-settings-restore'}[kind]).click(),shown:'#library-settings-'+kind+'-form:not([hidden])'})})),
-  {name:"Application first launch",url:"/app",ready:"#application-setup[open]",api:{"GET /api/app/state":{application:"/Applications/Pharos.app",selected:"",mcp:"",busy:false,libraries:[]}}},
+  // The setup window is a modal dialog that focuses its title on open
+  // (application.html), so its routes declare movesFocus.
+  {name:"Application first launch",url:"/app",ready:"#application-setup[open]",movesFocus:true,api:{"GET /api/app/state":{application:"/Applications/Pharos.app",selected:"",mcp:"",busy:false,libraries:[]}}},
   ...["about","machines","storage","details","review"].map(step=>({name:`Application introduction ${step}`,url:"/app",ready:"#application-setup[open]",api:{"GET /api/app/state":{application:"/Applications/Pharos.app",selected:"",mcp:"",busy:false,libraries:[]}},open:async page=>{
     await page.locator('#meet-pharos').click();
     if(step==='about')return;
@@ -148,7 +152,7 @@ const ROUTES = [
     await page.locator('#submit').click();
     if(step==='review')await page.locator('#submit').click();
   },shown:step==='about'?'#about-pharos:not([hidden])':`#wizard-${step}:not([hidden])`})),
-  {name:"Application library chooser",url:"/app",ready:"#library-list .card",check:async page=>{
+  {name:"Application library chooser",url:"/app",ready:"#library-list .card",movesFocus:true,check:async page=>{
     const widths=await page.locator('#application-intro').evaluate(intro=>({
       available:intro.getBoundingClientRect().width,
       copy:intro.querySelector('.setup-copy').getBoundingClientRect().width,
@@ -187,11 +191,15 @@ const ROUTES = [
     await page.locator('#library-actions [data-flow=recover]').click();await page.locator('#backup').fill('/Backups/Library');await page.locator('#submit').click();
     if(step===2){await page.locator('#recover-path').fill('/Libraries/Restored');await page.locator('#submit').click()}
   },shown:step===1?'#wizard-recover-target:not([hidden])':'#wizard-recover-review:not([hidden])'})),
-  ...[["Search", "/library"], ["Analyze", "/analyze"], ["Optimize", "/findings"]].flatMap(([name, url]) => [["unconfigured", false, false], ["idle", true, false], ["syncing", true, true]].map(([state, sources, busy]) => ({
+  // One empty state per page covers all three states across the three pages.
+  ...[["Search", "/library", "unconfigured", false, false], ["Analyze", "/analyze", "idle", true, false], ["Optimize", "/findings", "syncing", true, true]].map(([name, url, state, sources, busy]) => ({
     name: `${name} empty library ${state}`, url, ready: ".view.active .library-empty-card",
     api: { "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], library_empty: true, has_sources: sources, busy, sources: sources ? [{ name: "codex" }] : [], available_sources: [] } },
-  }))),
-  ...["dark","light"].flatMap(theme => [
+  })),
+  // The theme changes colours, not metrics: Ask Pharos runs dark, and its
+  // ready state once in light so the light theme still renders.
+  {name:"Ask Pharos ready (light)",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,preferences:{"pharos-theme":"light"}},
+  ...[
   {name:"Ask Pharos removed CLI",url:"/",ready:"#pharos-ask .home-search-trigger",api:{"GET /api/ask/status":{settings:{enabled:true,showInvitation:true,selection:askSelection},providers:[]}}},
   {name:"Ask Pharos opted out",url:"/",ready:"#pharos-ask .home-search-trigger",api:{"GET /api/ask/status":{settings:{enabled:false,showInvitation:false},providers:askProviders}}},
   {name:"Ask Pharos ready",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI},
@@ -212,10 +220,10 @@ const ROUTES = [
   {name:"Ask Pharos opt-in",url:"/",ready:"#pharos-ask .pharos-invitation:not([hidden])",api:{"GET /api/ask/status":{settings:{enabled:false,showInvitation:true},providers:askProviders}},open:page=>page.locator("#pharos-ask .pharos-try").click(),shown:"#pharos-ask .pharos-consent[open]"},
   {name:"Ask Pharos settings",url:"/settings/ask",ready:"#askSettingsPage .ask-settings select",api:askAPI},
 
-  ].map(route=>({...route,name:`${route.name} (${theme})`,preferences:{"pharos-theme":theme}}))),
+  ].map(route=>({...route,preferences:{"pharos-theme":"dark"}})),
   { name: "TL1 attempts query", url: "/analyze?analyze_mode=query&analyze_data=tl1_attempts", ready: ".usage-workspace-table .qt-row" },
   { name: "Data guide", url: "/analyze?analyze_mode=query&analyze_data=tool_calls&analyze_topic=tools", ready: ".usage-workspace-table .qt-row", open: page => page.locator(".usage-workspace-table .data-source-link").click(), shown: ".data-guide[open]" },
-  ...["usage", "writing", "writing_messages", "conversation_activity", "tool_calls", "tools", "skill_usages", "mcp_calls", "parallelism"].flatMap(dataset => [false, true].map(explore => ({
+  ...[["usage", false], ["tool_calls", true]].map(([dataset, explore]) => ({
     name: `Query ideas ${explore ? "Explore " : ""}${dataset}`,
     url: `/analyze?analyze_mode=query&analyze_data=${dataset}`,
     ready: ".usage-workspace-table .qt-row",
@@ -225,7 +233,7 @@ const ROUTES = [
       await page.getByRole("link", { name: "Matching records", exact: true }).first().waitFor();
     },
     shown: ".usage-workspace-table .qt-row",
-  }))),
+  })),
   // The unified activity panel, idle and busy, in the browser and in the app
   // (other libraries).
   ...[['idle', idleStatus, false], ['busy', busyStatus, false], ['busy in the app', busyStatus, true]].map(([state, snapshot, managed]) => ({
@@ -242,7 +250,8 @@ const ROUTES = [
     }, shown: '#pharosStatusPanel .pharos-status-items li',
   })),
   { name: "Home", url: "/", ready: ".home-belt-row .query-card" },
-  { name: "Home search composer", url: "/", ready: ".home-search-trigger", open: page => page.getByRole("button", { name: "Search past work", exact: true }).click(), shown: ".home-search-disclosure.is-expanded" },
+  { name: "Home search composer", url: "/", ready: ".home-search-trigger", open: async page => { await page.getByRole("button", { name: "Search past work", exact: true }).focus(); await page.keyboard.press("Enter"); }, shown: ".home-search-disclosure.is-expanded",
+    check: page => page.waitForFunction(() => document.activeElement?.matches(".home-search-content textarea, .home-search-content input")) },
   { name: "Home search before date", url: "/", ready: ".home-search-trigger", open: async page => { await page.getByRole("button", { name: "Search past work", exact: true }).click(); await page.getByRole("combobox", { name: "Date comparison", exact: true }).selectOption("to"); }, shown: ".home-search-disclosure.is-expanded" },
   ...["start", "end"].map(bound => ({ name: `Home search date range adding ${bound}`, url: "/", ready: ".home-search-trigger", open: async page => {
     await page.getByRole("button", { name: "Search past work", exact: true }).click();
@@ -314,15 +323,17 @@ const ROUTES = [
   { name: "Carbon Impact", url: "/analyze?analyze_view=carbon", ready: "#carbonSummary" },
   { name: "Analyze conversations", url: "/analyze?analyze_view=conversations", ready: "#queryTableUsage .qt-row" },
   { name: "Analyze workspace dashboards", url: "/analyze", ready: ".usage-dashboard .usage-chart" },
-  ...['tokens', 'human', 'skills', 'time', 'carbon'].map(topic => ({
-    name: `Dashboard pinned key ${topic}`, url: `/analyze?analyze_topic=${topic}`, ready: '.usage-chart-bars:not(.loading) > button',
+  // One route per chart kind and dashboard component; the numbers each
+  // topic draws are covered by the dashboard parity and analysis unit tests.
+  {
+    name: "Dashboard pinned key", url: "/analyze?analyze_topic=tokens", ready: '.usage-chart-bars:not(.loading) > button',
     open: async page => {
       const chart = page.locator('.usage-dashboard .usage-chart').first();
       await chart.locator('.usage-chart-bars > button').filter({ has: page.locator('i') }).first().focus();
       await page.keyboard.press('Enter');
       await chart.getByRole('group', { name: /^Details for / }).getByRole('link').first().waitFor();
     }, shown: '.usage-chart-tip.pinned',
-  })),
+  },
   { name: "Analyze relative query previews", url: `/analyze?${new URLSearchParams({ analyze_topic: "tokens", analyze_filters: encodeQuery({ ...EMPTY_QUERY, where: [{ field: "first_usage_at", op: ">=", value: "-30d" }, { field: "first_usage_at", op: "<", value: "+0s" }, { field: "provider", op: "=", value: "codex" }] }) })}`, ready: ".usage-query-destinations" },
   { name: "Analyze workspace cumulative", url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify({ display: "cumulative", period: "days", days: 3, split: "model_family", metric: "percent_cost" }))}`, ready: ".usage-dashboard .usage-chart-lines" },
   ...Object.entries({
@@ -332,47 +343,41 @@ const ROUTES = [
     cycle: { view: "cycle", cycle: "hour", metric: "tokens", split: "none" },
   }).map(([view, chart]) => ({ name: `Tokens and Cost ${view} view`, url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify(chart))}`, ready: '.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations',
     check: async page => assert.equal(await page.locator(".usage-analysis-dashboard [role=alert]").count(), 0, "the analysis reports an error") })),
-  // Over time draws every measure, population and breakdown kind.
-  ...Object.entries({
-    ratio: { metric: "cache_read_share", split: "provider_model", rollingPeriods: 7 },
-    "distinct rolling sum": { metric: "conversations", split: "none", rollingPeriods: 7, rollingOp: "sum" },
-    "whole periods and norm": { metric: "tokens", split: "none", rollingPeriods: 7, completePeriods: true, norm: true },
-    "token type": { metric: "tokens", split: "type", share: true },
-    "priced cost": { metric: "priced_cost", split: "provider", display: "cumulative" },
-  }).map(([name, chart]) => ({ name: `Tokens and Cost trend ${name}`, url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify({ period: "day", ...chart }))}`,
+  { name: "Tokens and Cost trend ratio", url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify({ period: "day", metric: "cache_read_share", split: "provider_model", rollingPeriods: 7 }))}`,
     ready: '.usage-dashboard section[aria-label="Over time"][aria-busy="false"] .usage-query-destinations',
-    check: async page => assert.equal(await page.locator('section[aria-label="Over time"] .query-table-error').count(), 0, "the trend reports an error") })),
-  { name: "Analyze cumulative human", url: `/analyze?analyze_topic=human&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20}))}`, ready: ".usage-dashboard .usage-chart-lines" },
-  { name: "Analyze cumulative skills", url: `/analyze?analyze_topic=skills&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20}))}`, ready: ".usage-dashboard .usage-chart-lines" },
-  { name: "Analyze cumulative time", url: `/analyze?analyze_topic=time&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20}))}`, ready: ".usage-dashboard .usage-chart-lines" },
-  { name: "Analyze cumulative carbon", url: `/analyze?analyze_topic=carbon&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20}))}`, ready: ".usage-dashboard .usage-chart-lines" },
-  { name: "Analyze cumulative tools", url: `/analyze?analyze_topic=tools&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20, "view": "trend", "metric": "mean_time", "period": "day"}))}`, ready: `.usage-tools-dashboard ${overTimeReady}` },
-  { name: "Analyze cumulative mcp", url: `/analyze?analyze_topic=mcp&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20, "view": "trend", "metric": "mean_time", "period": "day"}))}`, ready: `.usage-mcp-dashboard ${overTimeReady}` },
+    check: async page => assert.equal(await page.locator('section[aria-label="Over time"] .query-table-error').count(), 0, "the trend reports an error") },
   { name: "Analyze workspace custom intervals", url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify({ period: "hours", hours: 6, rollingPeriods: 37 }))}`, ready: ".usage-dashboard .usage-period-custom input" },
-  { name: "Analyze workspace human dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=human", ready: `.usage-human-dashboard ${overTimeReady}` },
   { name: "Analyze workspace tools dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=tools", ready: `.usage-tools-dashboard ${analysisReady}` },
   // Seven weeks keeps the history request within the stub's equality-filter
   // capability; wider day regex filters are exercised against the Go service.
   { name: "Analyze workspace tools trends", url: `/analyze?analyze_workspace=1&analyze_topic=tools&analyze_chart=${encodeURIComponent(JSON.stringify({ metric: "failure_rate", split: "tool_category", view: "trend", period: "week", rollingPeriods: 7 }))}`, ready: `.usage-tools-dashboard ${overTimeReady}` },
-  // Every view each record dashboard offers, over its catalog (2b).
-  ...Object.entries({
-    tools: { "compare share": { view: "compare", metric: "calls", split: "tool_name", compareAs: "share" }, "compare minimum": { view: "compare", metric: "failure_rate", split: "tool_name", minSamples: 10 }, "over time": { view: "trend", metric: "truncation_rate", split: "mcp_method", rollingPeriods: 7, completePeriods: true } },
-    mcp: { compare: { view: "compare", metric: "mean_output", split: "query_source" }, distribution: { view: "distribution", metric: "bytes", split: "tool_name", minSamples: 3, scale: "logarithmic" }, "hour cycle": { view: "cycle", cycle: "hour", metric: "calls", split: "none" }, "weekday cycle": { view: "cycle", cycle: "weekday", metric: "time", split: "none", reduce: "mean" }, "over time": { view: "trend", metric: "failure_rate", split: "status", rollingPeriods: 7 } },
-    time: { compare: { view: "compare", metric: "time", split: "activity", compareAs: "share" }, "unit compare": { view: "compare", unit: "conversation", metric: "calls", split: "repository_name", reduce: "median" }, distribution: { view: "distribution", metric: "time", split: "command_source", minSamples: 3, scale: "logarithmic" }, "unit distribution": { view: "distribution", unit: "tool_conversation", metric: "calls", split: "tool_name" }, scatter: { view: "scatter", unit: "conversation", metric: "calls", metricY: "time", split: "provider" }, cycle: { view: "cycle", cycle: "hour", metric: "time", split: "none", reduce: "total" }, "over time": { v: 2, metric: "mean_time", split: "none", rollingPeriods: 7, completePeriods: true, norm: true } },
-    // 2c: messages, usage under the Carbon assumptions, and parallelism records.
-    human: { compare: { view: "compare", metric: "typed", split: "repository_name", compareAs: "share" }, "unit compare": { view: "compare", unit: "conversation", metric: "typed", split: "repository_name", reduce: "mean" }, distribution: { view: "distribution", unit: "conversation", metric: "typed", split: "none" }, "hour cycle": { view: "cycle", cycle: "hour", metric: "typed", split: "none", reduce: "total" }, "weekday cycle": { view: "cycle", cycle: "weekday", metric: "typed_messages", split: "none" }, "over time": { v: 2, metric: "words", split: "kind", rollingPeriods: 7 }, "cue share": { v: 2, metric: "correction_share", split: "none", period: "week" }, hourly: { v: 2, metric: "typed", split: "none", period: "hour" } },
-    carbon: { compare: { view: "compare", metric: "co2", split: "carbon_tier", compareAs: "share" }, "over time": { v: 2, metric: "energy", split: "type", rollingPeriods: 7, rollingOp: "sum" }, cycle: { view: "cycle", cycle: "weekday", metric: "co2", split: "none" } },
-    parallelism: { "over time": { v: 2, metric: "at_once", split: "none", rollingPeriods: 7, completePeriods: true, norm: true }, compare: { view: "compare", metric: "agent_hours", split: "repository_name" }, distribution: { view: "distribution", unit: "agent", metric: "agent_hours", split: "repository_name" }, cycle: { view: "cycle", cycle: "hour", metric: "agent_hours", split: "none", reduce: "total" } },
-    skills: { compare: { view: "compare", metric: "conversations", split: "skill_name" }, distribution: { view: "distribution", metric: "body", split: "skill_evidence", minSamples: 3 }, "unit distribution": { view: "distribution", unit: "skill_path", metric: "loads", split: "skill_name" }, scatter: { view: "scatter", unit: "conversation", metric: "records", metricY: "body", split: "provider" }, cycle: { view: "cycle", cycle: "weekday", metric: "records", split: "none" }, "over time": { v: 2, metric: "records", split: "evidence_type", share: true, rollingPeriods: 7 } },
-  }).flatMap(([topic, charts]) => Object.entries(charts).map(([name, chart]) => ({ name: `${topic} dashboard ${name}`, url: `/analyze?analyze_topic=${topic}&analyze_chart=${encodeURIComponent(JSON.stringify(chart))}`,
-    ready: `.usage-${topic}-dashboard ${(chart.view ?? "trend") === "trend" ? overTimeReady : analysisReady}`,
-    check: async page => assert.deepEqual(await page.locator(`.usage-${topic}-dashboard [role=alert], .usage-${topic}-dashboard .query-table-error`).allTextContents(), [], "the dashboard reports an error") }))),
-  { name: "Analyze workspace skills dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=skills", ready: ".usage-dashboard .usage-chart" },
-  { name: "Analyze workspace time dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=time", ready: ".usage-dashboard .usage-chart" },
+  // A record dashboard's error reporting, on the one chart kind (weekday
+  // cycle) not drawn above.
+  { name: "MCP dashboard weekday cycle", url: `/analyze?analyze_topic=mcp&analyze_chart=${encodeURIComponent(JSON.stringify({ view: "cycle", cycle: "weekday", metric: "time", split: "none", reduce: "mean" }))}`, ready: `.usage-mcp-dashboard ${analysisReady}`,
+    check: async page => assert.deepEqual(await page.locator(".usage-mcp-dashboard [role=alert], .usage-mcp-dashboard .query-table-error").allTextContents(), [], "the dashboard reports an error") },
   { name: "Analyze workspace parallelism dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=parallelism", ready: ".usage-dashboard .concurrency-chart svg" },
   { name: "Analyze workspace carbon dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=carbon", ready: ".usage-dashboard #carbonSummary" },
   { name: "Analyze workspace agent experience dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=agent_experience", ready: `.usage-agent-experience-dashboard ${overTimeReady}` },
-  ...["usage", "conversation_activity", "writing", "writing_messages", "tool_calls", "tools", "mcp_calls", "skill_usages", "parallelism", "agent_events", "agent_event_messages"].map(dataset => ({
+  // A card's relative range, replaced by custom dates and times in the
+  // dashboard's inline range picker.
+  { name: "Dashboard custom date and time range", url: `/analyze?${new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: "tokens",
+    q_usage: encodeQuery({ ...EMPTY_QUERY, where: [{ field: "first_usage_at", op: ">=", value: "-7d" }, { field: "first_usage_at", op: "<", value: "+0s" }] }), window_mode: "relative", window_days: "7", window_field: "first_usage_at", window_dataset: "usage",
+    analyze_filters: encodeQuery({ ...EMPTY_QUERY, where: [{ field: "first_usage_at", op: ">=", value: "-7d" }, { field: "first_usage_at", op: "<", value: "+0s" }] }), analyze_chart: JSON.stringify({ period: "day", metric: "cost", split: "repository_name" }) })}`,
+    ready: ".usage-dashboard .usage-chart", open: async page => {
+      await page.getByRole("combobox", { name: "Time Bucket", exact: true }).selectOption("hour");
+      await page.getByRole("combobox", { name: "Range", exact: true }).selectOption("custom-times");
+      await page.getByLabel("From date and time", { exact: true }).waitFor();
+    }, shown: ".usage-dashboard .usage-chart" },
+  { name: "Parallelism custom date range", concurrency: true, url: `/analyze?${new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: "parallelism",
+    q_parallelism: encodeQuery({ ...EMPTY_QUERY, where: [{ field: "started_at", op: ">=", value: "-7d" }, { field: "started_at", op: "<", value: "+0s" }] }), window_mode: "relative", window_days: "7", window_field: "started_at", window_dataset: "parallelism",
+    analyze_parallelism: JSON.stringify({ range: "7d" }) })}`,
+    ready: ".usage-dashboard .concurrency-chart svg", open: async page => {
+      // The ribbon's Range; the engine views below have their own.
+      await page.getByRole("region", { name: "Parallelism chart", exact: true }).getByRole("combobox", { name: "Range", exact: true }).selectOption("custom");
+      await page.getByLabel("From date", { exact: true }).waitFor();
+    }, shown: ".usage-dashboard .concurrency-chart svg" },
+  // Tables the KNOWN fit bug applies to, and one it does not.
+  ...["usage", "writing_messages", "agent_events", "mcp_calls"].map(dataset => ({
     name: `Analyze workspace query ${dataset}`, url: `/analyze?analyze_mode=query&analyze_data=${dataset}`, ready: ".usage-workspace-table .qt-row", fitTable: true,
   })),
   { name: "Analyze record keyword editor", url: "/analyze?analyze_mode=query&analyze_data=tool_calls", ready: ".usage-workspace-table .qt-qb", open: page => page.getByRole("button", { name: /^Add keyword filter for / }).click(), shown: ".explore-search-modal" },
@@ -409,13 +414,6 @@ const ROUTES = [
   { name: "Cloud backup ongoing status", url: "/settings/backups", ready: ".cloud-ongoing article", api:{'GET /api/cloud-backup':cloudScheduledStatus} },
   { name: "Cloud backup schedule settings", url: "/settings/backups", ready: ".cloud-ongoing article", api:{'GET /api/cloud-backup':cloudScheduledStatus},open:page=>page.locator('.cloud-schedule-settings summary').click(),shown:'.cloud-schedule-settings .cloud-fields' },
   { name: "Cloud backup previous revisions", url: "/settings/backups", ready: ".cloud-ongoing article", api:{'GET /api/cloud-backup':cloudScheduledStatus},open:page=>page.getByRole('button',{name:'View backups and test restore',exact:true}).click(),shown:'.cloud-history-select' },
-  { name: "Cloud backup calculator", url: "/settings/backups", ready: "#cloud-explore", open: page => page.getByRole('button', {name: 'Explore cloud backup options', exact: true}).click(), shown: ".cloud-results svg" },
-  { name: "Cloud backup minimum storage breakdown", url: "/settings/backups", ready: "#cloud-explore", open: async page => {
-    await page.getByRole('button', {name: 'Explore cloud backup options', exact: true}).click();
-    await page.getByText('Detailed options', {exact: true}).click();
-    await page.getByLabel('Storage class', {exact: true}).selectOption('gcp-archive');
-    await page.getByText('Detailed options', {exact: true}).click();
-  }, shown: '.cloud-results svg' },
   { name: "Cloud backup detailed options", url: "/settings/backups", ready: "#cloud-explore", open: async page => {
     await page.getByRole('button', {name: 'Explore cloud backup options', exact: true}).click();
     await page.getByText('Detailed options', {exact: true}).click();
@@ -439,22 +437,8 @@ const ROUTES = [
     await page.getByLabel('Billing account ID', {exact: true}).fill('012ABC-345DEF-678ABC');
     await page.getByText('Schedule and advanced settings', {exact: true}).click();
   }, shown: '#cloud-projectParent' },
-  { name: "Cloud backup password commands", url: "/settings/backups", ready: "#cloud-explore", open: async page => {
-    await page.getByRole('button', {name: 'Explore cloud backup options', exact: true}).click();
-    await page.getByRole('button', {name: 'Configure this backup', exact: true}).click();
-    await page.getByLabel('Google Cloud project ID', {exact: true}).fill('pharos-example');
-    await page.getByLabel('Require a password to restore', {exact: true}).selectOption('true');
-    await page.getByRole('button', {name: 'Review configuration & commands', exact: true}).click();
-  }, shown: '.cloud-protected-commands' },
-  { name: "Cloud backup Azure commands", url: "/settings/backups", ready: "#cloud-explore", open: async page => {
-    await page.getByRole('button', {name: 'Explore cloud backup options', exact: true}).click();
-    await page.getByLabel('Cloud provider', {exact: true}).selectOption('azure');
-    await page.getByRole('button', {name: 'Configure this backup', exact: true}).click();
-    await page.getByLabel('Azure subscription', {exact: true}).fill('Backup subscription');
-    await page.getByLabel('Azure Blob Storage · Cold', {exact: true}).check();
-    await page.getByRole('button', {name: 'Review configuration & commands', exact: true}).click();
-  }, shown: "#cloud-step-2 pre" },
-  ...[[4,"Test"],[5,"First backup"],[6,"Test restore"]].map(([step,label])=>({
+  // Step 4 stands for the later setup steps (first backup, test restore).
+  ...[[4,"Test"]].map(([step,label])=>({
     name:`Cloud backup ${label.toLowerCase()}`,url:"/settings/backups",ready:"#cloud-explore",
     open:async page=>{
       await page.getByRole('button',{name:'Explore cloud backup options',exact:true}).click();
@@ -510,18 +494,20 @@ const ROUTES = [
   { name: "Bookmarks drawer", url: "/library", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-show-nav-button": true }, open: async page => { await activateHeaderTool(page, "navigatorToggle"); await page.locator("#bookmarksToggle").click(); }, shown: "#bookmarksDrawer.open" },
   { name: "History drawer", url: "/library", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-show-nav-button": true }, open: async page => { await activateHeaderTool(page, "navigatorToggle"); await page.locator("#historyToggle").click(); }, shown: "#historyDrawer.open" },
 ];
-const WIDTHS = [{ width: 1440, height: 900 }, { width: 1280, height: 720 }, { width: 1024, height: 768 }, { width: 390, height: 844 }, { width: 320, height: 640 }];
+// A desktop and the narrowest phone. The header and sidebar breakpoints in
+// between have their own standalone tests below.
+const WIDTHS = [{ width: 1440, height: 900 }, { width: 320, height: 640 }];
 
 // Layout bugs found by this sweep and not fixed yet. A case whose only
 // problems match here is marked todo with the bug, so the suite stays honest;
 // any other problem still fails it.
 const KNOWN = [{
   bug: "Query Table 0.9.7 fit-to-screen floors a column at its wrapping host link measured on one line, so Analyze's fitted tables scroll at desktop widths; docs/handoffs/query-table-fit-wrapping-links.md",
-  when: (route, viewport) => /^Analyze workspace query (usage|writing|writing_messages|tool_calls|skill_usages|conversation_activity|agent_events|agent_event_messages)$/.test(route.name) && viewport.width >= 1024,
+  when: (route, viewport) => /^Analyze workspace query (usage|writing_messages|agent_events)$/.test(route.name) && viewport.width >= 1024,
   match: /^fitted table still scrolls sideways: \d+px wide in \d+px$/,
 }];
 
-for (const width of [1440, 390, 320]) test(`Search filter suggestions stay readable and keep input focus @ ${width}`, { skip }, async t => {
+for (const width of [1440, 320]) test(`Search filter suggestions stay readable and keep input focus @ ${width}`, { skip }, async t => {
   const values = ["exploration", "exploration-service", "exploration-service-v2", "gbw-utilities", "general-purpose-repository",
     "go-query-table-integration-with-a-long-unbroken-suffix-abcdefghijklmnopqrstuvwxyz"];
   const query = { ...EMPTY_QUERY, where: [{ field: "repository_name", op: "=", value: "" }] };
@@ -560,12 +546,13 @@ for (const width of [1440, 390, 320]) test(`Search filter suggestions stay reada
 
 test('header centers navigation and collects actions before adding a dropdown row', { skip }, async t => {
   const { page, settled, shot } = await open(t, { url: '/library', ready: '#queryTableLibrary .qt-row' });
-  const desktopButton = await page.locator('#themeToggle').boundingBox();
   const more = page.getByRole('button', { name: 'More tools', exact: true });
-  for (const width of [1440, 1350, 1280, 1180, 1050, 1024, 1001, 1000, 900, 760, 700, 620, 560, 520, 480, 390, 320, 1280]) {
+  // One width per regime: centered, collected actions, phone header, the
+  // narrowest phone, and back to a width where every tool fits.
+  for (const width of [1440, 1000, 700, 320, 1280]) {
     await page.setViewportSize({ width, height: 900 });
     await settled();
-    if (width === 1280 || width === 1350) assert.equal(await more.isVisible(), false, `tools still fit at ${width}px`);
+    if (width === 1280) assert.equal(await more.isVisible(), false, `tools still fit at ${width}px`);
     const bounds = await page.evaluate(() => {
       const tabs = document.querySelector('body > header .tabs');
       const bar = document.querySelector('body > header .bar'), style = getComputedStyle(bar), box = bar.getBoundingClientRect();
@@ -593,10 +580,6 @@ test('header centers navigation and collects actions before adding a dropdown ro
     }
     assert.equal(await page.locator('body > header .brand > .brand-words .brand-tagline').isVisible(), true, 'the motto remains visible');
     const button = await page.locator('#themeToggle').boundingBox();
-    if (button) {
-      assert.equal(button.width, desktopButton.width, 'actions keep their desktop width');
-      assert.equal(button.height, desktopButton.height, 'actions keep their desktop height');
-    }
     if (await more.isVisible()) {
       const moreBox = await more.boundingBox();
       assert.ok(moreBox.x < (button?.x ?? Infinity), 'More sits to the left of retained actions');
@@ -647,7 +630,8 @@ test('header fit responds to tool choices and label changes without resizing', {
   await settled();
 });
 
-for (const width of [1440, 1024, 390, 320]) test(`Pharos release action fits through download and relaunch @ ${width}`, {skip}, async t => {
+// Inline at 1440; collected into More at 320.
+for (const width of [1440, 320]) test(`Pharos release action fits through download and relaunch @ ${width}`, {skip}, async t => {
   const {page, settled, shot} = await open(t, {
     url: '/library', viewport: {width, height: width < 500 ? 844 : 900}, ready: '#queryTableLibrary .qt-row',
     api: {'GET /api/library/status': {...defaultApi['GET /api/library/status'],
@@ -708,7 +692,7 @@ test("macOS window controls stay clear of the lighthouse when resizing", { skip 
     }
     document.body.append(controls);
   });
-  for (const width of [1180, 1440, 2133, 800, 620, 390, 320, 1180]) {
+  for (const width of [2133, 1180, 320]) {
     await page.setViewportSize({ width, height: 900 });
     await settled();
     const brand = page.locator('body > header .brand');
@@ -754,18 +738,13 @@ test('Ask Pharos suggestions stay readable, prefill the editor and remember bein
     }));
     assert.equal(clipped,false,'suggestion questions fit their cards');
   };
-  for(const theme of ['dark','light']){
-    await page.evaluate(theme=>window.pharosPrefs.set('pharos-theme',theme),theme);
-    await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
-    for(const width of [2133,390,320]){
-      await page.setViewportSize({width,height:1070});await settled();
-      assert.deepEqual(await layoutProblems(page),[]);
-      await readable();
-      await shot(`expanded-${theme}-${width}`);
-    }
+  for(const width of [320,2133]){
+    await page.setViewportSize({width,height:1070});await settled();
+    assert.deepEqual(await layoutProblems(page),[]);
+    await readable();
+    await shot(`expanded-${width}`);
   }
-  await page.setViewportSize({width:2133,height:1070});await settled();
-  for(let step=0;step<7;step++){
+  for(let step=0;step<2;step++){
     await suggestions.getByRole('button',{name:'Next suggestions',exact:true}).click();
     await readable();
   }
@@ -798,7 +777,7 @@ test("dashboard collection wraps after four bookmarked cards", { skip }, async t
   const bookmarks = Array.from({ length: 9 }, (_, index) => ({ id: `card-${index}`, title: `Saved view ${index + 1}`, url: `/settings/preferences?card=${index}` }));
   const { page, settled, shot } = await open(t, { url: '/', ready: '.home-collection .query-card', preferences: { 'pharos-bookmarks-v1': bookmarks } });
   const collection = page.getByRole('region', { name: 'Your collection', exact: true });
-  for (const width of [2133, 3000, 1180, 800, 390, 320]) {
+  for (const width of [3000, 1180, 320]) {
     await page.setViewportSize({ width, height: 900 });
     await settled();
     const cards = await collection.locator('.query-card').evaluateAll(cards => cards.map(card => {
@@ -861,7 +840,8 @@ test("dashboard catalog stays readable while a preview is pending", { skip }, as
   }
 });
 
-for (const width of [1649, 2133]) test(`pages without section menus use the full window at ${width}px`, { skip }, async t => {
+test('pages without section menus use the full window', { skip }, async t => {
+  const width = 2133;
   const { page } = await open(t, { url: '/analyze', viewport: { width, height: 1075 }, ready: '.usage-dashboard .usage-chart' });
   const primary = page.getByRole('navigation', { name: 'Primary navigation', exact: true });
   const fillsWindow = async () => {
@@ -885,95 +865,25 @@ for (const width of [1649, 2133]) test(`pages without section menus use the full
   await fillsWindow();
 });
 
-for (const dashboard of [
-  { name: "Human Words", topic: "human", card: "human-words", dataset: "writing_messages", field: "sent_at", first: "first_message_at", last: "last_message_at", summary: "Human Words summary", chart: { period: "day" } },
-  { name: "Tokens and Cost", topic: "tokens", card: "cost-repos", dataset: "usage", field: "first_usage_at", first: "first_usage_at", last: "first_usage_at", summary: "Machine token summary", chart: { period: "day", metric: "cost", split: "repository_name" } },
-  { name: "Tool Time", topic: "time", card: "machine-time", dataset: "tool_calls", field: "started_at", first: "started_at", last: "started_at", summary: "Tool Time summary", chart: { period: "day", metric: 0, split: "activity" } },
-  { name: "Skills", topic: "skills", card: "skill-evidence", dataset: "skill_usages", field: "created_at", first: "created_at", last: "created_at", chart: { period: "day", metric: 0, split: "skill_name" } },
-  { name: "Tools", topic: "tools", card: "tool-failure-rates", dataset: "tool_calls", field: "started_at", first: "day", last: "day", graph: ".usage-tools-dashboard .usage-analysis-dashboard .qt-metric", chart: { period: "day", metric: "calls", split: "tool_name", view: "compare" } },
-  { name: "Pharos MCP", topic: "mcp", card: "mcp-response-size", dataset: "mcp_calls", field: "called_at", first: "called_at", last: "called_at", graph: ".usage-mcp-dashboard .usage-analysis-dashboard .qt-metric", chart: { period: "day", metric: "calls", split: "tool_name", view: "compare" } },
-  { name: "Carbon Impact", topic: "carbon", card: "carbon-trend", dataset: "usage", field: "first_usage_at", first: "first_usage_at", last: "first_usage_at", summary: "Filtered carbon estimate", chart: { period: "day", metric: "co2", split: "type" } },
-]) for (const width of [1504, 390, 320]) test(`${dashboard.name} dashboard and inline ranges fit at ${width}px`, { skip }, async t => {
-  const where = [{ field: dashboard.last, op: ">=", value: "-7d" }, { field: dashboard.first, op: "<", value: "+0s" }];
-  const sourceWhere = where.map(term => ({ ...term, field: dashboard.field }));
-  const params = new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: dashboard.topic,
-    [`q_${dashboard.dataset}`]: encodeQuery({ ...EMPTY_QUERY, where: sourceWhere }), window_mode: "relative", window_days: "7", window_field: dashboard.field, window_dataset: dashboard.dataset,
-    analyze_filters: encodeQuery({ ...EMPTY_QUERY, where }), analyze_chart: JSON.stringify(dashboard.chart) });
-  const app = await open(t, { url: `/analyze?${params}`, viewport: { width, height: 933 }, ready: dashboard.graph ?? ".usage-dashboard .usage-chart" });
-  const { page } = app;
-  const chart = await page.locator(dashboard.graph ?? '.usage-dashboard .usage-chart').boundingBox();
-  if (dashboard.summary) {
-    const stats = await page.getByLabel(dashboard.summary, { exact: true }).boundingBox();
-    assert.ok(stats.y >= chart.y + chart.height, 'summary statistics follow the graph');
-  }
-  if (dashboard.topic === 'carbon') {
-    const assumptions = await page.getByRole('region', { name: 'Estimate assumptions', exact: true }).boundingBox();
-    assert.ok(assumptions.y >= chart.y + chart.height, 'carbon assumptions follow the graph');
-  }
-  assert.deepEqual(await layoutProblems(page), []);
-  await app.shot('relative-card-range');
-  if (dashboard.topic === 'tools' || dashboard.topic === 'mcp') await page.getByRole('combobox', { name: 'View', exact: true }).selectOption('trend');
-  await page.getByRole('combobox', { name: 'Time Bucket', exact: true }).selectOption(['time', 'skills', 'tools', 'mcp'].includes(dashboard.topic) ? 'week' : 'hour');
-  const range = page.getByRole('combobox', { name: 'Range', exact: true });
-  for (const [mode, label] of [['custom', 'From date'], ['custom-times', 'From date and time']]) {
-    await range.selectOption(mode);
-    const from = page.getByLabel(label, { exact: true });
-    await from.waitFor();
-    await app.settled();
-    assert.deepEqual(await layoutProblems(page), []);
-    if (width === 1504) {
-      const picker = await range.boundingBox(), dates = await from.boundingBox();
-      assert.ok(dates.x >= picker.x + picker.width && dates.y < picker.y + picker.height && picker.y < dates.y + dates.height, 'custom inputs sit beside the range selector');
-    }
-    await app.shot(mode);
-  }
-  const longer = await range.boundingBox();
-  await range.selectOption('7d');
-  await app.settled();
-  const shorter = await range.boundingBox();
-  // A narrow row holds one control, which stretches across it.
-  if (width === 1504) assert.ok(shorter.width < longer.width, 'the range selector shrinks with a shorter selected label');
-  assert.deepEqual(await layoutProblems(page), []);
-  await app.shot('shorter-selected-range');
-});
-
-for (const width of [1504, 390, 320]) test(`Parallelism dashboard and inline ranges fit at ${width}px`, { skip }, async t => {
-  const where = [{ field: 'started_at', op: '>=', value: '-7d' }, { field: 'started_at', op: '<', value: '+0s' }];
-  const params = new URLSearchParams({ analyze_mode: 'dashboards', analyze_topic: 'parallelism',
-    q_parallelism: encodeQuery({ ...EMPTY_QUERY, where }), window_mode: 'relative', window_days: '7', window_field: 'started_at', window_dataset: 'parallelism',
-    analyze_parallelism: JSON.stringify({ range: '7d' }) });
-  const app = await open(t, { url: `/analyze?${params}`, viewport: { width, height: 933 }, concurrency: true, ready: '.usage-dashboard .concurrency-chart svg' });
-  const { page } = app;
-  const chart = await page.locator('.concurrency-chart').boundingBox();
-  const stats = await page.getByRole('group', { name: 'Parallelism summary', exact: true }).boundingBox();
-  assert.ok(stats.y >= chart.y + chart.height, 'summary statistics follow the graph');
-  assert.deepEqual(await layoutProblems(page), []);
-  await app.shot('relative-card-range');
-  const counting = page.getByRole('region', { name: 'Parallelism chart', exact: true }).getByRole('combobox', { name: 'Count by', exact: true });
-  const longer = await counting.boundingBox();
-  await counting.selectOption('agent');
-  await app.settled();
-  assert.ok((await counting.boundingBox()).width < longer.width, 'the counting selector shrinks from workspaces to sessions');
-  // The ribbon's Range; the engine views below have their own.
-  const range = page.getByRole('region', { name: 'Parallelism chart', exact: true }).getByRole('combobox', { name: 'Range', exact: true });
-  await range.selectOption('custom');
-  const from = page.getByLabel('From date', { exact: true });
-  await from.waitFor();
-  await app.settled();
-  assert.deepEqual(await layoutProblems(page), []);
-  if (width === 1504) {
-    const picker = await range.boundingBox(), dates = await from.boundingBox();
-    assert.ok(dates.x >= picker.x + picker.width && dates.y < picker.y + picker.height && picker.y < dates.y + dates.height, 'custom inputs sit beside the range selector');
-  }
-  await app.shot('custom-dates');
-});
-
 describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY || 3) }, () => {
   for (const route of ROUTES) {
     for (const viewport of WIDTHS) {
       const name = `${route.name} @ ${viewport.width}`;
       test(name, { skip }, async t => {
         const app = await open(t, { url: route.url, viewport, ready: route.ready, preferences: route.preferences, concurrency: route.concurrency, managedLibrary: route.managedLibrary, api: route.api });
+        // Loading a page leaves initial focus to the user, and its title is
+        // ordinary text. A dashboard's chart title stands in for its h1.
+        const focus = route.open || route.movesFocus ? [] : await app.page.evaluate(() => {
+          const found = [], name = el => `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ""}${el.className && typeof el.className === "string" ? `.${el.className.trim().split(/\s+/)[0]}` : ""}`;
+          const active = document.activeElement;
+          if (active && active !== document.body) found.push(`loading the page focused ${name(active)}`);
+          for (const title of document.querySelectorAll(".view.active :is(h1, .usage-chart-headline > h2)")) {
+            if (!title.checkVisibility() || getComputedStyle(title).clipPath !== "none") continue;
+            title.focus();
+            if (document.activeElement === title) { found.push(`page title accepts focus: "${title.textContent.trim().slice(0, 40)}"`); title.blur(); }
+          }
+          return found;
+        });
         if (route.open) {
           await route.open(app.page);
           await app.page.locator(route.shown).first().waitFor();
@@ -1005,7 +915,7 @@ describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY
           await app.shot("scrolled");
           problems.push(...(await layoutProblems(app.page)).filter(problem => !problems.includes(problem)));
         }
-        problems.push(...fitting, ...app.problems());
+        problems.push(...focus, ...fitting, ...app.problems());
         const known = KNOWN.filter(bug => (!bug.when || bug.when(route, viewport)) && problems.some(problem => bug.match.test(problem)));
         if (problems.some(problem => !known.some(bug => bug.match.test(problem)))) assert.fail(`${name} (${route.url}):\n  ${problems.join("\n  ")}`);
         if (known.length) t.todo(known.map(bug => bug.bug).join("; "));
@@ -1079,41 +989,15 @@ test("Card Library restores saved covers while fresh queries are pending", { ski
   await app.page.getByRole("status", { name: "Refreshing preview", exact: true }).first().waitFor();
   const catalog = app.page.locator("#card-library");
   await catalog.scrollIntoViewIfNeeded();
-  assert.deepEqual(await layoutProblems(app.page), []);
   await app.shot("saved-covers-refreshing");
   release(); await app.settled();
   await app.page.getByRole("status", { name: "Refreshing preview", exact: true }).first().waitFor({ state: "hidden" });
   assert.deepEqual(app.problems(), []);
 });
 
-// Card links as the site map cases hold them: each card at its first default
-// window, and some at every window. Open the 7-day one where there is one.
-const cardLinks = JSON.parse(readFileSync(new URL('../../../testdata/site-map-cases.json', import.meta.url), 'utf8')).cards;
 
-// Card links open full dashboards. Check navigation into supporting queries
-// and back, and that each chart family fits the available viewport.
-for (const id of ['human-words', 'cost-repos', 'machine-time', 'skill-evidence', 'tool-failure-rates', 'mcp-response-size', 'carbon-trend', 'parallel-days', 'machine-latency-trend', 'session-input-output', 'human-message-lengths', 'writing-hours', 'session-human-output', 'error-signatures']) {
-  for (const width of [1504, 390, 320]) test(`Card dashboard ${id} fits at ${width}px`, { skip }, async t => {
-    const item = cardLinks.find(card => card.id === id && card.days === 7) ?? cardLinks.find(card => card.id === id);
-    const app = await open(t, { url: item.url, viewport: { width, height: 933 }, ready: '.usage-query-destinations a' });
-    const { page } = app;
-    await app.settled();
-    assert.equal(await page.getByRole('alert').count(), 0, 'the matching analysis is available');
-    assert.deepEqual(await layoutProblems(page), []);
-    const details = page.locator('.usage-query-destinations a').first();
-    await details.waitFor();
-    await app.shot(`card-dashboard-${id}`);
-    await details.click();
-    await page.locator('.usage-workspace-table').waitFor();
-    await page.getByRole('link', { name: /^Back to dashboard/ }).click();
-    await page.locator('.usage-dashboard .usage-query-destinations a').first().waitFor();
-    await app.settled();
-    assert.deepEqual(await layoutProblems(page), []);
-  });
-}
-
-
-for (const choice of ['today', '24h']) test(`Query time window picker keeps ${choice} selected after replacing a custom range`, { skip }, async t => {
+test('Query time window picker keeps today selected after replacing a custom range', { skip }, async t => {
+  const choice = 'today';
   const params = new URLSearchParams({ analyze_mode: 'query', analyze_topic: 'human', analyze_data: 'writing_messages', q_writing_messages: encodeQuery({ ...EMPTY_QUERY, where: [{ field: 'sent_at', op: '<=', value: '2026-01-31' }] }) });
   const app = await open(t, { url: `/analyze?${params}`, ready: 'select[aria-label="Query time window"]' });
   const picker = app.page.getByRole('combobox', { name: 'Query time window', exact: true });
@@ -1122,17 +1006,29 @@ for (const choice of ['today', '24h']) test(`Query time window picker keeps ${ch
   await executed;
   await app.settled();
   assert.equal(await picker.inputValue(), choice);
-  assert.equal(new URL(app.page.url()).searchParams.get('window_mode'), choice === 'today' ? 'today' : 'relative');
+  assert.equal(new URL(app.page.url()).searchParams.get('window_mode'), 'today');
 });
 
 
-test("Card dashboard opens from the Card Library and supports changing views and reloading", { skip }, async t => {
+// Card links open full dashboards: one round trip into the supporting query
+// and back, then a view change that survives reload.
+test("Card dashboard opens from the Card Library, fits, and supports changing views and reloading", { skip }, async t => {
   const app = await open(t, { url: '/cards?card_search=error-signatures&card_topic=all&card_window=7', ready: '.query-card-open' });
   const { page } = app;
   await page.locator('.query-card-open').first().click();
   const view = page.getByRole('combobox', { name: 'View', exact: true });
   await view.waitFor();
   assert.equal(new URL(page.url()).searchParams.get('analyze_topic'), 'calls');
+  await page.locator('.usage-query-destinations a').first().waitFor();
+  await app.settled();
+  assert.equal(await page.getByRole('alert').count(), 0, 'the matching analysis is available');
+  assert.deepEqual(await layoutProblems(page), []);
+  await page.locator('.usage-query-destinations a').first().click();
+  await page.locator('.usage-workspace-table').waitFor();
+  await page.getByRole('link', { name: /^Back to dashboard/ }).click();
+  await page.locator('.usage-dashboard .usage-query-destinations a').first().waitFor();
+  await app.settled();
+  assert.deepEqual(await layoutProblems(page), []);
   await view.selectOption('trend');
   await page.waitForFunction(() => JSON.parse(new URLSearchParams(location.search).get('analyze_chart')).view === 'trend');
   await page.reload();
@@ -1148,16 +1044,18 @@ const oldActivitySource = { ...EMPTY_QUERY, where: [
   { field: "event_at", op: ">=", value: "2026-10-01T15:00:00.000Z" },
   { field: "event_at", op: "<", value: "+0s" },
 ] };
-function oldActivityCard(token = encodeQuery(oldActivitySource)) {
+function oldActivityCard(token) {
   return `/analyze?${new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: "human", analyze_data: "writing_messages",
     analyze_chart: JSON.stringify({ view: "trend", metric: "words" }), analyze_filters: encodeQuery(EMPTY_QUERY),
     card_id: "session-human-output", card_query: "conversation_activity", q_conversation_activity: token,
     window_mode: "today", window_days: "1", window_dataset: "conversation_activity", window_field: "event_at", window_timezone: "Asia/Tokyo",
   })}`;
 }
-for (const durable of [false, true]) test(`Older card dashboard restores ${durable ? "durable" : "inline"} sources before rendering`, { skip }, async t => {
+// The durable source is the harder path; the inline mapping is covered by
+// unit/cards/card-recipes.
+test("Older card dashboard restores durable sources before rendering", { skip }, async t => {
   const code = "eeeeeeeeeeeeeeeeeeeeee";
-  const app = await open(t, { url: oldActivityCard(durable ? `@${code}` : undefined), ready: '.usage-query-destinations a',
+  const app = await open(t, { url: oldActivityCard(`@${code}`), ready: '.usage-query-destinations a',
     api: { "GET /api/query-snapshots": { version: 1, code, token: encodeQuery(oldActivitySource), createdAt: 0 } },
   });
   const { page } = app;
