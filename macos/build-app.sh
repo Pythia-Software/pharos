@@ -12,11 +12,18 @@
 #   PHAROS_CODESIGN_TIMESTAMP Set to 1 for a secure signing timestamp (required
 #                             for Developer ID notarization). Default: 0.
 #   PHAROS_ENABLE_UPDATES     Set to 1 only for Developer ID releases. Default: 0.
+#   SDKROOT                  macOS SDK path. Default: installed macOS 26.5 SDK.
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 if [ "${PHAROS_ENABLE_UPDATES:-0}" = 1 ]; then
     python3 "$ROOT/macos/release_support.py"
 fi
+# Swift does not honor SDKROOT alone. Select the compatible SDK explicitly
+# before building; the macOS 27 CLT SDK needs an unavailable SwiftUI plugin.
+if [ -z "${SDKROOT:-}" ]; then
+    SDKROOT=$(xcrun --sdk macosx26.5 --show-sdk-path)
+fi
+export SDKROOT
 OUT=${1:-"$ROOT/dist"}
 APP="$OUT/Pharos.app"
 BUNDLE_ID=local.pharos
@@ -75,7 +82,7 @@ for goarch in $GOARCHES; do
     echo "Building the labeling worker ($arch)…"
     (cd "$ROOT" && GOOS=darwin GOARCH="$goarch" CGO_ENABLED=1 go build -o "$WORK/pharos-labeler-ort-$arch" ./cmd/pharos-labeler-ort)
     echo "Building the Swift wrapper ($arch)…"
-    swiftc -parse-as-library -target "$arch-apple-macos$MACOS_MIN" -framework SwiftUI -framework WebKit \
+    swiftc -sdk "$SDKROOT" -parse-as-library -target "$arch-apple-macos$MACOS_MIN" -framework SwiftUI -framework WebKit \
         -framework DiskArbitration -framework Security -F "$SPARKLE" -framework Sparkle \
         -Xlinker -rpath -Xlinker '@executable_path/../Frameworks' \
         "$ROOT/macos/PharosApp.swift" "$ROOT/macos/LibraryVolume.swift" "$ROOT/macos/Launch.swift" \
