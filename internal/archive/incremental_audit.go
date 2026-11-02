@@ -68,6 +68,7 @@ type auditAttempt struct {
 type auditPool struct {
 	catalog        *Catalog
 	units          []syncUnit
+	ranks          []auditRank
 	checks         map[string]string
 	outcomes       map[string]string
 	issues         map[string]auditIssue
@@ -156,33 +157,59 @@ func (pool *auditPool) consider(unit syncUnit) {
 	if pool.retry(unit) {
 		pool.retries[key(unit)] = true
 	}
+	// Each discovered unit is considered, so the ranks are read once per
+	// unit rather than in every comparison.
 	pool.units = append(pool.units, unit)
-	sort.SliceStable(pool.units, func(left, right int) bool {
-		first, second := key(pool.units[left]), key(pool.units[right])
-		if pool.retries[first] != pool.retries[second] {
-			return pool.retries[first]
-		}
-		if a, b := pool.sourceAttempts[pool.units[left].Source.Name], pool.sourceAttempts[pool.units[right].Source.Name]; a != b {
-			return a < b
-		}
-		if pool.checks[first] != pool.checks[second] {
-			return pool.checks[first] < pool.checks[second]
-		}
-		return pool.progress[first].attempted < pool.progress[second].attempted
-	})
+	pool.ranks = append(pool.ranks, auditRank{retry: pool.retries[key(unit)], sourceAttempt: pool.sourceAttempts[unit.Source.Name],
+		check: pool.checks[key(unit)], attempted: pool.progress[key(unit)].attempted})
+	sort.Stable(auditCandidates{pool})
 	if len(pool.units) > 64 {
 		seen := map[string]bool{}
-		first, rest := []syncUnit{}, []syncUnit{}
-		for _, candidate := range pool.units {
+		first, rest := []int{}, []int{}
+		for index, candidate := range pool.units {
 			if !seen[candidate.Source.Name] {
 				seen[candidate.Source.Name] = true
-				first = append(first, candidate)
+				first = append(first, index)
 			} else {
-				rest = append(rest, candidate)
+				rest = append(rest, index)
 			}
 		}
-		pool.units = append(first, rest...)[:64]
+		units, ranks := make([]syncUnit, 0, 64), make([]auditRank, 0, 64)
+		for _, index := range append(first, rest...)[:64] {
+			units, ranks = append(units, pool.units[index]), append(ranks, pool.ranks[index])
+		}
+		pool.units, pool.ranks = units, ranks
 	}
+}
+
+// auditRank orders audit candidates: open mismatches to retry first, then
+// the source attempted least recently, then the unit verified and attempted
+// least recently.
+type auditRank struct {
+	retry                           bool
+	sourceAttempt, check, attempted string
+}
+
+// auditCandidates sorts a pool's units with their ranks.
+type auditCandidates struct{ pool *auditPool }
+
+func (c auditCandidates) Len() int { return len(c.pool.units) }
+func (c auditCandidates) Swap(i, j int) {
+	c.pool.units[i], c.pool.units[j] = c.pool.units[j], c.pool.units[i]
+	c.pool.ranks[i], c.pool.ranks[j] = c.pool.ranks[j], c.pool.ranks[i]
+}
+func (c auditCandidates) Less(i, j int) bool {
+	a, b := c.pool.ranks[i], c.pool.ranks[j]
+	if a.retry != b.retry {
+		return a.retry
+	}
+	if a.sourceAttempt != b.sourceAttempt {
+		return a.sourceAttempt < b.sourceAttempt
+	}
+	if a.check != b.check {
+		return a.check < b.check
+	}
+	return a.attempted < b.attempted
 }
 
 func (pool *auditPool) preflightSkipped(source SourceConfig) {

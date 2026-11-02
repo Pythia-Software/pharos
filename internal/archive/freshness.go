@@ -782,8 +782,8 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 		l.add(entry)
 	}
 
-	// The Tools rollup: built for the ledger's generation, this layout,
-	// today and this timezone, with no dirty workspaces.
+	// The Tools rollup: built for the ledger's generation, this layout and
+	// this timezone, with no dirty workspaces.
 	tools := domainEntry{domain: "an.tools", group: "analyses", label: "Tools rollup", state: freshCurrent,
 		asOf: latestTime(deferred["tools"].completedAt, ends["analysis.tools"].succeeded)}
 	var dirty int64
@@ -791,7 +791,7 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 	built := meta["tool_rollup_generation"]
 	changedAt, isDeferred := pendingDeferral("tools")
 	layout := strings.HasSuffix(built, "/"+toolRollupVersion)
-	stale := built != meta["tool_ledger_generation"]+"/"+toolRollupVersion || dirty > 0 || meta["tool_rollup_day"] != c.clock().Format("2006-01-02") ||
+	stale := built != meta["tool_ledger_generation"]+"/"+toolRollupVersion || dirty > 0 ||
 		meta["tool_rollup_timezone"] != toolRollupTimezone() || meta["tool_rollup_full_revision"] != meta["tool_rollup_built_full_revision"]
 	switch {
 	case metaErr != nil || deferredErr != nil || dirtyErr != nil:

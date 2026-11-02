@@ -256,11 +256,13 @@ and representative queries, usage, sessions/model requests, tool ledgers,
 conversation documents, group totals, and immediate workspace metrics.
 Volatile timestamps, internal search row IDs, and deferred library-wide
 analyses are excluded. Comparison reads do not modify retained message data.
-Antigravity CLI audits freshly stream run logs to select only evidence naming
-members of the audited group, rather than copying every unrelated run log into
-the bounded snapshot. Frozen evidence parsing bypasses the live log cache;
-live log discovery uses a bounded cache and a cancellable chunked reader that
-handles long lines and conversation IDs crossing chunk boundaries.
+Antigravity CLI audits select only the run logs naming members of the
+audited group, rather than copying every unrelated run log into the bounded
+snapshot. Frozen evidence parsing bypasses the live log cache. Live discovery,
+audits and captures share that cache: each log's conversation IDs, keyed by
+path, size and modification time, for every log the directory still has. A
+cancellable chunked reader fills it, handling long lines and conversation IDs
+crossing chunk boundaries.
 
 A confirmed mismatch creates a deduplicated persistent issue. While one is
 open, the drive dot in the header is red and pulses, and the drive panel lists

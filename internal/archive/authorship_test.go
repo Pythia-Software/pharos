@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1287,7 +1288,6 @@ func TestAuthorshipIncrementalParity(t *testing.T) {
 				}
 			}
 			commitSeed(t, tx)
-			suffixes := 0
 			for start := 0; start < len(order); {
 				stop := min(start+1+start%3, len(order))
 				tx := seedTx(t, c.DB)
@@ -1316,12 +1316,7 @@ func TestAuthorshipIncrementalParity(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				ctx := withWorkProgress(t.Context(), func(work activityWork) {
-					if work.Phase == "authorship mode: suffix" {
-						suffixes++
-					}
-				})
-				if err := c.RebuildAuthorship(ctx, want); err != nil {
+				if err := c.RebuildAuthorship(t.Context(), want); err != nil {
 					t.Fatal(err)
 				}
 				inputs, launches, err := c.authorshipInputs(t.Context())
@@ -1338,39 +1333,68 @@ func TestAuthorshipIncrementalParity(t *testing.T) {
 				}
 				start = stop
 			}
-			// A new turn in an existing conversation after the graph is stable must
-			// classify just this suffix and find the latest historical copy.
-			text := events[1].text
-			if _, err := c.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('append','c0','append','user','message',?,?,?)`, text, formatTime(authorAt(21*24*60)), hashBytes([]byte(text))); err != nil {
-				t.Fatal(err)
+			// New work after the graph is stable must classify just its suffix:
+			// a turn that finds the latest historical copy, a conversation in a
+			// new workspace, a headless run launched from history's
+			// conversation, and a sub-agent.
+			late := func(days int, offset time.Duration) string {
+				return formatTime(authorAt(days * 24 * 60).Add(offset))
 			}
-			want, _, _ := c.authorshipGenerations()
-			classified := 0
-			ctx := withWorkProgress(t.Context(), func(work activityWork) {
-				if work.Phase == "authorship mode: suffix" {
-					suffixes++
+			for _, step := range []struct {
+				name       string
+				statements []string
+				launched   string
+			}{
+				{"append", []string{`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('append','c0','append','user','message','` + events[1].text + `','` + late(21, 0) + `','append')`}, ""},
+				{"conversation", []string{
+					`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at,location) VALUES('late-work','claude','local','late-work','Late','2026-09-01','/elsewhere')`,
+					`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,started_at) VALUES('late','late-work','claude','local','late','claude-code/cli','` + late(22, 0) + `')`,
+					`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('late-first','late','late-first','user','message','Start a new parser for the late workspace','` + late(22, time.Second) + `','late-first')`,
+				}, ""},
+				{"run", []string{
+					`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('launch2','c0','launch2','assistant','tool_call','claude -p','` + late(23, 0) + `','launch2')`,
+					`INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,program,command,call_message_id,started_at,ended_at,status) VALUES('launch2','c0','c0',2,'claude','tool_call','Bash','command','claude','claude -p check','launch2','` + late(23, 0) + `','` + late(23, 2*time.Minute) + `','success')`,
+					`INSERT INTO tool_commands(tool_call_id,position,program,subcommand,command) VALUES('launch2',0,'claude','-p','claude -p check')`,
+					`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,started_at) VALUES('run2','run','claude','local','run2','claude-code/sdk-cli','` + late(23, time.Second) + `')`,
+					`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('headless2','run2','headless2','user','message','Check grammar','` + late(23, 2*time.Second) + `','headless2')`,
+				}, "run2"},
+				{"sub-agent", []string{
+					`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,parent_id,started_at) VALUES('child2','child-work','claude','local','child2','claude-code/cli','c0','` + late(24, 0) + `')`,
+					`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('child2-first','child2','child2-first','user','message','Check the grammar again from a sub-agent','` + late(24, time.Second) + `','child2-first')`,
+				}, ""},
+			} {
+				execTx(t, c.DB, step.statements...)
+				want, _, _ := c.authorshipGenerations()
+				classified, mode := 0, ""
+				ctx := withWorkProgress(t.Context(), func(work activityWork) {
+					if strings.HasPrefix(work.Phase, "authorship mode:") {
+						mode = work.Phase
+					}
+					if work.Phase == "classifying authorship" {
+						classified = int(work.Total)
+					}
+				})
+				if err := c.RebuildAuthorship(ctx, want); err != nil {
+					t.Fatal(err)
 				}
-				if work.Phase == "classifying authorship" {
-					classified = int(work.Total)
+				if classified != 1 || mode != "authorship mode: suffix" {
+					t.Fatalf("%s reclassified %d messages in %q", step.name, classified, mode)
 				}
-			})
-			if err := c.RebuildAuthorship(ctx, want); err != nil {
-				t.Fatal(err)
-			}
-			if classified != 1 || suffixes == 0 {
-				t.Fatalf("append reclassified %d messages; suffix runs %d", classified, suffixes)
-			}
-			inputs, launches, err := c.authorshipInputs(t.Context())
-			if err != nil {
-				t.Fatal(err)
-			}
-			results, err := c.classifyInputs(t.Context(), inputs)
-			if err != nil {
-				t.Fatal(err)
-			}
-			plan, err := c.planAuthorship(t.Context(), results, launches)
-			if err != nil || len(plan) != 0 {
-				t.Fatalf("append differs: %v (%v)", plan, err)
+				inputs, launches, err := c.authorshipInputs(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				results, err := c.classifyInputs(t.Context(), inputs)
+				if err != nil {
+					t.Fatal(err)
+				}
+				plan, err := c.planAuthorship(t.Context(), results, launches)
+				if err != nil || len(plan) != 0 {
+					t.Fatalf("%s differs: %v (%v)", step.name, plan, err)
+				}
+				if step.launched != "" && !slices.ContainsFunc(launches, func(launch conversationLaunch) bool { return launch.child == step.launched }) {
+					t.Fatalf("%s found no launch of %s: %v", step.name, step.launched, launches)
+				}
 			}
 		})
 	}

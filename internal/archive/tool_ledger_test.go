@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -156,6 +157,26 @@ func TestClaudeToolLedger(t *testing.T) {
 	var commands int
 	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM tool_commands WHERE program='head'").Scan(&commands); err != nil || commands != 1 {
 		t.Fatalf("tool commands: %d %v", commands, err)
+	}
+	// A later turn re-reads the git result: the call is rewritten for what it
+	// carried, but its unchanged commands are not, so writing classification
+	// is not dated back to the call's start.
+	if _, err := catalog.DB.Exec("UPDATE authorship_dirty SET earliest=NULL"); err != nil {
+		t.Fatal(err)
+	}
+	writeFixture(t, root, "project/claude-tools.jsonl", append(slices.Clone(claudeToolFixture),
+		`{"type":"user","uuid":"u5","parentUuid":"a4","sessionId":"claude-tools","timestamp":"2026-09-20T10:05:00.000Z","message":{"role":"user","content":"and now?"}}`,
+		`{"type":"assistant","uuid":"a5","parentUuid":"u5","sessionId":"claude-tools","timestamp":"2026-09-20T10:05:05.000Z","message":{"id":"msg_5","role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"Done."}],"usage":{"input_tokens":10,"cache_read_input_tokens":1400,"cache_creation_input_tokens":0,"output_tokens":5}}}`))
+	ingestFixture(t, catalog, "claude", root)
+	if carried := integer(toolCallsByProgram(t, catalog)["git"]["carried_requests"]); carried != 4 {
+		t.Fatalf("git carried %d requests after the new turn", carried)
+	}
+	var earliest string
+	if err := catalog.DB.QueryRow("SELECT COALESCE(earliest,'') FROM authorship_dirty").Scan(&earliest); err != nil || earliest < "2026-09-20T10:05:00" {
+		t.Fatalf("a new turn dated writing classification from %q (%v)", earliest, err)
+	}
+	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM tool_commands WHERE program='head'").Scan(&commands); err != nil || commands != 1 {
+		t.Fatalf("tool commands after the new turn: %d %v", commands, err)
 	}
 }
 

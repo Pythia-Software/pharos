@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -172,6 +173,29 @@ func TestAutomaticAuditBoundsAttemptsAndSharesCancellation(t *testing.T) {
 	result = server.Catalog.auditPool(ctx, pool, "cancel-fallback")
 	if len(result.Attempts) != 1 || result.Reason != "cancelled" {
 		t.Fatalf("cancellation did not stop the shared sampling budget: %+v", result)
+	}
+}
+
+// The pool keeps 64 candidates, open mismatches first, then the least
+// recently verified, and one from every source however many another has.
+func TestAuditPoolRanksAndKeepsEverySource(t *testing.T) {
+	pool := &auditPool{checks: map[string]string{}, outcomes: map[string]string{}, issues: map[string]auditIssue{}, retries: map[string]bool{},
+		versions: map[string]string{}, progress: map[string]auditProgress{}, sourceAttempts: map[string]string{}}
+	busy, quiet := SourceConfig{Name: "busy", Kind: "claude"}, SourceConfig{Name: "quiet", Kind: "claude"}
+	old := time.Now().Add(-time.Hour).UnixNano()
+	for index := range 80 {
+		pool.checks[fmt.Sprintf("busy/u%02d", index)] = fmt.Sprintf("2026-10-%02d", 80-index)
+	}
+	pool.checks["quiet/last"] = "2026-12-31"
+	for index := range 80 {
+		pool.consider(unitOf(busy, []sourcePart{{item: fmt.Sprintf("u%02d", index), size: 1, version: old}}, false))
+	}
+	pool.consider(unitOf(quiet, []sourcePart{{item: "last", size: 1, version: old}}, false))
+	if len(pool.units) != 64 {
+		t.Fatalf("pool holds %d units", len(pool.units))
+	}
+	if pool.units[0].ID != "u79" || !slices.ContainsFunc(pool.units, func(unit syncUnit) bool { return unit.Source.Name == "quiet" }) {
+		t.Fatalf("pool order starts with %s; holds quiet: %v", pool.units[0].ID, slices.ContainsFunc(pool.units, func(unit syncUnit) bool { return unit.Source.Name == "quiet" }))
 	}
 }
 

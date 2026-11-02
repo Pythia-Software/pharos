@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -191,13 +192,17 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 			return err
 		}
 		defer callStatement.Close()
-		commandStatement, err := tx.Prepare(`INSERT INTO tool_commands(tool_call_id,position,operator,command,program,subcommand,category,exit_code,duration_ms)
-			VALUES(?,?,?,?,?,?,?,?,?)`)
+		// A call is rewritten whenever a later turn changes what it carried;
+		// its commands and URLs rarely change, so only rows that differ are
+		// written. Their triggers date dependent work (writing classification)
+		// from the call's start, however old.
+		commandStatement, err := tx.Prepare(changedUpsertSQL(`INSERT INTO tool_commands(tool_call_id,position,operator,command,program,subcommand,category,exit_code,duration_ms)
+			VALUES(?,?,?,?,?,?,?,?,?)`, "tool_call_id", "position"))
 		if err != nil {
 			return err
 		}
 		defer commandStatement.Close()
-		urlStatement, err := tx.Prepare(`INSERT INTO tool_urls(tool_call_id,position,url,host,source) VALUES(?,?,?,?,?)`)
+		urlStatement, err := tx.Prepare(changedUpsertSQL(`INSERT INTO tool_urls(tool_call_id,position,url,host,source) VALUES(?,?,?,?,?)`, "tool_call_id", "position"))
 		if err != nil {
 			return err
 		}
@@ -211,8 +216,15 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 			if !write {
 				continue
 			}
-			for _, table := range []string{"tool_commands", "tool_urls"} {
-				if _, err := tx.Exec("DELETE FROM "+table+" WHERE tool_call_id=?", id); err != nil {
+			commandPositions, urlPositions := []int{}, []int{}
+			for _, command := range call.Commands {
+				commandPositions = append(commandPositions, command.Position)
+			}
+			for _, address := range call.URLs {
+				urlPositions = append(urlPositions, address.Position)
+			}
+			for table, positions := range map[string][]int{"tool_commands": commandPositions, "tool_urls": urlPositions} {
+				if _, err := tx.Exec("DELETE FROM "+table+" WHERE tool_call_id=? AND position NOT IN (SELECT value FROM json_each(?))", id, jsonText(positions)); err != nil {
 					return err
 				}
 			}
@@ -303,6 +315,25 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 		return bumpToolLedgerPartitionGeneration(tx)
 	}
 	return nil
+}
+
+// changedUpsertSQL is statement upserting on key, updating a row only when
+// one of its other columns differs, so unchanged rows fire no triggers.
+func changedUpsertSQL(statement string, key ...string) string {
+	start, end := strings.Index(statement, "("), strings.Index(statement, ")")
+	updates, changed := []string{}, []string{}
+	for _, column := range strings.Split(statement[start+1:end], ",") {
+		column = strings.TrimSpace(column)
+		if !slices.Contains(key, column) {
+			updates = append(updates, column+"=excluded."+column)
+			changed = append(changed, column+" IS NOT excluded."+column)
+		}
+	}
+	table := strings.Fields(statement[:start])[2]
+	for index := range changed {
+		changed[index] = table + "." + changed[index]
+	}
+	return statement + " ON CONFLICT(" + strings.Join(key, ",") + ") DO UPDATE SET " + strings.Join(updates, ",") + " WHERE " + strings.Join(changed, " OR ")
 }
 
 func derivedUpsertSQL(statement string) string {
@@ -438,9 +469,10 @@ func (c *Catalog) metaValue(ctx context.Context, key string) (string, error) {
 	return value, err
 }
 
-// toolRollupStale reports the ledger generation and local day a rollup
-// should be built for, the generation the current one was built for, and
-// whether it needs a rebuild.
+// toolRollupStale reports the ledger generation a rollup should be built
+// for, today's local date to record with it, the generation the current one
+// was built for, and whether it needs a rebuild. A new day is no reason: the
+// cube groups each call by its own local day, which no later date changes.
 func (c *Catalog) toolRollupStale(ctx context.Context) (generation, built, day string, stale bool, err error) {
 	if generation, err = c.metaValue(ctx, "tool_ledger_generation"); err != nil {
 		return
@@ -451,15 +483,11 @@ func (c *Catalog) toolRollupStale(ctx context.Context) (generation, built, day s
 		return
 	}
 	day = c.clock().Format("2006-01-02")
-	builtDay, err := c.metaValue(ctx, "tool_rollup_day")
-	if err != nil {
-		return generation, built, day, false, err
-	}
 	var dirty bool
 	err = c.reader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tool_rollup_dirty) OR
  COALESCE((SELECT value FROM meta WHERE key='tool_rollup_full_revision'),'')<>COALESCE((SELECT value FROM meta WHERE key='tool_rollup_built_full_revision'),'') OR
  COALESCE((SELECT value FROM meta WHERE key='tool_rollup_timezone'),'')<>?`, toolRollupTimezone()).Scan(&dirty)
-	return generation, built, day, generation != built || day != builtDay || dirty, err
+	return generation, built, day, generation != built || dirty, err
 }
 
 // errToolRollupBuilding answers a page while the first rollup in this build's
@@ -469,8 +497,7 @@ var errToolRollupBuilding = errors.New("Pharos is rebuilding its tool summaries 
 // currentToolRollup is ensureToolRollup for a page, which never waits for it:
 // a full rebuild reads every tool call, half a minute on a large catalog, and
 // waits for any sync holding the writer. A page reads the stored rollup while
-// the rebuild runs in the background, so it lags only the last sync or a
-// change of date. Until this build's layout exists there is nothing to read.
+// the rebuild runs in the background, so it lags only the last sync. Until this build's layout exists there is nothing to read.
 func (c *Catalog) currentToolRollup(ctx context.Context) error {
 	_, built, _, stale, err := c.toolRollupStale(ctx)
 	if err != nil || !stale {
