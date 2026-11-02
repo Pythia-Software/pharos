@@ -84,7 +84,9 @@ credentials stay in Keychain.
 
 Releases select the macOS 26.5 SDK by default: the standalone macOS 27
 Command Line Tools SDK references a SwiftUI macro plugin not included with
-those tools. Set `SDKROOT` explicitly to use another compatible SDK.
+those tools. The app build passes the selected SDK directly to `swiftc` using
+`-sdk`; Swift does not honor `SDKROOT` alone. Local app builds use the same
+default. Set `SDKROOT` explicitly to use another compatible SDK.
 
 The script fetches `origin/master`, refuses a dirty or different checkout and
 an existing tag, builds and verifies the app, then creates an annotated tag
