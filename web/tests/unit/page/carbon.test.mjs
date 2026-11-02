@@ -15,11 +15,12 @@ function carbon(settings = {}) {
   return loadClassicScript("carbon.js", { pharosPrefs }).window.pharosCarbon;
 }
 
-test("linked Carbon assumptions override saved defaults without writing preferences", () => {
+test("linked Carbon assumptions override saved defaults without writing preferences; a manual change saves only itself", () => {
   const saved = { scenario: "low", grid: "world" }, linked = { scenario: "high", pueScenario: "high", inputSensitivity: "third", grid: "custom", customGrid: 100, vehicle: "car_hybrid", flightFrom: "lax", flightTo: "jfk" };
   const writes = [], location = new URL("http://pharos.test/analyze?analyze_topic=carbon");
   location.searchParams.set("analyze_carbon", JSON.stringify(linked));
-  const loaded = loadClassicScript("carbon.js", { location, pharosPrefs: { get: (_key, fallback) => saved ?? fallback, set: (...args) => writes.push(args) } });
+  const history = { state: null, replaceState: (_state, _title, url) => { location.href = String(url); } };
+  const loaded = loadClassicScript("carbon.js", { location, history, pharosPrefs: { get: (_key, fallback) => saved ?? fallback, set: (...args) => writes.push(args) } });
   const result = loaded.window.pharosCarbon.estimate(factors, counts("medium", "cache_read", 1e6));
   close(result.co2, 20.8, "URL assumptions applied");
   assert.deepEqual(structuredClone(loaded.window.pharosCarbon.settingsSnapshot(factors)), linked);
@@ -27,6 +28,11 @@ test("linked Carbon assumptions override saved defaults without writing preferen
   loaded.window.dispatchEvent(new loaded.window.Event("pharos:route"));
   close(loaded.window.pharosCarbon.estimate(factors, counts("medium", "cache_read", 1e6)).co2, 400 * .02 * 5 / 3 * 1.3 * .1, "route assumptions applied");
   assert.equal(writes.length, 0);
+  loaded.window.pharosCarbon.updatePreferences({ pueScenario: "low" });
+  assert.deepEqual(structuredClone(writes), [["pharos-carbon-v1", { ...saved, pueScenario: "low" }]], "the saved defaults gain the chosen assumption, not the link's others");
+  const url = JSON.parse(location.searchParams.get("analyze_carbon"));
+  assert.equal(url.pueScenario, "low");
+  assert.equal(url.scenario, "central", "the open view keeps its linked assumptions");
 });
 
 function close(actual, expected, message) {

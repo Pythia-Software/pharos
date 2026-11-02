@@ -496,7 +496,7 @@ test("Tool summary call links keep every dimension of the selected row", () => {
 // their behaviour independently of the compact collection projection.
 import { createPropertyView, ITEM_DETAILS_COLUMN, selectedFields, toServerQuery } from "@pythia-software/query-table-core";
 import { conversationRowURL, primaryUsageSource, usageDetailsSchema, usageRowLinks } from "../../../src/usage-row-model.ts";
-import { usageActionQuery, usageDrilldownColumns, usageDrilldownField, usageQuerySchema, withGroupDetail } from "../../../src/usage-query-columns.ts";
+import { fittedDefaultQuery, usageActionQuery, usageDrilldownColumns, usageDrilldownField, usageQuerySchema, withGroupDetail } from "../../../src/usage-query-columns.ts";
 import { orderedUsageQuery } from "../../../src/usage-query-order.ts";
 import { authoredRenderers } from "../../../src/authored.tsx";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -541,6 +541,19 @@ test("Analyze keeps every drilldown after the selected data and before native De
     const fresh = usageActionQuery(EMPTY_QUERY, schema, dataset);
     assert.deepEqual(fresh.select.slice(0, original.defaultSelect.length), original.defaultSelect);
   }
+});
+
+test("a new Analyze table fits the screen while an explicit sizing choice survives restoration", () => {
+  const original = loadSchema(usage), schema = usageQuerySchema(original, "usage");
+  const fresh = fittedDefaultQuery(original);
+  assert.equal(fresh.fitToScreen, true);
+  assert.equal(fresh.limit, 50, "a new fitted table keeps the dataset page size");
+  const explicit = { ...EMPTY_QUERY, fitToScreen: false, select: [{ field: "model", width: 240 }], limit: 5 };
+  const restored = usageActionQuery(orderedUsageQuery("usage", decodeQueryStrict(encodeQuery(explicit))), schema, "usage");
+  assert.equal(Boolean(restored.fitToScreen), false, "links encode a manual layout as the absence of fitting");
+  assert.deepEqual(restored.select[0], explicit.select[0]);
+  assert.equal(restored.limit, 5);
+  assert.strictEqual(usageActionQuery(restored, schema, "usage"), restored, "canonicalization settles without resetting the sizing choice");
 });
 
 test("Drilldown ordering reads a conversation forward and browses populations newest first", () => {

@@ -209,6 +209,16 @@ function headerToolAddPosition(value, id) {
   return existing >= 0 ? existing : tools.length;
 }
 
+// A bookmark keeps the page's view but not the drawers or Find open over it, so a page
+// compares equal however it was reached. Other origins are kept whole.
+function bookmarkPageURL(raw = location.href) {
+  const url = new URL(raw, location.href);
+  if (url.origin !== location.origin) return url.href;
+  for (const key of ['overlay', 'history_search', 'history_collapsed', 'find', 'find_case', 'find_regex']) url.searchParams.delete(key);
+  url.searchParams.sort();
+  return url.pathname + url.search + url.hash;
+}
+
 function initHeaderHistory(changed) {
   const key = 'pharos-nav-max', push = history.pushState.bind(history), replace = history.replaceState.bind(history);
   const position = () => Number.isInteger(history.state?.pharosIndex) && history.state.pharosIndex >= 0 ? history.state.pharosIndex : 0;

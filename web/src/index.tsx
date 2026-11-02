@@ -2,6 +2,7 @@ import { hostQueryV3Transport } from "./host-query-transport";
 import { ViewDisclosure } from "./view-disclosure";
 import { useViewEntry } from "./view-state";
 import { installViewAttention, registerDetailAttentionResolver } from "./view-attention";
+import { nativeDetailsReady } from "./view-attention-model";
 import { revealQueryDetail } from "./query-attention";
 import { createAttentionRegistry } from "@pythia-software/query-table-core";
 import { portableLinkOptions, portableQueryLinks } from "./portable-query-link";
@@ -20,7 +21,7 @@ import { TextSearchEditor } from "./text-search-editor";
 import { SearchHelp } from "./search-help";
 import { RecordSearchEditor, recordSearchTargets } from "./record-search-editor";
 import { usageDetailsSchema } from "./usage-row-model";
-import { usageActionQuery, usageQuerySchema, withGroupDetail } from "./usage-query-columns";
+import { fittedDefaultQuery, usageActionQuery, usageQuerySchema, withGroupDetail } from "./usage-query-columns";
 import { orderedUsageQuery } from "./usage-query-order";
 import { usageRowRenderers } from "./usage-row-renderers";
 import { createQueryMetadataLoader } from "./query-metadata";
@@ -72,7 +73,7 @@ import { AskPharosSearch, AskPharosSettings } from "./ask-pharos";
 import { CardLibraryPage } from "./card-library";
 import { linkTargets, navigateLink } from "./query-link-targets";
 import { QueryChip } from "./query-card";
-import { queryFromURL, queryURL, rollingWindowField, updateQueryWindowURL, readRollingWindow, resolveRollingQuery, rollingQueryMatches, restoreRollingDefinition } from "./query-links";
+import { queryFromURL, queryURL, rollingWindowField, updateQueryWindowURL, queryWindowChoice, withQueryWindow, readRollingWindow, resolveRollingQuery, rollingQueryMatches, restoreRollingDefinition } from "./query-links";
 import { mainIntegration, pullRequestLabel, pullRequestURL, pullRequests } from "./pull-requests";
 import { optionLabels } from "./option-labels";
 import { preferences } from "./preferences";
@@ -541,7 +542,7 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
     const stored = shared ? memoryStorageAdapter() : libraryStorageAdapter({ fresh: new URLSearchParams(location.search).get("fresh") === "1", onRecovery: () => setRecovered(true) });
     // Fit a new Analyze table by default, while respecting every restored URL,
     // named/default save and last-used manual sizing choice.
-    return usageActions ? { ...stored, loadLast: async (key: string) => await stored.loadLast(key) ?? { ...EMPTY_QUERY, select:schema.defaultSelect ?? [], orderBy:schema.defaultSort ?? [], limit:schema.defaultLimit ?? EMPTY_QUERY.limit, fitToScreen: true } } : stored;
+    return usageActions ? { ...stored, loadLast: async (key: string) => await stored.loadLast(key) ?? fittedDefaultQuery(schema) } : stored;
   }, [bookmarkRevision, usageActions, schema]);
   const propertyStorage = useMemo(() => jsonPropertyViewStorage(
     key => preferences().get<string | null>(key, null),
@@ -624,10 +625,10 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
   const failed = api.execution ? api.execution.rows === "failed" : Boolean(api.error);
   const resultsView = searchResultsView(api.query, dataset === "library" ? readLibraryHost(hostState).view : "table");
   const attentionSchema = api.itemDetails?.schema.name;
-  const attentionRowsReady = Boolean(api.execution && api.execution.rows !== "running");
+  const detailsReady = nativeDetailsReady({ visible: Boolean(visible), shared: Boolean(shared), restored: api.restoration.ready, loading: api.loading, rows: api.execution?.rows, schema: attentionSchema });
   const nativeDetailSurface = resultsView === "table" && !(dataset === "writing_messages" && messageView === "text" && !api.query.grouping);
   useEffect(() => {
-    if (!visible || shared || !api.restoration.ready || !attentionRowsReady || api.loading || !attentionSchema) return;
+    if (!detailsReady || !attentionSchema) return;
     // Wait for the result page: otherwise native details can reveal in an
     // off-page fallback which the arriving rows immediately replace.
     // Custom conversation/text presentations do not mount native properties.
@@ -635,7 +636,7 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
     const unregister = registerDetailAttentionResolver((reference, signal) => nativeDetailSurface
       ? revealQueryDetail(attention, attentionSchema, reference, signal) : Promise.resolve("unavailable"));
     return () => { unregister(); attention.cancel(); };
-  }, [visible, api.restoration.ready, api.loading, attentionRowsReady, attentionSchema, attention, nativeDetailSurface]);
+  }, [detailsReady, attentionSchema, attention, nativeDetailSurface]);
   const selectRows = selectable && !api.query.grouping && resultsView === "table";
   useMachineQueryNavigation(api, Boolean(visible && !shared && (namespace || dataset === "usage")), JSON.stringify([scopeWhere, new URLSearchParams(location.search).get("machine_view")]), `q_${registryKey}`, scopeWhere);
   const apiRef = useRef(api);
@@ -742,15 +743,12 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
     {!api.query.grouping || namespace ? header?.(api) : null}
     {!shared && !namespace && Object.hasOwn(usageDatasets, dataset) ? <UsageQueryIdeas key={dataset} dataset={dataset as UsageDataset} api={api} /> : null}
     {presets?.(api)}
-    {!shared && !namespace && !["library", "tl1_attempts", "findings", "safety", "parallelism"].includes(dataset) && rollingWindowField(dataset) ? <label className="usage-chart-field">Time window<select aria-label="Query time window" value={(() => { const choice = readRollingWindow(new URLSearchParams(location.search), dataset); return choice?.mode === "today" ? "today" : choice?.mode === "relative" && choice.days === 1 ? "24h" : "saved"; })()} onChange={event => {
+    {!shared && !namespace && !["library", "tl1_attempts", "findings", "safety", "parallelism"].includes(dataset) && rollingWindowField(dataset) ? <label className="usage-chart-field">Time window<select aria-label="Query time window" value={queryWindowChoice(new URLSearchParams(location.search), dataset)} onChange={event => {
       if (event.target.value === "saved") return;
       const selected = readRollingWindow(new URLSearchParams(location.search), dataset);
       const address = updateQueryWindowURL(queryURL(dataset, api.query, selected), event.target.value === "today" ? "today" : 1, api.query);
       const adjusted = queryFromURL(address)!;
-      const params = new URL(address, location.origin).searchParams;
-      const nextURL=new URL(location.href);
-      for (const key of ["window_mode", "window_days", "window_field", "window_dataset", "window_timezone", "window_until_field"]) {const value=params.get(key);if(value)nextURL.searchParams.set(key,value);else nextURL.searchParams.delete(key);}
-      nextURL.searchParams.set(`q_${registryKey}`,params.get(`q_${dataset}`)!);
+      const nextURL=withQueryWindow(new URL(location.href),address,dataset,registryKey);
       history.replaceState(history.state,"",nextURL);window.dispatchEvent(new Event("pharos:uri-changed"));
       api.setQuery(adjusted.query);
     }}><option value="saved">Query filters</option><option value="today">Today</option><option value="24h">Last 24 hours</option></select></label> : null}

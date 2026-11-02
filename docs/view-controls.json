@@ -6108,11 +6108,11 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
-      "key": "36165ae1630cd480:0",
+      "key": "48b238cf5a98afa1:0",
       "file": "web/src/index.tsx",
       "owner": "QuerySurface",
       "tag": "select",
-      "control": "aria-label=\"Query time window\" value={(() => { const choice = readRollingWindow(new URLSearchParams(location.search), dataset); return choice?.mode === \"today\" ? \"today\" : choice?.mode === \"relative\" && choice.days === 1 ? \"24h\" : \"saved\"; })()} onChange={event => { if (event.target.value === \"saved\") return; const selected = readRollingWindow(new URLSearchParams(location.search), dataset); const address = updateQueryWindowURL(queryURL(dataset, api.query, selected), event.target.value === \"today\" ? \"today\" : 1, api.query); const adjusted = queryFromURL(address)!; const params = new URL(address, location.origin).searchParams; const nextURL=new URL(location.href); for (const key of [\"window_mode\", \"window_days\", \"window_field\", \"window_dataset\", \"window_timezone\", \"window_until_field\"]) {const value=params.get(key);if(value)nextURL.searchParams.set(key,value);else nextURL.searchParams.delete(key);} nextURL.searchParams.set(`q_${registryKey}`,params.get(`q_${dataset}`)!); history.replaceState(history.state,\"\",nextURL);window.dispatchEvent(new Event(\"pharos:uri-changed\")); api.setQuery(adjusted.query); }}",
+      "control": "aria-label=\"Query time window\" value={queryWindowChoice(new URLSearchParams(location.search), dataset)} onChange={event => { if (event.target.value === \"saved\") return; const selected = readRollingWindow(new URLSearchParams(location.search), dataset); const address = updateQueryWindowURL(queryURL(dataset, api.query, selected), event.target.value === \"today\" ? \"today\" : 1, api.query); const adjusted = queryFromURL(address)!; const nextURL=withQueryWindow(new URL(location.href),address,dataset,registryKey); history.replaceState(history.state,\"\",nextURL);window.dispatchEvent(new Event(\"pharos:uri-changed\")); api.setQuery(adjusted.query); }}",
       "contract": "native-query",
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },

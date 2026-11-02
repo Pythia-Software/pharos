@@ -745,7 +745,6 @@ addEventListener('storage',event=>{if(event.key===HISTORY_KEY&&$('#historyDrawer
 const BOOKMARKS_KEY='pharos-bookmarks-v1',DRAWERS={historyDrawer:'#historyToggle',bookmarksDrawer:'#bookmarksToggle'};
 function loadBookmarks(){const value=pharosPrefs.get(BOOKMARKS_KEY,[]);return Array.isArray(value)?value.filter(item=>item&&typeof item.id==='string'&&typeof item.url==='string'&&typeof item.title==='string').map(item=>({...item,url:bookmarkPageURL(item.url)})):[]}
 function saveBookmarks(items){pharosPrefs.set(BOOKMARKS_KEY,items);syncBookmarkState();window.dispatchEvent(new Event('pharos:bookmarks'))}
-function bookmarkPageURL(raw=location.href){const url=new URL(raw,location.href);if(url.origin!==location.origin)return url.href;for(const key of ['overlay','history_search','history_collapsed','find','find_case','find_regex'])url.searchParams.delete(key);url.searchParams.sort();return url.pathname+url.search+url.hash}
 function currentPageURL(){return bookmarkPageURL()}
 function syncBookmarkState(){const marked=loadBookmarks().some(item=>bookmarkPageURL(item.url)===currentPageURL()),add=$('#bookmarkAdd'),toggle=$('#bookmarksToggle');add.replaceChildren(...iconLabel('star',marked?'This page is bookmarked':'Bookmark this page'));add.disabled=marked;toggle.title=marked?'Bookmarks (this page is bookmarked)':'Bookmarks';const star=$('#bookmarkStar'),label=marked?'Edit bookmark':'Bookmark this page';star.classList.toggle('bookmarked',marked);star.setAttribute('aria-label',label);star.title=label}
 function openHistoryEntry(url){history.pushState(null,'',url);routeFromLocation()}
@@ -876,26 +875,12 @@ function xmlTreeView(element,onCollapse,path='$'){
   if(onCollapse)details.addEventListener('toggle',()=>{if(!details.open){details.open=true;onCollapse()}});
   return details;
 }
-// Dedupe local checks for a minute and limit concurrency for long transcripts.
-const markdownLinkChecks=new Map(),markdownLinkQueue=[];
-let markdownLinkActive=0;
-function checkMarkdownLink(href,workspace){
-  const key=JSON.stringify([href,workspace]),cached=markdownLinkChecks.get(key);
-  if(cached&&cached.until>Date.now())return cached.promise;
-  const promise=new Promise(resolve=>markdownLinkQueue.push({href,workspace,resolve}));
-  if(markdownLinkChecks.size>=256)markdownLinkChecks.delete(markdownLinkChecks.keys().next().value);
-  markdownLinkChecks.set(key,{promise,until:Date.now()+60000});pumpMarkdownLinks();return promise;
-}
-function pumpMarkdownLinks(){
-  while(markdownLinkActive<4&&markdownLinkQueue.length){
-    const {href,workspace,resolve}=markdownLinkQueue.shift();markdownLinkActive++;
-    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),4000);
-    fetch('/api/markdown-link?'+new URLSearchParams({href,workspace}),{signal:controller.signal})
-      .then(response=>{if(!response.ok)throw Error('Link check unavailable');return response.json()})
-      .then(resolve,()=>resolve({status:'unknown',detail:'Could not check availability on this Mac'}))
-      .finally(()=>{clearTimeout(timer);markdownLinkActive--;pumpMarkdownLinks()});
-  }
-}
+const checkMarkdownLink=markdownLinkChecker((href,workspace)=>{
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),4000);
+  return fetch('/api/markdown-link?'+new URLSearchParams({href,workspace}),{signal:controller.signal})
+    .then(response=>{if(!response.ok)throw Error('Link check unavailable');return response.json()})
+    .finally(()=>clearTimeout(timer));
+});
 function decorateMarkdownLink(link,item,workspace){
   const kind=item.link,mark=node('span','markdown-link-icon');mark.setAttribute('aria-hidden','true');link.prepend(mark);
   const update=(status,detail,href)=>{
@@ -911,7 +896,7 @@ function decorateMarkdownLink(link,item,workspace){
   if(kind.kind==='web'){
     update('web',kind.detail);
     if(!SHARE){const image=document.createElement('img');image.alt='';image.loading='lazy';image.referrerPolicy='no-referrer';image.src='/api/markdown-favicon?'+new URLSearchParams({host:kind.host});image.onerror=()=>image.replaceWith(icon('web'));mark.replaceChildren(image)}
-  }else if(['file','server'].includes(kind.kind)){
+  }else if(markdownLinkProbed(kind)){
     update(SHARE?'unknown':'checking',SHARE?'Local availability cannot be checked in a shared export':kind.detail);
     if(!SHARE)checkMarkdownLink(item.href,workspace).then(result=>update(result.status,result.detail,result.href));
   }else update(kind.kind,kind.detail);
@@ -939,7 +924,7 @@ function saveViewContent(key,value){const state=window.pharosView?.read('reader_
 // Non-details content controls use the same keyed, bidirectional map.
 function bindViewContent(toggle,key,fallback,apply){
  toggle.dataset.viewContent=key;
- toggle.restoreViewContent=()=>{const state=window.pharosView?.read('reader_content',{})||{};apply(Object.hasOwn(state,key)?state[key]===true:fallback)};
+ toggle.restoreViewContent=()=>apply(readerContentShown(window.pharosView?.read('reader_content',{}),key,fallback));
  toggle.restoreViewContent();
 }
 function restoreViewContent(root=document){for(const toggle of root.querySelectorAll('[data-view-content]'))toggle.restoreViewContent?.()}
@@ -1691,9 +1676,9 @@ function bindReaderView(panel){
  const key=element=>{if(element.dataset.viewKey)return '';if(element.dataset.pharosDisclosure)return element.dataset.pharosDisclosure;const message=element.dataset.messageId||element.sourceMessages?.[0]?.id||element.closest('[data-message-id]')?.dataset.messageId,call=element.dataset.callId||element.sourceMessages?.[0]?.call_id;return call?'call:'+call+':'+(element.classList[0]||'content')+(element.dataset.jsonPath?':'+element.dataset.jsonPath:''):message?'message:'+message+':'+(element.classList[0]||'content')+(element.dataset.jsonPath?':'+element.dataset.jsonPath:''):element.id?'section:'+element.id:''};
  // Keep each native default before applying URL overrides. Restoring an
  // absent/empty override must agree with reopening that URL in a fresh reader.
- const known=new WeakMap();const restore=(force=false)=>{const opened=new Set(api.read('reader_expanded',[])),closed=new Set(api.read('reader_collapsed',[]));for(const detail of panel.querySelectorAll('details')){const id=key(detail);if(!id||!force&&known.has(detail))continue;const state=known.get(detail)||{initial:detail.open,current:detail.open};known.set(detail,state);detail.dataset.pharosDisclosure=id;const open=opened.has(id)?true:closed.has(id)?false:state.initial;if(open)detail.materialize?.();detail.open=open;state.current=open}};
+ const known=new WeakMap();const restore=(force=false)=>{const opened=new Set(api.read('reader_expanded',[])),closed=new Set(api.read('reader_collapsed',[]));for(const detail of panel.querySelectorAll('details')){const id=key(detail);if(!id||!force&&known.has(detail))continue;const state=known.get(detail)||{initial:detail.open,current:detail.open};known.set(detail,state);detail.dataset.pharosDisclosure=id;const open=readerDisclosureOpen(id,opened,closed,state.initial);if(open)detail.materialize?.();detail.open=open;state.current=open}};
  restore();
- const toggled=event=>{const detail=event.target;if(!(detail instanceof HTMLDetailsElement))return;const id=key(detail),state=known.get(detail);if(!id||state?.current===detail.open)return;if(state)state.current=detail.open;const opened=new Set(api.read('reader_expanded',[])),closed=new Set(api.read('reader_collapsed',[]));if(detail.open){opened.add(id);closed.delete(id)}else{closed.add(id);opened.delete(id)}api.write('reader_expanded',[...opened].sort());api.write('reader_collapsed',[...closed].sort())};
+ const toggled=event=>{const detail=event.target;if(!(detail instanceof HTMLDetailsElement))return;const id=key(detail),state=known.get(detail);if(!id||state?.current===detail.open)return;if(state)state.current=detail.open;const next=readerDisclosureToggle(id,detail.open,api.read('reader_expanded',[]),api.read('reader_collapsed',[]));api.write('reader_expanded',next.expanded);api.write('reader_collapsed',next.collapsed)};
  panel.addEventListener('toggle',toggled,true);const observer=new MutationObserver(()=>restore());observer.observe(panel,{childList:true,subtree:true});
  const navigate=()=>{if(!panel.isConnected||!panel.closest('#detail.active'))return;panel.restoreTranscriptView?.();panel.restoreLabelsView?.();panel.restoreEventsView?.();restoreContent();restore(true)};
  const events=['popstate','pharos:view','pharos:workspace-history','pharos:route'];for(const name of events)window.addEventListener(name,navigate);

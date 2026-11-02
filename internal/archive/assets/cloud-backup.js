@@ -515,7 +515,9 @@ PY
     }
     return `bash <<'PHAROS_DOWNLOAD'\n${receipt.preview?'# Prototype example only: no object has been uploaded.\n# Version below is illustrative. This block stops before any download.\nprintf \'%s\\n\' \'Preview only: no cloud download is available yet.\' >&2\nexit 1\n\n':''}# Use your cloud account with download access, separate from the Pharos uploader.\nset -euo pipefail\numask 077\nPHAROS_RESTORE_DIR=${path}\nmkdir -p "$PHAROS_RESTORE_DIR"\nif ! mkdir "$PHAROS_RESTORE_DIR/.pharos-download.lock" 2>/dev/null; then\n  printf '%s\\n' 'A download is running or was interrupted here. Choose a new empty folder.' >&2\n  exit 1\nfi\ntrap 'rmdir -- "$PHAROS_RESTORE_DIR/.pharos-download.lock"' EXIT\nif [ -e "$PHAROS_RESTORE_DIR/${file}" ] || [ -e "$PHAROS_RESTORE_DIR/${file}.partial" ]; then\n  printf '%s\\n' 'Download file already exists. Choose an empty folder in Pharos.' >&2\n  exit 1\nfi\ntrap 'rm -f -- "$PHAROS_RESTORE_DIR/${file}.partial"; rmdir -- "$PHAROS_RESTORE_DIR/.pharos-download.lock"' EXIT\n${command}\nmv -n "$PHAROS_RESTORE_DIR/${file}.partial" "$PHAROS_RESTORE_DIR/${file}"\nif [ -e "$PHAROS_RESTORE_DIR/${file}.partial" ]; then\n  printf '%s\\n' 'Destination appeared during download; it was not overwritten.' >&2\n  exit 1\nfi\nrmdir -- "$PHAROS_RESTORE_DIR/.pharos-download.lock"\ntrap - EXIT\nPHAROS_DOWNLOAD\n`;
   }
-  window.pharosCloudBackup = {defaults,security,providers,regions,tiers,reviewed,compressionMeasurement,normalize,rate,estimate,calendarPeriods,forecast,projection,priceRange,validation,lifecycle,destination,setup,setupStages,prompt,formatCost,restoreDownload};
+  // The month a forecast chart key selects, or null for keys it ignores.
+  function chartKeyMonth(key,selected,last){const i={ArrowLeft:selected-1,ArrowRight:selected+1,Home:0,End:last}[key];return i==null?null:Math.max(0,Math.min(last,i));}
+  window.pharosCloudBackup = {defaults,security,providers,regions,tiers,reviewed,compressionMeasurement,normalize,rate,estimate,calendarPeriods,forecast,projection,priceRange,validation,lifecycle,destination,setup,setupStages,prompt,formatCost,restoreDownload,chartKeyMonth};
 
   const mount = document.getElementById('cloudBackupPlanner');
   if (!mount) return;
@@ -900,7 +902,7 @@ PY
     };
     svg.onpointermove=point;svg.onclick=point;svg.onpointerleave=event=>{if(event.pointerType!=='touch')hideChartTooltip();};svg.onblur=hideChartTooltip;svg.onfocus=()=>reveal(selected,tipScenario);
     svg.onkeydown=event=>{
-      const i={ArrowLeft:selected-1,ArrowRight:selected+1,Home:0,End:last}[event.key];
+      const i=chartKeyMonth(event.key,selected,last);
       if(i!=null){event.preventDefault();reveal(i,tipScenario);}
       else if(event.key==='ArrowUp'||event.key==='ArrowDown'){event.preventDefault();reveal(selected,event.key==='ArrowUp'?'projected':'flat');}
       else if(event.key==='Escape'){event.preventDefault();hideChartTooltip();}
