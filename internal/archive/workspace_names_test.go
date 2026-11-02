@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"maps"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -293,5 +294,42 @@ func TestWorkspaceNameEdgesFromEitherSide(t *testing.T) {
 	}
 	if got := edges([]string{}); len(got) != 0 {
 		t.Fatalf("no workspaces has edges %v", got)
+	}
+}
+
+// Reconciling identities links conversations from before alias declarations
+// and resolves the names of just the workspaces the new links join.
+func TestReconcileIdentitiesNamesNewlyLinkedWorkspaces(t *testing.T) {
+	c, _ := testCatalog(t)
+	native := ingestNamingRecord(t, c, namingRecord("codex", "native", "Codex native", "Fix login"))
+	task := ingestNamingRecord(t, c, namingRecord("tl1", "task", "Improve authentication", "", "codex:native"))
+	names := func() map[string]string {
+		t.Helper()
+		rows, err := queryMaps(c.DB, "SELECT workspace_id,display_title,COALESCE(display_workspace_id,'') shown FROM workspace_names WHERE workspace_id IN (?,?)", native, task)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := map[string]string{}
+		for _, row := range rows {
+			found[firstString(row["workspace_id"])] = firstString(row["display_title"]) + "|" + firstString(row["shown"])
+		}
+		return found
+	}
+	linked := names()
+	// A library from before declarations: the link and its declaration are
+	// missing, and the names were resolved without it.
+	execTx(t, c.DB, "DELETE FROM conversation_identity_links", "DELETE FROM declared_native_aliases")
+	if err := c.writeTransaction(t.Context(), "names", func(tx *sql.Tx) error { return refreshWorkspaceNames(tx, nil) }); err != nil {
+		t.Fatal(err)
+	}
+	if unlinked := names(); maps.Equal(unlinked, linked) {
+		t.Fatalf("fixture names do not depend on the link: %v", linked)
+	}
+	added, err := c.ReconcileIdentitiesContext(t.Context())
+	if err != nil || added == 0 {
+		t.Fatalf("reconcile added %d links: %v", added, err)
+	}
+	if got := names(); !maps.Equal(got, linked) {
+		t.Fatalf("names after reconcile = %v, want %v", got, linked)
 	}
 }
