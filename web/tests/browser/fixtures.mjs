@@ -123,6 +123,14 @@ function delegation(query) {
     metrics: metricSpecs, maxima: { self: Object.fromEntries(metricKeys.map(key => [key, key === "tokens" ? 100000 : 300000])), all: Object.fromEntries(metricKeys.map(key => [key, key === "tokens" ? 190000 : 300000])) },
     totals: { ...sessions[0].all, clock: metric(300000), total: metric(900000) }, start, end: sessionEnd, density: Array.from({ length: 120 }, (_, i) => i % 13), warnings: [] };
 }
+function workPreview(id, query) {
+  if (id !== workID) return;
+  const models = [{ model: "claude-opus-with-a-very-long-model-identifier", provider: "claude", sessions: sessions.length, tokens: 190000 }];
+  const scope = { start, end: sessionEnd, sessions: sessions.length, models, totals: { ...sessions[0].all, clock: metric(300000), total: metric(900000) } };
+  const conversation = query.get("conversation");
+  return { repository: "a-repository-with-a-long-name", branch: "gbdubs/a-very-long-branch-name-for-overflow", metrics: metricSpecs, workspace: scope,
+    ...conversation ? { conversation: { ...scope, sessions: 1 } } : {} };
+}
 function parallel(query) {
   const from = Number(query.get("start")) || start, to = Number(query.get("end")) || sessionEnd;
   return { snapshot: "fixture-v1", start: from, end: to, inference: "Inferred, not measured", lanes: (query.get("sessions") || "").split(",").filter(Boolean).map(id => ({ session: id,
@@ -517,5 +525,6 @@ export const defaultApi = {
   },
   "GET /api/work/:id/delegation": ({ query }) => delegation(query),
   "GET /api/work/:id/parallel": ({ query }) => parallel(query),
+  "GET /api/work/:id/preview": ({ params, query }) => workPreview(params.id, query),
   "GET /api/work/:id/find": { conversations: [] },
 };

@@ -2352,6 +2352,39 @@ test('dashboard card creation keeps focus in its dialog, restores it on cancel a
   await page.locator('.usage-dashboard .usage-chart').waitFor();
 });
 
+for (const [width, theme] of [[1440,'dark'],[390,'light'],[320,'dark']]) test(`Ask Pharos work previews fit beside their links (${theme}) @ ${width}`, {skip}, async t => {
+  const selection={provider:'Codex',model:'test-model',effort:'Low'};
+  const cards=[{id:'work',title:'Long work',description:'The whole workspace.',href:'/work/'+workID},{id:'conversation',title:'Root conversation',description:'One conversation in it.',href:'/work/'+workID+'?conversation=conv-root'}];
+  let session;
+  const {page,shot}=await open(t,{url:'/library',ready:'body>header',viewport:{width,height:900},preferences:{'pharos-theme':theme},api:{
+    'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
+    'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
+    'GET /api/ask/sessions':()=>({sessions:session?[session]:[]}),
+    'GET /api/ask/session':()=>session,
+    'POST /api/ask/session':({body})=>(session={...session,...body}),
+    'POST /api/ask/send':({body})=>(session={id:body.id,createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:body.turnID,prompt:body.prompt,cli:'Codex',model:'test-model',effort:'Low',status:'multiple',message:'',elapsedMs:1000,reply:'Your work.',cards}]}),
+  }});
+  await page.waitForFunction(()=>document.querySelector('.pharos-current-settings')?.textContent.includes('Test Model'));
+  await activateHeaderTool(page,'askPharosToggle');
+  const modal=page.getByRole('dialog',{name:'Ask Pharos',exact:true});
+  const question=page.getByRole('textbox',{name:'Ask a question',exact:true});
+  await question.fill('What did I do in the long work?');
+  const before=page.url();
+  await question.press('Enter');
+  for (const card of cards) {
+    const figure=page.getByRole('figure',{name:'Work preview: '+card.title,exact:true});
+    await figure.waitFor();await figure.scrollIntoViewIfNeeded();
+    await page.waitForFunction(title=>document.querySelector(`figure[aria-label="Work preview: ${title}"]`)?.getAttribute('aria-busy')==='false',card.title);
+    assert.equal(await page.getByRole('link',{name:new RegExp(card.title)}).getAttribute('href'),card.href);
+  }
+  for (const card of cards) assert.equal(await page.getByRole('figure',{name:'Work preview: '+card.title,exact:true}).locator('p').count(),2,'where/when and who/how much render');
+  assert.equal(page.url(),before,'previews leave the underlying page URL alone');
+  assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)),'loading previews must not move focus out of Ask');
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'work preview overflowed the viewport');
+  assert.ok(await page.evaluate(()=>[...document.querySelectorAll('.pharos-work-preview')].every(el=>el.scrollWidth<=el.clientWidth)),'work preview content overflowed its card');
+  await shot('ask-work-previews');
+});
+
 for (const [width, theme, count, unavailable, view='compare'] of [[1440,'dark',2,false],[390,'light',1,false],[320,'dark',1,true],[1440,'dark',1,false,'trend'],[390,'light',1,false,'distribution']]) test(`Ask Pharos chart previews keep links, page state and focus usable (${theme}, ${view}, ${unavailable?'unavailable':count+' charts'}) @ ${width}`, {skip}, async t => {
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   const cards=Array.from({length:count},(_,index)=>({id:'chart-'+index,title:index?'Tokens by model':'Tokens by provider',description:'Explore the selected token usage.',href:'/analyze?'+new URLSearchParams({analyze_mode:'dashboards',analyze_topic:'tokens',...view==='trend'?{analyze_window:'today',analyze_timezone:'America/Denver'}:{},analyze_chart:JSON.stringify({v:2,view,metric:'tokens',split:index?'model':'provider',unit:'conversation',minSamples:0,...view==='trend'?{rollingPeriods:3,norm:true}:{}}),analyze_filters:encodeQuery({...EMPTY_QUERY,where:[]})})}));

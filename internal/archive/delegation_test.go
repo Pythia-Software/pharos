@@ -568,3 +568,49 @@ func TestDelegationDefaultPageSizeIsForty(t *testing.T) {
 		t.Fatal("last page must retain the remaining sessions")
 	}
 }
+
+func TestWorkPreviewSummarizesWorkspaceAndConversation(t *testing.T) {
+	c, config := testCatalog(t)
+	seedDelegation(t, c)
+	if _, err := c.DB.Exec(`UPDATE conversations SET model=CASE id WHEN 'root' THEN 'opus' WHEN 'child' THEN 'gpt-5' ELSE 'gemini' END`); err != nil {
+		t.Fatal(err)
+	}
+	server := testServer(t, config, c)
+	value := func(scope any, key string) any {
+		return scope.(map[string]any)["totals"].(map[string]any)[key].(map[string]any)["value"]
+	}
+	status, work := delegationGET(t, server, "/api/work/delegation-work/preview")
+	if status != 200 || len(work["metrics"].([]any)) != len(delegationMetrics) {
+		t.Fatalf("workspace preview: %d %v", status, work)
+	}
+	workspace := work["workspace"].(map[string]any)
+	if workspace["sessions"] != float64(4) || value(workspace, "children") != float64(3) || value(workspace, "tokens") != float64(600) || value(workspace, "errors") != float64(1) || work["conversation"] != nil {
+		t.Fatalf("workspace scope: %v", workspace)
+	}
+	if models := workspace["models"].([]any); len(models) != 4 || models[0].(map[string]any)["model"] != "gemini" {
+		t.Fatalf("models must be ordered by tokens: %v", models)
+	}
+	// A child conversation's preview covers the agents it delegated to.
+	_, child := delegationGET(t, server, "/api/work/delegation-work/preview?conversation=child")
+	scope := child["conversation"].(map[string]any)
+	if scope["sessions"] != float64(2) || value(scope, "children") != float64(1) || value(scope, "tokens") != float64(500) || len(scope["models"].([]any)) != 2 {
+		t.Fatalf("conversation scope: %v", scope)
+	}
+	if child["workspace"].(map[string]any)["sessions"] != float64(4) {
+		t.Fatal("a conversation preview keeps the workspace totals")
+	}
+	if status, _ := delegationGET(t, server, "/api/work/delegation-work/preview?conversation=elsewhere"); status != 404 {
+		t.Fatal("a conversation outside the workspace must not fall back to the workspace")
+	}
+	// A second top-level conversation is another session, not a subagent.
+	if _, err := c.DB.Exec(`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('second','delegation-work','claude','local','second-native')`); err != nil {
+		t.Fatal(err)
+	}
+	_, more := delegationGET(t, server, "/api/work/delegation-work/preview")
+	if scope := more["workspace"].(map[string]any); scope["sessions"] != float64(5) || value(scope, "children") != float64(3) {
+		t.Fatalf("independent conversation counted as a subagent: %v", scope)
+	}
+	if status, _ := delegationGET(t, server, "/api/work/missing/preview"); status != 404 {
+		t.Fatal("missing workspace")
+	}
+}
