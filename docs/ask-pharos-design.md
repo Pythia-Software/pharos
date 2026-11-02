@@ -93,14 +93,20 @@ choices, and so does a lone card left after Pharos dropped others the agent
 offered beside it. Typing a follow-up while waiting or changing to ordinary search suppresses
 automatic navigation.
 
-Supported Analyze dashboard destinations display a compact, read-only chart above
-the destination link, using the same URL-based preview loader as Home dashboard
-cards. Chart answers stay in the thread, including a single result; ordinary
-single-link answers retain automatic navigation. Previews load when visible,
-show their time range and update time, and retain the link for empty or unavailable results.
+Supported Analyze dashboard destinations display as a Card Library card for the
+destination's own address, using the same card component and URL-based preview
+loader as Home dashboard cards. The card is the destination link; its plus button
+collects that address to Home in one click, where it renders the same chart, and
+an address already collected shows “In your collection” instead. Chart answers
+stay in the thread, including a single result; ordinary single-link answers
+retain automatic navigation. Previews load when visible, show their time range
+and refresh state, and keep the link for empty or unavailable results.
+A preview in an answer that just arrived loads at once, even while Ask floats or
+is dismissed, so its chart is ready when the user opens the result.
 Reopening a chat loads the addressed moving view rather than freezing its data.
-Retained previews also revalidate when Ask reopens and on dashboard calendar or
-dataset refreshes; hidden charts defer their queries until visible again.
+Retained previews also revalidate when Ask reopens, reusing a preview loaded in
+the last minute, and on dashboard calendar or dataset refreshes; hidden charts
+defer later queries until visible again.
 Preview loading must not change the surrounding page URL, preferences or focus.
 
 Validate destinations through Pharos's own routing and URL builders. If every

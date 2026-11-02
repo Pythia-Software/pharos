@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EMPTY_QUERY } from '@pythia-software/query-table-core';
-import { dashboardCardURL, readDashboardCard, collectDashboardCard, dashboardCardWindow } from '../../../src/dashboard-card-model';
+import { dashboardCardURL, readDashboardCard, collectDashboardCard, dashboardCardCollected, dashboardCardWindow } from '../../../src/dashboard-card-model';
 import { loadDashboardCardPreview } from '../../../src/dashboard-card-preview';
 import { analysisCatalogs } from '../../../src/analysis-catalogs';
 import { dashboardDefaults } from '../../../src/dashboard-defaults';
@@ -27,7 +27,9 @@ test('dashboard cards retain the complete chart and relative population through 
   assert.deepEqual(restored.state,normalizeAnalysis(catalog,state));
   for (const key of ['overlay','highlight','chart_pins']) assert.equal(restored.params.has(key),false);
   assert.equal(dashboardCardWindow(url),'Past 7 days');
+  assert.equal(dashboardCardCollected(url),false);
   const card = collectDashboardCard(url,' My tokens ',' My description ');
+  assert.equal(dashboardCardCollected(url),true,'Ask offers each chart address once');
   const second = collectDashboardCard(makeURL({...state,split:'repository_name'}),'Repositories','');
   assert.equal(readBookmarks().length,2);
   assert.equal(card.title,'My tokens');
@@ -38,6 +40,7 @@ test('dashboard cards retain the complete chart and relative population through 
   assert.equal(readBookmarks()[0].id,second.id);
   removeBookmark(card.id);
   assert.deepEqual(readBookmarks().map(item=>item.id),[second.id]);
+  assert.equal(dashboardCardCollected(url),false,'removing the card offers it again');
   assert.throws(()=>collectDashboardCard(url,'   ',''),/title/);
 });
 

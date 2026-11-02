@@ -331,9 +331,11 @@
 #pharos-ask .pharos-destination-result.has-preview{border:1px solid var(--pharos-line);border-radius:9px;overflow:hidden;background:var(--pharos-panel)}
 #pharos-ask .has-preview:has(.pharos-destination:hover){border-color:var(--pharos-violet)}
 #pharos-ask .has-preview>.pharos-destination{border:0;border-top:1px solid var(--pharos-line);border-radius:0;transform:none}
-#pharos-ask .pharos-chart-preview{margin:0;padding:12px;min-width:0;--query-cover-bg:var(--pharos-panel);--query-tone:var(--pharos-sea)}
-#pharos-ask .pharos-chart-preview-meta{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 12px;margin-bottom:10px;color:var(--pharos-muted);font-size:11px}
-#pharos-ask .pharos-chart-preview-cover{height:auto;min-height:220px;padding:0;overflow:hidden}
+#pharos-ask .pharos-chart-preview{margin:0;min-width:0;--query-card-width:100%}
+#pharos-ask .pharos-chart-preview .query-card{transform:none;cursor:default}
+#pharos-ask .pharos-chart-preview .query-card:hover{border-color:var(--pharos-violet)}
+#pharos-ask .pharos-chart-preview :is(.query-drag-tip,.query-cover-head>svg:first-child){display:none}
+#pharos-ask .pharos-chart-preview>.card-library-collected{padding:8px 4px 0;font-size:11px}
 
 #pharos-ask .pharos-work-preview{box-sizing:content-box;min-height:36px;margin:0;padding:8px 12px;min-width:0;font-size:12px;line-height:18px}
 #pharos-ask .pharos-work-preview-line{margin:0;overflow:hidden;color:var(--pharos-ink);text-overflow:ellipsis;white-space:nowrap}

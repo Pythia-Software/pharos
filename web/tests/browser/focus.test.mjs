@@ -2327,6 +2327,37 @@ test('dashboard card creation keeps focus in its dialog, restores it on cancel a
   await page.locator('.usage-dashboard .usage-chart').waitFor();
 });
 
+test('Ask Pharos loads chart previews behind the floating panel so a ready answer opens with its charts', {skip}, async t => {
+  const selection={provider:'Codex',model:'test-model',effort:'Low'};
+  const cards=['provider','model'].map(split=>({id:split,title:'Tokens by '+split,description:'Explore the selected token usage.',href:'/analyze?'+new URLSearchParams({analyze_mode:'dashboards',analyze_topic:'tokens',analyze_chart:JSON.stringify({v:2,view:'compare',metric:'tokens',split,unit:'conversation',minSamples:0}),analyze_filters:encodeQuery({...EMPTY_QUERY,where:[]})})}));
+  let finish;
+  const response=new Promise(resolve=>{finish=resolve;});
+  t.after(()=>finish());
+  const {page,calls}=await open(t,{url:'/library',ready:'body>header',api:{
+    'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
+    'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
+    'GET /api/ask/sessions':{sessions:[]},
+    'POST /api/ask/session':({body})=>body,
+    'POST /api/ask/send':async({body})=>{await response;return {id:body.id,createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:body.turnID,prompt:body.prompt,cli:'Codex',model:'test-model',effort:'Low',status:'multiple',message:'',elapsedMs:1000,reply:'Your token usage.',cards}]};},
+  }});
+  await page.waitForFunction(()=>document.querySelector('.pharos-current-settings')?.textContent.includes('Test Model'));
+  await activateHeaderTool(page,'askPharosToggle');
+  const modal=page.getByRole('dialog',{name:'Ask Pharos',exact:true});
+  const question=page.getByRole('textbox',{name:'Ask a question',exact:true});
+  await question.fill('Show my token usage');await question.press('Enter');
+  await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();await modal.waitFor({state:'hidden'});
+  const panel=page.getByRole('complementary',{name:'Ask Pharos progress'});
+  finish();
+  await panel.getByRole('button',{name:/Your response is ready/}).waitFor();
+  await page.waitForFunction(count=>{const charts=[...document.querySelectorAll('figure[aria-label^="Chart preview:"]')];return charts.length===count&&charts.every(chart=>chart.getAttribute('aria-busy')==='false');},cards.length);
+  const queries=()=>calls.filter(call=>/^\/api\/query\/usage\/(metrics|query-v3)$/.test(call.path)).length;
+  const loaded=queries();
+  assert.ok(loaded>0,'floating answers query their charts before they are opened');
+  await panel.getByRole('button',{name:/Your response is ready/}).click();await modal.waitFor();
+  for (const card of cards) assert.equal(await page.getByRole('figure',{name:'Chart preview: '+card.title,exact:true}).getAttribute('aria-busy'),'false','opening the answer shows its loaded chart');
+  assert.equal(queries(),loaded,'opening a just-loaded answer reuses its charts');
+});
+
 for (const [width, theme] of [[1440,'dark'],[390,'light'],[320,'dark']]) test(`Ask Pharos work previews fit beside their links (${theme}) @ ${width}`, {skip}, async t => {
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   const cards=[{id:'work',title:'Long work',description:'The whole workspace.',href:'/work/'+workID},{id:'conversation',title:'Root conversation',description:'One conversation in it.',href:'/work/'+workID+'?conversation=conv-root'}];
@@ -2388,6 +2419,16 @@ for (const [width, theme, count, unavailable, view='compare'] of [[1440,'dark',2
   }
   assert.equal(page.url(),before,'rendering a chart must leave the underlying page URL alone');
   assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)),'loading charts must not move focus out of Ask');
+  // One click collects the chart's own dashboard address, as in the Card Library.
+  const collect=modal.getByRole('button',{name:'Collect '+cards[0].title,exact:true});
+  await collect.click();
+  await collect.waitFor({state:'detached'});
+  await page.waitForFunction(()=>window.pharosPrefs.get('pharos-bookmarks-v1',[]).length===1);
+  const saved=await page.evaluate(()=>window.pharosPrefs.get('pharos-bookmarks-v1',[])[0]);
+  assert.deepEqual([saved.url,saved.title,saved.dashboard],[cards[0].href,cards[0].title,true]);
+  await page.waitForFunction(()=>document.activeElement?.matches('.pharos-chart-preview .query-card-open'));
+  assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)),'collecting keeps focus on the chart in Ask');
+  assert.equal(page.url(),before,'collecting a chart leaves the underlying page alone');
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'chart preview overflowed the viewport');
   if(view==='trend'){
     const metricRequest=response=>/\/api\/query\/usage\/(metrics|query-v3)(?:\?|$)/.test(response.url());
@@ -2406,8 +2447,10 @@ for (const [width, theme, count, unavailable, view='compare'] of [[1440,'dark',2
     refreshed=page.waitForResponse(metricRequest);
     await page.evaluate(()=>window.dispatchEvent(new CustomEvent('pharos:data-refresh',{detail:'usage'})));await refreshed;
     await page.waitForFunction(()=>document.querySelector('figure[aria-label^="Chart preview:"]')?.getAttribute('aria-busy')==='false');
-    // Reopening itself revalidates, even without a calendar or dataset event.
+    // Reopening itself revalidates a preview older than a minute, even
+    // without a calendar or dataset event.
     await page.getByRole('button',{name:'Close Ask Pharos',exact:true}).click();await modal.waitFor({state:'hidden'});
+    await page.clock.setFixedTime(new Date(await page.evaluate(()=>Date.now()+61000)));
     refreshed=page.waitForResponse(metricRequest);
     await activateHeaderTool(page,'askPharosToggle');await refreshed;
     await page.waitForFunction(()=>document.querySelector('figure[aria-label^="Chart preview:"]')?.getAttribute('aria-busy')==='false');
@@ -2426,7 +2469,7 @@ for (const [width, theme, count, unavailable, view='compare'] of [[1440,'dark',2
   await activateHeaderTool(page,'askPharosToggle');
   await page.waitForFunction(()=>document.querySelector('figure[aria-label^="Chart preview:"]')?.getAttribute('aria-busy')==='false');
   await settled();
-  const link=page.getByRole('link',{name:new RegExp(cards[0].title)});
+  const link=modal.getByRole('link',{name:new RegExp(cards[0].title)});
   await link.click();
   await page.waitForURL(url=>url.pathname==='/analyze'&&url.searchParams.get('analyze_topic')==='tokens');
   await modal.waitFor({state:'hidden'});
