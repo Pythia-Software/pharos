@@ -94,41 +94,32 @@ func TestImportAgentEventsChecksMessagesAndRanges(t *testing.T) {
 		t.Fatalf("message events = %d, %v", events, err)
 	}
 
-	// The live reader gets the message's events at the threshold, with ranges
-	// in UTF-16 code units (the ’ is three bytes and one unit); a shared
-	// export gets none.
-	for _, clip := range []bool{true, false} {
-		conversation, err := catalog.workConversation("w", "c", clip)
-		if err != nil {
-			t.Fatal(err)
+	// The reader gets the message's events at the threshold, with ranges in
+	// UTF-16 code units (the ’ is three bytes and one unit).
+	conversation, err := catalog.WorkConversation("w", "c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []map[string]any
+	for _, message := range conversation["messages"].([]map[string]any) {
+		if message["id"] == "m1" && message["agent_events"] != nil {
+			got = message["agent_events"].([]map[string]any)
 		}
-		var got []map[string]any
-		for _, message := range conversation["messages"].([]map[string]any) {
-			if message["id"] == "m1" && message["agent_events"] != nil {
-				got = message["agent_events"].([]map[string]any)
-			}
-		}
-		if !clip {
-			if got != nil || conversation["agent_events"] != nil {
-				t.Fatalf("a shared export carries events: %v", got)
-			}
-			continue
-		}
-		start := len([]rune(text[:first+1])) // every character here is one UTF-16 unit
-		end := len([]rune(text))
-		if len(got) != 1 || got[0]["kind"] != "workaround" || got[0]["sentence"] != [2]int{start, end} ||
-			!reflect.DeepEqual(got[0]["subject"], [][2]int{{0, start - 1}}) || got[0]["group"] != "Choices you may not see" {
-			t.Fatalf("reader events = %v", got)
-		}
-		if summary, _ := conversation["agent_events"].(map[string]any); summary["messages_read"] != 1 || summary["messages_with_events"] != 1 {
-			t.Fatalf("reader summary = %v", conversation["agent_events"])
-		}
+	}
+	start := len([]rune(text[:first+1])) // every character here is one UTF-16 unit
+	end := len([]rune(text))
+	if len(got) != 1 || got[0]["kind"] != "workaround" || got[0]["sentence"] != [2]int{start, end} ||
+		!reflect.DeepEqual(got[0]["subject"], [][2]int{{0, start - 1}}) || got[0]["group"] != "Choices you may not see" {
+		t.Fatalf("reader events = %v", got)
+	}
+	if summary, _ := conversation["agent_events"].(map[string]any); summary["messages_read"] != 1 || summary["messages_with_events"] != 1 {
+		t.Fatalf("reader summary = %v", conversation["agent_events"])
 	}
 
 	// The reader leaves out an event whose sentence is no longer where it was
 	// found.
 	execTx(t, catalog.DB, `UPDATE agent_events SET sentence='Something else entirely.' WHERE message_id='m1'`)
-	conversation, err := catalog.workConversation("w", "c", true)
+	conversation, err = catalog.WorkConversation("w", "c")
 	if err != nil {
 		t.Fatal(err)
 	}

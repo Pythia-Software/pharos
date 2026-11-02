@@ -3214,15 +3214,6 @@
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
     {
-      "key": "7647f1f9226e53a7:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "renderDetail",
-      "tag": "button",
-      "control": "'button', 'button-with-icon share-link'",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
       "key": "a58b094fb4327fd7:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "renderDetail",
@@ -6160,24 +6151,6 @@
       "control": "onClick={() => onChange(option)}",
       "contract": "native-query",
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
-    },
-    {
-      "key": "6c69bd4e084a9019:0",
-      "file": "web/src/index.tsx",
-      "owner": "ShareSelection",
-      "tag": "button",
-      "control": "onClick={() => { setError(\"\"); void window.pharosShareDownload?.(ids.map(String)).catch((failure: unknown) => setError(failure instanceof Error ? failure.message : \"The export failed\")); }}",
-      "contract": "action",
-      "reason": "Export/selection actions are excluded."
-    },
-    {
-      "key": "ed3852f33c1e4b68:0",
-      "file": "web/src/index.tsx",
-      "owner": "ShareSelection",
-      "tag": "button",
-      "control": "onClick={() => void selectAll()}",
-      "contract": "action",
-      "reason": "Export/selection actions are excluded."
     },
     {
       "key": "8f37bed72f7fcdd2:0",

@@ -240,10 +240,6 @@ func TestSkillUsageStoreAndBackfill(t *testing.T) {
 	if err != nil || len(metric.Metrics.Metrics) != 1 || metric.Metrics.Metrics[0].Error != "" || len(metric.Metrics.Metrics[0].Buckets) != 2 {
 		t.Fatalf("skill metrics = %#v, %v", metric.Metrics, err)
 	}
-	page, _, err := catalog.SharedHTML(ctx, []string{firstString(result.Rows[0]["workspace_id"])})
-	if err != nil || len(sharedPayload(t, page).Datasets["skill_usages"]) != 2 {
-		t.Fatalf("shared skills: %v", err)
-	}
 	before, err := queryMaps(catalog.DB, "SELECT * FROM skill_usages ORDER BY id")
 	if err != nil {
 		t.Fatal(err)

@@ -134,11 +134,9 @@ function Composer({ close }: { close: () => void }) {
 function restoreFocus(opener: HTMLElement) {
   const target = opener.getClientRects().length ? opener : document.getElementById("headerMore"); target?.focus();
 }
-if (!(window as unknown as { pharosShare?: unknown }).pharosShare) {
-  const toolbar = document.querySelector(".feedback-toolbar-controls");
-  if (toolbar) { const button = document.createElement("button"); button.type = "button"; button.id = "feedbackSend"; button.textContent = "Send feedback"; toolbar.append(button);
-    const open = (opener: HTMLButtonElement) => { const host = document.createElement("div"); document.body.append(host); const root = createRoot(host); root.render(<Composer close={() => { root.unmount(); host.remove(); restoreFocus(opener); }} />); };
-    button.onclick = () => open(button);
-    const header = document.getElementById("feedbackSubmitToggle"); if (header instanceof HTMLButtonElement) header.onclick = () => open(header);
-  }
+const toolbar = document.querySelector(".feedback-toolbar-controls");
+if (toolbar) { const button = document.createElement("button"); button.type = "button"; button.id = "feedbackSend"; button.textContent = "Send feedback"; toolbar.append(button);
+  const open = (opener: HTMLButtonElement) => { const host = document.createElement("div"); document.body.append(host); const root = createRoot(host); root.render(<Composer close={() => { root.unmount(); host.remove(); restoreFocus(opener); }} />); };
+  button.onclick = () => open(button);
+  const header = document.getElementById("feedbackSubmitToggle"); if (header instanceof HTMLButtonElement) header.onclick = () => open(header);
 }

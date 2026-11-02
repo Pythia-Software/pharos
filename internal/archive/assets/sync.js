@@ -1,5 +1,4 @@
 (() => {
-  if (document.getElementById('pharosShareData')) return;
   let status = null;
   let busy = false;
   let timer = null;

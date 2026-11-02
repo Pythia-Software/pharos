@@ -26,14 +26,13 @@ func init() {
 	}
 }
 
-func modelEffortFixture(t *testing.T) (*Catalog, Config, []string) {
+func modelEffortFixture(t *testing.T) (*Catalog, Config) {
 	t.Helper()
 	catalog, config := testCatalog(t)
 	type setting struct{ model, effort string }
 	opusLow := setting{"claude-opus-5-5", "low"}
 	opusHigh := setting{"claude-opus-5-5", "high"}
 	sonnetHigh := setting{"claude-sonnet-5-5", "high"}
-	ids := []string{}
 	for _, work := range []struct {
 		name          string
 		conversations [][]setting
@@ -75,17 +74,12 @@ func modelEffortFixture(t *testing.T) (*Catalog, Config, []string) {
 		if err := tx.Commit(); err != nil {
 			t.Fatal(err)
 		}
-		var id string
-		if err := catalog.DB.QueryRow("SELECT id FROM workspaces WHERE source_id=?", work.name).Scan(&id); err != nil {
-			t.Fatal(err)
-		}
-		ids = append(ids, id)
 	}
-	return catalog, config, ids
+	return catalog, config
 }
 
 func TestModelEffortSearchMatchesRecordedPairs(t *testing.T) {
-	catalog, _, _ := modelEffortFixture(t)
+	catalog, _ := modelEffortFixture(t)
 	for _, fixture := range []struct {
 		model, effort        string
 		works, conversations int
@@ -125,21 +119,28 @@ func TestModelEffortSearchMatchesRecordedPairs(t *testing.T) {
 }
 
 func TestModelEffortFilterSortAndGroupingAcrossDatasets(t *testing.T) {
-	catalog, config, ids := modelEffortFixture(t)
+	catalog, config := modelEffortFixture(t)
 	ctx := context.Background()
 	if err := catalog.ensureToolRollup(ctx); err != nil {
-		t.Fatal(err)
-	}
-	shared, _, err := catalog.sharedDatasets(ctx, ids)
-	if err != nil {
 		t.Fatal(err)
 	}
 	server := testServer(t, config, catalog)
 	for _, dataset := range []string{"usage", "tools", "tool_calls", "skill_usages"} {
 		t.Run(dataset, func(t *testing.T) {
-			rows := shared[dataset]
+			// In-memory filtering, grouping and sorting of these rows must agree
+			// with the SQL paths below.
+			v2Schema, err := sqliteQuerySchema(dataset)
+			if err != nil {
+				t.Fatal(err)
+			}
+			all := qt.ServerQueryV2{WireQuery: qt.WireQuery{Select: []string{"id", "model", "effort", "model_effort"}, Limit: 1000}, Version: 2, Profile: qt.SQLiteExpressionProfile}
+			loaded, err := server.executeQueryV2(ctx, dataset, nil, v2Schema, &all, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rows := loaded.Rows.Rows
 			if len(rows) < 4 {
-				t.Fatalf("missing fixture or exported pairs: %v", rows)
+				t.Fatalf("missing fixture pairs: %v", rows)
 			}
 			document, err := querySchemaDocument(dataset)
 			if err != nil {
@@ -149,7 +150,7 @@ func TestModelEffortFilterSortAndGroupingAcrossDatasets(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// Shares and the service support both independent keys and the combined key.
+			// In-memory and SQL queries support both independent keys and the combined key.
 			for _, where := range [][]querytable.WhereTerm{
 				{{Field: "model", Op: "=", Value: "claude-opus-5-5"}, {Field: "effort", Op: "=", Value: "high"}},
 				{{Field: "model_effort", Op: "=", Value: "claude-opus-5-5 · high"}},
@@ -157,7 +158,7 @@ func TestModelEffortFilterSortAndGroupingAcrossDatasets(t *testing.T) {
 				query := querytable.Query{Where: where, OrderBy: []querytable.OrderBy{{Field: "model", Dir: "asc"}, {Field: "effort", Dir: "desc"}}, Limit: 50}
 				result, err := querytable.Apply(rows, query, schema)
 				if err != nil || len(result.Rows) != 1 || result.Rows[0]["model_effort"] != "claude-opus-5-5 · high" {
-					t.Fatalf("share pair filter: %v %v", result, err)
+					t.Fatalf("in-memory pair filter: %v %v", result, err)
 				}
 				if source, ok := sqlDatasetFor(dataset); ok {
 					live, err := source.Rows(ctx, catalog.DB, query, schema)
@@ -181,7 +182,7 @@ func TestModelEffortFilterSortAndGroupingAcrossDatasets(t *testing.T) {
 				}
 			}
 			for _, grouping := range [][]string{{"model", "effort"}, {"model_effort"}} {
-				// A shared file groups its rows in the browser, by the same values.
+				// Grouping in memory yields the same pairs as SQL.
 				pairs := map[string]bool{}
 				for _, row := range rows {
 					keys := []any{}
@@ -191,7 +192,7 @@ func TestModelEffortFilterSortAndGroupingAcrossDatasets(t *testing.T) {
 					pairs[string(mustJSON(t, keys))] = true
 				}
 				if len(pairs) != 4 {
-					t.Fatalf("share pair grouping: %v", pairs)
+					t.Fatalf("in-memory pair grouping: %v", pairs)
 				}
 				v2Schema, err := sqliteQuerySchema(dataset)
 				if err != nil {
@@ -222,7 +223,7 @@ func TestModelEffortFilterSortAndGroupingAcrossDatasets(t *testing.T) {
 					}
 					for i := range live.Rows {
 						if live.Rows[i]["model_effort"] != result.Rows[i]["model_effort"] {
-							t.Fatalf("pair sort disagrees with share: %v vs %v", live.Rows, result.Rows)
+							t.Fatalf("pair sort disagrees with in-memory sort: %v vs %v", live.Rows, result.Rows)
 						}
 					}
 				}
@@ -241,7 +242,7 @@ func TestModelEffortFilterSortAndGroupingAcrossDatasets(t *testing.T) {
 				}
 				for i := range live.Rows.Rows {
 					if live.Rows.Rows[i]["model_effort"] != result.Rows[i]["model_effort"] {
-						t.Fatalf("V2 pair sort disagrees with share: %v vs %v", live.Rows.Rows, result.Rows)
+						t.Fatalf("V2 pair sort disagrees with in-memory sort: %v vs %v", live.Rows.Rows, result.Rows)
 					}
 				}
 			}
@@ -290,7 +291,7 @@ func TestModelEffortUnknownLabels(t *testing.T) {
 }
 
 func TestLibraryModelEffortFormatsDistinctPairs(t *testing.T) {
-	catalog, _, _ := modelEffortFixture(t)
+	catalog, _ := modelEffortFixture(t)
 	var expression string
 	for _, column := range libraryColumns {
 		if column.name == "model_efforts" {

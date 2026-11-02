@@ -24,8 +24,7 @@ def inject(doc):
     for name in ['target', 'close', 'grip', 'copy', 'edit', 'chevron-down']:
         symbols.append(re.search(r'<symbol id="ph-icon-' + name + r'".*?</symbol>', app).group())
     sprite = '<svg class="research-icon-sprite" aria-hidden="true"><defs>' + ''.join(symbols) + '</defs></svg>'
-    js = app[app.index("const FEEDBACK_KEY="):app.index('// A shared export answers')]
-    js = js[:js.index('// Saves works as one standalone file.')] + js[js.index('function loadFeedback(){'):]
+    js = app[app.index("const FEEDBACK_KEY="):app.index('async function api(path')]
     js = js.replace("'pharos-ui-feedback-v1'", 'storagePrefix+":notes"').replace("'pharos-ui-feedback-draft-v1'", 'storagePrefix+":draft"').replace("'pharos-ui-feedback-clear-on-copy'", 'storagePrefix+":clear"').replace("'pharos-ui-feedback-layout-v1'", 'storagePrefix+":layout"').replace("'pharos-feedback-enabled'", 'storagePrefix+":enabled"')
     js = js.replace("function feedbackView(){const view=document.querySelector('.view.active');return view?{id:view.id,title:view.querySelector('h1')?.textContent||view.id}:{id:'unknown',title:'Unknown view'}}", "function feedbackView(){return {id:document.querySelector('h1')?.closest('[id]')?.id||'report',title:document.title}}")
     js = js.replace("source:'internal/archive/assets/ui.py (APP_HTML)'", "controls:currentControls(),source:decodeURI(location.pathname)")

@@ -168,20 +168,12 @@ func TestEffortUsageAccountingQueriesAndExports(t *testing.T) {
 			t.Fatalf("MCP effort filter %q: %v %v", effort, result, err)
 		}
 	}
-	id := firstString(works[0]["id"])
 	library, err := catalog.cachedLibraryRows(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(library) != 1 || !strings.Contains(firstString(library[0]["efforts"]), "low") || !strings.Contains(firstString(library[0]["efforts"]), "max") {
 		t.Fatalf("library: %v", library)
-	}
-	page, _, err := catalog.SharedHTML(context.Background(), []string{id})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(page), `"effort":"low"`) || !strings.Contains(string(page), `"effort":"max"`) {
-		t.Fatal("share dropped effort")
 	}
 }
 

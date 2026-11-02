@@ -27,8 +27,8 @@ export function UsageDashboardLinks({ dataset, query, schema }: { dataset: Usage
 }
 
 // New records arrive while a dashboard is open (Pharos MCP's own requests,
-// new usage); Refresh reruns its queries. A shared export's rows never change.
-export function UsageWorkspace({ refresh = true, renderDashboard, renderTable }: { refresh?: boolean; renderDashboard: (topic: UsageTopic) => React.ReactNode; renderTable: (dataset: UsageDataset) => React.ReactNode }) {
+// new usage); Refresh reruns its queries.
+export function UsageWorkspace({ renderDashboard, renderTable }: { renderDashboard: (topic: UsageTopic) => React.ReactNode; renderTable: (dataset: UsageDataset) => React.ReactNode }) {
   useLocationRevision();
   const address = location.href;
   const params = new URLSearchParams(location.search), { mode, dataset, topic } = readUsageWorkspace(params);
@@ -60,7 +60,7 @@ export function UsageWorkspace({ refresh = true, renderDashboard, renderTable }:
   return <NestedPageLayout className="pharos-query-page usage-workspace" contentClassName="usage-workspace-content"
     label="Analyze" pages={pages} current={`${mode}:${mode === "dashboards" ? topic : dataset}`} title={title} titleSlot={setHeadline}
     description={mode === "dashboards" ? "" : "Build your own analysis. Filter record fields with where, or search record text for words and phrases. Group the matches and use having to filter grouped results."}
-    actions={<><ResetPage />{mode === "dashboards" && refresh ? <button type="button" className="usage-dashboard-refresh" onClick={() => window.dispatchEvent(new Event("pharos:usage-refresh"))}>Refresh</button> : null}{mode !== "dashboards" ? <UsageWorkspaceLink href={back.href}>{back.label}<Icon name="arrow-right" /></UsageWorkspaceLink> : null}</>}>
+    actions={<><ResetPage />{mode === "dashboards" ? <button type="button" className="usage-dashboard-refresh" onClick={() => window.dispatchEvent(new Event("pharos:usage-refresh"))}>Refresh</button> : null}{mode !== "dashboards" ? <UsageWorkspaceLink href={back.href}>{back.label}<Icon name="arrow-right" /></UsageWorkspaceLink> : null}</>}>
     {mode === "dashboards" ? <div className="usage-dashboard" key={topic}>
       <DashboardHeadline.Provider value={headline}>{renderDashboard(topic)}</DashboardHeadline.Provider></div>
       : <div className="usage-workspace-table" key={dataset}>{renderTable(dataset)}</div>}

@@ -293,8 +293,7 @@ Show (`transcriptLabelsControl` in `ui.py`):
   this conversation" or "Not labeled yet" (the toggle is disabled until it
   has labels).
 - **Only prose messages** are highlighted. Thinking and delegations render as
-  activity rows and are labeled but not shown yet; shared exports carry no
-  labels.
+  activity rows and are labeled but not shown yet.
 
 `WorkConversation` attaches them (`messageLabelsAttacher` in `labels.go`):
 each message's `labels` (`segment`, `ids` in the model's order, `probs` for
