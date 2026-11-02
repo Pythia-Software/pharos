@@ -83,6 +83,29 @@ func TestThinkingProjection(t *testing.T) {
 	if *byID["request-1"].Gap != 10 || *byID["request-8"].Gap != 600 || byID["request-10"].Gap == nil || *byID["request-10"].Gap != .1 {
 		t.Fatal("exact boundary durations", byID)
 	}
+	// Seeded rows are marked and derived by the query; stored rows must match.
+	if pending, err := c.requestTimingsPending(t.Context()); err != nil || !pending {
+		t.Fatal("ledger writes must mark their conversations", pending, err)
+	}
+	read, err := c.loadThinkingValidation(t.Context(), records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.refreshRequestTimings(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if stored, err := c.loadThinkingValidation(t.Context(), records); err != nil || !reflect.DeepEqual(stored, read) {
+		t.Fatalf("stored validation evidence differs from message bodies: %v\n%+v\n%+v", err, stored, read)
+	}
+	if pending, err := c.requestTimingsPending(t.Context()); err != nil || pending {
+		t.Fatal("refresh must store every marked conversation", pending, err)
+	}
+	stored, err := c.thinkingRecords(t.Context(), o)
+	sort.Slice(stored, func(i, j int) bool { return stored[i].ID < stored[j].ID })
+	sort.Slice(records, func(i, j int) bool { return records[i].ID < records[j].ID })
+	if err != nil || !reflect.DeepEqual(stored, records) {
+		t.Fatalf("stored timings differ from derived ones: %v\n%+v\n%+v", err, stored, records)
+	}
 	o.From = byID["request-9"].At
 	o.Model = "second-model"
 	filtered, err := c.thinkingRecords(context.Background(), o)
@@ -342,6 +365,11 @@ func TestThinkingCachedPopulationParityAndFreshness(t *testing.T) {
 	seedThinking(t, c)
 	ctx := t.Context()
 	if _, err := c.DB.Exec(`UPDATE model_requests SET requested_at='2026-10-20T00:28:20.1236Z' WHERE id='request-9'`); err != nil {
+		t.Fatal(err)
+	}
+	// Later commits, from any process, change stored conversations: the query
+	// must derive those again until the next refresh.
+	if err := c.refreshRequestTimings(ctx); err != nil {
 		t.Fatal(err)
 	}
 	original, err := c.thinkingSnapshot(ctx)

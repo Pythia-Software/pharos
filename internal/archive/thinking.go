@@ -11,9 +11,11 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -348,14 +350,8 @@ func (c *Catalog) thinkingRecords(ctx context.Context, o thinkingOptions) ([]thi
 	defer release()
 	// Stream directly into the quantitative records. A million intermediate maps
 	// retain several gigabytes and make a full-library read spend its budget in GC.
-	capacity := 4096
-	if o.FilterSQL == "" && o.From.IsZero() && o.To.IsZero() && (o.Model == "" || o.Model == "all") && (o.Effort == "" || o.Effort == "all") {
-		var count int
-		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM model_requests").Scan(&count); err != nil {
-			return nil, err
-		}
-		capacity = min(count, 2_000_000)
-	}
+	// Fixed-size chunks are joined once at the end, which costs less than
+	// counting the ledger first or regrowing one slice.
 	rows, err := tx.QueryContext(ctx, `SELECT id,conversation_id,COALESCE(agent_session_id,''),workspace_id,model,effort,
  COALESCE(provider,''),COALESCE(harness,''),COALESCE(repository_name,''),COALESCE(machine,''),preceding_tool,timing_quality,
  COALESCE(previous_request_id,''),COALESCE(native_id,''),COALESCE(requested_at,''),observed_millis,sequence,COALESCE(agent_depth,0),input_tokens,
@@ -364,7 +360,9 @@ func (c *Catalog) thinkingRecords(ctx context.Context, o thinkingOptions) ([]thi
 		return nil, err
 	}
 	defer rows.Close()
-	out := make([]thinkingRecord, 0, capacity)
+	const chunk = 1 << 16
+	chunks := [][]thinkingRecord{}
+	out := make([]thinkingRecord, 0, chunk)
 	for rows.Next() {
 		var r thinkingRecord
 		var at string
@@ -384,9 +382,16 @@ func (c *Catalog) thinkingRecords(ctx context.Context, o thinkingOptions) ([]thi
 		if gap.Valid {
 			r.Gap = &gap.Float64
 		}
+		if len(out) == chunk {
+			chunks = append(chunks, out)
+			out = make([]thinkingRecord, 0, chunk)
+		}
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return slices.Concat(append(chunks, out)...), nil
 }
 
 func thinkingLabel(s string) string {
@@ -880,6 +885,10 @@ func (s *Server) handleThinking(w http.ResponseWriter, r *http.Request) {
 		timings = append(timings, fmt.Sprintf("%s;dur=%.1f", name, float64(time.Since(phase).Microseconds())/1000))
 		phase = time.Now()
 	}
+	if err := s.Catalog.currentRequestTimings(r.Context()); err != nil {
+		writeError(w, fmt.Errorf("read request timing: %w", err), 500)
+		return
+	}
 	all, err := s.Catalog.thinkingSnapshot(r.Context())
 	if err != nil {
 		writeError(w, fmt.Errorf("read request timing: %w", err), 500)
@@ -924,7 +933,26 @@ func (s *Server) handleThinking(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	mark("fit")
+	// The overview's sections read the same records independently, so they
+	// are computed concurrently.
+	var sections sync.WaitGroup
+	var compactions []thinkingCompaction
+	var traces []thinkingTrace
+	var coverage, agents thinkingResponse
+	if o.Overview {
+		cover := o
+		cover.GroupBy = "model"
+		cover.Minimum = 0
+		cover.View = "histogram"
+		agent := cover
+		agent.GroupBy = "harness"
+		sections.Go(func() { compactions = thinkingCompactions(pairRecords) })
+		sections.Go(func() { traces = thinkingTraces(records) })
+		sections.Go(func() { coverage, _ = aggregateThinking(r.Context(), records, cover) })
+		sections.Go(func() { agents, _ = aggregateThinking(r.Context(), records, agent) })
+	}
 	value, err := aggregateThinking(r.Context(), records, o)
+	sections.Wait()
 	if err != nil {
 		writeError(w, err, 400)
 		return
@@ -932,7 +960,7 @@ func (s *Server) handleThinking(w http.ResponseWriter, r *http.Request) {
 	if o.Overview {
 		value.Factors = fit.Factors
 		value.Compactions = []thinkingCompaction{}
-		for _, event := range thinkingCompactions(pairRecords) {
+		for _, event := range compactions {
 			if o.Model != "" && o.Model != "all" && event.Model != o.Model {
 				continue
 			}
@@ -941,15 +969,8 @@ func (s *Server) handleThinking(w http.ResponseWriter, r *http.Request) {
 			}
 			value.Compactions = append(value.Compactions, event)
 		}
-		value.Traces = thinkingTraces(records)
-		coverage := o
-		coverage.GroupBy = "model"
-		coverage.Minimum = 0
-		coverage.View = "histogram"
-		other, _ := aggregateThinking(r.Context(), records, coverage)
-		value.Coverage = other.Groups
-		coverage.GroupBy = "harness"
-		agents, _ := aggregateThinking(r.Context(), records, coverage)
+		value.Traces = traces
+		value.Coverage = coverage.Groups
 		value.AgentCoverage = agents.Groups
 	}
 	mark("aggregate")

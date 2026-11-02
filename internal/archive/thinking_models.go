@@ -3,7 +3,9 @@ package archive
 import (
 	"context"
 	"math"
+	"runtime"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -111,287 +113,307 @@ func thinkingModels(ctx context.Context, records []thinkingRecord, includeNormal
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	for _, name := range names {
+	// Models fit independently and write ratios only to their own records, so
+	// they run in parallel; factors keep the sorted model order.
+	fits := make([][]thinkingFactor, len(names))
+	slots := make(chan struct{}, max(1, runtime.GOMAXPROCS(0)))
+	var wg sync.WaitGroup
+	for n, name := range names {
+		wg.Add(1)
+		slots <- struct{}{}
+		go func() {
+			defer func() { <-slots; wg.Done() }()
+			fits[n] = thinkingModel(ctx, records, name, groups[name], includeNormalization, includeFactors)
+		}()
+	}
+	wg.Wait()
+	if ctx.Err() != nil {
+		return nil
+	}
+	for _, fit := range fits {
+		factors = append(factors, fit...)
+	}
+	return factors
+}
+
+// thinkingModel fits one model's requests, given by their indexes in records.
+func thinkingModel(ctx context.Context, records []thinkingRecord, name string, ids []int, includeNormalization, includeFactors bool) []thinkingFactor {
+	factors := []thinkingFactor{}
+	conversations := map[string]bool{}
+	efforts := map[string]bool{}
+	for _, i := range ids {
+		conversations[records[i].Conversation] = true
+		efforts[records[i].Effort] = true
+	}
+	if len(ids) < 250 || len(conversations) < 25 {
+		return nil
+	}
+	levels := []string{}
+	for level := range efforts {
+		levels = append(levels, level)
+	}
+	sort.Strings(levels)
+	features := func(r thinkingRecord) []float64 {
+		v := append([]float64{1}, thinkingFeatures(r)...)
+		for _, level := range levels[1:] {
+			if level == r.Effort {
+				v = append(v, 1)
+			} else {
+				v = append(v, 0)
+			}
+		}
+		return v
+	}
+	// Five conversation-held-out folds. Efforts absent from training and numeric
+	// feature extrapolations have no estimate, even when the ridge fit exists.
+	for fold := 0; includeNormalization && fold < 5; fold++ {
 		if ctx.Err() != nil {
 			return nil
 		}
-		ids := groups[name]
-		conversations := map[string]bool{}
-		efforts := map[string]bool{}
-		for _, i := range ids {
-			conversations[records[i].Conversation] = true
-			efforts[records[i].Effort] = true
-		}
-		if len(ids) < 250 || len(conversations) < 25 {
-			continue
-		}
-		levels := []string{}
-		for level := range efforts {
-			levels = append(levels, level)
-		}
-		sort.Strings(levels)
-		features := func(r thinkingRecord) []float64 {
-			v := append([]float64{1}, thinkingFeatures(r)...)
-			for _, level := range levels[1:] {
-				if level == r.Effort {
-					v = append(v, 1)
-				} else {
-					v = append(v, 0)
-				}
-			}
-			return v
-		}
-		// Five conversation-held-out folds. Efforts absent from training and numeric
-		// feature extrapolations have no estimate, even when the ridge fit exists.
-		for fold := 0; includeNormalization && fold < 5; fold++ {
-			if ctx.Err() != nil {
-				return nil
-			}
-			x := [][]float64{}
-			y := []float64{}
-			counts := map[string]bool{}
-			seen := map[string]bool{}
-			lo, hi := []float64{}, []float64{}
-			for _, i := range ids {
-				r := records[i]
-				if thinkingFold(r.Conversation) == fold {
-					continue
-				}
-				v := features(r)
-				x = append(x, v)
-				y = append(y, math.Log(*r.Gap))
-				counts[r.Conversation] = true
-				seen[r.Effort] = true
-				if len(lo) == 0 {
-					lo = append(lo, v...)
-					hi = append(hi, v...)
-				} else {
-					for j := range v {
-						lo[j] = math.Min(lo[j], v[j])
-						hi[j] = math.Max(hi[j], v[j])
-					}
-				}
-			}
-			if len(x) < 200 || len(counts) < 20 {
-				continue
-			}
-			b, _ := thinkingNormal(x, y, 10)
-			if b == nil {
-				continue
-			}
-			for _, i := range ids {
-				r := &records[i]
-				if thinkingFold(r.Conversation) != fold || !seen[r.Effort] {
-					continue
-				}
-				v := features(*r)
-				supported := true
-				for j := 1; j <= 5; j++ {
-					if v[j] < lo[j] || v[j] > hi[j] {
-						supported = false
-					}
-				}
-				if !supported {
-					continue
-				}
-				ratio := *r.Gap / math.Exp(thinkingDot(v, b))
-				if !math.IsNaN(ratio) && !math.IsInf(ratio, 0) && ratio > 0 {
-					r.Ratio = &ratio
-				}
-			}
-		}
-		if !includeFactors {
-			continue
-		}
-		// Absorb stream, UTC date and effort effects without allocating a
-		// request-by-calendar-day matrix for an all-time library. Alternating
-		// projections converge to the same least-squares residualization.
-		streams := map[string][]int{}
+		x := [][]float64{}
+		y := []float64{}
+		counts := map[string]bool{}
+		seen := map[string]bool{}
+		lo, hi := []float64{}, []float64{}
 		for _, i := range ids {
 			r := records[i]
-			key := r.Conversation + "|" + r.Stream
-			streams[key] = append(streams[key], i)
-		}
-		x, y := [][]float64{}, []float64{}
-		clusters := []string{}
-		used := []int{}
-		streamCount := 0
-		keys := []string{}
-		for k := range streams {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		categories := []map[string][]int{{}, {}, {}}
-		for _, key := range keys {
-			members := streams[key]
-			if len(members) < 3 {
+			if thinkingFold(r.Conversation) == fold {
 				continue
 			}
-			streamCount++
-			for _, i := range members {
-				r := records[i]
-				at := len(x)
-				x = append(x, thinkingFeatures(r))
-				y = append(y, math.Log(*r.Gap))
-				clusters = append(clusters, r.Conversation)
-				used = append(used, i)
-				for j, label := range []string{key, r.At.UTC().Format("2006-01-02"), r.Effort} {
-					categories[j][label] = append(categories[j][label], at)
+			v := features(r)
+			x = append(x, v)
+			y = append(y, math.Log(*r.Gap))
+			counts[r.Conversation] = true
+			seen[r.Effort] = true
+			if len(lo) == 0 {
+				lo = append(lo, v...)
+				hi = append(hi, v...)
+			} else {
+				for j := range v {
+					lo[j] = math.Min(lo[j], v[j])
+					hi[j] = math.Max(hi[j], v[j])
 				}
 			}
 		}
-		if len(x) < 250 {
+		if len(x) < 200 || len(counts) < 20 {
 			continue
 		}
-		partitions := [][][]int{}
-		for _, category := range categories {
-			names := []string{}
-			for key := range category {
-				names = append(names, key)
-			}
-			sort.Strings(names)
-			partition := [][]int{}
-			for _, key := range names {
-				partition = append(partition, category[key])
-			}
-			partitions = append(partitions, partition)
-		}
-		converged := false
-		for iteration := 0; iteration < 200; iteration++ {
-			if ctx.Err() != nil {
-				return nil
-			}
-			shift := 0.0
-			for _, partition := range partitions {
-				for _, members := range partition {
-					means := make([]float64, len(x[0]))
-					meanY := 0.0
-					for _, i := range members {
-						meanY += y[i] / float64(len(members))
-						for j, v := range x[i] {
-							means[j] += v / float64(len(members))
-						}
-					}
-					shift = math.Max(shift, math.Abs(meanY))
-					for _, v := range means {
-						shift = math.Max(shift, math.Abs(v))
-					}
-					for _, i := range members {
-						y[i] -= meanY
-						for j := range x[i] {
-							x[i][j] -= means[j]
-						}
-					}
-				}
-			}
-			if shift < 1e-8 {
-				converged = true
-				break
-			}
-		}
-		if !converged {
-			continue
-		} // Never publish an unconverged factor table.
-		// Modified Gram–Schmidt selects an independent control basis. Factor columns
-		// are visited first; omitted columns never receive fabricated confidence CIs.
-		keep := []int{}
-		basis := [][]float64{}
-		for col := range x[0] {
-			v := make([]float64, len(x))
-			norm := 0.0
-			for i := range x {
-				v[i] = x[i][col]
-				norm += v[i] * v[i]
-			}
-			if norm < 1e-10 {
-				continue
-			}
-			for repeat := 0; repeat < 2; repeat++ {
-				for _, q := range basis {
-					dot := thinkingDot(v, q)
-					for i := range v {
-						v[i] -= dot * q[i]
-					}
-				}
-			}
-			rest := thinkingDot(v, v)
-			if rest < norm*1e-10 {
-				continue
-			}
-			for i := range v {
-				v[i] /= math.Sqrt(rest)
-			}
-			basis = append(basis, v)
-			keep = append(keep, col)
-		}
-		for i, v := range x {
-			next := []float64{}
-			for _, col := range keep {
-				next = append(next, v[col])
-			}
-			x[i] = next
-		}
-		if len(keep) == 0 {
-			continue
-		}
-		b, bread := thinkingNormal(x, y, 0)
+		b, _ := thinkingNormal(x, y, 10)
 		if b == nil {
 			continue
 		}
-		scores := map[string][]float64{}
-		for i, row := range x {
-			score := scores[clusters[i]]
-			if score == nil {
-				score = make([]float64, len(b))
+		for _, i := range ids {
+			r := &records[i]
+			if thinkingFold(r.Conversation) != fold || !seen[r.Effort] {
+				continue
 			}
-			resid := y[i] - thinkingDot(row, b)
-			for j, v := range row {
-				score[j] += v * resid
+			v := features(*r)
+			supported := true
+			for j := 1; j <= 5; j++ {
+				if v[j] < lo[j] || v[j] > hi[j] {
+					supported = false
+				}
 			}
-			scores[clusters[i]] = score
+			if !supported {
+				continue
+			}
+			ratio := *r.Gap / math.Exp(thinkingDot(v, b))
+			if !math.IsNaN(ratio) && !math.IsInf(ratio, 0) && ratio > 0 {
+				r.Ratio = &ratio
+			}
 		}
-		if len(scores) < 25 {
+	}
+	if !includeFactors {
+		return factors
+	}
+	// Absorb stream, UTC date and effort effects without allocating a
+	// request-by-calendar-day matrix for an all-time library. Alternating
+	// projections converge to the same least-squares residualization.
+	streams := map[string][]int{}
+	for _, i := range ids {
+		r := records[i]
+		key := r.Conversation + "|" + r.Stream
+		streams[key] = append(streams[key], i)
+	}
+	x, y := [][]float64{}, []float64{}
+	clusters := []string{}
+	used := []int{}
+	streamCount := 0
+	keys := []string{}
+	for k := range streams {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	categories := []map[string][]int{{}, {}, {}}
+	for _, key := range keys {
+		members := streams[key]
+		if len(members) < 3 {
 			continue
 		}
-		adjust := float64(len(scores)) / float64(len(scores)-1) * float64(len(x)-1) / float64(max(1, len(x)-streamCount-len(categories[1])-len(categories[2])+2-len(b)))
-		for j, col := range keep {
-			if col > 2 {
-				continue
+		streamCount++
+		for _, i := range members {
+			r := records[i]
+			at := len(x)
+			x = append(x, thinkingFeatures(r))
+			y = append(y, math.Log(*r.Gap))
+			clusters = append(clusters, r.Conversation)
+			used = append(used, i)
+			for j, label := range []string{key, r.At.UTC().Format("2006-01-02"), r.Effort} {
+				categories[j][label] = append(categories[j][label], at)
 			}
-			values := []float64{}
-			for _, i := range used {
-				r := records[i]
-				v := r.Input
-				if col == 1 {
-					v = math.Min(r.Reasoning, r.Output)
-				}
-				if col == 2 {
-					v = math.Max(0, r.Output-r.Reasoning)
-				}
-				if v > 0 {
-					values = append(values, v)
-				}
-			}
-			if len(values) < 50 {
-				continue
-			}
-			delta := math.Log(2.0)
-			if col > 0 {
-				ref := thinkingMedian(values)
-				delta = math.Log1p(2*ref) - math.Log1p(ref)
-			}
-			variance := 0.0
-			for _, score := range scores {
-				v := thinkingDot(bread[j], score)
-				variance += v * v
-			}
-			se := math.Sqrt(variance * adjust)
-			ratio, low, high := math.Exp(b[j]*delta), math.Exp((b[j]-1.96*se)*delta), math.Exp((b[j]+1.96*se)*delta)
-			if math.IsInf(high, 0) || math.IsNaN(high) {
-				continue
-			}
-			factors = append(factors, thinkingFactor{name, []string{"context", "reasoning", "other"}[col], ratio, low, high, len(x), len(scores)})
 		}
+	}
+	if len(x) < 250 {
+		return factors
+	}
+	partitions := [][][]int{}
+	for _, category := range categories {
+		names := []string{}
+		for key := range category {
+			names = append(names, key)
+		}
+		sort.Strings(names)
+		partition := [][]int{}
+		for _, key := range names {
+			partition = append(partition, category[key])
+		}
+		partitions = append(partitions, partition)
+	}
+	converged := false
+	for iteration := 0; iteration < 200; iteration++ {
+		if ctx.Err() != nil {
+			return nil
+		}
+		shift := 0.0
+		for _, partition := range partitions {
+			for _, members := range partition {
+				means := make([]float64, len(x[0]))
+				meanY := 0.0
+				for _, i := range members {
+					meanY += y[i] / float64(len(members))
+					for j, v := range x[i] {
+						means[j] += v / float64(len(members))
+					}
+				}
+				shift = math.Max(shift, math.Abs(meanY))
+				for _, v := range means {
+					shift = math.Max(shift, math.Abs(v))
+				}
+				for _, i := range members {
+					y[i] -= meanY
+					for j := range x[i] {
+						x[i][j] -= means[j]
+					}
+				}
+			}
+		}
+		if shift < 1e-8 {
+			converged = true
+			break
+		}
+	}
+	if !converged {
+		return factors
+	} // Never publish an unconverged factor table.
+	// Modified Gram–Schmidt selects an independent control basis. Factor columns
+	// are visited first; omitted columns never receive fabricated confidence CIs.
+	keep := []int{}
+	basis := [][]float64{}
+	for col := range x[0] {
+		v := make([]float64, len(x))
+		norm := 0.0
+		for i := range x {
+			v[i] = x[i][col]
+			norm += v[i] * v[i]
+		}
+		if norm < 1e-10 {
+			continue
+		}
+		for repeat := 0; repeat < 2; repeat++ {
+			for _, q := range basis {
+				dot := thinkingDot(v, q)
+				for i := range v {
+					v[i] -= dot * q[i]
+				}
+			}
+		}
+		rest := thinkingDot(v, v)
+		if rest < norm*1e-10 {
+			continue
+		}
+		for i := range v {
+			v[i] /= math.Sqrt(rest)
+		}
+		basis = append(basis, v)
+		keep = append(keep, col)
+	}
+	for i, v := range x {
+		next := []float64{}
+		for _, col := range keep {
+			next = append(next, v[col])
+		}
+		x[i] = next
+	}
+	if len(keep) == 0 {
+		return factors
+	}
+	b, bread := thinkingNormal(x, y, 0)
+	if b == nil {
+		return factors
+	}
+	scores := map[string][]float64{}
+	for i, row := range x {
+		score := scores[clusters[i]]
+		if score == nil {
+			score = make([]float64, len(b))
+		}
+		resid := y[i] - thinkingDot(row, b)
+		for j, v := range row {
+			score[j] += v * resid
+		}
+		scores[clusters[i]] = score
+	}
+	if len(scores) < 25 {
+		return factors
+	}
+	adjust := float64(len(scores)) / float64(len(scores)-1) * float64(len(x)-1) / float64(max(1, len(x)-streamCount-len(categories[1])-len(categories[2])+2-len(b)))
+	for j, col := range keep {
+		if col > 2 {
+			continue
+		}
+		values := []float64{}
+		for _, i := range used {
+			r := records[i]
+			v := r.Input
+			if col == 1 {
+				v = math.Min(r.Reasoning, r.Output)
+			}
+			if col == 2 {
+				v = math.Max(0, r.Output-r.Reasoning)
+			}
+			if v > 0 {
+				values = append(values, v)
+			}
+		}
+		if len(values) < 50 {
+			continue
+		}
+		delta := math.Log(2.0)
+		if col > 0 {
+			ref := thinkingMedian(values)
+			delta = math.Log1p(2*ref) - math.Log1p(ref)
+		}
+		variance := 0.0
+		for _, score := range scores {
+			v := thinkingDot(bread[j], score)
+			variance += v * v
+		}
+		se := math.Sqrt(variance * adjust)
+		ratio, low, high := math.Exp(b[j]*delta), math.Exp((b[j]-1.96*se)*delta), math.Exp((b[j]+1.96*se)*delta)
+		if math.IsInf(high, 0) || math.IsNaN(high) {
+			continue
+		}
+		factors = append(factors, thinkingFactor{name, []string{"context", "reasoning", "other"}[col], ratio, low, high, len(x), len(scores)})
 	}
 	return factors
 }

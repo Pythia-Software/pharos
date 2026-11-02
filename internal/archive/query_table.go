@@ -446,8 +446,9 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 }
 
 // prepareSQLDataset brings the derived table an SQL dataset reads up to date:
-// the tool rollup for tool use, and for user messages, a classification that
-// is missing or by older rules (see ensureAuthorship).
+// the tool rollup for tool use, stored request timings for model requests,
+// and for user messages, a classification that is missing or by older rules
+// (see ensureAuthorship).
 func (c *Catalog) prepareSQLDataset(ctx context.Context, dataset string) error {
 	if dataset == "writing_messages" {
 		c.ensureAuthorship()
@@ -455,6 +456,9 @@ func (c *Catalog) prepareSQLDataset(ctx context.Context, dataset string) error {
 	}
 	if dataset == "agent_events" || dataset == "agent_event_messages" {
 		return nil // imported (agent_events.go); nothing to bring up to date
+	}
+	if dataset == "model_requests" {
+		return c.currentRequestTimings(ctx)
 	}
 	return c.currentToolRollup(ctx)
 }
