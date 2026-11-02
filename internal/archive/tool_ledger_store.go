@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -191,13 +192,17 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 			return err
 		}
 		defer callStatement.Close()
-		commandStatement, err := tx.Prepare(`INSERT INTO tool_commands(tool_call_id,position,operator,command,program,subcommand,category,exit_code,duration_ms)
-			VALUES(?,?,?,?,?,?,?,?,?)`)
+		// A call is rewritten whenever a later turn changes what it carried;
+		// its commands and URLs rarely change, so only rows that differ are
+		// written. Their triggers date dependent work (writing classification)
+		// from the call's start, however old.
+		commandStatement, err := tx.Prepare(changedUpsertSQL(`INSERT INTO tool_commands(tool_call_id,position,operator,command,program,subcommand,category,exit_code,duration_ms)
+			VALUES(?,?,?,?,?,?,?,?,?)`, "tool_call_id", "position"))
 		if err != nil {
 			return err
 		}
 		defer commandStatement.Close()
-		urlStatement, err := tx.Prepare(`INSERT INTO tool_urls(tool_call_id,position,url,host,source) VALUES(?,?,?,?,?)`)
+		urlStatement, err := tx.Prepare(changedUpsertSQL(`INSERT INTO tool_urls(tool_call_id,position,url,host,source) VALUES(?,?,?,?,?)`, "tool_call_id", "position"))
 		if err != nil {
 			return err
 		}
@@ -211,8 +216,15 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 			if !write {
 				continue
 			}
-			for _, table := range []string{"tool_commands", "tool_urls"} {
-				if _, err := tx.Exec("DELETE FROM "+table+" WHERE tool_call_id=?", id); err != nil {
+			commandPositions, urlPositions := []int{}, []int{}
+			for _, command := range call.Commands {
+				commandPositions = append(commandPositions, command.Position)
+			}
+			for _, address := range call.URLs {
+				urlPositions = append(urlPositions, address.Position)
+			}
+			for table, positions := range map[string][]int{"tool_commands": commandPositions, "tool_urls": urlPositions} {
+				if _, err := tx.Exec("DELETE FROM "+table+" WHERE tool_call_id=? AND position NOT IN (SELECT value FROM json_each(?))", id, jsonText(positions)); err != nil {
 					return err
 				}
 			}
@@ -303,6 +315,25 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 		return bumpToolLedgerPartitionGeneration(tx)
 	}
 	return nil
+}
+
+// changedUpsertSQL is statement upserting on key, updating a row only when
+// one of its other columns differs, so unchanged rows fire no triggers.
+func changedUpsertSQL(statement string, key ...string) string {
+	start, end := strings.Index(statement, "("), strings.Index(statement, ")")
+	updates, changed := []string{}, []string{}
+	for _, column := range strings.Split(statement[start+1:end], ",") {
+		column = strings.TrimSpace(column)
+		if !slices.Contains(key, column) {
+			updates = append(updates, column+"=excluded."+column)
+			changed = append(changed, column+" IS NOT excluded."+column)
+		}
+	}
+	table := strings.Fields(statement[:start])[2]
+	for index := range changed {
+		changed[index] = table + "." + changed[index]
+	}
+	return statement + " ON CONFLICT(" + strings.Join(key, ",") + ") DO UPDATE SET " + strings.Join(updates, ",") + " WHERE " + strings.Join(changed, " OR ")
 }
 
 func derivedUpsertSQL(statement string) string {
