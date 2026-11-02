@@ -92,6 +92,10 @@
       "field": "disclosures"
     },
     {
+      "file": "web/src/logs-page.tsx",
+      "field": "disclosures"
+    },
+    {
       "file": "web/src/thinking-dashboard.tsx",
       "field": "disclosures"
     },
@@ -142,6 +146,10 @@
     {
       "file": "internal/archive/assets/ui.py",
       "field": "history_search"
+    },
+    {
+      "file": "web/src/logs-page.tsx",
+      "field": "log_source"
     },
     {
       "file": "web/src/app-navigation.tsx",
@@ -6097,6 +6105,57 @@
       "control": "onChange={state.update} onView={choose} onFilter={state.onFilter}",
       "contract": "native-query",
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
+    },
+    {
+      "key": "635b9b9fda13d8e8:0",
+      "file": "web/src/logs-page.tsx",
+      "owner": "CrashText",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={key}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "071bcb45a9aa4180:0",
+      "file": "web/src/logs-page.tsx",
+      "owner": "Events",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={key}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "01cbf11db1ede9ec:0",
+      "file": "web/src/logs-page.tsx",
+      "owner": "LogsPage",
+      "tag": "button",
+      "control": "onClick={refresh}",
+      "contract": "editing",
+      "reason": "Refresh re-reads the logs and Copy report for an agent copies text: actions, not view state. The source is log_source; disclosures use ViewDisclosure."
+    },
+    {
+      "key": "24fc1d2d7d7e7ae5:0",
+      "file": "web/src/logs-page.tsx",
+      "owner": "Overview",
+      "tag": "button",
+      "control": "onClick={() => void copyReport()}",
+      "contract": "editing",
+      "reason": "Refresh re-reads the logs and Copy report for an agent copies text: actions, not view state. The source is log_source; disclosures use ViewDisclosure."
+    },
+    {
+      "key": "fd3969f8d6594f2d:0",
+      "file": "web/src/logs-page.tsx",
+      "owner": "Runs",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={`logs:${source}:run:${run.started_at ?? \"earlier\"}`} defaultOpen={index === 0 || run.crashed}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "809445575b482999:0",

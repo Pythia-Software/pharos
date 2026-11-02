@@ -342,6 +342,7 @@ APP_HTML = r'''<!doctype html>
     @media(max-width:760px){.health{grid-template-columns:repeat(2,minmax(0,1fr))}}
     @media(max-width:500px){.health{grid-template-columns:1fr}.header-icons{flex:0 1 auto;min-width:0;flex-wrap:wrap;row-gap:6px}.navigator.open{flex-wrap:wrap}.navigator-uri{order:-1;flex-basis:100%}.navigator .navigator-error{order:1;flex-basis:100%}}
   </style>
+  <script src="/assets/page-errors.js"></script>
   <script src="/assets/preferences.js"></script>
   <script src="/assets/managed-storage.js"></script>
   <script>window.pharosPrefs=(function(){
@@ -448,7 +449,8 @@ APP_HTML = r'''<!doctype html>
       <div class="optional-behavior"><div><h3 id="pauseIndexingForQueriesTitle">Pause indexing during queries</h3><p id="pauseIndexingForQueriesDescription" class="muted">Give queries priority by pausing indexing and library maintenance while they run. Sustained browsing or agent queries can delay indexing. Off by default; changes apply without restarting.</p></div><button id="pauseIndexingForQueries" class="toggle" type="button" role="switch" aria-labelledby="pauseIndexingForQueriesTitle" aria-describedby="pauseIndexingForQueriesDescription" aria-checked="false"></button></div>
       <div class="optional-behavior"><div><h3 id="feedbackContactEmailTitle">Contact email for feedback</h3><p id="feedbackContactEmailDescription" class="muted">Prefilled in Send feedback so we can follow up. Leave it empty to send feedback without one. Changing it in the feedback form updates it here.</p></div><input id="feedbackContactEmail" type="email" maxlength="254" autocomplete="email" placeholder="you@example.com" aria-labelledby="feedbackContactEmailTitle" aria-describedby="feedbackContactEmailDescription"></div>
       <div class="optional-behavior"><div><h3 id="agentEventsTitle">Agent Experience (preview)</h3><p id="agentEventsDescription" class="muted">Finds what agents ran into in their replies and thinking — obstacles, surprises, discoveries, workarounds, unchecked claims — and lists Analyze → Agent Experience. A small model runs on this Mac in the background after a one-time 140 MB download; it reads the last 90 days, catching up only while plugged in.</p></div><button id="agentEvents" class="toggle" type="button" role="switch" aria-labelledby="agentEventsTitle" aria-describedby="agentEventsDescription" aria-checked="false"></button></div>
-    </section></div>
+    </section>
+    <section id="logsSettings" class="settings-section" data-settings-route="/settings/logs" data-page-title="Logs" data-page-description="Errors, slow requests, output and crash reports from this Mac, by source." aria-labelledby="settingsPageHeading" hidden><div id="logsPage"></div></section></div>
   </section>
   <section id="analyze" class="view" data-feedback-label="Analyze view"><div id="queryTableUsage"></div></section>
   <section id="findings" class="view" data-feedback-label="Findings view"><div id="findingsPage"></div></section>

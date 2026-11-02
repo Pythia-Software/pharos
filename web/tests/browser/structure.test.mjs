@@ -400,6 +400,9 @@ const ROUTES = [
   { name: "MCP query", url: "/analyze?analyze_mode=query&analyze_data=mcp_calls&analyze_topic=mcp&analyze_search=1", ready: ".usage-workspace-table .qt-row" },
   { name: "MCP legacy link", url: "/mcp", ready: `.usage-mcp-dashboard ${analysisReady}` },
   { name: "MCP settings", url: "/settings/mcp", ready: "#mcpSettingsPage .mcp-setup-grid" },
+  { name: "Logs overview", url: "/settings/logs", ready: "#logsPage .logs-cards" },
+  { name: "Logs service output", url: "/settings/logs?log_source=service", ready: "#logsPage .logs-run pre" },
+  { name: "Logs empty source", url: "/settings/logs?log_source=background", ready: "#logsOperations" },
   { name: "Library health", url: "/settings", ready: "#healthCards .panel:not([aria-busy])" },
   // In the app, a catalog with much free space offers to compact it.
   { name: "Library health compact catalog", url: "/settings", ready: ".storage-compact button", managedLibrary: { id: "local", name: "Pending history", config: "/Users/test/Libraries/Pending/library.toml" },

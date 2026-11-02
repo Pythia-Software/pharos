@@ -12,7 +12,7 @@ import (
 
 const menuBarPreferenceKey = "pharos-menu-bar"
 
-var menuBarDefaultOrder = []string{"open", "status", "indexed", "index", "words", "tokens", "cost", "carbon", "backup", "space", "search", "analyze", "optimize", "capture", "health", "sources", "finder", "settings", "eject", "quit"}
+var menuBarDefaultOrder = []string{"open", "status", "indexed", "index", "words", "tokens", "cost", "carbon", "backup", "space", "search", "analyze", "optimize", "capture", "health", "sources", "finder", "logs", "settings", "eject", "quit"}
 var menuBarRequired = []string{"open", "status", "settings", "quit"}
 var menuBarSeparatorPattern = regexp.MustCompile(`^separator:[1-9][0-9]*$`)
 
@@ -26,7 +26,7 @@ func menuBarGroup(id string) string {
 		return "library"
 	case "search", "analyze", "optimize":
 		return "navigation"
-	case "capture", "health", "sources", "finder":
+	case "capture", "health", "sources", "finder", "logs":
 		return "manage"
 	case "eject", "quit":
 		return "quit"
@@ -97,7 +97,7 @@ func menuBarSettings(values map[string]json.RawMessage) map[string]bool {
 	settings := map[string]bool{"enabled": true, "indexed": true, "words": true, "tokens": true, "carbon": true,
 		"cost": false, "backup": false, "space": false, "index": false, "eject": false,
 		"open": true, "status": true, "settings": true, "quit": true,
-		"search": false, "analyze": false, "optimize": false, "capture": false, "health": false, "sources": false, "finder": false}
+		"search": false, "analyze": false, "optimize": false, "capture": false, "health": false, "sources": false, "finder": false, "logs": false}
 	var saved map[string]any
 	_ = json.Unmarshal(values[menuBarPreferenceKey], &saved)
 	for key := range settings {
@@ -252,6 +252,9 @@ func (s *Server) menuBarStatus(ctx context.Context) (map[string]any, error) {
 		status["error_path"] = "/settings/backups"
 	}
 	status["error"] = problem
+	if settings["logs"] {
+		status["logs"] = s.logsAttention(ctx)
+	}
 	if settings["backup"] {
 		for _, backup := range loadBackupHistory(s.Config()).Backups {
 			if !backup.Partial {
