@@ -15,15 +15,21 @@ enum Harbor {
 // The content runs under the transparent title bar so the web header and the
 // traffic lights share one band. AppKit keeps the lights 14pt from the top of
 // a 28pt title bar and resets them whenever it lays the title bar out again,
-// so they are re-centered in a header-height bar after each resize or focus
+// so they are re-centered on the header's row after each resize or focus
 // change. An empty toolbar would center them too, but it swallows the clicks
-// meant for the header's tabs and search.
+// meant for the header's tabs and search. The page reports where its row's
+// center falls, in window points, so the lights follow it at any page zoom.
 struct WindowChrome: NSViewRepresentable {
     static let titlebarHeight: CGFloat = 52
     static let trafficLightInset: CGFloat = 19
+    /// Posted with the window as its object and the header row's center, in
+    /// points from the window's top, as `centerKey`.
+    static let headerCenterDidChange = Notification.Name("PharosHeaderCenterDidChange")
+    static let centerKey = "center"
 
     final class ChromeView: NSView {
         private var observers: [NSObjectProtocol] = []
+        private var headerCenter = WindowChrome.titlebarHeight / 2
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
@@ -43,6 +49,11 @@ struct WindowChrome: NSViewRepresentable {
                     self?.placeTrafficLights()
                 })
             }
+            observers.append(NotificationCenter.default.addObserver(forName: WindowChrome.headerCenterDidChange, object: window, queue: .main) { [weak self] note in
+                guard let self, let center = note.userInfo?[WindowChrome.centerKey] as? CGFloat, center > 0 else { return }
+                self.headerCenter = center
+                self.placeTrafficLights()
+            })
             placeTrafficLights()
         }
 
@@ -53,7 +64,7 @@ struct WindowChrome: NSViewRepresentable {
             guard let window, !window.styleMask.contains(.fullScreen),
                   let close = window.standardWindowButton(.closeButton),
                   let container = close.superview?.superview else { return }
-            let height = WindowChrome.titlebarHeight
+            let height = max(headerCenter * 2, close.frame.height)
             container.frame = NSRect(x: container.frame.minX, y: window.frame.height - height, width: container.frame.width, height: height)
             let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
             for (index, type) in buttons.enumerated() {
@@ -1027,6 +1038,11 @@ final class ArchiveService: ObservableObject {
 final class ArchiveWKWebView: WKWebView {
     private(set) var lastMouseDown: NSEvent?
     var onMoveToWindow: ((NSWindow) -> Void)?
+    var onPageZoom: (() -> Void)?
+
+    override var pageZoom: CGFloat {
+        didSet { if pageZoom != oldValue { onPageZoom?() } }
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -1089,9 +1105,11 @@ struct ArchiveWebView: NSViewRepresentable {
     // Only the app header (`body > header`) acts as the title bar; the page's
     // own <header>s, such as a workspace's heading and the drawers' and
     // panels' heads, are content, so pressing them never moves the window.
-    // The header is trimmed to `WindowChrome.titlebarHeight` so the traffic
-    // lights sit centered in it. Reserve their space from the window's left
-    // edge at every width; the web header spans the full window. In full
+    // The header is trimmed so the traffic lights sit centered on its row,
+    // and the page reports that row's center so they follow it. Reserve their
+    // space from the window's left edge at every width and zoom: the gap is
+    // in window points, divided by `--pharos-zoom` (the web view's page zoom,
+    // which `zoomScript` sets). The web header spans the full window. In full
     // screen macOS hides them, so the gap is removed. The page also reports its
     // background whenever the theme changes, so the area revealed by
     // rubber-band scrolling past either end matches it instead of showing
@@ -1100,7 +1118,7 @@ struct ArchiveWebView: NSViewRepresentable {
     (() => {
       const style = document.createElement('style');
       style.textContent = `
-        html.pharos-window body>header .bar{padding:5px 22px;padding-left:84px}
+        html.pharos-window body>header .bar{padding:5px 22px;padding-left:calc(84px / var(--pharos-zoom, 1))}
         html.pharos-window.pharos-fullscreen body>header .bar{padding-left:22px}`;
       document.head.append(style);
       document.documentElement.classList.add('pharos-window');
@@ -1125,6 +1143,14 @@ struct ArchiveWebView: NSViewRepresentable {
         event.preventDefault();
         window.webkit.messageHandlers.\(windowMessageName).postMessage(event.detail === 2 ? 'doubleClick' : 'drag');
       });
+      const header = document.querySelector('body > header');
+      if (header) {
+        const reportHeaderCenter = () => {
+          const row = (header.querySelector('.brand') || header).getBoundingClientRect();
+          window.webkit.messageHandlers.\(windowMessageName).postMessage({headerCenter: row.top + row.height / 2});
+        };
+        new ResizeObserver(reportHeaderCenter).observe(header);
+      }
       const reportBackground = () => window.webkit.messageHandlers.\(windowMessageName).postMessage({background: getComputedStyle(document.body).backgroundColor});
       new MutationObserver(reportBackground).observe(document.documentElement, {attributes: true, attributeFilter: ['data-theme']});
       matchMedia('(prefers-color-scheme: dark)').addEventListener('change', reportBackground);
@@ -1133,6 +1159,12 @@ struct ArchiveWebView: NSViewRepresentable {
     """
     static let windowMessageName = "pharosWindow"
 
+    /// Sets the page's `--pharos-zoom` before it first draws; the web view
+    /// replaces it whenever the zoom changes.
+    static func zoomScript(_ zoom: Double) -> String {
+        "document.documentElement.style.setProperty('--pharos-zoom', '\(zoom)')"
+    }
+
     final class Coordinator: NSObject, WKScriptMessageHandlerWithReply, WKScriptMessageHandler, WKUIDelegate, WKNavigationDelegate, WKDownloadDelegate {
         let origin: URL
         weak var webView: ArchiveWKWebView?
@@ -1140,12 +1172,16 @@ struct ArchiveWebView: NSViewRepresentable {
         weak var updates: UpdateNotice?
         private var publishedUpdateState: HeaderUpdateState?
         private var observers: [NSObjectProtocol] = []
+        /// The header row's center in CSS pixels, as the page last reported.
+        private var headerCenter: Double?
+        private var zoomUserScript: WKUserScript?
 
         init(origin: URL) { self.origin = origin }
 
         deinit { observers.forEach(NotificationCenter.default.removeObserver) }
 
         func observeFullScreen(of window: NSWindow) {
+            publishHeaderCenter()
             guard observers.isEmpty else { return }
             let center = NotificationCenter.default
             // Drop the traffic-light gap once they hide, and restore it before
@@ -1156,6 +1192,28 @@ struct ArchiveWebView: NSViewRepresentable {
                     self?.setFullScreenClass(fullScreen)
                 })
             }
+        }
+
+        /// Keeps the page's `--pharos-zoom` and the traffic lights in step
+        /// with the web view's page zoom.
+        func pageZoomChanged() {
+            guard let webView else { return }
+            let controller = webView.configuration.userContentController
+            let zoomScript = WKUserScript(source: ArchiveWebView.zoomScript(webView.pageZoom), injectionTime: .atDocumentStart, forMainFrameOnly: true)
+            let others = controller.userScripts.filter { $0 !== zoomUserScript }
+            controller.removeAllUserScripts()
+            (others + [zoomScript]).forEach(controller.addUserScript)
+            zoomUserScript = zoomScript
+            webView.evaluateJavaScript(ArchiveWebView.zoomScript(webView.pageZoom))
+            publishHeaderCenter()
+        }
+
+        private func publishHeaderCenter() {
+            guard let webView, let window = webView.window, let headerCenter else { return }
+            NotificationCenter.default.post(
+                name: WindowChrome.headerCenterDidChange, object: window,
+                userInfo: [WindowChrome.centerKey: CGFloat(headerCenter) * webView.pageZoom]
+            )
         }
 
         func setFullScreenClass(_ fullScreen: Bool) {
@@ -1284,6 +1342,11 @@ struct ArchiveWebView: NSViewRepresentable {
                       let settings = message.body as? [String: Any] else { return }
                 if settings["refreshUsage"] as? Bool == true { service?.menuBar.invalidateUsage(); return }
                 service?.menuBar.applyPreferences(settings)
+                return
+            }
+            if let center = (message.body as? [String: Any])?["headerCenter"] as? Double {
+                headerCenter = center
+                publishHeaderCenter()
                 return
             }
             if let background = (message.body as? [String: Any])?["background"] as? String {
@@ -1514,6 +1577,8 @@ struct ArchiveWebView: NSViewRepresentable {
         context.coordinator.webView = view
         service.menuBar.webView = view
         view.pageZoom = service.pageZoom
+        view.onPageZoom = { [weak coordinator = context.coordinator] in coordinator?.pageZoomChanged() }
+        context.coordinator.pageZoomChanged()
         view.onZoomIn = { [weak service] in service?.zoomPage(1) }
         view.onMoveToWindow = { [weak coordinator = context.coordinator] in coordinator?.observeFullScreen(of: $0) }
         view.uiDelegate = context.coordinator

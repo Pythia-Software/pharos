@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { suggestionPool } from "../../../src/curiosity-data";
+import { suggestionPool, fittingWindows } from "../../../src/curiosity-data";
 import { SPACING, beltSlots, growBelt, beltKind, previewKind, chooseNext, spreadDeck, leanBeside } from "../../../src/conveyor-deck";
 
 test("singleton and mixed arrivals keep every card readable until navigation is needed", () => {
@@ -117,4 +117,28 @@ test("leans alternate often, never lean one way three times running, and differ 
   }
   const flips = leans.slice(1).filter((lean, index) => Math.sign(lean) !== Math.sign(leans[index])).length;
   assert.ok(flips > leans.length * .6 && flips < leans.length * .95);
+});
+
+test("suggested windows follow where the library's activity lies", () => {
+  const counts = (one, seven, thirty, ninety, half, year) => ({ 1: one, 7: seven, 30: thirty, 90: ninety, 180: half, 365: year, all: year });
+  // Steady work over a long history: every window shows a different picture.
+  assert.deepEqual(fittingWindows([7, 30, 90], counts(4, 25, 100, 300, 600, 1200)), [7, 30, 90]);
+  // A library younger than a month: the longer windows repeat the 30-day one.
+  assert.deepEqual(fittingWindows([7, 30, 90], counts(2, 10, 40, 40, 40, 40)), [7, 30]);
+  // Nine in ten conversations this week, a stray one months ago.
+  assert.deepEqual(fittingWindows([7, 30, 90], counts(5, 45, 48, 50, 50, 50)), [7]);
+  assert.deepEqual(fittingWindows([30, 90], counts(5, 45, 48, 50, 50, 50)), [30]);
+  // Back after a break: the recent windows are too thin to say much.
+  assert.deepEqual(fittingWindows([1, 7, 30, 90], counts(0, 1, 2, 80, 90, 90)), [90]);
+  // One conversation, 89 days ago: show it, in the shortest window that holds it.
+  assert.deepEqual(fittingWindows([7, 30, 90, 180], counts(0, 0, 0, 1, 1, 1)), [90]);
+  assert.deepEqual(fittingWindows([7, 30], counts(0, 0, 0, 0, 0, 0)), [7]);
+  // Unknown activity leaves every window on offer.
+  assert.deepEqual(fittingWindows([7, 30, 90]), [7, 30, 90]);
+  assert.deepEqual(fittingWindows([7, 30, 90], { 7: 10 }), [7, 30, 90]);
+
+  const recent = suggestionPool(new Date(), undefined, counts(5, 45, 48, 50, 50, 50));
+  assert.ok(recent.every(card => card.window?.days !== 90 || Math.min(...card.days) === 90), "no 90-day card where a shorter window holds the same work");
+  const steady = suggestionPool(new Date(), undefined, counts(4, 25, 100, 300, 600, 1200));
+  assert.ok(steady.some(card => card.window?.days === 7) && steady.some(card => card.window?.days === 90), "a long, steady history still mixes short and long windows");
 });

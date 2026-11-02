@@ -676,16 +676,19 @@ test("macOS window controls stay clear of the lighthouse when resizing", { skip 
   await page.evaluate(() => {
     document.documentElement.classList.add('pharos-window');
     // AppKit places three 14 pt buttons at x=19, 39 and 59 in a 52 pt bar.
+    // Page zoom scales CSS pixels but not the window's points, so the
+    // controls are sized in points divided by --pharos-zoom.
     const controls = document.createElement('div');
     controls.id = 'nativeWindowControls';
-    controls.style.cssText = 'position:fixed;left:19px;top:19px;display:flex;gap:6px;z-index:100';
+    controls.style.cssText = 'position:fixed;left:calc(19px / var(--pharos-zoom, 1));top:calc(19px / var(--pharos-zoom, 1));display:flex;gap:calc(6px / var(--pharos-zoom, 1));z-index:100';
     for (const color of ['#ff5f57', '#febc2e', '#28c840']) {
       const button = document.createElement('span');
-      button.style.cssText = `width:14px;height:14px;border-radius:50%;background:${color}`;
+      button.style.cssText = `width:calc(14px / var(--pharos-zoom, 1));height:calc(14px / var(--pharos-zoom, 1));border-radius:50%;background:${color}`;
       controls.append(button);
     }
     document.body.append(controls);
   });
+  const setZoom = zoom => page.evaluate(zoom => document.documentElement.style.setProperty('--pharos-zoom', String(zoom)), zoom);
   for (const width of [2133, 1180, 320]) {
     await page.setViewportSize({ width, height: 900 });
     await settled();
@@ -711,6 +714,14 @@ test("macOS window controls stay clear of the lighthouse when resizing", { skip 
     });
     await settled();
     assert.ok((await brand.boundingBox()).x >= controls.x + controls.width, 'leaving fullscreen restores clearance');
+  }
+  // Zooming out must not slide the lighthouse under the controls.
+  for (const zoom of [0.5, 1.5]) {
+    await setZoom(zoom);
+    await settled();
+    const controls = await page.locator('#nativeWindowControls').boundingBox();
+    assert.ok((await page.locator('body > header .brand').boundingBox()).x >= controls.x + controls.width, `lighthouse clears window controls at ${zoom * 100}% zoom`);
+    assert.deepEqual(await layoutProblems(page), []);
   }
 });
 
