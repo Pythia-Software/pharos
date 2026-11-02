@@ -16,7 +16,7 @@ import mcpCalls from "../../../../schemas/mcp_calls.schema.json";
 import agentEvents from "../../../../schemas/agent_events.schema.json";
 import agentEventMessages from "../../../../schemas/agent_event_messages.schema.json";
 import { queryURL, queryFromURL, readRollingWindow, resolveRollingQuery } from "../../../src/query-links";
-import { currentUsageAnalyses, isUsageWorkspace, readUsageWorkspace, usageAnalysisLink, usageDashboardReturn, usageDatasets, usageSearchQuery, usageTopics, usageWorkspaceURL } from "../../../src/usage-workspace-model.ts";
+import { isUsageWorkspace, readUsageWorkspace, usageDashboardReturn, usageDatasets, usageSearchQuery, usageTopics, usageWorkspaceURL } from "../../../src/usage-workspace-model.ts";
 import { toolSummaryCallFilters } from "../../../src/tools-dashboard-model.ts";
 import { readDashboardLink, readDashboardQuery, groupedDashboardQuery, parallelismSelectionQuery, toolDashboardWhere } from "../../../src/usage-dashboard-model.ts";
 import { trendQuery } from "../../../src/dashboard-trend-model.ts";
@@ -276,7 +276,6 @@ test("every Analyze dataset and dashboard topic has a reloadable route", t => {
     assert.deepEqual(queryFromURL(tableURL.href), { dataset, query, window: undefined });
   }
   for (const topic of Object.keys(usageTopics)) assert.equal(readUsageWorkspace(new URL(usageWorkspaceURL({ topic }), "http://localhost").searchParams).topic, topic);
-  assert.ok(currentUsageAnalyses.every(item => Object.hasOwn(usageTopics, item.topic)));
 });
 
 test("Analyze defaults to its sidebar layout while explicit older analyses remain reachable", () => {
@@ -326,18 +325,6 @@ test("dashboard returns retain edited source filters and disclose incompatible r
   assert.equal(returned.has("analyze_window"), false, "an edited range must not be promoted back to Today");
   assert.equal(returned.has("window_mode"), false);
   assert.deepEqual(decodeQueryStrict(returned.get("analyze_filters")).where, edited);
-});
-
-test("legacy analyses carry the full query and linked chart assumptions or label a reset", () => {
-  const query = { ...EMPTY_QUERY, where: [{ field: "provider", op: "=", value: "claude" }] };
-  const current = new URLSearchParams({ analyze_chart: '{"split":"type"}', analyze_carbon: '{"scenario":"high"}' });
-  const linked = usageAnalysisLink("usage", query, "/analyze?analyze_view=carbon", current);
-  const params = new URL(linked.href, "http://localhost").searchParams;
-  assert.equal(linked.resetsFilters, false);
-  assert.deepEqual(decodeQueryStrict(params.get("q_carbon")), query);
-  assert.equal(params.get("analyze_carbon"), current.get("analyze_carbon"));
-  const reset = usageAnalysisLink("tool_calls", query, "/analyze?machine_view=time", current);
-  assert.equal(reset.resetsFilters, true);
 });
 
 test("changing records drops stale table context while switching modes keeps the current query window", () => {

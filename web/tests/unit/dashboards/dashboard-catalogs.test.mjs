@@ -14,7 +14,7 @@ import { groupedDashboardQuery } from "../../../src/usage-dashboard-model";
 import { normalizedDashboardChart } from "../../../src/analysis-catalogs";
 import { now, toolCalls, toolsRollup, mcpCalls, skillUsages } from "../helpers/record-ledgers.mjs";
 import { analysisInspectQuery, analysisNote, analysisQuery, analysisViews, catalogProblems, nativeCycleResult, normalizeAnalysis, readAnalysisLink, switchView, trendAdjustments, trendUnavailable, validAnalysisState, viewOptions, analysisVersion } from "../../../src/dashboard-analysis-model";
-import { trendNote, trendQuery, trendSeries } from "../../../src/dashboard-trend-model";
+import { trendQuery, trendSeries } from "../../../src/dashboard-trend-model";
 import { tokenAnalysisCatalog } from "../../../src/token-analysis-catalog";
 import { toolsAnalysisCatalog as tools } from "../../../src/tools-analysis-catalog";
 import { mcpAnalysisCatalog as mcp } from "../../../src/mcp-analysis-catalog";
@@ -405,7 +405,6 @@ test("the day boundary: Over time's days are the recorded days the cards count; 
   assert.deepEqual(daily, viewer);
   assert.ok(local(moved[0].called_at) in daily);
   assert.notEqual(local(moved[0].called_at), moved[0].day);
-  assert.match(trendNote(mcp, state), /after a time-zone change a late-evening record can fall on different days/);
   // Hours: every catalog with a timestamp offers them, as UTC clock hours,
   // whose supporting query opens the hourly totals as grouped rows.
   for (const catalog of [mcp, time, skills]) {
@@ -439,7 +438,6 @@ test("a ratio part may state a condition: the empty-search rate pools zero-resul
   const built = trendSeries(mcp, { ...state, split: "none" }, query, run(mcp, query.query), { now });
   const last = built.buckets.at(-1), end = last.date.getTime() + 86400000, start = new Date(last.date); start.setDate(start.getDate() - 6);
   assert.equal(last.values.total, rate(population.filter(row => Date.parse(row.called_at) >= start.getTime() && Date.parse(row.called_at) < end)));
-  assert.match(trendNote(mcp, { ...state, split: "none" }), /requests with no results divided by successful requests with a recorded result count/);
   assert.deepEqual(catalogProblems({ ...mcp, measures: { ...mcp.measures, bad: { ...mcp.measures.empty_rate, ratio: [{ op: "sum", expression: "1" }, "call_count"] } } }), ["bad has an expression part without a label."]);
 });
 
@@ -448,7 +446,6 @@ test("a catalog's request: its parameters reach every request, and its note ever
   const where = month(catalog);
   const compare = analysisQuery(catalog, { view: "compare", metric: "calls", split: "tool_name" }, where, { now });
   assert.match(analysisNote(catalog, { view: "compare", metric: "calls", split: "tool_name" }), /Built under your settings/);
-  assert.match(trendNote(catalog, { metric: "calls", split: "tool_name" }), /Built under your settings/);
   // Parameters ride on /metrics and /query-v3 alike.
   const prior = global.fetch, requests = [];
   global.fetch = async (url, init = {}) => {

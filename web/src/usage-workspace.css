@@ -47,7 +47,6 @@
 .usage-query-destination-heading>.app-icon{margin-left:auto;flex:none;width:15px;height:15px;color:var(--gold)}
 .usage-query-sentence{display:block;min-width:0;color:var(--muted);font-size:var(--fs-xs);line-height:1.65;overflow-wrap:anywhere}
 .usage-query-sentence strong{color:var(--ink);font-weight:600}
-.usage-dashboard-links .usage-legacy-link{display:inline-flex;align-items:center;gap:7px;margin-top:12px;padding:6px 10px;border:1px solid var(--line);border-radius:6px;color:var(--muted);font-size:var(--fs-sm)}
 @media(min-width:1700px){.usage-query-destinations{grid-template-columns:repeat(4,minmax(0,1fr))}}
 @media(max-width:700px){.usage-query-destinations{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:600px){.usage-dashboard-links .usage-query-destination{padding:9px}}
@@ -67,3 +66,5 @@
 .usage-chart-headline h2{margin:0;font-size:var(--fs-3xl);letter-spacing:-.035em;line-height:1.2;overflow-wrap:anywhere}
 .usage-chart-headline .usage-chart-average-label{font-family:var(--sans);letter-spacing:0}
 @media(max-width:600px){.usage-chart-headline h2{font-size:var(--fs-2xl)}}
+/* Reset and Refresh sit together at the heading's end. */
+.usage-workspace .nested-page-heading>.query-reset-page{margin-left:auto}

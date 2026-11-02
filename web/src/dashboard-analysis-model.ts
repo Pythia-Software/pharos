@@ -150,10 +150,10 @@ export type AnalysisState = {
   scale?: ChartScale; scaleY?: ChartScale; cycle?: CalendarCycle;
   // The trend's own settings.
   period?: ChartPeriod; hours?: number; days?: number; rollingPeriods?: number; rollingOp?: RollingOp; display?: ChartDisplay;
-  share?: boolean; completePeriods?: boolean; norm?: boolean; normPeriods?: number; seriesLimit?: number; selection?: SliceSelection<string>;
+  share?: boolean; nonzero?: boolean; completePeriods?: boolean; norm?: boolean; normPeriods?: number; seriesLimit?: number; selection?: SliceSelection<string>;
 };
 export type ResolvedAnalysis = AnalysisState & Required<Pick<AnalysisState, "view" | "unit" | "metricY" | "reduce" | "compareAs" | "minSamples" | "scaleY" | "cycle"
-  | "period" | "hours" | "days" | "rollingPeriods" | "rollingOp" | "display" | "share" | "completePeriods" | "norm" | "normPeriods" | "seriesLimit">>;
+  | "period" | "hours" | "days" | "rollingPeriods" | "rollingOp" | "display" | "share" | "nonzero" | "completePeriods" | "norm" | "normPeriods" | "seriesLimit">>;
 
 // Reserved ids: no catalog unit may be named records, nor a breakdown none.
 export const records = "records", noSplit = "none";
@@ -161,7 +161,7 @@ export const analysisViews: Array<[AnalysisView, string]> = [["trend", "Over tim
 export const analysisReductions: Array<[AnalysisReduce, string]> = [["total", "Total"], ["mean", "Mean per unit"], ["median", "Median per unit"], ["max", "Largest unit"], ["count", "Number of units"]];
 export const sampleThresholds = [0, 2, 3, 5, 10, 20, 50, 100];
 export const analysisDefaults = { unit: records, reduce: "total", compareAs: "bars", minSamples: 0, scaleY: "linear", cycle: "weekday",
-  period: "day", hours: 6, days: 3, rollingPeriods: 0, rollingOp: "mean", display: "interval", share: false, completePeriods: false, norm: false, normPeriods: 30, seriesLimit: 15 } as const;
+  period: "day", hours: 6, days: 3, rollingPeriods: 0, rollingOp: "mean", display: "interval", share: false, nonzero: false, completePeriods: false, norm: false, normPeriods: 30, seriesLimit: 15 } as const;
 // Groups drawn are fixed per display. The trend's seriesLimit is its own.
 const barsShown = 12, slicesShown = 8;
 // The groups a view fetches, and the points a scatter draws; a test lowers
@@ -237,7 +237,7 @@ export function validAnalysisState(catalog: AnalysisCatalog, input: AnalysisStat
     && (state.rollingPeriods === undefined || validRollingPeriods(state.rollingPeriods))
     && validChartDisplay(state.display) && (state.scale === undefined || validChartScale(state.scale)) && validChartPresentation(state)
     && (state.rollingOp === undefined || oneOf(state.rollingOp, rollingOps))
-    && [state.share, state.completePeriods, state.norm].every(value => value === undefined || typeof value === "boolean")
+    && [state.share, state.nonzero, state.completePeriods, state.norm].every(value => value === undefined || typeof value === "boolean")
     && (state.normPeriods === undefined || Number.isInteger(state.normPeriods) && state.normPeriods >= 1 && state.normPeriods <= 1000);
   if (!trendFields || state.v !== undefined && state.v !== analysisVersion) return false;
   if (state.view === undefined || state.view === "trend") return has(catalog.measures, state.metric) && trendSplit(catalog, state.split)
@@ -370,7 +370,7 @@ function normalizeTrend<T extends AnalysisState>(catalog: AnalysisCatalog, next:
   if (!has(catalog.measures, next.metric) || notTrended(catalog.measures[next.metric])) next.metric = catalog.trend.metric;
   if (!trendSplit(catalog, next.split)) next.split = catalog.trend.split;
   if (catalog.components?.[next.split] && !catalog.components[next.split].measures.includes(next.metric)) next.split = catalog.components[next.split].fallback;
-  next.share = next.share === true; next.completePeriods = next.completePeriods === true; next.norm = next.norm === true;
+  next.share = next.share === true; next.nonzero = next.nonzero === true; next.completePeriods = next.completePeriods === true; next.norm = next.norm === true;
   // The trend's scale, resolved once for the control and the chart: a state
   // without one draws the old trend charts' default, the linear + log split.
   if (!validChartScale(next.scale)) next.scale = defaultChartScale;

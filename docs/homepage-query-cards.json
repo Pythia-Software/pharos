@@ -3167,6 +3167,7 @@
           "split": "tool_name",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "compareAs": "share"
         },
         "dataset": "tool_calls",
@@ -3289,6 +3290,7 @@
           "split": "error_signature",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "minSamples": 2
         },
         "dataset": "tool_calls",
@@ -3499,7 +3501,8 @@
           "metric": "calls",
           "split": "repository_path",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "tool_calls",
         "detailAction": "Inspect failed file edits"
@@ -3590,7 +3593,8 @@
           "metric": "calls",
           "split": "repository_command",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "tool_calls",
         "detailAction": "Inspect reported test failures"
@@ -3747,6 +3751,7 @@
           "split": "tool_source",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "compareAs": "share"
         },
         "dataset": "tool_calls",
@@ -3838,6 +3843,7 @@
           "split": "tool_name",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "minSamples": 10
         },
         "dataset": "tool_calls",
@@ -3924,7 +3930,8 @@
           "metric": "calls",
           "split": "repository_path",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "tool_calls",
         "detailAction": "Explore frequently read paths"
@@ -4124,7 +4131,8 @@
           "metric": "calls",
           "split": "host",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "tool_calls",
         "detailAction": "Explore recorded web sites"
@@ -4220,7 +4228,8 @@
           "metric": "calls",
           "split": "mcp_server_method",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "tool_calls",
         "detailAction": "Explore connected tool methods"
@@ -4345,7 +4354,8 @@
           "metric": "conversations",
           "split": "skill_name",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "skill_usages",
         "detailAction": "Inspect conversations using each skill"
@@ -4521,7 +4531,8 @@
           "metric": "typed",
           "split": "none",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "writing_messages",
         "detailAction": "Explore daily word counts"
@@ -4608,6 +4619,7 @@
           "split": "repository_name",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "compareAs": "share"
         },
         "dataset": "writing_messages",
@@ -4706,6 +4718,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "model_family",
@@ -4818,6 +4831,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "repository_name",
@@ -4940,6 +4954,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "repository_name",
@@ -5284,6 +5299,7 @@
           "split": "tool_name",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "minSamples": 10
         },
         "dataset": "tool_calls",
@@ -5450,6 +5466,7 @@
           "split": "command_source",
           "period": "day",
           "scale": "logarithmic",
+          "nonzero": false,
           "minSamples": 3
         },
         "dataset": "tool_calls",
@@ -5564,6 +5581,7 @@
           "split": "tool_source",
           "period": "day",
           "scale": "logarithmic",
+          "nonzero": false,
           "minSamples": 3
         },
         "dataset": "tool_calls",
@@ -5767,7 +5785,8 @@
           "metric": "repositories",
           "split": "error_signature",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "tool_calls",
         "detailAction": "Compare cross-repository errors"
@@ -5871,7 +5890,8 @@
           "metric": "calls",
           "split": "repository_error",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "tool_calls",
         "detailAction": "Explore repository error evidence"
@@ -6014,7 +6034,8 @@
           "metric": "repositories",
           "split": "skill_name",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "skill_usages",
         "detailAction": "Inspect skills across repositories"
@@ -6643,6 +6664,7 @@
           "split": "repository_path",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "unit": "path_conversation",
           "reduce": "max"
         },
@@ -6764,7 +6786,8 @@
           "metric": "typed_share",
           "split": "repository_name",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "writing_messages",
         "detailAction": "Explore authorship by repo"
@@ -6888,6 +6911,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "repository_name",
@@ -6994,6 +7018,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cache_read_share",
           "split": "provider_model",
@@ -7100,6 +7125,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "provider_model_effort",
@@ -7339,6 +7365,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "delegated_run_depth",
@@ -7449,6 +7476,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "price_status",
@@ -7672,6 +7700,7 @@
           "split": "tool_name",
           "period": "day",
           "scale": "logarithmic",
+          "nonzero": false,
           "minSamples": 3
         },
         "dataset": "mcp_calls",
@@ -8198,7 +8227,8 @@
           "metric": "words",
           "split": "kind",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "writing_messages",
         "detailAction": "Inspect human contributions"
@@ -9182,7 +9212,8 @@
           "metric": "conversations",
           "split": "url",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "tool_calls",
         "detailAction": "Inspect shared web references"
@@ -9350,6 +9381,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "cycle": "hour",
           "reduce": "total"
         },
@@ -9450,6 +9482,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "rollingPeriods": 7,
           "rollingOp": "sum",
           "norm": true
@@ -9559,6 +9592,7 @@
           "split": "repository_name",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "rollingPeriods": 7
         },
         "dataset": "writing_messages",
@@ -9643,7 +9677,8 @@
           "metric": "words_per_message",
           "split": "none",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "writing_messages",
         "detailAction": "Inspect message lengths"
@@ -9742,6 +9777,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "unit": "conversation",
           "reduce": "mean"
         },
@@ -9781,6 +9817,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "unit": "work",
           "reduce": "mean"
         },
@@ -9863,6 +9900,7 @@
           "split": "repository_name",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "unit": "conversation",
           "reduce": "mean"
         },
@@ -10056,6 +10094,7 @@
           "split": "none",
           "period": "day",
           "scale": "logarithmic",
+          "nonzero": false,
           "unit": "conversation"
         },
         "dataset": "writing_messages",
@@ -10132,6 +10171,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "rollingPeriods": 7
         },
         "dataset": "writing_messages",
@@ -10198,6 +10238,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
           "norm": true
@@ -10272,6 +10313,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
           "norm": true
@@ -10391,6 +10433,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "percent",
           "split": "model_family",
@@ -10516,6 +10559,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "percent_cost",
           "split": "model_family",
@@ -10648,6 +10692,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "provider_model",
@@ -10845,6 +10890,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "delegated_runs",
           "split": "provider_model_effort",
@@ -10976,6 +11022,7 @@
           "split": "provider_model",
           "period": "day",
           "scale": "logarithmic",
+          "nonzero": false,
           "unit": "conversation",
           "metricY": "output",
           "scaleY": "logarithmic"
@@ -11108,6 +11155,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "delegated_runs",
           "split": "provider_model_effort",
@@ -11235,6 +11283,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "agent_sessions",
           "split": "provider_model_role",
@@ -11326,6 +11375,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "effort",
@@ -11574,6 +11624,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "provider_model",
@@ -11716,6 +11767,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "input",
           "split": "provider_model",
@@ -11812,6 +11864,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "provider_model",
@@ -11916,6 +11969,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "conversations",
           "split": "provider_model",
@@ -12010,6 +12064,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "repository_provider_model",
@@ -12217,6 +12272,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "provider_model",
@@ -12517,6 +12573,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cache_read_share",
           "split": "repository_name",
@@ -12811,7 +12868,8 @@
           "metric": "failure_rate",
           "split": "repository_name",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "tool_calls",
         "detailAction": "Compare repository failure rates"
@@ -12917,6 +12975,7 @@
           "split": "tool_name",
           "period": "day",
           "scale": "logarithmic",
+          "nonzero": false,
           "unit": "tool_conversation",
           "minSamples": 3
         },
@@ -12995,6 +13054,7 @@
           "split": "tool_name",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "compareAs": "share"
         },
         "dataset": "tool_calls",
@@ -13095,6 +13155,7 @@
           "split": "repository_name",
           "period": "day",
           "scale": "logarithmic",
+          "nonzero": false,
           "unit": "conversation",
           "minSamples": 3
         },
@@ -13363,7 +13424,8 @@
           "metric": "calls",
           "split": "app_provider",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "tool_calls",
         "detailAction": "Inspect Pharos calling clients"
@@ -13426,7 +13488,8 @@
           "metric": "calls",
           "split": "query_source",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "mcp_calls",
         "detailAction": "Inspect requested archive sources"
@@ -13536,6 +13599,7 @@
           "split": "tool_name",
           "period": "day",
           "scale": "logarithmic",
+          "nonzero": false,
           "minSamples": 3
         },
         "dataset": "mcp_calls",
@@ -13734,6 +13798,7 @@
           "split": "skill_evidence",
           "period": "day",
           "scale": "logarithmic",
+          "nonzero": false,
           "minSamples": 3
         },
         "dataset": "skill_usages",
@@ -13984,6 +14049,7 @@
           "split": "skill_name",
           "period": "day",
           "scale": "logarithmic",
+          "nonzero": false,
           "unit": "skill_path",
           "minSamples": 3
         },
@@ -14354,6 +14420,7 @@
           "split": "repository_name",
           "period": "day",
           "scale": "logarithmic",
+          "nonzero": false,
           "unit": "conversation",
           "minSamples": 3
         },
@@ -14580,6 +14647,7 @@
           "split": "tool_name",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "minSamples": 10
         },
         "dataset": "mcp_calls",
@@ -14697,6 +14765,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "percent_cost",
           "split": "provider",
@@ -14791,6 +14860,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "repository_name",
@@ -14901,6 +14971,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "repository_name",
@@ -15023,6 +15094,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "repository_name",
@@ -15176,6 +15248,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "repository_name",
@@ -15314,6 +15387,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "root_conversations",
           "split": "root_repository_name",
@@ -15396,6 +15470,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "channel",
@@ -15474,6 +15549,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "channel",
@@ -15552,6 +15628,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "machine_id",
@@ -15630,6 +15707,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "machine_id",
@@ -15708,6 +15786,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "execution_machine_id",
@@ -15786,6 +15865,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "execution_machine_id",
@@ -15947,6 +16027,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "effort",
@@ -16049,6 +16130,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "repository_name",
@@ -16197,6 +16279,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "repository_name",
@@ -16346,6 +16429,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "output",
           "split": "repository_name",
@@ -16449,6 +16533,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "output_share",
           "split": "repository_name",
@@ -16603,6 +16688,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "effort",
@@ -16762,6 +16848,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "provider_model",
@@ -16924,6 +17011,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "provider_model_effort",
@@ -17673,6 +17761,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "delegated_share",
           "split": "root_repository_name",
@@ -17819,6 +17908,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "delegating_share",
           "split": "root_repository_name",
@@ -17971,6 +18061,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "repository_name",
@@ -18733,6 +18824,7 @@
           "split": "activity",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "seriesLimit": 6
         },
         "dataset": "tool_calls",
@@ -18836,6 +18928,7 @@
           "split": "activity",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "compareAs": "share"
         },
         "dataset": "tool_calls",
@@ -18923,7 +19016,8 @@
           "metric": "time",
           "split": "operation_name",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "tool_calls",
         "detailAction": "Inspect slow operations"
@@ -18988,6 +19082,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
           "norm": true
@@ -19060,6 +19155,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
           "norm": true
@@ -19147,7 +19243,8 @@
           "metric": "active_hours",
           "split": "level_band",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "parallelism",
         "detailAction": "See each day's timeline"
@@ -19212,6 +19309,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
           "norm": true
@@ -19278,6 +19376,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "cycle": "hour",
           "reduce": "total"
         },
@@ -19364,7 +19463,8 @@
           "metric": "agent_hours",
           "split": "repository_name",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "parallelism",
         "detailAction": "Compare repositories"
@@ -19479,6 +19579,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "rollingPeriods": 7,
           "rollingOp": "sum",
           "norm": true
@@ -19584,6 +19685,7 @@
           "split": "carbon_tier",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "compareAs": "share"
         },
         "dataset": "usage",
@@ -19670,7 +19772,8 @@
           "metric": "co2",
           "split": "repository_name",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "usage",
         "detailAction": "Compare repositories"
@@ -19756,7 +19859,8 @@
           "metric": "co2",
           "split": "model_family",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "usage",
         "detailAction": "Compare models"
@@ -19859,6 +19963,7 @@
           "split": "provider",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "compareAs": "share"
         },
         "dataset": "usage",
@@ -19962,6 +20067,7 @@
           "split": "effort",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "compareAs": "share"
         },
         "dataset": "usage",
@@ -20265,6 +20371,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "model",
@@ -20382,6 +20489,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "provider",
@@ -20439,11 +20547,12 @@
         "showHeadline": false,
         "height": 300,
         "timeline": {
-          "scale": "logarithmic"
+          "scale": "logarithmic",
+          "nonzero": true
         }
       },
       "action": "Explore Tokens and Cost",
-      "note": "Recorded processing volume includes cached input, assumed, partial and unpriced usage. It is not unique text, effort or value. Dates use the retained usage fact’s placement; facts are not prorated. Each line shows one repository’s daily tokens independently. Log1p scaling keeps zero at zero; vertical distance does not represent an additive difference. Switch to linear to compare absolute amounts.",
+      "note": "Recorded processing volume includes cached input, assumed, partial and unpriced usage. It is not unique text, effort or value. Dates use the retained usage fact’s placement; facts are not prorated. Each line shows one repository’s daily tokens independently and passes over its idle days; days with no tokens at all are left out. Vertical distance does not represent an additive difference. Switch to linear to compare absolute amounts.",
       "exploration": {
         "keys": [
           "day",
@@ -20498,6 +20607,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": true,
           "v": 2,
           "metric": "tokens",
           "split": "repository_name",
@@ -20624,6 +20734,7 @@
           "display": "cumulative",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "provider",
@@ -20722,6 +20833,7 @@
           "split": "tool_name",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "rollingPeriods": 7
         },
         "dataset": "mcp_calls",
@@ -21057,6 +21169,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "cycle": "weekday"
         },
         "dataset": "writing_messages",
@@ -21135,6 +21248,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "cycle": "weekday"
         },
         "dataset": "writing_messages",
@@ -21208,6 +21322,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "cycle": "weekday"
         },
         "dataset": "parallelism",
@@ -21282,6 +21397,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "cycle": "weekday"
         },
         "dataset": "parallelism",

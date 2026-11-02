@@ -45,7 +45,7 @@ export async function loadDashboardCardPreview(address: string, schema: FieldSch
     const ready = built.buckets.some(bucket => series.some(item => bucket.values[item.key] !== undefined));
     return { state: ready ? "ready" : "empty", total: built.buckets.length, summary: trendTitle(catalog, state), action: "Explore this dashboard",
       buckets: built.buckets, series, note: analysisNote(catalog, state),
-      dashboardTrend: { prepared: true, lines: built.lines || state.display === "cumulative", percent: state.share, scale: state.scale, reference: built.norm,
+      dashboardTrend: { prepared: true, lines: built.lines || state.display === "cumulative", percent: state.share, nonzero: state.nonzero && !state.share, scale: state.scale, reference: built.norm,
         unit: percent ? "percent" : catalog.measures[state.metric].format.kind === "duration" ? "ms" : catalog.measures[state.metric].unit,
         xLabel: state.period, yLabel: trendTitle(catalog, state) } };
   }
