@@ -26,10 +26,12 @@ export function PageLink({ href, children, current, onClick, ...props }: React.C
   }}>{children}</a>;
 }
 
-/** Page headings and content retain their owners; the app shell owns navigation. */
-export function NestedPageLayout({ label, pages, current, title, description, actions, headingId, className = "", contentClassName = "", children }: {
+/** Page headings and content retain their owners; the app shell owns navigation.
+ * Content can draw a visible headline into titleSlot; the page's h1 then
+ * remains for assistive technology only. */
+export function NestedPageLayout({ label, pages, current, title, description, actions, headingId, titleSlot, className = "", contentClassName = "", children }: {
   label: string; pages: readonly NestedPage[]; current: string; title?: string; description?: string;
-  actions?: React.ReactNode; headingId?: string; className?: string; contentClassName?: string; children: React.ReactNode;
+  actions?: React.ReactNode; headingId?: string; titleSlot?: React.Ref<HTMLDivElement>; className?: string; contentClassName?: string; children: React.ReactNode;
 }) {
   const trail = nestedPageTrail(pages, current), page = trail.at(-1);
   const generatedId = useId(), heading = useRef<HTMLHeadingElement>(null), previous = useRef(current);
@@ -43,7 +45,7 @@ export function NestedPageLayout({ label, pages, current, title, description, ac
   return <div className={`nested-page ${className}`}>
     <div className="nested-page-layout">
       <div className={`nested-page-content ${contentClassName}`}>
-        <div className="view-heading nested-page-heading"><div>
+        <div className="view-heading nested-page-heading"><div ref={titleSlot}>
           <h1 ref={heading} id={headingId ?? generatedId}>{title ?? page?.label}</h1>
           {description ?? page?.description ? <p className="muted">{description ?? page?.description}</p> : null}
         </div>{actions}</div>

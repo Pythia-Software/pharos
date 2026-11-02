@@ -952,7 +952,8 @@ for (const dashboard of [
   await range.selectOption('7d');
   await app.settled();
   const shorter = await range.boundingBox();
-  assert.ok(shorter.width < longer.width, 'the range selector shrinks with a shorter selected label');
+  // A narrow row holds one control, which stretches across it.
+  if (width === 1504) assert.ok(shorter.width < longer.width, 'the range selector shrinks with a shorter selected label');
   assert.deepEqual(await layoutProblems(page), []);
   await app.shot('shorter-selected-range');
 });

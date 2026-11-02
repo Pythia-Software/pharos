@@ -9,7 +9,7 @@ import { updateSlice, type LegendAction } from "./chart-selection";
 import { dashboardChartURL } from "./dashboard-chart-links";
 import type { ChartInspectionRange } from "./chart-inspection";
 import type { ChartSeries } from "./chart-series";
-import { UsageDashboardLinks } from "./usage-workspace";
+import { UsageDashboardLinks, useDashboardHeadline } from "./usage-workspace";
 import type { UsageDataset } from "./usage-workspace-model";
 import { useUsageChartPalette } from "./usage-chart-colors";
 import { isOriginDimension, originLabel, useOriginMetadata } from "./origin-dimensions";
@@ -30,6 +30,7 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
   format: AmountFormat; tick?: AmountFormat; links?: boolean; currentURL?: string; children?: React.ReactNode;
 }) {
   const originRevision = useOriginMetadata();
+  const headline = useDashboardHeadline();
   const view = normalizeAnalysis(catalog, { ...state, view: "trend" as const });
   const measure = catalog.measures[view.metric], breakdown = catalog.breakdowns[view.split], count = trendPeriodCount(view);
   // Relative bounds resolve to period boundaries, so the query is stable
@@ -83,15 +84,14 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
   const title = trendTitle(catalog, view);
   const controls = <AnalysisControls catalog={catalog} view={view} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onTimeFilter(current => withTimeRange(current, catalog.time, from, to, preset), preset)} />;
   return <section className="usage-analysis-trend" aria-label="Over time" aria-busy={result.loading}>
-    {onView ? <CreateDashboardCard catalog={catalog} state={state} where={where} /> : null}
-    <StackedColumns title={title} controls={controls} series={built.series.length ? built.series : [{ key: "none", label: title, color: "var(--heat-1)" }]} buckets={built.buckets} prepared
+    <StackedColumns title={title} controls={controls} action={onView ? <CreateDashboardCard catalog={catalog} state={state} where={where} /> : undefined} series={built.series.length ? built.series : [{ key: "none", label: title, color: "var(--heat-1)" }]} buckets={built.buckets} prepared
       period={view.period} periodCount={count} rollingPeriods={view.rollingPeriods} display={view.display} cumulativeStart={built.cumulativeStart} scale={view.scale}
       rolling={kind === "ratio" ? "pooled" : view.rollingOp === "sum" ? "sum" : "average"} lines={built.lines} additive={built.additive}
       reference={built.norm === undefined ? undefined : { value: built.norm, label: "Norm" }}
       format={amount} tickFormat={tickAmount} noun={share || ratio || measure.unit === "USD" ? "" : view.display !== "cumulative" && view.rollingOp === "sum" && view.rollingPeriods > 1 ? rollingSumUnit(measure, view.period) : measure.unit}
       loading={result.loading} error={result.error || (result.loading ? "" : built.error ?? "")} legend={built.series.length > 0} percent={share}
       selected={built.selected} excluded={built.excluded} onSelect={select} onExpand={() => set({ seriesLimit: Math.min(1000, view.seriesLimit + 5) })}
-      onRange={pickRange(onTimeFilter, catalog.time, view.period, count, period => set({ period }))} seriesHref={href} />
+      onRange={pickRange(onTimeFilter, catalog.time, view.period, count, period => set({ period }))} seriesHref={href} titleSlot={links ? headline : undefined} />
     {adjustments.length ? <p className="usage-dashboard-note" role="status">{adjustments.join(" ")}</p> : null}
     {children}
     {links ? <>
