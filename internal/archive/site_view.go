@@ -556,6 +556,12 @@ func (site *siteMap) parseURL(raw string) (siteState, error) {
 	var query *qt.LinkQuery
 	if node != nil {
 		for key, field := range site.viewFields(node.Path) {
+			// A registered view field can also identify a nested route (for
+			// example Optimize's Safety section). Keep fixed route parameters
+			// in the address while parsing the remaining view state.
+			if _, fixed := node.Fixed.get(field.Param); fixed {
+				continue
+			}
 			if !values.Has(field.Param) {
 				continue
 			}

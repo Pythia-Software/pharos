@@ -287,6 +287,11 @@ func (cart *cartContext) items(target string, ids []string) []cartItem {
 
 // CartPrompt previews a target's prompt without starting any measurement.
 func (c *Catalog) CartPrompt(ctx context.Context, target string, ids []string, handoff string) (map[string]any, error) {
+	for _, id := range ids {
+		if strings.HasPrefix(id, "safety_") {
+			return nil, fmt.Errorf("efficiency and safety reviews need separate prompts")
+		}
+	}
 	cart, err := c.loadCartContext(ctx)
 	if err != nil {
 		return nil, err
