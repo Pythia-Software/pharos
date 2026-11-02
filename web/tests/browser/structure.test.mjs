@@ -322,6 +322,7 @@ const ROUTES = [
   { name: "Human Words messages", url: "/analyze?analyze_view=writing&writing=messages", ready: "#queryTableUsage .qt-row" },
   { name: "Carbon Impact", url: "/analyze?analyze_view=carbon", ready: "#carbonSummary" },
   { name: "Analyze conversations", url: "/analyze?analyze_view=conversations", ready: "#queryTableUsage .qt-row" },
+  { name: "Conversations dashboard", url: "/analyze?analyze_topic=activity", ready: '.dashboard-stats[aria-label="Conversations summary"][aria-busy="false"]' },
   { name: "Analyze workspace dashboards", url: "/analyze", ready: ".usage-dashboard .usage-chart" },
   // One route per chart kind and dashboard component; the numbers each
   // topic draws are covered by the dashboard parity and analysis unit tests.
@@ -1060,7 +1061,7 @@ test("Older card dashboard restores durable sources before rendering", { skip },
     api: { "GET /api/query-snapshots": { version: 1, code, token: encodeQuery(oldActivitySource), createdAt: 0 } },
   });
   const { page } = app;
-  await page.getByRole('heading', { name: 'Conversation Input and Output', exact: true }).waitFor();
+  await page.getByRole('heading', { name: 'Conversations', exact: true }).waitFor();
   assert.equal(await page.getByRole('combobox', { name: 'View', exact: true }).inputValue(), 'scatter');
   const params = new URL(page.url()).searchParams;
   assert.equal(params.get('analyze_topic'), 'activity');

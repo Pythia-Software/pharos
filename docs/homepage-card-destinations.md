@@ -33,8 +33,8 @@ present more groups or use a different reduction than the compact cover:
   share of group incidences. Largest subagent weight compares each model and
   effort's largest conversation, rather than showing one scalar maximum.
 - Human phrase examples open the Human Words text-source composition. Concrete
-  feedback opens correction-cue share; the compact study also requires a
-  specific-detail cue. Specialized human averages and weekday studies can use
+  feedback opens messages with typed text, the population the compact study
+  classifies; no dataset field holds its feedback and detail cues. Specialized human averages and weekday studies can use
   different baselines and complete-period rules than the dashboard controls.
 - Delegation depth opens token totals by depth; repeat-read comparisons open
   the maximum reads of a path in one conversation. These summarize the
@@ -44,8 +44,8 @@ present more groups or use a different reduction than the compact cover:
   URL state own the destination presentation.
 
 Tool Calls preserves per-call filters such as error signatures, file paths,
-test failures, MCP evidence and exact start bounds. Conversation Input and
-Output preserves conversation_activity records and token units. Neither needs
+test failures, MCP evidence and exact start bounds. Conversations preserves
+conversation_activity records and their units. Neither needs
 a lossy projection onto another dataset. Every active analysis destination
 uses its source dataset.
 
@@ -93,14 +93,14 @@ uses its source dataset.
 | `human-words-per-work` | `human` | compare | `typed` | `none` / work |
 | `human-repo-conversation-depth` | `human` | compare | `typed` | `repository_name` / conversation |
 | `human-message-lengths` | `human` | distribution | `typed` | `none` / conversation |
-| `human-specific-feedback` | `human` | trend | `correction_share` | `none` / records |
+| `human-specific-feedback` | `human` | trend | `typed_messages` | `none` / records |
 | `human-messages-per-day` | `human` | trend | `typed_messages` | `none` / records |
 | `human-conversations-per-day` | `human` | trend | `conversations` | `none` / records |
 | `model-token-share-trend` | `tokens` | trend | `percent` | `model_family` / records |
 | `model-cost-share-trend` | `tokens` | trend | `percent_cost` | `model_family` / records |
 | `model-session-costs` | `tokens` | distribution | `cost` | `provider_model` / conversation |
 | `largest-subagent-weight` | `tokens` | compare | `delegated_runs` | `provider_model_effort` / conversation |
-| `session-human-output` | `activity` | scatter | `human_input` | `provider_model` / conversation |
+| `session-human-output` | `activity` | scatter | `messages` | `provider_model` / conversation |
 | `session-delegation-count` | `tokens` | distribution | `delegated_runs` | `provider_model_effort` / conversation |
 | `model-agent-roles` | `tokens` | compare | `agent_sessions` | `provider_model_role` / records |
 | `effort-cost-share` | `tokens` | compare | `cost` | `effort` / records |

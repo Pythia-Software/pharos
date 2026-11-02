@@ -14,7 +14,7 @@ export function fieldsFor(document: any) {
     time: choose(["requested_at", "first_usage_at", "started_at", "called_at", "first_message_at", "sent_at", "created_at", "event_at"]),
     group: choose(["provider", "root_provider", "tool_name", "repository_name", "root_model_family", "skill_name", "model"]),
     text: choose(["command", "text", "title", "arguments_json", "tool_name", "skill_name", "model", "root_model_family"]),
-    number: choose(["total_tokens", "typed_words", "user_words", "duration_ms", "call_count", "estimated_output_tokens", "content_bytes", "unit_hours", "output_tokens", "words", "human_input_tokens"]),
+    number: choose(["total_tokens", "typed_words", "user_words", "duration_ms", "call_count", "estimated_output_tokens", "content_bytes", "unit_hours", "output_tokens", "words", "human_messages"]),
     nullable: choose(["repository_name", "model", "root_model_family", "program", "error_text", "skill_name", "title"]),
   };
 }
@@ -94,7 +94,7 @@ export function dashboardCases(topic: keyof typeof usageTopics, documents: Recor
     if (topic === "tokens") view = { metric: ["tokens", "cost", "percent", "percent_cost"][i % 4], split: tokenSplits[i % tokenSplits.length], period: periods[i % periods.length], hours: [1, 6, 12][i % 3], days: [1, 3, 7][i % 3], rollingPeriods: [0, 3, 7][i % 3], scale: scales[i % 3] };
     if (topic === "human") view = { scope: i % 2 ? "all" : "typed", split: humanSplits[i % humanSplits.length], period: periods[i % periods.length], hours: [1, 6, 12][i % 3], days: [1, 3, 7][i % 3], rollingPeriods: [0, 3, 7][i % 3], scale: scales[i % 3] };
     if (topic === "time" || topic === "skills") view = { metric: i % 2, split: (topic === "time" ? ["activity", "tool_category", "provider", "repository_name"] : ["skill_name", "evidence_type", "provider", "repository_name", "status"])[i % (topic === "time" ? 4 : 5)], period: ["day", "week", "month"][(i + (topic === "time" ? Math.floor(i / conditions.length) : 0)) % 3], scale: scales[i % 3] };
-    if (topic === "activity") view = { metric: i % 2 ? "output" : "human_input", split: ["provider", "model_family", "repository_name"][i % 3], view: "compare", period: ["day", "week", "month"][Math.floor(i / conditions.length)] };
+    if (topic === "activity") view = { metric: i % 2 ? "output" : "conversations", split: ["provider", "model_family", "repository_name"][i % 3], view: "compare", period: ["day", "week", "month"][Math.floor(i / conditions.length)] };
     if (topic === "calls") view = { metric: i % 2 ? "calls" : "failures", split: ["tool_name", "repository_name", "error_signature"][i % 3], view: i % 3 ? "compare" : "trend", period: ["day", "week", "month"][Math.floor(i / conditions.length)] };
     if (topic === "tools") view = { rollingPeriods: 0, metric: ["calls", "failures", "failure_rate", "time", "mean_time", "context_added", "context_carried"][i % 7], split: ["tool_category", "tool_name", "command_category", "program", "command_name", "mcp_server", "repository_name", "model_family", "session_kind"][i % 9], view: i % 2 ? "trend" : "compare", period: ["day", "week", "month"][i % 3] };
     if (topic === "mcp") view = { rollingPeriods: 0, metric: ["calls", "failures", "failure_rate", "output", "mean_output", "largest_output", "bytes", "truncated", "time", "mean_time"][i % 10], split: ["tool_name", "status", "query_source"][i % 3], view: i % 2 ? "trend" : "compare", period: ["day", "week", "month"][i % 3] };
