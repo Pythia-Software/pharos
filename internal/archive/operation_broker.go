@@ -564,7 +564,7 @@ func (b *brokerOperations) libraryResources(entries []map[string]any, processes 
 	for _, entry := range entries {
 		asked, _ := entry["resources"].([]resourceProcess)
 		own := []resourceReading{}
-		for _, process := range asked {
+		for _, process := range expandResourceProcesses(asked, resourceProcessTable()) {
 			if reading, ok := byPID[process.PID]; ok && !slices.ContainsFunc(own, func(r resourceReading) bool { return r.PID == process.PID }) {
 				own = append(own, reading)
 			}

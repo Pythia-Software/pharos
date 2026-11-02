@@ -191,6 +191,15 @@ func TestProcessUsageMatchesTheKernel(t *testing.T) {
 	}
 	defer child.Wait()
 	defer child.Process.Kill()
+	found := false
+	for _, process := range expandResourceProcesses([]resourceProcess{{PID: os.Getpid(), Role: "service"}}, resourceProcessTable()) {
+		if process.PID == child.Process.Pid {
+			found = process.OwnOnly && strings.HasPrefix(process.Role, "worker:")
+		}
+	}
+	if !found {
+		t.Fatal("live subprocess missing from resource rows")
+	}
 	if other, err := processUsageOf(child.Process.Pid); err != nil || other.Footprint == 0 {
 		t.Fatalf("another of this user's processes: %+v %v", other, err)
 	}
@@ -238,5 +247,32 @@ func TestResourceSamplingIsCheap(t *testing.T) {
 	t.Logf("one sample and its summary: %.1f µs of CPU; at one sample per 1.5 s, %.4f%% of one core", perSample*1e6, share)
 	if share > 1 {
 		t.Fatalf("sampling costs %.3f%% of one core", share)
+	}
+}
+
+func TestResourceWorkerTree(t *testing.T) {
+	roots := []resourceProcess{{PID: 10, Role: "service", Library: "a"}, {PID: 20, Role: "cli:ingest", Library: "b"}}
+	table := []processNode{{PID: 12, Parent: 11, Name: "model"}, {PID: 11, Parent: 10, Name: "labeler"}, {PID: 20, Parent: 10}, {PID: 21, Parent: 20, Name: "git"}, {PID: 10, Parent: 1}, {PID: 99, Parent: 1}}
+	processes := expandResourceProcesses(roots, table)
+	if len(processes) != 5 {
+		t.Fatalf("process tree: %+v", processes)
+	}
+	source := &fakeUsage{procs: map[int]processUsage{}}
+	clock := time.Now()
+	sampler := &resourceSampler{read: source.read, now: func() time.Time { return clock }, byPID: map[int]*resourceTrack{}}
+	for _, p := range processes {
+		if !p.OwnOnly || (p.PID == 21 && p.Library != "b") || (p.PID == 12 && p.Library != "a") {
+			t.Fatalf("attribution: %+v", p)
+		}
+		source.set(p.PID, processUsage{CPUSeconds: 1})
+	}
+	sampler.sample(processes)
+	clock = clock.Add(2 * time.Second)
+	for _, p := range processes {
+		source.set(p.PID, processUsage{CPUSeconds: 2, ChildCPUSeconds: 100})
+	}
+	summary := summarizeResources("Pharos", sampler.sample(processes))
+	if summary.CPUPercent == nil || *summary.CPUPercent != 250 {
+		t.Fatalf("workers counted once: %+v", summary)
 	}
 }

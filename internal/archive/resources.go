@@ -20,9 +20,11 @@ import (
 // sampled, and with any number open a process is read at most every
 // interval. So the sampler is not a loop and starts no goroutine.
 //
-// CPU is the change in user plus system time (the process's own and that of
-// its exited children: git, gh, diskutil and the CLIs count when they exit,
-// all at once) over the wall time between two samples, as a percentage of
+// CPU is the change in user plus system time over the wall time between
+// samples. On macOS active descendants have separate rows and only own CPU
+// counts, avoiding double counting on exit. Work that starts and exits between
+// samples cannot be measured. Without a process tree, exited child time is
+// included in the parent. CPU is displayed as a percentage of
 // one core. Memory is the physical footprint, what Activity Monitor shows.
 // Disk is the change in bytes the process read and wrote over the same
 // wall time (its own: the kernel keeps no count for exited children).
@@ -144,6 +146,7 @@ func (r *resourceSampler) sample(processes []resourceProcess) []resourceReading 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.now()
+	processes = expandResourceProcesses(processes, resourceProcessTable())
 	readings := []resourceReading{}
 	seen := map[int]bool{}
 	for _, process := range processes {
@@ -204,6 +207,48 @@ func (r *resourceSampler) sample(processes []resourceProcess) []resourceReading 
 		}
 	}
 	return readings
+}
+
+// processNode is the OS process tree entry needed to find active workers.
+type processNode struct {
+	PID, Parent int
+	Name        string
+}
+
+// expandResourceProcesses attributes descendants to their nearest known Pharos
+// process. Read only own CPU when the tree is available: reaped child counters
+// would count a worker a second time after its separate row disappears.
+func expandResourceProcesses(roots []resourceProcess, table []processNode) []resourceProcess {
+	if table == nil {
+		return roots
+	}
+	processes := append([]resourceProcess(nil), roots...)
+	known := map[int]resourceProcess{}
+	present := map[int]bool{}
+	for _, node := range table {
+		present[node.PID] = true
+	}
+	for i := range processes {
+		if present[processes[i].PID] {
+			processes[i].OwnOnly = true
+		}
+		known[processes[i].PID] = processes[i]
+	}
+	for changed := true; changed; {
+		changed = false
+		for _, node := range table {
+			if _, exists := known[node.PID]; exists {
+				continue
+			}
+			if parent, ok := known[node.Parent]; ok {
+				child := resourceProcess{PID: node.PID, Role: "worker:" + node.Name, Library: parent.Library, LibraryName: parent.LibraryName, OwnOnly: true}
+				known[node.PID] = child
+				processes = append(processes, child)
+				changed = true
+			}
+		}
+	}
+	return processes
 }
 
 // summarizeResources totals readings under label's subject ("Pharos").
@@ -280,6 +325,8 @@ func resourceRoleLabel(process resourceProcess) string {
 		return "Library service (" + process.LibraryName + ")"
 	case process.Role == "service":
 		return "Library service"
+	case strings.HasPrefix(process.Role, "worker:"):
+		return "Worker (" + strings.TrimPrefix(process.Role, "worker:") + fmt.Sprintf(", PID %d)", process.PID)
 	case strings.HasPrefix(process.Role, "cli:"):
 		return "pharos " + strings.TrimPrefix(process.Role, "cli:") + " (Terminal)"
 	}

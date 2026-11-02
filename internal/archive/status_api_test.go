@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -57,7 +56,7 @@ func TestStatusSnapshotComposesVerdictOperationsAndPlaceholders(t *testing.T) {
 	override(t, &resourceSampleInterval, 0)
 	resources, _ := idle.raw["resources"].(map[string]any)
 	processes, _ := resources["processes"].([]any)
-	if len(processes) != 1 || processes[0].(map[string]any)["pid"] != float64(os.Getpid()) || processes[0].(map[string]any)["role"] != "service" ||
+	if len(processes) == 0 || processes[0].(map[string]any)["pid"] != float64(os.Getpid()) || processes[0].(map[string]any)["role"] != "service" ||
 		!(resources["memory_bytes"].(float64) > 0) || resources["basis"] != resourceBasis || resources["sampled_at"] == nil ||
 		!strings.HasPrefix(firstString(resources["label"]), "Pharos is using ") {
 		t.Fatalf("the snapshot carries this service's resources: %#v", idle.raw["resources"])
@@ -163,7 +162,7 @@ func TestStatusSnapshotComposesVerdictOperationsAndPlaceholders(t *testing.T) {
 	for _, process := range getStatus(t, server, "/api/status?fresh=1").raw["resources"].(map[string]any)["processes"].([]any) {
 		roles[process.(map[string]any)["pid"].(float64)] = firstString(process.(map[string]any)["role"])
 	}
-	if want := map[float64]string{float64(os.Getpid()): "service", float64(command.Process.Pid): "cli:ingest"}; runtime.GOOS == "darwin" && !maps.Equal(roles, want) {
+	if runtime.GOOS == "darwin" && (roles[float64(os.Getpid())] != "service" || roles[float64(command.Process.Pid)] != "cli:ingest" || roles[float64(os.Getppid())] != "") {
 		t.Fatalf("resources list the service and this Mac's Terminal command: %v", roles)
 	}
 	upload.Finish(nil)

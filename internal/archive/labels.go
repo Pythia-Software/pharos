@@ -1294,10 +1294,21 @@ var labelsPowerCheck = time.Minute
 // which stops if this Mac goes onto battery; on battery the backlog waits,
 // and the stage stays pending for the next pass.
 func (s *Server) chainLabels(ctx context.Context, settings LabelerSettings) error {
-	settings = settings.withAssets()
-	if len(settings.missingAssets()) > 0 {
-		return errStageContinues
+	if missing := settings.missingAssets(); len(missing) > 0 {
+		// Services can run without the app broker, and a broker download may
+		// have served another library's assets. Ensure this stage's assets
+		// under the same per-Mac lock instead of waiting indefinitely.
+		if settings.Worker == "" || slices.ContainsFunc(missing, func(asset labelsAsset) bool { return !asset.pinned() }) {
+			return errStageContinues
+		}
+		switch err := fetchLabelsAssets(ctx, missing, nil, nil); {
+		case errors.Is(err, errLabelsFetching):
+			return errStageContinues
+		case err != nil:
+			return err
+		}
 	}
+	settings = settings.withAssets()
 	settings, bulk := labelsForPower(settings, s.cachedPower(ctx))
 	stats, err := s.Catalog.RunLabels(ctx, settings, LabelsRunOptions{Limit: labelsChainLimit})
 	switch {

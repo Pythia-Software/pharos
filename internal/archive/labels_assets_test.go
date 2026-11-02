@@ -308,6 +308,10 @@ func TestLabelsWaitForTheModelDownload(t *testing.T) {
 	config.Labels = configured
 	config.Labels.ModelDir = ""
 	srv := testServer(t, config, catalog)
+	// An unpublished model keeps the stage pending without attempting a
+	// download. Once published, the service must fetch it without a broker.
+	published := labelsAssets.Model
+	labelsAssets.Model.SHA256 = "PENDING"
 	if err := catalog.writeTransaction(t.Context(), "test", markSyncDeferred); err != nil {
 		t.Fatal(err)
 	}
@@ -319,10 +323,10 @@ func TestLabelsWaitForTheModelDownload(t *testing.T) {
 		t.Fatalf("labeled without the model (ledger %v, %+v)", catalog.hasLabelsLedger(), row)
 	}
 	waiting := config.Labels.labelsWaiting()
-	if !strings.Contains(waiting, "the labeling model: not yet downloaded") {
+	if !strings.Contains(waiting, "the labeling model: not available") {
 		t.Fatalf("waiting: %q", waiting)
 	}
-	if sub := itemSub(backgroundItem{ID: "labels"}, srv.backgroundInputsFor(t.Context(), nil)); !strings.Contains(sub, "not yet downloaded") {
+	if sub := itemSub(backgroundItem{ID: "labels"}, srv.backgroundInputsFor(t.Context(), nil)); !strings.Contains(sub, "not available") {
 		t.Fatalf("the labels item says %q", sub)
 	}
 	if status := srv.labelsSettings()["status"].(string); !strings.HasPrefix(status, "On, waiting for the download") {
@@ -347,15 +351,15 @@ func TestLabelsWaitForTheModelDownload(t *testing.T) {
 	if err != nil || status["waiting"] != waiting {
 		t.Fatalf("status: %v %v", status, err)
 	}
-	var out bytes.Buffer
-	if err := fetchLabelsCLI(t.Context(), config.Labels, &out); err != nil || !strings.Contains(out.String(), "downloaded to") {
-		t.Fatalf("fetch: %v %s", err, out.String())
-	}
+	labelsAssets.Model = published
 	if err := srv.finishDeferredStages(t.Context(), findingsAuto, map[string]bool{"authorship": true, "labels": true}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if n := labelCount(t, catalog, ""); n < 20 {
 		t.Fatalf("after the download the stage labeled %d messages", n)
+	}
+	if !published.present() {
+		t.Fatal("the labels stage did not download the model")
 	}
 }
 
