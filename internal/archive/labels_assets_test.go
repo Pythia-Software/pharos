@@ -145,6 +145,20 @@ func TestLabelsAssetDownloadsVerifiesAndUnpacks(t *testing.T) {
 	if got := labelsAssetStatus(asset); got != "not yet downloaded" {
 		t.Fatalf("before: %q", got)
 	}
+	// A failed attempt (here a release without the asset) is reported until
+	// one succeeds.
+	unpublished := asset
+	unpublished.URL = server.URL + "/unpublished/{name}"
+	if err := fetchLabelsAssets(t.Context(), []labelsAsset{unpublished}, nil, nil); err == nil {
+		t.Fatal("fetched an unpublished asset")
+	}
+	if got := labelsAssetStatus(asset); !strings.Contains(got, "failed") || !strings.Contains(got, "404") {
+		t.Fatalf("after a failed attempt: %q", got)
+	}
+	if err := fetchLabelsAssets(t.Context(), []labelsAsset{asset}, nil, nil); err != nil || fileExists(asset.failure()) {
+		t.Fatalf("the next attempt: %v (failure kept %v)", err, fileExists(asset.failure()))
+	}
+	os.RemoveAll(asset.dir())
 	var reported int64
 	if err := fetchLabelsAsset(t.Context(), asset, func(done, total int64) { reported = done }); err != nil {
 		t.Fatal(err)
@@ -158,7 +172,8 @@ func TestLabelsAssetDownloadsVerifiesAndUnpacks(t *testing.T) {
 	if fileExists(asset.partial()) || !strings.HasPrefix(labelsAssetStatus(asset), "downloaded to ") {
 		t.Fatalf("partial kept or status %q", labelsAssetStatus(asset))
 	}
-	if err := fetchLabelsAsset(t.Context(), asset, nil); err != nil || len(server.seenRanges()) != 1 {
+	// Two requests so far: the download after the failure, and this one's.
+	if err := fetchLabelsAsset(t.Context(), asset, nil); err != nil || len(server.seenRanges()) != 2 {
 		t.Fatalf("a present asset was fetched again: %v (%d requests)", err, len(server.seenRanges()))
 	}
 }
@@ -310,6 +325,24 @@ func TestLabelsWaitForTheModelDownload(t *testing.T) {
 	if sub := itemSub(backgroundItem{ID: "labels"}, srv.backgroundInputsFor(t.Context(), nil)); !strings.Contains(sub, "not yet downloaded") {
 		t.Fatalf("the labels item says %q", sub)
 	}
+	if status := srv.labelsSettings()["status"].(string); !strings.HasPrefix(status, "On, waiting for the download") {
+		t.Fatalf("Settings says %q", status)
+	}
+	// Without a worker no download helps, so that leads.
+	worker := srv.Config().Labels.Worker
+	srv.configMu.Lock()
+	srv.config.Labels.Worker = ""
+	srv.configMu.Unlock()
+	if status := srv.labelsSettings()["status"].(string); !strings.HasPrefix(status, "On, but labeling can't run: this Pharos has no labeling worker") ||
+		!strings.Contains(status, "also waiting for the download") {
+		t.Fatalf("Settings without a worker says %q", status)
+	}
+	if sub := itemSub(backgroundItem{ID: "labels"}, srv.backgroundInputsFor(t.Context(), nil)); !strings.HasPrefix(sub, "Labeling can't run") {
+		t.Fatalf("the labels item without a worker says %q", sub)
+	}
+	srv.configMu.Lock()
+	srv.config.Labels.Worker = worker
+	srv.configMu.Unlock()
 	status, err := catalog.LabelsStatus(t.Context(), config.Labels.withAssets())
 	if err != nil || status["waiting"] != waiting {
 		t.Fatalf("status: %v %v", status, err)

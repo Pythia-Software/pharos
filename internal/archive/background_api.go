@@ -398,10 +398,16 @@ func itemSub(item backgroundItem, in backgroundInputs) string {
 	case "other-sources":
 		return strings.Join(in.otherSources, ", ")
 	case "labels":
+		if in.labelerProblem != "" {
+			return "Labeling can't run: " + in.labelerProblem
+		}
 		if in.labelsWaiting != "" {
 			return "Labeling is " + in.labelsWaiting
 		}
 	case "agent_events":
+		if in.labelerProblem != "" {
+			return "Finding agent events can't run: " + in.labelerProblem
+		}
 		if in.agentEventsWaiting != "" {
 			return "Finding agent events is " + in.agentEventsWaiting
 		}
