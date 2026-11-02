@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -30,10 +31,17 @@ type usageSummaryWindow struct {
 	*quickStatsCounts
 }
 
-// UsageHistory gives charts the library's unfiltered conversation history.
-// Keep it separate from the usage summary's more expensive ledger reads.
+// usageHistoryWindows are the trailing windows, in days, whose activity
+// /api/usage/history counts: the rolling windows a card can take.
+var usageHistoryWindows = []int{1, 7, 30, 90, 180, 365}
+
+// UsageHistory gives charts the library's unfiltered conversation history,
+// and the home page how much of it falls in each trailing window: the number
+// of top-level conversations last active within it, and in all time. Keep it
+// separate from the usage summary's more expensive ledger reads.
 func (c *Catalog) UsageHistory(ctx context.Context) (map[string]any, error) {
-	return cachedValue(ctx, c, "usage:history", func(ctx context.Context) (map[string]any, error) {
+	now := c.clock()
+	return cachedValue(ctx, c, "usage:history:"+now.UTC().Format("2006-01-02T15"), func(ctx context.Context) (map[string]any, error) {
 		rows, err := queryMapsContext(ctx, c.reader(), `SELECT started_at FROM conversations
 			WHERE julianday(started_at) IS NOT NULL ORDER BY julianday(started_at),started_at LIMIT 1`)
 		if err != nil {
@@ -43,6 +51,26 @@ func (c *Catalog) UsageHistory(ctx context.Context) (map[string]any, error) {
 		if len(rows) > 0 {
 			result["oldest_conversation_at"] = rows[0]["started_at"]
 		}
+		columns, args := []string{"COUNT(*)"}, []any{}
+		for _, days := range usageHistoryWindows {
+			columns = append(columns, "COALESCE(SUM(active>=julianday(?)),0)")
+			args = append(args, now.Add(-time.Duration(days)*24*time.Hour).UTC().Format(time.RFC3339Nano))
+		}
+		counts := make([]int64, len(columns))
+		targets := make([]any, len(counts))
+		for index := range counts {
+			targets[index] = &counts[index]
+		}
+		if err := c.reader().QueryRowContext(ctx, `SELECT `+strings.Join(columns, ",")+` FROM (
+			SELECT MAX(julianday(started_at),COALESCE(julianday(ended_at),0)) active FROM conversations
+			WHERE agent_depth=0 AND julianday(started_at) IS NOT NULL)`, args...).Scan(targets...); err != nil {
+			return nil, err
+		}
+		active := map[string]int64{"all": counts[0]}
+		for index, days := range usageHistoryWindows {
+			active[strconv.Itoa(days)] = counts[index+1]
+		}
+		result["active_conversations"] = active
 		return result, nil
 	})
 }

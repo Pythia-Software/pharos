@@ -33,6 +33,20 @@ func TestUsageHistory(t *testing.T) {
 	if got := read(); got != "2023-01-01T00:00:00Z" {
 		t.Fatalf("history after older import: %v", got)
 	}
+	// Activity counts top-level conversations by their last activity: a
+	// conversation that began long ago and ended recently is recent work.
+	catalog.now = func() time.Time { return time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC) }
+	execTx(t, catalog.DB,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,started_at,ended_at,agent_depth) VALUES
+			('today','w-history','codex','local','today','2026-10-31T09:00:00Z',NULL,0),
+			('week','w-history','codex','local','week','2026-10-27T09:00:00Z','2026-10-27T10:00:00Z',0),
+			('resumed','w-history','codex','local','resumed','2026-06-01T09:00:00Z','2026-10-20T09:00:00Z',0),
+			('agent','w-history','codex','local','agent','2026-10-31T09:00:00Z',NULL,1)`)
+	active := libraryStatusCall(t, server, "/api/usage/history")["active_conversations"]
+	want := map[string]any{"1": 1.0, "7": 2.0, "30": 3.0, "90": 3.0, "180": 3.0, "365": 3.0, "all": 6.0}
+	if !reflect.DeepEqual(active, want) {
+		t.Fatalf("active conversations: %v, want %v", active, want)
+	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if _, err := catalog.UsageHistory(ctx); err != context.Canceled {

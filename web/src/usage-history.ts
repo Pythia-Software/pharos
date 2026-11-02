@@ -1,6 +1,7 @@
 import { queryRequest } from "./query-request";
+import type { WindowActivity } from "./curiosity-data";
 
-type UsageHistory = { oldest_conversation_at: string | null };
+type UsageHistory = { oldest_conversation_at: string | null; active_conversations?: WindowActivity };
 let cached: UsageHistory | null = null, pending: Promise<UsageHistory> | null = null;
 
 // Mounted charts share an in-flight read. Reload on mount or usage refresh

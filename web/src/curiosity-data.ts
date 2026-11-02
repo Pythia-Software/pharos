@@ -147,8 +147,37 @@ export function shuffled<T>(items: T[]): T[] {
   return result;
 }
 
-export function suggestionPool(clock = new Date(), recipes = queryRecipes): QuerySuggestion[] {
+// Top-level conversations last active within each trailing window, keyed by
+// its days ("all" for all time), from /api/usage/history.
+export type WindowActivity = Record<string, number>;
+// A window is worth suggesting when it holds at least FIT_MIN conversations
+// and, if a shorter window already qualifies, at least FIT_GROWTH times as
+// many: otherwise it shows the shorter window's work under a staler frame.
+export const FIT_MIN = 3, FIT_GROWTH = 1.5;
+
+// The windows among `days` that fit where the library's activity lies,
+// shortest first. Without activity for every window, all of them fit. When no
+// window holds enough, the shortest one holding the most stands alone.
+export function fittingWindows(days: number[], activity?: WindowActivity): number[] {
+  const sorted = [...days].sort((a, b) => a - b), count = (day: number) => activity?.[String(day)];
+  if (sorted.some(day => count(day) === undefined)) return sorted;
+  const fitting: number[] = [];
+  let previous = 0;
+  for (const day of sorted) {
+    const active = count(day)!;
+    if (active >= FIT_MIN && active >= previous * FIT_GROWTH) { fitting.push(day); previous = active; }
+  }
+  if (fitting.length) return fitting;
+  const most = Math.max(...sorted.map(day => count(day)!));
+  return [sorted.find(day => count(day) === most)!];
+}
+
+export function suggestionPool(clock = new Date(), recipes = queryRecipes, activity?: WindowActivity): QuerySuggestion[] {
   // One explicit window per question per visit. Keep the mix broad, without
-  // filling the belt with three nearly identical windows of the same card.
-  return shuffled(recipes.filter(recipe => !recipe.retired)).map((recipe, index) => instantiateRecipe(recipe, recipe.defaultWindow ?? (recipe.days ?? [7, 30, 90])[index % (recipe.days?.length ?? 3)], clock));
+  // filling the belt with three nearly identical windows of the same card,
+  // and only among the windows that fit the library's activity.
+  return shuffled(recipes.filter(recipe => !recipe.retired)).map((recipe, index) => {
+    const windows = fittingWindows(recipe.days ?? [7, 30, 90], activity);
+    return instantiateRecipe(recipe, recipe.defaultWindow ?? windows[index % windows.length], clock);
+  });
 }
