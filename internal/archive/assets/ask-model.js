@@ -206,8 +206,15 @@ function askRestorePresentation(href, saved) {
   if (saved.presentation === 'home' && !['/', '/home'].includes(url.pathname)) return null;
   return ['home', 'modal', 'floating', 'dismissed'].includes(saved.presentation) ? saved.presentation : null;
 }
-function askShowBrowseHint({pending=false,browsing=false,presentation='home'}) {
-  return pending&&!browsing&&['home','modal'].includes(presentation);
+function askShowBrowseHint({pending=false,browsing=false,presentation='home',hint=true}) {
+  return pending&&hint&&!browsing&&['home','modal'].includes(presentation);
+}
+// Dismissing the browse hint or choosing picture in picture skips the hint for
+// the next questions, so only people who never browse keep seeing it.
+function askBrowseHintSnooze() { return 5; }
+function askStartBrowseHint(snoozed) {
+  const left = Math.max(0, Math.floor(Number(snoozed) || 0));
+  return {hint: left === 0, snoozed: Math.max(0, left - 1)};
 }
 function askFloatingState(turn, {navigated = false} = {}) {
   if (!turn) return {message: 'Ask a question', ready: false};
@@ -238,14 +245,19 @@ function askSelectionProvider(saved, providers = []) {
 function askEffortChoices(catalog, model) {
   return catalog?.models.find(m => m.id === model)?.efforts || ['Default'];
 }
-function askIsDefaultSelection(selection, defaultSelection) {
-  return !!defaultSelection && ['provider', 'model', 'effort'].every(key => defaultSelection[key] === selection[key]);
+function askFastAvailable(catalog, model) {
+  return !!catalog?.models.find(m => m.id === model)?.fast;
 }
-// A new provider starts from its default; a new model keeps the effort only if it offers it.
+function askIsDefaultSelection(selection, defaultSelection) {
+  return !!defaultSelection && ['provider', 'model', 'effort'].every(key => defaultSelection[key] === selection[key]) && !!defaultSelection.fast === !!selection.fast;
+}
+// A new provider starts from its default with Fast off (absent); a new model
+// keeps the effort and Fast only if it offers them.
 function askPickSelection(selection, page, value, catalogs = {}) {
   const next = {...selection, [page]: value};
-  if (page === 'provider') Object.assign(next, askDefaultSelection(value, catalogs[value]));
+  if (page === 'provider') {delete next.fast; Object.assign(next, askDefaultSelection(value, catalogs[value]));}
   if (page === 'model' && !askEffortChoices(catalogs[next.provider], next.model).includes(next.effort)) next.effort = 'Default';
+  if (page === 'model' && !askFastAvailable(catalogs[next.provider], next.model) || page === 'fast' && !value) delete next.fast;
   return next;
 }
 // One visit updates or replaces an entry; without one, the whole browser

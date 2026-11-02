@@ -126,7 +126,7 @@ func unitOf(source SourceConfig, parts []sourcePart, changed bool) syncUnit {
 }
 
 func (c *Catalog) syncSettings(ctx context.Context) (syncSettings, error) {
-	// Background updates are on until someone turns them off.
+	// Background Processing are on until someone turns them off.
 	settings := syncSettings{Enabled: true, Interval: 300, Sources: []string{}}
 	var enabled int
 	var sources string

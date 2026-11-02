@@ -460,7 +460,12 @@ The build pins the assets it downloads in `internal/archive/labels/assets.json`
 - **Until then** labeling waits: the stage keeps its work pending, `pharos
   labels status` and the Message labels item say "waiting for the download"
   with each asset's state (not yet downloaded, downloading with progress,
-  partly downloaded), and `pharos labels run` fails saying so.
+  the last attempt's failure and time, partly downloaded), and `pharos
+  labels run` fails saying so. A failure is recorded beside the download
+  (`labeler/<name>-<version>.failed`) until an attempt succeeds.
+- **Without a worker** no download helps, so Settings and the Message
+  labels and Agent events items lead with that ("can't run"), and `pharos
+  labels status` reports it as `problem`.
 - **Precedence.** `labels_model_dir` / `labels_runtime` (or their
   environment variables), then the app bundle (the worker in
   `Contents/MacOS`, its runtime beside it, a model in
@@ -491,9 +496,15 @@ model. To publish a new model version:
    so a switch relabels).
 
 The app release itself needs nothing new: `pharos` embeds the descriptor,
-and the worker ships in `Contents/MacOS/pharos-labeler-ort` with or without
-ONNX Runtime beside it. Bundling the runtime (`Contents/MacOS/libonnxruntime.dylib`
-and its license) saves the 35 MB download.
+and `macos/build-app.sh` builds the worker into
+`Contents/MacOS/pharos-labeler-ort` (universal, with cgo) and bundles the
+pinned ONNX Runtime beside it as `Contents/MacOS/libonnxruntime.dylib`, its
+license and notices in `Contents/Resources/licenses`, re-signed with the
+app's identity. The worker alone is signed without library validation
+(`com.apple.security.cs.disable-library-validation`), so a hardened,
+Developer ID signed worker can still load the download or a configured
+`labels_runtime`, which Microsoft or whoever built them signed. The pinned
+runtime is arm64 only: an Intel Mac sets `labels_runtime`.
 
 ## Worker protocol `pharos-labeler/1`
 
@@ -780,10 +791,6 @@ every output, as LAPWING did.
   never predicts `P.frame.criteria`. See the research for per-segment scores.
 - **Long messages** use the unvalidated `chunk-union-v1`; a message's
   `segment` column is its first chunk's.
-- **The model's release is not published yet.** The descriptor pins
-  `kestrel-68m-tpool-1.tar.gz` (142,017,459 bytes); until the release
-  `labeler-kestrel-68m-tpool-1` carries it, downloads fail with 404 and are
-  retried, and labeling waits.
 - **Old downloads stay.** A new model version downloads beside the old one,
   which nothing removes yet (about 160 MB unpacked).
 - **Warm workers last `labels_idle_seconds`.** A run after that pays the

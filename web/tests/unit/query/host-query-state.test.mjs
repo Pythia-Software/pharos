@@ -80,8 +80,9 @@ test('a Search save keeps its phrase, user-message scope and Conversations view'
   draft.root.children = [{ ...newRule('lock this to another object'), kind: 'phrase' }];
   draft.scope = chooseScope(draft.scope, 'user');
   const state = normalized(libraryHostQuery, libraryHostState({ kind: 'text', text: draft, file: '', fileCase: false, view: 'conversation' }));
-  assert.deepEqual(Object.keys(state.params), ['text_builder', 'view']);
+  assert.deepEqual(Object.keys(state.params), ['text_builder'], 'Conversations is the default view');
   assert.deepEqual(normalized(libraryHostQuery, state), state);
+  assert.deepEqual(normalized(libraryHostQuery, { ...state, params: { ...state.params, view: ['conversation'] } }), state, 'older view=conversation links still read');
   const saved = decodeQueryStrict(encodeQuery({ ...EMPTY_QUERY, hostState: state }));
   const restored = readLibraryHost(normalized(libraryHostQuery, saved.hostState));
   assert.equal(restored.view, 'conversation');
@@ -93,7 +94,7 @@ test('a Search save keeps its phrase, user-message scope and Conversations view'
   assert.deepEqual(JSON.parse(find.get('find_where')), { op: 'phrase', text: 'lock this to another object' });
   // Clearing the search keeps the view; the default state has neither.
   assert.deepEqual(readLibraryHost(withoutLibrarySearch(state)), { kind: 'text', text: null, file: '', fileCase: false, view: 'conversation' });
-  assert.deepEqual(readLibraryHost(libraryHostQuery.defaults), { kind: 'text', text: null, file: '', fileCase: false, view: 'table' });
+  assert.deepEqual(readLibraryHost(libraryHostQuery.defaults), { kind: 'text', text: null, file: '', fileCase: false, view: 'conversation' });
   assert.equal(libraryFind(libraryHostQuery.defaults), '');
 });
 
@@ -107,17 +108,18 @@ test('adding a Search content search switches to Conversations; editing or remov
   assert.equal(readLibraryHost(changeLibrarySearch(table, { text: draft('browser') })).view, 'table');
   assert.equal(readLibraryHost(changeLibrarySearch(table, { text: null })).view, 'table');
   // No search added, no view change.
-  assert.equal(readLibraryHost(changeLibrarySearch(libraryHostQuery.defaults, { file: '' })).view, 'table');
+  const tableOnly = libraryHostState({ ...readLibraryHost(libraryHostQuery.defaults), view: 'table' });
+  assert.equal(readLibraryHost(changeLibrarySearch(tableOnly, { file: '' })).view, 'table');
 });
 
 test('Search file and URL searches, and older keyword links, normalize to their canonical parameters', () => {
-  const file = normalized(libraryHostQuery, { version: 1, params: { kind: ['file'], search: [' go.mod '], case: ['1'], view: ['table'] } });
+  const file = normalized(libraryHostQuery, { version: 1, params: { kind: ['file'], search: [' go.mod '], case: ['1'], view: ['conversation'] } });
   assert.deepEqual(file.params, { case: ['1'], kind: ['file'], search: ['go.mod'] });
   assert.deepEqual(Object.fromEntries(new URLSearchParams(libraryFind(file))), { find: 'go.mod', find_kind: 'file', find_case: '1' });
   assert.deepEqual(normalized(libraryHostQuery, { version: 1, params: { kind: ['url'], search: [''] } }), emptyHostState(), 'an empty file search is no search');
   // The live state (names sorted by Query Table) and a freshly built one
   // compare equal, so re-applying a case-sensitive search runs it again.
-  const built = libraryHostState({ kind: 'file', text: null, file: 'go.mod', fileCase: true, view: 'conversation' });
+  const built = libraryHostState({ kind: 'file', text: null, file: 'go.mod', fileCase: true, view: 'table' });
   assert.deepEqual(Object.keys(libraryHostQuery.normalize(built).params), ['case', 'kind', 'search', 'view']);
   assert.ok(sameHostState(libraryHostQuery.normalize(built), parseHostQueryState(built)));
   assert.ok(sameHostState({ version: 1, params: { search: ['a'], case: ['1'] } }, { version: 1, params: { case: ['1'], search: ['a'] } }));

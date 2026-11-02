@@ -461,17 +461,17 @@ test("a catalog's request: its parameters reach every request, and its note ever
 });
 
 
-test("whole conversations retain input and delegated output across event repositories", () => {
+test("whole conversations retain messages and delegated output across event repositories", () => {
   const records = [
-    { id: "root", root_conversation_id: "one", root_provider: "codex", root_model_family: "gpt", repository_name: "repo-a", human_input_tokens_estimate: 100, output_tokens: 0 },
-    { id: "delegate", root_conversation_id: "one", root_provider: "codex", root_model_family: "gpt", repository_name: "repo-b", human_input_tokens_estimate: 0, output_tokens: 200 },
+    { id: "root", root_conversation_id: "one", root_provider: "codex", root_model_family: "gpt", repository_name: "repo-a", human_messages: 3, output_tokens: 0 },
+    { id: "delegate", root_conversation_id: "one", root_provider: "codex", root_model_family: "gpt", repository_name: "repo-b", human_messages: 0, output_tokens: 200 },
   ];
-  const state = { view: "scatter", unit: "conversation", metric: "human_input", metricY: "output" };
+  const state = { view: "scatter", unit: "conversation", metric: "messages", metricY: "output" };
   for (const split of ["none", "provider_model", "repository_name"]) {
     const query = analysisQuery(activity, { ...state, split }, [], { now }).query;
     const result = core.evaluateMetrics(records, query, schemas.conversation_activity, { now }).metrics[0];
     assert.equal(result.error, undefined);
-    assert.deepEqual(result.buckets.map(bucket => [bucket.value, bucket.y]), [[100, 200]], split);
+    assert.deepEqual(result.buckets.map(bucket => [bucket.value, bucket.y]), [[3, 200]], split);
   }
   const byRepository = analysisQuery(activity, { view: "compare", unit: "records", metric: "output", split: "repository_name" }, [], { now }).query;
   const result = core.evaluateMetrics(records, byRepository, schemas.conversation_activity, { now }).metrics[0];

@@ -1,16 +1,27 @@
-# Query Table 0.9.8 in Pharos
+# Query Table 0.9.9 in Pharos
 
-Pharos pins core, React, UI and codegen to the published npm **0.9.8** packages,
-and the Go adapter to the published **v0.9.8** module, with no replacement or
+Pharos pins core, React, UI and codegen to the published npm **0.9.9** packages,
+and the Go adapter to the published **v0.9.9** module, with no replacement or
 local copy. The npm lockfile records registry URLs and integrities; `go.sum`
 records the released Go module. Clean builds use these pinned sources without
 another Query Table checkout.
 
 The [upstream inspection guide](https://github.com/Pythia-Software/query-table/blob/v0.9.8/docs/json-inspection-state.md)
-and [release notes](https://github.com/Pythia-Software/query-table/blob/v0.9.8/CHANGELOG.md)
+and [release notes](https://github.com/Pythia-Software/query-table/blob/v0.9.9/CHANGELOG.md)
 define the release contract. Optional worktree linking is described in
 [local development](query-table-local-development.md). The earlier
 [next-release handoff](query-table-next-release-handoff.md) is a historical record.
+
+## 0.9.9 changes
+
+0.9.9 changes only the Go SQLite backend; the npm packages are identical to
+0.9.8 apart from their versions. `ExecuteV2In` reduces box and histogram
+metrics of stored number fields from one shared native scan instead of sorting
+the population once per metric, and `ExecuteV2Rows` now computes them instead
+of returning `ErrRowsUnsupported`. Box means may differ from 0.9.8 by
+floating-point roundoff. Distributions of formulas or computed fields still use
+compiled plans, so Usage keeps its staged fallback for those. See the
+[upstream box and histogram guide](https://github.com/Pythia-Software/query-table/blob/v0.9.9/docs/backend-sqlite.md#box-plots-and-histograms).
 
 ## 0.9.8 changes
 

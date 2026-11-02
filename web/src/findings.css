@@ -166,7 +166,7 @@ button.findings-tile[aria-pressed="true"] { border-color: var(--accent); box-sha
 .findings-empty p { margin: 0; color: var(--muted); max-width: 90ch; }
 .findings-progress { position: relative; height: 4px; margin-top: 14px; overflow: hidden; border-radius: 2px; background: color-mix(in srgb, var(--line) 70%, transparent); }
 .findings-progress span { position: absolute; inset: 0 auto 0 0; width: 30%; border-radius: 2px; background: var(--accent); animation: findings-progress 1.6s ease-in-out infinite; }
-@keyframes findings-progress { from { left: -30%; } to { left: 100%; } }
+@keyframes findings-progress { from { transform: translateX(-100%); } to { transform: translateX(334%); } }
 @media (prefers-reduced-motion: reduce) { .findings-progress span { animation: none; width: 100%; opacity: .5; } }
 
 /* Dialog */

@@ -100,6 +100,8 @@ export function recordKeywordFind(state: HostQueryState | undefined, dataset: st
 }
 
 // ---- Search (Library): a message, file or URL search and the result view. ----
+// Results show as conversations unless view=table; older view=conversation
+// links still read, and the address bar drops the now-default value.
 
 export type LibrarySearchKind = "text" | "file" | "url";
 export type LibraryHost = { kind: LibrarySearchKind; text: TextSearchDraft | null; file: string; fileCase: boolean; view: SearchResultsView };
@@ -115,13 +117,13 @@ export function libraryHostState(host: LibraryHost): HostQueryState {
     params.kind = host.kind; params.search = host.file.trim();
     if (host.fileCase) params.case = "1";
   }
-  if (host.view === "conversation") params.view = "conversation";
+  if (host.view === "table") params.view = "table";
   return stateOf(params);
 }
 export function readLibraryHost(state: HostQueryState | undefined): LibraryHost {
   const params = new URLSearchParams(Object.entries(state?.params ?? {}).flatMap(([name, values]) => values.map(value => [name, value])));
   const kind = params.get("kind") === "file" || params.get("kind") === "url" ? params.get("kind") as LibrarySearchKind : "text";
-  const view: SearchResultsView = params.get("view") === "conversation" ? "conversation" : "table";
+  const view: SearchResultsView = params.get("view") === "table" ? "table" : "conversation";
   if (kind !== "text") return { kind, text: null, file: params.get("search") ?? "", fileCase: params.get("case") === "1", view };
   const text = params.has("text_builder") || params.has("search") ? readTextSearch(params) : null;
   return { kind, text: text?.active && !text.error ? text.draft : null, file: "", fileCase: false, view };
@@ -131,7 +133,7 @@ export const libraryHostQuery: HostQueryOptions = {
   defaults: emptyHostState(),
   normalize(state) {
     const params = readParams(state, libraryHostParameters);
-    const kind = params.get("kind") ?? "text", view = params.get("view") ?? "table";
+    const kind = params.get("kind") ?? "text", view = params.get("view") ?? "conversation";
     if (!["text", "file", "url"].includes(kind)) throw new Error("This search has an unknown kind.");
     if (!["table", "conversation"].includes(view)) throw new Error("This search has an unknown result view.");
     if (params.has("case") && !["0", "1"].includes(params.get("case")!)) throw new Error("This search's case setting could not be read.");

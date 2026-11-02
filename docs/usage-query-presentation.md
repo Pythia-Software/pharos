@@ -62,7 +62,7 @@ failure.
 | Query | Compact rows | Native Details focus | Drilldown |
 | --- | --- | --- | --- |
 | Token usage | Day, conversation, repository, model + effort, tokens, cost, output, cache share | Token breakdown, pricing coverage, attribution, Carbon estimates and exact time bounds | Source conversation near the first recorded usage; root conversation separately |
-| Conversation activity | Time, conversation, event kind, root model, estimated human input, output | Distinct human/output grain, root attribution, repository and provenance | Exact human message; output's source conversation near its recorded time |
+| Conversation activity | Time, conversation, event kind, root model, human messages, output | Distinct human/output grain, root attribution, repository and provenance | Exact human message; output's source conversation near its recorded time |
 | Human words by conversation | Conversation, repository, last message, typed words/turns/share, supplied words | All authorship categories, agent consumption, comparison measures | Messages filtered to this work |
 | Human messages | Time, classified two-line snippet, category, typed/other words, conversation | Retained classified text, classification rules and source spans, word breakdown | Exact message, with the reader's reveal and highlight |
 | Tool calls | Time, tool, invocation/target, status, duration, context added, conversation | Input/result excerpts, truncation, parsed commands/URLs, request context and costs | Separate exact call and result message links |

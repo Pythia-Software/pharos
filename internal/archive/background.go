@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-// Background updates (docs/background-work.md §11). Every kind of derived
+// Background Processing (docs/background-work.md §11). Every kind of derived
 // data has an automatic owner on one of three cadences: Frequently, with the
 // scheduled index; Hourly, once the library has been quiet; and Daily,
 // overnight. An adaptive item sits in the most frequent cadence its measured
@@ -65,7 +65,7 @@ var (
 	backgroundMissed = time.Hour
 )
 
-// backgroundItem is one row of Settings → Background updates: a kind of work
+// backgroundItem is one row of Settings → Background Processing: a kind of work
 // a person recognizes, what it feeds, and how it runs.
 type backgroundItem struct {
 	ID                string
@@ -84,8 +84,10 @@ type backgroundItem struct {
 	requiresAgentEvents bool
 }
 
-// backgroundItems in the order they run within a pass: new data first, then
-// the analysis chain's stages in chain order, then the rest.
+// backgroundItems in the order they run within a pass (runBackgroundItems),
+// which is the order Settings and the status panel list them: new data and
+// the other standalone work first, then the analysis chain's items in chain
+// order.
 var backgroundItems = []backgroundItem{
 	{ID: "conversations", Label: "New conversations", Verb: "Adding new conversations", Feeds: "Search, Home and Work pages", Cadence: cadenceFrequent, Fixed: true,
 		Kinds: []string{"index.changes.automatic"}, Why: "It reads only what changed since the last check."},
@@ -95,14 +97,18 @@ var backgroundItems = []backgroundItem{
 		Kinds: []string{"background.capture/sources"}, Why: "These sources can’t be checked for small changes, so each update reads them in full."},
 	{ID: "preserve", Label: "Preserve originals", Verb: "Preserving originals", Feeds: "Recovery, and history from your other Macs", Cadence: cadenceDaily,
 		Kinds: []string{"background.capture/preserve"}, Why: "Copies this Mac’s transcripts into the library, so they survive tools deleting them, and indexes what your other Macs captured."},
+	{ID: "verification", Label: "Verify indexed data", Verb: "Verifying queued inputs", Feeds: "Integrity checks deferred by quick indexing", Cadence: cadenceHourly,
+		Kinds: []string{"index.verify"}, Why: "Checks a bounded batch of larger inputs once the library is quiet. Completed checks survive interruptions; remaining inputs stay queued."},
+	{ID: "upgrade", Label: "Library upgrade", Verb: "Upgrading the library", Feeds: "Everything, after a Pharos update", Cadence: cadenceDaily, Fixed: true,
+		Kinds: []string{"library.upgrade"}, Why: "Runs only when a Pharos update needs it."},
+	{ID: "backup", Label: "Back up", Verb: "Backing up", Feeds: "Recovery", Cadence: cadenceDaily, OptIn: true,
+		Kinds: []string{"backup.local"}, Why: "Copies the library to your last backup destination when it is connected. Each backup copies the whole catalog, so it is off unless you choose Daily."},
 	{ID: "repositories", Label: "Repositories & merges", Verb: "Linking repositories", Feeds: "Work pages and repository filters", Cadence: cadenceFrequent, Adaptive: true,
 		Stages: []string{"identities", "git"}, Kinds: []string{"analysis.github", "analysis.identities", "analysis.git"}, Why: "Links conversations to their repositories, and asks Git which branches merged."},
 	{ID: "tools", Label: "Tools & usage", Verb: "Updating tools and usage", Feeds: "Analyze → Tools, and the usage cards", Cadence: cadenceFrequent, Adaptive: true,
 		Stages: []string{"tools"}, Kinds: []string{"analysis.tools"}, Why: "Adds the commands and tokens of the workspaces that changed."},
 	{ID: "writing", Label: "Your writing", Verb: "Updating your writing", Feeds: "Human Words cards, and Analyze → Writing", Cadence: cadenceHourly, Adaptive: true,
 		Stages: []string{"authorship"}, Kinds: []string{"analysis.authorship"}, Why: "Decides which messages you wrote. Today it reads all of your messages each time."},
-	{ID: "verification", Label: "Verify indexed data", Verb: "Verifying queued inputs", Feeds: "Integrity checks deferred by quick indexing", Cadence: cadenceHourly,
-		Kinds: []string{"index.verify"}, Why: "Checks a bounded batch of larger inputs once the library is quiet. Completed checks survive interruptions; remaining inputs stay queued."},
 	{ID: "findings", Label: "Findings", Verb: "Updating findings", Feeds: "Optimize", Cadence: cadenceHourly, Adaptive: true,
 		Stages: []string{"findings"}, Kinds: []string{"analysis.findings"}, Why: "Measures the findings you watch against new work."},
 	{ID: "labels", Label: "Message labels", Verb: "Labeling messages", Feeds: "Local labels (pharos labels)", Cadence: cadenceHourly, Adaptive: true, requiresLabels: true,
@@ -111,10 +117,6 @@ var backgroundItems = []backgroundItem{
 		Stages: []string{"agent_events"}, Kinds: []string{"analysis.agent_events/"}, Why: "Finds what agents ran into in the replies and thinking that changed on this Mac; a backlog continues when plugged in."},
 	{ID: "review", Label: "Findings review", Verb: "Reviewing findings", Feeds: "Optimize: new patterns and savings", Cadence: cadenceDaily, Fixed: true,
 		Kinds: []string{"analysis.findings"}, Why: "Looks at the last 28 days again for new patterns; the window moves once a day."},
-	{ID: "upgrade", Label: "Library upgrade", Verb: "Upgrading the library", Feeds: "Everything, after a Pharos update", Cadence: cadenceDaily, Fixed: true,
-		Kinds: []string{"library.upgrade"}, Why: "Runs only when a Pharos update needs it."},
-	{ID: "backup", Label: "Back up", Verb: "Backing up", Feeds: "Recovery", Cadence: cadenceDaily, OptIn: true,
-		Kinds: []string{"backup.local"}, Why: "Copies the library to your last backup destination when it is connected. Each backup copies the whole catalog, so it is off unless you choose Daily."},
 }
 
 // stageOrder is the analysis chain's order (finishDeferredStages).
@@ -226,6 +228,11 @@ func (settings backgroundSettings) cadence(item backgroundItem) string {
 	if temporary, ok := settings.Temporary[item.ID]; item.Adaptive && ok {
 		return temporary.Cadence
 	}
+	return settings.usual(item)
+}
+
+// usual is where an item runs without a temporary schedule.
+func (settings backgroundSettings) usual(item backgroundItem) string {
 	override := settings.Overrides[item.ID]
 	if item.OptIn {
 		if override == cadenceDaily {
@@ -244,6 +251,21 @@ func (settings backgroundSettings) cadence(item backgroundItem) string {
 type itemCost struct {
 	Seconds float64 `json:"seconds"`
 	Runs    int     `json:"runs"`
+	// Low and High bound the middle of the recent runs, for "Typically
+	// 2–3 h".
+	Low  float64 `json:"low"`
+	High float64 `json:"high"`
+}
+
+// typicalRange is the middle of sorted run times: the median and the runs
+// a quarter of the way in from each end.
+func typicalRange(sorted []float64) (median, low, high float64) {
+	n := len(sorted)
+	median = sorted[n/2]
+	if n%2 == 0 {
+		median = (sorted[n/2-1] + sorted[n/2]) / 2
+	}
+	return median, sorted[(n-1)/4], sorted[n-1-(n-1)/4]
 }
 
 // costRuns is how many recent runs make an item's typical cost, and
@@ -258,13 +280,6 @@ const (
 // repositories' three stages) costs the sum of their medians.
 func (c *Catalog) backgroundCosts(ctx context.Context) map[string]itemCost {
 	costs := map[string]itemCost{}
-	median := func(values []float64) float64 {
-		sort.Float64s(values)
-		if len(values)%2 == 1 {
-			return values[len(values)/2]
-		}
-		return (values[len(values)/2-1] + values[len(values)/2]) / 2
-	}
 	for _, item := range backgroundItems {
 		if item.ID == "conversations" {
 			if cost, ok := c.automaticIndexCost(ctx); ok {
@@ -272,7 +287,7 @@ func (c *Catalog) backgroundCosts(ctx context.Context) map[string]itemCost {
 			}
 			continue
 		}
-		total, runs := 0.0, -1
+		total, low, high, runs := 0.0, 0.0, 0.0, -1
 		for _, kind := range item.Kinds {
 			// "kind/variant" is that variant; "kind/" only the plain kind
 			// (labels' bounded share, not its backlog runs); "kind" all.
@@ -295,13 +310,15 @@ func (c *Catalog) backgroundCosts(ctx context.Context) map[string]itemCost {
 				runs = 0
 				break
 			}
-			total += median(values)
+			sort.Float64s(values)
+			median, lower, upper := typicalRange(values)
+			total, low, high = total+median, low+lower, high+upper
 			if runs < 0 || len(values) < runs {
 				runs = len(values)
 			}
 		}
 		if runs > 0 {
-			costs[item.ID] = itemCost{Seconds: total, Runs: runs}
+			costs[item.ID] = itemCost{Seconds: total, Runs: runs, Low: low, High: high}
 		}
 	}
 	return costs
@@ -319,7 +336,8 @@ func (c *Catalog) automaticIndexCost(ctx context.Context) (itemCost, bool) {
 		return itemCost{}, false
 	}
 	sort.Float64s(values)
-	return itemCost{Seconds: values[len(values)/2], Runs: len(values)}, true
+	median, low, high := typicalRange(values)
+	return itemCost{Seconds: median, Runs: len(values), Low: low, High: high}, true
 }
 
 // automaticSample is the part of a scheduled index's run history the
@@ -465,6 +483,8 @@ type backgroundInputs struct {
 	// why the pass waits for a download.
 	agentEvents        bool
 	agentEventsWaiting string
+	// labelerProblem is why neither can run, whatever is downloaded.
+	labelerProblem string
 }
 
 func (c *Catalog) readBackgroundInputs(ctx context.Context) backgroundInputs {
@@ -794,6 +814,9 @@ func (s *Server) backgroundInputsFor(ctx context.Context, requested map[string]b
 	}
 	if s.agentEventsEnabled(ctx) {
 		in.agentEvents, in.agentEventsWaiting = true, config.AgentEvents.waiting(config.Labels)
+	}
+	if in.labels || in.agentEvents {
+		in.labelerProblem = config.Labels.withAssets().labelerProblem()
 	}
 	return in
 }
