@@ -117,7 +117,7 @@ export function usageDashboardReturn(current: URLSearchParams) {
 }
 
 // Parameters only the removed Analyze and Tools pages read.
-const legacyKeys = ["analyze_workspace", "analyze_view", "writing", "messages", "message_query", "message_cursor", "machine_view", "machine_demo", "tools_view", "usage", "parallelism"];
+const legacyKeys = ["analyze_workspace", "analyze_view", "writing", "messages", "message_query", "message_cursor", "machine_view", "machine_demo", "tools_view", "usage", "parallelism", "carbon_window"];
 export function isUsageWorkspace(params = new URLSearchParams(location.search)) {
   if (params.get("analyze_workspace") === "1" || ["analyze_mode", "analyze_data", "analyze_topic"].some(key => params.has(key))) return true;
   return !["analyze_view", "writing", "machine_view", "tools_view", "q_usage", "q_writing", "q_writing_messages", "q_conversation_activity", "q_parallelism"].some(key => params.has(key));
@@ -126,8 +126,8 @@ export function isUsageWorkspace(params = new URLSearchParams(location.search)) 
 // An older Analyze or Tools link (analyze_view, machine_view, writing,
 // tools_view) opens what replaced its page: a link holding its table's query
 // opens that query table, and otherwise the page's dashboard, with the chart
-// a dashboard reads through its catalog's legacy mapping. A workspace link is
-// returned as it is.
+// a dashboard reads through its catalog's legacy mapping, and Carbon's
+// population. A workspace link is returned as it is.
 export function canonicalAnalyzeURL(path: string, params: URLSearchParams): string {
   if (path === "/analyze" && isUsageWorkspace(params)) return `/analyze?${params}`;
   const table = (dataset: UsageDataset) => ({ mode: "query" as const, dataset, topic: usageDatasetTopics[dataset] });
@@ -146,6 +146,13 @@ export function canonicalAnalyzeURL(path: string, params: URLSearchParams): stri
     if (key.startsWith("window_") && params.get("window_dataset") !== target.dataset) continue;
     if (key === "analyze_chart" && target.mode === "query") continue;
     next.append(key, value);
+  }
+  // The legacy Carbon page kept its population in q_carbon and its Today
+  // window in carbon_window; the dashboard keeps them in analyze_filters and
+  // analyze_window.
+  if (target.topic === "carbon" && !next.has("analyze_filters")) {
+    try { const where = decodeQueryStrict(params.get("q_carbon") ?? "")?.where; if (where?.length) next.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where })); } catch { /* An unreadable query leaves the dashboard's own population. */ }
+    if (params.get("carbon_window") === "today") next.set("analyze_window", "today");
   }
   next.set("analyze_mode", target.mode); next.set("analyze_data", target.dataset); next.set("analyze_topic", target.topic);
   return `/analyze?${next}`;

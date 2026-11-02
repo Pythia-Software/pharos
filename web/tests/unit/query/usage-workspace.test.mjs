@@ -299,6 +299,13 @@ test("Analyze defaults to its sidebar layout and older analyses open what replac
   // Otherwise the page's dashboard opens with the link's chart, which the dashboard reads in its terms.
   const carbon = canonical("/analyze", 'analyze_view=carbon&analyze_chart={"metric":"energy"}');
   assert.deepEqual([carbon.get("analyze_mode"), carbon.get("analyze_topic"), carbon.get("analyze_chart"), carbon.has("analyze_view")], ["dashboards", "carbon", '{"metric":"energy"}', false]);
+  // Carbon's population and Today window move to the dashboard's parameters.
+  const carbonWhere = [{ field: "repository_name", op: "=", value: "pharos" }, { field: "provider", op: "=", value: "codex" }];
+  const filtered = canonical("/analyze", new URLSearchParams({ analyze_view: "carbon", q_carbon: encodeQuery({ ...EMPTY_QUERY, where: carbonWhere }), carbon_window: "today" }).toString());
+  assert.deepEqual(decodeQueryStrict(filtered.get("analyze_filters")).where, carbonWhere);
+  assert.deepEqual([filtered.get("analyze_window"), filtered.has("q_carbon"), filtered.has("carbon_window")], ["today", false, false]);
+  assert.deepEqual(readDashboardLink(filtered, { metric: "co2" }, () => true, usageTime, undefined, new Date(2026, 10, 2, 12)).where.filter(term => term.field !== usageTime.first && term.field !== usageTime.last), carbonWhere);
+  assert.equal(canonical("/analyze", "analyze_view=carbon&q_carbon=broken").has("analyze_filters"), false);
   assert.equal(canonical("/analyze", "analyze_view=concurrency").get("analyze_topic"), "parallelism");
   assert.equal(canonical("/analyze", "analyze_view=tokens&machine_view=parallelism&q_parallelism=x").get("analyze_data"), "parallelism");
   assert.equal(isUsageWorkspace(canonical("/tools", "tools_view=calls")), true);

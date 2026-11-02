@@ -1,7 +1,7 @@
 import { MAX_HOST_QUERY_VALUE_LENGTH, parseHostQueryState, type FieldDef, type HostQueryState } from "@pythia-software/query-table-core";
 import type { HostQueryOptions } from "@pythia-software/query-table-react";
 import { readRecordKeywordSearch, recordKeywordParameter, recordKeywordRequest, type RecordKeywordSearch } from "./record-keyword-model";
-import { emptyScope, refreshSearchToday, readTextSearch, textFindParameters, type TextCondition, type TextSearchDraft } from "./text-search-model";
+import { emptyScope, refreshSearchToday, readTextSearch, scopes, textFindParameters, type TextCondition, type TextSearchDraft } from "./text-search-model";
 import type { SearchResultsView } from "./search-results-view-model";
 
 // Clauses Pharos runs itself, registered with Query Table as host query state
@@ -52,11 +52,14 @@ const stateOf = (params: Record<string, string>): HostQueryState => ({ version: 
 
 export function recordKeywordHostQuery(dataset: string, fields: FieldDef[]): HostQueryOptions {
   const parameter = recordKeywordParameter(dataset);
+  // The removed Human messages table saved its search as message_query.
+  const owned = dataset === "writing_messages" ? [parameter, "message_query"] : [parameter];
   return {
-    ownedParameters: [parameter],
+    ownedParameters: owned,
     defaults: emptyHostState(),
     normalize(state) {
-      const token = readParams(state, [parameter]).get(parameter);
+      const params = readParams(state, owned), older = params.get("message_query");
+      const token = params.get(parameter) ?? (older === undefined ? undefined : canonicalRecordKeyword(messageKeyword(older)));
       if (token === undefined) return emptyHostState();
       const { value, error } = readRecordKeywordSearch(token, fields);
       if (!value) throw new Error(error);
@@ -64,6 +67,20 @@ export function recordKeywordHostQuery(dataset: string, fields: FieldDef[]): Hos
       return stateOf({ [parameter]: bounded(canonicalRecordKeyword(value), "keyword filter") });
     },
   };
+}
+// An older Human messages search becomes a keyword filter on the message's
+// text when it means the same: the whole user message, matched exactly. A
+// span class (typed, pasted, …), a date range or fuzzy matching has no
+// keyword-filter equivalent, so it is refused rather than broadened.
+export function messageKeyword(token: string): RecordKeywordSearch {
+  const text = readTextSearch(new URLSearchParams({ text_builder: token }));
+  if (text.error) throw new Error(text.error);
+  const { surface, ...rest } = text.draft.scope, { surface: _, ...empty } = emptyScope();
+  const unsupported = !["user", "prose"].includes(surface) ? `searches only ${scopes.find(scope => scope.surface === surface)?.label.toLowerCase() ?? surface}`
+    : JSON.stringify(rest) !== JSON.stringify(empty) ? "limits its own dates or sources"
+    : text.draft.fuzzy ? "uses fuzzy matching" : "";
+  if (unsupported) throw new Error(`This saved Human messages search ${unsupported}, which a keyword filter on the message text cannot keep. Remove the search and add a keyword filter instead.`);
+  return { field: "text", draft: { ...text.draft, scope: emptyScope(), dateWindow: undefined } };
 }
 export function canonicalRecordKeyword(search: RecordKeywordSearch): string {
   return `{"field":${JSON.stringify(search.field)},"draft":${canonicalDraft(search.draft)}}`;
@@ -143,41 +160,12 @@ export function changeLibrarySearch(state: HostQueryState | undefined, change: P
 export const withoutLibrarySearch = (state: HostQueryState | undefined): HostQueryState =>
   libraryHostState({ ...readLibraryHost(state), kind: "text", text: null, file: "", fileCase: false });
 
-// ---- Older Human messages table: its message search (message_query). ----
-
-export const messageHostQuery: HostQueryOptions = {
-  ownedParameters: ["message_query"],
-  defaults: emptyHostState(),
-  normalize(state) {
-    const token = readParams(state, ["message_query"]).get("message_query");
-    if (token === undefined) return emptyHostState();
-    const text = readTextSearch(new URLSearchParams({ text_builder: token }));
-    if (text.error) throw new Error(text.error);
-    return withMessageSearch(text.active ? text.draft : null);
-  },
-};
-export function readMessageSearchHost(state: HostQueryState | undefined): TextSearchDraft | null {
-  const token = state?.params.message_query?.[0];
-  const text = token ? readTextSearch(new URLSearchParams({ text_builder: token })) : null;
-  return text?.active && !text.error ? text.draft : null;
-}
-export const withMessageSearch = (draft: TextSearchDraft | null): HostQueryState =>
-  draft ? stateOf({ message_query: bounded(canonicalDraft(draft), "search") }) : emptyHostState();
-export const messageFind = (state: HostQueryState | undefined): string => {
-  const draft = readMessageSearchHost(state);
-  return draft ? textFindParameters(draft) : "";
-};
-
 // Renew a calendar search at execution boundaries, never while paging a batch.
 export function refreshTodayHost(state: HostQueryState | undefined, clock = new Date(), onlyNewDay = false): HostQueryState | undefined {
   if (state?.params.text_builder) {
     const host = readLibraryHost(state);
     const text = host.text && refreshSearchToday(host.text, clock, onlyNewDay);
     if (text && text !== host.text) return libraryHostState({ ...host, text });
-  } else if (state?.params.message_query) {
-    const draft = readMessageSearchHost(state);
-    const next = draft && refreshSearchToday(draft, clock, onlyNewDay);
-    if (next && next !== draft) return withMessageSearch(next);
   }
   return state;
 }
