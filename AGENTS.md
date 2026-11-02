@@ -102,7 +102,7 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
 | JS unit tests (`web/tests/unit`, node only, seconds) | `npm --prefix web test` from any directory |
 | One JS unit file or test | `npm --prefix web test -- card-recipes --test-name-pattern=wishlist` (arguments are file-path filters, plus `--test-*` flags) |
 | JS unit tests, full matrix | `npm --prefix web run test:full` (every window, chart kind and edit in `card-parity`/`cover-parity`) |
-| Browser suite (about 470 cases; a few minutes) | `npm --prefix web run test:browser` (`-- focus` for one file, `-- --test-name-pattern=Findings` for one page, `PHAROS_BROWSER=webkit` for WebKit). Runs on one machine take turns; `PHAROS_BROWSER_LOCK=0` skips the queue |
+| Browser suite (about 470 cases; a few minutes) | `npm --prefix web run test:browser` (`-- focus` for one file, `-- --test-name-pattern=Findings` for one page, `PHAROS_BROWSER=webkit` for WebKit). Runs on one machine take turns using Python 3 and an OS file lock; `PHAROS_BROWSER_LOCK=0` skips the queue |
 | Library drive end to end (macOS, slow) | `npm --prefix web run test:e2e` (real build, disk image and service) |
 | JS checks before a PR | `npm --prefix web run check` (typecheck, schemas, recipe snapshot, bundle, unit tests) |
 | Python tools | `python3 -m unittest discover -s tools` |
