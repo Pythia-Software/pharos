@@ -82,7 +82,7 @@ file counts, input bytes or database
 message counts, time since the previous index, and one-minute machine load when
 available. Transcript bytes are file lengths; database byte measurements
 are the raw/decoded message-text bytes actually read, labeled separately.
-Settings → Capture & index → run Details exposes these measurements.
+Settings → Background Processing → run Details exposes these measurements.
 Interrupted stages remain in run history without becoming completed ETA
 samples. Workload features also feed the operation model described below.
 
@@ -99,7 +99,9 @@ remaining/estimated step counts and names of steps still lacking evidence.
 `estimated_completion_at` uses the whole-operation point forecast for the native
 menu bar when available. An incomplete operation forecast does not publish a
 whole-operation completion time; activities without an operation plan retain
-their existing stage estimate. Timing history is local metadata; estimation does not read
+their existing stage estimate. `estimated_completion_scope` says which it is
+(`operation` or `stage`); the menu says "about N min left" for an operation
+and "for this stage" otherwise. Timing history is local metadata; estimation does not read
 or send conversation content.
 
 Implementation: `operation_forecast.go`, `activity_progress.go`,

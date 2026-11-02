@@ -1,4 +1,5 @@
-import type { AggregationClause, WhereClause, WhereTerm } from "@pythia-software/query-table-core";
+import { isWhereConjunction, isWhereGroup, predicatesOf, type AggregationClause, type WhereBranch, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
+import { mapTermPredicates } from "./where-terms";
 
 export type MachineScope = { channel?: string; machine_id?: string; execution_machine_id?: string; days: number; repository: string; provider: string; model: string };
 export function machineScopeFromParams(params: URLSearchParams, saved: MachineScope): MachineScope {
@@ -46,7 +47,8 @@ export const noRepository = "(No repository)";
 
 export function machineFilterKey(term: WhereTerm): string {
   const clause = (value: WhereClause) => JSON.stringify([value.field, value.op, value.value, Boolean(value.negated)]);
-  return "any" in term ? JSON.stringify(term.any.map(clause).sort()) : clause(term);
+  const branch = (member: WhereBranch) => isWhereConjunction(member) ? JSON.stringify(member.all.map(clause).sort()) : clause(member);
+  return isWhereGroup(term) ? JSON.stringify(term.any.map(branch).sort()) : clause(term);
 }
 
 function repositoryWhere(repository: string): WhereTerm[] {
@@ -65,7 +67,7 @@ export function machineDrilldownWhere(where: WhereTerm[], terms: WhereTerm[], to
   // A homogeneous OR is one field's selection, such as null-or-empty repository.
   // Mixed-field ORs must stay intact when replacing a chart selection.
   const fieldOf = (term: WhereTerm) => {
-    const clauses = "any" in term ? term.any : [term];
+    const clauses = predicatesOf(term);
     return clauses.length && clauses.every(clause => clause.field === clauses[0].field) ? clauses[0].field : undefined;
   };
   const fields = new Set(terms.map(fieldOf).filter((field): field is string => field !== undefined));
@@ -208,7 +210,7 @@ export function relativeChange(current: number, previous: number): string {
 }
 export function previousTimeWhere(where: WhereTerm[], days: number): WhereTerm[] | null {
   let valid = true;
-  const shift = (clause: Exclude<WhereTerm, { any: unknown }>) => {
+  const shift = (clause: WhereClause) => {
     if (!["started_at", "ended_at", "day", "week", "month"].includes(clause.field) || clause.op === "is_null" || clause.op === "is_not_null") return clause;
     if (clause.field === "month" || clause.field === "week") { valid = false; return clause; }
     if (clause.field === "day" && /^\d{4}-\d{2}-\d{2}$/.test(clause.value)) return { ...clause, value: shiftMachineDay(clause.value, -days) };
@@ -216,6 +218,6 @@ export function previousTimeWhere(where: WhereTerm[], days: number): WhereTerm[]
     if (!Number.isFinite(date.getTime())) { valid = false; return clause; }
     date.setDate(date.getDate() - days); return { ...clause, value: date.toISOString() };
   };
-  const shifted = where.map(term => "any" in term ? { ...term, any: term.any.map(shift) } : shift(term));
+  const shifted = where.map(term => mapTermPredicates(term, shift)!);
   return valid ? shifted : null;
 }

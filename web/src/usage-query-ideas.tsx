@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import { ViewDisclosure } from "./view-disclosure";
+import React from "react";
 import type { QueryTableApi } from "@pythia-software/query-table-react";
 import { Icon } from "./icons";
 import { preferences } from "./preferences";
@@ -8,19 +9,13 @@ import type { UsageDataset } from "./usage-workspace-model";
 
 export function UsageQueryIdeas({ dataset, api }: { dataset: UsageDataset; api: QueryTableApi<Record<string, any>> }) {
   const key = queryIdeasPreferenceKey(dataset);
-  const [open, setOpen] = useState(() => queryIdeasOpen(preferences().get<unknown>(key, undefined)));
   const ideas = usageQueryIdeas[dataset];
   const sections = [...new Set(ideas.map(idea => idea.section))];
-  return <details className="usage-query-search usage-query-ideas" open={open} onToggle={event => {
-    const next = event.currentTarget.open;
-    // The initial native toggle event is not a user preference change.
-    if (next === open) return;
-    setOpen(next); preferences().set(key, next);
-  }}>
-    <summary><Icon name="compass" />Query ideas <span className="muted">{ideas.length} starting points</span></summary>
+  if (!ideas.length) return null;
+  return <ViewDisclosure viewKey={`query:${dataset}:ideas`} className="usage-query-search usage-query-ideas" defaultOpen={queryIdeasOpen(preferences().get<unknown>(key, undefined))} captureInitial onOpenChange={open => preferences().set(key, open)} summary={<><Icon name="compass" />Query ideas <span className="muted">{ideas.length} starting points</span></>}>
     {sections.map(section => <div className="usage-presets" role="group" aria-label={`${section} query ideas`} key={section}>
       <span className="usage-preset-label">{section}</span>
       {ideas.filter(idea => idea.section === section).map(idea => <QueryChip key={idea.id} title={idea.label} description={idea.title} active={queryIdeaMatches(api.query, idea)} onClick={() => api.setQuery(previous => applyQueryIdea(previous, idea))} />)}
     </div>)}
-  </details>;
+  </ViewDisclosure>;
 }

@@ -4,19 +4,19 @@
 .concurrency-dialog-heading h2 { margin: 0; font: 400 25px/1.2 var(--serif); }
 .concurrency-dialog-heading p { margin: 5px 0 0; font-size: 13px; color: var(--muted); }
 .concurrency-close { display: grid; place-items: center; flex: none; width: 30px; height: 30px; padding: 5px; color: var(--ink); background: none; border: 1px solid var(--line); border-radius: 4px; }
-.concurrency-controls { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
+.concurrency-controls { gap: 10px; margin-bottom: 16px; }
 .concurrency-controls > .usage-smoothing-control { min-width: 0; }
 .concurrency-controls>label,.concurrency-control { display: flex; flex-direction: column; gap: 5px; min-width: 0; color: var(--muted); font-size: 12px; line-height: 20px; }
 .concurrency-control-label { display: flex; align-items: center; gap: 4px; height: 20px; }
 .concurrency-info-button { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; flex: none; padding: 1px; border: 1px solid transparent; border-radius: 50%; color: var(--muted); background: transparent; cursor: pointer; }
 .concurrency-info-button svg { width: 16px; height: 16px; }
 .concurrency-info-button:hover { border-color: var(--line); color: var(--accent); background: color-mix(in srgb,var(--accent) 9%,var(--panel)); }
-.concurrency-info-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.concurrency-info-button:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 2px; }
 .concurrency-info-dialog { width: min(640px,calc(100vw - 32px)); max-height: calc(100dvh - 64px); box-sizing: border-box; padding: 22px 24px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); box-shadow: 0 24px 80px #0006; overflow: auto; }
 .concurrency-info-dialog::backdrop { background: #0b1710aa; }
 .concurrency-info-dialog h3 { margin: 18px 0 5px; font-size: 14px; font-weight: 600; }
 .concurrency-info-dialog p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
-.concurrency-controls select { width: 100%; min-width: 0; padding: 6px 24px 6px 8px; border: 1px solid var(--line); border-radius: 4px; color: var(--ink); background-color: var(--panel); font: 13px var(--sans); }
+.concurrency-controls :is(select, .dashboard-select-measure) { width: 100%; min-width: 0; padding: 6px 28px 6px 8px; border: 1px solid var(--line); border-radius: 4px; color: var(--ink); background-color: var(--panel); font: 13px var(--sans); }
 .concurrency-controls select:disabled { opacity: .55; }
 .concurrency-controls .usage-custom-dates label { gap: 5px; line-height: 20px; }
 .concurrency-range-note { flex-basis: 100%; font-size: 12px; color: var(--muted); }
@@ -73,11 +73,4 @@
   .usage-heading .usage-heading-actions { width: 100%; align-items: flex-start; }
   .usage-heading .library-view-toggle { flex-wrap: wrap; max-width: 100%; box-sizing: border-box; }
   .usage-heading-tools { justify-content: flex-start; max-width: 100%; }
-}
-
-@media(max-width:900px) {
-  .concurrency-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-@media(max-width:600px) {
-  .concurrency-controls > .usage-smoothing-control:has(input) { grid-column: 1 / -1; }
 }

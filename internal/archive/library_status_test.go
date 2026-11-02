@@ -67,11 +67,13 @@ func TestUnplugAdviceAlwaysSaysEject(t *testing.T) {
 	if idle["action"] != "eject" || idle["without_eject"] != "probably-fine" || !strings.Contains(idle["summary"].(string), "eject euclid before unplugging") {
 		t.Fatalf("idle: %#v", idle)
 	}
-	reading := unplugAdvice(drive, []libraryActivity{{Kind: "backup", Label: "Backing up"}})
-	if reading["action"] != "eject" || reading["without_eject"] != "unsafe" || !strings.Contains(reading["summary"].(string), "Backing up is reading the library") {
+	// No activity listed today is read-only (a backup writes backups.json);
+	// a read-only one, such as warming page caches, would get this advice.
+	reading := unplugAdvice(drive, []libraryActivity{{Kind: "maintenance", Label: "Warming page caches"}})
+	if reading["action"] != "eject" || reading["without_eject"] != "unsafe" || !strings.Contains(reading["summary"].(string), "Warming page caches is reading the library") {
 		t.Fatalf("reading: %#v", reading)
 	}
-	writing := unplugAdvice(drive, []libraryActivity{{Kind: "capture", Label: "Capturing Mac A", Writes: true}, {Kind: "backup", Label: "Backing up"}})
+	writing := unplugAdvice(drive, []libraryActivity{{Kind: "capture", Label: "Capturing Mac A", Writes: true}, {Kind: "maintenance", Label: "Warming page caches"}})
 	if writing["without_eject"] != "unsafe" || !strings.HasPrefix(writing["summary"].(string), "Capturing Mac A: writing to euclid now") || strings.Contains(writing["summary"].(string), "cannot stop") {
 		t.Fatalf("writing: %#v", writing)
 	}
@@ -229,18 +231,40 @@ func TestLibraryStatusListsEverythingHoldingTheLibrary(t *testing.T) {
 		expect()
 	}
 
-	// A backup reads the library; it does not write to it.
+	// A backup reads the library and writes its backups.json, so it writes
+	// to the drive.
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if err := server.backups.begin(BackupRun{ID: "b1", Kind: "backup", State: "running", Phase: "catalog", Destination: "/Volumes/Other/Pharos Backup"}, cancel); err != nil {
 		t.Fatal(err)
 	}
 	status = expect("backup")
-	if status["writing"] != false || !strings.Contains(firstString(status["activities"].([]any)[0].(map[string]any)["detail"]), "/Volumes/Other/Pharos Backup · catalog") {
+	if status["writing"] != true || status["activities"].([]any)[0].(map[string]any)["writes"] != true || !strings.Contains(firstString(status["activities"].([]any)[0].(map[string]any)["detail"]), "/Volumes/Other/Pharos Backup · catalog") {
 		t.Fatalf("backup: %#v", status)
 	}
 	server.backups.update(BackupRun{ID: "b1", State: "complete"}, true)
 	expect()
+
+	// Cloud work stages files on the library's drive, so it is not idle and
+	// an eject says what it does to the upload or verification.
+	for _, job := range []struct{ operation, label string }{
+		{"upload", "Uploading a cloud backup"}, {"verify", "Verifying a cloud backup"}, {"connect", "Testing a cloud backup destination"},
+	} {
+		if err := server.cloud.begin("run-1", job.operation, "full", cancel); err != nil {
+			t.Fatal(err)
+		}
+		server.cloud.report("run-1", "Uploading archive", 512, 2048)
+		status = expect("backup")
+		activity := status["activities"].([]any)[0].(map[string]any)
+		if status["writing"] != true || activity["label"] != job.label || activity["writes"] != true || activity["on_eject"] == "" || activity["id"] != "cloud:"+job.operation+":run-1" {
+			t.Fatalf("cloud %s: %#v", job.operation, status)
+		}
+		if work, _ := activity["work"].(map[string]any); job.operation == "upload" && (work["done"] != float64(512) || work["total"] != float64(2048) || work["unit"] != "byte") {
+			t.Fatalf("cloud upload progress: %#v", activity)
+		}
+		server.cloud.end()
+		expect()
+	}
 
 	// The Git merge lookup after a sync or index, and the Library view's
 	// pending refreshes.
@@ -271,6 +295,39 @@ func TestLibraryStatusListsEverythingHoldingTheLibrary(t *testing.T) {
 	expect()
 	if catalog.libraryCatchingUp() {
 		t.Fatal("still catching up once nothing is dirty")
+	}
+
+	// A cloud connection test runs inside its request, which a release
+	// waits for; the release cancels the test instead of timing out.
+	setup := t.TempDir()
+	plan := cloudConfig{Provider: "gcp", Region: "us-central1", Name: "Test destination", Bucket: "pharos-test-bucket", Object: "pharos/library.tar.zst", Identity: "pharos-uploader", Project: "pharos-example", StorageClass: "STANDARD"}
+	draft, _ := json.Marshal(plan)
+	writeSourceFile(t, filepath.Join(setup, "destination-draft.json"), string(draft))
+	writeSourceFile(t, filepath.Join(setup, "upload-credential.json"), `{"fixture":"upload-only"}`)
+	probing := make(chan struct{})
+	override(t, &cloudConnectProbe, func(ctx context.Context, _ Config, _ cloudDestination, _ string) error {
+		close(probing)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	body, _ := json.Marshal(map[string]any{"setup_directory": setup, "expected": plan})
+	connect := httptest.NewRequest(http.MethodPost, "/api/cloud-backup/import", strings.NewReader(string(body)))
+	connect.Header.Set("Authorization", "Bearer test-token")
+	connected := httptest.NewRecorder()
+	served := make(chan struct{})
+	go func() { server.ServeHTTP(connected, connect); close(served) }()
+	select {
+	case <-probing:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the connection test did not start: %d %s", connected.Code, connected.Body.String())
+	}
+	expect("backup")
+	if err := server.stop(stopTimeout); err != nil {
+		t.Fatalf("a release waited for the connection test: %v", err)
+	}
+	<-served
+	if connected.Code < 400 {
+		t.Fatalf("a connection test stopped by a release reported success: %d %s", connected.Code, connected.Body.String())
 	}
 }
 

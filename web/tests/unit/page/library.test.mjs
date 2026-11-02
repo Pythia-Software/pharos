@@ -311,3 +311,15 @@ test("one Stop reaches each stoppable task once and stays available until every 
   assert.deepEqual(plain(library.stopTargets([{stoppable: true, stopping: true}])), [{path: index.stop_path, stopping: true}]);
   assert.equal(library.stopTargets([{kind: 'capture'}, {kind: 'backup'}]).length, 0);
 });
+
+test("a run that left sources to the next index for a capture is not a failure", () => {
+  const failed = run => library.indexFailed(run);
+  assert.equal(failed(null), false);
+  assert.equal(failed({ state: 'complete', results: [] }), false);
+  assert.equal(failed({ state: 'deferred', results: [{ source: 'codex', pending: true, deferred: true, error: null }] }), false);
+  // A deferred run's own errors still count.
+  assert.equal(failed({ state: 'deferred', results: [{ source: 'claude', error: 'permission denied' }] }), true);
+  assert.equal(failed({ state: 'failed', results: [] }), true);
+  assert.equal(failed({ state: 'interrupted', results: [] }), true);
+  assert.equal(failed({ state: 'interrupted', stop_requested: true, results: [{ source: 'codex', error: 'interrupted: stopped' }] }), false);
+});

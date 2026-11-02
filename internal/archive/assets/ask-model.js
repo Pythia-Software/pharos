@@ -1,7 +1,102 @@
 // DOM-free interaction rules shared by the composer and its unit tests.
-function askComposerActions({draft = '', turns = [], pending = false, enabled = false, model = ''}) {
+// Interleave subjects so each carousel page offers different ways into the
+// archive. {scope} is optional; comparisons deliberately stay library-wide.
+const askIdeaCatalog = [
+  {topic:'prompting',text:'What instructions am I repeating{scope}?'},
+  {topic:'errors',text:'Which errors recur across conversations{scope}?'},
+  {topic:'usage',text:'Where did most tokens go this week{scope}?'},
+  {topic:'memory',text:'Find past conversations that explain a design decision{scope}.'},
+  {topic:'tools',text:'Which commands keep failing{scope}?'},
+  {topic:'models',text:'How has my mix of models changed this month?'},
+  {topic:'prompting',text:'What did I have to correct more than once{scope}?'},
+  {topic:'context',text:'Which tool outputs fill the most context{scope}?'},
+  {topic:'delegation',text:'How much token usage comes from subagents{scope}?'},
+  {topic:'memory',text:'Find an earlier fix for a recurring test failure{scope}.'},
+  {topic:'tools',text:'Which commands account for the most recorded tool time{scope}?'},
+  {topic:'cost',text:'How does the API cost equivalent vary by model?'},
+  {topic:'prompting',text:'What could I turn into reusable project instructions{scope}?'},
+  {topic:'errors',text:'Which files have the most failed edits{scope}?'},
+  {topic:'usage',text:'Which repositories use the most tokens?'},
+  {topic:'memory',text:'What approaches have I already tried for flaky tests{scope}?'},
+  {topic:'context',text:'Which tool outputs get truncated{scope}?'},
+  {topic:'activity',text:'When do my agent sessions overlap the most?'},
+  {topic:'prompting',text:'Where am I writing the most explanations{scope}?'},
+  {topic:'skills',text:'Which skills have recorded invocations or loads{scope}?'},
+  {topic:'usage',text:'How has my cache reuse changed this month?'},
+  {topic:'memory',text:'Find conversations where I revisited the same decision{scope}.'},
+  {topic:'errors',text:'Which test commands fail most often{scope}?'},
+  {topic:'models',text:'Which models have the most recorded tool errors?'},
+  {topic:'findings',text:'Which recurring problems have findings I could act on{scope}?'},
+  {topic:'tools',text:'Which files do agents read repeatedly{scope}?'},
+  {topic:'cost',text:'Which conversations have the highest API cost equivalent{scope}?'},
+  {topic:'memory',text:'Find my longest conversations{scope}.'},
+  {topic:'context',text:'Which conversations have the most compactions{scope}?'},
+  {topic:'activity',text:'What changed in my work this week?'},
+  {topic:'prompting',text:'Find examples where a clearer prompt helped me change course{scope}.'},
+  {topic:'skills',text:'Which skill loads have recorded errors{scope}?'},
+  {topic:'usage',text:'How do input and output tokens compare across models?'},
+  {topic:'memory',text:'What have I already learned about slow builds{scope}?'},
+  {topic:'tools',text:'Which searches am I repeating{scope}?'},
+  {topic:'cost',text:'How has my estimated carbon footprint changed this month?'},
+  {topic:'findings',text:'Which findings are being watched for improvement{scope}?'},
+  {topic:'tools',text:'Which MCP methods do I use most{scope}?'},
+  {topic:'activity',text:'How does my activity differ across machines?'},
+  {topic:'memory',text:'Find work where I switched approaches after a failure{scope}.'},
+  {topic:'tools',text:'Which documentation hosts do agents consult most{scope}?'},
+  {topic:'usage',text:'Which days had unusually high token usage this month?'},
+];
+function askPromptSuggestions({repositories=[],variation=0}={}) {
+  const names=[...new Set(repositories.filter(name=>typeof name==='string'&&name.trim()))];
+  let eligible=0,scoped=0;
+  return askIdeaCatalog.map(idea=>{
+    // Keep a mixture of broad and scoped questions, even with many repos.
+    const qualify=idea.text.includes('{scope}')&&eligible++%2===1&&names.length>1;
+    const repository=qualify?names[(scoped++ + variation)%names.length]:'';
+    return idea.text.replace('{scope}',qualify?' in the “'+repository+'” repository':'');
+  });
+}
+
+async function askReadResponse(response, onProgress) {
+  if (!response.ok || !response.headers.get('Content-Type')?.includes('application/x-ndjson')) {
+    const result=await response.json();
+    if(!response.ok)throw new Error(result.error||'Ask Pharos request failed');
+    return result;
+  }
+  const reader=response.body.getReader(),decoder=new TextDecoder();
+  let buffer='';
+  try {
+    while(true){
+      const {value,done}=await reader.read();
+      buffer+=decoder.decode(value,{stream:!done});
+      if(buffer.length>8*1024*1024)throw new Error('Ask Pharos response is too large');
+      let newline;
+      while((newline=buffer.indexOf('\n'))>=0){
+        const line=buffer.slice(0,newline);buffer=buffer.slice(newline+1);
+        if(!line.trim())continue;
+        const event=JSON.parse(line);
+        if(event.type==='progress')onProgress?.(event.activity);
+        if(event.type==='result'&&event.session)return event.session;
+      }
+      if(done)throw new Error('Ask Pharos connection ended before the answer arrived');
+    }
+  } finally { reader.releaseLock(); }
+}
+function askShowActivity({status,activity=[]}) {
+  return status==='error'&&activity?.length>0;
+}
+// Elapsed time is measured from the agent's start, so it stays hidden until the
+// first activity arrives rather than counting up and then snapping back.
+function askWaitStatus({activity=[],elapsedMs=0,message='',cli=''}) {
+  const latest=activity.at(-1),elapsed=Math.floor(elapsedMs/1000);
+  const silent=latest?Math.max(0,Math.floor((elapsedMs-latest.elapsedMs)/1000)):0;
+  return {
+    message:latest?.message||message||'Starting '+cli+'…',
+    elapsed:latest?elapsed+'s elapsed'+(silent>=10?' · '+silent+'s since last update':''):'',
+  };
+}
+function askComposerActions({draft = '', turns = [], pending = false, opening = false, enabled = false, model = ''}) {
   const populated = turns.length > 0 || draft.length > 0;
-  return {send: enabled && !!model && !pending && !!draft.trim(), history: !populated, clear: populated, modelLocked: turns.length > 0};
+  return {send: enabled && !!model && !pending && !opening && !!draft.trim(), stop: pending, history: !populated, clear: populated, modelLocked: turns.length > 0};
 }
 // Carry the visible conversation into a fresh, editable prompt for another model.
 function askRetryDraft({turns = [], draft = ''}) {
@@ -43,8 +138,14 @@ function askRetryDraft({turns = [], draft = ''}) {
   }
   return notice+kept.join('\n\n');
 }
-function askShouldNavigate({cards = [], draft = '', enabled, regular, edited}) {
-  return enabled && !regular && !edited && draft.length === 0 && cards.length === 1;
+// Chart previews stay in the answer for inspection. A lone ordinary link opens
+// itself unless the agent offered a choice or the user has started browsing.
+function askShouldNavigate({cards = [], omitted = 0, draft = '', enabled, regular, edited, browsing = false, hasPreview = false}) {
+  return enabled && !regular && !edited && !browsing && !hasPreview && draft.length === 0 && cards.length === 1 && !omitted;
+}
+function askOmittedNote(omitted = 0) {
+  if (!omitted) return '';
+  return omitted === 1 ? 'One suggested view could not be opened, so it is left out.' : `${omitted} suggested views could not be opened, so they are left out.`;
 }
 function askChatURL(href, id) {
   const url = new URL(href);
@@ -52,6 +153,11 @@ function askChatURL(href, id) {
   if (id) url.searchParams.set('ask_chat', id);
   else url.searchParams.delete('ask_chat');
   return url.href;
+}
+// History links must work independently of the page hosting the overlay.
+function askHistoryURL(href, id) {
+  const url = new URL(href);
+  return askChatURL(['/', '/home'].includes(url.pathname) ? url.href : new URL('/', url).href, id);
 }
 // Search results are matched against complete chats on the server. Their
 // summaries cannot be searched again without dropping later-message matches.
@@ -73,7 +179,94 @@ function askThreadHeight({total, latest, previous = 0, gap = 0, available}) {
   const recent = latest + Math.min(previous, 64) + (previous > 0 ? gap : 0);
   return Math.max(0, Math.min(total, recent, available));
 }
+// Anchor the empty composer a quarter down, then share growth above and below
+// its original center. Once an edge reaches the viewport, use the remaining space.
+function askDialogLayout({viewportHeight,contentHeight,emptyHeight}) {
+  const height=Math.max(0,Math.min(contentHeight,viewportHeight));
+  const growth=Math.max(0,height-emptyHeight);
+  return {height,top:Math.max(0,Math.min(viewportHeight-height,viewportHeight/4-growth/2))};
+}
 function askClarificationActions({latest = false, status, pending = false, enabled = false, opening = false, draft = ''}) {
   const active = latest && status === 'clarification' && enabled && !pending && !opening;
   return {active, sendOther: active && !!draft.trim()};
+}
+
+// Capture the complete view, including filters, without coupling it to chat routing.
+function askPageURI(href) {
+  const url = new URL(href);
+  for (const key of [...url.searchParams.keys()]) if (key === 'ask_chat' || key.toLowerCase().includes('token')) url.searchParams.delete(key);
+  return url.pathname + url.search + url.hash;
+}
+// A reload keeps this tab's surface. A different page or an explicit link to
+// another chat takes precedence over the surface remembered by the tab.
+function askRestorePresentation(href, saved) {
+  if (!saved || saved.page !== askPageURI(href)) return null;
+  const url = new URL(href), id = url.searchParams.get('ask_chat');
+  if (id && id !== saved.id) return null;
+  if (saved.presentation === 'home' && !['/', '/home'].includes(url.pathname)) return null;
+  return ['home', 'modal', 'floating', 'dismissed'].includes(saved.presentation) ? saved.presentation : null;
+}
+function askShowBrowseHint({pending=false,browsing=false,presentation='home'}) {
+  return pending&&!browsing&&['home','modal'].includes(presentation);
+}
+function askFloatingState(turn, {navigated = false} = {}) {
+  if (!turn) return {message: 'Ask a question', ready: false};
+  // The answer is the page now on screen, so the panel invites a follow-up instead of calling for attention.
+  if (navigated && turn.status === 'single') return {message: 'Opened · Ask a follow-up', ready: false};
+  if (turn.status === 'loading') return {message: askWaitStatus(turn).message, ready: false};
+  if (turn.status === 'error') return {message: 'Question failed · Review or retry', ready: true};
+  if (turn.status === 'canceled') return {message: 'Question canceled', ready: false};
+  return {message: turn.status === 'clarification' ? 'Pharos has a question for you' : 'Your response is ready', ready: true};
+}
+function askFloatingPosition({x, y, width, height, viewportWidth, viewportHeight}) {
+  return {x: Math.max(8, Math.min(x, viewportWidth - width - 8)), y: Math.max(8, Math.min(y, viewportHeight - height - 8))};
+}
+
+// A provider's own default wins; otherwise its marked (or first) model.
+function askDefaultSelection(provider, catalog) {
+  const models = catalog?.models || [], model = models.find(m => m.default) || models[0];
+  return catalog?.defaultSelection || {provider, model: model?.id || '', effort: 'Default'};
+}
+// A saved selection stays usable while its provider exists. Its model is not
+// checked against the catalog here; the server validates what it runs.
+function askValidSelection(value, providers = []) {
+  return !!value && providers.some(p => p.id === value.provider) && typeof value.model === 'string';
+}
+function askSelectionProvider(saved, providers = []) {
+  return providers.some(p => p.id === saved?.provider) ? saved.provider : providers[0]?.id;
+}
+function askEffortChoices(catalog, model) {
+  return catalog?.models.find(m => m.id === model)?.efforts || ['Default'];
+}
+function askFastAvailable(catalog, model) {
+  return !!catalog?.models.find(m => m.id === model)?.fast;
+}
+function askIsDefaultSelection(selection, defaultSelection) {
+  return !!defaultSelection && ['provider', 'model', 'effort'].every(key => defaultSelection[key] === selection[key]) && !!defaultSelection.fast === !!selection.fast;
+}
+// A new provider starts from its default with Fast off (absent); a new model
+// keeps the effort and Fast only if it offers them.
+function askPickSelection(selection, page, value, catalogs = {}) {
+  const next = {...selection, [page]: value};
+  if (page === 'provider') {delete next.fast; Object.assign(next, askDefaultSelection(value, catalogs[value]));}
+  if (page === 'model' && !askEffortChoices(catalogs[next.provider], next.model).includes(next.effort)) next.effort = 'Default';
+  if (page === 'model' && !askFastAvailable(catalogs[next.provider], next.model) || page === 'fast' && !value) delete next.fast;
+  return next;
+}
+// One visit updates or replaces an entry; without one, the whole browser
+// history is sent so the private store can reconcile with it.
+function askVisitInput({entry = null, replaced = null, stored = [], titleFor = null} = {}) {
+  const visits = (entry ? [entry] : stored.map(visit => ({...visit, title: titleFor?.(visit.url, visit.page) || visit.title})))
+    .map(visit => ({...visit, title: String(visit.title || 'Visited page').slice(0, 500)}));
+  return {visits, replaces: replaced || null, reconcile: !entry};
+}
+// Only the latest chat load may apply; starting another or invalidating
+// (a new chat, a route change) makes every earlier token stale.
+function askLoadSequence() {
+  let latest = 0;
+  return {next: () => ++latest, invalidate() { latest++; }, current: token => token === latest};
+}
+// A chat the user opened takes the keyboard unless they moved focus while it loaded.
+function askFocusAfterLoad({navigate = false, current = false, before = null, active = null, body = null}) {
+  return navigate && current && (active === before || active === body);
 }

@@ -2,8 +2,12 @@ import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { FieldSchema } from "@pythia-software/query-table-core";
 import { HomeSearch } from "./search-composer";
+import { createAskChartPreviews } from "./ask-chart-preview";
+import { createAskWorkPreviews } from "./ask-work-preview";
+import { combineAskPreviews, type AskLinkPreviews } from "./ask-link-previews";
+import type { QueryDataset } from "./query-links";
 
-declare global { interface Window { initPharosAsk?: (root: HTMLElement) => () => void; } }
+declare global { interface Window { initPharosAsk?: (root: HTMLElement, options?: { previews?: AskLinkPreviews }) => () => void; } }
 type Selection = { provider: string; model: string; effort: string };
 type Model = { id: string; label: string; efforts: string[]; default: boolean };
 type Provider = { id: string; models: Model[]; defaultSelection?: Selection };
@@ -16,9 +20,23 @@ async function askAPI<T>(path: string, body?: unknown): Promise<T> {
 
 // Keep the existing search editor mounted in a portal. The conversation view
 // owns only its own DOM, including the approved SVG contours and loading UI.
-export function AskPharosSearch({ schema }: { schema: FieldSchema }) {
+export function AskPharosHome() {
+  const host = useRef<HTMLDivElement>(null);
+  useEffect(() => { window.dispatchEvent(new CustomEvent("pharos:ask-home", { detail: host.current })); }, []);
+  return <div id="homeAskSearch" ref={host} />;
+}
+
+export function AskPharosSearch({ schemas }: { schemas: Record<QueryDataset, FieldSchema> }) {
+  const schema = schemas.library;
   const mount = useRef<HTMLDivElement>(null);
   const [markup, setMarkup] = useState("");
+  const [homeHost, setHomeHost] = useState<HTMLElement | null>(() => document.getElementById("homeAskSearch"));
+  useEffect(() => {
+    const attach = (event: Event) => setHomeHost((event as CustomEvent<HTMLElement>).detail);
+    setHomeHost(document.getElementById("homeAskSearch"));
+    window.addEventListener("pharos:ask-home", attach);
+    return () => window.removeEventListener("pharos:ask-home", attach);
+  }, []);
   const [searchHost, setSearchHost] = useState<HTMLElement | null>(null);
   useEffect(() => {
     const controller = new AbortController();
@@ -29,10 +47,10 @@ export function AskPharosSearch({ schema }: { schema: FieldSchema }) {
     if (!markup || !mount.current || !window.initPharosAsk) return;
     const root = mount.current.querySelector<HTMLElement>("#pharos-ask")!;
     setSearchHost(root.querySelector<HTMLElement>(".pharos-search-host"));
-    return window.initPharosAsk(root);
-  }, [markup]);
+    return window.initPharosAsk(root, { previews: combineAskPreviews(createAskChartPreviews(schemas), createAskWorkPreviews()) });
+  }, [markup, schemas]);
   return <>
-    {!markup && <HomeSearch schema={schema} />}
+    {!markup && homeHost && createPortal(<HomeSearch schema={schema} />, homeHost)}
     <div ref={mount} dangerouslySetInnerHTML={{ __html: markup }} />
     {searchHost && createPortal(<HomeSearch schema={schema} />, searchHost)}
   </>;

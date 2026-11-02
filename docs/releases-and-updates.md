@@ -98,37 +98,47 @@ asset of a published version. The disk image's Finder layout is written by
 so install [uv](https://docs.astral.sh/uv/) on the release Mac. Finder is not
 scripted, and its settings on the release Mac do not affect the layout.
 
-The disk image opens in Finder with an illustrated guide. For a **new portable
-library**, create a dedicated folder such as `/Volumes/YOUR-DRIVE/Pharos`, drag
-`Pharos.app` into it, and open that copy. Choose **Create Library Beside App**.
-The app creates `library.toml`, catalog, captures, staging, and preserved data
-in that folder. Keep the folder together when moving it between Macs.
+The disk image opens in Finder. Drag `Pharos.app` onto the Applications shortcut
+and open the installed copy. The setup guide asks where the library lives:
+- **On this Mac** creates it under
+  `~/Library/Application Support/Pharos/Libraries/<name>/`.
+- **An attached SSD** creates it in a folder you choose on the drive, such as
+  `/Volumes/YOUR-DRIVE/Pharos`.
 
-For a **new install in Applications**, drag `Pharos.app` onto the Applications
-shortcut in the disk image and open the installed copy. Choose **Set Up on This
-Mac**. The app creates
-`archive.toml`, the catalog, captures, staging, and preserved data under
-`~/Library/Application Support/Pharos`; those files stay out of Applications.
-Source paths are disabled until you opt in.
+Either way, the library folder holds `library.toml`, the catalog, captures,
+staging and preserved data. Keep the folder together when moving it between
+Macs. Source paths are disabled until you opt in. More libraries can be created,
+opened or switched in **Settings → Libraries** (see
+[Libraries and application setup](library-management.md)).
 
-To update either installation, quit Pharos, drag `Pharos.app` from the image to
-the folder where the original app was installed, choose **Replace**, then open
-the new app and approve macOS access prompts. Only replace the app; leave the
-library's other files in place. If macOS blocks an ad hoc signed build, use
-**System Settings → Privacy & Security → Open Anyway** after trying to open it.
+To update, quit Pharos, drag `Pharos.app` from the image onto Applications,
+choose **Replace**, then open the new app and approve macOS access prompts.
+Libraries, including those on drives, are separate folders, so an app update
+never touches them. If macOS blocks an ad hoc signed build, use **System
+Settings → Privacy & Security → Open Anyway** after trying to open it.
 
-The bundled CLI can also initialize a portable library after copying the app:
+The bundled CLI can also initialize a library folder on a drive. Then open it
+from **Settings → Libraries → Add an existing library…**:
 
 ```sh
-"/Volumes/YOUR-DRIVE/Pharos/Pharos.app/Contents/MacOS/pharos" init-library "/Volumes/YOUR-DRIVE/Pharos"
-open "/Volumes/YOUR-DRIVE/Pharos/Pharos.app"
+/Applications/Pharos.app/Contents/MacOS/pharos init-library "/Volumes/YOUR-DRIVE/Pharos"
 ```
 
-A library's app runs from the drive, and so do the MCP servers agent clients
-start from it. Quit Pharos and those clients before replacing the app, then
-reconnect Pharos in each client. The source checkout's
-`macos/install-library.sh` remains useful for development builds and adoption
-from a per-user install.
+Agents' MCP servers run from the app in Applications as
+`pharos mcp-app --application /Applications/Pharos.app`, and answer for the
+library open in Pharos. Quit Pharos and those clients
+before replacing the app, then reconnect Pharos in each client.
+
+**Older portable installs** ran a copy of `Pharos.app` from the drive, next to
+the library. To migrate:
+1. Install Pharos in Applications.
+2. Open the drive's library with **Settings → Libraries → Add an existing library…**.
+3. Re-register agents with the `mcp-app` command above.
+4. Delete the drive's old app copy. An outdated copy refuses newer catalogs (for
+   example, "schema version 21, but this build … supports up to 14").
+
+The source checkout's `macos/install-library.sh` remains useful for development
+builds and adoption from a per-user install.
 
 ## In-app updates
 
@@ -524,9 +534,16 @@ The upgrade runs these steps in order, as one background job:
    `AGENTS.md`, memory) and skills each Claude Code or Codex conversation
    loaded. A conversation whose transcript is gone from this Mac and the
    library's captures is marked unavailable rather than read again.
-5. **Rebuild the tool ledger** with error signatures, test failures, and
+5. **Index saved reasoning**: extract saved thinking and reasoning summaries
+   from retained messages, so the reasoning search target finds them.
+6. **Repair message search**: restore proven Claude parent/child links, make
+   delivered sub-agent reports readable, and repair phrase matching in
+   retained tool and context text.
+7. **Rebuild the tool ledger** with error signatures, test failures, and
    repository-relative paths. This is the longest step.
-6. **Rebuild the Tools rollup**, so the first visit to Tools doesn't wait.
+
+Only steps with pending work run. After them, the job rebuilds the Tools
+rollup, so the first visit to Tools doesn't wait.
 
 Repositories merge first because the tool ledger and the loaded-instructions
 record store repository-relative paths. Every step reads the catalog's

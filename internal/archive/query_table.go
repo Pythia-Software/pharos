@@ -16,7 +16,7 @@ import (
 )
 
 func (s *Server) queryTableSchema(dataset string) (querytable.Schema, error) {
-	if _, ok := sqlDatasetFor(dataset); !ok && dataset != "library" && dataset != "activity" && dataset != "usage" && dataset != "conversation_activity" && dataset != "writing" && dataset != "mcp_calls" && dataset != "tl1_attempts" && dataset != "findings" && dataset != "parallelism" {
+	if _, ok := sqlDatasetFor(dataset); !ok && dataset != "library" && dataset != "activity" && dataset != "usage" && dataset != "conversation_activity" && dataset != "writing" && dataset != "mcp_calls" && dataset != "tl1_attempts" && dataset != "findings" && dataset != "safety" && dataset != "parallelism" {
 		return querytable.Schema{}, fmt.Errorf("unknown query-table dataset %q", dataset)
 	}
 	document, err := querySchemaDocument(dataset)
@@ -85,27 +85,45 @@ func (s *Server) queryTableSourceRows(ctx context.Context, dataset string, value
 			run["result_summary"] = syncResultSummary(run["results"])
 		}
 		return runs, nil
+	default:
+		rows, ok, err := s.Catalog.datasetRows(ctx, dataset, fields, where...)
+		if !ok {
+			return nil, fmt.Errorf("unknown query-table dataset %q", dataset)
+		}
+		return rows, err
+	}
+}
+
+// datasetRows returns the rows of a dataset the catalog holds in memory;
+// ok is false for the others (the Library, activity and SQL datasets).
+func (c *Catalog) datasetRows(ctx context.Context, dataset string, fields libraryFields, where ...[]querytable.WhereTerm) ([]map[string]any, bool, error) {
+	var rows []map[string]any
+	var err error
+	switch dataset {
 	case "usage":
 		if !usageNeedsLineage(fields) {
-			return s.Catalog.localUsageBaseRows(ctx, false)
+			rows, err = c.localUsageBaseRows(ctx, false)
+		} else {
+			rows, err = c.localUsageRows(ctx)
 		}
-		return s.Catalog.localUsageRows(ctx)
 	case "conversation_activity":
-		return s.Catalog.conversationActivityRows(ctx)
+		rows, err = c.conversationActivityRows(ctx)
 	case "writing":
-		rows, _, err := s.Catalog.writingData(ctx)
-		return rows, err
+		rows, _, err = c.writingData(ctx)
 	case "mcp_calls":
-		return s.Catalog.mcpQueryRows(ctx)
+		rows, err = c.mcpQueryRows(ctx)
 	case "tl1_attempts":
-		return s.Catalog.cachedTL1AttemptRows(ctx)
+		rows, err = c.cachedTL1AttemptRows(ctx)
+	case "safety":
+		rows, err = c.safetyQueryRows(ctx)
 	case "findings":
-		return s.Catalog.findingQueryRows(ctx)
+		rows, err = c.findingQueryRows(ctx)
 	case "parallelism":
-		return s.Catalog.parallelismQueryRows(ctx, fields, where...)
+		rows, err = c.parallelismQueryRows(ctx, fields, where...)
 	default:
-		return nil, fmt.Errorf("unknown query-table dataset %q", dataset)
+		return nil, false, nil
 	}
+	return rows, true, err
 }
 
 func whereFields(where []querytable.WhereTerm) []string {
@@ -428,12 +446,19 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 }
 
 // prepareSQLDataset brings the derived table an SQL dataset reads up to date:
-// the tool rollup for tool use, and for user messages, a classification that
-// is missing or by older rules (see ensureAuthorship).
+// the tool rollup for tool use, stored request timings for model requests,
+// and for user messages, a classification that is missing or by older rules
+// (see ensureAuthorship).
 func (c *Catalog) prepareSQLDataset(ctx context.Context, dataset string) error {
 	if dataset == "writing_messages" {
 		c.ensureAuthorship()
 		return nil
+	}
+	if dataset == "agent_events" || dataset == "agent_event_messages" {
+		return nil // imported (agent_events.go); nothing to bring up to date
+	}
+	if dataset == "model_requests" {
+		return c.currentRequestTimings(ctx)
 	}
 	return c.currentToolRollup(ctx)
 }

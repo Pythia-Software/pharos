@@ -18,12 +18,46 @@ the same unicode61 verifier as message search and never select parent workspaces
 The restriction runs before grouping, metrics, sorting and pagination. Query-v3
 executes it; older row/metric protocols reject it instead of ignoring it.
 
-Record keyword definitions travel in the per-dataset `record_*` URL parameter.
-Invalid saved conditions fail closed. Table Saved/Undo/Reset controls still own
-QueryState; keyword clauses have their own edit/remove controls, like Library's
-content clause. Their unified lifecycle remains an upstream request in
-[the concrete saved-host-state handoff](handoffs/query-table-saved-host-query-state.md). Returning to a dashboard
-explicitly resets keyword conditions, and switching datasets drops them.
+A keyword clause is part of its table's query definition: Query Table 0.9.7's
+host query state ([handoff](handoffs/query-table-saved-host-query-state.md)),
+registered by `web/src/host-query-state.ts`. Save, Update, Saved, Default,
+Share, Reset and Undo/Redo treat the clause and the table query as one
+definition, and adding, editing or removing the clause is one history entry.
+Its definition (field and editor rules, without the editor's rule IDs) is
+mirrored in the per-dataset `record_<dataset>` URL parameter; only that
+dataset's parameter belongs to its table. Saves made before host state, and
+Reset, have no clause. A clause that cannot be read, names a field outside the
+allowlist or exceeds Query Table's 4,000-character host value fails the whole
+restore, so the query never runs without it. Each request compiles the clause
+it runs with into `record_search`, which the service validates and runs; the
+service also refuses a request whose host state declares a clause without
+`record_search`, or `record_search` without a declared clause. It checks that
+both are present, not that they match: matching them would need the editor's
+compiler on the server.
+Search keeps its content search (`text_builder`, or `kind`, `search` and
+`case`) and its Table/Conversations view the same way, as does the older Human
+messages table's `message_query`; message search cursors stay out of the
+definition. Returning to a dashboard explicitly resets keyword conditions, and
+switching datasets drops them.
+
+Query Table keeps each host value within 4,000 characters, where Pharos used to
+accept keyword drafts of up to 28,000 (Analyze) or 24,000 (Search's
+`text_builder`). Editing past the limit says the search is too large; an older
+link or save that carries a larger draft fails to restore, and Reset page opens
+the table without it. Pharos has asked upstream to raise the limit.
+
+A bare reload restores the last query whose rows and metrics loaded
+(`persistLast: "succeeded"`), never one that failed, timed out or was
+cancelled. A table's default saved query is restored on every bare visit, so
+Pharos skips a default whose rows the service rejected (HTTP 400 or 422) or
+that ran past the client's 45 s deadline (`rejectDefaultQuery` in
+`web/src/storage.ts`); a failed metric alone does not skip it. It says so once
+per page, and while skipped the Saved menu shows no default. Try again runs the
+default and shows it as the default again, and it is restored again once it
+loads, from Saved say. A failed or slow (12 s) query
+keeps Retry, Reset table and Reset page (`fresh=1`, which bypasses the last-used
+and default queries). The deadline stays, so a stalled connection ends as a
+failure.
 
 | Query | Compact rows | Native Details focus | Drilldown |
 | --- | --- | --- | --- |
@@ -50,17 +84,21 @@ widths and explicit sorts remain in effect. Query drilldowns specify a sort:
 time ascending within one conversation/work/unit, time descending across a
 population, with identity breaking timestamp ties. Grouped results receive an
 explicit key/summary sort; their Records drilldown also applies the appropriate
-record order. Native Detail for grouped results requires the upstream support
-described in [this handoff](handoffs/query-table-group-detail.md).
+record order. Grouped results show native group Detail
+([handoff](handoffs/query-table-group-detail.md)): their columns end with the
+link summaries, then Detail, which shows the group's keys, summaries and link
+summaries. Link summaries in Detail open the same exact-match records as the
+Records drill-down, which stays the table's trailing column. Search and the
+other tables with Detail end grouped results with it too.
 
 Every Analyze query opens with native **Fit All to Screen**, including restored
 queries and drilldowns. The `fitToScreen: true` presentation preference travels
 in the encoded `q_<dataset>` URL parameter and adapts to the viewer's table area
 after loading. Filters, sorts and selected data columns are preserved. Manual
 column sizing can override the fit during the current visit.
-At phone widths, Query Table 0.9.5 can clip native Detail/JSON buttons when
-columns reach its minimum size; [the upstream handoff](handoffs/query-table-fit-screen-controls.md)
-records the reproduction and the scoped browser-test todos.
+Since Query Table 0.9.7, fitting keeps each column wide enough for its Detail
+and JSON buttons and scrolls the table when they do not fit
+([handoff](handoffs/query-table-fit-screen-controls.md)).
 
 This is host integration against the published Query Table 0.9.2 release. No dependency patches or generated-bundle edits are involved.
 

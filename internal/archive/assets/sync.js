@@ -6,8 +6,6 @@
   let activeRun = null;
   let runningIds = new Set();
   let openIssues = [];
-  const openPanels = new Set();
-  const initializedPanels = new Set();
   const node = (tag, text, className = '') => {
     const element = document.createElement(tag);
     element.textContent = text;
@@ -67,19 +65,14 @@
     return element;
   };
   const panel = (title, key, initiallyOpen = false) => {
-    if (!initializedPanels.has(key)) {
-      initializedPanels.add(key);
-      if (initiallyOpen) openPanels.add(key);
-    }
     const element = node('details', '', 'sync-panel sync-disclosure');
-    element.open = openPanels.has(key);
+    element.dataset.viewKey = 'sync:' + key;
+    element.dataset.viewDefault = String(Boolean(initiallyOpen));
+    element.setAttribute('data-view-capture-initial', '');
+    element.open = Boolean(initiallyOpen);
     const summary = node('summary', title);
     summary.dataset.syncFocus = key;
     element.append(summary);
-    element.ontoggle = () => {
-      if (!element.isConnected) return;
-      if (element.open) openPanels.add(key); else openPanels.delete(key);
-    };
     return element;
   };
   const style = node('style', `
@@ -101,7 +94,7 @@
     .sync-metric{background:var(--panel);padding:14px 16px;min-width:0}
     .sync-metric span{display:block;color:var(--muted);font-size:var(--fs-sm)}
     .sync-metric strong{display:block;font-size:var(--fs-2xl);font-weight:600;margin-top:4px;font-variant-numeric:tabular-nums}
-    .sync-result{display:inline-block;padding:2px 7px;border:1px solid var(--line);border-radius:4px;font-size:var(--fs-xs)}
+    .sync-result{display:inline-block;max-width:100%;box-sizing:border-box;white-space:normal;overflow-wrap:anywhere;padding:2px 7px;border:1px solid var(--line);border-radius:4px;font-size:var(--fs-xs)}
     .sync-result.attention{color:var(--warn);border-color:var(--warn)}
     .sync-disclosure>summary{cursor:pointer;font-weight:600;font-size:var(--fs-md)}
     .sync-disclosure[open]>summary{margin-bottom:16px}
@@ -156,9 +149,10 @@
   // since finished having indexed something. A run that has left the list
   // can't say what it changed, so it counts.
   const finishedRunsChanged = (followed, runs) => [...followed].map(id => runs.find(run => run.id === id))
-    .filter(run => run?.state !== 'running').some(run => !run || run.workspaces > 0 || run.conversations > 0);
+    .filter(run => run?.state !== 'running').some(run => !run || run.workspaces > 0 || run.conversations > 0 || run.changed === true);
   // The header's Index changes is busy while a run is running.
-  const runningRun = activity => (activity.runs || []).find(run => run.state === 'running');
+  // A background pass is not one: Index changes stops it, so it stays free.
+  const runningRun = activity => (activity.runs || []).find(run => run.state === 'running' && run.kind !== 'background-update');
 
   // Home and the card pages rerun their queries when a run finishes having
   // indexed something. Runs that found no changes leave their results as they
@@ -178,6 +172,12 @@
     const active = runningRun(activity);
     const wasActive = Boolean(activeRun);
     activeRun = active || null;
+    // status-panel.js owns the header's Index changes state.
+    if (window.pharosStatusStore?.enabled() === true) {
+      if (wasActive && !active) window.pharosLibrary?.refresh?.();
+      window.pharosLibrary?.refreshSyncControls?.();
+      return;
+    }
     // A running sync is stopped from the drive panel, not the header.
     if (active) {
       action.disabled = true;
@@ -200,66 +200,9 @@
     const focused = dashboard.contains(document.activeElement) ? document.activeElement.dataset.syncFocus : null;
     // Keep the React tables and activity panel attached. Detaching a host
     // resets its scroll containers even when the React root is retained.
-    const retained = new Set(['syncHistoryTables', 'syncSourceTables', 'syncDiagnosticTables', 'syncOperations'].map(id => document.getElementById(id)));
+    const retained = new Set(['backgroundSchedule', 'syncHistoryTables', 'syncSourceTables', 'syncDiagnosticTables', 'syncOperations'].map(id => document.getElementById(id)));
     for (const child of [...dashboard.children]) if (!retained.has(child)) child.remove();
-    const settings = status.settings;
-    const preferences = node('section', '', 'sync-panel');
-    preferences.append(node('h3', 'Automatic indexing'));
-    const controls = node('div', '', 'sync-controls');
-    const label = node('label', 'Index changes ');
-    const cadence = document.createElement('select');
-    cadence.setAttribute('aria-label', 'Automatic indexing schedule');
-    for (const [value, text] of [[0, 'Off'], [60, 'Every minute'], [300, 'Every 5 minutes'], [900, 'Every 15 minutes'], [1800, 'Every 30 minutes'], [-1, 'Custom…']]) {
-      const option = node('option', text);
-      option.value = value;
-      cadence.append(option);
-    }
-    cadence.value = settings.enabled ? ([60, 300, 900, 1800].includes(settings.interval_seconds) ? settings.interval_seconds : -1) : 0;
-    const custom = document.createElement('input');
-    custom.type = 'number'; custom.min = 1; custom.max = 1440;
-    custom.value = settings.interval_seconds / 60;
-    custom.setAttribute('aria-label', 'Custom interval in minutes');
-    custom.hidden = Number(cadence.value) !== -1;
-    const save = async () => {
-      const value = Number(cadence.value);
-      custom.hidden = value !== -1;
-      if (value === -1 && !custom.reportValidity()) return;
-      await call('/api/sync/settings', {enabled: value !== 0, interval_seconds: value === -1 ? Number(custom.value) * 60 : value || settings.interval_seconds});
-      await refresh();
-    };
-    cadence.onchange = () => save().catch(error => showError(error.message));
-    custom.onchange = cadence.onchange;
-    label.append(cadence);
-    const check = button('Index changes now', () => call('/api/sync/check', {}));
-    check.disabled = Boolean(status.busy);
-    controls.append(label, custom, check);
-    preferences.append(node('p', 'Automatic indexing updates conversations. Index changes now also refreshes GitHub, identities, Git integration, tool summaries, Human Words, and findings.', 'muted'));
-    const schedule = node('p', `${status.pause_reason || 'Ready'} · Next run: `, 'muted');
-    schedule.append(settings.enabled ? time(settings.next_at) : document.createTextNode('Off'));
-    preferences.append(controls, schedule);
-    const sources = node('fieldset', '', 'sync-controls');
-    sources.append(node('legend', 'Index changes from these sources on this Mac'));
-    const selected = new Set(settings.sources.length ? settings.sources : (status.available_sources || status.sources || []).map(source => source.name));
-    for (const source of status.available_sources || status.sources || []) {
-      const choice = document.createElement('input');
-      choice.type = 'checkbox'; choice.checked = selected.has(source.name);
-      choice.setAttribute('aria-label', `Index changes from ${source.name}`);
-      choice.onchange = async () => {
-        if (choice.checked) selected.add(source.name); else selected.delete(source.name);
-        if (!selected.size) { choice.checked = true; selected.add(source.name); showError('Choose at least one source, or turn automatic indexing Off.'); return; }
-        try { await call('/api/sync/settings', {sources: [...selected]}); }
-        catch (error) { showError(error.message); }
-      };
-      const sourceLabel = node('label', ''); sourceLabel.append(choice, document.createTextNode(` ${source.name}`)); sources.append(sourceLabel);
-    }
-    for (const source of status.available_sources || []) {
-      if (source.preservation_mode === 'filesystem-retained-sqlite-gated') preferences.append(node('p', `${source.name}: transcript preservation is enabled for file-only inputs. Sources with SQLite naming metadata await preservation validation.`, 'muted'));
-      if (source.preservation_mode === 'live-sqlite-rollout-gap') preferences.append(node('p', `${source.name}: live indexing continues; automatic source preservation awaits validation. Use Capture & index to preserve available inputs.`, 'muted'));
-    }
-    preferences.append(sources, node('p', 'Index changes reads live inputs by default. Input preservation is opt-in; use Capture & index to preserve available inputs. Manual indexing also refreshes library-wide analysis.', 'muted'));
-    dashboard.insertBefore(preferences, document.getElementById('syncSourceTables'));
-    const latest = status.history?.[0];
-    if (settings.enabled && latest?.seconds > settings.interval_seconds) dashboard.insertBefore(node('p', 'Indexing changes takes longer than the selected interval. The next run starts after this one finishes.', 'badtext'), document.getElementById('syncDiagnosticTables'));
+    // The schedule (Background Processing) is background.js's, at the top.
     const repairs = panel('Repair & maintenance', 'repairs', status.recovery_jobs?.some(job => ['interrupted', 'failed'].includes(job.state)));
     repairs.append(node('p', 'For missing data or damaged indexes. These operations can take a long time; everyday capturing and indexing do not need them.', 'muted'));
     const actions = node('div', '', 'sync-actions');
@@ -295,7 +238,7 @@
     if (focused) [...dashboard.querySelectorAll('[data-sync-focus]')].find(element => element.dataset.syncFocus === focused)?.focus({preventScroll: true});
   }
 
-  async function refresh() {
+  async function refresh({automatic = false} = {}) {
     if (busy) return;
     busy = true;
     try {
@@ -303,7 +246,10 @@
       renderHeader(activity);
       announceChanges(activity);
       if (document.getElementById('settings')?.classList.contains('active') || !status || status.library_empty) {
-        status = await call('/api/sync/status');
+        const latest = await call('/api/sync/status');
+        // Keep history still while it is being reviewed. Page visits, Refresh
+        // and actions replace it; activity, source status and alerts stay live.
+        status = automatic && status?.settings ? {...latest, history: status.history} : latest;
         renderDashboard();
         window.dispatchEvent(new Event('pharos:sync-status'));
       }
@@ -315,9 +261,9 @@
         window.pharosLibrary?.renderAlerts?.();
       }
     } catch (error) { if (!status) showError(error.message); }
-    finally { busy = false; clearTimeout(timer); timer = setTimeout(refresh, 3000); }
+    finally { busy = false; clearTimeout(timer); timer = setTimeout(() => refresh({automatic: true}), 3000); }
   }
-  window.addEventListener('pharos:route', refresh);
+  window.addEventListener('pharos:route', () => refresh());
   window.pharosSync = {status: () => status, refresh, recovery, isBusy: () => Boolean(activeRun), issues: () => openIssues,
     // Pure helpers, for web/tests/unit/page/sync.test.mjs.
     finishedRunsChanged, runningRun, preservationState, format: {seconds, memory, when, number, percent}};

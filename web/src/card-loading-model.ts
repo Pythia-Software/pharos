@@ -33,7 +33,7 @@ export function cardLoadingPresentation(query: QueryState, options: { recipe?: Q
   const limit = typeof requested === "number" && Number.isSafeInteger(requested) && requested > 0 ? Math.min(100, requested) : undefined;
   const display = options.cover?.kind ?? metric.display?.kind ?? "auto";
   const timeline = metric.groupBy[0] === "day" && display === "auto" && metric.op === "sum" && !metric.expression && !metric.distribution;
-  const kind = loadingKind(metric, display, timeline);
+  const kind = timeline && cover?.timeline?.scale === "logarithmic" && !cover?.timeline?.percent ? "line" : loadingKind(metric, display, timeline);
   const count = kind === "value" ? 1 : kind === "columns" && metric.distribution?.kind === "histogram" ? metric.distribution.bins ?? 10
     : timeline ? Math.min(100, (options.days ?? 7) + 1)
     : limit ?? (kind === "box" ? 3 : kind === "scatter" ? 12 : kind === "columns" || kind === "line" ? 8 : kind === "pie" || kind === "donut" ? 8 : 4);
@@ -47,6 +47,18 @@ export function cardLoadingPresentation(query: QueryState, options: { recipe?: Q
     : kind === "box" ? 272 : ["pie", "donut"].includes(kind) ? 300 : kind === "scatter" ? 240 : headline ? 208 : undefined;
   return { kind, count: Math.max(1, Math.min(100, count)), headline, belowLabels, height: (options.cover ?? options.recipe?.cover)?.height ?? height };
 }
+
+// Covers without an authored height fit what they draw. Lists and box plots
+// grow with their rows; charts keep one height at any card width. Box plots
+// past four groups use the dense rows, as the preview draws them.
+export function fittedCoverHeight(kind: CardLoadingKind, rows: number, list: { belowLabels?: boolean; labelLines?: number } = {}): number {
+  if (kind === "value" || kind === "text") return 130;
+  if (kind === "list" || kind === "table") return Math.max(110, 41 + rows * (list.belowLabels ? 8 + 12 * (list.labelLines ?? 2) : rows >= 7 ? 20 : 24));
+  if (kind === "box") return boxCoverHeight(rows, rows > denseBoxGroups);
+  if (kind === "pie" || kind === "donut") return 200 + Math.ceil(rows / 2) * 14;
+  return kind === "scatter" ? 240 : 190;
+}
+export const denseBoxGroups = 4;
 
 function loadingKind(metric: AggregationClause, display: string, timeline: boolean): CardLoadingKind {
   if (metric.distribution) return metric.distribution.kind === "histogram" ? "columns" : "box";

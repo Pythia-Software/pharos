@@ -285,3 +285,45 @@ test("only a withheld batch offers a retry of the same request", () => {
   for (const stop_reason of ["complete", "time_budget", "time_budget_no_progress", "page_limit"]) assert.equal(m.withheldBatch({ stop_reason }), false);
   assert.equal(m.withheldBatch(undefined), false);
 });
+
+test("the scope note says when a word search leaves tool output out, and when a literal search needs a scope", () => {
+  const draft = (change = {}, scope = {}) => ({ ...m.emptyTextSearch(), ...change, scope: { ...m.emptyScope(), ...scope } });
+  assert.equal(m.textScopeNote(draft({}, { surface: "tools" })), "tool-output");
+  assert.equal(m.textScopeNote(draft({}, { surface: "all", roles: ["tool"] })), "tool-output");
+  assert.equal(m.textScopeNote(draft({}, { surface: "all", workspace_id: "w" })), "tool-output");
+  assert.equal(m.textScopeNote(draft({}, { surface: "all", roles: ["system"] })), null);
+  assert.equal(m.textScopeNote(draft({}, { surface: "tools", conversation_id: "c" })), null);
+  assert.equal(m.textScopeNote(draft({}, { surface: "prose" })), null);
+  // Literal and regex searches scan stored text, tool output included.
+  for (const literal of [{ match: "literal" }, { match: "regex" }, { editor: "syntax", mode: "regex" }]) {
+    assert.equal(m.textScopeNote(draft(literal, { surface: "tools" })), "scan");
+    assert.equal(m.textScopeNote(draft(literal, { surface: "tools", conversation_id: "c" })), null);
+  }
+  assert.equal(m.textScopeNote(draft({ editor: "syntax", mode: "advanced" }, { surface: "all" })), "tool-output");
+});
+
+
+test("Today search saves calendar intent and retains execution bounds across cursor batches", () => {
+  const clock = new Date(2026, 10, 1, 9, 30);
+  const draft = m.withSearchDateComparison(m.newKeywordSearch(clock), "from", "today", clock);
+  draft.root.children[0].text = "migration";
+  const midnight = new Date(clock); midnight.setHours(0, 0, 0, 0);
+  assert.equal(draft.scope.from, midnight.toISOString());
+  assert.equal(draft.scope.to, clock.toISOString());
+  assert.match(m.sentenceText(m.searchSentence(draft).parts), /today.*local time/);
+  const tomorrow = new Date(2026, 10, 2, 9);
+  const restored = m.readTextSearch(new URLSearchParams({ text_builder: JSON.stringify(draft) }), tomorrow);
+  assert.equal(restored.error, "");
+  for (const cursor of ["", "next"]) {
+    const params = new URLSearchParams(m.textFindParameters(restored.draft, cursor));
+    assert.equal(params.get("find_from"), draft.scope.from);
+    assert.equal(params.get("find_to"), draft.scope.to);
+  }
+  const renewed = m.refreshSearchToday(restored.draft, tomorrow);
+  assert.notEqual(renewed.scope.from, draft.scope.from);
+  assert.equal(renewed.scope.to, tomorrow.toISOString());
+  assert.equal(m.refreshSearchToday(draft, new Date(clock.getTime()+1000), true), draft);
+  const manual = { ...draft, scope: { ...draft.scope, from: "2026-01-01" } };
+  assert.equal(m.refreshSearchToday(manual, tomorrow), manual);
+  assert.equal(m.searchDateWindow(m.withSearchDateComparison(draft, "from", "last", clock)).duration, "30d");
+});

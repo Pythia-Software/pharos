@@ -1,28 +1,10 @@
-import { EMPTY_QUERY, decodeQueryStrict, inspectBucketQuery, type AggregationClause, type QueryState, type SummaryColumn, type CellDisplay, type WhereTerm, type OrderByClause } from "@pythia-software/query-table-core";
-import type { UsageDataset, UsageTopic } from "./usage-workspace-model";
+import { todayBounds } from "./day-window";
+import { EMPTY_QUERY, decodeQueryStrict, inspectBucketQuery, isMetricCycle, type CalendarGroupKey, type GroupKey, type AggregationClause, type QueryState, type SummaryColumn, type CellDisplay, type WhereTerm, type OrderByClause } from "@pythia-software/query-table-core";
+import { readUsageWorkspace, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
+import { withTimeRange } from "./chart-range";
 import type { ConcurrencySelection } from "./concurrency";
 import { localDay } from "./chart-period";
 import { shiftCalendarDay } from "./concurrency-settings";
-
-export type RecordDashboardTopic = Extract<UsageTopic, "skills" | "time">;
-type Measure = { label: string; op: AggregationClause["op"]; field?: string; expression?: string; unit: string; divisor?: number };
-type DashboardSpec = { dataset: UsageDataset; time: string; measures: Measure[]; splits: Array<[string, string]>; note: string };
-export const recordDashboards: Record<RecordDashboardTopic, DashboardSpec> = {
-  time: { dataset: "tool_calls", time: "started_at", measures: [
-    { label: "Recorded tool time", op: "sum", field: "duration_ms", unit: "hours", divisor: 3_600_000 },
-    { label: "Tool calls", op: "count", unit: "calls" },
-  ], splits: [["activity", "Activity"], ["tool_category", "Tool category"], ["provider", "Provider"], ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"], ["repository_name", "Repository"]], note: "Recorded durations can overlap and may include approval waits. Their sum is tool time, not elapsed wall time. Use the legacy view for command-family comparisons and timelines." },
-  skills: { dataset: "skill_usages", time: "created_at", measures: [
-    { label: "Evidence records", op: "count", unit: "records" },
-    { label: "Retained body volume", op: "sum", expression: "SUM(IF([content_bytes]>0,[content_bytes],0))", unit: "bytes" },
-  ], splits: [["skill_name", "Skill"], ["evidence_type", "Evidence type"], ["provider", "Provider"], ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"], ["repository_name", "Repository"], ["status", "Status"]], note: "These are observed invocations, file loads, and harness-reported loads. A load does not prove a skill was followed. Body volume sums known positive recorded sizes, including repeated loads." },
-
-};
-
-export function recordDashboardMetric(topic: RecordDashboardTopic, metric: number, period: string, split: string): AggregationClause {
-  const spec = recordDashboards[topic], measure = spec.measures[metric] ?? spec.measures[0];
-  return { id: "usage_dashboard", op: measure.op, ...(measure.field ? { field: measure.field } : {}), ...(measure.expression ? { expression: measure.expression } : {}), groupBy: [period, split], label: measure.label };
-}
 
 export function readDashboardQuery(params: URLSearchParams, fallback: QueryState): { query: QueryState; error: string } {
   const token = params.get("analyze_filters");
@@ -32,6 +14,34 @@ export function readDashboardQuery(params: URLSearchParams, fallback: QueryState
     if (query && !query.grouping) return { query, error: "" };
   } catch { /* A broken filter link must not broaden the requested population. */ }
   return { query: fallback, error: "This dashboard link has invalid filters. Open the legacy view or choose another dashboard." };
+}
+
+// A dashboard link as the page opens it: its chart over the dashboard's
+// defaults, if valid, and its filters, or the range analyze_days names
+// (readUsageWorkspace) without them. migrate reads an older link's state and
+// population (readAnalysisLink); migrated says the link must be rewritten.
+export function readDashboardLink<T extends object>(params: URLSearchParams, defaults: T, valid: (value: T) => boolean, time: { first: string; last: string }, migrate?: (view: T, where: WhereTerm[]) => { state: T; where: WhereTerm[] }, now = new Date()) {
+  let view = defaults, error = "";
+  if (params.has("analyze_chart")) {
+    try {
+      const saved = JSON.parse(params.get("analyze_chart")!);
+      if (!saved || typeof saved !== "object" || Array.isArray(saved)) throw new Error();
+      const candidate = { ...defaults, ...saved };
+      if (valid(candidate)) view = candidate; else throw new Error();
+    }
+    catch { error = "This dashboard link has invalid chart settings. Choose another dashboard to reset it."; }
+  }
+  // The definition must remain relative when the host writes it back. Resolving
+  // this into midnight here turned a copied "last 7 days" into fixed dates.
+  const restored = readDashboardQuery(params, { ...EMPTY_QUERY, where: withTimeRange([], time, undefined, undefined, `${readUsageWorkspace(params).days}d` as "7d" | "30d" | "90d") });
+  if (params.get("analyze_window") === "today" && !restored.error) {
+    const where = restored.query.where.filter(term => !("field" in term && [time.first, time.last].includes(term.field) && !term.negated && [">", ">=", "<", "<="].includes(term.op)));
+    try {
+      restored.query = { ...restored.query, where: [...where, { field: time.last, op: ">=", value: todayBounds(now, params.get("analyze_timezone") ?? undefined)[0] }, { field: time.first, op: "<", value: "+0s" }] };
+    } catch { restored.error = "This dashboard link has an invalid Today timezone."; }
+  }
+  const read = migrate && !error && !restored.error ? migrate(view, restored.query.where) : { state: view, where: restored.query.where };
+  return { view: read.state, where: read.where, error: error || restored.error, migrated: read.where !== restored.query.where || read.state !== view };
 }
 
 // Materialize the graph's dimensions as result rows. Its filters belong to
@@ -46,13 +56,20 @@ function summaryDisplay(clause: AggregationClause): CellDisplay | undefined {
   return undefined;
 }
 
+// Metric clauses as the grouped rows they draw: one summary per clause over
+// their shared keys. A calendar date grouping (a timestamp by hour, say)
+// becomes a calendar group key, one row per local interval; a cycle,
+// occurrences, whole intervals or filled empty intervals have no grouped
+// rows to match.
 export function groupedDashboardQuery(query: QueryState): QueryState {
   if (query.grouping) return query;
   const clauses = query.aggregations ?? [];
   if (!clauses.length) return query;
-  const keys = clauses[0].groupBy;
-  if (clauses.some(clause => JSON.stringify(clause.groupBy) !== JSON.stringify(keys))) throw new Error("Choose measures with the same grouping before opening grouped results.");
-  if (clauses.some(clause => clause.where?.length || clause.dateGrouping || clause.expressionY || clause.distribution || clause.minCount || clause.scope && clause.scope !== "allMatching")) throw new Error("This graph needs its own grouped-query conversion.");
+  const fields = clauses[0].groupBy, dateGrouping = clauses[0].dateGrouping;
+  if (clauses.some(clause => JSON.stringify(clause.groupBy) !== JSON.stringify(fields) || JSON.stringify(clause.dateGrouping) !== JSON.stringify(dateGrouping))) throw new Error("Choose measures with the same grouping before opening grouped results.");
+  const calendar = dateGrouping && !isMetricCycle(dateGrouping.interval) && !dateGrouping.occurrence && !dateGrouping.partialIntervals && !dateGrouping.includeEmpty && fields[0] === dateGrouping.field;
+  if (dateGrouping && !calendar || clauses.some(clause => clause.where?.length || clause.expressionY || clause.distribution || clause.minCount || clause.window || clause.share || clause.scope && clause.scope !== "allMatching")) throw new Error("This graph needs its own grouped-query conversion.");
+  const keys: GroupKey[] = fields.map((field, index) => index === 0 && calendar ? { field, interval: dateGrouping.interval as CalendarGroupKey["interval"], ...dateGrouping.timeZone ? { timeZone: dateGrouping.timeZone } : {} } : field);
   const summaries: SummaryColumn[] = clauses.map((clause, index) => ({
     id: `dashboard_${index + 1}`, op: clause.expression ? "formula" : clause.op,
     ...(clause.field && !clause.expression ? { field: clause.field } : {}),
@@ -61,13 +78,13 @@ export function groupedDashboardQuery(query: QueryState): QueryState {
     ...(summaryDisplay(clause) ? { display: summaryDisplay(clause) } : {}),
   }));
   const orderBy: OrderByClause[] = (clauses[0].sort ?? []).flatMap(sort => {
-    const field = sort.key === "value" ? summaries[0].id : /^group\d+$/.test(sort.key) ? keys[Number(sort.key.slice(5))] : undefined;
+    const field = sort.key === "value" ? summaries[0].id : /^group\d+$/.test(sort.key) ? fields[Number(sort.key.slice(5))] : undefined;
     return field ? [{ field, dir: sort.dir }] : [];
   });
-  for (const field of keys) if (!orderBy.some(sort => sort.field === field)) orderBy.push({ field, dir: "asc" });
+  for (const field of fields) if (!orderBy.some(sort => sort.field === field)) orderBy.push({ field, dir: "asc" });
   const { aggregations: _, ...source } = query;
   return { ...EMPTY_QUERY, limit: query.limit, grouping: { source: { ...source, offset: 0 }, keys, summaries, representative: null },
-    select: [...keys, ...summaries.map(column => column.id)].map(field => ({ field })), orderBy };
+    select: [...fields, ...summaries.map(column => column.id)].map(field => ({ field })), orderBy };
 }
 
 // The ribbon is continuous; its native query dataset is hourly occupancy.
@@ -117,15 +134,4 @@ export function toolDashboardWhere(where: WhereTerm[], bounds: { from?: Date; to
     ...start ? [{ field: "day", op: "matches_regex" as const, value: dayBoundaryPattern(start, "after") }] : [],
     { field: "day", op: "matches_regex", value: dayBoundaryPattern(end, "before") }];
   return [...kept, days.length === 1 ? days[0] : days.length ? { any: days } : { field: "day", op: "=", value: "No days in selected range" }];
-}
-
-// A cumulative point includes the full selected range through its interval.
-// Inspect the non-time group, retaining the source dates and other filters,
-// then cap its calendar key at this point (day, week, or month).
-export function inspectDashboardBucket(query: QueryState, bucket: Parameters<typeof inspectBucketQuery>[1], clause: AggregationClause, schema: Parameters<typeof inspectBucketQuery>[3], cumulative = false): QueryState | null {
-  if (!cumulative) return inspectBucketQuery(query, bucket, clause, schema);
-  const [period, ...groupBy] = clause.groupBy ?? [];
-  if (!period || bucket.keys[0] == null) return null;
-  const records = inspectBucketQuery(query, { ...bucket, keys: bucket.keys.slice(1) }, { ...clause, groupBy }, schema);
-  return records ? { ...records, where: [...records.where, { field: period, op: "<=", value: String(bucket.keys[0]) }] } : null;
 }

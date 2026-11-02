@@ -20,7 +20,9 @@ const (
 	feedbackEmbeddedFormat
 )
 
-type feedbackReport struct {
+// authorshipForm separates human text fields (notes) from generated metadata
+// in feedback exports and structured question replies.
+type authorshipForm struct {
 	start, end int
 	notes      [][2]int
 }
@@ -34,7 +36,7 @@ var (
 	feedbackField     = regexp.MustCompile(`^(?:\*\*[^*\n]+:\*\*|- [A-Za-z][A-Za-z ]*: )`)
 )
 
-func pageFeedbackReports(text string, bodyStart int) []feedbackReport {
+func pageFeedbackReports(text string, bodyStart int) []authorshipForm {
 	if !strings.Contains(text, "Page Feedback:") && !strings.Contains(text, "UI feedback") && !strings.Contains(text, "design feedback") {
 		return nil
 	}
@@ -50,7 +52,7 @@ func pageFeedbackReports(text string, bodyStart int) []feedbackReport {
 		if inFence || lines[i][0] < bodyStart || header == nil {
 			continue
 		}
-		report := feedbackReport{start: lines[i][0] + strings.Index(text[lines[i][0]:lines[i][1]], line) + header[0], end: lines[i][1]}
+		report := authorshipForm{start: lines[i][0] + strings.Index(text[lines[i][0]:lines[i][1]], line) + header[0], end: lines[i][1]}
 		annotation, context := false, false
 		format, number := feedbackUnknown, 0
 		if strings.HasPrefix(line, "# ") {
@@ -245,22 +247,22 @@ func feedbackJSONNotes(text string, start, end int) [][2]int {
 	return notes
 }
 
-// Claim only generated parts now. The comment ranges stay available to the
+// Claim only generated parts now. The human field ranges stay available to the
 // copied/re-sent checks, then get protected from general formatting heuristics.
-func claimFeedbackMetadata(l *labeler, reports []feedbackReport) {
+func claimFormMetadata(l *labeler, reports []authorshipForm, reason spanReason) {
 	for _, report := range reports {
 		start := report.start
 		for _, note := range report.notes {
-			l.claim(start, note[0], spanHarness, reasonPageFeedback, textOrigin{})
+			l.claim(start, note[0], spanHarness, reason, textOrigin{})
 			start = note[1]
 		}
-		l.claim(start, report.end, spanHarness, reasonPageFeedback, textOrigin{})
+		l.claim(start, report.end, spanHarness, reason, textOrigin{})
 	}
 }
 
-// maskFeedback blanks generated fields for copy comparisons, or the entire
-// report for formatting heuristics. It preserves byte offsets and newlines.
-func maskFeedback(text string, reports []feedbackReport, includeComments bool) string {
+// maskAuthorshipForms blanks generated fields for copy comparisons, or the entire
+// form for formatting heuristics. It preserves byte offsets and newlines.
+func maskAuthorshipForms(text string, reports []authorshipForm, includeComments bool) string {
 	if len(reports) == 0 {
 		return text
 	}
@@ -293,9 +295,9 @@ var designFeedbackAnnotation = regexp.MustCompile(`^## ([0-9]+)\. .+$`)
 // The design-preview exporter puts free-form comments before Element/State/
 // Source fields and a JSON state snapshot. Require that complete signature,
 // so a heading in an ordinary discussion is never enough to claim comments.
-func designFeedbackReports(text string, bodyStart int) []feedbackReport {
+func designFeedbackReports(text string, bodyStart int) []authorshipForm {
 	lines := textLines(text)
-	var reports []feedbackReport
+	var reports []authorshipForm
 	fenced := false
 	for i := 0; i < len(lines); i++ {
 		value := strings.TrimSpace(text[lines[i][0]:lines[i][1]])
@@ -305,7 +307,7 @@ func designFeedbackReports(text string, bodyStart int) []feedbackReport {
 		if fenced || lines[i][0] < bodyStart || !designFeedbackHeader.MatchString(value) {
 			continue
 		}
-		report := feedbackReport{start: lines[i][0], end: lines[i][1]}
+		report := authorshipForm{start: lines[i][0], end: lines[i][1]}
 		number, j := 0, i+1
 		for j < len(lines) {
 			if strings.TrimSpace(text[lines[j][0]:lines[j][1]]) == "" {

@@ -1,3 +1,4 @@
+import { analysisCatalogs } from "../../src/analysis-catalogs";
 // Every recipe, active or retired, at every preview window: its measures, its
 // destination and its cover compile against the server contract, and its
 // saved URL round-trips. Retired recipes stay here because saved collections
@@ -9,12 +10,17 @@ import { categoryForQuery } from "../../src/query-categories";
 import { suggestionPool } from "../../src/curiosity-data";
 import { cardTemplates } from "../../src/card-library-model";
 import { usageDatasetTopics, readUsageWorkspace, usageDashboardReturn } from "../../src/usage-workspace-model";
-import { readDashboardQuery, recordDashboardMetric, toolDashboardWhere } from "../../src/usage-dashboard-model";
-import { tokenChartMetrics } from "../../src/token-chart-request";
-import { mcpDashboardQuery, validMCPDashboard } from "../../src/mcp-dashboard-model";
-import { toolDashboardQuery, validToolDashboard } from "../../src/tools-dashboard-model";
+import { readDashboardQuery } from "../../src/usage-dashboard-model";
+import { trendQuery } from "../../src/dashboard-trend-model";
+import { analysisQuery, validAnalysisState } from "../../src/dashboard-analysis-model";
+import { tokenAnalysisCatalog } from "../../src/token-analysis-catalog";
+import { mcpAnalysisCatalog } from "../../src/mcp-analysis-catalog";
+import { toolsAnalysisCatalog } from "../../src/tools-analysis-catalog";
+import { toolTimeAnalysisCatalog, skillsAnalysisCatalog } from "../../src/record-analysis-catalogs";
 import { cardDashboardWhere, cardDetailsURL } from "../../src/card-exploration";
-import { timeBounds } from "../../src/usage-chart";
+import { windowedChart } from "../../src/card-windows";
+
+const catalogs = analysisCatalogs;
 
 const clock = new Date(2026, 9, 13, 12), now = clock.getTime();
 // Current-state and all-time recipes (recipe.period) have no lookback to vary.
@@ -49,26 +55,22 @@ for (const recipe of queryRecipes) test(`${recipe.id}${recipe.retired ? " (retir
     if (Object.hasOwn(usageDatasetTopics, recipe.dataset)) {
       assert.equal(url.pathname, "/analyze", `Analyze route @${days}d`);
       assert.equal(readUsageWorkspace(url.searchParams).dataset, recipe.destination?.dataset ?? recipe.dataset);
-      if (!recipe.retired) assert.ok(recipe.destination, "analysis cards start exploration on a dashboard");
+      if (!recipe.retired && recipe.dataset !== "tl1_attempts") assert.ok(recipe.destination || recipe.thinking, "analysis cards start exploration on a dashboard");
     }
     if (recipe.destination) {
       const { topic, chart } = recipe.destination;
       assert.equal(readUsageWorkspace(url.searchParams).mode, "dashboards");
       assert.equal(readUsageWorkspace(url.searchParams).topic, topic);
-      assert.deepEqual(JSON.parse(url.searchParams.get("analyze_chart")), chart);
+      assert.deepEqual(JSON.parse(url.searchParams.get("analyze_chart")), windowedChart(recipe.id, chart, days));
       const filters = readDashboardQuery(url.searchParams, core.EMPTY_QUERY);
       assert.equal(filters.error, "");
       assert.deepEqual(filters.query.where, cardDashboardWhere(recipe.dataset, recipe.destination.dataset, (query.grouping?.source ?? query).where), "dashboard carries compatible context");
-      const dashboard = topic === "tokens" ? { ...filters.query, aggregations: tokenChartMetrics(chart) }
-        : topic === "time" || topic === "skills" ? { ...filters.query, aggregations: [recordDashboardMetric(topic, chart.metric, chart.period, chart.split)] }
-        : topic === "mcp" ? mcpDashboardQuery(chart, filters.query.where)
-        : topic === "tools" ? toolDashboardQuery(chart, toolDashboardWhere(filters.query.where, timeBounds(filters.query.where, { first: "day", last: "day" }, now), clock))
-        : filters.query;
-      if (topic === "mcp") assert.equal(validMCPDashboard(chart), true);
-      if (topic === "tools") assert.equal(validToolDashboard(chart), true);
+      const catalog = catalogs[topic];
+      if (catalog) assert.equal(validAnalysisState(catalog, chart), true, "the chart is a valid analysis state");
+      const dashboard = !catalog ? filters.query : (chart.view ?? "trend") === "trend" ? trendQuery(catalog, chart, filters.query.where, { now }).query : analysisQuery(catalog, chart, filters.query.where, { now }).query;
       // The SQLite service supports isolated source regex (unlike the generic
       // in-memory fake); wide Tools date ranges use that native capability.
-      assert.deepEqual(core.toQueryRequestV3(dashboard, schemas[recipe.destination.dataset], { ...capabilities, regexSourceFilters: true }, execution, { now, rows: false }).diagnostics, [], `dashboard @${days}d`);
+      for (const part of core.planMetricSeries(dashboard, schemas[recipe.destination.dataset], { now })?.queries ?? [dashboard]) assert.deepEqual(core.toQueryRequestV3(part, schemas[recipe.destination.dataset], { ...capabilities, regexSourceFilters: true }, execution, { now, rows: false }).diagnostics, [], `dashboard @${days}d`);
       assert.equal(suggestion.action, recipe.action);
       const details = new URL(cardDetailsURL(url.searchParams), "http://home.test");
       assert.equal(readUsageWorkspace(details.searchParams).mode, "query");
@@ -78,7 +80,7 @@ for (const recipe of queryRecipes) test(`${recipe.id}${recipe.retired ? " (retir
       assert.equal(readUsageWorkspace(back.searchParams).topic, topic);
       assert.equal(readUsageWorkspace(back.searchParams).dataset, recipe.destination.dataset);
       assert.equal(back.searchParams.get("analyze_filters"), url.searchParams.get("analyze_filters"));
-      assert.equal(back.searchParams.get(`q_${recipe.dataset}`), url.searchParams.get(`q_${recipe.dataset}`));
+      assert.equal(readUsageWorkspace(back.searchParams).mode, "dashboards");
     }
     if (query.grouping) {
       const { grouping } = query;

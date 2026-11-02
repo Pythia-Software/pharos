@@ -20,10 +20,21 @@ export const sourceSetupCandidates = [
 ];
 const day = 86400000, iso = offset => new Date(now - offset).toISOString();
 
+// Fixed UTC calendar boundaries keep the fixture's calendar columns coherent.
+const summaryDay = new Date(now); summaryDay.setUTCHours(0, 0, 0, 0);
+const summaryWeek = new Date(summaryDay); summaryWeek.setUTCDate(summaryWeek.getUTCDate() - (summaryWeek.getUTCDay() + 6) % 7);
+const summaryMonth = new Date(summaryDay); summaryMonth.setUTCDate(1);
+const summaryFrom = { today: summaryDay.toISOString(), yesterday: new Date(+summaryDay - day).toISOString(), week: summaryWeek.toISOString(), month: summaryMonth.toISOString() };
+
 // Long values are where layouts break, so some rows carry them.
 const longTitle = "Investigate why the incremental indexer re-reads every capture after a laptop sleeps through a scheduled sync window";
-const datasets = Object.fromEntries(Object.entries(schemas).map(([name, schema]) => [name, population(schema, { now, count: 48 }).map((row, index) => index % 5 ? row
+export const queryFixtureDatasets = Object.fromEntries(Object.entries(schemas).map(([name, schema]) => [name, population(schema, { now, count: 48 }).map((row, index) => index % 5 ? row
   : { ...row, title: longTitle, repository_name: "pythia-software/an-unusually-long-repository-name-for-layout", location: "/Users/someone/conductor/workspaces/pharos/a-deeply-nested-worktree-directory/internal/archive" })]));
+const datasets = queryFixtureDatasets;
+// Parallelism records are built with the saved counting and gap settings.
+for (const row of datasets.parallelism) Object.assign(row, { counting: "workspace", gap_minutes: 60 });
+// The service assigns every usage record a carbon factor tier.
+datasets.usage.forEach((row, index) => { row.carbon_tier = ["small", "medium", "large"][index % 3]; });
 // Usage trends consume the calendar keys of their source records.
 for (const row of [...datasets.tools, ...datasets.mcp_calls]) {
   const monday = new Date(`${row.day}T00:00:00Z`);
@@ -113,6 +124,14 @@ function delegation(query) {
     metrics: metricSpecs, maxima: { self: Object.fromEntries(metricKeys.map(key => [key, key === "tokens" ? 100000 : 300000])), all: Object.fromEntries(metricKeys.map(key => [key, key === "tokens" ? 190000 : 300000])) },
     totals: { ...sessions[0].all, clock: metric(300000), total: metric(900000) }, start, end: sessionEnd, density: Array.from({ length: 120 }, (_, i) => i % 13), warnings: [] };
 }
+function workPreview(id, query) {
+  if (id !== workID) return;
+  const models = [{ model: "claude-opus-with-a-very-long-model-identifier", provider: "claude", sessions: sessions.length, tokens: 190000 }];
+  const scope = { start, end: sessionEnd, sessions: sessions.length, models, totals: { ...sessions[0].all, clock: metric(300000), total: metric(900000) } };
+  const conversation = query.get("conversation");
+  return { repository: "a-repository-with-a-long-name", branch: "gbdubs/a-very-long-branch-name-for-overflow", metrics: metricSpecs, workspace: scope,
+    ...conversation ? { conversation: { ...scope, sessions: 1 } } : {} };
+}
 function parallel(query) {
   const from = Number(query.get("start")) || start, to = Number(query.get("end")) || sessionEnd;
   return { snapshot: "fixture-v1", start: from, end: to, inference: "Inferred, not measured", lanes: (query.get("sessions") || "").split(",").filter(Boolean).map(id => ({ session: id,
@@ -147,16 +166,98 @@ const findingDetail = card => ({ ...card, chart: { title: "Codex conversations t
   attempts: [{ attempt: 1, change: "A shared instructions file", copied_at: iso(12 * day), status: "watching", target_label: "tl1", savings: { usd: 3.2, added_usd: 0 } }],
   steps: [{ label: "A shared instructions file", change: "" }, { label: "A fallback setting", change: "" }], metric: { kind: "rate", unit: "conversations" }, prompt: `Pharos finding ${card.id} …` });
 
-// TL1: one project with a configuration matrix and follow-ups.
-const followup = { from_flavor: "implement", from_configuration: "codex-high", from_model: "gpt-6", next_flavor: "agent-review", next_configuration: "claude-medium", next_model: "claude-sonnet", next_class: "llm", next_outcome: "findings", paths: 4, with_findings: 3, findings: 5 };
-const tl1Overview = {
-  project: "example", installations: [{ host_label: "Mac", synced_at: iso(3600000) }], enqueues: [], window: { tasks: 14, total_tasks: 14, label: "all time" },
-  coverage: { transcript_share: 1, cost_share: 1 }, totals: { cost_usd: 42, llm_attempts: 14, procedural_attempts: 0, candidates: 4, finished_candidates: 3, llm_error_rate: 0, agent_error_rate: 0, human_tasks: 4, pending_human: 0, median_steps: 3, median_llm_duration_ms: 12000, cache_read_share: 0.5, tokens: { total_tokens: 1000 } },
-  matrix: [{ flavor: "implement", configuration: "codex-high", attempts: 14, advanced: 12, advance_rate: 0.86, escalation_rate: 0.14, agent_error_rate: 0, median_cost_usd: 2, cost_per_advance_usd: 3, median_duration_ms: 12000, median_tokens: 1000, cache_read_share: 0.5, default: true, low_sample: true, flag: "worst_value" },
-    { flavor: "review", configuration: "claude-medium", attempts: 14, advanced: 14, advance_rate: 1, escalation_rate: 0, agent_error_rate: 0, median_cost_usd: 1, cost_per_advance_usd: 1, median_duration_ms: 10000, median_tokens: 500, cache_read_share: 0.4, flag: "best_value" }],
-  flavors: [], graph: { nodes: [], edges: [] }, errors: [], human: {}, reviews: {}, candidates: {},
-  followups: { next: [followup], after: [{ ...followup, after_flavor: "human-review", after_class: "human", after_outcome: "remanded", paths: 2, with_findings: 2, findings: 3 }] },
+// Synthetic examples for risky action layout; selection and lifecycle are tested in Go.
+const safetyCard = { id: "safety_sample", title: "Check where credentials were copied", explanation: "A command selected credential files or cloud configuration for copying to another location.", state: "open", target: repoTarget, target_label: "explo", first_seen_at: iso(day), last_seen_at: iso(day), calls: 3, material_change: false, cart: { target: repoTarget, target_label: "explo", ticked: true } };
+export const safetyFixtures = {
+  cases: [safetyCard, { ...safetyCard, id: "safety_delete", target: "machine:studio", target_label: "Mac Studio", calls: 7, material_change: true, handed_at: iso(3 * day), first_seen_at: iso(4 * day), last_seen_at: iso(2 * day), title: "Review a deletion outside this checkout", explanation: "A recursive deletion selects content outside the recorded checkout, or its target could not be resolved.", cart: undefined }, { ...safetyCard, id: "safety_handed", title: "Review a change to published Git history", explanation: "A command selects a force push or remote ref deletion.", state: "handed_off", handed_at: iso(day), cart: undefined }],
+  summary: { open: 2, handed_off: 1, dismissed: 0 },
+  cart: [{ target: repoTarget, label: "explo", ticked: 1, handoff: "review", handoff_reason: "Investigate and recommend; make no changes.", items: [{ id: safetyCard.id, title: safetyCard.title, ticked: true, change_label: "Investigate and recommend", suggested_target: repoTarget }] }],
+  targets: [{ target: repoTarget, label: "explo" }, { target: "machine:studio", label: "Mac Studio" }], built_at: iso(3600000), scanned_calls: "807",
+  coverage: "Supported shell commands in the last 28 days. Embedded interpreter code and arbitrary native/MCP mutations are not comprehensively interpreted. No open reviews is not a safety assessment.",
 };
+export const safetyDetailFixture = { ...safetyCard, subject: "/Users/example/repo/.build/gcloud", questions: ["Which sources contain credentials rather than configuration?", "Was the destination uploaded, published, or later cleaned up?"], evidence: [{ id: "safety_evidence_sample", call_id: "tool-call_sample", message_id: "m-1", at: iso(day), command: "cp -R ~/.config/gcloud .build/gcloud", cwd: "/Users/example/repo", cwd_basis: "tool input", status: "no_result", outcome: "Execution and effects need context", conditional: false, path: `/work/${workID}?conversation=${rootConversation}&message=m-1` }] };
+// Keep the sample settings catalog complete, even when there are only three example reviews.
+export const safetySettingsFixture = { rules: [
+  {
+    "id": "api",
+    "title": "Check what an API request changes",
+    "explanation": "An HTTP mutation needs its endpoint and payload semantics checked.",
+    "enabled": true
+  },
+  {
+    "id": "boundary-delete",
+    "title": "Review a deletion outside this checkout",
+    "explanation": "A recursive deletion selects content outside the recorded checkout, or its target could not be resolved.",
+    "enabled": true
+  },
+  {
+    "id": "cloud-delete",
+    "title": "Review a cloud deletion",
+    "explanation": "A command selects remote objects for deletion.",
+    "enabled": true
+  },
+  {
+    "id": "credentials",
+    "title": "Check where credentials were copied",
+    "explanation": "A command selected credential files or cloud configuration for copying to another location.",
+    "enabled": true
+  },
+  {
+    "id": "database",
+    "title": "Review a database change",
+    "explanation": "A command contains a database mutation. Its environment and affected records need checking.",
+    "enabled": true
+  },
+  {
+    "id": "delete",
+    "title": "Check content selected for deletion",
+    "explanation": "A command selects checkout content for deletion without establishing that it is disposable.",
+    "enabled": true
+  },
+  {
+    "id": "disk-image",
+    "title": "Check a disk image operation",
+    "explanation": "A command selects a disk image or mounted volume for a lifecycle operation.",
+    "enabled": true
+  },
+  {
+    "id": "local-history",
+    "title": "Check a change to saved Git work",
+    "explanation": "A command selects a reset, history rewrite, branch deletion, or stash discard.",
+    "enabled": true
+  },
+  {
+    "id": "permissions",
+    "title": "Review a permission change",
+    "explanation": "A command selects permissions outside the recorded checkout or against an unresolved path.",
+    "enabled": true
+  },
+  {
+    "id": "process",
+    "title": "Check which processes were selected",
+    "explanation": "A process signal uses a name or expression that may match more than this task's process.",
+    "enabled": true
+  },
+  {
+    "id": "publication",
+    "title": "Review a merge or publication",
+    "explanation": "A command selects a merge, release change, or tag publication.",
+    "enabled": true
+  },
+  {
+    "id": "remote-history",
+    "title": "Review a change to published Git history",
+    "explanation": "A command selects a force push or remote ref deletion.",
+    "enabled": false
+  },
+  {
+    "id": "system",
+    "title": "Review a system change",
+    "explanation": "A command selects a system service, installation, or disk change.",
+    "enabled": true
+  }
+], built_at: iso(3600000), scanned_calls: "807", window_days: 28, version: "safety-v1" };
+datasets.safety = safetyFixtures.cases.map(card => ({ ...card, rule_label: card.title, subject: card.id === "safety_sample" ? "/Users/example/repo/.build/gcloud" : card.id === "safety_delete" ? "/Users/example/archive" : "origin · work", material_change: false, in_prompt: Boolean(card.cart), review_count: 1 }));
 
 // Settings, sync and the header's library status.
 const hosts = [{ id: "studio", label: "Mac Studio", sources: [{ name: "Claude", captured_at: iso(3 * day), indexed_at: iso(3600000) }] }, { id: "air", label: "MacBook Air with a long machine name", sources: [{ name: "Codex", last_data_at: iso(125 * 60000) }] }, { id: "new", label: "New Mac", sources: [] }];
@@ -171,7 +272,12 @@ const syncHistory = Array.from({ length: 6 }, (_, index) => ({ run_id: `run-${in
 syncHistory[0].phases[0].work = [{ phase: "read", unit: "group", done: 2, total: 2, total_known: true, seconds: 4, features: { conversations: 8, messages: 130, bytes: 4096, bytes_basis: "message_text", since_last_index_seconds: 300, load_one_minute: 1.2 } }];
 syncHistory[0].forecasts = [{ reason: "launch", elapsed_seconds: 0, estimate: { point_seconds: 20, low_seconds: 10, high_seconds: 30, predicted_steps: 3, remaining_steps: 3 }, actual_remaining_seconds: 22.1 }];
 const syncSettings = { enabled: true, interval_seconds: 300, sources: [], next_at: new Date(now + 180000).toISOString() };
-const syncStatus = { settings: syncSettings, busy: false, library_empty: false, has_sources: true, available_sources: [{ name: "codex", preservation_mode: "filesystem-retained-sqlite-gated" }, { name: "claude" }], sources: [{ name: "codex" }, { name: "claude" }], history: syncHistory,
+syncHistory[0].audit.evidence_bytes = 32768;
+syncHistory[0].audit.attempts = [
+  { source: 'codex', unit: 'large-input', outcome: 'deferred', reason: 'evidence_size', detail: 'selected input exceeds quick verification budget', seconds: 0.01 },
+  { source: 'claude', unit: 'small-input', outcome: 'passed', seconds: 0.4, evidence_bytes: 32768 },
+];
+const syncStatus = { verification: { available: true, last_verified_at: syncHistory[0].finished_at, pending: [{ source_name: 'codex', reason: 'evidence_size', units: 2 }] }, settings: syncSettings, busy: false, library_empty: false, has_sources: true, available_sources: [{ name: "codex", preservation_mode: "filesystem-retained-sqlite-gated" }, { name: "claude" }], sources: [{ name: "codex" }, { name: "claude" }], history: syncHistory,
   source_states: [{ source_name: "codex", attempted_at: syncHistory[0].finished_at, succeeded_at: syncHistory[0].finished_at, preservation: {status:"legacy-gaps",legacy_preservation_gaps:2,pending_newer_inputs:true}, pending_preservation: true, last_capture_at: iso(3 * 3600000) }, { source_name: "claude", attempted_at: syncHistory[0].finished_at, succeeded_at: syncHistory[0].finished_at, last_capture_at: iso(3600000) }],
   statistics: { changes: { samples: 10, elapsed_seconds: { median: 22.1, p95: 61.8 }, cpu_seconds: { median: 8.7, p95: 11 }, rss_observed_peak_bytes: { last: 129 * 1048576 }, estimated_cpu_duty_percent_one_core: 2.9 } },
   forecast_accuracy: { 'automatic-sync': { launch: { attempts: 6, predicted: 5, evaluated: 4, covered: 3, median_absolute_error_seconds: 2.1, median_relative_error: 0.1, median_interval_width_seconds: 20 } } },
@@ -200,7 +306,202 @@ export const cloudScheduledStatus={
     {id:'cloud-full-verified',destination_id:'cloud-browser',kind:'full',trigger:'manual',state:'complete',object:scheduledCloudPlan.object,version:'1792684800000000',total_bytes:40000000000,file_bytes:135000000000,files:40000,started_at:iso(8*day),verified:true,restored_directory:'/tmp/pharos/recovered-library'}]
 };
 
+// The status snapshot (docs/background-work.md §7) the unified activity
+// panel renders. `eventStream` marks a stub the harness serves as
+// server-sent events: each document is one `snapshot` event, and the stream
+// stays open.
+export const eventStream = documents => ({ __eventStream: [documents].flat() });
+const statusLibrary = { id: "library-fixture", name: "Pharos SSD", drive: { name: "Pharos SSD", ejectable: true, location: "external", mounted: true }, portable: true, path: "/Volumes/Pharos SSD/Pharos", storage_bytes: 48e9 };
+// The freshness ledger (§5) in the server's shape: rows, and the summary
+// groups the Data row shows.
+const domain = (id, group, label, state, changes = {}) => ({ domain: id, group, label, as_of: null, behind: { state, count: null, unit: null },
+  state_label: { current: "Current", behind: "Behind", unknown: "Unknown" }[state], reason: null, catching_up: null, catching_up_label: null, next: null, ...changes });
+const idleLedger = [
+  domain("conv:claude-code-with-a-long-source-name", "conversations", "Conversations (claude-code-with-a-long-source-name)", "current", { as_of: iso(120000) }),
+  domain("conv:codex", "conversations", "Conversations (codex)", "current", { as_of: iso(180000) }),
+  domain("view", "search", "Search view", "current"),
+  domain("search.substring", "search", "Substring search", "current"),
+  domain("an.identities", "analyses", "Identity links", "current", { as_of: iso(3 * 3600000) }),
+  domain("an.tools", "analyses", "Tools rollup", "current", { as_of: iso(3 * 3600000) }),
+  domain("findings", "findings", "Findings", "scheduled", { as_of: iso(3 * 3600000), state_label: "Scheduled",
+    reason: { code: "changed", text: "New data since today's full pass; the next one runs tomorrow" }, next: "updates with Refresh findings now, or the first index tomorrow" }),
+  // A scheduled cloud backup within its schedule: a local one, which has no
+  // schedule, would be unknown.
+  domain("backup.cloud:archive", "backups", "Cloud backup (Archive bucket)", "current", { as_of: iso(2 * day) }),
+];
+const idleSummary = { all_current: true, text: "All current", checked_label: "checked", checked_at: iso(180000), groups: [
+  { group: "conversations", label: "Conversations", state: "current", short: "", short_age: false, text: "current", as_of: iso(180000), as_of_label: "", catching_up: null, shown: false },
+  { group: "analyses", label: "Analyses", state: "current", short: "", short_age: false, text: "current", as_of: iso(3 * 3600000), as_of_label: "", catching_up: null, shown: false },
+  { group: "findings", label: "Findings", state: "scheduled", short: "updates tomorrow", short_age: false, text: "scheduled, updates with Refresh findings now, or the first index tomorrow", as_of: iso(3 * 3600000), as_of_label: "", catching_up: null, shown: false, muted: true },
+  { group: "backups", label: "Backups", state: "current", short: "", short_age: false, text: "current", as_of: iso(2 * day), as_of_label: "", catching_up: null, shown: false },
+] };
+const deferred = { reason: { code: "deferred-by-schedule", text: "Scheduled indexing skips analyses" }, next: "updates with the next manual index", behind: { state: "behind", count: null, unit: null } };
+const busyLedger = [
+  domain("conv:claude-code-with-a-long-source-name", "conversations", "Conversations (claude-code-with-a-long-source-name)", "behind", { as_of: iso(2 * day), reason: { code: "indexing", text: "Indexing now" }, catching_up: "op-index", catching_up_label: "Index changes" }),
+  domain("conv:codex", "conversations", "Conversations (codex)", "unknown", { as_of: iso(3600000), reason: { code: "schedule-off", text: "Scheduled indexing is off for it" }, next: "updates with the next manual index" }),
+  domain("view", "search", "Search view", "behind", { behind: { state: "behind", count: 38, unit: "workspace" }, reason: { code: "refreshing", text: "Updating now" }, catching_up: "op-view", catching_up_label: "Index the Search view" }),
+  domain("an.identities", "analyses", "Identity links", "behind", { as_of: iso(3 * 3600000), ...deferred }),
+  domain("an.tools", "analyses", "Tools rollup", "behind", { as_of: iso(3 * 3600000), ...deferred }),
+  domain("findings", "findings", "Findings", "behind", { as_of: iso(3 * 3600000), reason: { code: "daily-pass-due", text: "Today's full pass has not run yet" }, next: "updates with the next manual index" }),
+  domain("backup.cloud:archive", "backups", "Cloud backup (Archive bucket with a long name)", "behind", { as_of: iso(9 * day), reason: { code: "overdue", text: "Older than its schedule" }, next: "updates with the next scheduled cloud backup" }),
+];
+const busySummary = { all_current: false, checked_at: null, groups: [
+  { group: "conversations", label: "Conversations", state: "behind", short: "updating", short_age: false, text: "catching up", as_of: iso(2 * day), as_of_label: "last current", catching_up: "op-index", tooltip: "Conversations (claude-code-with-a-long-source-name): behind, indexing now", shown: true },
+  { group: "analyses", label: "Analyses", state: "behind", short: "waits for manual index", short_age: false, text: "behind, updates with the next manual index", as_of: iso(3 * 3600000), as_of_label: "last current", catching_up: null, tooltip: "Identity links: behind, scheduled indexing skips analyses\nTools rollup: behind, scheduled indexing skips analyses", shown: true },
+  { group: "findings", label: "Findings", state: "behind", short: "waits for manual index", short_age: false, text: "behind, updates with the next manual index", as_of: iso(3 * 3600000), as_of_label: "last current", catching_up: null, shown: true },
+  { group: "search", label: "Search", state: "behind", short: "updating", short_age: false, text: "catching up", as_of: null, as_of_label: "", catching_up: "op-view", shown: true },
+  { group: "backups", label: "Backups", state: "behind", short: "behind", short_age: true, text: "behind, updates with the next scheduled cloud backup", as_of: iso(9 * day), as_of_label: "last current", catching_up: null, shown: false, muted: false },
+] };
+// Resources as a service reports them (§10): itself and a Terminal command.
+const statusResources = (label, processes) => ({ cpu_percent: 3, memory_bytes: 340e6, disk_bytes_per_second: 4.2e6, sampled_at: iso(0), basis: "proc_pid_rusage", approximate: false, label, processes });
+const idleResources = statusResources("Pharos is using under 1% of one core · 180 MB", [
+  { pid: 4120, role: "service", cpu_percent: 0, memory_bytes: 180e6, sampled_at: iso(0), basis: "proc_pid_rusage", text: "Library service · under 1% of one core · 180 MB" }]);
+const busyResources = statusResources("Pharos is using ~45% of one core · 1.2 GB", [
+  { pid: 4120, role: "service", cpu_percent: 38, memory_bytes: 1.1e9, sampled_at: iso(0), basis: "proc_pid_rusage", text: "Library service · ~38% of one core · 1.1 GB" },
+  { pid: 5150, role: "cli:capture", cpu_percent: 7, memory_bytes: 64e6, sampled_at: iso(0), basis: "proc_pid_rusage", text: "pharos capture (Terminal) · ~7% of one core · 64 MB" }]);
+const statusHeadings = { work: "Work", data: "Data" };
+// The schedule (docs/background-work.md §11), as /api/status and GET
+// /api/background report it.
+const backgroundItem = (id, label, cadence, state, changes = {}) => ({
+  id, label, verb: `Updating ${label}`, feeds: "Pages it feeds", why: "Why it runs where it does.", sub: changes.sub ?? "Pages it feeds", cadence, cadence_label: cadence, column: cadence, placed: cadence, usual_cadence: cadence,
+  adaptive: false, fixed: false, opt_in: false, override: "", state, state_label: { current: "Updated", running: "Updating now", failed: "Failed", queued: "Up next", unavailable: "Not set up" }[state],
+  as_of: iso(41 * 60000), next_at: iso(-19 * 60000), error: null, note: null, cost: { seconds: 40, runs: 7, class: "light", text: "about 40 s", typical: "Typically 30–45 s" },
+  choices: [{ value: "", label: "Automatically" }, { value: "daily", label: "Daily" }, { value: "manual", label: "Only when I ask" }], ...changes,
+});
+const backgroundView = (items, headline) => ({
+  mode: "on", paused_until: null, items, headline,
+  cadences: ["frequent", "hourly", "daily"].map(cadence => {
+    const members = items.filter(item => item.column === cadence && item.cadence !== "manual");
+    const state = ["failed", "running", "queued"].find(state => members.some(item => item.state === state)) ?? "current";
+    return { id: cadence, label: { frequent: "Frequently", hourly: "Hourly", daily: "Daily" }[cadence], description: "When it runs", state, state_label: state === "failed" ? "1 failed" : members[0]?.state_label,
+      as_of: iso(41 * 60000), next_at: iso(-19 * 60000), items: members.map(item => item.id) };
+  }),
+  unscheduled: items.filter(item => item.cadence === "manual").map(item => item.id),
+  everything: { seconds: 540, text: "Everything now takes about 9 min, mostly “Your writing”." },
+});
+const idleBackground = backgroundView([
+  backgroundItem("conversations", "New conversations", "frequent", "current", { sub: "claude (1 of 2 sources)", fixed: true, choices: null,
+    sources: [{ name: "claude", selected: true }, { name: "codex-with-a-rather-long-source-name", selected: false }] }),
+  backgroundItem("repositories", "Repositories & merges", "frequent", "current"),
+  backgroundItem("writing", "Your writing", "hourly", "current", { adaptive: true,
+    cadence_moves: [{ cadence: "frequent", label: "Promote to Frequently for a week" }, { cadence: "daily", label: "Demote to Daily for a week" }],
+    cost: { seconds: 358, runs: 7, class: "heavy", text: "about 6 min", typical: "Typically 5–8 min" }, note: "Moves to Frequently once a run usually takes under a minute." }),
+  backgroundItem("findings", "Findings", "hourly", "current"),
+  backgroundItem("verification", "Verify indexed data", "hourly", "queued", { sub: "Integrity checks deferred by quick indexing", why: "Checks a bounded batch of larger inputs once the library is quiet.", cost: { seconds: 1, runs: 2, class: "light", text: "about 1 s" } }),
+  backgroundItem("preserve", "Preserve originals", "daily", "current"),
+  backgroundItem("backup", "Back up to /Volumes/Backup Drive With A Long Name/Pharos Backup", "manual", "unavailable", { column: "daily", cost: null }),
+], { tone: "good", title: "Up to date", text: "Everything is on schedule." });
+const busyBackground = backgroundView([
+  backgroundItem("conversations", "New conversations", "frequent", "current", { fixed: true, choices: null }),
+  backgroundItem("repositories", "Repositories & merges", "frequent", "failed", { error: "git rev-list timed out after 5 s in ~/code/a-repository-with-a-very-long-name-that-has-to-wrap" }),
+  backgroundItem("writing", "Your writing", "hourly", "running"),
+  backgroundItem("findings", "Findings", "hourly", "queued"),
+  backgroundItem("preserve", "Preserve originals", "daily", "current"),
+  backgroundItem("backup", "Back up to /Users/someone/PharosBackup", "manual", "manual", { column: "daily", state_label: "Only when you ask", as_of: iso(26 * 3600000), next_at: null }),
+], { tone: "busy", title: "Updating your writing", text: "Human Words cards, and Analyze → Writing update when this finishes.", tech: null });
+export const backgroundDocument = {
+  labels: { enabled: false, can_change: true, status: 'Off. Turn on to label messages in this library.' },
+  settings: { mode: "on", paused_until: null, interval_seconds: 300, daily_at: "03:00", hold_when_busy: true, overrides: {},
+    battery: { frequent: "slower", hourly: "wait", daily: "wait", low_battery_waits: true }, battery_choices: { frequent: ["same", "slower", "wait"], hourly: ["same", "wait"], daily: ["same", "wait"] },
+    battery_slower_minutes: 15, low_battery_percent: 20 },
+  power: { battery: true, on_battery: true, percent: 64, low_power_mode: false },
+  view: idleBackground, rule: { frequent_seconds: 60, hourly_seconds: 600 },
+  descriptions: { frequent: "Every 5 min, as soon as there’s new work", hourly: "At most once an hour, after 10 quiet minutes", daily: "Overnight at 3:00 AM, or the first quiet moment after" },
+  cost: { window_hours: 24, seconds: 18000, text: "about 5 h", peak_bytes: 9.5e9, cadences: [
+    { id: "frequent", label: "Frequently", seconds: 10800, measured: true, text: "197 checks, 54 found nothing new" },
+    { id: "hourly", label: "Hourly", seconds: 6840, measured: false, text: "projected: about 8 min × 14, mostly Your writing" },
+    { id: "daily", label: "Daily", seconds: 480, measured: false, text: "projected" }] },
+};
+export const temporaryBackgroundDocument = {
+  ...backgroundDocument,
+  view: backgroundView(idleBackground.items.map(item => item.id === "writing" ? {
+    ...item, placed: "daily", usual_cadence: "daily", temporary_cadence: { cadence: "hourly", expires_at: iso(-7 * day) },
+    note: "Temporary schedule; your usual schedule resumes after one week.",
+  } : item), idleBackground.headline),
+};
+export const idleStatus = {
+  version: 1, revision: 1, generated_at: iso(0), host: { id: "test-mac", label: "This Mac" }, library: statusLibrary,
+  eject: { verdict: "safe", eta_seconds: null, checked: "polled", blockers: [], headline: "Safe to eject; checked again on eject", summary: "Nothing Pharos can see is writing to the library. Pharos checks everything again when you eject." },
+  operations: [], attention: [], freshness: idleLedger, freshness_summary: idleSummary, resources: idleResources, headings: statusHeadings, journal: { dropped: 0 },
+  background: idleBackground,
+};
+const statusOperation = (id, changes) => ({
+  id, kind: "index.changes.manual", variant: null, subject: null, label: "Index changes", verb: "Indexing changes", state: "running", state_label: "Indexing changes",
+  detail: null, reason: null, trigger: "user", process: "service", priority: "foreground", started_at: iso(120000), ended_at: null,
+  step: null, time: null, stoppable: true, stop: { method: "POST", path: "/api/operations/stop", body: { id } }, holds: [{ resource: "drive", mode: "write" }],
+  affects: [], on_eject: "Stops between workspaces; the next index resumes it.", latency: "batch", severity: "none", legacy: null, children: [], children_count: 0, ...changes,
+});
+export const busyStatus = {
+  ...idleStatus, revision: 2,
+  eject: { verdict: "safe-in", eta_seconds: null, checked: "polled", headline: "Safe to eject after the current workspace: stops index changes", summary: "Ejecting stops index changes after the current workspace; if that takes more than 7 s, Pharos refuses and you can try again.",
+    blockers: [{ operation: "op-index", label: "Index changes", on_eject: "Stops between workspaces; the next index resumes it.", latency: "batch", verdict: "safe-in" }] },
+  operations: [
+    statusOperation("op-index", { step: { index: 3, count: 6, name: "Indexing a source with a very long name that has to wrap somewhere", source: "Claude Code", unit: "byte", done: 812e6, total: 1980e6, fraction: 0.41 },
+      time: { state: "estimating", low_seconds: 180, high_seconds: 360, label: "about 3–6 min" },
+      children: [statusOperation("op-chain", { kind: "analysis.chain", label: "Update analyses", state_label: "Updating analyses", stoppable: false, stop: undefined })], children_count: 2 }),
+    statusOperation("op-view", { kind: "maintenance.library-view", label: "Index the Search view", state_label: "Indexing the Search view", priority: "background", stop: { method: "POST", path: "/api/operations/stop", body: { id: "op-view" } }, step: { index: 1, count: null, name: "Search view", unit: "workspace", done: 2, total: 40, fraction: 0.05 } }),
+    statusOperation("op-backup", { kind: "backup.local", label: "Back up", state: "blocked", state_label: "Waiting", priority: "background", stoppable: true, stop: { method: "POST", path: "/api/operations/stop", body: { id: "op-backup" } }, detail: "Waiting for a capture to finish" }),
+    statusOperation("op-old", { kind: "analysis.findings", label: "Update findings", state: "succeeded", state_label: "Done", stoppable: false, stop: undefined, ended_at: iso(60000) }),
+  ],
+  freshness: busyLedger, freshness_summary: busySummary, resources: busyResources, background: busyBackground,
+  attention: [{ id: "backup-failed", rule: 6, severity: "error", title: "The last backup failed", detail: "The destination drive is full: /Volumes/Backup Drive With A Long Name/Pharos Backup", action: { label: "Open Backups", path: "/settings/backups" } }],
+};
+// The broker's document, with two other libraries. A broker operation
+// touching a library makes its verdict busy, as the broker computes it.
+const copyBlocker = { operation: "op-copy", kind: "library.transfer", label: "Copy library", on_eject: "Not stoppable; eject of either drive must wait.", latency: "none", verdict: "busy", process: "broker" };
+const brokerBusy = eject => ({ ...eject, verdict: "busy", eta_seconds: null, headline: "Eject waits for copy library",
+  summary: "Eject waits for copy library, which cannot stop in time.", blockers: [copyBlocker, ...(eject.blockers || [])] });
+export const managedStatus = snapshot => ({
+  version: 1, revision: 3, generated_at: iso(0),
+  libraries: [
+    { id: "local", name: "Pending history", selected: true, connected: true, service: { state: "running" }, state_label: "Copying the library", snapshot, eject: brokerBusy(snapshot.eject), error: null },
+    { id: "archive", name: "Archive", drive: "Backup drive", selected: false, connected: true, service: { state: "running" }, state_label: "Copying the library", eject: brokerBusy(idleStatus.eject), error: null, snapshot: idleStatus },
+    { id: "spare", name: "Spare", drive: "", selected: false, connected: false, service: { state: "stopped" }, state_label: "Not open", snapshot: null, eject: idleStatus.eject, error: null },
+  ],
+  // As the broker reports its own work: in app.operations, naming the
+  // libraries it touches (a copy from the selected library to Archive).
+  app: { operations: [statusOperation("op-copy", { kind: "library.transfer", label: "Copy library", state_label: "Copying the library", process: "broker", stoppable: false, stop: undefined,
+    libraries: ["local", "archive"], step: { index: 2, count: 3, name: "Verified copy", unit: "byte", done: 4e9, total: 1e10, fraction: 0.4 } })], update: null },
+  attention: snapshot.attention,
+  // Every Pharos process on this Mac: the app, both open libraries' services.
+  resources: statusResources("Pharos is using ~62% of one core · 1.6 GB", [
+    { pid: 4000, role: "broker", cpu_percent: 12, memory_bytes: 90e6, sampled_at: iso(0), basis: "proc_pid_rusage", text: "Pharos app · ~12% of one core · 90 MB" },
+    ...snapshot.resources.processes.map(process => ({ ...process, library: "local" })),
+    { pid: 4300, role: "service", library: "archive", cpu_percent: 5, memory_bytes: 210e6, sampled_at: iso(0), basis: "proc_pid_rusage", text: "Library service (Archive) · ~5% of one core · 210 MB" }]),
+});
+
+// Synthetic numeric timing fixture: UI/layout tests never read a user library.
+export function thinkingFixture(query) {
+  const edges=[.1,.2,.3,.5,1,2,3,5,10,20,30,50,100,200,300,500,600];
+  const periods=Array.from({length:14},(_,i)=>new Date(+summaryDay-(13-i)*day).toISOString().slice(0,10));
+  const bounds=Object.fromEntries(periods.map(p=>[p,{From:p+"T00:00:00.000Z",To:new Date(Date.parse(p)+day).toISOString()}]));
+  const models=['gpt-6.1-sol','claude-opus-5-5'],efforts=['low','high'];
+  const stats=(factor=1)=>({n:320,median:8*factor,p75:15*factor,p90:30*factor,p95:45*factor,q1:3*factor,q3:15*factor,low:1*factor,high:30*factor});
+  const counts=[0,0,1,1,5,10,20,40,80,70,50,25,10,5,2,1];
+  const by=query.get('groupBy')??'none';
+  const labels=by==='model_effort'?models.flatMap(m=>efforts.map(e=>[m+' · '+e,m,e])):by==='model'?models.map(m=>[m,m,'']):by==='effort'?efforts.map(e=>[e,'',e]):[['All selected requests','','']];
+  const groups=labels.map(([label,model,effort],i)=>({key:label,label,model,effort,Retained:400,Timed:320,Adjusted:280,Conversations:16,RetainedConversations:20,stats:stats(1+i*.2),counts,
+    periods:Object.fromEntries(periods.map(p=>[p,{stats:stats(1+i*.2),retained:400,conversations:16,counts}])),
+    calendar:periods.flatMap(p=>Array.from({length:24},(_,hour)=>({day:p,hour,Raw:8+hour,Ratio:.6+hour/30,N:100,Adjusted:80,Conversations:8,AdjustedConversations:7}))),
+    bands:Array.from({length:8},(_,h)=>({hour:h*3,days:14,n:300,Ratio:.7+h*.08,Low:.6+h*.08,High:.8+h*.08})),comparison:{days:14,Ratio:.7,Low:.6,High:.8},
+    cdf:Array.from({length:101},(_,p)=>[.1+Math.pow(p/100,3)*150,p/100])}));
+  const response={periodBounds:bounds,calendarBounds:bounds,Retained:1600,Timed:1280,Adjusted:1120,Conversations:40,Hidden:0,Models:models,Efforts:efforts,edges,groups,summary:stats(),periods,calendarPeriods:periods,From:'',To:'',timezone:query.get('timezone')||'UTC'};
+  if(query.get('overview')==='1')Object.assign(response,{
+    coverage:groups,agentCoverage:[{...groups[0],key:'codex',label:'Codex'},{...groups[0],key:'claude',label:'Claude'}],
+    factors:models.flatMap(model=>['context','reasoning','other'].map((factor,i)=>({model,factor,Ratio:1.2+i*.1,Low:1.1+i*.1,High:1.3+i*.1,N:1200,Conversations:40}))),
+    compactions:Array.from({length:32},(_,i)=>({ID:'compact-'+i,Model:models[i%2],Effort:'high',Conversation:'conv-'+i,Gap:.2+i/40,Context:.3,Output:.7,Before:10,After:4})),
+    traces:[{ID:'stream-1',Model:models[0],Conversation:rootConversation,Workspace:workID,Count:36,Points:Array.from({length:36},(_,i)=>({ID:'request-'+i,At:iso((36-i)*60000),Rank:i,Context:i<18?10000+i*3000:12000+(i-18)*2000,Cache:1000,Output:100+i*7,Gap:2+i%12,Smooth:4+i%5,Compaction:i===18}))}],
+  });
+  if(query.get('evidence')==='1')response.validation={pairs:100,correlation:.8,medianRatio:.9,points:Array.from({length:30},(_,i)=>[i+1,i*.9+1]),counters:[[10,12],[30,27]],counterCount:2,counterOverlap:1};
+  return response;
+}
+
 export const defaultApi = {
+  "GET /api/thinking": ({query}) => thinkingFixture(query),
+  "GET /api/markdown-link": {status:"unavailable",detail:"File or local server unavailable on this Mac"},
+  // No remote image bytes in fixtures; the renderer uses its globe fallback.
+  "GET /api/markdown-favicon": {},
+
   "GET /api/app/state": {application:"/Applications/Pharos.app",selected:"local",mcp:"external",busy:false,libraries:[{id:"local",name:"Pending history",available:true,config:"/Users/test/Library/Application Support/Pharos/Libraries/Pending/library.toml"},{id:"external",name:"My archive",available:false,config:"/Volumes/Archive/Pharos/library.toml"}]},
   "GET /api/cloud-backup": {destinations:[],runs:[],schedules:[],active_run_id:"",setup_root:"/tmp/pharos/cloud-setup"},
   "POST /api/cloud-backup/schedule": {saved:true},
@@ -216,6 +517,12 @@ export const defaultApi = {
     for (const key of body?.delete ?? []) delete state.preferences[key];
     return { values: state.preferences };
   },
+  "PUT /api/query-snapshots": ({body,query,state}) => {
+    state.querySnapshots ??= {};
+    state.querySnapshots[`${query.get("dataset")}:${body.code}`]=body;
+    return body;
+  },
+  "GET /api/query-snapshots": ({query,state}) => state.querySnapshots?.[`${query.get("dataset")}:${query.get("code")}`],
   "GET /api/query-computed-columns": [],
   "GET /api/query-object-references": { references: [] },
 
@@ -250,12 +557,17 @@ export const defaultApi = {
   },
   "GET /api/origins": { machines: [{ id: "machine-fixture", label: "Test Mac", kind: "device" }] },
   "GET /api/usage/history": { oldest_conversation_at: iso(180 * day) },
-  "GET /api/usage/summary": { generated_at: iso(0), windows: ["1h", "6h", "24h", "7d", "30d", "all"].map((key, index) => ({ key, human_words: 100 * (index + 1), tokens: 1000 * (index + 1), cost_usd: index + 1, co2e_g: { central: 10 * (index + 1) } })), carbon_factors: carbonFactors },
+  "GET /api/usage/summary": { generated_at: iso(0), timezone: "UTC", windows: ["1h", "6h", "today", "24h", "7d", "30d", "all", "5m", "15m", "yesterday", "week", "month"].map((key, index) => ({ key, until: key === 'yesterday' ? summaryDay.toISOString() : iso(0), ...(summaryFrom[key] ? {from:summaryFrom[key]} : {}), human_words: 100 * (index + 1), tokens: 1000 * (index + 1), cost_usd: index + 1, co2e_g: { central: 10 * (index + 1) }, active_conversations: index + 2, message_count: 20 * (index + 1), user_messages: 8 * (index + 1), assistant_messages: 12 * (index + 1), tool_calls: 50 * (index + 1), failed_tool_calls: index + 1, tool_failure_rate: 2, tool_time_ms: (index + 1) * 240000, timed_tool_calls: 40 * (index + 1), delegated_runs: index + 1, active_repositories: Math.min(index + 1, 4) })), carbon_factors: carbonFactors },
   "GET /api/search/text/options": { providers: ["codex", "claude"], sources: ["conductor"] },
   "POST /api/search/text/validate": ({ body }) => ({ where: body.where ?? { op: ["literal", "regex", "phrase"].includes(body.mode) ? body.mode : "term", text: body.query } }),
   "GET /api/search/text/capabilities": { fuzzy: true, regex: true, case_sensitive: true },
   "GET /api/tools/status": toolsStatus,
   "GET /api/menu-bar/status": { error: "", indexed_at: iso(60000), library: { library_dir: "/Volumes/Pharos SSD/Pharos", activities: [], drive: { name: "Pharos SSD", ejectable: true } } },
+  "GET /api/status": idleStatus,
+  "GET /api/status/stream": eventStream(idleStatus),
+  "GET /api/app/status": managedStatus(idleStatus),
+  "GET /api/app/status/stream": eventStream(managedStatus(idleStatus)),
+  "POST /api/operations/stop": { stopping: true },
   "GET /api/menu-bar/usage": { human_words: 3240, tokens: 1200000, cost_usd: 8.42, co2e_g: 18.25 },
 
   // Settings.
@@ -265,6 +577,16 @@ export const defaultApi = {
   "GET /api/health/storage": { volume_name: "Pharos SSD", index_bytes: 2_000_000_000, internal_free_bytes: 100_000_000_000, free_bytes: 400_000_000_000, staging_bytes: 0, staging_cap_bytes: 1, path: "/Volumes/Pharos SSD/Pharos", status: "available" },
   "GET /api/health/pricing": { priced_tokens: 90, assumed_tokens: 0, partial_tokens: 0, unpriced_tokens: 10, total_tokens: 2_500_000_000, cost_usd: 1234.5, recent_tokens: 400_000_000, recent_cost_usd: 300, confirmed_changes: 3, proposed_changes: 0, unpriced_models: [] },
   "GET /api/health/carbon": { factors: carbonFactors, windows: [{ key: "all", co2e_g: { central: 123456 } }, { key: "30d", co2e_g: { central: 23456 } }] },
+  "GET /api/health/storage/breakdown": {
+    status: "measured", measured_at: iso(60000), volume_name: "Pharos SSD", volume_total_bytes: 2_000_000_000_000, volume_free_bytes: 400_000_000_000, total_bytes: 170_000_000_000,
+    estimated: "Repository shares, and the catalog's division by Mac and source, are estimated from message counts.",
+    parts: [["originals_latest", "Originals: latest copies", 46e9], ["originals_history", "Originals: earlier versions", 15e9], ["originals_other", "Originals: manifests and indexes", 2e8],
+      ["catalog_database", "Pharos catalog", 94e9], ["catalog_log", "Catalog write-ahead log", 12e9], ["catalog_sidecar", "Search and analysis caches", 1e9], ["preserved", "Preserved packages", 0], ["other", "App, settings and staging", 1.8e9]]
+      .map(([key, label, bytes]) => ({ key, label, bytes })),
+    machines: [{ id: "test-mac", label: "A Mac Studio with a rather long name (this Mac)", originals_bytes: 52e9, catalog_bytes: 90e9 }, { id: "air", label: "MacBook Air", originals_bytes: 9e9, catalog_bytes: 17e9 }],
+    sources: [{ id: "conductor", label: "conductor", originals_bytes: 30e9, catalog_bytes: 50e9 }, { id: "codex", label: "codex", originals_bytes: 16e9, catalog_bytes: 30e9 }],
+    repositories: [{ id: "repo", label: "a-repository-name-without-any-spaces-to-wrap", originals_bytes: 20e9, catalog_bytes: 40e9 }, { id: "", label: "No repository", originals_bytes: 30e9, catalog_bytes: 20e9 }],
+  },
   "GET /api/health/freshness": { sources: [], sync_active: false },
   "GET /api/health/drive": { free_bytes: 400_000_000_000, sizes: { library_bytes: 12_000_000_000 } },
   "GET /api/authorship": { built_at: iso(3600000), running: false, stale: false, error: null, totals: { typed_words: 1234, typed_messages: 98, messages: 400 }, last_30_days: { typed_words: 500 } },
@@ -276,15 +598,23 @@ export const defaultApi = {
   "GET /api/sync/settings": syncSettings,
   "GET /api/sync/history": { history: syncHistory },
   "GET /api/sync/recovery": { jobs: [] },
+  "GET /api/background": backgroundDocument,
+  "POST /api/background/settings": backgroundDocument,
+  "POST /api/labels/settings": ({ body }) => ({ ...backgroundDocument, labels: { enabled: body.enabled, can_change: true, status: body.enabled ? 'On, waiting for the labeling model.' : 'Off.' } }),
+  "POST /api/background/run": ({ body }) => ({ accepted: true, items: [body?.item].filter(Boolean) }),
   "GET /api/backup": { active: false, run: null, runs: [], last_success: { destination: "/Users/someone/Pharos Backup", finished_at: iso(2 * day) }, record: "/Volumes/Pharos SSD/Pharos/backups.json", suggested_destination: "/Users/someone/Pharos Backup" },
 
-  // Findings, TL1 and MCP.
+  // Findings and MCP.
   "GET /api/findings": findings,
+  "GET /api/findings/safety": safetyFixtures,
+  "GET /api/findings/safety/settings": safetySettingsFixture,
+  "POST /api/findings/safety/settings": ({ body }) => ({ ...safetySettingsFixture, rules: safetySettingsFixture.rules.map(rule => ({ ...rule, enabled: body?.rule_enabled?.[rule.id] ?? rule.enabled })) }),
+  "GET /api/findings/safety/:id": ({ params }) => ({ ...safetyDetailFixture, ...safetyFixtures.cases.find(item => item.id === params.id) }),
+  "POST /api/findings/safety/cart/prompt": ({ body }) => ({ target: body?.target, label: "explo", prompt: `Review these archived safety questions. Investigate and recommend; make no changes.\nUse get_safety_case for each case:\n${(body?.ids ?? []).join("\n")}`, count: body?.ids?.length ?? 0, preview_token: "sample-preview" }),
   "POST /api/findings/seen": { ok: true },
+  "POST /api/findings/refresh": { started: true },
   "POST /api/findings/cart/prompt": ({ body }) => ({ target: body?.target, label: "explo", handoff: body?.handoff ?? "pr", prompt: `Pharos findings for explo:\n${(body?.ids ?? []).join("\n")}`, count: body?.ids?.length ?? 0 }),
   "GET /api/findings/:id": ({ params }) => { const card = findingCards.find(item => item.id === params.id); return card && findingDetail(card); },
-  "GET /api/tl1": { projects: [{ project: "example", tasks: 14, installations: [{ installation_id: "mac", host_label: "Mac", tasks: 14 }] }] },
-  "GET /api/tl1/overview": tl1Overview,
   "GET /api/mcp": ({ state }) => ({ enabled: state.mcpEnabled ?? true, transport: "stdio", command: "/Applications/Pharos.app/Contents/MacOS/pharos", args: ["--config", "/Users/someone/Library/Application Support/Pharos/archive.toml", "mcp"], note: "Agent clients launch this local command when they connect.", skill: { name: "search-prior-coding-sessions", text: "Search prior coding sessions with Pharos.", paths: { codex: "~/.codex/skills/search-prior-coding-sessions/SKILL.md" } } }),
   "POST /api/mcp/enabled": ({ body, state }) => { state.mcpEnabled = body.enabled; return { enabled: body.enabled }; },
   "GET /api/mcp/calls": { items: [mcpCall], filtered_total: 1, tool_stats: [{ tool_name: "search_conversations", calls: 1, errors: 0, average_output_tokens: 300, largest_output_tokens: 300, truncated_calls: 0, average_duration_ms: 18 }], stats: { total_calls: 1, failed_calls: 0, average_output_tokens: 300, largest_output_tokens: 300, truncated_calls: 0 } },
@@ -297,5 +627,6 @@ export const defaultApi = {
   },
   "GET /api/work/:id/delegation": ({ query }) => delegation(query),
   "GET /api/work/:id/parallel": ({ query }) => parallel(query),
+  "GET /api/work/:id/preview": ({ params, query }) => workPreview(params.id, query),
   "GET /api/work/:id/find": { conversations: [] },
 };

@@ -1,9 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chartBucketsWithHistory, cumulativeBuckets, cumulativeMetricTrend, plottedBucketKey, rollingAverageBuckets, rollingMetricTrend, rollingRatioMetricTrend, shareBuckets, validChartDisplay, validRollingPeriods } from '../../../src/chart-series';
-import { smoothedToolTrend, toolDashboardQuery } from '../../../src/tools-dashboard-model';
-import { smoothedMCPTrend, mcpDashboardQuery } from '../../../src/mcp-dashboard-model';
-import { core, schemas } from '../helpers/recipes.mjs';
+import { chartBucketsWithHistory, cumulativeBuckets, plottedBucketKey, rollingAverageBuckets, shareBuckets, validChartDisplay, validRollingPeriods } from '../../../src/chart-series';
 import { shiftPeriod } from '../../../src/chart-period';
 import { smoothingWhere, timeBounds, usageTime, withTimeRange } from '../../../src/usage-chart';
 const bucketsOf = values => values.map((values, index) => ({ key: `2026-10-${String(index + 1).padStart(2, '0')}`, date: new Date(2026, 9, index + 1), values }));
@@ -162,38 +159,6 @@ test('empty data and invalid stored window values remain safe', () => {
   for (const periods of [0, 1, 2, 10, 11, 30, 365, 10000]) assert.equal(validRollingPeriods(periods), true);
 });
 
-test('native metric trends smooth each group across missing intervals and retain drilldown identities', () => {
-  const result = { id: 'calls', buckets: [
-    { keys: ['2026-10-01', 'shell'], value: 100, count: 4 },
-    { keys: ['2026-10-03', 'shell'], value: 50, count: 2 },
-    { keys: ['2026-10-03', null], value: 30, count: 1 },
-  ] };
-  const before = structuredClone(result);
-  const averaged = rollingMetricTrend(result, 'day', 30, new Date(2026, 9, 1), new Date(2026, 9, 3));
-  assert.deepEqual(averaged.buckets.filter(bucket => bucket.keys[1] === 'shell').map(bucket => bucket.value), [100, 50, 50]);
-  assert.deepEqual(averaged.buckets.filter(bucket => bucket.keys[1] === null).map(bucket => bucket.value), [0, 0, 10]);
-  assert.equal(averaged.buckets.find(bucket => bucket.keys[0] === '2026-10-03' && bucket.keys[1] === 'shell').count, 2);
-  assert.equal(averaged.buckets.find(bucket => bucket.keys[0] === '2026-10-02' && bucket.keys[1] === 'shell').count, 0);
-  assert.ok(averaged.buckets.every(bucket => Number.isFinite(bucket.count)));
-  assert.equal(rollingMetricTrend(result, 'day', 0, new Date(), new Date()), result);
-  assert.deepEqual(result, before);
-});
-
-test('native trends use prior history without exposing prior dates or losing visible raw counts', () => {
-  const result = { id:'calls', groupCount:3, buckets:[
-    {keys:['2026-09-30','shell'],value:100,count:4},
-    {keys:['2026-09-30',null],value:30,count:1},
-    {keys:['2026-10-01','shell'],value:10,count:2},
-  ] };
-  const averaged = rollingMetricTrend(result,'day',2,new Date(2026,9,1),new Date(2026,9,2),new Date(2026,8,30));
-  assert.deepEqual(averaged.buckets.map(bucket=>bucket.keys[0]),['2026-10-01','2026-10-01','2026-10-02','2026-10-02']);
-  assert.deepEqual(averaged.buckets.filter(bucket=>bucket.keys[1]==='shell').map(bucket=>bucket.value),[55,5]);
-  assert.deepEqual(averaged.buckets.filter(bucket=>bucket.keys[1]===null).map(bucket=>bucket.value),[15,0]);
-  assert.equal(averaged.buckets[0].count,2);
-  assert.equal(averaged.groupCount,averaged.buckets.length,'hidden history is not reported as truncated groups');
-  assert.ok(averaged.buckets.slice(1).every(bucket=>bucket.count===0));
-});
-
 test('cumulative charts exclude smoothing history and retain the selected opening balance at the plot limit', () => {
   const source = bucketsOf([{ calls: 100 }, { calls: 2 }, {}, { calls: 3 }]);
   source[0].history = true;
@@ -201,54 +166,5 @@ test('cumulative charts exclude smoothing history and retain the selected openin
   const visible = bucketsOf([{}, {}]).map((bucket, i) => ({ ...bucket, key: `2026-10-0${i+3}`, date: new Date(2026,9,i+3) }));
   assert.equal(plottedBucketKey(new Date(2026,9,1), 'day', 1, visible, 'cumulative'), '2026-10-03');
   assert.equal(plottedBucketKey(new Date(2026,9,1), 'day', 1, visible, 'interval'), '2026-10-01');
-  const result = {id:'calls', buckets:[{keys:['2026-10-01','shell'],value:2,count:2},{keys:['2026-10-03','shell'],value:3,count:3}]};
-  assert.deepEqual(cumulativeMetricTrend([result],'day',new Date(2026,9,2),new Date(2026,9,4)).buckets.map(bucket=>bucket.value),[0,3,3]);
-  const capped = cumulativeMetricTrend([result], 'hour', new Date(2026,0,1), new Date(2026,9,4));
-  assert.equal(capped.buckets.length,5000);
-  assert.equal(capped.buckets.at(-1).value,5);
 });
 
-test('native cumulative trends carry totals, weighted ratios, and maxima through idle intervals', () => {
-  const keys = day => [`2026-10-0${day}`, null];
-  const primary = {id:'mean',groupCount:2,buckets:[{keys:keys(1),value:10,count:10},{keys:keys(3),value:100,count:1}]};
-  const numerator = {id:'amount',buckets:[{keys:keys(1),value:100},{keys:keys(3),value:100}]};
-  const denominator = {id:'samples',buckets:[{keys:keys(1),value:10},{keys:keys(3),value:1}]};
-  const before = structuredClone([primary,numerator,denominator]);
-  const ratio = cumulativeMetricTrend([primary,numerator,denominator],'day',new Date(2026,9,1),new Date(2026,9,4),{op:'ratio',numerator:'amount',denominator:'samples'});
-  assert.deepEqual(ratio.buckets.map(bucket=>bucket.value),[10,10,200/11,200/11]);
-  assert.deepEqual(ratio.buckets.map(bucket=>bucket.count),[10,10,11,11]);
-  assert.ok(ratio.buckets.every(bucket=>bucket.keys[1]===null));
-  assert.equal(ratio.groupCount,4);
-  const maximum = cumulativeMetricTrend([{...primary,buckets:[{keys:keys(2),value:50},{keys:keys(3),value:10}]}],'day',new Date(2026,9,1),new Date(2026,9,4),{op:'max'});
-  assert.deepEqual(maximum.buckets.map(bucket=>bucket.value),[null,50,50,50]);
-  const zero = cumulativeMetricTrend([primary,numerator,{...denominator,buckets:[]}],'day',new Date(2026,9,1),new Date(2026,9,4),{op:'ratio',numerator:'amount',denominator:'samples'});
-  assert.ok(zero.buckets.every(bucket=>bucket.value===null));
-  assert.match(cumulativeMetricTrend([primary],'day',new Date(2026,9,1),new Date(2026,9,4),{op:'ratio',numerator:'amount',denominator:'samples'}).error,/underlying/);
-  assert.equal(cumulativeMetricTrend([],'day',new Date(),new Date()),undefined);
-  assert.deepEqual([primary,numerator,denominator],before);
-});
-
-test('rolling Tools and MCP means pool timed observations and keep empty windows as gaps', () => {
-  const rows = [
-    { day: '2026-10-01', tool_name: 'shell', call_count: 1, timed_count: 1, duration_ms: 100000, total_duration_ms: 100000 },
-    ...Array.from({ length: 99 }, () => ({ day: '2026-10-02', tool_name: 'shell', call_count: 1, timed_count: 1, duration_ms: 1000, total_duration_ms: 1000 })),
-  ];
-  for (const [dataset, query, smooth] of [['tools', toolDashboardQuery, smoothedToolTrend], ['mcp_calls', mcpDashboardQuery, smoothedMCPTrend]]) {
-    const view = { metric: 'mean_time', split: 'tool_name', view: 'trend', period: 'day', rollingPeriods: 7 };
-    const requested = query(view, []);
-    const metrics = core.evaluateMetrics(rows, requested, schemas[dataset]).metrics;
-    assert.ok(metrics.length >= 3, 'the chart requests numerators and denominators');
-    const result = smooth(view, metrics, new Date(2026, 9, 7), new Date(2026, 9, 10), new Date(2026, 9, 1));
-    assert.ok(Math.abs(result.buckets[0].value - 1990) < 1e-8, dataset);
-    assert.equal(result.buckets[1].value, 1000, dataset);
-    assert.equal(result.buckets[2].value, null, dataset);
-  }
-  const keys = ['2026-10-01', null];
-  const primary = { id: 'rate', buckets: [{ keys, value: 1, count: 1 }] };
-  const numerator = { id: 'n', buckets: [{ keys, value: 1, count: 1 }] };
-  const denominator = { id: 'd', buckets: [{ keys, value: 0, count: 1 }] };
-  const ratio = { numerator: 'n', denominator: 'd' };
-  const start = new Date(2026, 9, 1), end = new Date(2026, 9, 2);
-  assert.ok(rollingRatioMetricTrend([primary, numerator, denominator], ratio, 'day', 7, start, end).buckets.every(bucket => bucket.value === null));
-  assert.match(rollingRatioMetricTrend([primary], ratio, 'day', 7, start, end).error, /underlying/);
-});

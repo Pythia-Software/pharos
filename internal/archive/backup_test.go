@@ -732,7 +732,16 @@ func addSQLiteRecordBackupFixture(t *testing.T, config *Config) string {
 func TestBackupRestoresSQLiteRecordReplay(t *testing.T) {
 	config, dest := backupFixture(t)
 	original := addSQLiteRecordBackupFixture(t, &config)
+	// A compressed latest transcript and earlier version are backed up as
+	// stored and recover as valid evidence.
+	addEncodedClaudeFixture(t, &config)
 	runBackup(t, config, dest, false)
+	assertEncodedClaudeFixture(t, filepath.Join(dest, "captures"), "host-a")
+	recovered, err := RecoverLibrary(t.Context(), dest, filepath.Join(t.TempDir(), "recovered"), nil)
+	if err != nil {
+		t.Fatal("recovery of a backup with compressed captures", err)
+	}
+	assertEncodedClaudeFixture(t, recovered.CaptureRoot, "host-a")
 	os.RemoveAll(original)
 	restored := config
 	restored.CaptureRoot = filepath.Join(dest, "captures")
@@ -742,5 +751,54 @@ func TestBackupRestoresSQLiteRecordReplay(t *testing.T) {
 	recordTestReplay(t, restored, "records", catalog)
 	if conversationMessages(t, catalog, "conductor:durable-backup") != 2 {
 		t.Fatal("backup lost durable SQLite evidence")
+	}
+}
+
+// A backup taken while a compression is half done (its encoding still in its
+// lease, or its manifest committed but the file not yet renamed) recovers to
+// a library whose capture validates and still yields the session only the
+// generation holds.
+func TestBackupTakenMidCompressionRestoresAValidCapture(t *testing.T) {
+	for _, stage := range []string{"compress-verify", "compress-rename"} {
+		t.Run(stage, func(t *testing.T) {
+			config, dest := backupFixture(t)
+			dir := filepath.Join(t.TempDir(), "conductor")
+			exec := conductorFixture(t, dir)
+			config.Sources = []SourceConfig{{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true}}
+			exec(addConductorSession("old", 2)...)
+			runCapture(t, config)
+			exec("DELETE FROM session_messages", "DELETE FROM sessions")
+			exec(addConductorSession("latest", 1)...)
+			runCapture(t, config)
+			override(t, &captureFault, func(at, rel string) error {
+				if at == stage {
+					panic("killed")
+				}
+				return nil
+			})
+			func() {
+				defer func() { _ = recover() }()
+				compressGenerations(t, config)
+			}()
+			captureFault = nil
+			runBackup(t, config, dest, false)
+			if left := temporariesUnder(t, filepath.Join(dest, "captures")); len(left) != 0 {
+				t.Fatal("backup copied a compression's temporary", left)
+			}
+			// Restore through the recovery entry point, which validates every
+			// captured file before publishing the library.
+			restored, err := RecoverLibrary(t.Context(), dest, filepath.Join(t.TempDir(), "restored"), nil)
+			if err != nil {
+				t.Fatal("recovery of a backup taken mid-compression", err)
+			}
+			if err := validateCaptureEvidence(t.Context(), restored.CaptureRoot); err != nil {
+				t.Fatal("restored capture is invalid", err)
+			}
+			catalog, _ := testCatalog(t)
+			target := captureTarget{Host: currentHost(), Source: "conductor", Dir: capturedPath(restored, "conductor", "")}
+			if result := catalog.IndexCapture(t.Context(), target, nil); result.Error != nil || conversationMessages(t, catalog, "conductor:old") != 2 {
+				t.Fatalf("restored capture: %+v", result)
+			}
+		})
 	}
 }

@@ -51,6 +51,16 @@ test("compatible dashboards batch despite duplicate metric IDs and split at twen
   for (let i = 0; i < 23; i++) assert.equal(previews.get(String(i)).metrics[0].result.buckets[0].value, 5500 + i);
 });
 
+test("distribution cards request separately from their batch siblings", async t => {
+  const requests = fixture(t), previews = new Map();
+  const box = { id: "box", op: "count", groupBy: [], distribution: { kind: "box", input: "[duration_ms]", whiskers: "tukey" } };
+  const sum = i => ({ id: "sum", op: "sum", field: "duration_ms", groupBy: [], expression: `SUM([duration_ms])+${i}` });
+  await loadQueryPreviews([job("a", [sum(1)]), job("b", [box, sum(2)]), job("c", [box]), job("d", [sum(3)])], (id, preview, error) => { assert.ifError(error); previews.set(id, preview); });
+  const batches = requests.filter(request => request.path.endsWith("metrics")).map(batch => batch.request.metrics.length).sort();
+  assert.deepEqual(batches, [1, 2, 2]);
+  assert.equal(previews.size, 4);
+});
+
 test("cover changes reuse full results and preserve distributions and paired axes", async t => {
   const requests = fixture(t);
   const metrics = [
@@ -600,6 +610,30 @@ test("metric filters and minimum group sizes run only where advertised and discl
   assert.match(preview.note, /1 group hidden \(fewer than 4 rows\)/);
   assert.equal(preview.headlineMetric, undefined);
   assert.match(preview.summary, /^Shown: /);
+  // Distinct and summed minimums name what they counted.
+  clearPreviewCache();
+  fixture(t, path => path.endsWith("capabilities") ? response({ metricCapabilities: { version: 2, expressions: true, distributions: true, filters: true, minCount: true, minCountMeasures: true }, computedExecution: execution, queryCapabilities }) : undefined);
+  const slow = [{ field: "duration_ms", op: ">=", value: "400" }];
+  for (const [minCount, note] of [
+    [{ min: 4, distinct: "conversation_id" }, "1 group hidden (fewer than 4 distinct Conversation ID values)"],
+    [{ min: 200, sum: "result_tokens" }, "1 group hidden (fewer than 200 total Context added (tokens))"],
+  ]) {
+    const measured = await loadQueryPreview("tool_calls", query([{ id: "calls", op: "sum", field: "call_count", groupBy: ["repository_name"], minCount, where: slow }]), schemas.tool_calls);
+    assert.equal(measured.metrics[0].result.hiddenGroups, 1);
+    assert.ok(measured.note.includes(note), measured.note);
+  }
+});
+
+test("grouped previews run distinct minimums only where query-v3 advertises them", async t => {
+  const measures = [{ id: "calls", op: "count", groupBy: ["started_at"], dateGrouping: { field: "started_at", interval: "day", range: "observed", includeEmpty: false }, minCount: { min: 1, distinct: "conversation_id" } }];
+  const dated = rows.map(row => ({ ...row, started_at: new Date(row.started_at).toISOString() }));
+  const handshake = flags => (path, request) => path.endsWith("capabilities") ? response({ metricCapabilities: { version: 2 }, computedExecution: execution, queryCapabilities: { ...queryCapabilities, metricMinCount: true, ...flags } })
+    : path.includes("query-v3") ? response(serverQuery(request, dated)) : undefined;
+  fixture(t, handshake({ metricMinCountMeasures: false }));
+  await assert.rejects(loadQueryPreview("tool_calls", query(measures), schemas.tool_calls), /distinct values or a sum/);
+  fixture(t, handshake({ metricMinCountMeasures: true }));
+  const preview = await loadQueryPreview("tool_calls", query(measures), schemas.tool_calls);
+  assert.equal(preview.state, "ready");
 });
 
 test("grouped cards with link columns execute without sending the links", async t => {
@@ -794,4 +828,16 @@ test("a stalled browser cache cannot delay live card queries indefinitely", asyn
   await store.ready;
   store.put("live", { state: "ready", total: 1, summary: "Live" });
   assert.equal(store.get("live").fresh, true);
+});
+
+
+test("Today persisted preview identity changes at local midnight", async t => {
+  const before = new Date(2026, 9, 29, 23, 59, 59);
+  t.mock.timers.enable({ apis: ["Date"], now: before });
+  const item = { ...job("today", [{ id: "total", op: "sum", field: "duration_ms", groupBy: [] }]), options: { window: { mode: "today", days: 1, field: "started_at" } } };
+  const fixed = { ...item, options: { window: { mode: "relative", days: 1, field: "started_at" } } };
+  const [todayKey, elapsedKey] = await Promise.all([cardPreviewKey(item), cardPreviewKey(fixed)]);
+  t.mock.timers.setTime(+before + 2000);
+  assert.notEqual(await cardPreviewKey(item), todayKey);
+  assert.equal(await cardPreviewKey(fixed), elapsedKey);
 });

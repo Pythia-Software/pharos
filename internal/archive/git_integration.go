@@ -340,6 +340,10 @@ func integrationTip(ctx context.Context, location string) (string, error) {
 // Mac's path may not exist here, or may be an unrelated checkout: Conductor
 // reuses workspace directory names.
 func (c *Catalog) refreshMainIntegrations(ctx context.Context) error {
+	return c.completeStage(ctx, "git", func() error { return c.lookUpMainIntegrations(ctx) })
+}
+
+func (c *Catalog) lookUpMainIntegrations(ctx context.Context) error {
 	c.gitMainMu.Lock()
 	defer c.gitMainMu.Unlock()
 	rows, err := queryMapsContext(ctx, c.DB, `SELECT w.id,w.head_ref,r.canonical_remote,s.location,s.repository_locations_json

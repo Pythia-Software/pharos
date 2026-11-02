@@ -33,9 +33,13 @@ type captureView struct {
 	evidenceRevision, evidenceIdentity string
 	evidenceVolatile                   bool
 	noLocalLookups                     bool
-	host                               Host
-	dir                                string // <capture_root>/<host-id>/<source>
-	manifest                           *captureManifest
+	// lease is set for a temporary reader directory, into which materialize
+	// may decode encoded entries; decoded lists those it has.
+	lease    bool
+	decoded  map[string]bool
+	host     Host
+	dir      string // <capture_root>/<host-id>/<source>
+	manifest *captureManifest
 	// mappings pair original paths with absolute captured paths.
 	mappings []capturePathMapping
 }
@@ -294,10 +298,11 @@ func (c *Catalog) IndexCapture(ctx context.Context, target captureTarget, progre
 	if err != nil {
 		return fail(err)
 	}
-	defer lock.Close()
+	defer releaseLockFile(lock)
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		return fail(fmt.Errorf("%s is already being indexed: %w", target.label(), err))
 	}
+	opFrom(ctx).holdLock(lock)
 	historyWarnings := []captureError{}
 	reportHistoryWarning := func(warning captureError) {
 		for _, previous := range historyWarnings {
@@ -355,12 +360,12 @@ func (c *Catalog) IndexCapture(ctx context.Context, target captureTarget, progre
 	}
 	// Lease the whole inventory before planning. Replacement and pruning may
 	// proceed once the host lock is released; every planned path stays stable.
-	captureLock, err := lockCaptureReader(ctx, target.Dir)
+	captureLock, err := lockCaptureReader(ctx, target)
 	if err != nil {
 		return fail(err)
 	}
 	input, err := leaseCaptureForIndex(ctx, target)
-	captureLock.Close()
+	releaseLockFile(captureLock)
 	if err != nil {
 		return fail(err)
 	}
@@ -479,19 +484,38 @@ func (c *Catalog) indexGenerations(ctx context.Context, adapter Adapter, view *c
 		handled := map[string]bool{}
 		latest := filepath.Join(view.dir, filepath.FromSlash(snapshot.Captured))
 		if _, err := os.Stat(latest); !errors.Is(err, fs.ErrNotExist) {
-			var err error
-			handled, err = conductorSessionIDs(latest)
+			// Through the view, as every database reader: Conductor declares
+			// its database read on every index, so it is not compressed, but
+			// a capture whose latest snapshot is still reads correctly.
+			readable, err := view.materialize(ctx, snapshot.Captured)
 			if err != nil {
 				return err
+			}
+			if handled, err = conductorSessionIDs(readable); err != nil {
+				return err
+			}
+		}
+		// A generation older than every pending one only feeds handled, which
+		// nothing older needs: it is not opened (and so, if encoded, not decoded).
+		oldestPending := -1
+		for generationIndex, generation := range snapshot.Generations {
+			if force || !marker.has(snapshot.Path, generation.CapturedAt) {
+				oldestPending = generationIndex
 			}
 		}
 		reportWork(ctx, "indexing retained snapshots", "snapshot", 0, len(snapshot.Generations))
 		for generationIndex, generation := range snapshot.Generations { // newest first
 			file := filepath.Join(view.dir, filepath.FromSlash(generation.Captured))
-			if _, err := os.Stat(file); errors.Is(err, fs.ErrNotExist) {
-				marker.add(snapshot.Path, generation.CapturedAt) // gone: nothing left to take
+			if _, err := os.Stat(file); errors.Is(err, fs.ErrNotExist) || generationIndex > oldestPending {
+				marker.add(snapshot.Path, generation.CapturedAt) // gone, or already indexed: nothing left to take
 				reportWork(ctx, "indexing retained snapshots", "snapshot", generationIndex+1, len(snapshot.Generations))
 				continue
+			}
+			// SQLite cannot read an encoded generation: decode it into this
+			// reader's lease, at the same relative path.
+			file, err := view.materialize(ctx, generation.Captured)
+			if err != nil {
+				return err
 			}
 			ids, err := conductorSessionIDs(file)
 			if err != nil {
@@ -509,7 +533,7 @@ func (c *Catalog) indexGenerations(ctx context.Context, adapter Adapter, view *c
 				reportWork(ctx, "indexing retained snapshots", "snapshot", generationIndex+1, len(snapshot.Generations))
 				continue
 			}
-			older := &captureView{host: view.host, dir: view.dir, manifest: view.manifest, mappings: []capturePathMapping{{Original: snapshot.Path, Captured: file}}}
+			older := &captureView{host: view.host, dir: view.dir, manifest: view.manifest, lease: view.lease, decoded: view.decoded, mappings: []capturePathMapping{{Original: snapshot.Path, Captured: file}}}
 			config := conductor.config
 			config.Path = file
 			reader := &conductorAdapter{baseAdapter: baseAdapter{config: config, capability: conductor.capability, view: older}, selected: missing}

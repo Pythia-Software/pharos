@@ -37,8 +37,24 @@ func (c *sourceCapture) captureDatabases(items []captureItem, present map[string
 		previous := c.snapshots[rel]
 		if previous != nil {
 			previous.MissingSince = ""
-			if previous.Path == item.path && (c.session.recoveryID == "" || previous.RecoveryID == c.session.recoveryID) && previous.Source == state && c.intact(previous.Captured, previous.Size, previous.CapturedMTimeNS) {
+			if previous.Path == item.path && (c.session.recoveryID == "" || previous.RecoveryID == c.session.recoveryID) && previous.Source == state && c.intactSnapshot(previous) {
 				c.result.SnapshotsUnchanged++
+				// SQLite record capture exports every database on every run
+				// (each group names this run's revisions), so a compressed
+				// latest snapshot is restored to its original bytes once
+				// rather than decoded on every capture.
+				if c.source.Options["sqlite_record_capture"] == true && previous.Encoding != "" {
+					if err := c.restorePlainSnapshot(previous); err != nil {
+						// A full or failing drive stops the source, as
+						// snapshot() does, rather than decoding the rest.
+						var destination destinationError
+						if errors.As(err, &destination) {
+							return err
+						}
+						c.fail(item.path, err)
+						continue
+					}
+				}
 				if err := c.exportSnapshot(previous); err != nil {
 					c.fail(item.path, err)
 				}
@@ -111,6 +127,67 @@ func sqliteDependencyState(file string) (sqliteSourceState, error) {
 	return state, nil
 }
 
+// restorePlainSnapshot replaces an encoded latest snapshot with its original
+// bytes, under the capture lock this writer holds: decoded and verified into
+// a temporary, flushed, renamed over the name, then recorded plain at the
+// next commit. A kill before that commit leaves an entry marked encoded over
+// the original bytes, which every reader reads as plain (storedAs).
+func (c *sourceCapture) restorePlainSnapshot(s *capturedSnapshot) error {
+	file := filepath.Join(c.dir, filepath.FromSlash(s.Captured))
+	v := c.storedSnapshot(s)
+	if v.Encoding == "" {
+		s.Encoding, s.StoredSize = "", 0
+		return nil
+	}
+	if captureFault != nil {
+		if err := captureFault("restore-plain", s.Captured); err != nil {
+			return toDestination(err)
+		}
+	}
+	if err := c.ensureSpace(v.Size); err != nil {
+		return err
+	}
+	temporary := file + captureTempSuffix
+	if err := materializeCaptured(c.ctx, file, temporary, v); err != nil {
+		os.Remove(temporary)
+		return err
+	}
+	out, err := os.Open(temporary)
+	if err == nil {
+		err = out.Sync() // F_FULLFSYNC before the original encoding is replaced
+		out.Close()
+	}
+	if err == nil {
+		err = os.Rename(temporary, file)
+	}
+	if err != nil {
+		os.Remove(temporary)
+		return toDestination(err)
+	}
+	syncDir(filepath.Dir(file))
+	s.Encoding, s.StoredSize = "", 0
+	return nil
+}
+
+// storedSnapshot is a latest snapshot's entry as its copy is actually stored
+// (storedAs: a compression killed before its rename left it plain).
+func (c *sourceCapture) storedSnapshot(s *capturedSnapshot) capturedVersion {
+	return storedAs(filepath.Join(c.dir, filepath.FromSlash(s.Captured)), s.version())
+}
+
+// intactSnapshot is intact for a latest snapshot at the size it is stored at
+// and its recorded captured mtime, which compression keeps. The file is
+// opened only when an encoded entry's file has the original size.
+func (c *sourceCapture) intactSnapshot(s *capturedSnapshot) bool {
+	size := s.version().storedSize()
+	if s.Encoding != "" {
+		if info, err := os.Stat(filepath.Join(c.dir, filepath.FromSlash(s.Captured))); err == nil && info.Size() == s.Size && s.Size != s.StoredSize {
+			size = c.storedSnapshot(s).storedSize()
+		}
+	}
+	return c.intact(s.Captured, size, s.CapturedMTimeNS)
+}
+
 // snapshot replaces a database's latest snapshot, keeping the previous one as
 // a generation. Retention keeps the newest capture_snapshot_generations.
 func (c *sourceCapture) snapshot(item captureItem, rel string, state sqliteSourceState, previous *capturedSnapshot) (*capturedSnapshot, error) {
@@ -147,9 +224,11 @@ func (c *sourceCapture) snapshot(item captureItem, rel string, state sqliteSourc
 	if previous != nil {
 		snapshot.Generations = slices.Clone(previous.Generations)
 		if c.session.generations > 0 || c.session.preserveUnindexed || c.source.Options["sqlite_record_capture"] == true {
-			source := previous.Source
-			version := capturedVersion{Captured: previous.Captured, Size: previous.Size, CapturedAt: previous.CapturedAt, Source: &source}
-			intact := c.intact(previous.Captured, previous.Size, previous.CapturedMTimeNS)
+			// An encoded (idle) latest snapshot moves into history encoded,
+			// with the digest recorded when it was compressed.
+			stored := c.storedSnapshot(previous)
+			version := capturedVersion{Captured: previous.Captured, Size: previous.Size, CapturedAt: previous.CapturedAt, Source: stored.Source, Encoding: stored.Encoding, StoredSize: stored.StoredSize, SHA256: previous.SHA256}
+			intact := c.intactSnapshot(previous)
 			kept, err := c.preserve(version, intact)
 			if err != nil && intact {
 				os.Remove(temporary)
@@ -158,7 +237,7 @@ func (c *sourceCapture) snapshot(item captureItem, rel string, state sqliteSourc
 			// Otherwise an interrupted rotation may already have replaced the
 			// latest, leaving its predecessor in history to adopt.
 			if err == nil {
-				snapshot.Generations = append([]capturedVersion{kept}, snapshot.Generations...)
+				snapshot.Generations = append([]capturedVersion{kept}, withoutVersion(snapshot.Generations, kept.Captured)...)
 			}
 		}
 	}

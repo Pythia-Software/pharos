@@ -14,7 +14,7 @@ const MENU_BAR_TOOLS = [
   {id: 'search', label: 'Search conversations…', group: 'navigation', description: 'Find a conversation or search the archive.'},
   {id: 'analyze', label: 'Analyze usage…', group: 'navigation', description: 'Open usage, cost, writing, and carbon analysis.'},
   {id: 'optimize', label: 'Optimize…', group: 'navigation', description: 'Review findings and opportunities to improve agent work.'},
-  {id: 'capture', label: 'Capture & index…', group: 'manage', description: 'Open capture and indexing controls, schedules, and recent runs.'},
+  {id: 'capture', label: 'Background Processing…', group: 'manage', description: 'Open the background update schedule, capture and indexing controls, and recent runs.'},
   {id: 'health', label: 'Library health & backups…', group: 'manage', description: 'Check storage and recent activity, or choose a backup destination.'},
   {id: 'sources', label: 'Manage sources…', group: 'manage', description: 'Choose which conversation files Pharos reads on this Mac.'},
   {id: 'finder', label: 'Show library in Finder', group: 'manage', description: 'Reveal the connected library folder in Finder.'},
@@ -32,7 +32,10 @@ function menuBarActivityDetail(activity, now = Date.now()) {
   const parts = [typeof activity.label === 'string' ? activity.label : 'Working'];
   if (Number.isFinite(activity.progress)) parts.push(`stage ${Math.trunc(activity.progress * 100)}%`);
   const completion = Date.parse(activity.estimated_completion_at);
-  if (completion > now) parts.push(`about ${Math.max(1, Math.ceil((completion - now) / 60000))} min for this stage`);
+  // An operation-scoped estimate covers the whole run; otherwise it is the
+  // current stage's (older services send no scope).
+  const minutes = Math.max(1, Math.ceil((completion - now) / 60000));
+  if (completion > now) parts.push(activity.estimated_completion_scope === 'operation' ? `about ${minutes} min left` : `about ${minutes} min for this stage`);
   return parts.join(' · ');
 }
 function normalizeMenuBarSettings(saved = {}) {
@@ -51,7 +54,7 @@ function normalizeMenuBarSettings(saved = {}) {
       return [...before, id];
     });
   }
-  return {enabled: typeof saved?.enabled === 'boolean' ? saved.enabled : true, layoutVersion: 2,
+  return {enabled: typeof saved?.enabled === 'boolean' ? saved.enabled : true, layoutVersion: 2, usagePeriod: saved?.usagePeriod === 'today' || !Object.keys(saved||{}).length ? 'today' : '24h',
     ...Object.fromEntries(MENU_BAR_TOOLS.map(tool => [tool.id, order.includes(tool.id)])), order};
 }
 // Destination is an insertion boundary in the original list; null removes.
@@ -80,7 +83,6 @@ function editMenuBarSettings(saved, id, destination) {
   if (!root) return;
   const active = get('menuBarActive'), toolbox = get('menuBarToolbox'), menu = get('menuBarToolMenu');
   let settings = normalizeMenuBarSettings(window.pharosPrefs.get(MENU_BAR_KEY, {})), dragId = null;
-  let expanded = false;
   let snapshot = null, usage = null, loading = false, lastUsage = 0, previewError = false;
   const native = () => window.webkit?.messageHandlers?.pharosMenuBar;
   const notify = () => { try { native()?.postMessage({...settings}); } catch {} };
@@ -134,6 +136,7 @@ function editMenuBarSettings(saved, id, destination) {
   async function refreshPreview() {
     if (loading || !settings.enabled || !root.getClientRects().length) return;
     loading = true;
+    const period = settings.usagePeriod;
     try {
       const response = await fetch('/api/menu-bar/status');
       if (!response.ok) throw new Error('Preview unavailable');
@@ -141,12 +144,13 @@ function editMenuBarSettings(saved, id, destination) {
       if (settings.order.some(id => definition(id).group === 'usage') && Date.now() - lastUsage >= 60000) {
         lastUsage = Date.now();
         try {
-          const response = await fetch('/api/menu-bar/usage');
-          usage = response.ok ? await response.json() : null;
+          const response = await fetch('/api/menu-bar/usage?period='+period);
+          const next = response.ok ? await response.json() : null;
+          if (settings.usagePeriod === period) usage = next;
         } catch { usage = null; }
       }
     } catch { previewError = true; }
-    finally { loading = false; syncFaces(); }
+    finally { loading = false; syncFaces(); if (period !== settings.usagePeriod) void refreshPreview(); }
   }
   function closeMenu() { if (menu.matches(':popover-open')) menu.hidePopover(); }
   function clearDrag() {
@@ -161,7 +165,7 @@ function editMenuBarSettings(saved, id, destination) {
     list.querySelector(`[data-tool="${target}"] button`)?.focus();
   }
   function commit(next, message, focusId) {
-    closeMenu(); settings = next;
+    closeMenu(); if(next.usagePeriod!==settings.usagePeriod){lastUsage=0;usage=null;} settings = next; get('menuBarUsagePeriod').value=settings.usagePeriod;
     window.pharosPrefs.set(MENU_BAR_KEY, settings); notify(); render();
     get('menuBarEditorStatus').textContent = message;
     if (focusId) focusTool(focusId);
@@ -187,13 +191,11 @@ function editMenuBarSettings(saved, id, destination) {
     menu.style.top = Math.max(8, Math.min(innerHeight - 100, rect.bottom + 6)) + 'px';
   }
   function renderDisclosure() {
-    if (!settings.enabled) expanded = false;
     root.classList.toggle('is-enabled', settings.enabled);
     const button = get('menuBarExpand');
     button.hidden = !settings.enabled;
-    button.setAttribute('aria-expanded', String(expanded));
-    button.querySelector('span').textContent = expanded ? 'Collapse' : 'Expand';
-    get('menuBarOptions').hidden = !settings.enabled || !expanded;
+    button.disabled = !settings.enabled;
+    window.pharosView?.restoreDisclosures(button);
   }
   function render() {
     get('showMacMenuBar').classList.toggle('on', settings.enabled);
@@ -209,7 +211,7 @@ function editMenuBarSettings(saved, id, destination) {
         const line = element('span', 'menu-bar-separator-line');
         line.setAttribute('role', 'separator'); line.setAttribute('aria-label', 'Menu separator'); face.append(line);
       } else {
-        if (group !== tool.group && ['usage', 'library'].includes(tool.group)) row.append(element('div', 'menu-bar-heading', tool.group === 'usage' ? 'Last 24 hours' : 'Library'));
+        if (group !== tool.group && ['usage', 'library'].includes(tool.group)) row.append(element('div', 'menu-bar-heading', tool.group === 'usage' ? (settings.usagePeriod==='today'?'Today':'Last 24 hours') : 'Library'));
         group = tool.group;
       }
       const handle = element('button', 'menu-bar-handle'); handle.type = 'button'; handle.append(glyph('grip'));
@@ -246,8 +248,8 @@ function editMenuBarSettings(saved, id, destination) {
       const row = element('li', 'menu-bar-available'), add = element('button', 'menu-bar-add');
       row.dataset.tool = tool.id; row.draggable = true;
       add.type = 'button'; add.setAttribute('aria-label', `Add ${tool.label}`);
-      add.title = tool.description;
-      add.setAttribute('aria-description', tool.description);
+      add.title = tool.description?.replace('last 24 hours',settings.usagePeriod==='today'?'today since local midnight':'last 24 hours');
+      add.setAttribute('aria-description', add.title);
       add.append(element('span', '', tool.label));
       if (tool.separator) add.append(element('span', 'menu-bar-separator-line'));
       add.append(glyph('plus'));
@@ -277,11 +279,14 @@ function editMenuBarSettings(saved, id, destination) {
       dragId = null; clearDrag();
     };
   }
+  get('menuBarUsagePeriod').value=settings.usagePeriod;
+  get('menuBarUsagePeriod').onchange=event=>commit({...settings,usagePeriod:event.target.value},'Usage period updated.');
+  window.addEventListener('pharos:day-change',()=>{lastUsage=0;usage=null;refreshPreview()});
   get('showMacMenuBar').onclick = () => commit({...settings, enabled: !settings.enabled}, settings.enabled ? 'Mac menu bar hidden.' : 'Mac menu bar shown.');
-  get('menuBarExpand').onclick = () => {
-    expanded = !expanded; closeMenu(); renderDisclosure();
-    if (expanded) refreshPreview();
-  };
+  get('menuBarExpand').addEventListener('pharos:disclosure', () => {
+    closeMenu();
+    if (get('menuBarExpand').getAttribute('aria-expanded') === 'true') refreshPreview();
+  });
   get('menuBarReset').onclick = () => commit({...normalizeMenuBarSettings(), enabled: settings.enabled}, 'Default menu restored.');
   addEventListener('resize', closeMenu);
   document.querySelector('main').addEventListener('scroll', closeMenu);

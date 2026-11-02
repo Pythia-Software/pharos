@@ -7,7 +7,7 @@
 .query-card:active { cursor:grabbing; }
 /* A card stretched to its row's height gives the extra height to its cover. */
 .query-card-open { display:flex; flex-direction:column; flex:1 0 auto; text-decoration:none; color:inherit; border-radius:6px; overflow:hidden; cursor:pointer; }
-.query-card-open:focus-visible { outline:2px solid var(--gold); outline-offset:4px; }
+.query-card-open:focus-visible { outline:2px solid var(--focus-ring, var(--accent)); outline-offset:4px; }
 .query-xray-open { position:absolute; z-index:2; inset:0; width:100%; padding:0; border:0; border-radius:inherit; background:transparent; cursor:pointer; }
 .query-xray-open:focus-visible { outline:2px solid var(--query-tone); outline-offset:3px; }
 .query-card[data-revealable]:hover,.query-card[data-revealable]:focus-within { border-color:var(--sea); }
@@ -66,6 +66,7 @@
 .query-cover-columns { position:absolute; inset:0 0 0 24px; display:flex; align-items:stretch; gap:0; height:100%; }
 .query-cover-columns>span { flex:1; min-width:0; display:flex; flex-direction:column-reverse; justify-content:flex-start; height:100%; }
 .query-cover-columns i { display:block; flex:none; width:100%; min-height:0; }
+.query-timeline-lines { position:absolute; inset:0; width:100%; height:100%; overflow:visible; pointer-events:none; }
 .query-compact-metric .qt-metric-axis-labels,.query-chart-axis-labels { display:flex; flex:none; justify-content:space-between; gap:8px; padding-top:3px; font-size:8px; line-height:11px; color:var(--muted); }
 .query-chart-axis-labels>span { min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .query-compact-metric .qt-metric-axis { font-size:8px; }
@@ -94,12 +95,11 @@
 .query-keep:focus-visible { outline:2px solid var(--ink); outline-offset:3px; }
 .query-card.discovery { transform:rotate(var(--query-lean)) translateY(3px); box-shadow:0 9px 15px #0004; }
 
-.query-drag-tip { position:absolute; z-index:5; bottom:calc(100% + 10px); left:50%; transform:translateX(-50%) translateY(4px); background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:5px; padding:7px 9px; font-size:11px; white-space:nowrap; box-shadow:0 4px 14px #0004; opacity:0; pointer-events:none; display:flex; gap:5px; align-items:center; transition:opacity .12s,transform .12s; }
+.query-drag-tip { position:absolute; z-index:5; bottom:calc(100% + 10px); left:50%; transform:translateX(-50%); background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:5px; padding:7px 9px; font-size:11px; white-space:nowrap; box-shadow:0 4px 14px #0004; opacity:0; pointer-events:none; display:flex; gap:5px; align-items:center; transition:opacity .12s; }
 .query-drag-tip svg { width:13px; height:13px; color:var(--gold); }
-.query-card.discovery:hover .query-drag-tip,.query-card.discovery:focus-within .query-drag-tip { opacity:1; transform:translateX(-50%); }
-.home-belt-row>.query-card:first-child .query-drag-tip { left:0; transform:translateY(4px); }
-.home-belt-row>.query-card:first-child:hover .query-drag-tip,.home-belt-row>.query-card:first-child:focus-within .query-drag-tip { transform:none; }
-.query-card.insert-before { box-shadow:-5px 0 0 var(--gold),1px 5px 9px #0003; }
+.query-card.discovery:hover .query-drag-tip,.query-card.discovery:focus-within .query-drag-tip { opacity:1; }
+.home-belt-row>.query-card:first-child .query-drag-tip { left:0; transform:none; }
+.query-card.insert-before { box-shadow:-5px 0 0 var(--sea),1px 5px 9px #0003; }
 .query-chip { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line); background:color-mix(in srgb,var(--gold) 4%,var(--panel)); color:var(--ink); padding:5px 8px; border-radius:5px; font:inherit; font-size:var(--fs-sm); cursor:pointer; }
 .query-chip svg { width:12px; height:12px; color:var(--muted); }
 .query-chip svg:first-child { color:var(--sea); }
@@ -164,7 +164,8 @@
 @keyframes query-preview-drift { to { opacity:.35; transform:translate(var(--drift-x),var(--drift-y)); } }
 @media(prefers-reduced-motion:reduce) { .query-preview-spinner,.query-preview-loading .query-preview-loading-shape * { animation:none; } }
 
-.query-cover-dense-list .qt-metric-bars { justify-content:flex-start; gap:5px; }
+/* Top-aligned rows leave room for the first value label above its bar. */
+.query-cover-dense-list .qt-metric-bars { justify-content:flex-start; gap:5px; padding-top:3px; }
 
 /* The shared portal supplies unclipped tooltips for native metric marks. */
 .query-compact-metric .qt-metric-tooltip { display:none; }
@@ -234,3 +235,5 @@
 .query-shared-box.is-dense .query-box-outlier { top:4px; }
 .query-role-values>span { display:inline-flex; align-items:center; gap:3px; white-space:nowrap; }
 .query-role-values i { display:inline-block; width:4px; height:4px; flex:none; border-radius:1px; }
+.query-cover-columns .query-timeline-point { position:absolute; left:50%; width:4px; height:4px; border-radius:50%; transform:translate(-50%,50%); }
+.query-cover-columns>.query-timeline-reference { height:0; position:absolute; left:0; right:0; border-top:1px dashed var(--muted); pointer-events:none; }

@@ -172,8 +172,14 @@ func TestMCPTraceWorktreePrioritizesMetadataAndUsesIndexedFallback(t *testing.T)
 	}
 	addAuditMessage(t, catalog, "transcript-only", "other-conversation", "assistant", "message", "Created /src/worktrees/transcript-only-agent", 2, "2026-10-06")
 	indexed := auditCall(t, catalog, "trace_worktree", map[string]any{"query": "transcript-only-agent", "max_output_tokens": 4000})
-	if indexed["search_scope"] != "indexed_message_phrases" || integer(indexed["total"]) != 1 {
+	if indexed["search_scope"] != "indexed_message_phrases" || integer(indexed["total"]) != 1 || indexed["coverage"] != toolOutputCoverage {
 		t.Fatalf("indexed literal fallback missing: %s", jsonText(indexed))
+	}
+	// Tool output is not word-indexed, so a path only it mentions is not
+	// found, even through a posting the old writer left.
+	addAuditMessage(t, catalog, "tool-only", "other-conversation", "tool", "tool_result", "Created /src/worktrees/tool-output-agent", 3, "2026-10-06")
+	if output := auditCall(t, catalog, "trace_worktree", map[string]any{"query": "tool-output-agent"}); integer(output["total"]) != 0 {
+		t.Fatalf("fallback found tool output: %s", jsonText(output))
 	}
 	if _, err := catalog.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash)
 		VALUES('not-indexed','other-conversation','not-indexed','assistant','message','unindexed-agent','not-indexed')`); err != nil {

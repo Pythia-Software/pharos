@@ -12,6 +12,14 @@ private runtime credential. The broker owns the primary connection, explicit MCP
 assignment and verified library transfers. See [Libraries and application setup](library-management.md)
 and the [implementation design](onboarding-and-library-design.md).
 
+Startup keeps the native lighthouse visible until the first web page finishes
+loading or its navigation is cancelled or diverted to a download. Later reloads
+and navigations keep the current page visible without the startup overlay.
+The broker answering `/api/ready` alone does not mean its library is open.
+Catalog opens reuse a completed initialization for the same executable, schema,
+and Library projection, while still registering the current Mac. A new build or
+an older catalog runs the full migration and backfill pass before serving pages.
+
 Channel and Machine attribute work to its initiating conversation and device,
 including delegated usage. Execution machine records each session's placement
 separately. These dimensions are available across query tables, charts, cards,
@@ -25,7 +33,7 @@ inheritance contract. Unknown placement remains visible in totals.
 - No source is reclaimed. TL1 reclamation is mothballed and excluded from the default build.
 - The archive never calls `rm -rf`, `git worktree remove`, `git worktree prune`, or `git gc`. TL1 owns the worker handshake, lock/lease, atomic recheck, and exact-resource removal.
 - Preservation must fit the 100,000,000-byte logical cap, reside on the pinned volume, and pass a complete hash/reopen check before acknowledgement.
-- Heavy work is deferred unless CPU, memory, and authoritative TL1/agent activity signals all say the machine is truly idle. Unknown owner activity means “not idle.”
+- Nothing gates background work on the machine being idle. Index changes runs on its interval, maintenance runs whenever it has work, and only capture copies, local backups and adoption run at low (utility) disk priority. The machine's load average is recorded only as a forecasting feature. [Background work](background-work.md) is the contract for how background operations are registered, journaled and reported.
 
 ## Quick start
 
@@ -63,28 +71,36 @@ optional aggregate metrics, column reorder, and resize.
 
 - **Home** shows saved query cards and Dashboard Catalog suggestions. The catalog’s **All Cards** button opens the browsable Card Library at `/cards`. Completed covers are cached in the browser's IndexedDB, isolated by library and keyed by query, template, schema, and time zone. Revisiting the page shows saved covers immediately while current results refresh behind a small status icon; a failed refresh keeps the last cover. Snapshots expire after seven days and are capped at 400 covers or 16 MiB per library. Once foreground cards finish, Home warms the catalog's default covers, before the Card Library page is opened. Cold requests prioritize cards near the viewport as it scrolls; grouped requests take independent queue slots rather than serializing inside a metrics batch. A first visit still computes its initial covers, and these browser snapshots do not precompute while the app is closed.
 
-- **Library** searches conversation text, changed files, and tool URLs. Text search reads retained user messages, agent responses, and thinking from `messages_fts`, groups hits by conversation, and links to the matching message. Unquoted words use AND; fuzzy expansion reads nearby vocabulary terms, while quoted phrases match in order. Case and separator matching are optional. The UI's text search does not use workspace vectors. File search uses `change_files`; a file change has workspace scope and is attributed to a conversation only when its work item, time span, or sole-conversation workspace supports that link. URL search reads `tool_urls` and excludes unopened web-search result links. The search narrows the Library query table, whose filters then apply to the matching work; the table also offers repository, source, PR, sub-agent, compaction, cost, and other structured filters. Work detail shows evidence-linked summaries, attempted/checkpointed/integrated changes, conversations, metrics, PR associations, and receipts.
+- **Library** searches conversation text, changed files, and tool URLs. Text search reads retained user messages, agent responses, and thinking from `messages_fts`, groups hits by conversation, and links to the matching message. `messages_fts` word-indexes every message kind with text except tool output (`tool_result`, most of a catalog's text; see `tool_output_index.go`): a search of the tools or all surface scoped to a conversation or at most 100 workspaces also scans the stored text of the tool output in scope, while Library Find's workspace rows and unscoped searches cover the other kinds and say so. Catalogs written before that remove their tool-output postings in the background (`maintenance.search.tool-output`), then run a bounded merge; the file shrinks only with `VACUUM`. Unquoted words use AND; fuzzy expansion reads nearby vocabulary terms, while quoted phrases match in order. Case and separator matching are optional. The UI's text search does not use workspace vectors. File search uses `change_files`; a file change has workspace scope and is attributed to a conversation only when its work item, time span, or sole-conversation workspace supports that link. URL search reads `tool_urls` and excludes unopened web-search result links. The search narrows the Library query table, whose filters then apply to the matching work; the table also offers repository, source, PR, sub-agent, compaction, cost, and other structured filters. Work detail shows evidence-linked summaries, attempted/checkpointed/integrated changes, conversations, metrics, PR associations, and receipts.
 
 Past Work also shows when an archived commit appears on the local `origin/main` history. It links the first mainline commit containing that work, whether it arrived through a merge commit or directly. This uses local Git objects only; squash merges and work without a retained commit ID cannot be attributed by ancestry. Refresh the local `origin/main` ref and index a source to update these associations.
-- **TL1** appears once a TL1 source is indexed. It compares each flavor across agent configurations (advance, escalation, and agent error rates, cost per useful result, time, tokens, cache reuse), clusters errors by normalized signature and who can fix them, traces human attention and review findings to their causes, and segments work by TL1's large enqueues (defaulting to the latest, so analysis follows the most recent flavor revisions). Its recommendations (error clusters, reruns, cost outliers) are findings scoped to each flavor, measured like any other. Flavor and candidate drill-downs and a per-run query table sit underneath. See [`docs/tl1-analysis.md`](tl1-analysis.md).
+- **TL1** ingestion preserves workflow data and native transcripts. Its dedicated analysis pages are removed for now. Archived conversations remain searchable, flavor recommendations remain in Findings, and attempts remain queryable in Analyze. The TL1 analysis APIs and MCP tools are also retained.
 - **Analyze** has two views, switched at the top of the page, and remembers the last one. **Tokens** is the token-usage query table: one row per agent session, local day, and model, with uncached input, cache reads, cache writes, output, and reasoning kept separate. Provider, model, repository, source, agent kind, and day/week/month are all filter and group-by fields, so metrics such as "cache reads per week by model" are a saved view. A stacked chart above the table shows tokens or cost per day, week, or month, split by token type, provider, model, repository, or agent kind. The chart, the summary cards, and the table share one set of filters: clicking a key filters to that provider, model, repository, or agent kind (⌘-click adds more; clicking the lone selection, or its ×, clears it), dragging across columns or choosing a range preset sets a time filter, and a filter typed into the table narrows the chart and cards too. Token types are not rows, so clicking one only narrows the chart. When a few columns dwarf the rest (the tallest is over twice the 80th percentile of non-empty columns, rounded up to a round number), the chart breaks its axis there: linear below in the lower half, logarithmic above in the upper half, marked with broken-axis slashes and a "log scale" label. The Human Words chart does the same. Preset buttons set up common breakdowns. Linked mirrors of the same work are counted once. **Your writing** is described below.
+- **Analyze dashboards** (Tokens and Cost so far) offer views beside the trend: **Compare groups** (bars or shares), **Distribution** (box or histogram), **Two measures** (a scatter), and **Hour / weekday cycle** (hour of day or day of week). Each view can count usage records or whole conversations, agent sessions, or delegated runs, and can hide groups below a minimum sample. Each catalog lists its measures, breakdowns and units; the engine, its query shapes, and how a Home card maps to a dashboard state are in [`docs/dashboard-analysis.md`](dashboard-analysis.md).
+- **The site map** lists every page, its options, every card, and which dashboard settings combine, generated from the TypeScript that defines them, so Go can browse the site and build links. See [`docs/site-map.md`](site-map.md).
 - **Tools** analyzes tool use from retained transcripts. A daily summary table groups calls by tool, shell program and subcommand (`git status`, `go test`, `sed`), model, repository, and agent kind, with error counts by kind, durations, the tokens each result added to the context, the tokens re-read by later requests until compaction, and their API-equivalent cost. A per-call table filters and sorts every call; a summary row drills into its calls, and each call opens with its parsed commands, input, and result. Each call also records the sites it reached: URLs from web fetches, browser navigation, Codex web searches, and network commands such as `curl`, plus any web search query and the links it returned. Presets cover error rates, failure kinds, top commands, shell calls a dedicated tool could make, slow tools, test and build time, context cost, sites reached, and web searches. Definitions are in [`docs/tool-analytics.md`](tool-analytics.md).
 - **Findings** turns recurring, fixable patterns (failures, instruction drift between harnesses, CLI friction, context-heavy commands, orientation and exploration cost, cost outliers, and TL1 flavor problems) into plain-language cards with a proposed change. Findings go into per-target prompts ("carts") saved in the library; copying one is the intervention that starts a before-and-after measurement with a fixed analysis plan, guard metrics, and weekly net savings. Manual Index changes runs a full findings pass; scheduled indexing defers findings. Capture & index and separate index actions retain daily full discovery and watched-finding measurements between daily passes. See [`docs/findings.md`](findings.md).
 - **MCP** controls local agent access, provides a copyable stdio connection definition and setup prompt, and offers a query-table of recent tool calls with filters, saved views, metrics, response-size estimates, duration, result counts, truncation, and errors.
-- **Sources on this Mac** lists every configured source, path availability, coverage, last index attempt and successful index, and errors. Each card has an enable switch in its header. It offers **Find sources on this Mac** and links to Settings → Capture & index, which has **Capture & index** (capture this Mac, index captures from every Mac, then any pending library upgrade) and, separately, **Capture this Mac** and **Index captured files**. The header's **Index changes** button incrementally indexes this Mac's sources, then refreshes GitHub, identities, Git integration, Tools, Human Words, and findings using live inputs by default and retained inputs only when explicitly enabled. Acquisition rollout is staged; see the [source acquisition matrix](incremental-sync.md#source-acquisition-rollout).
+- **Sources on this Mac** lists every configured source, path availability, coverage, last index attempt and successful index, and errors. Each card has an enable switch in its header. It offers **Find sources on this Mac** and links to Settings → Background Processing, which shows what runs Frequently, Hourly and Daily and has **Capture & index** (capture this Mac, index captures from every Mac, then any pending library upgrade) and, separately, **Capture this Mac** and **Index captured files**. The header's **Index changes** button incrementally indexes this Mac's sources, then refreshes GitHub, identities, Git integration, Tools, Human Words, and findings using live inputs by default and retained inputs only when explicitly enabled. Acquisition rollout is staged; see the [source acquisition matrix](incremental-sync.md#source-acquisition-rollout).
 - **Library drive** (in the header) names the drive holding the library and what is holding or writing the library (capture, index, backup, Git lookups, Library view indexing), with progress and estimated completion times based on recent successful runs. In the app, **Eject** at the right of the panel's title releases the library, stops agents' Pharos MCP servers running from the drive, quits, and ejects it. See [Library status and Eject](configuration.md#library-status-and-eject).
 - **Macs and captures** (in Settings → Sources) lists this Mac and every Mac whose captures are in the library, with when each source was captured and indexed and which need indexing. **Open Capture & index** links to the capture and index controls and their progress. A newly added Mac is captured right after onboarding, then offered **Index now**.
 - **Library drive** checks and **Backups** (in Settings → Health) show the drive's encryption, Spotlight, file system, free space, volume pin and backup age, each with what to do and a copyable command, and back the library up to a folder on another drive.
 - **Settings → Backups** also provides the local backup controls and a cloud backup wizard: a six-step calculator/configuration/commands/test/first-backup/test-restore flow, an opt-in compact wizard with GCP defaults, four primary calculator controls, collapsed detailed options, linked regional settings, and a calendar-month cost graph comparing linear growth with a flat library using a measured full-backup compression sample, database-saved configurations, and exact copyable provisioning commands and prompts. AWS/GCP use native revision-count retention; Azure uses previous-version age expiry. The selected design stores restricted upload credentials in the Pharos database and uses provider-managed encryption, with cloud-account access for restore. Optional password protection uses age public-key encryption with a password-encrypted recovery bundle; setup asks for the password only in Terminal, with separately copyable preparation and provisioning blocks. The Test, First backup and Test restore steps use server-side credential import, restricted-access probes, real provider uploads and recorded version IDs. The backend makes consistent full snapshots, embeds recovery bundles, and validates downloaded archive digests, file manifests and SQLite integrity in isolated folders. Protected verification prompts only in Terminal; `pharos cloud-restore` also recovers without the original database. Daily, weekly and every-30-day schedules persist in SQLite and activate after a verified full restore. They bind to a Mac and library path, catch up once after downtime, serialize destination uploads, and use bounded retries. Settings offers pause/resume, schedule editing, repeat manual backups and version selection for restore tests. The cloud entry carries a Beta chip. Durable upload restart-resume journals remain future work. See [Cloud backups](cloud-backups.md) for pricing assumptions and the implementation plan.
 - **Library drive** in the header shows live indexing progress and the latest completed index result, including updated workspace and conversation counts and any error.
 - **Your writing** (in Analyze) estimates how much text you typed or dictated into agent chats. Each user message is split into typed text, harness instructions, one-click templates, attachments, agent output copied from the previous 48 hours, re-sent text, likely pastes, and prompts sent by scripts or other agents. A query table lists one row per conversation, sortable and filterable by each kind of input and by tokens and cost, so "deepest conversations" is one click; the chart and breakdown above it follow the filters. The chart splits words by kind of input, repository, app, or provider; its key and a dragged time range filter the table the same way as on Tokens, and a time filter counts only the words sent inside it. A second query table lists one row per user message, filterable by the categories and rules that labelled its text, and shows messages either as rows or as text highlighted span by span, each span explaining on hover why it counted as what. The transcript reader shows the split for each message, and Settings has cards that open each Analyze view. Definitions are in [`docs/human-authorship.md`](human-authorship.md).
+- **Analyze → Agent Experience** (preview, turned on in Settings → App preferences) shows what agents ran into while they worked, found in their replies and thinking: obstacles, surprises, discoveries, workarounds, unchecked claims and more, with rates per 1,000 agent messages and each event linked into the reader. Events are imported from a study's model predictions for now. See [`docs/agent-events.md`](agent-events.md).
 - **Analyze → Carbon Impact** estimates the electricity and CO₂e behind your token usage, all time or the last 30 days, split by token type (uncached input, cache writes, cache reads, output) and model tier. Energy per token comes from published inference measurements, with cache reads charged far less than recomputed input; you choose the electricity grid, data-center overhead (PUE), and a low, central, or high estimate. It is an estimate, not a measurement: factors and sources are in [`carbon/`](../carbon/README.md).
 - **Library upgrade** appears when a catalog indexed by an older version needs its derived data brought up to date: repository merges, token attribution, harness versions, loaded instructions, and the tool ledger, run in that order as one resumable background job. See [Upgrading an existing library](releases-and-updates.md#upgrading-an-existing-library).
 - **Health** shows retrieval coverage/freshness, index size, and external-storage health. Retrieval-only is shown as an intentional capability.
+- **Storage** (on Health, `/api/health/storage/breakdown`) splits the library drive's space into captured originals (latest copies, earlier versions, manifests) and Pharos's catalog (database, write-ahead log, caches), and tabulates both by Mac, source and repository. Sizes come from the drive checks' cached walk of the library, which counts each hard-linked file once. Originals by Mac and source are measured. Nothing records which repository a capture's or the catalog's bytes belong to, and measuring that would read the whole catalog, so repository shares, and the catalog's split by Mac and source, are estimated from each conversation's message count in its sightings (`storage_breakdown.go`). The drive checks read those counts when they walk the drive and keep them with the sizes, so the breakdown answers from memory; a sync's commits do not invalidate it, and the size-history row each measurement records does not hold the sizes back while the catalog writer is busy. The catalog's copy of a conversation belongs to the Mac and source it was written from; a merged copy is spread across every Mac that saw it.
 
 Delegated work is retained as a recursive `agent_sessions` tree, including sub-agents of sub-agents and links back to each session's messages. Session and workspace usage preserve uncached input, cache reads, cache creation, output, reasoning, and any unclassified aggregate remainder separately so pricing can be applied without reconstructing provider envelopes.
 
 Run diagnostics with `dist/Pharos.app/Contents/MacOS/pharos --config "$HOME/Library/Application Support/Pharos/archive.toml" doctor`. Configuration is documented in [`docs/configuration.md`](configuration.md).
+
+`pharos labeling` prepares a read-only snapshot of conversation text as a versioned dataset for offline labeling by a large model, runs labeling jobs and exports training data; see [`docs/library-labeling.md`](library-labeling.md).
+
+**Local labels** (a prototype, off unless `labels_enabled` is set) label every message's function (requests, steering, feedback, reports and so on, taxonomy `candidate-0.3`) on this Mac with the `kestrel-68m` encoder. Pharos builds each message's items with `labeling prepare`'s own code, tokenizes and frames them in pure Go, and runs the model in a separate worker process (`cmd/pharos-labeler-ort`, ONNX Runtime) over a small versioned stdin/stdout protocol, so the `pharos` binary stays pure Go. Labels are a derived ledger (`message_labels`) rebuilt after authorship in the analysis chain, incrementally, never by a page; see [`docs/local-labeler.md`](local-labeler.md).
 
 ## Sources and identity
 
@@ -124,14 +140,29 @@ for the protocol, privacy boundaries, deployment, and operation.
 
 The Library UI sends its text, file, and URL searches to the Library query table as `find=` (with `find_kind`, `find_fuzzy`, `find_case`, and `find_separators`), which keeps the work `/api/library/find` hits and adds each row's best match and match count; `/api/library/find` still returns the hits themselves. Its text path uses FTS vocabulary and message verification without vector ranking. Legacy `/api/search`, query-table `search=`, and MCP conversation discovery still retain the previous concept/feature embedding behavior. Search and MCP do not upload archive content. Extractive summaries cite retained source locators.
 
-The workspace page loads a workspace in pieces, since one long session with many sub-agents can retain hundreds of megabytes. `/api/work/{id}` returns the workspace without messages, plus what the page used to derive from all of them: each conversation's message count and first prompt, pull request links found in any message, and the files its tool calls touched. `/api/work/{id}/conversations/{id}` returns one conversation for the reader. Its long tool outputs and event bodies are shortened past 2 KB, with JSON keeping its structure so error flags, exit codes, and token usage survive, and are marked `text_clipped`/`raw_clipped`. `/api/messages/{id}` returns a message's original when the reader opens it. Finding text across a workspace's conversations runs on the service (`/find`). In the reader, a turn initially renders 50 events and adds pages of 150 as it scrolls; event details are built when opened.
+The workspace page loads a workspace in pieces, since one long session with many sub-agents can retain hundreds of megabytes. `/api/work/{id}` returns the workspace without messages, plus what the page used to derive from all of them: each conversation's message count and first prompt, pull request links found in any message, and the files its tool calls touched. `/api/work/{id}/conversations/{id}` returns one conversation for the reader. Its long tool outputs and event bodies are shortened past 2 KB, with JSON keeping its structure so error flags, exit codes, and token usage survive, and are marked `text_clipped`/`raw_clipped`. `/api/messages/{id}` returns a message's original when the reader opens it. Finding text across a workspace's conversations runs on the service (`/find`). In the reader, a turn initially renders 50 events and adds pages of 150 as it scrolls; event details are built when opened. Page Find (Cmd/Ctrl+F, `web/src/page-find.ts`) searches the reader in the browser, including turns, pages and details that are not rendered yet, and renders the part holding the match it steps to; see [page Find](url-view-state.md#page-find).
 
-Requests never wait for the catalog writer, which a sync holds for seconds at
-a time. They read through a read-only connection pool and never write:
+Catalog data reads use a read-only connection pool, so they do not wait for
+the catalog writer, which a sync can hold for seconds at a time. Requests
+that save data still use the serialized writer:
 
+- **Settings → App preferences → Pause indexing during queries** optionally lets
+  interactive query, search, reader and MCP requests pause ingestion before
+  each record, and search-index and Library maintenance between batches.
+  It defaults off so sustained browsing does not prevent indexing
+  progress. The saved library preference `pharos-pause-indexing-for-queries-v1`
+  applies without restarting, independently of the activity panel and manual or
+  automatic indexing. Pauses never hold the catalog writer or a SQLite
+  transaction: a record already being written finishes before yielding.
+  Turning the setting off releases paused work even during a query.
+  Status polls do not pause work.
+- Cached Library and derived views keep their last computed generation for the
+  entire ingest; cold values still compute on demand. Once the ingest ends,
+  reads observe the new generation and refresh. Freshness may lag throughout a
+  long ingest so pages remain usable without repeated whole-catalog rebuilds.
 - Conversation origins are published at the end of each ingest and by the
-  Library maintenance loop, at most once a minute while a sync runs, so pages
-  can show channel and machine up to a minute behind during a sync.
+  Library maintenance loop, at most once a minute while a sync runs. Cached
+  views may retain the previous origins until the ingest ends.
 - Dirty parallelism timings and MCP metric projections are computed in the
   request's snapshot without being stored; maintenance stores them.
 - The tool rollup rebuilds in the background. Until the first rollup in a new
@@ -141,6 +172,9 @@ a time. They read through a read-only connection pool and never write:
 
 `TestRequestReadsDoNotWaitForTheCatalogWriter` holds the writer, as a sync
 does, and checks page reads, query datasets and MCP tools against it.
+`TestInteractiveQueriesPauseIngest` and `TestIndexCompletesAtomicWorkspaceDuringQuery`
+check that indexing yields without blocking other writers, an open record keeps
+making progress during a query, and cancellation rolls it back for safe replay.
 
 The HTTP service binds only to loopback and requires either a bearer token or its HttpOnly UI cookie. Core endpoints are:
 
@@ -244,6 +278,15 @@ finding's extracted facts kept apart from its evidence handles, which are
 labeled as untrusted transcript content. Neither changes a finding's state; only
 copying a prompt in Pharos starts a measurement.
 
+`browse_site` and `site_link` find and build links to the web UI's pages
+from the [site map](site-map.md). `browse_site` lists one level of it at a
+time: pages, a dashboard's views and settings, filterable fields with their
+operators and most frequent values, and cards. `site_link` checks a page,
+options, filters and window against the map and returns the canonical link,
+a title, and a one-sentence summary of what the page shows. Its errors name
+the argument and list the valid choices. Given a link, it returns the
+canonical form or says why the map cannot express it.
+
 The existing `search_work`, `get_work_detail`, `get_conversation_excerpt`,
 `get_change_set`, `trace`, `query_metrics`, and `get_receipt` tools remain
 available. `get_conversation_excerpt` is a compatibility alias for bounded
@@ -277,7 +320,7 @@ the reader's `/api/work/…` requests (overview, one conversation at a time, and
   each holding only the selected works' rows. Tools summary rows come from the
   same SQL and record builder as the rollup (`toolUsageRecord`), run over a
   temporary cube that excludes every other work. Human Words, Carbon Impact,
-  MCP, TL1, search, and settings need the live library and are left out.
+  MCP, search, and settings need the live library and are left out.
 - **Privacy:** the payload is whitelisted (`sharedWork`, `sharedFieldNames` in
   `share.go`), so a new catalog column stays out of shared files until it is
   listed. Message evidence locators and the sources of copied spans (which name
@@ -319,7 +362,7 @@ by Finder, building, and opening the app:
 
 Use `./launch.sh --no-open` to initialize and build without opening the app.
 
-The SwiftUI wrapper starts the loopback-only Go service embedded beside it and presents its authenticated interface in WebKit. The catalog, configuration, staging data, and preserved archive remain outside the app bundle.
+The SwiftUI wrapper runs from Applications. It starts the application broker (`pharos app`), which starts one loopback-only Go service per connected library, and presents the selected library's authenticated interface in WebKit. Libraries (catalog, configuration, staging data and preserved archive) are separate folders on this Mac or on a drive, outside the app bundle.
 
 ### Code signing
 
@@ -406,8 +449,7 @@ For new interface icons, follow the [icon drawing and usage guide](iconography.m
 
 Analyze, Optimize, and Settings share the sidebar and mobile menu in
 `web/src/app-navigation.tsx`, driven by `app-navigation-model.ts`.
-Optimize groups the Findings dashboard, table, and settings under Findings,
-and the available TL1 pages under TL1. Findings settings uses
+Optimize groups the Findings dashboard, table, and settings under Findings. Findings settings uses
 `/findings?view=settings`; old `/settings/optimization` links redirect there.
 Page content can use `web/src/nested-pages.tsx` for its shared layout and heading.
 A `NestedPage` tree supplies labels, destinations, descriptions, and stable
@@ -582,3 +624,6 @@ recovery envelopes rescue catalog-only entities. Fresh rebuilds use production
 parsers/writers before opening a separate rollback oracle for comparison. See
 [the operator contract](capture-history.md); this facility does not run on
 startup or authorize production migrations.
+
+See [Thinking dashboards](thinking-dashboards.md) for request timing semantics,
+statistical support, URL state and the native evidence-query integration.

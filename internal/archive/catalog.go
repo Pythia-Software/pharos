@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	labelrt "github.com/gbdubs/pharos/internal/labeler"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,11 +15,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	qt "github.com/Pythia-Software/query-table/backends/go"
 	_ "modernc.org/sqlite"
 )
 
 type Catalog struct {
-	queryOnly          bool
+	queryOnly bool
+	// readOnly is a catalog opened with read-only connections (see
+	// openCatalogReadOnly): it records no MCP history.
+	readOnly           bool
 	Path               string
 	DB                 *sql.DB
 	reads              *sql.DB
@@ -34,7 +39,12 @@ type Catalog struct {
 	find         libraryFindCache
 	transcripts  transcriptFindCache
 	derived      derivedCache
-	queryCounts  queryCountCache
+	// Initialized under derived.mu; caps simultaneous workload fits.
+	thinkingFitSlots chan struct{}
+	queryCounts      queryCountCache
+	// sourceProofs holds what Query Table proved about SQL datasets' whole
+	// sources, keyed by the data generation it was proven in.
+	sourceProofs qt.SQLiteSourceProofs
 	// quietVersion and warmVersion are the catalog versions warmCaches last
 	// saw and warmed; only the Library maintenance loop uses them.
 	quietVersion, warmVersion int64
@@ -45,30 +55,36 @@ type Catalog struct {
 	// authorship tracks the human-authorship rebuild.
 	authorship authorshipState
 	// findings tracks the findings pass (see findings.go).
-	findings   findingsState
-	mcpHistory mcpHistory
-	wal        walBound
-	writers    catalogWriteTracker
-	now        func() time.Time
+	findings findingsState
+	// labels allows one labels run at a time in this process (labels.go);
+	// labelers is the labeler runtime its runs share.
+	labels sync.Mutex
+	// agentEventsRun keeps one agent events pass at a time in this process.
+	agentEventsRun sync.Mutex
+	labelers       *labelrt.Manager
+	labelersOnce   sync.Once
+	mcpHistory     mcpHistory
+	wal            walBound
+	writers        catalogWriteTracker
+	queries        queryActivity
+	now            func() time.Time
 	// background runs the catalog's own background work (the authorship
-	// rebuild). The service sets it to its spawn, so a release cancels the
-	// work and waits for it before closing the catalog; nil runs a goroutine,
-	// counted in unowned so that whoever closes the catalog can wait for it.
-	background        func(work func(context.Context)) bool
+	// rebuild) as an operation. The service sets it to its start, so a
+	// release cancels the work and waits for it before closing the catalog;
+	// nil runs a goroutine, counted in unowned so that whoever closes the
+	// catalog can wait for it.
+	background func(spec OperationSpec, work func(context.Context, *Op) error) bool
+	// initialized records this open's Initialize, for the journal.
+	initialized *initializeRecord
+	// ops is the registry Catalog-level work registers with (the service's,
+	// or a CLI command's); nil registers nothing.
+	ops               *opRegistry
 	unowned           sync.WaitGroup
 	projectionBatches atomic.Int32
 	// ingestRuns counts this process's running ingests (see cacheVersion).
 	ingestRuns atomic.Int32
-}
-
-// runBackground starts work with background, or in a goroutine when it is
-// nil, and reports false if the service is stopping.
-func (c *Catalog) runBackground(work func(context.Context)) bool {
-	if c.background == nil {
-		c.unowned.Go(func() { work(context.Background()) })
-		return true
-	}
-	return c.background(work)
+	// flags caches feature flags read from ui_preferences (feature_flags.go).
+	flags featureFlagCache
 }
 
 func OpenCatalog(path string) (*Catalog, error) {
@@ -89,10 +105,7 @@ func openCatalog(path string, prepare func(*Catalog) error) (*Catalog, error) {
 	// SQLite PRAGMAs are connection-local. The DSN applies them to every pooled
 	// connection, so deleting a session always cascades its message links and
 	// every commit is durable (see catalogDSN).
-	db, err := sql.Open("sqlite", catalogDSN(path))
-	if err != nil {
-		return nil, err
-	}
+	db := openCatalogDB(path, catalogDSN(path), "catalog")
 	// SQLite serializes writes. A small pool still allows UI reads while a source
 	// snapshot is being parsed without creating unbounded lock contention.
 	db.SetMaxOpenConns(4)
@@ -133,6 +146,10 @@ func filepathDir(path string) string {
 }
 
 func (c *Catalog) Close() error {
+	cliWriteCheck("close")
+	if c.labelers != nil {
+		c.labelers.Close()
+	}
 	c.closeMCPHistory()
 	c.library.mu.Lock()
 	c.library.close()
@@ -239,15 +256,15 @@ func (c *Catalog) Initialize() error {
 	if err := c.ensureTL1Schema(); err != nil {
 		return fmt.Errorf("initialize TL1 tables: %w", err)
 	}
+	if err := c.ensureAgentEventsSchema(); err != nil {
+		return fmt.Errorf("initialize agent events: %w", err)
+	}
 	if err := c.ensureFindingsSchema(); err != nil {
 		return fmt.Errorf("initialize findings tables: %w", err)
 	}
 	// Keep large bulk imports from spending most of their time merging FTS
 	// segments inside individual message inserts. These settings persist in FTS5.
-	if _, err := c.DB.Exec("INSERT INTO messages_fts(messages_fts,rank) VALUES('automerge',8)"); err != nil {
-		return err
-	}
-	if _, err := c.DB.Exec("INSERT INTO messages_fts(messages_fts,rank) VALUES('crisismerge',32)"); err != nil {
+	if _, err := c.DB.Exec(wordIndexMergePolicy); err != nil {
 		return err
 	}
 	if _, err := c.DB.Exec(queryTableComputedDDL + ";" + qtQuerySnapshotsDDL); err != nil {
@@ -255,6 +272,7 @@ func (c *Catalog) Initialize() error {
 	}
 	for _, migration := range []struct{ table, column, statement string }{
 		{"tool_query_facts", "day", "ALTER TABLE tool_query_facts ADD COLUMN day TEXT"},
+		{"sync_deferred", "pending_since", "ALTER TABLE sync_deferred ADD COLUMN pending_since TEXT"},
 		{"source_item_states", "indexed_by", "ALTER TABLE source_item_states ADD COLUMN indexed_by TEXT NOT NULL DEFAULT 'intentional'"},
 		{"source_states", "index_version", "ALTER TABLE source_states ADD COLUMN index_version TEXT"},
 		{"messages", "raw_text", "ALTER TABLE messages ADD COLUMN raw_text TEXT"},
@@ -332,6 +350,14 @@ func (c *Catalog) Initialize() error {
 	}
 	for _, index := range []string{
 		"CREATE INDEX IF NOT EXISTS tool_query_facts_day_idx ON tool_query_facts(day)",
+		// Request-gap aggregation reads only these small timing fields, not tool bodies.
+		"CREATE INDEX IF NOT EXISTS tool_calls_next_request_timing_idx ON tool_calls(next_request_id,ended_at,agent_session_id,tool_category) WHERE next_request_id IS NOT NULL",
+		// Cover the timing projection so request reads never visit large
+		// conversation bodies or sort the entire ledger's window partitions.
+		"CREATE INDEX IF NOT EXISTS conversations_timing_idx ON conversations(id,workspace_id,provider,harness,agent_depth)",
+		"CREATE INDEX IF NOT EXISTS model_requests_timing_idx ON model_requests(conversation_id,COALESCE(agent_session_id,''),sequence,id,requested_at,native_id,model,effort,input_tokens,cache_read_input_tokens,output_tokens,reasoning_output_tokens,compacted_before,agent_session_id)",
+		"CREATE INDEX IF NOT EXISTS messages_timing_metadata_idx ON messages(conversation_id,source_order) WHERE kind='metadata'",
+
 		"CREATE INDEX IF NOT EXISTS messages_conversation_model_effort_idx ON messages(conversation_id,effort,model) WHERE model IS NOT NULL OR effort IS NOT NULL",
 		"DROP INDEX IF EXISTS messages_conversation_effort_idx",
 		"CREATE INDEX IF NOT EXISTS agent_sessions_child_conversation_idx ON agent_sessions(child_conversation_id)",
@@ -349,6 +375,13 @@ func (c *Catalog) Initialize() error {
 		if _, err := c.DB.Exec(index); err != nil {
 			return err
 		}
+	}
+	// Its triggers read request and tool-call columns migrated above.
+	if err := c.ensureRequestTimings(); err != nil {
+		return fmt.Errorf("initialize request timings: %w", err)
+	}
+	if err := c.ensureRequestEvidence(); err != nil {
+		return fmt.Errorf("initialize request evidence: %w", err)
 	}
 	// Columns such as effort are added above when opening a legacy catalog.
 	if _, err := c.DB.Exec(`CREATE INDEX IF NOT EXISTS tool_calls_analytics_time_idx
@@ -378,6 +411,10 @@ func (c *Catalog) Initialize() error {
 	}
 	if err := c.migrateHosts(); err != nil {
 		return err
+	}
+	// Install guards only after all of their input columns have migrated.
+	if err := c.ensureAuthorshipState(); err != nil {
+		return fmt.Errorf("initialize authorship state: %w", err)
 	}
 	// Existing Python catalogs may contain duplicates created before the partial
 	// unique index was introduced. Preserve the newest row exactly as before.
@@ -436,6 +473,8 @@ func (c *Catalog) Initialize() error {
 	var ftsRowsVersion string
 	if err := c.DB.QueryRow("SELECT value FROM meta WHERE key='message_fts_rows_version'").Scan(&ftsRowsVersion); err == sql.ErrNoRows {
 		// Existing FTS rows need a one-time rowid lookup for bounded updates.
+		// It maps every row, tool output included: the tool-output removal
+		// (tool_output_index.go) finds the postings it deletes through it.
 		if _, err = c.DB.Exec(`INSERT OR REPLACE INTO message_fts_rows(message_id,fts_rowid)
 			SELECT message_id,rowid FROM messages_fts`); err != nil {
 			return err
@@ -455,6 +494,13 @@ func (c *Catalog) Initialize() error {
 	if _, err := c.DB.Exec(`INSERT OR IGNORE INTO meta(key,value) SELECT 'tool_command_fts_version','1'
 		WHERE NOT EXISTS(SELECT 1 FROM tool_calls)`); err != nil {
 		return err
+	}
+	// Nor has its word index any tool output to remove.
+	for _, key := range []string{toolOutputRemovedKey, toolOutputMergedKey} {
+		if _, err := c.DB.Exec(`INSERT OR IGNORE INTO meta(key,value) SELECT ?,'1'
+			WHERE NOT EXISTS(SELECT 1 FROM conversations)`, key); err != nil {
+			return err
+		}
 	}
 	var aliasesVersion string
 	if err := c.DB.QueryRow("SELECT value FROM meta WHERE key='declared_native_aliases_version'").Scan(&aliasesVersion); err == sql.ErrNoRows {
@@ -707,7 +753,7 @@ func (c *Catalog) RefineUsageTimeline(progress func(done, total int)) (int, erro
 		if err := c.rebuildAgentSessions(row); err != nil {
 			return index, err
 		}
-		c.boundWAL(walSizeLimit)
+		c.boundWAL(context.Background(), walSizeLimit)
 		if progress != nil {
 			progress(index+1, len(conversations))
 		}

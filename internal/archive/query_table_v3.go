@@ -96,11 +96,21 @@ func (s *Server) queryV3SourceFields(ctx context.Context, schema qt.Schema, q qt
 }
 
 func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.Values, schema qt.Schema, q qt.QueryRequestV3) (qt.QueryResultV3, *libraryFindSummary, error) {
+	if err := checkRecordKeywordHostState(dataset, q.HostState, params); err != nil {
+		return qt.QueryResultV3{}, nil, err
+	}
 	record, recordErr := s.recordSearch(ctx, dataset, params)
 	if recordErr != nil {
 		return qt.QueryResultV3{}, nil, recordErr
 	}
 	defer record.close()
+	if dataset == "parallelism" {
+		var err error
+		ctx, err = withParallelismPreferences(ctx, params.Get("parallelism_settings"))
+		if err != nil {
+			return qt.QueryResultV3{}, nil, err
+		}
+	}
 	if dataset == "usage" {
 		var err error
 		ctx, err = withCarbonPreferences(ctx, params.Get("carbon_settings"))

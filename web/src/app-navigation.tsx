@@ -1,3 +1,4 @@
+import { useViewState } from "./view-state";
 import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
@@ -30,15 +31,15 @@ function NavigationLink({ navigate, ...props }: React.ComponentProps<typeof Page
 function AppNavigation({ settings, contentNavigation }: { settings: NestedPage[]; contentNavigation: HTMLElement }) {
   const revision = useLocationRevision();
   const [layout, setLayout] = useState(readLayout);
-  const [hasTL1, setHasTL1] = useState(false), [badge, setBadge] = useState("");
-  const [collapsed, setCollapsed] = useState(() => preferences().get("pharos-sidebar-collapsed", false));
+  const [badge, setBadge] = useState("");
+  const [collapsed, setCollapsed] = useViewState("nav_collapsed", () => preferences().get("pharos-sidebar-collapsed", false));
   const [open, setOpen] = useState(false), [branch, setBranch] = useState("");
   const dialog = useRef<HTMLDialogElement>(null), trigger = useRef<HTMLButtonElement>(null);
   const navigating = useRef(false), previousURL = useRef(location.href);
   const params = new URLSearchParams(location.search), selected = appLocation(location.pathname, params);
-  const sections = appSections(settings, params, hasTL1 || location.pathname.startsWith("/tl1"));
+  const sections = appSections(settings, params);
   const { section, page } = appLocationLabel(sections, selected);
-  const [expanded, setExpanded] = useState<NavigationExpansion>({});
+  const [expanded, setExpanded] = useViewState<NavigationExpansion>("nav_expanded", {});
   const toggle = (section: string, id: string) => setExpanded(state => toggleNavigationSection(state, section, id));
   const activeBranch = sections.find(item => item.id === branch) ?? section;
   const hasSidebar = layout !== "phone" && section.pages.length > 0;
@@ -67,17 +68,6 @@ function AppNavigation({ settings, contentNavigation }: { settings: NestedPage[]
     observer.observe(document.querySelector("body > header .tabs")!, { subtree: true, attributes: true, childList: true, characterData: true });
     sync();
     return () => observer.disconnect();
-  }, []);
-  useEffect(() => {
-    const controller = new AbortController();
-    const load = () => {
-      void fetch("/api/tl1", { signal: controller.signal }).then(response => response.ok ? response.json() : null).then(body => {
-        if (!controller.signal.aborted && body) setHasTL1(Boolean(body.projects?.length));
-      }).catch(() => {});
-    };
-    load();
-    window.addEventListener("pharos:route", load);
-    return () => { window.removeEventListener("pharos:route", load); controller.abort(); };
   }, []);
   useEffect(() => {
     if (previousURL.current === location.href && !navigating.current) return;
@@ -122,8 +112,8 @@ function AppNavigation({ settings, contentNavigation }: { settings: NestedPage[]
   const path = <span className="app-location-path"><span>{section.label}</span>{page ? <><span className="app-location-separator">/</span><strong>{page.label}</strong></> : selected.section === "library" && location.pathname.startsWith("/work/") ? <><span className="app-location-separator">/</span><strong>{location.pathname.includes("/conversation/") ? "Conversation" : "Workspace"}</strong></> : null}</span>;
   return <>
     <button ref={layout === "phone" ? trigger : undefined} id="appNavigationToggle" className="app-location-switcher" type="button" aria-haspopup="dialog" aria-controls="appNavigationDialog" aria-expanded={open} onClick={show}>{path}<Icon name="chevron-down" /></button>
-    {createPortal(<>{hasSidebar ? <button ref={trigger} id="appSidebarToggle" className="app-sidebar-toggle" type="button" aria-label={rail ? "Collapse sidebar" : "Expand sidebar"} title={rail ? "Collapse sidebar" : "Expand sidebar"} aria-controls="appNavigationRail" aria-expanded={rail} onClick={toggleSidebar}><Icon name="sidebar" /></button> : null}
-      <aside id="appNavigationRail" className="app-navigation-rail" aria-label={`${section.label} navigation`} hidden={!rail}><div className="app-navigation-rail-head"><h2 className="app-navigation-rail-title">{section.label}</h2></div><nav className="app-navigation-list" aria-label={`${section.label} pages`}>
+    {createPortal(<>{hasSidebar ? <button ref={trigger} id="appSidebarToggle" data-view-field="nav_collapsed" className="app-sidebar-toggle" type="button" aria-label={rail ? "Collapse sidebar" : "Expand sidebar"} title={rail ? "Collapse sidebar" : "Expand sidebar"} aria-controls="appNavigationRail" aria-expanded={rail} onClick={toggleSidebar}><Icon name="sidebar" /></button> : null}
+      <aside id="appNavigationRail" data-view-field="nav_expanded" className="app-navigation-rail" aria-label={`${section.label} navigation`} hidden={!rail}><div className="app-navigation-rail-head"><h2 className="app-navigation-rail-title">{section.label}</h2></div><nav className="app-navigation-list" aria-label={`${section.label} pages`}>
       <NavigationItems pages={section.pages} current={selected.current} navigate={navigate} expanded={expanded[section.id] ?? {}} toggle={id => toggle(section.id, id)} />
     </nav></aside></>, contentNavigation)}
     {createPortal(<dialog ref={dialog} id="appNavigationDialog" className={`app-navigation-dialog ${branch === "root" ? "app-navigation-root" : ""}`} aria-label="Navigate Pharos" onClose={() => { setOpen(false); if (!navigating.current) trigger.current?.focus({ preventScroll: true }); }} onClick={event => {

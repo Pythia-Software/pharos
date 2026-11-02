@@ -558,3 +558,32 @@ func TestRefreshRepositoryForgeIDsMergesNewMoves(t *testing.T) {
 		t.Fatalf("private repository asked %d then %d times", before, after)
 	}
 }
+
+func TestRepositoryEvidenceDoesNotRewriteKnownValues(t *testing.T) {
+	c, _ := testCatalog(t)
+	execTx(t, c.DB,
+		`INSERT INTO repositories(id,display_name,created_at,updated_at) VALUES('old','Old','t','t'),('new','New','t','t')`,
+		`CREATE TABLE repository_write_probe(id TEXT)`,
+		`CREATE TRIGGER repository_write_probe AFTER UPDATE ON repositories BEGIN INSERT INTO repository_write_probe VALUES(NEW.id); END`)
+	old := repositoryIdentity{ID: "old", Normalized: "github.com/example/old", Root: "root-old", Forge: "forge-old"}
+	if err := c.saveRepositoryEvidence(t.Context(), []repositoryIdentity{old}); err != nil {
+		t.Fatal(err)
+	}
+	execSQL(t, c.DB, `DELETE FROM repository_write_probe`)
+	next := repositoryIdentity{ID: "new", Normalized: "github.com/example/new", Root: "root-new", Forge: "forge-new"}
+	if err := c.saveRepositoryEvidence(t.Context(), []repositoryIdentity{old, next}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := queryMaps(c.DB, `SELECT id FROM repository_write_probe`)
+	if err != nil || len(rows) != 1 || rows[0]["id"] != "new" {
+		t.Fatalf("evidence rewrites: %v (%v)", rows, err)
+	}
+	execSQL(t, c.DB, `DELETE FROM repository_write_probe`)
+	if err := c.saveRepositoryEvidence(t.Context(), []repositoryIdentity{old, next}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = queryMaps(c.DB, `SELECT id FROM repository_write_probe`)
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("unchanged evidence writes: %v (%v)", rows, err)
+	}
+}

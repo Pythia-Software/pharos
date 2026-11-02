@@ -1,5 +1,13 @@
 # Query Table: fitted columns clip computed link controls
 
+**Resolved in Query Table 0.9.7**, consumed by Pharos's matching published
+core/React/UI/codegen packages and Go module. Fitted group-link and template
+links shorten to an ellipsis no narrower than 96 px, keeping their accessible
+name and href, and the table scrolls when the minimums exceed the screen. The
+`Query ideas` cases in `web/tests/browser/structure.test.mjs` pass again.
+
+The original report below describes the **0.9.5** implementation.
+
 Observed with the published Query Table **0.9.5** core, React, UI and codegen
 packages and Go module. Pharos enables the supported `fitToScreen: true`
 preference on suggested Query views and computed query-link destinations.

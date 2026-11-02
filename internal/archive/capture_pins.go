@@ -32,8 +32,12 @@ type preservationPin struct {
 	Path         string   `json:"path"`
 	SHA256       string   `json:"sha256"`
 	Size         int64    `json:"size"`
-	CreatedAt    string   `json:"created_at"`
-	ReleasedAt   string   `json:"released_at,omitempty"`
+	// Encoding is how the pinned file is stored; SHA256 and Size describe its
+	// original bytes, so a check decodes it (capturedSHA256). Compression
+	// never rewrites a pinned file, so this holds for the pin's lifetime.
+	Encoding   string `json:"encoding,omitempty"`
+	CreatedAt  string `json:"created_at"`
+	ReleasedAt string `json:"released_at,omitempty"`
 }
 type preservationPins struct {
 	pendingReaders []string
@@ -192,7 +196,7 @@ func (c *sourceCapture) pinReader(refs []recordObject) (func(), error) {
 			lease.Close()
 			lock, err := lockCaptureTarget(context.Background(), c.dir)
 			if err == nil {
-				defer lock.Close()
+				defer releaseLockFile(lock)
 				err = releasePreservationOwner(c.dir, owner)
 			}
 			if err == nil {
@@ -267,8 +271,12 @@ func (c *sourceCapture) pinVersion(owner, purpose string, v capturedVersion, dep
 	if err != nil {
 		return preservationPin{}, err
 	}
+	// How the input is stored comes from this writer's inventory, not the
+	// caller: a plan made before a compression still pins the right bytes. A
+	// latest file keeps its encoding when its pin links it into history.
+	encoding := c.encodingOf(v.Captured)
 	if strings.HasPrefix(v.Captured, "files/") {
-		digest, size, err := fileSHA256Context(c.ctx, filepath.Join(c.dir, filepath.FromSlash(v.Captured)))
+		digest, size, err := capturedSHA256(c.ctx, filepath.Join(c.dir, filepath.FromSlash(v.Captured)), encoding)
 		if err != nil {
 			return preservationPin{}, err
 		}
@@ -276,23 +284,34 @@ func (c *sourceCapture) pinVersion(owner, purpose string, v capturedVersion, dep
 			return preservationPin{}, errors.New("latest pin input changed; reconcile inventory")
 		}
 		v.SHA256 = digest
+		v.Encoding = encoding
+		latest := v.Captured
 		v, err = c.pinHistoryVersion(v)
 		if err != nil {
+			return preservationPin{}, err
+		}
+		if err = c.recordPinnedCopy(latest, v); err != nil {
 			return preservationPin{}, err
 		}
 	}
 	if !safeRetainedPath(v.Captured) {
 		return preservationPin{}, errors.New("pin input is not immutable")
 	}
-	digest, size, err := fileSHA256Context(c.ctx, filepath.Join(c.dir, filepath.FromSlash(v.Captured)))
+	file := filepath.Join(c.dir, filepath.FromSlash(v.Captured))
+	digest, size, err := capturedSHA256(c.ctx, file, encoding)
 	if err != nil {
 		return preservationPin{}, err
 	}
 	if size != v.Size || v.SHA256 != "" && digest != v.SHA256 {
 		return preservationPin{}, errors.New("pin input changed; reconcile inventory")
 	}
-	pin := preservationPin{ID: hashBytes([]byte(owner + "\x00" + v.Captured + "\x00" + digest)), Owner: owner, Purpose: purpose, Path: v.Captured, SHA256: digest, Size: size, CreatedAt: now(), ReaderLease: c.readerLease}
-	pin.ClosureBytes = size
+	stored, err := os.Stat(file)
+	if err != nil {
+		return preservationPin{}, err
+	}
+	pin := preservationPin{ID: hashBytes([]byte(owner + "\x00" + v.Captured + "\x00" + digest)), Owner: owner, Purpose: purpose, Path: v.Captured, SHA256: digest, Size: size, Encoding: encoding, CreatedAt: now(), ReaderLease: c.readerLease}
+	// The closure is what the pin keeps on disk.
+	pin.ClosureBytes = stored.Size()
 	seen := map[string]bool{v.Captured: true}
 	for _, dependency := range dependencies {
 		if seen[dependency] {
@@ -376,32 +395,54 @@ func lockCaptureTarget(ctx context.Context, dir string) (*os.File, error) {
 		}
 		return nil, err
 	}
+	opFrom(ctx).holdLock(f)
 	return f, nil
 }
 
-func waitCaptureLock(ctx context.Context, acquire func() (*os.File, error)) (*os.File, error) {
+// waitCaptureLock retries acquire while a capture holds the lock, until ctx
+// ends; automatic runs do not wait. A wait reports its phase, naming the Mac
+// whose capture holds the lock, so a run that waits says so instead of
+// looking stuck; cancelling ctx (Stop, or a release) ends the wait.
+func waitCaptureLock(ctx context.Context, host string, acquire func() (*os.File, error)) (*os.File, error) {
+	waiting := false
+	op := opFrom(ctx)
 	for {
 		lock, err := acquire()
 		if !errors.Is(err, errCaptureBusy) || modeOf(ctx).automatic {
+			if waiting {
+				op.Unblock()
+			}
 			return lock, err
+		}
+		if !waiting {
+			waiting = true
+			reportWork(ctx, captureWaitPhase(host), "", 0, -1)
+			// After the report, which mirrors a new step into op.
+			op.Block("capture-running", "the capture on "+defaultString(host, "another Mac"))
 		}
 		timer := time.NewTimer(100 * time.Millisecond)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
+			op.Unblock()
 			return nil, ctx.Err()
 		case <-timer.C:
 		}
 	}
 }
 
-func lockCaptureReader(ctx context.Context, dir string) (*os.File, error) {
-	return waitCaptureLock(ctx, func() (*os.File, error) { return lockCaptureTarget(ctx, dir) })
+// captureWaitPhase is the phase of work waiting for host's capture.
+func captureWaitPhase(host string) string {
+	return "waiting for the capture on " + defaultString(host, "another Mac") + " to finish"
+}
+
+func lockCaptureReader(ctx context.Context, target captureTarget) (*os.File, error) {
+	return waitCaptureLock(ctx, defaultString(target.Host.Label, target.Host.ID), func() (*os.File, error) { return lockCaptureTarget(ctx, target.Dir) })
 }
 
 func beginInputCapture(ctx context.Context, config Config) (*captureSession, error) {
 	var session *captureSession
-	_, err := waitCaptureLock(ctx, func() (*os.File, error) {
+	_, err := waitCaptureLock(ctx, currentHost().Label, func() (*os.File, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -410,6 +451,7 @@ func beginInputCapture(ctx context.Context, config Config) (*captureSession, err
 		if err != nil {
 			return nil, err
 		}
+		opFrom(ctx).holdLock(session.lock)
 		return session.lock, nil
 	})
 	return session, err
@@ -418,10 +460,10 @@ func beginInputCapture(ctx context.Context, config Config) (*captureSession, err
 // Reader/job bookkeeping must not claim a new capture observation or overwrite
 // its last-run diagnostics. Only the writer compatibility version changes.
 func (c *sourceCapture) upgradePreservationWriter() error {
-	if c.manifest.Version >= captureManifestVersion {
+	if c.manifest.Version >= c.manifest.writerVersion() {
 		return nil
 	}
-	c.manifest.Version = captureManifestVersion
+	c.manifest.Version = c.manifest.writerVersion()
 	data, e := json.Marshal(c.manifest)
 	if e != nil {
 		return e
@@ -440,6 +482,80 @@ func checkNativeSnapshotPause(dir string) error {
 		return errNativeSnapshotPaused
 	}
 	return nil
+}
+
+// recordPinnedCopy lists in the manifest the history copy a pin made of an
+// encoded latest file or snapshot, as an earlier version or a generation with
+// its encoding, stored size and digest. Unlisted, it would be an orphan
+// whose raw bytes no planner recognises, and the manifest's version could
+// fall below the one that describes it. A plain copy needs no entry: its
+// bytes are the original's. Listed last, it changes no retention order; the
+// next rotation of the same capture lands on the same name, and is not
+// listed twice.
+func (c *sourceCapture) recordPinnedCopy(latest string, v capturedVersion) error {
+	if v.Encoding == "" {
+		return nil
+	}
+	info, err := os.Stat(filepath.Join(c.dir, filepath.FromSlash(v.Captured)))
+	if err != nil {
+		return err
+	}
+	v.StoredSize = info.Size()
+	listed := false
+	if snapshot := c.snapshots[latest]; snapshot != nil {
+		v.Source = &snapshot.Source
+		snapshot.Generations, listed = insertGeneration(snapshot.Generations, v)
+	} else if file := c.files[latest]; file != nil {
+		v.Source = nil
+		file.Previous, listed = appendVersion(file.Previous, v)
+	}
+	if !listed {
+		return nil
+	}
+	return writeCaptureManifest(c.dir, c.manifest)
+}
+
+// appendVersion appends v unless versions already names its path.
+func appendVersion(versions []capturedVersion, v capturedVersion) ([]capturedVersion, bool) {
+	for _, existing := range versions {
+		if existing.Captured == v.Captured {
+			return versions, false
+		}
+	}
+	return append(versions, v), true
+}
+
+// insertGeneration lists v among generations, which are newest first, where
+// its captured_at places it (a pinned latest snapshot's copy is the newest),
+// unless they already name its path. Retention runs only after a rotation,
+// which lists the same name in the same place, so the order costs nothing.
+func insertGeneration(generations []capturedVersion, v capturedVersion) ([]capturedVersion, bool) {
+	for _, existing := range generations {
+		if existing.Captured == v.Captured {
+			return generations, false
+		}
+	}
+	at, _ := parseTime(v.CapturedAt)
+	index := len(generations)
+	for i, existing := range generations {
+		if captured, ok := parseTime(existing.CapturedAt); ok && captured.Before(at) {
+			index = i
+			break
+		}
+	}
+	return slices.Insert(slices.Clone(generations), index, v), true
+}
+
+// withoutVersion drops the entries naming path (a pinned copy that a
+// rotation now lists in its own place).
+func withoutVersion(versions []capturedVersion, path string) []capturedVersion {
+	kept := versions[:0:0]
+	for _, version := range versions {
+		if version.Captured != path {
+			kept = append(kept, version)
+		}
+	}
+	return kept
 }
 
 // Pinning cannot rename the latest input out from under its manifest on a
@@ -485,7 +601,7 @@ func (c *sourceCapture) pinHistoryVersion(v capturedVersion) (capturedVersion, e
 			return v, e
 		}
 	}
-	hash, size, e := fileSHA256Context(c.ctx, to)
+	hash, size, e := capturedSHA256(c.ctx, to, v.Encoding)
 	if e != nil {
 		return v, e
 	}

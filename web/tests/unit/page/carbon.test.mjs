@@ -5,6 +5,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import factors from "../../../../carbon/co2_factors.json";
 import { loadClassicScript } from "../helpers/classic-script.mjs";
+import shared from "../../../../testdata/carbon-estimates.json";
+import { deriveCarbon } from "../../../src/carbon-analysis-catalog";
 
 // carbon.js reads its assumption settings (grid, PUE, energy scenario, input
 // sensitivity) from pharosPrefs once, when it loads.
@@ -13,11 +15,12 @@ function carbon(settings = {}) {
   return loadClassicScript("carbon.js", { pharosPrefs }).window.pharosCarbon;
 }
 
-test("linked Carbon assumptions override saved defaults without writing preferences", () => {
+test("linked Carbon assumptions override saved defaults without writing preferences; a manual change saves only itself", () => {
   const saved = { scenario: "low", grid: "world" }, linked = { scenario: "high", pueScenario: "high", inputSensitivity: "third", grid: "custom", customGrid: 100, vehicle: "car_hybrid", flightFrom: "lax", flightTo: "jfk" };
   const writes = [], location = new URL("http://pharos.test/analyze?analyze_topic=carbon");
   location.searchParams.set("analyze_carbon", JSON.stringify(linked));
-  const loaded = loadClassicScript("carbon.js", { location, pharosPrefs: { get: (_key, fallback) => saved ?? fallback, set: (...args) => writes.push(args) } });
+  const history = { state: null, replaceState: (_state, _title, url) => { location.href = String(url); } };
+  const loaded = loadClassicScript("carbon.js", { location, history, pharosPrefs: { get: (_key, fallback) => saved ?? fallback, set: (...args) => writes.push(args) } });
   const result = loaded.window.pharosCarbon.estimate(factors, counts("medium", "cache_read", 1e6));
   close(result.co2, 20.8, "URL assumptions applied");
   assert.deepEqual(structuredClone(loaded.window.pharosCarbon.settingsSnapshot(factors)), linked);
@@ -25,6 +28,11 @@ test("linked Carbon assumptions override saved defaults without writing preferen
   loaded.window.dispatchEvent(new loaded.window.Event("pharos:route"));
   close(loaded.window.pharosCarbon.estimate(factors, counts("medium", "cache_read", 1e6)).co2, 400 * .02 * 5 / 3 * 1.3 * .1, "route assumptions applied");
   assert.equal(writes.length, 0);
+  loaded.window.pharosCarbon.updatePreferences({ pueScenario: "low" });
+  assert.deepEqual(structuredClone(writes), [["pharos-carbon-v1", { ...saved, pueScenario: "low" }]], "the saved defaults gain the chosen assumption, not the link's others");
+  const url = JSON.parse(location.searchParams.get("analyze_carbon"));
+  assert.equal(url.pueScenario, "low");
+  assert.equal(url.scenario, "central", "the open view keeps its linked assumptions");
 });
 
 function close(actual, expected, message) {
@@ -117,4 +125,27 @@ test("mass and energy step their unit and keep three significant figures", () =>
   const { mass, energy } = carbon();
   assert.deepEqual([0, 0.0123, 20.84, 999.4, 1234, 562681.19, 1.5e6].map(mass), ["0 g", "0.012 g", "20.8 g", "999 g", "1.23 kg", "563 kg", "1.5 t"]);
   assert.deepEqual([0, 460, 1063.75, 2.5e6].map(energy), ["0 Wh", "460 Wh", "1.06 kWh", "2.5 MWh"]);
+});
+
+// The estimates the service must reproduce too (TestCarbonSharedEstimates),
+// and the Carbon dashboard's token-type split built on this calculator.
+test("the calculator and the dashboard's token-type split reproduce the shared estimates", () => {
+  for (const { name, settings, facility_wh, co2e_g, co2e_g_by_category } of shared.cases) {
+    const pharosCarbon = carbon(settings), result = pharosCarbon.estimate(factors, { tokens: shared.tokens });
+    close(result.facilityWh, facility_wh, `${name} facility Wh`);
+    close(result.co2, co2e_g, `${name} CO₂e`);
+    const totals = Object.entries(shared.tokens).map(([tier, counts]) => ({ keys: [tier], values: { uncached_input_tokens: counts.uncached_input, cache_read_input_tokens: counts.cache_read, cache_creation_input_tokens: counts.cache_write, output_tokens: counts.output } }));
+    const parts = deriveCarbon({ settings: pharosCarbon.settingsSnapshot(factors), factors, estimate: pharosCarbon.estimate }, totals, "co2");
+    for (const [category, grams] of Object.entries(co2e_g_by_category)) close(parts[category], grams, `${name} ${category}`);
+  }
+});
+
+test("each dashboard card estimates its own Carbon assumptions without changing the calculator", () => {
+  const calculator = carbon({scenario:"low",grid:"world"});
+  const period = counts("medium","cache_read",1e6);
+  const before = calculator.estimate(factors,period);
+  const settings = {scenario:"high",pueScenario:"high",inputSensitivity:"third",grid:"custom",customGrid:100};
+  close(calculator.estimate(factors,period,settings).co2,20.8,"card assumptions");
+  close(calculator.estimate(factors,period).co2,before.co2,"calculator assumptions stay intact");
+  assert.equal(calculator.settingsSnapshot(factors).scenario,"low");
 });

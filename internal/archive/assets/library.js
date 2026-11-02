@@ -330,7 +330,6 @@
       ? `Step ${activity.forecast.current_step}/${activity.forecast.total_steps}` : 'Step';
     return {title, stepLabel, context: unique(context).join(' · '), caption: unique([count, volume, percent, rate]).join(' · '), details};
   }
-  const expandedActivities = new Set();
   function activityLine(activity, {showTitle = true} = {}) {
     const item = node('div', 'pharos-activity');
     item.dataset.key = `activity:${activity.id || `${activity.kind}:${activity.label}`}:${activity.started_at || ''}`;
@@ -357,7 +356,9 @@
     item.append(overallLabel, overallBar, stepLabel, stepBar);
     const details = node('details', 'pharos-sub pharos-activity-details');
     details.dataset.activity = item.dataset.key;
-    details.open = expandedActivities.has(details.dataset.activity);
+    details.dataset.viewKey = 'library:' + details.dataset.activity + ':details';
+    details.dataset.viewDefault = 'false';
+    details.open = window.pharosView?.read('disclosures', {})[details.dataset.viewKey] === true;
     const summary = node('summary');
     const elapsed = timing.elapsed;
     summary.append(node('span', '', elapsed == null ? '' : `${elapsed < 60 ? `${elapsed} sec` : `${Math.floor(elapsed / 60)} min`} elapsed`), node('span', 'pharos-details-label', 'Details'));
@@ -383,6 +384,10 @@
     return line;
   };
   const nativeLibrary = () => window.webkit?.messageHandlers?.pharosLibrary;
+  // With the unified activity preference on, status-panel.js renders the
+  // chip, its panel and the header's Index changes state from the status
+  // store; this file then leaves them alone (one renderer, #92 and #137).
+  const unified = () => window.pharosStatusStore?.enabled() === true;
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   // ---- library status (header chip and panel)
@@ -409,7 +414,10 @@
     if (run?.error && !isStopError(run, run.error) && !errors.some(error => error.includes(String(run.error)))) errors.unshift(String(run.error));
     return errors;
   };
-  const indexFailed = run => run && ((run.state !== 'complete' && !indexStopped(run)) || indexErrors(run).length > 0);
+  // A run that left sources to the next index because a capture was using
+  // them ("deferred") is not a failure, and there is nothing to do about it.
+  const indexDeferred = run => run?.state === 'deferred';
+  const indexFailed = run => Boolean(run) && ((!['complete', 'deferred'].includes(run.state) && !indexStopped(run)) || indexErrors(run).length > 0);
 
   // Stops the running index (or source sync) between records, or the Library
   // view refresh; it says when it has.
@@ -447,7 +455,8 @@
   function refreshIndexStatus() {
     if (!indexStatusRequest) {
       indexStatusRequest = call('/api/activity').then(value => {
-        recentIndex = (value.runs || []).find(run => run.state !== 'running') || null;
+        // The latest finished index; a background pass is not one.
+        recentIndex = (value.runs || []).find(run => run.state !== 'running' && run.kind !== 'background-update') || null;
       }, () => { recentIndex = null; }).finally(() => { indexStatusRequest = null; });
     }
     return indexStatusRequest;
@@ -470,7 +479,7 @@
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshStatus(); });
 
-  let controls = null, chip = null, headerSync = null, headerCaptureIndexRunning = false, panel = null, panelMode = 'drive', ejectState = null;
+  let controls = null, chip = null, headerSync = null, headerCaptureIndexRunning = false, panel = null, ejectState = null;
   let appUpdate = null, appUpdateButton = null, appUpdateRequest = false;
   let driveSpace = null, driveSpaceRequest = null, driveSpaceError = false;
   // The drive chip and Index changes share one combo button (ui.py's
@@ -496,7 +505,7 @@
     chip.type = 'button';
     chip.setAttribute('aria-haspopup', 'dialog');
     chip.setAttribute('aria-expanded', 'false');
-    chip.onclick = () => (panel && panelMode === 'drive' ? closePanel() : openPanel('drive'));
+    chip.onclick = () => (unified() ? window.pharosStatusPanel?.toggle() : panel ? closePanel() : openPanel());
     group.prepend(chip);
     return chip;
   }
@@ -629,6 +638,10 @@
 
   function renderHeaderAction() {
     const actions = [ensureHeaderAction(), document.getElementById('headerSyncOnly')];
+    if (unified()) {
+      actions.length = 0;
+      window.pharosStatusPanel?.renderHeader();
+    }
     const state = {activities: status?.activities, incremental: window.pharosSync?.isBusy(),
       local: headerCaptureIndexRunning || hostsBusy, upgrading: upgradeStatus?.running,
       sourcesEnabled: hostsData?.sources.enabled, upgradeNeeded: upgradeStatus?.needed, releasing: ejectState?.phase === 'ejecting'};
@@ -637,7 +650,7 @@
       action.disabled = busy;
       action.setAttribute('aria-busy', String(busy));
     }
-    // Capture & index is on Settings → Capture & index and in the drive panel.
+    // Capture & index is on Settings → Background Processing and in the drive panel.
     for (const update of document.querySelectorAll('#pharosUpdateLibrary, .pharos-panel-update')) {
       update.disabled = captureIndexDisabled(state);
       if (update.classList.contains('pharos-panel-update')) update.hidden = update.disabled;
@@ -740,6 +753,7 @@
     if (!target) return;
     renderHeaderAction();
     renderAppUpdate();
+    if (unified()) return;
     const dot = node('span', 'pharos-dot'), name = node('span', 'pharos-drive-name');
     let state;
     if (!status) {
@@ -783,26 +797,28 @@
   function refreshDriveSpace() {
     if (driveSpaceRequest) return driveSpaceRequest;
     driveSpaceRequest = call('/api/health/drive').then(value => { driveSpace = value; driveSpaceError = false; renderPanel(); }, () => { driveSpace = null; driveSpaceError = true; renderPanel(); })
-      .finally(() => { driveSpaceRequest = null; if (panel && panelMode === 'drive' && driveSpace?.status === 'checking') setTimeout(() => { if (panel && panelMode === 'drive') refreshDriveSpace(); }, 1000); });
+      .finally(() => { driveSpaceRequest = null; if (panel && driveSpace?.status === 'checking') setTimeout(() => { if (panel) refreshDriveSpace(); }, 1000); });
     return driveSpaceRequest;
   }
 
-  function openPanel(mode = 'drive') {
+  function openPanel({fromURL = false} = {}) {
+    if (unified()) return window.pharosStatusPanel?.open({fromURL, focus: !fromURL});
     if (!ensureChip()) return;
-    if (panel) closePanel();
-    panelMode = mode;
+    if (panel) return;
+    if (!fromURL) window.pharosView?.write('overlay', 'drive');
     panel = node('section', 'pharos-drive-panel');
     panel.id = 'pharosDrivePanel';
     panel.setAttribute('role', 'dialog');
-    panel.setAttribute('aria-label', mode === 'activity' ? 'Running activity' : 'Library drive');
+    panel.setAttribute('aria-label', 'Library drive');
     document.body.append(panel);
     chip?.setAttribute('aria-expanded', 'true');
     renderPanel();
     refreshStatus();
-    if (mode === 'drive') refreshDriveSpace();
+    refreshDriveSpace();
   }
 
-  function closePanel() {
+  function closePanel({fromURL = false} = {}) {
+    if (panel && !fromURL && window.pharosView?.read('overlay', 'none') === 'drive') window.pharosView.write('overlay', 'none');
     panel?.remove();
     panel = null;
     if (ejectState?.phase !== 'ejecting') ejectState = null;
@@ -817,9 +833,7 @@
   window.addEventListener('resize', placePanel);
 
   function renderPanel() {
-    if (!panel) return;
-    expandedActivities.clear();
-    for (const details of panel.querySelectorAll('details[data-activity][open]')) expandedActivities.add(details.dataset.activity);
+    if (!panel || unified()) return;
     const content = node('div');
     const scrollTop = panel.scrollTop, scrollLeft = panel.scrollLeft;
     const commit = () => {
@@ -830,31 +844,27 @@
       panel.scrollLeft = scrollLeft;
     };
     if (!status) {
-      content.append(node('h2', '', panelMode === 'activity' ? 'Running activity' : 'Library'), node('p', 'pharos-error', statusError?.status === 503 ? 'Pharos is stopping; it has released or is releasing the library.' : `Could not read the library's status${statusError ? `: ${statusError.message}` : ''}.`));
+      content.append(node('h2', '', 'Library'), node('p', 'pharos-error', statusError?.status === 503 ? 'Pharos is stopping; it has released or is releasing the library.' : `Could not read the library's status${statusError ? `: ${statusError.message}` : ''}.`));
       commit();
       return;
     }
     if (statusError) content.append(node('p', 'pharos-error', 'Status unavailable. Showing the last reported counts; reconnecting…'));
     const drive = status.drive || {};
-    if (panelMode === 'activity') {
-      content.append(node('h2', '', 'Running activity'));
-    } else {
-      const head = node('div', 'pharos-panel-head');
-      head.append(node('h2', '', drive.ejectable ? drive.name : status.portable ? 'Library' : 'This Mac'));
-      if (drive.ejectable && nativeLibrary()) head.append(ejectButton(drive, status.activities || []));
-      content.append(head);
-      const where = [{external: 'External drive', 'disk-image': 'Disk image', internal: "This Mac's internal disk"}[drive.location] || 'Drive', status.library_dir].filter(Boolean).join(' · ');
-      content.append(node('div', 'pharos-sub', where));
-      const space = node('dl', 'pharos-drive-space');
-      const unknown = driveSpaceError || (driveSpace && driveSpace.status !== 'checking') ? 'Unavailable' : 'Checking…';
-      space.append(node('dt', '', 'Free space'), node('dd', '', driveSpace?.free_bytes == null ? unknown : size(driveSpace.free_bytes)),
-        node('dt', '', 'Pharos size'), node('dd', '', driveSpace?.sizes?.library_bytes == null ? unknown : size(driveSpace.sizes.library_bytes)));
-      content.append(space);
-      if (ejectState?.phase === 'confirm') content.append(ejectConfirm(drive, status.activities || []));
-      if (ejectState?.phase === 'error') content.append(node('p', 'pharos-error', ejectState.message));
-    }
+    const head = node('div', 'pharos-panel-head');
+    head.append(node('h2', '', drive.ejectable ? drive.name : status.portable ? 'Library' : 'This Mac'));
+    if (drive.ejectable && nativeLibrary()) head.append(ejectButton(drive, status.activities || []));
+    content.append(head);
+    const where = [{external: 'External drive', 'disk-image': 'Disk image', internal: "This Mac's internal disk"}[drive.location] || 'Drive', status.library_dir].filter(Boolean).join(' · ');
+    content.append(node('div', 'pharos-sub', where));
+    const space = node('dl', 'pharos-drive-space');
+    const unknown = driveSpaceError || (driveSpace && driveSpace.status !== 'checking') ? 'Unavailable' : 'Checking…';
+    space.append(node('dt', '', 'Free space'), node('dd', '', driveSpace?.free_bytes == null ? unknown : size(driveSpace.free_bytes)),
+      node('dt', '', 'Pharos size'), node('dd', '', driveSpace?.sizes?.library_bytes == null ? unknown : size(driveSpace.sizes.library_bytes)));
+    content.append(space);
+    if (ejectState?.phase === 'confirm') content.append(ejectConfirm(drive, status.activities || []));
+    if (ejectState?.phase === 'error') content.append(node('p', 'pharos-error', ejectState.message));
 
-    const alerts = panelMode === 'drive' ? problems() : [];
+    const alerts = problems();
     if (alerts.length) {
       const attention = node('section', 'pharos-attention');
       attention.setAttribute('aria-label', 'Needs attention');
@@ -888,7 +898,7 @@
       stop.title = `Stops ${runningActivities.filter(activity => activity.stoppable).map(activity => activity.label).join(' and ')} safely. Completed work is kept.`;
       running.append(stop);
     }
-    if (panelMode === 'drive' && !targets.length) {
+    if (!targets.length) {
       const updateLibrary = button('Capture & index', 'pharos-panel-update', captureAndIndex);
       updateLibrary.title = "Captures this Mac's sources, indexes captures from every Mac, and runs any pending library upgrade. Index changes, in the header, only indexes what changed.";
       running.append(updateLibrary);
@@ -913,7 +923,8 @@
       const last = node('div', 'pharos-last-index');
       last.append(node('h3', '', 'Last index this session'));
       const failed = indexFailed(recentIndex);
-      const label = indexStopped(recentIndex) ? 'Stopped' : recentIndex.state === 'interrupted' ? 'Interrupted' : failed ? 'Failed' : 'Complete';
+      const label = indexStopped(recentIndex) ? 'Stopped' : recentIndex.state === 'interrupted' ? 'Interrupted' : failed ? 'Failed'
+        : indexDeferred(recentIndex) ? 'Complete, except sources a capture was using' : 'Complete';
       last.append(node('div', failed ? 'pharos-error' : '', `${label} · ${ago(recentIndex.completed_at)} · ${recentIndex.completed_sources} of ${recentIndex.total_sources} sources`));
       last.append(node('div', 'pharos-sub', `${plural(recentIndex.workspaces, 'workspace')} indexed · ${plural(recentIndex.conversations, 'conversation')}${indexStopped(recentIndex) ? '; the next index resumes' : ''}`));
       // A failure's errors are under Needs attention.
@@ -944,8 +955,13 @@
 
   function ejectConfirm(drive, activities) {
     const row = node('div', 'pharos-row');
-    const stopping = activities.filter(activity => activity.kind !== 'capture-other').map(activity => activity.label);
-    if (stopping.length) row.append(node('p', 'pharos-note', `Ejecting stops ${stopping.join(', ')} at a safe point; ${stopping.length === 1 ? 'it resumes' : 'each resumes'} the next time it runs.`));
+    // The service says what stopping each activity does (on_eject): most
+    // resume on their next run, but a cloud upload starts again.
+    const stopping = activities.filter(activity => activity.kind !== 'capture-other');
+    if (stopping.length) {
+      row.append(node('p', 'pharos-note', `Ejecting stops ${stopping.map(activity => activity.label).join(', ')} at a safe point.`));
+      for (const activity of stopping) if (activity.on_eject) row.append(node('p', 'pharos-note pharos-sub', `${activity.label}: ${activity.on_eject}`));
+    }
     if (activities.some(activity => activity.kind === 'capture-other')) row.append(node('p', 'pharos-note pharos-warn', 'Pharos cannot stop a capture by another process; the drive stays busy until it finishes.'));
     row.append(button(`Stop and Eject ${drive.name}`, 'primary', () => eject(drive)), button('Cancel', '', () => { ejectState = null; renderPanel(); }));
     return row;
@@ -1191,8 +1207,8 @@
     }
   }
 
-  // Index changes is the incremental run (Settings → Capture & index's
-  // Index changes now): it indexes only what changed in this Mac's sources,
+  // Index changes is the incremental run (Settings → Background Processing'
+  // Update everything now): it indexes only what changed in this Mac's sources,
   // without capturing them.
   async function syncNow() {
     if (headerCaptureIndexRunning || hostsBusy) return;
@@ -1273,7 +1289,7 @@
   // ---- Settings → Health and Backups
   const CHECK_TITLES = {encryption: 'Encryption', spotlight: 'Spotlight', filesystem: 'File system', location: 'Location', free_space: 'Free space', volume_pin: 'Volume pin', backup: 'Backup'};
   const STATUS_DOT = {ok: '', info: 'idle', unknown: 'idle', warning: 'warn', problem: 'bad'};
-  let backupDraft = null, backupError = null, backupBusy = false, driveHealthExpanded = true;
+  let backupDraft = null, backupError = null, backupBusy = false;
 
   async function loadDriveHealth() {
     const [drive, backup] = await Promise.all([call('/api/health/drive'), call('/api/backup')]);
@@ -1297,6 +1313,7 @@
     }
     const cards = document.getElementById('healthCards');
     if (!cards) return;
+    const driveHealthExpanded = window.pharosView?.read('disclosures', {})['library:drive-health'] ?? true;
     const checks = (drive.checks || []).filter(check => check.id !== 'backup');
     let section = document.getElementById('pharosDriveHealth');
     if (!section) {
@@ -1323,15 +1340,19 @@
       attention.append(node('span', 'pharos-health-attention-label', 'Needs Attention:'));
       for (const check of attentionChecks) {
         const chip = button(CHECK_TITLES[check.id] || check.id, 'pharos-chip warn', () => {
-          driveHealthExpanded = true;
-          renderDriveHealth(drive, backup);
+          window.pharosView?.write('disclosures', {...window.pharosView.read('disclosures', {}), 'library:drive-health': true});
           section.querySelector(`[data-check="${check.id}"]`)?.scrollIntoView({block: 'center'});
         });
         attention.append(chip);
       }
       controls.append(attention);
     }
-    const toggle = button(driveHealthExpanded ? 'Collapse' : 'Expand', '', () => { driveHealthExpanded = !driveHealthExpanded; renderDriveHealth(drive, backup); });
+    const toggle = button('');
+    toggle.dataset.viewKey = 'library:drive-health';
+    toggle.dataset.viewDefault = 'true';
+    const action = node('span', '', driveHealthExpanded ? 'Collapse' : 'Expand');
+    action.setAttribute('data-view-action', '');
+    toggle.append(action);
     toggle.setAttribute('aria-expanded', String(driveHealthExpanded));
     toggle.setAttribute('aria-controls', 'pharosDriveHealthDetails');
     controls.append(toggle);
@@ -1463,9 +1484,17 @@
   const syncOnly = document.getElementById('headerSyncOnly');
   if (syncOnly) syncOnly.onclick = syncNow;
 
-  window.pharosLibrary = {closePanel, refresh: refreshStatus, status: () => status, runs, refreshSettings, refreshSyncControls: renderSyncControls, renderAlerts: () => { renderChip(); renderPanel(); }, onStatus: listener => listeners.add(listener), toggleActivityPanel: () => (panel && panelMode === 'activity' ? closePanel() : openPanel('activity')),
+  window.pharosLibrary = {closePanel, setPanelOpen(open) {
+    if (open) openPanel({fromURL: true});
+    else { closePanel({fromURL: true}); window.pharosStatusPanel?.close({fromURL: true}); }
+  }, refresh: refreshStatus,
+    // For status-panel.js: the chip and Index changes it renders, the
+    // in-place renderer, and whether
+    // this page is starting a capture or index.
+    ensureChip, updateLiveChildren, localBusy: () => Boolean(headerCaptureIndexRunning || hostsBusy), status: () => status, runs, refreshSettings, refreshSyncControls: renderSyncControls, renderAlerts: () => { renderChip(); renderPanel(); }, onStatus: listener => listeners.add(listener),
     // Pure helpers, for web/tests/unit/page/library.test.mjs.
-    libraryUpdate, overviewActivities, activityTiming, activityProgress, activityOverallProgress, activityPresentation, estimateRate, workCount, headerBusy, captureIndexDisabled, stopTargets, appUpdatePresentation};
+    libraryUpdate, overviewActivities, indexFailed, activityTiming, activityProgress, activityOverallProgress, activityPresentation, estimateRate, workCount, headerBusy, captureIndexDisabled, stopTargets, appUpdatePresentation};
+  window.dispatchEvent(new Event('pharos:drive-view-ready'));
   const sheet = node('style');
   sheet.textContent = CSS;
   document.head.append(sheet);

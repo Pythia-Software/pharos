@@ -1,5 +1,8 @@
 # Query Table: host search clauses in the query lifecycle
 
+**Delivered in Query Table 0.9.7** with host query state; see
+[the saved host query state handoff](query-table-saved-host-query-state.md).
+
 For the concrete saved-search implementation contract, API proposal, Pharos
 migration points and acceptance matrix, see
 [Save the complete query, including host URL parameters](query-table-saved-host-query-state.md).

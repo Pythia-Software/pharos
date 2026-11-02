@@ -1,4 +1,4 @@
-import { type AggregationClause, type MetricDisplay, type QueryState } from "@pythia-software/query-table-core";
+import { groupKeyFields, type AggregationClause, type MetricDisplay, type QueryState } from "@pythia-software/query-table-core";
 import type { QueryRecipe } from "./curiosity-data";
 import type { ChartScale } from "./chart-scale";
 import type { ChartDisplay } from "./chart-series";
@@ -41,7 +41,7 @@ export function cardCoverQuery(query: QueryState, recipe: QueryRecipe, requested
     const unit = view?.valueField === column.id ? view.unit : column.field === "duration_ms" || column.expression === "MEDIAN([duration_ms])" ? "ms" : ["card_rate", "card_escalation"].includes(column.id) ? "percent" : "";
     const daily = view?.coverMetric?.field === column.id;
     const metric: AggregationClause = daily ? { ...view!.coverMetric!, id: column.id, display: { ...view!.coverMetric!.display, kind: cover.kind ?? "auto" } } : {
-      id: column.id, op: ["sum", "count"].includes(column.op) ? "sum" : "max", field: column.id, groupBy: query.grouping.keys,
+      id: column.id, op: ["sum", "count"].includes(column.op) ? "sum" : "max", field: column.id, groupBy: groupKeyFields(query.grouping.keys),
       label: column.label ?? column.id, groupLimit: 12,
       display: { kind: cover.kind ?? "bar-horizontal", ...(unit === "percent" ? { format: { kind: "percent", decimals: 1 } } : unit === "ms" ? { format: { kind: "duration", sourceUnit: "milliseconds" } } : {}) },
     };
@@ -50,7 +50,7 @@ export function cardCoverQuery(query: QueryState, recipe: QueryRecipe, requested
     // otherwise small early groups could crowd out eligible later ones.
     if (metric.distribution?.kind === "box" && cover.minSamples) metric.groupLimit = 10000;
     if (!daily) metric.groupLimit = Math.max(12, cover.maxGroups ?? 12);
-    const companions: AggregationClause[] = (view?.context ?? []).filter(item => item.field !== column.id).map(item => ({ id: item.field, op: "max", field: item.field, groupBy: query.grouping!.keys, label: item.label, groupLimit: Math.max(12, cover.maxGroups ?? 12) }));
+    const companions: AggregationClause[] = (view?.context ?? []).filter(item => item.field !== column.id).map(item => ({ id: item.field, op: "max", field: item.field, groupBy: groupKeyFields(query.grouping!.keys), label: item.label, groupLimit: Math.max(12, cover.maxGroups ?? 12) }));
     return { query: { ...query, aggregations: [metric, ...companions] }, metricId: column.id };
   }
   // A source chart shares the destination's source predicates. The destination

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -204,6 +205,24 @@ type librarySizes struct {
 	CapturesBytes  int64 `json:"captures_bytes"`
 	PreservedBytes int64 `json:"preserved_bytes"`
 	LibraryBytes   int64 `json:"library_bytes"`
+
+	// The parts behind those totals, for the Settings storage breakdown.
+	// CatalogBytes includes CatalogLogBytes (-wal and -shm); sidecars beside
+	// the catalog and the library folder's other files are in no total above.
+	CatalogLogBytes     int64         `json:"-"`
+	CatalogSidecarBytes int64         `json:"-"`
+	OtherBytes          int64         `json:"-"`
+	Captures            []captureSize `json:"-"`
+}
+
+// captureSize is what one host's capture of one source holds on the drive.
+// Source is empty for the host's own files, such as host.json.
+type captureSize struct {
+	Host, Source string
+	// Latest is files/, the current copy of the source; History is history/,
+	// the versions it superseded; Other is the rest: its manifest, index
+	// markers and what readers' temporary copies hold beyond those.
+	Latest, History, Other int64
 }
 
 func measureLibrary(ctx context.Context, config Config, device uint64) librarySizes {
@@ -213,17 +232,141 @@ func measureLibrary(ctx context.Context, config Config, device uint64) librarySi
 		for _, suffix := range []string{"", "-wal", "-shm"} {
 			if info, err := os.Stat(config.CatalogPath + suffix); err == nil {
 				sizes.CatalogBytes += info.Size()
+				if suffix != "" {
+					sizes.CatalogLogBytes += info.Size()
+				}
+			}
+		}
+		sidecars, _ := filepath.Glob(config.CatalogPath + ".*")
+		for _, sidecar := range sidecars {
+			if info, err := os.Lstat(sidecar); err == nil && info.Mode().IsRegular() {
+				sizes.CatalogSidecarBytes += info.Size()
 			}
 		}
 	}
 	if on(config.CaptureRoot) {
-		sizes.CapturesBytes = treeSizeContext(ctx, config.CaptureRoot)
+		sizes.Captures = measureCaptures(ctx, config.CaptureRoot)
+		for _, capture := range sizes.Captures {
+			sizes.CapturesBytes += capture.Latest + capture.History + capture.Other
+		}
 	}
 	if on(config.ArchiveRoot) {
 		sizes.PreservedBytes = treeSizeContext(ctx, config.ArchiveRoot)
 	}
+	if config.Library && on(config.Path) {
+		sizes.OtherBytes = libraryOtherBytes(ctx, config)
+	}
 	sizes.LibraryBytes = sizes.CatalogBytes + sizes.CapturesBytes + sizes.PreservedBytes
 	return sizes
+}
+
+// measureCaptures sizes the capture root per host and source, following the
+// layout described in capture.go. Each file counts once: readers' temporary
+// directories (.reader-*) hard-link the captures they read, so they are walked
+// last and add only what files/ and history/ do not already hold.
+func measureCaptures(ctx context.Context, root string) []captureSize {
+	index := map[[2]string]*captureSize{}
+	seen := map[[2]uint64]bool{}
+	var hidden []string
+	walk := func(start string) {
+		_ = filepath.WalkDir(start, func(path string, entry fs.DirEntry, err error) error {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if err != nil {
+				return nil
+			}
+			rel, err := filepath.Rel(root, path)
+			if err != nil {
+				return nil
+			}
+			parts := strings.Split(filepath.ToSlash(rel), "/")
+			if entry.IsDir() {
+				if path != start && len(parts) == 3 && strings.HasPrefix(parts[2], ".") {
+					hidden = append(hidden, path)
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !entry.Type().IsRegular() {
+				return nil
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return nil
+			}
+			if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+				inode := [2]uint64{uint64(stat.Dev), uint64(stat.Ino)}
+				if seen[inode] {
+					return nil
+				}
+				seen[inode] = true
+			}
+			key := [2]string{parts[0], ""}
+			if len(parts) == 1 {
+				key[0] = ""
+			} else if len(parts) > 2 {
+				key[1] = parts[1]
+			}
+			size := index[key]
+			if size == nil {
+				size = &captureSize{Host: key[0], Source: key[1]}
+				index[key] = size
+			}
+			switch {
+			case len(parts) > 3 && parts[2] == captureFilesDir:
+				size.Latest += info.Size()
+			case len(parts) > 3 && parts[2] == captureHistoryDir:
+				size.History += info.Size()
+			default:
+				size.Other += info.Size()
+			}
+			return nil
+		})
+	}
+	walk(root)
+	for _, dir := range hidden {
+		walk(dir)
+	}
+	sizes := make([]captureSize, 0, len(index))
+	for _, size := range index {
+		sizes = append(sizes, *size)
+	}
+	sort.Slice(sizes, func(i, j int) bool {
+		return sizes[i].Host < sizes[j].Host || sizes[i].Host == sizes[j].Host && sizes[i].Source < sizes[j].Source
+	})
+	return sizes
+}
+
+// libraryOtherBytes is what the library folder holds besides the catalog,
+// captures and preserved packages: the app, settings, staging and backups'
+// records.
+func libraryOtherBytes(ctx context.Context, config Config) int64 {
+	skip := map[string]bool{filepath.Clean(config.CaptureRoot): true, filepath.Clean(config.ArchiveRoot): true}
+	catalog := filepath.Clean(config.CatalogPath)
+	var total int64
+	_ = filepath.WalkDir(filepath.Dir(config.Path), func(path string, entry fs.DirEntry, err error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err != nil {
+			return nil
+		}
+		if entry.IsDir() {
+			if skip[filepath.Clean(path)] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if path == catalog || strings.HasPrefix(path, catalog+"-") || strings.HasPrefix(path, catalog+".") || !entry.Type().IsRegular() {
+			return nil
+		}
+		if info, err := entry.Info(); err == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
 }
 
 func treeSizeContext(ctx context.Context, root string) int64 {
@@ -255,6 +398,10 @@ type driveState struct {
 	sizes   librarySizes
 	checked time.Time
 	growth  cloudGrowth
+	// shares divide sizes for the storage breakdown. They are read with the
+	// sizes, so both describe the same moment and a sync's commits do not
+	// send the breakdown back to the catalog.
+	shares storageShares
 }
 
 func collectDrive(ctx context.Context, config Config) *driveState {
@@ -321,19 +468,56 @@ func (c *driveCache) store(config Config, state *driveState) {
 	}
 }
 
+// publish makes state the current one while its refresh is still running:
+// unlike store, it leaves refreshing set, so no other refresh starts until
+// this one finishes.
+func (c *driveCache) publish(config Config, state *driveState) {
+	key := driveKey(config)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.key == key {
+		c.state = state
+	}
+}
+
+// setGrowth replaces published with a copy carrying growth, unless a newer
+// state has replaced it. Readers may hold published, so it is not modified.
+func (c *driveCache) setGrowth(published *driveState, growth cloudGrowth) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.state == published {
+		updated := *published
+		updated.growth = growth
+		c.state = &updated
+	}
+}
+
 // driveHealth answers from the cache at once and refreshes it in the
 // background, so a slow diskutil never holds up a poll.
 func (s *Server) driveHealth() map[string]any {
 	config := s.Config()
 	state, refresh := drives.cached(config)
 	if refresh {
-		s.spawn(func(ctx context.Context) {
-			var fresh *driveState
-			defer func() { drives.store(config, fresh) }()
-			if state := collectDrive(ctx, config); ctx.Err() == nil {
-				state.growth = s.Catalog.recordCloudLibrarySize(ctx, config, state)
-				fresh = state
+		// A read that writes one library_size_history row (§3.4, hidden). The
+		// sizes are published before that write, which waits for the catalog
+		// writer: during a sync that can take minutes. The refresh stays in
+		// flight until the write lands, so polls meanwhile start no other.
+		s.start(OperationSpec{Kind: "drive.measure", Trigger: triggerRead}, func(ctx context.Context, op *Op) error {
+			defer drives.store(config, nil)
+			fresh := collectDrive(ctx, config)
+			if ctx.Err() != nil {
+				return nil
 			}
+			fresh.growth = cloudLibraryGrowth(nil, fresh.checked, fresh.sizes.LibraryBytes)
+			if state != nil {
+				fresh.growth, fresh.shares = state.growth, state.shares
+			}
+			if shares, err := s.Catalog.storageShares(ctx); err == nil {
+				fresh.shares = shares
+			}
+			drives.publish(config, fresh)
+			drives.setGrowth(fresh, s.Catalog.recordCloudLibrarySize(ctx, config, fresh))
+			return nil
 		})
 	}
 	if state == nil {

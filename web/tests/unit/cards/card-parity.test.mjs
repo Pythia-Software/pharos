@@ -34,3 +34,18 @@ test("collecting all active cards preserves distinct studies sharing the same so
   }
   assert.equal(values.get("pharos-bookmarks-v1").length, active.length);
 });
+
+test("re-collecting a card whose saved link predates versioned dashboard charts finds the saved card", t => {
+  fixture(t);
+  const recipe = active.find(item => item.destination?.topic === "tokens"), item = instantiateRecipe(recipe, 7);
+  const options = { templateId: item.instanceId, window: item.window, cover: item.cover ?? defaultCardCover(item) };
+  // The same link as written before charts carried v: 2.
+  const url = new URL(item.url, "http://localhost"), chart = JSON.parse(url.searchParams.get("analyze_chart"));
+  delete chart.v;
+  url.searchParams.set("analyze_chart", JSON.stringify(chart));
+  const old = collectQuery(item.dataset, item.query, item.title, { ...options, templateId: undefined, url: url.pathname + url.search });
+  assert.equal(collectQuery(item.dataset, item.query, item.title, { ...options, templateId: undefined, url: item.url }).id, old.id);
+  // A chart that draws differently is a different card.
+  url.searchParams.set("analyze_chart", JSON.stringify({ ...chart, split: "effort" }));
+  assert.notEqual(collectQuery(item.dataset, item.query, item.title, { ...options, templateId: undefined, url: url.pathname + url.search }).id, old.id);
+});

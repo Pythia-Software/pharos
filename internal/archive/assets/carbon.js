@@ -35,7 +35,7 @@
 .carbon-control-title{display:inline-flex;align-items:center;gap:5px;min-height:23px;font-weight:600;color:var(--ink,#222)}
 .carbon-info-button{display:inline-flex;align-items:center;justify-content:center;flex:none;width:23px;height:23px;padding:2px;border:1px solid transparent;border-radius:50%;background:transparent;color:var(--muted,#666);cursor:pointer}
 .carbon-info-button:hover{border-color:var(--line,#ccc);background:color-mix(in srgb,var(--accent,#315845) 9%,var(--panel,#fff));color:var(--accent,#315845)}
-.carbon-info-button:focus-visible{outline:2px solid var(--accent,#315845);outline-offset:2px}
+.carbon-info-button:focus-visible{outline:2px solid var(--focus-ring, #315845);outline-offset:2px}
 .carbon-info-button svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 .carbon-info-dialog{width:min(640px,calc(100vw - 32px));max-height:min(82vh,760px);padding:0;border:1px solid var(--line,#ccc);border-radius:12px;background:var(--panel,#fff);color:var(--ink,#222);box-shadow:0 20px 60px #0005;overflow:auto}
 .carbon-info-dialog::backdrop{background:rgba(14,25,22,.55)}
@@ -44,7 +44,7 @@
 .carbon-info-head h2{margin:0;font-size:21px;line-height:1.2}
 .carbon-info-close{flex:none;min-width:32px;min-height:32px;border:1px solid var(--line,#ccc);border-radius:6px;background:var(--panel,#fff);color:var(--ink,#222);font:inherit;font-size:23px;line-height:1;cursor:pointer}
 .carbon-info-close:hover{color:var(--accent,#315845)}
-.carbon-info-close:focus-visible{outline:2px solid var(--accent,#315845);outline-offset:2px}
+.carbon-info-close:focus-visible{outline:2px solid var(--focus-ring, #315845);outline-offset:2px}
 .carbon-info-body{padding:20px 26px 26px;font-size:var(--fs-md,13px);line-height:1.55}
 .carbon-info-lead{margin:0 0 18px;font-size:15px;line-height:1.5}
 .carbon-info-section{margin-top:18px}
@@ -142,7 +142,7 @@
 .carbon-row-trigger small{font-size:10px;font-weight:400;color:var(--accent,#315845);text-decoration:underline;text-underline-offset:2px}
 .carbon-factor-link{min-height:28px;min-width:24px;margin:0;padding:1px 3px;border:0;background:transparent;color:var(--ink,#222);font:inherit;cursor:pointer;text-decoration:underline dashed var(--gold,#ac893d);text-underline-offset:3px}
 .carbon-factor-link:hover{color:var(--accent,#315845)}
-.carbon-factor-link:focus-visible,.carbon-row-trigger:focus-visible,.carbon-calculation summary:focus-visible{outline:2px solid var(--accent,#315845);outline-offset:3px}
+.carbon-factor-link:focus-visible,.carbon-row-trigger:focus-visible,.carbon-calculation summary:focus-visible{outline:2px solid var(--focus-ring, #315845);outline-offset:3px}
 .carbon-term-evidence[hidden]{display:none}
 .carbon-term-evidence>td{white-space:normal;text-align:left;padding:12px;background:color-mix(in srgb,var(--bg,#f8f6f0) 45%,var(--panel,#fff))}
 .carbon-row-evidence h4,.carbon-factor-evidence h4{margin:8px 0 5px;font-size:var(--fs-sm,12px)}
@@ -203,7 +203,7 @@
     return n;
   };
   const load = () => { const saved = window.pharosPrefs.get(STORE, {}); return saved && typeof saved === 'object' ? saved : {}; };
-  const save = () => window.pharosPrefs.set(STORE, prefs);
+  const save = change => window.pharosPrefs.set(STORE, {...load(), ...change});
   const routeSettings = () => {
     if (typeof location === 'undefined') return null;
     const encoded = new URLSearchParams(location.search).get('analyze_carbon');
@@ -215,7 +215,6 @@
   };
   const prefs = {...(routeSettings() || load())};
   let data = null, factorsData = null, error = '', usageLabel = 'all time', usageScope = '';
-  const disclosureState = new Map();
 
   // Three significant figures, with the unit stepped so the number stays short.
   const sig = value => {
@@ -289,12 +288,12 @@
     return {byCategory, byTier, terms, outputEquivalent, pue, wh: total, facilityWh: total * pue, grams, co2: grams(total)};
   }
 
-  function settings(factors) {
-    const scenario = SCENARIOS.some(([key]) => key === prefs.scenario) ? prefs.scenario : 'central';
-    const pueScenario = SCENARIOS.some(([key]) => key === prefs.pueScenario) ? prefs.pueScenario : 'central';
-    const inputSensitivity = INPUT_SENSITIVITIES.some(([key]) => key === prefs.inputSensitivity) ? prefs.inputSensitivity : 'current';
-    const grid = factors.grids.find(item => item.key === prefs.grid) || (prefs.grid === 'custom' ? null : factors.grids.find(item => item.key === factors.default_grid));
-    const gridValue = grid ? grid.g_co2e_per_kwh : Math.max(0, Number(prefs.customGrid) || 0);
+  function settings(factors, values = prefs) {
+    const scenario = SCENARIOS.some(([key]) => key === values.scenario) ? values.scenario : 'central';
+    const pueScenario = SCENARIOS.some(([key]) => key === values.pueScenario) ? values.pueScenario : 'central';
+    const inputSensitivity = INPUT_SENSITIVITIES.some(([key]) => key === values.inputSensitivity) ? values.inputSensitivity : 'current';
+    const grid = factors.grids.find(item => item.key === values.grid) || (values.grid === 'custom' ? null : factors.grids.find(item => item.key === factors.default_grid));
+    const gridValue = grid ? grid.g_co2e_per_kwh : Math.max(0, Number(values.customGrid) || 0);
     return {scenario, pueScenario, inputSensitivity, inputScale: inputSensitivity === 'third' ? 5 / 3 : 1,
       grid, gridValue, pue: pick(factors.pue, pueScenario)};
   }
@@ -470,9 +469,10 @@
 
   function disclosure(key, title, cls = '') {
     const details = node('details', cls), summary = node('summary', '', title);
-    details.open = disclosureState.get(key) || false;
+    // The shared disclosure binding captures the native closed default and
+    // restores URL overrides after insertion, including across rerenders.
+    details.dataset.viewKey='carbon:'+key;
     summary.dataset.carbonControl = `disclosure:${key}`;
-    details.ontoggle = () => { if (details.isConnected) disclosureState.set(key, details.open); };
     details.append(summary);
     return details;
   }
@@ -667,16 +667,14 @@
         const key = `row:${tier.key}:${category}`, row = node('tr', 'carbon-term-row'), name = node('th'); name.scope = 'row';
         row.dataset.category = category; row.dataset.tier = tier.key;
         const detailRow = node('tr', 'carbon-term-evidence'), detailCell = node('td'); detailCell.colSpan = 10;
-        detailRow.id = `carbon-row-${tier.key}-${term.category}`; detailRow.hidden = !disclosureState.get(key);
+        detailRow.id = `carbon-row-${tier.key}-${term.category}`; detailRow.hidden = window.pharosView?.read('disclosures', {})['carbon:' + key] !== true;
         const toggle = node('button', 'carbon-row-trigger', tierLabel(tier)); toggle.type = 'button';
         toggle.setAttribute('aria-label', `Explain ${CATEGORY_LABELS[category][0]} · ${tier.label}`);
         toggle.append(node('small', '', 'Details'));
         toggle.dataset.carbonControl = key; toggle.setAttribute('aria-expanded', String(!detailRow.hidden)); toggle.setAttribute('aria-controls', detailRow.id);
-        toggle.onclick = () => {
-          detailRow.hidden = !detailRow.hidden; disclosureState.set(key, !detailRow.hidden);
-          if (!detailRow.hidden && !detailCell.firstChild) detailCell.append(rowEvidence(factors, setup, term));
-          toggle.setAttribute('aria-expanded', String(!detailRow.hidden));
-        };
+        toggle.dataset.viewKey = 'carbon:' + key; toggle.dataset.viewDefault = 'false';
+        const populate = () => { if (!detailRow.hidden && !detailCell.firstChild) detailCell.append(rowEvidence(factors, setup, term)); };
+        toggle.addEventListener('pharos:disclosure', populate); populate();
         name.append(toggle); row.append(name);
         const ratio = Number(term.ratio.toPrecision(4));
         const ratioLink = factorLink('ratio', category, ledgerFraction(`${ratio === term.ratio ? '' : '≈ '}${precise(ratio)} OE`, '1 tok', `${precise(term.ratio)} OE tokens divided by 1 ${categoryUnit(category)} token`));
@@ -787,8 +785,7 @@
 
   function methodology(factors, result, setup) {
     const details = node('details', 'carbon-method');
-    details.open = disclosureState.get('reference') || false;
-    details.ontoggle = () => { if (details.isConnected) disclosureState.set('reference', details.open); };
+    details.dataset.viewKey='carbon:reference';
     const summary = node('summary', '', 'All factor settings and sources');
     summary.dataset.carbonControl = 'disclosure:reference';
     details.append(summary);
@@ -850,7 +847,9 @@
   }
 
   function updatePreferences(change) {
-    Object.assign(prefs, change); save(); syncSettingsURL(); render();
+    Object.assign(prefs, change);
+    save(change);
+    syncSettingsURL(); render();
     // Usage rows carry estimates under the saved settings, so listeners that
     // refetch must wait for the save rather than the debounced write.
     Promise.resolve(window.pharosPrefs.flush?.()).then(() => window.dispatchEvent(new Event('pharos:carbon-settings')));
@@ -1025,15 +1024,15 @@
     render();
   }
 
-  function estimate(factors, period) {
-    const setup = settings(factors);
+  function estimate(factors, period, values = prefs) {
+    const setup = settings(factors, values);
     return calculate(factors, period, setup.scenario, setup.pue, setup.gridValue, setup.inputScale);
   }
 
   const sheet = node('style');
   sheet.textContent = CSS;
   document.head.append(sheet);
-  window.pharosCarbon = {show, pending, estimate, mass, energy, settingsSnapshot};
+  window.pharosCarbon = {show, pending, estimate, mass, energy, settingsSnapshot, updatePreferences};
   window.addEventListener('pharos:route', () => {
     for (const key of Object.keys(prefs)) delete prefs[key];
     Object.assign(prefs, routeSettings() || load());

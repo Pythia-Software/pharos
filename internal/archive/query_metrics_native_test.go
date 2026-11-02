@@ -135,7 +135,10 @@ func TestNativeMetricsMatchTheAdapter(t *testing.T) {
 		"an expression":      {ID: "x", Expression: "SUM([n])"},
 		"a number key":       {ID: "x", Op: "count", GroupBy: []string{"n"}},
 		"a group limit":      {ID: "x", Op: "count", GroupBy: []string{"kind"}, GroupLimit: 1},
-		"a minimum count":    {ID: "x", Op: "count", GroupBy: []string{"kind"}, MinCount: 2},
+		"a minimum count":    {ID: "x", Op: "count", GroupBy: []string{"kind"}, MinCount: qt.MetricMinCount{Min: 2}},
+		"a distinct minimum": {ID: "x", Op: "count", GroupBy: []string{"kind"}, MinCount: qt.MetricMinCount{Min: 2, Distinct: "n"}},
+		"a summed minimum":   {ID: "x", Op: "count", GroupBy: []string{"kind"}, MinCount: qt.MetricMinCount{Min: 2, Sum: "n"}},
+		"hours of the day":   {ID: "x", Op: "count", DateGrouping: &qt.MetricDateGrouping{Field: "at", Interval: "hourOfDay"}},
 		"a sort":             {ID: "x", Op: "count", GroupBy: []string{"kind"}, Sort: []qt.MetricSort{{Key: "group0", Dir: "asc"}}},
 		"a metric filter":    {ID: "x", Op: "count", Where: []qt.WhereTerm{{Field: "side", Op: "=", Value: "x"}}},
 		"shown rows":         {ID: "x", Op: "count", Scope: "shownRows"},
@@ -347,6 +350,12 @@ func TestNativeMetricsMatchTheAdapterOnPharosDatasets(t *testing.T) {
 	}
 	types := []string{"uncached_input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens", "unclassified_tokens"}
 	filtered := func(q qt.MetricQuery, where ...qt.WhereTerm) qt.MetricQuery { q.Where = where; return q }
+	minimum := func(q qt.MetricQuery, min qt.MetricMinCount) qt.MetricQuery {
+		for i := range q.Metrics {
+			q.Metrics[i].MinCount = min
+		}
+		return q
+	}
 	summary := sums([]string{"total_tokens", "cost_usd", "uncached_input_tokens", "cache_read_input_tokens", "output_tokens"})
 	summary.Metrics = append(summary.Metrics, qt.AggSpec{ID: "agent_sessions", Op: "count_distinct", Field: "agent_session_id"})
 	for _, sample := range []struct {
@@ -371,6 +380,17 @@ func TestNativeMetricsMatchTheAdapterOnPharosDatasets(t *testing.T) {
 		// Hourly rows are selected before, as the adapter's are.
 		{"hourly tokens over a threshold", "usage", filtered(sums([]string{"total_tokens"}, "hour"), qt.WhereTerm{Field: "total_tokens", Op: ">", Value: "1500"}), true},
 		{"hourly cost by provider, one model", "usage", filtered(sums([]string{"cost_usd"}, "hour", "provider"), qt.WhereTerm{Field: "model", Op: "!=", Value: "absent"}), true},
+		// OR of AND branches, over dimensions and over indexed command text.
+		{"tool errors for pairs", "tool_calls", filtered(sums([]string{"error_count"}, "status"), qt.WhereTerm{Any: []qt.WhereClause{
+			{All: []qt.WhereClause{{Field: "provider", Op: "=", Value: "codex"}, {Field: "tool_name", Op: "=", Value: "Bash"}}}, {Field: "tool_name", Op: "=", Value: "Read"}}}), true},
+		{"tool tokens for command pairs", "tool_calls", filtered(sums([]string{"result_tokens"}, "tool_name"), qt.WhereTerm{Any: []qt.WhereClause{
+			{All: []qt.WhereClause{{Field: "command", Op: "contains", Value: "git"}, {Field: "command", Op: "contains", Value: "test"}}}, {Field: "command", Op: "contains", Value: "./..."}}}), true},
+		{"tokens for model pairs", "usage", filtered(sums([]string{"total_tokens"}, "provider"), qt.WhereTerm{Any: []qt.WhereClause{
+			{All: []qt.WhereClause{{Field: "provider", Op: "=", Value: "codex"}, {Field: "model", Op: "!=", Value: "absent"}}}, {Field: "provider", Op: "=", Value: "claude"}}}), true},
+		// Distinct and summed minimums are the adapter's.
+		{"tool tokens by tool, distinct minimum", "tool_calls", minimum(sums([]string{"result_tokens"}, "tool_name"), qt.MetricMinCount{Min: 2, Distinct: "conversation_id"}), false},
+		{"tool tokens by tool, summed minimum", "tool_calls", minimum(sums([]string{"result_tokens"}, "tool_name"), qt.MetricMinCount{Min: 500, Sum: "result_tokens"}), false},
+		{"tokens by model, distinct minimum", "usage", minimum(sums([]string{"total_tokens"}, "model"), qt.MetricMinCount{Min: 1, Distinct: "agent_session_id"}), true},
 		// A formula is staged.
 		{"tokens per day", "usage", metricRequest(qt.AggSpec{ID: "per day", Expression: "SUM([total_tokens]) / COUNT()"}), false},
 	} {
@@ -384,11 +404,15 @@ func TestNativeMetricsMatchTheAdapterOnPharosDatasets(t *testing.T) {
 				t.Fatal(err)
 			}
 			override(t, &nativeMetrics, false)
-			want, err := server.executeQueryV2(context.Background(), sample.dataset, nil, schema, nil, &sample.q)
-			if err != nil || !identical(got, want) {
-				left, _ := json.Marshal(got.Metrics)
-				right, _ := json.Marshal(want.Metrics)
-				t.Fatalf("%v\n got %s\nwant %s", err, left, right)
+			// The adapter's second execution in a generation reuses what its
+			// first proved about the source.
+			for range 2 {
+				want, err := server.executeQueryV2(context.Background(), sample.dataset, nil, schema, nil, &sample.q)
+				if err != nil || !identical(got, want) {
+					left, _ := json.Marshal(got.Metrics)
+					right, _ := json.Marshal(want.Metrics)
+					t.Fatalf("%v\n got %s\nwant %s", err, left, right)
+				}
 			}
 			for _, metric := range got.Metrics.Metrics {
 				if metric.Error != "" || len(metric.Buckets) == 0 {
@@ -414,5 +438,68 @@ func TestNativeMetricsMatchTheAdapterOnPharosDatasets(t *testing.T) {
 				t.Fatalf("answered without staging = %v, want %v (%v)", handled, sample.unstaged, err)
 			}
 		})
+	}
+}
+
+// Query Table reuses a source's proven row count and integer bounds only
+// within the data generation it read them in. A write between requests
+// advances the generation, so the next request proves the source again.
+func TestAdapterMetricsFollowWritesBetweenRequests(t *testing.T) {
+	catalog, config := testCatalog(t)
+	// A current ledger: no request rebuilds it from the messages below.
+	want, _, err := catalog.authorshipGenerations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.RebuildAuthorship(t.Context(), want); err != nil {
+		t.Fatal(err)
+	}
+	write := func(id string, words int64) {
+		t.Helper()
+		tx := seedTx(t, catalog.DB)
+		for _, statement := range []string{
+			`INSERT OR IGNORE INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','codex','local','w','Proofs','2026-09-01T00:00:00Z')`,
+			`INSERT OR IGNORE INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c','w','codex','local','c')`,
+			`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at) VALUES(?1,'c',?1,'user','message','words','h','2026-09-01T12:00:00.000Z')`,
+			`INSERT INTO message_authorship(message_id,conversation_id,workspace_id,sent_at,day,total_chars,spans_json,words) VALUES(?1,'c','w','2026-09-01T12:00:00.000Z','2026-09-01',5,'[]',?2)`,
+		} {
+			if _, err := tx.Exec(statement, id, words); err != nil {
+				t.Fatal(err)
+			}
+		}
+		commitSeed(t, tx)
+	}
+	for i := range 3 {
+		write(fmt.Sprint("m", i), 4)
+	}
+	server := testServer(t, config, catalog)
+	override(t, &nativeMetrics, false)
+	schema, err := sqliteQuerySchema("writing_messages")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := metricRequest(qt.AggSpec{ID: "messages", Op: "count"}, qt.AggSpec{ID: "mean", Op: "avg", Field: "words"})
+	measure := func() qt.SQLiteMetricsV2Result {
+		t.Helper()
+		result, err := server.executeQueryV2(t.Context(), "writing_messages", nil, schema, nil, &q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return *result.Metrics
+	}
+	for range 2 {
+		if result := measure(); result.Metrics[0].Buckets[0].Value != float64(3) || result.Metrics[1].Buckets[0].Value != float64(4) {
+			t.Fatalf("before the write: %+v", result.Metrics)
+		}
+	}
+	// A value beyond safe integers fails the average, unless a stale proof
+	// let it through.
+	write("late", 1<<53+1)
+	result := measure()
+	if messages := result.Metrics[0].Buckets[0].Value; messages != float64(4) {
+		t.Fatalf("messages after a write = %v, want 4", messages)
+	}
+	if mean := result.Metrics[1]; mean.Error == "" && (len(mean.Buckets) == 0 || mean.Buckets[0].Error == "") {
+		t.Fatalf("an unsafe total was trusted: %+v", mean)
 	}
 }

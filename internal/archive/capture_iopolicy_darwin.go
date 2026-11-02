@@ -41,13 +41,29 @@ func currentIOPolicy() (int32, error) {
 // background (throttle) tier, still finishes promptly when someone is waiting
 // to unplug. The policy is per thread so the service's own requests keep their
 // priority; fn must do its I/O on the calling goroutine.
+//
+// The thread goes back to Go's pool only once its policy is restored, on a
+// return or a panic alike. If restoring fails, the goroutine leaves the
+// thread locked, and Go ends a thread whose goroutine exits locked rather
+// than reuse it at the utility tier.
 func withCaptureIOPolicy(fn func()) {
 	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
 	previous, err := currentIOPolicy()
-	if err == nil && ioPolicy(ioPolicySet, &ioPolicyParam{scope: ioPolicyThread, iotype: ioPolicyDisk, policy: ioPolicyUtility}) == nil {
-		// The locked thread returns to the pool afterwards; restore it first.
-		defer ioPolicy(ioPolicySet, &ioPolicyParam{scope: ioPolicyThread, iotype: ioPolicyDisk, policy: previous})
+	if err != nil || ioPolicy(ioPolicySet, &ioPolicyParam{scope: ioPolicyThread, iotype: ioPolicyDisk, policy: ioPolicyUtility}) != nil {
+		defer runtime.UnlockOSThread()
+		fn()
+		return
 	}
+	defer func() {
+		if restoreIOPolicy(previous) == nil {
+			runtime.UnlockOSThread()
+		}
+	}()
 	fn()
+}
+
+// restoreIOPolicy sets the calling thread's disk policy back; tests replace
+// it to fail.
+var restoreIOPolicy = func(policy int32) error {
+	return ioPolicy(ioPolicySet, &ioPolicyParam{scope: ioPolicyThread, iotype: ioPolicyDisk, policy: policy})
 }

@@ -82,7 +82,20 @@ func processResourceUsage() processResources {
 	return result
 }
 
+// processRSS is this process's resident set size. On macOS it is read from
+// the kernel (proc_pid_rusage's resident size, resources_darwin.go), which is
+// the figure ps -o rss reports, so samples stay comparable with those taken
+// by forking ps once a second, as this did before. ps is the fallback.
 func processRSS() int64 {
+	if resourceBasis == resourceBasisKernel {
+		if usage, err := processUsageOf(os.Getpid()); err == nil && usage.Resident > 0 {
+			return int64(usage.Resident)
+		}
+	}
+	return processRSSFromPS()
+}
+
+func processRSSFromPS() int64 {
 	output, err := exec.Command("ps", "-o", "rss=", "-p", strconv.Itoa(os.Getpid())).Output()
 	if err != nil {
 		return 0

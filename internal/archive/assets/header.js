@@ -6,7 +6,8 @@ const HEADER_TOOLS = [
   { id: 'library', family: 'library', element: 'headerLibrary', label: 'Drive & sync status', description: 'Library activity, drive actions, and Index changes.', on: true },
   { id: 'sync', family: 'library', element: 'headerSyncOnly', label: 'Sync only', description: 'Index changes without the drive name or status.', on: false },
   { id: 'search', element: 'searchToggle', label: 'Search', description: 'Search the library. The ⌘K shortcut also works.', on: true },
-  { id: 'summary', element: 'usageSummaryToggle', label: 'Analyze summary', description: 'Recent words, tokens, CO₂e, and API cost.', on: true, legacy: 'pharos-show-usage-summary-button' },
+  { id: 'ask', element: 'askPharosToggle', label: 'Ask Pharos', description: 'Ask about the current page and browse while Pharos works.', on: true },
+  { id: 'summary', element: 'usageSummaryToggle', label: 'Quick Stats', description: 'Recent words, tokens, CO₂e, and API cost.', on: true, legacy: 'pharos-show-usage-summary-button' },
   { id: 'annotations', element: 'feedbackToggle', label: 'Agent annotations', description: 'Mark up the interface to share feedback with an agent.', on: false, legacy: 'pharos-show-agent-annotation-button' },
   { id: 'feedback', element: 'feedbackSubmitToggle', label: 'Send feedback', description: 'Send a bug report, request, or prompt to Pythia Software.', on: true },
   { id: 'settings', element: 'settingsToggle', label: 'Settings', description: 'Keep app settings within reach.', on: true, required: true },
@@ -206,6 +207,16 @@ function headerToolAddPosition(value, id) {
   const tools = normalizeHeaderTools(value), family = HEADER_TOOLS.find(tool => tool.id === id)?.family;
   const existing = family ? tools.findIndex(other => HEADER_TOOLS.find(tool => tool.id === other).family === family) : -1;
   return existing >= 0 ? existing : tools.length;
+}
+
+// A bookmark keeps the page's view but not the drawers or Find open over it, so a page
+// compares equal however it was reached. Other origins are kept whole.
+function bookmarkPageURL(raw = location.href) {
+  const url = new URL(raw, location.href);
+  if (url.origin !== location.origin) return url.href;
+  for (const key of ['overlay', 'history_search', 'history_collapsed', 'find', 'find_case', 'find_regex']) url.searchParams.delete(key);
+  url.searchParams.sort();
+  return url.pathname + url.search + url.hash;
 }
 
 function initHeaderHistory(changed) {

@@ -31,7 +31,7 @@ func TestScheduledSyncDefersAnalysesAndManualSyncRefreshesGitHub(t *testing.T) {
 	}
 	background := catalog.background
 	started := 0
-	catalog.background = func(func(context.Context)) bool { started++; return false }
+	catalog.background = func(OperationSpec, func(context.Context, *Op) error) bool { started++; return false }
 	if !server.runAutomatic(server.life.ctx, syncSettings{Interval: 60}) {
 		t.Fatal("scheduled sync not admitted")
 	}
@@ -62,7 +62,7 @@ func TestScheduledSyncDefersAnalysesAndManualSyncRefreshesGitHub(t *testing.T) {
 			t.Fatalf("scheduled sync refreshed %s: %q %v", key, value, err)
 		}
 	}
-	if countRows(t, catalog, "SELECT COUNT(*) FROM sync_deferred WHERE generation>completed_generation") != 5 {
+	if countRows(t, catalog, "SELECT COUNT(*) FROM sync_deferred WHERE generation>completed_generation") != len(stageOrder) {
 		t.Fatal("scheduled sync lost deferred work")
 	}
 	catalog.background = background
@@ -116,7 +116,7 @@ func TestSyncCheckStartsManualRun(t *testing.T) {
 
 func TestManualSyncFailedAnalysisRetainsDirtyGeneration(t *testing.T) {
 	server := automaticTestServer(t, stableCodexSource(t, 1))
-	server.Catalog.background = func(func(context.Context)) bool { return false }
+	server.Catalog.background = func(OperationSpec, func(context.Context, *Op) error) bool { return false }
 	if !server.runManualSync(server.life.ctx, syncSettings{Interval: 60}) {
 		t.Fatal("manual sync not admitted")
 	}
@@ -200,6 +200,43 @@ func stableCodexSource(t *testing.T, count int) SourceConfig {
 		t.Fatal(err)
 	}
 	return SourceConfig{Name: "codex", Kind: "codex", Path: path, Account: "local", Enabled: true}
+}
+
+// A rebuild a page started before an index does not follow up while the
+// index runs, so the index's own authorship stage starts the rebuild that
+// brings the ledger current, rather than failing on the page's stale one.
+func TestManualSyncRebuildsAuthorshipAfterAPageRebuild(t *testing.T) {
+	server := automaticTestServer(t, stableCodexSource(t, 1))
+	start := server.Catalog.background
+	var page func(context.Context, *Op) error
+	server.Catalog.background = func(spec OperationSpec, work func(context.Context, *Op) error) bool {
+		if page == nil {
+			page = work
+			return true
+		}
+		return start(spec, work)
+	}
+	if !server.Catalog.ensureAuthorship() || page == nil {
+		t.Fatal("a page did not start a rebuild of the missing ledger")
+	}
+	done := make(chan bool)
+	go func() { done <- server.runManualSync(server.life.ctx, syncSettings{Interval: 60}) }()
+	waitUntil(t, 30*time.Second, "the index's authorship stage", func() bool {
+		return slices.ContainsFunc(server.ops.running(), func(op *Op) bool { return op.spec.Kind == "analysis.authorship" })
+	})
+	// The page's rebuild ends during the index, for the inputs before it.
+	if err := page(server.life.ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !<-done {
+		t.Fatal("manual sync not admitted")
+	}
+	if server.runs[0].State != "complete" {
+		t.Fatalf("index after a page's rebuild: %+v", server.runs[0])
+	}
+	if server.Catalog.ensureAuthorship() {
+		t.Fatal("the index left authorship stale")
+	}
 }
 
 func automaticTestServer(t *testing.T, source SourceConfig) *Server {
@@ -301,7 +338,7 @@ func TestAutomaticRefreshKeepsIntentionalStateAndAuditsNoops(t *testing.T) {
 	if countRows(t, server.Catalog, "SELECT COUNT(*) FROM messages WHERE text='freshincrementalzebra'") != 1 {
 		t.Fatal("appended message missing")
 	}
-	if countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_deferred WHERE generation>completed_generation") != 5 {
+	if countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_deferred WHERE generation>completed_generation") != len(stageOrder) {
 		t.Fatal("deferred library work was not marked")
 	}
 	after, _ = queryMaps(server.Catalog.DB, "SELECT * FROM source_states")
@@ -718,7 +755,8 @@ func TestVerificationReadsOffHostCapturesAfterSourceRemoval(t *testing.T) {
 	t.Cleanup(func() { server.stop(5 * time.Second) })
 	summary := server.verifyAllInputs(t.Context(), "retained", nil)
 	if summary.Checked != 1 || summary.Passed != 1 || summary.Errors != 0 || summary.Deferred != 0 {
-		t.Fatalf("retained off-host verification: %+v", summary)
+		checks, _ := queryMaps(catalog.DB, "SELECT source_name,unit,outcome,detail FROM sync_verifications")
+		t.Fatalf("retained off-host verification: %+v; checks=%+v", summary, checks)
 	}
 	if countRows(t, catalog, "SELECT COUNT(*) FROM sync_verifications WHERE host_id='host-a' AND outcome='passed'") != 1 {
 		t.Fatal("verification was attributed to the wrong host")

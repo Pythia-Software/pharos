@@ -129,7 +129,18 @@ func workspaceNameEdges(tx *sql.Tx, ids []string) ([]workspaceNameEdge, error) {
 		if len(ids) == 0 {
 			return nil, nil
 		}
-		query += " AND (a.workspace_id IN (" + placeholders(len(ids)) + ") OR b.workspace_id IN (" + placeholders(len(ids)) + "))"
+		// Start from the given workspaces' conversations on each side of the
+		// link, so both halves use an index. An OR across the join scans every
+		// conversation, twice per workspace an index writes. UNION collapses
+		// a link found from both sides.
+		in := placeholders(len(ids))
+		query = `SELECT a.workspace_id left_workspace,b.workspace_id right_workspace FROM conversations a
+		JOIN conversation_identity_links l ON l.left_id=a.id JOIN conversations b ON b.id=l.right_id
+		WHERE a.workspace_id IN (` + in + `) AND l.relationship='native-alias' AND a.workspace_id<>b.workspace_id
+		UNION
+		SELECT a.workspace_id left_workspace,b.workspace_id right_workspace FROM conversations b
+		JOIN conversation_identity_links l ON l.right_id=b.id JOIN conversations a ON a.id=l.left_id
+		WHERE b.workspace_id IN (` + in + `) AND l.relationship='native-alias' AND a.workspace_id<>b.workspace_id`
 		for range 2 {
 			for _, id := range ids {
 				args = append(args, id)

@@ -218,7 +218,7 @@ func (c *Catalog) machineTimeMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQL
 func machineTimeMetric(spec qt.AggSpec) bool {
 	plain := spec.Op == "count" && (spec.Field == "" || spec.Field == "duration_ms") || spec.Op == "sum" && spec.Field == "duration_ms"
 	if !plain || spec.Expression != "" || spec.ExpressionY != "" || spec.Distribution != nil || spec.DateGrouping != nil || len(spec.Sort) > 0 ||
-		spec.GroupLimit != 0 || spec.MinCount != 0 || len(spec.Where) > 0 || len(spec.Diagnostics) > 0 || spec.Scope != "" && spec.Scope != "allMatching" {
+		spec.GroupLimit != 0 || spec.MinCount.Active() || len(spec.Where) > 0 || len(spec.Diagnostics) > 0 || spec.Scope != "" && spec.Scope != "allMatching" {
 		return false
 	}
 	for _, field := range spec.GroupBy {
@@ -252,26 +252,39 @@ func machineTimeFilterable(where []qt.WhereTerm, schema qt.Schema) bool {
 func machineTimeMatches(row map[string]any, where []qt.WhereTerm) bool {
 	for _, term := range where {
 		matched := false
-		for _, clause := range term.Predicates() {
-			text, _ := row[clause.Field].(string)
-			null := text == ""
-			var match bool
-			switch clause.Op {
-			case "=":
-				match = text == clause.Value
-			case "!=":
-				match = text != clause.Value
-			case "is_null":
-				match = null
-			case "is_not_null":
-				match = !null
+		for _, branch := range term.Branches() {
+			if machineTimeBranch(row, branch) {
+				matched = true
+				break
 			}
-			if clause.Negated {
-				match = !match && !null
-			}
-			matched = matched || match
 		}
 		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+// machineTimeBranch reports whether row meets every literal of one AND branch.
+func machineTimeBranch(row map[string]any, branch []qt.WhereClause) bool {
+	for _, clause := range branch {
+		text, _ := row[clause.Field].(string)
+		null := text == ""
+		var match bool
+		switch clause.Op {
+		case "=":
+			match = text == clause.Value
+		case "!=":
+			match = text != clause.Value
+		case "is_null":
+			match = null
+		case "is_not_null":
+			match = !null
+		}
+		if clause.Negated {
+			match = !match && !null
+		}
+		if !match {
 			return false
 		}
 	}

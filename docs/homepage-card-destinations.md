@@ -1,161 +1,174 @@
-# Card analysis destinations
+# Homepage card destinations
 
-All 119 active cards preserve their analysis on navigation. The 115 analysis
-cards open an expanded chart with the same source query, preview executor and
-visualization as Home; the three Findings cards and TL1 revisits retain their
-native query routes. The 52 retired definitions remain resolvable.
+**Card → Full dashboard → Supporting query.** All 115 active analysis cards
+open standard Analyze dashboards with their view, measure, breakdown, time
+range and source predicates encoded in the URL. There is no intermediate
+expanded-card page. The three Findings cards and TL1 revisits retain their
+native workflows. All 52 retired definitions remain resolvable.
 
-## Navigation contract
+Home, the conveyor, the Card Library and agent-generated card links use the
+same primary destinations. Dashboard controls are immediately available to
+change the view, measures, grouping, range and filters. Dashboard drilldowns
+open their contributing queries; returning restores the dashboard and
+reconciles query edits.
 
-**Card → matching expanded analysis → supporting query.** A related dashboard
-is a separate, explicitly broader exploration; its projected filters and generic
-chart defaults never replace the card's analysis.
+Collected cards retain their exact source query and cover separately for
+previews and editing. Their navigation URLs shed `card_*`, `q_*` and source
+window companions, using `analyze_chart` and `analyze_filters` instead.
+`analyze_window=today` preserves moving calendar intent and `analyze_timezone`
+retains a pinned timezone. Elapsed datetime operands remain relative.
+Existing collected cards migrate their dashboard mapping without replacing
+saved queries or durable source snapshot references.
 
-- `card_query` and `q_*` identify the exact source query. Source WHERE, staged
-  observation reductions, grouped HAVING, root lineage, distributions and
-  paired axes remain intact. Durable snapshot tokens resolve before execution;
-  unavailable queries show an error rather than a fresh template's population.
-- `card_cover` retains the chosen metric, kind, series/sample limits, Other,
-  legend, scale, smoothing and cumulative/percentage settings. Saved metric
-  edits update this presentation. Existing collected covers migrate in place.
-- `card_id` selects the original specialized study when applicable. Trailing
-  totals, pooled ratios, complete-day endpoints, historical comparison spans,
-  local-hour and weekday studies use the same loaders on both surfaces.
-- Window edits change the exact source predicates while keeping the cover.
-  The expanded parallelism charts use those source bounds, not the ribbon's
-  separate calendar-day preset. Counting and gap preferences keep the same
-  record execution path as Home.
-- **View supporting query** opens the original Query Table with source and
-  grouped filters intact. Its interval/source rows are the supporting evidence;
-  the chart's smoothed or specialized values remain in the expanded analysis.
-  Back to dashboard restores that analysis and cover.
-- Generic Tools/MCP rolling rates and means pool numerator and denominator
-  instead of averaging daily ratios. Writing series filter exact message
-  timestamps before grouping into either days or hours.
+## Calculation differences
+
+The dashboard is an exploratory view of the card's subject. Its chart can
+present more groups or use a different reduction than the compact cover:
+
+- Group eligibility remains in the saved source query. The dashboards expose
+  ordinary sample thresholds; specialized HAVING rules such as at least one
+  failure, two repositories per error/skill, repeated calls per path, or
+  positive delegation per conversation can leave additional groups visible.
+- Model conversation reach opens distinct conversation counts, rather than a
+  share of group incidences. Largest subagent weight compares each model and
+  effort's largest conversation, rather than showing one scalar maximum.
+- Human phrase examples open the Human Words text-source composition. Concrete
+  feedback opens correction-cue share; the compact study also requires a
+  specific-detail cue. Specialized human averages and weekday studies can use
+  different baselines and complete-period rules than the dashboard controls.
+- Delegation depth opens token totals by depth; repeat-read comparisons open
+  the maximum reads of a path in one conversation. These summarize the
+  card's source instead of reproducing its exact observation distribution.
+- Covers can fold series, hide legends, use custom metrics or show specialized
+  historical norms. These remain cover preferences; dashboard controls and
+  URL state own the destination presentation.
+
+Tool Calls preserves per-call filters such as error signatures, file paths,
+test failures, MCP evidence and exact start bounds. Conversation Input and
+Output preserves conversation_activity records and token units. Neither needs
+a lossy projection onto another dataset. Every active analysis destination
+uses its source dataset.
 
 ## Every active card
 
-The matching analysis uses the card's source dataset and saved calculation;
-there is no categorical or date projection on its primary navigation path.
-
-| Card ID | Primary analysis source | Entry point |
-| --- | --- | --- |
-| `tool-failures` | `tool_calls` | Expanded matching analysis |
-| `error-signatures` | `tool_calls` | Expanded matching analysis |
-| `edit-failures` | `tool_calls` | Expanded matching analysis |
-| `test-failures` | `tool_calls` | Expanded matching analysis |
-| `large-outputs` | `tool_calls` | Expanded matching analysis |
-| `truncated-outputs` | `tool_calls` | Expanded matching analysis |
-| `read-paths` | `tool_calls` | Expanded matching analysis |
-| `primary-domains` | `tool_calls` | Expanded matching analysis |
-| `mcp-methods` | `tool_calls` | Expanded matching analysis |
-| `skill-evidence` | `skill_usages` | Expanded matching analysis |
-| `human-words` | `writing_messages` | Expanded matching analysis |
-| `explaining-repos` | `writing_messages` | Expanded matching analysis |
-| `usage-models` | `usage` | Expanded matching analysis |
-| `usage-repos` | `usage` | Expanded matching analysis |
-| `cost-repos` | `usage` | Expanded matching analysis |
-| `tool-failure-rates` | `tool_calls` | Expanded matching analysis |
-| `duration-distribution` | `tool_calls` | Expanded matching analysis |
-| `output-distribution` | `tool_calls` | Expanded matching analysis |
-| `error-reach` | `tool_calls` | Expanded matching analysis |
-| `cross-repo-errors` | `tool_calls` | Expanded matching analysis |
-| `skill-reach` | `skill_usages` | Expanded matching analysis |
-| `repeated-reads` | `tool_calls` | Expanded matching analysis |
-| `human-word-mix` | `writing_messages` | Expanded matching analysis |
-| `usage-work` | `usage` | Expanded matching analysis |
-| `cache-efficiency` | `usage` | Expanded matching analysis |
-| `effort-cost` | `usage` | Expanded matching analysis |
-| `delegation-depth` | `usage` | Expanded matching analysis |
-| `price-coverage` | `usage` | Expanded matching analysis |
-| `mcp-response-size` | `mcp_calls` | Expanded matching analysis |
-| `human-example-phrases` | `writing_messages` | Expanded matching analysis |
-| `tl1-revisits` | `tl1_attempts` | Native query |
-| `primary-urls` | `tool_calls` | Expanded matching analysis |
-| `writing-hours` | `writing_messages` | Expanded matching analysis |
-| `human-word-total` | `writing_messages` | Expanded matching analysis |
-| `human-repository-words-trend` | `writing_messages` | Expanded matching analysis |
-| `human-words-per-message` | `writing_messages` | Expanded matching analysis |
-| `human-words-per-conversation` | `writing_messages` | Expanded matching analysis |
-| `human-words-per-work` | `writing_messages` | Expanded matching analysis |
-| `human-repo-conversation-depth` | `writing_messages` | Expanded matching analysis |
-| `human-message-lengths` | `writing_messages` | Expanded matching analysis |
-| `human-specific-feedback` | `writing_messages` | Expanded matching analysis |
-| `human-messages-per-day` | `writing_messages` | Expanded matching analysis |
-| `human-conversations-per-day` | `writing_messages` | Expanded matching analysis |
-| `model-token-share-trend` | `usage` | Expanded matching analysis |
-| `model-cost-share-trend` | `usage` | Expanded matching analysis |
-| `model-session-costs` | `usage` | Expanded matching analysis |
-| `largest-subagent-weight` | `usage` | Expanded matching analysis |
-| `session-human-output` | `conversation_activity` | Expanded matching analysis |
-| `session-delegation-count` | `usage` | Expanded matching analysis |
-| `model-agent-roles` | `usage` | Expanded matching analysis |
-| `effort-cost-share` | `usage` | Expanded matching analysis |
-| `session-token-cost` | `usage` | Expanded matching analysis |
-| `session-input-output` | `usage` | Expanded matching analysis |
-| `model-token-share` | `usage` | Expanded matching analysis |
-| `model-conversation-reach` | `usage` | Expanded matching analysis |
-| `repository-model-use` | `usage` | Expanded matching analysis |
-| `model-cost-share` | `usage` | Expanded matching analysis |
-| `cache-repositories` | `usage` | Expanded matching analysis |
-| `repository-failure-rates` | `tool_calls` | Expanded matching analysis |
-| `conversation-error-counts` | `tool_calls` | Expanded matching analysis |
-| `tool-call-share` | `tool_calls` | Expanded matching analysis |
-| `tool-calls-per-conversation` | `tool_calls` | Expanded matching analysis |
-| `pharos-mcp-sources` | `tool_calls` | Expanded matching analysis |
-| `pharos-mcp-query-sources` | `mcp_calls` | Expanded matching analysis |
-| `pharos-mcp-durations` | `mcp_calls` | Expanded matching analysis |
-| `skill-body-sizes` | `skill_usages` | Expanded matching analysis |
-| `skill-load-distribution` | `skill_usages` | Expanded matching analysis |
-| `research-conversation-searches` | `tool_calls` | Expanded matching analysis |
-| `archive-empty-search-rate` | `mcp_calls` | Expanded matching analysis |
-| `provider-cost-share` | `usage` | Expanded matching analysis |
-| `api-cost-total` | `usage` | Expanded matching analysis |
-| `repository-cost-share` | `usage` | Expanded matching analysis |
-| `window-work-cost` | `usage` | Expanded matching analysis |
-| `work-cost-distribution` | `usage` | Expanded matching analysis |
-| `work-volume-cost` | `usage` | Expanded matching analysis |
-| `origin-tokens-channel` | `usage` | Expanded matching analysis |
-| `origin-cost-channel` | `usage` | Expanded matching analysis |
-| `origin-tokens-machine_id` | `usage` | Expanded matching analysis |
-| `origin-cost-machine_id` | `usage` | Expanded matching analysis |
-| `origin-tokens-execution_machine_id` | `usage` | Expanded matching analysis |
-| `origin-cost-execution_machine_id` | `usage` | Expanded matching analysis |
-| `run-effort-token-ranges` | `usage` | Expanded matching analysis |
-| `repository-token-share` | `usage` | Expanded matching analysis |
-| `task-token-ranges` | `usage` | Expanded matching analysis |
-| `task-output-ranges` | `usage` | Expanded matching analysis |
-| `repository-output-share` | `usage` | Expanded matching analysis |
-| `task-effort-token-ranges` | `usage` | Expanded matching analysis |
-| `task-model-token-ranges` | `usage` | Expanded matching analysis |
-| `task-model-effort-token-ranges` | `usage` | Expanded matching analysis |
-| `repository-delegated-share` | `usage` | Expanded matching analysis |
-| `delegating-task-share` | `usage` | Expanded matching analysis |
-| `delegated-run-token-ranges` | `usage` | Expanded matching analysis |
-| `machine-time` | `tool_calls` | Expanded matching analysis |
-| `machine-activities` | `tool_calls` | Expanded matching analysis |
-| `machine-operations` | `tool_calls` | Expanded matching analysis |
-| `machine-call-trend` | `tool_calls` | Expanded matching analysis |
-| `machine-latency-trend` | `tool_calls` | Expanded matching analysis |
-| `parallel-days` | `parallelism` | Expanded matching analysis |
-| `parallel-trend` | `parallelism` | Expanded matching analysis |
-| `parallel-hours` | `parallelism` | Expanded matching analysis |
-| `parallel-repositories` | `parallelism` | Expanded matching analysis |
-| `carbon-trend` | `usage` | Expanded matching analysis |
-| `carbon-tiers` | `usage` | Expanded matching analysis |
-| `carbon-repositories` | `usage` | Expanded matching analysis |
-| `carbon-models` | `usage` | Expanded matching analysis |
-| `carbon-providers` | `usage` | Expanded matching analysis |
-| `carbon-effort` | `usage` | Expanded matching analysis |
-| `findings-open` | `findings` | Native query |
-| `findings-fixes` | `findings` | Native query |
-| `findings-results` | `findings` | Native query |
-| `models-needing-prices` | `usage` | Expanded matching analysis |
-| `token-volume-trend` | `usage` | Expanded matching analysis |
-| `token-volume-log` | `usage` | Expanded matching analysis |
-| `cumulative-api-cost` | `usage` | Expanded matching analysis |
-| `mcp-call-trend` | `mcp_calls` | Expanded matching analysis |
-| `human-words-weekday` | `writing_messages` | Expanded matching analysis |
-| `human-messages-weekday` | `writing_messages` | Expanded matching analysis |
-| `parallel-active-weekday` | `parallelism` | Expanded matching analysis |
-| `parallel-weekday` | `parallelism` | Expanded matching analysis |
+| Card ID | Destination | View | Measure | Breakdown / observation |
+| --- | --- | --- | --- | --- |
+| `tool-failures` | `calls` | compare | `failures` | `tool_name` / records |
+| `error-signatures` | `calls` | compare | `calls` | `error_signature` / records |
+| `edit-failures` | `calls` | compare | `calls` | `repository_path` / records |
+| `test-failures` | `calls` | compare | `calls` | `repository_command` / records |
+| `large-outputs` | `time` | compare | `result_tokens` | `tool_source` / records |
+| `truncated-outputs` | `calls` | compare | `truncation_rate` | `tool_name` / records |
+| `read-paths` | `calls` | compare | `calls` | `repository_path` / records |
+| `primary-domains` | `calls` | compare | `calls` | `host` / records |
+| `mcp-methods` | `calls` | compare | `calls` | `mcp_server_method` / records |
+| `skill-evidence` | `skills` | compare | `conversations` | `skill_name` / records |
+| `human-words` | `human` | trend | `typed` | `none` / records |
+| `explaining-repos` | `human` | compare | `typed` | `repository_name` / records |
+| `usage-models` | `tokens` | trend | `tokens` | `model_family` / records |
+| `usage-repos` | `tokens` | trend | `tokens` | `repository_name` / records |
+| `cost-repos` | `tokens` | trend | `cost` | `repository_name` / records |
+| `tool-failure-rates` | `calls` | compare | `failure_rate` | `tool_name` / records |
+| `duration-distribution` | `time` | distribution | `time` | `command_source` / records |
+| `output-distribution` | `time` | distribution | `result_tokens` | `tool_source` / records |
+| `error-reach` | `calls` | compare | `repositories` | `error_signature` / records |
+| `cross-repo-errors` | `calls` | compare | `calls` | `repository_error` / records |
+| `skill-reach` | `skills` | compare | `repositories` | `skill_name` / records |
+| `repeated-reads` | `calls` | compare | `calls` | `repository_path` / path_conversation |
+| `human-word-mix` | `human` | compare | `typed_share` | `repository_name` / records |
+| `usage-work` | `tokens` | distribution | `tokens` | `repository_name` / conversation |
+| `cache-efficiency` | `tokens` | compare | `cache_read_share` | `provider_model` / records |
+| `effort-cost` | `tokens` | compare | `cost` | `provider_model_effort` / conversation |
+| `delegation-depth` | `tokens` | compare | `tokens` | `delegated_run_depth` / records |
+| `price-coverage` | `tokens` | compare | `tokens` | `price_status` / records |
+| `mcp-response-size` | `mcp` | distribution | `bytes` | `tool_name` / records |
+| `human-example-phrases` | `human` | trend | `words` | `kind` / records |
+| `tl1-revisits` | Native tl1_attempts workflow | Query | Saved query | Saved grouping |
+| `primary-urls` | `calls` | compare | `conversations` | `url` / records |
+| `writing-hours` | `human` | cycle | `typed` | `none` / records |
+| `human-word-total` | `human` | trend | `typed` | `none` / records |
+| `human-repository-words-trend` | `human` | trend | `typed` | `repository_name` / records |
+| `human-words-per-message` | `human` | compare | `words_per_message` | `none` / records |
+| `human-words-per-conversation` | `human` | compare | `typed` | `none` / conversation |
+| `human-words-per-work` | `human` | compare | `typed` | `none` / work |
+| `human-repo-conversation-depth` | `human` | compare | `typed` | `repository_name` / conversation |
+| `human-message-lengths` | `human` | distribution | `typed` | `none` / conversation |
+| `human-specific-feedback` | `human` | trend | `correction_share` | `none` / records |
+| `human-messages-per-day` | `human` | trend | `typed_messages` | `none` / records |
+| `human-conversations-per-day` | `human` | trend | `conversations` | `none` / records |
+| `model-token-share-trend` | `tokens` | trend | `percent` | `model_family` / records |
+| `model-cost-share-trend` | `tokens` | trend | `percent_cost` | `model_family` / records |
+| `model-session-costs` | `tokens` | distribution | `cost` | `provider_model` / conversation |
+| `largest-subagent-weight` | `tokens` | compare | `delegated_runs` | `provider_model_effort` / conversation |
+| `session-human-output` | `activity` | scatter | `human_input` | `provider_model` / conversation |
+| `session-delegation-count` | `tokens` | distribution | `delegated_runs` | `provider_model_effort` / conversation |
+| `model-agent-roles` | `tokens` | compare | `agent_sessions` | `provider_model_role` / records |
+| `effort-cost-share` | `tokens` | compare | `cost` | `effort` / records |
+| `session-token-cost` | `tokens` | scatter | `tokens` | `provider_model` / conversation |
+| `session-input-output` | `tokens` | scatter | `input` | `provider_model` / conversation |
+| `model-token-share` | `tokens` | compare | `tokens` | `provider_model` / records |
+| `model-conversation-reach` | `tokens` | compare | `conversations` | `provider_model` / records |
+| `repository-model-use` | `tokens` | compare | `tokens` | `repository_provider_model` / records |
+| `model-cost-share` | `tokens` | compare | `cost` | `provider_model` / records |
+| `cache-repositories` | `tokens` | compare | `cache_read_share` | `repository_name` / records |
+| `repository-failure-rates` | `calls` | compare | `failure_rate` | `repository_name` / records |
+| `conversation-error-counts` | `time` | distribution | `calls` | `tool_name` / tool_conversation |
+| `tool-call-share` | `calls` | compare | `calls` | `tool_name` / records |
+| `tool-calls-per-conversation` | `time` | distribution | `calls` | `repository_name` / conversation |
+| `pharos-mcp-sources` | `calls` | compare | `calls` | `app_provider` / records |
+| `pharos-mcp-query-sources` | `mcp` | compare | `calls` | `query_source` / records |
+| `pharos-mcp-durations` | `mcp` | distribution | `time` | `tool_name` / records |
+| `skill-body-sizes` | `skills` | distribution | `body` | `skill_evidence` / records |
+| `skill-load-distribution` | `skills` | distribution | `loads` | `skill_name` / skill_path |
+| `research-conversation-searches` | `time` | distribution | `calls` | `repository_name` / conversation |
+| `archive-empty-search-rate` | `mcp` | compare | `empty_rate` | `tool_name` / records |
+| `provider-cost-share` | `tokens` | trend | `percent_cost` | `provider` / records |
+| `api-cost-total` | `tokens` | compare | `cost` | `repository_name` / records |
+| `repository-cost-share` | `tokens` | compare | `cost` | `repository_name` / records |
+| `window-work-cost` | `tokens` | compare | `cost` | `repository_name` / conversation |
+| `work-cost-distribution` | `tokens` | distribution | `cost` | `repository_name` / conversation |
+| `work-volume-cost` | `tokens` | scatter | `root_conversations` | `root_repository_name` / repository |
+| `origin-tokens-channel` | `tokens` | trend | `tokens` | `channel` / records |
+| `origin-cost-channel` | `tokens` | trend | `cost` | `channel` / records |
+| `origin-tokens-machine_id` | `tokens` | trend | `tokens` | `machine_id` / records |
+| `origin-cost-machine_id` | `tokens` | trend | `cost` | `machine_id` / records |
+| `origin-tokens-execution_machine_id` | `tokens` | trend | `tokens` | `execution_machine_id` / records |
+| `origin-cost-execution_machine_id` | `tokens` | trend | `cost` | `execution_machine_id` / records |
+| `run-effort-token-ranges` | `tokens` | distribution | `tokens` | `effort` / run_effort |
+| `repository-token-share` | `tokens` | compare | `tokens` | `repository_name` / records |
+| `task-token-ranges` | `tokens` | distribution | `tokens` | `repository_name` / conversation |
+| `task-output-ranges` | `tokens` | distribution | `output` | `repository_name` / conversation |
+| `repository-output-share` | `tokens` | compare | `output_share` | `repository_name` / records |
+| `task-effort-token-ranges` | `tokens` | distribution | `tokens` | `effort` / conversation |
+| `task-model-token-ranges` | `tokens` | distribution | `tokens` | `provider_model` / conversation |
+| `task-model-effort-token-ranges` | `tokens` | distribution | `tokens` | `provider_model_effort` / conversation |
+| `repository-delegated-share` | `tokens` | compare | `delegated_share` | `root_repository_name` / records |
+| `delegating-task-share` | `tokens` | compare | `delegating_share` | `root_repository_name` / records |
+| `delegated-run-token-ranges` | `tokens` | distribution | `tokens` | `repository_name` / delegated_run |
+| `machine-time` | `time` | trend | `time` | `activity` / records |
+| `machine-activities` | `time` | compare | `time` | `activity` / records |
+| `machine-operations` | `time` | compare | `time` | `operation_name` / records |
+| `machine-call-trend` | `calls` | trend | `calls` | `none` / records |
+| `machine-latency-trend` | `calls` | trend | `mean_time` | `none` / records |
+| `parallel-days` | `parallelism` | trend | `active_hours` | `level_band` / records |
+| `parallel-trend` | `parallelism` | trend | `at_once` | `none` / records |
+| `parallel-hours` | `parallelism` | cycle | `agent_hours` | `none` / records |
+| `parallel-repositories` | `parallelism` | compare | `agent_hours` | `repository_name` / records |
+| `carbon-trend` | `carbon` | trend | `co2` | `none` / records |
+| `carbon-tiers` | `carbon` | compare | `co2` | `carbon_tier` / records |
+| `carbon-repositories` | `carbon` | compare | `co2` | `repository_name` / records |
+| `carbon-models` | `carbon` | compare | `co2` | `model_family` / records |
+| `carbon-providers` | `carbon` | compare | `co2` | `provider` / records |
+| `carbon-effort` | `carbon` | compare | `co2` | `effort` / records |
+| `findings-open` | Native findings workflow | Query | Saved query | Saved grouping |
+| `findings-fixes` | Native findings workflow | Query | Saved query | Saved grouping |
+| `findings-results` | Native findings workflow | Query | Saved query | Saved grouping |
+| `models-needing-prices` | `tokens` | compare | `tokens` | `model` / records |
+| `token-volume-trend` | `tokens` | trend | `tokens` | `provider` / records |
+| `token-volume-log` | `tokens` | trend | `tokens` | `repository_name` / records |
+| `cumulative-api-cost` | `tokens` | trend | `cost` | `provider` / records |
+| `mcp-call-trend` | `mcp` | trend | `calls` | `tool_name` / records |
+| `human-words-weekday` | `human` | cycle | `typed` | `none` / records |
+| `human-messages-weekday` | `human` | cycle | `typed_messages` | `none` / records |
+| `parallel-active-weekday` | `parallelism` | cycle | `active_hours` | `none` / records |
+| `parallel-weekday` | `parallelism` | cycle | `at_once` | `none` / records |

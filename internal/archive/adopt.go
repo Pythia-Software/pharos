@@ -608,6 +608,7 @@ func adoptedSettings(legacy Config, top map[string]string) (string, []string) {
 		{"io_mbps_ceiling", float(legacy.IOMBPSCeiling)},
 		{"yield_poll_seconds", float(legacy.YieldPollSeconds)},
 		{"capture_snapshot_generations", strconv.Itoa(legacy.CaptureGenerations)},
+		{"capture_compress_after_days", strconv.Itoa(legacy.CaptureCompressAfterDays)},
 	} {
 		if _, ok := top[setting.key]; ok {
 			lines = append(lines, setting.key+" = "+setting.value)

@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -46,7 +47,7 @@ func TestUsageSummaryWindows(t *testing.T) {
 	now := time.Date(2026, 9, 21, 2, 15, 0, 0, time.UTC)
 	catalog.now = func() time.Time { return now }
 	// Keep the authorship rebuild from replacing the rows below.
-	catalog.background = func(func(context.Context)) bool { return false }
+	catalog.background = func(OperationSpec, func(context.Context, *Op) error) bool { return false }
 	for _, message := range []struct {
 		id     string
 		sentAt time.Time
@@ -82,14 +83,14 @@ func TestUsageSummaryWindows(t *testing.T) {
 			t.Fatalf("%s: got %+v, want %+v", key, got, want)
 		}
 	}
-	if len(windows) != 6 {
+	if len(windows) != len(usageSummaryWindows) {
 		t.Fatalf("windows: %#v", windows)
 	}
 }
 
 func TestUsageSummaryLedgerMatchesUsagePage(t *testing.T) {
 	catalog, _ := testCatalog(t)
-	catalog.background = func(func(context.Context)) bool { return false }
+	catalog.background = func(OperationSpec, func(context.Context, *Op) error) bool { return false }
 	for _, item := range []struct {
 		id, source, model string
 		total             int64
@@ -165,14 +166,14 @@ func TestUsageSummaryLedgerMatchesUsagePage(t *testing.T) {
 	}
 	windows := summary["windows"].([]*usageSummaryWindow)
 	// Two 7-token rows and two 11-token rows, each rounded independently.
-	if windows[0].Tokens != 26 || windows[5].Tokens != 236 {
-		t.Fatalf("fractional/mirrored totals: 1h=%d all=%d", windows[0].Tokens, windows[5].Tokens)
+	if windows[0].Tokens != 26 || windows[6].Tokens != 236 {
+		t.Fatalf("fractional/mirrored totals: 1h=%d all=%d", windows[0].Tokens, windows[6].Tokens)
 	}
 }
 
 func TestUsageSummaryEmptyAndCanceled(t *testing.T) {
 	catalog, _ := testCatalog(t)
-	catalog.background = func(func(context.Context)) bool { return false }
+	catalog.background = func(OperationSpec, func(context.Context, *Op) error) bool { return false }
 	summary, err := catalog.UsageSummary(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -191,7 +192,7 @@ func TestUsageSummaryEmptyAndCanceled(t *testing.T) {
 
 func BenchmarkUsageSummary(b *testing.B) {
 	catalog, _ := testCatalog(b)
-	catalog.background = func(func(context.Context)) bool { return false }
+	catalog.background = func(OperationSpec, func(context.Context, *Op) error) bool { return false }
 	catalog.now = func() time.Time { return time.Date(2026, 9, 21, 2, 15, 0, 0, time.UTC) }
 	// Approximately the real catalog's 46,500 hourly ledger entries, with
 	// workspace text large enough to reveal accidental full-record reads.
@@ -214,6 +215,190 @@ func BenchmarkUsageSummary(b *testing.B) {
 	for b.Loop() {
 		if _, err := catalog.UsageSummary(b.Context()); err != nil {
 			b.Fatal(err)
+		}
+	}
+}
+
+func TestUsageSummaryTodayUsesLocalMidnight(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	catalog.background = func(OperationSpec, func(context.Context, *Op) error) bool { return false }
+	ingestUsageFixture(t, catalog)
+	for _, item := range []struct{ zone, now, from string }{
+		{"America/Denver", "2026-03-08T10:00:00Z", "2026-03-08T07:00:00Z"},
+		{"America/Denver", "2026-11-01T10:00:00Z", "2026-11-01T06:00:00Z"},
+		{"Asia/Kathmandu", "2026-10-29T05:00:00Z", "2026-10-28T18:15:00Z"},
+	} {
+		t.Run(item.zone+item.now, func(t *testing.T) {
+			zone, err := time.LoadLocation(item.zone)
+			if err != nil {
+				t.Fatal(err)
+			}
+			override(t, &time.Local, zone)
+			now, _ := time.Parse(time.RFC3339, item.now)
+			from, _ := time.Parse(time.RFC3339, item.from)
+			catalog.now = func() time.Time { return now }
+			if _, err := catalog.DB.Exec("DELETE FROM message_authorship"); err != nil {
+				t.Fatal(err)
+			}
+			for index, at := range []time.Time{from.Add(-time.Second), from, now.Add(-time.Second), now, now.Add(time.Hour)} {
+				if _, err := catalog.DB.Exec(`INSERT INTO message_authorship(message_id,conversation_id,workspace_id,sent_at,day,total_chars,typed_chars,typed_words,spans_json) VALUES(?,?,?,?,?,10,10,2,'[]')`, fmt.Sprint(index), "c", "w", at.UTC().Format(time.RFC3339), at.In(zone).Format("2006-01-02")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			summary, err := catalog.UsageSummary(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, window := range summary["windows"].([]*usageSummaryWindow) {
+				if window.Key != "today" {
+					continue
+				}
+				if window.From != item.from || window.Until != item.now || window.HumanWords != 4 || window.Messages != 2 {
+					t.Fatalf("Today: %+v", window)
+				}
+			}
+		})
+	}
+}
+
+// Calendar periods freeze both boundaries, including DST and zones whose
+// midnight cuts across a UTC usage hour.
+func TestQuickStatsCalendarBounds(t *testing.T) {
+	for _, item := range []struct{ zone, now, key, from, until string }{
+		{"America/Denver", "2026-03-09T08:00:00Z", "yesterday", "2026-03-08T07:00:00Z", "2026-03-09T06:00:00Z"},
+		{"America/Denver", "2026-11-02T08:00:00Z", "yesterday", "2026-11-01T06:00:00Z", "2026-11-02T07:00:00Z"},
+		{"America/Denver", "2026-11-01T10:00:00Z", "week", "2026-10-26T06:00:00Z", "2026-11-01T10:00:00Z"},
+		{"Asia/Kathmandu", "2026-10-29T05:00:00Z", "month", "2026-09-30T18:15:00Z", "2026-10-29T05:00:00Z"},
+	} {
+		t.Run(item.zone+item.now+item.key, func(t *testing.T) {
+			zone, err := time.LoadLocation(item.zone)
+			if err != nil {
+				t.Fatal(err)
+			}
+			override(t, &time.Local, zone)
+			now, _ := time.Parse(time.RFC3339, item.now)
+			from, until := usageSummaryBounds(item.key, 0, now)
+			if from.UTC().Format(time.RFC3339) != item.from || until.UTC().Format(time.RFC3339) != item.until {
+				t.Fatalf("%s: %v – %v", item.key, from, until)
+			}
+		})
+	}
+}
+
+func TestQuickStatsCountsUseEventsAndCanonicalRuns(t *testing.T) {
+	c, config := testCatalog(t)
+	c.background = func(OperationSpec, func(context.Context, *Op) error) bool { return false }
+	c.now = func() time.Time { return time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC) }
+	execTx(t, c.DB,
+		`INSERT INTO repositories(id,display_name,created_at,updated_at) VALUES('repo','Repo','2026-10-30','2026-10-30')`,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,repository_id,indexed_at) VALUES
+ ('native','codex','local','native','Native','repo','2026-10-30'),('mirror','conductor','local','mirror','Mirror','repo','2026-10-30')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth) VALUES
+ ('root','native','codex','local','root',NULL,0),('copy','mirror','codex','local','copy',NULL,0),
+ ('child','native','codex','local','child','root',1),('continued','native','codex','local','continued','root',0),
+ ('missing','native','codex','local','missing',NULL,1)`,
+		`INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('root','copy','mirror',1,'{}')`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash,selected) VALUES
+ ('u','root','u','user','message','pasted text','2026-10-30T11:50:00Z','u',1),
+ ('r','root','r','assistant','message','reply','2026-10-30T11:55:00Z','r',1),
+ ('tool','root','tool','assistant','tool_call','','2026-10-30T11:56:00Z','t',1),
+ ('sys','root','sys','system','message','','2026-10-30T11:56:00Z','s',1),
+ ('hidden','root','hidden','assistant','message','','2026-10-30T11:56:00Z','h',0),
+ ('cp','copy','cp','user','message','mirror','2026-10-30T11:50:00Z','c',1),
+ ('cu','child','cu','user','message','delegation prompt','2026-10-30T11:52:00Z','cu',1),
+ ('cr','child','cr','assistant','message','child reply','2026-10-30T11:54:00Z','cr',1),
+ ('co','continued','co','assistant','message','continued reply','2026-10-30T11:59:00Z','co',1),
+ ('old','root','old','user','message','yesterday','2026-10-29T11:50:00Z','o',1),
+ ('future','root','future','user','message','future','2026-10-30T12:00:00Z','f',1),
+ ('unknown','missing','unknown','assistant','message','unknown root','2026-10-30T11:59:00Z','x',1),
+ ('embedded-prompt','root','embedded-prompt','user','message','embedded agent prompt','2026-10-30T11:55:00Z','ep',1)`,
+		`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider,child_conversation_id,started_at) VALUES
+ ('main','native','root','main','root','codex',NULL,'2026-10-30T11:50:00Z'),
+ ('handle','native','root','handle','subagent','codex','child','2026-10-30T11:52:00Z'),
+ ('child-main','native','child','main','root','codex',NULL,'2026-10-30T11:52:00Z'),
+ ('embedded','native','root','embedded','subagent','codex',NULL,'2026-10-30T11:55:00Z')`,
+		`INSERT INTO agent_session_messages(agent_session_id,message_id,source_order) VALUES('embedded','embedded-prompt',0)`,
+		`INSERT INTO tool_calls(id,workspace_id,conversation_id,agent_session_id,sequence,provider,kind,tool_name,tool_category,started_at,status,duration_ms) VALUES
+ ('one','native','root','main',1,'codex','tool_call','shell','command','2026-10-30T11:53:00Z','error',500),
+ ('two','native','child','child-main',2,'codex','tool_call','shell','command','2026-10-30T11:59:00Z','success',NULL),
+ ('dup','mirror','copy',NULL,1,'codex','tool_call','shell','command','2026-10-30T11:53:00Z','error',9999)`)
+	s, err := c.UsageSummary(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = c.addQuickStatsCounts(t.Context(), s); err != nil {
+		t.Fatal(err)
+	}
+	var hour, yesterday, five *usageSummaryWindow
+	for _, w := range s["windows"].([]*usageSummaryWindow) {
+		if w.Key == "1h" {
+			hour = w
+		}
+		if w.Key == "yesterday" {
+			yesterday = w
+		}
+		if w.Key == "5m" {
+			five = w
+		}
+	}
+	q := hour.quickStatsCounts
+	// The unknown child contributes its observed reply but cannot invent a root.
+	if q.Conversations != 1 || q.Messages != 7 || q.UserMessages != 1 || q.Replies != 4 || q.ToolCalls != 2 || q.FailedCalls != 1 || q.DelegatedRuns != 2 || q.Repositories != 1 || q.TimedCalls != 1 || q.ToolTime == nil || *q.ToolTime != 500 || q.FailureRate == nil || *q.FailureRate != 50 {
+		t.Fatalf("counts: %+v", q)
+	}
+	if yesterday.quickStatsCounts.Messages != 1 {
+		t.Fatalf("yesterday: %+v", yesterday.quickStatsCounts)
+	}
+	if five.quickStatsCounts.ToolCalls != 1 || five.ToolTime != nil {
+		t.Fatalf("untimed calls: %+v", five.quickStatsCounts)
+	}
+	if yesterday.ToolTime == nil || *yesterday.ToolTime != 0 || yesterday.FailureRate != nil {
+		t.Fatalf("no calls: %+v", yesterday.quickStatsCounts)
+	}
+
+	// The HTTP response opts into the same totals; default and native callers
+	// do not acquire the additional record aggregation.
+	server := testServer(t, config, c)
+	payload := libraryStatusCall(t, server, "/api/usage/summary?details=1")
+	if len(payload["windows"].([]any)) != len(usageSummaryWindows) {
+		t.Fatalf("windows: %#v", payload)
+	}
+	wire := payload["windows"].([]any)[0].(map[string]any)
+	if wire["message_count"] != float64(7) || wire["messages"] != float64(0) {
+		t.Fatalf("message contracts: %#v", wire)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := c.addQuickStatsCounts(ctx, s); err != context.Canceled {
+		t.Fatalf("cancel: %v", err)
+	}
+}
+
+func TestQuickStatsShortUsageUsesObservedHour(t *testing.T) {
+	c, _ := testCatalog(t)
+	c.background = func(OperationSpec, func(context.Context, *Op) error) bool { return false }
+	ingestUsageFixture(t, c)
+	c.now = func() time.Time { return time.Date(2026, 9, 21, 1, 30, 0, 0, time.UTC) }
+	s, err := c.UsageSummary(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]int64{"5m": 338, "15m": 1015, "1h": 2030}
+	for _, w := range s["windows"].([]*usageSummaryWindow) {
+		if n, ok := want[w.Key]; ok && w.Tokens != n {
+			t.Fatalf("%s: %d, want %d", w.Key, w.Tokens, n)
+		}
+	}
+	override(t, &time.Local, time.UTC)
+	c.now = func() time.Time { return time.Date(2026, 9, 22, 7, 0, 0, 0, time.UTC) }
+	s, err = c.UsageSummary(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range s["windows"].([]*usageSummaryWindow) {
+		if w.Key == "yesterday" && w.Tokens != 2030 {
+			t.Fatalf("yesterday: %+v", w)
 		}
 	}
 }

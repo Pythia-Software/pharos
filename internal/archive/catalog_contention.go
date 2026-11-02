@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"modernc.org/sqlite"
@@ -67,6 +68,9 @@ type catalogWriteTracker struct {
 	active map[uint64]catalogWriter
 	recent []string
 	gate   chan struct{}
+	// waiting counts writers blocked in acquireWriteGate, so the journal's
+	// low-priority lane can give the gate back to them (§6.2).
+	waiting atomic.Int32
 }
 
 // acquireWriteGate queues this process's tracked writers for the catalog
@@ -87,9 +91,44 @@ func (c *Catalog) acquireWriteGate(ctx context.Context) (func(), error) {
 	select {
 	case gate <- struct{}{}:
 		return func() { <-gate }, nil
+	default:
+	}
+	tracker.waiting.Add(1)
+	defer tracker.waiting.Add(-1)
+	select {
+	case gate <- struct{}{}:
+		return func() { <-gate }, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+// tryWriteGate takes the writer gate only if it is free at once: the
+// journal's low-priority lane never queues ahead of real work.
+func (c *Catalog) tryWriteGate() (func(), bool) {
+	tracker := &c.writers
+	tracker.mu.Lock()
+	if tracker.gate == nil {
+		tracker.gate = make(chan struct{}, 1)
+	}
+	gate := tracker.gate
+	tracker.mu.Unlock()
+	select {
+	case gate <- struct{}{}:
+		return func() { <-gate }, true
+	default:
+		return nil, false
+	}
+}
+
+// writersWaiting reports tracked writers queued for the gate.
+func (c *Catalog) writersWaiting() bool { return c.writers.waiting.Load() > 0 }
+
+// writerActive reports a tracked write transaction in flight in this process.
+func (c *Catalog) writerActive() bool {
+	c.writers.mu.Lock()
+	defer c.writers.mu.Unlock()
+	return len(c.writers.active) > 0
 }
 
 func (c *Catalog) trackWriter(label string) func() {

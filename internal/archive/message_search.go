@@ -115,11 +115,12 @@ func (c *Catalog) pendingMessageSearch(ctx context.Context) (int64, error) {
 }
 
 // repairMessageSearch refreshes only envelope postings whose lexical form has
-// changed. It never modifies canonical text, raw evidence or message identity.
+// changed. It never modifies canonical text, raw evidence or message identity,
+// and never indexes tool output (see wordIndexedKind).
 func repairMessageSearch(ctx context.Context, tx *sql.Tx, conversation string) error {
 	rows, err := queryMapsContext(ctx, tx, `SELECT m.id FROM messages m
 	 LEFT JOIN message_fts_rows r ON r.message_id=m.id LEFT JOIN messages_fts f ON f.rowid=r.fts_rowid
-	 WHERE m.conversation_id=? AND m.kind IN ('tool_call','tool_result','delegation','delegation_result','context')
+	 WHERE m.conversation_id=? AND m.kind IN ('tool_call','tool_result','delegation','delegation_result','context') AND `+wordIndexedKind("m.")+`
 	 AND m.text<>'' AND pharos_lexical_text(m.kind,m.text) IS NOT f.text`, conversation)
 	if err != nil {
 		return err

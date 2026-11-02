@@ -63,7 +63,13 @@ func (a *antigravityAdapter) requests(id string) (map[int64]antigravityRequest, 
 		}
 		return nil, err
 	}
-	db, err := openReadOnlySQLite(path)
+	// An idle conversation's database may be stored compressed: decoded into
+	// the reader's lease when its conversation is parsed (phase 3).
+	readable, err := a.files().Database(path)
+	if err != nil {
+		return nil, err
+	}
+	db, err := openReadOnlySQLite(readable)
 	if err != nil {
 		return nil, err
 	}

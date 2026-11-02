@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -205,20 +207,48 @@ func TestAskConversationPersistenceAndSelection(t *testing.T) {
 	s := askTestServer(t)
 	askEnable(t, s)
 	calls := 0
+	pageURI := "/analyze?analyze_topic=tokens&private_view=retainedscope"
 	override(t, &askRunCLI, func(ctx context.Context, p askProvider, selection askSelection, prompt string) ([]byte, error) {
 		calls++
+		_, raw, _ := strings.Cut(prompt, "Context JSON:\n")
+		var data struct {
+			Conversation []struct {
+				CurrentURI   string    `json:"currentURI"`
+				Destinations []askCard `json:"destinations"`
+			} `json:"conversation"`
+		}
+		if err := json.Unmarshal([]byte(raw), &data); err != nil || len(data.Conversation) == 0 || data.Conversation[0].CurrentURI != pageURI {
+			t.Errorf("current page context missing from CLI conversation: %+v %v", data, err)
+		}
+		if calls > 1 && (len(data.Conversation) < 2 || len(data.Conversation[0].Destinations) != 2 || data.Conversation[0].Destinations[0].Href != "/analyze" || data.Conversation[0].Destinations[0].Title != "Review recorded model usage") {
+			t.Errorf("follow-up lost the earlier destination URLs: %+v", data.Conversation)
+		}
 		if strings.Contains(prompt, s.Config().APIToken) {
 			t.Error("passed service token to CLI")
 		}
 		var response askAgentResponse
-		_ = json.Unmarshal(askReply("slow-commands", "findings"), &response)
+		_ = json.Unmarshal(askReply("analyze", "findings"), &response)
+		response.Destinations[0].Title = "Review recorded model usage"
+		response.Destinations[1].Title = "Find recurring agent failures"
 		response.Message = fmt.Sprintf("Navigation reply %d", calls)
 		return []byte(jsonText(response)), nil
 	})
-	askOK(t, s, "send", askInput())
+	for _, uri := range []string{"https://elsewhere.test/", "//elsewhere.test/", "/api/status", "/analyze?token=secret"} {
+		invalid := askInput()
+		invalid["currentURI"] = uri
+		if r := askCall(t, s, http.MethodPost, "send", invalid); r.Code == 200 {
+			t.Fatalf("accepted unsafe context %q", uri)
+		}
+	}
+	input := askInput()
+	input["currentURI"] = pageURI
+	askOK(t, s, "send", input)
 	session, err := s.askSession(t.Context(), "chat-1")
 	if err != nil || len(session.Conversation) != 1 || len(session.Conversation[0].Cards) != 2 {
 		t.Fatalf("session: %+v %v", session, err)
+	}
+	if session.Conversation[0].CurrentURI != pageURI {
+		t.Fatal("page context was not persisted")
 	}
 	if session.Conversation[0].Cards[0].Href == "" || session.Conversation[0].ModelLabel != "Test Model" {
 		t.Fatal("missing route or model identity")
@@ -264,11 +294,14 @@ func TestAskConversationPersistenceAndSelection(t *testing.T) {
 	if err != nil || len(got.Conversation) != 2 || got.Draft != "Keep this draft" {
 		t.Fatalf("restart lost chat: %+v %v", got, err)
 	}
+	if got.Conversation[0].Cards[0].Title != "Review recorded model usage" || got.Conversation[0].Cards[1].Title != "Find recurring agent failures" {
+		t.Fatalf("restart lost contextual destination names: %+v", got.Conversation[0].Cards)
+	}
 	summaries, err := s.askSessions(t.Context(), "wasting", 0)
 	if err != nil || len(summaries) != 1 || summaries[0].QuestionCount != 2 || len(summaries[0].Conversation) != 1 {
 		t.Fatalf("history summaries: %+v %v", summaries, err)
 	}
-	for _, query := range []string{"retries", "Navigation reply 2", "Explore the recorded evidence"} {
+	for _, query := range []string{"retries", "Navigation reply 2", "Explore the recorded evidence", "Review recorded model usage"} {
 		matches, err := s.askSessions(t.Context(), query, 0)
 		if err != nil || len(matches) != 1 || matches[0].ID != session.ID {
 			t.Fatalf("full-text history match %q missing: %+v %v", query, matches, err)
@@ -277,6 +310,10 @@ func TestAskConversationPersistenceAndSelection(t *testing.T) {
 	found, searchErr := s.Catalog.Search(SearchOptions{Query: "wasting", Limit: 10, ctx: t.Context()})
 	if searchErr != nil || len(found["items"].([]map[string]any)) != 1 {
 		t.Fatalf("chat missing from general search: %v %v", found, searchErr)
+	}
+	var contextCount int
+	if err = s.Catalog.reader().QueryRow("SELECT COUNT(*) FROM messages WHERE text LIKE '%retainedscope%'").Scan(&contextCount); err != nil || contextCount != 0 {
+		t.Fatalf("private page context entered archive: %d %v", contextCount, err)
 	}
 	var count int
 	if err = s.Catalog.reader().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH ?", `"wasting"`).Scan(&count); err != nil || count != 1 {
@@ -345,6 +382,10 @@ func TestAskPrivateVisitsAndChats(t *testing.T) {
 	if strings.Contains(jsonText(result), secret) {
 		t.Fatal("retention did not remove old visit")
 	}
+	// The agent compares browse_site's pages with the site map pages seen.
+	if pages := result.(map[string]any)["seenPages"].([]string); !slices.Contains(pages, "findings") {
+		t.Fatalf("seen pages %v", pages)
+	}
 	// No visit metadata enters indexed messages or generic UI preferences.
 	var count int
 	if err = s.Catalog.reader().QueryRow("SELECT COUNT(*) FROM messages_fts").Scan(&count); err != nil || count != 0 {
@@ -395,7 +436,9 @@ func TestAskCancelAndDisable(t *testing.T) {
 				<-ctx.Done()
 				return nil, ctx.Err()
 			})
-			go func() { done <- askCall(t, s, http.MethodPost, "send", askInput()) }()
+			input := askInput()
+			input["currentURI"] = "/analyze?analyze_topic=tokens"
+			go func() { done <- askCall(t, s, http.MethodPost, "send", input) }()
 			select {
 			case <-started:
 			case <-time.After(5 * time.Second):
@@ -417,6 +460,26 @@ func TestAskCancelAndDisable(t *testing.T) {
 			session, err := s.askSession(t.Context(), "chat-1")
 			if err != nil || session.Conversation[0].Status != "canceled" {
 				t.Fatalf("canceled state: %+v %v", session, err)
+			}
+			if action == "cancel" {
+				// Cancellation may have changed the finished copy while it was saving.
+				if pending, err := s.saveFinishedAsk("chat-1"); pending || err != nil {
+					t.Fatalf("finish canceled save: %v", err)
+				}
+				override(t, &askRunCLI, func(_ context.Context, _ askProvider, _ askSelection, prompt string) ([]byte, error) {
+					if !strings.Contains(prompt, jsonText(input["currentURI"])) {
+						t.Error("retry lost original page context")
+					}
+					return askReply("findings"), nil
+				})
+				retry := askInput()
+				retry["retry"] = true
+				retry["currentURI"] = "/library"
+				askOK(t, s, "send", retry)
+				session, err = s.askSession(t.Context(), "chat-1")
+				if err != nil || len(session.Conversation) != 1 || session.Conversation[0].CurrentURI != input["currentURI"] {
+					t.Fatalf("retry context: %+v %v", session, err)
+				}
 			}
 		})
 	}
@@ -547,25 +610,34 @@ func TestAskSavesAnswerPastABusyCatalog(t *testing.T) {
 }
 
 func TestAskModelCatalogs(t *testing.T) {
-	raw := json.RawMessage(`{"data":[{"model":"available-model","displayName":"Available Model","isDefault":true,"supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"}]}],"nextCursor":null}`)
+	raw := json.RawMessage(`{"data":[{"model":"available-model","displayName":"Available Model","isDefault":true,"supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"}],"serviceTiers":[{"id":"priority","name":"Fast"}],"additionalSpeedTiers":["fast"]},{"model":"standard-model","displayName":"Standard Model","supportedReasoningEfforts":[],"serviceTiers":[]},{"model":"speed-tier-model","displayName":"Speed Tier Model","supportedReasoningEfforts":[],"additionalSpeedTiers":["fast"]}],"nextCursor":null}`)
 	models, err := askCodexModels(raw)
-	if err != nil || len(models) != 1 || !askValidSelection(askProvider{Models: models}, askSelection{Model: "available-model", Effort: "High"}) {
+	if err != nil || len(models) != 3 || !askValidSelection(askProvider{Models: models}, askSelection{Model: "available-model", Effort: "High"}) {
 		t.Fatalf("models: %+v %v", models, err)
 	}
 	if askValidSelection(askProvider{Models: models}, askSelection{Model: "invented", Effort: "High"}) {
 		t.Fatal("invented model accepted")
 	}
+	if !models[0].Fast || models[0].fastTier != "priority" || !askValidSelection(askProvider{Models: models}, askSelection{Model: "available-model", Effort: "High", Fast: true}) {
+		t.Fatalf("fast tier not offered: %+v", models[0])
+	}
+	if models[1].Fast || askValidSelection(askProvider{Models: models}, askSelection{Model: "standard-model", Effort: "Default", Fast: true}) {
+		t.Fatal("fast accepted for a model without a fast tier")
+	}
+	if !models[2].Fast || models[2].fastTier != "fast" {
+		t.Fatalf("a catalog listing only the fast speed tier: %+v", models[2])
+	}
 	agy := askAGYModels("Fetching models...\nmodel-low\tModel (Low)\nmodel-high\tModel (High)\n")
 	if len(agy) != 1 || len(agy[0].Efforts) != 3 {
 		t.Fatalf("agy: %+v", agy)
 	}
-	cards, err := askDestinations()
-	if err != nil || len(cards) < 20 {
-		t.Fatalf("catalog: %d %v", len(cards), err)
-	}
-	for _, card := range cards {
+	for _, card := range askSections() {
 		if !askSafeURL(card.Href) {
-			t.Errorf("invalid destination %s", card.ID)
+			t.Errorf("invalid section %s", card.ID)
+		}
+		// The same page reached by url gets the same kind.
+		if byURL, err := askSiteCard(t.Context(), card.Href); err != nil || byURL.Kind != card.Kind {
+			t.Errorf("section %s (%s) by url: %+v %v", card.ID, card.Kind, byURL, err)
 		}
 	}
 }
@@ -668,6 +740,11 @@ func TestAskInstalledCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := testServer(t, config, catalog)
+	var activity []string
+	provider.progress = func(message string) {
+		activity = append(activity, message)
+		t.Logf("activity: %s", message)
+	}
 	session := askSession{Selection: askSelection{Provider: name, Model: model.ID, Effort: effort}, Conversation: []askTurn{{Prompt: "First call list_repositories through the Pharos MCP server (pharos-ask for Antigravity, pharos otherwise), then show me Pharos settings. Use the catalog for the destination; do not request a private lookup."}}}
 	answer, err := server.answerAsk(ctx, provider, session, "America/Denver")
 	if err != nil {
@@ -679,6 +756,9 @@ func TestAskInstalledCLI(t *testing.T) {
 	var calls int
 	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM mcp_calls WHERE tool_name='list_repositories' AND status='ok'").Scan(&calls); err != nil || calls == 0 {
 		t.Fatalf("agent did not successfully use Pharos MCP: calls=%d, err=%v", calls, err)
+	}
+	if !slices.ContainsFunc(activity, func(message string) bool { return strings.HasPrefix(message, "Reading repositories") }) {
+		t.Fatalf("CLI used Pharos MCP without reporting tool activity: %v", activity)
 	}
 	t.Logf("%s · %s · %s -> %s", name, model.Label, effort, answer.Cards[0].Title)
 }
@@ -715,9 +795,101 @@ func TestAskNativeContextNeverEntersGeneralArchive(t *testing.T) {
 		t.Fatalf("ordinary ingestion changed: %d %v", count, err)
 	}
 }
+
+// The picker answers from the models found in the background: enabling Ask
+// and starting the service discover them, and a stale list is refreshed
+// behind an answer from the old one, which a failed refresh keeps.
+func TestAskModelsRefreshInBackground(t *testing.T) {
+	s := askTestServer(t)
+	var calls atomic.Int32
+	entered, gate := make(chan struct{}), make(chan error)
+	override(t, &askDiscoverModels, func(ctx context.Context, p askProvider) ([]askModel, error) {
+		n := calls.Add(1)
+		if n > 1 {
+			entered <- struct{}{}
+			if err := <-gate; err != nil {
+				return nil, err
+			}
+		}
+		return []askModel{{ID: fmt.Sprintf("model-%d", n), Label: "Model", Efforts: []string{"Default"}, Default: true}}, nil
+	})
+	refreshing := func() {
+		t.Helper()
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("no refresh started")
+		}
+	}
+	settle := func(s *Server) {
+		t.Helper()
+		s.ask.mu.Lock()
+		d := s.ask.discovering["Codex"]
+		s.ask.mu.Unlock()
+		if d == nil {
+			return
+		}
+		select {
+		case <-d.done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("discovery did not finish")
+		}
+	}
+	models := func() string {
+		t.Helper()
+		r := askCall(t, s, http.MethodGet, "models?provider=Codex", nil)
+		if r.Code != 200 {
+			t.Fatalf("models: %d %s", r.Code, r.Body.String())
+		}
+		var p askProvider
+		if err := json.Unmarshal(r.Body.Bytes(), &p); err != nil || len(p.Models) != 1 {
+			t.Fatalf("models: %s %v", r.Body.String(), err)
+		}
+		return p.Models[0].ID
+	}
+	age := func(by time.Duration) {
+		s.ask.mu.Lock()
+		defer s.ask.mu.Unlock()
+		cached := s.ask.models["Codex"]
+		cached.checkedAt = cached.checkedAt.Add(-by)
+		s.ask.models["Codex"] = cached
+	}
+	askEnable(t, s)
+	settle(s)
+	if got := models(); got != "model-1" || calls.Load() != 1 {
+		t.Fatalf("enabling did not discover models ahead of the picker: %s after %d discoveries", got, calls.Load())
+	}
+	age(askModelsTTL)
+	if got := models(); got != "model-1" {
+		t.Fatalf("a stale list was not answered at once: %s", got)
+	}
+	refreshing()
+	gate <- nil
+	settle(s)
+	if got := models(); got != "model-2" {
+		t.Fatalf("refresh did not replace the list: %s", got)
+	}
+	age(askModelsTTL)
+	models()
+	refreshing()
+	gate <- fmt.Errorf("not authenticated")
+	settle(s)
+	if got := models(); got != "model-2" || calls.Load() != 3 {
+		t.Fatalf("a failed refresh lost the list or retried at once: %s after %d discoveries", got, calls.Load())
+	}
+	restarted := testServer(t, s.Config(), s.Catalog)
+	restarted.warmAskModelsOnStart()
+	refreshing()
+	gate <- nil
+	settle(restarted)
+	restarted.ask.mu.Lock()
+	defer restarted.ask.mu.Unlock()
+	if got := restarted.ask.models["Codex"].Models; len(got) != 1 || got[0].ID != "model-4" {
+		t.Fatalf("starting with Ask enabled did not discover models: %+v", got)
+	}
+}
 func TestAskDisableInterruptsModelDiscovery(t *testing.T) {
 	s := askTestServer(t)
-	askEnable(t, s)
 	started := make(chan struct{})
 	done := make(chan *httptest.ResponseRecorder, 1)
 	override(t, &askDiscoverModels, func(ctx context.Context, p askProvider) ([]askModel, error) {
@@ -725,6 +897,7 @@ func TestAskDisableInterruptsModelDiscovery(t *testing.T) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	})
+	askEnable(t, s)
 	go func() { done <- askCall(t, s, http.MethodGet, "models?provider=Codex", nil) }()
 	select {
 	case <-started:
@@ -837,8 +1010,12 @@ func TestAskCLIConnections(t *testing.T) {
 	for _, name := range []string{"Codex", "Claude", "Antigravity"} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			provider := askProvider{ID: name, path: "/test/cli", mcp: want}
+			provider := askProvider{ID: name, path: "/test/cli", mcp: want, Models: []askModel{{ID: "test-model", Efforts: []string{"Default", "Low"}, Fast: name != "Antigravity", fastTier: map[string]string{"Codex": "priority"}[name]}}}
 			cmd, err := askPrepareCLI(t.Context(), provider, askSelection{Provider: name, Model: "test-model", Effort: "Low"}, dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fast, err := askPrepareCLI(t.Context(), provider, askSelection{Provider: name, Model: "test-model", Effort: "Low", Fast: true}, t.TempDir())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -871,8 +1048,11 @@ func TestAskCLIConnections(t *testing.T) {
 				if err := json.Unmarshal([]byte(config["mcp_servers.pharos.args"]), &got.Args); err != nil {
 					t.Fatal(err)
 				}
-				if config["mcp_servers.pharos.required"] != "true" || config["features.shell_tool"] != "false" || flag("--sandbox") != "read-only" || cmd.Args[len(cmd.Args)-1] != "-" {
+				if config["mcp_servers.pharos.required"] != "true" || config["mcp_servers.pharos.default_tools_approval_mode"] != `"approve"` || config["features.shell_tool"] != "false" || flag("--sandbox") != "read-only" || cmd.Args[len(cmd.Args)-1] != "-" {
 					t.Fatalf("missing required MCP startup or sandbox: %v", cmd.Args)
+				}
+				if slices.ContainsFunc(cmd.Args, func(arg string) bool { return strings.HasPrefix(arg, "service_tier=") }) || !slices.Contains(fast.Args, `service_tier="priority"`) || fast.Args[len(fast.Args)-1] != "-" {
+					t.Fatalf("fast tier: %v / %v", cmd.Args, fast.Args)
 				}
 			case "Claude":
 				var config struct {
@@ -884,6 +1064,16 @@ func TestAskCLIConnections(t *testing.T) {
 				got = config.Servers["pharos"]
 				if len(config.Servers) != 1 || flag("--allowedTools") != "mcp__pharos" || flag("--tools") != "" || flag("--permission-mode") != "dontAsk" || !slices.Contains(cmd.Args, "--strict-mcp-config") {
 					t.Fatalf("missing scoped MCP permissions: %v", cmd.Args)
+				}
+				settings := func(args []string) (value struct{ DisableAllHooks, FastMode bool }) {
+					t.Helper()
+					if err := json.Unmarshal([]byte(args[slices.Index(args, "--settings")+1]), &value); err != nil {
+						t.Fatal(err)
+					}
+					return value
+				}
+				if plain, fast := settings(cmd.Args), settings(fast.Args); !plain.DisableAllHooks || plain.FastMode || !fast.DisableAllHooks || !fast.FastMode {
+					t.Fatalf("fast mode settings: %+v / %+v", plain, fast)
 				}
 			case "Antigravity":
 				agent, err := os.ReadFile(filepath.Join(dir, ".agents", "agents", "pharos-navigation.md"))
@@ -986,5 +1176,556 @@ func TestAskViewIdentityRetainsQueryState(t *testing.T) {
 	}
 	if askViewKey("/analyze?repo=pharos") == askViewKey("/analyze?repo=other") {
 		t.Fatal("different filters became the same visited view")
+	}
+}
+
+// A destination is a section or lookup id, or a link the site map reads back:
+// the card carries the canonical link, its title and its summary.
+func TestAskSiteLinkDestinations(t *testing.T) {
+	s := askTestServer(t)
+	site, cases := testSiteMap(t), readSiteCases(t)
+	example, _ := url.Parse(cases.Example.URL)
+	state, err := siteLinkFromURL(cases.Example.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := site.build(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := func(destinations ...map[string]string) func(context.Context, askProvider, askSelection, string) ([]byte, error) {
+		return func(context.Context, askProvider, askSelection, string) ([]byte, error) {
+			return []byte(jsonText(map[string]any{"message": "This view shows it.", "destinations": destinations, "lookup": askLookup{Kind: "none"}, "clarification": nil})), nil
+		}
+	}
+	// The same link in another parameter order, or on this computer's origin,
+	// is the same card.
+	for _, given := range []string{cases.Example.URL, example.Path + "?" + example.Query().Encode(), "http://127.0.0.1:8765" + cases.Example.URL} {
+		override(t, &askRunCLI, reply(map[string]string{"id": "", "url": given, "description": ""}, map[string]string{"id": "", "url": canonical, "description": "The same view again."}))
+		answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC")
+		if err != nil {
+			t.Fatalf("%s: %v", given, err)
+		}
+		if len(answer.Cards) != 1 {
+			t.Fatalf("%s: the same view twice gave %d cards", given, len(answer.Cards))
+		}
+		card := answer.Cards[0]
+		if card.Href != canonical || card.Title != site.title(state) || card.Description != site.summary(state) || card.Kind != "Analyze" || !askSafeURL(card.Href) {
+			t.Fatalf("%s: card %+v, want %s", given, card, canonical)
+		}
+	}
+	override(t, &askRunCLI, reply(map[string]string{"id": "", "url": canonical, "description": "Opus tokens by model."}))
+	if answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC"); err != nil || answer.Cards[0].Description != "Opus tokens by model." {
+		t.Fatalf("the agent's description was not kept: %+v %v", answer, err)
+	}
+	// Two windows of the same view have the same generated title. Keep the
+	// agent's contextual names while still resolving each link through the map.
+	destinations := []map[string]string{}
+	for _, days := range []int{7, 30} {
+		state, err := site.linkFromArgs(map[string]any{"page": "analyze/tokens", "days": days})
+		if err != nil {
+			t.Fatal(err)
+		}
+		link, err := site.build(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		destinations = append(destinations, map[string]string{"id": "", "url": link, "title": fmt.Sprintf("Tokens over the last %d days", days), "description": "Compare token volume across time windows."})
+	}
+	override(t, &askRunCLI, reply(destinations...))
+	answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC")
+	if err != nil || len(answer.Cards) != 2 {
+		t.Fatalf("distinct windows: %+v %v", answer, err)
+	}
+	for i, card := range answer.Cards {
+		if card.Title != destinations[i]["title"] || card.Href != destinations[i]["url"] || card.Kind != "Analyze" {
+			t.Fatalf("contextual destination %d: %+v", i, card)
+		}
+	}
+	for _, title := range []string{"", " \n "} {
+		override(t, &askRunCLI, reply(map[string]string{"id": "", "url": canonical, "title": title, "description": ""}))
+		if answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC"); err != nil || answer.Cards[0].Title != site.title(state) {
+			t.Fatalf("blank title should use the view title: %+v %v", answer, err)
+		}
+	}
+	with := func(change func(url.Values)) string {
+		values := example.Query()
+		change(values)
+		return example.Path + "?" + values.Encode()
+	}
+	for name, destination := range map[string]map[string]string{
+		"malformed URL":      {"id": "", "url": "/analyze?analyze_mode=%zz"},
+		"control separators": {"id": "", "url": strings.ReplaceAll(canonical, "&", "\x1f")},
+		"unknown parameter":  {"id": "", "url": with(func(v url.Values) { v.Set("colour", "red") })},
+		"coercible state":    {"id": "", "url": with(func(v url.Values) { v.Set("analyze_chart", `{"v":2,"view":"trend","metric":"cost","split":"type"}`) })},
+		"Ask chat":           {"id": "", "url": "/?ask_chat=chat-1"},
+		"other site":         {"id": "", "url": "https://example.com/analyze"},
+		"both":               {"id": "analyze", "url": canonical},
+		"neither":            {"id": " ", "url": ""},
+		"unknown id":         {"id": "nope", "url": ""},
+		"long description":   {"id": "analyze", "url": "", "description": strings.Repeat("x", 1001)},
+		"long title":         {"id": "analyze", "url": "", "title": strings.Repeat("x", 301)},
+	} {
+		if _, given := destination["description"]; !given {
+			destination["description"] = ""
+		}
+		calls := 0
+		invalidReply := reply(destination)
+		override(t, &askRunCLI, func(ctx context.Context, p askProvider, selection askSelection, prompt string) ([]byte, error) {
+			calls++
+			if calls > 2 {
+				t.Fatal("invalid destinations caused repeated correction attempts")
+			}
+			return invalidReply(ctx, p, selection, prompt)
+		})
+		if answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC"); err == nil || !strings.HasSuffix(err.Error(), "try again") {
+			t.Errorf("%s: %+v accepted: %+v %v", name, destination, answer, err)
+		}
+		if calls != 2 {
+			t.Errorf("%s: got %d calls, want one correction attempt", name, calls)
+		}
+		// Beside a destination Pharos can open, it is only left out.
+		calls = 0
+		mixedReply := reply(destination, map[string]string{"id": "", "url": canonical, "description": ""})
+		override(t, &askRunCLI, func(ctx context.Context, p askProvider, selection askSelection, prompt string) ([]byte, error) {
+			calls++
+			return mixedReply(ctx, p, selection, prompt)
+		})
+		if answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC"); err != nil || len(answer.Cards) != 1 || answer.Cards[0].Href != canonical || answer.Omitted != 1 {
+			t.Errorf("%s beside a valid link: %+v %v", name, answer, err)
+		}
+		if calls != 1 {
+			t.Errorf("%s: retried a response with a valid destination", name)
+		}
+	}
+}
+
+func TestAskCorrectsInvalidDestinations(t *testing.T) {
+	for _, lookups := range []int{0, 2} {
+		t.Run(fmt.Sprintf("after %d private lookups", lookups), func(t *testing.T) {
+			s := askTestServer(t)
+			askEnable(t, s)
+			calls, link, broken := 0, "", ""
+			message := "Explore your parallelism over the last seven days."
+			override(t, &askRunCLI, func(ctx context.Context, p askProvider, selection askSelection, prompt string) ([]byte, error) {
+				calls++
+				_, raw, _ := strings.Cut(prompt, "Context JSON:\n")
+				var data struct {
+					LookupsRemaining     int               `json:"lookupsRemaining"`
+					PrivateLookupResults []json.RawMessage `json:"privateLookupResults"`
+					Correction           *struct {
+						Response askAgentResponse `json:"response"`
+						Errors   []string         `json:"errors"`
+					} `json:"destinationCorrection"`
+				}
+				if err := json.Unmarshal([]byte(raw), &data); err != nil {
+					t.Fatal(err)
+				}
+				if calls <= lookups {
+					if data.LookupsRemaining != 3-calls || data.Correction != nil {
+						t.Fatalf("incorrect lookup context: %+v", data)
+					}
+					return []byte(jsonText(askAgentResponse{Lookup: askLookup{Kind: []string{"visits", "chats"}[calls-1]}})), nil
+				}
+				if calls > lookups+2 {
+					t.Fatal("correction was not bounded")
+				}
+				if calls == lookups+2 {
+					if data.Correction == nil || data.Correction.Response.Message != message || len(data.Correction.Response.Destinations) != 1 || data.Correction.Response.Destinations[0].URL != broken || len(data.Correction.Errors) != 1 || !strings.Contains(data.Correction.Errors[0], "invalid control character") {
+						t.Fatalf("missing failed response or useful validation error: %+v", data.Correction)
+					}
+					if data.LookupsRemaining != 2-lookups || len(data.PrivateLookupResults) != lookups {
+						t.Fatalf("correction lost or consumed private lookups: %+v", data)
+					}
+				} else if data.Correction != nil {
+					t.Fatal("correction present before an invalid response")
+				}
+				value, _, err := callSiteMCP(ctx, s.Catalog, "site_link", map[string]any{
+					"page": "analyze/parallelism", "days": 7,
+					"options": map[string]any{"view": "trend", "metric": "agent_hours", "split": "level_band"},
+				})
+				if err != nil {
+					return nil, err
+				}
+				link = value.(map[string]any)["url"].(string)
+				given := link
+				if calls == lookups+1 {
+					broken = strings.ReplaceAll(link, "&", "\x1f")
+					given = broken
+				}
+				return []byte(jsonText(map[string]any{"message": message, "destinations": []map[string]string{{"id": "", "url": given, "description": ""}}, "lookup": askLookup{Kind: "none"}})), nil
+			})
+			input := askInput()
+			input["prompt"] = "Can you tell me a bit about my recent parallelism?"
+			askOK(t, s, "send", input)
+			session, err := s.askSession(t.Context(), "chat-1")
+			if err != nil || len(session.Conversation) != 1 {
+				t.Fatalf("session: %+v %v", session, err)
+			}
+			turn := session.Conversation[0]
+			if calls != lookups+2 || turn.Status != "single" || turn.Reply != message || len(turn.Cards) != 1 || turn.Cards[0].Href != link || turn.Omitted != 0 {
+				t.Fatalf("correction failed: %d calls, %+v", calls, turn)
+			}
+		})
+	}
+}
+
+// A prebuilt card's own link is a destination too: its card's title, and a
+// link that reads back as the same card.
+func TestAskCardLinkDestination(t *testing.T) {
+	s := askTestServer(t)
+	site, cases := testSiteMap(t), readSiteCases(t)
+	given := cases.Cards[0]
+	days := 0
+	if given.Days != nil {
+		days = *given.Days
+	}
+	override(t, &askRunCLI, func(context.Context, askProvider, askSelection, string) ([]byte, error) {
+		return []byte(jsonText(map[string]any{"message": "This card shows it.", "destinations": []map[string]string{{"id": "", "url": given.URL, "description": ""}}, "lookup": askLookup{Kind: "none"}, "clarification": nil})), nil
+	})
+	answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC")
+	if err != nil || len(answer.Cards) != 1 {
+		t.Fatalf("answer: %+v %v", answer, err)
+	}
+	card := answer.Cards[0]
+	want := site.cardText(site.cardByID[given.ID].Title, days)
+	if card.Title != want || card.Kind != "Analyze" {
+		t.Fatalf("card %+v, want title %q", card, want)
+	}
+	state, err := siteLinkFromURL(card.Href)
+	if err != nil || state.Card != given.ID || state.Days != days {
+		t.Fatalf("%s reads back as %+v, %v", card.Href, state, err)
+	}
+	if again, err := site.build(state); err != nil || again != card.Href {
+		t.Fatalf("%s rebuilds as %s, %v", card.Href, again, err)
+	}
+}
+
+// The motivating question, through the send endpoint: an agent that builds
+// the view with site_link and returns its url opens that one view. The fake
+// agent proves the wiring, not a model's judgement.
+func TestAskOpusTokensQuestion(t *testing.T) {
+	s := askTestServer(t)
+	askEnable(t, s)
+	link := ""
+	override(t, &askRunCLI, func(ctx context.Context, p askProvider, sel askSelection, prompt string) ([]byte, error) {
+		if !strings.Contains(prompt, "browse_site and site_link") || strings.Contains(prompt, `"slow-commands"`) {
+			t.Error("the prompt does not send the agent to the site tools, or still lists every card")
+		}
+		value, _, err := callSiteMCP(ctx, s.Catalog, "site_link", map[string]any{
+			"page":    "analyze/tokens",
+			"options": map[string]any{"view": "trend", "metric": "tokens", "split": "model_family", "rollingPeriods": 7},
+			"filters": []any{map[string]any{"field": "provider", "op": "=", "value": "claude"}, map[string]any{"field": "model_family", "op": "contains", "value": "opus"}},
+			"days":    30,
+		})
+		if err != nil {
+			return nil, err
+		}
+		link = value.(map[string]any)["url"].(string)
+		return []byte(jsonText(map[string]any{"message": "Opus-class tokens per day by model.", "destinations": []map[string]string{{"id": "", "url": link, "description": ""}}, "lookup": askLookup{Kind: "none"}, "clarification": nil})), nil
+	})
+	input := askInput()
+	input["prompt"] = "How many tokens have I used per day through Anthropic Opus-class models? Show me a 7-day trailing average, grouped by model."
+	askOK(t, s, "send", input)
+	session, err := s.askSession(t.Context(), "chat-1")
+	if err != nil || len(session.Conversation) != 1 || session.Conversation[0].Status != "single" || len(session.Conversation[0].Cards) != 1 {
+		t.Fatalf("answer: %+v %v", session, err)
+	}
+	// site_link names only the chart settings given; the page draws them as
+	// the example's whole chart (TestSiteLinkBuildsTheMotivatingExample).
+	card := session.Conversation[0].Cards[0]
+	if card.Href != link {
+		t.Fatalf("card link %s, want %s", card.Href, link)
+	}
+	if card.Title != "Tokens and Cost · Over time" || card.Kind != "Analyze" || card.Description != "Tokens per day by model, 7-day rolling mean, where provider is claude and model contains opus, last 30 days." {
+		t.Fatalf("card %+v", card)
+	}
+	// A follow-up can name the saved card by its id, and the saved chat keeps
+	// the canonical link.
+	override(t, &askRunCLI, func(context.Context, askProvider, askSelection, string) ([]byte, error) {
+		return askReply(card.ID), nil
+	})
+	input["turnID"], input["prompt"] = "turn-2", "Open that again"
+	askOK(t, s, "send", input)
+	if session, err = s.askSession(t.Context(), "chat-1"); err != nil || len(session.Conversation) != 2 || len(session.Conversation[1].Cards) != 1 || session.Conversation[1].Cards[0].Href != card.Href {
+		t.Fatalf("follow-up: %+v %v", session, err)
+	}
+	// A destination Pharos cannot open beside it is left out, and the saved
+	// turn says how many, so the page notes it and does not open the card.
+	override(t, &askRunCLI, func(context.Context, askProvider, askSelection, string) ([]byte, error) {
+		return askReply(card.ID, "nope"), nil
+	})
+	input["turnID"], input["prompt"] = "turn-3", "Open that or the other one"
+	askOK(t, s, "send", input)
+	if session, err = s.askSession(t.Context(), "chat-1"); err != nil || len(session.Conversation) != 3 || len(session.Conversation[2].Cards) != 1 || session.Conversation[2].Omitted != 1 || session.Conversation[1].Omitted != 0 {
+		t.Fatalf("omitted destination: %+v %v", session, err)
+	}
+}
+
+func TestAskCLIProgress(t *testing.T) {
+	for _, tc := range []struct {
+		provider string
+		events   []string
+		last     string
+	}{
+		{"Codex", []string{
+			`{"type":"thread.started"}`,
+			`{"type":"item.started","item":{"id":"call-1","type":"mcp_tool_call","server":"pharos","tool":"browse_site","arguments":{"secret":"private lookup"}}}`,
+			`{"type":"item.completed","item":{"id":"call-1","type":"mcp_tool_call","server":"pharos","tool":"browse_site","status":"completed","result":"private result"}}`,
+			`{"type":"item.completed","item":{"type":"reasoning","text":"private reasoning"}}`,
+		}, "Thinking…"},
+		{"Claude", []string{
+			`{"type":"system","subtype":"init"}`,
+			`{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","id":"call-1","name":"mcp__pharos__browse_site"}}}`,
+			`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"call-1","name":"mcp__pharos__browse_site","input":"private lookup"}]}}`,
+			`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call-1","content":"private result"}]}}`,
+			`{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"thinking","thinking":"private reasoning"}}}`,
+		}, "Thinking…"},
+		{"Antigravity", []string{
+			`{"event":"step_update","step_update":{"step_index":0,"step_type":"user_input","state":"DONE"}}`,
+			`{"event":"step_update","step_update":{"step_index":1,"step_type":"tool","state":"ACTIVE","tool_name":"call_mcp_tool","tool_info":{"parameters":{"ServerName":"pharos-ask","ToolName":"browse_site","Arguments":{"query":"private lookup"}}}}}`,
+			`{"event":"step_update","step_update":{"step_index":1,"step_type":"tool","state":"ACTIVE","tool_name":"call_mcp_tool","tool_info":{"parameters":{"ServerName":"pharos-ask","ToolName":"browse_site"}}}}`,
+			`{"event":"step_update","step_update":{"step_index":1,"step_type":"tool","state":"DONE","tool_name":"call_mcp_tool","tool_info":{"output":"private result"}}}`,
+			`{"event":"step_update","step_update":{"step_index":2,"step_type":"agent_response","state":"ACTIVE","text_delta":"private response"}}`,
+		}, "Preparing the response…"},
+	} {
+		t.Run(tc.provider, func(t *testing.T) {
+			var messages []string
+			events := askCLIEvents{provider: askProvider{ID: tc.provider, progress: func(message string) { messages = append(messages, message) }}}
+			for _, raw := range tc.events {
+				events.read([]byte(raw))
+			}
+			if len(messages) != 4 || messages[1] != "Browsing available views…" || messages[2] != "Browsing available views — done" || messages[3] != tc.last || strings.Contains(strings.Join(messages, " "), "private") {
+				t.Fatalf("unexpected activity or private payload exposed: %v", messages)
+			}
+			events.read([]byte(`{"type":"item.started","item":{"type":"mcp_tool_call","server":"elsewhere","tool":"private"}}`))
+			events.read([]byte(`{"type":"assistant","message":{"content":[{"type":"text","text":"private"}]}}`))
+			events.read([]byte(`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"private"}}}`))
+			events.read([]byte(`{"event":"step_update","step_update":{"step_index":3,"step_type":"tool","state":"ACTIVE","tool_name":"call_mcp_tool","tool_info":{"parameters":{"ServerName":"elsewhere","ToolName":"private"}}}}`))
+			events.read([]byte(`{"event":"step_update","step_update":{"step_type":"tool","state":"ACTIVE","tool_name":"call_mcp_tool"}}`))
+			events.read([]byte(`not JSON`))
+			if len(messages) != 4 {
+				t.Fatalf("unsupported event changed progress: %v", messages)
+			}
+		})
+	}
+	t.Run("Antigravity partial routing and failures", func(t *testing.T) {
+		var messages []string
+		events := askCLIEvents{provider: askProvider{ID: "Antigravity", progress: func(message string) { messages = append(messages, message) }}}
+		for _, raw := range []string{
+			`{"event":"step_update","step_update":{"step_index":1,"step_type":"tool","state":"ACTIVE","tool_name":"call_mcp_tool"}}`,
+			`{"event":"step_update","step_update":{"step_index":1,"step_type":"tool","state":"ACTIVE","tool_info":{"name":"call_mcp_tool","parameters":{"ServerName":"pharos-ask","ToolName":"site_link"}}}}`,
+			`{"event":"step_update","step_update":{"step_index":1,"step_type":"tool","state":"DONE","tool_name":"call_mcp_tool","tool_info":{"error":{"type":"failed","message":"private error details"}}}}`,
+			`{"event":"step_update","step_update":{"step_index":2,"step_type":"tool","state":"DONE","tool_name":"call_mcp_tool","tool_info":{"parameters":{"ServerName":"pharos-ask","ToolName":"list_repositories"},"error":null}}}`,
+			`{"event":"step_update","step_update":{"step_index":3,"step_type":"tool","state":"DONE","tool_name":"finish"}}`,
+			`{"event":"step_update","step_update":{"step_index":4,"step_type":"checkpoint","state":"DONE"}}`,
+		} {
+			events.read([]byte(raw))
+		}
+		want := []string{"Reading Pharos data…", "Checking a destination link…", "Checking a destination link — failed", "Reading repositories — done", "Preparing the response…", "Finalizing the response…"}
+		if !reflect.DeepEqual(messages, want) {
+			t.Fatalf("AGY activity = %v, want %v", messages, want)
+		}
+	})
+}
+
+func TestAskCLIStreamingProcess(t *testing.T) {
+	for _, provider := range []string{"Codex", "Claude", "Antigravity"} {
+		t.Run(provider, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "cli")
+			start := `{"type":"item.started","item":{"id":"call-1","type":"mcp_tool_call","server":"pharos","tool":"browse_site"}}`
+			preamble := "#!/bin/sh\ncat >/dev/null\n"
+			if provider == "Claude" {
+				start = `{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","id":"call-1","name":"mcp__pharos__browse_site"}}}`
+			}
+			if provider == "Antigravity" {
+				t.Setenv("HOME", dir)
+				settings := filepath.Join(dir, ".gemini", "antigravity-cli", "settings.json")
+				if err := os.MkdirAll(filepath.Dir(settings), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(settings, []byte(`{"permissions":{"allow":["mcp(pharos-ask/*)"]}}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+				start = `{"event":"step_update","step_update":{"step_index":1,"step_type":"tool","state":"ACTIVE","tool_name":"call_mcp_tool","tool_info":{"parameters":{"ServerName":"pharos-ask","ToolName":"browse_site"}}}}`
+				preamble = "#!/bin/sh\nprintf '%s\\n' '{\"event\":\"init\",\"conversation_id\":\"private-session\"}'\nIFS= read -r question\nprintf '%s' \"$question\" >prompt.json\n"
+			}
+			// This process cannot finish by itself. Receiving its tool event
+			// cancels it, proving progress is read before process completion.
+			script := preamble + "printf '%s\\n' '" + start + "'\nexec tail -f /dev/null\n"
+			if err := os.WriteFile(path, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			seen, registered := false, false
+			p := askProvider{ID: provider, path: path, mcp: askMCPServer{Command: "/test/pharos"}, progress: func(message string) {
+				if message == "Browsing available views…" {
+					seen = true
+					if provider == "Antigravity" && !registered {
+						t.Error("AGY received private context before session registration")
+					}
+					cancel()
+				}
+			}, recordSession: func(_ context.Context, id string) error {
+				if id != "private-session" {
+					t.Errorf("unexpected private session: %q", id)
+				}
+				registered = true
+				return nil
+			}}
+			if _, err := askRunCLI(ctx, p, askSelection{Model: "test-model", Effort: "Default"}, "test question"); !errors.Is(err, context.Canceled) || !seen {
+				t.Fatalf("CLI did not stream before exit: seen=%v, err=%v", seen, err)
+			}
+			// Final output still passes through the provider's structured response.
+			script = preamble + "cat >answer.json <<'JSON'\n" + string(askReply("home")) + "\nJSON\n"
+			switch provider {
+			case "Claude":
+				script += "cat <<'JSON'\n" + jsonText(map[string]any{"type": "result", "structured_output": json.RawMessage(askReply("home"))}) + "\nJSON\n"
+			case "Antigravity":
+				script += "cat <<'JSON'\n" + jsonText(map[string]any{"event": "result", "result": map[string]any{"status": "SUCCESS", "structured_output": json.RawMessage(askReply("home"))}}) + "\nJSON\n"
+			}
+			if err := os.WriteFile(path, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			p.progress = nil
+			raw, err := askRunCLI(t.Context(), p, askSelection{Model: "test-model", Effort: "Default"}, "test question")
+			if err != nil || strings.TrimSpace(string(raw)) != string(askReply("home")) {
+				t.Fatalf("lost structured response: %s, %v", raw, err)
+			}
+		})
+	}
+}
+
+func TestAskStreamsActivityAndReconciles(t *testing.T) {
+	for _, action := range []string{"complete", "cancel"} {
+		t.Run(action, func(t *testing.T) {
+			s := askTestServer(t)
+			askEnable(t, s)
+			finish := make(chan struct{})
+			override(t, &askRunCLI, func(ctx context.Context, p askProvider, _ askSelection, _ string) ([]byte, error) {
+				p.reportProgress("Browsing available views…")
+				select {
+				case <-finish:
+					return askReply("home"), nil
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			})
+			listener := httptest.NewServer(s)
+			defer listener.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			r, _ := http.NewRequestWithContext(ctx, http.MethodPost, listener.URL+"/api/ask/send", strings.NewReader(jsonText(askInput())))
+			r.Header.Set("Authorization", "Bearer test-token")
+			r.Header.Set("Content-Type", "application/json")
+			r.Header.Set("Accept", "application/x-ndjson")
+			response, err := http.DefaultClient.Do(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode != 200 || response.Header.Get("Content-Type") != "application/x-ndjson" {
+				t.Fatalf("stream: %d %v", response.StatusCode, response.Header)
+			}
+			decoder := json.NewDecoder(response.Body)
+			var event struct {
+				Type     string
+				Activity askProgress
+				Session  askSession
+			}
+			for range 2 {
+				if err := decoder.Decode(&event); err != nil || event.Type != "progress" {
+					t.Fatalf("progress did not arrive while CLI blocked: %+v %v", event, err)
+				}
+			}
+			if event.Activity.Message != "Browsing available views…" {
+				t.Fatalf("missing tool activity: %+v", event)
+			}
+			// Reopening a running chat sees the same transient progress, without
+			// rewriting the catalog for every event or repeating the CLI request.
+			var running askSession
+			if err := json.Unmarshal(askCall(t, s, http.MethodGet, "session?id=chat-1", nil).Body.Bytes(), &running); err != nil || len(running.Conversation) != 1 || len(running.Conversation[0].Activity) != 2 || running.Conversation[0].Status != "loading" {
+				t.Fatalf("reopened progress: %+v %v", running, err)
+			}
+			wantStatus, wantActivity, wantCards := "single", 3, 1
+			if action == "cancel" {
+				askOK(t, s, "cancel", map[string]any{"id": "chat-1"})
+				wantStatus, wantActivity, wantCards = "canceled", 2, 0
+			} else {
+				close(finish)
+			}
+			for event.Type != "result" {
+				if err := decoder.Decode(&event); err != nil {
+					t.Fatal(err)
+				}
+			}
+			turn := event.Session.Conversation[0]
+			if turn.Status != wantStatus || len(turn.Activity) != wantActivity || len(turn.Cards) != wantCards {
+				t.Fatalf("lost final answer or activity: %+v", turn)
+			}
+			saved, err := s.askSession(t.Context(), "chat-1")
+			if err != nil || !reflect.DeepEqual(saved.Conversation[0].Activity, turn.Activity) {
+				t.Fatalf("activity not saved: %+v %v", saved, err)
+			}
+		})
+	}
+}
+
+func TestAskActivityIsBounded(t *testing.T) {
+	s := askTestServer(t)
+	askEnable(t, s)
+	override(t, &askRunCLI, func(_ context.Context, p askProvider, _ askSelection, _ string) ([]byte, error) {
+		for i := range askActivityLimit + 5 {
+			message := fmt.Sprintf("Action %d", i)
+			p.reportProgress(message)
+			p.reportProgress(message)
+		}
+		return askReply("home"), nil
+	})
+	var session askSession
+	if err := json.Unmarshal(askOK(t, s, "send", askInput()).Body.Bytes(), &session); err != nil {
+		t.Fatal(err)
+	}
+	activity := session.Conversation[0].Activity
+	if len(activity) != askActivityLimit || activity[0].Message != "Action 6" || activity[len(activity)-1].Message != "Saving the answer…" {
+		t.Fatalf("activity was not bounded and deduplicated: %+v", activity)
+	}
+}
+
+func TestAskSiteLinksRespectCancellation(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	linked, err := testSiteMap(t).linkTool(linkArgs(t, `{"page":"analyze/query/usage","query":{"select":[{"field":"model"}]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	longURL := linked["url"].(string) + "&highlight=text:" + strings.Repeat("x", 2500)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	for _, call := range []func() (askCard, error){
+		func() (askCard, error) {
+			return askSiteCard(ctx, longURL, catalog)
+		},
+		func() (askCard, error) {
+			return askDestination(ctx, nil, "", longURL, "", "", catalog)
+		},
+	} {
+		if _, err := call(); !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled Ask did destination work: %v", err)
+		}
+	}
+	// Cancellation after a rejected response stops before launching a repair.
+	s := askTestServer(t)
+	ctx, cancel = context.WithCancel(t.Context())
+	defer cancel()
+	calls := 0
+	override(t, &askRunCLI, func(context.Context, askProvider, askSelection, string) ([]byte, error) {
+		calls++
+		return askReply("unknown"), nil
+	})
+	p := askProvider{ID: "Codex", progress: func(string) { cancel() }}
+	if _, err := s.answerAsk(ctx, p, askSession{}, "UTC"); !errors.Is(err, context.Canceled) || calls != 1 {
+		t.Fatalf("cancelled correction: %d CLI calls, %v", calls, err)
 	}
 }

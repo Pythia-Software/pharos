@@ -1146,6 +1146,22 @@ CREATE TABLE IF NOT EXISTS sync_settings (
   host_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL, interval_seconds INTEGER NOT NULL,
   sources_json TEXT NOT NULL DEFAULT '[]', next_at TEXT
 );
+-- Background updates (docs/background-work.md §11): this Mac's schedule
+-- beside sync_settings (whose enabled is the on/off switch), and each item's
+-- last scheduled run.
+CREATE TABLE IF NOT EXISTS background_settings (
+  host_id TEXT PRIMARY KEY, paused_until TEXT, daily_at TEXT NOT NULL DEFAULT '03:00',
+  hold_when_busy INTEGER NOT NULL DEFAULT 1, overrides_json TEXT NOT NULL DEFAULT '{}',
+  placements_json TEXT NOT NULL DEFAULT '{}', battery_json TEXT NOT NULL DEFAULT '{}', updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS background_runs (
+  host_id TEXT NOT NULL, item TEXT NOT NULL, started_at TEXT, finished_at TEXT,
+  succeeded_at TEXT, error TEXT, seconds REAL, PRIMARY KEY(host_id,item)
+);
+CREATE TABLE IF NOT EXISTS background_temporary_cadences (
+  host_id TEXT NOT NULL, item TEXT NOT NULL, cadence TEXT NOT NULL, expires_at TEXT NOT NULL,
+  PRIMARY KEY(host_id,item)
+);
 CREATE TABLE IF NOT EXISTS automatic_source_states (
   host_id TEXT NOT NULL, source_name TEXT NOT NULL, attempted_at TEXT, succeeded_at TEXT,
   error TEXT, indexed_at TEXT, preflight TEXT, counts_json TEXT NOT NULL DEFAULT '{}',
@@ -1170,6 +1186,15 @@ CREATE TABLE IF NOT EXISTS sync_integrity_issues (
   first_at TEXT NOT NULL, last_at TEXT NOT NULL, state TEXT NOT NULL,
   detail_json TEXT NOT NULL, occurrences INTEGER NOT NULL DEFAULT 1, resolved_at TEXT
 );
+-- Host-local attempt/backoff state and the durable queue of larger audits.
+CREATE TABLE IF NOT EXISTS sync_verification_progress (
+  host_id TEXT NOT NULL, source_name TEXT NOT NULL, unit TEXT NOT NULL,
+  signature TEXT NOT NULL, attempted_at TEXT NOT NULL, verified_at TEXT,
+  next_at TEXT, heavy INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0,
+  reason TEXT, evidence_bytes INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(host_id,source_name,unit)
+);
+CREATE INDEX IF NOT EXISTS sync_verification_pending ON sync_verification_progress(host_id,heavy,next_at);
 CREATE TABLE IF NOT EXISTS sync_recovery_jobs (
   id TEXT PRIMARY KEY, mode TEXT NOT NULL, scope_json TEXT NOT NULL, state TEXT NOT NULL,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL, progress_json TEXT NOT NULL DEFAULT '{}',
@@ -1496,3 +1521,36 @@ CREATE TABLE IF NOT EXISTS source_input_states (
 
 CREATE INDEX IF NOT EXISTS conversation_sightings_host_source
  ON conversation_sightings(host_id,source_name,conversation_id,origin);
+
+-- The operation journal (docs/background-work.md §6): one row per structural
+-- operation this or another Pharos process on a Mac ran against the library,
+-- written best-effort through a low-priority lane. It is a record, not
+-- history: library transfers never copy it. Additive, so older builds ignore it.
+CREATE TABLE IF NOT EXISTS operation_journal (
+ id TEXT PRIMARY KEY,
+ parent_id TEXT,
+ root_id TEXT NOT NULL,
+ kind TEXT NOT NULL,
+ variant TEXT NOT NULL DEFAULT '',
+ subject TEXT NOT NULL DEFAULT '',
+ trigger TEXT NOT NULL,
+ host_id TEXT NOT NULL,
+ process TEXT NOT NULL,
+ pid INTEGER NOT NULL,
+ instance TEXT NOT NULL,
+ state TEXT NOT NULL,
+ reason TEXT,
+ error TEXT,
+ step_index INTEGER, step_count INTEGER, step_name TEXT, step_unit TEXT,
+ step_done REAL, step_total REAL,
+ started_at TEXT NOT NULL,
+ updated_at TEXT NOT NULL,
+ ended_at TEXT,
+ legacy_ref TEXT,
+ detail_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS operation_journal_open ON operation_journal(host_id) WHERE ended_at IS NULL;
+CREATE INDEX IF NOT EXISTS operation_journal_recent ON operation_journal(host_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS operation_journal_root ON operation_journal(root_id);
+-- The freshness ledger reads each analysis stage's latest outcome (§5).
+CREATE INDEX IF NOT EXISTS operation_journal_kind ON operation_journal(host_id, kind, started_at DESC);

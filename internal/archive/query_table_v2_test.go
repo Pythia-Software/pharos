@@ -60,7 +60,7 @@ func metricRequest(specs ...qt.AggSpec) qt.MetricQuery {
 }
 
 func TestGeneratedQuerySchemas(t *testing.T) {
-	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings", "parallelism"} {
+	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings", "safety", "parallelism", "agent_events", "agent_event_messages"} {
 		t.Run(dataset, func(t *testing.T) {
 			doc, err := querySchemaDocument(dataset)
 			if err != nil {
@@ -832,7 +832,7 @@ func TestQueryV2LibraryCompactRequests(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil || len(page.Rows) != 1 {
 		t.Fatal("page", err, w.Body.String())
 	}
-	for _, name := range []string{"purpose", "outcome", "pr_details", "cost_usd", "first_input"} {
+	for _, name := range []string{"purpose", "outcome", "pr_details", "cost_usd", "first_input", "preview_elapsed_ms"} {
 		if _, found := page.Rows[0][name]; !found {
 			t.Fatalf("page enrichment lost %s", name)
 		}

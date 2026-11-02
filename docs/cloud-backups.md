@@ -322,7 +322,9 @@ can take 15 minutes. If connecting returns no version ID, wait and retry. The co
 The selected storage class is written into `destination-draft.json`; the
 uploader must set it for every new revision. GCP also sets the bucket's default
 class. AWS/Azure provisioning cannot itself apply a class to archives that
-have not yet been uploaded. The schedule in the draft remains disabled until a scheduler is implemented.
+have not yet been uploaded. The schedule in the draft starts disabled; Pharos's
+scheduler runs it only once **Enable scheduled backups** is turned on (see the
+setup flow above).
 
 Native lifecycle deletion is asynchronous. A retained count is a target,
 not an instantaneous storage cap; minimum age and an upload in progress can
@@ -479,8 +481,8 @@ for any destination names or account details.
    including read/list denial, overwrite/version receipts, cancellation, provider
    checksum handling and native lifecycle retention. No live provider was used
    during this implementation.
-2. Add automatic schedules, notifications and durable multipart/resumable
-   journals for restart recovery. Retry/cancellation must preserve uncertain
+2. Add notifications and durable multipart/resumable journals for restart
+   recovery (scheduled backups already run in the service). Retry/cancellation must preserve uncertain
    completion outcomes and never mark an unconfirmed revision as verified.
 3. Add administrator-side lifecycle auditing and a richer history/cleanup UI.
    Current cleanup follows the commands' provider lifecycle policy; forgetting

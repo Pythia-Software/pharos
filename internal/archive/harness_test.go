@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/labeler/labelertest"
 )
 
 // testDurability skips the drive flushes that durableCatalog makes every
@@ -29,6 +31,15 @@ var testDurability = catalogPragmas{synchronous: "OFF"}
 // ioreg or scutil who the Mac is, run diskutil, mdutil or hdiutil, or read the
 // user's git configuration. Tests of those lookups opt back in.
 func TestMain(m *testing.M) {
+	// A fake model CLI is this binary (see labelingFakeCLI); its arguments
+	// are the CLI's, not test flags.
+	if os.Getenv(labelingFakeEnv) != "" {
+		os.Exit(labelingFakeCLI())
+	}
+	// A fake labeler worker is this binary too (see labelertest.FakeWorker).
+	if mode := os.Getenv(labelertest.FakeWorkerEnv); mode != "" {
+		os.Exit(labelertest.FakeWorker(mode))
+	}
 	flag.Parse()
 	if code, ran := runInProcesses(); ran {
 		os.Exit(code)

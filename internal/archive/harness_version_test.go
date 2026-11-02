@@ -1,12 +1,17 @@
 package archive
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 func TestHarnessVersionsFromTranscripts(t *testing.T) {
@@ -71,6 +76,19 @@ func TestHarnessBackfillAndAlias(t *testing.T) {
 	}
 	if _, err := os.Stat(c.captureRootPath()); !os.IsNotExist(err) {
 		t.Fatalf("metadata backfill created retained transcripts without opt-in: %v", err)
+	}
+	// Inheriting again changes nothing, so it marks nothing dirty: the
+	// identities stage runs after every scheduled index.
+	execSQL(t, c.DB, "DELETE FROM workspace_library_dirty")
+	if err := c.inheritHarnessAliases(); err != nil {
+		t.Fatal(err)
+	}
+	var dirty int
+	if err := c.DB.QueryRow("SELECT COUNT(*) FROM workspace_library_dirty").Scan(&dirty); err != nil {
+		t.Fatal(err)
+	}
+	if dirty != 0 {
+		t.Fatalf("inheriting unchanged aliases marked %d workspaces dirty", dirty)
 	}
 }
 
@@ -295,5 +313,117 @@ func TestHarnessBackfillRetriesCustomCaptureRoot(t *testing.T) {
 	var harness, version string
 	if err := c.DB.QueryRow(`SELECT harness,harness_version_last FROM conversations WHERE id='c'`).Scan(&harness, &version); err != nil || harness != "codex/codex_exec" || version != "0.155.0" {
 		t.Fatalf("captured version = %q %q: %v", harness, version, err)
+	}
+
+	// A rollout stored compressed is streamed through its lease's capture
+	// view: read as its original bytes, and never decoded to disk.
+	var encoded bytes.Buffer
+	writer, err := zstd.NewWriter(&encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := `{"type":"session_meta","payload":{"originator":"codex_cli_rs","cli_version":"0.160.0"}}` + "\n" + strings.Repeat(`{"type":"event_msg"}`+"\n", 200)
+	writer.Write([]byte(original))
+	writer.Close()
+	if err := os.WriteFile(filepath.Join(dir, "files", "rollout-2.jsonl"), encoded.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte(original))
+	manifest.Version = captureManifestVersion
+	manifest.Files = append(manifest.Files, &capturedFile{Path: "/other-mac/rollout-2.jsonl", Captured: "files/rollout-2.jsonl", Size: int64(len(original)), SHA256: hex.EncodeToString(sum[:]), Encoding: captureEncodingZstd, StoredSize: int64(encoded.Len())})
+	if data, err = json.Marshal(manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, captureManifestName), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.DB.Exec(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,origin,origin_host_id) VALUES('d','wc','codex','local','d','/other-mac/rollout-2.jsonl','other-host')`); err != nil {
+		t.Fatal(err)
+	}
+	decodedOnDisk := 0
+	override(t, &materializeHook, func(string) { decodedOnDisk++ })
+	if err := c.backfillHarnessVersions(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DB.QueryRow(`SELECT harness,harness_version_last FROM conversations WHERE id='d'`).Scan(&harness, &version); err != nil || harness != "codex/codex_cli_rs" || version != "0.160.0" || decodedOnDisk != 0 {
+		t.Fatalf("compressed rollout version = %q %q (%d decoded copies): %v", harness, version, decodedOnDisk, err)
+	}
+}
+
+// Exercise the real stage and chain with legacy null aliases and a native
+// alias. A trigger observes actual writes, including updates to identical values.
+func TestIdentitiesAndChainLeaveUnchangedConversationsAlone(t *testing.T) {
+	c, config := testCatalog(t)
+	execTx(t, c.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES
+		('native','claude','local','native','Native','2026-09-01'),
+		('wrapper','conductor','local','wrapper','Wrapper','2026-09-01'),
+		('legacy','chatgpt','local','legacy','Legacy','2026-09-01')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,harness_version_first,harness_version_last,aliases_json) VALUES
+		('native','native','claude','local','native','claude-code/cli','2.1.1','2.1.2','[]'),
+		('wrapper','wrapper','claude','local','conductor:wrapper','conductor',NULL,NULL,'["native"]'),
+		('legacy','legacy','chatgpt','local','legacy','chatgpt-export',NULL,NULL,'null')`)
+	if _, err := c.ReconcileIdentitiesContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var version, source string
+	if err := c.DB.QueryRow(`SELECT harness_version_last,harness_version_source FROM conversations WHERE id='wrapper'`).Scan(&version, &source); err != nil || version != "2.1.2" || source != "alias" {
+		t.Fatalf("first alias inheritance: %q %q %v", version, source, err)
+	}
+	s := testServer(t, config, c)
+	if err := s.finishDeferredSyncPhases(t.Context(), false, nil); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, c.DB,
+		`DELETE FROM workspace_library_dirty`, `DELETE FROM mcp_metric_dirty`,
+		`CREATE TABLE conversation_update_probe(id TEXT)`,
+		`CREATE TRIGGER conversation_update_probe AFTER UPDATE ON conversations BEGIN INSERT INTO conversation_update_probe VALUES(NEW.id); END`)
+	before, err := queryMaps(c.DB, `SELECT * FROM finding_message_revisions ORDER BY conversation_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range []string{"identities", "chain"} {
+		started := time.Now()
+		if stage == "identities" {
+			_, err = c.ReconcileIdentitiesContext(t.Context())
+		} else {
+			err = s.finishDeferredSyncPhases(t.Context(), false, nil)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("unchanged %s: %s", stage, time.Since(started))
+		for _, table := range []string{"conversation_update_probe", "workspace_library_dirty", "mcp_metric_dirty"} {
+			var n int
+			if err := c.DB.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&n); err != nil || n != 0 {
+				t.Fatalf("%s changed %s: rows=%d err=%v", stage, table, n, err)
+			}
+		}
+		after, err := queryMaps(c.DB, `SELECT * FROM finding_message_revisions ORDER BY conversation_id`)
+		if err != nil || jsonText(before) != jsonText(after) {
+			t.Fatalf("%s invalidated findings: %v -> %v (%v)", stage, before, after, err)
+		}
+	}
+}
+
+func TestHarnessAliasKeepsACompatiblePeer(t *testing.T) {
+	c, _ := testCatalog(t)
+	execTx(t, c.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('n','claude','local','n','Native','t'),('w','conductor','local','w','Wrapper','t')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,harness_version_first,harness_version_last,harness_version_source) VALUES
+   ('a','n','claude','local','a','claude-code','1','2','transcript'),
+   ('b','n','claude','local','b','claude-code','3','4','transcript'),
+   ('w','w','claude','local','w','conductor','1','2','alias')`,
+		`INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('a','w','native-alias',1,'{}'),('b','w','native-alias',1,'{}')`,
+		`CREATE TABLE alias_write_probe(id TEXT)`,
+		`CREATE TRIGGER alias_write_probe AFTER UPDATE ON conversations BEGIN INSERT INTO alias_write_probe VALUES(NEW.id); END`)
+	for range 2 {
+		if err := c.inheritHarnessAliases(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := queryMaps(c.DB, `SELECT * FROM alias_write_probe`)
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("compatible alias rewrites: %v (%v)", rows, err)
 	}
 }

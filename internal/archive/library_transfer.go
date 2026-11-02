@@ -327,9 +327,15 @@ func retainedTree(ctx context.Context, source, target, label string, skipImports
 			if skipImports && entry.Name() == ".imports" {
 				return filepath.SkipDir
 			}
+			// Leases (§6.5) describe running processes, not library data, and
+			// temporaries (reader leases, a compression in progress) are not
+			// evidence: local backup leaves both out too.
+			if entry.Name() == leaseDirName || path != source && strings.HasSuffix(entry.Name(), captureTempSuffix) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
-		if entry.Name() == ".delivered.json" || entry.Name() == "indexed.json" || strings.HasSuffix(entry.Name(), ".lock") || strings.HasSuffix(entry.Name(), ".partial") {
+		if entry.Name() == ".delivered.json" || entry.Name() == "indexed.json" || strings.HasSuffix(entry.Name(), ".lock") || strings.HasSuffix(entry.Name(), ".partial") || strings.HasSuffix(entry.Name(), captureTempSuffix) {
 			return nil
 		}
 		rel, err := filepath.Rel(source, path)
@@ -1034,7 +1040,7 @@ func TransferLibrary(ctx context.Context, source, target Config, move bool, prog
 		}
 		receipt.Files = append(receipt.Files, files...)
 	}
-	if err = validateCaptureEvidence(ctx, filepath.Join(dir, "captures")); err != nil {
+	if err = validateStagedCaptureEvidence(ctx, filepath.Join(dir, "captures")); err != nil {
 		return receipt, fmt.Errorf("verify retained source evidence: %w", err)
 	}
 	// Content-addressed transfer IDs make retries and repeated copies reuse the
@@ -1116,9 +1122,10 @@ func TransferLibrary(ctx context.Context, source, target Config, move bool, prog
 // Only user state and small capture checkpoints survive a move. Building a
 // fresh catalog avoids leaving transcripts in FTS, rollups, derived findings,
 // query caches, free SQLite pages, or a retained WAL.
-var moveRetainedTables = []string{"ui_preferences", "query_table_query_snapshots", "query_table_computed_columns", "sync_settings", "automatic_source_states",
+var moveRetainedTables = []string{"ui_preferences", "query_table_query_snapshots", "query_table_computed_columns", "sync_settings", "background_settings", "background_temporary_cadences", "automatic_source_states",
 	"cloud_destinations", "cloud_backup_runs", "cloud_backup_schedules", "library_size_history",
 	"ask_settings", "ask_sessions", "ask_visits", "ask_native_sessions", "finding_actions", "finding_cart", "finding_cart_clones", "finding_interventions", "finding_settings",
+	"safety_state", "safety_cart", "safety_handoffs",
 	"source_states", "source_record_states", "source_item_states", "source_terminal_states", "sync_generations", "hosts", "protections", "repository_retirements", "library_delivery_checkpoints", "library_workspace_delivery_checkpoints"}
 
 func cleanupDeliveredHistory(ctx context.Context, source Config, receipt libraryTransferReceipt) error {
@@ -1353,9 +1360,18 @@ func runLibraryTransferCLI(args []string) error {
 	if err != nil {
 		return err
 	}
-	receipt, err := TransferLibrary(context.Background(), a, b, *move, func(s string) { fmt.Fprintln(os.Stderr, s) })
-	if err != nil {
-		return err
+	variant := "copy"
+	if *move {
+		variant = "move"
 	}
-	return printJSON(receipt)
+	// Leased beside both catalogs and in the app's lease directory, so each
+	// library's service and the broker see it (§6.5).
+	dirs := []string{leaseDirs(a)[0], leaseDirs(b)[0], appLeaseDir()}
+	return runCLIOperationIn(dirs, []string{a.Path, b.Path}, "library-transfer", OperationSpec{Kind: "library.transfer", Variant: variant}, func(ctx context.Context, op *Op) error {
+		receipt, err := TransferLibrary(ctx, a, b, *move, func(s string) { fmt.Fprintln(os.Stderr, s); op.Step(s, "", -1) })
+		if err != nil {
+			return err
+		}
+		return printJSON(receipt)
+	})
 }

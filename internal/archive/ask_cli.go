@@ -23,17 +23,24 @@ type askSelection struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
 	Effort   string `json:"effort"`
+	Fast     bool   `json:"fast,omitempty"`
 }
+
+// Fast marks a model the CLI can run in its faster, higher-cost mode. Codex
+// names that mode's service tier per model; Claude needs no tier.
 type askModel struct {
 	Variants map[string]string `json:"-"`
 	ID       string            `json:"id"`
 	Label    string            `json:"label"`
 	Efforts  []string          `json:"efforts"`
 	Default  bool              `json:"default"`
+	Fast     bool              `json:"fast,omitempty"`
+	fastTier string
 }
 type askProvider struct {
-	discoveredAt     time.Time
+	checkedAt        time.Time
 	recordSession    func(context.Context, string) error
+	progress         func(string)
 	ID               string        `json:"id"`
 	Models           []askModel    `json:"models"`
 	DefaultSelection *askSelection `json:"defaultSelection,omitempty"`
@@ -130,16 +137,7 @@ func (b *askOutput) Write(p []byte) (int, error) {
 func askCommand(ctx context.Context, path, dir string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Dir = dir
-	env := []string{}
-	for _, entry := range os.Environ() {
-		key, _, _ := strings.Cut(entry, "=")
-		if key != "CLAUDECODE" && key != "CLAUDE_CODE_ENTRYPOINT" && key != "PHAROS_API_TOKEN" {
-			env = append(env, entry)
-		}
-	}
-	// Include the binary's directory for native launchers which locate node.
-	env = append(env, "PATH="+filepath.Dir(path)+string(os.PathListSeparator)+os.Getenv("PATH"))
-	cmd.Env = env
+	cmd.Env = cliEnvironment(path)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
@@ -217,6 +215,7 @@ var askDiscoverModels = func(ctx context.Context, p askProvider) ([]askModel, er
 				Models []struct {
 					Value, ResolvedModel, DisplayName string
 					SupportedEffortLevels             []string
+					SupportsFastMode                  bool
 				}
 			}
 		}
@@ -234,7 +233,7 @@ var askDiscoverModels = func(ctx context.Context, p askProvider) ([]askModel, er
 			if m.Value == "default" {
 				label = m.ResolvedModel
 			}
-			result = append(result, askModel{ID: m.ResolvedModel, Label: label, Efforts: askEfforts(m.SupportedEffortLevels), Default: m.Value == "default"})
+			result = append(result, askModel{ID: m.ResolvedModel, Label: label, Efforts: askEfforts(m.SupportedEffortLevels), Default: m.Value == "default", Fast: m.SupportsFastMode})
 		}
 		return result, nil
 	case "Antigravity":
@@ -265,6 +264,8 @@ func askCodexModels(raw json.RawMessage) ([]askModel, error) {
 			Model, DisplayName        string
 			IsDefault                 bool
 			SupportedReasoningEfforts []struct{ ReasoningEffort string }
+			ServiceTiers              []struct{ ID, Name string }
+			AdditionalSpeedTiers      []string
 		}
 		NextCursor *string
 	}
@@ -280,7 +281,18 @@ func askCodexModels(raw json.RawMessage) ([]askModel, error) {
 		for _, e := range m.SupportedReasoningEfforts {
 			efforts = append(efforts, e.ReasoningEffort)
 		}
-		result = append(result, askModel{ID: m.Model, Label: m.DisplayName, Default: m.IsDefault, Efforts: askEfforts(efforts)})
+		model := askModel{ID: m.Model, Label: m.DisplayName, Default: m.IsDefault, Efforts: askEfforts(efforts)}
+		// Catalogs name the fast tier ("priority", named Fast), or list only the
+		// speed tier "fast", which Codex also accepts as a service tier.
+		if slices.ContainsFunc(m.AdditionalSpeedTiers, func(tier string) bool { return strings.EqualFold(tier, "fast") }) {
+			model.Fast, model.fastTier = true, "fast"
+		}
+		for _, tier := range m.ServiceTiers {
+			if tier.ID != "" && (strings.EqualFold(tier.Name, "Fast") || strings.EqualFold(tier.ID, "fast")) {
+				model.Fast, model.fastTier = true, tier.ID
+			}
+		}
+		result = append(result, model)
 	}
 	return result, nil
 }
@@ -316,7 +328,7 @@ func askAGYModels(raw string) []askModel {
 }
 func askValidSelection(p askProvider, s askSelection) bool {
 	for _, m := range p.Models {
-		if m.ID == s.Model && slices.Contains(m.Efforts, s.Effort) {
+		if m.ID == s.Model && slices.Contains(m.Efforts, s.Effort) && (!s.Fast || m.Fast) {
 			return true
 		}
 	}
@@ -340,13 +352,42 @@ var askRunCLI = func(ctx context.Context, p askProvider, s askSelection, prompt 
 		return askRunAGY(ctx, cmd, p, prompt)
 	}
 	cmd.Stdin = strings.NewReader(prompt)
-	var out, diagnostics askOutput
-	cmd.Stdout = &out
+	var diagnostics askOutput
 	cmd.Stderr = &diagnostics
-	if err = cmd.Run(); err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err = cmd.Start(); err != nil {
+		return nil, err
+	}
+	events := askCLIEvents{provider: p}
+	output := &io.LimitedReader{R: stdout, N: 2<<20 + 1}
+	scan := bufio.NewScanner(output)
+	scan.Buffer(make([]byte, 4096), 2<<20+1)
+	var result []byte
+	for scan.Scan() {
+		events.read(scan.Bytes())
+		var envelope struct{ Type string }
+		if p.ID == "Claude" && json.Unmarshal(scan.Bytes(), &envelope) == nil && envelope.Type == "result" {
+			result = bytes.Clone(scan.Bytes())
 		}
+	}
+	readErr := scan.Err()
+	if output.N == 0 {
+		readErr = fmt.Errorf("CLI output exceeded 2 MiB")
+	}
+	if readErr != nil {
+		_ = cmd.Cancel()
+	}
+	err = cmd.Wait()
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if readErr != nil {
+		return nil, readErr
+	}
+	if err != nil {
 		return nil, fmt.Errorf("%s could not complete the request. Check its CLI version, Pharos MCP connection, login and account limits in Terminal, then retry", p.ID)
 	}
 	if p.ID == "Codex" {
@@ -364,7 +405,7 @@ var askRunCLI = func(ctx context.Context, p askProvider, s askSelection, prompt 
 		IsError          bool            `json:"is_error"`
 		Status           string          `json:"status"`
 	}
-	if err = json.Unmarshal(out.Bytes(), &envelope); err != nil {
+	if err = json.Unmarshal(result, &envelope); err != nil {
 		return nil, fmt.Errorf("%s returned invalid JSON", p.ID)
 	}
 	if envelope.IsError || envelope.Status == "ERROR" {
@@ -394,10 +435,26 @@ func askPrepareCLI(ctx context.Context, p askProvider, s askSelection, dir strin
 	var args []string
 	switch p.ID {
 	case "Codex":
-		args = []string{"exec", "--ignore-user-config", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "-c", `approval_policy="never"`, "-c", "features.shell_tool=false", "-c", "features.apply_patch_freeform=false", "-c", `web_search="disabled"`, "--model", s.Model, "--output-schema", schema, "--output-last-message", filepath.Join(dir, "answer.json"), "--color", "never", "-"}
-		args = append(args[:len(args)-1], "-c", "mcp_servers.pharos.command="+jsonText(p.mcp.Command), "-c", "mcp_servers.pharos.args="+jsonText(p.mcp.Args), "-c", "mcp_servers.pharos.required=true", "-")
+		// Codex asks to approve each MCP tool call, which approval_policy
+		// "never" refuses; preapprove the read-only Pharos server's tools only,
+		// as Claude's --allowedTools does.
+		args = []string{"exec", "--json", "--ignore-user-config", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "-c", `approval_policy="never"`, "-c", "features.shell_tool=false", "-c", "features.apply_patch_freeform=false", "-c", `web_search="disabled"`, "--model", s.Model, "--output-schema", schema, "--output-last-message", filepath.Join(dir, "answer.json"), "--color", "never", "-"}
+		args = append(args[:len(args)-1], "-c", "mcp_servers.pharos.command="+jsonText(p.mcp.Command), "-c", "mcp_servers.pharos.args="+jsonText(p.mcp.Args), "-c", "mcp_servers.pharos.required=true", "-c", `mcp_servers.pharos.default_tools_approval_mode="approve"`, "-")
+		if s.Fast {
+			for _, m := range p.Models {
+				if m.ID == s.Model && m.fastTier != "" {
+					args = append(args[:len(args)-1], "-c", "service_tier="+jsonText(m.fastTier), "-")
+				}
+			}
+		}
 	case "Claude":
-		args = []string{"-p", "--output-format", "json", "--json-schema", askResponseSchema, "--model", s.Model, "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--setting-sources", "", "--settings", `{"disableAllHooks":true}`, "--no-session-persistence", "--permission-mode", "dontAsk"}
+		// Print mode runs fast only when the flag settings opt in; the account
+		// can still decline it, and Claude then answers at standard speed.
+		settings := map[string]bool{"disableAllHooks": true}
+		if s.Fast {
+			settings["fastMode"] = true
+		}
+		args = []string{"-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--json-schema", askResponseSchema, "--model", s.Model, "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--setting-sources", "", "--settings", jsonText(settings), "--no-session-persistence", "--permission-mode", "dontAsk"}
 		args = append(args, "--mcp-config", jsonText(map[string]any{"mcpServers": map[string]askMCPServer{"pharos": p.mcp}}), "--allowedTools", "mcp__pharos")
 	case "Antigravity":
 		// Use a dedicated workspace agent, plan mode and the terminal sandbox.
@@ -429,7 +486,7 @@ skills: []
 plugins: []
 commandExecutionPolicy: off
 ---
-Use only the pharos-ask MCP server for archived work and the supplied JSON navigation context for destinations and private history. Do not use other MCP servers or native tools.
+Use only the pharos-ask MCP server, for archived work and for site links (browse_site, then site_link); take section ids and private history from the supplied JSON context. Do not use other MCP servers or native tools.
 `
 		if err := os.WriteFile(filepath.Join(agentDir, "pharos-navigation.md"), []byte(agent), 0600); err != nil {
 			return nil, err
@@ -532,6 +589,7 @@ func askRunAGY(ctx context.Context, cmd *exec.Cmd, p askProvider, prompt string)
 	defer func() { _ = cmd.Cancel(); _ = cmd.Wait() }()
 	scan := bufio.NewScanner(io.LimitReader(stdout, 2<<20))
 	scan.Buffer(make([]byte, 4096), 1<<20)
+	events := askCLIEvents{provider: p}
 	sent := false
 	for scan.Scan() {
 		var event struct {
@@ -558,6 +616,10 @@ func askRunAGY(ctx context.Context, cmd *exec.Cmd, p askProvider, prompt string)
 			}
 			_ = stdin.Close()
 			sent = true
+			p.reportProgress("Connected to Antigravity; processing your question…")
+		}
+		if sent {
+			events.read(scan.Bytes())
 		}
 		if event.Event == "result" {
 			if event.Result.Status != "SUCCESS" {

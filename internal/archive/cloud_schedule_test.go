@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -130,6 +131,10 @@ func TestCloudScheduledBackupsCatchUpOnceAndAllowManualBackups(t *testing.T) {
 	}
 	if run.Trigger != "scheduled" || run.ScheduledFor == "" {
 		t.Fatal("scheduled run lost its trigger or original due date")
+	}
+	// The running upload is listed, so the drive is not reported idle.
+	if activities := server.libraryActivities(); !slices.ContainsFunc(activities, func(a libraryActivity) bool { return a.ID == "cloud:upload:"+run.ID && a.Writes }) {
+		t.Fatalf("a scheduled upload is not a library activity: %+v", activities)
 	}
 	if err := server.cloudScheduleTick(ctx, finishedAt); err != nil {
 		t.Fatal(err)
@@ -344,6 +349,31 @@ func TestCloudScheduleCancellationChangesAndCopiedLibrary(t *testing.T) {
 	}
 	if onlyCloudSchedule(t, c).CatalogPath != canonical(c.Path) {
 		t.Fatal("explicit activation did not bind to the new library location")
+	}
+
+	// A release (before an eject) cancels a running upload's context within
+	// the release budget. The upload itself is replaced here; what
+	// uploadCloudRun does once cancelled (save it as cancelled, delete its
+	// staging) needs a real uploader and is not exercised by this test.
+	uploading, stopped := make(chan struct{}), make(chan error, 1)
+	override(t, &cloudPerformUpload, func(_ *Server, ctx context.Context, _ cloudDestination, run cloudRun) {
+		close(uploading)
+		<-ctx.Done()
+		stopped <- ctx.Err()
+	})
+	run, err := server.startCloudRun(ctx, d.ID, "sample", "manual", at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-uploading
+	if !slices.ContainsFunc(server.libraryActivities(), func(a libraryActivity) bool { return a.ID == "cloud:upload:"+run.ID }) {
+		t.Fatal("a running upload is not a library activity")
+	}
+	if err := server.stop(stopTimeout); err != nil {
+		t.Fatalf("a release waited for the upload: %v", err)
+	}
+	if err := <-stopped; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the upload's context after a release: %v", err)
 	}
 }
 

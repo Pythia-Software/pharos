@@ -51,7 +51,7 @@ func (s *Server) getQueryItem(w http.ResponseWriter, r *http.Request, dataset st
 	request := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{
 		Select: querySourceFields(schema), Where: []qt.WhereTerm{{Field: schema.IDField, Op: "=", Value: id}}, Limit: 1,
 	}}
-	result, err := s.executeQueryV2(ctx, dataset, url.Values{"carbon_settings": r.URL.Query()["carbon_settings"]}, schema, &request, nil)
+	result, err := s.executeQueryV2(ctx, dataset, url.Values{"carbon_settings": r.URL.Query()["carbon_settings"], "parallelism_settings": r.URL.Query()["parallelism_settings"]}, schema, &request, nil)
 	if err != nil {
 		writeError(w, err, 400)
 		return

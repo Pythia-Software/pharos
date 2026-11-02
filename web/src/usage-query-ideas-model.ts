@@ -1,4 +1,4 @@
-import { applyPatch, matchPatch, type AggregationClause, type QueryState, type SummaryColumn } from "@pythia-software/query-table-core";
+import { applyPatch, groupKeyFields, matchPatch, type AggregationClause, type QueryState, type SummaryColumn } from "@pythia-software/query-table-core";
 import { usageGroupPresets, usageComparisonPresets, usageTablePresetPatch, type UsageTablePreset } from "./usage-queries";
 import type { UsageDataset } from "./usage-workspace-model";
 
@@ -19,7 +19,7 @@ function finish(dataset: UsageDataset, idea: QueryIdea): QueryIdea {
   const links = summaries.filter(column => column.op === "link");
   const records: SummaryColumn = { id: "idea_records", op: "link", label: "Drill In", link: { label: "Matching records", to: { kind: "query", target: dataset } } };
   const ordered = [...summaries.filter(column => column.op !== "link"), ...links, records];
-  const columns = [...(idea.columns ?? [...idea.grouping.keys, ...summaries.map(column => column.id)]).filter(field => !links.some(link => link.id === field)), ...links.map(link => link.id), records.id];
+  const columns = [...(idea.columns ?? [...groupKeyFields(idea.grouping.keys), ...summaries.map(column => column.id)]).filter(field => !links.some(link => link.id === field)), ...links.map(link => link.id), records.id];
   return { ...idea, grouping: { ...idea.grouping, summaries: ordered }, columns };
 }
 function idea(dataset: UsageDataset, id: string, section: string, label: string, title: string, keys: string[], summaries: SummaryColumn[], sort = summaries.find(column => column.op !== "link")?.id, chronological = false): QueryIdea {
@@ -42,7 +42,13 @@ const mcp = [sum("call_count", "Calls"), sum("error_count", "Failed calls"), rat
 // additive; elapsed occupancy is repeated across units and must not be summed.
 const occupancy = [sum("unit_hours", "Agent/workspace hours"), distinct("unit_id", "Units"), { id: "idea_peak", op: "max" as const, field: "level", label: "Peak recorded concurrency" }];
 
+// Agent events: each row is one event; agent_event_messages: one row per message read.
+const agentEvents: SummaryColumn[] = [count("idea_events", "Events"), distinct("conversation_id", "Conversations"), distinct("message_id", "Messages")];
+const agentEventMessages: SummaryColumn[] = [sum("message_count", "Messages read"), sum("candidates", "Keyword hits"), sum("events", "Events"), ratio("idea_events_per_message", "SUM([events])/NULLIF(SUM([message_count]),0)", "Events per message")];
+
 export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
+  model_requests: [idea("model_requests","models","Compare","Timing coverage by model","Retained requests and usable post-tool gaps by model",["model"],[count("idea_requests","Retained requests"),count("idea_timed","Usable gaps","gap_seconds")])],
+  tl1_attempts: [],
   usage: [...usageGroupPresets.map(preset => ({ preset, section: "Group by" })), ...usageComparisonPresets.map(preset => ({ preset, section: "Compare" }))].map(({ preset, section }) => finish("usage", { ...preset, id: `usage:${preset.label}`, section })),
   writing: [
     idea("writing", "repos", "Compare", "By repository", "Compare whole-work writing totals and weighted words per written turn by repository", ["repository_name"], written),
@@ -99,6 +105,16 @@ export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
     idea("parallelism", "weeks", "Over time", "Weekly activity", "Agent/workspace hours per week with each counting method and gap separate", ["week", "counting", "gap_minutes"], occupancy, "idea_unit_hours", true),
     idea("parallelism", "levels", "Compare", "Concurrency bands", "Compare unit-hours by concurrency band without summing repeated elapsed time", ["counting", "gap_minutes", "level_band"], occupancy),
     idea("parallelism", "threads", "Explore", "Conversation activity", "Inspect hourly occupancy records and open their source conversation when recorded", ["counting", "gap_minutes", "conversation_id"], [...occupancy, conversation]),
+  ],
+  agent_events: [
+    idea("agent_events", "kinds", "Compare", "Events by kind", "Compare how often each kind of event occurs, and in how many conversations", ["family"], agentEvents),
+    idea("agent_events", "weeks", "Over time", "Weekly events", "Events per week by kind group", ["week", "family_group"], agentEvents, "idea_events", true),
+    idea("agent_events", "repos", "Compare", "Events by repository", "Compare events and affected conversations across repositories", ["repository_name"], agentEvents),
+    idea("agent_events", "threads", "Explore", "Conversations with the most events", "Rank conversations by their events and open them in the reader", ["conversation_id"], [...agentEvents, conversation]),
+  ],
+  agent_event_messages: [
+    idea("agent_event_messages", "repos", "Compare", "Messages read by repository", "Compare messages read, keyword hits and events across repositories", ["repository_name"], agentEventMessages),
+    idea("agent_event_messages", "sources", "Compare", "Replies and thinking", "Compare events per message in visible replies and thinking", ["source"], agentEventMessages),
   ],
 };
 

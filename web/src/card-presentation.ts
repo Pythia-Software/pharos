@@ -1,5 +1,6 @@
 import type { MetricDisplay, MetricValue, MetricValueFormat } from "@pythia-software/query-table-core";
 import { chartSeriesStyle } from "./chart-colors";
+import { denseBoxGroups, fittedCoverHeight } from "./card-loading-model";
 import type { QueryPreview } from "./query-previews";
 
 function compactAxisFormat(format: MetricValueFormat | undefined, values: (MetricValue | undefined)[]): MetricValueFormat {
@@ -45,12 +46,26 @@ export function compactMetricPresentation(preview: QueryPreview) {
     yFormat: compactAxisFormat(clause.display?.yFormat, result.buckets.slice(0, budget).map(bucket => bucket.y)),
   } : {};
   const axisScales: Pick<MetricDisplay, "xScale" | "yScale"> = {
-    xScale: { ...clause.display?.xScale, mode: kind === "scatter" ? clause.display?.xScale?.mode ?? "linear" : "linear" },
-    yScale: { ...clause.display?.yScale, mode: kind === "scatter" ? clause.display?.yScale?.mode ?? "linear" : "linear" },
+    xScale: { ...clause.display?.xScale, mode: kind === "scatter" || preview.preserveScale ? clause.display?.xScale?.mode ?? "linear" : "linear" },
+    yScale: { ...clause.display?.yScale, mode: kind === "scatter" || preview.preserveScale ? clause.display?.yScale?.mode ?? "linear" : "linear" },
   };
   const omittedLogPoints = kind === "scatter" ? result.buckets.slice(0, budget).filter(bucket =>
     !bucket.error && !bucket.yError && typeof bucket.value === "number" && Number.isFinite(bucket.value) && typeof bucket.y === "number" && Number.isFinite(bucket.y)
     && (axisScales.xScale?.mode === "log" && bucket.value <= 0 || axisScales.yScale?.mode === "log" && bucket.y <= 0)).length : 0;
   if (omittedLogPoints) summary = [summary, `${omittedLogPoints.toLocaleString()} zero/negative ${omittedLogPoints === 1 ? "point" : "points"} omitted`].filter(Boolean).join(" · ");
   return { metric, scalar, kind, budget, shown, total, groupLabel, summary, headlineMetric, ranked, listOptions, axisFormats, axisScales, omittedLogPoints, friendlyKeys: !scalar && (compoundList || Boolean(preview.groupLabels) || clause.groupBy.length > 1 && ["pie", "donut", "scatter", "box"].includes(kind)) };
+}
+
+// A preview built without a recipe, such as a dashboard address in Ask, has
+// no authored cover height. Fit the cover to the marks it will draw.
+export function fittedPreview(preview: QueryPreview): QueryPreview {
+  if (preview.state !== "ready") return { ...preview, coverHeight: fittedCoverHeight("text", 0) };
+  if (preview.buckets && preview.series) return { ...preview, coverHeight: Math.max(fittedCoverHeight("columns", 0), 135 + Math.ceil(preview.series.length / 2) * 12) };
+  const presentation = compactMetricPresentation(preview);
+  if (!presentation) return preview;
+  const { kind, shown, ranked, listOptions, metric } = presentation;
+  const rows = shown + (ranked && metric.clause.display?.showOther && presentation.total > shown ? 1 : 0);
+  if (kind === "box") return { ...preview, density: shown > denseBoxGroups ? "compact" : preview.density, coverHeight: fittedCoverHeight("box", shown) };
+  const fitted = kind === "value" ? "value" : ranked ? "list" : kind === "pie" || kind === "donut" || kind === "scatter" || kind === "line" ? kind : "columns";
+  return { ...preview, coverHeight: fittedCoverHeight(fitted, rows, { belowLabels: listOptions?.barPosition === "below", labelLines: listOptions?.maxLabelLines }) };
 }

@@ -144,12 +144,26 @@ func (c *Catalog) workConversation(workspaceID, conversationID string, clip bool
 	if err != nil {
 		return nil, err
 	}
+	// Local labels are for the live reader; a shared export leaves them out.
+	attachLabels, labelsSummary := func(map[string]any) {}, func() (map[string]any, error) { return nil, nil }
+	attachEvents, eventsSummary := func(map[string]any) {}, func() (map[string]any, error) { return nil, nil }
+	if clip {
+		if attachLabels, labelsSummary, err = c.messageLabelsAttacher(conversationID); err != nil {
+			return nil, err
+		}
+		// Agent events (agent_events.go), likewise only in the live reader.
+		if attachEvents, eventsSummary, err = c.agentEventsAttacher(conversationID); err != nil {
+			return nil, err
+		}
+	}
 	// With ledger usage, whole bodies are only needed while attaching authorship
 	// and clipping a row. Do that before retaining it, rather than keeping every
 	// original output alive until the entire conversation has been read.
 	previewRows := clip && len(sessions) > 0
 	prepare := func(message map[string]any) {
 		attach(message)
+		attachLabels(message)
+		attachEvents(message)
 		if previewRows {
 			clipReaderMessage(message)
 		}
@@ -178,6 +192,16 @@ func (c *Catalog) workConversation(workspaceID, conversationID string, clip bool
 	})
 	for _, message := range messages {
 		delete(message, "source_order")
+	}
+	if labels, err := labelsSummary(); err != nil {
+		return nil, err
+	} else if labels != nil {
+		conversation["labels"] = labels
+	}
+	if events, err := eventsSummary(); err != nil {
+		return nil, err
+	} else if events != nil {
+		conversation["agent_events"] = events
 	}
 	if len(sessions) > 0 {
 		usage := tokenCounts{}

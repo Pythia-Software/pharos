@@ -5,6 +5,7 @@ import Foundation
 import Darwin
 import CryptoKit
 import Sparkle
+import WebKit
 
 /// Stub HTTP readiness/release independently of the owned subprocess. This
 /// reproduces startup with a live child whose listener is not accepting yet.
@@ -289,6 +290,38 @@ func refuses(_ work: () throws -> Void, _ message: String) {
                 StartupResponse.ready = true
                 until("readiness polling did not resume after cancelled quit") { service.url != nil }
                 expect(service.error == nil, "cancelled startup quit can recover to a ready service")
+                // Broker readiness alone cannot dismiss the startup beacon:
+                // the page's initial request can still be opening its library.
+                expect(service.pageLoading, "readiness must keep the beacon until a page loads")
+                let page = ArchiveWKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+                let coordinator = ArchiveWebView.Coordinator(origin: service.url!)
+                coordinator.service = service
+                coordinator.webView(page, didFinish: nil)
+                expect(!service.pageLoading, "a finished page dismisses the startup beacon")
+                coordinator.webView(page, didStartProvisionalNavigation: nil)
+                expect(!service.pageLoading, "later navigation preserves the visible page without a startup beacon")
+                coordinator.webView(page, didFinish: nil)
+                for error in [
+                    NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled),
+                    NSError(domain: "WebKitErrorDomain", code: 102),
+                    NSError(domain: "WebKitErrorDomain", code: 204),
+                ] {
+                    for provisional in [true, false] {
+                        // Each case starts at the initial navigation. A cancelled
+                        // or diverted load need not have a replacement or finish.
+                        service.pageLoading = true
+                        coordinator.webView(page, didStartProvisionalNavigation: nil)
+                        if provisional {
+                            coordinator.webView(page, didFailProvisionalNavigation: nil, withError: error)
+                        } else {
+                            coordinator.webView(page, didFail: nil, withError: error)
+                        }
+                        expect(!service.pageLoading, "an ignored navigation error dismisses the startup beacon (\(error), provisional: \(provisional))")
+                        expect(service.pageError == nil && !service.pageWaiting, "an ignored navigation keeps the working page available")
+                        coordinator.webView(page, didStartProvisionalNavigation: nil)
+                        expect(!service.pageLoading, "navigation after an ignored error does not rearm the startup beacon")
+                    }
+                }
                 StartupResponse.busy = true
                 finished = false
                 service.prepareToTerminate(installing: true) { error in

@@ -69,10 +69,13 @@ func captureViewOf(adapter Adapter) *captureView {
 	return nil
 }
 
-// IngestContext stops between workspace records once ctx is cancelled. Each
-// record commits on its own, so the source is left "indexing" and the next
-// sync resumes it, as after a crash.
+// IngestContext yields to queries before acquiring a record's writer. Cancellation
+// rolls back any unfinished record; committed records remain and the next sync
+// resumes the source, as after a crash.
 func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress ProgressFunc) IngestResult {
+	if err := c.queries.wait(ctx); err != nil {
+		return IngestResult{Source: adapter.Config().Name, Error: err.Error()}
+	}
 	// Plans retain the acquired reader, never readers over a live inventory.
 	if plan := modeOf(ctx).plan; plan != nil && plan.reader != nil {
 		adapter = plan.reader
@@ -326,7 +329,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 			tracker = mode.plan.tracker
 		}
 		if tracker == nil {
-			tracker, err = c.newPartTracker(host, config.Name, partial, captureViewOf(adapter))
+			tracker, err = c.newPartTracker(ctx, host, config.Name, partial, captureViewOf(adapter))
 		}
 		if err != nil {
 			return err
@@ -341,7 +344,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 	processRecord := func(record *WorkspaceRecord, parts []sourcePart) error {
 		started := time.Now()
 		defer func() { result.WriteSeconds += time.Since(started).Seconds() }()
-		if err := ctx.Err(); err != nil {
+		if err := c.queries.wait(ctx); err != nil {
 			return err
 		}
 		result.Parsed += physicalPartCount(parts)
@@ -382,7 +385,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 				return err
 			}
 			if updated {
-				c.boundWAL(walSizeLimit)
+				c.boundWAL(ctx, walSizeLimit)
 				result.SkippedCurrent++
 				return nil
 			}
@@ -421,7 +424,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 				}
 			}
 			if !copied {
-				conversations, messages, err = ingestCopyMode(tx, *record, adapter.Capability() == "tl1-release", host, config.Name, captureViewOf(adapter) != nil, mode.force, repositoryOptions{c.RepositoryAliases, c.RepositorySeparate})
+				conversations, messages, err = ingestCopyModeContext(ctx, tx, *record, adapter.Capability() == "tl1-release", host, config.Name, captureViewOf(adapter) != nil, mode.force, repositoryOptions{c.RepositoryAliases, c.RepositorySeparate})
 				if errors.Is(err, errOlderCopy) {
 					// Nothing is recorded, so the newer read's digest and parts stand.
 					older = true
@@ -470,7 +473,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 			result.Older++
 			return nil
 		}
-		c.boundWAL(walSizeLimit)
+		c.boundWAL(ctx, walSizeLimit)
 		if copied {
 			result.SkippedCurrent++
 			return nil
@@ -533,6 +536,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 // commits constantly during a sync) fails its first write at once instead of
 // waiting out busy_timeout.
 func (c *Catalog) beginWrite(ctx context.Context) (*sql.Tx, error) {
+	cliWriteCheck("write")
 	tx, err := c.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -627,10 +631,20 @@ func (c *Catalog) IngestExisting(adapter Adapter, progress ProgressFunc) IngestR
 			return fmt.Errorf("selective adapter emitted unrequested source id %q", record.SourceID)
 		}
 		retainedRecordIdentity(captureViewOf(adapter), &record, nil)
-		tx, beginErr := c.beginWrite(context.Background())
+		// Through the writer gate, so the journal's lane yields to it (§6.2);
+		// released at commit, before the writes below that take it again.
+		tx, finish, beginErr := c.beginTrackedWrite(context.Background(), "repair-existing")
 		if beginErr != nil {
 			return beginErr
 		}
+		released := false
+		done := func() {
+			if !released {
+				released = true
+				finish()
+			}
+		}
+		defer done()
 		conversations, messages, ingestErr := ingestCopy(tx, record, adapter.Capability() == "tl1-release", host.ID, config.Name, captureViewOf(adapter) != nil, repositoryOptions{c.RepositoryAliases, c.RepositorySeparate})
 		if errors.Is(ingestErr, errOlderCopy) {
 			tx.Rollback()
@@ -641,10 +655,12 @@ func (c *Catalog) IngestExisting(adapter Adapter, progress ProgressFunc) IngestR
 			tx.Rollback()
 			return ingestErr
 		}
-		if commitErr := tx.Commit(); commitErr != nil {
+		commitErr := tx.Commit()
+		done()
+		if commitErr != nil {
 			return commitErr
 		}
-		c.boundWAL(walSizeLimit)
+		c.boundWAL(context.Background(), walSizeLimit)
 		result.Workspaces++
 		result.Conversations += conversations
 		result.Messages += messages
@@ -708,6 +724,15 @@ func ingestCopy(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host,
 }
 
 func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host, source string, fromCapture, force bool, repositoryOptions ...repositoryOptions) (int, int, error) {
+	return ingestCopyModeContext(context.Background(), tx, record, allowReclamation, host, source, fromCapture, force, repositoryOptions...)
+}
+
+func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host, source string, fromCapture, force bool, repositoryOptions ...repositoryOptions) (int, int, error) {
+	// The caller already holds the catalog writer. Check cancellation within
+	// this atomic record, but never pause for queries while holding that lock.
+	if err := ctx.Err(); err != nil {
+		return 0, 0, err
+	}
 	// Native Ask Pharos transcripts contain private lookup context. Only the
 	// separately stored user-visible chat is indexed, never the agent protocol.
 	if len(record.Conversations) > 0 {
@@ -848,6 +873,9 @@ func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, h
 	merged := map[string]bool{}
 	written := 0
 	for index, conversation := range record.Conversations {
+		if err := ctx.Err(); err != nil {
+			return 0, 0, err
+		}
 		if authority.conversations[index].older {
 			continue
 		}
@@ -893,13 +921,19 @@ func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, h
 		}
 		retained := map[string]bool{}
 		for sourceOrder, message := range conversation.Messages {
+			if err := ctx.Err(); err != nil {
+				messageWriter.statement.Close()
+				return 0, 0, err
+			}
 			message.SourceOrder = sourceOrder
 			id, changed, err := messageWriter.write(message)
 			if err != nil {
 				messageWriter.statement.Close()
 				return 0, 0, err
 			}
-			if changed {
+			// A forced rebuild replaces the whole conversation's postings below.
+			// Updating them here as well doubles the index IO for changed text.
+			if changed && !force {
 				if err := replaceMessageFTS(tx, id); err != nil {
 					messageWriter.statement.Close()
 					return 0, 0, err
@@ -1310,7 +1344,10 @@ func upsertRepositoryChanges(tx *sql.Tx, value map[string]any, options ...reposi
 	}
 	_, err = tx.Exec(`INSERT INTO repositories(id,canonical_remote,normalized_remote,display_name,owner,root_commit,forge_id,aliases_json,local_locations_json,created_at,updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET canonical_remote=COALESCE(excluded.canonical_remote,repositories.canonical_remote),normalized_remote=COALESCE(excluded.normalized_remote,repositories.normalized_remote),display_name=excluded.display_name,
-		owner=COALESCE(excluded.owner,repositories.owner),root_commit=COALESCE(excluded.root_commit,repositories.root_commit),forge_id=COALESCE(excluded.forge_id,repositories.forge_id),aliases_json=excluded.aliases_json,local_locations_json=excluded.local_locations_json,updated_at=excluded.updated_at`, item.ID, nilIfEmpty(item.Remote), nilIfEmpty(item.Normalized), item.Name, nilIfEmpty(item.Owner), nilIfEmpty(item.Root), nilIfEmpty(item.Forge), jsonText(item.Aliases), jsonText(item.Locations), now(), now())
+		owner=COALESCE(excluded.owner,repositories.owner),root_commit=COALESCE(excluded.root_commit,repositories.root_commit),forge_id=COALESCE(excluded.forge_id,repositories.forge_id),aliases_json=excluded.aliases_json,local_locations_json=excluded.local_locations_json,updated_at=excluded.updated_at
+		WHERE (repositories.canonical_remote,repositories.normalized_remote,repositories.display_name,repositories.owner,repositories.root_commit,repositories.forge_id,repositories.aliases_json,repositories.local_locations_json)
+		IS NOT (COALESCE(excluded.canonical_remote,repositories.canonical_remote),COALESCE(excluded.normalized_remote,repositories.normalized_remote),excluded.display_name,
+		COALESCE(excluded.owner,repositories.owner),COALESCE(excluded.root_commit,repositories.root_commit),COALESCE(excluded.forge_id,repositories.forge_id),excluded.aliases_json,excluded.local_locations_json)`, item.ID, nilIfEmpty(item.Remote), nilIfEmpty(item.Normalized), item.Name, nilIfEmpty(item.Owner), nilIfEmpty(item.Root), nilIfEmpty(item.Forge), jsonText(item.Aliases), jsonText(item.Locations), now(), now())
 	return item.ID, staleToolPaths(added, item.ID, items), err
 }
 
@@ -1391,7 +1428,7 @@ func upsertConversation(tx *sql.Tx, workspaceID, workItemID string, value Conver
 			parent = found
 		}
 	}
-	_, err := tx.Exec(`INSERT INTO conversations(id,workspace_id,work_item_id,provider,model,effort,account,native_id,parent_id,agent_depth,agent_path,agent_nickname,origin,origin_host_id,coverage,started_at,ended_at,aliases_json,harness,harness_version_first,harness_version_last,harness_version_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(provider,account,native_id) DO UPDATE SET workspace_id=excluded.workspace_id,work_item_id=COALESCE(excluded.work_item_id,conversations.work_item_id),parent_id=COALESCE(excluded.parent_id,conversations.parent_id),agent_depth=excluded.agent_depth,agent_path=COALESCE(excluded.agent_path,conversations.agent_path),agent_nickname=COALESCE(excluded.agent_nickname,conversations.agent_nickname),origin=COALESCE(excluded.origin,conversations.origin),origin_host_id=excluded.origin_host_id,model=COALESCE(excluded.model,conversations.model),effort=excluded.effort,coverage=excluded.coverage,started_at=COALESCE(excluded.started_at,conversations.started_at),ended_at=MAX(excluded.ended_at,conversations.ended_at),aliases_json=excluded.aliases_json,harness=COALESCE(excluded.harness,conversations.harness),harness_version_first=COALESCE(conversations.harness_version_first,excluded.harness_version_first),harness_version_last=COALESCE(excluded.harness_version_last,conversations.harness_version_last),harness_version_source=CASE WHEN excluded.harness_version_last IS NOT NULL THEN excluded.harness_version_source ELSE conversations.harness_version_source END`, id, workspaceID, workItem, value.Provider, nilIfEmpty(value.Model), nilIfEmpty(value.Effort), value.Account, value.NativeID, parent, value.AgentDepth, nilIfEmpty(value.AgentPath), nilIfEmpty(value.AgentNickname), nilIfEmpty(value.Origin), host, defaultString(value.Coverage, "complete"), nilIfEmpty(value.StartedAt), nilIfEmpty(value.EndedAt), jsonText(value.Aliases), nilIfEmpty(value.Harness), nilIfEmpty(value.HarnessVersionFirst), nilIfEmpty(value.HarnessVersionLast), versionSource(value))
+	_, err := tx.Exec(`INSERT INTO conversations(id,workspace_id,work_item_id,provider,model,effort,account,native_id,parent_id,agent_depth,agent_path,agent_nickname,origin,origin_host_id,coverage,started_at,ended_at,aliases_json,harness,harness_version_first,harness_version_last,harness_version_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(provider,account,native_id) DO UPDATE SET workspace_id=excluded.workspace_id,work_item_id=COALESCE(excluded.work_item_id,conversations.work_item_id),parent_id=COALESCE(excluded.parent_id,conversations.parent_id),agent_depth=excluded.agent_depth,agent_path=COALESCE(excluded.agent_path,conversations.agent_path),agent_nickname=COALESCE(excluded.agent_nickname,conversations.agent_nickname),origin=COALESCE(excluded.origin,conversations.origin),origin_host_id=excluded.origin_host_id,model=COALESCE(excluded.model,conversations.model),effort=excluded.effort,coverage=excluded.coverage,started_at=COALESCE(excluded.started_at,conversations.started_at),ended_at=MAX(excluded.ended_at,conversations.ended_at),aliases_json=excluded.aliases_json,harness=COALESCE(excluded.harness,conversations.harness),harness_version_first=COALESCE(conversations.harness_version_first,excluded.harness_version_first),harness_version_last=COALESCE(excluded.harness_version_last,conversations.harness_version_last),harness_version_source=CASE WHEN excluded.harness_version_last IS NOT NULL THEN excluded.harness_version_source ELSE conversations.harness_version_source END`, id, workspaceID, workItem, value.Provider, nilIfEmpty(value.Model), nilIfEmpty(value.Effort), value.Account, value.NativeID, parent, value.AgentDepth, nilIfEmpty(value.AgentPath), nilIfEmpty(value.AgentNickname), nilIfEmpty(value.Origin), host, defaultString(value.Coverage, "complete"), nilIfEmpty(value.StartedAt), nilIfEmpty(value.EndedAt), jsonText(append([]string{}, value.Aliases...)), nilIfEmpty(value.Harness), nilIfEmpty(value.HarnessVersionFirst), nilIfEmpty(value.HarnessVersionLast), versionSource(value))
 	if err != nil {
 		return "", err
 	}
@@ -1461,7 +1498,7 @@ func replaceMessageFTS(tx *sql.Tx, id string) error {
 	if err := deleteMessageFTS(tx, id); err != nil {
 		return err
 	}
-	result, err := tx.Exec("INSERT INTO messages_fts(message_id,text) SELECT id,pharos_lexical_text(kind,text) FROM messages WHERE id=? AND text<>''", id)
+	result, err := tx.Exec("INSERT INTO messages_fts(message_id,text) SELECT id,pharos_lexical_text(kind,text) FROM messages WHERE id=? AND text<>'' AND "+wordIndexedKind(""), id)
 	if err != nil {
 		return err
 	}
@@ -1497,7 +1534,7 @@ func insertConversationFTS(tx *sql.Tx, conversationID string) error {
 	if err := tx.QueryRow("SELECT COALESCE(MAX(rowid),0) FROM messages_fts").Scan(&lastRowID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec("INSERT INTO messages_fts(message_id,text) SELECT id,pharos_lexical_text(kind,text) FROM messages WHERE conversation_id=? AND text<>''", conversationID); err != nil {
+	if _, err := tx.Exec("INSERT INTO messages_fts(message_id,text) SELECT id,pharos_lexical_text(kind,text) FROM messages WHERE conversation_id=? AND text<>'' AND "+wordIndexedKind(""), conversationID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec("INSERT INTO message_fts_rows(message_id,fts_rowid) SELECT message_id,rowid FROM messages_fts WHERE rowid>?", lastRowID); err != nil {
@@ -2067,7 +2104,21 @@ func (c *Catalog) ReconcileIdentities() (int, error) {
 	return c.ReconcileIdentitiesContext(context.Background())
 }
 
-func (c *Catalog) ReconcileIdentitiesContext(ctx context.Context) (int, error) {
+func (c *Catalog) ReconcileIdentitiesContext(ctx context.Context) (links int, err error) {
+	err = c.completeStage(ctx, "identities", func() error {
+		links, err = c.reconcileIdentities(ctx)
+		return err
+	})
+	return links, err
+}
+
+func (c *Catalog) reconcileIdentities(ctx context.Context) (int, error) {
+	// Links only accrue (deletes cascade), so those after lastLink are this
+	// pass's: only their workspaces' names can change.
+	var lastLink int64
+	if err := c.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(rowid),0) FROM conversation_identity_links").Scan(&lastLink); err != nil {
+		return 0, err
+	}
 	if err := c.reconcileHistoryLinks(ctx); err != nil {
 		return 0, err
 	}
@@ -2075,7 +2126,11 @@ func (c *Catalog) ReconcileIdentitiesContext(ctx context.Context) (int, error) {
 	if err := c.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM conversation_identity_links").Scan(&before); err != nil {
 		return 0, err
 	}
-	rows, err := queryMapsContext(ctx, c.DB, "SELECT id,aliases_json FROM conversations WHERE aliases_json<>'[]'")
+	// Ingest links a conversation's aliases as it writes it, and records them
+	// in declared_native_aliases, so a conversation written later links back
+	// to it. Only conversations from before those declarations need linking.
+	rows, err := queryMapsContext(ctx, c.DB, `SELECT id,aliases_json FROM conversations c WHERE aliases_json NOT IN ('[]','null')
+		AND NOT EXISTS(SELECT 1 FROM declared_native_aliases d WHERE d.conversation_id=c.id)`)
 	if err != nil {
 		return 0, err
 	}
@@ -2110,6 +2165,7 @@ func (c *Catalog) ReconcileIdentitiesContext(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	reportWork(ctx, "updating linked workspaces", "link", 0, len(links))
+	renamed := []string{}
 	for index, link := range links {
 		pairs := [][5]string{
 			{firstString(link["left_id"]), firstString(link["left_kind"]), firstString(link["left_activity"]), firstString(link["right_kind"]), firstString(link["right_activity"])},
@@ -2125,17 +2181,38 @@ func (c *Catalog) ReconcileIdentitiesContext(ctx context.Context) (int, error) {
 			}
 			activity, hasActivity := parseTime(pair[2])
 			if !hasActivity || linked.After(activity) {
-				if _, err := c.DB.ExecContext(ctx, "UPDATE workspaces SET activity_at=?,activity_source=? WHERE id=?", formatTime(linked), "linked:"+pair[3]+":native-id", pair[0]); err != nil {
+				if err := c.writeTransaction(ctx, "linked workspace activity", func(tx *sql.Tx) error {
+					result, err := tx.ExecContext(ctx, "UPDATE workspaces SET activity_at=?,activity_source=? WHERE id=? AND (activity_at IS NULL OR activity_at<?)", formatTime(linked), "linked:"+pair[3]+":native-id", pair[0], formatTime(linked))
+					if err != nil {
+						return err
+					}
+					if changed, _ := result.RowsAffected(); changed > 0 {
+						renamed = append(renamed, pair[0])
+					}
+					return nil
+				}); err != nil {
 					return 0, err
 				}
 			}
 		}
 		reportWork(ctx, "updating linked workspaces", "link", index+1, len(links))
 	}
-	if err := c.writeTransaction(ctx, "resolve linked workspace names", func(tx *sql.Tx) error {
-		return refreshWorkspaceNames(tx, nil)
-	}); err != nil {
+	added, err := queryMapsContext(ctx, c.DB, `SELECT DISTINCT c.workspace_id FROM conversation_identity_links l
+		JOIN conversations c ON c.id=l.left_id OR c.id=l.right_id WHERE l.rowid>?`, lastLink)
+	if err != nil {
 		return 0, err
+	}
+	for _, row := range added {
+		renamed = append(renamed, firstString(row["workspace_id"]))
+	}
+	// Ingest resolves the names of the workspaces it writes and those linked
+	// to them; this pass resolves those whose links or activity it changed.
+	if len(renamed) > 0 {
+		if err := c.writeTransaction(ctx, "resolve linked workspace names", func(tx *sql.Tx) error {
+			return refreshWorkspaceNames(tx, renamed)
+		}); err != nil {
+			return 0, err
+		}
 	}
 	var after int
 	if err := c.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM conversation_identity_links").Scan(&after); err != nil {

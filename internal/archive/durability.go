@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -81,10 +82,7 @@ func readerDSN(path string) string {
 // openReader opens c's read pool. It is lazy: no connection opens until a
 // read, by which time the writer pool has put the catalog in WAL mode.
 func (c *Catalog) openReader() error {
-	db, err := sql.Open("sqlite", readerDSN(c.Path))
-	if err != nil {
-		return err
-	}
+	db := openCatalogDB(c.Path, readerDSN(c.Path), "reader")
 	db.SetMaxOpenConns(readerConns)
 	db.SetMaxIdleConns(readerConns)
 	c.reads = db
@@ -109,6 +107,19 @@ var errCheckpointBusy = errors.New("catalog checkpoint incomplete: the WAL is st
 // second if a reader of an older snapshot or another writer is still active.
 // Readers are never blocked.
 func (c *Catalog) Checkpoint() error {
+	return c.checkpointWith(nil)
+}
+
+// checkpointTruncating runs just before the truncating pass; tests replace
+// it to see under which IO policy that pass runs.
+var checkpointTruncating = func() {}
+
+// checkpointWith is Checkpoint with passive, when set, wrapping the
+// passive pass only: the WAL bound runs that bulk copy, which takes no
+// writer lock, at its operation's priority class (§10). The truncating
+// pass holds writers off, so it always runs at the default tier.
+func (c *Catalog) checkpointWith(passive func(func())) error {
+	cliWriteCheck("checkpoint")
 	// Don't wait indefinitely for a pooled connection either, e.g. in Close
 	// while long queries still hold every connection.
 	acquire, cancel := context.WithTimeout(context.Background(), time.Duration(checkpointWaitMS)*time.Millisecond)
@@ -121,7 +132,11 @@ func (c *Catalog) Checkpoint() error {
 	ctx := context.Background()
 	// A passive pass copies what it can without the write lock, so the
 	// truncating pass below holds writers off only briefly.
-	if _, err := conn.ExecContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)"); err != nil {
+	if passive == nil {
+		passive = func(fn func()) { fn() }
+	}
+	passive(func() { _, err = conn.ExecContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)") })
+	if err != nil {
 		return err
 	}
 	if _, err := conn.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout=%d", checkpointWaitMS)); err != nil {
@@ -129,20 +144,33 @@ func (c *Catalog) Checkpoint() error {
 	}
 	defer conn.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout=%d", busyTimeoutMS))
 	var busy, logFrames, checkpointed int
+	checkpointTruncating()
 	if err := conn.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logFrames, &checkpointed); err != nil {
 		return err
 	}
 	if busy != 0 {
-		return errCheckpointBusy
+		return &checkpointBusyError{frames: int64(logFrames), backfilled: int64(checkpointed)}
 	}
 	return nil
 }
+
+// checkpointBusyError is errCheckpointBusy with what the truncating pass
+// reported: the frames in the log (mxFrame) and how many of them are in
+// the database (nBackfill); -1 when unknown.
+type checkpointBusyError struct{ frames, backfilled int64 }
+
+func (e *checkpointBusyError) Error() string        { return errCheckpointBusy.Error() }
+func (e *checkpointBusyError) Is(target error) bool { return target == errCheckpointBusy }
 
 // walBound lets one goroutine at a time checkpoint an oversized WAL and backs
 // off after readers kept a checkpoint from finishing.
 type walBound struct {
 	mu      sync.Mutex
 	retryAt time.Time
+	// stall is the busy checkpoint's diagnosis bookkeeping (wal_pin.go);
+	// pin its result, read by the attention list without mu.
+	stall walStall
+	pin   atomic.Pointer[walPin]
 }
 
 // boundWAL checkpoints once the WAL outgrows limit. An automatic checkpoint
@@ -151,8 +179,27 @@ type walBound struct {
 // log grows by everything a sync writes: reads slow down searching it, and an
 // unclean exit leaves all of it to replay on the next open. Syncs call this
 // between transactions, where the writer does not contend for its own lock.
-func (c *Catalog) boundWAL(limit int64) {
+//
+// The checkpoint's operation is a child of the operation ctx carries, so its
+// priority class (§10) is its caller's: a manual index, a capture or a
+// release waits for it and keeps the default IO tier. A caller with no
+// operation is waiting for it too (a close, a repair), so it is foreground;
+// only keepWALSmall's own ticker runs it as a background root.
+func (c *Catalog) boundWAL(ctx context.Context, limit int64) {
+	c.boundWALAt(ctx, limit, priorityForeground)
+}
+
+// boundWALAt is boundWAL; priority is the class of a checkpoint whose ctx
+// carries no operation.
+func (c *Catalog) boundWALAt(ctx context.Context, limit int64, priority string) {
 	if info, err := os.Stat(c.Path + "-wal"); err != nil || info.Size() <= limit {
+		// Another checkpoint (after a run, another process's) folded it in.
+		if c.wal.mu.TryLock() {
+			if c.wal.pin.Load() != nil || !c.wal.stall.backfillSince.IsZero() {
+				c.noteWALCheckpointed()
+			}
+			c.wal.mu.Unlock()
+		}
 		return
 	}
 	if !c.wal.mu.TryLock() {
@@ -162,9 +209,45 @@ func (c *Catalog) boundWAL(limit int64) {
 	if time.Now().Before(c.wal.retryAt) {
 		return
 	}
-	if err := c.Checkpoint(); err != nil {
-		c.wal.retryAt = time.Now().Add(walRetryDelay)
+	// Only a check that runs a checkpoint is an operation (§3.4).
+	if ctx == nil {
+		ctx = context.Background()
 	}
+	spec := OperationSpec{Kind: "maintenance.checkpoint", Variant: "bound", Trigger: triggerSchedule}
+	if opFrom(ctx) == nil {
+		spec.Priority = priority
+	} else {
+		spec.Trigger = triggerChained
+	}
+	// Not cancelled with its caller: a checkpoint is short and not
+	// interruptible.
+	_, op := c.beginOp(context.WithoutCancel(ctx), spec)
+	// Only the passive pass at the operation's class; the truncating pass,
+	// which blocks writers, at the default tier.
+	err := c.checkpointWith(op.RunIO)
+	if err != nil {
+		c.wal.retryAt = time.Now().Add(walRetryDelay)
+	} else {
+		c.noteWALCheckpointed()
+	}
+	if errors.Is(err, errCheckpointBusy) {
+		// A reader or a writer kept the checkpoint from finishing. A large
+		// log whose checkpoint stops advancing is diagnosed (wal_pin.go).
+		detail := ""
+		frames, backfilled := int64(-1), int64(-1)
+		var counts *checkpointBusyError
+		if errors.As(err, &counts) {
+			frames, backfilled = counts.frames, counts.backfilled
+		}
+		if info, statErr := os.Stat(c.Path + "-wal"); statErr == nil {
+			if pin := c.noteWALBusy(info.Size(), frames, backfilled, c.clock()); pin != nil {
+				detail = pin.String()
+			}
+		}
+		op.SkipWith("catalog-busy", detail)
+		return
+	}
+	op.Finish(err)
 }
 
 // keepWALSmall bounds the WAL between syncs and while other processes write.
@@ -176,7 +259,7 @@ func (c *Catalog) keepWALSmall(ctx context.Context, every time.Duration, limit i
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			c.boundWAL(limit)
+			c.boundWALAt(context.Background(), limit, priorityBackground)
 		}
 	}
 }

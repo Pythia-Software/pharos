@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mergeIntervals, workspaceSpans, concurrencyAverage, concurrencySpans, concurrencyUnit, conversationTimings, formatConcurrencyDuration, clipIntervals, workSessions, concurrencyMetrics, stackSegments, zonedDayBounds } from "../../../src/concurrency-data";
-import { loadConcurrencyData, threadedSummaryWindow, openConcurrencyModal, closeConcurrencyModal } from "../../../src/concurrency-store";
+import { loadConcurrencyData, threadedSummaryWindow, quickStatsRuntimeWindow, openConcurrencyModal, closeConcurrencyModal } from "../../../src/concurrency-store";
 import { normalizeConcurrencySettings, resolveConcurrencyRange } from "../../../src/concurrency-settings";
 import { describeDataSource } from "../../../src/data-taxonomy-model";
 
@@ -354,4 +354,54 @@ test("multi-day windows follow daylight savings and retain idle days in the aver
   assert.equal(range.bounds[1] - range.bounds[0], 71 * 60 * minute);
   const spans = new Map([["a", [[range.bounds[0], range.bounds[0] + 2 * 60 * minute]]]]);
   assert.equal(concurrencyMetrics(spans, [], range.bounds).average, 2 / 71);
+});
+
+
+test("Today parallelism includes elapsed idle time without substituting the last captured date", () => {
+  const now = new Date(2026, 10, 1, 9), midnight = new Date(now); midnight.setHours(0, 0, 0, 0);
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const day = new Intl.DateTimeFormat("en-CA").format(now);
+  const data = { timezone: zone, period_start: day, period_end: day, threads: [repoThread("w", "repo", [[+midnight, +midnight + 3600000]])] };
+  const settings = normalizeConcurrencySettings({ range: "today" });
+  assert.equal(settings.range, "today");
+  assert.deepEqual(resolveConcurrencyRange(data, settings, now).bounds, [+midnight, +now]);
+  const result = threadedSummaryWindow(data, 0, "", "today", +now, "workspace", midnight.toISOString());
+  assert.equal(result.average, 3600000/(+now-+midnight));
+  assert.equal(threadedSummaryWindow({ ...data, threads: [] }, 0, "", "today", +now).average, 0);
+  const old = { ...data, period_start: "2026-01-01", period_end: "2026-01-02" };
+  assert.deepEqual(resolveConcurrencyRange(old, settings, now).bounds, [+midnight, +now]);
+  assert.equal(threadedSummaryWindow(old, 0, "", "today", +now), null);
+  assert.equal(threadedSummaryWindow(data, 0, "", "today", +midnight), null);
+});
+
+test('linked parallelism restoration is read-only and deliberate changes save only chosen defaults',async t=>{
+ const {readConcurrencySettings,saveConcurrencyChanges,concurrencySettingsKey}=await import('../../../src/concurrency-settings');
+ const originals=new Map(['location','window'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
+ t.after(()=>{for(const[key,descriptor]of originals){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key]}});
+ let stored={gap:60,counting:'workspace',repository:'saved',range:'7d'};const writes=[];
+ globalThis.window={pharosPrefs:{get:()=>stored,set:(key,value)=>{assert.equal(key,concurrencySettingsKey);stored=value;writes.push(value)}},dispatchEvent(){}};
+ globalThis.location=new URL('https://pharos.test/analyze?'+new URLSearchParams({analyze_parallelism:JSON.stringify({gap:0,counting:'agent',repository:'linked',range:'30d'})}));
+ assert.equal(readConcurrencySettings().gap,0);assert.equal(writes.length,0);
+ saveConcurrencyChanges({gap:15});
+ assert.equal(stored.gap,15);assert.equal(stored.counting,'workspace');assert.equal(stored.repository,'saved');assert.equal(stored.range,'7d');
+ globalThis.location=new URL('https://pharos.test/analyze?analyze_topic=parallelism');
+ assert.equal(readConcurrencySettings().gap,15);
+});
+
+test("Quick Stats runtimes count parallel sessions separately and union wall time", () => {
+  const base = Date.parse("2026-10-06T10:00:00Z"), hour = 60 * minute;
+  const roots = [thread("one", "same-checkout", [[base, base + hour]]), thread("two", "same-checkout", [[base, base + hour]])];
+  const child = {...thread("child", "same-checkout", [[base, base + hour]], undefined, 1), root_conversation_id: "one"};
+  const data = {period_start:"2026-10-01",period_end:"2026-10-07",timezone:"UTC",threads:[...roots,child]};
+  assert.deepEqual(quickStatsRuntimeWindow(data, 0, "1h", base + hour), {agent:2*hour,active:hour});
+  assert.deepEqual(quickStatsRuntimeWindow(data, 0, "15m", base + hour), {agent:30*minute,active:15*minute});
+  assert.deepEqual(quickStatsRuntimeWindow(data, 0, "5m", base + hour), {agent:10*minute,active:5*minute});
+  assert.deepEqual(quickStatsRuntimeWindow(data, 0, "yesterday", base + hour, new Date(base + 30*minute).toISOString()), {agent:hour,active:30*minute});
+  assert.deepEqual(quickStatsRuntimeWindow({...data,threads:[]}, 0, "1h", base + hour), {agent:0,active:0});
+  assert.equal(quickStatsRuntimeWindow(data, 0, "all", base + hour), null);
+  assert.equal(quickStatsRuntimeWindow(data, 0, "month", base + hour, "2026-09-30T23:00:00Z"), null);
+  assert.equal(quickStatsRuntimeWindow(data, 0, "today", NaN), null);
+  const gaps = {...data,threads:[thread("gaps", "same", [[base,base+minute],[base+10*minute,base+11*minute]])]};
+  assert.equal(quickStatsRuntimeWindow(gaps, 0, "1h", base + hour).agent, 2*minute);
+  assert.equal(quickStatsRuntimeWindow(gaps, 15, "1h", base + hour).agent, 11*minute);
 });

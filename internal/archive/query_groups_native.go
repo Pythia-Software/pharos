@@ -101,7 +101,7 @@ func (c *Catalog) nativeTextComplementGroups(ctx context.Context, tx *sql.Tx, ta
 // facts. Its freshness is checked in this read snapshot before replacing raw
 // calls with weighted groups. The caller has validated integer domains/bounds.
 func (c *Catalog) nativeMachineTimeGroups(ctx context.Context, tx *sql.Tx, d qt.QueryDatasetV3, q qt.QueryRequestV3, fields nativeFields) ([]nativeGroup, int64, bool, error) {
-	if d.Dataset != "pharos_tool_calls" || slices.ContainsFunc(fields.names, func(field string) bool { return field != "duration_ms" }) || slices.ContainsFunc(q.Grouping.Keys, func(field string) bool { return !machineTimeDimensions.has(field) }) {
+	if d.Dataset != "pharos_tool_calls" || slices.ContainsFunc(fields.names, func(field string) bool { return field != "duration_ms" }) || len(q.Grouping.KeyIntervals) > 0 || slices.ContainsFunc(q.Grouping.Keys, func(field string) bool { return !machineTimeDimensions.has(field) }) {
 		return nil, 0, false, nil
 	}
 	lower, upper, where, valid := machineTimeDayRange(q.Source.Where)

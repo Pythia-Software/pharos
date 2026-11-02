@@ -1,5 +1,15 @@
 # Usage query optimization handoff
 
+**Resolved upstream.** Query Table 0.9.3 fuses metrics across fields, 0.9.4
+reduces grouped V3 sources directly, and 0.9.7 accepts host predicate
+relations, proves V2 sources once per data generation, and picks the nearest
+point on line charts. Pharos gives its adapter executions source generations;
+its host reducer, substring narrowing and broad-exclusion complement remain,
+and it measured predicate relations without adopting them. See
+[source proofs](query-table-integration.md#source-proofs) and
+[substring relations](query-table-integration.md#substring-relations-measured-not-adopted)
+for the measurements.
+
 Pharos consumes the published Query Table **0.9.2** release. This work changes
 no Query Table package, module, installed dependency, or generated library code.
 The frontend bundle is rebuilt from the host's normal TypeScript source.

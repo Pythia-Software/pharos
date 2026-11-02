@@ -1,11 +1,16 @@
+import { queryRecipes } from "./curiosity-data";
+import { cardDestination } from "./card-destinations";
+import type { WindowChoice } from "./day-window";
 import { encodeQuery, normalizeQueryState, type QueryState, type SavedQuery, createQueryLinkService, httpQuerySnapshotStore } from "@pythia-software/query-table-core";
 import type { CardCover } from "./card-cover";
 import { preferences } from "./preferences";
+import { normalizedDashboardChart } from "./analysis-catalogs";
 import { queryDatasets, queryFromURL, queryURL, resolveRollingQuery, rollingQueryMatches, updateQueryWindowURL, type QueryDataset, type RollingWindow } from "./query-links";
 
 export const BOOKMARKS_KEY = "pharos-bookmarks-v1";
 export type Bookmark = {
   id: string; title: string; url: string; description?: string; savedAt?: number;
+  dashboard?: boolean;
   query?: QueryState; dataset?: QueryDataset; savedQueryId?: string; templateId?: string; coverMetricId?: string; cover?: CardCover;
 };
 
@@ -25,14 +30,20 @@ export function writeBookmarks(items: Bookmark[]) {
 export function migrateSavedQueries() {
   let items = readBookmarks(), changed = false;
   items = items.map(item => {
-    const spec = queryFromURL(item.url, item.query);
-    if (spec?.window && spec.window.mode !== "relative" && rollingQueryMatches(spec.query, spec.window)) {
+    let spec = queryFromURL(item.url, item.query);
+    if (spec?.window && spec.window.mode === "calendar" && rollingQueryMatches(spec.query, spec.window)) {
       const url = updateQueryWindowURL(item.url, spec.window.days, item.query);
       changed = true; item = { ...item, url, query: queryFromURL(url)?.query };
+      spec = queryFromURL(item.url, item.query);
     }
     try {
       const url = new URL(item.url, location.origin);
       if (url.origin === location.origin && url.searchParams.has("card_id")) {
+        const recipe = queryRecipes.find(recipe => recipe.id === url.searchParams.get("card_id"));
+        if (recipe?.destination && spec) {
+          const destination = new URL(cardDestination(recipe, spec.query, spec.window), location.origin);
+          for (const [key, value] of destination.searchParams) if (key.startsWith("analyze_")) url.searchParams.set(key, value);
+        }
         if (item.cover) url.searchParams.set("card_cover", JSON.stringify(item.cover));
         if (item.coverMetricId) url.searchParams.set("card_metric", item.coverMetricId);
         url.searchParams.set("card_title", item.title);
@@ -83,14 +94,19 @@ export function collectQuery(dataset: QueryDataset, query: QueryState, title: st
   const items = readBookmarks(), url = options.url ?? queryURL(dataset, query, options.window);
   const dashboardContext = (address: string) => {
     const params = new URL(address, location.origin).searchParams;
-    return params.get("card_query") && params.get("analyze_mode") === "dashboards" ? JSON.stringify([params.get("analyze_topic"), params.get("analyze_chart"), params.get("analyze_filters")]) : "";
+    return params.get("card_query") && params.get("analyze_mode") === "dashboards" ? JSON.stringify([params.get("analyze_topic"), normalizedDashboardChart(params.get("analyze_topic"), params.get("analyze_chart")), params.get("analyze_filters")]) : "";
+  };
+  // The same card link, written before or after a chart's format changed.
+  const sameLink = (address: string) => {
+    const strip = (value: string) => { const parsed = new URL(value, location.origin); parsed.searchParams.delete("analyze_chart"); return parsed.pathname + parsed.search; };
+    return Boolean(dashboardContext(address)) && strip(address) === strip(url) && dashboardContext(address) === dashboardContext(url);
   };
   const existing = items.find(item => {
     // A template can select a specialized study even when its source query
     // and cover match another card. Preserve that identity when collecting.
     if (item.templateId !== options.templateId) return false;
     if (JSON.stringify(item.cover) !== JSON.stringify(options.cover)) return false;
-    if (item.url === url) return true;
+    if (item.url === url || sameLink(item.url)) return true;
     const spec = options.templateId && item.templateId === options.templateId ? queryFromURL(item.url, item.query) : undefined;
     return spec?.dataset === dataset && encodeQuery(spec.query) === encodeQuery(query) && dashboardContext(item.url) === dashboardContext(url);
   });
@@ -104,7 +120,7 @@ export function collectQuery(dataset: QueryDataset, query: QueryState, title: st
   return item;
 }
 
-export function updateBookmark(id: string, title: string, description: string, days?: number | null, coverMetricId?: string): Bookmark {
+export function updateBookmark(id: string, title: string, description: string, days?: WindowChoice | null, coverMetricId?: string): Bookmark {
   if (!title.trim() || title.trim().length > 200 || description.length > 500) throw new Error("Use a title up to 200 characters and a description up to 500.");
   const items = readBookmarks(), current = items.find(item => item.id === id), spec = current && queryFromURL(current.url, current.query);
   if (!current) throw new Error("This saved view is no longer in your collection.");
@@ -128,7 +144,7 @@ export function updateBookmark(id: string, title: string, description: string, d
       }
     } else { delete updated.coverMetricId; delete updated.cover; }
   }
-  if (days !== undefined && days !== spec?.window?.days) {
+  if (days !== undefined && days !== (spec?.window?.mode === "today" ? "today" : spec?.window?.days)) {
     updated.url = updateQueryWindowURL(updated.url, days, updated.query ?? current.query);
     updated.query = queryFromURL(updated.url, updated.query ?? current.query)?.query;
     if (current.templateId) updated.templateId = `${current.templateId.split(":")[0]}:${days ?? "all"}`;

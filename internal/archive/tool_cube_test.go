@@ -93,8 +93,9 @@ const toolRollupFromCalls = `SELECT date(t.started_at,'localtime') day,r.display
 	WHERE t.workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)
 	GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20`
 
-// same compares two results that should agree. Floats may differ in the
-// last places: sums taken in another order, or scores from float32 vectors.
+// same compares two results that should agree, field by exported field.
+// Floats may differ in the last places: sums taken in another order, or
+// scores from float32 vectors.
 func same(left, right any) bool {
 	a, b := reflect.ValueOf(left), reflect.ValueOf(right)
 	if !a.IsValid() || !b.IsValid() {
@@ -130,6 +131,10 @@ func same(left, right any) bool {
 		return true
 	case reflect.Struct:
 		for index := range a.NumField() {
+			// Unexported fields are the executor's working state, never results.
+			if !a.Type().Field(index).IsExported() {
+				continue
+			}
 			if !same(a.Field(index).Interface(), b.Field(index).Interface()) {
 				return false
 			}
@@ -237,6 +242,18 @@ func TestToolCallCubeAnswersLikeTheCalls(t *testing.T) {
 			if !same(got, want) {
 				t.Fatalf("distinct %s %q: cube %v, calls %v", field, search, got, want)
 			}
+		}
+		// browse_site's most frequent values count the cube's groups.
+		got, err := toolCallDataset.FrequentValues(ctx, catalog.DB, field, 50, schema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := direct.FrequentValues(ctx, catalog.DB, field, 50, schema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !same(got, want) || field == "tool_name" && (len(got) < 2 || got[0].Count < got[len(got)-1].Count) {
+			t.Fatalf("frequent %s: cube %v, calls %v", field, got, want)
 		}
 	}
 	names := []string{}

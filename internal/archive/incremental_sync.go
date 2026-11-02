@@ -126,7 +126,8 @@ func unitOf(source SourceConfig, parts []sourcePart, changed bool) syncUnit {
 }
 
 func (c *Catalog) syncSettings(ctx context.Context) (syncSettings, error) {
-	settings := syncSettings{Interval: 300, Sources: []string{}}
+	// Background Processing are on until someone turns them off.
+	settings := syncSettings{Enabled: true, Interval: 300, Sources: []string{}}
 	var enabled int
 	var sources string
 	err := c.reader().QueryRowContext(ctx, "SELECT enabled,interval_seconds,sources_json,COALESCE(next_at,'') FROM sync_settings WHERE host_id=?", currentHost().ID).
@@ -187,12 +188,10 @@ func (s *Server) automaticLoop(ctx context.Context) {
 	timer := time.NewTicker(time.Second)
 	defer timer.Stop()
 	for {
-		settings, err := s.Catalog.syncSettings(ctx)
-		if err == nil && settings.Enabled {
-			due, _ := time.Parse(time.RFC3339Nano, settings.NextAt)
-			if due.IsZero() || !time.Now().Before(due) {
-				s.runAutomatic(ctx, settings)
-			}
+		background, err := s.Catalog.backgroundSettings(ctx, time.Now())
+		requested := s.indexRequested()
+		if err == nil && automaticDue(background, s.cachedPower(ctx), requested, time.Now()) && s.runAutomatic(ctx, background.sync) && requested {
+			s.takeIndexRequest()
 		}
 		select {
 		case <-ctx.Done():
@@ -200,6 +199,26 @@ func (s *Server) automaticLoop(ctx context.Context) {
 		case <-timer.C:
 		}
 	}
+}
+
+// automaticDue is whether the scheduled index runs now: Run now
+// (requested) whatever the mode, power or time; otherwise when background
+// updates are on, the battery policy lets Frequently run, and its time has
+// come, 15 min after the last run on battery when Frequently runs slower
+// (§11).
+func automaticDue(background backgroundSettings, power powerState, requested bool, at time.Time) bool {
+	if requested {
+		return true
+	}
+	battery := background.Battery.onPower(cadenceFrequent, power)
+	if background.Mode != "on" || battery == batteryWait {
+		return false
+	}
+	due, _ := time.Parse(time.RFC3339Nano, background.sync.NextAt)
+	if battery == batterySlower && !due.IsZero() {
+		due = due.Add(slowerBy(background.sync.Interval))
+	}
+	return due.IsZero() || !at.Before(due)
 }
 
 func (s *Server) runAutomatic(parent context.Context, settings syncSettings) bool {
@@ -212,14 +231,26 @@ func (s *Server) runManualSync(parent context.Context, settings syncSettings) bo
 
 // Scheduled indexing leaves library-wide analysis pending. A manual request
 // uses the same incremental writer, then refreshes every derived analysis.
+// A manual run's operation (queued until it has the ingest coordinator)
+// comes with parent; an automatic run registers its own once it has it.
 func (s *Server) runIncremental(parent context.Context, settings syncSettings, manual bool) bool {
+	handle := opFrom(parent)
 	if manual && !s.acquireManualIngest() {
+		if parent.Err() == nil {
+			handle.Skip("already-running")
+		}
 		return false
 	}
+	handle.Run()
 	s.auto.mu.Lock()
 	if !manual && (s.auto.cancel != nil || s.auto.manualWaiters > 0 || !s.ingestMu.TryLock()) {
 		s.auto.mu.Unlock()
 		return false
+	}
+	if !manual {
+		parent, handle = s.begin(parent, OperationSpec{Kind: "index.changes.automatic", Trigger: triggerSchedule})
+		// Deferred first, so it runs last, after the run's final state.
+		defer handle.Finish(nil)
 	}
 	ctx, cancel := context.WithCancel(parent)
 	mode := modeOf(ctx)
@@ -251,7 +282,7 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 	if manual {
 		kind = manualSyncRunKind
 	}
-	run := s.startRunNamed(kind, names)
+	run := s.startRunFor(handle, kind, names)
 	registered, end := s.beginIngest(run.ID)
 	defer end()
 	stop := context.AfterFunc(registered, cancel)
@@ -304,7 +335,9 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 			workMeter.report(activityWork{Phase: phase, Source: source.Name})
 		}
 		if p.err == nil {
-			s.prepareSyncSource(ctx, source, p)
+			// Discovery walks the source: an automatic run's walks run at
+			// its priority class (Op.RunIO), a manual run's as they are.
+			handle.RunIO(func() { s.prepareSyncSource(ctx, source, p) })
 		}
 		if p.err != nil {
 			continue
@@ -401,21 +434,24 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 			}
 		}, written: func(id string) { changedWorkspaces[id] = true }}
 		baseW, baseC, baseM := totals(results)
-		result := s.Catalog.IngestContext(withIngestMode(ctx, mode), adapter, func(phase string, w, c, m, skipped, processed int) {
-			s.updateRun(run.ID, func(run *SyncRun) {
-				run.Phase = phase
-				run.Workspaces = baseW + w
-				run.Conversations = baseC + c
-				run.Messages = baseM + m
-				run.InputsChecked = checked
+		var result IngestResult
+		handle.RunIO(func() {
+			result = s.Catalog.IngestContext(withIngestMode(ctx, mode), adapter, func(phase string, w, c, m, skipped, processed int) {
+				s.updateRun(run.ID, func(run *SyncRun) {
+					run.Phase = phase
+					run.Workspaces = baseW + w
+					run.Conversations = baseC + c
+					run.Messages = baseM + m
+					run.InputsChecked = checked
+				})
+				work := activityWork{Phase: phase, Source: source.Name}
+				if plan != nil && phase == "indexing" {
+					work = plan.work(phase, source.Name, model, processed)
+					work.Kind = "incremental"
+				}
+				work.Next = "Refresh the Library view and verify changed inputs"
+				workMeter.report(work)
 			})
-			work := activityWork{Phase: phase, Source: source.Name}
-			if plan != nil && phase == "indexing" {
-				work = plan.work(phase, source.Name, model, processed)
-				work.Kind = "incremental"
-			}
-			work.Next = "Refresh the Library view and verify changed inputs"
-			workMeter.report(work)
 		})
 		op.end("source:"+source.Name, result.Error == nil && ctx.Err() == nil)
 		results = append(results, result)
@@ -441,6 +477,9 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 	}
 	if len(changedWorkspaces) == 0 {
 		op.skip("projections")
+	} else if !manual {
+		// The analyses placed Frequently follow the index that fed them.
+		defer s.wakeBackground()
 	}
 	if len(changedWorkspaces) > 0 && ctx.Err() == nil {
 		op.begin("projections")
@@ -453,7 +492,9 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 			ids = append(ids, id)
 		}
 		slices.Sort(ids)
-		if err := s.Catalog.refreshLibraryWorkspaces(ctx, ids); err != nil {
+		var err error
+		handle.RunIO(func() { err = s.Catalog.refreshLibraryWorkspaces(ctx, ids) })
+		if err != nil {
 			failure = err.Error()
 		}
 		meter.endPhaseWork(phase, workMeter.finish(ctx.Err() == nil))
@@ -466,7 +507,7 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 		workMeter.model = "analysis-v1:audit"
 		workMeter.report(activityWork{Phase: "verifying", Unit: "input", TotalKnown: true, Total: float64(min(1, len(pool.units)))})
 		op.begin("audit")
-		audit = s.Catalog.auditPool(ctx, pool, run.ID)
+		handle.RunIO(func() { audit = s.Catalog.auditPool(ctx, pool, run.ID) })
 		op.end("audit", ctx.Err() == nil && audit.Outcome != "read_error")
 		if audit.Outcome == "passed" {
 			workMeter.report(activityWork{Phase: "verifying", Unit: "input", TotalKnown: true, Done: 1, Total: 1})
@@ -529,7 +570,13 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 	}
 	s.Catalog.DB.Exec(`DELETE FROM sync_history WHERE host_id=? AND id NOT IN (SELECT id FROM sync_history WHERE host_id=? ORDER BY id DESC LIMIT 200)`, currentHost().ID, currentHost().ID)
 	next := time.Now().Add(time.Duration(settings.Interval) * time.Second).UTC().Format(time.RFC3339Nano)
-	s.Catalog.DB.Exec("UPDATE sync_settings SET next_at=? WHERE host_id=? AND interval_seconds=? AND enabled=1 AND COALESCE(next_at,'')=?", next, currentHost().ID, settings.Interval, settings.NextAt)
+	// With no row (background updates on by default) this stores the
+	// default schedule, so the next run waits its interval; with one, only
+	// a schedule nobody changed during the run moves on.
+	s.Catalog.DB.Exec(`INSERT INTO sync_settings(host_id,enabled,interval_seconds,sources_json,next_at) VALUES(?,1,?,'[]',?)
+		ON CONFLICT(host_id) DO UPDATE SET next_at=excluded.next_at
+		WHERE sync_settings.interval_seconds=excluded.interval_seconds AND sync_settings.enabled=1 AND COALESCE(sync_settings.next_at,'')=?`,
+		currentHost().ID, settings.Interval, next, settings.NextAt)
 	workMeter.release(state == "complete")
 	op.finish(state)
 	s.updateRun(run.ID, func(run *SyncRun) {
@@ -558,13 +605,20 @@ func conditionalString(condition bool, value string) any {
 }
 
 func markSyncDeferred(tx *sql.Tx) error {
-	for _, name := range []string{"identities", "git", "tools", "authorship", "findings"} {
-		if _, err := tx.Exec(`INSERT INTO sync_deferred(name,generation,changed_at) VALUES(?,1,?)
-			ON CONFLICT(name) DO UPDATE SET generation=generation+1,changed_at=excluded.changed_at`, name, now()); err != nil {
+	for _, name := range stageOrder {
+		if err := markSyncDeferredStage(tx, name); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func markSyncDeferredStage(tx *sql.Tx, name string) error {
+	// pending_since is the first change after the stage last caught up.
+	_, err := tx.Exec(`INSERT INTO sync_deferred(name,generation,changed_at,pending_since) VALUES(?,1,?,?)
+		ON CONFLICT(name) DO UPDATE SET generation=generation+1,changed_at=excluded.changed_at,
+		pending_since=CASE WHEN sync_deferred.generation<=sync_deferred.completed_generation OR sync_deferred.pending_since IS NULL THEN excluded.changed_at ELSE sync_deferred.pending_since END`, name, now(), now())
+	return err
 }
 
 func (c *Catalog) sourceChanges(ctx context.Context, source SourceConfig) sourceChangeReport {
@@ -583,7 +637,7 @@ func (c *Catalog) sourceChanges(ctx context.Context, source SourceConfig) source
 			err = errors.New("this source has no bounded change discovery")
 		} else {
 			var tracker *partTracker
-			tracker, err = c.newPartTracker(currentHost().ID, source.Name, partial, nil)
+			tracker, err = c.newPartTracker(ctx, currentHost().ID, source.Name, partial, nil)
 			if err == nil {
 				err = partial.discoverParts(func(parts []sourcePart) bool {
 					report.Units++
@@ -668,7 +722,7 @@ func (s *Server) getIncrementalSync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.URL.Path == "/api/sync/history" {
-		writeJSON(w, map[string]any{"samples": samples, "statistics": syncStatistics(samples, settings.Interval), "forecast_accuracy": forecastAccuracy, "forecast_runs": forecastRuns}, 200)
+		writeJSON(w, map[string]any{"samples": samples, "statistics": syncStatistics(samples, settings.Interval), "forecast_accuracy": forecastAccuracy, "forecast_runs": forecastRuns, "verification": s.Catalog.verificationStatus(r.Context())}, 200)
 		return
 	}
 	states, err := queryMapsContext(r.Context(), s.Catalog.reader(), `SELECT a.*,s.last_success_at AS intentional_index_at FROM automatic_source_states a LEFT JOIN source_states s ON s.host_id=a.host_id AND s.source_name=a.source_name WHERE a.host_id=?`, currentHost().ID)
@@ -684,7 +738,10 @@ func (s *Server) getIncrementalSync(w http.ResponseWriter, r *http.Request) {
 		row["pending_preservation"] = capturePending(firstString(row["indexed_at"]), lastCapture, preservation)
 	}
 	deferred, _ := queryMaps(s.Catalog.reader(), "SELECT * FROM sync_deferred WHERE generation>completed_generation")
-	coverage, _ := queryMaps(s.Catalog.reader(), "SELECT source_name,outcome,COUNT(*) units,MAX(checked_at) last_verification FROM sync_verifications WHERE host_id=? GROUP BY source_name,outcome", currentHost().ID)
+	coverage, _ := queryMaps(s.Catalog.reader(), `SELECT v.source_name,v.outcome,COUNT(*) units,
+		MAX(COALESCE(p.verified_at,CASE WHEN v.outcome IN ('passed','mismatch') THEN v.checked_at END)) last_verification,
+		MAX(v.checked_at) last_attempt FROM sync_verifications v LEFT JOIN sync_verification_progress p USING(host_id,source_name,unit)
+		WHERE v.host_id=? GROUP BY v.source_name,v.outcome`, currentHost().ID)
 	issues, _ := queryMaps(s.Catalog.reader(), "SELECT id,source_name,unit,last_at FROM sync_integrity_issues WHERE state='open' ORDER BY last_at DESC LIMIT 100")
 	jobs, _ := queryMapsContext(r.Context(), s.Catalog.reader(), "SELECT * FROM sync_recovery_jobs WHERE state!='complete' ORDER BY updated_at DESC LIMIT 30")
 	pause := ""
@@ -701,7 +758,7 @@ func (s *Server) getIncrementalSync(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err, 500)
 		return
 	}
-	writeJSON(w, map[string]any{"settings": settings, "sources": syncSourceChoices(s.autoSources(settings)), "available_sources": syncSourceChoices(s.autoSources(syncSettings{})), "source_states": states, "history": samples, "statistics": syncStatistics(samples, settings.Interval), "pause_reason": pause, "busy": s.syncActive() || s.captureActive(), "library_empty": libraryEmpty, "has_sources": slices.ContainsFunc(s.Config().Sources, func(source SourceConfig) bool { return source.Enabled }), "recovery_jobs": jobs, "deferred": deferred, "coverage": coverage, "issues": issues, "measurement_limits": syncMeasurementLimits, "forecast_accuracy": forecastAccuracy, "forecast_runs": forecastRuns}, 200)
+	writeJSON(w, map[string]any{"settings": settings, "sources": syncSourceChoices(s.autoSources(settings)), "available_sources": syncSourceChoices(s.autoSources(syncSettings{})), "source_states": states, "history": samples, "statistics": syncStatistics(samples, settings.Interval), "pause_reason": pause, "busy": s.syncActive() || s.captureActive(), "library_empty": libraryEmpty, "has_sources": slices.ContainsFunc(s.Config().Sources, func(source SourceConfig) bool { return source.Enabled }), "recovery_jobs": jobs, "deferred": deferred, "coverage": coverage, "issues": issues, "measurement_limits": syncMeasurementLimits, "forecast_accuracy": forecastAccuracy, "forecast_runs": forecastRuns, "verification": s.Catalog.verificationStatus(r.Context())}, 200)
 }
 
 // capturePending is the Sources table's "Needs capture": the source was indexed
@@ -783,7 +840,13 @@ func (s *Server) postIncrementalSync(w http.ResponseWriter, r *http.Request, bod
 			writeError(w, err, 500)
 			return
 		}
-		if !s.spawn(func(ctx context.Context) { s.runManualSync(ctx, settings) }) {
+		// The run waits (queued) for an automatic index to yield.
+		if !s.start(OperationSpec{Kind: "index.changes.manual", Trigger: triggerUser, Queued: true}, func(ctx context.Context, op *Op) error {
+			if !s.runManualSync(ctx, settings) && ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return nil
+		}) {
 			writeError(w, errors.New("service stopping"), 503)
 			return
 		}

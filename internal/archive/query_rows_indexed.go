@@ -30,9 +30,32 @@ type queryCountCache struct {
 	counts map[queryCountKey]int64
 }
 
-func (c *Catalog) queryCount(ctx context.Context, tx *sql.Tx, statement string, args []any, fast ...func(context.Context, *sql.Tx) (int64, bool, error)) (int64, error) {
+// queryGeneration is the data generation tx reads: every write to a table
+// that a query or cached view reads advances it (see queryCacheTables).
+func queryGeneration(ctx context.Context, tx *sql.Tx) (int64, error) {
 	var generation int64
-	if err := tx.QueryRowContext(ctx, "SELECT value FROM query_cache_generation WHERE id=1").Scan(&generation); err != nil {
+	err := tx.QueryRowContext(ctx, "SELECT value FROM query_cache_generation WHERE id=1").Scan(&generation)
+	return generation, err
+}
+
+// withSourceProofs lets Query Table reuse what it proved about d's source
+// while tx reads the same data generation: the first metric batch over a
+// source in a generation proves its row count and that its summed integer
+// fields are safe, and later batches skip per-row checks. The generation is
+// read in tx itself, so the proofs describe tx's snapshot. Query Table bounds
+// a proof to a population of rows and remembers a source too large to prove.
+func (c *Catalog) withSourceProofs(ctx context.Context, tx *sql.Tx, d qt.SQLiteV2Dataset) (qt.SQLiteV2Dataset, error) {
+	generation, err := queryGeneration(ctx, tx)
+	if err != nil {
+		return d, err
+	}
+	d.SourceGeneration, d.SourceProofs = fmt.Sprint(generation), &c.sourceProofs
+	return d, nil
+}
+
+func (c *Catalog) queryCount(ctx context.Context, tx *sql.Tx, statement string, args []any, fast ...func(context.Context, *sql.Tx) (int64, bool, error)) (int64, error) {
+	generation, err := queryGeneration(ctx, tx)
+	if err != nil {
 		return 0, err
 	}
 	encoded, err := json.Marshal(args)
@@ -81,11 +104,10 @@ func (c *Catalog) toolCubeFresh(ctx context.Context, tx *sql.Tx) (bool, error) {
 	err := tx.QueryRowContext(ctx, `SELECT
  COALESCE((SELECT value FROM meta WHERE key='tool_rollup_generation'),'')=
  COALESCE((SELECT value FROM meta WHERE key='tool_ledger_generation'),'')||? AND
- COALESCE((SELECT value FROM meta WHERE key='tool_rollup_day'),'')=? AND
  NOT EXISTS(SELECT 1 FROM tool_rollup_dirty) AND
  COALESCE((SELECT value FROM meta WHERE key='tool_rollup_full_revision'),'')=
  COALESCE((SELECT value FROM meta WHERE key='tool_rollup_built_full_revision'),'') AND
- COALESCE((SELECT value FROM meta WHERE key='tool_rollup_timezone'),'')=?`, "/"+toolRollupVersion, c.clock().Format("2006-01-02"), toolRollupTimezone()).Scan(&fresh)
+ COALESCE((SELECT value FROM meta WHERE key='tool_rollup_timezone'),'')=?`, "/"+toolRollupVersion, toolRollupTimezone()).Scan(&fresh)
 	return fresh, err
 }
 
@@ -229,7 +251,7 @@ func (s *Server) countOnlyMetricsV2(ctx context.Context, tx *sql.Tx, table sqlDa
 	for _, spec := range q.Metrics {
 		count := spec.Op == "count" && spec.Field == "" && spec.Expression == "" || strings.ToUpper(strings.TrimSpace(spec.Expression)) == "COUNT()"
 		// A metric's own WHERE narrows its population below the table total.
-		if !count || len(spec.GroupBy) > 0 || len(spec.Where) > 0 || spec.MinCount > 0 || spec.ExpressionY != "" || spec.Distribution != nil || spec.DateGrouping != nil || spec.Scope != "" && spec.Scope != "allMatching" {
+		if !count || len(spec.GroupBy) > 0 || len(spec.Where) > 0 || spec.MinCount.Active() || spec.ExpressionY != "" || spec.Distribution != nil || spec.DateGrouping != nil || spec.Scope != "" && spec.Scope != "allMatching" {
 			return qt.SQLiteV2ExecutionResult{}, false, nil
 		}
 	}

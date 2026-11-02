@@ -79,14 +79,22 @@ func sqliteQuerySchema(dataset string) (qt.Schema, error) {
 		return PharosToolsSchema(), nil
 	case "tool_calls":
 		return PharosToolCallsSchema(), nil
+	case "model_requests":
+		return PharosModelRequestsSchema(), nil
 	case "skill_usages":
 		return PharosSkillUsagesSchema(), nil
 	case "tl1_attempts":
 		return PharosTl1AttemptsSchema(), nil
+	case "safety":
+		return PharosSafetySchema(), nil
 	case "findings":
 		return PharosFindingsSchema(), nil
 	case "parallelism":
 		return PharosParallelismSchema(), nil
+	case "agent_events":
+		return PharosAgentEventsSchema(), nil
+	case "agent_event_messages":
+		return PharosAgentEventMessagesSchema(), nil
 	}
 	return qt.Schema{}, fmt.Errorf("unknown query-table dataset %q", dataset)
 }
@@ -154,56 +162,68 @@ func (d sqlDataset) v2CandidateSource(schema qt.Schema, terms []qt.WhereTerm, cl
 	conditions := []string{}
 	bind := func(value any) string { args = append(args, value); return fmt.Sprintf("?%d", len(args)) }
 	for _, term := range terms {
+		// Each literal's candidate (or exact text) predicate replaces it in
+		// place: AND within a branch, OR across branches. The term narrows
+		// only when every literal has one.
 		branches := []string{}
 		saved := len(args)
-		for _, clause := range term.Predicates() {
-			predicate := ""
-			if d.calendarFacts && clause.Field == "day" && !clause.Negated && clause.Op == "is_null" {
-				predicate = "t.rowid IN (SELECT rowid FROM tool_query_facts WHERE day IS NULL OR day='')"
-			}
-			if !clause.Negated && clause.Op == "=" && clause.Value != "" && d.lookups[clause.Field] && d.columns[clause.Field] != "" &&
-				(schema.Fields[clause.Field].Kind == qt.FieldText || schema.Fields[clause.Field].Kind == qt.FieldEnum) {
-				predicate = d.columns[clause.Field] + "=" + bind(clause.Value)
-			}
-			if clock != nil && !clause.Negated && d.timestamps[clause.Field] != "" && schema.Fields[clause.Field].Kind == qt.FieldDatetime {
-				if from, to, ok := indexedDatetimeBounds(clause, *clock); ok {
-					column := d.timestamps[clause.Field]
-					if from != "" {
-						predicate = column + ">=" + bind(from)
-					}
-					if to != "" {
-						if predicate != "" {
-							predicate += " AND "
+	literals:
+		for _, branch := range term.Branches() {
+			conjuncts := make([]string, 0, len(branch))
+			for _, clause := range branch {
+				predicate := ""
+				if d.calendarFacts && clause.Field == "day" && !clause.Negated && clause.Op == "is_null" {
+					predicate = "t.rowid IN (SELECT rowid FROM tool_query_facts WHERE day IS NULL OR day='')"
+				}
+				if !clause.Negated && clause.Op == "=" && clause.Value != "" && d.lookups[clause.Field] && d.columns[clause.Field] != "" &&
+					(schema.Fields[clause.Field].Kind == qt.FieldText || schema.Fields[clause.Field].Kind == qt.FieldEnum) {
+					predicate = d.columns[clause.Field] + "=" + bind(clause.Value)
+				}
+				if clock != nil && !clause.Negated && d.timestamps[clause.Field] != "" && schema.Fields[clause.Field].Kind == qt.FieldDatetime {
+					if from, to, ok := indexedDatetimeBounds(clause, *clock); ok {
+						column := d.timestamps[clause.Field]
+						if from != "" {
+							predicate = column + ">=" + bind(from)
 						}
-						predicate += column + "<" + bind(to)
-					}
-					predicate = "(" + predicate + ")"
-				}
-			}
-			if !clause.Negated && d.toolSearchIndexed {
-				if search := toolSearchTerm(clause.Field, clause.Op, clause.Value); search != "" {
-					predicate = "t.rowid IN (SELECT rowid FROM tool_command_fts WHERE tool_command_fts MATCH " + bind(search) + ")"
-				}
-			}
-			if !clause.Negated && clause.Op == "=" && d.buckets[clause.Field] != "" {
-				if from, to, ok := bucketRange(clause.Field, clause.Value); ok {
-					if len(exact) > 0 {
-						if bounds, found := exact[0][clause.Field+"\x00"+clause.Value]; found {
-							from, to = bounds[0], bounds[1]
+						if to != "" {
+							if predicate != "" {
+								predicate += " AND "
+							}
+							predicate += column + "<" + bind(to)
 						}
+						predicate = "(" + predicate + ")"
 					}
-					predicate = "(" + d.buckets[clause.Field] + ">=" + bind(from) + " AND " + d.buckets[clause.Field] + "<" + bind(to) + ")"
 				}
+				if !clause.Negated && d.toolSearchIndexed {
+					if search := toolSearchTerm(clause.Field, clause.Op, clause.Value); search != "" {
+						predicate = "t.rowid IN (SELECT rowid FROM tool_command_fts WHERE tool_command_fts MATCH " + bind(search) + ")"
+					}
+				}
+				if !clause.Negated && clause.Op == "=" && d.buckets[clause.Field] != "" {
+					if from, to, ok := bucketRange(clause.Field, clause.Value); ok {
+						if len(exact) > 0 {
+							if bounds, found := exact[0][clause.Field+"\x00"+clause.Value]; found {
+								from, to = bounds[0], bounds[1]
+							}
+						}
+						predicate = "(" + d.buckets[clause.Field] + ">=" + bind(from) + " AND " + d.buckets[clause.Field] + "<" + bind(to) + ")"
+					}
+				}
+				if d.queryText.term(clause) {
+					predicate = d.queryText.predicate(clause, bind, d.pageFrom == "FROM tool_query_facts t")
+				}
+				if predicate == "" {
+					branches = nil
+					args = args[:saved]
+					break literals
+				}
+				conjuncts = append(conjuncts, predicate)
 			}
-			if d.queryText.term(clause) {
-				predicate = d.queryText.predicate(clause, bind, d.pageFrom == "FROM tool_query_facts t")
+			if len(conjuncts) == 1 {
+				branches = append(branches, conjuncts[0])
+			} else {
+				branches = append(branches, "("+strings.Join(conjuncts, " AND ")+")")
 			}
-			if predicate == "" {
-				branches = nil
-				args = args[:saved]
-				break
-			}
-			branches = append(branches, predicate)
 		}
 		if len(branches) > 0 {
 			conditions = append(conditions, "("+strings.Join(branches, " OR ")+")")
@@ -752,6 +772,27 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 	if params.Get("record_search") != "" {
 		return queryV2ExecutionResult{}, fmt.Errorf("record keyword search requires query-v3")
 	}
+	var hostStates []json.RawMessage
+	if rowRequest != nil {
+		hostStates = append(hostStates, rowRequest.HostState)
+	}
+	if metrics != nil {
+		hostStates = append(hostStates, metrics.HostState)
+	}
+	for _, raw := range hostStates {
+		if declared, err := recordKeywordHostState(dataset, raw); err != nil {
+			return queryV2ExecutionResult{}, err
+		} else if declared {
+			return queryV2ExecutionResult{}, fmt.Errorf("record keyword search requires query-v3")
+		}
+	}
+	if dataset == "parallelism" {
+		var err error
+		ctx, err = withParallelismPreferences(ctx, params.Get("parallelism_settings"))
+		if err != nil {
+			return queryV2ExecutionResult{}, err
+		}
+	}
 	if dataset == "usage" {
 		var err error
 		ctx, err = withCarbonPreferences(ctx, params.Get("carbon_settings"))
@@ -827,7 +868,8 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 				}
 				_, covered = table.project(exactNames).preferCoveringScan(where)
 			}
-			if covered {
+			// Model requests read the narrow stored timing projection.
+			if covered || dataset == "model_requests" {
 				// Narrow covered scalar populations can read the full live ledger
 				// without copying command/result payloads. Exact sample/group limits
 				// and the request deadline remain enforced by the adapter.
@@ -1018,6 +1060,8 @@ func queryRowActionFields(dataset string, selected []string) []string {
 		required = []string{"conversation_id", "started_at", "location"}
 	case "skill_usages":
 		required = []string{"workspace_id", "conversation_id", "tool_call_id", "evidence_message_id", "body_message_id"}
+	case "agent_events", "agent_event_messages":
+		required = []string{"workspace_id", "conversation_id", "message_id"}
 	}
 	if len(required) == 0 {
 		return selected
@@ -1085,9 +1129,13 @@ func (s *Server) executeStagedQueryV2(ctx context.Context, dataset string, table
 	}
 	if !sqlBacked {
 		d.SourceSQL, err = stageQueryRows(ctx, tx, "pharos_query_rows", sourceRows, d.Schema, sourceNames)
-		if err != nil {
-			return err
-		}
+	} else if metrics != nil {
+		// A staged copy is new in every request; only a SQL source lasts a
+		// generation. Rows use no proofs.
+		d, err = s.Catalog.withSourceProofs(ctx, tx, d)
+	}
+	if err != nil {
+		return err
 	}
 	indexed := false
 	if sqlBacked && rowRequest != nil && metrics == nil {

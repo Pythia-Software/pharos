@@ -203,7 +203,7 @@ func (c *Catalog) repairUsageAttribution(ctx context.Context, progress func(int,
 		if err != nil {
 			return index, err
 		}
-		c.boundWAL(walLimit)
+		c.boundWAL(ctx, walLimit)
 		if progress != nil {
 			progress(index+1, len(rows))
 		}

@@ -66,7 +66,7 @@ if(flatLinks.length){
 }
 const rows=[...selected.values()], pages=[...new Set(rows.map(row=>row.page))];
 const pageLabels={
- 'dashboard:tokens':'Tokens & cost dashboard','dashboard:human':'Human words dashboard','dashboard:time':'Agent time dashboard',
+ 'dashboard:tokens':'Tokens & cost dashboard','dashboard:human':'Human words dashboard','dashboard:time':'Tool time dashboard',
  'dashboard:parallelism':'Parallelism dashboard','dashboard:tools':'Tools dashboard','dashboard:mcp':'Pharos MCP dashboard',
  'dashboard:skills':'Skills dashboard','dashboard:carbon':'Carbon impact dashboard','query:usage':'Token usage query',
  'query:conversation_activity':'Conversation activity query','query:writing':'Human words by conversation query',

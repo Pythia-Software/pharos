@@ -32,7 +32,7 @@ directions.
 
 ## Current implementation
 
-Analyze, Settings, and TL1 share `NestedPageLayout`: the same sidebar tree,
+Analyze and Settings share `NestedPageLayout`: the same sidebar tree,
 mobile menu, full breadcrumb trail, page heading, local link handling, and
 router subscription. Settings opens directly into its selected page without
 an overarching heading or introduction. Its panel metadata supplies both the
@@ -355,9 +355,10 @@ Every suggestion ends with computed native `op: "link"` columns. **Drill In**
 opens matching records in the same dataset, retaining source filters and exact
 group-key predicates (including null keys). Every suggested query view and
 computed query-link destination sets `fitToScreen: true`, so columns refit to
-the viewer’s table viewport after loading. Query Table 0.9.5 clips some fitted
-link controls at narrow widths; the [upstream handoff](handoffs/query-table-fit-link-clipping.md)
-records reproduction and acceptance criteria. Work/conversation suggestions also
+the viewer’s table viewport after loading. Since Query Table 0.9.7, fitted
+link controls shorten to an ellipsis inside their cells and keep their full
+accessible name ([handoff](handoffs/query-table-fit-link-clipping.md)).
+Work/conversation suggestions also
 link directly to their source. Message writing, command-family timing and
 skill evidence demonstrate coherent representative-row message links: the
 latest message, the call with the longest recorded duration when available,

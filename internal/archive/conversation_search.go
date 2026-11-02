@@ -36,14 +36,17 @@ type libraryHit struct {
 	Role             string `json:"role,omitempty"`
 	MessageKind      string `json:"message_kind,omitempty"`
 	Snippet          string `json:"snippet,omitempty"`
-	Path             string `json:"path,omitempty"`
-	OldPath          string `json:"old_path,omitempty"`
-	URL              string `json:"url,omitempty"`
-	URLSource        string `json:"url_source,omitempty"`
-	ToolName         string `json:"tool_name,omitempty"`
-	ToolCallID       string `json:"tool_call_id,omitempty"`
-	Attribution      string `json:"attribution,omitempty"`
-	Count            int    `json:"count"`
+	// Highlights are the query's matches in Snippet, as UTF-16 offsets so a
+	// browser can mark them. Only Library rows carry them (attach).
+	Highlights  [][2]int `json:"highlights,omitempty"`
+	Path        string   `json:"path,omitempty"`
+	OldPath     string   `json:"old_path,omitempty"`
+	URL         string   `json:"url,omitempty"`
+	URLSource   string   `json:"url_source,omitempty"`
+	ToolName    string   `json:"tool_name,omitempty"`
+	ToolCallID  string   `json:"tool_call_id,omitempty"`
+	Attribution string   `json:"attribution,omitempty"`
+	Count       int      `json:"count"`
 }
 
 var libraryWords = regexp.MustCompile(`[\pL\pN]+`)

@@ -49,7 +49,18 @@ func TestReingestFTSUsesRowidsAndSkipsUnchangedText(t *testing.T) {
 	record := WorkspaceRecord{
 		SourceID: "session", SourceKind: "conductor", Account: "local", Title: "Session",
 		Conversations: []ConversationRecord{{NativeID: "thread", Provider: "codex", Account: "local",
-			Messages: []MessageRecord{{NativeID: "one", Role: "user", Kind: "message", Text: "alpha", Selected: true}}}},
+			Messages: []MessageRecord{{NativeID: "one", Role: "user", Kind: "message", Text: "alpha", Selected: true},
+				{NativeID: "output", Role: "tool", Kind: "tool_result", Text: "tool output", Selected: true}}}},
+	}
+	// Tool output is never word-indexed, whether ingest indexes the whole
+	// conversation or one changed message.
+	unindexedOutput := func() {
+		t.Helper()
+		var mapped, indexed int
+		if err := catalog.DB.QueryRow(`SELECT (SELECT COUNT(*) FROM message_fts_rows r JOIN messages m ON m.id=r.message_id WHERE m.kind='tool_result'),
+			(SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'output')`).Scan(&mapped, &indexed); err != nil || mapped != 0 || indexed != 0 {
+			t.Fatalf("tool output word-indexed: %d mapped, %d indexed, %v", mapped, indexed, err)
+		}
 	}
 	ingest := func() {
 		t.Helper()
@@ -76,6 +87,7 @@ func TestReingestFTSUsesRowidsAndSkipsUnchangedText(t *testing.T) {
 		return rowid, text
 	}
 	ingest()
+	unindexedOutput()
 	first, value := ftsRow()
 	if value != "alpha" {
 		t.Fatalf("FTS text = %q", value)
@@ -86,7 +98,9 @@ func TestReingestFTSUsesRowidsAndSkipsUnchangedText(t *testing.T) {
 		t.Fatalf("unchanged text rebuilt FTS row %d as %d", first, second)
 	}
 	record.Conversations[0].Messages[0].Text = "beta"
+	record.Conversations[0].Messages[1].Text = "changed tool output"
 	ingest()
+	unindexedOutput()
 	_, value = ftsRow()
 	if value != "beta" {
 		t.Fatalf("updated FTS text = %q", value)
@@ -1518,7 +1532,7 @@ INSERT INTO task_attempts VALUES ('attempt-1','task-1',1,'worktree-1','claude','
 func TestAppRoutesServeUIOnDirectNavigation(t *testing.T) {
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
-	for _, path := range []string{"/", "/home", "/cards?card_topic=cost", "/library?search=debug", "/sources", "/settings/sync", "/settings/header", "/settings/mcp", "/analyze", "/mcp", "/activity", "/health", "/work/workspace_123", "/work/workspace_123/conversation/conversation_456?message=tool_789"} {
+	for _, path := range []string{"/", "/home", "/cards?card_topic=cost", "/library?search=debug", "/sources", "/settings/sync", "/settings/header", "/settings/layout", "/settings/mcp", "/analyze", "/mcp", "/activity", "/health", "/work/workspace_123", "/work/workspace_123/conversation/conversation_456?message=tool_789"} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		request.Header.Set("Authorization", "Bearer test-token")
 		response := httptest.NewRecorder()

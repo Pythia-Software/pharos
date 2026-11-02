@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/gbdubs/pharos/internal/querytable"
 )
@@ -31,6 +33,8 @@ type libraryFindSet struct {
 	limited      bool
 	search       textSearchResult
 	cacheVersion string
+	// The search's spelling options, to mark its matches in each snippet.
+	caseSensitive, separators bool
 }
 
 // libraryFindSummary tells a page of rows how the keyword search went.
@@ -98,7 +102,7 @@ func (c *Catalog) libraryFindMatches(ctx context.Context, o LibraryFindOptions) 
 	if err != nil {
 		return nil, err
 	}
-	set := &libraryFindSet{matches: map[string]*libraryFindMatch{}, limited: limited, search: search, cacheVersion: version}
+	set := &libraryFindSet{matches: map[string]*libraryFindMatch{}, limited: limited, search: search, cacheVersion: version, caseSensitive: o.CaseSensitive, separators: o.Separators}
 	for _, hit := range hits {
 		match := set.matches[hit.WorkspaceID]
 		if match == nil {
@@ -113,9 +117,11 @@ func (c *Catalog) libraryFindMatches(ctx context.Context, o LibraryFindOptions) 
 			match.Count++
 		}
 	}
-	// A withheld page or a deadline without progress is not a reusable batch.
-	// A retry after transient load must be able to search again.
-	if versionErr == nil && (!o.WorkspaceRows || !limited) && search.StopReason != "consistency_check_timeout" && search.StopReason != "time_budget_no_progress" {
+	// A withheld page or a deadline without progress is not a reusable batch,
+	// nor are incomplete workspace rows, which Find reports as an error. A
+	// retry after transient load must be able to search again.
+	incomplete := o.WorkspaceRows && (limited || search.Strategy != "" && !search.Complete)
+	if versionErr == nil && !incomplete && search.StopReason != "consistency_check_timeout" && search.StopReason != "time_budget_no_progress" {
 		cache.mu.Lock()
 		if len(cache.entries) >= 8 {
 			cache.entries = nil
@@ -252,6 +258,84 @@ func (set *libraryFindSet) attach(rows []map[string]any) {
 	}
 }
 
+// highlight marks the query's matches in a hit's snippet. The snippet is an
+// excerpt, so this locates the query's positive terms within it, rather than
+// re-verifying the whole query: an excluded or distant term is not marked.
+func (set *libraryFindSet) highlight(hit libraryHit) libraryHit {
+	hit.Highlights = snippetHighlights(set.search.Query, hit.Snippet, set.caseSensitive, set.separators)
+	return hit
+}
+
+func snippetHighlights(query *textQuery, snippet string, caseSensitive, separators bool) [][2]int {
+	if snippet == "" || query == nil {
+		return nil
+	}
+	query = query.verificationCopy()
+	var spans [][2]int
+	if query.Op == "literal" || query.Op == "regex" {
+		if pattern, _, err := compileTextPattern(query, caseSensitive); err == nil && pattern != nil {
+			for _, at := range pattern.FindAllStringIndex(snippet, 64) {
+				if at[1] > at[0] {
+					spans = append(spans, [2]int{at[0], at[1]})
+				}
+			}
+		}
+	} else {
+		spans = query.positiveLocations(snippet, caseSensitive, separators)
+	}
+	return utf16Spans(snippet, mergeTextSpans(spans))
+}
+
+func (n *textQuery) positiveLocations(body string, caseSensitive, separators bool) [][2]int {
+	switch n.Op {
+	case "not":
+		return n.Children[0].positiveLocations(body, caseSensitive, separators)
+	case "and", "or", "near", "pre":
+		spans := [][2]int{}
+		for _, child := range n.Children {
+			spans = append(spans, child.positiveLocations(body, caseSensitive, separators)...)
+		}
+		return spans
+	default:
+		return n.strictLocations(body, caseSensitive, separators, 64)
+	}
+}
+
+// mergeTextSpans sorts byte spans and joins overlapping ones.
+func mergeTextSpans(spans [][2]int) [][2]int {
+	slices.SortFunc(spans, func(a, b [2]int) int { return a[0] - b[0] })
+	merged := [][2]int{}
+	for _, span := range spans {
+		if last := len(merged) - 1; last >= 0 && span[0] <= merged[last][1] {
+			merged[last][1] = max(merged[last][1], span[1])
+		} else {
+			merged = append(merged, span)
+		}
+	}
+	return merged
+}
+
+// utf16Spans converts byte offsets in text to UTF-16 offsets.
+func utf16Spans(text string, spans [][2]int) [][2]int {
+	if len(spans) == 0 {
+		return nil
+	}
+	result := make([][2]int, len(spans))
+	units, at := 0, 0
+	advance := func(to int) int {
+		for at < to && at < len(text) {
+			r, size := utf8.DecodeRuneInString(text[at:])
+			at += size
+			units += utf16.RuneLen(r)
+		}
+		return units
+	}
+	for i, span := range spans {
+		result[i] = [2]int{advance(span[0]), advance(span[1])}
+	}
+	return result
+}
+
 // The word index establishes membership without loading matching bodies.
 // Fetch evidence only for the final page, after the table's filters/sort/Limit.
 func (c *Catalog) attachLibraryFind(ctx context.Context, set *libraryFindSet, rows []map[string]any) error {
@@ -285,8 +369,8 @@ func (c *Catalog) attachLibraryFind(ctx context.Context, set *libraryFindSet, ro
 			if found, exists := evidence[hit.MessageID]; exists {
 				hit.Title, hit.Provider, hit.StartedAt = found.Title, found.Provider, found.StartedAt
 				hit.Role, hit.MessageKind, hit.Snippet = found.Role, found.MessageKind, found.Snippet
-				row["find_hit"] = hit
 			}
+			row["find_hit"] = set.highlight(hit)
 		}
 	}
 	return nil

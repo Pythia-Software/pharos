@@ -161,6 +161,10 @@ func TestActivityEstimatesResetWithStageSourceAndRun(t *testing.T) {
 	if activities[0].Estimate.State != "estimating" {
 		t.Fatalf("never learned: %+v", activities[0])
 	}
+	// Without an operation forecast, the completion time is the stage's.
+	if activities[0].EstimatedCompletionAt == "" || activities[0].EstimatedCompletionScope != "stage" {
+		t.Fatalf("stage completion: %q, scope %q", activities[0].EstimatedCompletionAt, activities[0].EstimatedCompletionScope)
+	}
 	activities[0].Work.Source = "codex"
 	s.estimateActivities(activities, start.Add(14*time.Second))
 	if activities[0].Estimate.State != "learning" || len(s.estimator.observations) != 1 {
@@ -551,7 +555,7 @@ func TestOperationForecastKeepsStageMeasurementSeparateAndUsesWholeCompletion(t 
 	s := &Server{}
 	s.estimateActivities(activities, at)
 	a := activities[0]
-	if a.Progress != nil || a.Estimate.State != "unknown" || a.Forecast.Point != 100 || a.EstimatedCompletionAt != formatTime(at.Add(100*time.Second)) {
+	if a.Progress != nil || a.Estimate.State != "unknown" || a.Forecast.Point != 100 || a.EstimatedCompletionAt != formatTime(at.Add(100*time.Second)) || a.EstimatedCompletionScope != "operation" {
 		t.Fatalf("opaque measured stage should keep a whole-operation forecast: %+v", a)
 	}
 	if a.Forecast.Progress == nil || *a.Forecast.Progress != 0 {
@@ -596,7 +600,7 @@ func TestOperationForecastKeepsStageMeasurementSeparateAndUsesWholeCompletion(t 
 	op.steps[1].Inventory = true
 	op.steps = append(op.steps, forecastStep{ID: "unknown", Label: "Unseen step", State: "pending"})
 	s.estimateActivities(activities, at)
-	if activities[0].EstimatedCompletionAt != "" || activities[0].Forecast.Progress != nil {
+	if activities[0].EstimatedCompletionAt != "" || activities[0].EstimatedCompletionScope != "" || activities[0].Forecast.Progress != nil {
 		t.Fatalf("partial forecast published a complete ETA: %+v", activities[0])
 	}
 	for i := range op.steps {

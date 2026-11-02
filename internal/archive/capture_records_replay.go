@@ -523,19 +523,19 @@ func (a *sqliteReplayAdapter) replay(r retainedSQLiteRevision, emit func(Workspa
 // openSQLiteReplay pins committed revisions while holding the capture lock,
 // then releases it before decompression, parsing, catalog writes or uploads.
 func openSQLiteReplay(ctx context.Context, target captureTarget) (*sqliteReplayAdapter, func(), error) {
-	lock, e := lockCaptureReader(ctx, target.Dir)
+	lock, e := lockCaptureReader(ctx, target)
 	if e != nil {
 		return nil, nil, e
 	}
 	c, e := sourceCaptureForTarget(ctx, target)
 	if e != nil {
-		lock.Close()
+		releaseLockFile(lock)
 		return nil, nil, e
 	}
 	s := newRecordStore(c)
 	revs, e := s.revisions()
 	if e != nil || len(revs) == 0 {
-		lock.Close()
+		releaseLockFile(lock)
 		return nil, nil, e
 	}
 	allRefs := []recordObject{}
@@ -547,10 +547,10 @@ func openSQLiteReplay(ctx context.Context, target captureTarget) (*sqliteReplayA
 	}
 	close, e := c.pinReader(allRefs)
 	if e != nil {
-		lock.Close()
+		releaseLockFile(lock)
 		return nil, nil, e
 	}
-	lock.Close()
+	releaseLockFile(lock)
 	config := c.source
 	config.Path = target.Dir
 	adapter := &sqliteReplayAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only", view: newCaptureView(target.Host, target.Dir, c.manifest)}, store: s, revisions: revs}

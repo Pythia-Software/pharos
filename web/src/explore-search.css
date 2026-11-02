@@ -1,6 +1,5 @@
 .explore-content-controls { display: flex; flex: 1; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .explore-content-controls .app-icon { width: 13px; height: 13px; flex-shrink: 0; }
-.explore-content-hint { margin-left: 4px; color: var(--muted); font-size: var(--fs-xs); }
 .explore-content-controls .explore-content-chip { max-width: 100%; text-align: left; white-space: normal; }
 .explore-content-chip > span { overflow-wrap: anywhere; }
 .qt-modal.explore-search-modal { width: min(880px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); }
@@ -9,9 +8,6 @@
 .explore-search-context { margin: 0 0 20px; color: var(--muted); }
 .search-results-display-controls { display: flex; flex: 1; align-items: center; flex-wrap: wrap; gap: 8px 12px; min-width: 0; }
 .search-results-display-options { display: flex; flex-wrap: wrap; gap: 6px; }
-.search-results-display-hint { color: var(--muted); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 @media (max-width: 600px) {
-  .explore-content-hint { flex-basis: 100%; margin: 3px 0 0; }
   .explore-content-controls .explore-content-chip { flex: 1; }
-  .search-results-display-hint { flex-basis: 100%; }
 }

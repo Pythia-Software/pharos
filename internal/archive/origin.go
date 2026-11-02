@@ -266,29 +266,37 @@ func recordOriginObservation(tx *sql.Tx, id, host, source string, cv Conversatio
 // store the rows that changed. built records the snapshot's revision; commits
 // since then leave the projection dirty for the next pass.
 func (c *Catalog) ensureOrigins(ctx context.Context) error {
+	_, err := c.publishOrigins(ctx)
+	return err
+}
+
+// publishOrigins is ensureOrigins, also reporting whether the projection was
+// out of date, so the maintenance loop's pass is an operation only when it
+// stored something (§3.4).
+func (c *Catalog) publishOrigins(ctx context.Context) (published bool, err error) {
 	if c.queryOnly {
-		return ctx.Err()
+		return false, ctx.Err()
 	}
 	c.originsMu.Lock()
 	defer c.originsMu.Unlock()
 	snapshot, err := c.reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer snapshot.Rollback()
 	var revision, built int64
 	if err := snapshot.QueryRowContext(ctx, "SELECT revision,built FROM origin_state WHERE id=1").Scan(&revision, &built); err != nil || revision == built {
-		return err
+		return false, err
 	}
 	rows, err := computeOrigins(ctx, snapshot)
 	if err != nil {
-		return err
+		return true, err
 	}
 	// Linked child executions also supply attribution for tool calls stored
 	// in their parent's workspace, through the session's child handle.
 	linked, err := queryMapsContext(ctx, snapshot, `SELECT DISTINCT child_conversation_id,workspace_id FROM agent_sessions WHERE child_conversation_id IS NOT NULL`)
 	if err != nil {
-		return err
+		return true, err
 	}
 	_ = snapshot.Rollback()
 	dependentWorkspaces := map[string][]string{}
@@ -296,7 +304,7 @@ func (c *Catalog) ensureOrigins(ctx context.Context) error {
 		id := firstString(session["child_conversation_id"])
 		dependentWorkspaces[id] = append(dependentWorkspaces[id], firstString(session["workspace_id"]))
 	}
-	return c.writeTransaction(ctx, "conversation-origins", func(tx *sql.Tx) error {
+	return true, c.writeTransaction(ctx, "conversation-origins", func(tx *sql.Tx) error {
 		// Another process may have published a later snapshot meanwhile.
 		var current int64
 		if err := tx.QueryRowContext(ctx, "SELECT built FROM origin_state WHERE id=1").Scan(&current); err != nil || current >= revision {

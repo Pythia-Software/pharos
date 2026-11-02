@@ -142,13 +142,17 @@ func TestLibrarySubstringSearchAndExplanations(t *testing.T) {
 		t.Fatalf("match types: %v", rows[0]["match_types"])
 	}
 
-	// Tool output is only in the word index.
-	if rows := queryLibrary(t, server, "search=zqxwvtoolonly&substring=1"); len(rows) != 1 {
-		t.Fatalf("word search should still find tool output with substring on: %v", rows)
+	// Tool output is in neither index, so Library search does not find it.
+	for _, parameters := range []string{"search=zqxwvtoolonly", "search=zqxwvtoolonly&substring=1"} {
+		if rows := queryLibrary(t, server, parameters); len(rows) != 0 {
+			t.Fatalf("%s found tool output: %v", parameters, rows)
+		}
 	}
-	var indexed int
-	if err := catalog.DB.QueryRow(`SELECT COUNT(*) FROM messages_trigram WHERE messages_trigram MATCH '"zqxwvtoolonly"'`).Scan(&indexed); err != nil || indexed != 0 {
-		t.Fatalf("tool output should not be in the substring index: %d, %v", indexed, err)
+	for _, table := range []string{"messages_fts", "messages_trigram"} {
+		var indexed int
+		if err := catalog.DB.QueryRow(`SELECT COUNT(*) FROM ` + table + ` WHERE ` + table + ` MATCH '"zqxwvtoolonly"'`).Scan(&indexed); err != nil || indexed != 0 {
+			t.Fatalf("tool output should not be in %s: %d, %v", table, indexed, err)
+		}
 	}
 
 	rows = queryLibrary(t, server, "search=authentication+bug&explain=1")
@@ -251,8 +255,8 @@ func TestLibraryQuotedPhraseSearch(t *testing.T) {
 	if rows := search(`"authentication error" uthentication`, true); len(rows) != 1 || rows[0]["why"].(map[string]any)["substring"] == nil {
 		t.Fatalf("unquoted substring search should still work with a phrase: %v", rows)
 	}
-	if rows := search(`"backup manifest"`, false); len(rows) != 1 || rows[0]["title"] != "Speed up catalog queries" {
-		t.Fatalf("phrase search should include tool output through the word index: %v", rows)
+	if rows := search(`"backup manifest"`, false); len(rows) != 0 {
+		t.Fatalf("tool output is not word-indexed, so a phrase in it finds nothing: %v", rows)
 	}
 	if rows := search(`"authentication error`, true); len(rows) == 0 {
 		t.Fatal("an unfinished quote should keep ordinary search behavior")

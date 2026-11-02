@@ -1,5 +1,12 @@
 # Query Table: native Detail for grouped query results
 
+**Delivered in Query Table 0.9.7** as native Detail for grouped results
+(`api.itemDetails` with `subject: "group"`). Pharos adopted it on Query Table
+0.9.7: grouped tables end with their link summaries, then Detail, and keep
+their Records drill-down.
+
+The original assignment below describes the **0.9.5** implementation.
+
 Pharos uses the published Query Table **0.9.5** release for all four npm
 packages and the Go module. No dependency or generated-bundle patches are
 permitted in this repository.

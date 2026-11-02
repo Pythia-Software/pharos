@@ -75,7 +75,7 @@ func (c *Catalog) backfillHarnessVersionsContext(ctx context.Context) error {
 					}
 					continue
 				}
-				value.harness, value.first, value.last = codexHarnessFromFileContext(ctx, path)
+				value.harness, value.first, value.last = capturedPaths.files(path).codexHarness(ctx, path)
 			case "conductor":
 				value.harness = "conductor"
 			case "chatgpt":
@@ -120,7 +120,16 @@ type harnessInputs struct {
 	inventories map[string]map[string]harnessCapture
 	failures    map[string]error
 	leases      []func()
+	// views are the leases' capture views by leased path: their readers open
+	// through them, streaming an encoded file rather than decoding it to disk.
+	views map[string]*captureView
 }
+
+// files is how a path harnessSourcePath returned is read.
+func (inputs *harnessInputs) files(path string) sourceFiles {
+	return sourceFiles{view: inputs.views[path]}
+}
+
 type harnessCapture struct {
 	dir    string
 	host   Host
@@ -129,7 +138,7 @@ type harnessCapture struct {
 }
 
 func newHarnessInputs() *harnessInputs {
-	return &harnessInputs{paths: map[string]map[string]string{}, inventories: map[string]map[string]harnessCapture{}, failures: map[string]error{}}
+	return &harnessInputs{paths: map[string]map[string]string{}, inventories: map[string]map[string]harnessCapture{}, failures: map[string]error{}, views: map[string]*captureView{}}
 }
 func (inputs *harnessInputs) Close() {
 	for _, close := range inputs.leases {
@@ -167,7 +176,7 @@ func (c *Catalog) harnessSourcePath(ctx context.Context, origin, host, provider 
 				continue
 			}
 			manifest, err := loadCaptureManifest(dir)
-			lock.Close()
+			releaseLockFile(lock)
 			if err != nil {
 				cache.failures[host] = err
 				continue
@@ -186,11 +195,13 @@ func (c *Catalog) harnessSourcePath(ctx context.Context, origin, host, provider 
 		}
 		only := &captureManifest{Version: captureManifestVersion, Host: retained.host, Source: captureSourceInfo{Name: retained.source.Name, Kind: provider, Path: origin, Account: retained.source.Account}, Files: []*capturedFile{retained.file}, PathMap: []capturePathMapping{{Original: origin, Captured: retained.file.Captured}}}
 		input, err := freezeManifestInput(ctx, captureTarget{Host: retained.host, Source: retained.source.Name, Dir: retained.dir}, SourceConfig{}, false, only)
-		lock.Close()
+		releaseLockFile(lock)
 		if err == nil {
 			cache.leases = append(cache.leases, input.Close)
-			cache.paths[host][origin] = input.Adapter.Config().Path
-			return cache.paths[host][origin], nil
+			path := input.Adapter.Config().Path
+			cache.views[path] = captureViewOf(input.Adapter)
+			cache.paths[host][origin] = path
+			return path, nil
 		}
 		cache.failures[host] = err
 	}
@@ -216,8 +227,13 @@ func codexHarnessFromFile(path string) (string, string, string) {
 }
 
 func codexHarnessFromFileContext(ctx context.Context, path string) (string, string, string) {
+	return sourceFiles{}.codexHarness(ctx, path)
+}
+
+// codexHarness reads a rollout forward through the capture view.
+func (s sourceFiles) codexHarness(ctx context.Context, path string) (string, string, string) {
 	harness, first, last := "codex", "", ""
-	file, err := os.Open(path)
+	file, err := s.Open(path)
 	if err != nil {
 		return harness, first, last
 	}
@@ -271,16 +287,27 @@ func inheritHarnessAliasesTx(tx *sql.Tx) error {
 }
 
 func inheritHarnessAliasesTxContext(ctx context.Context, tx *sql.Tx) error {
-	_, err := tx.ExecContext(ctx, `UPDATE conversations AS wrapper SET
-  harness_version_first=COALESCE(wrapper.harness_version_first,peer.harness_version_first),
-  harness_version_last=peer.harness_version_last,harness_version_source='alias'
-  FROM (SELECT l.left_id wrapper_id,native.harness_version_first,native.harness_version_last
+	// Keep any already-compatible native peer. Filtering candidates before
+	// choosing a peer would otherwise alternate between disagreeing aliases.
+	_, err := tx.ExecContext(ctx, `WITH peers AS (
+   SELECT l.left_id wrapper_id,native.harness_version_first,native.harness_version_last
    FROM conversation_identity_links l JOIN conversations native ON native.id=l.right_id
    JOIN workspaces w ON w.id=native.workspace_id WHERE l.relationship='native-alias' AND w.source_kind IN ('claude','codex') AND native.harness_version_last IS NOT NULL
    UNION ALL
    SELECT l.right_id,native.harness_version_first,native.harness_version_last
    FROM conversation_identity_links l JOIN conversations native ON native.id=l.left_id
-   JOIN workspaces w ON w.id=native.workspace_id WHERE l.relationship='native-alias' AND w.source_kind IN ('claude','codex') AND native.harness_version_last IS NOT NULL) peer
-  WHERE wrapper.id=peer.wrapper_id AND wrapper.harness='conductor'`)
+   JOIN workspaces w ON w.id=native.workspace_id WHERE l.relationship='native-alias' AND w.source_kind IN ('claude','codex') AND native.harness_version_last IS NOT NULL)
+ UPDATE conversations AS wrapper SET
+  harness_version_first=COALESCE(wrapper.harness_version_first,peer.harness_version_first),
+  harness_version_last=peer.harness_version_last,harness_version_source='alias'
+  FROM peers peer
+  WHERE wrapper.id=peer.wrapper_id AND wrapper.harness='conductor'
+  AND (wrapper.harness_version_first IS NOT COALESCE(wrapper.harness_version_first,peer.harness_version_first)
+   OR wrapper.harness_version_last IS NOT peer.harness_version_last
+   OR wrapper.harness_version_source IS NOT 'alias')
+  AND wrapper.id NOT IN (SELECT current.id FROM peers stable JOIN conversations current ON current.id=stable.wrapper_id
+   WHERE current.harness_version_first IS COALESCE(current.harness_version_first,stable.harness_version_first)
+   AND current.harness_version_last IS stable.harness_version_last AND current.harness_version_source='alias')`)
+
 	return err
 }

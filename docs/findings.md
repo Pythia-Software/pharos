@@ -1,5 +1,10 @@
 # Findings
 
+Optimize separates **Efficiency** (the measured findings described here) from
+**[Risky actions](safety.md)** (questions for an agent to investigate). They share the
+basket interaction and have separate prompts and lifecycles. Copying an
+efficiency prompt starts measurement; copying a risky action prompt records a handoff.
+
 Findings are recurring patterns in your agents' work that a change to a
 repository, its instructions, or a harness setting can fix. Each one says what
 happens, what it costs, and the change to make, in words about your own work.
@@ -183,7 +188,11 @@ it saved so far.
 ## When it runs
 
 Manual **Index changes** runs a full pass after refreshing tool rollups and
-Human Words. Scheduled automatic indexing does not start findings work.
+Human Words. Scheduled indexing does not start findings work itself; the
+background schedule runs the findings stage on its cadence (Hourly, until it
+measures fast enough for Frequently), and **Findings review** runs today's
+full pass after the daily time
+([background updates](background-work.md#11-background-updates)).
 Capture & index and separate index actions retain the daily refresh policy:
 a full pass on the first refresh after local midnight or a detector change,
 and otherwise measurements of watched findings, wins still accruing, and

@@ -1,7 +1,8 @@
+import { DashboardSelect } from "./dashboard-select";
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { clipIntervals, concurrencyAverage, concurrencyMetrics, concurrencySpans, concurrencyUnit, conversationTimings, formatConcurrencyDuration as duration, mergeIntervals, minute, ribbonPath, stackSegments, workSessions, zonedDayBounds, type ConcurrencyCounting, type ConcurrencyData, type ConcurrencyMetrics, type ConcurrencyMode, type ConcurrencyThread, type Interval, type Segment } from "./concurrency-data";
 import { SmoothingControl } from "./usage-chart";
-import { concurrencyRangePresets, readConcurrencySettings, readMachineConcurrencySettings, normalizeConcurrencySettings, resolveConcurrencyRange, saveConcurrencySettings, type ConcurrencyRange, type ConcurrencySettings } from "./concurrency-settings";
+import { concurrencyRangePresets, readConcurrencySettings, readMachineConcurrencySettings, normalizeConcurrencySettings, resolveConcurrencyRange, saveConcurrencySettings, saveConcurrencyChanges, type ConcurrencyRange, type ConcurrencySettings } from "./concurrency-settings";
 import { closeConcurrencyModal, loadConcurrencyData } from "./concurrency-store";
 import { pushMachineLocation } from "./machine-location";
 import { useDrilldownHistory, ZoomNavigation } from "./machine-navigation";
@@ -18,8 +19,8 @@ const percent = (value: number) => `${Math.round(value * 100)}%`;
 const sumSpans = (spans: Interval[]) => spans.reduce((total, [a, b]) => total + b - a, 0);
 type Hover = { time: number; unit: string | null; conversation?: string };
 
-function Metrics({ value, daily, counting }: { value: ConcurrencyMetrics; daily: boolean; counting: ConcurrencyCounting }) {
-  return <div className="concurrency-metrics"><span title={`Average concurrent ${counting === "agent" ? "sessions" : "workspaces"} including idle time`}><strong>{value.average.toFixed(2)}×</strong> {daily ? "daily average" : "window average"}</span><span><strong>{percent(value.parallel)}</strong> of working time with 2+ {counting === "agent" ? "sessions" : "workspaces"}</span><span><strong>{value.peak}</strong> peak</span></div>;
+function Metrics({ value, daily, today, counting }: { value: ConcurrencyMetrics; daily: boolean; today?: boolean; counting: ConcurrencyCounting }) {
+  return <div className="concurrency-metrics"><span title={`Average concurrent ${counting === "agent" ? "sessions" : "workspaces"} including idle time`}><strong>{value.average.toFixed(2)}×</strong> {today ? "today so far average" : daily ? "daily average" : "window average"}</span><span><strong>{percent(value.parallel)}</strong> of working time with 2+ {counting === "agent" ? "sessions" : "workspaces"}</span><span><strong>{value.peak}</strong> peak</span></div>;
 }
 
 function ConcurrencyChart({ mode, counting, threads, historyThreads, historyStart, gap, order, bounds, ceiling, colors, selected, hover, onHover, onSelect, onZoom, timezone, smoothingMinutes }: {
@@ -161,7 +162,7 @@ function ConcurrencyInfoDialog({ data, onClose }: { data: ConcurrencyData; onClo
     <h3>Threaded</h3><p>Connects turns within each root conversation using the selected turn gap. Gaps up to that length count as continuous activity, with no padding after the final turn. Pale ribbons show the gaps between turns.</p>
     <h3>Model activity</h3><p>Estimates when a model is running from input-to-response timestamps, excluding recorded tool waits. This is estimated timing rather than measured inference telemetry.</p>
     <h3>Workspaces or sessions</h3><p><strong>Workspaces</strong> counts each checkout once, even when it has several conversations active. <strong>Sessions</strong> counts each independently started root conversation separately, including conversations in the same checkout. Linked delegated compute belongs to its parent conversation in either view. Colors identify repositories, and rows stay with the same repository where packing allows.</p>
-    <h3>Averages and working time</h3><p>Average parallelism includes the full selected date range or zoom interval, including idle time. Header summary columns use their full trailing windows. Working time and its percentage with 2+ workspaces or sessions use a fixed one-hour idle cutoff.</p>
+    <h3>Averages and working time</h3><p>Average parallelism includes the full selected date range or zoom interval, including idle time. Today so far uses elapsed time since local midnight. Header summary columns use their displayed intervals. Working time and its percentage with 2+ workspaces or sessions use a fixed one-hour idle cutoff.</p>
     <h3>Timing coverage</h3><p>This timing data covers {data.period_start} – {data.period_end} in {data.timezone}. {data.coverage.mirrors_removed} source mirrors were removed and {data.coverage.unexplained_waits_excluded} unexplained waits over ten minutes were omitted. Header stats use the saved counting choice, turn gap and repository; windows outside this timing export show —.</p>
   </dialog>;
 }
@@ -189,13 +190,15 @@ export function ConcurrencyPanel({ scope, activityWindow, routeParameter, onSele
       url.searchParams.set(routeParameter ?? "q_machine_parallelism", JSON.stringify(merged));
       pushMachineLocation(url);
     }
-    saveConcurrencySettings(merged); setHover(null);
+    if (routeParameter) saveConcurrencyChanges(next);
+    else saveConcurrencySettings(merged);
+    setHover(null);
   };
   useEffect(() => {
     const parameter = routeParameter ?? (scope ? "q_machine_parallelism" : "");
     const url = new URL(location.href);
     url.searchParams.delete("machine_demo");
-    if (parameter && !url.searchParams.has(parameter)) url.searchParams.set(parameter, JSON.stringify(readSettings()));
+    if (parameter) url.searchParams.set(parameter, JSON.stringify(readSettings()));
     history.replaceState(history.state, "", url);
     const restore = () => { setSettings(readSettings()); setHover(null); };
     window.addEventListener("pharos:concurrency-settings", restore);
@@ -206,8 +209,11 @@ export function ConcurrencyPanel({ scope, activityWindow, routeParameter, onSele
   useEffect(() => {
     let active = true;
     setError(""); setData(null);
-    loadConcurrencyData().then(next => { if (active) setData(next); }).catch(reason => { if (active) setError(String(reason.message ?? reason)); });
-    return () => { active = false; };
+    const load = (refresh = false) => loadConcurrencyData(refresh).then(next => { if (active) { setData(next); setError(""); } }).catch(reason => { if (active) setError(String(reason.message ?? reason)); });
+    const refresh = () => { void load(true); };
+    void load();
+    window.addEventListener("pharos:usage-refresh", refresh);
+    return () => { active = false; window.removeEventListener("pharos:usage-refresh", refresh); };
   }, []);
   const scopeKey = JSON.stringify(scope);
   useEffect(() => { if (scope) { setSettings(readMachineConcurrencySettings()); setHover(null); } }, [scopeKey]);
@@ -259,26 +265,29 @@ export function ConcurrencyPanel({ scope, activityWindow, routeParameter, onSele
   if (!data) return <p className="muted" aria-busy="true">Reading captured timing…</p>;
   if (scope?.days && activityWindow && (Date.parse(activityWindow.start) >= zonedDayBounds(data.period_end, data.timezone)[1] || Date.parse(activityWindow.end) <= zonedDayBounds(data.period_start, data.timezone)[0])) return <p className="machine-empty">No captured timing overlaps this period. Snapshot coverage: {data.period_start} – {data.period_end}. Choose another period.</p>;
   const chooseRange = (value: string) => update(/^\d{4}-\d{2}-\d{2}$/.test(value) ? { range: "day", day: value, workspace: "", agent: "", zoom: null } : { range: value as ConcurrencyRange, startDay: range.startDay, endDay: range.endDay, workspace: "", agent: "", zoom: null });
+  const incompleteToday = settings.range === "today" && (rangeBounds[0] < zonedDayBounds(data.period_start, data.timezone)[0] || rangeBounds[1] > zonedDayBounds(data.period_end, data.timezone)[1]);
   const clock = new Intl.DateTimeFormat(undefined, { timeZone: data.timezone, ...(!singleDay ? { month: "short", day: "numeric" } as const : {}), hour: "numeric", minute: "2-digit" });
   return <section className="concurrency-panel" aria-label="Parallelism chart">
     {scope || routeParameter ? <p className="machine-parallelism-note">Captured timing: {data.period_start} – {data.period_end} · {data.timezone}. {scope?.days ? "Showing the captured portion of the selected period; averages use only this portion. " : ""}Model activity is estimated from response timing; tool waits are excluded.</p> : null}
+    {incompleteToday ? <p role="status">Incomplete timing coverage for Today. Available: {data.period_start} – {data.period_end}.</p> : null}
     <div className="concurrency-controls">
-      <div className="concurrency-control"><div className="concurrency-control-label"><label htmlFor="parallelism-view">View</label><button type="button" className="concurrency-info-button" aria-label="About parallelism views" aria-haspopup="dialog" aria-controls="parallelism-calculation" title="How parallelism is calculated" onClick={() => setShowInfo(true)}><Icon name="info" /></button></div><select id="parallelism-view" aria-label="View" value={mode} onChange={event => update({ mode: event.target.value as ConcurrencyMode })}><option value="user">Threaded</option><option value="model">Model activity</option></select></div>
-      <label>Count by<select aria-label="Count by" value={counting} onChange={event => update({ counting: event.target.value as ConcurrencyCounting, workspace: "", agent: "" })}><option value="workspace">Workspaces</option><option value="agent">Sessions</option></select></label>
-      {!scope ? <div className={`usage-date-range${settings.range === "custom" ? " custom" : ""}`}><label className="concurrency-control usage-chart-picker">Range<select aria-label="Range" value={settings.range === "day" ? range.startDay : settings.range} title={`Presets end at the latest captured day, ${data.period_end}`} onChange={event => chooseRange(event.target.value)}>
+      <div className="concurrency-control"><div className="concurrency-control-label"><label htmlFor="parallelism-view">View</label><button type="button" className="concurrency-info-button" aria-label="About parallelism views" aria-haspopup="dialog" aria-controls="parallelism-calculation" title="How parallelism is calculated" onClick={() => setShowInfo(true)}><Icon name="info" /></button></div><DashboardSelect id="parallelism-view" aria-label="View" value={mode} onChange={event => update({ mode: event.target.value as ConcurrencyMode })}><option value="user">Threaded</option><option value="model">Model activity</option></DashboardSelect></div>
+      <label>Count by<DashboardSelect aria-label="Count by" value={counting} onChange={event => update({ counting: event.target.value as ConcurrencyCounting, workspace: "", agent: "" })}><option value="workspace">Workspaces</option><option value="agent">Sessions</option></DashboardSelect></label>
+      {!scope ? <div className={`usage-date-range${settings.range === "custom" ? " custom" : ""}`}><label className="concurrency-control usage-chart-picker">Range<DashboardSelect aria-label="Range" value={settings.range === "day" ? range.startDay : settings.range} title={`Presets end at the latest captured day, ${data.period_end}`} onChange={event => chooseRange(event.target.value)}>
+        <option value="today">Today so far</option>
         {concurrencyRangePresets.map(([key, , label]) => <option key={key} value={key}>{label}</option>)}
         <option value="custom">Custom dates…</option>
         <optgroup label="Individual days">{data.days.slice().sort().map(date => <option key={date}>{date}</option>)}</optgroup>
         <option value="all">All captured time</option>
-      </select></label>
+      </DashboardSelect></label>
         {settings.range === "custom" ? <div className="usage-custom-dates">
           <label><span>From</span><input aria-label="From date" type="date" min={data.period_start} max={range.endDay} value={range.startDay} onChange={event => { if (event.target.value && event.currentTarget.validity.valid) update({ startDay: event.target.value, workspace: "", agent: "", zoom: null }); }} /></label>
           <label><span>Through</span><input aria-label="Through date" type="date" min={range.startDay} max={data.period_end} value={range.endDay} onChange={event => { if (event.target.value && event.currentTarget.validity.valid) update({ endDay: event.target.value, workspace: "", agent: "", zoom: null }); }} /></label>
           <span className="muted concurrency-range-note">Both dates included · {data.timezone}</span>
         </div> : null}
       </div> : null}
-      <label>Turn gap<select aria-label="Turn gap" value={gap} disabled={mode === "model"} onChange={event => update({ gap: Number(event.target.value) })}>{[0, 15, 30, 60].map(value => <option key={value} value={value}>{value === 0 ? "No bridging" : `${value} minutes`}</option>)}</select></label>
-      {!scope ? <label>Repository<select aria-label="Repository" value={repository} onChange={event => update({ repository: event.target.value, workspace: "", agent: "", zoom: null })}><option value="">All repositories</option>{repositories.map(repo => <option key={repo}>{repo}</option>)}</select></label> : null}
+      <label>Turn gap<DashboardSelect aria-label="Turn gap" value={gap} disabled={mode === "model"} onChange={event => update({ gap: Number(event.target.value) })}>{[0, 15, 30, 60].map(value => <option key={value} value={value}>{value === 0 ? "No bridging" : `${value} minutes`}</option>)}</DashboardSelect></label>
+      {!scope ? <label>Repository<DashboardSelect aria-label="Repository" value={repository} onChange={event => update({ repository: event.target.value, workspace: "", agent: "", zoom: null })}><option value="">All repositories</option>{repositories.map(repo => <option key={repo}>{repo}</option>)}</DashboardSelect></label> : null}
       <SmoothingControl value={settings.smoothingMinutes} unit="minutes" onChange={smoothingMinutes => update({ smoothingMinutes })} note="Average occupancy line" />
     </div>
     <ZoomNavigation canBack={navigation.canBack} zoomed={Boolean(zoom || selected)} onBack={() => navigation.back(snapshot => update(snapshot))} onReset={() => update({ zoom: null, workspace: "", agent: "" })}>
@@ -286,7 +295,7 @@ export function ConcurrencyPanel({ scope, activityWindow, routeParameter, onSele
     </ZoomNavigation>
     {settings.smoothingMinutes ? <p className="usage-dashboard-note">The line shows a {settings.smoothingMinutes}-minute trailing average. Ribbons, hover counts, summary metrics, and linked records retain actual activity.</p> : null}
     <ConcurrencyChart key={counting} mode={mode} counting={counting} threads={rangeThreads} historyThreads={threads} historyStart={zonedDayBounds(data.period_start, data.timezone)[0]} gap={gap} order={order} bounds={bounds} ceiling={Math.max(2, visibleMetrics[mode].peak)} colors={colors} selected={highlighted} hover={hover} onHover={setHover} onSelect={chooseUnit} onZoom={value => update({ zoom: value })} timezone={data.timezone} smoothingMinutes={settings.smoothingMinutes}/>
-    <div className="concurrency-plot-summary" role="group" aria-label="Parallelism summary"><Metrics value={visibleMetrics[mode]} daily={singleDay && !zoom} counting={counting} /><div className="concurrency-working-summary muted"><span>{duration(visibleMetrics[mode].working)} working time</span><span className="concurrency-view-note">{mode === "user" ? "Pale = gap between turns" : "Estimated timing; tool waits excluded"}</span></div></div>
+    <div className="concurrency-plot-summary" role="group" aria-label="Parallelism summary">{incompleteToday ? <span>— · Incomplete timing coverage</span> : <Metrics value={visibleMetrics[mode]} daily={singleDay && !zoom} today={settings.range === "today" && !zoom} counting={counting} />}<div className="concurrency-working-summary muted"><span>{duration(visibleMetrics[mode].working)} working time</span><span className="concurrency-view-note">{mode === "user" ? "Pale = gap between turns" : "Estimated timing; tool waits excluded"}</span></div></div>
     <div className="concurrency-hover-detail" aria-live="polite">{hover ? <><strong>{clock.format(hover.time)}</strong> · {activeAt(hover.time)} concurrent {counting === "agent" ? "sessions" : "workspaces"}{focusedThreads[0] ? <span> · {focusedThreads[0].repository} / {focusedThreads[0].workspace_name} · {focusedThreads[0].title}</span> : null}</> : selected && focusedThreads[0] ? <>{focusedThreads[0].repository} / {focusedThreads[0].workspace_name} · {focusedThreads.length} conversation{focusedThreads.length === 1 ? "" : "s"}</> : "Select a ribbon to follow its conversations. Drag across the chart to zoom."}</div>
     <div className="concurrency-chart-footer"><div className="concurrency-repositories">{repositories.filter(repo => rangeThreads.some(thread => thread.repository === repo)).map(repo => <span key={repo}><i style={{ background: palette[repositories.indexOf(repo) % palette.length] }}/>{repo}</span>)}</div></div>
     <details className="concurrency-conversations" open={settings.showConversations} onToggle={event => { if (event.currentTarget.open !== settings.showConversations) update({ showConversations: event.currentTarget.open }); }}><summary>{scopedRows.length} conversations{selected ? (counting === "agent" ? " for selected session" : ` in ${unitInfo.get(selected)?.workspace_name}`) : " in this range"}</summary>

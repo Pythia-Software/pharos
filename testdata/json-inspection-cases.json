@@ -1,0 +1,458 @@
+[
+  {
+    "goToken": "2d.bFFBbtswEPzLoEc2sI2ceCzQQ4AG7V0ijI24rtlQJEuu5ASC_l6snDQI4OPOLGd2hgsabNcheDjTQXKOx0QjwzkDD7tgzJ51B_xSKOka_rScHlIrPEjISckFnoQaCyzKmWpux3Eox4FibDCo-fLgYaHz1z0MToGjAlR_TyMnaUfVhEETElbbmWsLOcHuDXLhBCt1YoPGVIczLBKzj4x35DF7hsUpJK-GdIE9UWxsMOQYqTT2v0jOW5IvXY9nfr27BDnf-Syth4PZ4L9TFu77jVfUmbfc7L9NwzPLfwGe9e4ezj5thL3fwdxmDjvVmUMLT5G_J6mvP8IYBPZ-t3u__-fMtYZr1QsKiWb8pIaPU96yrebT5o1IHw-0vdWpW-RB2D-SaI23rbrD3nU9hF_kqlOoCixmihNff0nnw7qubl3_DQA",
+    "inspections": [
+      {
+        "dataset": "pharos_mcp_calls",
+        "field": "arguments_json",
+        "rowId": "call-1",
+        "state": {
+          "collapsedPaths": [
+            "$[\"key.with.dots\"]",
+            "$[\"quote\\\"key\"]"
+          ],
+          "expandedBuckets": [
+            "$[\"events\"]:bucket:40",
+            "$[\"events\"]:bucket:20"
+          ],
+          "open": true,
+          "raw": false,
+          "search": "needle",
+          "searchMode": "find",
+          "searchOverrides": [
+            {
+              "expanded": false,
+              "path": "$[\"events\"]"
+            },
+            {
+              "expanded": true,
+              "path": "$[\"key.with.dots\"]"
+            }
+          ],
+          "selectedMatch": {
+            "part": "value",
+            "path": "$[\"events\"][21][\"text\"]",
+            "start": 2
+          },
+          "version": 1,
+          "visibleEntryLimit": 400
+        }
+      }
+    ],
+    "name": "all inspection choices and quoted paths",
+    "query": {
+      "itemDetails": {
+        "jsonInspections": [
+          {
+            "dataset": "pharos_mcp_calls",
+            "field": "arguments_json",
+            "rowId": "call-1",
+            "state": {
+              "collapsedPaths": [
+                "$[\"key.with.dots\"]",
+                "$[\"quote\\\"key\"]"
+              ],
+              "expandedBuckets": [
+                "$[\"events\"]:bucket:40",
+                "$[\"events\"]:bucket:20"
+              ],
+              "open": true,
+              "raw": false,
+              "search": "needle",
+              "searchMode": "find",
+              "searchOverrides": [
+                {
+                  "expanded": false,
+                  "path": "$[\"events\"]"
+                },
+                {
+                  "expanded": true,
+                  "path": "$[\"key.with.dots\"]"
+                }
+              ],
+              "selectedMatch": {
+                "part": "value",
+                "path": "$[\"events\"][21][\"text\"]",
+                "start": 2
+              },
+              "version": 1,
+              "visibleEntryLimit": 400
+            }
+          }
+        ],
+        "modes": [
+          "expand"
+        ]
+      },
+      "limit": 100,
+      "offset": 0,
+      "orderBy": [],
+      "select": [
+        {
+          "field": "id"
+        },
+        {
+          "field": "tool_name"
+        }
+      ],
+      "where": []
+    },
+    "token": "2d.bVHBbsIwDP0Xa8cOFcSpx0k7IA1t97aqTGPWjLTJEreAqv77nAKb0LjFz_bzey8jBMjyHLSCMsmBrTVVhy1BWSagIBuhtYriDNDJYRfH4CvYbtMFRzVr28XmCAoZAzFk4Br0NlRt7aoajQmQgLfHjZBBrJ-XAuw1mQig_-xb6jhUkVMagZEpnh3IByGHbJmAdSQP9j3JAKGvG1ntiJShuDIjW5Ep6F6LRDmIR8j2aIJs1NYYdIHUB3IzO3nKCzjQeXHU3CyU5VBAKUsR_u4tU1HM_YiK24tvUi99fSD-JaAh6paZbDc3snV65fjXWaWRZ9BB7wy9duzPb7rVktU6TW_638Ww15eoR3AiVdzcsQn7TcrV25TcTT6w9LcQ05tERSAj30ZqixxjfHwqXy1LqZlOfOFx6OPXDmj6OXKe69U0TeU0_QA",
+    "valid": true
+  },
+  {
+    "goToken": "2d.1JAxT_QwDIb_yztn6PeNGZEYTgLBXkWVSVwaSJMo9vVAVf87irhjZmWz7Fd-_HiHwI4jYoAzI7SUNGVaGc4ZBNgdawncM-CPSrnH8CYln7JU9hpL7sMdgZSEFRZ1oVZkWn2dPKUkMGjlcgqwg8EcOQVYUHs9r5xVpr4MBqKk3HkbN4klw_4zKJUz7ExJ2ECYml9ggVv9WALDYo5JuXUMXX7SvqREVTg8ky79RGeuBhzuzv6d9drcosSXxPdZ2-dDXKPC_h-GG-Jp49bi9wfccZjfiWLAn1d1x_E1AA",
+    "inspections": [
+      {
+        "dataset": "pharos_mcp_calls",
+        "field": "arguments_json",
+        "rowId": 0,
+        "state": {
+          "collapsedPaths": [],
+          "expandedBuckets": [],
+          "open": false,
+          "raw": false,
+          "search": "",
+          "searchMode": "filter",
+          "searchOverrides": [],
+          "version": 1,
+          "visibleEntryLimit": 200
+        }
+      },
+      {
+        "dataset": "pharos_mcp_calls",
+        "field": "arguments_json",
+        "rowId": "0",
+        "state": {
+          "collapsedPaths": [],
+          "expandedBuckets": [],
+          "open": false,
+          "raw": false,
+          "search": "",
+          "searchMode": "filter",
+          "searchOverrides": [],
+          "version": 1,
+          "visibleEntryLimit": 200
+        }
+      }
+    ],
+    "name": "typed identities and explicit false/empty defaults",
+    "query": {
+      "itemDetails": {
+        "jsonInspections": [
+          {
+            "dataset": "pharos_mcp_calls",
+            "field": "arguments_json",
+            "rowId": 0,
+            "state": {
+              "collapsedPaths": [],
+              "expandedBuckets": [],
+              "open": false,
+              "raw": false,
+              "search": "",
+              "searchMode": "filter",
+              "searchOverrides": [],
+              "version": 1,
+              "visibleEntryLimit": 200
+            }
+          },
+          {
+            "dataset": "pharos_mcp_calls",
+            "field": "arguments_json",
+            "rowId": "0",
+            "state": {
+              "collapsedPaths": [],
+              "expandedBuckets": [],
+              "open": false,
+              "raw": false,
+              "search": "",
+              "searchMode": "filter",
+              "searchOverrides": [],
+              "version": 1,
+              "visibleEntryLimit": 200
+            }
+          }
+        ],
+        "modes": [
+          "expand"
+        ]
+      },
+      "limit": 100,
+      "offset": 0,
+      "orderBy": [],
+      "select": [
+        {
+          "field": "id"
+        },
+        {
+          "field": "tool_name"
+        }
+      ],
+      "where": []
+    },
+    "token": "2d.1ZCxTsQwEET_ZWoXgTIlEsVJIOijKFrsDTE4tuX13YGi-3fWBFFfe5KLsf28M-MNgn4Y4B1GM6CmFKZIK2McDRz6DWty3BjwV6bYMHxIiocomW31KbbLDY4qCVf0yAuVJNNq82QpBIFBSeeDDusMZs9BFai8H1eOVaY2TBGpVLn5nbiITkV_Z5Ayq5gpCCvBVOyibxv9q581mu5nHyqXZkPnf9qmECgLu1eqS4uoufcG7B6O9pPr3-HJi38L_Bhr-X7yq9cK950m3S1eNE7x-w-Ml4u5rig61TdeVdcP",
+    "valid": true
+  },
+  {
+    "goToken": "2d.NJBBSwQxDIX_yztX2PXYo-BhQdH7UIbYZpxqpy1NZlYZ5r9LcfeWvDzyJW-HwA4DYoAzA7SUNGZaGM4ZBNgdSwncPeCfSrnb8CUlX7JU9hpL7sMdgZSEFRZ1plZkXHwdPaUkMGjlegmw6P3DGQZT5NQFap_rwlll7DthIErKHbtxk1gy7NmgVM6wEyVhA2FqfoYF7vVrCQyLKSbl1ml0hdW2soEvKVEVDu-kcz_UmdsfHJ5W_816E7co8SPxc9b2-xKXqLCPp9Od8LZxa_E_B3cc7jj-BgA",
+    "inspections": [
+      {
+        "dataset": "pharos_mcp_calls",
+        "field": "arguments_json",
+        "rowId": "call-1",
+        "state": {
+          "collapsedPaths": [],
+          "expandedBuckets": [],
+          "open": false,
+          "raw": true,
+          "search": "",
+          "searchMode": "filter",
+          "searchOverrides": [],
+          "version": 1,
+          "visibleEntryLimit": 200
+        }
+      }
+    ],
+    "name": "raw view",
+    "query": {
+      "itemDetails": {
+        "jsonInspections": [
+          {
+            "dataset": "pharos_mcp_calls",
+            "field": "arguments_json",
+            "rowId": "call-1",
+            "state": {
+              "collapsedPaths": [],
+              "expandedBuckets": [],
+              "open": false,
+              "raw": true,
+              "search": "",
+              "searchMode": "filter",
+              "searchOverrides": [],
+              "version": 1,
+              "visibleEntryLimit": 200
+            }
+          }
+        ],
+        "modes": [
+          "expand"
+        ]
+      },
+      "limit": 100,
+      "offset": 0,
+      "orderBy": [],
+      "select": [
+        {
+          "field": "id"
+        },
+        {
+          "field": "tool_name"
+        }
+      ],
+      "where": []
+    },
+    "token": "2d.NVDLTsQwDPwXn4u0yzFHJA4rgeBeVZVJXBrIS7G7C6r237FZkHKwx5OZsXdgcOMIMcA0jCC1prlgJpimAQK4HXINZBygr4bFaPDBtZwKN_ISa7HhDgEFmQQctBV75Tn7NntMiWGAXi8nFQPr744KLJGSAdjft0xFeDZNHbCgkNmeqbOKgzsOUBtpsWBiUgZh96v-NfZv_awJtV9iEurmhhdw0jcl-5oSNqbwirJaUE1_24PCw-Y_Sf7Ac-T4luixSP9-ijnqIveHw7_Di6bp8XaH6XrV9wM",
+    "valid": true
+  },
+  {
+    "inspections": [
+      {
+        "dataset": "pharos_mcp_calls",
+        "field": "arguments_json",
+        "rowId": "call-1",
+        "state": {
+          "collapsedPaths": [],
+          "expandedBuckets": [],
+          "open": false,
+          "raw": false,
+          "search": "",
+          "searchMode": "filter",
+          "searchOverrides": [],
+          "version": 2,
+          "visibleEntryLimit": 200
+        }
+      }
+    ],
+    "name": "future version",
+    "valid": false
+  },
+  {
+    "inspections": [
+      {
+        "dataset": "pharos_mcp_calls",
+        "field": "arguments_json",
+        "rowId": "call-1",
+        "state": {
+          "collapsedPaths": [
+            "$.events"
+          ],
+          "expandedBuckets": [],
+          "open": false,
+          "raw": false,
+          "search": "",
+          "searchMode": "filter",
+          "searchOverrides": [],
+          "version": 1,
+          "visibleEntryLimit": 200
+        }
+      }
+    ],
+    "name": "bad JSONPath",
+    "valid": false
+  },
+  {
+    "inspections": [
+      {
+        "dataset": "pharos_mcp_calls",
+        "field": "arguments_json",
+        "rowId": "call-1",
+        "state": {
+          "collapsedPaths": [
+            null
+          ],
+          "expandedBuckets": [],
+          "open": false,
+          "raw": false,
+          "search": "",
+          "searchMode": "filter",
+          "searchOverrides": [],
+          "version": 1,
+          "visibleEntryLimit": 200
+        }
+      }
+    ],
+    "name": "null path",
+    "valid": false
+  },
+  {
+    "inspections": [
+      {
+        "dataset": "pharos_mcp_calls",
+        "field": "arguments_json",
+        "rowId": "call-1",
+        "state": {
+          "collapsedPaths": [],
+          "expandedBuckets": [
+            "$[\"events\"]:bucket:0"
+          ],
+          "open": false,
+          "raw": false,
+          "search": "",
+          "searchMode": "filter",
+          "searchOverrides": [],
+          "version": 1,
+          "visibleEntryLimit": 200
+        }
+      }
+    ],
+    "name": "empty bucket range",
+    "valid": false
+  },
+  {
+    "inspections": [
+      {
+        "dataset": "pharos_mcp_calls",
+        "field": "arguments_json",
+        "rowId": "call-1",
+        "state": {
+          "collapsedPaths": [],
+          "expandedBuckets": [],
+          "open": false,
+          "raw": false,
+          "search": "",
+          "searchMode": "filter",
+          "searchOverrides": [],
+          "selectedMatch": {
+            "part": "other",
+            "path": "$",
+            "start": 0
+          },
+          "version": 1,
+          "visibleEntryLimit": 200
+        }
+      }
+    ],
+    "name": "bad match",
+    "valid": false
+  },
+  {
+    "inspections": [
+      {
+        "dataset": "pharos_mcp_calls",
+        "field": "arguments_json",
+        "rowId": "call-1",
+        "state": {
+          "collapsedPaths": [],
+          "expandedBuckets": [],
+          "open": false,
+          "raw": false,
+          "search": "",
+          "searchMode": "filter",
+          "searchOverrides": [],
+          "version": 1,
+          "visibleEntryLimit": 10001
+        }
+      }
+    ],
+    "name": "entry limit",
+    "valid": false
+  },
+  {
+    "inspections": [
+      {
+        "dataset": "pharos_mcp_calls",
+        "field": "arguments_json",
+        "rowId": "call-1",
+        "state": {
+          "collapsedPaths": [],
+          "expandedBuckets": [],
+          "open": false,
+          "raw": false,
+          "search": "",
+          "searchMode": "filter",
+          "searchOverrides": [],
+          "version": 1,
+          "visibleEntryLimit": 200
+        }
+      },
+      {
+        "dataset": "pharos_mcp_calls",
+        "field": "arguments_json",
+        "rowId": "call-1",
+        "state": {
+          "collapsedPaths": [
+            "$[\"key.with.dots\"]",
+            "$[\"quote\\\"key\"]"
+          ],
+          "expandedBuckets": [
+            "$[\"events\"]:bucket:40",
+            "$[\"events\"]:bucket:20"
+          ],
+          "open": true,
+          "raw": false,
+          "search": "needle",
+          "searchMode": "find",
+          "searchOverrides": [
+            {
+              "expanded": false,
+              "path": "$[\"events\"]"
+            },
+            {
+              "expanded": true,
+              "path": "$[\"key.with.dots\"]"
+            }
+          ],
+          "selectedMatch": {
+            "part": "value",
+            "path": "$[\"events\"][21][\"text\"]",
+            "start": 2
+          },
+          "version": 1,
+          "visibleEntryLimit": 400
+        }
+      }
+    ],
+    "name": "duplicate scopes",
+    "valid": false
+  }
+]

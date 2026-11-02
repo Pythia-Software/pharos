@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -20,7 +21,9 @@ import (
 )
 
 type SyncRun struct {
-	operation        *operationForecast
+	operation *operationForecast
+	// op is the registry's operation shadowing this run (operations_legacy.go).
+	op               *Op
 	ID               string   `json:"id"`
 	Kind             string   `json:"kind"`
 	State            string   `json:"state"`
@@ -53,6 +56,9 @@ type SyncRun struct {
 	// StopRequested is set while a running run winds down after a stop
 	// request: it finishes the record in hand and keeps everything written.
 	StopRequested bool `json:"stop_requested,omitempty"`
+	// Changed is a run that indexed nothing but updated what pages show (a
+	// background pass), so they refresh when it ends.
+	Changed bool `json:"changed,omitempty"`
 }
 type Server struct {
 	Catalog  *Catalog
@@ -63,26 +69,53 @@ type Server struct {
 	ingestStop ingestStopper
 	runsMu     sync.RWMutex
 	runs       []*SyncRun
-	life       lifecycle
-	captures   captureRuns
-	backups    backupRuns
-	cloud      cloudJobs
-	tasks      backgroundTasks
-	timingMu   sync.Mutex
-	estimator  activityEstimator
-	forecasts  forecastStore
-	auto       automaticSync
+	// status shares the latest status snapshot among its readers.
+	status    statusHub
+	life      lifecycle
+	captures  captureRuns
+	backups   backupRuns
+	cloud     cloudJobs
+	tasks     backgroundTasks
+	timingMu  sync.Mutex
+	estimator activityEstimator
+	forecasts forecastStore
+	auto      automaticSync
+	// background is the Hourly and Daily schedule's state (background.go).
+	background backgroundState
 	// Leave catalog connections available for rows/previews while metadata scans run.
 	queryMetadata chan struct{}
 	ask           askState
+	// ops is the operation registry (operations.go); journal writes it to
+	// the catalog, and leases watches other Pharos processes' leases.
+	ops     *opRegistry
+	journal *journalWriter
+	leases  leaseWatch
+	// captureProbe caches the status path's capture-lock probe for polled
+	// operation snapshots.
+	captureProbe captureProbe
+	// freshFiles caches the freshness ledger's file-derived inputs.
+	freshFiles freshnessFileCache
+	// resources samples this process and its library's other Pharos
+	// processes for the status snapshot (resources.go).
+	resources *resourceSampler
 }
 
 func NewServer(config Config, catalog *Catalog) *Server {
 	server := &Server{Catalog: catalog, config: config, runs: []*SyncRun{}, queryMetadata: make(chan struct{}, 1)}
+	server.background.wake = make(chan struct{}, 1)
 	server.life.init()
+	server.ops = newOpRegistry("service")
+	server.ops.releasing = server.releasing
+	server.resources = newResourceSampler()
 	if catalog != nil {
 		server.ingestMu.path = catalog.Path
-		catalog.background = server.spawn
+		catalog.background = server.start
+		catalog.ops = server.ops
+		// Background work's IO runs at the utility tier (§10).
+		server.ops.lowerIO = true
+		server.journal = newJournalWriter(catalog, server.ops)
+		catalog.recordInitialize(server.ops, triggerStartup)
+		server.leases.dirs = func() []string { return leaseDirs(server.Config()) }
 		catalog.RepositoryAliases = config.RepositoryAliases
 		catalog.RepositorySeparate = config.RepositorySeparate
 		catalog.setCaptureRoot(config.CaptureRoot)
@@ -103,6 +136,9 @@ func (s *Server) Serve() error {
 		return err
 	}
 	defer owner.Close()
+	// A compaction holds the use lock exclusively, so none is running; what
+	// one killed part way left is tens of gigabytes nothing else removes.
+	removeCompactionLeftovers(canonical(config.CatalogPath))
 	if config.Host != "127.0.0.1" && config.Host != "::1" && config.Host != "localhost" {
 		return fmt.Errorf("the archive API may bind only to a loopback address")
 	}
@@ -130,15 +166,22 @@ func (s *Server) Serve() error {
 	fmt.Printf("Pharos: http://%s:%d/\n", display, config.Port)
 	// Requests are cancelled when the service stops.
 	server := &http.Server{Handler: s, ReadHeaderTimeout: 5 * time.Second, BaseContext: func(net.Listener) context.Context { return s.life.ctx }}
-	s.spawn(s.Catalog.maintainLibrary)
-	s.spawn(s.Catalog.maintainSubstringIndex)
-	s.spawn(s.Catalog.maintainTextSearch)
-	s.spawn(s.Catalog.maintainToolSearch)
-	s.spawn(s.Catalog.maintainQueryTextIndexes)
-	s.spawn(func(ctx context.Context) { s.Catalog.keepWALSmall(ctx, 10*time.Second, walSizeLimit) })
-	s.spawn(s.automaticLoop)
-	s.spawn(s.cloudScheduleLoop)
+	s.startJournal()
+	s.daemon("maintainLibrary", s.Catalog.maintainLibrary)
+	s.daemon("maintainSubstringIndex", s.Catalog.maintainSubstringIndex)
+	s.daemon("maintainToolOutputIndex", s.Catalog.maintainToolOutputIndex)
+	s.daemon("maintainTextSearch", s.Catalog.maintainTextSearch)
+	s.daemon("maintainToolSearch", s.Catalog.maintainToolSearch)
+	s.daemon("maintainQueryTextIndexes", s.Catalog.maintainQueryTextIndexes)
+	s.daemon("keepWALSmall", func(ctx context.Context) { s.Catalog.keepWALSmall(ctx, 10*time.Second, walSizeLimit) })
+	s.daemon("automaticLoop", s.automaticLoop)
+	s.daemon("backgroundLoop", s.backgroundLoop)
+	s.daemon("cloudScheduleLoop", s.cloudScheduleLoop)
+	s.daemon("watchFeatureFlags", s.Catalog.watchFeatureFlags)
+	s.daemon("compressCaptures", s.compressCapturesLoop)
 	s.refreshGitInBackground(true)
+	s.countUpgradeInBackground()
+	s.warmAskModelsOnStart()
 	return s.serveUntilStopped(server, listener)
 }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -173,6 +216,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.life.requests.Done()
+	if interactiveRead(r) {
+		defer s.Catalog.beginInteractiveRead(r.Context())()
+	}
 	debug.SetPanicOnFault(true) // see exitOnFault
 	defer func() {
 		if value := recover(); value != nil {
@@ -246,7 +292,7 @@ func (s *Server) authorized(r *http.Request) bool {
 // of which serves the single-page UI.
 func isUIPage(path string) bool {
 	switch path {
-	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/preferences", "/settings/ask", "/sources", "/activity", "/analyze", "/tools", "/tl1", "/tl1/configurations", "/tl1/followups", "/tl1/quality", "/tl1/runs", "/health", "/mcp", "/findings":
+	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/layout", "/settings/preferences", "/settings/ask", "/sources", "/activity", "/analyze", "/tools", "/health", "/mcp", "/findings":
 		return true
 	}
 	return strings.HasPrefix(path, "/work/")
@@ -254,29 +300,40 @@ func isUIPage(path string) bool {
 
 // uiAssets maps each static asset URL the UI loads to its file under assets/.
 var uiAssets = map[string]struct{ name, contentType string }{
-	"/assets/query-tables.js":     {"query-tables.js", "text/javascript; charset=utf-8"},
-	"/assets/query-tables.css":    {"query-tables.css", "text/css; charset=utf-8"},
-	"/assets/onboarding.js":       {"onboarding.js", "text/javascript; charset=utf-8"},
-	"/assets/upgrade.js":          {"upgrade.js", "text/javascript; charset=utf-8"},
-	"/assets/library.js":          {"library.js", "text/javascript; charset=utf-8"},
-	"/assets/cloud-backup.js":     {"cloud-backup.js", "text/javascript; charset=utf-8"},
-	"/assets/sync.js":             {"sync.js", "text/javascript; charset=utf-8"},
-	"/assets/carbon.js":           {"carbon.js", "text/javascript; charset=utf-8"},
-	"/assets/menu-bar.js":         {"menu-bar.js", "text/javascript; charset=utf-8"},
-	"/assets/header.js":           {"header.js", "text/javascript; charset=utf-8"},
-	"/assets/ask-pharos.html":     {"ask-pharos.html", "text/html; charset=utf-8"},
-	"/assets/ask-pharos.css":      {"ask-pharos.css", "text/css; charset=utf-8"},
-	"/assets/ask-model.js":        {"ask-model.js", "text/javascript; charset=utf-8"},
-	"/assets/ask-pharos.js":       {"ask-pharos.js", "text/javascript; charset=utf-8"},
-	"/assets/reader-model.js":     {"reader-model.js", "text/javascript; charset=utf-8"},
-	"/assets/managed-storage.js":  {"managed-storage.js", "text/javascript; charset=utf-8"},
-	"/assets/managed-library.js":  {"managed-library.js", "text/javascript; charset=utf-8"},
-	"/assets/managed-library.css": {"managed-library.css", "text/css; charset=utf-8"},
+	"/assets/query-tables.js":      {"query-tables.js", "text/javascript; charset=utf-8"},
+	"/assets/query-tables.css":     {"query-tables.css", "text/css; charset=utf-8"},
+	"/assets/onboarding.js":        {"onboarding.js", "text/javascript; charset=utf-8"},
+	"/assets/upgrade.js":           {"upgrade.js", "text/javascript; charset=utf-8"},
+	"/assets/library.js":           {"library.js", "text/javascript; charset=utf-8"},
+	"/assets/status-store.js":      {"status-store.js", "text/javascript; charset=utf-8"},
+	"/assets/status-panel.js":      {"status-panel.js", "text/javascript; charset=utf-8"},
+	"/assets/cloud-backup.js":      {"cloud-backup.js", "text/javascript; charset=utf-8"},
+	"/assets/sync.js":              {"sync.js", "text/javascript; charset=utf-8"},
+	"/assets/background.js":        {"background.js", "text/javascript; charset=utf-8"},
+	"/assets/carbon.js":            {"carbon.js", "text/javascript; charset=utf-8"},
+	"/assets/menu-bar.js":          {"menu-bar.js", "text/javascript; charset=utf-8"},
+	"/assets/quick-stats.js":       {"quick-stats.js", "text/javascript; charset=utf-8"},
+	"/assets/header.js":            {"header.js", "text/javascript; charset=utf-8"},
+	"/assets/ask-pharos.html":      {"ask-pharos.html", "text/html; charset=utf-8"},
+	"/assets/ask-pharos.css":       {"ask-pharos.css", "text/css; charset=utf-8"},
+	"/assets/ask-model.js":         {"ask-model.js", "text/javascript; charset=utf-8"},
+	"/assets/ask-glow.js":          {"ask-glow.js", "text/javascript; charset=utf-8"},
+	"/assets/ask-prompt.js":        {"ask-prompt.js", "text/javascript; charset=utf-8"},
+	"/assets/ask-pharos.js":        {"ask-pharos.js", "text/javascript; charset=utf-8"},
+	"/assets/reader-model.js":      {"reader-model.js", "text/javascript; charset=utf-8"},
+	"/assets/storage-breakdown.js": {"storage-breakdown.js", "text/javascript; charset=utf-8"},
+	"/assets/managed-storage.js":   {"managed-storage.js", "text/javascript; charset=utf-8"},
+	"/assets/managed-library.js":   {"managed-library.js", "text/javascript; charset=utf-8"},
+	"/assets/managed-library.css":  {"managed-library.css", "text/css; charset=utf-8"},
 }
 
 func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	switch {
+	case path == "/api/markdown-link":
+		s.markdownLink(w, r)
+	case path == "/api/markdown-favicon":
+		s.markdownFavicon(w, r)
 	case isUIPage(path):
 		writeHTML(w, appHTML())
 	case strings.HasPrefix(path, "/conversation/"):
@@ -346,6 +403,7 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(path, "/api/work/"):
 		// /api/work/{id}, /api/work/{id}/conversations/{conversation}, and
 		// /api/work/{id}/find: the reader loads a workspace in pieces.
+		// /api/work/{id}/matches places a Search's matches in its summary.
 		parts := strings.Split(strings.TrimPrefix(path, "/api/work/"), "/")
 		var value any
 		var err error
@@ -353,10 +411,20 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		case len(parts) == 2 && (parts[1] == "delegation" || parts[1] == "parallel"):
 			s.getDelegation(w, r, parts[0], parts[1] == "parallel")
 			return
+		case len(parts) == 2 && parts[1] == "preview":
+			s.getWorkPreview(w, r, parts[0])
+			return
 		case len(parts) == 1:
 			value, err = nilIfNoMap(s.Catalog.WorkOverview(parts[0]))
 		case len(parts) == 3 && parts[1] == "conversations":
 			value, err = nilIfNoMap(s.Catalog.WorkConversation(parts[0], parts[2]))
+		case len(parts) == 2 && parts[1] == "matches":
+			matches, err := s.Catalog.WorkMatches(r.Context(), parts[0], r.URL.Query())
+			if err != nil {
+				writeError(w, err, http.StatusBadRequest)
+				return
+			}
+			value = matches
 		case len(parts) == 2 && parts[1] == "find":
 			q := r.URL.Query()
 			options := transcriptFindOptions{Term: q.Get("q"), Output: q.Get("output") == "1", Regex: q.Get("regex") == "1", CaseSensitive: q.Get("case") == "1"}
@@ -450,6 +518,9 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/health/counts":
 		value, err := s.Catalog.HealthCounts(r.Context())
 		writeResult(w, value, err)
+	case path == "/api/library/summary":
+		value, err := s.Catalog.LibrarySummary(r.Context())
+		writeResult(w, value, err)
 	case path == "/api/health/pricing":
 		value, err := s.Catalog.PricingHealth(r.Context())
 		writeResult(w, value, err)
@@ -458,6 +529,8 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeResult(w, value, err)
 	case path == "/api/health/storage":
 		writeJSON(w, merge(storage(s.Config()), map[string]any{"index_bytes": s.Catalog.indexBytes()}), 200)
+	case path == "/api/health/storage/breakdown":
+		writeJSON(w, s.storageBreakdown(), 200)
 	case path == "/api/health/freshness":
 		writeJSON(w, merge(s.Catalog.Freshness(), map[string]any{"sync_active": s.syncActive()}), 200)
 	case path == "/api/authorship":
@@ -473,6 +546,8 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = append(rows, map[string]any{"id": "environment:web", "label": "Web (device unknown)", "kind": "web"})
 		writeJSON(w, map[string]any{"machines": rows}, 200)
+	case path == "/api/thinking":
+		s.handleThinking(w, r)
 	case path == "/api/usage/history":
 		value, err := s.Catalog.UsageHistory(r.Context())
 		writeResult(w, value, err)
@@ -481,12 +556,15 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeResult(w, value, err)
 	case path == "/api/usage/summary":
 		value, err := s.Catalog.UsageSummary(r.Context())
+		if err == nil && r.URL.Query().Get("details") == "1" {
+			err = s.Catalog.addQuickStatsCounts(r.Context(), value)
+		}
 		writeResult(w, value, err)
 	case path == "/api/menu-bar/status":
 		value, err := s.menuBarStatus(r.Context())
 		writeResult(w, value, err)
 	case path == "/api/menu-bar/usage":
-		value, err := s.menuBarUsage(r.Context())
+		value, err := s.menuBarUsage(r.Context(), r.URL.Query().Get("period"))
 		writeResult(w, value, err)
 	case path == "/api/tools/status":
 		value, err := s.Catalog.ToolLedgerStatus(r.Context())
@@ -522,9 +600,22 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, s.backupStatus(), http.StatusOK)
 	case path == "/api/search/status":
 		progress, err := s.Catalog.substringIndexProgress(r.Context())
-		writeResult(w, map[string]any{"substring": progress}, err)
+		if err != nil {
+			writeResult(w, nil, err)
+			break
+		}
+		toolOutput, err := s.Catalog.toolOutputIndexProgress(r.Context())
+		writeResult(w, map[string]any{"substring": progress, "tool_output": toolOutput}, err)
 	case path == "/api/library/status":
 		writeJSON(w, s.libraryStatus(), http.StatusOK)
+	case path == "/api/operations":
+		s.serveOperations(w, r)
+	case path == "/api/status":
+		s.serveStatus(w, r)
+	case path == "/api/background":
+		s.getBackground(w, r)
+	case path == "/api/status/stream":
+		s.serveStatusStream(w, r)
 	case path == "/api/health/drive":
 		// Just the drive checks, from their cache: cheap enough to poll.
 		writeJSON(w, s.driveHealth(), http.StatusOK)
@@ -620,14 +711,20 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 
 	case strings.HasPrefix(path, "/api/sync/") || path == "/api/library/update":
 		s.postIncrementalSync(w, r, body)
+	case path == "/api/background/settings":
+		s.postBackgroundSettings(w, r, body)
+	case path == "/api/background/run":
+		s.postBackgroundRun(w, r, body)
 	case path == "/api/upgrade":
 		// The upgrade reads and rewrites much of the catalog, so it runs in the
 		// background; /api/upgrade and the library status report progress. A
 		// release stops it after the unit in progress; starting it again resumes.
-		started := s.spawn(func(ctx context.Context) {
-			if err := s.Catalog.RunUpgrade(ctx, nil); err != nil && ctx.Err() == nil {
+		started := s.start(OperationSpec{Kind: "library.upgrade", Trigger: triggerUser}, func(ctx context.Context, op *Op) error {
+			err := s.Catalog.RunUpgrade(ctx, nil)
+			if err != nil && ctx.Err() == nil {
 				fmt.Fprintf(os.Stderr, "Library upgrade: %v\n", err)
 			}
+			return err
 		})
 		if !started {
 			writeJSON(w, map[string]any{"error": "Pharos is stopping"}, http.StatusServiceUnavailable)
@@ -638,13 +735,21 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		// Building the ledger re-reads every retained conversation, so it runs
 		// in the background; progress is reported by /api/tools/status. A
 		// release stops it between conversations; the next build resumes.
-		started := s.spawn(func(ctx context.Context) {
-			if _, err := s.Catalog.BackfillToolLedger(ctx, nil); err != nil && ctx.Err() == nil {
+		started := s.start(OperationSpec{Kind: "tools.ledger.build", Trigger: triggerUser}, func(ctx context.Context, op *Op) error {
+			op.Plan(StepPlan{Name: "Build the Tools ledger", Unit: "conversation", Total: -1}, StepPlan{Name: "Rebuild the Tools rollup", Total: -1})
+			op.Step("Build the Tools ledger", "conversation", -1)
+			_, err := s.Catalog.BackfillToolLedger(ctx, func(done, total int) {
+				op.progress("Build the Tools ledger", "", "conversation", float64(done), float64(total), total > 0)
+			})
+			if err != nil && ctx.Err() == nil {
 				fmt.Fprintf(os.Stderr, "Tool ledger build: %v\n", err)
 			}
-			if err := s.Catalog.ensureToolRollup(ctx); err != nil && ctx.Err() == nil {
-				fmt.Fprintf(os.Stderr, "Tool rollup: %v\n", err)
+			op.Step("Rebuild the Tools rollup", "", -1)
+			rollup := s.Catalog.ensureToolRollup(ctx)
+			if rollup != nil && ctx.Err() == nil {
+				fmt.Fprintf(os.Stderr, "Tool rollup: %v\n", rollup)
 			}
+			return errors.Join(err, rollup)
 		})
 		if !started {
 			writeJSON(w, map[string]any{"error": "Pharos is stopping"}, http.StatusServiceUnavailable)
@@ -655,14 +760,20 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		s.postFindings(w, r, body)
 	case path == "/api/preferences":
 		s.postPreferences(w, r, body)
+	case path == "/api/labels/settings":
+		s.postLabelsSettings(w, r, body)
 	case path == "/api/capture":
 		s.startCapture(w, body)
 	case path == "/api/index":
 		s.startIndex(w, body)
+	case path == "/api/operations/stop":
+		s.stopOperation(w, body)
 	case path == "/api/index/cancel":
 		writeJSON(w, map[string]any{"stopped": s.stopIngest()}, http.StatusOK)
 	case path == "/api/library/refresh/stop":
-		writeJSON(w, map[string]any{"stopped": s.Catalog.stopLibraryRefresh()}, http.StatusOK)
+		stopped := s.Catalog.stopLibraryRefresh()
+		s.ops.markKindStopping("maintenance.library-view")
+		writeJSON(w, map[string]any{"stopped": stopped}, http.StatusOK)
 	case path == "/api/library/refresh/resume":
 		writeJSON(w, map[string]any{"resumed": s.Catalog.resumeLibraryRefresh()}, http.StatusOK)
 	case strings.HasPrefix(path, "/api/cloud-backup/"):
@@ -670,7 +781,11 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/backup":
 		s.startBackup(w, body)
 	case path == "/api/backup/cancel":
-		writeJSON(w, map[string]any{"cancelled": s.backups.stop()}, http.StatusOK)
+		cancelled := s.backups.stop()
+		if cancelled {
+			s.ops.markKindStopping("backup.local")
+		}
+		writeJSON(w, map[string]any{"cancelled": cancelled}, http.StatusOK)
 	case path == "/api/mcp/rpc":
 		s.mcpRPC(w, r, body)
 	case path == "/api/mcp/enabled":
@@ -883,9 +998,12 @@ func (s *Server) syncSources(w http.ResponseWriter, sources []SourceConfig) {
 		return
 	}
 	defer s.ingestMu.Unlock()
-	run := s.startRun(sources)
+	_, handle := s.begin(s.life.ctx, OperationSpec{Kind: "index.sources.legacy", Trigger: triggerUser})
+	defer handle.Finish(nil) // when the handler returns, after the checkpoint below
+	run := s.startRunFor(handle, "source-sync", sourceNames(sources))
 	results := []IngestResult{}
 	ctx, end := s.beginIngest(run.ID)
+	ctx = withOp(ctx, handle)
 	defer end()
 	for index, source := range sources {
 		if ctx.Err() != nil {
@@ -999,11 +1117,15 @@ func skippedTotals(results []IngestResult) int {
 	return total
 }
 func (s *Server) startRun(sources []SourceConfig) *SyncRun {
+	return s.startRunNamed("source-sync", sourceNames(sources))
+}
+
+func sourceNames(sources []SourceConfig) []string {
 	names := []string{}
 	for _, source := range sources {
 		names = append(names, source.Name)
 	}
-	return s.startRunNamed("source-sync", names)
+	return names
 }
 
 func (s *Server) startRunNamed(kind string, names []string) *SyncRun {
@@ -1028,6 +1150,7 @@ func (s *Server) updateRun(id string, update func(*SyncRun)) {
 			}
 			run.operation.observe(run.Work, time.Now())
 			run.UpdatedAt = now()
+			run.op.mirrorRun(run)
 			return
 		}
 	}

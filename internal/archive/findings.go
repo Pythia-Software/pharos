@@ -269,6 +269,9 @@ type findingEnv struct {
 	cachedCalls    []callGroup
 	featureCache   bool
 	cachedPrompts  map[string]string
+	// pendingFeatures holds feature partitions computed inside the pass's
+	// snapshot, published once it ends (publishFindingFeatures).
+	pendingFeatures []findingFeaturePublication
 }
 
 // callGroup is one conversation's calls of one tool and program.
@@ -786,7 +789,7 @@ func (stats findingStats) mainProvider() (string, float64) {
 // version and the local day. Every index between full passes only measures
 // the findings being watched.
 func (c *Catalog) findingsGeneration() string {
-	return findingsVersion + "/" + c.clock().Local().Format("2006-01-02")
+	return findingsVersion + "/" + safetyVersion + "/" + c.clock().Local().Format("2006-01-02")
 }
 
 // RefreshFindings runs the full findings pass when the day or detectors
@@ -794,10 +797,27 @@ func (c *Catalog) findingsGeneration() string {
 // the findings the user is watching. The service runs it after each index,
 // once the tool rollup is current.
 func (c *Catalog) RefreshFindings(ctx context.Context, force bool) error {
+	return c.refreshFindings(ctx, func(built, generation string) bool { return force || built != generation })
+}
+
+// MeasureFindings measures the watched findings without discovering new
+// ones, whatever day the last full pass was: background updates leave
+// today's full pass to the daily review.
+func (c *Catalog) MeasureFindings(ctx context.Context) error {
+	return c.refreshFindings(ctx, func(string, string) bool { return false })
+}
+
+// refreshFindings runs a pass, full when full says so for the built and
+// current generations.
+func (c *Catalog) refreshFindings(ctx context.Context, fullPass func(built, generation string) bool) error {
 	state := &c.findings
 	state.mu.Lock()
 	if state.running {
 		state.mu.Unlock()
+		// A second request is an honest no-op (§3.3 single flight).
+		if op := opFrom(ctx); op != nil && op.spec.Kind == "analysis.findings" {
+			op.Skip("already-running")
+		}
 		return nil
 	}
 	state.running, state.phase = true, "starting"
@@ -812,13 +832,23 @@ func (c *Catalog) RefreshFindings(ctx context.Context, force bool) error {
 		}
 	}()
 	started := time.Now()
+	// The full pass reads the library as it is now: the freshness ledger
+	// compares this with the inputs later (§5).
+	inputs := c.inputsGeneration(ctx)
+	// The day the pass analyses, fixed when it starts: a pass that crosses
+	// midnight is the day before's.
+	generation := c.findingsGeneration()
 	built, _ := c.metaValue(ctx, "findings_generation")
-	full := force || built != c.findingsGeneration()
+	full := fullPass(built, generation)
 	err = c.runFindingsPass(ctx, full)
 	if err == nil && full {
+		c.setFindingsPhase("reviewing safety selections")
+		err = c.refreshSafety(ctx)
+	}
+	if err == nil && full {
 		err = c.writeTransaction(ctx, "findings-meta", func(tx *sql.Tx) error {
-			for key, value := range map[string]string{"findings_generation": c.findingsGeneration(), "findings_built_at": formatTime(c.clock()),
-				"findings_took_ms": fmt.Sprint(time.Since(started).Milliseconds())} {
+			for key, value := range map[string]string{"findings_generation": generation, "findings_built_at": formatTime(c.clock()),
+				"findings_took_ms": fmt.Sprint(time.Since(started).Milliseconds()), "findings_inputs_generation": inputs} {
 				if _, err := tx.Exec("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value); err != nil {
 					return err
 				}
@@ -837,11 +867,15 @@ func (c *Catalog) RefreshFindings(ctx context.Context, force bool) error {
 
 // refreshFindingsInBackground runs RefreshFindings on the catalog's
 // background executor.
+// It is started by GET /api/findings before findings exist, a read that
+// starts a write (§1): the page waits for it, so it is foreground (§10).
 func (c *Catalog) refreshFindingsInBackground(force bool) {
-	c.runBackground(func(ctx context.Context) {
-		if err := c.RefreshFindings(ctx, force); err != nil && ctx.Err() == nil {
+	c.startBackground(OperationSpec{Kind: "analysis.findings", Trigger: triggerRead, Priority: priorityForeground}, func(ctx context.Context, op *Op) error {
+		err := c.RefreshFindings(withWorkProgress(ctx, op.mirrorWork), force)
+		if err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Findings: %v\n", err)
 		}
+		return err
 	})
 }
 
@@ -857,6 +891,11 @@ func (c *Catalog) setFindingsPhase(phase string) {
 	c.findings.phase = phase
 	c.findings.mu.Unlock()
 }
+
+// findingsAbortPublishWait bounds how long a stopped findings pass may
+// spend keeping the detector inputs it computed: well inside the time a
+// release that begins meanwhile waits for workers.
+var findingsAbortPublishWait = 2 * time.Second
 
 // runFindingsPass measures the specs of every finding the user acted on,
 // discovers new candidates on a full pass, and stores the results.
@@ -926,6 +965,32 @@ func (c *Catalog) runFindingsPassWithFeatures(ctx context.Context, full, feature
 		return err
 	}
 	env.measuring, env.stored, env.featureCache = measuring, existing, features
+	defer func() {
+		if len(env.pendingFeatures) == 0 {
+			return
+		}
+		// A pass that failed or was stopped, before or while it published,
+		// keeps the detector inputs it computed, so the next one does not
+		// rebuild them: end the snapshot first (a no-op once committed),
+		// then publish (each publication checks the build it read). A stop
+		// has cancelled ctx: a user's stop or the chain's gives the
+		// publication findingsAbortPublishWait of its own, well inside a
+		// release's wait for workers; the service stopping (a release, a
+		// quit) skips it, so nothing holds up the eject.
+		_ = snapshot.Rollback()
+		publish := ctx
+		if ctx.Err() != nil {
+			if c.serviceStopping() {
+				return
+			}
+			var cancel context.CancelFunc
+			publish, cancel = context.WithTimeout(context.WithoutCancel(ctx), findingsAbortPublishWait)
+			defer cancel()
+		}
+		if err := env.publishFindingFeatures(publish); err != nil {
+			fmt.Fprintf(os.Stderr, "Findings: could not keep the inputs of a pass that ended early: %v\n", err)
+		}
+	}()
 	candidates := []*findingCandidate{}
 	detectors := []findingDetector{}
 	for _, detector := range findingDetectors {
@@ -991,6 +1056,9 @@ func (c *Catalog) runFindingsPassWithFeatures(ctx context.Context, full, feature
 	env.db = conn
 	reportWork(ctx, "saving findings", "finding", 0, len(kept))
 	c.setFindingsPhase("saving")
+	if err := env.publishFindingFeatures(ctx); err != nil {
+		return err
+	}
 	if err := c.storeFindings(ctx, env, kept, existing, states, retired, full); err != nil {
 		return err
 	}

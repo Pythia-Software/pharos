@@ -1,0 +1,792 @@
+[
+  {
+    "name": "word rule",
+    "draft": {
+      "editor": "visual",
+      "match": "rules",
+      "root": {
+        "id": "group-1",
+        "kind": "group",
+        "join": "all",
+        "children": [
+          {
+            "id": "rule-1",
+            "kind": "words",
+            "text": "failure",
+            "other": "",
+            "distance": "8",
+            "exclude": false
+          }
+        ],
+        "exclude": false
+      },
+      "text": "",
+      "mode": "advanced",
+      "scope": {
+        "surface": "prose",
+        "roles": [],
+        "kinds": [],
+        "repository": "",
+        "provider": "",
+        "source": "",
+        "from": "",
+        "to": "",
+        "conversation_id": "",
+        "workspace_id": ""
+      },
+      "fuzzy": false,
+      "caseSensitive": false,
+      "separators": false
+    },
+    "valid": true
+  },
+  {
+    "name": "empty rules",
+    "draft": {
+      "editor": "visual",
+      "match": "rules",
+      "root": {
+        "id": "group-1",
+        "kind": "group",
+        "join": "all",
+        "children": [],
+        "exclude": false
+      },
+      "text": "",
+      "mode": "advanced",
+      "scope": {
+        "surface": "prose",
+        "roles": [],
+        "kinds": [],
+        "repository": "",
+        "provider": "",
+        "source": "",
+        "from": "",
+        "to": "",
+        "conversation_id": "",
+        "workspace_id": ""
+      },
+      "fuzzy": false,
+      "caseSensitive": false,
+      "separators": false
+    },
+    "valid": false
+  },
+  {
+    "name": "one empty rule beside a word",
+    "draft": {
+      "editor": "visual",
+      "match": "rules",
+      "root": {
+        "id": "group-1",
+        "kind": "group",
+        "join": "all",
+        "children": [
+          {
+            "id": "rule-1",
+            "kind": "words",
+            "text": "failure",
+            "other": "",
+            "distance": "8",
+            "exclude": false
+          },
+          {
+            "id": "rule-1",
+            "kind": "words",
+            "text": "",
+            "other": "",
+            "distance": "8",
+            "exclude": false
+          }
+        ],
+        "exclude": false
+      },
+      "text": "",
+      "mode": "advanced",
+      "scope": {
+        "surface": "prose",
+        "roles": [],
+        "kinds": [],
+        "repository": "",
+        "provider": "",
+        "source": "",
+        "from": "",
+        "to": "",
+        "conversation_id": "",
+        "workspace_id": ""
+      },
+      "fuzzy": false,
+      "caseSensitive": false,
+      "separators": false
+    },
+    "valid": false
+  },
+  {
+    "name": "excluded only group",
+    "draft": {
+      "editor": "visual",
+      "match": "rules",
+      "root": {
+        "id": "group-1",
+        "kind": "group",
+        "join": "all",
+        "children": [
+          {
+            "id": "rule-1",
+            "kind": "words",
+            "text": "failure",
+            "other": "",
+            "distance": "8",
+            "exclude": true
+          }
+        ],
+        "exclude": false
+      },
+      "text": "",
+      "mode": "advanced",
+      "scope": {
+        "surface": "prose",
+        "roles": [],
+        "kinds": [],
+        "repository": "",
+        "provider": "",
+        "source": "",
+        "from": "",
+        "to": "",
+        "conversation_id": "",
+        "workspace_id": ""
+      },
+      "fuzzy": false,
+      "caseSensitive": false,
+      "separators": false
+    },
+    "valid": false
+  },
+  {
+    "name": "empty nested group",
+    "draft": {
+      "editor": "visual",
+      "match": "rules",
+      "root": {
+        "id": "group-1",
+        "kind": "group",
+        "join": "all",
+        "children": [
+          {
+            "id": "rule-1",
+            "kind": "words",
+            "text": "failure",
+            "other": "",
+            "distance": "8",
+            "exclude": false
+          },
+          {
+            "kind": "group",
+            "join": "all",
+            "children": [],
+            "exclude": false
+          }
+        ],
+        "exclude": false
+      },
+      "text": "",
+      "mode": "advanced",
+      "scope": {
+        "surface": "prose",
+        "roles": [],
+        "kinds": [],
+        "repository": "",
+        "provider": "",
+        "source": "",
+        "from": "",
+        "to": "",
+        "conversation_id": "",
+        "workspace_id": ""
+      },
+      "fuzzy": false,
+      "caseSensitive": false,
+      "separators": false
+    },
+    "valid": false
+  },
+  {
+    "name": "punctuation only rule",
+    "draft": {
+      "editor": "visual",
+      "match": "rules",
+      "root": {
+        "id": "group-1",
+        "kind": "group",
+        "join": "all",
+        "children": [
+          {
+            "id": "rule-1",
+            "kind": "words",
+            "text": "...",
+            "other": "",
+            "distance": "8",
+            "exclude": false
+          }
+        ],
+        "exclude": false
+      },
+      "text": "",
+      "mode": "advanced",
+      "scope": {
+        "surface": "prose",
+        "roles": [],
+        "kinds": [],
+        "repository": "",
+        "provider": "",
+        "source": "",
+        "from": "",
+        "to": "",
+        "conversation_id": "",
+        "workspace_id": ""
+      },
+      "fuzzy": false,
+      "caseSensitive": false,
+      "separators": false
+    },
+    "valid": false
+  },
+  {
+    "name": "missing proximity phrase",
+    "draft": {
+      "editor": "visual",
+      "match": "rules",
+      "root": {
+        "id": "group-1",
+        "kind": "group",
+        "join": "all",
+        "children": [
+          {
+            "id": "rule-1",
+            "kind": "near",
+            "text": "failure",
+            "other": "",
+            "distance": "8",
+            "exclude": false
+          }
+        ],
+        "exclude": false
+      },
+      "text": "",
+      "mode": "advanced",
+      "scope": {
+        "surface": "prose",
+        "roles": [],
+        "kinds": [],
+        "repository": "",
+        "provider": "",
+        "source": "",
+        "from": "",
+        "to": "",
+        "conversation_id": "",
+        "workspace_id": ""
+      },
+      "fuzzy": false,
+      "caseSensitive": false,
+      "separators": false
+    },
+    "valid": false
+  },
+  {
+    "name": "proximity distance out of range",
+    "draft": {
+      "editor": "visual",
+      "match": "rules",
+      "root": {
+        "id": "group-1",
+        "kind": "group",
+        "join": "all",
+        "children": [
+          {
+            "id": "rule-1",
+            "kind": "near",
+            "text": "failure",
+            "other": "retry",
+            "distance": "101",
+            "exclude": false
+          }
+        ],
+        "exclude": false
+      },
+      "text": "",
+      "mode": "advanced",
+      "scope": {
+        "surface": "prose",
+        "roles": [],
+        "kinds": [],
+        "repository": "",
+        "provider": "",
+        "source": "",
+        "from": "",
+        "to": "",
+        "conversation_id": "",
+        "workspace_id": ""
+      },
+      "fuzzy": false,
+      "caseSensitive": false,
+      "separators": false
+    },
+    "valid": false
+  },
+  {
+    "name": "prefix wildcard",
+    "draft": {
+      "editor": "visual",
+      "match": "rules",
+      "root": {
+        "id": "group-1",
+        "kind": "group",
+        "join": "all",
+        "children": [
+          {
+            "id": "rule-1",
+            "kind": "prefix",
+            "text": "fail*",
+            "other": "",
+            "distance": "8",
+            "exclude": false
+          }
+        ],
+        "exclude": false
+      },
+      "text": "",
+      "mode": "advanced",
+      "scope": {
+        "surface": "prose",
+        "roles": [],
+        "kinds": [],
+        "repository": "",
+        "provider": "",
+        "source": "",
+        "from": "",
+        "to": "",
+        "conversation_id": "",
+        "workspace_id": ""
+      },
+      "fuzzy": false,
+      "caseSensitive": false,
+      "separators": false
+    },
+    "valid": false
+  },
+  {
+    "name": "literal with unused empty rules",
+    "draft": {
+      "editor": "visual",
+      "match": "literal",
+      "root": {
+        "id": "group-1",
+        "kind": "group",
+        "join": "all",
+        "children": [],
+        "exclude": false
+      },
+      "text": "failure",
+      "mode": "advanced",
+      "scope": {
+        "surface": "prose",
+        "roles": [],
+        "kinds": [],
+        "repository": "",
+        "provider": "",
+        "source": "",
+        "from": "",
+        "to": "",
+        "conversation_id": "",
+        "workspace_id": ""
+      },
+      "fuzzy": false,
+      "caseSensitive": false,
+      "separators": false
+    },
+    "valid": true
+  },
+  {
+    "name": "syntax with unused empty rules",
+    "draft": {
+      "editor": "syntax",
+      "match": "rules",
+      "root": {
+        "id": "group-1",
+        "kind": "group",
+        "join": "all",
+        "children": [],
+        "exclude": false
+      },
+      "text": "failure OR retry",
+      "mode": "advanced",
+      "scope": {
+        "surface": "prose",
+        "roles": [],
+        "kinds": [],
+        "repository": "",
+        "provider": "",
+        "source": "",
+        "from": "",
+        "to": "",
+        "conversation_id": "",
+        "workspace_id": ""
+      },
+      "fuzzy": false,
+      "caseSensitive": false,
+      "separators": false
+    },
+    "valid": true
+  },
+  {
+    "name": "nonobject date window",
+    "draft": {
+      "editor": "visual",
+      "match": "rules",
+      "root": {
+        "id": "group-1",
+        "kind": "group",
+        "join": "all",
+        "children": [
+          {
+            "id": "rule-1",
+            "kind": "words",
+            "text": "failure",
+            "other": "",
+            "distance": "8",
+            "exclude": false
+          }
+        ],
+        "exclude": false
+      },
+      "text": "",
+      "mode": "advanced",
+      "scope": {
+        "surface": "prose",
+        "roles": [],
+        "kinds": [],
+        "repository": "",
+        "provider": "",
+        "source": "",
+        "from": "",
+        "to": "",
+        "conversation_id": "",
+        "workspace_id": ""
+      },
+      "fuzzy": false,
+      "caseSensitive": false,
+      "separators": false,
+      "dateWindow": false
+    },
+    "valid": false
+  },
+  {
+    "name": "numeric duration",
+    "draft": {
+      "editor": "visual",
+      "match": "rules",
+      "root": {
+        "id": "group-1",
+        "kind": "group",
+        "join": "all",
+        "children": [
+          {
+            "id": "rule-1",
+            "kind": "words",
+            "text": "failure",
+            "other": "",
+            "distance": "8",
+            "exclude": false
+          }
+        ],
+        "exclude": false
+      },
+      "text": "",
+      "mode": "advanced",
+      "scope": {
+        "surface": "prose",
+        "roles": [],
+        "kinds": [],
+        "repository": "",
+        "provider": "",
+        "source": "",
+        "from": "",
+        "to": "",
+        "conversation_id": "",
+        "workspace_id": ""
+      },
+      "fuzzy": false,
+      "caseSensitive": false,
+      "separators": false,
+      "dateWindow": {
+        "duration": 7,
+        "from": "x"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "numeric from",
+    "draft": {
+      "editor": "visual",
+      "match": "rules",
+      "root": {
+        "id": "group-1",
+        "kind": "group",
+        "join": "all",
+        "children": [
+          {
+            "id": "rule-1",
+            "kind": "words",
+            "text": "failure",
+            "other": "",
+            "distance": "8",
+            "exclude": false
+          }
+        ],
+        "exclude": false
+      },
+      "text": "",
+      "mode": "advanced",
+      "scope": {
+        "surface": "prose",
+        "roles": [],
+        "kinds": [],
+        "repository": "",
+        "provider": "",
+        "source": "",
+        "from": "",
+        "to": "",
+        "conversation_id": "",
+        "workspace_id": ""
+      },
+      "fuzzy": false,
+      "caseSensitive": false,
+      "separators": false,
+      "dateWindow": {
+        "duration": "7d",
+        "from": 3
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "duration 7d",
+    "draft": {
+      "editor": "visual",
+      "match": "rules",
+      "root": {
+        "id": "group-1",
+        "kind": "group",
+        "join": "all",
+        "children": [
+          {
+            "id": "rule-1",
+            "kind": "words",
+            "text": "failure",
+            "other": "",
+            "distance": "8",
+            "exclude": false
+          }
+        ],
+        "exclude": false
+      },
+      "text": "",
+      "mode": "advanced",
+      "scope": {
+        "surface": "prose",
+        "roles": [],
+        "kinds": [],
+        "repository": "",
+        "provider": "",
+        "source": "",
+        "from": "2026-10-01T00:00:00Z",
+        "to": "",
+        "conversation_id": "",
+        "workspace_id": ""
+      },
+      "fuzzy": false,
+      "caseSensitive": false,
+      "separators": false,
+      "dateWindow": {
+        "duration": "7d",
+        "from": "2026-10-01T00:00:00Z"
+      }
+    },
+    "valid": true,
+    "recordValid": false
+  },
+  {
+    "name": "duration 0d",
+    "draft": {
+      "editor": "visual",
+      "match": "rules",
+      "root": {
+        "id": "group-1",
+        "kind": "group",
+        "join": "all",
+        "children": [
+          {
+            "id": "rule-1",
+            "kind": "words",
+            "text": "failure",
+            "other": "",
+            "distance": "8",
+            "exclude": false
+          }
+        ],
+        "exclude": false
+      },
+      "text": "",
+      "mode": "advanced",
+      "scope": {
+        "surface": "prose",
+        "roles": [],
+        "kinds": [],
+        "repository": "",
+        "provider": "",
+        "source": "",
+        "from": "2026-10-01T00:00:00Z",
+        "to": "",
+        "conversation_id": "",
+        "workspace_id": ""
+      },
+      "fuzzy": false,
+      "caseSensitive": false,
+      "separators": false,
+      "dateWindow": {
+        "duration": "0d",
+        "from": "2026-10-01T00:00:00Z"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "duration bad",
+    "draft": {
+      "editor": "visual",
+      "match": "rules",
+      "root": {
+        "id": "group-1",
+        "kind": "group",
+        "join": "all",
+        "children": [
+          {
+            "id": "rule-1",
+            "kind": "words",
+            "text": "failure",
+            "other": "",
+            "distance": "8",
+            "exclude": false
+          }
+        ],
+        "exclude": false
+      },
+      "text": "",
+      "mode": "advanced",
+      "scope": {
+        "surface": "prose",
+        "roles": [],
+        "kinds": [],
+        "repository": "",
+        "provider": "",
+        "source": "",
+        "from": "2026-10-01T00:00:00Z",
+        "to": "",
+        "conversation_id": "",
+        "workspace_id": ""
+      },
+      "fuzzy": false,
+      "caseSensitive": false,
+      "separators": false,
+      "dateWindow": {
+        "duration": "bad",
+        "from": "2026-10-01T00:00:00Z"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "null role",
+    "draft": {
+      "editor": "visual",
+      "match": "rules",
+      "root": {
+        "id": "group-1",
+        "kind": "group",
+        "join": "all",
+        "children": [
+          {
+            "id": "rule-1",
+            "kind": "words",
+            "text": "failure",
+            "other": "",
+            "distance": "8",
+            "exclude": false
+          }
+        ],
+        "exclude": false
+      },
+      "text": "",
+      "mode": "advanced",
+      "scope": {
+        "surface": "prose",
+        "roles": [
+          null
+        ],
+        "kinds": [],
+        "repository": "",
+        "provider": "",
+        "source": "",
+        "from": "",
+        "to": "",
+        "conversation_id": "",
+        "workspace_id": ""
+      },
+      "fuzzy": false,
+      "caseSensitive": false,
+      "separators": false
+    },
+    "valid": false
+  },
+  {
+    "name": "reversed dates",
+    "draft": {
+      "editor": "visual",
+      "match": "rules",
+      "root": {
+        "id": "group-1",
+        "kind": "group",
+        "join": "all",
+        "children": [
+          {
+            "id": "rule-1",
+            "kind": "words",
+            "text": "failure",
+            "other": "",
+            "distance": "8",
+            "exclude": false
+          }
+        ],
+        "exclude": false
+      },
+      "text": "",
+      "mode": "advanced",
+      "scope": {
+        "surface": "prose",
+        "roles": [],
+        "kinds": [],
+        "repository": "",
+        "provider": "",
+        "source": "",
+        "from": "2026-10-03",
+        "to": "2026-10-01",
+        "conversation_id": "",
+        "workspace_id": ""
+      },
+      "fuzzy": false,
+      "caseSensitive": false,
+      "separators": false
+    },
+    "valid": false
+  }
+]

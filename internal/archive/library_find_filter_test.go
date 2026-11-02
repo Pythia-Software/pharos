@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf16"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
 	"github.com/gbdubs/pharos/internal/querytable"
@@ -298,8 +300,19 @@ func TestLibraryFindCacheTracksSearchInputs(t *testing.T) {
 				results <- err
 				return
 			}
-			if hit, ok := rows[0]["find_hit"].(libraryHit); !ok || !strings.Contains(hit.Snippet, "race condition") {
+			hit, ok := rows[0]["find_hit"].(libraryHit)
+			if !ok || !strings.Contains(hit.Snippet, "race condition") {
 				results <- fmt.Errorf("missing localized page evidence: %#v", rows)
+				return
+			}
+			// The phrase is marked in the snippet; the excluded term never is.
+			units := utf16.Encode([]rune(hit.Snippet))
+			marked := []string{}
+			for _, span := range hit.Highlights {
+				marked = append(marked, string(utf16.Decode(units[span[0]:span[1]])))
+			}
+			if len(marked) == 0 || slices.ContainsFunc(marked, func(text string) bool { return !strings.EqualFold(text, "race condition") }) {
+				results <- fmt.Errorf("snippet highlights %q in %q", marked, hit.Snippet)
 			}
 		})
 	}
@@ -313,14 +326,20 @@ func TestLibraryFindCacheTracksSearchInputs(t *testing.T) {
 
 func TestLibraryFindNoProgressCanRetry(t *testing.T) {
 	c := textFixture(t)
-	stalled := true
+	stalled, afterRow, rows := true, false, 0
 	hookTextSearch(t, c, func(ctx context.Context) error {
-		if stalled {
+		if stalled && !afterRow {
 			<-ctx.Done()
 			return ctx.Err()
 		}
 		return nil
-	}, nil)
+	}, func(ctx context.Context) error {
+		if rows++; stalled && afterRow && rows > 1 {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		return nil
+	})
 	options := LibraryFindOptions{Query: "cache", Search: TextSearchOptions{TimeoutMS: 100}}
 	first, err := c.libraryFindMatches(t.Context(), options)
 	if err != nil || first.search.StopReason != "time_budget_no_progress" {
@@ -330,6 +349,20 @@ func TestLibraryFindNoProgressCanRetry(t *testing.T) {
 	again, err := c.libraryFindMatches(t.Context(), options)
 	if err != nil || again == first || len(again.matches) == 0 {
 		t.Fatalf("transient timeout was cached: %+v %v", again, err)
+	}
+	// Workspace rows that time out after some progress are incomplete, an
+	// error to Find, and a retry must search again rather than return it
+	// from the cache.
+	stalled, afterRow, rows = true, true, 0
+	options = LibraryFindOptions{Query: "cache", WorkspaceRows: true, Search: TextSearchOptions{TimeoutMS: 100}}
+	first, err = c.libraryFindMatches(t.Context(), options)
+	if err != nil || first.search.Complete || first.search.StopReason != "time_budget" {
+		t.Fatalf("expected incomplete workspace rows: %+v %v", first, err)
+	}
+	stalled = false
+	again, err = c.libraryFindMatches(t.Context(), options)
+	if err != nil || again == first || !again.search.Complete {
+		t.Fatalf("incomplete workspace rows were cached: %+v %v", again, err)
 	}
 }
 
@@ -406,5 +439,44 @@ func TestLibraryFindPricesMatchingWorkspaces(t *testing.T) {
 	rows, found, err := server.libraryRows(t.Context(), params, libraryFieldsFor("title", "cost_usd"), nil, []querytable.WhereTerm{{Field: "cost_usd", Op: ">", Value: "6"}})
 	if err != nil || len(rows) != 0 || found.search.Count != 0 {
 		t.Fatalf("cost filter applied after candidates: %v %+v %v", rows, found, err)
+	}
+}
+
+func TestWorkMatchesPlacesMatchesBetweenSummaryMessages(t *testing.T) {
+	c := textFixture(t)
+	type placed struct{ Kind, ID, Preview string }
+	matches := func(query string) ([]placed, []int, workMatches) {
+		t.Helper()
+		result, err := c.WorkMatches(t.Context(), "w", url.Values{"find": {query}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		items := []placed{}
+		for _, item := range result.Items {
+			items = append(items, placed{item.Kind, item.MessageID, item.Preview})
+		}
+		return items, result.Between, result
+	}
+	// Both matches are summary messages; one prose message lies between them
+	// (reasoning and tool output do not count), and the other work's is absent.
+	items, between, _ := matches(`"race condition"`)
+	if !slices.Equal(items, []placed{{"match", "a", "first"}, {"match", "b", "last"}}) || !slices.Equal(between, []int{1}) {
+		t.Fatalf("race condition: %v %v", items, between)
+	}
+	items, between, result := matches("cache")
+	if !slices.Equal(items, []placed{{"match", "a", "first"}, {"match", "span", ""}, {"last", "b", ""}}) || !slices.Equal(between, []int{0, 0}) {
+		t.Fatalf("cache: %v %v", items, between)
+	}
+	if span := result.Items[1]; len(span.Highlights) != 1 || span.Snippet[span.Highlights[0][0]:span.Highlights[0][1]] != "cache" {
+		t.Fatalf("cache highlights: %#v", span)
+	}
+	// A card shows the newest matches, up to its limit.
+	override(t, &libraryEvidenceLimit, 1)
+	items, between, _ = matches(`"race condition"`)
+	if !slices.Equal(items, []placed{{"first", "a", ""}, {"match", "b", "last"}}) || !slices.Equal(between, []int{1}) {
+		t.Fatalf("limited: %v %v", items, between)
+	}
+	if _, err := c.WorkMatches(t.Context(), "w", url.Values{"find": {"go.mod"}, "find_kind": {"file"}}); err == nil {
+		t.Fatal("file searches have no matching messages")
 	}
 }

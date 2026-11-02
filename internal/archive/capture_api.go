@@ -14,11 +14,17 @@ import (
 )
 
 func runCaptureCLI(config Config, names []string) error {
+	return runCaptureCLIContext(context.Background(), config, names)
+}
+
+// runCaptureCLIContext is runCaptureCLI with ctx, which carries the
+// command's operation: the capture lock it takes is named in its lease.
+func runCaptureCLIContext(ctx context.Context, config Config, names []string) error {
 	sources, err := captureSources(config, names)
 	if err != nil {
 		return err
 	}
-	summary, err := Capture(context.Background(), config, sources, func(result CaptureSourceResult) {
+	summary, err := Capture(ctx, config, sources, func(result CaptureSourceResult) {
 		if result.State != "running" {
 			fmt.Fprintf(os.Stderr, "%s: %s; %d files (%d bytes) and %d snapshots (%d bytes) captured, %d errors\n", result.Name, result.State,
 				result.FilesCopied, result.BytesCopied, result.SnapshotsTaken, result.SnapshotBytes, len(result.Errors))
@@ -221,9 +227,11 @@ func (s *Server) startCapture(w http.ResponseWriter, body map[string]any) {
 		return
 	}
 	run := s.captures.start(sources)
+	_, handle := s.begin(s.life.ctx, OperationSpec{Kind: "capture.this-mac", Trigger: triggerUser, Legacy: run.ID})
+	handle.holdLock(session.lock)
 	// A release (before an eject) cancels the capture between files; every
 	// file and manifest is replaced atomically, so the next run resumes.
-	started := s.spawn(func(ctx context.Context) {
+	started := s.launch(handle, func(ctx context.Context, op *Op) (err error) {
 		defer s.ingestMu.Unlock()
 		defer session.Close()
 		summary, failure := CaptureSummary{OK: true}, error(nil)
@@ -232,6 +240,10 @@ func (s *Server) startCapture(w http.ResponseWriter, body map[string]any) {
 				failure = fmt.Errorf("capture stopped: %v", value)
 			}
 			s.captures.finish(run.ID, summary, failure)
+			err = failure
+			if err == nil && !summary.OK {
+				err = defaultError(ctx.Err(), errors.New("some sources could not be captured"))
+			}
 		}()
 		var previous CaptureSourceResult
 		summary = session.Run(ctx, sources, func(result CaptureSourceResult) {
@@ -240,7 +252,9 @@ func (s *Server) startCapture(w http.ResponseWriter, body map[string]any) {
 			}
 			previous = result
 			s.captures.progress(run.ID, result)
+			op.mirrorWork(captureWork(result))
 		})
+		return nil
 	})
 	if !started {
 		s.ingestMu.Unlock()

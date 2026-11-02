@@ -1,19 +1,22 @@
 import { isOriginDimension, originLabel, loadOriginMetadata } from "./origin-dimensions";
 import { apiCostTrendQuery, apiCostTrendFacts, buildApiCostTrend, usesApiCostTrend, type CostTimeBucket } from "./api-cost-trend";
 import { formatMetricOutput } from "@pythia-software/query-table-ui";
-import { metricPopulationError, parseRelativeDuration, createGroupingModel, sourceExecutionSchema, toQueryRequestV3, validateQueryResultV3, validateComputedColumn, toMetricQuery, toServerQueryV2, type QueryCapabilitiesV3, type QueryResultV3, type ComputedColumn, type AggregationClause, type AggregationResult, type AggregationResultEntry, type ComputedExecution, type FieldSchema, type MetricCapabilities, type MetricQuery, type QueryState } from "@pythia-software/query-table-core";
+import { groupKeyFields, metricMinCountText, metricPopulationError, parseRelativeDuration, createGroupingModel, sourceExecutionSchema, toQueryRequestV3, validateQueryResultV3, validateComputedColumn, toMetricQuery, toServerQueryV2, type QueryCapabilitiesV3, type QueryResultV3, type ComputedColumn, type AggregationClause, type AggregationResult, type AggregationResultEntry, type ComputedExecution, type FieldSchema, type MetricCapabilities, type MetricQuery, type QueryState } from "@pythia-software/query-table-core";
 import { categoryForQuery, queryCategories } from "./query-categories";
 import { chartBucketsWithHistory, foldSeries, rollingAverageBuckets, validRollingPeriods, type ChartBucket, type ChartSeries } from "./chart-series";
 import { earliestKey, parseDay, shiftPeriod } from "./chart-period";
 import { resolveRollingQuery, rollingQueryMatches, rollingWindowField, type QueryDataset, type RollingWindow } from "./query-links";
 import type { QueryRecipe } from "./curiosity-data";
 import { readTextSearch, textFindParameters } from "./text-search-model";
+import { readRecordKeywordSearch, recordKeywordParameter, recordKeywordRequest } from "./record-keyword-model";
 import { cardCoverQuery, humanStudyCoverMatches, type CardCover } from "./card-cover";
 import { filterBoxSamples } from "./compact-box-model";
 import { createHumanStudyLoader, clearHumanStudyCache, type HumanStudyPreview } from "./human-study";
 import { activityPresentation } from "./machine-activity-data";
 import { buildCardTrend, cardTrendDays, cardTrendQueries, trendSchemas, usesCardTrend } from "./card-trend";
 import { usesWeekdayCover, weekdayMetric } from "./weekday-cover";
+import { loadDashboardCardPreview } from "./dashboard-card-preview";
+import type { CompactTimelineOptions } from "./column-marks";
 
 export type PreviewMetric = { clause: AggregationClause; result: AggregationResultEntry };
 export type QueryPreview = {
@@ -29,9 +32,11 @@ export type QueryPreview = {
   ranking?: { label: string; value: number; color: string }[];
   buckets?: ChartBucket[]; series?: ChartSeries[]; excerpt?: string;
   timeline?: CardCover["timeline"];
+  dashboardTrend?: CompactTimelineOptions;
+  preserveScale?: boolean;
   study?: HumanStudyPreview;
 };
-type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean };
+type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean; dashboard?: string };
 export type PreviewJob = { priority?: () => number; id: string; dataset: QueryDataset; query: QueryState; schema: FieldSchema; options?: PreviewOptions };
 type Context = { schema: FieldSchema; execution: ComputedExecution; capabilities: MetricCapabilities; queryCapabilities?: QueryCapabilitiesV3 };
 type Payload = { now?: number; metrics?: AggregationResult["metrics"]; rows?: Record<string, unknown>[]; total?: number; sourceTotal?: number; find?: { limited?: boolean; search?: { complete: boolean } } };
@@ -65,6 +70,17 @@ async function fetchPreview<T>(url: string, signal?: AbortSignal, request?: unkn
 
 function searchContext(job: PreviewJob): string {
   const params = new URL(job.options?.url ?? "/", location.origin).searchParams, find = new URLSearchParams();
+  // A saved query's host state is its search; its address mirrors it.
+  for (const [name, values] of Object.entries(job.query.hostState?.params ?? {})) {
+    params.delete(name);
+    for (const value of values) params.append(name, value);
+  }
+  const record = params.get(recordKeywordParameter(job.dataset));
+  if (record !== null) {
+    const saved = readRecordKeywordSearch(record, job.schema.fields);
+    if (!saved.value) throw new Error(saved.error);
+    return `?${new URLSearchParams({ record_search: recordKeywordRequest(saved.value) })}`;
+  }
   if (job.dataset === "writing_messages" && params.has("message_query")) {
     const saved = readTextSearch(new URLSearchParams({ text_builder: params.get("message_query")! }));
     if (saved.error) throw new Error(saved.error);
@@ -151,7 +167,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
         ?? query.grouping.summaries.find(column => column.op !== "row")?.id;
     const column = query.grouping.summaries.find(column => column.id === valueField);
     const unit = cover && valueField === cover.valueField ? cover.unit : column?.field?.includes("cost") ? "USD" : column?.field === "duration_ms" || column?.expression === "MEDIAN([duration_ms])" ? "ms" : column?.field?.includes("tokens") ? "tokens" : column?.field?.includes("words") ? "words" : ["card_rate", "card_escalation"].includes(valueField ?? "") ? "percent" : "";
-    const labelFields = cover?.labelFields ?? query.grouping.keys;
+    const labelFields = cover?.labelFields ?? groupKeyFields(query.grouping.keys);
     const insights = (payload.rows ?? []).slice(0, 3).map(row => ({
       label: labelFields.map(field => String(row[field] ?? "Unspecified")).join(" · "),
       value: valueField && typeof row[valueField] === "number" ? formatPreviewValue(row[valueField] as number, unit) : "—",
@@ -224,7 +240,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
     : `${formatPreviewValue(result.processedRows ?? total, "")} observations · ${clause.label ?? clause.op}`;
   const notes = [recipe?.note, searchNote, options.sourceCover ? "Chart covers source observations before grouped filters" : undefined, result.scope === "shownRows" ? "Covers the saved table page" : undefined, result.coverage === "partial" ? "Partial results" : undefined,
     result.groupCount !== undefined && result.groupCount > result.buckets.length ? "Open the view for all results" : undefined,
-    hidden ? `${hidden.toLocaleString()} ${hidden === 1 ? "group" : "groups"} hidden (fewer than ${clause.minCount?.toLocaleString()} rows)` : undefined,
+    hidden ? `${hidden.toLocaleString()} ${hidden === 1 ? "group" : "groups"} hidden (fewer than ${metricMinCountText(clause, field => schema.fields.find(item => item.name === field)?.label ?? field)})` : undefined,
     result.buckets.some(bucket => bucket.error || bucket.yError) ? "Some groups have calculation errors" : undefined];
   let ready = values.length > 0, eligible = true;
   if (options.suggested && recipe?.eligibility && !query.grouping) {
@@ -237,7 +253,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   if (!ready && recipe?.emptyLabel) preview.emptyLabel = recipe.emptyLabel;
   if (!ready && minimum && (clause.distribution?.kind === "box" || clause.expressionY)) preview.emptyLabel = `No cohorts with at least ${minimum} ${(options.cover ?? recipe?.cover)?.sampleUnit ?? (!query.grouping && ["tool_calls", "mcp_calls"].includes(job.dataset) ? "calls" : "conversations")}`;
   if (query.grouping && recipe?.exploration?.context && payload.rows?.length) {
-    preview.groupEvidence = Object.fromEntries(payload.rows.map(row => [JSON.stringify(query.grouping!.keys.map(key => row[key] ?? null)), recipe.exploration!.context!.map(item => typeof row[item.field] === "number" ? `${formatPreviewValue(row[item.field] as number, item.unit ?? "")} ${item.label}` : "").filter(Boolean).join(" · ")]));
+    preview.groupEvidence = Object.fromEntries(payload.rows.map(row => [JSON.stringify(groupKeyFields(query.grouping!.keys).map(key => row[key] ?? null)), recipe.exploration!.context!.map(item => typeof row[item.field] === "number" ? `${formatPreviewValue(row[item.field] as number, item.unit ?? "")} ${item.label}` : "").filter(Boolean).join(" · ")]));
   }
   if (query.grouping && recipe?.exploration?.context && values[0]) {
     preview.evidence = recipe.exploration.context.map(item => {
@@ -246,7 +262,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
     }).filter(Boolean).join(" · ") || preview.groupEvidence?.[JSON.stringify(values[0].keys)];
   }
   if (query.grouping && recipe?.exploration?.labelFields && payload.rows?.length) {
-    preview.groupLabels = Object.fromEntries(payload.rows.map(row => [JSON.stringify(query.grouping!.keys.map(key => row[key] ?? null)), recipe.exploration!.labelFields!.map(field => keyLabel(schema, field)?.(row[field]) ?? String(row[field] ?? "Unspecified")).join(" · ")]));
+    preview.groupLabels = Object.fromEntries(payload.rows.map(row => [JSON.stringify(groupKeyFields(query.grouping!.keys).map(key => row[key] ?? null)), recipe.exploration!.labelFields!.map(field => keyLabel(schema, field)?.(row[field]) ?? String(row[field] ?? "Unspecified")).join(" · ")]));
   }
   // A ranked cover needs values and evidence as well as bars. Match companion
   // metrics by their actual group keys, never by bucket position.
@@ -325,6 +341,19 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
 // canonical revisions; an aborted caller never lends its signal to another run.
 export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string, preview?: QueryPreview, error?: unknown) => void, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return;
+  const dashboards = jobs.filter(job => job.options?.dashboard);
+  if (dashboards.length) {
+    const pending = [...dashboards];
+    const work = async () => {
+      while (pending.length && !signal?.aborted) {
+        const job = pending.shift()!;
+        try { const preview = await loadDashboardCardPreview(job.options!.dashboard!, job.schema, signal); if (!signal?.aborted) publish(job.id, preview); }
+        catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
+      }
+    };
+    await Promise.all([work(), work(), work(), loadQueryPreviews(jobs.filter(job => !job.options?.dashboard), publish, signal)]);
+    return;
+  }
   if (jobs.some(job => [...(job.query.grouping?.keys ?? []), ...(job.query.aggregations ?? []).flatMap(metric => metric.groupBy), ...(job.options?.recipe?.exploration?.keys ?? [])].some(field => field === "machine_id" || field === "execution_machine_id"))) await loadOriginMetadata();
   const contexts = new Map<QueryDataset, Promise<Context>>();
   function context(job: PreviewJob) {
@@ -450,9 +479,10 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
   for (const group of groups.values()) {
     let batch: Item[] = [], size = 0;
     for (const item of group) {
-      if (item.query.grouping || item.query.aggregations?.some(metric => metric.dateGrouping) || !item.query.aggregations?.length) {
-        if (batch.length) tasks.push(batch);
-        batch = []; size = 0; tasks.push([item]); continue;
+      // The server evaluates each distribution in its own pass over the source,
+      // so batching one with other cards only serializes their work.
+      if (item.query.grouping || item.query.aggregations?.some(metric => metric.dateGrouping || metric.distribution) || !item.query.aggregations?.length) {
+        tasks.push([item]); continue;
       }
       const count = item.query.aggregations.length;
       if (size + count > 20 || !item.query.aggregations?.length) { if (batch.length) tasks.push(batch); batch = []; size = 0; }
@@ -468,8 +498,9 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
       for (const item of items) {
         try {
           // A metric filter or minimum group size the executor does not run fails its card, never silently dropped.
-          const grouped = Boolean(item.query.grouping || item.query.aggregations?.some(metric => metric.dateGrouping));
-          const support = grouped ? { filters: ctx.queryCapabilities?.metricFilters, minCount: ctx.queryCapabilities?.metricMinCount } : ctx.capabilities;
+          // The service runs record keyword clauses only through query-v3.
+          const grouped = Boolean(item.query.grouping || item.query.aggregations?.some(metric => metric.dateGrouping) || /(^|[?&])record_search=/.test(item.search));
+          const support = grouped ? { filters: ctx.queryCapabilities?.metricFilters, minCount: ctx.queryCapabilities?.metricMinCount, minCountMeasures: ctx.queryCapabilities?.metricMinCountMeasures } : ctx.capabilities;
           const unsupported = item.query.aggregations?.map(metric => metricPopulationError(metric, support)).find(Boolean);
           if (unsupported) throw new Error(unsupported);
           if (grouped) {

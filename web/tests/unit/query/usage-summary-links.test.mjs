@@ -7,7 +7,7 @@ import { readDashboardQuery } from "../../../src/usage-dashboard-model";
 import { timeBounds, usageTime, writingTime } from "../../../src/usage-chart";
 import { defaultConcurrencySettings, normalizeConcurrencySettings } from "../../../src/concurrency-settings";
 import usage from "../../../../schemas/usage.schema.json";
-import writing from "../../../../schemas/writing.schema.json";
+import writingMessages from "../../../../schemas/writing_messages.schema.json";
 
 const generatedAt = "2026-11-01T08:30:12.345Z"; // Crosses the US daylight saving change.
 const windows = [["1h", 1], ["6h", 6], ["24h", 24], ["7d", 168], ["30d", 720], ["all", 0]];
@@ -21,11 +21,11 @@ test("summary values open their dashboard with the snapshot's exact elapsed dura
       assert.equal(url.pathname, "/analyze");
       assert.equal(state.topic, topic);
       assert.equal(state.mode, "dashboards");
-      assert.equal(state.dataset, human ? "writing" : "usage");
-      const restored = readDashboardQuery(params, { ...EMPTY_QUERY, where: [{ field: human ? "last_message_at" : "last_usage_at", op: ">=", value: "-30d" }] });
+      assert.equal(state.dataset, human ? "writing_messages" : "usage");
+      const restored = readDashboardQuery(params, { ...EMPTY_QUERY, where: [{ field: human ? "sent_at" : "last_usage_at", op: ">=", value: "-30d" }] });
       assert.equal(restored.error, "");
       assert.deepEqual(restored.query, decodeQueryStrict(params.get("analyze_filters")));
-      const bounds = timeBounds(restored.query.where, human ? writingTime : usageTime);
+      const bounds = timeBounds(restored.query.where, human ? { first: "sent_at", last: "sent_at" } : usageTime);
       if (hours) {
         assert.equal(bounds.to.toISOString(), generatedAt);
         assert.equal(bounds.from.getTime(), Date.parse(generatedAt) - hours * 3600000);
@@ -38,7 +38,7 @@ test("summary values open their dashboard with the snapshot's exact elapsed dura
       assert.equal(chart.period, hours && hours <= 24 ? "hour" : "day");
       if (metric === "cost_usd") assert.equal(chart.metric, "cost");
       if (metric === "tokens") assert.equal(chart.metric, "tokens");
-      const schema = loadSchema(human ? writing : usage);
+      const schema = loadSchema(human ? writingMessages : usage);
       assert.deepEqual(toQueryRequestV3(restored.query, schema, { version: 3, profile: "qt-sqlite-v1" }).diagnostics ?? [], []);
     }
   }
@@ -66,7 +66,46 @@ test("parallelism summary links retain counting assumptions and replace saved se
 });
 
 test("summary links reject unknown durations and invalid snapshot times", () => {
-  for (const window of ["", "2h", "today", "constructor"]) assert.equal(usageSummaryURL("tokens", window, generatedAt), undefined);
+  for (const window of ["", "2h", "constructor"]) assert.equal(usageSummaryURL("tokens", window, generatedAt), undefined);
   assert.equal(usageSummaryURL("tokens", "1h", "invalid"), undefined);
   assert.ok(usageSummaryURL("tokens", "all", "invalid"));
+});
+
+
+test("Today summary links use the service's midnight and freeze the displayed snapshot", () => {
+  const from = "2026-11-01T06:00:00.000Z";
+  for (const metric of ["human_words", "tokens", "cost_usd", "co2e_g", "parallelism"]) {
+    const params = urlFor(metric, "today", generatedAt, defaultConcurrencySettings, from).searchParams;
+    assert.equal(params.has("analyze_window"), false);
+    if (metric === "parallelism") assert.deepEqual(JSON.parse(params.get("analyze_parallelism")).zoom, [Date.parse(from), Date.parse(generatedAt)]);
+    else {
+      const where = decodeQueryStrict(params.get("analyze_filters")).where;
+      assert.equal(where.find(term => term.op === ">=").value, from);
+      assert.equal(where.find(term => term.op === "<").value, generatedAt);
+    }
+  }
+  assert.equal(usageSummaryURL("tokens", "today", "invalid"), undefined);
+});
+
+
+test("calendar and short summary links freeze the service's exact interval", () => {
+  const from="2026-11-01T06:00:00.000Z",until="2026-11-02T07:00:00.000Z";
+  for(const key of ['yesterday','week','month']) {
+    const where=decodeQueryStrict(urlFor('tokens',key,until,defaultConcurrencySettings,from).searchParams.get('analyze_filters')).where;
+    assert.equal(where.find(term=>term.op==='>=').value,from);
+    assert.equal(where.find(term=>term.op==='<').value,until);
+    assert.equal(usageSummaryURL('tokens',key,until),undefined);
+  }
+  for(const [key,minutes] of [['5m',5],['15m',15]]) {
+    const where=decodeQueryStrict(urlFor('tokens',key,until).searchParams.get('analyze_filters')).where;
+    assert.equal(Date.parse(where.find(term=>term.op==='>=').value),Date.parse(until)-minutes*60000);
+  }
+  for(const metric of ['tool_calls','failed_tool_calls','tool_failure_rate','tool_time_ms']) {
+    const url=urlFor(metric,'yesterday',until,defaultConcurrencySettings,from);
+    assert.equal(readUsageWorkspace(url.searchParams).dataset,'tool_calls');
+    const where=decodeQueryStrict(url.searchParams.get('q_tool_calls')).where;
+    assert.equal(where.find(term=>term.op==='>=').value,from);
+    assert.equal(where.some(term=>term.field==='status'),metric==='failed_tool_calls');
+  }
+  for(const metric of ['message_count','active_conversations','delegated_runs']) assert.equal(usageSummaryURL(metric,'1h',until),undefined);
 });

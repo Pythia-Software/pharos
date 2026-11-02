@@ -15,22 +15,48 @@ const MAX_SAVED_NAME_LENGTH = 200;
 const REJECTED_PREFIX = "pharos-query-rejected:";
 const queryFingerprint = (query: QueryState) => JSON.stringify(normalizeQueryState(query));
 
-export function rejectLastQuery(key: string, query: QueryState, restoration?: { defaults: QueryState; canonicalize: (query: QueryState) => QueryState }) {
-  const fingerprints = [queryFingerprint(query)];
-  // A default can acquire schema details and host scope during restoration.
-  // Match that effective query before also skipping its original saved form.
-  if (restoration) {
-    const id = readDefaultId(key), saved = id && readSaved(key).find(saved => saved.id === id);
-    if (saved && queryFingerprint(restoration.canonicalize(normalizeQueryState(saved.query, restoration.defaults))) === fingerprints[0]) {
-      fingerprints.push(queryFingerprint(saved.query));
-    }
-  }
-  try { localStorage.setItem(REJECTED_PREFIX + key, JSON.stringify(fingerprints)); } catch { /* Storage can be unavailable. */ }
+// Query Table saves the last-used query only once it loads (persistLast:
+// "succeeded"), but restores a table's default saved query on every bare
+// visit. A default that the service rejected or that ran out of time would
+// fail again each time, so it is skipped until Retry, or until the same
+// query succeeds (for example when loaded from Saved).
+type Restoration = { defaults: QueryState; canonicalize: (query: QueryState) => QueryState };
+// The table's default saved query, when query is its effective form: a
+// default acquires schema details, host scope and host defaults during
+// restoration.
+function defaultFor(key: string, query: QueryState, restoration: Restoration): SavedQuery | undefined {
+  const id = readDefaultId(key), saved = id ? readSaved(key).find(saved => saved.id === id) : undefined;
+  if (!saved) return;
+  const effective = restoration.canonicalize(normalizeQueryState(saved.query, restoration.defaults));
+  if (!effective.hostState && restoration.defaults.hostState) effective.hostState = restoration.defaults.hostState;
+  return queryFingerprint(effective) === queryFingerprint(query) ? saved : undefined;
 }
 
-export function retryLastQuery(key: string) {
-  try { localStorage.removeItem(REJECTED_PREFIX + key); } catch { /* Storage can be unavailable. */ }
+export function rejectDefaultQuery(key: string, query: QueryState, restoration: Restoration) {
+  const saved = defaultFor(key, query, restoration);
+  if (!saved) return;
+  notified.delete(key);
+  try { localStorage.setItem(REJECTED_PREFIX + key, JSON.stringify([queryFingerprint(saved.query)])); } catch { /* Storage can be unavailable. */ }
 }
+
+/** A successful run of the default (from Saved, say) restores it on bare visits again. */
+export function acceptDefaultQuery(key: string, query: QueryState, restoration: Restoration) {
+  const saved = defaultFor(key, query, restoration);
+  if (saved && rejected(key, saved.query)) retryDefaultQuery(key);
+}
+
+/** Stops skipping the default; returns its id, so Try again can load it. */
+export function retryDefaultQuery(key: string): string | null {
+  notified.delete(key);
+  try { localStorage.removeItem(REJECTED_PREFIX + key); } catch { /* Storage can be unavailable. */ }
+  const id = readDefaultId(key);
+  return id && readSaved(key).some(saved => saved.id === id) ? id : null;
+}
+
+// The skip is reported once per page: the Saved menu's refreshes, after a
+// save or deletion, ask for the default again and must not bring back a
+// notice the person has dismissed with Reset table.
+const notified = new Set<string>();
 
 function rejected(key: string, query: QueryState) {
   try {
@@ -38,7 +64,6 @@ function rejected(key: string, query: QueryState) {
     return Array.isArray(fingerprints) && fingerprints.includes(queryFingerprint(query));
   } catch { return false; }
 }
-
 function datasetOf(key: string): QueryDataset | undefined {
   return queryDatasets.find(dataset => key === `pharos_${dataset}`);
 }
@@ -75,6 +100,7 @@ export function clientTableStorageAdapter(): StorageAdapter {
     .map(item => ({ ...item, query: normalizeQueryState(item.query) }));
   const write = (key: string, items: SavedQuery[]) => preferences().set(`query-table:saved:${key}`, items);
   return {
+    storesHostState: true,
     loadLast: local.loadLast,
     saveLast: local.saveLast,
     async listSaved(key) { return read(key).sort((a, b) => b.savedAt - a.savedAt); },
@@ -108,18 +134,23 @@ export function clientTableStorageAdapter(): StorageAdapter {
   };
 }
 
+// Saved queries, defaults and the last-used query keep the query's host state
+// (QueryState.hostState): the local adapter and normalizeQueryState carry it,
+// bookmarks store the whole query, and durable links snapshot it. Query Table
+// writes the last-used query only once it has loaded (persistLast:
+// "succeeded"), so a failing query is never restored on a bare reload; a
+// failing default is skipped (rejectDefaultQuery). fresh (Reset page)
+// bypasses the last-used and default queries.
 export function libraryStorageAdapter(options: { fresh?: boolean; onRecovery?: () => void } = {}): StorageAdapter {
   const local = localStorageAdapter();
   return {
+    storesHostState: true,
     snapshots: httpQuerySnapshotStore("/api/query-snapshots", queryFetch),
     async loadLast(key) {
-      if (options.fresh) return null;
-      const query = await local.loadLast(key);
-      if (query && rejected(key, query)) { options.onRecovery?.(); return null; }
-      return query;
+      return options.fresh ? null : local.loadLast(key);
     },
     async saveLast(key, query) {
-      if (!rejected(key, query)) await local.saveLast(key, query);
+      await local.saveLast(key, query);
     },
     async listSaved(key) {
       return readSaved(key).sort((a, b) => b.savedAt - a.savedAt);
@@ -130,7 +161,10 @@ export function libraryStorageAdapter(options: { fresh?: boolean; onRecovery?: (
       if (!id) return null;
       const found = readSaved(key).find(query => query.id === id);
       if (!found) writeDefaultId(key, null);
-      if (found && rejected(key, found.query)) { options.onRecovery?.(); return null; }
+      if (found && rejected(key, found.query)) {
+        if (!notified.has(key)) { notified.add(key); options.onRecovery?.(); }
+        return null;
+      }
       return found ?? null;
     },
     async setDefaultSaved(key, id) {

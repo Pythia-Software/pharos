@@ -263,7 +263,7 @@ func (s *Server) estimateActivities(activities []libraryActivity, at time.Time) 
 	for i := range activities {
 		a := &activities[i]
 		a.Forecast = a.operation.estimate(at, a.Stopping)
-		a.EstimatedCompletionAt = ""
+		a.EstimatedCompletionAt, a.EstimatedCompletionScope = "", ""
 		a.Estimate = &activityEstimate{State: "unknown", Basis: "This stage does not report a measurable total"}
 		if a.Work != nil {
 			work := *a.Work
@@ -293,6 +293,8 @@ func (s *Server) estimateActivities(activities []libraryActivity, at time.Time) 
 				phase = a.Work.Phase
 			}
 			switch {
+			case strings.HasPrefix(phase, "waiting for the capture on "):
+				a.Estimate.Basis = "Waiting for that capture to finish; this starts as soon as it does"
 			case strings.Contains(phase, "waiting"):
 				a.Estimate.Basis = "Waiting for the catalog write lock; timing resumes when records can be saved"
 			case strings.Contains(phase, "saving"), phase == "finishing":
@@ -301,6 +303,8 @@ func (s *Server) estimateActivities(activities []libraryActivity, at time.Time) 
 				a.Estimate.Basis = "The other process does not report its progress to this service"
 			case a.Kind == "git":
 				a.Estimate.Basis = "Checking repository history and refreshing derived data; remaining work varies by repository"
+			case strings.HasPrefix(a.ID, "cloud:"):
+				a.Estimate.Basis = "Building or checking the cloud archive; its size is known only once uploading starts"
 			case a.Kind == "backup":
 				a.Estimate.Basis = "Copying the catalog and discovering files; the full backup size is not known yet"
 			case strings.Contains(phase, "database snapshots"):
@@ -311,6 +315,7 @@ func (s *Server) estimateActivities(activities []libraryActivity, at time.Time) 
 		if a.Forecast != nil {
 			if a.Forecast.Point > 0 {
 				a.EstimatedCompletionAt = formatTime(at.Add(time.Duration(a.Forecast.Point * float64(time.Second))))
+				a.EstimatedCompletionScope = "operation"
 			}
 			continue
 		}
@@ -318,6 +323,7 @@ func (s *Server) estimateActivities(activities []libraryActivity, at time.Time) 
 		if a.Estimate.State == "estimating" {
 			seconds := (a.Estimate.LowSeconds + a.Estimate.HighSeconds) / 2
 			a.EstimatedCompletionAt = formatTime(at.Add(time.Duration(seconds * float64(time.Second))))
+			a.EstimatedCompletionScope = "stage"
 		}
 	}
 	for key := range s.estimator.observations {

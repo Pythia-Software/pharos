@@ -195,3 +195,18 @@ test('history still supports a forward branch when session storage is unavailabl
   sync();
   assert.equal(buttons.navForward.disabled, false);
 });
+
+test('Ask Pharos participates in header defaults, reordering and removal', () => {
+  const header=loadClassicScript('header.js');
+  assert.ok(header.defaultHeaderTools().includes('ask'));
+  assert.deepEqual(plain(header.editHeaderTools(['settings','search'],'ask',0)),['ask','settings','search']);
+  assert.deepEqual(plain(header.editHeaderTools(['ask','settings'],'ask',null)),['settings']);
+});
+
+test('bookmarks keep the page view but not the drawers or Find open over it', () => {
+  const location = new URL('http://pharos.test/cards?overlay=bookmarks&card_window=30&history_search=Cards&card_topic=all&history_collapsed=1&find=cache&find_case=1&find_regex=1#top');
+  const { bookmarkPageURL } = loadClassicScript('header.js', { location });
+  assert.equal(bookmarkPageURL(), '/cards?card_topic=all&card_window=30#top');
+  assert.equal(bookmarkPageURL('/cards?card_window=30&card_topic=all'), bookmarkPageURL('/cards?card_topic=all&overlay=history&card_window=30'), 'the same page compares equal however it was reached');
+  assert.equal(bookmarkPageURL('https://example.test/docs?overlay=1'), 'https://example.test/docs?overlay=1', 'other origins are kept whole');
+});

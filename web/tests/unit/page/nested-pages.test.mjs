@@ -1,13 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { localPageNavigation, nestedPageTrail } from "../../../src/nested-pages-model";
-import { appLocation, appLocationLabel, appSections, isNavigationSectionExpanded, optimizePages, tl1Pages, toggleNavigationSection } from "../../../src/app-navigation-model";
+import { appLocation, appLocationLabel, appSections, isNavigationSectionExpanded, optimizePages, toggleNavigationSection } from "../../../src/app-navigation-model";
 
 test("the app tree resolves global, nested, and legacy destinations without changing their queries", () => {
   const params = new URLSearchParams('analyze_mode=query&analyze_data=usage&q_usage=saved&analyze_days=7');
   const before = params.toString();
   const settings = [{ id: '/settings', href: '/settings', label: 'Library health' }, { id: '/settings/sources', href: '/settings/sources', label: 'Sources' }];
-  const sections = appSections(settings, params, true);
+  const sections = appSections(settings, params);
   const active = appLocation('/analyze', params);
   assert.equal(appLocationLabel(sections, active).page.label, 'Token usage');
   const link = new URL(appLocationLabel(sections, active).page.href, 'https://pharos.test');
@@ -31,25 +31,26 @@ test("the app tree resolves global, nested, and legacy destinations without chan
   ]) assert.equal(appLocation(path, new URLSearchParams(query)).current, current);
 });
 
-test("Optimize groups Findings pages and available TL1 pages in the same navigation", () => {
-  const sections = appSections([], new URLSearchParams(), true);
-  const optimize = sections.find(section => section.label === "Optimize");
-  assert.equal(sections.find(section => section.id === "tl1"), undefined);
-  assert.deepEqual(optimize.pages.map(page => page.label), ["Findings", "TL1"]);
-  assert.deepEqual(optimizePages(false).map(page => page.label), ["Findings"]);
-  for (const [path, query, group, label] of [
-    ["/findings", "", "Findings", "Dashboard"],
-    ["/findings", "list=watching&repo=example", "Findings", "Dashboard"],
-    ["/findings", "finding=example&tab=evidence", "Findings", "Dashboard"],
-    ["/findings", "view=table&q_findings=saved", "Findings", "Table"],
-    ["/findings", "view=settings", "Findings", "Settings"],
-    ["/settings/optimization", "", "Findings", "Settings"],
-    ...tl1Pages.map(page => [page.path, "", "TL1", page.label]),
+test("Optimize resolves separate efficiency and safety pages", () => {
+  const sections = appSections([], new URLSearchParams());
+  const optimize = sections.find(section => section.id === "findings");
+  assert.deepEqual(optimize.pages.map(page => page.id), ["findings", "safety"]);
+  assert.deepEqual(optimizePages().map(page => page.id), ["findings", "safety"]);
+  for (const [path, query, trail] of [
+    ["/findings", "", ["findings", "findings:dashboard"]],
+    ["/findings", "list=watching&repo=example", ["findings", "findings:dashboard"]],
+    ["/findings", "finding=example&tab=evidence", ["findings", "findings:dashboard"]],
+    ["/findings", "view=table&q_findings=saved", ["findings", "findings:table"]],
+    ["/findings", "view=settings", ["findings", "findings:settings"]],
+    ["/settings/optimization", "", ["findings", "findings:settings"]],
+    ["/findings", "optimize_area=safety&view=table", ["safety", "safety:table"]],
+    ["/findings", "optimize_area=safety&view=settings", ["safety", "safety:settings"]],
+    ["/findings", "optimize_area=safety&safety_list=handed_off&safety_case=example", ["safety", "safety:dashboard"]],
   ]) {
     const params = new URLSearchParams(query), before = params.toString();
     const selected = appLocation(path, params);
     assert.equal(selected.section, optimize.id);
-    assert.deepEqual(nestedPageTrail(optimize.pages, selected.current).map(page => page.label), [group, label]);
+    assert.deepEqual(nestedPageTrail(optimize.pages, selected.current).map(page => page.id), trail);
     const destination = appLocationLabel(sections, selected).page;
     const url = new URL(destination.href, "https://pharos.test");
     assert.deepEqual(appLocation(url.pathname, url.searchParams), selected, "page links resolve back to their menu selection");
@@ -78,7 +79,7 @@ test("navigation and breadcrumbs follow the selected page at any depth", () => {
 
 test("navigation groups default open and preserve each section's last toggle independently", () => {
   const initial = {};
-  const sections = appSections([], new URLSearchParams(), true);
+  const sections = appSections([], new URLSearchParams());
   for (const section of sections) {
     for (const page of section.pages.filter(page => page.children)) {
       assert.equal(isNavigationSectionExpanded(initial[section.id] ?? {}, page.id), true);
@@ -91,7 +92,6 @@ test("navigation groups default open and preserve each section's last toggle ind
   const elsewhere = toggleNavigationSection(closed, "findings", "findings");
   assert.equal(isNavigationSectionExpanded(elsewhere.analyze, "query"), false);
   assert.equal(isNavigationSectionExpanded(elsewhere.findings, "findings"), false);
-  assert.equal(isNavigationSectionExpanded(elsewhere.findings, "tl1"), true, "groups loaded later start open");
   const reopened = toggleNavigationSection(elsewhere, "analyze", "query");
   assert.equal(isNavigationSectionExpanded(reopened.analyze, "query"), true);
   assert.equal(isNavigationSectionExpanded(reopened.findings, "findings"), false);

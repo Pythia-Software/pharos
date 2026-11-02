@@ -1,6 +1,7 @@
-export type ChartScale = "linear" | "logarithmic" | "half";
+export const chartScales = ["linear", "logarithmic", "half"] as const;
+export type ChartScale = typeof chartScales[number];
 export const defaultChartScale: ChartScale = "half";
-export const validChartScale = (value: unknown): value is ChartScale => value === "linear" || value === "logarithmic" || value === "half";
+export const validChartScale = (value: unknown): value is ChartScale => chartScales.includes(value as ChartScale);
 
 // niceTicks places two or three gridlines at round values up to peak.
 function niceTicks(peak: number): number[] {

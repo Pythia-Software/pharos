@@ -12,7 +12,7 @@ import (
 
 // getTL1 serves the TL1 tab:
 //
-//	GET /api/tl1                      installations and the projects they run (drives tab visibility)
+//	GET /api/tl1                      installations and the projects they run
 //	GET /api/tl1/overview             analysis for one project
 //	GET /api/tl1/flavor?name=         one flavor's definition, history, and prompt
 //	GET /api/tl1/candidate?id=        one candidate's task timeline

@@ -137,8 +137,15 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 	if r.URL.Path == "/api/library/update" {
 		s.Catalog.resumeLibraryRefresh()
 	}
-	run := s.startRunNamed("library-update", names)
+	kind, variant := runOperationKind("library-update", mode)
+	trigger := triggerUser
+	if resume != "" {
+		trigger = "resume"
+	}
+	_, handle := s.begin(s.life.ctx, OperationSpec{Kind: kind, Variant: variant, Trigger: trigger})
+	run := s.startRunFor(handle, "library-update", names)
 	ctx, end := s.beginIngest(run.ID)
+	ctx = withOp(ctx, handle)
 	job := resume
 	if job == "" {
 		job = run.ID
@@ -178,6 +185,7 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 			end()
 			s.ingestMu.Unlock()
 			s.updateRun(run.ID, func(run *SyncRun) { run.State = "failed"; run.Error = err.Error(); run.CompletedAt = now() })
+			handle.Finish(err)
 			writeError(w, err, 500)
 			return
 		}
@@ -185,10 +193,11 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 		end()
 		s.ingestMu.Unlock()
 		s.updateRun(run.ID, func(run *SyncRun) { run.State = "failed"; run.Error = err.Error(); run.CompletedAt = now() })
+		handle.Finish(err)
 		writeError(w, err, 500)
 		return
 	}
-	started := s.spawn(func(context.Context) {
+	recovery := func() {
 		defer s.ingestMu.Unlock()
 		defer end()
 		op := s.beginOperation(run.ID, "library-update:"+mode)
@@ -339,7 +348,8 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 			s.auditIntentional(ctx, run.ID, names)
 			op.end("verification", ctx.Err() == nil)
 		}
-	})
+	}
+	started := s.launch(handle, func(context.Context, *Op) error { recovery(); return nil })
 	if !started {
 		end()
 		s.ingestMu.Unlock()
@@ -362,10 +372,50 @@ func (s *Server) finishDeferredSync(ctx context.Context) error {
 
 // runPhase lets manual sync expose and measure each expensive stage. Keep the
 // same completion guards for Capture & index and manual incremental indexing.
-func (s *Server) finishDeferredSyncPhases(ctx context.Context, forceFindings bool, runPhase func(string, func() error) error) error {
-	invoke := runPhase
-	if invoke == nil {
-		invoke = func(_ string, work func() error) error { return work() }
+//
+// The chain is an analysis.chain stage of the run ctx carries, and each of
+// its stages a child of it (docs/background-work.md §2.4).
+func (s *Server) finishDeferredSyncPhases(ctx context.Context, forceFindings bool, runPhase func(string, func() error) error) (err error) {
+	findings := findingsAuto
+	if forceFindings {
+		findings = findingsForce
+	}
+	return s.finishDeferredStages(ctx, findings, nil, runPhase)
+}
+
+// findingsMode is what the chain's findings stage does: the full pass when
+// today's has not run (auto), the full pass anyway (force, a manual
+// index), or only measure the findings being watched (measure, a
+// background update's findings item, which leaves today's full pass to
+// the daily review).
+type findingsMode int
+
+const (
+	findingsAuto findingsMode = iota
+	findingsForce
+	findingsMeasure
+)
+
+// finishDeferredStages is the chain limited to the stages in only (all of
+// them when nil): background updates run each stage on its own cadence.
+// GitHub runs with identities.
+func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode, only map[string]bool, runPhase func(string, func() error) error) (err error) {
+	forceFindings := findings == findingsForce
+	ctx, chain := s.Catalog.beginOp(ctx, OperationSpec{Kind: "analysis.chain", Trigger: triggerChained})
+	defer func() { chain.Finish(err) }()
+	measure := runPhase
+	if measure == nil {
+		measure = func(_ string, work func() error) error { return work() }
+	}
+	var stage *Op
+	invoke := func(name string, work func() error) error {
+		_, stage = chain.childFrom(ctx, OperationSpec{Kind: "analysis." + name, Trigger: triggerChained})
+		// A background stage (Git, tools, authorship, findings) runs at its
+		// priority class; foreground ones as they are.
+		var err error
+		stage.RunIO(func() { err = measure(name, work) })
+		stage.Finish(err)
+		return err
 	}
 	op := operationOf(ctx)
 	runPhase = invoke
@@ -379,8 +429,10 @@ func (s *Server) finishDeferredSyncPhases(ctx context.Context, forceFindings boo
 			return err
 		}
 	}
-	if err := runPhase("github", func() error { return s.Catalog.RefreshRepositoryForgeIDs(ctx) }); err != nil {
-		return err
+	if only == nil || only["identities"] {
+		if err := runPhase("github", func() error { return s.Catalog.RefreshRepositoryForgeIDs(ctx) }); err != nil {
+			return err
+		}
 	}
 	// Repository merges can invalidate analyses, so snapshot dirty generations
 	// after GitHub resolution and before the remaining stages.
@@ -406,22 +458,37 @@ func (s *Server) finishDeferredSyncPhases(ctx context.Context, forceFindings boo
 		{"git", func() error { return s.Catalog.refreshMainIntegrations(ctx) }},
 		{"tools", func() error { return s.Catalog.ensureToolRollup(ctx) }},
 		{"authorship", func() error {
-			s.Catalog.refreshAuthorshipInContext(ctx)
-			for s.Catalog.authorshipRunning() {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(50 * time.Millisecond):
+			// The rebuild runs in the background, as a child of this stage.
+			// A rebuild a page started may be running; it does not check
+			// again while this index runs (startAuthorship), so once it ends
+			// this stage starts its own. A few rounds also cover the moment
+			// between a rebuild and its own follow-up.
+			for round := 1; ; round++ {
+				started := s.Catalog.refreshAuthorshipInContext(withOp(ctx, stage))
+				for s.Catalog.authorshipRunning() {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-time.After(50 * time.Millisecond):
+					}
+				}
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				want, built, err := s.Catalog.authorshipGenerations()
+				if err != nil {
+					return err
+				}
+				if want == built {
+					return nil
+				}
+				s.Catalog.authorship.mu.Lock()
+				failed := s.Catalog.authorship.lastError != ""
+				s.Catalog.authorship.mu.Unlock()
+				if round == 3 || (started && failed) {
+					return errors.New("authorship rebuild did not complete; dirty generation retained")
 				}
 			}
-			want, built, err := s.Catalog.authorshipGenerations()
-			if err != nil {
-				return err
-			}
-			if want != built {
-				return errors.New("authorship rebuild did not complete; dirty generation retained")
-			}
-			return nil
 		}},
 		{"findings", func() error {
 			// A page or another explicit action may already be discovering
@@ -437,21 +504,63 @@ func (s *Server) finishDeferredSyncPhases(ctx context.Context, forceFindings boo
 				case <-time.After(50 * time.Millisecond):
 				}
 			}
+			if findings == findingsMeasure {
+				return s.Catalog.MeasureFindings(ctx)
+			}
 			return s.Catalog.RefreshFindings(ctx, forceFindings)
 		}},
+	}
+	// Local labels come last, and only where they are turned on: a backlog
+	// never delays findings, and a library without them runs the chain as
+	// before (docs/local-labeler.md).
+	if settings := s.Config().Labels; settings.Enabled {
+		stages = append(stages, struct {
+			name string
+			work func() error
+		}{"labels", func() error { return s.chainLabels(ctx, settings) }})
+	} else if generation["labels"] > 0 {
+		// With labels off there is nothing to label: what indexing marked
+		// is done, so it never reads as waiting.
+		if err := complete("labels"); err != nil {
+			return err
+		}
+	}
+	// Agent events follow, also only where they are turned on.
+	if settings := s.Config().AgentEvents; s.agentEventsEnabled(ctx) {
+		stages = append(stages, struct {
+			name string
+			work func() error
+		}{"agent_events", func() error { return s.chainAgentEvents(ctx, s.Config().Labels, settings) }})
+	} else if generation["agent_events"] > 0 {
+		if err := complete("agent_events"); err != nil {
+			return err
+		}
 	}
 	for _, stage := range stages {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if only != nil && !only[stage.name] {
+			continue
+		}
 		if err := runPhase(stage.name, func() error {
-			if err := stage.work(); err != nil {
+			err := stage.work()
+			if errors.Is(err, errStageContinues) {
+				// Its share is done; the rest stays pending for later.
+				return nil
+			}
+			if err != nil {
 				return err
 			}
 			return complete(stage.name)
 		}); err != nil {
 			return err
 		}
+	}
+	// The freshness ledger's upgrade count (§5), cheap next to the whole
+	// chain; a background stage leaves it to the daily pass.
+	if only == nil {
+		s.Catalog.storeUpgradeCount(ctx)
 	}
 	return nil
 }
@@ -529,7 +638,7 @@ func (c *Catalog) repairRetained(ctx context.Context, job string, names []string
 		}); err != nil {
 			return err
 		}
-		c.boundWAL(walSizeLimit)
+		c.boundWAL(ctx, walSizeLimit)
 		if progress != nil {
 			progress(index+1, len(workspaces))
 		}

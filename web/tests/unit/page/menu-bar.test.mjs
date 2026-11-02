@@ -77,6 +77,11 @@ test('Mac menu preview includes the current stage and remaining estimate in stat
   const now = Date.parse('2026-10-22T13:22:00Z');
   assert.equal(detail({label: 'Manual sync: evaluating findings', progress: .22, estimated_completion_at: '2026-10-22T13:23:00Z'}, now),
     'Manual sync: evaluating findings · stage 22% · about 1 min for this stage');
+  // A whole-operation forecast is not labelled as the stage's.
+  assert.equal(detail({label: 'Capture & index', progress: .22, estimated_completion_at: '2026-10-22T13:25:00Z', estimated_completion_scope: 'operation'}, now),
+    'Capture & index · stage 22% · about 3 min left');
+  assert.equal(detail({label: 'Indexing', estimated_completion_at: '2026-10-22T13:23:00Z', estimated_completion_scope: 'stage'}, now),
+    'Indexing · about 1 min for this stage');
   assert.equal(detail({label: 'Indexing', estimated_completion_at: '2026-10-22T13:21:00Z'}, now), 'Indexing');
   assert.equal(detail({estimated_completion_at: 'invalid'}, now), 'Working');
 });

@@ -968,7 +968,8 @@ func (j *backupJob) lockCaptures(hostDir string) (func(), error) {
 
 // skipBackupName leaves out locks and the temporaries of writes in progress.
 func skipBackupName(name string) bool {
-	return name == captureLockName || strings.HasSuffix(name, captureTempSuffix) || strings.HasSuffix(name, backupTempSuffix) ||
+	// Leases (§6.5) describe running processes, not library data.
+	return name == captureLockName || name == leaseDirName || strings.HasSuffix(name, captureTempSuffix) || strings.HasSuffix(name, backupTempSuffix) ||
 		strings.HasPrefix(name, ".") && strings.HasSuffix(name, ".tmp")
 }
 

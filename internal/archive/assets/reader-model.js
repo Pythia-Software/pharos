@@ -1,7 +1,7 @@
 // The conversation reader's model, without the DOM: message bodies, normalized
 // events, token accounting and context samples, tool calls and their results,
 // turns, file paths, the Show filter's categories, Find, harness XML blocks,
-// message summaries, and Markdown parsing.
+// message summaries, local labels, agent events, and Markdown parsing.
 // It is a classic script whose top-level declarations are globals: ui.py loads
 // it before its inline script, which renders with them, and a shared export
 // inlines it (sharedPage in share.go). Node tests load it with vm
@@ -183,9 +183,11 @@ function normalizeMessages(messages){
   const output=[],reports=contextTokenReports(messages,conversationTokenReports(messages));
   messages.forEach((message,index)=>{
     const original=message.raw_text||message.text,parsed=messageJSON(message),value=parsed?.payload&&typeof parsed.payload==='object'?parsed.payload:parsed;
-    const base={...message,native_id:message.native_id||`event-${index}`,raw_text:original};
+    const base={...message,...(message.authorship?{authorship_text:message.authorship_text??message.text}:{}),native_id:message.native_id||message.id||`event-${index}`,raw_text:original};
     let emitted=false;
-    const emit=(fields,suffix='')=>{const normalized={...base,...fields,tokenReport:emitted?null:reports[index],native_id:base.native_id+suffix};messageJSONCache.set(normalized,{...messageJSONCache.get(message)});output.push(normalized);emitted=true};
+    // Agent events' ranges index the stored text, so only an entry showing that
+    // text keeps them (a block split out of a JSON message does not).
+    const emit=(fields,suffix='')=>{const normalized={...base,...fields,tokenReport:emitted?null:reports[index],native_id:base.native_id+suffix};if(normalized.agent_events&&String(normalized.text??'')!==String(message.text??''))delete normalized.agent_events;messageJSONCache.set(normalized,{...messageJSONCache.get(message)});output.push(normalized);emitted=true};
     if(['thinking','reasoning','analysis'].includes(message.kind)){emit({kind:'reasoning'});return}
     const blocks=Array.isArray(value?.message?.content)?value.message.content:Array.isArray(value?.content)?value.content:Array.isArray(value)?value:null;
     if(!['tool_result','delegation_result','error'].includes(message.kind)&&blocks&&blocks.some(block=>['text','input_text','output_text','tool_use','tool_result','thinking'].includes(block?.type))){
@@ -229,6 +231,27 @@ function conversationGraph(messages){
   let current=null;for(const message of top){if(message.role==='user'&&message.kind==='message'){if(current)turns.push(current);current={human:message,events:[]}}else{if(!current)current={human:null,events:[]};current.events.push(message)}}if(current)turns.push(current);
   return{childrenByParent,delegationResultsByCall,toolResultsByCall,consumed,turns};
 }
+// A compact outline for result cards, using the reader's normalized graph.
+// Inline delegations stay under their owning turn; paired results are not turns.
+function conversationOutline(conversation){
+  const graph=conversationGraph(conversationMessages(conversation)),seen=new Set();
+  const agents=events=>events.filter(message=>message.kind==='delegation'&&!seen.has(message)).map(message=>{
+    seen.add(message);
+    const {input}=toolPayload(message),children=[...new Set([message.native_id,message.call_id].filter(Boolean).flatMap(key=>graph.childrenByParent.get(key)||[]))],replies=children.filter(item=>item.kind==='message'),results=graph.delegationResultsByCall.get(message.call_id)||[];
+    return {id:message.native_id||message.call_id||message.id,kind:'agent',label:String(input.subagent_type||input.agent_type||input.name||'Sub-agent'),
+      prompt:String(input.description||input.prompt||input.task||messageSummary(message)||'Sub-agent'),
+      human:{role:'user',text:input.prompt||input.description||input.task||messageSummary(message)},
+      response:replies.at(-1)||(results.length?{role:'assistant',text:readableValue(toolPayload(results.at(-1)).content)}:null),tools:children.filter(item=>item.kind==='tool_call').length,children:agents(children)};
+  });
+  let turnNumber=0;
+  return graph.turns.map((turn,index)=>({id:turn.human?.id||turn.human?.native_id||'setup-'+index,kind:'turn',label:turn.human?'Turn '+(++turnNumber):'Session setup',
+    prompt:messageSummary(turn.human)||'Session setup',human:turn.human,response:turn.events.filter(message=>message.kind==='message').at(-1)||null,
+    tools:turn.events.filter(message=>message.kind==='tool_call').length,children:agents(turn.events)}));
+}
+// Publish the result-card model with the model script itself, independently of
+// the page shell's rendering and startup work.
+window.pharosConversationOutline=conversationOutline;
+
 // Messages a turn or sub-agent owns: its events, their results, and nested
 // agents' events. Token totals, search, and reveal all use this one walk.
 function ownedMessages(roots,context,visited=new Set()){const owned=[],queue=roots.filter(Boolean);for(let cursor=0;cursor<queue.length;cursor++){const message=queue[cursor];if(visited.has(message))continue;visited.add(message);owned.push(message);if(message.kind==='delegation')for(const key of new Set([message.native_id,message.call_id].filter(Boolean)))queue.push(...(context.childrenByParent.get(key)||[]));if(['tool_call','delegation'].includes(message.kind))queue.push(...(context.toolResultsByCall.get(message.call_id)||[]),...(context.delegationResultsByCall.get(message.call_id)||[]))}return owned}
@@ -289,9 +312,32 @@ function filePathParts(path,roots){
   return{root,inside,absolute,directory,filename};
 }
 
+// Linked disclosure and content state (reader_expanded, reader_collapsed and
+// reader_content). An identity the link leaves out keeps the reader's native
+// default, so an absent, [] or {} override agrees with a fresh reader.
+function readerDisclosureOpen(id,expanded,collapsed,initial){return expanded.has(id)?true:collapsed.has(id)?false:initial}
+function readerDisclosureToggle(id,open,expanded,collapsed){
+  const opened=new Set(expanded),closed=new Set(collapsed);
+  if(open){opened.add(id);closed.delete(id)}else{closed.add(id);opened.delete(id)}
+  return{expanded:[...opened].sort(),collapsed:[...closed].sort()};
+}
+function readerContentShown(state,key,fallback){return state&&Object.hasOwn(state,key)?state[key]===true:fallback}
+
 // Transcript filter and find
 const TRANSCRIPT_CATEGORIES=[['prompts','Prompts','Messages you, or a parent agent, sent'],['response','Final responses','The last reply of each turn'],['replies','Interim replies','Agent messages before the final reply of a turn'],['thinking','Thinking','Reasoning the agent recorded'],['edits','File edits','Edits and writes'],['commands','Commands','Shell commands'],['reads','Reads & searches','File reads, listings, and searches'],['tools','Other tools','Browser, todo, MCP, and other tool calls'],['agents','Sub-agents','Delegated agent runs'],['events','System events','Injected context, attachments, run events, and errors'],['usage','Token usage','Token usage events']];
 const TRANSCRIPT_LEVELS=[['all','All','Every event',TRANSCRIPT_CATEGORIES.map(([key])=>key)],['all-minus-usage','All minus usage','Every event except token usage',TRANSCRIPT_CATEGORIES.map(([key])=>key).filter(key=>key!=='usage')],['thought','Chain of thought','Prompts, replies, and thinking; no tool activity',['prompts','response','replies','thinking']],['primary','Primary only','Prompts and each turn’s final response',['prompts','response']],['custom','Custom','Choose each kind of event',null]];
+// Named URL presets stand alone. A category list is required only for Custom;
+// older links with just a category list still select Custom.
+function transcriptFilterState(params,stored={}){
+  const level=params.get('reader_filter_level');
+  if(level!=='custom'&&TRANSCRIPT_LEVELS.some(([key])=>key===level))return{level,custom:Array.isArray(stored?.custom)?stored.custom.filter(key=>TRANSCRIPT_CATEGORIES.some(([id])=>id===key)):null};
+  const keys=TRANSCRIPT_CATEGORIES.map(([key])=>key);
+  if(params.has('reader_filter')){
+    try{const custom=JSON.parse(params.get('reader_filter'));if(Array.isArray(custom)&&custom.every(key=>keys.includes(key)))return{level:'custom',custom}}catch{}
+  }
+  const saved=stored&&typeof stored==='object'?stored:{};
+  return{level:TRANSCRIPT_LEVELS.some(([key])=>key===saved.level)?saved.level:'all',custom:Array.isArray(saved.custom)?saved.custom.filter(key=>keys.includes(key)):null};
+}
 function transcriptShown(state){return new Set(state.level==='custom'?state.custom||[]:TRANSCRIPT_LEVELS.find(([key])=>key===state.level)[3])}
 function transcriptCategory(message,context){
   if(message.kind==='delegation')return'agents';if(message.kind==='reasoning')return'thinking';
@@ -370,48 +416,224 @@ function dedentText(value){const lines=String(value).replace(/^\s*\n|\s+$/g,'').
 // A message's one-line summary: its prose, or the tags of its XML blocks.
 function proseSummary(text){const segments=xmlSegments(text),prose=segments.filter(segment=>!segment.tag).map(segment=>segment.text).join(' ');return prose.trim()?prose:segments.map(segment=>`<${segment.tag}>`).join(' ')}
 function messageSummary(message){return proseSummary(displayText(message))}
+function compactMessageSummary(message){
+  const inline=new Set(['a','span','strong','em','del','code']),text=item=>typeof item==='string'?item:(item.children||[]).map(text).join('')+(inline.has(item.tag)?'':' ');
+  return shortText(text(markdownTree(messageSummary(message))),640);
+}
+
+// Authorship offsets refer to UTF-8 bytes in the stored body. Keep that body
+// through normalization, then project only an exact display string (including
+// JSON escapes). Missing or ambiguous classification never implies human text.
+function humanWritingMask(message,text=displayText(message)){
+  if(message?.role!=='user')return '';
+  const source=String(message.authorship_text??message.text??''),spans=(message.authorship?.spans||[]).filter(span=>span.category==='typed');
+  if(!spans.length)return '';
+  const bytes=new TextEncoder().encode(source),decoder=new TextDecoder(),mask=Array(source.length).fill('0');
+  for(const span of spans){
+    if(!Number.isInteger(span.start)||!Number.isInteger(span.end)||span.start<0||span.end>bytes.length||span.end<=span.start)continue;
+    const start=decoder.decode(bytes.subarray(0,span.start)).length,end=decoder.decode(bytes.subarray(0,span.end)).length;
+    mask.fill('1',start,end);
+  }
+  const flags=mask.join('');if(source===text)return flags;
+  // Text blocks can be unwrapped from a JSON envelope. A unique matching
+  // literal preserves attribution even for escaped newlines and emoji.
+  const matches=[...source.matchAll(/"(?:\\.|[^"\\])*"/g)].filter(match=>{try{return JSON.parse(match[0])===text}catch{return false}});
+  if(matches.length!==1)return '';
+  const match=matches[0],body=match[0].slice(1,-1),result=[];
+  for(const part of body.matchAll(/\\(?:u[\da-fA-F]{4}|["\\/bfnrt])|[^\\]/g)){
+    const at=match.index+1+part.index,typed=flags.slice(at,at+part[0].length).split('').every(flag=>flag==='1');
+    result.push((typed?'1':'0').repeat(JSON.parse('"'+part[0]+'"').length));
+  }
+  return result.join('');
+}
+function hasHumanWriting(message){return humanWritingMask(message).includes('1')}
+
+// Local labels (labels.go, messageLabelsAttacher): a message's closed label
+// set, every label with its ancestors. The reader colors a message by its
+// family, a root's child, taken from its likeliest specific label; a message
+// with only a root label has none. Hues follow this fixed order.
+const LABEL_FAMILIES=[['C.report','Report'],['P.control','Control'],['C.deliberation','Deliberation'],['C.input','Input'],['C.feedback','Feedback'],['P.request','Request'],['P.frame','Frame'],['C.difficulty','Difficulty']];
+// The taxonomy's roots are role names; a message labeled only at a root says just this.
+const LABEL_ROOTS={P:'Asks or steers',C:'Responds or reports'};
+const LABEL_SEGMENTS={'H-typed':'Typed text','H-typed+ctx':'Typed text with quoted context','H-template':'Template or saved prompt','H-resent':'Re-sent text','H-feedback':'UI feedback','H-other':'Human message','AIUR':'Agent text sent as a user message','AR':'Agent reply','DEL':'Delegation','TH':'Thinking'};
+function labelFamily(id){const family=String(id).split('.').slice(0,2).join('.');return LABEL_FAMILIES.some(([key])=>key===family)?family:''}
+function messageLabelView(message,taxonomy=[]){
+  const ids=message?.labels?.ids;if(!Array.isArray(ids)||!ids.length)return null;
+  const rows=taxonomy instanceof Map?taxonomy:new Map((taxonomy||[]).map(row=>[row.id,row])),probs=message.labels.probs||{};
+  const labels=ids.filter(id=>!ids.some(other=>other.startsWith(id+'.'))).map(id=>{const family=labelFamily(id),familyName=LABEL_FAMILIES.find(([key])=>key===family)?.[1]||'',name=LABEL_ROOTS[id]||rows.get(id)?.name||id;
+    return{id,name,family,familyName,title:familyName&&id!==family&&!name.toLowerCase().startsWith(familyName.toLowerCase())?`${familyName} · ${name}`:name,definition:rows.get(id)?.definition||'',prob:typeof probs[id]==='number'?probs[id]:null}})
+    .sort((a,b)=>(b.prob??0)-(a.prob??0)||a.id.localeCompare(b.id));
+  const segment=message.labels.segment||'';
+  return{family:labels.find(label=>label.family)?.family||'',segment,segmentName:LABEL_SEGMENTS[segment]||segment,labels};
+}
+// The text a message's labels describe: a person's typed pieces when the
+// classification finds them, otherwise all of it. Typed text stays '1'
+// (human-written); the rest is '2'.
+function labelMask(message,text,mask=humanWritingMask(message,text)){return message?.labels?.ids?.length&&!mask.includes('1')?'2'.repeat(text.length):mask}
+
+// Agent events (agent_events.go, agentEventsAttacher): sentences of an agent
+// message where something happened (an obstacle, a discovery, a workaround),
+// with what it was about (subject) and what the agent did (response). Ranges
+// are UTF-16 offsets of the message's stored text (messages.text), so they
+// apply only where the reader shows that text unchanged: a reply's card, or
+// thinking's own text (Codex keeps the JSON event in raw_text and the prose
+// in text). normalizeMessages drops them from blocks it splits out. Each event's sentence is
+// marked in its group's hue; subject and response sentences that are not
+// themselves events get a lighter mark. Groups follow this fixed order, and
+// each has the class event-<suffix>.
+const EVENT_GROUPS=[['Friction','friction'],['Reactions and learning','learning'],['Worth a second look','second-look'],['Choices you may not see','choices']];
+function eventGroupClass(group){return 'event-'+(EVENT_GROUPS.find(([name])=>name===group)?.[1]||EVENT_GROUPS[0][1])}
+// The text events are shown on: thinking's own text (the reader shows it as a
+// Reasoning row), otherwise what the message card shows.
+function eventText(message){return ['thinking','reasoning','analysis'].includes(message?.kind)?String(message.text??''):displayText(message)}
+function messageEventView(message,text=eventText(message)){
+  const events=message?.agent_events;if(!Array.isArray(events)||!events.length||text!==String(message.text??''))return null;
+  const fits=range=>Array.isArray(range)&&Number.isInteger(range[0])&&Number.isInteger(range[1])&&range[0]>=0&&range[0]<range[1]&&range[1]<=text.length;
+  const slice=ranges=>ranges.filter(fits).map(range=>text.slice(range[0],range[1]).trim()).join(' ');
+  const view=events.filter(event=>fits(event.sentence)).map(event=>({kind:event.kind,label:event.label||event.kind,group:event.group||'',definition:event.definition||'',
+    probability:typeof event.probability==='number'?event.probability:null,sentence:event.sentence,subject:(event.subject||[]).filter(fits),response:(event.response||[]).filter(fits),
+    sentenceText:slice([event.sentence]),subjectText:slice(event.subject||[]),responseText:slice(event.response||[])}));
+  return view.length?view:null;
+}
+// The distinct sentences a message's events mark, in text order: the events'
+// own sentences, and their subject and response sentences (context).
+function eventSpans(events){
+  const distinct=ranges=>[...new Map(ranges.map(range=>[range[0]+':'+range[1],range])).values()].sort((a,b)=>a[0]-b[0]||a[1]-b[1]);
+  return{sentences:distinct(events.map(event=>event.sentence)),context:distinct(events.flatMap(event=>[...event.subject,...event.response]))};
+}
+// eventMask overlays a message's events on mask (a flag per character).
+// Each marked sentence gets its own flag, so Markdown keeps it a mark of its
+// own whose class names it (event-at-N, the Nth sentence or context span):
+// a flag is a private-use character, 8 per span, the low 3 bits the group
+// (7 for context). Context goes first, then each event's sentence, so a
+// sentence that is an event keeps its event's hue; of two events on one
+// sentence the likelier picks it.
+const EVENT_FLAG_BASE=0xE000,EVENT_FLAG_SPANS=800,EVENT_CONTEXT_GROUP=7;
+function eventMask(text,events,mask=''){
+  if(!events?.length)return mask;
+  const flags=Array.from({length:text.length},(_,index)=>mask[index]||'0'),spans=eventSpans(events),index=(list,range)=>list.findIndex(item=>item[0]===range[0]&&item[1]===range[1]);
+  const paint=(range,span,group)=>{if(span<0||span>=EVENT_FLAG_SPANS)return;const flag=String.fromCharCode(EVENT_FLAG_BASE+span*8+group);for(let at=range[0];at<range[1]&&at<flags.length;at++)flags[at]=flag};
+  for(const range of spans.context)paint(range,index(spans.context,range),EVENT_CONTEXT_GROUP);
+  for(const event of [...events].sort((a,b)=>(a.probability??0)-(b.probability??0))){const group=EVENT_GROUPS.findIndex(([name])=>name===event.group);paint(event.sentence,index(spans.sentences,event.sentence),Math.max(0,group))}
+  return flags.join('');
+}
+// The events a highlighted mark belongs to, by the span its class names: the
+// events of that sentence, or for a context mark, those whose subject or
+// response it is.
+function eventsAtMark(events,mark){
+  const classes=String(mark?.className??'').split(/\s+/),at=classes.find(name=>/^event-at-\d+$/.test(name));if(!at)return [];
+  const spans=eventSpans(events),span=Number(at.slice(9)),same=(a,b)=>a&&b&&a[0]===b[0]&&a[1]===b[1];
+  if(classes.includes('event-context')){const range=spans.context[span];return events.filter(event=>[...event.subject,...event.response].some(item=>same(item,range)))}
+  const range=spans.sentences[span];return events.filter(event=>same(event.sentence,range));
+}
+const MARK_CLASSES={'1':'human-written','2':'labeled-text'};
+function markClass(flag){
+  if(MARK_CLASSES[flag])return MARK_CLASSES[flag];
+  const code=flag.charCodeAt(0)-EVENT_FLAG_BASE;if(!(code>=0&&code<EVENT_FLAG_SPANS*8))return '';
+  const span=code>>3,group=code&7;return group===EVENT_CONTEXT_GROUP?`event-context event-at-${span}`:`agent-event ${eventGroupClass(EVENT_GROUPS[group]?.[0])} event-at-${span}`;
+}
+function markdownText(text,mask=''){
+  if(!/[^0]/.test(mask))return [text];
+  const result=[];let start=0;
+  while(start<text.length){const flag=mask[start]||'0';let end=start+1;while(end<text.length&&(mask[end]||'0')===flag)end++;
+    const part=text.slice(start,end),className=markClass(flag);result.push(className?markdownElement('mark',className,part):part);start=end;
+  }return result;
+}
 
 // Markdown
-// Agent prose is Markdown, parsed into a tree the page builds with text nodes
+// Message prose is Markdown, parsed into a tree the page builds with text nodes
 // and element properties only (markdownView in ui.py). An element is
 // {tag, className, children} plus the properties the page sets on it (href,
 // rel, target, start, and language for a code block's data-language); a
 // string is text and {icon} one of the page's icons. Embedded HTML therefore
 // stays text, and a link keeps its href only for the schemes below.
 function markdownElement(tag,className='',content){return{tag,className,children:content===undefined||content===''?[]:[content]}}
-function markdownLinkAllowed(href){return/^(https?:\/\/|mailto:|#|\/(?!\/)|\.{1,2}\/)/i.test(href)&&!/^\/\//.test(href)}
-function markdownInline(text,parent,depth=0){
-  if(depth>8){parent.children.push(text);return}
-  const tokens=/(\x60[^\x60\n]+\x60|!?\[[^\]\n]+\]\([^\s)]+(?:\s+"[^"]*")?\)|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|\*[^*\n]+\*|_[^_\n]+_)/g;
+function markdownLinkAllowed(href){
+  if(!href||/[\x00-\x1f\x7f\\]/.test(href)||href.startsWith('//'))return false;
+  if(/^[^/:]+\.[^/:]+:\d+(?::\d+)?(?:#.*)?$/.test(href))return true;
+  if(/^[a-z][a-z0-9+.-]*:/i.test(href))return /^(https?:\/\/|mailto:|file:\/\/)/i.test(href);
+  return !/[<>()[\]]/.test(href);
+}
+function markdownLinkKind(href){
+  if(!markdownLinkAllowed(href))return null;
+  if(href.startsWith('#'))return {kind:'fragment',icon:'link',detail:'Jump within this page'};
+  if(href.startsWith('/')||href.startsWith('?')){
+    const path=new URL(href,'http://pharos.invalid/').pathname;
+    const pages=['/','/home','/cards','/library','/settings','/settings/backups','/settings/libraries','/settings/sources','/settings/sync','/settings/optimization','/settings/mcp','/settings/header','/settings/layout','/settings/preferences','/settings/ask','/sources','/activity','/analyze','/tools','/health','/mcp','/findings'];
+    if(pages.includes(path)||/^\/work\/[^/]+(?:\/conversation\/[^/]+)?$/.test(path)||/^\/conversation\/[^/]+$/.test(path))return {kind:'page',icon:'link',detail:'Open Pharos view'};
+  }
+  if(/^mailto:/i.test(href))return {kind:'mail',icon:'mail',detail:'Open in your email app'};
+  if(/^https?:/i.test(href)){
+    try{
+      const url=new URL(href),host=url.hostname.toLowerCase();
+      if(url.username||url.password)return null;
+      const local=host==='localhost'||host.endsWith('.localhost')||host==='[::1]'||host==='0.0.0.0'||/^127(?:\.\d{1,3}){3}$/.test(host);
+      return {kind:local?'server':'web',icon:local?'server':'web',host,detail:local?'Checking local server on this Mac…':`Website · ${host} (page availability not checked)`};
+    }catch{return null}
+  }
+  return {kind:'file',icon:'file',detail:'Checking file on this Mac…'};
+}
+// Only local files and servers are checked on this Mac; Pharos routes,
+// fragments, mail and websites never are. Repeated links share a check for a
+// minute, and at most four run at once for long transcripts.
+function markdownLinkProbed(kind){return kind?.kind==='file'||kind?.kind==='server'}
+function markdownLinkChecker(check,{now=Date.now,concurrency=4,size=256,ttl=60000}={}){
+  const checks=new Map(),queue=[];let active=0;
+  const pump=()=>{
+    while(active<concurrency&&queue.length){
+      const {href,workspace,resolve}=queue.shift();active++;
+      new Promise(done=>done(check(href,workspace))).then(resolve,()=>resolve({status:'unknown',detail:'Could not check availability on this Mac'})).finally(()=>{active--;pump()});
+    }
+  };
+  return (href,workspace)=>{
+    const key=JSON.stringify([href,workspace]),cached=checks.get(key);
+    if(cached&&cached.until>now())return cached.promise;
+    const promise=new Promise(resolve=>queue.push({href,workspace,resolve}));
+    if(checks.size>=size)checks.delete(checks.keys().next().value);
+    checks.set(key,{promise,until:now()+ttl});pump();return promise;
+  };
+}
+function markdownInline(text,parent,depth=0,mask=''){
+  if(depth>8){parent.children.push(...markdownText(text,mask));return}
+  const tokens=/(\x60[^\x60\n]+\x60|!?\[[^\]\n]+\]\((?:<[^>\n]+>|[^\s)]+)(?:\s+"[^"]*")?\)|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|\*[^*\n]+\*|_[^_\n]+_)/g;
   let offset=0;
   for(const match of text.matchAll(tokens)){
-    parent.children.push(text.slice(offset,match.index));const token=match[0];let element;
-    if(token.charCodeAt(0)===96)element=markdownElement('code','',token.slice(1,-1));
-    else if(/^!?\[/.test(token)){const link=token.match(/^!?\[([^\]]+)\]\((\S+?)(?:\s+"[^"]*")?\)$/),href=link?.[2]||'';element=markdownElement('span','',link?.[1]||token);if(markdownLinkAllowed(href)){element=markdownElement('a','',link[1]);element.href=href;element.rel='noreferrer noopener';if(/^https?:/.test(href))element.target='_blank'}}
-    else{const double=token.startsWith('**')||token.startsWith('__')||token.startsWith('~~'),size=double?2:1;element=markdownElement(token.startsWith('~~')?'del':double?'strong':'em','');markdownInline(token.slice(size,-size),element,depth+1)}
+    parent.children.push(...markdownText(text.slice(offset,match.index),mask.slice(offset,match.index)));const token=match[0],flags=mask.slice(match.index,match.index+token.length);let element;
+    if(token.charCodeAt(0)===96){element=markdownElement('code');element.children=markdownText(token.slice(1,-1),flags.slice(1,-1))}
+    else if(/^!?\[/.test(token)){
+      const link=token.match(/^!?\[([^\]]+)\]\((?:<([^>]+)>|(\S+?))(?:\s+"[^"]*")?\)$/),href=link?.[2]||link?.[3]||'',kind=markdownLinkKind(href),label=link?.[1]||token,labelStart=token.startsWith('!')?2:1;
+      element=markdownElement(kind?'a':'span',kind?'markdown-link':'');element.children=markdownText(label,flags.slice(labelStart,labelStart+label.length));
+      if(kind){element.href=href;element.link=kind;element.rel='noreferrer noopener';if(['web','server','file'].includes(kind.kind))element.target='_blank'}
+    }else{const double=token.startsWith('**')||token.startsWith('__')||token.startsWith('~~'),size=double?2:1;element=markdownElement(token.startsWith('~~')?'del':double?'strong':'em','');markdownInline(token.slice(size,-size),element,depth+1,flags.slice(size,-size))}
     parent.children.push(element);offset=match.index+token.length;
-  }parent.children.push(text.slice(offset));
+  }parent.children.push(...markdownText(text.slice(offset),mask.slice(offset)));
 }
-function markdownTree(text,depth=0){
-  const root=markdownElement('div','markdown-content'),lines=String(text).replace(/\r\n/g,'\n').split('\n'),inline=(tag,text)=>{const el=markdownElement(tag,'');markdownInline(text,el);return el};
-  if(depth>12)return markdownElement('div','markdown-content',String(text));
+function markdownTree(text,depth=0,mask=''){
+  let source=String(text);
+  if(source.includes('\r\n')){let at=0;mask=source.split('\r\n').map(part=>{const flags=mask.slice(at,at+part.length);at+=part.length+2;return flags}).join('0');source=source.replace(/\r\n/g,'\n')}
+  const root=markdownElement('div','markdown-content'),lines=source.split('\n'),flags=[];let at=0;
+  for(const line of lines){flags.push(mask.slice(at,at+line.length));at+=line.length+1}
+  const inline=(tag,text,mask='')=>{const el=markdownElement(tag);markdownInline(text,el,0,mask);return el};
+  if(depth>12){root.children=markdownText(source,mask);return root}
   let i=0;
   while(i<lines.length){
     const line=lines[i];if(!line.trim()){i++;continue}
     const fence=line.match(/^\s*(\x60{3,}|~{3,})(.*)$/);
-    if(fence){const body=[];i++;while(i<lines.length&&!lines[i].trim().startsWith(fence[1]))body.push(lines[i++]);if(i<lines.length)i++;const pre=markdownElement('pre',''),code=markdownElement('code','',body.join('\n'));if(fence[2].trim())code.language=fence[2].trim();pre.children.push(code);root.children.push(pre);continue}
-    const heading=line.match(/^(#{1,6})\s+(.+)$/);if(heading){root.children.push(inline('h'+heading[1].length,heading[2]));i++;continue}
-    if(/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)){root.children.push(markdownElement('hr',''));i++;continue}
-    if(/^\s*>/.test(line)){const body=[];while(i<lines.length&&/^\s*>/.test(lines[i]))body.push(lines[i++].replace(/^\s*>\s?/,''));const quote=markdownElement('blockquote','');quote.children.push(markdownTree(body.join('\n'),depth+1));root.children.push(quote);continue}
+    if(fence){const body=[],marks=[];i++;while(i<lines.length&&!lines[i].trim().startsWith(fence[1])){body.push(lines[i]);marks.push(flags[i++])}if(i<lines.length)i++;const pre=markdownElement('pre'),code=markdownElement('code');code.children=markdownText(body.join('\n'),marks.join('0'));if(fence[2].trim())code.language=fence[2].trim();pre.children.push(code);root.children.push(pre);continue}
+    const heading=line.match(/^(#{1,6})\s+(.+)$/);if(heading){root.children.push(inline('h'+heading[1].length,heading[2],flags[i].slice(line.length-heading[2].length)));i++;continue}
+    if(/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)){root.children.push(markdownElement('hr'));i++;continue}
+    if(/^\s*>/.test(line)){const body=[],marks=[];while(i<lines.length&&/^\s*>/.test(lines[i])){const prefix=lines[i].match(/^\s*>\s?/)[0].length;body.push(lines[i].slice(prefix));marks.push(flags[i].slice(prefix));i++}const quote=markdownElement('blockquote');quote.children.push(markdownTree(body.join('\n'),depth+1,marks.join('0')));root.children.push(quote);continue}
     const list=line.match(/^(\s*)([-+*]|\d+[.)])\s+(.*)$/);
-    if(list){const ordered=/^\d/.test(list[2]),indent=list[1].length,container=markdownElement(ordered?'ol':'ul','');if(ordered)container.start=parseInt(list[2],10);
-      while(i<lines.length){const item=lines[i].match(/^(\s*)([-+*]|\d+[.)])\s+(.*)$/);if(!item||item[1].length!==indent||/^\d/.test(item[2])!==ordered)break;const body=[item[3]],continuationIndent=indent+item[2].length+1;i++;
-        while(i<lines.length&&lines[i].trim()&&/^\s+/.test(lines[i])&&lines[i].search(/\S/)>indent)body.push(lines[i++].slice(continuationIndent));
-        const li=markdownElement('li',''),task=body[0].match(/^\[([ xX])\]\s+(.*)$/);if(task){li.children.push(markdownElement('span','markdown-task',{icon:task[1].toLowerCase()==='x'?'todo':'checkbox'}));body[0]=task[2]}li.children.push(markdownTree(body.join('\n'),depth+1));container.children.push(li);
+    if(list){const ordered=/^\d/.test(list[2]),indent=list[1].length,container=markdownElement(ordered?'ol':'ul');if(ordered)container.start=parseInt(list[2],10);
+      while(i<lines.length){const item=lines[i].match(/^(\s*)([-+*]|\d+[.)])\s+(.*)$/);if(!item||item[1].length!==indent||/^\d/.test(item[2])!==ordered)break;const body=[item[3]],marks=[flags[i].slice(lines[i].length-item[3].length)],continuationIndent=indent+item[2].length+1;i++;
+        while(i<lines.length&&lines[i].trim()&&/^\s+/.test(lines[i])&&lines[i].search(/\S/)>indent){body.push(lines[i].slice(continuationIndent));marks.push(flags[i].slice(continuationIndent));i++}
+        const li=markdownElement('li'),task=body[0].match(/^\[([ xX])\]\s+(.*)$/);if(task){li.children.push(markdownElement('span','markdown-task',{icon:task[1].toLowerCase()==='x'?'todo':'checkbox'}));marks[0]=marks[0].slice(body[0].length-task[2].length);body[0]=task[2]}li.children.push(markdownTree(body.join('\n'),depth+1,marks.join('0')));container.children.push(li);
         if(!lines[i]?.trim()&&lines[i+1]?.match(/^(\s*)([-+*]|\d+[.)])\s+/)?.[1].length===indent)i++;
       }root.children.push(container);continue}
-    if(line.includes('|')&&/^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[i+1]||'')){const cells=value=>value.trim().replace(/^\||\|$/g,'').split('|').map(x=>x.trim()),wrap=markdownElement('div','markdown-table'),table=markdownElement('table',''),head=markdownElement('thead',''),tr=markdownElement('tr','');cells(line).forEach(cell=>tr.children.push(inline('th',cell)));head.children.push(tr);table.children.push(head);const body=markdownElement('tbody','');i+=2;while(i<lines.length&&lines[i].includes('|')&&lines[i].trim()){const row=markdownElement('tr','');cells(lines[i++]).forEach(cell=>row.children.push(inline('td',cell)));body.children.push(row)}table.children.push(body);wrap.children.push(table);root.children.push(wrap);continue}
-    const paragraph=[line];i++;while(i<lines.length&&lines[i].trim()&&!/^\s*(?:#{1,6}\s|>|[-+*]\s|\d+[.)]\s|\x60{3,}|~{3,})/.test(lines[i])){if(lines[i].includes('|')&&/^\s*\|?\s*:?-{3,}/.test(lines[i+1]||''))break;paragraph.push(lines[i++])}root.children.push(inline('p',paragraph.join('\n')));
+    if(line.includes('|')&&/^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[i+1]||'')){
+      const cells=(tag,index)=>{const row=markdownElement('tr'),value=lines[index];let offset=0;for(const cell of value.split('|')){const start=offset;offset+=cell.length+1;if(start===0&&!cell.trim()||offset>value.length&&!cell.trim())continue;const left=cell.length-cell.trimStart().length,text=cell.trim();row.children.push(inline(tag,text,flags[index].slice(start+left,start+left+text.length)))}return row};
+      const wrap=markdownElement('div','markdown-table'),table=markdownElement('table'),head=markdownElement('thead');head.children.push(cells('th',i));table.children.push(head);const body=markdownElement('tbody');i+=2;while(i<lines.length&&lines[i].includes('|')&&lines[i].trim())body.children.push(cells('td',i++));table.children.push(body);wrap.children.push(table);root.children.push(wrap);continue}
+    const paragraph=[line],marks=[flags[i]];i++;while(i<lines.length&&lines[i].trim()&&!/^\s*(?:#{1,6}\s|>|[-+*]\s|\d+[.)]\s|\x60{3,}|~{3,})/.test(lines[i])){if(lines[i].includes('|')&&/^\s*\|?\s*:?-{3,}/.test(lines[i+1]||''))break;paragraph.push(lines[i]);marks.push(flags[i++])}root.children.push(inline('p',paragraph.join('\n'),marks.join('0')));
   }return root;
 }
 

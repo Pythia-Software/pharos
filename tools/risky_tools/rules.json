@@ -1,0 +1,17 @@
+{
+  "version": "risky-tools-v1",
+  "rules": {
+    "delete": ["delete", "high", "Recovery depends on backups, trash or version control; untracked data may be lost."],
+    "history": ["history_rewrite", "high", "Recovery may require reflogs or collaborators' clones. Shared-branch state is unknown."],
+    "data": ["data_loss", "high", "Recovery depends on database backups or a tested reverse migration. Target environment is unknown."],
+    "install": ["install_system", "caution", "Uninstalling or restoring configuration may be needed; scripts can have further effects."],
+    "system": ["install_system", "high", "System or privileged changes may require manual recovery."],
+    "publish": ["external_publish_send", "high", "Published content may be copied; deletion cannot guarantee recall."],
+    "routine": ["external_publish_send", "routine", "Routine remote write; usually editable or revertible, but others may already have seen it."],
+    "credential": ["credential", "high", "Credential access is observed, not proof of disclosure; exposure may require rotation."],
+    "process": ["process_control", "caution", "Processes can be restarted; in-flight work may be lost."],
+    "permission": ["permission_change", "caution", "Restore the prior mode or owner; its previous value is not recorded."],
+    "spend": ["spending", "high", "Provisioning or purchases can incur charges that cannot be undone."],
+    "outside_write": ["outside_repository_write", "caution", "Recovery may require a previous file copy; the old contents are not recorded."]
+  }
+}

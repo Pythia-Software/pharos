@@ -53,6 +53,7 @@ func beginSQLiteRecordSource(ctx context.Context, root string, source SourceConf
 	if e != nil {
 		return nil, e
 	}
+	opFrom(ctx).holdLock(session.lock)
 	fail := func(e error) (*sourceCapture, error) { session.Close(); return nil, e }
 	dir := filepath.Join(session.hostDir, source.Name)
 	if e = os.MkdirAll(dir, 0700); e != nil {
@@ -219,7 +220,7 @@ func runSQLiteRecordsCLI(config Config, args []string) error {
 	if e != nil {
 		return e
 	}
-	defer lock.Close()
+	defer releaseLockFile(lock)
 	c, e := sourceCaptureForTarget(context.Background(), target)
 	if e != nil {
 		return e

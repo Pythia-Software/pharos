@@ -85,26 +85,34 @@ func TestCachesOutliveCommitsDuringARun(t *testing.T) {
 	if value() != 1 {
 		t.Fatal("first value")
 	}
+	firstRows := libraryRowsByID(t, catalog)
 	catalog.ingestRuns.Add(1)
 	commit()
-	now = now.Add(runCacheHold - time.Second)
+	now = now.Add(time.Minute - time.Second)
 	if got := value(); got != 1 {
 		t.Fatalf("a commit during a run recomputed within the hold: %d", got)
 	}
 	now = now.Add(2 * time.Second)
-	if got := value(); got != 2 {
-		t.Fatalf("a value outlived the hold: %d", got)
+	if got := value(); got != 1 {
+		t.Fatalf("a long ingest rebuilt a cached view: %d", got)
 	}
 	commit()
-	if got := value(); got != 2 {
-		t.Fatalf("a commit right after the hold renewed recomputed: %d", got)
+	now = now.Add(time.Hour)
+	if got := value(); got != 1 {
+		t.Fatalf("a later commit during a long ingest rebuilt a cached view: %d", got)
+	}
+	if rows := libraryRowsByID(t, catalog); !sameRow(firstRows["c"], rows["c"]) {
+		t.Fatal("a long ingest rebuilt the Library's cached rows")
 	}
 	catalog.ingestRuns.Add(-1)
-	if got := value(); got != 3 {
+	if got := value(); got != 2 {
 		t.Fatalf("the run ended without the next read seeing its commits: %d", got)
 	}
+	if rows := libraryRowsByID(t, catalog); rows["c"]["title"] == firstRows["c"]["title"] {
+		t.Fatal("the Library did not refresh after indexing ended")
+	}
 	commit()
-	if got := value(); got != 4 {
+	if got := value(); got != 3 {
 		t.Fatalf("a commit outside a run did not recompute: %d", got)
 	}
 }
