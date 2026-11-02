@@ -416,81 +416,6 @@ test('Cloud backup wizard focuses the calculator after Reset and returns to Expl
   assert.ok(await explore.evaluate(input=>input===document.activeElement));
 });
 
-// The drive panel, opened from the header chip, is where running work is
-// shown. Maintenance folds into the index's card, so the later tasks here are
-// backups, which keep cards of their own.
-test('Drive panel refresh preserves scrolling, focus and animation phase', {skip}, async t => {
-  const main = {id: 'refreshing-index', kind: 'sync', label: 'Capture & index', stoppable: true,
-    started_at: new Date(Date.now() - 120_000).toISOString(),
-    work: {phase: 'Discovering inputs', source: 'Codex', done: 0, total: 0},
-    forecast: {state: 'partial', remaining_steps: 4, predicted_steps: 3, basis: 'Learning the remaining analyses'}};
-  let activities = [main, ...Array.from({length: 5}, (_, index) => ({id: `task-${index}`, kind: 'backup', label: `Background task ${index}`}))];
-  let stopped = 0;
-  const {page, settled, shot} = await open(t, {url: '/library', ready: '#queryTableLibrary .qt-row', viewport: {width: 390, height: 550}, api: {
-    'GET /api/library/status': () => ({...defaultApi['GET /api/library/status'], idle: false, activities}),
-    'POST /api/library/refresh/stop': () => {stopped++; return {stopped: true};},
-  }});
-  await page.emulateMedia({reducedMotion: 'no-preference'});
-  await activateHeaderTool(page, 'pharosDrive');
-  await settled();
-  const panel = page.getByRole('dialog', {name: 'Library drive', exact: true});
-  const summary = panel.locator('summary').first();
-  await summary.click();
-  await summary.focus();
-  await page.evaluate(async () => {
-    const panel = document.getElementById('pharosDrivePanel');
-    panel.scrollTop = 160;
-    const animations = [...panel.querySelector('[role="progressbar"]').getAnimations({subtree: true}),
-      ...document.getElementById('pharosDrive').getAnimations({subtree: true})];
-    if (!animations.length) throw new Error('No loading animations to exercise');
-    for (const animation of animations) {animation.pause(); await animation.ready; animation.currentTime = 750;}
-    window.activityRefreshTest = {animations, focused: document.activeElement, scrollTop: panel.scrollTop};
-    if (!panel.scrollTop) throw new Error('Activity fixture must scroll');
-  });
-  activities = [{...main, stop_path: '/api/library/refresh/stop', detail: 'Updated discovery counts'}, ...activities.slice(1)];
-  await page.evaluate(() => window.pharosLibrary.refresh());
-  assert.ok(await page.evaluate(() => {
-    const panel = document.getElementById('pharosDrivePanel'), before = window.activityRefreshTest;
-    const animations = [...panel.getAnimations({subtree: true}), ...document.getElementById('pharosDrive').getAnimations({subtree: true})];
-    return document.activeElement === before.focused && panel.scrollTop === before.scrollTop
-      && panel.querySelector('details').open
-      && before.animations.every(animation => animations.includes(animation) && animation.currentTime === 750);
-  }), 'refresh interrupted scrolling, focus, disclosure state or an in-progress animation');
-  // Removing a preceding task also keeps a later task's animation alive.
-  await page.evaluate(async () => {
-    const bar = [...document.querySelectorAll('#pharosDrivePanel [role="progressbar"]')].find(el => el.getAttribute('aria-label').startsWith('Background task 4: overall'));
-    window.laterActivityAnimation = bar.getAnimations({subtree: true})[0];
-    window.laterActivityAnimation.pause();
-    await window.laterActivityAnimation.ready;
-    window.laterActivityAnimation.currentTime = 900;
-  });
-  activities = [activities[0], ...activities.slice(2)];
-  await page.evaluate(() => window.pharosLibrary.refresh());
-  assert.ok(await panel.evaluate(element => element.getAnimations({subtree: true}).includes(window.laterActivityAnimation) && window.laterActivityAnimation.currentTime === 900));
-  // Exercise the state-preserving move fallback used by older browsers.
-  await page.evaluate(() => {Element.prototype.moveBefore = undefined;});
-  activities = [activities[0], ...activities.slice(1).reverse()];
-  await page.evaluate(() => window.pharosLibrary.refresh());
-  assert.ok(await panel.evaluate(element => {
-    const bar = [...element.querySelectorAll('[role="progressbar"]')].find(el => el.getAttribute('aria-label').startsWith('Background task 4: overall'));
-    return bar.getAnimations({subtree: true})[0].currentTime === 900;
-  }), 'reordering tasks restarted an in-progress animation');
-  const stop = panel.getByRole('button', {name: 'Stop', exact: true});
-  await stop.click();
-  await settled();
-  assert.equal(stopped, 1, 'retained Stop button did not use the latest stop target');
-  // A measured step can replace discovery without closing its details.
-  activities = [{...activities[0], work: {phase: 'Indexing', source: 'Codex', done: 42, total: 100},
-    forecast: {state: 'provisional', progress: .63, low_seconds: 120, high_seconds: 180}}, ...activities.slice(1)];
-  await page.evaluate(() => window.pharosLibrary.refresh());
-  assert.ok(await panel.locator('details').first().evaluate(element => element.open));
-  activities = [activities[0]];
-  await page.evaluate(() => window.pharosLibrary.refresh());
-  await panel.locator('summary').first().click();
-  await panel.evaluate(element => {element.scrollTop = 0;});
-  await shot('refreshed');
-});
-
 test("summary value links retain keyboard focus when the summary rerenders", { skip }, async t => {
   const { page } = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-usage-summary-links": true, "pharos-quick-stats-v1": {metrics: ["cost_usd", "tokens"], windows: ["today", "6h"]} } });
   await activateHeaderTool(page, "usageSummaryToggle");
@@ -533,7 +458,7 @@ async function holdsFocus(page, surface, opener) {
 // its declared stop; Eject acts only on a fresh verdict.
 test("Unified activity panel holds focus across refreshes, stops each operation and ejects only on a fresh verdict", { skip }, async t => {
   let fresh = { verdict: "busy", summary: "Busy", blockers: [{ label: "L", on_eject: "O" }], checked: "fresh" };
-  const app = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-unified-activity-v1": true }, api: {
+  const app = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row", api: {
     "GET /api/status/stream": eventStream(busyStatus),
     "GET /api/status": ({ query }) => query.get("fresh") === "1" ? { ...busyStatus, eject: fresh } : busyStatus,
   } });
@@ -545,7 +470,7 @@ test("Unified activity panel holds focus across refreshes, stops each operation 
   const panel = page.getByRole("dialog", { name: "Library drive", exact: true });
   await panel.waitFor();
   await holdsFocus(page, panel, chip);
-  assert.equal(await page.locator("#pharosDrivePanel").count(), 0, "the old drive panel stays closed while the flag is on");
+  assert.equal(await page.locator("#pharosDrivePanel").count(), 0, "the old drive panel stays closed");
 
   await press(chip);
   await panel.waitFor();
@@ -559,15 +484,6 @@ test("Unified activity panel holds focus across refreshes, stops each operation 
   assert.ok(await stop.evaluate(element => document.activeElement === element), "a refresh moved focus");
   assert.ok(await daily.evaluate(element => element.open), "a refresh closed the cadence row the user opened");
   await app.shot("refreshed");
-
-  // A busy fresh verdict refuses; a safe one ejects.
-  await panel.getByRole("button", { name: /^Eject/ }).click();
-  await panel.getByRole("button", { name: "Check again", exact: true }).waitFor();
-  assert.equal(await page.evaluate(() => window.ejects), 0, "ejected on a busy verdict");
-  assert.ok(calls.some(call => call.path === "/api/status" && call.query.get("fresh") === "1"));
-  fresh = { verdict: "safe", summary: "Safe", blockers: [], checked: "fresh" };
-  await panel.getByRole("button", { name: "Check again", exact: true }).click();
-  await page.waitForFunction(() => window.ejects === 1);
 
   // A stop that fails leaves Stop enabled to try again; one that works
   // keeps it disabled while the operations wind down.
@@ -587,35 +503,50 @@ test("Unified activity panel holds focus across refreshes, stops each operation 
   const stopped = calls.filter(call => call.method === "POST" && call.path === "/api/operations/stop").map(call => call.body.id).sort();
   assert.deepEqual(stopped, ["op-backup", "op-index", "op-view"]);
   assert.ok(await page.evaluate(() => document.querySelector('#pharosStatusPanel [data-key="stop"]').disabled), "Stop enabled again after it worked");
+
+  // Eject when safe: under a verdict that is not safe, Eject waits; once
+  // the snapshot allows ejecting, a fresh verdict that agrees ejects.
+  const unsafe = { verdict: "unsafe", summary: "Not safe to eject: indexing sources.", headline: "Not safe to eject: indexing sources",
+    blockers: [{ label: "Indexing sources", on_eject: "Not registered.", verdict: "unsafe" }], checked: "polled" };
+  fresh = { ...unsafe, checked: "fresh" };
+  push("/api/status/stream", { ...busyStatus, revision: 4, eject: unsafe });
+  await panel.getByRole("button", { name: /Eject when safe/ }).waitFor();
+  await app.shot("eject when safe");
+  await panel.getByRole("button", { name: /Eject when safe/ }).click();
+  await panel.getByRole("button", { name: /Waiting to eject/ }).waitFor();
+  assert.equal(await page.evaluate(() => window.ejects), 0, "ejected on a busy verdict");
+  assert.ok(calls.some(call => call.path === "/api/status" && call.query.get("fresh") === "1"));
+  await app.shot("waiting to eject");
+  fresh = { verdict: "safe", summary: "Safe", blockers: [], checked: "fresh" };
+  push("/api/status/stream", { ...busyStatus, revision: 5, eject: fresh });
+  await page.waitForFunction(() => window.ejects === 1);
 });
 
-// With the flag off (the default) the old drive panel runs and nothing reads
-// the status snapshot. The Settings switch takes over the chip at once, and
-// turning it off gives it back.
-test("Unified activity switch: off leaves the old drive panel alone; on and off again switch the chip's panel", { skip }, async t => {
-  const { page, settled, calls } = await open(t, { url: "/settings/preferences", ready: "#unifiedActivity" });
-  const chip = page.locator("#pharosDrive");
-  const statusCalls = () => calls.filter(call => call.path.startsWith("/api/status") || call.path.startsWith("/api/app/status")).length;
-  await chip.click();
-  await page.locator("#pharosDrivePanel").waitFor();
-  await chip.click();
-  await settled();
-  assert.equal(statusCalls(), 0, "the flag is off, yet the page read the status snapshot");
-  assert.equal(await page.locator("#pharosStatusPanel").count(), 0);
-
-  await page.locator("#unifiedActivity").click();
+// Eject when safe keeps checking while the window is hidden: a hidden page
+// holds no stream, so no snapshot says the blocker ended, and the wait
+// checks the fresh verdict itself once snapshots have been quiet.
+test("Eject when safe ejects once safe while the page is hidden", { skip }, async t => {
+  const unsafe = { verdict: "unsafe", summary: "Not safe to eject: indexing sources.", headline: "Not safe to eject: indexing sources",
+    blockers: [{ label: "Indexing sources", on_eject: "Not registered.", verdict: "unsafe" }], checked: "polled" };
+  let fresh = { ...unsafe, checked: "fresh" };
+  const snapshot = { ...busyStatus, eject: unsafe };
+  const { page } = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row", api: {
+    "GET /api/status/stream": eventStream(snapshot),
+    "GET /api/status": ({ query }) => query.get("fresh") === "1" ? { ...snapshot, eject: fresh } : snapshot,
+  } });
+  await page.evaluate(() => { window.ejects = 0; window.webkit = { messageHandlers: { pharosLibrary: { postMessage: async () => { window.ejects++; } } } }; });
   await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library);
-  assert.ok(calls.some(call => call.method === "POST" && call.path === "/api/preferences" && call.body?.set?.["pharos-unified-activity-v1"] === true));
-  await chip.click();
-  await page.locator("#pharosStatusPanel").waitFor();
-  assert.equal(await page.locator("#pharosDrivePanel").count(), 0);
-  await page.keyboard.press("Escape");
-
-  await page.locator("#unifiedActivity").click();
-  await settled();
-  await chip.click();
-  await page.locator("#pharosDrivePanel").waitFor();
-  assert.equal(await page.locator("#pharosStatusPanel").count(), 0);
+  await press(page.locator("#pharosDrive"));
+  const panel = page.getByRole("dialog", { name: "Library drive", exact: true });
+  await panel.getByRole("button", { name: /Eject when safe/ }).click();
+  await panel.getByRole("button", { name: /Waiting to eject/ }).waitFor();
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await page.waitForFunction(() => window.pharosStatusStore.current()?.mode === "paused");
+  fresh = { verdict: "safe", summary: "Safe", blockers: [], checked: "fresh" };
+  await page.waitForFunction(() => window.ejects === 1, null, { timeout: 20000 });
 });
 
 for (const width of [1440, 390, 320]) test(`Data guide takes focus, keeps controls reachable and returns focus @ ${width}`, { skip }, async t => {

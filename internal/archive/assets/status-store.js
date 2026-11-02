@@ -1,8 +1,6 @@
 // The status store (docs/background-work.md §7): one client copy of the
 // status snapshot, for the unified activity panel, the header chip and the
-// header's Index changes button. It runs only while the
-// pharos-unified-activity-v1 preference is on; off, it never connects and
-// the page behaves exactly as before.
+// header's Index changes button.
 //
 // It reads /api/status/stream (in the app, the broker's /api/app/status/stream,
 // which adds every other library and the app's own operations) and falls back
@@ -14,12 +12,13 @@
 // arguments, so web/tests/unit/page/status-store.test.mjs can drive them.
 (() => {
   'use strict';
-  const FLAG = 'pharos-unified-activity-v1';
   const POLL_MS = 5000;
   // After this long on polling, the store tries the stream again.
   const RETRY_STREAM_MS = 30000;
 
-  const enabled = () => window.pharosPrefs?.get(FLAG, false) === true;
+  // The unified activity panel is the only one now. library.js still asks,
+  // until its old drive panel is removed.
+  const enabled = () => true;
 
   // The endpoints: the broker's in the app, the service's otherwise.
   const endpoints = managed => managed
@@ -45,7 +44,7 @@
     const library = selected?.snapshot ? {...selected.snapshot, eject: selected.eject || selected.snapshot.eject} : null;
     const appRunning = (document.app?.operations || []).filter(operation => !TERMINAL.has(operation.state));
     const others = document.libraries.filter(entry => entry !== selected).map(entry => ({
-      id: entry.id, name: entry.name, connected: Boolean(entry.connected), eject: entry.eject || null, stateLabel: entry.state_label || null,
+      id: entry.id, name: entry.name, drive: entry.drive || '', connected: Boolean(entry.connected), eject: entry.eject || null, stateLabel: entry.state_label || null,
       operations: [...appRunning.filter(operation => touches(operation, entry.id)), ...(entry.snapshot?.operations || [])], service: entry.service || null,
     }));
     for (const operation of appRunning.filter(operation => !document.libraries.some(entry => touches(operation, entry.id)))) {
@@ -55,7 +54,8 @@
       attention: Array.isArray(document.attention) ? document.attention : [],
       // Every Pharos process on this Mac, for the Load row.
       resources: document.resources || null,
-      service: selected ? {id: selected.id, name: selected.name, state: selected.service?.state || null, stateLabel: selected.state_label || null, connected: Boolean(selected.connected), error: selected.error || null, eject: selected.eject || null} : null};
+      // position and count: "Library Pending history (1/3)".
+      service: selected ? {id: selected.id, name: selected.name, position: document.libraries.indexOf(selected) + 1, count: document.libraries.length, state: selected.service?.state || null, stateLabel: selected.state_label || null, connected: Boolean(selected.connected), error: selected.error || null, eject: selected.eject || null} : null};
   }
 
   // The fresh verdict in the app: the broker's, for the selected library,
@@ -205,18 +205,14 @@
     };
   }
 
-  // The page's one store, created when the flag is first on.
+  // The page's one store.
   let store = null;
   const instance = () => store ??= createStore({managed: Boolean(window.pharosManagedLibrary), selectedId: window.pharosManagedLibrary?.id || null});
-  function startIfEnabled() {
-    if (enabled()) instance().start();
-    else store?.stop();
-  }
+  const start = () => instance().start();
   document.addEventListener('visibilitychange', () => store?.visibility());
-  window.addEventListener('pharos:unified-activity', startIfEnabled);
 
   window.pharosStatusStore = {
-    enabled, start: startIfEnabled,
+    enabled, start,
     current: () => store?.current() || null,
     subscribe: listener => instance().subscribe(listener),
     fresh: () => instance().fresh(),
@@ -224,5 +220,5 @@
     // Pure helpers, for web/tests/unit/page/status-store.test.mjs.
     createStore, normalize, endpoints, brokerEjectVerdict, POLL_MS,
   };
-  startIfEnabled();
+  start();
 })();

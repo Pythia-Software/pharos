@@ -303,7 +303,7 @@ export const cloudScheduledStatus={
 // server-sent events: each document is one `snapshot` event, and the stream
 // stays open.
 export const eventStream = documents => ({ __eventStream: [documents].flat() });
-const statusLibrary = { id: "library-fixture", name: "Pharos SSD", drive: { name: "Pharos SSD", ejectable: true, location: "external", mounted: true }, portable: true, path: "/Volumes/Pharos SSD/Pharos" };
+const statusLibrary = { id: "library-fixture", name: "Pharos SSD", drive: { name: "Pharos SSD", ejectable: true, location: "external", mounted: true }, portable: true, path: "/Volumes/Pharos SSD/Pharos", storage_bytes: 48e9 };
 // The freshness ledger (§5) in the server's shape: rows, and the summary
 // groups the Data row shows.
 const domain = (id, group, label, state, changes = {}) => ({ domain: id, group, label, as_of: null, behind: { state, count: null, unit: null },
@@ -345,7 +345,7 @@ const busySummary = { all_current: false, checked_at: null, groups: [
   { group: "backups", label: "Backups", state: "behind", short: "behind", short_age: true, text: "behind, updates with the next scheduled cloud backup", as_of: iso(9 * day), as_of_label: "last current", catching_up: null, shown: false, muted: false },
 ] };
 // Resources as a service reports them (§10): itself and a Terminal command.
-const statusResources = (label, processes) => ({ cpu_percent: 3, memory_bytes: 340e6, sampled_at: iso(0), basis: "proc_pid_rusage", approximate: false, label, processes });
+const statusResources = (label, processes) => ({ cpu_percent: 3, memory_bytes: 340e6, disk_bytes_per_second: 4.2e6, sampled_at: iso(0), basis: "proc_pid_rusage", approximate: false, label, processes });
 const idleResources = statusResources("Pharos is using under 1% of one core · 180 MB", [
   { pid: 4120, role: "service", cpu_percent: 0, memory_bytes: 180e6, sampled_at: iso(0), basis: "proc_pid_rusage", text: "Library service · under 1% of one core · 180 MB" }]);
 const busyResources = statusResources("Pharos is using ~45% of one core · 1.2 GB", [
@@ -363,11 +363,12 @@ const backgroundItem = (id, label, cadence, state, changes = {}) => ({
 const backgroundView = (items, headline) => ({
   mode: "on", paused_until: null, items, headline,
   cadences: ["frequent", "hourly", "daily"].map(cadence => {
-    const members = items.filter(item => item.column === cadence);
+    const members = items.filter(item => item.column === cadence && item.cadence !== "manual");
     const state = ["failed", "running", "queued"].find(state => members.some(item => item.state === state)) ?? "current";
     return { id: cadence, label: { frequent: "Frequently", hourly: "Hourly", daily: "Daily" }[cadence], description: "When it runs", state, state_label: state === "failed" ? "1 failed" : members[0]?.state_label,
       as_of: iso(41 * 60000), next_at: iso(-19 * 60000), items: members.map(item => item.id) };
   }),
+  unscheduled: items.filter(item => item.cadence === "manual").map(item => item.id),
   everything: { seconds: 540, text: "Everything now takes about 9 min, mostly “Your writing”." },
 });
 const idleBackground = backgroundView([
@@ -388,6 +389,7 @@ const busyBackground = backgroundView([
   backgroundItem("writing", "Your writing", "hourly", "running"),
   backgroundItem("findings", "Findings", "hourly", "queued"),
   backgroundItem("preserve", "Preserve originals", "daily", "current"),
+  backgroundItem("backup", "Back up to /Users/someone/PharosBackup", "manual", "manual", { column: "daily", state_label: "Only when you ask", as_of: iso(26 * 3600000), next_at: null }),
 ], { tone: "busy", title: "Updating your writing", text: "Human Words cards, and Analyze → Writing update when this finishes.", tech: null });
 export const backgroundDocument = {
   labels: { enabled: false, can_change: true, status: 'Off. Turn on to label messages in this library.' },
@@ -412,7 +414,7 @@ export const temporaryBackgroundDocument = {
 export const idleStatus = {
   version: 1, revision: 1, generated_at: iso(0), host: { id: "test-mac", label: "This Mac" }, library: statusLibrary,
   eject: { verdict: "safe", eta_seconds: null, checked: "polled", blockers: [], headline: "Safe to eject; checked again on eject", summary: "Nothing Pharos can see is writing to the library. Pharos checks everything again when you eject." },
-  operations: [], attention: [], freshness: idleLedger, freshness_summary: idleSummary, resources: idleResources, headings: statusHeadings, features: { unified_activity: true }, journal: { dropped: 0 },
+  operations: [], attention: [], freshness: idleLedger, freshness_summary: idleSummary, resources: idleResources, headings: statusHeadings, journal: { dropped: 0 },
   background: idleBackground,
 };
 const statusOperation = (id, changes) => ({
@@ -445,8 +447,8 @@ export const managedStatus = snapshot => ({
   version: 1, revision: 3, generated_at: iso(0),
   libraries: [
     { id: "local", name: "Pending history", selected: true, connected: true, service: { state: "running" }, state_label: "Copying the library", snapshot, eject: brokerBusy(snapshot.eject), error: null },
-    { id: "archive", name: "Archive (Backup drive)", selected: false, connected: true, service: { state: "running" }, state_label: "Copying the library", eject: brokerBusy(idleStatus.eject), error: null, snapshot: idleStatus },
-    { id: "spare", name: "Spare", selected: false, connected: false, service: { state: "stopped" }, state_label: "Not open", snapshot: null, eject: idleStatus.eject, error: null },
+    { id: "archive", name: "Archive", drive: "Backup drive", selected: false, connected: true, service: { state: "running" }, state_label: "Copying the library", eject: brokerBusy(idleStatus.eject), error: null, snapshot: idleStatus },
+    { id: "spare", name: "Spare", drive: "", selected: false, connected: false, service: { state: "stopped" }, state_label: "Not open", snapshot: null, eject: idleStatus.eject, error: null },
   ],
   // As the broker reports its own work: in app.operations, naming the
   // libraries it touches (a copy from the selected library to Archive).
