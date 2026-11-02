@@ -95,11 +95,10 @@
 .query-keep:focus-visible { outline:2px solid var(--ink); outline-offset:3px; }
 .query-card.discovery { transform:rotate(var(--query-lean)) translateY(3px); box-shadow:0 9px 15px #0004; }
 
-.query-drag-tip { position:absolute; z-index:5; bottom:calc(100% + 10px); left:50%; transform:translateX(-50%) translateY(4px); background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:5px; padding:7px 9px; font-size:11px; white-space:nowrap; box-shadow:0 4px 14px #0004; opacity:0; pointer-events:none; display:flex; gap:5px; align-items:center; transition:opacity .12s,transform .12s; }
+.query-drag-tip { position:absolute; z-index:5; bottom:calc(100% + 10px); left:50%; transform:translateX(-50%); background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:5px; padding:7px 9px; font-size:11px; white-space:nowrap; box-shadow:0 4px 14px #0004; opacity:0; pointer-events:none; display:flex; gap:5px; align-items:center; transition:opacity .12s; }
 .query-drag-tip svg { width:13px; height:13px; color:var(--gold); }
-.query-card.discovery:hover .query-drag-tip,.query-card.discovery:focus-within .query-drag-tip { opacity:1; transform:translateX(-50%); }
-.home-belt-row>.query-card:first-child .query-drag-tip { left:0; transform:translateY(4px); }
-.home-belt-row>.query-card:first-child:hover .query-drag-tip,.home-belt-row>.query-card:first-child:focus-within .query-drag-tip { transform:none; }
+.query-card.discovery:hover .query-drag-tip,.query-card.discovery:focus-within .query-drag-tip { opacity:1; }
+.home-belt-row>.query-card:first-child .query-drag-tip { left:0; transform:none; }
 .query-card.insert-before { box-shadow:-5px 0 0 var(--gold),1px 5px 9px #0003; }
 .query-chip { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line); background:color-mix(in srgb,var(--gold) 4%,var(--panel)); color:var(--ink); padding:5px 8px; border-radius:5px; font:inherit; font-size:var(--fs-sm); cursor:pointer; }
 .query-chip svg { width:12px; height:12px; color:var(--muted); }
