@@ -1664,11 +1664,14 @@ test('Ask Pharos floating progress keeps focus and a ready response leaves the p
   await modal.getByRole('button',{name:'Remove page context',exact:true}).click();
   await editor.evaluate(element=>{element.value='What if we broke it down by model?';element.dispatchEvent(new Event('input',{bubbles:true}));});
   await page.getByRole('button',{name:'Send question',exact:true}).click();
-  const browseHint=page.getByRole('tooltip');await browseHint.waitFor();
+  const browseHint=page.locator('.pharos-browse-hint');await browseHint.waitFor();
   await page.waitForFunction(()=>{const hint=document.getElementById('pharos-browse-hint'),rect=hint.getBoundingClientRect();return rect.left>=0&&rect.right<=innerWidth&&rect.top>=0&&rect.bottom<=innerHeight;});
   await page.waitForFunction(element=>new Promise(resolve=>{const observer=new IntersectionObserver(([entry])=>{observer.disconnect();resolve(entry.intersectionRatio===1);});observer.observe(element);}),await browseHint.elementHandle());
   assert.ok(await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).evaluate(element=>{const rect=element.getBoundingClientRect(),target=document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2);return element===target||element.contains(target);}), 'the hint leaves picture in picture clickable');
   await shot('ask-browse-hint');
+  await page.getByRole('button',{name:'Dismiss browse hint',exact:true}).click();
+  await browseHint.waitFor({state:'hidden'});
+  assert.equal(await page.evaluate(()=>document.activeElement?.getAttribute('aria-label')),'Float Ask Pharos','dismissing the hint leaves focus on picture in picture');
   await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();
   await modal.waitFor({state:'hidden'});
   const panel=page.getByRole('complementary',{name:'Ask Pharos progress'});

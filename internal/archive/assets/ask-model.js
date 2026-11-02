@@ -206,8 +206,15 @@ function askRestorePresentation(href, saved) {
   if (saved.presentation === 'home' && !['/', '/home'].includes(url.pathname)) return null;
   return ['home', 'modal', 'floating', 'dismissed'].includes(saved.presentation) ? saved.presentation : null;
 }
-function askShowBrowseHint({pending=false,browsing=false,presentation='home'}) {
-  return pending&&!browsing&&['home','modal'].includes(presentation);
+function askShowBrowseHint({pending=false,browsing=false,presentation='home',hint=true}) {
+  return pending&&hint&&!browsing&&['home','modal'].includes(presentation);
+}
+// Dismissing the browse hint or choosing picture in picture skips the hint for
+// the next questions, so only people who never browse keep seeing it.
+function askBrowseHintSnooze() { return 5; }
+function askStartBrowseHint(snoozed) {
+  const left = Math.max(0, Math.floor(Number(snoozed) || 0));
+  return {hint: left === 0, snoozed: Math.max(0, left - 1)};
 }
 function askFloatingState(turn, {navigated = false} = {}) {
   if (!turn) return {message: 'Ask a question', ready: false};

@@ -451,6 +451,14 @@ test('browsing suppresses automatic navigation even after reopening a single res
     assert.equal(model.askShowBrowseHint({pending:false,presentation}),false);
   }
   for(const presentation of ['floating','dismissed'])assert.equal(model.askShowBrowseHint({pending:true,presentation}),false);
+  assert.equal(model.askShowBrowseHint({pending:true,presentation:'modal',hint:false}),false);
+});
+test('a dismissed or used browse hint stays away for five questions, then returns', () => {
+  assert.deepEqual(plain(model.askStartBrowseHint(undefined)),{hint:true,snoozed:0});
+  let snoozed=model.askBrowseHintSnooze(),shown=[];
+  for(let i=0;i<7;i++){const start=model.askStartBrowseHint(snoozed);shown.push(start.hint);snoozed=start.snoozed;}
+  assert.deepEqual(shown,[false,false,false,false,false,true,true]);
+  assert.deepEqual(plain(model.askStartBrowseHint('junk')),{hint:true,snoozed:0});
 });
 test('floating progress reflects the latest state and distinguishes completion from waiting or cancellation', () => {
   const running=model.askFloatingState({status:'loading',message:'Comparing model usage…'});
