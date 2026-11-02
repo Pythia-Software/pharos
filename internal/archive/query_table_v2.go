@@ -868,7 +868,8 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 				}
 				_, covered = table.project(exactNames).preferCoveringScan(where)
 			}
-			if covered {
+			// Model requests read the narrow stored timing projection.
+			if covered || dataset == "model_requests" {
 				// Narrow covered scalar populations can read the full live ledger
 				// without copying command/result payloads. Exact sample/group limits
 				// and the request deadline remain enforced by the adapter.

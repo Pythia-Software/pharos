@@ -59,12 +59,28 @@ their view and breakdown. Their editable
 native source query remains available for collection and preview. Native compact
 previews use Query Table automatic histogram bins / Tukey boxes; the full page
 uses shared rounded edges / p10–p90 whiskers. This difference is disclosed.
+Previews read the stored timing projection (with a 2-million-row population
+budget), and each card with a distribution is its own request, because Query
+Table evaluates each distribution in a separate pass. A 7-day preview takes
+about 1–2 seconds per card. Windows of 180 days or more are bound by Query
+Table's distribution executor.
 
 ## Data and execution
 
 `thinking_table.go` projects the existing `model_requests`, linked `tool_calls`
 and conversation/source ledger. It computes prior response evidence before
-applying dashboard filters. Explicit native-alias families choose one transcript,
+applying dashboard filters. The projection is stored, one narrow row per request,
+in `model_request_timings` (keyed by conversation, with a covering
+`requested_at` index); excluded conversations are stored in
+`model_request_exclusions`. Triggers on every input mark the affected
+conversations in `model_request_timing_dirty` (or flag the exclusions stale) in
+the source transaction. Reads take stored rows for clean conversations and
+derive dirty ones live, so results are always current. The Tools stage
+(`analysis.tools`, after the rollup) refreshes dirty conversations 200 at a time
+in the background, and a read that finds work pending starts that stage.
+Validation reads `model_request_evidence`, the numeric timer and counter fields
+of metadata messages, kept by triggers and backfilled by the same stage; until
+the backfill finishes it reads the messages directly. Explicit native-alias families choose one transcript,
 preferring native/non-mirrored evidence; inactive group members are excluded.
 Unlinked copies cannot be deduplicated safely by text similarity.
 
@@ -91,20 +107,21 @@ All dashboard views share one immutable full-library request population through
 the existing catalog-generation cache. Concurrent misses share a build; source
 commits, including external ledger/identity/origin changes, invalidate it. Normal
 model/effort/range controls select that population in memory. Native predicates
-on ledger columns select IDs without rebuilding timing evidence; predicates on
-derived timing still use the authoritative SQL projection. Native selections,
+select IDs from the stored projection. Native selections,
 fits and numeric validation results each retain at most four completed cohorts,
 expire after five idle minutes, and are rebuilt on demand. Completed entries
-release closures holding request slices. Fits run one at a time per catalog and
-include all fitted inputs in the cohort identity. Ratios are attached only to
+release closures holding request slices. Fits run one cohort at a time per
+catalog, fitting models in parallel, and include all fitted inputs in the cohort
+identity. The Overview's coverage, compaction and trace sections are computed
+concurrently with its main aggregate. Ratios are attached only to
 request-local copies, so calendar normalization cannot contaminate another view.
 The fixed population/options can be warmed after a source change.
 
 `Server-Timing` reports records, filtering, fitting, aggregation, metadata and
-optional validation phases. The first full-library build and a new derived native
-predicate can still take tens of seconds; this is an in-process cache, not an
-incrementally persisted projection. The cache uses the shared catalog generation,
-so changes to other cached-data dependencies can also cause a rebuild. See
+optional validation phases. The in-memory population is rebuilt from the stored
+projection in about 5 seconds on a 1.3-million-request library, after startup or
+a change to any cached-data dependency (the shared catalog generation); the warm
+loop rebuilds it in the background when it was used recently. See
 [the performance investigation](thinking-performance.md) for real-library
 measurements and remaining costs.
 

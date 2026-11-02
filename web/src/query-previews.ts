@@ -479,9 +479,10 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
   for (const group of groups.values()) {
     let batch: Item[] = [], size = 0;
     for (const item of group) {
-      if (item.query.grouping || item.query.aggregations?.some(metric => metric.dateGrouping) || !item.query.aggregations?.length) {
-        if (batch.length) tasks.push(batch);
-        batch = []; size = 0; tasks.push([item]); continue;
+      // The server evaluates each distribution in its own pass over the source,
+      // so batching one with other cards only serializes their work.
+      if (item.query.grouping || item.query.aggregations?.some(metric => metric.dateGrouping || metric.distribution) || !item.query.aggregations?.length) {
+        tasks.push([item]); continue;
       }
       const count = item.query.aggregations.length;
       if (size + count > 20 || !item.query.aggregations?.length) { if (batch.length) tasks.push(batch); batch = []; size = 0; }

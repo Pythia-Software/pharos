@@ -12,9 +12,12 @@
 // contains any of them. Flags go to `node --test` before the file list, so
 // `--test-name-pattern=x` works. Each tier's timeout bounds each test, unless
 // the test sets its own. The 10 slowest tests are listed at the end, and the
-// exit status is non-zero on failure. Needs the Node in .nvmrc or later.
+// exit status is non-zero on failure. Browser and e2e runs on one machine
+// take turns through browser-turn.py (Python 3); PHAROS_BROWSER_LOCK=0 skips
+// the queue. Needs the Node in .nvmrc or later.
 import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildRoot, buildUnitTests, unitEntries, unitSource, web } from "./build.mjs";
@@ -29,6 +32,7 @@ const repo = join(web, "..");
 const browserSource = join(web, "tests", "browser"), e2eSource = join(web, "tests", "e2e");
 // Starts one browser for the tier and closes it after the last file.
 const browserSetup = `--test-global-setup=${join(browserSource, "setup.mjs")}`;
+const browserTurn = fileURLToPath(new URL("./browser-turn.py", import.meta.url));
 const timingsReporter = fileURLToPath(new URL("./timings-reporter.mjs", import.meta.url));
 const valueFlags = new Set(["--test-name-pattern", "--test-skip-pattern", "--test-reporter", "--test-reporter-destination", "--test-concurrency", "--test-timeout", "--test-shard"]);
 
@@ -85,7 +89,14 @@ function run(tier, files, timingsFile) {
     ...destinations.map(destination => `--test-reporter-destination=${destination}`), `--test-reporter-destination=${timingsFile}`,
     ...files,
   ];
-  return new Promise(resolve => spawn(process.execPath, argv, { cwd: tier.cwd, env: { ...env, ...tier.env }, stdio: "inherit" }).on("exit", (code, signal) => resolve(code ?? (signal ? 1 : 0))));
+  const queued = tier.name !== "unit" && process.env.PHAROS_BROWSER_LOCK !== "0";
+  // The helper execs Node with the flock descriptor still open: the test
+  // process owns the turn, including if this parent runner is killed.
+  const command = queued ? "python3" : process.execPath;
+  const commandArgs = queued ? [browserTurn, join(tmpdir(), "pharos-browser-tests.flock"), repo, process.execPath, ...argv] : argv;
+  return new Promise(resolve => spawn(command, commandArgs, { cwd: tier.cwd, env: { ...env, ...tier.env }, stdio: "inherit" })
+    .on("error", error => { console.error(`Could not start tests${queued ? " (queued browser/e2e runs require Python 3)" : ""}: ${error.message}`); resolve(1); })
+    .on("exit", (code, signal) => resolve(code ?? (signal ? 1 : 0))));
 }
 
 let failed = false, interrupted = false;

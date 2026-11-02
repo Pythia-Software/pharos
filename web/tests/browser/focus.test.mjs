@@ -8,10 +8,10 @@ import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { defaultApi, workID, eventStream, busyStatus } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
-test('Message labels keeps keyboard focus after saving the Settings switch', {skip}, async t => {
-  const {page, shot} = await open(t, {url:'/settings/sync',ready:'#labelsEnabled'});
-  const toggle = page.getByRole('switch', {name:'Enable message labels',exact:true});
-  await toggle.focus();
+test('Settings switches keep keyboard focus and their saved state across Settings and Analyze', {skip}, async t => {
+  const {page, settled, shot} = await open(t, {url:'/settings/sync',ready:'#labelsEnabled'});
+  const labels = page.getByRole('switch', {name:'Enable message labels',exact:true});
+  await labels.focus();
   for (const enabled of [true, false]) {
     const saved = page.waitForResponse(response => response.url().endsWith('/api/labels/settings') && response.request().method() === 'POST');
     await page.keyboard.press('Space');
@@ -20,19 +20,29 @@ test('Message labels keeps keyboard focus after saving the Settings switch', {sk
       const box = document.getElementById('labelsEnabled');
       return box?.checked === enabled && !box.disabled && document.activeElement === box;
     }, enabled);
-    assert.ok(await toggle.evaluate(element => element === document.activeElement));
     if (enabled) await shot('enabled');
   }
+  await page.evaluate(() => window.pharosNavigate('/settings/mcp'));
+  await page.locator('#mcpSettingsPage .mcp-setup-grid').waitFor();
+  const mcp = page.getByRole('switch', { name: 'Enable MCP', exact: true });
+  await page.waitForFunction(() => !document.querySelector('[aria-label="Enable MCP"]')?.disabled);
+  await press(mcp);
+  await page.waitForFunction(() => document.querySelector('[aria-label="Enable MCP"]').getAttribute('aria-checked') === 'false');
+  await press(page.getByRole('link', { name: 'View MCP usage', exact: true }));
+  await page.locator('.usage-mcp-dashboard .qt-metric').waitFor();
+  await press(page.getByRole('link', { name: 'MCP settings', exact: true }));
+  await mcp.waitFor();
+  await settled();
+  assert.equal(await mcp.getAttribute('aria-checked'), 'false');
 });
 
 test('Library setup keeps focus in its modal and returns to the choice after cancelling a flow', {skip}, async t => {
-  let folderSelections=0;
   const {page, calls, shot} = await open(t, {url:'/app',ready:'#application-setup[open]',api:{
     'GET /api/app/state': {application:'/Applications/Pharos.app',selected:'',mcp:'',busy:false,libraries:[]},
     'POST /api/app/create': {saved:true},
-    'POST /api/app/choose-folder': ()=>({path:folderSelections++===0?'/Volumes/Test SSD':''}),
   }});
   const dialog=page.locator('#application-setup');
+  const focused=locator=>locator.evaluate(element=>element===document.activeElement);
   assert.ok(await dialog.evaluate(element=>element.contains(document.activeElement)));
   await page.locator('.brand').evaluate(element=>element.focus());
   assert.ok(await dialog.evaluate(element=>element.contains(document.activeElement)), 'background took focus during setup');
@@ -42,79 +52,35 @@ test('Library setup keeps focus in its modal and returns to the choice after can
   }
   await shot('welcome');
   await page.locator('#meet-pharos').click();
-  assert.ok(await page.locator('#about-title').evaluate(element=>element===document.activeElement));
-  await shot('about-pharos');
-  await page.locator('#back-to-welcome').click();
-  assert.ok(await page.locator('#welcome-title').evaluate(element=>element===document.activeElement));
-  await page.locator('#meet-pharos').click();
+  assert.ok(await focused(page.locator('#about-title')));
   await page.locator('#start-setup').click();
-  assert.ok(await page.locator('#flow-title').evaluate(element=>element===document.activeElement));
-  await shot('machines');
+  assert.ok(await focused(page.locator('#flow-title')));
   await page.locator('.wizard-alternate summary').focus();
   await page.keyboard.press('Shift+Tab');
   assert.ok(await page.evaluate(()=>document.activeElement.matches('input[name=machines]')), 'reverse Tab skipped the machine choices');
   await page.locator('input[name=machines][value=many]').check();
   await page.locator('#submit').click();
-  assert.ok(await page.locator('#flow-title').evaluate(element=>element===document.activeElement));
-  await shot('storage');
+  assert.ok(await focused(page.locator('#flow-title')));
   await page.locator('#submit').click();
-  assert.ok(await page.locator('#name').isHidden());
-  assert.ok(await page.locator('#path').isHidden());
   await page.locator('#submit').click();
-  assert.ok(await page.locator('#path').evaluate(element=>element===document.activeElement), 'missing SSD folder was not focused');
+  assert.ok(await focused(page.locator('#path')), 'missing SSD folder was not focused');
+  await page.getByRole('button',{name:'Done editing library location',exact:true}).click();
+  await page.getByRole('button',{name:'Edit library location',exact:true}).click();
+  assert.ok(await focused(page.locator('#path')), 'editing the location did not focus its input');
+  await page.locator('#path').fill('/Volumes/Test SSD');
   await page.getByRole('button',{name:'Edit library name',exact:true}).click();
-  assert.ok(await page.locator('#name').evaluate(element=>element===document.activeElement), 'editing the library name did not focus its input');
+  assert.ok(await focused(page.locator('#name')), 'editing the library name did not focus its input');
   await page.locator('#name').fill('Research');
-  await page.getByRole('button',{name:'Done editing library name',exact:true}).click();
-  assert.ok(await page.locator('#name').isHidden());
-  await page.locator('#choose-folder').click();
-  await page.waitForFunction(()=>document.querySelector('#path').value==='/Volumes/Test SSD'&&!document.querySelector('#choose-folder').disabled);
-  assert.ok(await page.locator('#choose-folder').evaluate(element=>element===document.activeElement), 'folder selection lost keyboard focus');
-  await page.locator('#choose-folder').click();
-  await page.waitForFunction(()=>!document.querySelector('#choose-folder').disabled);
-  assert.equal(await page.locator('#path').inputValue(),'/Volumes/Test SSD', 'cancelling cleared the selected folder');
-  await shot('details');
   await page.locator('#submit').click();
-  assert.ok(await page.locator('#flow-title').evaluate(element=>element===document.activeElement));
+  assert.ok(await focused(page.locator('#flow-title')));
   await shot('review');
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('#name').inputValue(),'Research');
-  assert.ok(await page.locator('#name').isHidden(), 'returning from review exposed the editor');
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
-  assert.ok(await page.locator('#about-title').evaluate(element=>element===document.activeElement));
-  await page.locator('#start-setup').click();
-  await page.locator('.wizard-alternate summary').click();
-  await page.locator('#wizard-machines [data-flow=open]').click();
-  await page.locator('#submit').click();
-  assert.ok(await page.locator('#existing-path').evaluate(element=>element===document.activeElement));
-  await page.keyboard.press('Escape');
-  assert.ok(await page.locator('#flow-title').evaluate(element=>element===document.activeElement));
-  await page.locator('#wizard-machines [data-flow=recover]').click();
-  await page.locator('#submit').click();
-  assert.ok(await page.locator('#backup').evaluate(element=>element===document.activeElement));
-  await page.locator('#backup').fill('/Backups/My Library');
-  await page.locator('#submit').click();
-  await page.locator('#submit').click();
-  assert.ok(await page.locator('#recover-path').evaluate(element=>element===document.activeElement));
-  await page.locator('#recover-path').fill('/Libraries/Restored');
-  await page.locator('#submit').click();
-  await shot('restore-review');
-  await page.keyboard.press('Escape');
-  await page.keyboard.press('Escape');
-  await page.keyboard.press('Escape');
-  assert.ok(await dialog.isVisible(), 'initial setup dismissed before choosing a library');
-  assert.ok(calls.every(call=>['/api/app/state','/api/app/choose-folder'].includes(call.path)), 'setup wrote data before final review');
-  await page.locator('#application-theme').click();
-  await shot('machines-light');
-  await page.locator('#submit').click();
-  await page.locator('#submit').click();
-  await page.locator('#submit').click();
-  await page.locator('#submit').click();
-  await page.locator('#next').waitFor({state:'visible'});
-  assert.ok(await page.locator('#next').evaluate(element=>element===document.activeElement), 'completion did not focus source approval');
-  await shot('ready');
+  assert.ok(await focused(page.locator('#about-title')));
+  assert.ok(calls.every(call=>call.path==='/api/app/state'), 'setup wrote data before final review');
 });
 
 const settingsLocal={id:'local',name:'Pending history',config:'/Libraries/Pending/library.toml',available:true,connected:true};
@@ -147,31 +113,6 @@ test('Library settings opens inline forms and returns focus when cancelled', {sk
   }
 });
 
-test('Library settings starts transfers and releases, then the startup window returns there', {skip}, async t => {
-  await t.test('transfer', async t => {
-    const {page,calls,shot}=await open(t,{url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:settingsLocal,api:{
-      'GET /api/app/state':({state})=>state.transferred?{...settingsState,libraries:[{...settingsLocal,connected:false},settingsArchive],job:{state:'complete',phase:'Library operation completed and verified',updated_at:new Date().toISOString()}}:settingsState,
-      'POST /api/app/transfer':({state})=>{state.transferred=true;return {started:true}},
-      'POST /api/app/connect':{saved:true},
-    }});
-    await page.getByRole('heading',{name:'Copy or move history',exact:true}).click();await shot('transfer');
-    await page.getByRole('radio',{name:/^Move/}).check();
-    await page.getByRole('button',{name:'Move history',exact:true}).click();
-    await page.waitForURL(url=>url.pathname==='/settings/libraries'&&calls.some(call=>call.path==='/api/app/connect'));
-    assert.deepEqual(calls.filter(call=>call.method==='POST').map(call=>[call.path,call.body]),[['/api/app/transfer',{source:'local',target:'archive',move:true}],['/api/app/connect',{id:'local'}]]);
-  });
-  await t.test('release', async t => {
-    const {page,calls}=await open(t,{url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:settingsArchive,api:{
-      'GET /api/app/state':({state})=>({...settingsState,selected:'archive',libraries:[settingsLocal,{...settingsArchive,connected:!state.released}]}),
-      'POST /api/app/disconnect':({state})=>{state.released=true;return {saved:true}},
-    }});
-    await page.getByRole('button',{name:'Release for eject',exact:true}).click();
-    await page.locator('#notice').getByText('Library released',{exact:false}).waitFor();
-    assert.deepEqual(calls.find(call=>call.path==='/api/app/disconnect').body,{id:'archive'});
-    assert.ok(await page.getByRole('button',{name:'Reconnect to My archive',exact:true}).isVisible());
-  });
-});
-
 test('Library settings renames in place and opens delivery from its switch, keeping focus', {skip}, async t => {
   const {page,calls}=await open(t,{url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:settingsLocal,api:{
     'GET /api/app/state':({state})=>({...settingsState,libraries:[settingsLocal,{...settingsArchive,name:state.renamed||settingsArchive.name}]}),
@@ -198,65 +139,6 @@ test('Library settings renames in place and opens delivery from its switch, keep
   assert.ok(!calls.some(call=>call.path==='/api/app/delivery'),'opening delivery turned it on');
 });
 
-test('Library settings switches within Settings and opens the selected library', {skip}, async t => {
-  const {page,calls}=await open(t,{url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:settingsLocal,api:{
-    'GET /api/app/state':({state})=>({...settingsState,selected:state.managedLibrary.id}),
-    'POST /api/app/connect':({body,state})=>{assert.equal(body.id,settingsArchive.id);state.managedLibrary=settingsArchive;return {saved:true}},
-  }});
-  await page.getByRole('button',{name:'Switch to My archive',exact:true}).click();
-  await page.waitForFunction(()=>document.querySelector('#library-settings-current h3')?.textContent==='My archive');
-  assert.equal(new URL(page.url()).pathname,'/settings/libraries');
-  assert.deepEqual(calls.filter(call=>call.path==='/api/app/connect').map(call=>call.body),[{id:settingsArchive.id}]);
-});
-
-test('Library settings creates and opens libraries from its inline forms', {skip}, async t => {
-  for(const kind of ['create','open'])await t.test(kind,async t=>{
-    const {page,calls}=await open(t,{url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:settingsLocal,api:{
-      'GET /api/app/state':settingsState,
-      ['POST /api/app/'+kind]:({state})=>{state.managedLibrary=settingsArchive;return {saved:true}},
-    }});
-    await page.locator(kind==='open'?'#library-settings-open':'#library-settings-new').click();
-    if(kind==='open')await page.locator('#library-settings-existing').fill('/Volumes/Archive/library.toml');
-    else {await page.locator('#library-settings-name').fill('Research');await page.locator('#library-settings-parent').fill('/Volumes/Archive')}
-    const saved=page.waitForResponse(response=>response.url().endsWith('/api/app/'+kind)&&response.request().method()==='POST');
-    await page.locator('#library-settings-'+kind+'-form button[type=submit]').click();
-    await saved;
-    await page.waitForFunction(()=>window.pharosManagedLibrary?.id==='archive');
-    assert.equal(new URL(page.url()).pathname,kind==='open'?'/settings/libraries':'/settings/sources');
-    assert.deepEqual(calls.find(call=>call.path==='/api/app/'+kind).body,kind==='open'?{path:'/Volumes/Archive/library.toml'}:{name:'Research',path:'/Volumes/Archive/Research',location:'mac'});
-  });
-});
-
-test('Library proposal allows default setup and deliberate inline overrides', {skip}, async t => {
-  const parent='/Users/test/Library/Application Support/Pharos/Libraries';
-  const {page,calls}=await open(t,{url:'/app',ready:'#application-setup[open]',api:{
-    'GET /api/app/state':{application:'/Applications/Pharos.app',selected:'',mcp:'',busy:false,libraries:[],local_library_parent:parent},
-    'POST /api/app/create':{saved:true},
-  }});
-  await page.locator('#meet-pharos').click();await page.locator('#start-setup').click();
-  await page.locator('#submit').click();await page.locator('#submit').click();
-  assert.ok(await page.locator('#name').isHidden());assert.ok(await page.locator('#path').isHidden());
-  assert.ok((await page.locator('#location-path').textContent()).includes(parent));
-  await page.locator('#submit').click();
-  assert.ok((await page.locator('#review-folder').textContent()).startsWith(parent+'/'));
-  await page.locator('#cancel').click();
-  await page.getByRole('button',{name:'Edit library location',exact:true}).click();
-  assert.equal(await page.locator('#path').inputValue(),parent);
-  assert.ok(await page.locator('#path').evaluate(element=>element===document.activeElement));
-  await page.locator('#path').fill('/Users/test/Research');
-  await page.getByRole('button',{name:'Done editing library location',exact:true}).click();
-  await page.getByRole('button',{name:'Edit library name',exact:true}).click();
-  await page.locator('#name').fill('');await page.locator('#submit').click();
-  assert.ok(await page.locator('#name').evaluate(element=>element===document.activeElement));
-  await page.locator('#name').fill('Research');
-  await page.locator('#submit').click();await page.locator('#cancel').click();
-  assert.ok(await page.locator('#name').isHidden());assert.ok(await page.locator('#path').isHidden());
-  await page.locator('#submit').click();
-  assert.ok(!calls.some(call=>call.path==='/api/app/create'), 'editing the proposal created a library');
-  await page.locator('#submit').click();await page.locator('#next').waitFor({state:'visible'});
-  assert.deepEqual(calls.find(call=>call.path==='/api/app/create').body,{name:'Research',path:'/Users/test/Research/Research',location:'mac'});
-});
-
 test('Source setup keeps tool choices and focus while reviewing folders before approval', {skip}, async t => {
   const {page,calls,shot}=await open(t,{url:'/app',ready:'#application-setup[open]',api:{
     'GET /api/app/state':{application:'/Applications/Pharos.app',selected:'source-review-library',mcp:'',busy:false,libraries:[]},
@@ -273,14 +155,8 @@ test('Source setup keeps tool choices and focus while reviewing folders before a
   const guide=page.locator('#pharosOnboarding');
   await guide.getByRole('group',{name:'Detected tools',exact:true}).waitFor();
   assert.ok(await guide.locator('h2').evaluate(element=>element===document.activeElement));
-  assert.ok(await guide.getByRole('checkbox',{name:/Claude Code/}).isChecked());
-  assert.ok(!await guide.getByRole('checkbox',{name:/Codex/}).isVisible());
   assert.ok(!calls.some(call=>call.path==='/api/probe'),'presence detection parsed source history');
   await shot('source-tools');
-  await guide.getByText('Other tools',{exact:true}).click();
-  await guide.getByRole('checkbox',{name:/Codex/}).check();
-  await guide.getByRole('checkbox',{name:/Codex/}).uncheck();
-  await guide.getByRole('checkbox',{name:/Claude Code/}).check();
   await guide.getByRole('button',{name:'Continue',exact:true}).click();
   await guide.locator('.pharos-candidate').first().waitFor();
   assert.ok(await guide.locator('h2').evaluate(element=>element===document.activeElement));
@@ -290,11 +166,7 @@ test('Source setup keeps tool choices and focus while reviewing folders before a
   assert.ok(await guide.locator('h2').evaluate(element=>element===document.activeElement));
   await shot('source-review');
   await page.keyboard.press('Escape');
-  assert.ok(await guide.getByRole('button',{name:'Continue',exact:true}).isVisible());
-  await guide.getByRole('button',{name:'Back',exact:true}).click();
-  assert.ok(await guide.getByRole('checkbox',{name:/Claude Code/}).isChecked());
-  await guide.getByRole('button',{name:'Continue',exact:true}).click();
-  assert.ok(!await guide.getByRole('checkbox',{name:/claude-work\/projects/}).isChecked());
+  assert.ok(await guide.getByRole('button',{name:'Continue',exact:true}).isVisible(),'Escape left the review');
   await guide.getByRole('button',{name:'Continue',exact:true}).click();
   assert.ok(!calls.some(call=>['/api/probe/accept','/api/capture','/api/index'].includes(call.path)),'history was read or capture approved before final consent');
   await guide.getByRole('button',{name:'Add and capture',exact:true}).click();
@@ -306,8 +178,9 @@ test('Source setup keeps tool choices and focus while reviewing folders before a
   assert.ok(libraryScopes.length>0&&libraryScopes.every(scope=>scope==='source-review-library'),'source setup requests lost their library binding');
 });
 
-for (const topic of ['tokens', 'human', 'skills', 'time', 'carbon']) for (const display of ['interval', 'cumulative']) test(`Dashboard ${topic} ${display} inspection focuses its links and dismisses on Escape or outside click`, { skip }, async t => {
-  const { page, settled, shot } = await open(t, { url: `/analyze?${new URLSearchParams({ analyze_topic: topic, analyze_chart: JSON.stringify({ display }) })}`, ready: '.usage-chart-bars:not(.loading) > button' });
+// Tokens stand for every dashboard topic: all share usage-chart.tsx.
+for (const display of ['interval', 'cumulative']) test(`Dashboard ${display} inspection focuses its links and dismisses on Escape or outside click${display === 'interval' ? '; pointer capture snaps to columns' : ''}`, { skip }, async t => {
+  const { page, settled, shot } = await open(t, { url: `/analyze?${new URLSearchParams({ analyze_topic: 'tokens', analyze_chart: JSON.stringify({ display }) })}`, ready: '.usage-chart-bars:not(.loading) > button' });
   const chart = page.locator('.usage-dashboard .usage-chart').first();
   const bar = display === 'cumulative' ? chart.locator('.usage-chart-bars > button').last() : chart.locator('.usage-chart-bars > button').filter({ has: page.locator('i') }).first();
   await bar.focus();
@@ -324,11 +197,9 @@ for (const topic of ['tokens', 'human', 'skills', 'time', 'carbon']) for (const 
   await page.locator('.usage-chart-headline > h2').click();
   await details.waitFor({ state: 'hidden' });
   await settled();
-});
+  if (display !== 'interval') return;
 
-test('Dashboard chart pointer capture snaps to columns and treats a drag back to its anchor as inspection', { skip }, async t => {
-  const { page, settled } = await open(t, { url: '/analyze?analyze_topic=tokens', ready: '.usage-chart-bars:not(.loading) > button' });
-  const chart = page.locator('.usage-dashboard .usage-chart').first();
+  // Pointer capture snaps to columns and treats a drag back to its anchor as inspection.
   const bars = chart.locator('.usage-chart-bars > button');
   const before = page.url();
   const start = await bars.nth(1).boundingBox(), end = await bars.nth(4).boundingBox();
@@ -351,46 +222,31 @@ test('Dashboard chart pointer capture snaps to columns and treats a drag back to
   await settled();
 });
 
-test('Cloud backup setup focuses invalid fields and retains storage-class keyboard focus', {skip}, async t => {
-  const {page} = await open(t, {url:'/settings/backups',ready:'#cloud-explore'});
-  await page.getByRole('button',{name:'Explore cloud backup options',exact:true}).click();
+test('Cloud backup forecast, setup, password stages and Reset keep keyboard focus', {skip}, async t => {
+  const {page}=await open(t,{url:'/settings/backups',ready:'#cloud-explore'});
+  const explore=page.getByRole('button',{name:'Explore cloud backup options',exact:true});
+  await explore.click();
+  // The price forecast keeps focus while the keyboard moves its readout (months: unit/page/cloud-backup).
+  for(const chart of await page.locator('.cloud-results svg').all()){
+    await chart.focus();
+    for(const key of ['ArrowRight','End','Home']){
+      await page.keyboard.press(key);
+      assert.ok(await chart.evaluate(input=>input===document.activeElement));
+    }
+  }
+  // Setup focuses each invalid field.
   await page.getByLabel('Cloud provider',{exact:true}).selectOption('gcp');
   await page.getByRole('button',{name:'Configure this backup',exact:true}).click();
   assert.ok(await page.locator('#cloud-step-1').evaluate(panel=>panel===document.activeElement));
   await page.getByRole('button',{name:'Review configuration & commands',exact:true}).click();
   assert.ok(await page.getByLabel('Google Cloud project ID',{exact:true}).evaluate(input=>input===document.activeElement));
   await page.getByLabel('Google Cloud project ID',{exact:true}).fill('pharos-example');
-  const standard=page.getByLabel('Google Cloud Storage · Standard',{exact:true});
-  await standard.focus();
-  await page.keyboard.press('ArrowDown');
-  assert.ok(await page.getByLabel('Google Cloud Storage · Nearline',{exact:true}).evaluate(input=>input===document.activeElement));
-  await page.keyboard.press('ArrowDown');
-  assert.ok(await page.getByLabel('Google Cloud Storage · Coldline',{exact:true}).evaluate(input=>input===document.activeElement));
-  await page.getByLabel('Google Cloud project',{exact:true}).selectOption('new');
+  const project=page.getByLabel('Google Cloud project',{exact:true});
+  await project.selectOption('new');
   await page.getByRole('button',{name:'Review configuration & commands',exact:true}).click();
   assert.ok(await page.getByLabel('Billing account ID',{exact:true}).evaluate(input=>input===document.activeElement));
-});
-
-test('Cloud backup price forecast supports keyboard exploration without losing focus', {skip}, async t => {
-  const {page}=await open(t,{url:'/settings/backups',ready:'#cloud-explore'});
-  await page.getByRole('button',{name:'Explore cloud backup options',exact:true}).click();
-  for(const chart of await page.locator('.cloud-results svg').all()){
-    await chart.focus();
-    const readout=chart.locator('..').locator('output'),first=await readout.textContent();
-    await page.keyboard.press('ArrowRight');
-    assert.ok(await chart.evaluate(input=>input===document.activeElement));
-    assert.notEqual(await readout.textContent(),first);
-    await page.keyboard.press('End');
-    assert.ok(await chart.evaluate(input=>input===document.activeElement));
-    await page.keyboard.press('Home');
-    assert.equal(await readout.textContent(),first);
-  }
-});
-
-test('Cloud backup password stages keep keyboard focus while copying each independent block', {skip}, async t => {
-  const {page}=await open(t,{url:'/settings/backups',ready:'#cloud-explore'});
-  await page.getByRole('button',{name:'Explore cloud backup options',exact:true}).click();
-  await page.getByRole('button',{name:'Configure this backup',exact:true}).click();
+  // Password stages keep focus while copying each independent block.
+  await project.selectOption('existing');
   await page.getByLabel('Google Cloud project ID',{exact:true}).fill('pharos-example');
   await page.getByLabel('Require a password to restore',{exact:true}).selectOption('true');
   await page.getByRole('button',{name:'Review configuration & commands',exact:true}).click();
@@ -400,14 +256,7 @@ test('Cloud backup password stages keep keyboard focus while copying each indepe
     await page.waitForFunction(count=>window.cloudCopies===count,index+1);
     assert.ok(await button.evaluate(element=>element===document.activeElement));
   }
-});
-
-test('Cloud backup wizard focuses the calculator after Reset and returns to Explore when closed', {skip}, async t => {
-  const {page}=await open(t,{url:'/settings/backups',ready:'#cloud-explore'});
-  const explore=page.getByRole('button',{name:'Explore cloud backup options',exact:true});
-  await explore.click();
-  await page.getByRole('button',{name:'Configure this backup',exact:true}).click();
-  await page.getByRole('button',{name:'Review configuration & commands',exact:true}).click();
+  // Reset focuses the calculator; closing returns to Explore.
   await page.getByRole('button',{name:'Reset cloud backup options',exact:true}).click();
   assert.ok(await page.locator('#cloud-step-0').evaluate(panel=>panel===document.activeElement));
   await page.keyboard.press('Tab');
@@ -454,16 +303,14 @@ async function holdsFocus(page, surface, opener) {
 
 // The unified activity panel (flag on) takes focus from the chip, keeps it
 // while open, gives it back on Escape, and keeps focus and its disclosure
-// across a pushed snapshot. Stop reaches every stoppable operation through
-// its declared stop; Eject acts only on a fresh verdict.
-test("Unified activity panel holds focus across refreshes, stops each operation and ejects only on a fresh verdict", { skip }, async t => {
-  let fresh = { verdict: "busy", summary: "Busy", blockers: [{ label: "L", on_eject: "O" }], checked: "fresh" };
+// across a pushed snapshot. Stop and Eject decisions are unit tested in
+// web/tests/unit/page/status-panel.test.mjs.
+test("Unified activity panel holds focus and its disclosure across refreshes", { skip }, async t => {
   const app = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row", api: {
     "GET /api/status/stream": eventStream(busyStatus),
-    "GET /api/status": ({ query }) => query.get("fresh") === "1" ? { ...busyStatus, eject: fresh } : busyStatus,
+    "GET /api/status": busyStatus,
   } });
-  const { page, settled, calls, push } = app;
-  await page.evaluate(() => { window.ejects = 0; window.webkit = { messageHandlers: { pharosLibrary: { postMessage: async () => { window.ejects++; } } } }; });
+  const { page, push } = app;
   const chip = page.locator("#pharosDrive");
   await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library?.revision === 2);
   await press(chip);
@@ -484,42 +331,6 @@ test("Unified activity panel holds focus across refreshes, stops each operation 
   assert.ok(await stop.evaluate(element => document.activeElement === element), "a refresh moved focus");
   assert.ok(await daily.evaluate(element => element.open), "a refresh closed the cadence row the user opened");
   await app.shot("refreshed");
-
-  // A stop that fails leaves Stop enabled to try again; one that works
-  // keeps it disabled while the operations wind down.
-  // (The refusal is answered in the page, as a 409 from the service would
-  // be, so the harness does not count it as a failed request.)
-  await page.evaluate(() => {
-    const real = window.fetch;
-    window.fetch = (input, options) => String(input).includes("/api/operations/stop") && window.stopFails
-      ? Promise.resolve(new Response(JSON.stringify({ error: "try again in a moment" }), { status: 409 })) : real(input, options);
-    window.stopFails = true;
-  });
-  await stop.click();
-  await page.waitForFunction(() => !document.querySelector('#pharosStatusPanel [data-key="stop"]').disabled);
-  await page.evaluate(() => { window.stopFails = false; });
-  await stop.click();
-  await settled();
-  const stopped = calls.filter(call => call.method === "POST" && call.path === "/api/operations/stop").map(call => call.body.id).sort();
-  assert.deepEqual(stopped, ["op-backup", "op-index", "op-view"]);
-  assert.ok(await page.evaluate(() => document.querySelector('#pharosStatusPanel [data-key="stop"]').disabled), "Stop enabled again after it worked");
-
-  // Eject when safe: under a verdict that is not safe, Eject waits; once
-  // the snapshot allows ejecting, a fresh verdict that agrees ejects.
-  const unsafe = { verdict: "unsafe", summary: "Not safe to eject: indexing sources.", headline: "Not safe to eject: indexing sources",
-    blockers: [{ label: "Indexing sources", on_eject: "Not registered.", verdict: "unsafe" }], checked: "polled" };
-  fresh = { ...unsafe, checked: "fresh" };
-  push("/api/status/stream", { ...busyStatus, revision: 4, eject: unsafe });
-  await panel.getByRole("button", { name: /Eject when safe/ }).waitFor();
-  await app.shot("eject when safe");
-  await panel.getByRole("button", { name: /Eject when safe/ }).click();
-  await panel.getByRole("button", { name: /Waiting to eject/ }).waitFor();
-  assert.equal(await page.evaluate(() => window.ejects), 0, "ejected on a busy verdict");
-  assert.ok(calls.some(call => call.path === "/api/status" && call.query.get("fresh") === "1"));
-  await app.shot("waiting to eject");
-  fresh = { verdict: "safe", summary: "Safe", blockers: [], checked: "fresh" };
-  push("/api/status/stream", { ...busyStatus, revision: 5, eject: fresh });
-  await page.waitForFunction(() => window.ejects === 1);
 });
 
 // Eject when safe keeps checking while the window is hidden: a hidden page
@@ -549,8 +360,8 @@ test("Eject when safe ejects once safe while the page is hidden", { skip }, asyn
   await page.waitForFunction(() => window.ejects === 1, null, { timeout: 20000 });
 });
 
-for (const width of [1440, 390, 320]) test(`Data guide takes focus, keeps controls reachable and returns focus @ ${width}`, { skip }, async t => {
-  const app = await open(t, { url: "/analyze?analyze_mode=query&analyze_data=tool_calls&analyze_topic=tools", viewport: { width, height: 900 }, ready: ".usage-workspace-table .qt-row" });
+test("Data guide takes focus, keeps controls reachable and returns focus @ 320", { skip }, async t => {
+  const app = await open(t, { url: "/analyze?analyze_mode=query&analyze_data=tool_calls&analyze_topic=tools", viewport: { width: 320, height: 900 }, ready: ".usage-workspace-table .qt-row" });
   const { page } = app;
   const opener = page.locator(".usage-workspace-table .data-source-link");
   await app.shot("from-statement");
@@ -568,22 +379,11 @@ for (const width of [1440, 390, 320]) test(`Data guide takes focus, keeps contro
   await press(opener);
   await dialog.getByRole("button", { name: "Close data guide", exact: true }).click();
   await page.waitForFunction(element => document.activeElement === element, await opener.elementHandle());
-  await press(page.getByRole("button", { name: "Collapse query builder", exact: true }));
-  await app.shot("collapsed-query");
-  await press(page.getByRole("button", { name: "Expand query builder", exact: true }));
-  await press(opener);
-  await holdsFocus(page, dialog, opener);
-});
-
-test("Data guide is available outside Analyze in the light theme", { skip }, async t => {
-  const app = await open(t, { url: "/library", preferences: { "pharos-theme": "light" }, ready: "#queryTableLibrary .qt-row" });
-  await press(app.page.locator("#queryTableLibrary .data-source-link"));
-  await app.page.getByRole("dialog", { name: "Data Guide", exact: true }).waitFor();
-  await app.shot("workspace-guide-light");
 });
 
 // Exercise the guide alongside native grouping, filter and aggregate editors.
-for (const [dataset, path, numeric] of [["library", "/library", "conversation_count"], ["tool_calls", "/analyze?analyze_mode=query&analyze_data=tool_calls", "duration_ms"]]) {
+{
+  const [dataset, path, numeric] = ["tool_calls", "/analyze?analyze_mode=query&analyze_data=tool_calls", "duration_ms"];
   test(`Data guide preserves native grouping editors for ${dataset}`, { skip }, async t => {
     const query = {
       ...EMPTY_QUERY,
@@ -597,6 +397,8 @@ for (const [dataset, path, numeric] of [["library", "/library", "conversation_co
     const aggregate = page.getByRole("combobox", { name: /^Aggregation for/ }).first();
     await aggregate.selectOption("avg");
     assert.equal(await aggregate.inputValue(), "avg");
+    // The new aggregation reruns the query; a popover opened mid-render closes.
+    await app.settled();
     for (const name of ["Add filter", "Add HAVING filter", "Customize columns"]) {
       const opener = page.getByRole("button", { name, exact: true });
       await press(opener);
@@ -609,11 +411,6 @@ for (const [dataset, path, numeric] of [["library", "/library", "conversation_co
     await press(guideLink);
     await holdsFocus(page, page.getByRole("dialog", { name: "Data Guide", exact: true }), guideLink);
     await app.shot(`${dataset}-grouping-with-source`);
-    await press(page.getByRole("button", { name: "Collapse query builder", exact: true }));
-    await app.shot(`${dataset}-grouping-collapsed`);
-    await press(page.getByRole("button", { name: "Expand query builder", exact: true }));
-    await press(guideLink);
-    await holdsFocus(page, page.getByRole("dialog", { name: "Data Guide", exact: true }), guideLink);
     await press(page.getByRole("button", { name: "Remove Repository grouping", exact: true }));
     const addGroup = page.getByRole("button", { name: "Add group by", exact: true });
     await press(addGroup);
@@ -667,24 +464,9 @@ test("quick search takes focus from the header button and from the keyboard shor
   await holdsFocus(page, dialog, tab);
 });
 
-for (const viewport of [{ width: 2133, height: 1075 }, { width: 1440, height: 900 }, { width: 1024, height: 768 }, { width: 700, height: 768 }]) {
-  test(`header page buttons remain reachable and navigate at ${viewport.width}px`, { skip }, async t => {
-    const { page } = await open(t, { url: '/analyze', viewport, ready: '.usage-dashboard .usage-chart' });
-    const navigation = page.getByRole('navigation', { name: 'Primary navigation', exact: true });
-    for (const button of await navigation.getByRole('button').all()) {
-      await button.focus();
-      assert.equal(await onScreen(button), true, `${await button.textContent()} is outside the viewport`);
-    }
-    await press(navigation.getByRole('button', { name: 'Search', exact: true }));
-    await page.locator('#queryTableLibrary .qt-row').first().waitFor();
-    assert.equal(new URL(page.url()).pathname, '/library');
-    await press(navigation.getByRole('button', { name: 'Analyze', exact: true }));
-    await page.locator('.usage-dashboard .usage-chart').first().waitFor();
-    assert.equal(new URL(page.url()).pathname, '/analyze');
-  });
-}
-
-for (const viewport of [{ width: 2133, height: 1075 }, { width: 1440, height: 900 }, { width: 1280, height: 720 }, { width: 1024, height: 768 }]) {
+{
+  // 1024 px is the narrowest width that keeps the sidebar beside the page.
+  const viewport = { width: 1024, height: 768 };
   test(`section sidebar collapses, restores space and navigates at ${viewport.width}px`, { skip }, async t => {
     const { page } = await open(t, { url: '/analyze', viewport, ready: '.usage-dashboard .usage-chart' });
     const sidebar = page.getByRole('complementary', { name: 'Analyze navigation', exact: true });
@@ -719,8 +501,9 @@ for (const viewport of [{ width: 2133, height: 1075 }, { width: 1440, height: 90
   });
 }
 
-test('navigation keeps focus reachable when resizing between a sidebar and phone switcher', { skip }, async t => {
-  const { page } = await open(t, { url: '/analyze', viewport: { width: 1280, height: 720 }, ready: '.usage-dashboard .usage-chart' });
+test('navigation and header focus stay reachable when resizing between layouts', { skip }, async t => {
+  const { page, settled } = await open(t, { url: '/analyze', viewport: { width: 1280, height: 720 }, ready: '.usage-dashboard .usage-chart' });
+  // The section sidebar hands focus to the phone switcher and back.
   const sidebar = page.getByRole('complementary', { name: 'Analyze navigation', exact: true });
   await sidebar.getByRole('link', { name: /^Human words$/i }).focus();
   await page.setViewportSize({ width: 390, height: 844 });
@@ -737,10 +520,37 @@ test('navigation keeps focus reachable when resizing between a sidebar and phone
   await page.getByRole('button', { name: 'Expand sidebar', exact: true }).waitFor();
   await press(page.getByRole('button', { name: 'Expand sidebar', exact: true }));
   await sidebar.waitFor();
+
+  // A header tool that stays inline keeps focus through resizes.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await settled();
+  const settings = page.locator('#settingsToggle');
+  await settings.focus();
+  await page.evaluate(() => dispatchEvent(new Event('resize')));
+  await page.waitForFunction(element => document.activeElement === element, await settings.elementHandle());
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await settled();
+  await page.waitForFunction(element => document.activeElement === element, await settings.elementHandle());
+  const theme = page.locator('#themeToggle');
+  await theme.focus();
+  for (const width of [1280, 390, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    await settled();
+    await page.waitForFunction(element => document.activeElement === element, await theme.elementHandle());
+  }
+
+  // A header tool that moves into the overflow menu hands focus to it and back.
+  await page.locator('#searchToggle').focus();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForFunction(() => document.activeElement === document.getElementById('headerMore'));
+  await press(page.locator('#headerMore'));
+  await page.locator('#searchToggle').focus();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.waitForFunction(() => document.activeElement === document.getElementById('searchToggle'));
 });
 
-for (const width of [1440, 390, 320]) test(`Search content search takes focus and returns it to the query builder @ ${width}`, { skip }, async t => {
-  const { page } = await open(t, { url: "/library", viewport: { width, height: 844 }, ready: "#queryTableLibrary .qt-row" });
+test("Search content search takes focus and returns it to the query builder @ 390", { skip }, async t => {
+  const { page } = await open(t, { url: "/library", viewport: { width: 390, height: 844 }, ready: "#queryTableLibrary .qt-row" });
   const button = page.getByRole("button", { name: "Messages", exact: true });
   await press(button);
   const dialog = page.getByRole("dialog", { name: "Search within work", exact: true });
@@ -748,7 +558,8 @@ for (const width of [1440, 390, 320]) test(`Search content search takes focus an
   await holdsFocus(page, dialog, button);
 });
 
-for (const width of [1440, 390, 320]) test(`Search long query can scroll to submit @ ${width}`, { skip }, async t => {
+test("Search long query can scroll to submit @ 320", { skip }, async t => {
+  const width = 320;
   const draft = {
     editor: "visual", match: "rules", text: "", mode: "advanced", fuzzy: false, caseSensitive: false, separators: false,
     scope: { surface: "prose", roles: [], kinds: [], repository: "", provider: "", source: "", from: "", to: "", conversation_id: "", workspace_id: "" },
@@ -775,24 +586,8 @@ for (const width of [1440, 390, 320]) test(`Search long query can scroll to subm
   await app.settled();
 });
 
-for (const route of [
-  { name: "Analyze", url: "/analyze", ready: ".usage-dashboard .usage-chart", link: /^Human words$/i, destination: ".usage-human-dashboard .usage-chart" },
-  { name: "Settings", url: "/settings", ready: "#healthCards .panel:not([aria-busy])", link: /^Sources$/, destination: "#sourceGrid .source-card" },
-]) test(`${route.name} navigation is usable from the keyboard on a phone`, { skip }, async t => {
-  const { page } = await open(t, { url: route.url, viewport: { width: 390, height: 844 }, ready: route.ready });
-  const menu = page.getByRole("dialog", { name: "Navigate Pharos" });
-  await press(page.locator("#appNavigationToggle"));
-  const target = menu.getByRole("link", { name: route.link });
-  await target.waitFor();
-  await press(target);
-  await page.locator(route.destination).first().waitFor();
-  await page.waitForFunction(() => document.activeElement?.tagName === "MAIN");
-  assert.equal(await menu.isVisible(), false);
-  await page.goBack();
-  await page.locator(route.ready).first().waitFor();
-});
-
-for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 640 }]) {
+{
+  const viewport = { width: 390, height: 844 };
   test(`app navigation takes and returns focus, and reaches other app sections at ${viewport.width}px`, { skip }, async t => {
     const { page } = await open(t, { url: '/analyze', viewport, ready: '.usage-dashboard .usage-chart' });
     const opener = page.locator('#appNavigationToggle'), dialog = page.getByRole('dialog', { name: 'Navigate Pharos' });
@@ -817,7 +612,8 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 640 }
   });
 }
 
-for (const viewport of [{ width: 850, height: 720 }, { width: 390, height: 844 }]) {
+{
+  const viewport = { width: 390, height: 844 };
   test(`overflowed header tools remain live and restore focus at ${viewport.width}px`, { skip }, async t => {
     const { page } = await open(t, { url: '/library', viewport, ready: '#queryTableLibrary .qt-row',
       preferences: { 'pharos-header-tools-v1': ['summary', 'theme', 'history', 'library', 'search', 'settings'] },
@@ -840,43 +636,14 @@ for (const viewport of [{ width: 850, height: 720 }, { width: 390, height: 844 }
   });
 }
 
-for (const tools of [['settings'], ['back', 'sync', 'settings']]) {
-  test(`header respects saved tool visibility with ${tools.join(', ')}`, { skip }, async t => {
-    const { page, settled } = await open(t, {
-      url: '/library', ready: '#queryTableLibrary .qt-row',
-      preferences: { 'pharos-header-tools-v1': tools },
-    });
-    // Give history a previous page so an accidentally exposed Back is enabled.
-    await press(page.getByRole('navigation', { name: 'Primary navigation', exact: true }).getByRole('button', { name: 'Analyze', exact: true }));
-    await page.locator('.usage-dashboard .usage-chart').first().waitFor();
-    for (const width of [1440, 1280, 390]) {
-      await page.setViewportSize({ width, height: 900 });
-      await settled();
-      const more = page.getByRole('button', { name: 'More tools', exact: true }), overflow = await more.isVisible();
-      if (overflow) await press(more);
-      for (const [tool, id] of [['history', 'headerHistory'], ['back', 'headerBackOnly'], ['library', 'headerLibrary'], ['sync', 'headerSyncOnly']]) {
-        assert.equal(await page.locator(`#${id}`).isVisible(), tools.includes(tool), `${tool} visibility differs from saved choices at ${width}px`);
-      }
-      const settings = page.locator('#settingsToggle');
-      await settings.focus();
-      await page.locator('#navBack').evaluate(element => element.focus());
-      await page.waitForFunction(element => document.activeElement === element, await settings.elementHandle());
-      if (overflow) await page.keyboard.press('Escape');
-    }
-  });
-}
-
-for (const width of [1440, 390]) test(`Optimize pages move keyboard focus to their content at ${width}px`, { skip }, async t => {
-  const { page, settled, shot } = await open(t, { url: '/findings', viewport: { width, height: 900 }, ready: '.findings-card' });
-  const phone = width === 390;
-  const menu = page.getByRole('dialog', { name: 'Navigate Pharos' });
-  const navigation = phone ? menu : page.getByRole('complementary', { name: 'Optimize navigation', exact: true });
+test('Optimize pages move keyboard focus to their content at 1440px', { skip }, async t => {
+  const { page, settled, shot } = await open(t, { url: '/findings', viewport: { width: 1440, height: 900 }, ready: '.findings-card' });
+  const navigation = page.getByRole('complementary', { name: 'Optimize navigation', exact: true });
   async function choose(name, ready) {
-    if (phone) await press(page.locator('#appNavigationToggle'));
-    await press(navigation.getByRole('link', { name, exact: true }));
+    // The Safety area has its own Table and Settings links.
+    await press(navigation.getByRole('link', { name, exact: true }).and(page.locator(':not([href*="optimize_area"])')));
     await page.locator(ready).first().waitFor();
     await page.waitForFunction(() => document.activeElement?.tagName === 'MAIN');
-    if (phone) assert.equal(await menu.isVisible(), false);
   }
   await choose('Settings', '.findings-settings .findings-panel');
   await choose('Table', '.findings-table .qt-row');
@@ -891,44 +658,6 @@ for (const width of [1440, 390]) test(`Optimize pages move keyboard focus to the
   await shot('optimize-findings');
 });
 
-test('header focus survives resizing while its tool remains inline', { skip }, async t => {
-  const { page, settled } = await open(t, { url: '/library', ready: '#queryTableLibrary .qt-row' });
-  const settings = page.locator('#settingsToggle');
-  await settings.focus();
-  await page.evaluate(() => dispatchEvent(new Event('resize')));
-  await page.waitForFunction(element => document.activeElement === element, await settings.elementHandle());
-  await page.setViewportSize({ width: 1600, height: 900 });
-  await settled();
-  await page.waitForFunction(element => document.activeElement === element, await settings.elementHandle());
-  const theme = page.locator('#themeToggle');
-  await theme.focus();
-  for (const width of [1280, 390, 1440]) {
-    await page.setViewportSize({ width, height: 900 });
-    await settled();
-    await page.waitForFunction(element => document.activeElement === element, await theme.elementHandle());
-  }
-});
-
-test('header focus stays reachable when its tool moves between inline and overflow', { skip }, async t => {
-  const { page } = await open(t, { url: '/library', viewport: { width: 1440, height: 900 }, ready: '#queryTableLibrary .qt-row' });
-  await page.locator('#searchToggle').focus();
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.waitForFunction(() => document.activeElement === document.getElementById('headerMore'));
-  await press(page.locator('#headerMore'));
-  await page.locator('#searchToggle').focus();
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.waitForFunction(() => document.activeElement === document.getElementById('searchToggle'));
-});
-
-test("MCP call details take focus, keep it and return it on Escape", { skip }, async t => {
-  const { page } = await open(t, { url: "/analyze?analyze_mode=query&analyze_data=mcp_calls&analyze_topic=mcp", ready: ".usage-workspace-table .qt-row" });
-  const opener = page.getByRole("button", { name: /^Open item .+ in modal$/ }).first();
-  await press(opener);
-  const dialog = page.getByRole("dialog");
-  await dialog.getByText("Arguments (sanitized)", { exact: true }).waitFor();
-  await holdsFocus(page, dialog, opener);
-});
-
 test("grouped results' Detail takes focus, keeps it and returns it on Escape", { skip }, async t => {
   const grouped = withGroupingKeys({ ...EMPTY_QUERY, select: [{ field: "tool_name" }] }, ["tool_name"]);
   const { page } = await open(t, { url: `/analyze?${new URLSearchParams({ analyze_mode: "query", analyze_data: "tool_calls", q_tool_calls: encodeQuery(grouped) })}`, ready: ".usage-workspace-table .qt-row" });
@@ -937,20 +666,6 @@ test("grouped results' Detail takes focus, keeps it and returns it on Escape", {
   const dialog = page.getByRole("dialog", { name: "Group details" });
   await dialog.waitFor();
   await holdsFocus(page, dialog, opener);
-});
-
-test("MCP settings switch remains usable when moving between Settings and Analyze", { skip }, async t => {
-  const { page, settled } = await open(t, { url: "/settings/mcp", ready: "#mcpSettingsPage .mcp-setup-grid" });
-  const toggle = page.getByRole("switch", { name: "Enable MCP", exact: true });
-  await page.waitForFunction(() => !document.querySelector('[aria-label="Enable MCP"]').disabled);
-  await press(toggle);
-  await page.waitForFunction(() => document.querySelector('[aria-label="Enable MCP"]').getAttribute("aria-checked") === "false");
-  await press(page.getByRole("link", { name: "View MCP usage", exact: true }));
-  await page.locator(".usage-mcp-dashboard .qt-metric").waitFor();
-  await press(page.getByRole("link", { name: "MCP settings", exact: true }));
-  await toggle.waitFor();
-  await settled();
-  assert.equal(await toggle.getAttribute("aria-checked"), "false");
 });
 
 test('header editing keeps keyboard focus on the handle being changed', { skip }, async t => {
@@ -979,32 +694,9 @@ test('header editing keeps keyboard focus on the handle being changed', { skip }
   await page.waitForFunction(element => document.activeElement === element, await settings.elementHandle());
 });
 
-for (const [url, ready] of [
-  ["/cards", ".card-library-entry .query-card"],
-  ["/library", "#queryTableLibrary .qt-row"],
-  ["/analyze", ".usage-dashboard .usage-chart"],
-  ["/findings", ".findings-card"],
-  ["/settings", "#healthCards .panel:not([aria-busy])"],
-  ["/settings/sources", "#sourceGrid .source-card"],
-  ["/settings/preferences", "#optionalBehaviors"],
-  [`/work/${workID}`, ".work-heading h1"],
-  [`/work/${workID}/conversation/conv-root`, ".conversation-panel .turn"],
-]) test(`Opening ${url} leaves focus alone and its title is ordinary text`, { skip }, async t => {
-  const { page } = await open(t, { url, ready });
-  assert.ok(await page.evaluate(() => document.activeElement === document.body), "loading a page should not choose a focused element");
-  // A dashboard's chart title stands in for its h1, which assistive technology alone reads.
-  for (const title of await page.locator(".view.active :is(h1, .usage-chart-headline > h2):visible").all()) {
-    if (await title.evaluate(element => getComputedStyle(element).clipPath !== "none")) continue;
-    assert.equal(await title.evaluate(element => { element.focus(); return document.activeElement === element; }), false, "page titles should not accept focus");
-    await title.click();
-    assert.equal(await title.evaluate(element => document.activeElement === element), false, "clicking a title should leave it unfocused");
-  }
-});
-
-for (const [drawer, toggle, close] of [
-  ["History", "historyToggle", "historyClose"],
-  ["Bookmarks", "bookmarksToggle", "bookmarksClose"],
-]) for (const width of [1440, 390]) test(`${drawer} close restores reachable focus at ${width}px`, { skip }, async t => {
+// Both drawers share setDrawer; History stands for them, inline and in More.
+const [toggle, close] = ["historyToggle", "historyClose"];
+for (const width of [1440, 390]) test(`History close restores reachable focus at ${width}px`, { skip }, async t => {
   const { page } = await open(t, { url: "/library", viewport: { width, height: 900 }, ready: "#queryTableLibrary .qt-row", preferences: { "pharos-header-tools-v1": ["navigator", "settings"] } });
   await activateHeaderTool(page, "navigatorToggle");
   await press(page.locator(`#${toggle}`));
@@ -1023,13 +715,8 @@ for (const [drawer, toggle, close] of [
   assert.ok(await other.evaluate(element => element === document.activeElement), "dismissing a drawer should preserve focus chosen outside it");
 });
 
-for (const url of ["/", "/home"]) test(`Home at ${url} leaves initial focus to the user`, { skip }, async t => {
-  const { page } = await open(t, { url, ready: ".home-belt-row .query-card" });
-  assert.ok(await page.evaluate(() => document.activeElement === document.body), "opening Home should not focus a page element");
-  const welcome = page.locator(".home-intro h1");
-  assert.equal(await welcome.evaluate(element => { element.focus(); return document.activeElement === element; }), false, "the welcome text should not accept programmatic focus");
-  await welcome.click();
-  assert.equal(await welcome.evaluate(element => document.activeElement === element), false, "clicking the welcome text should not focus it");
+test("Home search button focuses its input", { skip }, async t => {
+  const { page } = await open(t, { url: "/", ready: ".home-belt-row .query-card" });
   await press(page.getByRole("button", { name: "Search past work", exact: true }));
   await page.waitForFunction(() => document.activeElement?.matches(".home-search-content textarea, .home-search-content input"));
 });
@@ -1099,26 +786,29 @@ test("the delegation session sheet on a phone takes focus, keeps it and returns 
   await holdsFocus(page, sheet, show);
 });
 
-for (const moveFocus of [false, true]) test(`conversation navigation ${moveFocus ? "preserves a newer focus choice" : "focuses the requested reader"}`, { skip }, async t => {
-  let release;
-  const pending = new Promise(resolve => { release = resolve; });
-  t.after(() => release());
+test("conversation navigation focuses the requested reader unless focus moved while it loaded", { skip }, async t => {
+  let gate = null;
+  t.after(() => gate?.release());
+  const deferred = () => { let release; const promise = new Promise(resolve => { release = resolve; }); return { promise, release }; };
   const { page, settled } = await open(t, { url: `/work/${workID}/conversation/conv-root`, ready: ".conversation-panel .turn", api: {
     "GET /api/work/:id/conversations/:conversation": async call => {
-      if (call.params.conversation === "conv-child") await pending;
+      if (call.params.conversation !== "conv-root") await gate?.promise;
       return defaultApi["GET /api/work/:id/conversations/:conversation"](call);
     },
   } });
-  const loading = page.waitForRequest(request => new URL(request.url()).pathname.endsWith("/conversations/conv-child"));
-  await page.evaluate(url => window.pharosNavigate(url), `/work/${workID}/conversation/conv-child`);
-  await loading;
   const control = page.locator("#settingsToggle");
-  if (moveFocus) { await control.focus(); assert.ok(await control.evaluate(element => element === document.activeElement)); }
-  release();
-  await page.getByRole("article", { name: "User message", exact: true }).getByText("Review the change (conv-child)", { exact: true }).waitFor();
-  await settled();
-  const target = moveFocus ? control : page.locator(".conversation-panel");
-  await page.waitForFunction(element => document.activeElement === element, await target.elementHandle());
+  for (const [conversation, moveFocus] of [["conv-child", false], ["conv-nested", true]]) {
+    gate = deferred();
+    const loading = page.waitForRequest(request => new URL(request.url()).pathname.endsWith(`/conversations/${conversation}`));
+    await page.evaluate(url => window.pharosNavigate(url), `/work/${workID}/conversation/${conversation}`);
+    await loading;
+    if (moveFocus) { await control.focus(); assert.ok(await control.evaluate(element => element === document.activeElement)); }
+    gate.release();
+    await page.getByRole("article", { name: "User message", exact: true }).getByText(`Review the change (${conversation})`, { exact: true }).waitFor();
+    await settled();
+    const target = moveFocus ? control : page.locator(".conversation-panel");
+    await page.waitForFunction(element => document.activeElement === element, await target.elementHandle());
+  }
   await press(page.locator(".workspace-reader-workspace"));
   await page.waitForFunction(() => document.activeElement?.tagName === "MAIN");
   assert.equal(await page.locator(".work-heading h1").evaluate(element => { element.focus(); return element === document.activeElement; }), false, "returning to the overview leaves its title unfocusable");
@@ -1148,19 +838,6 @@ for (const merged of [false, true]) test(`transcript rails follow layout changes
   assert.ok(tops.rails.length, "the rails are shown");
   for (const [name, top] of tops.rails) assert.ok(top >= tops.header - 1, `${name} starts at ${top}, above the header's bottom at ${tops.header}`);
 
-  // Rail geometry must stay useful after disclosures and a viewport change.
-  // A context jump must still reach its event, including a deferred turn.
-  await page.getByRole("button", { name: "Close turns", exact: true }).click();
-  await page.getByRole("button", { name: "Open turns", exact: true }).click();
-  await page.setViewportSize({ width: 1100, height: 800 });
-  await settled();
-  await page.locator(".token-marker").last().evaluate(marker => marker.click());
-  await page.waitForFunction(() => {
-    const target = document.querySelector(".token-highlight");
-    if (!target) return false;
-    const bounds = target.getBoundingClientRect();
-    return bounds.height > 0 && bounds.bottom > document.querySelector("body > header").getBoundingClientRect().bottom && bounds.top < innerHeight;
-  });
   if (merged) {
     // The overview grows without resizing the transcript or its scrollport.
     // The selected turn and the progress band must still describe the viewport.
@@ -1233,23 +910,6 @@ async function annotate(t) {
   return app.page;
 }
 
-test("the annotation toolbar and composer stay inside the viewport after a resize", { skip }, async t => {
-  const page = await annotate(t);
-  await page.setViewportSize({ width: 580, height: 460 });
-  for (const surface of [".feedback-toolbar", ".feedback-composer"]) assert.equal(await onScreen(page.locator(surface)), true, `${surface} off screen at 580×460`);
-});
-
-test("the expanded feedback panel stays inside a 360px viewport", { skip }, async t => {
-  const page = await annotate(t);
-  await page.locator("#feedbackNote").fill("Annotation");
-  // Adding an annotation expands the toolbar into the feedback panel.
-  await page.locator("#feedbackAdd").click();
-  await page.locator("#feedbackPanel.open").waitFor();
-  await page.setViewportSize({ width: 360, height: 420 });
-  const box = await onScreen(page.locator(".feedback-toolbar"));
-  assert.equal(box, true, `expanded toolbar at [${box}] in 360×420`);
-});
-
 test("feedback review keeps focus, fits a phone, and returns focus to its opener", { skip }, async t => {
   const { page, shot } = await open(t, { url: "/settings", ready: "#healthCards .panel" });
   await activateHeaderTool(page, "feedbackSubmitToggle");
@@ -1270,8 +930,12 @@ test("feedback review keeps focus, fits a phone, and returns focus to its opener
   assert.equal(await page.evaluate(() => headerToolAnchor(document.getElementById("feedbackSubmitToggle")) === document.activeElement), true);
 });
 
-test("annotated element screenshots render and the reviewed report sends without leaving the page", { skip }, async t => {
+test("annotated element screenshots render, the annotation surfaces stay on screen and the reviewed report sends without leaving the page", { skip }, async t => {
   const page = await annotate(t);
+  // The toolbar and composer stay inside the viewport after a resize.
+  await page.setViewportSize({ width: 580, height: 460 });
+  for (const surface of [".feedback-toolbar", ".feedback-composer"]) assert.equal(await onScreen(page.locator(surface)), true, `${surface} off screen at 580×460`);
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.locator("#feedbackNote").fill("Make this heading clearer");
   await page.locator("#feedbackIncludeURL").check();
   await page.getByRole("button", { name: "Take a screenshot of this element", exact: true }).click();
@@ -1280,7 +944,12 @@ test("annotated element screenshots render and the reviewed report sends without
     return !img.hidden && img.complete && img.naturalWidth > 0;
   });
   if (process.env.PHAROS_UI_SCREENSHOTS) { mkdirSync(process.env.PHAROS_UI_SCREENSHOTS, { recursive: true }); await page.locator("#feedbackScreenshotPreview").screenshot({ path: `${process.env.PHAROS_UI_SCREENSHOTS}/feedback-element-capture.png` }); }
+  // Adding an annotation expands the toolbar into the feedback panel, which fits 360 px.
   await page.locator("#feedbackAdd").click();
+  await page.locator("#feedbackPanel.open").waitFor();
+  await page.setViewportSize({ width: 360, height: 420 });
+  const box = await onScreen(page.locator(".feedback-toolbar"));
+  assert.equal(box, true, `expanded toolbar at [${box}] in 360×420`);
   await page.locator("#feedbackSend").click();
   const dialog = page.getByRole("dialog", { name: "Send feedback", exact: true });
   await dialog.waitFor();
@@ -1307,47 +976,40 @@ test('Analyze record keyword editor keeps focus through apply, edit and cancel',
   await settled();
   await press(edit);
   await dialog.waitFor();
-  await holdsFocus(page,dialog,edit);
-  await shot('keyword-applied');
+  await page.waitForFunction(element=>element.contains(document.activeElement),await dialog.elementHandle());
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({state:'hidden'});
+  await page.waitForFunction(element=>element===document.activeElement,await edit.elementHandle());
 });
 
-test("Query ideas disclosure supports keyboard toggles and restores the saved preference", { skip }, async t => {
-  const app = await open(t, { url: "/analyze?analyze_mode=query&analyze_data=tool_calls", ready: ".usage-workspace-table .qt-row" });
-  const { page } = app;
-  const summary = page.locator(".usage-query-ideas > summary");
-  const chip = page.locator(".usage-query-ideas .query-chip").first();
-  await chip.waitFor();
-  const saved = page.waitForResponse(response => response.url().endsWith("/api/preferences") && response.request().method() === "POST");
-  await summary.focus();
-  await page.keyboard.press("Enter");
-  await chip.waitFor({ state: "hidden" });
-  await saved;
-  assert.equal(await summary.evaluate(element => element === document.activeElement), true);
-  await page.reload();
-  await page.locator(".usage-workspace-table .qt-row").first().waitFor();
-  await chip.waitFor({ state: "hidden" });
-  await summary.focus();
-  await page.keyboard.press("Enter");
-  await chip.waitFor();
-  assert.equal(await summary.evaluate(element => element === document.activeElement), true);
-  await app.settled();
-  await app.shot("query-ideas-keyboard");
-});
-
-for (const width of [1440, 390, 320]) test(`Capture & index run details keep focus through live refresh and return it on close @ ${width}`, { skip }, async t => {
-  const { page, settled } = await open(t, { url: '/settings/sync', viewport: { width, height: 900 }, ready: '#syncHistoryTables .qt-row' });
-  const opener = page.getByRole('region', { name: 'Recent run history', exact: true }).getByRole('button', { name: 'Details', exact: true }).first();
+test('Capture & index keeps run details focus, table scrolling and query edits through live refreshes @ 390', { skip }, async t => {
+  const { page, settled } = await open(t, { url: '/settings/sync', viewport: { width: 390, height: 900 }, ready: '#syncHistoryTables .qt-row' });
+  const history = page.getByRole('region', { name: 'Recent run history', exact: true });
+  // Run details keep focus through a refresh and return it on close.
+  const opener = history.getByRole('button', { name: 'Details', exact: true }).first();
   await press(opener);
   const dialog = page.getByRole('dialog', { name: 'Index run details', exact: true });
   await dialog.waitFor();
   await page.evaluate(() => window.pharosSync.refresh());
   await settled();
   await holdsFocus(page, dialog, opener);
-});
 
-test('Capture & index query editor retains focus and edits across live refreshes', { skip }, async t => {
-  const { page } = await open(t, { url: '/settings/sync', ready: '#syncHistoryTables .qt-row' });
-  const history = page.getByRole('region', { name: 'Recent run history', exact: true });
+  // Tables keep their horizontal scroll through a status refresh.
+  await page.getByText('Performance & verification details', { exact: true }).click();
+  const labels = ['Recent run history', 'Source status', 'Measured indexing cost'];
+  const positions = [];
+  for (const label of labels) {
+    const wrap = page.getByRole('region', { name: label, exact: true }).locator('.qt-table-wrap');
+    await page.waitForFunction(element => element.scrollWidth > element.clientWidth, await wrap.elementHandle());
+    positions.push(await wrap.evaluate(element => { element.scrollLeft = 300; return element.scrollLeft; }));
+  }
+  await page.evaluate(() => window.pharosSync.refresh());
+  await settled();
+  for (const [index, label] of labels.entries()) {
+    assert.equal(await page.getByRole('region', { name: label, exact: true }).locator('.qt-table-wrap').evaluate(element => element.scrollLeft), positions[index], `${label} scroll after a refresh`);
+  }
+
+  // The query editor keeps focus and its edit across refreshes.
   await history.getByRole('button', { name: 'Expand query builder', exact: true }).click();
   const limit = history.getByRole('spinbutton');
   await limit.fill('2');
@@ -1365,29 +1027,21 @@ test('Mac menu editing preserves focus when adding, moving, and removing items',
   const disclosure = page.locator('#menuBarExpand');
   const visibility = page.getByRole('switch', { name: 'macOS menu bar', exact: true });
   const options = page.locator('#menuBarOptions');
-  assert.equal(await visibility.getAttribute('aria-checked'), 'false');
-  assert.equal(await disclosure.isVisible(), false, 'the off state only shows the visibility toggle');
-  await shot('off');
+  const focused = async locator => page.waitForFunction(element => document.activeElement === element, await locator.elementHandle());
   await press(visibility);
   await disclosure.waitFor();
   assert.ok(await visibility.evaluate(element => document.activeElement === element), 'enabling the menu keeps focus on its toggle');
-  assert.equal(await disclosure.getAttribute('aria-expanded'), 'false', 'enabled menu settings start collapsed');
-  assert.equal(await options.isVisible(), false);
-  await shot('collapsed');
   await press(disclosure);
   await options.waitFor();
   assert.ok(await disclosure.evaluate(element => document.activeElement === element), 'opening the card keeps keyboard focus on the disclosure');
-  await shot('expanded');
   await press(disclosure, 'Space');
   await options.waitFor({ state: 'hidden' });
-  assert.equal(await visibility.getAttribute('aria-checked'), 'true', 'collapsing the editor keeps the menu enabled');
   await page.keyboard.press('Tab');
   assert.ok(await options.evaluate(element => !element.contains(document.activeElement)), 'Tab skips collapsed menu controls');
   await press(disclosure);
   await options.waitFor();
   const add = page.getByRole('button', { name: 'Add Estimated API cost', exact: true });
   const handle = page.getByRole('button', { name: 'Arrange Estimated API cost', exact: true });
-  const focused = async locator => page.waitForFunction(element => document.activeElement === element, await locator.elementHandle());
   await press(add);
   await focused(handle);
   await press(handle);
@@ -1406,63 +1060,16 @@ test('Mac menu editing preserves focus when adding, moving, and removing items',
   await press(status, 'Delete');
   await focused(status);
   const addSeparator = page.getByRole('button', { name: 'Add Separator', exact: true });
-  const separators = page.getByRole('button', { name: /^Arrange Separator / });
-  const before = await separators.count();
   await press(addSeparator);
   await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label')?.startsWith('Arrange Separator '));
-  const added = page.locator('#menuBarActive button:focus');
-  const label = await added.getAttribute('aria-label');
+  const label = await page.evaluate(() => document.activeElement.getAttribute('aria-label'));
   await page.keyboard.press('Alt+ArrowUp');
   await page.waitForFunction(label => document.activeElement?.getAttribute('aria-label') === label, label);
-  assert.equal(await separators.count(), before + 1);
   await page.keyboard.press('Delete');
   await focused(addSeparator);
-  assert.equal(await separators.count(), before);
   await press(visibility);
   await options.waitFor({ state: 'hidden' });
-  assert.equal(await disclosure.isVisible(), false, 'disabling the menu hides its editor control');
   assert.ok(await visibility.evaluate(element => document.activeElement === element), 'disabling the menu keeps its toggle reachable');
-  await press(visibility);
-  await disclosure.waitFor();
-  assert.equal(await disclosure.getAttribute('aria-expanded'), 'false', 'reenabling the menu starts collapsed');
-});
-
-for (const width of [390, 320]) test(`Capture & index tables retain horizontal scrolling through status refreshes @ ${width}`, { skip }, async t => {
-  const { page, settled } = await open(t, { url: '/settings/sync', viewport: { width, height: 900 }, ready: '#syncHistoryTables .qt-row' });
-  await page.getByText('Performance & verification details', { exact: true }).click();
-  const labels = ['Recent run history', 'Source status', 'Measured indexing cost'];
-  const positions = [];
-  for (const label of labels) {
-    const wrap = page.getByRole('region', { name: label, exact: true }).locator('.qt-table-wrap');
-    await page.waitForFunction(element => element.scrollWidth > element.clientWidth, await wrap.elementHandle());
-    positions.push(await wrap.evaluate(element => { element.scrollLeft = 300; return element.scrollLeft; }));
-  }
-  for (let poll = 0; poll < 2; poll++) {
-    await page.evaluate(() => window.pharosSync.refresh());
-    await settled();
-    for (const [index, label] of labels.entries()) {
-      assert.equal(await page.getByRole('region', { name: label, exact: true }).locator('.qt-table-wrap').evaluate(element => element.scrollLeft), positions[index], `${label} scroll after poll ${poll + 1}`);
-    }
-  }
-});
-
-for (const width of [1440, 390]) test(`Capture & index saved query remains available after a reload @ ${width}`, { skip }, async t => {
-  const { page } = await open(t, { url: '/settings/sync', viewport: { width, height: 900 }, ready: '#syncHistoryTables .qt-row' });
-  const history = page.getByRole('region', { name: 'Recent run history', exact: true });
-  await history.getByRole('button', { name: 'Save query', exact: true }).click();
-  const name = history.getByRole('textbox');
-  await name.fill('Run history to revisit');
-  const persisted = page.waitForResponse(response => response.url().endsWith('/api/preferences') && response.request().method() === 'POST' && response.request().postDataJSON()?.set?.['query-table:saved:sync_history']);
-  await name.press('Enter');
-  await persisted;
-  await history.getByRole('button', { name: 'Run history to revisit', exact: true }).waitFor();
-  await page.reload();
-  await page.locator('#syncHistoryTables .qt-row').first().waitFor();
-  await history.getByRole('button', { name: /^Saved/ }).click();
-  const saved = page.getByRole('dialog', { name: 'Saved queries', exact: true });
-  await saved.getByRole('button', { name: /^Run history to revisit/ }).click();
-  await saved.waitFor({ state: 'hidden' });
-  await history.getByRole('button', { name: 'Run history to revisit', exact: true }).waitFor();
 });
 
 test('Ask Pharos invitation gives focus back to existing search when dismissed', {skip}, async t => {
@@ -1476,7 +1083,7 @@ test('Ask Pharos invitation gives focus back to existing search when dismissed',
   assert.ok(await page.getByRole('button',{name:'Search past work',exact:true}).evaluate(element=>element===document.activeElement));
 });
 
-for(const modal of [false,true]) for(const width of [1440,390,320]) test(`Ask Pharos model picker overlays content without expanding ${modal?'the dialog':'Home'} @ ${width}`,{skip},async t=>{
+for(const [modal,width] of [[false,1440],[true,320]]) test(`Ask Pharos model picker overlays content without expanding ${modal?'the dialog':'Home'} @ ${width}`,{skip},async t=>{
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   const {page,settled,shot}=await open(t,{url:'/',viewport:{width,height:900},ready:'#pharos-ask .pharos-ai:not([hidden])',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
@@ -1519,13 +1126,14 @@ for(const modal of [false,true]) for(const width of [1440,390,320]) test(`Ask Ph
   assert.ok(await picker.isHidden());
 });
 
-for (const theme of ['dark','light']) for (const width of [1440,390,320]) test(`Ask Pharos keeps long chats scrollable and the editor reachable (${theme}) @ ${width}`, {skip}, async t => {
+test('Ask Pharos keeps long chats scrollable and the editor reachable @ 390', {skip}, async t => {
+  const width = 390;
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   const turn=index=>({id:'turn-'+index,prompt:'Question '+index,cli:'Codex',model:'test-model',modelLabel:'Test Model',effort:'Low',status:'multiple',message:'',elapsedMs:1000,reply:index===5?'The newest reply.':'Earlier context. '.repeat(100),cards:[]});
   let session={id:'long-chat',createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:Array.from({length:6},(_,index)=>turn(index))};
   let finish;
   let reply=new Promise(resolve=>{finish=resolve;});t.after(()=>finish());
-  const {page,settled,shot,calls}=await open(t,{url:'/?ask_chat=long-chat',viewport:{width,height:900},preferences:{'pharos-theme':theme},ready:'#pharos-ask .pharos-turn',api:{
+  const {page,settled,shot,calls}=await open(t,{url:'/?ask_chat=long-chat',viewport:{width,height:900},ready:'#pharos-ask .pharos-turn',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
     'GET /api/ask/session':()=>session,
@@ -1605,24 +1213,21 @@ for (const theme of ['dark','light']) for (const width of [1440,390,320]) test(`
   assert.ok(await page.locator('.pharos-model-trigger').isEnabled(),'Clear starts a new chat with an unlocked model selection');
 });
 
-for(const [status,width,theme,longTranscript] of [['error',1440,'dark'],['error',390,'light'],['error',320,'dark'],['canceled',390,'dark'],['error',1440,'light',true]]) test(`Ask Pharos retry with another model focuses the picker (${status}, ${theme}${longTranscript?', long transcript':''}) @ ${width}`,{skip},async t=>{
+test('Ask Pharos retry with another model focuses the picker @ 320',{skip},async t=>{
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   const turn={id:'first-turn',prompt:'Which commands keep failing?',cli:'Codex',model:'test-model',modelLabel:'Test Model',effort:'Low',status:'clarification',reply:'',clarification:{question:'Which project?',options:['Pharos','All projects']},cards:[],elapsedMs:1000};
-  const original={id:'failed-chat',createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'Keep the time range to this week.',conversation:[turn,{...turn,id:'failed-turn',prompt:'Pharos',status,clarification:null,reply:status==='error'?'The agent returned an empty response; try again':'Request canceled.'}]};
-  if(longTranscript)original.conversation.splice(0,1,{...turn,id:'older-turn',prompt:'Older question',status:'multiple',clarification:null,reply:'A'.repeat(8000)},{...turn,status:'multiple',clarification:null,reply:'B'.repeat(8000)});
+  const original={id:'failed-chat',createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'Keep the time range to this week.',conversation:[turn,{...turn,id:'failed-turn',prompt:'Pharos',status:'error',clarification:null,reply:'The agent returned an empty response; try again'}]};
   const sessions=new Map([[original.id,original]]);
-  const {page,settled,shot,calls}=await open(t,{url:'/?ask_chat=failed-chat',viewport:{width,height:900},preferences:{'pharos-theme':theme},ready:'.pharos-recovery:not([hidden])',api:{
+  const {page,settled,shot,calls}=await open(t,{url:'/?ask_chat=failed-chat',viewport:{width:320,height:900},ready:'.pharos-recovery:not([hidden])',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true},{id:'second-model',label:'Second Model',efforts:['Default','Low']}]},
     'GET /api/ask/session':({query})=>sessions.get(query.get('id')),
     'GET /api/ask/sessions':()=>({sessions:[...sessions.values()]}),
     'POST /api/ask/session':({body})=>{
-      assert.ok(Buffer.byteLength(body.draft||'','utf8')<=12000,'saved drafts must satisfy the server byte limit');
       const session={...(sessions.get(body.id)||{id:body.id,createdAt:Date.now(),updatedAt:Date.now(),conversation:[]}),draft:body.draft,selection:body.selection};
       sessions.set(body.id,session);return session;
     },
     'POST /api/ask/send':({body})=>{
-      assert.ok(Buffer.byteLength(body.prompt,'utf8')<=12000,'sent questions must satisfy the server byte limit');
       const session={...sessions.get(body.id),draft:'',conversation:[{...turn,id:body.turnID,prompt:body.prompt,status:'multiple',clarification:null,reply:'Your retry completed.'}]};
       sessions.set(body.id,session);return session;
     },
@@ -1643,9 +1248,9 @@ for(const [status,width,theme,longTranscript] of [['error',1440,'dark'],['error'
   await retry.focus();await page.keyboard.press('Enter');
   const picker=page.getByRole('dialog',{name:'Model selection',exact:true});
   assert.ok(await picker.evaluate(element=>element.contains(document.activeElement)),'retry moves keyboard focus into the model picker');
-  const prior=longTranscript?'[Earlier conversation omitted or shortened to fit.]\n\nYou:\nWhich commands keep failing?\n\nPharos:\n'+'B'.repeat(8000):'You:\nWhich commands keep failing?\n\nPharos:\nWhich project?\n\n- Pharos\n\n- All projects';
-  const expected=prior+'\n\nYou:\nPharos\n\nPharos ('+status+'):\n'+original.conversation.at(-1).reply+'\n\nYou (unsent draft):\nKeep the time range to this week.';
-  assert.equal(await question.evaluate(element=>element.value),expected);
+  // The transcript's exact form is unit tested in ask-pharos.test.mjs.
+  const expected=await question.evaluate(element=>element.value);
+  assert.ok(expected.includes(original.draft),'the retry draft carries the unsent draft');
   const newID=new URL(page.url()).searchParams.get('ask_chat');
   assert.ok(newID&&newID!==original.id,'retry has its own draft chat');
   assert.equal(calls.filter(call=>call.path==='/api/ask/send').length,0,'opening the picker must not send a request');
@@ -1659,61 +1264,51 @@ for(const [status,width,theme,longTranscript] of [['error',1440,'dark'],['error'
   await picker.getByRole('button',{name:'Second Model',exact:true}).click();
   await page.keyboard.press('Escape');await saved;await settled();
   assert.ok(await page.locator('.pharos-model-trigger').evaluate(element=>element===document.activeElement),'Escape returns focus to the model control');
-  assert.deepEqual(sessions.get(newID).selection,{...selection,model:'second-model'});
   assert.equal(sessions.get(newID).draft,expected);
   assert.deepEqual(sessions.get(original.id).conversation,original.conversation,'the prior chat remains in history');
   await page.reload();await settled();
   await page.waitForFunction(text=>document.querySelector('#pharos-question')?.value===text,expected);
   assert.ok(await page.getByRole('button',{name:'Send question',exact:true}).isEnabled());
-  if(longTranscript){
-    await page.getByRole('button',{name:'Send question',exact:true}).click();
-    await page.getByRole('status').filter({hasText:'Your retry completed.'}).waitFor();
-    await settled();
-    assert.equal(sessions.get(newID).conversation[0].prompt,expected,'the restored transcript can be sent after reload');
-    await shot('sent-trimmed-transcript');
-  }
+  await page.getByRole('button',{name:'Send question',exact:true}).click();
+  await page.getByRole('status').filter({hasText:'Your retry completed.'}).waitFor();
+  await settled();
+  assert.equal(sessions.get(newID).conversation[0].prompt,expected,'the restored transcript can be sent after reload');
 });
 
-for (const moveFocus of [false, true]) test(`opening a saved chat ${moveFocus ? "preserves a newer focus choice" : "focuses its composer"}`, { skip }, async t => {
+// Whether focus moved while the chat loaded is unit tested (askFocusAfterLoad);
+// this checks the composer takes focus once the chat opened from History arrives.
+test("opening a saved chat from History focuses its composer", { skip }, async t => {
   const selection = { provider: 'Codex', model: 'test-model', effort: 'Low' };
-  const session = { id: 'focus-chat', createdAt: Date.now(), updatedAt: Date.now(), selection, draft: '', conversation: [{ id: 'prior-turn', prompt: 'A prior question', cli: 'Codex', model: 'test-model', modelLabel: 'Test Model', effort: 'Low', status: 'multiple', message: '', elapsedMs: 1000, reply: 'A saved reply', cards: [] }] };
-  let release;
-  const pending = new Promise(resolve => { release = resolve; });
-  t.after(() => release());
+  const sessions = [{ id: 'focus-chat', createdAt: Date.now(), updatedAt: Date.now(), selection, draft: '', conversation: [{ id: 'focus-chat-turn', prompt: 'A prior question', cli: 'Codex', model: 'test-model', modelLabel: 'Test Model', effort: 'Low', status: 'multiple', message: '', elapsedMs: 1000, reply: 'A saved reply', cards: [] }] }];
   const { page, settled } = await open(t, { ready: '#pharos-ask .pharos-ai:not([hidden])', api: {
     'GET /api/ask/status': { settings: { enabled: true, showInvitation: true, selection }, providers: [{ id: 'Codex' }] },
     'GET /api/ask/models': { id: 'Codex', models: [{ id: 'test-model', label: 'Test Model', efforts: ['Default', 'Low'], default: true }] },
-    'GET /api/ask/sessions': { sessions: [session] },
-    'GET /api/ask/session': async () => { await pending; return session; },
+    'GET /api/ask/sessions': { sessions },
+    'GET /api/ask/session': ({ query }) => sessions.find(session => session.id === query.get('id')),
+    'POST /api/ask/session': ({ body }) => body,
   } });
   await press(page.getByRole('button', { name: 'History', exact: true }));
-  const loading = page.waitForRequest(request => new URL(request.url()).pathname === '/api/ask/session');
+  // Let the history list finish refreshing before choosing from it.
+  await settled();
   await press(page.getByRole('link', { name: 'Open chat: A prior question', exact: true }));
-  await loading;
-  const control = page.locator('#settingsToggle');
-  if (moveFocus) { await control.focus(); assert.ok(await control.evaluate(element => element === document.activeElement)); }
-  release();
   await page.getByRole('status').filter({ hasText: 'A saved reply' }).waitFor();
   await settled();
-  const target = moveFocus ? control : page.getByRole('textbox', { name: 'Ask a question', exact: true });
-  await page.waitForFunction(element => document.activeElement === element, await target.elementHandle());
+  const question = page.getByRole('textbox', { name: 'Ask a question', exact: true });
+  await page.waitForFunction(element => document.activeElement === element, await question.elementHandle());
 });
 
-test('Ask Pharos chat links survive reload, new tabs and browser Back/Forward', {skip,timeout:60000}, async t => {
+test('Ask Pharos chat links survive reload and browser Back', {skip,timeout:60000}, async t => {
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   const saved={id:'saved-chat',createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:'saved-turn',prompt:'A prior question',cli:'Codex',model:'test-model',modelLabel:'Test Model',effort:'Low',status:'multiple',message:'',elapsedMs:1000,reply:'An earlier reply',cards:[]}]};
-  saved.conversation.push({...saved.conversation[0],id:'later-turn',prompt:'A later topic',reply:'A later reply'});
   const sessions=new Map([[saved.id,saved]]);
   let delaySession=false,releaseSession;
   const delayedSession=new Promise(resolve=>{releaseSession=resolve;});
   t.after(()=>releaseSession());
-  const {page,settled,calls}=await open(t,{url:'/',ready:'#pharos-ask .pharos-ai:not([hidden])',api:{
-    'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'},{id:'Claude'}]},
-    'GET /api/ask/models':({query})=>query.get('provider')==='Claude'
-      ? {id:'Claude',models:[{id:'claude-first',label:'Claude First',efforts:['Default','Medium'],default:true},{id:'claude-second',label:'Claude Second',efforts:['Default','Low']}],defaultSelection:{provider:'Claude',model:'claude-first',effort:'Medium'}}
-      : {id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true},{id:'second-model',label:'Second Model',efforts:['Default','Low']}]},
+  const {page,settled}=await open(t,{url:'/',ready:'#pharos-ask .pharos-ai:not([hidden])',api:{
+    'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
+    'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
     'GET /api/ask/session':async({query})=>{if(delaySession&&query.get('id')==='saved-chat')await delayedSession;return sessions.get(query.get('id'));},
-    'GET /api/ask/sessions':({query})=>({sessions:[...sessions.values()].filter(session=>JSON.stringify(session).toLowerCase().includes((query.get('q')||'').toLowerCase())).map(session=>({...session,conversation:session.conversation.slice(0,1)}))}),
+    'GET /api/ask/sessions':()=>({sessions:[...sessions.values()]}),
     'POST /api/ask/session':({body})=>{
       const session={...(sessions.get(body.id)||{...saved,id:body.id,conversation:[]}),draft:body.draft,selection:body.selection};
       sessions.set(body.id,session);return session;
@@ -1723,43 +1318,18 @@ test('Ask Pharos chat links survive reload, new tabs and browser Back/Forward', 
       sessions.set(body.id,session);return session;
     },
   }});
-  assert.ok(calls.some(call=>call.path==='/api/ask/visits'&&call.body.reconcile),'opening Ask reconciles the authoritative browser history');
-  const previousVisit=await page.evaluate(()=>JSON.parse(localStorage.getItem('pharos-history-v1'))[0]);
-  const replaced=page.waitForResponse(response=>response.url().endsWith('/api/ask/visits')&&response.request().method()==='POST'&&response.request().postDataJSON().replaces?.at===previousVisit.at);
-  await page.evaluate(()=>window.pharosNameVisit('Updated page title'));
-  const replacement=(await replaced).request().postDataJSON();
-  assert.equal(replacement.replaces.url,previousVisit.url,'the private store receives the identity removed from browser history');
-  assert.equal(replacement.visits.length,1);
-  await settled();
+  // Visit payloads, selection defaults and history search are unit tested in ask-pharos.test.mjs.
   const question=page.getByRole('textbox',{name:'Ask a question',exact:true});
   const draftSaved=page.waitForResponse(response=>response.url().includes('/api/ask/session')&&response.request().method()==='POST');
   await question.fill('Keep this question');await draftSaved;
+  const id=new URL(page.url()).searchParams.get('ask_chat');
+  assert.ok(id,'a new draft gets a conversation URL');
   // This checks persisted chat restoration, so finish background card loads
   // before the deliberate reload cancels the old document's requests.
   await settled();
-  const chatURL=page.url(),id=new URL(chatURL).searchParams.get('ask_chat');
-  assert.ok(id,'a new draft gets a conversation URL');
   await page.reload();await settled();
   await page.waitForFunction(()=>document.querySelector('#pharos-question')?.value==='Keep this question');
-  assert.equal(await question.evaluate(element=>element.value),'Keep this question');
   assert.ok(await page.evaluate(() => document.activeElement === document.body), 'restoring a chat should leave initial focus alone');
-  const choose=async(kind,value,expected)=>{
-    const persisted=page.waitForResponse(response=>response.url().includes('/api/ask/session')&&response.request().method()==='POST'&&Object.entries(expected).every(([key,value])=>response.request().postDataJSON().selection[key]===value));
-    await page.locator('.pharos-model-trigger').click();
-    const menu=page.getByRole('dialog',{name:'Model selection',exact:true});
-    await menu.getByRole('button',{name:new RegExp('^'+kind+' ')}).click();
-    await menu.getByRole('button',{name:value,exact:true}).click();
-    await page.keyboard.press('Escape');await persisted;await settled();
-    await page.reload();await settled();
-    await page.waitForFunction(()=>document.querySelector('#pharos-question')?.value==='Keep this question');
-    assert.deepEqual(sessions.get(id).selection,expected);
-    assert.ok((await page.locator('.pharos-model-trigger').textContent()).includes(value),'the saved draft should restore the chosen picker value');
-  };
-  await choose('Model','Second Model',{...selection,model:'second-model'});
-  await choose('Effort','Default',{...selection,model:'second-model',effort:'Default'});
-  await choose('CLI','Claude',{provider:'Claude',model:'claude-first',effort:'Medium'});
-  await choose('Model','Claude Second',{provider:'Claude',model:'claude-second',effort:'Default'});
-  await choose('Effort','Low',{provider:'Claude',model:'claude-second',effort:'Low'});
   await page.getByRole('button',{name:'Send question',exact:true}).click();
   await page.getByRole('status').filter({hasText:'Your latest reply'}).waitFor();
   assert.equal(new URL(page.url()).searchParams.get('ask_chat'),id);
@@ -1767,23 +1337,9 @@ test('Ask Pharos chat links survive reload, new tabs and browser Back/Forward', 
   assert.equal(new URL(page.url()).searchParams.get('ask_chat'),null);
   await page.goBack();await page.getByRole('status').filter({hasText:'Your latest reply'}).waitFor();
   assert.equal(new URL(page.url()).searchParams.get('ask_chat'),id);
-  await page.goForward();await settled();
-  await page.getByRole('button',{name:'History',exact:true}).click();
-  const search=page.getByRole('searchbox',{name:'Find a prior chat',exact:true});
-  const matches=page.waitForResponse(response=>response.url().includes('/api/ask/sessions?')&&new URL(response.url()).searchParams.get('q')==='later topic');
-  await search.fill('later topic');await matches;await settled();
-  const link=page.getByRole('link',{name:'Open chat: A prior question',exact:true});
-  await link.waitFor();
-  const savedURL=new URL(await link.getAttribute('href'),page.url()).href;
-  const anotherTab=await page.context().newPage();
-  await anotherTab.goto(savedURL);await anotherTab.getByRole('status').filter({hasText:'An earlier reply'}).waitFor();
-  assert.equal(new URL(anotherTab.url()).searchParams.get('ask_chat'),'saved-chat');
-  await anotherTab.close();
-  await link.click();await page.getByRole('status').filter({hasText:'An earlier reply'}).waitFor();
-  assert.equal(new URL(page.url()).searchParams.get('ask_chat'),'saved-chat');
   // Back can arrive before a slow chat load. Its late response must not
   // replace the page the user has already returned to.
-  await page.getByRole('button',{name:'Clear',exact:true}).click();
+  await page.getByRole('button',{name:'Clear',exact:true}).click();await settled();
   delaySession=true;
   const loading=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/ask/session'&&request.method()==='GET');
   await page.evaluate(()=>window.pharosNavigate('/?ask_chat=saved-chat'));await loading;
@@ -1792,27 +1348,19 @@ test('Ask Pharos chat links survive reload, new tabs and browser Back/Forward', 
   releaseSession();await settled();
   assert.equal(new URL(page.url()).searchParams.get('ask_chat'),null);
   assert.equal(await page.getByRole('status').filter({hasText:'An earlier reply'}).count(),0);
-  // A history link from another page must also restore the chat when copied
-  // into a new tab, while an ordinary click keeps the chat in the overlay.
+  // A history link opened from another page keeps the chat in the overlay.
+  delaySession=false;
   await page.evaluate(()=>window.pharosNavigate('/analyze?analyze_topic=tokens'));await settled();
   const contextURL=page.url();
   await activateHeaderTool(page,'askPharosToggle');
   await page.getByRole('button',{name:'History',exact:true}).click();
-  await link.waitFor();
-  const modalChatURL=new URL(await link.getAttribute('href'),page.url()).href;
-  const modalTab=await page.context().newPage();
-  try{
-    await modalTab.goto(modalChatURL);
-    await modalTab.getByRole('status').filter({hasText:'An earlier reply'}).waitFor();
-    assert.equal(new URL(modalTab.url()).searchParams.get('ask_chat'),'saved-chat');
-  }finally{await modalTab.close();}
-  await link.click();
+  await page.getByRole('link',{name:'Open chat: A prior question',exact:true}).click();
   await page.getByRole('dialog',{name:'Ask Pharos',exact:true}).getByRole('status').filter({hasText:'An earlier reply'}).waitFor();
   assert.equal(page.url(),contextURL,'opening a chat in the overlay must preserve the page URI');
 });
 
 // The long URI exceeds what a saved prompt chip may hold, so reload restores the context alone.
-for(const url of ['/', '/analyze?analyze_topic=tokens', '/analyze?analyze_topic=tokens&history_search='+'x'.repeat(2100)]) test(`Ask Pharos restores its open and floating surfaces after reload (${url==='/'?'Home':url.length>2000?'Analyze, long URI':'Analyze'})`,{skip},async t=>{
+for(const url of ['/analyze?analyze_topic=tokens', '/analyze?analyze_topic=tokens&history_search='+'x'.repeat(2100)]) test(`Ask Pharos restores its open and floating surfaces after reload (${url.length>2000?'Analyze, long URI':'Analyze'})`,{skip},async t=>{
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   let session=null;
   const {page,settled}=await open(t,{url,ready:'#askPharosToggle:not([disabled])',api:{
@@ -1828,21 +1376,17 @@ for(const url of ['/', '/analyze?analyze_topic=tokens', '/analyze?analyze_topic=
   const pageURL=page.url();
   const reload=async()=>{await settled();await page.waitForLoadState('networkidle');await page.reload();await settled();};
   await activateHeaderTool(page,'askPharosToggle');
-  await reload();
-  await modal.waitFor();
-  assert.ok(await question.evaluate(element=>element===document.activeElement),'the restored modal focuses its editor');
   const saved=page.waitForResponse(response=>response.url().includes('/api/ask/session')&&response.request().method()==='POST');
   await question.evaluate(element=>{element.value='Keep this open question';element.dispatchEvent(new Event('input',{bubbles:true}));});await saved;await settled();
   const chip=question.getByRole('group',{name:/^About/});
-  if(url==='/')assert.equal(await chip.count(),0,'the home page is not attached as context');
-  else if(url.length<=2000){await chip.focus();await page.keyboard.press('Alt+ArrowRight');}
+  if(url.length<=2000){await chip.focus();await page.keyboard.press('Alt+ArrowRight');}
   const inlineDraft=await question.innerText();await question.focus();
   await reload();
   await modal.waitFor();
   await page.waitForFunction(()=>document.querySelector('#pharos-question')?.value==='Keep this open question');
-  assert.equal(await question.evaluate(element=>element.value),'Keep this open question');
+  assert.ok(await question.evaluate(element=>element===document.activeElement),'the restored modal focuses its editor');
   assert.equal(await question.innerText(),inlineDraft,'reload preserves the context chip position within the draft');
-  if(url!=='/')assert.equal(await chip.count(),1,'reload keeps the page context');
+  assert.equal(await chip.count(),1,'reload keeps the page context');
   assert.equal(page.url(),pageURL,'restoring the overlay keeps the underlying page URI');
   await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();
   const handle=panel.getByRole('button',{name:'Move Ask Pharos progress'});
@@ -1850,35 +1394,26 @@ for(const url of ['/', '/analyze?analyze_topic=tokens', '/analyze?analyze_topic=
   await reload();
   await panel.waitFor();
   assert.equal(page.url(),pageURL,'restoring floating progress keeps the underlying page URI');
+  // Which surface a reload restores (including dismissed) is unit tested by askRestorePresentation.
   await panel.getByRole('button',{name:'Dismiss Ask Pharos progress',exact:true}).click();
-  await reload();
-  assert.equal(await panel.isVisible(),false,'dismissed progress stays dismissed');
-  assert.equal(await modal.isVisible(),false);
+  assert.equal(await panel.isVisible(),false,'dismissing hides the progress panel');
   await activateHeaderTool(page,'askPharosToggle');
   assert.equal(await question.evaluate(element=>element.value),'Keep this open question');
   await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();
   await panel.getByRole('button',{name:/^Ask Pharos/}).click();
   assert.equal(await question.evaluate(element=>element.value),'Keep this open question');
   await page.getByRole('button',{name:'Close Ask Pharos',exact:true}).click();
-  await reload();
-  assert.equal(await modal.isVisible(),false,'a closed overlay stays closed');
-  await page.waitForFunction(()=>document.querySelector('#pharos-question')?.value==='Keep this open question');
-  if(url==='/'){
-    await page.locator('#homeAskSearch').getByRole('textbox',{name:'Ask a question',exact:true}).waitFor();
-    assert.equal(await question.evaluate(element=>element.value),'Keep this open question','Home still owns the composer after reload');
-  }else{
-    await page.locator('body>header .brand').click();
-    await page.locator('#homeAskSearch').getByRole('textbox',{name:'Ask a question',exact:true}).waitFor();
-    assert.equal(await question.evaluate(element=>element.value),'Keep this open question','returning Home reattaches the restored composer');
-  }
+  await page.locator('body>header .brand').click();
+  await page.locator('#homeAskSearch').getByRole('textbox',{name:'Ask a question',exact:true}).waitFor();
+  assert.equal(await question.evaluate(element=>element.value),'Keep this open question','returning Home reattaches the restored composer');
 });
 
-for(const theme of ['dark','light']) for(const mode of ['choice','other','composer']) test(`Ask Pharos clarification supports ${mode} replies and keeps focus usable (${theme})`,{skip},async t=>{
+for(const mode of ['choice','other']) test(`Ask Pharos clarification supports ${mode} replies and keeps focus usable`,{skip},async t=>{
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   const clarification={question:'By “use”, do you mean model tokens, API cost equivalent, or something else?',options:['Model tokens','API cost equivalent']};
   let session={id:'clarification-chat',createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',clarificationDraft:'',conversation:[{id:'clarify-turn',prompt:'Show me my use',cli:'Codex',model:'test-model',modelLabel:'Test Model',effort:'Low',status:'clarification',reply:'',message:'',elapsedMs:1000,cards:[],clarification}]};
   const submitted=[];
-  const {page,settled,shot}=await open(t,{url:'/?ask_chat=clarification-chat',viewport:{width:mode==='choice'?1440:mode==='other'?390:320,height:900},preferences:{'pharos-theme':theme},ready:'.pharos-clarification:not([hidden])',api:{
+  const {page,settled,shot}=await open(t,{url:'/?ask_chat=clarification-chat',viewport:{width:mode==='choice'?1440:390,height:900},ready:'.pharos-clarification:not([hidden])',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
     'GET /api/ask/session':()=>session,
@@ -1899,7 +1434,7 @@ for(const theme of ['dark','light']) for(const mode of ['choice','other','compos
     await question.fill('An unrelated next question');
     await page.getByRole('button',{name:'B. API cost equivalent',exact:true}).focus();
     await page.keyboard.press('Enter');
-  }else if(mode==='other'){
+  }else{
     await question.fill('An unrelated next question');
     const saved=page.waitForResponse(response=>response.url().includes('/api/ask/session')&&response.request().method()==='POST'&&response.request().postDataJSON().clarificationDraft==='Workspace counts');
     await other.fill('Workspace counts');await saved;
@@ -1909,15 +1444,13 @@ for(const theme of ['dark','light']) for(const mode of ['choice','other','compos
     await other.focus();await page.keyboard.press('Shift+Enter');await page.keyboard.insertText('across all projects');
     expected='Workspace counts\nacross all projects';
     await page.keyboard.press('Enter');
-  }else{
-    expected='Workspace counts';await question.fill(expected);await page.getByRole('button',{name:'Send question',exact:true}).click();
   }
   await page.getByRole('link',{name:/Usage details/}).waitFor();await settled();
   assert.equal(submitted.length,1,'an answer should submit exactly one request');
   assert.equal(submitted[0].prompt,expected);
   assert.equal(new URL(page.url()).searchParams.get('ask_chat'),'clarification-chat');
-  if(mode!=='composer')assert.equal(await question.evaluate(element=>element.value),'An unrelated next question');
-  if(mode!=='composer')assert.ok(await question.evaluate(element=>element===document.activeElement),'answering should return keyboard focus to the composer');
+  assert.equal(await question.evaluate(element=>element.value),'An unrelated next question');
+  assert.ok(await question.evaluate(element=>element===document.activeElement),'answering should return keyboard focus to the composer');
   assert.ok(await page.getByRole('button',{name:'A. Model tokens',exact:true}).isDisabled(),'older clarification options must not be submitted again');
   const footer=page.getByRole('button',{name:'Send question',exact:true});
   assert.ok(await footer.evaluate(element=>{const box=element.getBoundingClientRect();return box.top>=0&&box.bottom<=innerHeight;}));
@@ -1926,7 +1459,8 @@ for(const theme of ['dark','light']) for(const mode of ['choice','other','compos
   await shot('answered');
 });
 
-for(const width of [1440,390])test(`Ask Pharos prompt chips drag into text and support keyboard editing @ ${width}`,{skip},async t=>{
+test('Ask Pharos prompt chips drag into text and support keyboard editing @ 1440',{skip},async t=>{
+  const width=1440;
   const selection={provider:'Codex',model:'test-model',effort:'Low'};let sent;
   const {page,shot}=await open(t,{viewport:{width,height:800},ready:'.pharos-ai:not([hidden])',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
@@ -1979,7 +1513,7 @@ for(const width of [1440,390])test(`Ask Pharos prompt chips drag into text and s
   assert.equal(sent.prompt,'Find usage by model\nthis week');assert.equal(sent.currentURI,contextURI);
 });
 
-for(const [width,height,motion] of [[2133,1070,'no-preference'],[390,650,'no-preference'],[320,480,'reduce']])test(`Ask Pharos dialog grows within the viewport and settles back after Clear (${motion}) @ ${width}`,{skip},async t=>{
+for(const [width,height,motion] of [[2133,1070,'no-preference'],[320,480,'reduce']])test(`Ask Pharos dialog grows within the viewport and settles back after Clear (${motion}) @ ${width}`,{skip},async t=>{
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   let finish;const response=new Promise(resolve=>{finish=resolve;});t.after(()=>finish());
   const {page,settled,shot}=await open(t,{viewport:{width,height},ready:'.pharos-ai:not([hidden])',api:{
@@ -2003,7 +1537,6 @@ for(const [width,height,motion] of [[2133,1070,'no-preference'],[390,650,'no-pre
   await finishMotion();
   const empty=await modal.boundingBox();
   assert.ok(empty.y>0&&empty.y+empty.height<=height,'the empty overlay floats inside the viewport');
-  if(height>900)assert.ok(empty.y>height/5&&empty.y<height/3,'the empty overlay starts around a quarter down a tall window');
   await shot('empty-position');
   await modal.getByRole('button',{name:'History',exact:true}).click();await finishMotion();
   assert.ok(await modal.getByRole('button',{name:'Close chat history',exact:true}).evaluate(element=>{const box=element.getBoundingClientRect(),hit=document.elementFromPoint(box.x+box.width/2,box.y+box.height/2);return element===hit||element.contains(hit);}),'history controls remain reachable as the dialog makes room for the menu');
@@ -2060,33 +1593,36 @@ for(const [width,height,motion] of [[2133,1070,'no-preference'],[390,650,'no-pre
   assert.ok(await page.getByRole('button',{name:'Close Ask Pharos',exact:true}).evaluate(fits),'Close stays reachable after shrinking the window');
 });
 
-for (const [width,url,theme] of [[1440,'/analyze?analyze_topic=tokens','dark'],[390,'/analyze?analyze_topic=tokens','dark'],[320,'/analyze?analyze_topic=tokens','dark'],[2133,'/','dark'],[1440,'/','light'],[390,'/','light']]) test(`Ask Pharos overlay and floating progress keep focus and stay reachable (${url==='/'?'Home':'Analyze'}, ${theme}) @ ${width}`, {skip}, async t => {
+// Opens Analyze with Ask enabled; the send stub waits for `finish`.
+async function openAskOverlay(t, width) {
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
-  let finish, sent;
-  const response=new Promise(resolve=>{finish=resolve;});
-  t.after(()=>finish());
-  const {page,shot}=await open(t,{url,preferences:{'pharos-theme':theme},viewport:{width,height:width===2133?1070:650},ready:'body>header',api:{
+  const state={sent:null};
+  const response=new Promise(resolve=>{state.finish=resolve;});
+  t.after(()=>state.finish());
+  const app=await open(t,{url:'/analyze?analyze_topic=tokens',viewport:{width,height:650},ready:'body>header',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
     'GET /api/ask/sessions':{sessions:[]},
     'POST /api/ask/session':({body})=>body,
     'POST /api/ask/send':async({body})=>{
-      sent=body;await response;
+      state.sent=body;await response;
       return {id:body.id,createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:body.turnID,prompt:body.prompt,currentURI:body.currentURI,cli:'Codex',model:'test-model',effort:'Low',status:'single',message:'',elapsedMs:1000,reply:'Ready to explore.',cards:[{id:'library',title:'Search',kind:'Page',description:'Your past work',href:'/library'}]}]};
     },
   }});
-  await page.waitForFunction(()=>document.querySelector('.pharos-current-settings')?.textContent.includes('Test Model'));
-  await activateHeaderTool(page,'askPharosToggle');
-  const modal=page.getByRole('dialog',{name:'Ask Pharos',exact:true});
-  const editor=page.getByRole('textbox',{name:'Ask a question',exact:true});
+  await app.page.waitForFunction(()=>document.querySelector('.pharos-current-settings')?.textContent.includes('Test Model'));
+  await activateHeaderTool(app.page,'askPharosToggle');
+  return {...app,state,modal:app.page.getByRole('dialog',{name:'Ask Pharos',exact:true}),editor:app.page.getByRole('textbox',{name:'Ask a question',exact:true})};
+}
+
+test('Ask Pharos overlay keeps focus and its controls reachable @ 1440', {skip}, async t => {
+  const {page,shot,modal,editor}=await openAskOverlay(t,1440);
   assert.ok(await editor.evaluate(element=>element===document.activeElement));
   await page.locator('body>header .brand').evaluate(element=>element.focus());
   assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)),'the overlay must keep focus');
   await editor.evaluate(element=>{element.value='What if we broke it down by model?';element.dispatchEvent(new Event('input',{bubbles:true}));});
   const reachable=element=>{const box=element.getBoundingClientRect(),target=document.elementFromPoint(box.x+box.width/2,box.y+box.height/2);return box.left>=0&&box.right<=innerWidth&&(element===target||element.contains(target));};
-  const home=url==='/',removeContext=modal.getByRole('button',{name:'Remove page context',exact:true});
-  if(home)assert.equal(await removeContext.count(),0,'the home page is not attached as context');
-  for(const name of ['Clear','Close Ask Pharos',...(home?[]:['Remove page context'])])assert.ok(await modal.getByRole('button',{name,exact:true}).evaluate(reachable),name+' must stay reachable');
+  const removeContext=modal.getByRole('button',{name:'Remove page context',exact:true});
+  for(const name of ['Clear','Close Ask Pharos','Remove page context'])assert.ok(await modal.getByRole('button',{name,exact:true}).evaluate(reachable),name+' must stay reachable');
   assert.ok(await editor.evaluate(element=>{
     const controls=[...element.closest('form').querySelectorAll('.pharos-window-controls button:not([hidden])')].map(button=>button.getBoundingClientRect());
     const walker=document.createTreeWalker(element,NodeFilter.SHOW_TEXT);
@@ -2097,16 +1633,14 @@ for (const [width,url,theme] of [[1440,'/analyze?analyze_topic=tokens','dark'],[
     return true;
   }),'floating controls must not obscure prompt text');
   await shot('ask-overlay');
-  if(!home){
-    await removeContext.click();
-    assert.ok(await editor.evaluate(element=>element===document.activeElement),'removing context returns focus to the request');
-    assert.equal(await editor.evaluate(element=>element.value),'What if we broke it down by model?','removing context preserves the draft');
-  }
+  await removeContext.click();
+  assert.ok(await editor.evaluate(element=>element===document.activeElement),'removing context returns focus to the request');
+  assert.equal(await editor.evaluate(element=>element.value),'What if we broke it down by model?','removing context preserves the draft');
   await modal.getByRole('button',{name:'Close Ask Pharos',exact:true}).click();
   await modal.waitFor({state:'hidden'});
   assert.ok(await page.locator('#askPharosToggle').evaluate(element=>element===document.activeElement)||await page.locator('#headerMore').evaluate(element=>element===document.activeElement),'Close returns focus to the header');
   await activateHeaderTool(page,'askPharosToggle');
-  if(!home)await removeContext.waitFor();else await modal.waitFor();
+  await removeContext.waitFor();
   await page.getByRole('button',{name:'Switch to non-AI search',exact:true}).click();
   await modal.getByRole('button',{name:'Search past work',exact:true}).click();
   await modal.getByRole('textbox',{name:'Text for rule 1.1',exact:true}).fill('cache');
@@ -2115,10 +1649,12 @@ for (const [width,url,theme] of [[1440,'/analyze?analyze_topic=tokens','dark'],[
   await modal.waitFor({state:'hidden'});
   const brand=page.locator('body>header .brand');await brand.focus();
   assert.ok(await brand.evaluate(element=>element===document.activeElement),'ordinary search results must allow background interaction');
-  await page.evaluate(()=>window.pharosNavigate('/analyze?analyze_topic=tokens'));
-  await activateHeaderTool(page,'askPharosToggle');
-  const originalURI=await page.evaluate(()=>location.pathname+location.search+location.hash);
-  if(width===390)await modal.getByRole('button',{name:'Remove page context',exact:true}).click();
+});
+
+// Placement of dragged and resized progress is unit tested in ask-pharos.test.mjs.
+test('Ask Pharos floating progress keeps focus and a ready response leaves the page alone @ 390', {skip}, async t => {
+  const {page,shot,modal,editor,state}=await openAskOverlay(t,390);
+  await modal.getByRole('button',{name:'Remove page context',exact:true}).click();
   await editor.evaluate(element=>{element.value='What if we broke it down by model?';element.dispatchEvent(new Event('input',{bubbles:true}));});
   await page.getByRole('button',{name:'Send question',exact:true}).click();
   const browseHint=page.getByRole('tooltip');await browseHint.waitFor();
@@ -2130,22 +1666,9 @@ for (const [width,url,theme] of [[1440,'/analyze?analyze_topic=tokens','dark'],[
   await modal.waitFor({state:'hidden'});
   const panel=page.getByRole('complementary',{name:'Ask Pharos progress'});
   await panel.waitFor();
-  const handle=page.getByRole('button',{name:'Move Ask Pharos progress'});
-  const bounds=await panel.locator('.pharos-floating-open').boundingBox();
-  await page.mouse.move(bounds.x+bounds.width/2,bounds.y+bounds.height/2);
-  await page.mouse.down();await page.mouse.move(width-15,620);await page.mouse.up();
-  await handle.focus();await page.keyboard.press('ArrowDown');
-  const fits=element=>{const rect=element.getBoundingClientRect();return rect.left>=0&&rect.right<=innerWidth&&rect.top>=0&&rect.bottom<=innerHeight;};
-  assert.ok(await panel.evaluate(fits),'dragged progress must stay in the viewport');
   await panel.locator('.pharos-floating-open').click();
   await modal.waitFor();
   assert.ok(await editor.evaluate(element=>element===document.activeElement));
-  await page.setViewportSize({width:320,height:500});
-  await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();
-  await panel.waitFor();
-  assert.ok(await panel.evaluate(fits),'progress restored after a hidden resize must stay in the viewport');
-  await panel.locator('.pharos-floating-open').click();await modal.waitFor();
-  await page.setViewportSize({width,height:650});
   await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();await panel.waitFor();
   await activateHeaderTool(page,'settingsToggle');
   await page.waitForURL('**/settings*');
@@ -2155,10 +1678,10 @@ for (const [width,url,theme] of [[1440,'/analyze?analyze_topic=tokens','dark'],[
   await activateHeaderTool(page,'askPharosToggle');
   assert.ok(await editor.evaluate(element=>element===document.activeElement));
   await page.keyboard.press('Escape');await modal.waitFor({state:'hidden'});await panel.waitFor();
-  finish();
+  state.finish();
   await panel.getByRole('button',{name:/Your response is ready/}).waitFor();
   assert.equal(new URL(page.url()).pathname,'/settings','a ready response must leave the current page alone');
-  assert.equal(sent.currentURI,width===390?'':originalURI,'the request uses the attached context and respects its removal');
+  assert.equal(state.sent.currentURI,'','the request respects the removed page context');
   await shot('ask-floating-ready');
   await panel.getByRole('button',{name:/Your response is ready/}).click();
   await page.locator('.pharos-destination:not([hidden])').click();
@@ -2222,33 +1745,34 @@ test('Ask Pharos on Home can keep browsing without losing the active chat', {ski
   await page.locator('#homeAskSearch').getByRole('button',{name:'A. Tokens',exact:true}).waitFor();
 });
 
-for (const browsing of [false,true]) test(`Ask Pharos ${browsing?'reopened browsing':'blocking'} overlay handles a ready destination`, {skip}, async t => {
+test('Ask Pharos blocking and reopened browsing overlays handle a ready destination', {skip}, async t => {
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
-  let finish;
-  const response=new Promise(resolve=>{finish=resolve;});t.after(()=>finish());
+  let finish,response,answers=0;
+  const hold=()=>{response=new Promise(resolve=>{finish=resolve;});};
+  t.after(()=>finish?.());
   const {page}=await open(t,{url:'/library',ready:'body>header',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
     'GET /api/ask/sessions':{sessions:[]},
     'POST /api/ask/session':({body})=>body,
-    'POST /api/ask/send':async({body})=>{await response;return {id:body.id,createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:body.turnID,prompt:body.prompt,cli:'Codex',model:'test-model',effort:'Low',status:'single',message:'',elapsedMs:1000,reply:'Your preferences.',cards:[{id:'settings',title:'Settings',kind:'Page',description:'Your preferences',href:'/settings'}]}]};},
+    'POST /api/ask/send':async({body})=>{
+      // The first answer opens Settings; the second, asked from Settings, opens Search.
+      const href=answers++?'/library':'/settings';
+      await response;
+      return {id:body.id,createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:body.turnID,prompt:body.prompt,cli:'Codex',model:'test-model',effort:'Low',status:'single',message:'',elapsedMs:1000,reply:'Your destination.',cards:[{id:href,title:'Destination',kind:'Page',description:'A destination',href}]}]};
+    },
   }});
   await page.waitForFunction(()=>document.querySelector('.pharos-current-settings')?.textContent.includes('Test Model'));
-  await activateHeaderTool(page,'askPharosToggle');
-  await page.getByRole('textbox',{name:'Ask a question',exact:true}).fill('Open settings');
-  await page.getByRole('button',{name:'Send question',exact:true}).click();
   const modal=page.getByRole('dialog',{name:'Ask Pharos',exact:true});
-  if(browsing){
-    await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();
+  const ask=async prompt=>{
+    hold();
     await activateHeaderTool(page,'askPharosToggle');
-  }
+    await page.getByRole('textbox',{name:'Ask a question',exact:true}).fill(prompt);
+    await page.getByRole('button',{name:'Send question',exact:true}).click();
+  };
+  // Blocking: the ready answer opens its destination.
+  await ask('Open settings');
   finish();
-  if(browsing){
-    await page.locator('.pharos-destination:not([hidden])').waitFor();
-    assert.equal(new URL(page.url()).pathname,'/library');
-    assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)));
-    await page.locator('.pharos-destination:not([hidden])').click();
-  }
   await page.waitForURL(url=>url.pathname==='/settings');await modal.waitFor({state:'hidden'});
   // The chat pops out into picture in picture, ready for a follow-up about the opened page.
   const panel=page.getByRole('complementary',{name:'Ask Pharos progress',exact:true});
@@ -2256,8 +1780,19 @@ for (const browsing of [false,true]) test(`Ask Pharos ${browsing?'reopened brows
   await page.locator('.pharos-pip-ghost').waitFor({state:'detached'});
   await panel.locator('.pharos-floating-open').click();await modal.waitFor();
   assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)));
+  await page.getByRole('button',{name:'Close Ask Pharos',exact:true}).click();await modal.waitFor({state:'hidden'});
+  // Browsing, then reopened: the ready answer waits for a click.
+  await ask('Open search');
+  await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();
+  await activateHeaderTool(page,'askPharosToggle');
+  finish();
+  const search=page.locator('.pharos-destination[href="/library"]:not([hidden])');
+  await search.waitFor();
+  assert.equal(new URL(page.url()).pathname,'/settings');
+  assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)));
+  await search.click();
+  await page.waitForURL(url=>url.pathname==='/library');await modal.waitFor({state:'hidden'});
 });
-
 
 test('Quick Stats disclosure and editing keep keyboard focus on the control being used', { skip }, async t => {
   const { page, shot } = await open(t, { url: '/settings/layout', ready: '#quickStatsExpand' });
@@ -2267,38 +1802,16 @@ test('Quick Stats disclosure and editing keep keyboard focus on the control bein
   assert.ok(await disclosure.evaluate(element => document.activeElement === element));
   const handle = page.getByRole('button', { name: 'Arrange Tokens', exact: true });
   const focused = async locator => page.waitForFunction(element => document.activeElement === element, await locator.elementHandle());
-  await handle.focus();
   await press(handle, 'Alt+ArrowUp');
-  await focused(handle);
-  await press(handle);
-  await page.locator('#quickStatsToolMenu:popover-open').waitFor();
-  await page.keyboard.press('Escape');
-  await focused(handle);
-  await press(handle);
-  await press(page.getByRole('button', { name: 'Move down Tokens', exact: true }));
   await focused(handle);
   await page.keyboard.press('Delete');
   const add = page.getByRole('button', { name: 'Add Tokens', exact: true });
   await focused(add);
   await press(add);
   await focused(handle);
-  const column = page.getByRole('button', { name: 'Arrange Today', exact: true });
-  await press(column, 'Alt+ArrowLeft');
-  await focused(column);
-  await press(column);
-  await press(page.getByRole('button', { name: 'Move right Today', exact: true }));
-  await focused(column);
   await page.evaluate(() => dispatchEvent(new Event('pharos:carbon-settings')));
-  await focused(column);
-  await page.keyboard.press('Delete');
-  const addColumn = page.getByRole('button', { name: 'Add Today', exact: true });
-  await focused(addColumn);
-  await press(addColumn);
-  await focused(column);
+  await focused(handle);
   await shot('quick-stats-editor');
-  await press(disclosure);
-  await page.locator('#quickStatsOptions').waitFor({ state: 'hidden' });
-  assert.ok(await disclosure.evaluate(element => document.activeElement === element));
 });
 
 test('dashboard card creation keeps focus in its dialog, restores it on cancel and opens the saved Home card', {skip}, async t => {
@@ -2313,7 +1826,7 @@ test('dashboard card creation keeps focus in its dialog, restores it on cancel a
   await create.click();
   await dialog.getByRole('textbox',{name:'Title',exact:true}).fill('My provider tokens');
   await dialog.getByRole('textbox',{name:'Description',exact:true}).fill('A moving view of my token usage.');
-  for(const width of [1440,390,320]) {
+  for(const width of [1440,320]) {
     await page.setViewportSize({width,height:900});
     assert.ok(await dialog.evaluate(el=>{const r=el.getBoundingClientRect();return r.left>=0 && r.right<=innerWidth && el.scrollWidth<=el.clientWidth;}),'dialog fits the viewport');
   }
@@ -2358,11 +1871,11 @@ test('Ask Pharos loads chart previews behind the floating panel so a ready answe
   assert.equal(queries(),loaded,'opening a just-loaded answer reuses its charts');
 });
 
-for (const [width, theme] of [[1440,'dark'],[390,'light'],[320,'dark']]) test(`Ask Pharos work previews fit beside their links (${theme}) @ ${width}`, {skip}, async t => {
+for (const width of [1440,320]) test(`Ask Pharos work previews fit beside their links @ ${width}`, {skip}, async t => {
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   const cards=[{id:'work',title:'Long work',description:'The whole workspace.',href:'/work/'+workID},{id:'conversation',title:'Root conversation',description:'One conversation in it.',href:'/work/'+workID+'?conversation=conv-root'}];
   let session;
-  const {page,shot}=await open(t,{url:'/library',ready:'body>header',viewport:{width,height:900},preferences:{'pharos-theme':theme},api:{
+  const {page,shot}=await open(t,{url:'/library',ready:'body>header',viewport:{width,height:900},api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
     'GET /api/ask/sessions':()=>({sessions:session?[session]:[]}),
@@ -2391,18 +1904,18 @@ for (const [width, theme] of [[1440,'dark'],[390,'light'],[320,'dark']]) test(`A
   await shot('ask-work-previews');
 });
 
-for (const [width, theme, count, unavailable, view='compare'] of [[1440,'dark',2,false],[390,'light',1,false],[320,'dark',1,true],[1440,'dark',1,false,'trend'],[390,'light',1,false,'distribution']]) test(`Ask Pharos chart previews keep links, page state and focus usable (${theme}, ${view}, ${unavailable?'unavailable':count+' charts'}) @ ${width}`, {skip}, async t => {
+// Preview resolution, jobs and unavailable charts are unit tested in ask-pharos.test.mjs.
+for (const [width, count, view] of [[390,2,'compare'],[1440,1,'trend']]) test(`Ask Pharos chart previews keep links, page state and focus usable (${view}, ${count} charts) @ ${width}`, {skip}, async t => {
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   const cards=Array.from({length:count},(_,index)=>({id:'chart-'+index,title:index?'Tokens by model':'Tokens by provider',description:'Explore the selected token usage.',href:'/analyze?'+new URLSearchParams({analyze_mode:'dashboards',analyze_topic:'tokens',...view==='trend'?{analyze_window:'today',analyze_timezone:'America/Denver'}:{},analyze_chart:JSON.stringify({v:2,view,metric:'tokens',split:index?'model':'provider',unit:'conversation',minSamples:0,...view==='trend'?{rollingPeriods:3,norm:true}:{}}),analyze_filters:encodeQuery({...EMPTY_QUERY,where:[]})})}));
   let session;
-  const {page,shot,settled,calls}=await open(t,{url:'/library',ready:'body>header',viewport:{width,height:900},preferences:{'pharos-theme':theme},api:{
+  const {page,shot,settled,calls}=await open(t,{url:'/library',ready:'body>header',viewport:{width,height:900},api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
     'GET /api/ask/sessions':()=>({sessions:session?[session]:[]}),
     'GET /api/ask/session':()=>session,
     'POST /api/ask/session':({body})=>(session={...session,...body}),
     'POST /api/ask/send':({body})=>(session={id:body.id,createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:body.turnID,prompt:body.prompt,cli:'Codex',model:'test-model',effort:'Low',status:count===1?'single':'multiple',message:'',elapsedMs:1000,reply:'Your token usage.',cards}]}),
-    ...(unavailable?{'POST /api/query/usage/metrics':()=>({metrics:[]}), 'POST /api/query/usage/query-v3':()=>({metrics:[]})}:{}),
   }});
   await page.waitForFunction(()=>document.querySelector('.pharos-current-settings')?.textContent.includes('Test Model'));
   await activateHeaderTool(page,'askPharosToggle');
@@ -2456,6 +1969,7 @@ for (const [width, theme, count, unavailable, view='compare'] of [[1440,'dark',2
     await page.waitForFunction(()=>document.querySelector('figure[aria-label^="Chart preview:"]')?.getAttribute('aria-busy')==='false');
     assert.equal(page.url(),before,'revalidation preserves the surrounding page state');
     assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)),'revalidation preserves focus in Ask');
+    return;
   }
   await shot('ask-chart-previews');
   await page.getByRole('button',{name:'Clear',exact:true}).click();

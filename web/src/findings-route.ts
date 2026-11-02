@@ -17,3 +17,8 @@ export function readFindingsRoute(params: URLSearchParams): FindingsRoute {
 }
 // One finding's page; the overview tab is the default and is left out.
 export const findingDetailURL = (id: string, tab = "") => `/findings?${new URLSearchParams({ finding: id, ...(tab && tab !== "overview" ? { tab } : {}) })}`;
+// Rank by: a linked findings_rank applies without saving, an unlinked view
+// shows the saved default, and only a manual choice saves the default.
+export function findingsRank<T extends string>(linked: T | "", saved: T | undefined, chosen?: T): { rank: T | "usd"; save?: { rank: T } } {
+  return chosen ? { rank: chosen, save: { rank: chosen } } : { rank: linked || saved || "usd" };
+}

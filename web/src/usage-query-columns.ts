@@ -1,4 +1,4 @@
-import { ITEM_DETAILS_COLUMN, groupKeyFields, type FieldDef, type FieldSchema, type QueryState } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, ITEM_DETAILS_COLUMN, groupKeyFields, type FieldDef, type FieldSchema, type QueryState } from "@pythia-software/query-table-core";
 import { toolSummaryDimensions } from "./tools-dashboard-model";
 import type { UsageDataset } from "./usage-workspace-model";
 
@@ -50,6 +50,12 @@ export function withGroupDetail(query: QueryState): QueryState {
     select.find(column => column.field === ITEM_DETAILS_COLUMN) ?? { field: ITEM_DETAILS_COLUMN },
   ];
   return JSON.stringify(columns) === JSON.stringify(query.select) ? query : { ...query, select: columns };
+}
+
+// A new Analyze table fits the screen at the dataset's page size. Restored
+// URLs, saves and last-used queries keep their own sizing choice.
+export function fittedDefaultQuery(schema: FieldSchema): QueryState {
+  return { ...EMPTY_QUERY, select: schema.defaultSelect ?? [], orderBy: schema.defaultSort ?? [], limit: schema.defaultLimit ?? EMPTY_QUERY.limit, fitToScreen: true };
 }
 
 export function usageActionQuery(query: QueryState, schema: FieldSchema, dataset: UsageDataset): QueryState {

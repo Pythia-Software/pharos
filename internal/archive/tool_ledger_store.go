@@ -554,6 +554,16 @@ func (c *Catalog) ensureToolRollup(ctx context.Context) error {
 	state := &c.tools
 	state.rollup.Lock()
 	defer state.rollup.Unlock()
+	if err := c.updateStaleToolRollup(ctx); err != nil {
+		return err
+	}
+	// Request timings are derived from the same ledger, a conversation at a
+	// time. Their exclusions read the mirrored workspaces the rollup publishes.
+	return c.refreshRequestTimings(ctx)
+}
+
+func (c *Catalog) updateStaleToolRollup(ctx context.Context) error {
+	state := &c.tools
 	generation, built, day, stale, err := c.toolRollupStale(ctx)
 	if err != nil || !stale {
 		return err
