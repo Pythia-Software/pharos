@@ -8,156 +8,449 @@
       "description": "What this run may do, and how much of its limits it has used.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["plugin", "run_id", "direction", "sender_id", "deadline", "permissions", "permissions_hash", "limits", "used", "credential"],
+      "required": [
+        "plugin",
+        "run_id",
+        "direction",
+        "sender_id",
+        "library_instance",
+        "as_of",
+        "export_delay_seconds",
+        "deadline",
+        "permissions",
+        "permissions_hash",
+        "limits",
+        "used",
+        "credential",
+        "datasets"
+      ],
       "properties": {
-        "plugin": {"$ref": "common.schema.json#/$defs/plugin_ref"},
-        "run_id": {"$ref": "common.schema.json#/$defs/run_id"},
-        "direction": {"enum": ["import", "export"]},
-        "sender_id": {"$ref": "common.schema.json#/$defs/sender_id"},
-        "deadline": {"$ref": "common.schema.json#/$defs/timestamp"},
+        "plugin": {
+          "$ref": "common.schema.json#/$defs/plugin_ref"
+        },
+        "run_id": {
+          "$ref": "common.schema.json#/$defs/run_id"
+        },
+        "direction": {
+          "enum": [
+            "import",
+            "export"
+          ]
+        },
+        "sender_id": {
+          "$ref": "common.schema.json#/$defs/sender_id"
+        },
+        "deadline": {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        },
         "permissions": {
           "description": "The manifest's permissions as consented, verbatim.",
           "$ref": "plugin-manifest.schema.json#/$defs/permissions"
         },
-        "permissions_hash": {"$ref": "common.schema.json#/$defs/sha256"},
+        "permissions_hash": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
         "limits": {
           "type": "object",
-          "additionalProperties": {"type": "integer", "minimum": 0}
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
         },
         "used": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["requests", "rows", "served_bytes"],
+          "required": [
+            "requests",
+            "rows",
+            "served_bytes"
+          ],
           "properties": {
-            "requests": {"type": "integer", "minimum": 0},
-            "rows": {"type": "integer", "minimum": 0},
-            "served_bytes": {"type": "integer", "minimum": 0}
+            "requests": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "rows": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "served_bytes": {
+              "type": "integer",
+              "minimum": 0
+            }
           }
         },
-        "credential": {"description": "Whether GET /credential has a registration credential.", "type": "boolean"}
+        "credential": {
+          "description": "Whether GET /credential has a registration credential.",
+          "type": "boolean"
+        },
+        "library_instance": {
+          "$ref": "common.schema.json#/$defs/library_instance"
+        },
+        "as_of": {
+          "$ref": "common.schema.json#/$defs/as_of"
+        },
+        "export_delay_seconds": {
+          "description": "The library's export delay; as_of is the run's start minus this.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "datasets": {
+          "description": "For each granted dataset, the keys it allows for grouping and the fields it allows as periods.",
+          "type": "object",
+          "propertyNames": {
+            "$ref": "common.schema.json#/$defs/dataset"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "group_keys",
+              "period_fields"
+            ],
+            "properties": {
+              "group_keys": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "period_fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "credential": {
       "description": "A short-lived access token for the receiver. Pharos keeps the refresh token and refreshes it; scripts never see it.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["token_type", "access_token", "expires_at"],
+      "required": [
+        "token_type",
+        "access_token",
+        "expires_at"
+      ],
       "properties": {
-        "token_type": {"const": "Bearer"},
-        "access_token": {"type": "string", "minLength": 1},
-        "expires_at": {"$ref": "common.schema.json#/$defs/timestamp"}
+        "token_type": {
+          "const": "Bearer"
+        },
+        "access_token": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expires_at": {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        }
       }
     },
     "changes": {
-      "description": "What changed since a token: items to send again, periods to restate, items to retract. Private activity never appears and never advances the token.",
+      "description": "What changed in the granted datasets after a token, up to the run's as_of: items to fetch and send again, time ranges to restate, items to retract. Private activity never appears and never moves the token.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["changes", "restate", "retract", "next", "more"],
+      "required": [
+        "changes",
+        "restate",
+        "retract",
+        "next",
+        "more"
+      ],
       "properties": {
         "changes": {
           "type": "array",
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["dataset", "id", "version"],
+            "required": [
+              "dataset",
+              "id"
+            ],
             "properties": {
-              "dataset": {"$ref": "common.schema.json#/$defs/dataset"},
-              "id": {"$ref": "common.schema.json#/$defs/opaque_id"},
-              "version": {"type": "integer", "minimum": 1}
+              "dataset": {
+                "$ref": "common.schema.json#/$defs/dataset"
+              },
+              "id": {
+                "$ref": "common.schema.json#/$defs/opaque_id"
+              }
             }
           }
         },
         "restate": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["dataset", "period"],
-            "properties": {
-              "dataset": {"$ref": "common.schema.json#/$defs/dataset"},
-              "period": {"type": "string"}
-            }
+            "$ref": "common.schema.json#/$defs/restatement"
           }
         },
         "retract": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["id", "kind", "version"],
-            "properties": {
-              "id": {"$ref": "common.schema.json#/$defs/opaque_id"},
-              "kind": {"enum": ["conversation", "row"]},
-              "version": {"type": "integer", "minimum": 1}
-            }
+            "$ref": "common.schema.json#/$defs/retraction"
           }
         },
-        "next": {"$ref": "common.schema.json#/$defs/change_token"},
-        "more": {"description": "Whether another page follows immediately.", "type": "boolean"}
-      }
-    },
-    "conversations_page": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["conversations", "more"],
-      "properties": {
-        "conversations": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["id", "version", "fields"],
-            "properties": {
-              "id": {"$ref": "common.schema.json#/$defs/opaque_id"},
-              "version": {"type": "integer", "minimum": 1},
-              "fields": {
-                "description": "The granted fields of library/1 for this conversation, after redaction.",
-                "type": "object"
-              }
-            }
-          }
+        "next": {
+          "$ref": "common.schema.json#/$defs/change_token"
         },
-        "cursor": {"description": "Pass back for the next page.", "type": "string"},
-        "more": {"type": "boolean"}
+        "more": {
+          "description": "Whether another page follows immediately.",
+          "type": "boolean"
+        }
       }
     },
     "messages_page": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["conversation", "version", "messages", "more"],
+      "required": [
+        "conversation",
+        "version",
+        "messages",
+        "more",
+        "as_of"
+      ],
       "properties": {
-        "conversation": {"$ref": "common.schema.json#/$defs/opaque_id"},
-        "version": {"type": "integer", "minimum": 1},
+        "conversation": {
+          "$ref": "common.schema.json#/$defs/opaque_id",
+          "description": "A conversations/1 ID."
+        },
+        "version": {
+          "$ref": "common.schema.json#/$defs/item_version"
+        },
         "messages": {
           "type": "array",
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["id", "role", "kind", "created_at"],
+            "required": [
+              "id",
+              "role",
+              "kind",
+              "created_at"
+            ],
             "properties": {
-              "id": {"$ref": "common.schema.json#/$defs/opaque_id"},
-              "role": {"enum": ["user", "assistant", "system", "tool"]},
-              "kind": {"type": "string"},
-              "created_at": {"$ref": "common.schema.json#/$defs/timestamp"},
-              "model": {"type": "string"},
-              "text": {"description": "After redaction; absent when the grant has no text.", "type": "string"},
-              "redacted": {"description": "Fields or spans removed by redaction.", "type": "array", "items": {"type": "string"}}
+              "id": {
+                "$ref": "common.schema.json#/$defs/opaque_id"
+              },
+              "role": {
+                "enum": [
+                  "user",
+                  "assistant",
+                  "system",
+                  "tool"
+                ]
+              },
+              "kind": {
+                "type": "string"
+              },
+              "created_at": {
+                "$ref": "common.schema.json#/$defs/timestamp"
+              },
+              "model": {
+                "type": "string"
+              },
+              "text": {
+                "description": "After redaction; absent when the grant has no text.",
+                "type": "string"
+              },
+              "redacted": {
+                "description": "Fields or spans removed by redaction.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
             }
-          }
+          },
+          "description": "Messages created at or before as_of."
         },
-        "cursor": {"type": "string"},
-        "more": {"type": "boolean"}
+        "cursor": {
+          "type": "string"
+        },
+        "more": {
+          "type": "boolean"
+        },
+        "as_of": {
+          "$ref": "common.schema.json#/$defs/as_of"
+        }
       }
     },
     "resend_request": {
       "description": "A scripted exporter's receiver asked for everything: Pharos forgets what it counted as acknowledged for this plugin and records the reason.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["reason"],
+      "required": [
+        "reason"
+      ],
       "properties": {
-        "reason": {"type": "string", "minLength": 1, "maxLength": 500},
-        "from": {"$ref": "common.schema.json#/$defs/date"}
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "from": {
+          "$ref": "common.schema.json#/$defs/date"
+        }
       }
+    },
+    "items_page": {
+      "description": "Rows of one dataset by opaque ID, with the version Pharos assigns as it serves them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset",
+        "as_of",
+        "items",
+        "more"
+      ],
+      "properties": {
+        "dataset": {
+          "$ref": "common.schema.json#/$defs/dataset"
+        },
+        "as_of": {
+          "$ref": "common.schema.json#/$defs/as_of"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "version",
+              "fields"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "common.schema.json#/$defs/opaque_id"
+              },
+              "version": {
+                "$ref": "common.schema.json#/$defs/item_version"
+              },
+              "fields": {
+                "description": "The granted fields, after redaction.",
+                "type": "object"
+              }
+            }
+          }
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "more": {
+          "type": "boolean"
+        }
+      }
+    },
+    "query_result": {
+      "description": "The answer to an export query: rows for select, groups for group.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset",
+        "as_of"
+      ],
+      "properties": {
+        "dataset": {
+          "$ref": "common.schema.json#/$defs/dataset"
+        },
+        "as_of": {
+          "$ref": "common.schema.json#/$defs/as_of"
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "version",
+              "fields"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "common.schema.json#/$defs/opaque_id"
+              },
+              "version": {
+                "$ref": "common.schema.json#/$defs/item_version"
+              },
+              "fields": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "keys",
+              "values",
+              "fingerprint"
+            ],
+            "properties": {
+              "period": {
+                "description": "Start of the period, in the query's time zone.",
+                "type": "string"
+              },
+              "keys": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              },
+              "values": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "fingerprint": {
+                "$ref": "common.schema.json#/$defs/sha256"
+              }
+            }
+          }
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "more": {
+          "type": "boolean"
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "rows"
+          ],
+          "not": {
+            "required": [
+              "groups"
+            ]
+          }
+        },
+        {
+          "required": [
+            "groups"
+          ],
+          "not": {
+            "required": [
+              "rows"
+            ]
+          }
+        }
+      ]
     }
   }
 }

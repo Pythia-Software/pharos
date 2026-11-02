@@ -2,25 +2,60 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://pharos.pythia.software/contracts/plugins/plugin-manifest.schema.json",
   "title": "Pharos plugin manifest (pharos-plugin/1)",
-  "description": "What a plugin is, what it may read or produce, and how it runs. Installing grants all of permissions; declining installs nothing. Any change to permissions requires new consent.",
+  "description": "What a plugin is, what it may read or produce, and how it runs. Installing grants all of permissions; declining installs nothing. Any change to permissions requires new consent, and any change to the bundle an acknowledgement. permissions_hash is SHA-256 over the RFC 8785 canonical JSON of permissions with every default applied, so writing a default explicitly never asks for consent again.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["plugin", "id", "name", "publisher", "version", "direction", "description", "permissions", "triggers", "run"],
+  "required": [
+    "plugin",
+    "id",
+    "name",
+    "publisher",
+    "version",
+    "direction",
+    "description",
+    "permissions",
+    "triggers",
+    "run"
+  ],
   "properties": {
-    "plugin": {"const": "pharos-plugin/1"},
-    "id": {"$ref": "common.schema.json#/$defs/plugin_id"},
-    "name": {"type": "string", "minLength": 1, "maxLength": 80},
-    "publisher": {"type": "string", "minLength": 1, "maxLength": 80},
-    "version": {"$ref": "common.schema.json#/$defs/version"},
-    "direction": {"enum": ["import", "export"]},
+    "plugin": {
+      "const": "pharos-plugin/1"
+    },
+    "id": {
+      "$ref": "common.schema.json#/$defs/plugin_id"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "publisher": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "version": {
+      "$ref": "common.schema.json#/$defs/version"
+    },
+    "direction": {
+      "enum": [
+        "import",
+        "export"
+      ]
+    },
     "description": {
       "description": "One or two sentences shown on the consent screen.",
       "type": "string",
       "minLength": 1,
       "maxLength": 500
     },
-    "homepage": {"type": "string", "format": "uri"},
-    "permissions": {"$ref": "#/$defs/permissions"},
+    "homepage": {
+      "type": "string",
+      "format": "uri"
+    },
+    "permissions": {
+      "$ref": "#/$defs/permissions"
+    },
     "params": {
       "description": "A JSON Schema for the parameters the person fills in at install (for example an SSH destination). Pharos renders it as a form and validates against it; values reach the script as request.params.",
       "type": "object"
@@ -28,40 +63,68 @@
     "triggers": {
       "type": "array",
       "minItems": 1,
-      "items": {"$ref": "#/$defs/trigger"}
+      "items": {
+        "$ref": "#/$defs/trigger"
+      }
     },
-    "guards": {"$ref": "#/$defs/guards"},
-    "limits": {"$ref": "#/$defs/limits"},
+    "guards": {
+      "$ref": "#/$defs/guards"
+    },
+    "limits": {
+      "$ref": "#/$defs/limits"
+    },
     "registration": {
       "description": "Optional receiver sign-up, run once at install as OAuth for native apps (RFC 8252) with PKCE.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["url", "token_url"],
+      "required": [
+        "url",
+        "token_url"
+      ],
       "properties": {
-        "url": {"description": "Authorization page opened in the browser.", "type": "string", "format": "uri"},
-        "token_url": {"description": "Where Pharos exchanges the authorization code and refreshes access tokens.", "type": "string", "format": "uri"}
+        "url": {
+          "description": "Authorization page opened in the browser.",
+          "type": "string",
+          "format": "uri"
+        },
+        "token_url": {
+          "description": "Where Pharos exchanges the authorization code and refreshes access tokens.",
+          "type": "string",
+          "format": "uri"
+        }
       }
     },
     "supports": {
       "type": "array",
       "uniqueItems": true,
-      "items": {"enum": ["retract"]}
+      "items": {
+        "enum": [
+          "retract"
+        ]
+      }
     },
     "identity": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "on_reinstall": {
-          "description": "keep reuses the previous sender ID and hash key in this library; new starts fresh.",
-          "enum": ["keep", "new"],
+          "description": "What reinstalling this plugin in the same library reuses. keep: the sender ID, and for a plugin without registration the installation key behind its opaque IDs and hashes. new: fresh ones. With registration, opaque IDs and hashes always follow the receiver's organization salt, so the receiver can match items either way; new changes only the sender ID.",
+          "enum": [
+            "keep",
+            "new"
+          ],
           "default": "keep"
         }
       }
     },
     "run": {
       "oneOf": [
-        {"$ref": "#/$defs/scripted_run"},
-        {"$ref": "#/$defs/declarative_run"}
+        {
+          "$ref": "#/$defs/scripted_run"
+        },
+        {
+          "$ref": "#/$defs/declarative_run"
+        }
       ]
     },
     "update_url": {
@@ -72,20 +135,76 @@
   },
   "allOf": [
     {
-      "if": {"properties": {"direction": {"const": "export"}}},
+      "if": {
+        "properties": {
+          "direction": {
+            "const": "export"
+          }
+        }
+      },
       "then": {
-        "properties": {"permissions": {"required": ["read"], "not": {"required": ["produce"]}}}
+        "properties": {
+          "permissions": {
+            "required": [
+              "read"
+            ],
+            "not": {
+              "required": [
+                "produce"
+              ]
+            }
+          }
+        }
       },
       "else": {
         "properties": {
-          "permissions": {"required": ["produce"], "not": {"anyOf": [{"required": ["read"]}, {"required": ["destinations"]}]}},
-          "run": {"$ref": "#/$defs/scripted_run"}
+          "permissions": {
+            "required": [
+              "produce"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "read"
+                  ]
+                },
+                {
+                  "required": [
+                    "destinations"
+                  ]
+                }
+              ]
+            }
+          },
+          "run": {
+            "$ref": "#/$defs/scripted_run"
+          }
         }
       }
     },
     {
-      "if": {"properties": {"run": {"required": ["builtin"]}}, "required": ["run"]},
-      "then": {"properties": {"permissions": {"required": ["destinations"]}}}
+      "if": {
+        "properties": {
+          "run": {
+            "required": [
+              "builtin"
+            ]
+          }
+        },
+        "required": [
+          "run"
+        ]
+      },
+      "then": {
+        "properties": {
+          "permissions": {
+            "required": [
+              "destinations"
+            ]
+          }
+        }
+      }
     }
   ],
   "$defs": {
@@ -93,22 +212,142 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "read": {"$ref": "#/$defs/read_permissions"},
-        "produce": {"$ref": "#/$defs/produce_permissions"},
-        "redaction": {"$ref": "#/$defs/redaction"},
+        "read": {
+          "$ref": "#/$defs/read_permissions"
+        },
+        "produce": {
+          "$ref": "#/$defs/produce_permissions"
+        },
+        "redaction": {
+          "$ref": "#/$defs/redaction"
+        },
         "destinations": {
           "description": "Where an exporter's data goes, shown at consent. A declarative exporter can deliver only to URLs under these.",
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": {"type": "string", "format": "uri"}
+          "items": {
+            "type": "string",
+            "format": "uri"
+          }
         },
         "fetches_from": {
           "description": "For importers: where data comes from, in words for the consent screen, such as \"alice@lab-box over SSH\".",
           "type": "array",
-          "items": {"type": "string", "minLength": 1, "maxLength": 200}
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "redaction": {
+                "properties": {
+                  "preset": {
+                    "const": "stats"
+                  }
+                },
+                "required": [
+                  "preset"
+                ]
+              }
+            },
+            "required": [
+              "redaction"
+            ]
+          },
+          "then": {
+            "properties": {
+              "read": {
+                "properties": {
+                  "text": {
+                    "const": false
+                  },
+                  "export_bundles": {
+                    "const": false
+                  },
+                  "datasets": {
+                    "additionalProperties": {
+                      "properties": {
+                        "mode": {
+                          "const": "aggregate"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "redaction": {
+                "properties": {
+                  "preset": {
+                    "const": "metadata"
+                  }
+                },
+                "required": [
+                  "preset"
+                ]
+              }
+            },
+            "required": [
+              "redaction"
+            ]
+          },
+          "then": {
+            "properties": {
+              "read": {
+                "properties": {
+                  "text": {
+                    "const": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "redaction": {
+                "properties": {
+                  "preset": {
+                    "const": "text-scrubbed"
+                  }
+                },
+                "required": [
+                  "preset"
+                ]
+              }
+            },
+            "required": [
+              "redaction"
+            ]
+          },
+          "then": {
+            "properties": {
+              "read": {
+                "required": [
+                  "text"
+                ],
+                "properties": {
+                  "text": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "read_permissions": {
       "description": "What an exporter may read through the connector API. Private conversations and usage are never readable, whatever this says.",
@@ -118,21 +357,32 @@
         "datasets": {
           "type": "object",
           "minProperties": 1,
-          "propertyNames": {"$ref": "common.schema.json#/$defs/dataset"},
+          "propertyNames": {
+            "$ref": "common.schema.json#/$defs/dataset"
+          },
           "additionalProperties": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["fields", "mode"],
+            "required": [
+              "fields",
+              "mode"
+            ],
             "properties": {
               "fields": {
                 "type": "array",
                 "minItems": 1,
                 "uniqueItems": true,
-                "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$"
+                }
               },
               "mode": {
-                "description": "aggregate allows grouped metrics only; rows allows rows too.",
-                "enum": ["aggregate", "rows"]
+                "description": "aggregate allows grouped summaries only, grouped by the keys the dataset allows; rows allows rows too. The consent screen names the finest grouping the granted keys allow.",
+                "enum": [
+                  "aggregate",
+                  "rows"
+                ]
               }
             }
           }
@@ -156,13 +406,30 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "repositories": {"type": "array", "items": {"type": "string"}, "minItems": 1},
-            "machines": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+            "repositories": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            "machines": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
             "from": {
               "description": "Earliest activity readable: a date, or a relative age such as -90d. Without it, all past history is readable.",
               "anyOf": [
-                {"$ref": "common.schema.json#/$defs/date"},
-                {"type": "string", "pattern": "^-[1-9][0-9]*d$"}
+                {
+                  "$ref": "common.schema.json#/$defs/date"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-[1-9][0-9]*d$"
+                }
               ]
             }
           }
@@ -173,53 +440,112 @@
       "description": "What an importer may add to the library.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["kinds"],
+      "required": [
+        "kinds"
+      ],
       "properties": {
         "kinds": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": {"$ref": "common.schema.json#/$defs/drop_kind"}
+          "items": {
+            "$ref": "common.schema.json#/$defs/drop_kind"
+          }
         },
         "namespaces": {
-          "description": "Usage record namespaces this importer writes. Records are unique by (namespace, id) across every importer that declares the namespace.",
+          "description": "Usage record namespaces. Each belongs to this plugin: records are unique by (plugin ID, namespace, id), so another plugin cannot overwrite them, and reinstalling this plugin continues deduplicating against them.",
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": {"$ref": "common.schema.json#/$defs/namespace"}
+          "items": {
+            "$ref": "common.schema.json#/$defs/namespace"
+          }
         }
       },
-      "if": {"properties": {"kinds": {"contains": {"const": "usage-records/1"}}}},
-      "then": {"required": ["namespaces"]},
-      "else": {"not": {"required": ["namespaces"]}}
+      "if": {
+        "properties": {
+          "kinds": {
+            "contains": {
+              "const": "usage-records/1"
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "namespaces"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "namespaces"
+          ]
+        }
+      }
     },
     "redaction": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["preset"],
+      "required": [
+        "preset"
+      ],
       "properties": {
-        "preset": {"enum": ["stats", "metadata", "text-scrubbed", "full"]},
-        "drop": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
-        "hash": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "preset": {
+          "enum": [
+            "stats",
+            "metadata",
+            "text-scrubbed",
+            "full"
+          ]
+        },
+        "drop": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "hash": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          },
+          "description": "Pseudonymised fields. Values are keyed by the receiver's salt, so other receivers cannot match them, but this receiver can check guesses (a repository name is easy to guess). The consent screen says so."
+        },
         "coarsen": {
           "type": "object",
-          "additionalProperties": {"enum": ["day", "week", "month"]}
+          "additionalProperties": {
+            "enum": [
+              "day",
+              "week",
+              "month"
+            ]
+          }
         },
         "truncate": {
           "description": "Field to maximum characters.",
           "type": "object",
-          "additionalProperties": {"type": "integer", "minimum": 1}
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 1
+          }
         },
         "relative_paths": {
           "description": "Path fields replaced by repository-relative paths.",
           "type": "array",
           "uniqueItems": true,
-          "items": {"type": "string"}
+          "items": {
+            "type": "string"
+          }
         },
         "scrub_patterns": {
           "description": "Extra regular expressions removed from text, beyond the built-in secret patterns.",
           "type": "array",
-          "items": {"type": "string"}
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
@@ -235,19 +561,28 @@
           "minProperties": 1,
           "maxProperties": 1,
           "properties": {
-            "every": {"$ref": "common.schema.json#/$defs/duration"},
+            "every": {
+              "$ref": "common.schema.json#/$defs/duration"
+            },
             "at": {
               "description": "Local times of day.",
               "type": "array",
               "minItems": 1,
-              "items": {"type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"}
+              "items": {
+                "type": "string",
+                "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+              }
             }
           }
         },
         "after_index": {
           "type": "object",
           "additionalProperties": false,
-          "properties": {"min_interval": {"$ref": "common.schema.json#/$defs/duration"}}
+          "properties": {
+            "min_interval": {
+              "$ref": "common.schema.json#/$defs/duration"
+            }
+          }
         },
         "threshold": {
           "description": "After an index, once this much has arrived since the last acknowledged run.",
@@ -255,29 +590,54 @@
           "additionalProperties": false,
           "minProperties": 1,
           "properties": {
-            "conversations": {"type": "integer", "minimum": 1},
-            "tokens": {"type": "integer", "minimum": 1}
+            "conversations": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "tokens": {
+              "type": "integer",
+              "minimum": 1
+            }
           }
         },
-        "manual": {"type": "object", "additionalProperties": false}
+        "manual": {
+          "type": "object",
+          "additionalProperties": false
+        }
       }
     },
     "guards": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "min_interval": {"$ref": "common.schema.json#/$defs/duration"},
-        "max_runs_per_day": {"type": "integer", "minimum": 1},
+        "min_interval": {
+          "$ref": "common.schema.json#/$defs/duration"
+        },
+        "max_runs_per_day": {
+          "type": "integer",
+          "minimum": 1
+        },
         "quiet_hours": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["from", "to"],
+          "required": [
+            "from",
+            "to"
+          ],
           "properties": {
-            "from": {"type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"},
-            "to": {"type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"}
+            "from": {
+              "type": "string",
+              "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+            },
+            "to": {
+              "type": "string",
+              "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+            }
           }
         },
-        "on_power_only": {"type": "boolean"}
+        "on_power_only": {
+          "type": "boolean"
+        }
       }
     },
     "limits": {
@@ -285,25 +645,95 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "max_runtime": {"$ref": "common.schema.json#/$defs/duration"},
-        "max_cpu": {"$ref": "common.schema.json#/$defs/duration"},
-        "max_memory": {"$ref": "common.schema.json#/$defs/byte_size"},
-        "max_bytes": {"description": "Bytes written to output_dir.", "$ref": "common.schema.json#/$defs/byte_size"},
-        "max_requests": {"type": "integer", "minimum": 1},
-        "max_rows": {"type": "integer", "minimum": 1},
-        "max_served_bytes": {"$ref": "common.schema.json#/$defs/byte_size"}
+        "max_runtime": {
+          "$ref": "common.schema.json#/$defs/duration"
+        },
+        "max_cpu": {
+          "$ref": "common.schema.json#/$defs/duration"
+        },
+        "max_memory": {
+          "$ref": "common.schema.json#/$defs/byte_size"
+        },
+        "max_bytes": {
+          "description": "Bytes written to output_dir.",
+          "$ref": "common.schema.json#/$defs/byte_size"
+        },
+        "max_requests": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_rows": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_served_bytes": {
+          "$ref": "common.schema.json#/$defs/byte_size"
+        }
       }
     },
     "scripted_run": {
+      "description": "A program from the plugin bundle. Pharos appends the request file's path to the arguments.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["command"],
+      "oneOf": [
+        {
+          "required": [
+            "interpreter",
+            "entry"
+          ],
+          "not": {
+            "required": [
+              "executable"
+            ]
+          }
+        },
+        {
+          "required": [
+            "executable"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "interpreter"
+                ]
+              },
+              {
+                "required": [
+                  "entry"
+                ]
+              }
+            ]
+          }
+        }
+      ],
       "properties": {
-        "command": {
-          "description": "Argument vector, relative to the plugin bundle. The interpreter (first element) is resolved per Mac when the plugin is allowed there. Pharos appends the request file's path.",
+        "interpreter": {
+          "description": "Resolved on each Mac when the plugin is allowed there. Pharos checks that it really runs (on a Mac without the Command Line Tools, /usr/bin/python3 is a stub that offers to install them).",
+          "enum": [
+            "python3",
+            "node",
+            "bash",
+            "zsh",
+            "ruby",
+            "perl"
+          ]
+        },
+        "entry": {
+          "description": "Script path inside the bundle.",
+          "type": "string",
+          "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$)).+$"
+        },
+        "executable": {
+          "description": "Executable path inside the bundle.",
+          "type": "string",
+          "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$)).+$"
+        },
+        "args": {
           "type": "array",
-          "minItems": 1,
-          "items": {"type": "string", "minLength": 1}
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
@@ -311,14 +741,28 @@
       "description": "Run by Pharos itself: read through the connector API and deliver over pharos-receiver/1.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["builtin", "receiver", "send"],
+      "required": [
+        "builtin",
+        "receiver",
+        "send"
+      ],
       "properties": {
-        "builtin": {"const": "declarative-export/1"},
+        "builtin": {
+          "const": "declarative-export/1"
+        },
         "receiver": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["url"],
-          "properties": {"url": {"description": "Base URL of the pharos-receiver/1 service; must be under a destination.", "type": "string", "format": "uri"}}
+          "required": [
+            "url"
+          ],
+          "properties": {
+            "url": {
+              "description": "Base URL of the pharos-receiver/1 service; must be under a destination.",
+              "type": "string",
+              "format": "uri"
+            }
+          }
         },
         "send": {
           "type": "array",
@@ -326,18 +770,56 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["name", "dataset", "mode", "query", "incremental"],
+            "required": [
+              "name",
+              "dataset",
+              "query",
+              "incremental"
+            ],
             "properties": {
-              "name": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
-              "dataset": {"$ref": "common.schema.json#/$defs/dataset"},
-              "mode": {"enum": ["aggregate", "rows"]},
+              "name": {
+                "description": "The series name. Periods are keyed by (series, period, group), so two sends over one dataset never collide.",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]*$"
+              },
+              "dataset": {
+                "$ref": "common.schema.json#/$defs/dataset"
+              },
               "query": {
-                "description": "A Query Table V3 request body over the dataset's granted fields.",
-                "type": "object"
+                "description": "Every field it names must be in permissions.read for this dataset (checked when the manifest is parsed).",
+                "$ref": "export-query.schema.json"
               },
               "incremental": {
                 "description": "changes sends what changed since the last acknowledged run; full sends everything each run.",
-                "enum": ["changes", "full"]
+                "enum": [
+                  "changes",
+                  "full"
+                ]
+              }
+            },
+            "if": {
+              "properties": {
+                "incremental": {
+                  "const": "changes"
+                },
+                "query": {
+                  "required": [
+                    "group"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "query": {
+                  "properties": {
+                    "group": {
+                      "required": [
+                        "period"
+                      ]
+                    }
+                  }
+                }
               }
             }
           }

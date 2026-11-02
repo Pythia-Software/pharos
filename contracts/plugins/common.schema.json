@@ -20,8 +20,14 @@
     "byte_size": {
       "description": "Bytes, as an integer or with a binary unit: 52428800 or \"50MiB\".",
       "oneOf": [
-        {"type": "integer", "minimum": 0},
-        {"type": "string", "pattern": "^[1-9][0-9]*(B|KiB|MiB|GiB)$"}
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*(B|KiB|MiB|GiB)$"
+        }
       ]
     },
     "sha256": {
@@ -60,10 +66,17 @@
     "plugin_ref": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "version"],
+      "required": [
+        "id",
+        "version"
+      ],
       "properties": {
-        "id": {"$ref": "#/$defs/plugin_id"},
-        "version": {"$ref": "#/$defs/version"}
+        "id": {
+          "$ref": "#/$defs/plugin_id"
+        },
+        "version": {
+          "$ref": "#/$defs/version"
+        }
       }
     },
     "cursor": {
@@ -76,16 +89,25 @@
     },
     "transcript_kind": {
       "description": "Native transcript formats an importer can drop.",
-      "enum": ["claude", "codex", "canonical", "chatgpt-export"]
+      "enum": [
+        "claude",
+        "codex",
+        "canonical",
+        "chatgpt-export"
+      ]
     },
     "drop_kind": {
       "anyOf": [
-        {"$ref": "#/$defs/transcript_kind"},
-        {"const": "usage-records/1"}
+        {
+          "$ref": "#/$defs/transcript_kind"
+        },
+        {
+          "const": "usage-records/1"
+        }
       ]
     },
     "namespace": {
-      "description": "Deduplication scope for usage records, declared in the manifest: records are unique by (namespace, id).",
+      "description": "Deduplication scope for usage records. A namespace belongs to the plugin that declares it: records are unique by (plugin ID, namespace, id), so no other plugin can overwrite them.",
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9.-]{0,63}$"
     },
@@ -93,11 +115,30 @@
       "description": "A machine that a drop came from. key is stable for that machine and user within the plugin.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["key", "label", "os"],
+      "required": [
+        "key",
+        "label",
+        "os"
+      ],
       "properties": {
-        "key": {"type": "string", "minLength": 1, "maxLength": 200},
-        "label": {"type": "string", "minLength": 1, "maxLength": 200},
-        "os": {"enum": ["linux", "windows", "darwin", "other"]},
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "os": {
+          "enum": [
+            "linux",
+            "windows",
+            "darwin",
+            "other"
+          ]
+        },
         "machine_id": {
           "description": "Optional hardware or OS identifier, such as /etc/machine-id, used only as a hint for the machine registry.",
           "type": "string",
@@ -109,7 +150,10 @@
       "description": "One folder of output_dir (or of a bundle). Transcript drops mirror the source's layout under root; a usage drop holds usage-records/1 JSON Lines files.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["dir", "kind"],
+      "required": [
+        "dir",
+        "kind"
+      ],
       "properties": {
         "dir": {
           "description": "Relative, slash-separated path under output_dir. No '..' or leading '/'.",
@@ -117,19 +161,55 @@
           "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$))[^\\\\]+$",
           "maxLength": 512
         },
-        "kind": {"$ref": "#/$defs/drop_kind"},
-        "machine": {"description": "key of a machine declared beside this drop.", "type": "string"},
-        "source": {"description": "Capture source name; defaults to kind.", "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"},
+        "kind": {
+          "$ref": "#/$defs/drop_kind"
+        },
+        "machine": {
+          "description": "key of a machine declared beside this drop.",
+          "type": "string"
+        },
+        "source": {
+          "description": "Capture source name; defaults to kind.",
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+        },
         "root": {
           "description": "The original absolute path on that machine, POSIX or Windows style. A file's original path is root joined with its path under dir.",
           "type": "string",
           "minLength": 1
         },
-        "namespace": {"$ref": "#/$defs/namespace"}
+        "namespace": {
+          "$ref": "#/$defs/namespace"
+        }
       },
-      "if": {"properties": {"kind": {"const": "usage-records/1"}}},
-      "then": {"required": ["namespace"], "not": {"required": ["root"]}},
-      "else": {"required": ["machine", "root"], "not": {"required": ["namespace"]}}
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "usage-records/1"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "namespace"
+        ],
+        "not": {
+          "required": [
+            "root"
+          ]
+        }
+      },
+      "else": {
+        "required": [
+          "machine",
+          "root"
+        ],
+        "not": {
+          "required": [
+            "namespace"
+          ]
+        }
+      }
     },
     "tokens": {
       "description": "Token counts by category, already normalized: input that was neither read from nor written to a cache, cache reads, cache writes by lifetime, output, reasoning output, and anything the source could not classify.",
@@ -137,25 +217,51 @@
       "additionalProperties": false,
       "minProperties": 1,
       "properties": {
-        "uncached_input": {"type": "integer", "minimum": 0},
-        "cache_read": {"type": "integer", "minimum": 0},
-        "cache_write_5m": {"type": "integer", "minimum": 0},
-        "cache_write_1h": {"type": "integer", "minimum": 0},
-        "output": {"type": "integer", "minimum": 0},
-        "reasoning": {"type": "integer", "minimum": 0},
-        "unclassified": {"type": "integer", "minimum": 0}
+        "uncached_input": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_read": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_write_5m": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_write_1h": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reasoning": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unclassified": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     },
     "error": {
-      "description": "Every refusal names what was wrong, so a script's author can fix it.",
+      "description": "Every refusal names what was wrong, so a script's author can fix it. Grant checks run before existence checks, so not_found never distinguishes a private item from an absent one.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["error"],
+      "required": [
+        "error"
+      ],
       "properties": {
         "error": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["code", "message"],
+          "required": [
+            "code",
+            "message"
+          ],
           "properties": {
             "code": {
               "enum": [
@@ -164,21 +270,99 @@
                 "dataset_not_granted",
                 "field_not_granted",
                 "mode_not_granted",
+                "group_key_not_allowed",
                 "text_not_granted",
                 "export_not_granted",
                 "limit_reached",
                 "invalid_request",
                 "not_found",
+                "cursor_expired",
                 "conflict",
+                "batch_conflict",
+                "superseded",
                 "busy"
               ]
             },
-            "message": {"type": "string"},
-            "dataset": {"$ref": "#/$defs/dataset"},
-            "field": {"type": "string"},
-            "limit": {"enum": ["requests", "rows", "served_bytes", "runtime", "page_size", "query_time"]},
-            "retry_after_seconds": {"type": "integer", "minimum": 1}
+            "message": {
+              "type": "string"
+            },
+            "dataset": {
+              "$ref": "#/$defs/dataset"
+            },
+            "field": {
+              "type": "string"
+            },
+            "limit": {
+              "enum": [
+                "requests",
+                "rows",
+                "served_bytes",
+                "runtime",
+                "page_size",
+                "query_time"
+              ]
+            },
+            "retry_after_seconds": {
+              "type": "integer",
+              "minimum": 1
+            }
           }
+        }
+      }
+    },
+    "item_version": {
+      "description": "When Pharos served this state of an item: milliseconds since 1970 times 1000, plus a counter, never less than any version served before for the installation. It moves only forward, including after a library is restored, and says nothing about other items or about private activity.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "library_instance": {
+      "description": "The library's writable instance. It changes when a library is restored or copied, so a receiver can tell a rolled-back or duplicated sender from lost data.",
+      "type": "string",
+      "pattern": "^[0-9A-Za-z_-]{8,64}$"
+    },
+    "as_of": {
+      "description": "The export cutoff: now minus the library's export delay. Activity after it is not exported yet.",
+      "$ref": "#/$defs/timestamp"
+    },
+    "retraction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset",
+        "id",
+        "version"
+      ],
+      "properties": {
+        "dataset": {
+          "$ref": "#/$defs/dataset"
+        },
+        "id": {
+          "$ref": "#/$defs/opaque_id"
+        },
+        "version": {
+          "description": "Supersedes upserts of this item with lower versions.",
+          "$ref": "#/$defs/item_version"
+        }
+      }
+    },
+    "restatement": {
+      "description": "A time range of a dataset whose aggregates changed. Re-send every period of every series that overlaps it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset",
+        "from",
+        "to"
+      ],
+      "properties": {
+        "dataset": {
+          "$ref": "#/$defs/dataset"
+        },
+        "from": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "to": {
+          "$ref": "#/$defs/timestamp"
         }
       }
     }

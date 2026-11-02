@@ -11,7 +11,7 @@
       "datasets": {
         "usage/1": {
           "fields": [
-            "week",
+            "at",
             "provider",
             "total_tokens",
             "cost_usd"
@@ -47,9 +47,7 @@
     "on_reinstall": "new"
   },
   "run": {
-    "command": [
-      "node",
-      "publish.mjs"
-    ]
+    "interpreter": "node",
+    "entry": "publish.mjs"
   }
 }

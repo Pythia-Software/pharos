@@ -7,6 +7,7 @@ service yet. Where the docs and a schema disagree, the schema is the contract.
 | Contract | File | Written by | Read by |
 | --- | --- | --- | --- |
 | `pharos-plugin/1` manifest | [plugin-manifest.schema.json](plugin-manifest.schema.json) | plugin publisher | Pharos (install, consent, runs) |
+| `export-query/1` | [export-query.schema.json](export-query.schema.json) | exporter (or a declarative manifest's `send`) | Pharos's connector API |
 | `pharos-run/1` request | [run-request.schema.json](run-request.schema.json) | Pharos | plugin, per run |
 | `pharos-run/1` result | [run-result.schema.json](run-result.schema.json) | plugin, per run | Pharos |
 | `usage-records/1` | [usage-record.schema.json](usage-record.schema.json) | usage importer, one JSON line per record | Pharos |
@@ -26,8 +27,19 @@ timestamps, durations, byte sizes, machines, drops, tokens and the error body.
   `permissions.read` and no `produce`; an import manifest the reverse, and only
   scripted runs. A declarative exporter must declare `destinations`.
 - **Datasets are versioned** (`usage/1`). A published dataset version never
-  changes; new fields mean a new version, a new manifest version and new
+  changes; a new field, or a new value that changes what a field covers (a new
+  kind of channel, say), means a new version, a new manifest version and new
   consent.
+- **Queries are our own.** `export-query/1` follows Query Table's semantics but
+  is owned and versioned here; Pharos compiles it to Query Table. A query
+  either selects rows or groups; an incremental aggregate send names its
+  period.
+- **Everything is keyed by dataset.** Changes, items, upserts and retractions
+  name `(dataset, opaque id)`; aggregates are keyed by `(series, period)`, and a
+  period entry carries all its groups.
+- **Presets agree with permissions:** `stats` only aggregates and no text,
+  `metadata` no text, `text-scrubbed` text.
+- **Runs name an interpreter and entry, or an executable,** inside the bundle.
 - **Usage drops name a namespace and no machine root**; transcript drops name a
   machine and its original `root`. Drop folders cannot climb out of
   `output_dir`.
@@ -37,9 +49,22 @@ timestamps, durations, byte sizes, machines, drops, tokens and the error body.
   and nothing else.
 
 Some rules span documents and are checked by Pharos rather than by the schemas:
-every drop's `machine` is declared in `machines`; drops do not share a folder or
-a machine and source; a usage drop's namespace is in the manifest's
-`produce.namespaces`; a run's queries use only granted fields.
+
+- every drop's `machine`, and every usage record's `machine`, is declared in
+  the result's `machines`;
+- drops do not share a folder, or a machine and source;
+- a usage drop's namespace is in the manifest's `produce.namespaces`, and
+  namespaces belong to the plugin that declares them;
+- every field an export query names (in filters, period, keys, summaries,
+  having, selection and ordering) is granted for its dataset, its keys and
+  period are ones the dataset allows (`/grant` lists them), and a declarative
+  manifest's sends satisfy this when it is parsed;
+- a declarative receiver URL is under one of `destinations`;
+- the permissions hash is SHA-256 over RFC 8785 canonical JSON of the
+  permissions with defaults filled in;
+- versions served for an installation only increase;
+- a batch's idempotency key always carries the same body (its
+  `Pharos-Batch-SHA256`).
 
 ## Versioning
 
@@ -47,6 +72,8 @@ a machine and source; a usage drop's namespace is in the manifest's
 - Within a version, Pharos may add **optional** request fields; plugins ignore
   fields they do not know. A run request has no `additionalProperties: false`
   for that reason.
+- Export datasets are versioned on their own (`usage/1`, `usage/2`): a field's
+  meaning, including the set of values it can hold, is part of the version.
 - Pharos is strict about what plugins write: results, manifests and usage
   records refuse unknown fields, so a plugin's mistake is reported, not
   ignored.

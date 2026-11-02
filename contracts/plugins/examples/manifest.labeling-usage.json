@@ -46,9 +46,7 @@
     "max_bytes": "200MiB"
   },
   "run": {
-    "command": [
-      "python3",
-      "labeling_usage.py"
-    ]
+    "interpreter": "python3",
+    "entry": "labeling_usage.py"
   }
 }

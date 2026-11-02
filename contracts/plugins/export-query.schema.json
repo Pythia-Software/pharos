@@ -1,0 +1,291 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pharos.pythia.software/contracts/plugins/export-query.schema.json",
+  "title": "Export query (export-query/1)",
+  "description": "The query language of the plugin contract, over one export dataset. Its semantics follow Query Table (filters, calendar group keys, summaries, ordering) so Pharos compiles it to Query Table directly, but its shape is owned and versioned here, so Query Table can change underneath. Every field it names, anywhere, must be granted. Filters, group keys and ordering on a redacted field see the redacted value, never the original.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "query"
+  ],
+  "properties": {
+    "query": {
+      "const": "export-query/1"
+    },
+    "where": {
+      "description": "Terms that all hold (AND).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/term"
+      }
+    },
+    "group": {
+      "$ref": "#/$defs/group"
+    },
+    "having": {
+      "description": "Terms over group keys and summary IDs, applied to the groups.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/term"
+      }
+    },
+    "select": {
+      "description": "Rows mode: the fields of each row.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/field"
+      }
+    },
+    "order_by": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "field",
+          "dir"
+        ],
+        "properties": {
+          "field": {
+            "description": "A field, group key or summary ID.",
+            "$ref": "#/$defs/field"
+          },
+          "dir": {
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          },
+          "nulls": {
+            "enum": [
+              "first",
+              "last"
+            ]
+          }
+        }
+      }
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000
+    }
+  },
+  "oneOf": [
+    {
+      "required": [
+        "group"
+      ],
+      "not": {
+        "required": [
+          "select"
+        ]
+      }
+    },
+    {
+      "required": [
+        "select"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "group"
+            ]
+          },
+          {
+            "required": [
+              "having"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "field": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "op": {
+      "description": "Query Table's operators. Which apply depends on the field's type, as in Query Table: text takes = != contains starts_with ends_with; enums = !=; numbers and datetimes = != > >= < <=; text arrays includes; every type is_null and is_not_null.",
+      "enum": [
+        "=",
+        "!=",
+        ">",
+        ">=",
+        "<",
+        "<=",
+        "contains",
+        "starts_with",
+        "ends_with",
+        "includes",
+        "is_null",
+        "is_not_null"
+      ]
+    },
+    "literal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "field",
+        "op"
+      ],
+      "properties": {
+        "field": {
+          "$ref": "#/$defs/field"
+        },
+        "op": {
+          "$ref": "#/$defs/op"
+        },
+        "value": {
+          "description": "As in Query Table, a string: numbers in decimal, datetimes in RFC 3339 or relative to the run's as_of (-7d, -12h). Omitted for is_null and is_not_null.",
+          "type": "string"
+        },
+        "negated": {
+          "type": "boolean"
+        }
+      },
+      "if": {
+        "properties": {
+          "op": {
+            "enum": [
+              "is_null",
+              "is_not_null"
+            ]
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "required": [
+            "value"
+          ]
+        }
+      },
+      "else": {
+        "required": [
+          "value"
+        ]
+      }
+    },
+    "term": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/literal"
+        },
+        {
+          "description": "OR of branches, each an AND of literals.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "any"
+          ],
+          "properties": {
+            "any": {
+              "type": "array",
+              "minItems": 2,
+              "items": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/literal"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "summaries"
+      ],
+      "properties": {
+        "period": {
+          "description": "The calendar key that makes groups periods, always the first key. Restatements replace whole periods of it.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "field",
+            "interval"
+          ],
+          "properties": {
+            "field": {
+              "description": "A datetime field the dataset allows as a period.",
+              "$ref": "#/$defs/field"
+            },
+            "interval": {
+              "enum": [
+                "hour",
+                "day",
+                "week",
+                "month"
+              ]
+            },
+            "time_zone": {
+              "description": "IANA name; defaults to the library's time zone.",
+              "type": "string"
+            }
+          }
+        },
+        "keys": {
+          "description": "Further group keys: fields the dataset allows as keys.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/field"
+          }
+        },
+        "summaries": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "op"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/field"
+              },
+              "op": {
+                "enum": [
+                  "count",
+                  "count_distinct",
+                  "sum",
+                  "avg",
+                  "min",
+                  "max"
+                ]
+              },
+              "field": {
+                "description": "Required except for count.",
+                "$ref": "#/$defs/field"
+              }
+            },
+            "if": {
+              "properties": {
+                "op": {
+                  "const": "count"
+                }
+              }
+            },
+            "then": {},
+            "else": {
+              "required": [
+                "field"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

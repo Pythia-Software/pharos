@@ -35,7 +35,8 @@ EXAMPLES = {
     "connector.grant.json": "connector.schema.json#/$defs/grant",
     "connector.credential.json": "connector.schema.json#/$defs/credential",
     "connector.changes.json": "connector.schema.json#/$defs/changes",
-    "connector.conversations.json": "connector.schema.json#/$defs/conversations_page",
+    "connector.items.json": "connector.schema.json#/$defs/items_page",
+    "connector.query-result.json": "connector.schema.json#/$defs/query_result",
     "connector.messages.json": "connector.schema.json#/$defs/messages_page",
     "connector.error.field-not-granted.json": "common.schema.json#/$defs/error",
     "receiver.token-response.json": "receiver.schema.json#/$defs/token_response",
@@ -43,6 +44,8 @@ EXAMPLES = {
     "receiver.hello-response.changes.json": "receiver.schema.json#/$defs/hello_response",
     "receiver.hello-response.everything.json": "receiver.schema.json#/$defs/hello_response",
     "receiver.commit-request.json": "receiver.schema.json#/$defs/commit_request",
+    "receiver.commit-request.takeover.json": "receiver.schema.json#/$defs/commit_request",
+    "receiver.hello-request.takeover.json": "receiver.schema.json#/$defs/hello_request",
     "receiver.commit-response.json": "receiver.schema.json#/$defs/commit_response",
 }
 
@@ -96,6 +99,8 @@ class ContractTests(unittest.TestCase):
         importer = example("manifest.ssh-importer.json")
         record = json.loads((HERE / "examples/usage-records.jsonl").read_text().splitlines()[0])
         result = example("run-result.import.json")
+        batch = example("report.batch.json")
+        send = manifest["run"]["send"][0]
         cases = {
             "an exporter that also produces": ("plugin-manifest.schema.json",
                 {**manifest, "permissions": {**manifest["permissions"], "produce": {"kinds": ["claude"]}}}),
@@ -121,6 +126,25 @@ class ContractTests(unittest.TestCase):
             "an unknown status": ("run-result.schema.json", {**result, "status": "done"}),
             "a need that is not offered": ("receiver.schema.json#/$defs/hello_response",
                 {"need": "more-permissions", "accepts": [], "max_batch_bytes": 65536}),
+            "a query that both groups and selects": ("export-query.schema.json",
+                {**send["query"], "select": ["provider"]}),
+            "an incremental aggregate send without a period": ("plugin-manifest.schema.json",
+                {**manifest, "run": {**manifest["run"], "send": [{**send, "query": {**send["query"], "group": {
+                    k: v for k, v in send["query"]["group"].items() if k != "period"}}}]}}),
+            "the stats preset over rows": ("plugin-manifest.schema.json",
+                {**manifest, "permissions": {**manifest["permissions"], "redaction": {"preset": "stats"}}}),
+            "the text-scrubbed preset without text": ("plugin-manifest.schema.json",
+                {**manifest, "permissions": {**manifest["permissions"], "redaction": {"preset": "text-scrubbed"}}}),
+            "an interpreter and an executable": ("plugin-manifest.schema.json",
+                {**importer, "run": {**importer["run"], "executable": "bin/pull"}}),
+            "an entry outside the bundle": ("plugin-manifest.schema.json",
+                {**importer, "run": {"interpreter": "python3", "entry": "../elsewhere.py"}}),
+            "a retraction without its dataset": ("report.schema.json",
+                {**batch, "retract": [{"id": "w_2bH7xPq1", "version": 1}]}),
+            "a period without its series": ("report.schema.json",
+                {**batch, "periods": [{k: v for k, v in batch["periods"][0].items() if k != "series"}]}),
+            "a filter without a value": ("export-query.schema.json",
+                {"query": "export-query/1", "select": ["provider"], "where": [{"field": "provider", "op": "="}]}),
         }
         for description, (ref, instance) in cases.items():
             with self.subTest(case=description):

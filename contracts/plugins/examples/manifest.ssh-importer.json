@@ -65,9 +65,7 @@
     "max_memory": "512MiB"
   },
   "run": {
-    "command": [
-      "python3",
-      "ssh_pull.py"
-    ]
+    "interpreter": "python3",
+    "entry": "ssh_pull.py"
   }
 }

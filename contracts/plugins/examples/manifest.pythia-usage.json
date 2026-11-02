@@ -12,7 +12,7 @@
       "datasets": {
         "usage/1": {
           "fields": [
-            "day",
+            "at",
             "provider",
             "model",
             "repository_name",
@@ -85,12 +85,15 @@
       {
         "name": "daily-usage",
         "dataset": "usage/1",
-        "mode": "aggregate",
         "incremental": "changes",
         "query": {
-          "grouping": {
+          "query": "export-query/1",
+          "group": {
+            "period": {
+              "field": "at",
+              "interval": "day"
+            },
             "keys": [
-              "day",
               "provider",
               "model",
               "repository_name"
@@ -113,25 +116,23 @@
       {
         "name": "work-items",
         "dataset": "library/1",
-        "mode": "rows",
         "incremental": "changes",
         "query": {
-          "result": {
-            "select": [
-              "id",
-              "activity_at",
-              "repository_name",
-              "cost_usd",
-              "outcome",
-              "conversation_count"
-            ],
-            "orderBy": [
-              {
-                "field": "activity_at",
-                "dir": "desc"
-              }
-            ]
-          }
+          "query": "export-query/1",
+          "select": [
+            "id",
+            "activity_at",
+            "repository_name",
+            "cost_usd",
+            "outcome",
+            "conversation_count"
+          ],
+          "order_by": [
+            {
+              "field": "activity_at",
+              "dir": "desc"
+            }
+          ]
         }
       }
     ]

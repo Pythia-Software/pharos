@@ -12,7 +12,7 @@
       "datasets": {
         "usage/1": {
           "fields": [
-            "day",
+            "at",
             "provider",
             "model",
             "repository_name",
@@ -56,5 +56,38 @@
     "rows": 412,
     "served_bytes": 90211
   },
-  "credential": true
+  "credential": true,
+  "library_instance": "inst_7Hq2Lx9Wv4",
+  "as_of": "2026-10-30T15:00:00Z",
+  "export_delay_seconds": 259200,
+  "datasets": {
+    "usage/1": {
+      "group_keys": [
+        "provider",
+        "model",
+        "model_family",
+        "effort",
+        "harness",
+        "channel",
+        "machine",
+        "repository_name",
+        "session_kind",
+        "run_role",
+        "price_status"
+      ],
+      "period_fields": [
+        "at"
+      ]
+    },
+    "library/1": {
+      "group_keys": [
+        "repository_name",
+        "outcome",
+        "channel"
+      ],
+      "period_fields": [
+        "activity_at"
+      ]
+    }
+  }
 }

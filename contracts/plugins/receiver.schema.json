@@ -8,60 +8,131 @@
       "description": "From registration.token_url, for the authorization code grant (with PKCE) and for refresh. salt arrives with the first grant only and never changes for the organization.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["token_type", "access_token", "expires_in"],
+      "required": [
+        "token_type",
+        "access_token",
+        "expires_in"
+      ],
       "properties": {
-        "token_type": {"const": "Bearer"},
-        "access_token": {"type": "string", "minLength": 1},
-        "expires_in": {"type": "integer", "minimum": 60},
-        "refresh_token": {"type": "string", "minLength": 1},
+        "token_type": {
+          "const": "Bearer"
+        },
+        "access_token": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expires_in": {
+          "type": "integer",
+          "minimum": 60
+        },
+        "refresh_token": {
+          "type": "string",
+          "minLength": 1
+        },
         "salt": {
           "description": "The organization's key for opaque IDs and hashed fields: the same at this receiver for every member, different at every other receiver.",
           "type": "string",
           "pattern": "^[0-9A-Za-z_-]{32,}$"
         },
-        "receiver_name": {"description": "Shown on the plugin's page, such as the organization's name.", "type": "string", "maxLength": 200}
+        "receiver_name": {
+          "description": "Shown on the plugin's page, such as the organization's name.",
+          "type": "string",
+          "maxLength": 200
+        }
       }
     },
     "hello_request": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["sender_id", "plugin", "permissions_hash", "datasets", "receipt"],
+      "required": [
+        "sender_id",
+        "library_instance",
+        "plugin",
+        "permissions_hash",
+        "datasets",
+        "as_of",
+        "receipt"
+      ],
       "properties": {
-        "sender_id": {"$ref": "common.schema.json#/$defs/sender_id"},
-        "plugin": {"$ref": "common.schema.json#/$defs/plugin_ref"},
-        "permissions_hash": {"$ref": "common.schema.json#/$defs/sha256"},
+        "sender_id": {
+          "$ref": "common.schema.json#/$defs/sender_id"
+        },
+        "plugin": {
+          "$ref": "common.schema.json#/$defs/plugin_ref"
+        },
+        "permissions_hash": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
         "datasets": {
           "type": "array",
           "minItems": 1,
-          "items": {"$ref": "common.schema.json#/$defs/dataset"}
+          "items": {
+            "$ref": "common.schema.json#/$defs/dataset"
+          }
         },
         "receipt": {
           "description": "The last receipt this receiver returned from a commit, or null before the first.",
-          "oneOf": [{"$ref": "#/$defs/receipt"}, {"type": "null"}]
+          "oneOf": [
+            {
+              "$ref": "#/$defs/receipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
-        "run_id": {"$ref": "common.schema.json#/$defs/run_id"}
+        "run_id": {
+          "$ref": "common.schema.json#/$defs/run_id"
+        },
+        "library_instance": {
+          "$ref": "common.schema.json#/$defs/library_instance"
+        },
+        "replaces_instance": {
+          "description": "Sent once, when the person resumes a restored or copied library: this instance takes over from that one. The receiver answers everything, Pharos commits with replace_all, and from then on the receiver refuses the old instance with 409 superseded.",
+          "$ref": "common.schema.json#/$defs/library_instance"
+        },
+        "as_of": {
+          "$ref": "common.schema.json#/$defs/as_of"
+        }
       }
     },
     "hello_response": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["need", "accepts", "max_batch_bytes"],
+      "required": [
+        "need",
+        "accepts",
+        "max_batch_bytes"
+      ],
       "properties": {
         "need": {
           "oneOf": [
-            {"const": "changes"},
+            {
+              "const": "changes"
+            },
             {
               "type": "object",
               "additionalProperties": false,
-              "required": ["everything"],
+              "required": [
+                "everything"
+              ],
               "properties": {
                 "everything": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["reason"],
+                  "required": [
+                    "reason"
+                  ],
                   "properties": {
-                    "reason": {"type": "string", "minLength": 1, "maxLength": 500},
-                    "from": {"$ref": "common.schema.json#/$defs/date"}
+                    "reason": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 500,
+                      "description": "Shown in the plugin's run history."
+                    },
+                    "from": {
+                      "$ref": "common.schema.json#/$defs/date"
+                    }
                   }
                 }
               }
@@ -69,23 +140,37 @@
             {
               "type": "object",
               "additionalProperties": false,
-              "required": ["resend"],
+              "required": [
+                "resend"
+              ],
               "properties": {
                 "resend": {
                   "type": "object",
                   "additionalProperties": false,
                   "minProperties": 1,
                   "properties": {
-                    "ids": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/opaque_id"}},
+                    "ids": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "common.schema.json#/$defs/opaque_id"
+                      }
+                    },
                     "periods": {
                       "type": "array",
                       "items": {
                         "type": "object",
                         "additionalProperties": false,
-                        "required": ["dataset", "period"],
+                        "required": [
+                          "dataset",
+                          "period"
+                        ],
                         "properties": {
-                          "dataset": {"$ref": "common.schema.json#/$defs/dataset"},
-                          "period": {"type": "string"}
+                          "dataset": {
+                            "$ref": "common.schema.json#/$defs/dataset"
+                          },
+                          "period": {
+                            "type": "string"
+                          }
                         }
                       }
                     }
@@ -98,36 +183,71 @@
         "accepts": {
           "description": "Dataset versions the receiver accepts; Pharos sends only these.",
           "type": "array",
-          "items": {"$ref": "common.schema.json#/$defs/dataset"}
+          "items": {
+            "$ref": "common.schema.json#/$defs/dataset"
+          }
         },
-        "max_batch_bytes": {"type": "integer", "minimum": 65536},
-        "retention_days": {"description": "Shown on the plugin's page.", "type": "integer", "minimum": 0}
+        "max_batch_bytes": {
+          "type": "integer",
+          "minimum": 65536
+        },
+        "retention_days": {
+          "description": "Shown on the plugin's page.",
+          "type": "integer",
+          "minimum": 0
+        }
       }
     },
     "batch_response": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["accepted"],
+      "required": [
+        "accepted"
+      ],
       "properties": {
-        "accepted": {"description": "Batch position, echoed. A replayed batch is accepted again without effect.", "type": "integer", "minimum": 1}
+        "accepted": {
+          "description": "Batch position, echoed. A replayed batch is accepted again without effect.",
+          "type": "integer",
+          "minimum": 1
+        }
       }
     },
     "commit_request": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["run_id", "batches"],
+      "required": [
+        "run_id",
+        "batches"
+      ],
       "properties": {
-        "run_id": {"$ref": "common.schema.json#/$defs/run_id"},
-        "batches": {"type": "integer", "minimum": 0}
+        "run_id": {
+          "$ref": "common.schema.json#/$defs/run_id"
+        },
+        "batches": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "replace_all": {
+          "description": "The run sent everything the permissions allow: anything the receiver holds from this installation that the run did not send is retracted. Used after a takeover; never inferred.",
+          "type": "boolean",
+          "default": false
+        }
       }
     },
     "commit_response": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["receipt", "committed_at"],
+      "required": [
+        "receipt",
+        "committed_at"
+      ],
       "properties": {
-        "receipt": {"$ref": "#/$defs/receipt"},
-        "committed_at": {"$ref": "common.schema.json#/$defs/timestamp"}
+        "receipt": {
+          "$ref": "#/$defs/receipt"
+        },
+        "committed_at": {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        }
       }
     },
     "receipt": {
