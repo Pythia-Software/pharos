@@ -199,8 +199,6 @@ func (m *applicationManager) deliveryCycle(sourceID, targetID string) {
 		return
 	}
 	defer m.operationMu.Unlock()
-	// Whether delivery's IO runs at the utility tier is the flag's (§10).
-	m.operations.refreshFlag(m.ctx)
 	m.mu.Lock()
 	a, b := m.registry.library(sourceID), m.registry.library(targetID)
 	if a == nil || b == nil || m.released || m.suspended[sourceID] {

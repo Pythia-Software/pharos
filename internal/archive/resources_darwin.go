@@ -148,6 +148,8 @@ func processUsageOf(pid int) (processUsage, error) {
 		ChildCPUSeconds: seconds(info.ChildUserTime + info.ChildSystemTime),
 		Footprint:       info.PhysFootprint,
 		Resident:        info.ResidentSize,
+		DiskBytes:       info.DiskioBytesread + info.DiskioByteswritten,
+		DiskKnown:       true,
 		Started:         info.ProcStartAbstime,
 	}, nil
 }

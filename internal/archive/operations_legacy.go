@@ -35,16 +35,22 @@ func runOperationKind(kind, mode string) (string, string) {
 func (s *Server) startRunFor(op *Op, kind string, names []string) *SyncRun {
 	run := s.startRunNamed(kind, names)
 	if op != nil {
-		op.reg.mu.Lock()
-		op.spec.Legacy = run.ID
-		op.reg.changedLocked(op, false)
-		op.reg.mu.Unlock()
+		op.linkLegacy(run.ID)
 		s.runsMu.Lock()
 		run.op = op
 		s.runsMu.Unlock()
 		s.updateRun(run.ID, func(*SyncRun) {})
 	}
 	return run
+}
+
+// linkLegacy names the run op accounts for, so the eject verdict counts the
+// run as op's (not unregistered work) and Stop finds the run to stop.
+func (op *Op) linkLegacy(id string) {
+	op.reg.mu.Lock()
+	op.spec.Legacy = id
+	op.reg.changedLocked(op, false)
+	op.reg.mu.Unlock()
 }
 
 // mirrorRun follows run's state, phase and progress. updateRun calls it with
