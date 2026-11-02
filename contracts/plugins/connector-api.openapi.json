@@ -120,28 +120,12 @@
       }
     },
     "/items/{dataset}": {
-      "get": {
+      "post": {
         "operationId": "getItems",
-        "summary": "Rows of one granted dataset by opaque ID, for example those listed by /changes",
+        "summary": "Rows of one granted dataset by opaque ID, for example those listed by /changes. A POST, so long ID lists fit.",
         "parameters": [
           {
             "$ref": "#/components/parameters/Dataset"
-          },
-          {
-            "name": "ids",
-            "in": "query",
-            "required": true,
-            "description": "Comma-separated opaque IDs of this dataset.",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "cursor",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -163,6 +147,16 @@
           },
           "429": {
             "$ref": "#/components/responses/Limit"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "connector.schema.json#/$defs/items_request"
+              }
+            }
           }
         }
       }

@@ -51,6 +51,7 @@
         "permissions_hash",
         "datasets",
         "as_of",
+        "export_delay_seconds",
         "receipt"
       ],
       "properties": {
@@ -87,12 +88,34 @@
         "library_instance": {
           "$ref": "common.schema.json#/$defs/library_instance"
         },
-        "replaces_instance": {
-          "description": "Sent once, when the person resumes a restored or copied library: this instance takes over from that one. The receiver answers everything, Pharos commits with replace_all, and from then on the receiver refuses the old instance with 409 superseded.",
-          "$ref": "common.schema.json#/$defs/library_instance"
-        },
         "as_of": {
           "$ref": "common.schema.json#/$defs/as_of"
+        },
+        "takeover": {
+          "description": "Sent with every hello while a takeover is open, from the person resuming a restored or copied library until a commit completes it. The hello that first names it supersedes replaces_instance at once.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "replaces_instance"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "common.schema.json#/$defs/takeover"
+            },
+            "replaces_instance": {
+              "$ref": "common.schema.json#/$defs/library_instance"
+            }
+          }
+        },
+        "unconfirmed_run": {
+          "description": "A run whose commit Pharos sent without receiving an answer. If the receiver committed it, hello_response returns its receipt.",
+          "$ref": "common.schema.json#/$defs/run_id"
+        },
+        "export_delay_seconds": {
+          "description": "The library's export delay: as_of is this long before the run started. Lets the receiver explain how current its data is.",
+          "type": "integer",
+          "minimum": 0
         }
       }
     },
@@ -102,7 +125,8 @@
       "required": [
         "need",
         "accepts",
-        "max_batch_bytes"
+        "max_batch_bytes",
+        "max_version"
       ],
       "properties": {
         "need": {
@@ -149,27 +173,45 @@
                   "additionalProperties": false,
                   "minProperties": 1,
                   "properties": {
-                    "ids": {
+                    "items": {
                       "type": "array",
-                      "items": {
-                        "$ref": "common.schema.json#/$defs/opaque_id"
-                      }
-                    },
-                    "periods": {
-                      "type": "array",
+                      "minItems": 1,
                       "items": {
                         "type": "object",
                         "additionalProperties": false,
                         "required": [
                           "dataset",
-                          "period"
+                          "id"
                         ],
                         "properties": {
                           "dataset": {
                             "$ref": "common.schema.json#/$defs/dataset"
                           },
+                          "id": {
+                            "$ref": "common.schema.json#/$defs/opaque_id"
+                          }
+                        }
+                      }
+                    },
+                    "periods": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "series",
+                          "period"
+                        ],
+                        "properties": {
+                          "series": {
+                            "description": "The send's name in the manifest.",
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_-]*$"
+                          },
                           "period": {
-                            "type": "string"
+                            "description": "Start of the period, as in the report.",
+                            "$ref": "common.schema.json#/$defs/timestamp"
                           }
                         }
                       }
@@ -195,6 +237,15 @@
           "description": "Shown on the plugin's page.",
           "type": "integer",
           "minimum": 0
+        },
+        "max_version": {
+          "description": "The highest version the receiver holds for this installation, in items, periods and tombstones; 0 if none. Pharos's version clock never goes below it.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "receipt": {
+          "description": "The receipt of hello's unconfirmed_run, when the receiver committed it. Pharos then counts that run as acknowledged.",
+          "$ref": "#/$defs/receipt"
         }
       }
     },
@@ -227,10 +278,22 @@
           "type": "integer",
           "minimum": 0
         },
-        "replace_all": {
-          "description": "The run sent everything the permissions allow: anything the receiver holds from this installation that the run did not send is retracted. Used after a takeover; never inferred.",
-          "type": "boolean",
-          "default": false
+        "takeover": {
+          "description": "Sent by every run of an open takeover. complete is true only on the run that finished sending everything the permissions allow; at that commit the receiver retracts whatever it holds from the installation that no run of this takeover sent. Nothing is ever retracted by absence otherwise.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "complete"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "common.schema.json#/$defs/takeover"
+            },
+            "complete": {
+              "type": "boolean"
+            }
+          }
         }
       }
     },

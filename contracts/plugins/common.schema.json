@@ -50,6 +50,15 @@
       "type": "string",
       "pattern": "^[a-z][a-z0-9_-]*/[1-9][0-9]*$"
     },
+    "field_type": {
+      "description": "What a field holds. In aggregate mode, min and max take only number and time fields, sum and avg only numbers, and a text or list field may appear only as a group key the dataset allows.",
+      "enum": [
+        "text",
+        "number",
+        "time",
+        "list"
+      ]
+    },
     "opaque_id": {
       "description": "An identifier Pharos derives for one receiver. It names the same item every time for that receiver and matches nothing at another receiver.",
       "type": "string",
@@ -280,6 +289,7 @@
                 "conflict",
                 "batch_conflict",
                 "superseded",
+                "forked",
                 "busy"
               ]
             },
@@ -311,14 +321,19 @@
       }
     },
     "item_version": {
-      "description": "When Pharos served this state of an item: milliseconds since 1970 times 1000, plus a counter, never less than any version served before for the installation. It moves only forward, including after a library is restored, and says nothing about other items or about private activity.",
+      "description": "When Pharos served this state of an item: milliseconds since 1970 times 1000, plus a counter, never less than any version served before for the installation. Pharos never goes below its own stored high-water mark or the receiver's max_version from hello, so it moves only forward, including after a library is restored onto a Mac whose clock is behind, and says nothing about other items or about private activity.",
       "type": "integer",
       "minimum": 1
     },
     "library_instance": {
-      "description": "The library's writable instance. It changes when a library is restored or copied, so a receiver can tell a rolled-back or duplicated sender from lost data.",
+      "description": "The library's writable instance, from its library descriptor (pharos-library.json). Pharos refuses to open a copied library until Recover library gives it a new identity, and Recover library (which also restores backups) always mints a new instance, so a receiver can tell a rolled-back or duplicated sender from lost data. Opening one library from several Macs keeps its instance.",
       "type": "string",
       "pattern": "^[0-9A-Za-z_-]{8,64}$"
+    },
+    "takeover": {
+      "description": "Names one takeover: the full send with which a restored or copied library replaces what a receiver holds from the instance it came from. It spans as many runs as the limits require.",
+      "type": "string",
+      "pattern": "^tko_[0-9A-Za-z_-]{6,}$"
     },
     "as_of": {
       "description": "The export cutoff: now minus the library's export delay. Activity after it is not exported yet.",

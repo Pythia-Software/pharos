@@ -11,7 +11,11 @@
     "library/1"
   ],
   "as_of": "2026-10-30T15:00:00Z",
+  "export_delay_seconds": 259200,
   "receipt": "rcpt_000148",
   "run_id": "run_20261104T090000Z_a01b",
-  "replaces_instance": "inst_7Hq2Lx9Wv4"
+  "takeover": {
+    "id": "tko_4Wc8Hn2Qs",
+    "replaces_instance": "inst_7Hq2Lx9Wv4"
+  }
 }

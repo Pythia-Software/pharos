@@ -9,5 +9,6 @@
     "usage/1",
     "library/1"
   ],
-  "max_batch_bytes": 4194304
+  "max_batch_bytes": 4194304,
+  "max_version": 0
 }

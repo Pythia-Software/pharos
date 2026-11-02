@@ -136,6 +136,22 @@
     "as_of": {
       "description": "Exporters: the run's cutoff; also in /grant.",
       "$ref": "common.schema.json#/$defs/as_of"
+    },
+    "takeover": {
+      "description": "Exporters, while a takeover is open: the plugin must make its receiver replace what it holds from replaces_instance. Pharos has reset what it counts as acknowledged, so the runs send everything; the run that returns complete ends the takeover.",
+      "type": "object",
+      "required": [
+        "id",
+        "replaces_instance"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "common.schema.json#/$defs/takeover"
+        },
+        "replaces_instance": {
+          "$ref": "common.schema.json#/$defs/library_instance"
+        }
+      }
     }
   }
 }

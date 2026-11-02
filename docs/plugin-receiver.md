@@ -1,6 +1,6 @@
 # Plugin receiver
 
-Design, 2026-11-02, revised after the first design review. Nothing here is built. This is the service side of
+Design, 2026-11-02, revised after two design reviews. Nothing here is built. This is the service side of
 [plugins](plugins.md): what a cloud receiver such as Pythia's must do so that
 the guarantees Pharos makes to the person sharing hold end to end. Pythia's
 service is the first implementation; the protocol is public, specified in
@@ -20,20 +20,23 @@ What the Pharos side assumes of a receiver:
    cannot come back from a late or replayed delivery.
 4. **A period replaces** every group the receiver holds for its series and
    period, so groups that no longer exist disappear.
-5. **It notices its own data loss** and asks for everything, and it accepts a
-   takeover from a restored or copied library while refusing the instance
-   that was replaced.
-6. **It cannot ask for more than was consented.** It may only ask Pharos to send
+5. **It notices its own data loss** and asks for everything. It accepts a
+   takeover from a restored or copied library, over several runs, while
+   refusing the instance that was replaced, and refuses two libraries sending
+   as one instance.
+6. **It reports the highest version it holds,** so Pharos's versions keep
+   moving forward even when a Mac's clock does not.
+7. **It cannot ask for more than was consented.** It may only ask Pharos to send
    again what the permissions already allow.
-7. **Installations are isolated.** A credential reaches one installation and
+8. **Installations are isolated.** A credential reaches one installation and
    can only deliver and say hello.
-8. **The person sharing can see everything the receiver holds about them**, and
+9. **The person sharing can see everything the receiver holds about them**, and
    who at their organization looked at it.
-9. **The person can disconnect from either side.** Revoking on the receiver
-   pauses the plugin in Pharos at its next run.
-10. **Schemas are negotiated.** The receiver says which export dataset versions
+10. **The person can disconnect from either side.** Revoking on the receiver
+    pauses the plugin in Pharos at its next run.
+11. **Schemas are negotiated.** The receiver says which export dataset versions
     it accepts.
-11. **One key, one body.** A batch's idempotency key always carries the same
+12. **One key, one body.** A batch's idempotency key always carries the same
     content; a retried run comes with a new run ID.
 
 ## Tenancy
@@ -94,8 +97,10 @@ keep sharing at the previous version.
     "library/1"
   ],
   "as_of": "2026-10-30T15:00:00Z",
+  "export_delay_seconds": 259200,
   "receipt": "rcpt_000148",
-  "run_id": "run_20261102T150000Z_77c0"
+  "run_id": "run_20261102T150000Z_77c0",
+  "unconfirmed_run": "run_20261102T090000Z_51d3"
 }
 ```
 
@@ -110,23 +115,68 @@ Answer:
     "library/1"
   ],
   "max_batch_bytes": 4194304,
-  "retention_days": 395
+  "max_version": 1793700000000004,
+  "retention_days": 395,
+  "receipt": "rcpt_000149"
 }
 ```
 
 `need` is `changes`, `{"everything": {"reason", "from"}}` (with `from`
-optional), or `{"resend": {"ids", "periods"}}`. A permissions hash other than
-the installation's consented one is refused with `409 conflict`, which Pharos
-shows as a mismatch to resolve by updating the plugin. `as_of` says how current
-the data is: the sender's library exports with a delay (three days by
-default).
+optional), or `{"resend": {"items", "periods"}}`, where items are
+`{dataset, id}` and periods `{series, period}`, keyed as in the report:
+
+<!-- contract: receiver.schema.json#/$defs/hello_response -->
+```json
+{
+  "need": {
+    "resend": {
+      "items": [
+        {
+          "dataset": "library/1",
+          "id": "w_9tq3LmA2"
+        }
+      ],
+      "periods": [
+        {
+          "series": "daily-usage",
+          "period": "2026-10-21T00:00:00-06:00"
+        }
+      ]
+    }
+  },
+  "accepts": [
+    "usage/1",
+    "library/1"
+  ],
+  "max_batch_bytes": 4194304,
+  "max_version": 1793700000000004
+}
+```
+
+A permissions hash other than the installation's consented one is refused
+with `409 conflict`, which Pharos shows as a mismatch to resolve by updating
+the plugin. `as_of` and `export_delay_seconds` say how current the data is:
+the sender's library exports with a delay (three days by default), and a
+receiver's dashboards should say so rather than look stale.
+
+`max_version` is the highest version the receiver holds for the installation,
+across items, periods and tombstones. Pharos never serves a version below it,
+so a library restored onto a Mac whose clock is behind still sends versions
+that win.
 
 ### Library instances
 
-`library_instance` names the sender's library as restored or copied: it
-changes when the library is restored from a backup or copied. A plugin in such
-a library starts paused in Pharos, and when the person resumes it, its hello
-names the instance it replaces:
+`library_instance` is the instance in the library's descriptor
+(`pharos-library.json`). Pharos already guards it: a library whose folder was
+copied (by the Finder, a Time Machine restore or any other file copy) is
+refused when opened, because the folder is no longer the one the descriptor
+recorded, and **Recover library**, which is also how backups are restored,
+gives the result a new library ID and instance. Opening the same library from
+several Macs, under any mount name, keeps its instance. A plugin whose
+installation last ran in another instance starts paused in Pharos. When the
+person resumes it, Pharos opens a **takeover**: a full send that replaces
+whatever the receiver holds from the installation, over as many runs as the
+limits require. Every hello until it completes names it:
 
 <!-- contract: receiver.schema.json#/$defs/hello_request -->
 ```json
@@ -143,41 +193,65 @@ names the instance it replaces:
     "library/1"
   ],
   "as_of": "2026-10-30T15:00:00Z",
+  "export_delay_seconds": 259200,
   "receipt": "rcpt_000148",
   "run_id": "run_20261104T090000Z_a01b",
-  "replaces_instance": "inst_7Hq2Lx9Wv4"
+  "takeover": {
+    "id": "tko_4Wc8Hn2Qs",
+    "replaces_instance": "inst_7Hq2Lx9Wv4"
+  }
 }
 ```
 
-The receiver records the new instance and answers `everything`. Pharos sends
-everything and commits with `replace_all`:
+The hello that first names a takeover supersedes the old instance at once:
+from then on the receiver answers that instance with `409 superseded`, which
+pauses it, so two copies of one library never alternate. Once an installation
+has said hello, a hello from an instance the receiver has not seen and naming
+no takeover is refused the same way. The receiver answers the opening hello
+with `everything` (Pharos sends everything for a takeover regardless) and
+later ones as usual.
+
+Every commit during the takeover carries its ID, and the run that finishes
+sending everything says so:
 
 <!-- contract: receiver.schema.json#/$defs/commit_request -->
 ```json
 {
   "run_id": "run_20261104T090000Z_a01b",
   "batches": 41,
-  "replace_all": true
+  "takeover": {
+    "id": "tko_4Wc8Hn2Qs",
+    "complete": true
+  }
 }
 ```
 
-At that commit the receiver retracts whatever it holds from the installation
-that the run did not send. From then on it answers the replaced instance's
-hello with `409 superseded`, which pauses that copy, so two copies of one
-library never alternate. A hello from an instance the receiver has not seen,
-without `replaces_instance`, is also refused with `409 superseded`.
+Items and periods delivered under the takeover are marked with its ID. Until
+it completes, the receiver keeps what it held, so dashboards show no gap while
+the backfill runs. At the completing commit it retracts whatever it holds from
+the installation that no run of the takeover sent. A newer takeover, after
+another restore, replaces an open one, and only deliveries under the newer ID
+count.
 
 ### Receipts
 
 Each committed run gets a receipt, an opaque value that names the
 installation's commit sequence number. Pharos sends the last receipt it
-received with every hello:
+received with every hello, and names in `unconfirmed_run` a run whose commit
+it sent without getting an answer. Outside a takeover (whose restored library
+naturally holds an old receipt), the receiver reads them so:
 
 - the latest receipt: the receiver has everything Pharos counts as
-  acknowledged, so `changes`;
-- an earlier receipt it knows: the last commit's response was lost; Pharos
-  never counted that run as acknowledged and sends its changes again, which
-  idempotency absorbs, so still `changes`;
+  acknowledged, so `changes` (an `unconfirmed_run` it never committed stays
+  unacknowledged);
+- the receipt before the latest, with `unconfirmed_run` naming the run that
+  produced the latest: the commit's answer was lost. The receiver returns the
+  missed receipt in the hello answer's `receipt`, Pharos counts that run as
+  acknowledged, and nothing is sent twice;
+- any other receipt it knows: two libraries are sending as one instance, such
+  as a block-for-block clone of a whole drive, which the descriptor cannot
+  tell apart. The receiver refuses with `409 forked`, which pauses that copy
+  until the person recovers it as a library of its own;
 - a receipt it does not know: the receiver lost data, for example by restoring
   a backup, so `everything`.
 
@@ -201,12 +275,12 @@ returns the next receipt:
   with only the dataset, opaque ID, version and time.
 - **Periods** replace every group the receiver holds for their
   `(series, period)`, when newer.
-- **`replace_all`** (after a takeover) retracts whatever the installation's
-  run did not send.
+- **The commit that completes a takeover** retracts whatever the installation
+  holds that no run of the takeover sent.
 
 Otherwise nothing is removed by absence: a run that sends everything again
 does not imply that what it left out is gone. Pharos tracks what each receiver
-may hold and says so explicitly, with a retraction or `replace_all`.
+may hold and says so explicitly, with a retraction or a completed takeover.
 
 A batch key staged before with a different body (`Pharos-Batch-SHA256`) is
 refused with `409 batch_conflict`. Pharos retries a failed run as a new run,
@@ -232,13 +306,13 @@ page.
 | Table | One row per | Holds |
 | --- | --- | --- |
 | `organizations`, `teams`, `members` | tenant, team, person | roles, SSO, plan; each organization's salt for opaque IDs and hashes, issued at registration |
-| `installations` | member × Pharos library | sender ID, current library instance and the instances it superseded, plugin version, permissions hash and consented permissions, status, last hello, last receipt, last `as_of` |
+| `installations` | member × Pharos library | sender ID, current library instance and the instances it superseded, open takeover, plugin version, permissions hash and consented permissions, status, last hello, last receipt, last `as_of` and export delay, highest version held |
 | `credentials` | refresh token | hashed token, installation, issued, rotated, revoked |
-| `runs` | run | run ID, installation, need answered, batches, committed at, receipt |
+| `runs` | run | run ID, installation, need answered, takeover, batches, committed at, receipt |
 | `staged_batches` | batch before commit, kept 24 hours | idempotency key, size, SHA-256, payload |
-| `items` | installation × dataset × opaque ID | version, payload, last run |
+| `items` | installation × dataset × opaque ID | version, payload, last run, last takeover |
 | `tombstones` | retracted item | installation, dataset, opaque ID, version, retracted at |
-| `periods` | installation × series × period | dataset, version, its groups (keys, fingerprint, values), last run |
+| `periods` | installation × series × period | dataset, version, its groups (keys, fingerprint, values), last run, last takeover |
 | `member_activity` | delivery or access | what arrived when, and which admin or manager viewed what; shown to the member |
 
 Opaque IDs are keyed by the organization's salt, so the same conversation or

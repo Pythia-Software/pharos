@@ -1,6 +1,6 @@
 # Importer and exporter plugins
 
-Design, 2026-11-02, revised after the first design review. Nothing in the
+Design, 2026-11-02, revised after two design reviews. Nothing in the
 service is built yet. The public contracts
 (JSON Schemas, OpenAPI and checked examples) are in
 [`contracts/plugins/`](../contracts/plugins/), the service's side is planned in
@@ -251,7 +251,8 @@ and first-party plugins, Pythia's included, use them like anyone else's.
    path); in plain language, what it reads and where it sends it, and how
    often; what stays out (private work items, text when `text` is false,
    pseudonymised fields, described as "this receiver can check guesses"); the
-   finest grouping its aggregates allow ("by day, model and repository"); the
+   finest grouping its aggregates allow ("totals by day, model and
+   repository"), and that aggregates carry no text but those groups; the
    library's export delay; and, for an exporter, a summary of what it would
    send today, computed from its permissions (datasets, rows, date range).
    **Yes** or **No**.
@@ -419,7 +420,7 @@ and approved permissions. Nothing else (no UI cookie, no app token) works there.
 GET  /connector/v1/grant                          what this run may do, its cutoff and usage
 GET  /connector/v1/credential                     a short-lived receiver access token, if registered
 POST /connector/v1/query/{dataset}                an export query: rows or groups
-GET  /connector/v1/items/{dataset}?ids=           rows by opaque ID, for example those /changes lists
+POST /connector/v1/items/{dataset}                rows by opaque ID, for example those /changes lists
 GET  /connector/v1/changes?since=&limit=          what to send again, restate or retract
 GET  /connector/v1/conversations/{id}/messages    a conversation's messages, when the grant allows text
 GET  /connector/v1/export?since=&cursor=          pharos-drop/1 bundles, for another Pharos
@@ -444,6 +445,15 @@ meaning whatever Query Table release Pharos uses, and checking a query against
 a grant is mechanical. Every field it names must be granted; its group keys
 and period must be ones the dataset allows (listed in `/grant`); aggregate mode
 allows no selection.
+
+**Aggregate means no row's text.** Every field has a type (text, number, time
+or list), listed in `/grant`. In aggregate mode, a text or list field may
+appear only as a group key the dataset allows (in the keys, or in a filter);
+`min` and `max` take numbers and times, `sum` and `avg` numbers, and
+`count_distinct` any granted field. Without this, `max(title)` over groups
+fine enough to hold one work item each would return titles one by one. A
+group of one still shows that item's numbers, as any total over one thing
+does; the consent screen's "finest grouping" is what bounds that.
 
 ### Export datasets
 
@@ -705,20 +715,51 @@ ID.
 
 ## Restored and copied libraries
 
-A library's writable instance changes when it is restored from a backup or
-copied. Either way its delivery state may be behind what receivers hold: a
-restored library has forgotten what it served after the backup, and a copy
-shares an installation with the library it came from.
+A plugin's delivery state lives in the library, so a restored or copied
+library may be behind what receivers hold: a restored library has forgotten
+what it served after the backup, and a copy shares an installation with the
+library it came from.
 
-So a plugin in a restored or copied library starts paused, saying so: **This
-library was restored or copied. Resume sending from it?** Resuming takes over.
-The hello names the new instance and the one it replaces; the receiver answers
-`everything`; Pharos sends everything the permissions allow and commits with
-`replace_all`, which retracts whatever the receiver holds from this
-installation that the run did not send. The receiver then refuses the old
-instance (`409 superseded`), so a copy still running on another Mac stops
-instead of alternating with this one. Versions are the time an item was served,
-so everything sent after a restore is newer than what came before it.
+Pharos already tells these apart. Each library's descriptor
+(`pharos-library.json`) holds its ID, its writable **instance** and the
+identity of its folder. A copied folder (by the Finder, a Time Machine restore
+or any file copy) no longer matches, so Pharos refuses to open it until
+**Recover library**, which is also how a backup is restored, gives it a new ID
+and instance. Opening one library from several Macs in turn, under any mount
+name, keeps its instance. A plugin's `library_instance` is the descriptor's,
+and an installation records the instance it last ran in.
+
+So a plugin whose library's instance changed starts paused, saying so: **This
+library was restored or copied. Resume sending from it?** Resuming opens a
+**takeover**, which spans as many runs as the limits require:
+
+1. Pharos resets what it counts as acknowledged, so its runs send everything
+   the permissions allow.
+2. Every hello names the takeover and the instance it replaces. The first one
+   supersedes the old instance at once: the receiver refuses it from then on
+   (`409 superseded`), so a copy still running on another Mac stops instead of
+   alternating with this one.
+3. Every commit carries the takeover's ID. The receiver keeps what it held
+   while the backfill runs, so nothing disappears and comes back.
+4. The run that finishes sending everything commits with `complete`. Only
+   then does the receiver retract whatever it holds from the installation that
+   no run of the takeover sent.
+
+A scripted exporter sees the open takeover in its run request and does the
+same with its own receiver; its first run to return `complete` ends it.
+
+Versions are the time an item was served, from a clock that never goes below
+its stored high-water mark or the highest version the receiver reports in
+hello, so everything sent after a restore is newer than what came before it,
+even from a Mac whose clock is behind.
+
+A block-for-block clone of a whole drive keeps the folder's identity too, so
+the descriptor cannot tell it from the original. Receipts catch that case: a
+hello outside a takeover whose receipt is older than the latest, and not
+explained by a commit whose answer was lost, means two libraries are sending
+as one, and the
+receiver refuses it with `409 forked` until that copy is recovered as a
+library of its own.
 
 ## Importers
 
@@ -933,27 +974,32 @@ Pythia's service implements it; anyone can, and
 [plugin receiver](plugin-receiver.md) sketches the receiver's side. Each run:
 
 1. `POST /v1/hello` with the sender ID, library instance, plugin version,
-   permissions hash, dataset versions, `as_of`, and the receipt of the last run
-   the receiver committed. The receiver answers with what it needs: `changes`;
-   `everything` with a reason and optionally a `from` date; or `resend` with
-   opaque IDs and periods. It also gives the dataset versions it accepts and its
-   batch size limit. A receipt the receiver does not recognize means it lost
-   what came after, and it answers `everything`.
+   permissions hash, dataset versions, `as_of` and the export delay, the
+   receipt of the last run the receiver committed, any run whose commit went
+   unanswered, and any open [takeover](#restored-and-copied-libraries). The
+   receiver answers with what it needs: `changes`; `everything` with a reason
+   and optionally a `from` date; or `resend` with items (`dataset`, `id`) and
+   periods (`series`, `period`). It also gives the dataset versions it
+   accepts, its batch size limit, the highest version it holds for the
+   installation, and the receipt of an unanswered commit it did apply. A
+   receipt the receiver does not recognize means it lost what came after, and
+   it answers `everything`.
 2. `POST /v1/batches`, one or more, each with `Idempotency-Key: <run_id>/<n>`
    and the body's SHA-256, carrying upserts, whole periods and retractions as
    `pharos-report/1`. The same key with a different body is refused, so a key
    always means one body.
-3. `POST /v1/commit` with the run ID and batch count (and `replace_all` after a
-   [takeover](#restored-and-copied-libraries)). The receiver applies the run's
-   batches together and returns a receipt. Only a committed run is
-   acknowledged; a run that ends without a commit counts as served, not
-   acknowledged.
+3. `POST /v1/commit` with the run ID and batch count (and the takeover, if
+   one is open). Pharos records the commit as unanswered before sending it.
+   The receiver applies the run's batches together and returns a receipt. Only
+   a committed run is acknowledged; a run that ends without a commit counts as
+   served, not acknowledged, until a later hello returns its receipt.
 
 A run that fails is retried as a new run with a new `run_id`; receivers discard
 staged batches that are never committed. `401` or `403` from the receiver (the
 person disconnected on the receiver's side, or their access was revoked) pauses
-the plugin with a notice, and `409 superseded` pauses a library that another
-instance took over from. Uninstalling sends `DELETE /v1/registration`, after the
+the plugin with a notice; `409 superseded` pauses a library that another
+instance took over from, and `409 forked` one that shares its instance with
+another. Uninstalling sends `DELETE /v1/registration`, after the
 optional request to delete everything. The protocol has no endpoint through
 which a receiver could ask for more than the permissions allow: those change
 only with a new plugin version and new consent.
@@ -987,7 +1033,7 @@ A sketch of the tables:
 
 | Table | One row per | Holds |
 | --- | --- | --- |
-| `plugin_installations` | installed plugin, kept after uninstall | manifest, consented version and bundle hash, permissions hash, credential, sender ID, hash key, state, last receiver receipt |
+| `plugin_installations` | installed plugin, kept after uninstall | manifest, consented version and bundle hash, permissions hash, credential, sender ID, hash key, state, library instance, open takeover, version high-water mark, last receiver receipt and unanswered commit |
 | `plugin_consents` | consent or acknowledgement | version, permissions hash, time, the difference shown |
 | `plugin_runs` | run | trigger, Mac, start and end, status, limit reached, counts, cursor before and after, permissions hash |
 | `plugin_ledger` | item served or retracted in a run (180 days) | run, dataset, item, version, fields hash |
@@ -1000,8 +1046,9 @@ A sketch of the tables:
 | `privacy_states` | work item or usage record × audience | effective state, reason (mark, rule, default), decided at, settled; audience is "every exporter" for now |
 
 An item's version is the time Pharos served that state of it, as a clock that
-never goes back for the installation: later deliveries always win, including
-after a restore, and the number says nothing about other items. Change tokens
+never goes back for the installation (nor below what the receiver reports):
+later deliveries always win, including after a restore, and the number says
+nothing about other items. Change tokens
 are opaque. Imports extend the
 existing evidence model: a conversation's copies already name host, source and
 origin, and `plugin_imports` adds the plugin and run for each adopted file
@@ -1027,9 +1074,11 @@ Invariants, each a test target:
 7. A privacy mark or rule change commits together with the retractions it
    queues.
 8. Nothing with activity after a run's `as_of` is served, except retractions.
-9. Versions served for an installation only increase, across restores too.
-10. A restored or copied library sends nothing until the person resumes it,
-    and its first run then replaces everything the receiver holds.
+9. Versions served for an installation only increase, across restores and a
+   clock that is behind.
+10. A restored or copied library sends nothing until the person resumes it.
+    Its takeover then replaces everything the receiver holds, and the
+    receiver retracts nothing until the takeover's last run commits.
 
 ## Pharos to Pharos
 
@@ -1056,5 +1105,11 @@ its cursor (`--twice` runs again from that cursor).
 
 ## Open questions
 
-None outstanding. The cloud receiver's side is sketched in
-[plugin receiver](plugin-receiver.md).
+- **A minimum group size for aggregates.** Aggregates now carry no row's text,
+  but a group that holds one work item still shows its numbers. A manifest
+  could declare a minimum, but hiding small groups is leaky: a total minus the
+  visible groups reveals what was hidden, and folding them into "other" leaks
+  whenever only one was folded. The current design has none; the finest
+  grouping is shown at consent and is what the person agrees to.
+
+The cloud receiver's side is sketched in [plugin receiver](plugin-receiver.md).

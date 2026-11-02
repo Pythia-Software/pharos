@@ -1,6 +1,6 @@
 # Plugins: implementation plan
 
-Plan, 2026-11-02, revised after the first design review, for
+Plan, 2026-11-02, revised after two design reviews, for
 [plugins](plugins.md). Nothing here is built. The public
 contracts are in [`contracts/plugins/`](../contracts/plugins/); this document is
 the service's side: components and their Go interfaces, the catalog tables, the
@@ -9,6 +9,12 @@ invariants and their tests, and the order of work.
 
 Names below are proposals. Everything lives in `internal/archive` (one package)
 in files prefixed `plugin_`, `connector_`, `privacy_` and `receiver_`.
+
+A **work item** in these documents is a Library row, which the catalog calls a
+**workspace**: a `workspaces` row, whose `id` the `library` schema binds to
+`w.id`. The catalog's unrelated `work_items` table (tasks inside a workspace,
+written by `upsertWorkItem`) plays no part here. Privacy, `subject_kind` and
+`library/1` IDs key on workspaces.
 
 ## Components
 
@@ -213,8 +219,10 @@ type exportQuery struct {
 
 // checkExportQuery walks every field the query names (filters, period, keys,
 // summaries, having, select, order) and refuses the first that is not granted,
-// not allowed as a key or period, or not allowed by the mode. It is complete:
-// the language names fields only in those places.
+// not allowed as a key or period, or not allowed by the mode. In aggregate
+// mode a text or list field may only be an allowed group key (as a key or in a
+// filter), min and max take numbers and times, sum and avg numbers. It is
+// complete: the language names fields only in those places.
 func checkExportQuery(dataset exportDataset, grant datasetGrant, query exportQuery) error
 
 // compileExportQuery turns a checked query into the Query Table request for the
@@ -234,7 +242,10 @@ result's where. When Query Table changes its wire format, only
 The first versions. Fields map onto today's [schemas](../schemas); IDs are
 opaque per receiver key, and hashed or dropped fields follow the manifest's
 redaction. Group keys are listed per dataset; anything else can be selected in
-rows mode but not grouped by.
+rows mode but not grouped by. Field types, which `/grant` lists and aggregate
+checks use: `at` and fields ending `_at` are times; token fields, counts,
+`cost_usd`, `estimate_usd` and `duration_ms` are numbers; `providers`,
+`models` and `harnesses` are lists; everything else is text.
 
 **`usage/1`**: rows of the `usage` dataset (one per session, hour and model).
 
@@ -273,6 +284,40 @@ subagent), `started_at` (period field), `last_activity_at`, `provider`,
 `role`, `provider`, `model`, `effort`, `harness`, `channel`, `machine`,
 `repository_name`.
 
+### Instances, takeovers and the version clock
+
+```go
+// checkPluginInstances runs when the service opens a library, after
+// checkLibrary has accepted its descriptor: every live installation whose
+// library_instance differs from the descriptor's is paused with
+// takeover_needed. Recover library (restores included) is the only way an
+// instance changes, so this is the only place that notices.
+func checkPluginInstances(tx *sql.Tx, descriptor LibraryDescriptor) (paused []string, err error)
+
+// openTakeover runs when the person resumes such an installation: it mints a
+// tko_ ID, records it with the instance it replaces, resets acknowledged
+// state (as a receiver's "everything" does) and adopts the descriptor's
+// instance, in one transaction. A run that finishes with nothing left
+// unacknowledged commits the takeover as complete and clears it.
+func openTakeover(tx *sql.Tx, installationID string, descriptor LibraryDescriptor) (takeoverID string, err error)
+
+// versionClock stamps what a run serves: max(now in µs, last+1). raise moves
+// last up to a receiver's max_version from hello before anything is served;
+// the run's final transaction stores last as the installation's high-water
+// mark.
+type versionClock struct{ last int64 }
+
+func (c *versionClock) raise(floor int64)
+func (c *versionClock) next(now time.Time) int64
+```
+
+Plugin tables are library state, not history: **Copy or move history** never
+carries them, so a destination library's own plugins export what arrives.
+
+A declarative run records `unconfirmed_run` before it sends commit and clears
+it with the answer. If a later hello returns that run's receipt, Pharos
+acknowledges the run from its ledger entries and installs its cursor then.
+
 ## Catalog tables
 
 ```sql
@@ -280,7 +325,7 @@ CREATE TABLE IF NOT EXISTS plugin_installations (
   id TEXT PRIMARY KEY,                   -- inst_…
   plugin_id TEXT NOT NULL,
   state TEXT NOT NULL,                   -- active, paused, needs_consent, uninstalled
-  pause_reason TEXT,                     -- failures, disconnected, superseded, takeover_needed, …
+  pause_reason TEXT,                     -- failures, disconnected, superseded, forked, takeover_needed, …
   manifest_json TEXT NOT NULL,           -- the consented manifest
   version TEXT NOT NULL,
   bundle_hash TEXT NOT NULL,
@@ -289,9 +334,13 @@ CREATE TABLE IF NOT EXISTS plugin_installations (
   sender_id TEXT NOT NULL,
   hash_key BLOB NOT NULL,                -- from the receiver's salt, or random
   credential_json TEXT,                  -- refresh token; never served to scripts
-  library_instance TEXT NOT NULL,        -- the writable instance it last ran in
+  library_instance TEXT NOT NULL,        -- the descriptor's instance it last ran in
+  takeover_id TEXT,                      -- open takeover, until a complete commit
+  takeover_replaces TEXT,                -- the instance it replaces
+  takeover_opened_at TEXT,
   last_version INTEGER NOT NULL DEFAULT 0, -- the version clock's high-water mark
   receiver_receipt TEXT,
+  unconfirmed_run TEXT,                  -- commit sent, no answer yet
   cursor_json TEXT,                      -- last acknowledged
   change_position TEXT,                  -- declarative exporters; opaque token
   installed_at TEXT NOT NULL,
@@ -359,7 +408,8 @@ CREATE TABLE IF NOT EXISTS plugin_runs (
   retractions INTEGER NOT NULL DEFAULT 0,
   receipt_json TEXT,
   full_resend_reason TEXT,
-  replace_all INTEGER NOT NULL DEFAULT 0,
+  takeover_id TEXT,
+  takeover_complete INTEGER NOT NULL DEFAULT 0,
   cursor_json TEXT,                      -- as returned; installed only if acknowledged
   log_path TEXT
 );
@@ -537,7 +587,7 @@ passed, and its value says nothing about them. Rows older than 30 days are
 pruned whatever any installation has read; a token older than that gets
 `cursor_expired`.
 
-Versions are not stored per item. `nextVersion` stamps whatever a run serves,
+Versions are not stored per item. `versionClock.next` stamps whatever a run serves,
 and `plugin_deliveries.served_fields_hash` tells a real change from a
 re-send, so a run sends an item again only when what it would send differs.
 
@@ -556,8 +606,9 @@ Go tests on `testCatalog`/`testServer` unless marked.
 | 6. Opaque IDs are stable per receiver key and unrelated across receivers | `TestOpaqueIDsDependOnlyOnTheReceiverKey` |
 | 7. A mark or rule change commits with the retractions it queues | `TestPrivacyChangeAndRetractionsCommitTogether` |
 | 8. Nothing with activity after `as_of` is served, except retractions | `TestExportDelayHoldsBackRecentActivity`, including a delay change |
-| 9. Versions only increase, across a restore | `TestVersionsMoveForwardAfterRestore` |
-| 10. A restored or copied library sends nothing until resumed, then replaces everything | `TestRestoredLibraryPausesThenTakesOver` |
+| 9. Versions only increase, across a restore and a clock that is behind | `TestVersionsMoveForwardAfterRestore`: a restored high-water mark, a clock set back, a receiver's `max_version` |
+| 10. A restored or copied library sends nothing until resumed; its takeover replaces everything, and retracts only at its last run | `TestRestoredLibraryPausesThenTakesOver`: a takeover over several partial runs, a privacy change during it, a second restore before it completes |
+| A commit whose answer was lost is acknowledged by the next hello, not sent again | `TestUnansweredCommitIsAcknowledgedByTheNextHello` |
 | No side channels: tokens, versions, counts and 403/404 do not move for private activity | `TestPrivateActivityLeavesNoTrace` |
 | Export queries naming any ungranted field, key or period are refused, wherever the field appears | `TestExportQueryChecksEveryField` |
 | A cursor older than the feed's retention gets `cursor_expired`, and a full send follows | `TestExpiredChangeTokensResync` |
@@ -612,8 +663,18 @@ privacy machinery; exporters after privacy.
   discards staging, and a declarative run that has not committed acknowledges
   nothing.
 - **Clock.** The version clock trusts the Mac's clock only to move forward
-  from the stored high-water mark; a clock set far ahead would push versions
-  ahead, which is harmless but permanent.
+  from the stored high-water mark and the receiver's `max_version`; a clock
+  set far ahead would push versions ahead, which is harmless but permanent. A
+  scripted exporter's own receiver has no `max_version` channel, so after a
+  restore onto a Mac whose clock is behind its versions rest on the restored
+  high-water mark alone.
+- **Queries over redacted fields.** A filter, key or ordering on a hashed field
+  compiles to the keyed hash of every row, which no index serves. Grouping can
+  group on the original value and hash the keys of the output, since the hash
+  is one-to-one in practice; filters by a hashed value cannot, and scan.
+- **A takeover is a full send.** It is as large as a first backfill and
+  competes with indexing the same way; until its last run commits, the
+  receiver also holds what the old instance sent.
 - **Metadata is current, activity is delayed.** A work item past the cutoff
   shows its current title and repository, which may reflect activity newer
   than `as_of`. Titles are the likeliest to; if that matters, `library/1` can

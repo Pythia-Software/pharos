@@ -11,6 +11,8 @@
     "library/1"
   ],
   "as_of": "2026-10-30T15:00:00Z",
+  "export_delay_seconds": 259200,
   "receipt": "rcpt_000148",
-  "run_id": "run_20261102T150000Z_77c0"
+  "run_id": "run_20261102T150000Z_77c0",
+  "unconfirmed_run": "run_20261102T090000Z_51d3"
 }

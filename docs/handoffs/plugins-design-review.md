@@ -89,6 +89,25 @@ shown. Check the resolutions as part of this review.
 | 10 | Usage namespaces had no owner | Namespaces belong to the declaring plugin; records keyed by `(plugin, namespace, id)` |
 | 11–17 | Interpreter, permissions hash, duplicated declarative fields, preset checks, aggregate granularity, 403/404 order, a missing README rule | `interpreter`/`entry`; RFC 8785 hash with defaults; parse-time subset check; presets checked in the schema; per-dataset group keys shown at consent; check order in the OpenAPI; README updated |
 
+## Round two
+
+The second review (of `608f8702`) found the following.
+
+| # | Finding | Resolution |
+| --- | --- | --- |
+| 1 | Nothing said how Pharos detects a restored or copied library | `library_instance` is the existing library descriptor's instance (`pharos-library.json`): a copied folder is refused until **Recover library** (also how backups restore) mints a new one, and one drive opened on several Macs keeps it. `checkPluginInstances` pauses installations from another instance. A block-for-block drive clone, which the descriptor cannot see, is caught by receipts: `409 forked` |
+| 2 | `replace_all` assumed a takeover fits in one run | A takeover (`tko_…`) spans runs: every hello and commit names it, the run that finishes commits `complete`, and only then does the receiver retract what no run of it sent |
+| 3 | `resend` still used bare IDs and `{dataset, period}` | `items: [{dataset, id}]`, `periods: [{series, period}]` with an RFC 3339 start |
+| 4 | Aggregate mode could return row values through `min`/`max` and sparse groups | Fields have types, listed in `/grant`; in aggregate mode text and list fields are only allowed group keys, `min`/`max` take numbers and times, `sum`/`avg` numbers. A minimum group size is an open question for the owner |
+| 5 | After a restore the version clock rested on the wall clock | Hello answers carry the receiver's `max_version`; the clock never goes below it |
+| 6 | "Work item" was ambiguous in the catalog | Defined once: a `workspaces` row, not the `work_items` table |
+| 7 | Queries over redacted fields need a performance note | Added to Hazards |
+| 8 | `/items?ids=` would hit URL limits | `POST /items/{dataset}` with an `items_request` body |
+| Q | Default freshness | The three-day default stays; hello now carries `export_delay_seconds` beside `as_of`, so receivers can explain the gap |
+
+Also changed: a commit whose answer was lost is recovered through hello
+(`unconfirmed_run`, answered with its `receipt`) instead of being sent again.
+
 ## What to look for
 
 Concrete scenarios beat general concerns. For each finding, give the inputs or
@@ -101,11 +120,12 @@ sequence of events and what goes wrong.
    consent preview, fast paths and fact cubes, subagents, mirrors, workspaces,
    imported conversations.
 2. **Recordkeeping under failure.** Walk the served/acknowledged model and the
-   seven invariants through: a crash between adoption and cursor commit; a
+   ten invariants through: a crash between adoption and cursor commit; a
    receiver commit whose response is lost; a partial run followed by a privacy
    change; a full re-send; uninstall and reinstall with `keep` and with `new`;
    restoring the library from a backup; copying a library; two Macs opening the
-   same library in turn; the ledger's 180-day pruning.
+   same library in turn; a takeover interrupted by a privacy change or a second
+   restore; the ledger's 180-day pruning.
 3. **The export delay and the export query.** Whether `as_of` holds
    everywhere (metadata, messages, totals, change visibility, restatements,
    a change of the delay itself), and whether `export-query/1` is complete

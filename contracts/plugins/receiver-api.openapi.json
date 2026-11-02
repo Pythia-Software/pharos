@@ -21,7 +21,7 @@
       "post": {
         "operationId": "hello",
         "summary": "Start a run and say what the receiver needs",
-        "description": "A receipt the receiver does not recognize means it lost what came after, and it answers everything.",
+        "description": "A receipt the receiver does not recognize means it lost what came after, and it answers everything. Outside a takeover, a known receipt older than the latest is explained only by unconfirmed_run naming the run that produced the latest; anything else means two libraries are sending as one instance, refused with 409 forked.",
         "requestBody": {
           "required": true,
           "content": {
@@ -50,7 +50,7 @@
             "$ref": "#/components/responses/Disconnected"
           },
           "409": {
-            "description": "permissions_hash differs from the consented one (conflict; the person updates the plugin), or library_instance was replaced by another instance (superseded; this copy of the library stops sending)",
+            "description": "conflict: permissions_hash differs from the consented one (the person updates the plugin); superseded: library_instance was replaced by a takeover, or is unknown and names no takeover (this copy of the library stops sending); forked: the receipt shows another library sending as this instance (this copy stops sending until it is recovered as its own library)",
             "content": {
               "application/json": {
                 "schema": {
@@ -142,7 +142,7 @@
       "post": {
         "operationId": "commit",
         "summary": "Apply the run's batches together and return a receipt",
-        "description": "Upserts and periods apply when newer than what is stored and than any tombstone; retractions delete content and keep a tombstone; a period replaces every group of its (series, period). Nothing is removed by absence, except that replace_all, sent explicitly after a takeover, retracts whatever the run did not send.",
+        "description": "Upserts and periods apply when newer than what is stored and than any tombstone; retractions delete content and keep a tombstone; a period replaces every group of its (series, period). Nothing is removed by absence, except at the commit that completes a takeover, which retracts whatever no run of that takeover sent.",
         "requestBody": {
           "required": true,
           "content": {

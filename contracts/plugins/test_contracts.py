@@ -43,6 +43,7 @@ EXAMPLES = {
     "receiver.hello-request.json": "receiver.schema.json#/$defs/hello_request",
     "receiver.hello-response.changes.json": "receiver.schema.json#/$defs/hello_response",
     "receiver.hello-response.everything.json": "receiver.schema.json#/$defs/hello_response",
+    "receiver.hello-response.resend.json": "receiver.schema.json#/$defs/hello_response",
     "receiver.commit-request.json": "receiver.schema.json#/$defs/commit_request",
     "receiver.commit-request.takeover.json": "receiver.schema.json#/$defs/commit_request",
     "receiver.hello-request.takeover.json": "receiver.schema.json#/$defs/hello_request",
@@ -100,6 +101,8 @@ class ContractTests(unittest.TestCase):
         record = json.loads((HERE / "examples/usage-records.jsonl").read_text().splitlines()[0])
         result = example("run-result.import.json")
         batch = example("report.batch.json")
+        resend = example("receiver.hello-response.resend.json")
+        takeover = example("receiver.commit-request.takeover.json")
         send = manifest["run"]["send"][0]
         cases = {
             "an exporter that also produces": ("plugin-manifest.schema.json",
@@ -125,7 +128,17 @@ class ContractTests(unittest.TestCase):
                 {**result, "drops": [{"dir": "usage", "kind": "usage-records/1", "namespace": "x", "root": "/tmp"}]}),
             "an unknown status": ("run-result.schema.json", {**result, "status": "done"}),
             "a need that is not offered": ("receiver.schema.json#/$defs/hello_response",
-                {"need": "more-permissions", "accepts": [], "max_batch_bytes": 65536}),
+                {"need": "more-permissions", "accepts": [], "max_batch_bytes": 65536, "max_version": 0}),
+            "a hello answer without the receiver's highest version": ("receiver.schema.json#/$defs/hello_response",
+                {k: v for k, v in resend.items() if k != "max_version"}),
+            "a resend of an ID without its dataset": ("receiver.schema.json#/$defs/hello_response",
+                {**resend, "need": {"resend": {"items": ["w_9tq3LmA2"]}}}),
+            "a resend of a period without its series": ("receiver.schema.json#/$defs/hello_response",
+                {**resend, "need": {"resend": {"periods": [{"dataset": "usage/1", "period": "2026-10-21T00:00:00-06:00"}]}}}),
+            "a takeover commit that does not say whether it completes": ("receiver.schema.json#/$defs/commit_request",
+                {**takeover, "takeover": {"id": takeover["takeover"]["id"]}}),
+            "a replace-everything commit outside a takeover": ("receiver.schema.json#/$defs/commit_request",
+                {"run_id": takeover["run_id"], "batches": 1, "replace_all": True}),
             "a query that both groups and selects": ("export-query.schema.json",
                 {**send["query"], "select": ["provider"]}),
             "an incremental aggregate send without a period": ("plugin-manifest.schema.json",

@@ -45,8 +45,11 @@ timestamps, durations, byte sizes, machines, drops, tokens and the error body.
   `output_dir`.
 - **Spend and estimates are different fields.** A usage record's `cost.usd` is
   required when its status is `priced` or `assumed`; `estimate` is never cost.
-- **A receiver can ask for changes, everything, or particular items again,**
-  and nothing else.
+- **A receiver can ask for changes, everything, or particular items and
+  periods again** (keyed as in the report), and nothing else. It always says
+  the highest version it holds.
+- **Nothing is retracted by absence,** except at the commit that completes a
+  takeover; every run of a takeover names it.
 
 Some rules span documents and are checked by Pharos rather than by the schemas:
 
@@ -59,10 +62,17 @@ Some rules span documents and are checked by Pharos rather than by the schemas:
   having, selection and ordering) is granted for its dataset, its keys and
   period are ones the dataset allows (`/grant` lists them), and a declarative
   manifest's sends satisfy this when it is parsed;
+- in aggregate mode, a text or list field appears only as an allowed group key
+  (as a key or in a filter), `min` and `max` take number and time fields, and
+  `sum` and `avg` numbers (`/grant` lists each field's type);
 - a declarative receiver URL is under one of `destinations`;
 - the permissions hash is SHA-256 over RFC 8785 canonical JSON of the
   permissions with defaults filled in;
-- versions served for an installation only increase;
+- versions served for an installation only increase, and never fall below the
+  receiver's `max_version`;
+- outside a takeover, a hello's receipt is the latest, or the one before it
+  with `unconfirmed_run` naming the run that produced the latest; any other
+  known receipt is `409 forked`;
 - a batch's idempotency key always carries the same body (its
   `Pharos-Batch-SHA256`).
 
