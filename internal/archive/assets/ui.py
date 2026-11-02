@@ -1726,6 +1726,7 @@ if(SHARE)document.querySelector('button[data-view=home]')?.remove();else documen
 // Query Table renders its own SVG controls. Keep its React-owned nodes intact:
 // replacing their children after render breaks grouped column changes.
 window.pharosMessageCard=messageCard;
+window.pharosLoadOriginal=loadOriginal;
 window.pharosHasHumanWriting=hasHumanWriting;
 window.pharosMessageSummary=compactMessageSummary;
 window.pharosTurnSummaries=turnSummaryData;

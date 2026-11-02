@@ -16,7 +16,7 @@ import { DataTaxonomyModal, SourceQueryBuilder } from "./data-taxonomy";
 import { installDelegationExplorer } from "./delegation";
 import { installWorkspaceInbox } from "./workspace-inbox";
 import { MessageTableSearch, newMessageSearch } from "./message-table-search";
-import { ConversationFacts, ResultConversationBrowser, ResultMessage, conversationActivitySummary } from "./conversation-results";
+import { ConversationFacts, ResultConversationBrowser, ResultMessage, conversationActivitySummary, openableProps, type ResultTarget } from "./conversation-results";
 import { TextSearchEditor } from "./text-search-editor";
 import { SearchHelp } from "./search-help";
 import { RecordSearchEditor, recordSearchTargets } from "./record-search-editor";
@@ -30,8 +30,8 @@ import { ExploreSearch } from "./explore-search";
 import { recordKeywordSummary, RecordKeywordClause } from "./record-keyword-clause";
 import { refreshTodayHost, changeLibrarySearch, libraryFind, libraryHostQuery, libraryHostState, messageFind, messageHostQuery, readLibraryHost, readMessageSearchHost, readRecordKeyword, recordKeywordFind, recordKeywordHostQuery, sameHostState, withMessageSearch, withoutLibrarySearch, withRecordKeyword, type LibraryHost } from "./host-query-state";
 import { SearchResultsDisplay } from "./search-results-view";
-import { highlightParts, matchFindState, summaryEntries, type WorkMatches, type WorkMatchItem } from "./find-match-model";
-import { writeFindParameters } from "./page-find-model";
+import { highlightParts, matchFindState, plainSnippetParts, summaryEntries, type WorkMatches, type WorkMatchItem } from "./find-match-model";
+import { findPattern, writeFindParameters } from "./page-find-model";
 import { queryForSearchResultsView, searchResultsView, type SearchResultsView } from "./search-results-view-model";
 import { newKeywordSearch, searchSentence, withheldBatch, type TextSearchDraft } from "./text-search-model";
 import { CarbonImpact, useLegacyCarbonFilters } from "./carbon-impact";
@@ -856,13 +856,25 @@ function ConversationResultCard({ row, api, renderers, find }: { row: Row; api: 
   const firstInput = row.first_input ? { role: "user", text: row.first_input } : row.purpose ? { role: "user", text: row.purpose } : null;
   const latestResponse = row.last_response ? { role: "assistant", text: row.last_response } : row.outcome ? { role: "assistant", text: row.outcome } : null;
   const count = Number(row.find_match_count) || 1;
-  const match = row.find_hit ? <FindMatch hit={row.find_hit} label={`Match · ${count.toLocaleString()} ${findHitNoun(row.find_hit)}${count === 1 ? "" : "s"}`} /> : null;
   const matches = useWorkMatches(row, find);
+  const [target, setTarget] = useState<ResultTarget | null>(null);
   const openBrowser = () => { setHasBrowsed(true); setBrowse(true); browserToggle.current?.focus({ preventScroll: true }); };
-  const summaryMessage = (item: WorkMatchItem, label: string) => item.kind === "match"
-    ? <FindMatch key={item.message_id} label={label} hit={{ ...(row.find_hit as FindHit), conversation_id: item.conversation_id, message_id: item.message_id, role: item.role, message_kind: item.message_kind, snippet: item.snippet, highlights: item.highlights }} />
-    : item.kind === "first" && firstInput ? <ResultMessage key={item.message_id} label={label} message={firstInput} kind="human" compact />
-    : item.kind === "last" && latestResponse ? <ResultMessage key={item.message_id} label={label} message={latestResponse} kind="assistant" compact /> : null;
+  // A preview message opens Browse at its turn, marking a match's terms.
+  const browseTo = (messageID: unknown, conversationID?: unknown, hit?: FindHit) => {
+    const find = hit ? matchFindState(hit.snippet ?? "", hit.highlights) : null, pattern = find ? findPattern(find) : null;
+    if (messageID) setTarget({ messageID: String(messageID), conversationID: conversationID ? String(conversationID) : undefined, pattern: pattern?.status === "ready" ? pattern.pattern : null });
+    openBrowser();
+  };
+  const openHit = (hit: FindHit) => hit.message_id ? browseTo(hit.message_id, hit.conversation_id, hit) : openFindHit(hit);
+  const match = row.find_hit ? <FindMatch hit={row.find_hit} label={`Match · ${count.toLocaleString()} ${findHitNoun(row.find_hit)}${count === 1 ? "" : "s"}`} onOpen={() => openHit(row.find_hit)} /> : null;
+  const summaryMessage = (item: WorkMatchItem, label: string) => {
+    if (item.kind === "match") {
+      const hit = { ...(row.find_hit as FindHit), conversation_id: item.conversation_id, message_id: item.message_id, role: item.role, message_kind: item.message_kind, snippet: item.snippet, highlights: item.highlights };
+      return <FindMatch key={item.message_id} label={label} hit={hit} onOpen={() => openHit(hit)} />;
+    }
+    const message = item.kind === "first" ? firstInput : latestResponse;
+    return message ? <ResultMessage key={item.message_id} label={label} message={message} kind={item.kind === "first" ? "human" : "assistant"} compact onOpen={() => browseTo(item.message_id, item.conversation_id)} /> : null;
+  };
   return <article className="conversation-result-card" data-pharos-target={`row:${row.id}`}>
     <div className="conversation-result-head">
       <div className="conversation-result-summary">
@@ -880,15 +892,15 @@ function ConversationResultCard({ row, api, renderers, find }: { row: Row; api: 
           <Icon name="tree" /><span>{entry.label}</span><Icon name="chevron-down" />
         </button>)}
     </div> : !browse && (firstInput || latestResponse || match) ? <div className={`conversation-result-preview${firstInput && (latestResponse || match) ? " joined" : ""}`}>
-      {firstInput ? <ResultMessage label="First ask" message={firstInput} kind="human" compact /> : null}
+      {firstInput ? <ResultMessage label="First ask" message={firstInput} kind="human" compact onOpen={() => browseTo(row.first_input_id)} /> : null}
       <button type="button" data-view-field="search_cards" className="conversation-preview-browse" aria-label={`Browse turns: ${activitySummary}`} aria-expanded={browse} aria-controls={browserID} onClick={openBrowser}>
         <Icon name="tree" /><span>{activitySummary}</span><Icon name="chevron-down" />
       </button>
       {match}
-      {latestResponse ? <ResultMessage label="Latest response" message={latestResponse} kind="assistant" compact /> : null}
+      {latestResponse ? <ResultMessage label="Latest response" message={latestResponse} kind="assistant" compact onOpen={() => browseTo(row.last_response_id)} /> : null}
     </div> : browse && match ? <div className="conversation-result-preview">{match}</div> : !browse ? <p className="muted conversation-result-empty">No retained message preview.</p> : null}
     <div id={browserID} className={`conversation-browser-disclosure${browse ? " is-expanded" : ""}`} aria-hidden={!browse} ref={element => { if (element) element.inert = !browse; }}>
-      <div className="conversation-browser-content">{hasBrowsed || browse ? <ResultConversationBrowser workspaceID={String(row.id)} readJSON={readerJSON} /> : null}</div>
+      <div className="conversation-browser-content">{hasBrowsed || browse ? <ResultConversationBrowser workspaceID={String(row.id)} readJSON={readerJSON} target={target} /> : null}</div>
     </div>
   </article>;
 }
@@ -948,12 +960,11 @@ const findHitNoun = (hit: FindHit) => hit.url ? "matching URL" : hit.path ? "mat
 
 // A keyword match, as a message in the conversation summary, with the
 // query's matches marked.
-function FindMatch({ hit, label }: { hit: FindHit; label: string }) {
-  return <div className={`result-message compact library-find-match ${hit.role === "user" ? "human" : "assistant"}`}>
+function FindMatch({ hit, label, onOpen }: { hit: FindHit; label: string; onOpen: () => void }) {
+  return <div className={`result-message compact library-find-match ${hit.role === "user" ? "human" : "assistant"}`} {...openableProps(onOpen)}>
     <div className="result-message-label">{label}</div>
     <div className="result-message-body library-find-snippet">{hit.url ? <a href={hit.url} target="_blank" rel="noopener noreferrer">{hit.url}</a>
-      : highlightParts(findHitText(hit), hit.highlights).map((part, index) => part.match ? <mark key={index}>{part.text}</mark> : part.text)}</div>
-    <button type="button" className="library-find-open" onClick={() => openFindHit(hit)}>{findHitLabel(hit)} <Icon name="arrow-right" /></button>
+      : (hit.path ? highlightParts : plainSnippetParts)(findHitText(hit), hit.highlights).map((part, index) => part.match ? <mark key={index}>{part.text}</mark> : part.text)}</div>
   </div>;
 }
 

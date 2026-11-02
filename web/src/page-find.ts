@@ -295,7 +295,8 @@ function scrollParent(element: HTMLElement): HTMLElement | null {
   }
   return null;
 }
-function scrollRange(range: Range) {
+/** Scrolls a range's text to the middle of its scroller, without focus. */
+export function scrollRange(range: Range) {
   const element = range.startContainer.parentElement;
   if (!element) return;
   element.scrollIntoView({ block: "nearest", inline: "nearest" });
