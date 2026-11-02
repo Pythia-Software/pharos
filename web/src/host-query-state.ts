@@ -134,6 +134,12 @@ export function libraryFind(state: HostQueryState | undefined): string {
   if (host.fileCase) params.set("find_case", "1");
   return params.toString();
 }
+/** Adding a content search shows its matches as conversations. Editing or
+ * removing one keeps the chosen view, so Table stays a deliberate choice. */
+export function changeLibrarySearch(state: HostQueryState | undefined, change: Partial<LibraryHost>): HostQueryState {
+  const next = libraryHostState({ ...readLibraryHost(state), ...change });
+  return !libraryFind(state) && libraryFind(next) ? libraryHostState({ ...readLibraryHost(next), view: "conversation" }) : next;
+}
 export const withoutLibrarySearch = (state: HostQueryState | undefined): HostQueryState =>
   libraryHostState({ ...readLibraryHost(state), kind: "text", text: null, file: "", fileCase: false });
 

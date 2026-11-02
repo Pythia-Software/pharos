@@ -5803,6 +5803,17 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
+      "key": "00e22af22344e13c:0",
+      "file": "web/src/index.tsx",
+      "owner": "ConversationResultCard",
+      "tag": "button",
+      "control": "data-view-field=\"search_cards\" aria-label={`Browse turns: ${activitySummary}`} onClick={openBrowser}",
+      "binding": "search_cards",
+      "disclosure": true,
+      "contract": "view.search_cards",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "0fb8dba2b119b527:0",
       "file": "web/src/index.tsx",
       "owner": "ConversationResultCard",
@@ -5821,22 +5832,22 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
-      "key": "4fdbaf71bb0bff42:0",
+      "key": "1d97fab11b9f77e9:0",
       "file": "web/src/index.tsx",
       "owner": "ConversationResultCard",
       "tag": "button",
-      "control": "data-view-field=\"search_cards\" onClick={() => { setHasBrowsed(true); setBrowse(value => !value); }}",
+      "control": "data-view-field=\"search_cards\" aria-label={`${entry.label}. Browse turns: ${activitySummary}`} onClick={openBrowser}",
       "binding": "search_cards",
       "disclosure": true,
       "contract": "view.search_cards",
       "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "65734982c21de1f3:0",
+      "key": "4fdbaf71bb0bff42:0",
       "file": "web/src/index.tsx",
       "owner": "ConversationResultCard",
       "tag": "button",
-      "control": "data-view-field=\"search_cards\" aria-label={`Browse turns: ${activitySummary}`} onClick={() => { setHasBrowsed(true); setBrowse(true); browserToggle.current?.focus({ preventScroll: true }); }}",
+      "control": "data-view-field=\"search_cards\" onClick={() => { setHasBrowsed(true); setBrowse(value => !value); }}",
       "binding": "search_cards",
       "disclosure": true,
       "contract": "view.search_cards",

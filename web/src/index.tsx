@@ -27,8 +27,10 @@ import { createQueryMetadataLoader } from "./query-metadata";
 import { SearchDialog } from "./search-dialog";
 import { ExploreSearch } from "./explore-search";
 import { recordKeywordSummary, RecordKeywordClause } from "./record-keyword-clause";
-import { refreshTodayHost, libraryFind, libraryHostQuery, libraryHostState, messageFind, messageHostQuery, readLibraryHost, readMessageSearchHost, readRecordKeyword, recordKeywordFind, recordKeywordHostQuery, sameHostState, withMessageSearch, withoutLibrarySearch, withRecordKeyword, type LibraryHost } from "./host-query-state";
+import { refreshTodayHost, changeLibrarySearch, libraryFind, libraryHostQuery, libraryHostState, messageFind, messageHostQuery, readLibraryHost, readMessageSearchHost, readRecordKeyword, recordKeywordFind, recordKeywordHostQuery, sameHostState, withMessageSearch, withoutLibrarySearch, withRecordKeyword, type LibraryHost } from "./host-query-state";
 import { SearchResultsDisplay } from "./search-results-view";
+import { highlightParts, matchFindState, summaryEntries, type WorkMatches, type WorkMatchItem } from "./find-match-model";
+import { writeFindParameters } from "./page-find-model";
 import { queryForSearchResultsView, searchResultsView, type SearchResultsView } from "./search-results-view-model";
 import { newKeywordSearch, searchSentence, withheldBatch, type TextSearchDraft } from "./text-search-model";
 import { CarbonImpact, useLegacyCarbonFilters } from "./carbon-impact";
@@ -829,7 +831,25 @@ function readerJSON(path: string, signal?: AbortSignal): Promise<Row> {
   return shared ? window.pharosApi!(path) : fetch(path, { signal }).then(responseJSON<Row>);
 }
 
-function ConversationResultCard({ row, api, renderers }: { row: Row; api: QueryTableApi<Row>; renderers: RenderRegistry<Row> }) {
+// A message search's matches, placed in the card summary. Each card loads
+// its own, so the table page carries only one keyword hit per work.
+function useWorkMatches(row: Row, find: string): WorkMatches | null {
+  const hit = row.find_hit as FindHit | undefined;
+  const wanted = Boolean(find && hit && !hit.url && !hit.path);
+  const [loaded, setLoaded] = useState<{ key: string; matches: WorkMatches } | null>(null);
+  const key = `${row.id}?${find}`;
+  useEffect(() => {
+    if (!wanted || shared) return;
+    const controller = new AbortController();
+    void readerJSON(`/api/work/${encodeURIComponent(String(row.id))}/matches?${find}`, controller.signal)
+      .then(matches => { if (!controller.signal.aborted) setLoaded({ key, matches: matches as WorkMatches }); })
+      .catch(() => {}); // The row's own hit stays on show.
+    return () => controller.abort();
+  }, [key, wanted]);
+  return wanted && loaded?.key === key && loaded.matches.items.some(item => item.kind === "match") ? loaded.matches : null;
+}
+
+function ConversationResultCard({ row, api, renderers, find }: { row: Row; api: QueryTableApi<Row>; renderers: RenderRegistry<Row>; find: string }) {
   const [browse, setBrowse] = useViewEntry("search_cards", `${row.id}/browse`, false);
   const [hasBrowsed, setHasBrowsed] = useState(false);
   const browserToggle = useRef<HTMLButtonElement>(null);
@@ -837,6 +857,14 @@ function ConversationResultCard({ row, api, renderers }: { row: Row; api: QueryT
   const activitySummary = conversationActivitySummary(row);
   const firstInput = row.first_input ? { role: "user", text: row.first_input } : row.purpose ? { role: "user", text: row.purpose } : null;
   const latestResponse = row.last_response ? { role: "assistant", text: row.last_response } : row.outcome ? { role: "assistant", text: row.outcome } : null;
+  const count = Number(row.find_match_count) || 1;
+  const match = row.find_hit ? <FindMatch hit={row.find_hit} label={`Match · ${count.toLocaleString()} ${findHitNoun(row.find_hit)}${count === 1 ? "" : "s"}`} /> : null;
+  const matches = useWorkMatches(row, find);
+  const openBrowser = () => { setHasBrowsed(true); setBrowse(true); browserToggle.current?.focus({ preventScroll: true }); };
+  const summaryMessage = (item: WorkMatchItem, label: string) => item.kind === "match"
+    ? <FindMatch key={item.message_id} label={label} hit={{ ...(row.find_hit as FindHit), conversation_id: item.conversation_id, message_id: item.message_id, role: item.role, message_kind: item.message_kind, snippet: item.snippet, highlights: item.highlights }} />
+    : item.kind === "first" && firstInput ? <ResultMessage key={item.message_id} label={label} message={firstInput} kind="human" compact />
+    : item.kind === "last" && latestResponse ? <ResultMessage key={item.message_id} label={label} message={latestResponse} kind="assistant" compact /> : null;
   return <article className="conversation-result-card" data-pharos-target={`row:${row.id}`}>
     <div className="conversation-result-head">
       <div className="conversation-result-summary">
@@ -848,14 +876,19 @@ function ConversationResultCard({ row, api, renderers }: { row: Row; api: QueryT
         <button type="button" ref={browserToggle} data-view-field="search_cards" className="conversation-browser-toggle" onClick={() => { setHasBrowsed(true); setBrowse(value => !value); }} aria-expanded={browse} aria-controls={browserID}><Icon name="tree" />{browse ? "Collapse turns" : "Browse"}<Icon name="chevron-down" /></button>
       </div>
     </div>
-    {row.find_hit ? <FindMatch hit={row.find_hit} count={Number(row.find_match_count) || 1} /> : null}
-    {!browse && (firstInput || latestResponse) ? <div className={`conversation-result-preview${firstInput && latestResponse ? " joined" : ""}`}>
+    {!browse && matches ? <div className="conversation-result-preview joined">
+      {summaryEntries(matches, count).map((entry, index) => entry.type === "message" ? summaryMessage(entry.item, entry.label)
+        : <button key={`gap:${index}`} type="button" data-view-field="search_cards" className="conversation-preview-browse" title={`Browse turns: ${activitySummary}`} aria-label={`${entry.label}. Browse turns: ${activitySummary}`} aria-expanded={browse} aria-controls={browserID} onClick={openBrowser}>
+          <Icon name="tree" /><span>{entry.label}</span><Icon name="chevron-down" />
+        </button>)}
+    </div> : !browse && (firstInput || latestResponse || match) ? <div className={`conversation-result-preview${firstInput && (latestResponse || match) ? " joined" : ""}`}>
       {firstInput ? <ResultMessage label="First ask" message={firstInput} kind="human" compact /> : null}
-      <button type="button" data-view-field="search_cards" className="conversation-preview-browse" aria-label={`Browse turns: ${activitySummary}`} aria-expanded={browse} aria-controls={browserID} onClick={() => { setHasBrowsed(true); setBrowse(true); browserToggle.current?.focus({ preventScroll: true }); }}>
+      <button type="button" data-view-field="search_cards" className="conversation-preview-browse" aria-label={`Browse turns: ${activitySummary}`} aria-expanded={browse} aria-controls={browserID} onClick={openBrowser}>
         <Icon name="tree" /><span>{activitySummary}</span><Icon name="chevron-down" />
       </button>
+      {match}
       {latestResponse ? <ResultMessage label="Latest response" message={latestResponse} kind="assistant" compact /> : null}
-    </div> : !browse ? <p className="muted conversation-result-empty">No retained message preview.</p> : null}
+    </div> : browse && match ? <div className="conversation-result-preview">{match}</div> : !browse ? <p className="muted conversation-result-empty">No retained message preview.</p> : null}
     <div id={browserID} className={`conversation-browser-disclosure${browse ? " is-expanded" : ""}`} aria-hidden={!browse} ref={element => { if (element) element.inert = !browse; }}>
       <div className="conversation-browser-content">{hasBrowsed || browse ? <ResultConversationBrowser workspaceID={String(row.id)} readJSON={readerJSON} /> : null}</div>
     </div>
@@ -863,14 +896,15 @@ function ConversationResultCard({ row, api, renderers }: { row: Row; api: QueryT
 }
 
 function ConversationResults({ api, searching, failed, renderers }: { api: QueryTableApi<Row>; searching: boolean; failed: boolean; renderers: RenderRegistry<Row> }) {
+  const find = shared ? "" : libraryFind(api.query.hostState);
   if (!api.loading && !api.rows.length) return <div className="conversation-results-empty no-results">{failed ? failedMessage : searching ? "No work matches this search and these filters." : "No work matches this query."}</div>;
   return <div className={`conversation-results ${api.loading ? "loading" : ""}`} aria-busy={api.loading}>
     {api.loading && !api.rows.length ? <div className="conversation-results-empty">Loading conversations…</div> : null}
-    {api.rows.map((row) => <ConversationResultCard key={String(api.rowId(row) ?? row.id)} row={row} api={api} renderers={renderers} />)}
+    {api.rows.map((row) => <ConversationResultCard key={String(api.rowId(row) ?? row.id)} row={row} api={api} renderers={renderers} find={find} />)}
   </div>;
 }
 
-type FindHit = { workspace_id: string; conversation_id?: string; title: string; provider?: string; started_at?: string; message_id?: string; role?: string; message_kind?: string; snippet?: string; path?: string; old_path?: string; url?: string; url_source?: string; tool_name?: string; tool_call_id?: string; attribution?: string; count: number };
+type FindHit = { workspace_id: string; conversation_id?: string; title: string; provider?: string; started_at?: string; message_id?: string; role?: string; message_kind?: string; snippet?: string; highlights?: [number, number][]; path?: string; old_path?: string; url?: string; url_source?: string; tool_name?: string; tool_call_id?: string; attribution?: string; count: number };
 // What the Library's keyword search found within the stored table filters.
 type SearchProgress = { complete: boolean; stop_reason: string; stop_message?: string; next_cursor: string; count: number; count_relation: string; candidates: number; verified_bytes: number; skipped_oversize: number; elapsed_ms: number; strategy: string; coverage: string; expansions?: Record<string,string[]> };
 type FindSummary = { workspaces: number; limited: boolean; search?: SearchProgress };
@@ -879,6 +913,7 @@ function openFindHit(hit: FindHit) {
   const params = new URLSearchParams();
   if (hit.conversation_id) params.set("conversation", hit.conversation_id);
   if (hit.message_id) params.set("message", hit.message_id);
+  if (!hit.url && !hit.path) writeFindParameters(params, matchFindState(hit.snippet ?? "", hit.highlights));
   history.pushState(null, "", `/work/${encodeURIComponent(hit.workspace_id)}${params.size ? `?${params}` : ""}`);
   (window as unknown as { routeFromLocation?: () => void }).routeFromLocation?.();
 }
@@ -911,13 +946,16 @@ function findHitText(hit: FindHit): string {
   return hit.snippet ?? "";
 }
 
-// A result's keyword match: its most relevant hit and how many there were.
-function FindMatch({ hit, count }: { hit: FindHit; count: number }) {
-  const noun = hit.url ? "matching URL" : hit.path ? "matching file change" : "matching message";
-  return <div className="library-find-match">
-    <div className="result-message-label">Keyword match · {count.toLocaleString()} {noun}{count === 1 ? "" : "s"}</div>
-    <p className="library-find-snippet">{hit.url ? <a href={hit.url} target="_blank" rel="noopener noreferrer">{hit.url}</a> : findHitText(hit)}</p>
-    <button type="button" className="library-find-open" onClick={() => openFindHit(hit)}>{findHitLabel(hit)}</button>
+const findHitNoun = (hit: FindHit) => hit.url ? "matching URL" : hit.path ? "matching file change" : "matching message";
+
+// A keyword match, as a message in the conversation summary, with the
+// query's matches marked.
+function FindMatch({ hit, label }: { hit: FindHit; label: string }) {
+  return <div className={`result-message compact library-find-match ${hit.role === "user" ? "human" : "assistant"}`}>
+    <div className="result-message-label">{label}</div>
+    <div className="result-message-body library-find-snippet">{hit.url ? <a href={hit.url} target="_blank" rel="noopener noreferrer">{hit.url}</a>
+      : highlightParts(findHitText(hit), hit.highlights).map((part, index) => part.match ? <mark key={index}>{part.text}</mark> : part.text)}</div>
+    <button type="button" className="library-find-open" onClick={() => openFindHit(hit)}>{findHitLabel(hit)} <Icon name="arrow-right" /></button>
   </div>;
 }
 
@@ -1018,10 +1056,11 @@ function LibrarySearchClause({ api }: { api: QueryTableApi<Row> }) {
   const [fileCaseDraft, setFileCaseDraft] = useState(current.fileCase);
   useEffect(() => { setFileDraft(current.file); setFileCaseDraft(current.fileCase); }, [current]);
   const [error, setError] = useState("");
-  // Applying the search already in effect runs it again.
+  // Applying the search already in effect runs it again. A grouped query
+  // keeps its table; the Conversations preference returns once ungrouped.
   const commit = (change: Partial<LibraryHost>, rerun = false) => {
     try {
-      const hostState = libraryHostState({ ...current, ...change });
+      const hostState = changeLibrarySearch(state, change);
       if (rerun && sameHostState(libraryHostQuery.normalize!(hostState), state)) api.refresh();
       else api.setDefinition?.(previous => ({ query: { ...previous.query, offset: 0 }, hostState }));
       setError("");
