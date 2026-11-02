@@ -9,13 +9,13 @@ export function CreateDashboardCard({ catalog, state, where }: { catalog: Analys
   const dialog = useRef<HTMLDialogElement>(null);
   const [draft, setDraft] = useState({ url: "", title: "", description: "" });
   const [error, setError] = useState(""), [saved, setSaved] = useState(false);
-  return <div className="dashboard-card-actions">
-    <button type="button" onClick={() => {
+  return <span className="dashboard-card-actions">
+    <button type="button" className="dashboard-card-create" aria-label="Create card" title="Create card" onClick={() => {
       const url = dashboardCardURL(location.href, catalog, state, where);
       setDraft({ url, title: dashboardCardTitle(catalog, state), description: dashboardCardDescription(url) });
       setError(""); setSaved(false); dialog.current?.showModal();
-    }}><Icon name="plus" />Create card</button>
-    {saved ? <span role="status">Card added to <a href="/home" onClick={event => { event.preventDefault(); window.pharosNavigate?.("/home"); }}>your Home dashboard</a>.</span> : null}
+    }}><Icon name="plus" /></button>
+    {saved ? <span role="status">Added to <a href="/home" onClick={event => { event.preventDefault(); window.pharosNavigate?.("/home"); }}>Home</a></span> : null}
     <dialog ref={dialog} className="home-editor" aria-labelledby="createDashboardCardTitle"><form onSubmit={event => {
       event.preventDefault();
       try { collectDashboardCard(draft.url, draft.title, draft.description); dialog.current?.close(); setSaved(true); }
@@ -28,5 +28,5 @@ export function CreateDashboardCard({ catalog, state, where }: { catalog: Analys
       {error ? <p role="alert">{error}</p> : null}
       <div className="home-editor-actions"><button type="button" onClick={() => dialog.current?.close()}>Cancel</button><button type="submit">Create card</button></div>
     </form></dialog>
-  </div>;
+  </span>;
 }

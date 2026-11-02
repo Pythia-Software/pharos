@@ -321,7 +321,7 @@ for (const topic of ['tokens', 'human', 'skills', 'time', 'carbon']) for (const 
   assert.ok(await bar.evaluate(element => element === document.activeElement), 'Escape returns focus to the inspected period');
   await bar.click();
   await details.waitFor();
-  await chart.locator('h3').click();
+  await page.locator('.usage-chart-headline > h2').click();
   await details.waitFor({ state: 'hidden' });
   await settled();
 });
@@ -342,7 +342,7 @@ test('Dashboard chart pointer capture snaps to columns and treats a drag back to
   await chart.getByRole('group', { name: /^Details for / }).waitFor();
   assert.equal(new URL(page.url()).searchParams.get('analyze_filters'),new URL(before).searchParams.get('analyze_filters'),'one-period inspection leaves date filters alone');
   assert.ok(Object.keys(JSON.parse(new URL(page.url()).searchParams.get('chart_pins'))).length,'a deliberate pinned bucket is represented in the URL');
-  await chart.locator('h3').click();
+  await page.locator('.usage-chart-headline > h2').click();
   await page.mouse.move(end.x + end.width / 2, end.y + 30);
   await page.mouse.down();
   await page.mouse.move(start.x + start.width / 2, start.y + 30);
@@ -992,7 +992,9 @@ for (const [url, ready] of [
 ]) test(`Opening ${url} leaves focus alone and its title is ordinary text`, { skip }, async t => {
   const { page } = await open(t, { url, ready });
   assert.ok(await page.evaluate(() => document.activeElement === document.body), "loading a page should not choose a focused element");
-  for (const title of await page.locator(".view.active h1:visible").all()) {
+  // A dashboard's chart title stands in for its h1, which assistive technology alone reads.
+  for (const title of await page.locator(".view.active :is(h1, .usage-chart-headline > h2):visible").all()) {
+    if (await title.evaluate(element => getComputedStyle(element).clipPath !== "none")) continue;
     assert.equal(await title.evaluate(element => { element.focus(); return document.activeElement === element; }), false, "page titles should not accept focus");
     await title.click();
     assert.equal(await title.evaluate(element => document.activeElement === element), false, "clicking a title should leave it unfocused");
@@ -2273,7 +2275,7 @@ test('dashboard card creation keeps focus in its dialog, restores it on cancel a
   }
   await shot('create-dashboard-card');
   await dialog.getByRole('button',{name:'Create card',exact:true}).click();
-  await page.getByRole('link',{name:'your Home dashboard',exact:true}).click();
+  await page.locator('.dashboard-card-actions').getByRole('link',{name:'Home',exact:true}).click();
   const card = page.locator('.home-collection .query-card').filter({hasText:'My provider tokens'});
   await card.locator('.query-cover[aria-busy]').waitFor({state:'detached'});
   await shot('created-dashboard-card-home');

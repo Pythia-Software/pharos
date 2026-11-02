@@ -19,7 +19,7 @@ and event counts, alongside a worked median-wait example.
 Model/harness coverage, conversation traces, validation and methodology use
 URL-addressable `ViewDisclosure` accordions and the shared dashboard disclosure
 style. Detail links to Overview and opens
-the methodology accordion through semantic reveal. Tokens and Cost, Agent Time
+the methodology accordion through semantic reveal. Tokens and Cost, Tool Time
 and Parallelism link to Waiting and Compaction.
 
 Detail has six views: distributions over time, comparison heatmap, histograms,
@@ -33,7 +33,10 @@ window comparisons. Percentile overlays can be toggled. Effort ordering remains
 low to high with Unreported last, regardless of numeric sort. All observed
 groups stay available; SVG facets render as they enter the viewport.
 
-`thinking` is validated JSON in the shared view-state contract. Partial Card
+`thinking` is validated JSON in the shared view-state contract. Agents link
+to these pages with `site_link` options and `days` like any other dashboard;
+the site map lists each control as a key of `thinking`
+([site map](site-map.md#nodes)). Partial Card
 Library links capture effective defaults. Dates always use the viewer's local
 time zone; legacy pinned zones and minimum-sample filters are normalized when
 opening old links.
@@ -48,8 +51,11 @@ Evidence queries preserve the originating page/presentation; returning
 from an edited query uses its edited population rather than reapplying removed
 model/date controls.
 
-Four Card Library recipes link directly to these pages: wait distribution,
-wait by model/effort, reasoning by effort, and timing coverage. Their editable
+The Card Library's **Waiting and Thinking** topic has six recipes. Wait
+distribution, context compactions and timing coverage open Waiting and
+Compaction (timing coverage with its coverage accordion open); wait by
+model/effort, wait by preceding tool and reasoning by effort open Thinking in
+their view and breakdown. Their editable
 native source query remains available for collection and preview. Native compact
 previews use Query Table automatic histogram bins / Tukey boxes; the full page
 uses shared rounded edges / p10–p90 whiskers. This difference is disclosed.
