@@ -2134,7 +2134,9 @@ for (const [width,url,theme] of [[1440,'/analyze?analyze_topic=tokens','dark'],[
   await page.locator('.pharos-destination:not([hidden])').click();
   await modal.waitFor({state:'hidden'});
   await page.waitForURL(url=>url.pathname==='/library');
-  assert.ok(await page.locator('#askPharosToggle').evaluate(element=>element===document.activeElement)||await page.locator('#headerMore').evaluate(element=>element===document.activeElement));
+  // Opening the answer floats the chat; focus returns to the picture in picture panel that reopened it.
+  await panel.getByRole('button',{name:/Ask a follow-up/}).waitFor();
+  assert.ok(await panel.locator('.pharos-floating-open').evaluate(element=>element===document.activeElement));
 });
 
 test('Ask Pharos on Home can keep browsing without losing the active chat', {skip}, async t => {
@@ -2218,6 +2220,12 @@ for (const browsing of [false,true]) test(`Ask Pharos ${browsing?'reopened brows
     await page.locator('.pharos-destination:not([hidden])').click();
   }
   await page.waitForURL(url=>url.pathname==='/settings');await modal.waitFor({state:'hidden'});
+  // The chat pops out into picture in picture, ready for a follow-up about the opened page.
+  const panel=page.getByRole('complementary',{name:'Ask Pharos progress',exact:true});
+  await panel.waitFor();
+  await page.locator('.pharos-pip-ghost').waitFor({state:'detached'});
+  await panel.locator('.pharos-floating-open').click();await modal.waitFor();
+  assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)));
 });
 
 
