@@ -1591,11 +1591,11 @@ before findings exist, and `analysis.authorship` from a page. A background body 
 at utility can make a foreground writer wait a little longer; the utility
 tier, unlike background, is not throttled hard.
 
-## 11. Background updates
+## 11. Background Processing
 
 Every domain a page shows has an automatic owner. `backgroundLoop`
 (`background.go`) runs the work the scheduled index does not, on one of
-three cadences, and Settings → Background updates and the drive panel show
+three cadences, and Settings → Background Processing and the drive panel show
 the same schedule from one declaration (`backgroundItems`):
 
 | Item | Runs | Cadence before measurements | Measured by |
@@ -1631,7 +1631,9 @@ the same schedule from one declaration (`backgroundItems`):
 - **Overrides** may permanently move an item to a slower cadence or to only
   when you ask. Adaptive items also have **Promote/Demote … for a week**
   actions: they move one bucket faster or slower, even beyond the measured
-  placement. The choice is stored per Mac in `background_temporary_cadences`
+  placement. In Settings, dragging an adaptive item onto another cadence's
+  column does the same for any cadence, and dragging it back to its usual
+  one ends the week. The choice is stored per Mac in `background_temporary_cadences`
   with a seven-day expiry and takes precedence over automatic placement and
   permanent overrides until then. The usual schedule resumes at expiry or
   when **End temporary schedule** is selected. Choosing a permanent schedule
@@ -1662,8 +1664,8 @@ the same schedule from one declaration (`backgroundItems`):
   mark is completed at once.
 - **Preserve originals** on a Mac with no enabled sources captures nothing
   but still indexes what other Macs captured.
-- **Mode.** On (default), paused until a time (scheduled indexing waits
-  too), or only when I ask (`sync_settings.enabled` off). With no schedule
+- **Mode.** On (default), paused until a time (Pause for 1 hour or 1 day,
+  `pause_minutes` up to 1440; scheduled indexing waits too), or only when I ask (`sync_settings.enabled` off). With no schedule
   row, the first scheduled index stores the default one. Run now runs an
   item whatever the mode or power source; for new conversations it asks
   `automaticLoop` for one scheduled index, leaving the saved schedule as it
@@ -1699,7 +1701,10 @@ the same schedule from one declaration (`backgroundItems`):
   `power`, `current`, `paused`, `manual`, `unavailable`) with `as_of` and
   `next_at`, one row per cadence, `unscheduled` (the items set to Only
   when you ask, Back up unless chosen: on no schedule, so in no cadence's
-  row), and the cost of Update everything now.
+  row), and the cost of Update everything now. A measured item's cost
+  carries `typical`, the middle of its recent runs ("Typically 2–3 h",
+  between the runs a quarter of the way in from each end), which leads its
+  line in Settings.
   `GET /api/background` adds the settings, the placement rule and the last
   24 hours' cost (measured for scheduled indexing and journaled passes,
   else projected from the items' costs; Frequently counts scheduled
@@ -1713,8 +1718,8 @@ the same schedule from one declaration (`backgroundItems`):
   cadence row is its icon, dot and name, with its state at the line's end.
   Unscheduled items are one more row, Ad hoc, shown like a cadence; each
   row's small ▶ runs it now (`POST /api/background/run {"cadence": …}`,
-  `manual` for Ad hoc). Settings → Background updates lists them in an
-  Only when you ask group. The panel is titled Background Processing,
+  `manual` for Ad hoc). Settings → Background Processing lists them in an
+  Only when you ask group, and its column heads carry the same ▶. The panel is titled Background Processing,
   under "Library NAME (1/3) on DRIVE", the name linking to Settings →
   Libraries; other libraries are only counted there. Running now and
   Schedule head their sections, and each running line says where it

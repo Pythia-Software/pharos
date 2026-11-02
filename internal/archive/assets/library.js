@@ -650,7 +650,7 @@
       action.disabled = busy;
       action.setAttribute('aria-busy', String(busy));
     }
-    // Capture & index is on Settings → Background updates and in the drive panel.
+    // Capture & index is on Settings → Background Processing and in the drive panel.
     for (const update of document.querySelectorAll('#pharosUpdateLibrary, .pharos-panel-update')) {
       update.disabled = captureIndexDisabled(state);
       if (update.classList.contains('pharos-panel-update')) update.hidden = update.disabled;
@@ -1207,7 +1207,7 @@
     }
   }
 
-  // Index changes is the incremental run (Settings → Background updates'
+  // Index changes is the incremental run (Settings → Background Processing'
   // Update everything now): it indexes only what changed in this Mac's sources,
   // without capturing them.
   async function syncNow() {
