@@ -270,6 +270,27 @@ func TestBackgroundCostsAreMediansOfJournaledRuns(t *testing.T) {
 // A pass runs the most frequent cadence's due work through the chain, only
 // the stages due (and those before them with work waiting), records each
 // item, and leaves the rest; Run now runs an item outside its cadence.
+// Settings and the status panel list items in backgroundItems order, so it
+// is the order a pass runs them: standalone items, then the chain's in
+// chain order.
+func TestBackgroundItemsAreListedInRunOrder(t *testing.T) {
+	chained, last := false, -1
+	for _, item := range backgroundItems {
+		chain := len(item.Stages) > 0 || item.ID == "review"
+		if chained && !chain {
+			t.Fatalf("%s runs before the chain but is listed after it", item.ID)
+		}
+		chained = chained || chain
+		for _, stage := range item.Stages {
+			index := slices.Index(stageOrder, stage)
+			if index < last {
+				t.Fatalf("%s's stage %s is listed out of chain order", item.ID, stage)
+			}
+			last = index
+		}
+	}
+}
+
 func TestBackgroundPassRunsDueStagesAndRecordsThem(t *testing.T) {
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
