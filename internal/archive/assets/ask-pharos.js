@@ -173,12 +173,15 @@ window.initPharosAsk = function(root, {chartPreviews} = {}) {
     const target=returnFocus!==document.body&&returnFocus?.isConnected&&returnFocus.getClientRects().length?returnFocus:headerButton?.getClientRects().length?headerButton:document.getElementById('headerMore');
     target?.focus({preventScroll:true});
   }
-  function openOverlay() {
+  function attachPageChip(uri){promptEditor.setChip({id:'page',type:'page',value:uri,label:'About '+(window.historyTitle?.(uri)||new URL(uri,location.origin).pathname)});}
+  // Only the header button asks about the page it was pressed on, and the home
+  // page is not a subject; reopening or restoring keeps the prompt as it was.
+  function openOverlay(fromHeader=false) {
     surfaceRestorePending=false;
     if(presentation==='modal')return;
     returnFocus=document.activeElement;
-    contextURI=askPageURI(location.href);
-    promptEditor.setChip({id:'page',type:'page',value:contextURI,label:'About '+(window.historyTitle?.(contextURI)||new URL(contextURI,location.origin).pathname)});
+    if(fromHeader&&['/','/home'].includes(location.pathname)){contextURI='';promptEditor.removeChip('page');}
+    else if(fromHeader){contextURI=askPageURI(location.href);attachPageChip(contextURI);}
     regularOverride=false;
     delete overlay.dataset.positioned;overlay.style.removeProperty('height');overlay.style.removeProperty('--pharos-dialog-top');
     presentation='modal';overlay.append(root);overlay.showModal();
@@ -217,13 +220,13 @@ window.initPharosAsk = function(root, {chartPreviews} = {}) {
     floatPosition=askFloatingPosition({x,y,width:rect.width,height:rect.height,viewportWidth:innerWidth,viewportHeight:innerHeight});
     floating.style.left=floatPosition.x+'px';floating.style.top=floatPosition.y+'px';floating.style.right='auto';floating.style.bottom='auto';
   }
-  listen(window,'pharos:ask-open',openOverlay);
+  listen(window,'pharos:ask-open',()=>openOverlay(true));
   windowClose.addEventListener('click',closeOverlay);
   browseButton.addEventListener('click',()=>browse());
   overlay.addEventListener('cancel',event=>{if(event.defaultPrevented)return;event.preventDefault();closeOverlay();});
   // Nested model/history menus consume Escape before closing the whole search.
   root.addEventListener('keydown',event=>{if(event.key==='Escape'&&event.defaultPrevented)event.stopPropagation();});
-  floating.querySelector('.pharos-floating-open').addEventListener('click',openOverlay);
+  floating.querySelector('.pharos-floating-open').addEventListener('click',()=>openOverlay());
   floating.querySelector('.pharos-floating-dismiss').addEventListener('click',()=>{surfaceRestorePending=false;presentation='dismissed';updateSurface();});
   const handle=floating.querySelector('.pharos-floating-drag');
   // Like picture in picture: drag the panel itself, or tap to reopen it.
@@ -262,6 +265,9 @@ window.initPharosAsk = function(root, {chartPreviews} = {}) {
     else if(restored==='floating')browse(false);
     else if(restored!=='home'){presentation='dismissed';overlay.append(root);}
     contextURI=typeof savedSurface.contextURI==='string'?savedSurface.contextURI:'';
+    // The saved prompt replaces this when it can be restored; one too long to
+    // restore must still keep its page context.
+    if(contextURI)attachPageChip(contextURI);
     const point=savedSurface.floatPosition;
     if(point&&Number.isFinite(point.x)&&Number.isFinite(point.y)&&restored==='floating')positionFloating(point.x,point.y);
     updateSurface();return restored!=='home';
