@@ -73,7 +73,7 @@ body[data-application-setup] #navigator{display:none}
 .application-setup.introduction #application-intro,.application-setup.introduction #library-actions,.application-setup.introduction #libraries{display:none}
 .application-setup .header-icon{min-height:30px;width:30px;padding:0}
 .application-setup [hidden]{display:none!important}
-.application-setup :focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.application-setup :focus-visible{outline:2px solid var(--focus-ring, var(--accent));outline-offset:3px}
 .application-setup h1:focus,.application-setup h2:focus,.application-setup #next:focus{outline:none}
 .application-setup.flow-open #application-intro,.application-setup.flow-open #library-actions,.application-setup.flow-open #libraries{display:none}
 .application-setup.library-ready #application-intro,.application-setup.library-ready #library-actions,.application-setup.library-ready #libraries{display:none}
@@ -89,7 +89,7 @@ body[data-application-setup] #navigator{display:none}
 .application-setup .wizard-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;border:0;padding:0;margin:18px 0 0;min-width:0}
 .application-setup .wizard-choice{display:flex;flex-direction:column;position:relative;min-width:0;margin:0;padding:22px;border:1px solid var(--line);border-radius:9px;background:var(--bg);font-weight:400;cursor:pointer}
 .application-setup .wizard-choice:has(input:checked){border-color:var(--gold);background:color-mix(in srgb,var(--gold) 7%,var(--bg));box-shadow:inset 0 0 0 1px var(--gold)}
-.application-setup .wizard-choice:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:3px}
+.application-setup .wizard-choice:has(input:focus-visible){outline:2px solid var(--focus-ring, var(--accent));outline-offset:3px}
 .application-setup .wizard-choice input[type=radio]{position:absolute;top:18px;right:18px;display:block;width:18px;height:18px;min-height:0;margin:0;padding:0;accent-color:var(--accent)}
 .application-setup .wizard-choice>svg{display:block;width:100%;height:110px;margin:0 0 12px;color:var(--gold)}
 .application-setup .wizard-choice strong{font:600 19px/1.3 var(--serif);margin-bottom:8px}
