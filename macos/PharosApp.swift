@@ -1088,6 +1088,9 @@ final class ArchiveWKWebView: WKWebView {
         var title: String { highlighted ? "Remove Highlight" : "Highlight \(noun)" }
     }
     var contextTarget: ContextTarget?
+    /// Whether the page offers `window.pharosPageAction` (the main page does;
+    /// setup windows do not).
+    var pageActions = false
 
     /// The page's link without the launch token, which the service already
     /// trades for a cookie on arrival.
@@ -1098,10 +1101,10 @@ final class ArchiveWKWebView: WKWebView {
         return components.string
     }
 
-    /// Every page menu gets Copy Page Link and Highlight after WebKit's own
-    /// Back/Forward/Reload, or at the end of a menu without them. Highlight
-    /// adds the target to the URL's `highlight`/`reveal`, so the copied link
-    /// brings attention to it.
+    /// Every page menu gets Copy Page Link and Highlight, then Open Logs, Send
+    /// Feedback and Annotate, after WebKit's own Back/Forward/Reload or at the
+    /// end of a menu without them. Highlight adds the target to the URL's
+    /// `highlight`/`reveal`, so the copied link brings attention to it.
     override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
         super.willOpenMenu(menu, with: event)
         let copy = NSMenuItem(title: "Copy Page Link", action: #selector(copyPageLink(_:)), keyEquivalent: "")
@@ -1110,7 +1113,13 @@ final class ArchiveWKWebView: WKWebView {
         let highlight = NSMenuItem(title: contextTarget?.title ?? "Highlight", action: contextTarget == nil ? nil : #selector(toggleHighlight(_:)), keyEquivalent: "")
         highlight.target = self
         var index = menu.items.firstIndex { $0.identifier?.rawValue == "WKMenuItemIdentifierReload" }.map { $0 + 1 } ?? menu.items.count
-        var items = [copy, highlight]
+        let actions = [("Open Logs", "logs"), ("Send Feedback…", "feedback"), ("Annotate…", "annotate")].map { title, action in
+            let item = NSMenuItem(title: title, action: pageActions ? #selector(runPageAction(_:)) : nil, keyEquivalent: "")
+            item.target = self
+            item.representedObject = action
+            return item
+        }
+        var items = [copy, highlight, .separator()] + actions
         if index > 0 { items.insert(.separator(), at: 0) }
         if index < menu.items.count, !menu.items[index].isSeparatorItem { items.append(.separator()) }
         for item in items { menu.insertItem(item, at: index); index += 1 }
@@ -1119,6 +1128,12 @@ final class ArchiveWKWebView: WKWebView {
     override func didCloseMenu(_ menu: NSMenu, with event: NSEvent?) {
         super.didCloseMenu(menu, with: event)
         contextTarget = nil
+        pageActions = false
+    }
+
+    @objc private func runPageAction(_ sender: NSMenuItem) {
+        guard let action = sender.representedObject as? String else { return }
+        evaluateJavaScript("window.pharosPageAction?.('\(action)')")
     }
 
     @objc private func copyPageLink(_ sender: Any?) {
@@ -1226,7 +1241,7 @@ struct ArchiveWebView: NSViewRepresentable {
       // The native context menu offers to highlight what was right-clicked.
       document.addEventListener('contextmenu', event => {
         const target = event.target instanceof Element ? window.pharosView?.contextTarget?.(event.target) : null;
-        window.webkit.messageHandlers.\(windowMessageName).postMessage({contextTarget: target ?? false});
+        window.webkit.messageHandlers.\(windowMessageName).postMessage({contextTarget: target ?? false, pageActions: typeof window.pharosPageAction === 'function'});
       }, true);
     })();
     """
@@ -1434,6 +1449,7 @@ struct ArchiveWebView: NSViewRepresentable {
             }
             if let body = message.body as? [String: Any], body.keys.contains("contextTarget") {
                 webView.contextTarget = ArchiveWKWebView.ContextTarget(body["contextTarget"])
+                webView.pageActions = body["pageActions"] as? Bool == true
                 return
             }
             if let center = (message.body as? [String: Any])?["headerCenter"] as? Double {
