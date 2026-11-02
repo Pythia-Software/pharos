@@ -1,0 +1,14 @@
+{
+  "sender_id": "snd_3f9cA1",
+  "plugin": {
+    "id": "software.pythia.usage",
+    "version": "1.4.0"
+  },
+  "permissions_hash": "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "datasets": [
+    "usage/1",
+    "library/1"
+  ],
+  "receipt": "rcpt_000148",
+  "run_id": "run_20261102T150000Z_77c0"
+}

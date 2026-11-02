@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pharos.pythia.software/contracts/plugins/run-result.schema.json",
+  "title": "Pharos run result (pharos-run/1)",
+  "description": "Written by the plugin to output_dir/result.json, at most 1 MiB, before exiting 0. complete and partial acknowledge the run: its cursor is stored and returned next time. failed, a non-zero exit, a missing or invalid result, or a drop that fails validation acknowledge nothing.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract", "status", "message"],
+  "properties": {
+    "contract": {"const": "pharos-run/1"},
+    "status": {
+      "description": "complete: nothing more to do for now. partial: stopped at a limit, consistent with cursor; Pharos runs again soon. failed: nothing is acknowledged.",
+      "enum": ["complete", "partial", "failed"]
+    },
+    "message": {"type": "string", "maxLength": 1000},
+    "cursor": {
+      "description": "Stored with the acknowledgement and returned in the next request. Ignored when status is failed.",
+      "$ref": "common.schema.json#/$defs/cursor"
+    },
+    "warnings": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {"type": "string", "maxLength": 1000}
+    },
+    "transferred_bytes": {
+      "description": "The plugin's own count of network bytes, shown beside what it dropped or Pharos served.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "delivered": {
+      "description": "Exporters: what the plugin says it delivered. Pharos records what it served regardless.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "conversations": {"type": "integer", "minimum": 0},
+        "rows": {"type": "integer", "minimum": 0},
+        "periods": {"type": "integer", "minimum": 0},
+        "retractions": {"type": "integer", "minimum": 0},
+        "bytes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "receipt": {
+      "description": "Exporters: the receiver's acknowledgement, kept with the run.",
+      "type": "object"
+    },
+    "machines": {
+      "description": "Importers: machines the drops came from. Every drop's machine must be one of these keys.",
+      "type": "array",
+      "items": {"$ref": "common.schema.json#/$defs/machine"}
+    },
+    "drops": {
+      "description": "Importers: folders of output_dir to adopt. No two drops share a dir, or a machine and source.",
+      "type": "array",
+      "items": {"$ref": "common.schema.json#/$defs/drop"}
+    }
+  }
+}

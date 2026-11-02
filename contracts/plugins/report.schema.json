@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pharos.pythia.software/contracts/plugins/report.schema.json",
+  "title": "Report batch (pharos-report/1)",
+  "description": "One batch of a run's delivery to a receiver: upserts of rows, replacements of aggregate periods, and retractions. A receiver applies a run's batches together at commit. Versions only increase, so an upsert older than what the receiver holds, or than a retraction, is ignored.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract", "sender_id", "plugin", "permissions_hash", "run_id", "batch", "generated_at"],
+  "properties": {
+    "contract": {"const": "pharos-report/1"},
+    "sender_id": {"$ref": "common.schema.json#/$defs/sender_id"},
+    "plugin": {"$ref": "common.schema.json#/$defs/plugin_ref"},
+    "permissions_hash": {"$ref": "common.schema.json#/$defs/sha256"},
+    "run_id": {"$ref": "common.schema.json#/$defs/run_id"},
+    "batch": {"description": "1-based position in the run.", "type": "integer", "minimum": 1},
+    "generated_at": {"$ref": "common.schema.json#/$defs/timestamp"},
+    "upserts": {
+      "description": "Rows, keyed by opaque ID. Each item's version is its own counter, raised whenever something visible about it changes; it never reflects activity elsewhere in the library.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["dataset", "id", "version", "data"],
+        "properties": {
+          "dataset": {"$ref": "common.schema.json#/$defs/dataset"},
+          "id": {"$ref": "common.schema.json#/$defs/opaque_id"},
+          "version": {"type": "integer", "minimum": 1},
+          "data": {
+            "description": "The row's granted fields, after redaction, named as in the dataset.",
+            "type": "object"
+          }
+        }
+      }
+    },
+    "periods": {
+      "description": "Aggregates for one period and group. Each replaces what the receiver holds for that key; a restatement is the same thing sent again.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["dataset", "period", "group", "fingerprint", "values"],
+        "properties": {
+          "dataset": {"$ref": "common.schema.json#/$defs/dataset"},
+          "period": {
+            "description": "A day (2026-10-21), ISO week (2026-W43) or month (2026-10) in the library's time zone.",
+            "type": "string",
+            "pattern": "^[0-9]{4}-([0-9]{2}-[0-9]{2}|W[0-9]{2}|[0-9]{2})$"
+          },
+          "group": {
+            "description": "Group-by field values, after redaction. {} for the period's total.",
+            "type": "object",
+            "additionalProperties": {"type": ["string", "number", "boolean", "null"]}
+          },
+          "fingerprint": {"$ref": "common.schema.json#/$defs/sha256"},
+          "values": {
+            "description": "Metric values by name.",
+            "type": "object",
+            "additionalProperties": {"type": ["number", "null"]}
+          }
+        }
+      }
+    },
+    "retract": {
+      "description": "Items to delete. Each ID is one the receiver was given before.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "version"],
+        "properties": {
+          "id": {"$ref": "common.schema.json#/$defs/opaque_id"},
+          "kind": {"enum": ["conversation", "row"]},
+          "version": {
+            "description": "Supersedes upserts up to this version.",
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    }
+  }
+}

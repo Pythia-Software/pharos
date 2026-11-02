@@ -1,0 +1,30 @@
+{
+  "contract": "pharos-run/1",
+  "direction": "export",
+  "plugin": {
+    "id": "dev.example.public-dashboard",
+    "version": "2.0.1"
+  },
+  "run_id": "run_20261102T060000Z_4f2a",
+  "started_at": "2026-11-02T06:00:00Z",
+  "deadline": "2026-11-02T06:02:00Z",
+  "dry_run": false,
+  "trigger": {
+    "kind": "schedule"
+  },
+  "limits": {
+    "max_bytes": 1048576,
+    "max_requests": 50,
+    "max_rows": 100000,
+    "max_served_bytes": 10485760
+  },
+  "api": {
+    "url": "http://127.0.0.1:53817/connector/v1",
+    "token": "pht_5JzQm2v8Lr4Xc9Wn7Ty3Kd6Hs1Pa0Bf8Ge2Uj4Ni"
+  },
+  "output_dir": "/Volumes/euclid/Pharos/staging/plugins/dev.example.public-dashboard/run_20261102T060000Z_4f2a/out",
+  "cursor": {
+    "changes": "chg_0001f3a9"
+  },
+  "params": {}
+}

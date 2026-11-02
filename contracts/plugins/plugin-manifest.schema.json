@@ -1,0 +1,348 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pharos.pythia.software/contracts/plugins/plugin-manifest.schema.json",
+  "title": "Pharos plugin manifest (pharos-plugin/1)",
+  "description": "What a plugin is, what it may read or produce, and how it runs. Installing grants all of permissions; declining installs nothing. Any change to permissions requires new consent.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["plugin", "id", "name", "publisher", "version", "direction", "description", "permissions", "triggers", "run"],
+  "properties": {
+    "plugin": {"const": "pharos-plugin/1"},
+    "id": {"$ref": "common.schema.json#/$defs/plugin_id"},
+    "name": {"type": "string", "minLength": 1, "maxLength": 80},
+    "publisher": {"type": "string", "minLength": 1, "maxLength": 80},
+    "version": {"$ref": "common.schema.json#/$defs/version"},
+    "direction": {"enum": ["import", "export"]},
+    "description": {
+      "description": "One or two sentences shown on the consent screen.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "homepage": {"type": "string", "format": "uri"},
+    "permissions": {"$ref": "#/$defs/permissions"},
+    "params": {
+      "description": "A JSON Schema for the parameters the person fills in at install (for example an SSH destination). Pharos renders it as a form and validates against it; values reach the script as request.params.",
+      "type": "object"
+    },
+    "triggers": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/trigger"}
+    },
+    "guards": {"$ref": "#/$defs/guards"},
+    "limits": {"$ref": "#/$defs/limits"},
+    "registration": {
+      "description": "Optional receiver sign-up, run once at install as OAuth for native apps (RFC 8252) with PKCE.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "token_url"],
+      "properties": {
+        "url": {"description": "Authorization page opened in the browser.", "type": "string", "format": "uri"},
+        "token_url": {"description": "Where Pharos exchanges the authorization code and refreshes access tokens.", "type": "string", "format": "uri"}
+      }
+    },
+    "supports": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"enum": ["retract"]}
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "on_reinstall": {
+          "description": "keep reuses the previous sender ID and hash key in this library; new starts fresh.",
+          "enum": ["keep", "new"],
+          "default": "keep"
+        }
+      }
+    },
+    "run": {
+      "oneOf": [
+        {"$ref": "#/$defs/scripted_run"},
+        {"$ref": "#/$defs/declarative_run"}
+      ]
+    },
+    "update_url": {
+      "description": "Where Pharos checks for new versions of this manifest.",
+      "type": "string",
+      "format": "uri"
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"direction": {"const": "export"}}},
+      "then": {
+        "properties": {"permissions": {"required": ["read"], "not": {"required": ["produce"]}}}
+      },
+      "else": {
+        "properties": {
+          "permissions": {"required": ["produce"], "not": {"anyOf": [{"required": ["read"]}, {"required": ["destinations"]}]}},
+          "run": {"$ref": "#/$defs/scripted_run"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"run": {"required": ["builtin"]}}, "required": ["run"]},
+      "then": {"properties": {"permissions": {"required": ["destinations"]}}}
+    }
+  ],
+  "$defs": {
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "read": {"$ref": "#/$defs/read_permissions"},
+        "produce": {"$ref": "#/$defs/produce_permissions"},
+        "redaction": {"$ref": "#/$defs/redaction"},
+        "destinations": {
+          "description": "Where an exporter's data goes, shown at consent. A declarative exporter can deliver only to URLs under these.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "format": "uri"}
+        },
+        "fetches_from": {
+          "description": "For importers: where data comes from, in words for the consent screen, such as \"alice@lab-box over SSH\".",
+          "type": "array",
+          "items": {"type": "string", "minLength": 1, "maxLength": 200}
+        }
+      }
+    },
+    "read_permissions": {
+      "description": "What an exporter may read through the connector API. Private conversations and usage are never readable, whatever this says.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "datasets": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {"$ref": "common.schema.json#/$defs/dataset"},
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["fields", "mode"],
+            "properties": {
+              "fields": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}
+              },
+              "mode": {
+                "description": "aggregate allows grouped metrics only; rows allows rows too.",
+                "enum": ["aggregate", "rows"]
+              }
+            }
+          }
+        },
+        "text": {
+          "description": "Whether message text is readable, subject to redaction.",
+          "type": "boolean",
+          "default": false
+        },
+        "export_bundles": {
+          "description": "Whether /export may return pharos-drop/1 bundles of transcripts, for another Pharos.",
+          "type": "boolean",
+          "default": false
+        },
+        "forward_imported": {
+          "description": "Whether conversations this library imported from elsewhere are readable. Off by default, so libraries feeding each other do not loop.",
+          "type": "boolean",
+          "default": false
+        },
+        "restrict": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repositories": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+            "machines": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+            "from": {
+              "description": "Earliest activity readable: a date, or a relative age such as -90d. Without it, all past history is readable.",
+              "anyOf": [
+                {"$ref": "common.schema.json#/$defs/date"},
+                {"type": "string", "pattern": "^-[1-9][0-9]*d$"}
+              ]
+            }
+          }
+        }
+      }
+    },
+    "produce_permissions": {
+      "description": "What an importer may add to the library.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kinds"],
+      "properties": {
+        "kinds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "common.schema.json#/$defs/drop_kind"}
+        },
+        "namespaces": {
+          "description": "Usage record namespaces this importer writes. Records are unique by (namespace, id) across every importer that declares the namespace.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "common.schema.json#/$defs/namespace"}
+        }
+      },
+      "if": {"properties": {"kinds": {"contains": {"const": "usage-records/1"}}}},
+      "then": {"required": ["namespaces"]},
+      "else": {"not": {"required": ["namespaces"]}}
+    },
+    "redaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preset"],
+      "properties": {
+        "preset": {"enum": ["stats", "metadata", "text-scrubbed", "full"]},
+        "drop": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "hash": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "coarsen": {
+          "type": "object",
+          "additionalProperties": {"enum": ["day", "week", "month"]}
+        },
+        "truncate": {
+          "description": "Field to maximum characters.",
+          "type": "object",
+          "additionalProperties": {"type": "integer", "minimum": 1}
+        },
+        "relative_paths": {
+          "description": "Path fields replaced by repository-relative paths.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string"}
+        },
+        "scrub_patterns": {
+          "description": "Extra regular expressions removed from text, beyond the built-in secret patterns.",
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "trigger": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "schedule": {
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "maxProperties": 1,
+          "properties": {
+            "every": {"$ref": "common.schema.json#/$defs/duration"},
+            "at": {
+              "description": "Local times of day.",
+              "type": "array",
+              "minItems": 1,
+              "items": {"type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"}
+            }
+          }
+        },
+        "after_index": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"min_interval": {"$ref": "common.schema.json#/$defs/duration"}}
+        },
+        "threshold": {
+          "description": "After an index, once this much has arrived since the last acknowledged run.",
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "properties": {
+            "conversations": {"type": "integer", "minimum": 1},
+            "tokens": {"type": "integer", "minimum": 1}
+          }
+        },
+        "manual": {"type": "object", "additionalProperties": false}
+      }
+    },
+    "guards": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "min_interval": {"$ref": "common.schema.json#/$defs/duration"},
+        "max_runs_per_day": {"type": "integer", "minimum": 1},
+        "quiet_hours": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["from", "to"],
+          "properties": {
+            "from": {"type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"},
+            "to": {"type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"}
+          }
+        },
+        "on_power_only": {"type": "boolean"}
+      }
+    },
+    "limits": {
+      "description": "Requested limits, within app-wide ceilings; the person can lower them.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_runtime": {"$ref": "common.schema.json#/$defs/duration"},
+        "max_cpu": {"$ref": "common.schema.json#/$defs/duration"},
+        "max_memory": {"$ref": "common.schema.json#/$defs/byte_size"},
+        "max_bytes": {"description": "Bytes written to output_dir.", "$ref": "common.schema.json#/$defs/byte_size"},
+        "max_requests": {"type": "integer", "minimum": 1},
+        "max_rows": {"type": "integer", "minimum": 1},
+        "max_served_bytes": {"$ref": "common.schema.json#/$defs/byte_size"}
+      }
+    },
+    "scripted_run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command"],
+      "properties": {
+        "command": {
+          "description": "Argument vector, relative to the plugin bundle. The interpreter (first element) is resolved per Mac when the plugin is allowed there. Pharos appends the request file's path.",
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "declarative_run": {
+      "description": "Run by Pharos itself: read through the connector API and deliver over pharos-receiver/1.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["builtin", "receiver", "send"],
+      "properties": {
+        "builtin": {"const": "declarative-export/1"},
+        "receiver": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["url"],
+          "properties": {"url": {"description": "Base URL of the pharos-receiver/1 service; must be under a destination.", "type": "string", "format": "uri"}}
+        },
+        "send": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "dataset", "mode", "query", "incremental"],
+            "properties": {
+              "name": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+              "dataset": {"$ref": "common.schema.json#/$defs/dataset"},
+              "mode": {"enum": ["aggregate", "rows"]},
+              "query": {
+                "description": "A Query Table V3 request body over the dataset's granted fields.",
+                "type": "object"
+              },
+              "incremental": {
+                "description": "changes sends what changed since the last acknowledged run; full sends everything each run.",
+                "enum": ["changes", "full"]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "plugin": {
+    "id": "software.pythia.usage",
+    "version": "1.4.0"
+  },
+  "run_id": "run_20261102T150000Z_77c0",
+  "direction": "export",
+  "sender_id": "snd_3f9cA1",
+  "deadline": "2026-11-02T15:10:00Z",
+  "permissions": {
+    "read": {
+      "datasets": {
+        "usage/1": {
+          "fields": [
+            "day",
+            "provider",
+            "model",
+            "repository_name",
+            "total_tokens",
+            "cost_usd"
+          ],
+          "mode": "aggregate"
+        },
+        "library/1": {
+          "fields": [
+            "id",
+            "activity_at",
+            "repository_name",
+            "cost_usd",
+            "outcome",
+            "conversation_count"
+          ],
+          "mode": "rows"
+        }
+      },
+      "text": false
+    },
+    "redaction": {
+      "preset": "metadata",
+      "hash": [
+        "repository_name"
+      ]
+    },
+    "destinations": [
+      "https://ingest.pythia.software"
+    ]
+  },
+  "permissions_hash": "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "limits": {
+    "max_requests": 500,
+    "max_rows": 200000,
+    "max_served_bytes": 52428800
+  },
+  "used": {
+    "requests": 3,
+    "rows": 412,
+    "served_bytes": 90211
+  },
+  "credential": true
+}

@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pharos.pythia.software/contracts/plugins/connector.schema.json",
+  "title": "Connector API bodies (connector/v1)",
+  "description": "Bodies of the loopback API a run reads through. See connector-api.openapi.json for the endpoints.",
+  "$defs": {
+    "grant": {
+      "description": "What this run may do, and how much of its limits it has used.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["plugin", "run_id", "direction", "sender_id", "deadline", "permissions", "permissions_hash", "limits", "used", "credential"],
+      "properties": {
+        "plugin": {"$ref": "common.schema.json#/$defs/plugin_ref"},
+        "run_id": {"$ref": "common.schema.json#/$defs/run_id"},
+        "direction": {"enum": ["import", "export"]},
+        "sender_id": {"$ref": "common.schema.json#/$defs/sender_id"},
+        "deadline": {"$ref": "common.schema.json#/$defs/timestamp"},
+        "permissions": {
+          "description": "The manifest's permissions as consented, verbatim.",
+          "$ref": "plugin-manifest.schema.json#/$defs/permissions"
+        },
+        "permissions_hash": {"$ref": "common.schema.json#/$defs/sha256"},
+        "limits": {
+          "type": "object",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        },
+        "used": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["requests", "rows", "served_bytes"],
+          "properties": {
+            "requests": {"type": "integer", "minimum": 0},
+            "rows": {"type": "integer", "minimum": 0},
+            "served_bytes": {"type": "integer", "minimum": 0}
+          }
+        },
+        "credential": {"description": "Whether GET /credential has a registration credential.", "type": "boolean"}
+      }
+    },
+    "credential": {
+      "description": "A short-lived access token for the receiver. Pharos keeps the refresh token and refreshes it; scripts never see it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["token_type", "access_token", "expires_at"],
+      "properties": {
+        "token_type": {"const": "Bearer"},
+        "access_token": {"type": "string", "minLength": 1},
+        "expires_at": {"$ref": "common.schema.json#/$defs/timestamp"}
+      }
+    },
+    "changes": {
+      "description": "What changed since a token: items to send again, periods to restate, items to retract. Private activity never appears and never advances the token.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["changes", "restate", "retract", "next", "more"],
+      "properties": {
+        "changes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["dataset", "id", "version"],
+            "properties": {
+              "dataset": {"$ref": "common.schema.json#/$defs/dataset"},
+              "id": {"$ref": "common.schema.json#/$defs/opaque_id"},
+              "version": {"type": "integer", "minimum": 1}
+            }
+          }
+        },
+        "restate": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["dataset", "period"],
+            "properties": {
+              "dataset": {"$ref": "common.schema.json#/$defs/dataset"},
+              "period": {"type": "string"}
+            }
+          }
+        },
+        "retract": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "kind", "version"],
+            "properties": {
+              "id": {"$ref": "common.schema.json#/$defs/opaque_id"},
+              "kind": {"enum": ["conversation", "row"]},
+              "version": {"type": "integer", "minimum": 1}
+            }
+          }
+        },
+        "next": {"$ref": "common.schema.json#/$defs/change_token"},
+        "more": {"description": "Whether another page follows immediately.", "type": "boolean"}
+      }
+    },
+    "conversations_page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["conversations", "more"],
+      "properties": {
+        "conversations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "version", "fields"],
+            "properties": {
+              "id": {"$ref": "common.schema.json#/$defs/opaque_id"},
+              "version": {"type": "integer", "minimum": 1},
+              "fields": {
+                "description": "The granted fields of library/1 for this conversation, after redaction.",
+                "type": "object"
+              }
+            }
+          }
+        },
+        "cursor": {"description": "Pass back for the next page.", "type": "string"},
+        "more": {"type": "boolean"}
+      }
+    },
+    "messages_page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["conversation", "version", "messages", "more"],
+      "properties": {
+        "conversation": {"$ref": "common.schema.json#/$defs/opaque_id"},
+        "version": {"type": "integer", "minimum": 1},
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "role", "kind", "created_at"],
+            "properties": {
+              "id": {"$ref": "common.schema.json#/$defs/opaque_id"},
+              "role": {"enum": ["user", "assistant", "system", "tool"]},
+              "kind": {"type": "string"},
+              "created_at": {"$ref": "common.schema.json#/$defs/timestamp"},
+              "model": {"type": "string"},
+              "text": {"description": "After redaction; absent when the grant has no text.", "type": "string"},
+              "redacted": {"description": "Fields or spans removed by redaction.", "type": "array", "items": {"type": "string"}}
+            }
+          }
+        },
+        "cursor": {"type": "string"},
+        "more": {"type": "boolean"}
+      }
+    },
+    "resend_request": {
+      "description": "A scripted exporter's receiver asked for everything: Pharos forgets what it counted as acknowledged for this plugin and records the reason.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason"],
+      "properties": {
+        "reason": {"type": "string", "minLength": 1, "maxLength": 500},
+        "from": {"$ref": "common.schema.json#/$defs/date"}
+      }
+    }
+  }
+}

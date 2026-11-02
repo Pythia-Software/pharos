@@ -1,0 +1,55 @@
+{
+  "plugin": "pharos-plugin/1",
+  "id": "dev.example.public-dashboard",
+  "name": "Public productivity dashboard",
+  "publisher": "example.dev",
+  "version": "2.0.1",
+  "direction": "export",
+  "description": "Publishes weekly token and cost totals to a static JSON file in your dashboard repository.",
+  "permissions": {
+    "read": {
+      "datasets": {
+        "usage/1": {
+          "fields": [
+            "week",
+            "provider",
+            "total_tokens",
+            "cost_usd"
+          ],
+          "mode": "aggregate"
+        }
+      },
+      "restrict": {
+        "from": "-365d"
+      }
+    },
+    "redaction": {
+      "preset": "stats"
+    },
+    "destinations": [
+      "https://github.com/example/dashboard"
+    ]
+  },
+  "triggers": [
+    {
+      "schedule": {
+        "at": [
+          "06:00"
+        ]
+      }
+    }
+  ],
+  "limits": {
+    "max_runtime": "2m",
+    "max_requests": 50
+  },
+  "identity": {
+    "on_reinstall": "new"
+  },
+  "run": {
+    "command": [
+      "node",
+      "publish.mjs"
+    ]
+  }
+}

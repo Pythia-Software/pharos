@@ -1,0 +1,176 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Pharos connector API",
+    "version": "1",
+    "description": "Served by Pharos on loopback for the length of a plugin run. Every request carries the run's bearer token, which identifies the plugin, run and consented permissions; no other credential works here. Requests never write to the library: what a run read is counted in memory and recorded when the run ends. Requests are handled one at a time per run; near a limit Pharos answers 429 with Retry-After, and past it revokes the token. Private conversations and usage are never returned, counted or aggregated."
+  },
+  "servers": [{"url": "http://127.0.0.1:{port}/connector/v1", "variables": {"port": {"default": "53817"}}}],
+  "security": [{"runToken": []}],
+  "paths": {
+    "/grant": {
+      "get": {
+        "operationId": "getGrant",
+        "summary": "What this run may do, and how much of its limits it has used",
+        "responses": {
+          "200": {"description": "The grant", "content": {"application/json": {"schema": {"$ref": "connector.schema.json#/$defs/grant"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/credential": {
+      "get": {
+        "operationId": "getCredential",
+        "summary": "A short-lived access token for the plugin's receiver",
+        "responses": {
+          "200": {"description": "The credential", "content": {"application/json": {"schema": {"$ref": "connector.schema.json#/$defs/credential"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/query/{dataset}/query-v3": {
+      "post": {
+        "operationId": "queryRows",
+        "summary": "Query Table V3 rows and groups over an export dataset",
+        "description": "The Query Table V3 wire contract (as served under /api/query by Pharos), restricted to the dataset's granted fields and mode. Forced filters and redaction apply.",
+        "parameters": [{"$ref": "#/components/parameters/Dataset"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueryTableRequest"}}}},
+        "responses": {
+          "200": {"description": "Query Table V3 response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueryTableResponse"}}}},
+          "400": {"$ref": "#/components/responses/Invalid"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/NotGranted"},
+          "429": {"$ref": "#/components/responses/Limit"}
+        }
+      }
+    },
+    "/query/{dataset}/metrics": {
+      "post": {
+        "operationId": "queryMetrics",
+        "summary": "Query Table metrics over an export dataset",
+        "parameters": [{"$ref": "#/components/parameters/Dataset"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueryTableRequest"}}}},
+        "responses": {
+          "200": {"description": "Query Table metrics response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueryTableResponse"}}}},
+          "400": {"$ref": "#/components/responses/Invalid"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/NotGranted"},
+          "429": {"$ref": "#/components/responses/Limit"}
+        }
+      }
+    },
+    "/changes": {
+      "get": {
+        "operationId": "getChanges",
+        "summary": "What to send again, restate or retract since a change token",
+        "description": "Without since, everything readable is a change. Retractions are those queued for this plugin: items it was served that are no longer exportable.",
+        "parameters": [
+          {"name": "since", "in": "query", "schema": {"$ref": "common.schema.json#/$defs/change_token"}},
+          {"$ref": "#/components/parameters/Limit"}
+        ],
+        "responses": {
+          "200": {"description": "A page of changes", "content": {"application/json": {"schema": {"$ref": "connector.schema.json#/$defs/changes"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "429": {"$ref": "#/components/responses/Limit"}
+        }
+      }
+    },
+    "/conversations": {
+      "get": {
+        "operationId": "listConversations",
+        "summary": "Conversation metadata, as granted library/1 fields",
+        "parameters": [
+          {"name": "ids", "in": "query", "description": "Comma-separated opaque IDs, for example from /changes.", "schema": {"type": "string"}},
+          {"name": "cursor", "in": "query", "schema": {"type": "string"}},
+          {"$ref": "#/components/parameters/Limit"}
+        ],
+        "responses": {
+          "200": {"description": "A page of conversations", "content": {"application/json": {"schema": {"$ref": "connector.schema.json#/$defs/conversations_page"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/NotGranted"},
+          "429": {"$ref": "#/components/responses/Limit"}
+        }
+      }
+    },
+    "/conversations/{id}/messages": {
+      "get": {
+        "operationId": "listMessages",
+        "summary": "A conversation's messages, when the grant allows text",
+        "parameters": [
+          {"name": "id", "in": "path", "required": true, "schema": {"$ref": "common.schema.json#/$defs/opaque_id"}},
+          {"name": "cursor", "in": "query", "schema": {"type": "string"}},
+          {"$ref": "#/components/parameters/Limit"}
+        ],
+        "responses": {
+          "200": {"description": "A page of messages", "content": {"application/json": {"schema": {"$ref": "connector.schema.json#/$defs/messages_page"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/NotGranted"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "429": {"$ref": "#/components/responses/Limit"}
+        }
+      }
+    },
+    "/export": {
+      "get": {
+        "operationId": "exportBundle",
+        "summary": "A pharos-drop/1 bundle of transcripts, for another Pharos",
+        "description": "A tar stream with bundle.json first, then the drops' files. Needs export_bundles. Only conversations captured by this library's own Macs, unless forward_imported. Sized to stay within the run's served bytes; Pharos-Next-Cursor and Pharos-More headers page through the rest.",
+        "parameters": [
+          {"name": "since", "in": "query", "schema": {"$ref": "common.schema.json#/$defs/change_token"}},
+          {"name": "cursor", "in": "query", "schema": {"type": "string"}},
+          {"name": "max_bytes", "in": "query", "schema": {"type": "integer", "minimum": 1}}
+        ],
+        "responses": {
+          "200": {
+            "description": "A bundle",
+            "headers": {
+              "Pharos-Next-Cursor": {"schema": {"type": "string"}},
+              "Pharos-More": {"schema": {"enum": ["true", "false"]}}
+            },
+            "content": {"application/x-tar": {"schema": {"type": "string", "contentMediaType": "application/x-tar"}}}
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/NotGranted"},
+          "429": {"$ref": "#/components/responses/Limit"}
+        }
+      }
+    },
+    "/resend": {
+      "post": {
+        "operationId": "recordResend",
+        "summary": "Record that a scripted exporter's receiver asked for everything",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "connector.schema.json#/$defs/resend_request"}}}},
+        "responses": {
+          "204": {"description": "Recorded; acknowledged state for this plugin is reset when the run is acknowledged"},
+          "400": {"$ref": "#/components/responses/Invalid"},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "runToken": {"type": "http", "scheme": "bearer", "description": "request.api.token, also in PHAROS_TOKEN. Valid until the run ends."}
+    },
+    "parameters": {
+      "Dataset": {"name": "dataset", "in": "path", "required": true, "description": "Export dataset with version, URL-encoded: usage%2F1.", "schema": {"$ref": "common.schema.json#/$defs/dataset"}},
+      "Limit": {"name": "limit", "in": "query", "description": "Page size, capped by Pharos.", "schema": {"type": "integer", "minimum": 1, "maximum": 1000}}
+    },
+    "schemas": {
+      "QueryTableRequest": {"description": "A request body of the Query Table wire contract Pharos uses (see docs/query-table-integration.md).", "type": "object"},
+      "QueryTableResponse": {"description": "A response body of the Query Table wire contract, with redaction applied.", "type": "object"}
+    },
+    "responses": {
+      "Unauthorized": {"description": "Missing, unknown or expired token", "content": {"application/json": {"schema": {"$ref": "common.schema.json#/$defs/error"}}}},
+      "NotGranted": {"description": "A dataset, field, mode, text or export outside the grant; names what was refused", "content": {"application/json": {"schema": {"$ref": "common.schema.json#/$defs/error"}}}},
+      "NotFound": {"description": "Unknown or not readable; private items are indistinguishable from absent ones", "content": {"application/json": {"schema": {"$ref": "common.schema.json#/$defs/error"}}}},
+      "Invalid": {"description": "Malformed request", "content": {"application/json": {"schema": {"$ref": "common.schema.json#/$defs/error"}}}},
+      "Limit": {
+        "description": "Near a limit; retry after the given time. Past it the token is revoked and the run stops.",
+        "headers": {"Retry-After": {"schema": {"type": "integer"}}},
+        "content": {"application/json": {"schema": {"$ref": "common.schema.json#/$defs/error"}}}
+      }
+    }
+  }
+}

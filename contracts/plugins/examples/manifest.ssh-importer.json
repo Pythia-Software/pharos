@@ -1,0 +1,73 @@
+{
+  "plugin": "pharos-plugin/1",
+  "id": "software.pythia.ssh-importer",
+  "name": "Import over SSH",
+  "publisher": "Pharos",
+  "version": "0.1.0",
+  "direction": "import",
+  "description": "Copies Claude Code and Codex history from another machine over SSH. Nothing is installed on that machine.",
+  "permissions": {
+    "produce": {
+      "kinds": [
+        "claude",
+        "codex"
+      ]
+    },
+    "fetches_from": [
+      "the SSH destination you enter below"
+    ]
+  },
+  "params": {
+    "type": "object",
+    "required": [
+      "destination"
+    ],
+    "properties": {
+      "destination": {
+        "type": "string",
+        "title": "SSH destination",
+        "examples": [
+          "alice@lab-box"
+        ]
+      },
+      "sources": {
+        "type": "array",
+        "items": {
+          "enum": [
+            "claude",
+            "codex"
+          ]
+        },
+        "default": [
+          "claude",
+          "codex"
+        ]
+      },
+      "label": {
+        "type": "string",
+        "title": "Name shown in Pharos"
+      }
+    }
+  },
+  "triggers": [
+    {
+      "schedule": {
+        "every": "6h"
+      }
+    },
+    {
+      "manual": {}
+    }
+  ],
+  "limits": {
+    "max_runtime": "20m",
+    "max_bytes": "2GiB",
+    "max_memory": "512MiB"
+  },
+  "run": {
+    "command": [
+      "python3",
+      "ssh_pull.py"
+    ]
+  }
+}

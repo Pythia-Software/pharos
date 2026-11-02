@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pharos.pythia.software/contracts/plugins/usage-record.schema.json",
+  "title": "Usage record (usage-records/1)",
+  "description": "One line of a usage drop: one model request (or one attempt and model) with no conversation. Records are unique by (the drop's namespace, id); a record sent again replaces the stored one.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "at", "provider", "model", "tokens", "cost", "automation"],
+  "properties": {
+    "id": {
+      "description": "Stable across copies of the source, such as a labeling attempt ID.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "at": {"description": "When the request started.", "$ref": "common.schema.json#/$defs/timestamp"},
+    "ended_at": {"$ref": "common.schema.json#/$defs/timestamp"},
+    "provider": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+    "route": {"description": "How the request was made, such as claude, codex or agy.", "type": "string"},
+    "model": {"description": "The model requested.", "type": "string", "minLength": 1},
+    "served_model": {"description": "The model that answered, when it differs.", "type": "string"},
+    "effort": {"type": ["string", "null"]},
+    "harness": {"type": "string"},
+    "harness_version": {"type": "string"},
+    "machine": {
+      "description": "key of a machine declared in the result, when the requests ran elsewhere. Omitted means this Mac.",
+      "type": "string"
+    },
+    "tokens": {"$ref": "common.schema.json#/$defs/tokens"},
+    "cost": {
+      "description": "Spend. usd counts as cost only when status is priced or assumed; other statuses are unpriced usage.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "usd": {"type": "number", "minimum": 0},
+        "status": {"enum": ["priced", "assumed", "unpriced", "unknown"]},
+        "priced_model": {"description": "The price-book model used, when it differs from model.", "type": "string"}
+      },
+      "if": {"properties": {"status": {"enum": ["priced", "assumed"]}}},
+      "then": {"required": ["usd"]}
+    },
+    "estimate": {
+      "description": "Exposure, never counted as cost.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["usd"],
+      "properties": {
+        "usd": {"type": "number", "minimum": 0},
+        "basis": {"type": "string"}
+      }
+    },
+    "duration_ms": {"type": "integer", "minimum": 0},
+    "outcome": {"description": "ok, failed, invalid and so on. Failed requests with usage still count.", "type": "string"},
+    "automation": {
+      "description": "Marks the usage as automation in the usage views. kind becomes the channel (for example Automated: labeling); the other labels become fields.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+        "job": {"type": "string"},
+        "dataset": {"type": "string"},
+        "role": {"type": "string"},
+        "labels": {
+          "type": "object",
+          "maxProperties": 16,
+          "additionalProperties": {"type": "string", "maxLength": 200}
+        }
+      }
+    }
+  }
+}

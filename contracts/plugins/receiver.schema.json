@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pharos.pythia.software/contracts/plugins/receiver.schema.json",
+  "title": "Receiver protocol bodies (pharos-receiver/1)",
+  "description": "Bodies of the HTTPS protocol a receiver implements and Pharos's declarative exporter speaks. See receiver-api.openapi.json for the endpoints.",
+  "$defs": {
+    "token_response": {
+      "description": "From registration.token_url, for the authorization code grant (with PKCE) and for refresh. salt arrives with the first grant only and never changes for the organization.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["token_type", "access_token", "expires_in"],
+      "properties": {
+        "token_type": {"const": "Bearer"},
+        "access_token": {"type": "string", "minLength": 1},
+        "expires_in": {"type": "integer", "minimum": 60},
+        "refresh_token": {"type": "string", "minLength": 1},
+        "salt": {
+          "description": "The organization's key for opaque IDs and hashed fields: the same at this receiver for every member, different at every other receiver.",
+          "type": "string",
+          "pattern": "^[0-9A-Za-z_-]{32,}$"
+        },
+        "receiver_name": {"description": "Shown on the plugin's page, such as the organization's name.", "type": "string", "maxLength": 200}
+      }
+    },
+    "hello_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sender_id", "plugin", "permissions_hash", "datasets", "receipt"],
+      "properties": {
+        "sender_id": {"$ref": "common.schema.json#/$defs/sender_id"},
+        "plugin": {"$ref": "common.schema.json#/$defs/plugin_ref"},
+        "permissions_hash": {"$ref": "common.schema.json#/$defs/sha256"},
+        "datasets": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "common.schema.json#/$defs/dataset"}
+        },
+        "receipt": {
+          "description": "The last receipt this receiver returned from a commit, or null before the first.",
+          "oneOf": [{"$ref": "#/$defs/receipt"}, {"type": "null"}]
+        },
+        "run_id": {"$ref": "common.schema.json#/$defs/run_id"}
+      }
+    },
+    "hello_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["need", "accepts", "max_batch_bytes"],
+      "properties": {
+        "need": {
+          "oneOf": [
+            {"const": "changes"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["everything"],
+              "properties": {
+                "everything": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["reason"],
+                  "properties": {
+                    "reason": {"type": "string", "minLength": 1, "maxLength": 500},
+                    "from": {"$ref": "common.schema.json#/$defs/date"}
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["resend"],
+              "properties": {
+                "resend": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "minProperties": 1,
+                  "properties": {
+                    "ids": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/opaque_id"}},
+                    "periods": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["dataset", "period"],
+                        "properties": {
+                          "dataset": {"$ref": "common.schema.json#/$defs/dataset"},
+                          "period": {"type": "string"}
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "accepts": {
+          "description": "Dataset versions the receiver accepts; Pharos sends only these.",
+          "type": "array",
+          "items": {"$ref": "common.schema.json#/$defs/dataset"}
+        },
+        "max_batch_bytes": {"type": "integer", "minimum": 65536},
+        "retention_days": {"description": "Shown on the plugin's page.", "type": "integer", "minimum": 0}
+      }
+    },
+    "batch_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["accepted"],
+      "properties": {
+        "accepted": {"description": "Batch position, echoed. A replayed batch is accepted again without effect.", "type": "integer", "minimum": 1}
+      }
+    },
+    "commit_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "batches"],
+      "properties": {
+        "run_id": {"$ref": "common.schema.json#/$defs/run_id"},
+        "batches": {"type": "integer", "minimum": 0}
+      }
+    },
+    "commit_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["receipt", "committed_at"],
+      "properties": {
+        "receipt": {"$ref": "#/$defs/receipt"},
+        "committed_at": {"$ref": "common.schema.json#/$defs/timestamp"}
+      }
+    },
+    "receipt": {
+      "description": "Names one committed run of one installation. Opaque to Pharos.",
+      "type": "string",
+      "pattern": "^[0-9A-Za-z_-]{1,128}$"
+    }
+  }
+}

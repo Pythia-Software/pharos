@@ -1,0 +1,9 @@
+{
+  "need": "changes",
+  "accepts": [
+    "usage/1",
+    "library/1"
+  ],
+  "max_batch_bytes": 4194304,
+  "retention_days": 395
+}

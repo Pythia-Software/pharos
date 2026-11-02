@@ -1,0 +1,24 @@
+{
+  "changes": [
+    {
+      "dataset": "library/1",
+      "id": "w_9tq3LmA2",
+      "version": 12
+    }
+  ],
+  "restate": [
+    {
+      "dataset": "usage/1",
+      "period": "2026-10-21"
+    }
+  ],
+  "retract": [
+    {
+      "id": "w_2bH7xPq1",
+      "kind": "row",
+      "version": 5
+    }
+  ],
+  "next": "chg_0001f3b0",
+  "more": false
+}

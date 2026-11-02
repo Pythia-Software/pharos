@@ -1,0 +1,50 @@
+{
+  "contract": "pharos-run/1",
+  "status": "partial",
+  "message": "312 file(s), 1.9 GB from alice@lab-box; stopped because the byte budget is spent",
+  "cursor": {
+    "version": 1,
+    "destination": "alice@lab-box",
+    "sources": {
+      "claude": {
+        "since": 1793120411,
+        "after": "-home-alice-src-api/7a1c.jsonl",
+        "databases": {}
+      },
+      "codex": {
+        "since": 1793116800,
+        "databases": {
+          "state_5.sqlite": 1793120002
+        }
+      }
+    }
+  },
+  "transferred_bytes": 2040109056,
+  "machines": [
+    {
+      "key": "alice@lab-box",
+      "label": "lab-box (alice)",
+      "os": "linux",
+      "machine_id": "4b2d9c0e8f7a41d3b6c5e2f1a0987654"
+    }
+  ],
+  "drops": [
+    {
+      "dir": "claude",
+      "kind": "claude",
+      "machine": "alice@lab-box",
+      "source": "claude",
+      "root": "/home/alice/.claude/projects"
+    },
+    {
+      "dir": "codex",
+      "kind": "codex",
+      "machine": "alice@lab-box",
+      "source": "codex",
+      "root": "/home/alice/.codex"
+    }
+  ],
+  "warnings": [
+    "codex: sqlite3 is not installed on lab-box; state_5.sqlite skipped"
+  ]
+}

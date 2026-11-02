@@ -1,0 +1,13 @@
+{
+  "need": {
+    "everything": {
+      "reason": "restored from backup of 2026-10-30",
+      "from": "2026-01-01"
+    }
+  },
+  "accepts": [
+    "usage/1",
+    "library/1"
+  ],
+  "max_batch_bytes": 4194304
+}

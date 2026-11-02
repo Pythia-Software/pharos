@@ -1,0 +1,105 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Pharos receiver protocol",
+    "version": "pharos-receiver/1",
+    "description": "Implemented by a service that receives data from Pharos exporters, such as Pythia's. Pharos always initiates: after registration the receiver only answers. Each run is hello, then batches, then commit; only a committed run is acknowledged. The receiver may ask Pharos to send changes, everything, or particular items again, but never for more than the plugin's consented permissions."
+  },
+  "servers": [{"url": "https://receiver.example.com", "description": "The manifest's run.receiver.url"}],
+  "security": [{"accessToken": []}],
+  "paths": {
+    "/v1/hello": {
+      "post": {
+        "operationId": "hello",
+        "summary": "Start a run and say what the receiver needs",
+        "description": "A receipt the receiver does not recognize means it lost what came after, and it answers everything.",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "receiver.schema.json#/$defs/hello_request"}}}},
+        "responses": {
+          "200": {"description": "What to send", "content": {"application/json": {"schema": {"$ref": "receiver.schema.json#/$defs/hello_response"}}}},
+          "401": {"$ref": "#/components/responses/Disconnected"},
+          "403": {"$ref": "#/components/responses/Disconnected"},
+          "409": {"description": "permissions_hash differs from the consented one; the person updates the plugin", "content": {"application/json": {"schema": {"$ref": "common.schema.json#/$defs/error"}}}}
+        }
+      }
+    },
+    "/v1/batches": {
+      "post": {
+        "operationId": "deliverBatch",
+        "summary": "Stage one batch of the run",
+        "parameters": [
+          {"name": "Idempotency-Key", "in": "header", "required": true, "description": "<run_id>/<batch>", "schema": {"type": "string", "pattern": "^run_[0-9A-Za-z_-]+/[1-9][0-9]*$"}}
+        ],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "report.schema.json"}}}},
+        "responses": {
+          "200": {"description": "Staged (or already staged)", "content": {"application/json": {"schema": {"$ref": "receiver.schema.json#/$defs/batch_response"}}}},
+          "401": {"$ref": "#/components/responses/Disconnected"},
+          "413": {"description": "Larger than max_batch_bytes"},
+          "422": {"description": "A field outside the installation's consented permissions; names the field", "content": {"application/json": {"schema": {"$ref": "common.schema.json#/$defs/error"}}}}
+        }
+      }
+    },
+    "/v1/commit": {
+      "post": {
+        "operationId": "commit",
+        "summary": "Apply the run's batches together and return a receipt",
+        "description": "Upserts apply when newer than the stored version and any tombstone; retractions delete content and keep a tombstone; periods replace. Nothing is removed by absence.",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "receiver.schema.json#/$defs/commit_request"}}}},
+        "responses": {
+          "200": {"description": "Committed", "content": {"application/json": {"schema": {"$ref": "receiver.schema.json#/$defs/commit_response"}}}},
+          "401": {"$ref": "#/components/responses/Disconnected"},
+          "409": {"description": "A batch is missing; Pharos runs again", "content": {"application/json": {"schema": {"$ref": "common.schema.json#/$defs/error"}}}}
+        }
+      }
+    },
+    "/v1/registration": {
+      "delete": {
+        "operationId": "unregister",
+        "summary": "The plugin was uninstalled",
+        "description": "Sent after the optional last run that retracts everything. What the receiver keeps afterwards is its own policy.",
+        "responses": {
+          "204": {"description": "The installation is ended"},
+          "401": {"$ref": "#/components/responses/Disconnected"}
+        }
+      }
+    },
+    "/oauth/token": {
+      "post": {
+        "operationId": "token",
+        "summary": "registration.token_url: exchange the authorization code, or refresh",
+        "description": "OAuth 2.0 for native apps (RFC 8252). Pharos opens registration.url with response_type=code, client_id (the plugin ID), a loopback redirect_uri, state, code_challenge with S256, and sender_id, permissions_hash and any invitation code from the install link. The path here is illustrative; the manifest names the real one.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": ["grant_type", "client_id"],
+                "properties": {
+                  "grant_type": {"enum": ["authorization_code", "refresh_token"]},
+                  "client_id": {"type": "string"},
+                  "code": {"type": "string"},
+                  "redirect_uri": {"type": "string"},
+                  "code_verifier": {"type": "string"},
+                  "refresh_token": {"type": "string"}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "Tokens", "content": {"application/json": {"schema": {"$ref": "receiver.schema.json#/$defs/token_response"}}}},
+          "400": {"description": "OAuth error response (RFC 6749 section 5.2)"}
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "accessToken": {"type": "http", "scheme": "bearer", "description": "An access token from registration, scoped to one installation: it can say hello, deliver and commit, and nothing else."}
+    },
+    "responses": {
+      "Disconnected": {"description": "The person disconnected on the receiver's side, or access was revoked; Pharos pauses the plugin with a notice", "content": {"application/json": {"schema": {"$ref": "common.schema.json#/$defs/error"}}}}
+    }
+  }
+}

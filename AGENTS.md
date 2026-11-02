@@ -106,6 +106,7 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
 | Library drive end to end (macOS, slow) | `npm --prefix web run test:e2e` (real build, disk image and service) |
 | JS checks before a PR | `npm --prefix web run check` (typecheck, schemas, recipe snapshot, bundle, unit tests) |
 | Python tools | `python3 -m unittest discover -s tools` |
+| Plugin contracts and the SSH importer | `python3 -m unittest discover -s contracts/plugins` and `python3 -m unittest discover -s importers` (need `jsonschema`) |
 | Frontend bundle | `npm --prefix web run build` after any `web/src` or `pricing/*.json` change; outputs are gitignored |
 | Recipe snapshot | `npm --prefix web run generate-recipes` after changing card recipes; it rewrites `implemented_recipes` in `docs/homepage-query-cards.json`, which Go's `TestHomeQueryRecipesV2` executes |
 | Site map | `npm --prefix web run generate-site-map` after changing pages, routes, analysis catalogs, dashboard defaults, schemas or card recipes; it rewrites `internal/archive/assets/site-map.json` and `testdata/site-map-cases.json` ([docs/site-map.md](docs/site-map.md)) |
