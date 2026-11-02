@@ -15,7 +15,7 @@ import { DataTaxonomyModal, SourceQueryBuilder } from "./data-taxonomy";
 import { installDelegationExplorer } from "./delegation";
 import { installWorkspaceInbox } from "./workspace-inbox";
 import { MessageTableSearch, newMessageSearch } from "./message-table-search";
-import { ConversationFacts, ResultConversationBrowser, ResultMessage, conversationActivitySummary } from "./conversation-results";
+import { ConversationFacts, ResultConversationBrowser, ResultMessage, conversationActivitySummary, openableProps, type ResultTarget } from "./conversation-results";
 import { TextSearchEditor } from "./text-search-editor";
 import { SearchHelp } from "./search-help";
 import { RecordSearchEditor, recordSearchTargets } from "./record-search-editor";
@@ -29,8 +29,8 @@ import { ExploreSearch } from "./explore-search";
 import { recordKeywordSummary, RecordKeywordClause } from "./record-keyword-clause";
 import { refreshTodayHost, changeLibrarySearch, libraryFind, libraryHostQuery, libraryHostState, messageFind, messageHostQuery, readLibraryHost, readMessageSearchHost, readRecordKeyword, recordKeywordFind, recordKeywordHostQuery, sameHostState, withMessageSearch, withoutLibrarySearch, withRecordKeyword, type LibraryHost } from "./host-query-state";
 import { SearchResultsDisplay } from "./search-results-view";
-import { highlightParts, matchFindState, summaryEntries, type WorkMatches, type WorkMatchItem } from "./find-match-model";
-import { writeFindParameters } from "./page-find-model";
+import { highlightParts, matchFindState, plainSnippetParts, summaryEntries, type WorkMatches, type WorkMatchItem } from "./find-match-model";
+import { findPattern, writeFindParameters } from "./page-find-model";
 import { queryForSearchResultsView, searchResultsView, type SearchResultsView } from "./search-results-view-model";
 import { newKeywordSearch, searchSentence, withheldBatch, type TextSearchDraft } from "./text-search-model";
 import { CarbonImpact, useLegacyCarbonFilters } from "./carbon-impact";
@@ -71,7 +71,7 @@ import { AskPharosSearch, AskPharosSettings } from "./ask-pharos";
 import { CardLibraryPage } from "./card-library";
 import { linkTargets, navigateLink } from "./query-link-targets";
 import { QueryChip } from "./query-card";
-import { queryFromURL, queryURL, rollingWindowField, updateQueryWindowURL, queryWindowChoice, withQueryWindow, readRollingWindow, resolveRollingQuery, rollingQueryMatches, restoreRollingDefinition } from "./query-links";
+import { queryFromURL, queryURL, rollingWindowField, readRollingWindow, resolveRollingQuery, rollingQueryMatches, restoreRollingDefinition } from "./query-links";
 import { mainIntegration, pullRequestLabel, pullRequestURL, pullRequests } from "./pull-requests";
 import { optionLabels } from "./option-labels";
 import { preferences } from "./preferences";
@@ -728,15 +728,6 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
     {!api.query.grouping || namespace ? header?.(api) : null}
     {!namespace && Object.hasOwn(usageDatasets, dataset) ? <UsageQueryIdeas key={dataset} dataset={dataset as UsageDataset} api={api} /> : null}
     {presets?.(api)}
-    {!namespace && !["library", "tl1_attempts", "findings", "safety", "parallelism"].includes(dataset) && rollingWindowField(dataset) ? <label className="usage-chart-field">Time window<select aria-label="Query time window" value={queryWindowChoice(new URLSearchParams(location.search), dataset)} onChange={event => {
-      if (event.target.value === "saved") return;
-      const selected = readRollingWindow(new URLSearchParams(location.search), dataset);
-      const address = updateQueryWindowURL(queryURL(dataset, api.query, selected), event.target.value === "today" ? "today" : 1, api.query);
-      const adjusted = queryFromURL(address)!;
-      const nextURL=withQueryWindow(new URL(location.href),address,dataset,registryKey);
-      history.replaceState(history.state,"",nextURL);window.dispatchEvent(new Event("pharos:uri-changed"));
-      api.setQuery(adjusted.query);
-    }}><option value="saved">Query filters</option><option value="today">Today</option><option value="24h">Last 24 hours</option></select></label> : null}
     {queryContent || resultPresentation ? <SourceQueryBuilder dataset={dataset} compact summary={querySummary?.(api)} api={stableApi} fields={api.query.grouping ? api.schema!.fields : api.computed.catalogue} total={api.total} running={api.loading}
       whereRow={<>
         {resultPresentation?.(api)}
@@ -807,13 +798,25 @@ function ConversationResultCard({ row, api, renderers, find }: { row: Row; api: 
   const firstInput = row.first_input ? { role: "user", text: row.first_input } : row.purpose ? { role: "user", text: row.purpose } : null;
   const latestResponse = row.last_response ? { role: "assistant", text: row.last_response } : row.outcome ? { role: "assistant", text: row.outcome } : null;
   const count = Number(row.find_match_count) || 1;
-  const match = row.find_hit ? <FindMatch hit={row.find_hit} label={`Match · ${count.toLocaleString()} ${findHitNoun(row.find_hit)}${count === 1 ? "" : "s"}`} /> : null;
   const matches = useWorkMatches(row, find);
+  const [target, setTarget] = useState<ResultTarget | null>(null);
   const openBrowser = () => { setHasBrowsed(true); setBrowse(true); browserToggle.current?.focus({ preventScroll: true }); };
-  const summaryMessage = (item: WorkMatchItem, label: string) => item.kind === "match"
-    ? <FindMatch key={item.message_id} label={label} hit={{ ...(row.find_hit as FindHit), conversation_id: item.conversation_id, message_id: item.message_id, role: item.role, message_kind: item.message_kind, snippet: item.snippet, highlights: item.highlights }} />
-    : item.kind === "first" && firstInput ? <ResultMessage key={item.message_id} label={label} message={firstInput} kind="human" compact />
-    : item.kind === "last" && latestResponse ? <ResultMessage key={item.message_id} label={label} message={latestResponse} kind="assistant" compact /> : null;
+  // A preview message opens Browse at its turn, marking a match's terms.
+  const browseTo = (messageID: unknown, conversationID?: unknown, hit?: FindHit) => {
+    const find = hit ? matchFindState(hit.snippet ?? "", hit.highlights) : null, pattern = find ? findPattern(find) : null;
+    if (messageID) setTarget({ messageID: String(messageID), conversationID: conversationID ? String(conversationID) : undefined, pattern: pattern?.status === "ready" ? pattern.pattern : null });
+    openBrowser();
+  };
+  const openHit = (hit: FindHit) => hit.message_id ? browseTo(hit.message_id, hit.conversation_id, hit) : openFindHit(hit);
+  const match = row.find_hit ? <FindMatch hit={row.find_hit} label={`Match · ${count.toLocaleString()} ${findHitNoun(row.find_hit)}${count === 1 ? "" : "s"}`} onOpen={() => openHit(row.find_hit)} /> : null;
+  const summaryMessage = (item: WorkMatchItem, label: string) => {
+    if (item.kind === "match") {
+      const hit = { ...(row.find_hit as FindHit), conversation_id: item.conversation_id, message_id: item.message_id, role: item.role, message_kind: item.message_kind, snippet: item.snippet, highlights: item.highlights };
+      return <FindMatch key={item.message_id} label={label} hit={hit} onOpen={() => openHit(hit)} />;
+    }
+    const message = item.kind === "first" ? firstInput : latestResponse;
+    return message ? <ResultMessage key={item.message_id} label={label} message={message} kind={item.kind === "first" ? "human" : "assistant"} compact onOpen={() => browseTo(item.message_id, item.conversation_id)} /> : null;
+  };
   return <article className="conversation-result-card" data-pharos-target={`row:${row.id}`}>
     <div className="conversation-result-head">
       <div className="conversation-result-summary">
@@ -831,15 +834,15 @@ function ConversationResultCard({ row, api, renderers, find }: { row: Row; api: 
           <Icon name="tree" /><span>{entry.label}</span><Icon name="chevron-down" />
         </button>)}
     </div> : !browse && (firstInput || latestResponse || match) ? <div className={`conversation-result-preview${firstInput && (latestResponse || match) ? " joined" : ""}`}>
-      {firstInput ? <ResultMessage label="First ask" message={firstInput} kind="human" compact /> : null}
+      {firstInput ? <ResultMessage label="First ask" message={firstInput} kind="human" compact onOpen={() => browseTo(row.first_input_id)} /> : null}
       <button type="button" data-view-field="search_cards" className="conversation-preview-browse" aria-label={`Browse turns: ${activitySummary}`} aria-expanded={browse} aria-controls={browserID} onClick={openBrowser}>
         <Icon name="tree" /><span>{activitySummary}</span><Icon name="chevron-down" />
       </button>
       {match}
-      {latestResponse ? <ResultMessage label="Latest response" message={latestResponse} kind="assistant" compact /> : null}
+      {latestResponse ? <ResultMessage label="Latest response" message={latestResponse} kind="assistant" compact onOpen={() => browseTo(row.last_response_id)} /> : null}
     </div> : browse && match ? <div className="conversation-result-preview">{match}</div> : !browse ? <p className="muted conversation-result-empty">No retained message preview.</p> : null}
     <div id={browserID} className={`conversation-browser-disclosure${browse ? " is-expanded" : ""}`} aria-hidden={!browse} ref={element => { if (element) element.inert = !browse; }}>
-      <div className="conversation-browser-content">{hasBrowsed || browse ? <ResultConversationBrowser workspaceID={String(row.id)} readJSON={readerJSON} /> : null}</div>
+      <div className="conversation-browser-content">{hasBrowsed || browse ? <ResultConversationBrowser workspaceID={String(row.id)} readJSON={readerJSON} target={target} /> : null}</div>
     </div>
   </article>;
 }
@@ -899,12 +902,11 @@ const findHitNoun = (hit: FindHit) => hit.url ? "matching URL" : hit.path ? "mat
 
 // A keyword match, as a message in the conversation summary, with the
 // query's matches marked.
-function FindMatch({ hit, label }: { hit: FindHit; label: string }) {
-  return <div className={`result-message compact library-find-match ${hit.role === "user" ? "human" : "assistant"}`}>
+function FindMatch({ hit, label, onOpen }: { hit: FindHit; label: string; onOpen: () => void }) {
+  return <div className={`result-message compact library-find-match ${hit.role === "user" ? "human" : "assistant"}`} {...openableProps(onOpen)}>
     <div className="result-message-label">{label}</div>
     <div className="result-message-body library-find-snippet">{hit.url ? <a href={hit.url} target="_blank" rel="noopener noreferrer">{hit.url}</a>
-      : highlightParts(findHitText(hit), hit.highlights).map((part, index) => part.match ? <mark key={index}>{part.text}</mark> : part.text)}</div>
-    <button type="button" className="library-find-open" onClick={() => openFindHit(hit)}>{findHitLabel(hit)} <Icon name="arrow-right" /></button>
+      : (hit.path ? highlightParts : plainSnippetParts)(findHitText(hit), hit.highlights).map((part, index) => part.match ? <mark key={index}>{part.text}</mark> : part.text)}</div>
   </div>;
 }
 
@@ -1528,7 +1530,7 @@ function useUsageDashboardState<T extends object>(defaults: T, valid: (value: T)
 function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
   if(topic==="thinking-overview"||topic==="thinking-detail") return <ThinkingDashboard detail={topic==="thinking-detail"}/>;
   if (topic === "calls") return <CatalogDashboard catalog={toolTimeAnalysisCatalog} dataset="tool_calls" name="calls" defaults={dashboardDefaults.calls} />;
-  if (topic === "activity") return <CatalogDashboard catalog={conversationAnalysisCatalog} dataset="conversation_activity" name="activity" defaults={dashboardDefaults.activity} />;
+  if (topic === "activity") return <CatalogDashboard catalog={conversationAnalysisCatalog} dataset="conversation_activity" name="activity" defaults={dashboardDefaults.activity} summary={where => <ConversationsSummary where={where} />} />;
   if (topic === "tokens") return <TokenUsageDashboard />;
   if (topic === "human") return <HumanUsageDashboard />;
   if (topic === "parallelism") return <ParallelismUsageDashboard />;
@@ -1643,14 +1645,14 @@ const readHumanWhere: ReadWhere = (where, state) => {
 // The dashboard's population, whatever the chart draws.
 const humanSummaryMetrics: AggregationClause[] = [
   { id: "typed", op: "sum", field: "typed_words", groupBy: [] },
+  { id: "words", op: "sum", field: "words", groupBy: [] },
   { id: "typed_messages", op: "sum", expression: "SUM(IF([typed_words]>0,1,0))", groupBy: [] },
   { id: "messages", op: "count", groupBy: [] },
-  { id: "works", op: "count_distinct", field: "work_id", groupBy: [] },
 ];
 function HumanWordsSummary({ where, status }: { where: WhereTerm[]; status: AuthorshipStatus | null }) {
   const result = useMetrics("writing_messages", where, humanSummaryMetrics);
   const value = (id: string) => Number(result.metrics.find(metric => metric.id === id)?.buckets[0]?.value) || 0;
-  const typed = value("typed"), typedMessages = value("typed_messages");
+  const typed = value("typed"), words = value("words"), typedMessages = value("typed_messages");
   const building = status !== null && !status.built_at;
   const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{building ? "Building…" : result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
   return <>
@@ -1658,10 +1660,31 @@ function HumanWordsSummary({ where, status }: { where: WhereTerm[]; status: Auth
       {card("Words you wrote", compactNumber(typed), "typed or dictated in the selected period")}
       {card("Messages with your writing", typedMessages.toLocaleString(), `of ${value("messages").toLocaleString()} classified user messages`)}
       {card("Words per message", typedMessages ? Math.round(typed / typedMessages).toLocaleString() : "—", "average over messages containing your writing")}
-      {card("Works with input", value("works").toLocaleString(), "works with classified messages in this period")}
+      {card("Typed share", words ? `${Math.round(typed / words * 100)}%` : "—", `of ${compactNumber(words)} words in your messages`)}
     </div>
     {status ? <p className="usage-dashboard-note" role="status">{status.error ? `Classification update failed: ${status.error}` : status.running ? "Updating text classifications…" : status.stale ? "Text classifications need an update." : status.built_at ? `Text classified ${new Date(status.built_at).toLocaleString()}` : "Waiting for text classification."}</p> : null}
   </>;
+}
+
+// Conversations' population, whatever the chart draws.
+const conversationSummaryMetrics: AggregationClause[] = [
+  { id: "conversations", op: "count_distinct", field: "root_conversation_id", groupBy: [] },
+  { id: "messages", op: "sum", field: "human_messages", groupBy: [] },
+  { id: "output", op: "sum", field: "output_tokens", groupBy: [] },
+  { id: "repositories", op: "count_distinct", field: "repository_name", groupBy: [] },
+];
+function ConversationsSummary({ where }: { where: WhereTerm[] }) {
+  const result = useMetrics("conversation_activity", where, conversationSummaryMetrics);
+  const value = (id: string) => Number(result.metrics.find(metric => metric.id === id)?.buckets[0]?.value) || 0;
+  const conversations = value("conversations"), messages = value("messages"), output = value("output");
+  const per = (amount: number) => { const mean = amount / conversations; return conversations ? `${mean < 10 ? mean.toLocaleString(undefined, { maximumFractionDigits: 1 }) : compactNumber(mean)} per conversation` : "none in this range"; };
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
+  return <div className="mcp-metrics dashboard-stats" aria-label="Conversations summary" aria-busy={result.loading}>
+    {card("Conversations", conversations.toLocaleString(), "top-level, with their delegated work")}
+    {card("Your messages", messages.toLocaleString(), per(messages))}
+    {card("Output tokens", compactNumber(output), per(output))}
+    {card("Repositories", value("repositories").toLocaleString(), "with conversation activity")}
+  </div>;
 }
 
 // An engine dashboard: Over time, or Compare, Distribution, Scatter and Cycle
@@ -1859,7 +1882,7 @@ function LegacyUsagePage() {
         ? "Understand how your agents use tokens, work in parallel, and spend their time across repositories."
         : view === "writing"
           ? <>Text you typed or dictated into agent chats, per conversation or per message. Harness instructions, one-click prompts, attachments, pastes, and copied agent output are counted separately; filter the table and the chart and breakdown follow. {statusText ? <span className="meta">{statusText}</span> : null}</>
-          : view === "conversations" ? "Compare human-supplied text estimates and recorded output across whole conversations, including delegated work. Human text is estimated once per classified message, excluding harness and automated spans; output retains the usage ledger’s time placement." : "Estimated inference electricity and CO₂e for the tokens in this library, using published research and explicit assumptions."}</p></div>
+          : view === "conversations" ? "Compare conversations, your messages and recorded output across whole conversations, including delegated work. Messages exclude harness and automated prompts; output retains the usage ledger’s time placement." : "Estimated inference electricity and CO₂e for the tokens in this library, using published research and explicit assumptions."}</p></div>
       <div className="usage-heading-actions">
         <ResetPage />
         <div className="library-view-toggle" role="group" aria-label="Analyze view">

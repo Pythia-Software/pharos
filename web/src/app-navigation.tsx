@@ -1,5 +1,5 @@
 import { useViewState } from "./view-state";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { appLocation, appLocationLabel, appSections, isNavigationSectionExpanded, toggleNavigationSection, type AppSection, type NavigationExpansion } from "./app-navigation-model";
@@ -44,6 +44,16 @@ function AppNavigation({ settings, contentNavigation }: { settings: NestedPage[]
   const activeBranch = sections.find(item => item.id === branch) ?? section;
   const hasSidebar = layout !== "phone" && section.pages.length > 0;
   const rail = hasSidebar && !collapsed;
+  // The page's offsets follow the sidebar through an attribute on <main>, not
+  // main:has(...): a :has() on main makes every attribute change in the page,
+  // such as opening a transcript turn, re-check or restyle all of it.
+  // Sync after every commit, writing only a change.
+  useLayoutEffect(() => {
+    const main = contentNavigation.parentElement!, value = hasSidebar ? rail ? "open" : "collapsed" : undefined;
+    if (main.dataset.appSidebar === value) return;
+    if (value) main.dataset.appSidebar = value;
+    else delete main.dataset.appSidebar;
+  });
 
   useEffect(() => {
     const header = document.querySelector<HTMLElement>("body > header")!;

@@ -35,7 +35,7 @@ const messages = [sum("typed_words", "Your words"), sum("pasted_words", "Likely 
 const calls = [count("idea_calls", "Calls"), sum("error_count", "Failed calls"), ratio("idea_failure_rate", "SUM([error_count])/NULLIF(COUNT(),0)", "Failure rate", true), duration("duration_ms", "Recorded tool time"), count("idea_timed", "Timed calls", "duration_ms"), { id: "idea_mean_duration", op: "avg" as const, field: "duration_ms", label: "Time per timed run", display: { kind: "duration" as const, sourceUnit: "milliseconds" as const } }];
 const toolTotals = [sum("call_count", "Calls"), sum("error_count", "Failed calls"), ratio("idea_failure_rate", "SUM([error_count])/NULLIF(SUM([call_count]),0)", "Failure rate", true), duration("total_duration_ms", "Recorded tool time"), sum("timed_count", "Timed calls"), { ...ratio("idea_mean_duration", "SUM([total_duration_ms])/NULLIF(SUM([timed_count]),0)", "Time per timed run"), display: { kind: "duration" as const, sourceUnit: "milliseconds" as const } }];
 const context = [sum("result_tokens", "Context added (tokens)"), sum("carried_tokens", "Context carried (tokens)")];
-const activity = [sum("human_messages", "Human messages"), sum("human_input_tokens_estimate", "Estimated human input tokens"), sum("output_tokens", "Recorded output tokens"), distinct("conversation_id", "Conversations")];
+const activity = [sum("human_messages", "Human messages"), sum("output_tokens", "Recorded output tokens"), distinct("conversation_id", "Conversations")];
 const skills = [count("idea_evidence", "Evidence records"), distinct("conversation_id", "Conversations"), ratio("idea_body_bytes", "SUM(IF([content_bytes]>0,[content_bytes],0))", "Retained body bytes")];
 const mcp = [sum("call_count", "Calls"), sum("error_count", "Failed calls"), ratio("idea_failure_rate", "SUM([error_count])/NULLIF(SUM([call_count]),0)", "Failure rate", true), sum("estimated_output_tokens", "Estimated output tokens"), sum("truncated_count", "Truncated responses"), duration("duration_ms", "Server time")];
 // Counting method and turn-gap assumptions must stay separate. Unit hours are
@@ -65,10 +65,10 @@ export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
     idea("writing_messages", "apps", "Compare", "App and provider", "Compare human writing by source app and provider", ["source_kind", "provider"], messages),
   ],
   conversation_activity: [
-    idea("conversation_activity", "repos", "Compare", "Input and output by repo", "Compare human input estimates and recorded output without treating the ratio as quality", ["repository_name"], activity),
+    idea("conversation_activity", "repos", "Compare", "Messages and output by repo", "Compare human messages and recorded output without treating the ratio as quality", ["repository_name"], activity),
     idea("conversation_activity", "models", "Compare", "Root model and effort", "Compare activity attributed to each root model and effort", ["root_provider", "root_model_family", "root_effort"], activity),
     idea("conversation_activity", "events", "Compare", "Event kinds", "Inspect where human-message and output observations enter the activity ledger", ["event_kind"], activity),
-    idea("conversation_activity", "threads", "Explore", "By conversation", "Open conversations contributing human input and output in the selected dates", ["conversation_id"], [...activity, conversation]),
+    idea("conversation_activity", "threads", "Explore", "By conversation", "Open conversations contributing human messages and output in the selected dates", ["conversation_id"], [...activity, conversation]),
   ],
   tool_calls: [
     idea("tool_calls", "commands", "Time and reliability", "Command families", "Compare parsed command families using total time, timed-run means and failure rates", ["operation_key", "operation_name"], calls, "idea_duration_ms"),
@@ -192,8 +192,8 @@ usageQueryIdeas.writing_messages.push(
   recordIdea("writing_messages", "pasted-messages", "Most pasted messages", "Read the individual messages with the most likely-pasted words and inspect their classified source text", ["conversation_id", "id"], [workTitle, ...messages, message], "idea_pasted_words"),
 );
 usageQueryIdeas.conversation_activity.push(
-  recordIdea("conversation_activity", "root-threads", "Top-level threads", "Explore human input and recorded output across root conversations and their delegated activity", ["root_conversation_id"], [{ id: "idea_root_title", op: "max", field: "root_title", label: "Root conversation" }, ...activity, rootThread], "idea_output_tokens"),
-  withExample("conversation_activity", recordIdea("conversation_activity", "recent-events", "Latest activity events", "Inspect recent human-input and usage observations; message links are available only when the event records a message ID", ["event_kind", "conversation_id", "id"], [{ id: "idea_event_at", op: "max", field: "event_at", label: "Observed at" }, ...activity, conversation], "idea_event_at"), "event_at", "message_id", "Source message"),
+  recordIdea("conversation_activity", "root-threads", "Top-level threads", "Explore human messages and recorded output across root conversations and their delegated activity", ["root_conversation_id"], [{ id: "idea_root_title", op: "max", field: "root_title", label: "Root conversation" }, ...activity, rootThread], "idea_output_tokens"),
+  withExample("conversation_activity", recordIdea("conversation_activity", "recent-events", "Latest activity events", "Inspect recent human-message and usage observations; message links are available only when the event records a message ID", ["event_kind", "conversation_id", "id"], [{ id: "idea_event_at", op: "max", field: "event_at", label: "Observed at" }, ...activity, conversation], "idea_event_at"), "event_at", "message_id", "Source message"),
 );
 usageQueryIdeas.tool_calls.push(
   idea("tool_calls", "repeated-operations", "Explore", "Repeated operations", "Find command families repeated within the same conversation, then inspect their exact invocations and outcomes", ["conversation_id", "operation_key", "operation_name"], [...calls, conversation], "idea_calls"),

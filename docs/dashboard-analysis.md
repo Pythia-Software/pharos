@@ -24,9 +24,9 @@ Tool Calls is a full record-level dashboard alongside Tool Summary and Agent
 Time. Its catalog supports error signatures, repository paths, research hosts
 and URLs, MCP server/method pairs, failure/truncation rates, reach and context
 attribution. Cards keep exact timestamp and evidence predicates instead of
-projecting them onto whole-day summaries. Conversation Input and Output is a
-full dashboard over conversation_activity, keeping estimated input tokens and
-recorded output in their source units. It offers comparisons, distributions,
+projecting them onto whole-day summaries. Conversations is a full dashboard
+over conversation_activity: distinct top-level conversations, human messages
+and recorded output tokens, with a summary of the population above the chart. It offers comparisons, distributions,
 scatter, timestamp-based calendar trends and cycles. Whole-conversation
 observations combine delegated activity across repositories; repository
 breakdowns apply only to activity records. Older card URLs restore their exact
@@ -761,9 +761,8 @@ around it. Its default view is the one it always opened on.
   check every card against them. Measures: typed words, all user words,
   messages with typed text (typed words over zero), all messages,
   conversations (distinct), the typed share of words (pooled), typed words
-  per message with typed text (a conditional ratio), and the shares of
-  messages with the dataset's correction cue, positive cue and copied text
-  (conditional ratios). Text source is a component breakdown of all user
+  per message with typed text (a conditional ratio), and the share of
+  messages with copied text (a conditional ratio). Text source is a component breakdown of all user
   words into the page's five groups (typed, likely pasted, copied or
   re-sent, templates and attachments, harness and automation); Typed words
   by Text source is one total. Breakdowns: repository, app, provider, the
@@ -957,9 +956,8 @@ The input to phase 4. Every other card in the parity tables above matches.
 | `error-signatures`, `edit-failures`, `read-paths`, `repeated-reads`, `primary-domains`, `primary-urls`, `cross-repo-errors`, `error-reach`, `test-failures` | Record-level Tools fields and filters (phase 3); some of them are Tool Time states once its catalog gains those breakdowns. |
 | `model-conversation-reach` | A share of group incidences (phase 4). |
 | `human-words-per-work` | A workspace directory: the card joins each message's work to its Library location and combines works sharing a repository and directory. Messages carry no location, so the dashboard opens the mean per work (`work_id`), which is not a directory. |
-| `human-specific-feedback`, `human-example-phrases` | Human studies classify typed text in the browser (`human-study.ts`: feedback and detail cues, images, pastes, file references). No dataset field holds those classes; the dataset's own `correction_cue` and `positive_cue` are other rules. They open the correction-cue share and all words by Text source. Matching needs those classes as `writing_messages` fields (a Go change). |
+| `human-specific-feedback`, `human-example-phrases` | Human studies classify typed text in the browser (`human-study.ts`: feedback and detail cues, images, pastes, file references). No dataset field holds those classes; the dataset's own `correction_cue` and `positive_cue` are other rules. They open messages with typed text and all words by Text source. Matching needs those classes as `writing_messages` fields (a Go change). |
 | `human-word-total` | The human study (`volume`) totals elapsed windows ending at the current instant (now − k days), not calendar days. It opens typed words as a total over the card's window with a norm, which counts whole calendar days. |
-| `session-human-output` | A scatter over `conversation_activity` (estimated human text tokens against output tokens per conversation). No catalog reads that dataset; it opens all words by provider. |
 
 Caveats on matched cards:
 - `writing-hours` is all-time on the card and opens an hour cycle's total,

@@ -213,7 +213,7 @@ func TestLibraryTransferRetainedEvidence(t *testing.T) {
 	if catalogCount(t, recovered, "copy_evidence") != len(evidence) {
 		t.Fatal("recovery lost evidence authority")
 	}
-	// Background updates are on by default; a recovered library starts with
+	// Background Processing are on by default; a recovered library starts with
 	// them off until someone turns them on.
 	if c := reopenCatalog(t, recovered.CatalogPath); func() bool {
 		defer c.Close()

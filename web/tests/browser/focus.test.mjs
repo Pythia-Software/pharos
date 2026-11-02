@@ -266,7 +266,7 @@ test('Cloud backup forecast, setup, password stages and Reset keep keyboard focu
 });
 
 test("summary value links retain keyboard focus when the summary rerenders", { skip }, async t => {
-  const { page } = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-usage-summary-links": true, "pharos-quick-stats-v1": {metrics: ["cost_usd", "tokens"], windows: ["today", "6h"]} } });
+  const { page } = await open(t, { url: "/library?view=table", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-usage-summary-links": true, "pharos-quick-stats-v1": {metrics: ["cost_usd", "tokens"], windows: ["today", "6h"]} } });
   await activateHeaderTool(page, "usageSummaryToggle");
   const link = page.getByRole("link", { name: /^Tokens, 6h:/ });
   await link.focus();
@@ -306,7 +306,7 @@ async function holdsFocus(page, surface, opener) {
 // across a pushed snapshot. Stop and Eject decisions are unit tested in
 // web/tests/unit/page/status-panel.test.mjs.
 test("Unified activity panel holds focus and its disclosure across refreshes", { skip }, async t => {
-  const app = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row", api: {
+  const app = await open(t, { url: "/library?view=table", ready: "#queryTableLibrary .qt-row", api: {
     "GET /api/status/stream": eventStream(busyStatus),
     "GET /api/status": busyStatus,
   } });
@@ -341,7 +341,7 @@ test("Eject when safe ejects once safe while the page is hidden", { skip }, asyn
     blockers: [{ label: "Indexing sources", on_eject: "Not registered.", verdict: "unsafe" }], checked: "polled" };
   let fresh = { ...unsafe, checked: "fresh" };
   const snapshot = { ...busyStatus, eject: unsafe };
-  const { page } = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row", api: {
+  const { page } = await open(t, { url: "/library?view=table", ready: "#queryTableLibrary .qt-row", api: {
     "GET /api/status/stream": eventStream(snapshot),
     "GET /api/status": ({ query }) => query.get("fresh") === "1" ? { ...snapshot, eject: fresh } : snapshot,
   } });
@@ -454,7 +454,7 @@ async function useSearchMenus(page, dialog) {
 }
 
 test("quick search takes focus from the header button and from the keyboard shortcut, and returns it", { skip }, async t => {
-  const { page } = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row" });
+  const { page } = await open(t, { url: "/library?view=table", ready: "#queryTableLibrary .qt-row" });
   const dialog = page.locator("#searchDialog"), button = page.locator("#searchToggle");
   await press(button);
   await useSearchMenus(page, dialog);
@@ -550,7 +550,7 @@ test('navigation and header focus stay reachable when resizing between layouts',
 });
 
 test("Search content search takes focus and returns it to the query builder @ 390", { skip }, async t => {
-  const { page } = await open(t, { url: "/library", viewport: { width: 390, height: 844 }, ready: "#queryTableLibrary .qt-row" });
+  const { page } = await open(t, { url: "/library?view=table", viewport: { width: 390, height: 844 }, ready: "#queryTableLibrary .qt-row" });
   const button = page.getByRole("button", { name: "Messages", exact: true });
   await press(button);
   const dialog = page.getByRole("dialog", { name: "Search within work", exact: true });
@@ -566,7 +566,7 @@ test("Search long query can scroll to submit @ 320", { skip }, async t => {
     root: { id: "long-query", kind: "group", join: "all", exclude: false,
       children: Array.from({ length: 12 }, (_, index) => ({ id: `rule-${index}`, kind: "words", text: `condition ${index + 1}`, other: "", distance: "8", exclude: false })) },
   };
-  const app = await open(t, { url: `/library?${new URLSearchParams({ text_builder: JSON.stringify(draft) })}`, viewport: { width, height: 600 }, ready: "#queryTableLibrary .qt-row",
+  const app = await open(t, { url: `/library?view=table&${new URLSearchParams({ text_builder: JSON.stringify(draft) })}`, viewport: { width, height: 600 }, ready: "#queryTableLibrary .qt-row",
     api: { "POST /api/search/text/validate": ({ body }) => ({ where: body.where }) } });
   const { page } = app;
   await press(page.getByRole("button", { name: "Edit messages search", exact: true }));
@@ -615,7 +615,7 @@ test("Search long query can scroll to submit @ 320", { skip }, async t => {
 {
   const viewport = { width: 390, height: 844 };
   test(`overflowed header tools remain live and restore focus at ${viewport.width}px`, { skip }, async t => {
-    const { page } = await open(t, { url: '/library', viewport, ready: '#queryTableLibrary .qt-row',
+    const { page } = await open(t, { url: '/library?view=table', viewport, ready: '#queryTableLibrary .qt-row',
       preferences: { 'pharos-header-tools-v1': ['summary', 'theme', 'history', 'library', 'search', 'settings'] },
     });
     const more = page.getByRole('button', { name: 'More tools', exact: true });
@@ -697,7 +697,7 @@ test('header editing keeps keyboard focus on the handle being changed', { skip }
 // Both drawers share setDrawer; History stands for them, inline and in More.
 const [toggle, close] = ["historyToggle", "historyClose"];
 for (const width of [1440, 390]) test(`History close restores reachable focus at ${width}px`, { skip }, async t => {
-  const { page } = await open(t, { url: "/library", viewport: { width, height: 900 }, ready: "#queryTableLibrary .qt-row", preferences: { "pharos-header-tools-v1": ["navigator", "settings"] } });
+  const { page } = await open(t, { url: "/library?view=table", viewport: { width, height: 900 }, ready: "#queryTableLibrary .qt-row", preferences: { "pharos-header-tools-v1": ["navigator", "settings"] } });
   await activateHeaderTool(page, "navigatorToggle");
   await press(page.locator(`#${toggle}`));
   await press(page.locator(`#${close}`));
@@ -1220,7 +1220,7 @@ test('Ask Pharos retry with another model focuses the picker @ 320',{skip},async
   const sessions=new Map([[original.id,original]]);
   const {page,settled,shot,calls}=await open(t,{url:'/?ask_chat=failed-chat',viewport:{width:320,height:900},ready:'.pharos-recovery:not([hidden])',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
-    'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true},{id:'second-model',label:'Second Model',efforts:['Default','Low']}]},
+    'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true},{id:'second-model',label:'Second Model',efforts:['Default','Low'],fast:true}]},
     'GET /api/ask/session':({query})=>sessions.get(query.get('id')),
     'GET /api/ask/sessions':()=>({sessions:[...sessions.values()]}),
     'POST /api/ask/session':({body})=>{
@@ -1259,9 +1259,15 @@ test('Ask Pharos retry with another model focuses the picker @ 320',{skip},async
   assert.ok(await question.evaluate(fits),'restored messages remain reachable');
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'recovery actions must wrap on narrow screens');
   await shot('restored-draft-and-picker');
-  const saved=page.waitForResponse(response=>response.url().includes('/api/ask/session')&&response.request().method()==='POST'&&response.request().postDataJSON().selection.model==='second-model');
+  const saved=page.waitForResponse(response=>response.url().includes('/api/ask/session')&&response.request().method()==='POST'&&response.request().postDataJSON().selection.model==='second-model'&&response.request().postDataJSON().selection.fast===true);
+  const fast=picker.getByRole('switch',{name:'Fast',exact:true});
+  assert.ok(await fast.isHidden(),'Fast is offered only for a model that supports it');
   await picker.getByRole('button',{name:/^Model /}).click();
   await picker.getByRole('button',{name:'Second Model',exact:true}).click();
+  assert.equal(await fast.getAttribute('aria-checked'),'false','Fast starts off');
+  await fast.focus();await page.keyboard.press('Space');
+  assert.equal(await fast.getAttribute('aria-checked'),'true');
+  await shot('fast-on');
   await page.keyboard.press('Escape');await saved;await settled();
   assert.ok(await page.locator('.pharos-model-trigger').evaluate(element=>element===document.activeElement),'Escape returns focus to the model control');
   assert.equal(sessions.get(newID).draft,expected);
@@ -1273,6 +1279,7 @@ test('Ask Pharos retry with another model focuses the picker @ 320',{skip},async
   await page.getByRole('status').filter({hasText:'Your retry completed.'}).waitFor();
   await settled();
   assert.equal(sessions.get(newID).conversation[0].prompt,expected,'the restored transcript can be sent after reload');
+  assert.equal(calls.find(call=>call.path==='/api/ask/send').body.selection.fast,true,'Fast survives reload into the request');
 });
 
 // Whether focus moved while the chat loaded is unit tested (askFocusAfterLoad);
@@ -1657,11 +1664,14 @@ test('Ask Pharos floating progress keeps focus and a ready response leaves the p
   await modal.getByRole('button',{name:'Remove page context',exact:true}).click();
   await editor.evaluate(element=>{element.value='What if we broke it down by model?';element.dispatchEvent(new Event('input',{bubbles:true}));});
   await page.getByRole('button',{name:'Send question',exact:true}).click();
-  const browseHint=page.getByRole('tooltip');await browseHint.waitFor();
+  const browseHint=page.locator('.pharos-browse-hint');await browseHint.waitFor();
   await page.waitForFunction(()=>{const hint=document.getElementById('pharos-browse-hint'),rect=hint.getBoundingClientRect();return rect.left>=0&&rect.right<=innerWidth&&rect.top>=0&&rect.bottom<=innerHeight;});
   await page.waitForFunction(element=>new Promise(resolve=>{const observer=new IntersectionObserver(([entry])=>{observer.disconnect();resolve(entry.intersectionRatio===1);});observer.observe(element);}),await browseHint.elementHandle());
   assert.ok(await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).evaluate(element=>{const rect=element.getBoundingClientRect(),target=document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2);return element===target||element.contains(target);}), 'the hint leaves picture in picture clickable');
   await shot('ask-browse-hint');
+  await page.getByRole('button',{name:'Dismiss browse hint',exact:true}).click();
+  await browseHint.waitFor({state:'hidden'});
+  assert.equal(await page.evaluate(()=>document.activeElement?.getAttribute('aria-label')),'Float Ask Pharos','dismissing the hint leaves focus on picture in picture');
   await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();
   await modal.waitFor({state:'hidden'});
   const panel=page.getByRole('complementary',{name:'Ask Pharos progress'});
@@ -1875,7 +1885,7 @@ for (const width of [1440,320]) test(`Ask Pharos work previews fit beside their 
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   const cards=[{id:'work',title:'Long work',description:'The whole workspace.',href:'/work/'+workID},{id:'conversation',title:'Root conversation',description:'One conversation in it.',href:'/work/'+workID+'?conversation=conv-root'}];
   let session;
-  const {page,shot}=await open(t,{url:'/library',ready:'body>header',viewport:{width,height:900},api:{
+  const {page,shot}=await open(t,{url:'/library',ready:'.conversation-result-card',viewport:{width,height:900},api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
     'GET /api/ask/sessions':()=>({sessions:session?[session]:[]}),
@@ -1909,7 +1919,7 @@ for (const [width, count, view] of [[390,2,'compare'],[1440,1,'trend']]) test(`A
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   const cards=Array.from({length:count},(_,index)=>({id:'chart-'+index,title:index?'Tokens by model':'Tokens by provider',description:'Explore the selected token usage.',href:'/analyze?'+new URLSearchParams({analyze_mode:'dashboards',analyze_topic:'tokens',...view==='trend'?{analyze_window:'today',analyze_timezone:'America/Denver'}:{},analyze_chart:JSON.stringify({v:2,view,metric:'tokens',split:index?'model':'provider',unit:'conversation',minSamples:0,...view==='trend'?{rollingPeriods:3,norm:true}:{}}),analyze_filters:encodeQuery({...EMPTY_QUERY,where:[]})})}));
   let session;
-  const {page,shot,settled,calls}=await open(t,{url:'/library',ready:'body>header',viewport:{width,height:900},api:{
+  const {page,shot,settled,calls}=await open(t,{url:'/library',ready:'.conversation-result-card',viewport:{width,height:900},api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
     'GET /api/ask/sessions':()=>({sessions:session?[session]:[]}),

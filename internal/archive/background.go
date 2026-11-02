@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-// Background updates (docs/background-work.md §11). Every kind of derived
+// Background Processing (docs/background-work.md §11). Every kind of derived
 // data has an automatic owner on one of three cadences: Frequently, with the
 // scheduled index; Hourly, once the library has been quiet; and Daily,
 // overnight. An adaptive item sits in the most frequent cadence its measured
@@ -65,7 +65,7 @@ var (
 	backgroundMissed = time.Hour
 )
 
-// backgroundItem is one row of Settings → Background updates: a kind of work
+// backgroundItem is one row of Settings → Background Processing: a kind of work
 // a person recognizes, what it feeds, and how it runs.
 type backgroundItem struct {
 	ID                string
@@ -226,6 +226,11 @@ func (settings backgroundSettings) cadence(item backgroundItem) string {
 	if temporary, ok := settings.Temporary[item.ID]; item.Adaptive && ok {
 		return temporary.Cadence
 	}
+	return settings.usual(item)
+}
+
+// usual is where an item runs without a temporary schedule.
+func (settings backgroundSettings) usual(item backgroundItem) string {
 	override := settings.Overrides[item.ID]
 	if item.OptIn {
 		if override == cadenceDaily {
@@ -244,6 +249,21 @@ func (settings backgroundSettings) cadence(item backgroundItem) string {
 type itemCost struct {
 	Seconds float64 `json:"seconds"`
 	Runs    int     `json:"runs"`
+	// Low and High bound the middle of the recent runs, for "Typically
+	// 2–3 h".
+	Low  float64 `json:"low"`
+	High float64 `json:"high"`
+}
+
+// typicalRange is the middle of sorted run times: the median and the runs
+// a quarter of the way in from each end.
+func typicalRange(sorted []float64) (median, low, high float64) {
+	n := len(sorted)
+	median = sorted[n/2]
+	if n%2 == 0 {
+		median = (sorted[n/2-1] + sorted[n/2]) / 2
+	}
+	return median, sorted[(n-1)/4], sorted[n-1-(n-1)/4]
 }
 
 // costRuns is how many recent runs make an item's typical cost, and
@@ -258,13 +278,6 @@ const (
 // repositories' three stages) costs the sum of their medians.
 func (c *Catalog) backgroundCosts(ctx context.Context) map[string]itemCost {
 	costs := map[string]itemCost{}
-	median := func(values []float64) float64 {
-		sort.Float64s(values)
-		if len(values)%2 == 1 {
-			return values[len(values)/2]
-		}
-		return (values[len(values)/2-1] + values[len(values)/2]) / 2
-	}
 	for _, item := range backgroundItems {
 		if item.ID == "conversations" {
 			if cost, ok := c.automaticIndexCost(ctx); ok {
@@ -272,7 +285,7 @@ func (c *Catalog) backgroundCosts(ctx context.Context) map[string]itemCost {
 			}
 			continue
 		}
-		total, runs := 0.0, -1
+		total, low, high, runs := 0.0, 0.0, 0.0, -1
 		for _, kind := range item.Kinds {
 			// "kind/variant" is that variant; "kind/" only the plain kind
 			// (labels' bounded share, not its backlog runs); "kind" all.
@@ -295,13 +308,15 @@ func (c *Catalog) backgroundCosts(ctx context.Context) map[string]itemCost {
 				runs = 0
 				break
 			}
-			total += median(values)
+			sort.Float64s(values)
+			median, lower, upper := typicalRange(values)
+			total, low, high = total+median, low+lower, high+upper
 			if runs < 0 || len(values) < runs {
 				runs = len(values)
 			}
 		}
 		if runs > 0 {
-			costs[item.ID] = itemCost{Seconds: total, Runs: runs}
+			costs[item.ID] = itemCost{Seconds: total, Runs: runs, Low: low, High: high}
 		}
 	}
 	return costs
@@ -319,7 +334,8 @@ func (c *Catalog) automaticIndexCost(ctx context.Context) (itemCost, bool) {
 		return itemCost{}, false
 	}
 	sort.Float64s(values)
-	return itemCost{Seconds: values[len(values)/2], Runs: len(values)}, true
+	median, low, high := typicalRange(values)
+	return itemCost{Seconds: median, Runs: len(values), Low: low, High: high}, true
 }
 
 // automaticSample is the part of a scheduled index's run history the
@@ -465,6 +481,8 @@ type backgroundInputs struct {
 	// why the pass waits for a download.
 	agentEvents        bool
 	agentEventsWaiting string
+	// labelerProblem is why neither can run, whatever is downloaded.
+	labelerProblem string
 }
 
 func (c *Catalog) readBackgroundInputs(ctx context.Context) backgroundInputs {
@@ -794,6 +812,9 @@ func (s *Server) backgroundInputsFor(ctx context.Context, requested map[string]b
 	}
 	if s.agentEventsEnabled(ctx) {
 		in.agentEvents, in.agentEventsWaiting = true, config.AgentEvents.waiting(config.Labels)
+	}
+	if in.labels || in.agentEvents {
+		in.labelerProblem = config.Labels.withAssets().labelerProblem()
 	}
 	return in
 }

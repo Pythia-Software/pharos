@@ -48,6 +48,18 @@ export function cardLoadingPresentation(query: QueryState, options: { recipe?: Q
   return { kind, count: Math.max(1, Math.min(100, count)), headline, belowLabels, height: (options.cover ?? options.recipe?.cover)?.height ?? height };
 }
 
+// Covers without an authored height fit what they draw. Lists and box plots
+// grow with their rows; charts keep one height at any card width. Box plots
+// past four groups use the dense rows, as the preview draws them.
+export function fittedCoverHeight(kind: CardLoadingKind, rows: number, list: { belowLabels?: boolean; labelLines?: number } = {}): number {
+  if (kind === "value" || kind === "text") return 130;
+  if (kind === "list" || kind === "table") return Math.max(110, 41 + rows * (list.belowLabels ? 8 + 12 * (list.labelLines ?? 2) : rows >= 7 ? 20 : 24));
+  if (kind === "box") return boxCoverHeight(rows, rows > denseBoxGroups);
+  if (kind === "pie" || kind === "donut") return 200 + Math.ceil(rows / 2) * 14;
+  return kind === "scatter" ? 240 : 190;
+}
+export const denseBoxGroups = 4;
+
 function loadingKind(metric: AggregationClause, display: string, timeline: boolean): CardLoadingKind {
   if (metric.distribution) return metric.distribution.kind === "histogram" ? "columns" : "box";
   if (metric.expressionY) return "scatter";

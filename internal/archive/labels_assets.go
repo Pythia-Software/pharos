@@ -118,6 +118,24 @@ func (a labelsAsset) present() bool {
 // partial is the download in progress, kept between attempts.
 func (a labelsAsset) partial() string { return a.dir() + ".download" }
 
+// failure records why the last download failed, until one succeeds, so
+// status can say so rather than read as not yet started.
+func (a labelsAsset) failure() string { return a.dir() + ".failed" }
+
+// lastFailure is when the last download failed and why ("" when the last
+// attempt did not fail).
+func (a labelsAsset) lastFailure() (time.Time, string) {
+	info, err := os.Stat(a.failure())
+	if err != nil {
+		return time.Time{}, ""
+	}
+	data, err := os.ReadFile(a.failure())
+	if err != nil {
+		return time.Time{}, ""
+	}
+	return info.ModTime(), strings.TrimSpace(string(data))
+}
+
 // downloaded is how many bytes of the download are on disk.
 func (a labelsAsset) downloaded() int64 {
 	if info, err := os.Stat(a.partial()); err == nil {
@@ -371,15 +389,20 @@ func fetchLabelsAssets(ctx context.Context, assets []labelsAsset, op *Op, progre
 			}
 		})
 		if err != nil {
+			if ctx.Err() == nil {
+				_ = os.WriteFile(asset.failure(), []byte(err.Error()+"\n"), 0o600)
+			}
 			return err
 		}
+		os.Remove(asset.failure())
 	}
 	return nil
 }
 
 // labelsAssetStatus describes an asset for status: downloaded, downloading
-// (with progress), partly downloaded, or not yet downloaded.
+// (with progress), failed, partly downloaded, or not yet downloaded.
 func labelsAssetStatus(asset labelsAsset) string {
+	at, failed := asset.lastFailure()
 	switch {
 	case asset.present():
 		return "downloaded to " + asset.dir()
@@ -388,6 +411,12 @@ func labelsAssetStatus(asset labelsAsset) string {
 	case labelsFetchActive():
 		done := asset.downloaded()
 		return fmt.Sprintf("downloading: %d of %d MB (%.0f%%)", done>>20, asset.Size>>20, 100*float64(done)/float64(asset.Size))
+	case failed != "":
+		status := "the last download failed at " + at.Format("Jan 2 15:04") + " (" + failed + ")"
+		if done := asset.downloaded(); done > 0 {
+			status += fmt.Sprintf("; %d of %d MB kept", done>>20, asset.Size>>20)
+		}
+		return status + "; Pharos tries again later"
 	case asset.downloaded() > 0:
 		return fmt.Sprintf("partly downloaded (%d of %d MB, resumed on the next attempt)", asset.downloaded()>>20, asset.Size>>20)
 	}

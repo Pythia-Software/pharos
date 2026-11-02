@@ -221,6 +221,15 @@ test('retained page bindings cannot write foreign URL fields after navigation',a
  for(const [name,value]of Object.entries({delegation_page:'0',delegation_event:'',delegation_expanded:[],card_window:'default',findings_rank:'usd'}))writeViewState(name,value);
  assert.equal(location.href,before);
  writeViewState('nav_collapsed',false);assert.equal(location.searchParams.get('nav_collapsed'),'0');
+ // Fields written together replace the history entry once, and not at all when unchanged.
+ const {writeViewStates}=await import('../../../src/view-state');
+ globalThis.location=new URL('https://pharos.test/work/w');
+ let replaced=0;globalThis.history={state:null,replaceState(_state,_title,url){replaced++;globalThis.location=new URL(url);}};
+ writeViewStates({reader_expanded:['message:a'],reader_collapsed:['message:b'],card_window:'default'});
+ assert.equal(replaced,1);
+ assert.deepEqual([location.searchParams.get('reader_expanded'),location.searchParams.get('reader_collapsed'),location.searchParams.has('card_window')],['["message:a"]','["message:b"]',false]);
+ writeViewStates({reader_expanded:['message:a'],reader_collapsed:['message:b']});
+ assert.equal(replaced,1);
 });
 
 test('viewer-dependent entry captures batch writes and respect explicit changes, cancellation and navigation',async t=>{

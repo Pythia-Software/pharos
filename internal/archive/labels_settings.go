@@ -16,16 +16,33 @@ func (s *Server) labelsSettings() map[string]any {
 	status := "Off. Turn on to label messages in this library."
 	if settings.Enabled {
 		status = "On. Message labels follow the background update schedule."
-		if waiting := settings.labelsWaiting(); waiting != "" {
+		waiting := settings.labelsWaiting()
+		if problem := settings.labelerProblem(); problem != "" {
+			// No download fixes this, so it leads.
+			status = "On, but labeling can't run: " + problem + "."
+			if waiting != "" {
+				status += " It is also " + waiting + "."
+			}
+		} else if waiting != "" {
 			status = "On, " + waiting + "."
-		}
-		if settings.Worker == "" || !fileExists(settings.Worker) {
-			status += " The labeling worker is missing; install a Pharos build that includes it, or configure a local worker."
-		} else if settings.Runtime != "" && !fileExists(settings.Runtime) {
-			status += " The configured labeling runtime is missing."
 		}
 	}
 	return map[string]any{"enabled": settings.Enabled, "can_change": config.Path != "", "status": status}
+}
+
+// labelerProblem is why no labeling can run on this Mac, however long it
+// waits for downloads ("" when it can): no worker, or a configured worker or
+// runtime that is missing. Agent events share the worker.
+func (settings LabelerSettings) labelerProblem() string {
+	switch {
+	case settings.Worker == "":
+		return "this Pharos has no labeling worker; install a Pharos build that includes it, or configure a local worker"
+	case !fileExists(settings.Worker):
+		return "the configured labeling worker " + settings.Worker + " is missing"
+	case settings.Runtime != "" && !fileExists(settings.Runtime):
+		return "the configured labeling runtime " + settings.Runtime + " is missing"
+	}
+	return ""
 }
 
 // postLabelsSettings persists the opt-in alongside labels_enabled's other

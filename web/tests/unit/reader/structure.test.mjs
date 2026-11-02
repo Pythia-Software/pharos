@@ -139,6 +139,10 @@ test("result outlines keep turns, setup and nested inline agents under their own
  assert.equal(agent.response.text, "Reviewing.");
  assert.equal(agent.children[0].prompt, "Check timing"); assert.equal(agent.children[0].response.text, "Timing checked.");
  assert.equal(outline[2].human.text, "Explain the fix."); assert.equal(outline[2].response, null);
+ // Each entry owns its messages: a turn its events, a sub-agent its own.
+ const owned = entry => plain(entry.messages.map(message => message.native_id)).sort();
+ for (const id of ["delegate", "result", "final"]) assert.ok(owned(outline[1]).includes(id), id);
+ assert.deepEqual(owned(agent), ["child", "delegate", "nested", "nested-reply", "result"]);
  // Two inline tool blocks share a stored message ID but remain separate agents.
  const envelope = { id: "stored-envelope", role: "assistant", kind: "message", text: JSON.stringify({ content: [
   { type: "tool_use", id: "audit-one", name: "Task", input: { prompt: "Audit configuration" } },

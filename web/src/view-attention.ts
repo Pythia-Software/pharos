@@ -1,5 +1,5 @@
 import { libraryHostParameters } from "./host-query-state";
-import { readViewState, readClassicViewState, writeViewState, installClassicDisclosures } from "./view-state";
+import { readViewState, readClassicViewState, writeViewState, writeViewStates, installClassicDisclosures } from "./view-state";
 import { attentionTargets, viewContract, viewFields, retainPageView, viewPageForURL } from "./view-contract";
 import { adoptTextTargets, installPageFind } from "./page-find";
 import { attentionMutationMatters, createDetailLanding } from "./view-attention-model";
@@ -15,7 +15,7 @@ export function targetReference(kind: string, id: string): string {
   if (!attentionTargets.some(target => target.pattern.startsWith(`${kind}:<`)) || !id || id.length > 4000) throw new Error("Unknown attention target.");
   return `${kind}:${id}`;
 }
-declare global { interface Window { pharosView: { read: typeof readViewState; write: typeof writeViewState; register: typeof registerAttentionResolver; contract: typeof viewContract; refresh: () => void; restoreDisclosures: ReturnType<typeof installClassicDisclosures>; globalParameters: () => string[]; retainPage: (params: URLSearchParams, path: string) => void }; } }
+declare global { interface Window { pharosView: { read: typeof readViewState; write: typeof writeViewState; writeAll: typeof writeViewStates; register: typeof registerAttentionResolver; contract: typeof viewContract; refresh: () => void; restoreDisclosures: ReturnType<typeof installClassicDisclosures>; globalParameters: () => string[]; retainPage: (params: URLSearchParams, path: string) => void }; } }
 let frame = 0, navigation = "", landed = false;
 const opened = new Set<string>();
 let marked = new Set<HTMLElement>();
@@ -88,7 +88,7 @@ function update() {
 function schedule(){if(!frame) frame=requestAnimationFrame(update);}
 export function installViewAttention() {
   const restoreDisclosures=installClassicDisclosures();
-  window.pharosView={restoreDisclosures,read:readClassicViewState,write:writeViewState,register:registerAttentionResolver,contract:viewContract,refresh:schedule,globalParameters:()=>Object.values(viewFields).filter(field=>field.pages.includes("*")).map(field=>field.param),retainPage:(params,path)=>retainPageView(params,viewPageForURL(new URL(path,location.origin)),path.startsWith("/work/")?libraryHostParameters:[])};
+  window.pharosView={restoreDisclosures,read:readClassicViewState,write:writeViewState,writeAll:writeViewStates,register:registerAttentionResolver,contract:viewContract,refresh:schedule,globalParameters:()=>Object.values(viewFields).filter(field=>field.pages.includes("*")).map(field=>field.param),retainPage:(params,path)=>retainPageView(params,viewPageForURL(new URL(path,location.origin)),path.startsWith("/work/")?libraryHostParameters:[])};
   for(const event of ["popstate","pharos:route","pharos:view"])window.addEventListener(event,()=>{navigation="";cancelDetailLanding();schedule();});
   window.addEventListener("pharos:uri-changed",schedule);
   const observer=new MutationObserver(records=>{
