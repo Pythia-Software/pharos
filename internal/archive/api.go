@@ -410,6 +410,9 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		case len(parts) == 2 && (parts[1] == "delegation" || parts[1] == "parallel"):
 			s.getDelegation(w, r, parts[0], parts[1] == "parallel")
 			return
+		case len(parts) == 2 && parts[1] == "preview":
+			s.getWorkPreview(w, r, parts[0])
+			return
 		case len(parts) == 1:
 			value, err = nilIfNoMap(s.Catalog.WorkOverview(parts[0]))
 		case len(parts) == 3 && parts[1] == "conversations":
