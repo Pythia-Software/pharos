@@ -50,6 +50,9 @@ var unregisteredWorkAllowed = map[string]allowedWork{
 	"worker.go:serve":                             {1, "the labeler worker binary's frame reader (cmd/pharos-labeler-ort): a separate process that never opens a catalog"},
 	"worker.go:start":                             {1, "the labeler worker binary's model runner (cmd/pharos-labeler-ort): a separate process that never opens a catalog"},
 	"labeling_run.go:loop":                        {1, "the offline `pharos labeling run` command's bounded worker pool; it runs outside the service and journals its work in the dataset's own ledger"},
+	"thinking.go:handleThinking":                  {4, "request handling: the Overview's sections computed in parallel over the request's records; writes nothing"},
+	"thinking_models.go:thinkingModels":           {1, "a bounded worker per model inside a Thinking fit, which the request or cache build waits for; writes nothing"},
+	"thinking_cache.go:thinkingCohortKey":         {1, "hashes chunks of a Thinking cohort in parallel for its cache key; writes nothing"},
 }
 
 type allowedWork struct {

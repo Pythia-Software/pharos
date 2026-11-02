@@ -51,6 +51,16 @@ test("compatible dashboards batch despite duplicate metric IDs and split at twen
   for (let i = 0; i < 23; i++) assert.equal(previews.get(String(i)).metrics[0].result.buckets[0].value, 5500 + i);
 });
 
+test("distribution cards request separately from their batch siblings", async t => {
+  const requests = fixture(t), previews = new Map();
+  const box = { id: "box", op: "count", groupBy: [], distribution: { kind: "box", input: "[duration_ms]", whiskers: "tukey" } };
+  const sum = i => ({ id: "sum", op: "sum", field: "duration_ms", groupBy: [], expression: `SUM([duration_ms])+${i}` });
+  await loadQueryPreviews([job("a", [sum(1)]), job("b", [box, sum(2)]), job("c", [box]), job("d", [sum(3)])], (id, preview, error) => { assert.ifError(error); previews.set(id, preview); });
+  const batches = requests.filter(request => request.path.endsWith("metrics")).map(batch => batch.request.metrics.length).sort();
+  assert.deepEqual(batches, [1, 2, 2]);
+  assert.equal(previews.size, 4);
+});
+
 test("cover changes reuse full results and preserve distributions and paired axes", async t => {
   const requests = fixture(t);
   const metrics = [
