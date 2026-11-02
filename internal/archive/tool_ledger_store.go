@@ -469,9 +469,10 @@ func (c *Catalog) metaValue(ctx context.Context, key string) (string, error) {
 	return value, err
 }
 
-// toolRollupStale reports the ledger generation and local day a rollup
-// should be built for, the generation the current one was built for, and
-// whether it needs a rebuild.
+// toolRollupStale reports the ledger generation a rollup should be built
+// for, today's local date to record with it, the generation the current one
+// was built for, and whether it needs a rebuild. A new day is no reason: the
+// cube groups each call by its own local day, which no later date changes.
 func (c *Catalog) toolRollupStale(ctx context.Context) (generation, built, day string, stale bool, err error) {
 	if generation, err = c.metaValue(ctx, "tool_ledger_generation"); err != nil {
 		return
@@ -482,15 +483,11 @@ func (c *Catalog) toolRollupStale(ctx context.Context) (generation, built, day s
 		return
 	}
 	day = c.clock().Format("2006-01-02")
-	builtDay, err := c.metaValue(ctx, "tool_rollup_day")
-	if err != nil {
-		return generation, built, day, false, err
-	}
 	var dirty bool
 	err = c.reader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tool_rollup_dirty) OR
  COALESCE((SELECT value FROM meta WHERE key='tool_rollup_full_revision'),'')<>COALESCE((SELECT value FROM meta WHERE key='tool_rollup_built_full_revision'),'') OR
  COALESCE((SELECT value FROM meta WHERE key='tool_rollup_timezone'),'')<>?`, toolRollupTimezone()).Scan(&dirty)
-	return generation, built, day, generation != built || day != builtDay || dirty, err
+	return generation, built, day, generation != built || dirty, err
 }
 
 // errToolRollupBuilding answers a page while the first rollup in this build's
@@ -500,8 +497,7 @@ var errToolRollupBuilding = errors.New("Pharos is rebuilding its tool summaries 
 // currentToolRollup is ensureToolRollup for a page, which never waits for it:
 // a full rebuild reads every tool call, half a minute on a large catalog, and
 // waits for any sync holding the writer. A page reads the stored rollup while
-// the rebuild runs in the background, so it lags only the last sync or a
-// change of date. Until this build's layout exists there is nothing to read.
+// the rebuild runs in the background, so it lags only the last sync. Until this build's layout exists there is nothing to read.
 func (c *Catalog) currentToolRollup(ctx context.Context) error {
 	_, built, _, stale, err := c.toolRollupStale(ctx)
 	if err != nil || !stale {

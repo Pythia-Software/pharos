@@ -31,10 +31,11 @@ single observations on a shared machine, not repeated estimates; differences
 under about 20% are noise.
 
 Page-cache state dominates the delta index. A freshly cloned catalog is cold.
-A run that starts on a later day than its catalog's tool cube first rebuilds
-the cube, reading every tool call, and its delta index then ran about 20
-seconds faster than the same build's runs on the earlier day. The `claude`
-phase fell from about 26 to 6 seconds. Sampled Go CPU was about the same in
+In these measurements, a run that started on a later day than its catalog's
+tool cube first rebuilt the cube (see Day rollover below), reading every tool
+call, and its delta index then ran about 20 seconds faster than the same
+build's runs on the earlier day. The `claude` phase fell from about 26 to 6
+seconds. Sampled Go CPU was about the same in
 both; the extra time fell outside it, which is consistent with page reads.
 Only runs on the same side of that boundary are compared below.
 
@@ -143,15 +144,20 @@ dirty for any update. One delta dirtied 11,997 workspaces (237,000 calls).
 The upsert now skips unchanged rows, and the triggers fire only when a watched
 column's value changes.
 
+**Day rollover.** The tool cube was rebuilt in full on the first rollup of
+each day: about 80 seconds, 30 of them holding the writer, and 60 CPU-s on
+this catalog. Nothing in it depends on today: it groups each call by its own
+local day, and a timezone change still forces the rebuild. A new day now
+leaves it current: starting the service on the previous day's replica took
+29.3 seconds and 9 CPU-s (1.9 GB peak RSS), against 113.9 seconds and 70
+CPU-s (3.8 GB) before. The date is still recorded, because earlier builds
+that open the same library rebuild when it is not today.
+
 ## What remains expensive
 
 - **Writing changed conversations.** In the S1 → S3 delta the Claude and
   Conductor phases took about 16 and 12 seconds for 5,600 new messages, with
   a cold page cache costing up to 20 seconds more.
-- **Day rollover.** The tool cube records whether it was built today, so the
-  first rollup after midnight rebuilds every partition: about 80 seconds, 30
-  of them holding the writer, and 60 CPU-s on this catalog. The cube's rows are keyed
-  by the call's own local day, so the daily rebuild may be unnecessary.
 - **Origins.** `publishOrigins` recomputes every origin after any index that
   wrote: about 1 GB allocated and 3.5 CPU-s.
 - **First index after start.** Discovery reads Conductor's database and the

@@ -100,6 +100,14 @@ func TestIncrementalToolRollupBoundedAndNoop(t *testing.T) {
 	if after, _ := c.metaValue(t.Context(), "tool_rollup_publication"); after != publication {
 		t.Fatal("no-op republished cube")
 	}
+	// A new day moves no call to another local day.
+	c.now = func() time.Time { return time.Now().AddDate(0, 0, 1) }
+	if err := c.ensureToolRollup(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := c.metaValue(t.Context(), "tool_rollup_publication"); after != publication {
+		t.Fatal("a new day republished cube")
+	}
 	// Rewriting a value it already holds (an upsert of an unchanged
 	// repository on every ingest) leaves every partition current.
 	for _, query := range []string{"UPDATE repositories SET display_name=display_name", "UPDATE workspaces SET title=title,activity_at=activity_at",

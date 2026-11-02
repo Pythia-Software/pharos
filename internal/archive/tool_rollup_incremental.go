@@ -67,10 +67,6 @@ func (c *Catalog) prepareToolRollup(ctx context.Context, conn *sql.Conn, generat
 	if err != nil {
 		return build, err
 	}
-	builtDay, err := readMeta(snapshot, ctx, "tool_rollup_day")
-	if err != nil {
-		return build, err
-	}
 	fullRev, err := readMeta(snapshot, ctx, "tool_rollup_full_revision")
 	if err != nil {
 		return build, err
@@ -93,7 +89,7 @@ func (c *Catalog) prepareToolRollup(ctx context.Context, conn *sql.Conn, generat
 		return build, err
 	}
 	zone := toolRollupTimezone()
-	build = toolRollupBuild{timezone: zone, full: force || !strings.HasSuffix(built, "/"+toolRollupVersion) || builtDay != day || builtRev != fullRev || builtZone != zone,
+	build = toolRollupBuild{timezone: zone, full: force || !strings.HasSuffix(built, "/"+toolRollupVersion) || builtRev != fullRev || builtZone != zone,
 		generation: generation, day: day, fullRevision: fullRev, publication: publication}
 	if _, err := snapshot.ExecContext(ctx, "CREATE TEMP TABLE tool_dirty_build AS SELECT * FROM tool_rollup_dirty"); err != nil {
 		return build, err
@@ -252,6 +248,8 @@ func (c *Catalog) publishToolPartitions(ctx context.Context, conn *sql.Conn, bui
 		}
 		reportWork(ctx, "publishing tool rollup", "statement", index+1, len(statements))
 	}
+	// Earlier builds rebuild the whole rollup when tool_rollup_day is
+	// not today; keep recording it for a library they also open.
 	for key, value := range map[string]string{"tool_rollup_generation": build.generation, "tool_rollup_day": build.day, "tool_rollup_timezone": build.timezone, "tool_rollup_built_full_revision": build.fullRevision,
 		"tool_rollup_writer_ms": fmt.Sprint(time.Since(started).Milliseconds())} {
 		if _, err := tx.ExecContext(ctx, "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value); err != nil {
