@@ -110,3 +110,10 @@ main[tabindex="-1"]:focus{outline:none}
   .app-navigation-root-close{position:absolute;top:8px;right:8px}
   .app-navigation-sections{border-right:0}
 }
+/* A page with something recent to read (Settings → Logs); the label says which. */
+.app-navigation-attention{display:inline-flex;flex:none;margin-left:auto}
+.app-navigation-list summary .app-navigation-attention+.app-icon{margin-left:0}
+.app-navigation-attention .app-icon{width:15px;height:15px}
+.app-navigation-attention.error .app-icon{color:var(--bad)}
+.app-navigation-attention.warning .app-icon{color:var(--warn)}
+.app-navigation-attention .visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}

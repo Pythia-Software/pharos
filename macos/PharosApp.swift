@@ -144,6 +144,10 @@ final class ArchiveService: ObservableObject {
     private var pageWatch = 0
     /// The page that failed, which the web view loads when it comes back.
     private var pageTarget: URL?
+    /// Failures the page itself cannot see (its web process ended, a load
+    /// failed), kept here rather than in a web view, which the recovery screen
+    /// replaces. The next page that loads records them in Settings → Logs.
+    var unreportedPageFailures: [[String: Any]] = []
     @Published var status = "Starting local archive…"
     @Published var disconnected: Disconnection?
     /// The Eject button's release and eject are under way.
@@ -238,7 +242,7 @@ final class ArchiveService: ObservableObject {
         var environment = ProcessInfo.processInfo.environment
         environment["PHAROS_PARENT_PID"] = String(getpid())
         task.environment = environment
-        let log = ServiceLog()
+        let log = ServiceLog(file: ServiceLog.appLogFile())
         task.standardError = log.pipe
         serviceLog = log
         task.terminationHandler = { [weak self] process in
@@ -1244,7 +1248,20 @@ struct ArchiveWebView: NSViewRepresentable {
             loadFailed(webView, error: error)
         }
 
+        private func noteFailure(_ message: String, page: URL?) {
+            guard let service else { return }
+            service.unreportedPageFailures = Array((service.unreportedPageFailures + [["kind": "webkit", "message": message, "page": page?.path ?? ""]]).suffix(10))
+        }
+
+        private func reportFailures(_ webView: WKWebView) {
+            guard let service, !service.unreportedPageFailures.isEmpty, let data = try? JSONSerialization.data(withJSONObject: service.unreportedPageFailures),
+                  let events = String(data: data, encoding: .utf8) else { return }
+            service.unreportedPageFailures = []
+            webView.evaluateJavaScript("window.pharosReportEvents?.(\(events))")
+        }
+
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            noteFailure("The page's web process stopped unexpectedly (WebKit web content process terminated).", page: webView.url)
             if repeatedFailure(webView, reason: "The page stopped unexpectedly.") { return }
             loadFailed(webView, error: nil)
         }
@@ -1296,6 +1313,7 @@ struct ArchiveWebView: NSViewRepresentable {
                 return url
             }
             let target = servicePage(nsError?.userInfo[NSURLErrorFailingURLErrorKey] as? URL) ?? servicePage(webView.url) ?? origin
+            if let nsError { noteFailure("The page did not load: \(nsError.localizedDescription) (\(nsError.domain) \(nsError.code)).", page: target) }
             failedLoads += 1
             let attempt = failedLoads
             let navigation = navigations
@@ -1318,6 +1336,7 @@ struct ArchiveWebView: NSViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             failedLoads = 0
             service?.pageLoading = false
+            reportFailures(webView)
             setFullScreenClass(webView.window?.styleMask.contains(.fullScreen) == true)
             service?.menuBar.navigationFinished()
             publishedUpdateState = nil

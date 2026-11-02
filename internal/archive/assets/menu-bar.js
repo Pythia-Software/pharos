@@ -18,6 +18,7 @@ const MENU_BAR_TOOLS = [
   {id: 'health', label: 'Library health & backups…', group: 'manage', description: 'Check storage and recent activity, or choose a backup destination.'},
   {id: 'sources', label: 'Manage sources…', group: 'manage', description: 'Choose which conversation files Pharos reads on this Mac.'},
   {id: 'finder', label: 'Show library in Finder', group: 'manage', description: 'Reveal the connected library folder in Finder.'},
+  {id: 'logs', label: 'Logs & crash reports', group: 'manage', description: 'Open recent page errors, slow requests, service output and crash reports, marking the ones to read first.'},
   {id: 'settings', label: 'Settings…', required: true, group: 'settings'},
   {id: 'eject', label: 'Eject library…', group: 'quit', description: 'Safely eject the library. Appears when its drive is ejectable.'},
   {id: 'quit', label: 'Quit Pharos', required: true, group: 'quit'},

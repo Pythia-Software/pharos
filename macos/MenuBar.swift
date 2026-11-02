@@ -8,9 +8,9 @@ struct MenuBarPreferences {
         "enabled": true, "indexed": true, "words": true, "tokens": true, "carbon": true,
         "cost": false, "backup": false, "space": false, "index": false, "eject": false,
         "open": true, "status": true, "settings": true, "quit": true,
-        "search": false, "analyze": false, "optimize": false, "capture": false, "health": false, "sources": false, "finder": false,
+        "search": false, "analyze": false, "optimize": false, "capture": false, "health": false, "sources": false, "finder": false, "logs": false,
     ]
-    static let defaultOrder = ["open", "status", "indexed", "index", "words", "tokens", "cost", "carbon", "backup", "space", "search", "analyze", "optimize", "capture", "health", "sources", "finder", "settings", "eject", "quit"]
+    static let defaultOrder = ["open", "status", "indexed", "index", "words", "tokens", "cost", "carbon", "backup", "space", "search", "analyze", "optimize", "capture", "health", "sources", "finder", "logs", "settings", "eject", "quit"]
     static let required = ["open", "status", "settings", "quit"]
     static func isSeparator(_ id: String) -> Bool {
         id.range(of: "^separator:[1-9][0-9]*$", options: .regularExpression) != nil
@@ -21,7 +21,7 @@ struct MenuBarPreferences {
         case "words", "tokens", "cost", "carbon": return "usage"
         case "backup", "space": return "library"
         case "search", "analyze", "optimize": return "navigation"
-        case "capture", "health", "sources", "finder": return "manage"
+        case "capture", "health", "sources", "finder", "logs": return "manage"
         case "eject", "quit": return "quit"
         default: return id
         }
@@ -376,6 +376,21 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         row("sources", "Manage sources…", path: "/settings/sources")
         let finder = NSMenuItem(title: "Show library in Finder", action: #selector(showLibraryInFinder), keyEquivalent: "")
         finder.target = self; rows["finder"] = finder
+        // Logs opens Settings → Logs at a source. update() marks the sources
+        // the status snapshot says hold something recent to read.
+        let logs = NSMenuItem(title: "Logs & crash reports", action: nil, keyEquivalent: "")
+        logs.image = NSImage(systemSymbolName: "chevron.left.forwardslash.chevron.right", accessibilityDescription: nil)
+        let sources = NSMenu()
+        for (id, title) in Self.logSources {
+            let source = NSMenuItem(title: title, action: #selector(navigate(_:)), keyEquivalent: "")
+            source.target = self
+            source.representedObject = id == "overview" ? "/settings/logs" : "/settings/logs?log_source=\(id)"
+            source.identifier = NSUserInterfaceItemIdentifier(id)
+            sources.addItem(source)
+            if id == "overview" { sources.addItem(.separator()) }
+        }
+        logs.submenu = sources
+        rows["logs"] = logs
         row("settings", "Settings…", path: "/settings/preferences")
         let eject = NSMenuItem(title: "Eject library…", action: #selector(ejectLibrary), keyEquivalent: "")
         eject.target = self; rows["eject"] = eject
@@ -635,6 +650,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         setRowTitle("eject", "Eject \(drive["name"] as? String ?? "library")…")
         rows["eject"]?.isEnabled = ejectable && !service.ejecting && service.url != nil
         rows["finder"]?.isEnabled = libraryDirectory != nil
+        let logAttention = snapshot["logs"] as? [String: String] ?? [:]
+        for source in rows["logs"]?.submenu?.items ?? [] {
+            guard let id = source.identifier?.rawValue else { continue }
+            source.isEnabled = service.url != nil
+            source.image = logAttention[id].flatMap { level in
+                NSImage(systemSymbolName: level == "error" ? "exclamationmark.octagon" : "exclamationmark.triangle", accessibilityDescription: level == "error" ? "Errors" : "Warnings")
+            }
+        }
+        setRowTitle("logs", logAttention.isEmpty ? "Logs & crash reports" : "Logs & crash reports · \(logAttention.count) to check")
         rows["index"]?.isEnabled = service.url != nil && service.hasConnectedLibrary && !service.ejecting && !indexing && !activities.contains { ["sync", "index", "capture", "capture-other", "maintenance"].contains($0["kind"] as? String ?? "") }
         for key in ["words", "tokens", "carbon", "cost", "backup", "space"] { rows[key]?.isEnabled = service.url != nil }
         layoutMenuText()
@@ -713,6 +737,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) { refresh() }
 
     func invalidateUsage() { usageUpdated = .distantPast; refreshUsage() }
+
+    /// Settings → Logs's sources, as web/src/logs-model.ts lists them.
+    static let logSources = [("overview", "Overview"), ("page", "Page errors"), ("requests", "Slow & failed requests"), ("service", "Service output"),
+                             ("app", "App output"), ("background", "Background work"), ("crashes", "Crash reports")]
 
     @objc private func navigate(_ sender: NSMenuItem) { showWindow(path: sender.representedObject as? String ?? "") }
 

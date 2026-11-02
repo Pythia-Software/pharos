@@ -8,6 +8,8 @@ import { PageLink, useLocationRevision } from "./nested-pages";
 import { Icon } from "./icons";
 import { preferences } from "./preferences";
 import { focusPageContent } from "./page-focus";
+import { attentionBySource, attentionLabel, withLogSources } from "./logs-model";
+import { useLogsSummary } from "./logs-summary";
 import "./app-shell.css";
 
 type Layout = "wide" | "compact" | "phone";
@@ -17,9 +19,14 @@ function NavigationItems({ pages, current, navigate, expanded, toggle }: {
   pages: readonly NestedPage[]; current: string; navigate: () => void; expanded: NavigationExpansion[string]; toggle: (id: string) => void;
 }) {
   return <>{pages.map(page => page.children ? <details key={page.id} open={isNavigationSectionExpanded(expanded, page.id)}>
-    <summary onClick={event => { event.preventDefault(); toggle(page.id); }}>{page.label}<Icon name="chevron-down" /></summary>
+    <summary onClick={event => { event.preventDefault(); toggle(page.id); }}>{page.label}<AttentionMark attention={page.attention} /><Icon name="chevron-down" /></summary>
     <div className="app-navigation-children"><NavigationItems pages={page.children} current={current} navigate={navigate} expanded={expanded} toggle={toggle} /></div>
-  </details> : <NavigationLink key={page.id} href={page.href} current={page.id === current} navigate={navigate}>{page.label}</NavigationLink>)}</>;
+  </details> : <NavigationLink key={page.id} href={page.href} current={page.id === current} navigate={navigate}>{page.label}<AttentionMark attention={page.attention} /></NavigationLink>)}</>;
+}
+
+function AttentionMark({ attention }: { attention?: NestedPage["attention"] }) {
+  if (!attention) return null;
+  return <span className={`app-navigation-attention ${attention}`} title={attentionLabel(attention)}><Icon name={attention === "error" ? "error" : "severity-high"} /><span className="visually-hidden">{attentionLabel(attention)}</span></span>;
 }
 
 function NavigationLink({ navigate, ...props }: React.ComponentProps<typeof PageLink> & { navigate: () => void }) {
@@ -37,7 +44,8 @@ function AppNavigation({ settings, contentNavigation }: { settings: NestedPage[]
   const dialog = useRef<HTMLDialogElement>(null), trigger = useRef<HTMLButtonElement>(null);
   const navigating = useRef(false), previousURL = useRef(location.href);
   const params = new URLSearchParams(location.search), selected = appLocation(location.pathname, params);
-  const sections = appSections(settings, params);
+  const logs = useLogsSummary(selected.section === "settings");
+  const sections = appSections(withLogSources(settings, attentionBySource(logs)), params);
   const { section, page } = appLocationLabel(sections, selected);
   const [expanded, setExpanded] = useViewState<NavigationExpansion>("nav_expanded", {});
   const toggle = (section: string, id: string) => setExpanded(state => toggleNavigationSection(state, section, id));

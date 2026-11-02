@@ -249,6 +249,7 @@
   {"path":"settings/layout","url":"/settings/layout"},
   {"path":"settings/ask","url":"/settings/ask"},
   {"path":"settings/preferences","url":"/settings/preferences"},
+  {"path":"settings/logs","url":"/settings/logs"},
   {"path":"settings/libraries","url":"/settings/libraries"},
   {"path":"work","url":"/work/workspace-1","state":{"work_id":"workspace-1"}},
   {"path":"work","url":"/work/workspace-1?conversation=conversation-2&message=message-3&call=call-4","state":{"work_id":"workspace-1","conversation":"conversation-2","message":"message-3","call":"call-4"}},

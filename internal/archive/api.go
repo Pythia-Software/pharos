@@ -82,6 +82,8 @@ type Server struct {
 	auto      automaticSync
 	// background is the Hourly and Daily schedule's state (background.go).
 	background backgroundState
+	// diagnostics holds Settings → Logs's page and request journals.
+	diagnostics serviceDiagnostics
 	// Leave catalog connections available for rows/previews while metadata scans run.
 	queryMetadata chan struct{}
 	ask           askState
@@ -219,9 +221,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if interactiveRead(r) {
 		defer s.Catalog.beginInteractiveRead(r.Context())()
 	}
+	trace, traced := s.traceRequest(w, r)
+	defer traced()
+	if trace != nil {
+		w = trace
+	}
 	debug.SetPanicOnFault(true) // see exitOnFault
 	defer func() {
 		if value := recover(); value != nil {
+			if trace != nil {
+				trace.panic = fmt.Sprintf("%v\n\n%s", value, debug.Stack())
+			}
 			s.exitIfFault(value)
 			writeJSON(w, map[string]any{"error": fmt.Sprint(value)}, http.StatusInternalServerError)
 		}
@@ -232,6 +242,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/feedback/") {
 		s.feedbackHTTP(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/logs/") {
+		s.logsHTTP(w, r)
 		return
 	}
 	if r.URL.Path == "/api/query-object-references" {
@@ -292,7 +306,7 @@ func (s *Server) authorized(r *http.Request) bool {
 // of which serves the single-page UI.
 func isUIPage(path string) bool {
 	switch path {
-	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/layout", "/settings/preferences", "/settings/ask", "/sources", "/activity", "/analyze", "/tools", "/health", "/mcp", "/findings":
+	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/layout", "/settings/preferences", "/settings/ask", "/settings/logs", "/sources", "/activity", "/analyze", "/tools", "/health", "/mcp", "/findings":
 		return true
 	}
 	return strings.HasPrefix(path, "/work/")
@@ -323,6 +337,7 @@ var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/reader-model.js":      {"reader-model.js", "text/javascript; charset=utf-8"},
 	"/assets/storage-breakdown.js": {"storage-breakdown.js", "text/javascript; charset=utf-8"},
 	"/assets/managed-storage.js":   {"managed-storage.js", "text/javascript; charset=utf-8"},
+	"/assets/page-errors.js":       {"page-errors.js", "text/javascript; charset=utf-8"},
 	"/assets/managed-library.js":   {"managed-library.js", "text/javascript; charset=utf-8"},
 	"/assets/managed-library.css":  {"managed-library.css", "text/css; charset=utf-8"},
 }

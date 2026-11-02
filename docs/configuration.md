@@ -127,6 +127,29 @@ Changes apply immediately and are saved with the library, including when it
 moves between Macs. Earlier button visibility preferences are kept until you
 change or reset the layout.
 
+## Logs and crash reports
+
+When a page stays blank, or Pharos stops, open **Settings → Logs** (or add
+**Logs & crash reports** to the menu bar; it is off by default). Its sidebar
+lists one page per source and marks with an error or warning icon each source
+that recorded something in the last day (crash reports: the last week):
+
+| Source | What it holds | Written by |
+|---|---|---|
+| Page errors | Uncaught errors, failed and stalled requests, scripts that did not load, and web processes that stopped | the page (`page-errors.js`) and the app |
+| Slow & failed requests | Requests that took 3 s or more, returned an error, or panicked (with the stack), and requests running now | the service |
+| Service output | The library service's stderr by run; a run that panicked or exited with an error is a crash | the app's broker |
+| App output | Everything the app and its services printed, by launch | the Mac app |
+| Background work | Operations on this Mac that failed or were interrupted in the last week | the operation journal |
+| Crash reports | macOS reports for Pharos processes and the web processes the app started | macOS (`~/Library/Logs/DiagnosticReports`) |
+
+**Overview** lists the marked sources first. **Copy report for an agent** copies
+their recent entries, stacks and crashed threads, with the paths of the full
+logs, which live in `~/Library/Application Support/Pharos/logs` (`app.log`, and
+per library `library-<id>/service.log`, `page-errors.jsonl` and
+`requests.jsonl`). Logs stay on this Mac and are bounded: a log over 4 MB starts
+a new file and keeps one previous file.
+
 ## Portable library
 
 A portable library keeps everything Pharos has indexed in one directory,

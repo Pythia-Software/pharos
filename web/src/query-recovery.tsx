@@ -26,10 +26,16 @@ export function ResetPage() {
 
 // A renderer exception otherwise unmounts the entire React page, including its
 // reset controls. Keep a recovery action outside the failed component tree.
+declare global { interface Window { pharosReportError?: (error: unknown, kind?: string, detail?: string) => void } }
+
 export class PageErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
   state: { error: Error | null } = { error: null };
   static getDerivedStateFromError(failure: unknown) {
     return { error: failure instanceof Error ? failure : new Error(String(failure)) };
+  }
+  // Settings → Logs (Page errors) keeps it, with the component stack.
+  componentDidCatch(error: unknown, info: React.ErrorInfo) {
+    window.pharosReportError?.(error, "render", info.componentStack ?? "");
   }
   render() {
     if (!this.state.error) return this.props.children;

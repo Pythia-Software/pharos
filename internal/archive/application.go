@@ -257,11 +257,26 @@ func (m *applicationManager) startChildLocked(id string, l *registeredLibrary, c
 	cmd := exec.Command(runningExecutable(), "--config", config.Path, "serve", "--dynamic", "--endpoint", path, "--application", m.registry.Application)
 	cmd.Env = append(os.Environ(), parentEnv+"="+strconv.Itoa(os.Getpid()))
 	cmd.Stderr = os.Stderr
+	// The service's output also goes to its log, from here: a panic is
+	// written by the runtime to the process's stderr, past any copy the
+	// service keeps itself. WaitDelay keeps a helper that inherited stderr
+	// from holding Wait open after the service exits.
+	serviceLog, logDir := openServiceLog(l.ID)
+	if serviceLog != nil {
+		cmd.Stderr = io.MultiWriter(quietWriter{serviceLog}, quietWriter{os.Stderr})
+		cmd.WaitDelay = 2 * time.Second
+	}
+	cmd.Env = append(cmd.Env, diagnosticLogDirEnv+"="+logDir)
 	c := &applicationChild{cmd: cmd, done: make(chan struct{})}
 	if err := cmd.Start(); err != nil {
+		closeServiceLog(serviceLog, 0, err)
 		return nil, err
 	}
-	go func() { _ = cmd.Wait(); close(c.done) }()
+	go func() {
+		err := cmd.Wait()
+		closeServiceLog(serviceLog, cmd.Process.Pid, err)
+		close(c.done)
+	}()
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	timeout := time.NewTimer(2 * time.Minute)
