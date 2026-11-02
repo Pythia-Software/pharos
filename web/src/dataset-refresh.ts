@@ -8,6 +8,16 @@ export function onDatasetRefresh(dataset: string, callback: () => void, target: 
   return () => { for (const type of ["pharos:usage-refresh", "pharos:data-refresh"]) target.removeEventListener(type, listener); };
 }
 
+export function onSafetyChange(callback: () => void, target: Pick<EventTarget, "addEventListener" | "removeEventListener"> = window): () => void {
+  target.addEventListener("pharos:safety-changed", callback);
+  return () => target.removeEventListener("pharos:safety-changed", callback);
+}
+
+type DiscoveryStatus = { built_at: string | null; running: boolean };
+export function findingsDiscoveryChanged(previous: DiscoveryStatus | undefined, next: DiscoveryStatus): boolean {
+  return Boolean(previous && (previous.built_at !== next.built_at || previous.running && !next.running));
+}
+
 // The datasets a saved preference rebuilds on the service: Carbon
 // assumptions re-estimate usage, Parallelism settings rebuild its records.
 const settingDatasets: Record<string, string> = { "pharos-carbon-v1": "usage", "pharos-concurrency-v1": "parallelism" };

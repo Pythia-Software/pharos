@@ -5,14 +5,13 @@ import {createAttentionRegistry,parseJsonInspections} from '@pythia-software/que
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {EMPTY_QUERY,encodeQuery,decodeQueryStrict} from '@pythia-software/query-table-core';
-import {viewFields,fieldsForPage,encodeViewValue,parseViewValue,retainPageView} from '../../../src/view-contract';
+import {viewFields,fieldsForPage,encodeViewValue,parseViewValue,retainPageView,viewPageForURL} from '../../../src/view-contract';
 import {portableQueryLinks} from '../../../src/portable-query-link';
 import {viewRequestURL} from '../../../src/query-request';
 import {withSearchDateWindow,emptyTextSearch,refreshSearchToday,readTextSearch} from '../../../src/text-search-model';
 import {restoreRollingDefinition} from '../../../src/query-links';
 import {readRollingWindow, resolveRollingQuery, updateQueryWindowURL, queryURL, queryFromURL} from '../../../src/query-links';
 import {todayBounds} from '../../../src/day-window';
-import {loadSearchPage} from '../../../src/search-pagination';
 import {readDashboardLink} from '../../../src/usage-dashboard-model';
 
 const query={...EMPTY_QUERY,where:Array.from({length:70},(_,i)=>({field:'model',op:'!=',value:`${i}-${Array.from({length:60},(_,n)=>String.fromCharCode(33+(i*31+n*17+i*n)%90)).join('')}`}))};
@@ -45,6 +44,31 @@ test('host view codecs preserve explicit false, empty values, ordered IDs and re
  assert.equal(fieldsForPage('findings/settings').findings_rank,undefined);
  assert.equal(fieldsForPage('analyze/query/tool_calls','tool_calls').record_keyword.param,'record_tool_calls');
  for(const [key,raw]of [['card_filters','false'],['card_window','forever'],['delegation_columns','[1]'],['search_state','{}']])assert.throws(()=>parseViewValue(viewFields[key],raw),key);
+});
+
+test('Safety links restore their own section, lifecycle, case and evidence disclosures',()=>{
+ const url=new URL('https://pharos.test/findings?optimize_area=safety');
+ const values={optimize_area:'safety',safety_list:'handed_off',safety_place:'machine:host-1',safety_rank:'calls',safety_case:'safety_stable',disclosures:{'safety:safety_stable:evidence:source-1':true}};
+ for(const [name,value]of Object.entries(values)){
+  const field=viewFields[name];url.searchParams.set(field.param,encodeViewValue(field,value));
+  assert.deepEqual(parseViewValue(field,url.searchParams.get(field.param)),value);
+ }
+ assert.equal(viewPageForURL(url),'findings/safety');
+ const fields=fieldsForPage('findings/safety');
+ for(const name of Object.keys(values))assert.ok(fields[name],name);
+ assert.equal(fields.findings_rank,undefined);
+ assert.equal(fieldsForPage('findings').safety_case,undefined);
+ assert.throws(()=>parseViewValue(viewFields.safety_list,'won'));
+ assert.equal(viewPageForURL(new URL('https://pharos.test/findings?optimize_area=safety&view=table')),'findings/safety/table');
+ assert.equal(viewPageForURL(new URL('https://pharos.test/findings?optimize_area=safety&view=settings')),'findings/safety/settings');
+ assert.ok(fieldsForPage('findings/safety/table').safety_case);
+ assert.equal(fieldsForPage('findings/safety/settings').safety_case,undefined);
+ assert.equal(fieldsForPage('findings/safety/table').findings_rank,undefined);
+ assert.equal(fieldsForPage('findings/safety/table').safety_rank,undefined);
+ assert.equal(fieldsForPage('findings/safety/settings').safety_rank,undefined);
+ assert.equal(fieldsForPage('findings').safety_rank,undefined);
+ for(const rank of ['recent','calls','evidence'])assert.equal(parseViewValue(viewFields.safety_rank,encodeViewValue(viewFields.safety_rank,rank)),rank);
+ assert.throws(()=>parseViewValue(viewFields.safety_rank,'usd'));
 });
 
 test('large links remain self-contained until immutable library persistence succeeds',async()=>{
@@ -164,17 +188,6 @@ test('Today follows the viewer unless pinned, and native datetime edits release 
 });
 
 
-test('reader batch restoration replays fresh cursors and clamps a shortened result',async()=>{
- const calls=[];
- const load=async cursor=>{calls.push(cursor);return cursor===''?{items:['first'],next_cursor:'fresh-next'}:{items:['second']};};
- assert.deepEqual(await loadSearchPage(load,1),{batch:{items:['second']},cursor:'fresh-next',page:1});
- assert.deepEqual(calls,['','fresh-next']);
- const short=await loadSearchPage(async()=>({items:[]}),3);assert.equal(short.page,0);
- const retry=[];await loadSearchPage(async cursor=>{retry.push(cursor);return {items:[]};},1,'live-cursor');assert.deepEqual(retry,['live-cursor']);
- await assert.rejects(loadSearchPage(load,251),/0 to 250/);
-});
-
-
 test("partial linked parallelism views never inherit another viewer's saved counting assumptions",async()=>{
  const {readConcurrencySettings}=await import('../../../src/concurrency-settings');
  const savedWindow=globalThis.window,savedLocation=globalThis.location;
@@ -203,7 +216,7 @@ test('retained page bindings cannot write foreign URL fields after navigation',a
  writeViewState('delegation_page','2');assert.equal(location.searchParams.get('delegation_page'),'2');
  globalThis.location=new URL('https://pharos.test/analyze?analyze_topic=tokens');
  const before=location.href;
- for(const [name,value]of Object.entries({delegation_page:'0',delegation_event:'',delegation_expanded:[],reader_search:{},reader_page:'0',card_window:'default',findings_rank:'usd'}))writeViewState(name,value);
+ for(const [name,value]of Object.entries({delegation_page:'0',delegation_event:'',delegation_expanded:[],card_window:'default',findings_rank:'usd'}))writeViewState(name,value);
  assert.equal(location.href,before);
  writeViewState('nav_collapsed',false);assert.equal(location.searchParams.get('nav_collapsed'),'0');
 });
@@ -251,7 +264,7 @@ test('applied search codecs agree with shared cross-language validation cases',(
  for(const sample of searchCases){
   const restored=readTextSearch(new URLSearchParams({text_builder:JSON.stringify(sample.draft)}));
   assert.equal(!restored.error,sample.valid,sample.name);
-  for(const owner of ['search_state','reader_search','record_keyword']){
+  for(const owner of ['search_state','record_keyword']){
    const value=owner==='record_keyword'?{field:'model',draft:sample.draft}:sample.draft;
    if(owner==='record_keyword'?(sample.recordValid??sample.valid):sample.valid)assert.doesNotThrow(()=>encodeViewValue(viewFields[owner],value),`${owner}: ${sample.name}`);
    else assert.throws(()=>encodeViewValue(viewFields[owner],value),undefined,`${owner}: ${sample.name}`);
@@ -259,7 +272,7 @@ test('applied search codecs agree with shared cross-language validation cases',(
  }
  const large={...searchCases.find(item=>item.valid).draft,editor:'syntax',text:'x'.repeat(24001)};
  assert.throws(()=>encodeViewValue(viewFields.search_state,large));
- for(const [name,value]of [['reader_page','+5'],['reader_page','-0'],['sidebar_width','+400'],['reader_expanded',['m',null]],['window_timezone','Local'],['window_timezone','']])assert.throws(()=>encodeViewValue(viewFields[name],value));
+ for(const [name,value]of [['delegation_page','+5'],['delegation_page','-0'],['find_case','true'],['sidebar_width','+400'],['reader_expanded',['m',null]],['window_timezone','Local'],['window_timezone','']])assert.throws(()=>encodeViewValue(viewFields[name],value));
 });
 
 test('classic controls recover from invalid state while strict query readers still reject it',async()=>{

@@ -6,8 +6,8 @@
 /* Guided charts are part of the page, rather than a second card inside it. */
 .usage-dashboard .usage-chart{border:0;border-radius:0;background:transparent;padding:0;margin:0 0 22px;box-shadow:none}.usage-dashboard .usage-chart-head{gap:18px;margin-bottom:22px}.usage-query-search{border-block:1px solid var(--line);padding:12px 0;margin:0 0 20px}.usage-query-search>summary{display:flex;gap:8px;align-items:center;cursor:pointer;list-style:none;font-size:var(--fs-md)}.usage-query-search>summary::-webkit-details-marker{display:none}.usage-query-search>summary::after{content:'＋';margin-left:auto;color:var(--muted)}.usage-query-search[open]>summary::after{content:'−'}.usage-query-search[open]>summary{margin-bottom:16px}.usage-query-search>summary>.muted{font-size:var(--fs-sm);margin-left:4px}
 @media(max-width:600px){.usage-dashboard .usage-chart{padding:0}}
-.usage-tools-controls{margin-bottom:20px}.usage-tools-controls>label{display:flex;flex-direction:column;gap:6px;font-size:var(--fs-sm);color:var(--muted)}.usage-tools-controls select{min-width:0;width:100%}.usage-dashboard :is(.usage-tools-dashboard,.usage-mcp-dashboard,.usage-analysis-dashboard)>.qt-metric{border:0;border-radius:0;background:transparent;padding:0;box-shadow:none;width:100%;min-width:0;min-height:480px}.usage-dashboard .concurrency-panel{border:0;background:transparent;padding:0;box-shadow:none}
-@media(max-width:600px){.usage-dashboard :is(.usage-tools-dashboard,.usage-mcp-dashboard,.usage-analysis-dashboard)>.qt-metric{min-height:420px}}
+.usage-tools-controls{margin-bottom:20px}.usage-tools-controls>label{display:flex;flex-direction:column;gap:6px;font-size:var(--fs-sm);color:var(--muted)}.usage-tools-controls select{min-width:0;width:100%}.usage-dashboard :is(.usage-tools-dashboard,.usage-mcp-dashboard,.usage-analysis-dashboard>.dashboard-card-anchor)>.qt-metric{border:0;border-radius:0;background:transparent;padding:0;box-shadow:none;width:100%;min-width:0;min-height:480px}.usage-dashboard .concurrency-panel{border:0;background:transparent;padding:0;box-shadow:none}
+@media(max-width:600px){.usage-dashboard :is(.usage-tools-dashboard,.usage-mcp-dashboard,.usage-analysis-dashboard>.dashboard-card-anchor)>.qt-metric{min-height:420px}}
 
 .usage-dashboard-note a,.mcp-settings-actions a{display:inline-flex;align-items:center;gap:6px}.mcp-settings-actions{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:20px}.mcp-settings-actions .app-icon{width:15px;height:15px}.mcp-call-dialog::backdrop{background:#1118}
 .usage-mcp-measure-note{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:14px}.usage-mcp-measure-note p{margin:0}.usage-mcp-measure-note button{flex:none}
@@ -41,7 +41,7 @@
 .usage-query-destinations{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .usage-dashboard-links .usage-query-destination{display:flex;flex-direction:column;gap:5px;min-width:0;padding:9px 11px;border:1px solid var(--line);border-radius:7px;color:var(--ink);text-decoration:none;background:var(--panel)}
 .usage-dashboard-links .usage-query-destination:hover{border-color:var(--gold);text-decoration:none}
-.usage-query-destination:focus-visible{outline:2px solid var(--gold);outline-offset:3px}
+.usage-query-destination:focus-visible{outline:2px solid var(--focus-ring, var(--accent));outline-offset:3px}
 .usage-query-destination-heading{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;margin-bottom:2px;font-size:var(--fs-md)}
 .usage-query-destination-heading strong{flex:1;min-width:0;color:var(--gold);font-weight:600}
 .usage-query-destination-heading>.app-icon{margin-left:auto;flex:none;width:15px;height:15px;color:var(--gold)}
@@ -59,4 +59,11 @@
 .usage-dashboard .carbon-analysis>.carbon-summary{padding:14px 0;border-block:1px solid var(--line)}
 
 /* Expanded cards use the identical visualization and execution contract as Home. */
-.usage-analysis-empty{margin:24px 0;color:var(--muted)}.usage-dashboard .usage-analysis-dashboard>.qt-metric.usage-analysis-tall{min-height:760px}
+.usage-analysis-empty{margin:24px 0;color:var(--muted)}.usage-dashboard .usage-analysis-dashboard>.dashboard-card-anchor>.qt-metric.usage-analysis-tall{min-height:760px}
+
+/* A dashboard's main chart title stands in for the page title (the h1 stays for assistive technology). */
+.nested-page-heading>div:has(>.usage-chart-headline)>h1{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.usage-chart-headline{flex-wrap:wrap;gap:4px 12px}
+.usage-chart-headline h2{margin:0;font-size:var(--fs-3xl);letter-spacing:-.035em;line-height:1.2;overflow-wrap:anywhere}
+.usage-chart-headline .usage-chart-average-label{font-family:var(--sans);letter-spacing:0}
+@media(max-width:600px){.usage-chart-headline h2{font-size:var(--fs-2xl)}}

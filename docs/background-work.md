@@ -534,8 +534,8 @@ Mac:
 |---|---|---|
 | `safe` | No running operation holds the drive for writing. Read-only holders (a `maintenance.cache-warm` pass) may run; eject stops them | Release stops any readers (each `on_eject` says how) and closes the catalog |
 | `safe-in(eta)` | At least one operation holds the drive for writing, and every drive holder stops at a safe point within the release budget (7 s, `stopTimeout`): latency `instant` or `record`, a `SafePoint` estimate ≤ 7 s, or a `batch` holder with no estimate (assumed to stop in time; a release that times out refuses safely). `eta` is the largest estimate, or `null` when any is unknown | Release stops them at safe points and closes the catalog. With an `eta`: "Ejecting stops <label> within about N s". With `eta: null`, fixed wording: "Ejecting stops <label> after the current <unit>; if that takes more than 7 s, Pharos refuses and you can try again" |
-| `busy` | Some holder blocks release: a held lease of another process (CLI work), a broker operation, `catalog.initialize`, a `release-blocking` request-scoped operation (§2.3), or a holder whose `SafePoint` estimate exceeds the budget or whose latency is `step` or `none`; `eta` is its safe point or forecast when known | Eject is refused until it ends or reaches its safe point; the panel names it |
-| `unsafe` | Unknown or unregistered writer evidence: kind `unknown`; unregistered running work found by the registry's self-check; a held capture or index lock that no live lease and no operation in this service's registry names by an exact concrete write hold (§4.1; holding the ingest coordinator names nothing); a lease file or lease directory that cannot be read, listed or probed; the service unreachable while the drive is mounted | Eject is refused; the panel says what is unknown |
+| `busy` | Some holder blocks release: a held lease of another process (CLI work), a broker operation, `catalog.initialize`, a `release-blocking` request-scoped operation (§2.3), or a holder whose `SafePoint` estimate exceeds the budget or whose latency is `step` or `none`; `eta` is its safe point or forecast when known | Eject is refused until it ends or reaches its safe point; the panel names it, and its button reads Eject when safe: it stops what it can, waits, and ejects on the first fresh verdict that allows it (checked on each snapshot, and every few seconds once snapshots go quiet, as on a hidden page) |
+| `unsafe` | Unknown or unregistered writer evidence: kind `unknown`; unregistered running work found by the registry's self-check; a held capture or index lock that no live lease and no operation in this service's registry names by an exact concrete write hold (§4.1; holding the ingest coordinator names nothing); a lease file or lease directory that cannot be read, listed or probed; the service unreachable while the drive is mounted | Eject is refused; the panel says what is unknown, and Eject when safe waits for it as for `busy` |
 
 So a Search view refresh alone (`maintenance.library-view`, a `record`
 writer) is `safe-in`, never `safe`.
@@ -1218,8 +1218,9 @@ recent rows and `freshness: []`; it has no stream. `GET /api/status?fresh=1`
   `/api/operations` keeps `freshness: []`. `attention` (§7.3) is filled
   from phase 2.
 - Phase 2 adds to `/api/status`: `library.drive.location` and `mounted`,
-  `library.portable` and `library.path`, and `features.unified_activity`
-  (the flag, §9). It drops `journal.recent`, keeping `journal.dropped`.
+  `library.portable` and `library.path`. It drops `journal.recent`, keeping
+  `journal.dropped`. (It also carried `features.unified_activity`, the
+  flag, until the flag was removed; §9.)
 - `eject.headline` (both documents, phase 2 round 1): the verdict as one
   short clause ("Safe to eject in ~2 s: stops back up first"); `summary`
   stays the full sentence, including the release's 7 s limit, for
@@ -1404,29 +1405,28 @@ one server-side sentence.
 
 ## 9. Feature flag and rollout
 
-`pharos-unified-activity-v1` is a boolean in the catalog's `ui_preferences`,
-default `false`, toggled in Settings → Preferences (phase 2 adds it).
+The series shipped behind `pharos-unified-activity-v1`, a boolean
+preference with a "Unified activity panel (preview)" switch in Settings →
+Preferences. The flag is gone: the unified activity panel is the drive
+panel for everyone, and a saved value of the old key is ignored.
 
-**Gated by the flag:** every new surface (the rebuilt drive panel, the
-native menu rendered from the snapshot, Settings pages that read the
-snapshot or ledger) and every behaviour change (phase 4's IO priority, the
-registry refusing to start drive-holding work during a release).
+What that means now:
 
-Phase 2 wiring: the switch is "Unified activity panel (preview)" in
-Settings → Preferences, saved at once. Go reads the flag through
-`Catalog.unifiedActivity` (`feature_flags.go`), cached for 5 s and cleared
-whenever preferences are saved. The page reads it from `pharosPrefs`
-(`status-store.js`); with it on, `status-panel.js` is the one renderer of
-the header chip, its panel and Index changes' state, and `library.js` and
-`sync.js` leave those alone; turning it off gives them back without a
-reload. `/api/menu-bar/status` carries `unified_activity`, and only when it
-is true does the native menu also poll the snapshot. The panel's Eject
-requests `/api/status?fresh=1` and acts only on that result; in the app it
-requests `/api/app/status?fresh=1` instead and acts only on the broker's
-fresh verdict for the selected library (§7.2), refusing when that is
-missing, names another library or is not `checked: fresh`; it never acts
-on the library's own verdict there. `safe` ejects, `safe-in` asks first
-and checks again, `busy` and `unsafe` refuse.
+- `status-store.js` connects on every page, and `status-panel.js` is the
+  one renderer of the header chip, its panel and Index changes' state.
+  `library.js` and `sync.js` still ask `pharosStatusStore.enabled()`,
+  which is always true, until their old drive panel paths are removed.
+- `/api/menu-bar/status` always carries `unified_activity: true`, so the
+  native menu also polls the snapshot. The shipped `MenuBar.swift` still
+  reads the field.
+- Background work always lowers its IO (§10).
+
+The panel's Eject requests `/api/status?fresh=1` and acts only on that
+result; in the app it requests `/api/app/status?fresh=1` instead and acts
+only on the broker's fresh verdict for the selected library (§7.2),
+refusing when that is missing, names another library or is not
+`checked: fresh`; it never acts on the library's own verdict there. `safe`
+ejects, `safe-in` asks first and checks again, `busy` and `unsafe` refuse.
 
 **Runs regardless, in shadow:** the registry, the journal, the broker's
 registry, the snapshot endpoints and streams, the freshness function, and
@@ -1436,9 +1436,9 @@ operation that holds the drive and is in scope of `libraryActivities` has
 an activity; and the verdict is never `safe` while `libraryActivities`
 lists a writer (§4.3).
 
-**Dual-write, no retirement.** Existing endpoints, fields, pollers and the
-old drive panel keep working unchanged. Removing them is a later phase,
-not part of this series.
+**Dual-write, no retirement.** Existing endpoints, fields and pollers keep
+working unchanged; the old drive panel's code stays, though nothing opens
+it now. Removing them is a later phase, not part of this series.
 
 **Unregistered work is a test failure.** A Go test parses the package's
 non-test files and fails on any `spawn(`, `runBackground(` or `go func`
@@ -1482,14 +1482,19 @@ Phase 4 measures, and the snapshots report, per process (`resources.go`):
 - **What.** CPU is the delta of own plus exited children's user and system
   time over the wall time between two readings, as % of one core (`null`
   until a second reading); memory is `ri_phys_footprint` (Activity
-  Monitor's figure). A figure, and a total, never exceeds `NumCPU × 100`. A reading is
+  Monitor's figure); disk is the delta of `ri_diskio_bytesread` plus
+  `ri_diskio_byteswritten` over the same interval, in bytes per second
+  (`disk_bytes_per_second`, the process's own: the kernel keeps no disk
+  count for exited children; `null` until a second reading, and off
+  macOS). A figure, and a total, never exceeds `NumCPU × 100`. A reading is
   a new baseline, with `cpu_percent: null`, when its PID was reused
   (another `ri_proc_start_abstime`), when the previous reading is more
   than 10 s old (no page was open: an average over the gap is not the
   current load), and when its children's time grew by more than the
   interval × cores (a long child reaped). A total's `cpu_percent` is
-  `null` (memory only) while any of its processes has none. `cpu_percent`
-  is a whole number and `memory_bytes` two significant figures.
+  `null` (memory only) while any of its processes has none, and so is its
+  `disk_bytes_per_second`. `cpu_percent` is a whole number, and
+  `memory_bytes` and `disk_bytes_per_second` two significant figures.
 - **Change detection.** `resources` objects are left out of the snapshot's
   tag (`statusTag`), so a document whose only change is its load keeps its
   ETag: a poll gets 304 and sees new resources only with another change. A
@@ -1507,26 +1512,31 @@ Phase 4 measures, and the snapshots report, per process (`resources.go`):
   the same call's `ri_resident_size`, the figure `ps -o rss` reports, so
   RSS history stays comparable; `ps` remains the fallback. Recorded CPU
   shifts a little lower: it includes `RUSAGE_CHILDREN`, which counted the
-  once-a-second `ps` forks. This is not behind the flag: it changes no
-  behaviour and drops one fork per second of a run.
+  once-a-second `ps` forks. This changes no behaviour and drops one fork
+  per second of a run.
 
 Shape, in `/api/status` (`resources`, `null` when nothing could be read)
 and in `/api/app/status` (the machine's total as `resources`, and each
 library entry's own as `libraries[].resources`):
 
 ```json
-{"cpu_percent": 45, "memory_bytes": 1200000000, "sampled_at": "…", "basis": "proc_pid_rusage", "approximate": false,
+{"cpu_percent": 45, "memory_bytes": 1200000000, "disk_bytes_per_second": 4200000, "sampled_at": "…", "basis": "proc_pid_rusage", "approximate": false,
  "label": "Pharos is using ~45% of one core · 1.2 GB",
  "processes": [{"pid": 4120, "role": "service", "library": "lib-a", "cpu_percent": 38, "memory_bytes": 1100000000,
                 "sampled_at": "…", "basis": "proc_pid_rusage", "text": "Library service (Euclid) · ~38% of one core · 1.1 GB"}]}
 ```
 
 `role` is `service`, `broker` or the lease's process (`cli:ingest`).
-`label` and `text` are the server's words; the panel's Load row shows the
-machine's `label` in the app and the library's otherwise, with the
-processes' `text` in its tooltip.
+`label` and `text` are the server's words. The panel's Load row shows CPU
+(% of one core), RAM and Disk (per second) in one row, each with its icon,
+for the machine in the app and the library otherwise, with `label` and the
+processes' `text` in its tooltip. The panel's Load row is four equal
+cells, CPU | RAM | I/O | Storage: I/O is `disk_bytes_per_second`, and
+Storage is the library's `storage_bytes` in the status snapshot (what it
+keeps on its drive, from the last drive check, which Health refreshes;
+the snapshot never measures it, and leaves it out before a check).
 
-**Priority classes to IO policy** (applied only with the flag on):
+**Priority classes to IO policy:**
 
 | Class | Disk IO policy | Applied |
 |---|---|---|
@@ -1535,11 +1545,8 @@ processes' `text` in its tooltip.
 
 The class is applied in one place, the handle: `Op.RunIO(fn)` runs fn
 under utility when the operation's priority is `background` and the
-registry's `lowerIO` says so; otherwise it runs fn unchanged. `lowerIO`
-reads the flag from memory only (`Catalog.unifiedActivityNow`): saving
-preferences sets it, every read of the flag refreshes it, and the
-service's `watchFeatureFlags` daemon reads it every 5 s, so work never
-waits on a reader connection for it. The thread returns to Go's pool only
+registry has `lowerIO` set (the service's and the broker's do); otherwise
+it runs fn unchanged. The thread returns to Go's pool only
 once its policy is restored; if restoring fails, the goroutine keeps the
 thread locked and Go ends it rather than reuse it at utility. The policy
 is per thread and goroutines fn starts do not inherit it, so it wraps the
@@ -1565,12 +1572,7 @@ loops that do their IO on their own goroutine:
   writer lock) follows the class; the truncating pass, which holds
   writers off, always runs at the default tier;
 - the broker's delivery (`library.deliver`): its pending capture and its
-  move. The broker has no catalog, so its `lowerIO` is the flag the
-  selected library's service reports (`features.unified_activity`), read
-  from every status document and asked for again before each delivery.
-  The value belongs to the selected library: another selection clears it,
-  and a selected library whose service cannot confirm it (none running,
-  or no answer) is off.
+  move.
 
 Work run inline inside a background body inherits its utility thread,
 whatever its own class: a Tools rollup that `analysis.refresh` rebuilds
@@ -1580,7 +1582,7 @@ Not covered: work an operation hands to other goroutines (capture's hashing
 pipeline, a backup's WAL poller), and Terminal commands, whose registries
 have no `lowerIO`.
 The three copy paths that ran at utility before (capture copies, local
-backups, adoption) keep doing so with the flag on or off: they are not
+backups, adoption) keep doing so: they are not
 moved to the default tier even where their kind is foreground. A
 read-started rebuild that a request or page waits on is registered
 foreground and keeps the default tier: `analysis.tools` from a read,
@@ -1695,12 +1697,30 @@ the same schedule from one declaration (`backgroundItems`):
 - **Surfaces.** `/api/status` carries `background`: the headline, every
   item's state (`running`, `queued`, `failed`, `missed`, `never`,
   `power`, `current`, `paused`, `manual`, `unavailable`) with `as_of` and
-  `next_at`, one row per cadence, and the cost of Update everything now.
+  `next_at`, one row per cadence, `unscheduled` (the items set to Only
+  when you ask, Back up unless chosen: on no schedule, so in no cadence's
+  row), and the cost of Update everything now.
   `GET /api/background` adds the settings, the placement rule and the last
   24 hours' cost (measured for scheduled indexing and journaled passes,
   else projected from the items' costs; Frequently counts scheduled
   indexing and the journaled analysis passes after it). `POST /api/background/settings`
   and `POST /api/background/run` change and run it.
+- **In the panel.** The headline shows only when it is out of the
+  ordinary (tone `bad`, `behind` or `paused`): Up to date and the running
+  item are already in the cadence rows, where a running item's tooltip
+  says what it feeds. A running item's dot pulses, as the header chip's
+  does; a queued one (Up next) is steady. Stop sits beside Eject. Each
+  cadence row is its icon, dot and name, with its state at the line's end.
+  Unscheduled items are one more row, Ad hoc, shown like a cadence; each
+  row's small ▶ runs it now (`POST /api/background/run {"cadence": …}`,
+  `manual` for Ad hoc). Settings → Background updates lists them in an
+  Only when you ask group. The panel is titled Background Processing,
+  under "Library NAME (1/3) on DRIVE", the name linking to Settings →
+  Libraries; other libraries are only counted there. Running now and
+  Schedule head their sections, and each running line says where it
+  comes from: "Part of Hourly" for a background pass, else who started
+  it (`trigger`). An alert's title and action share a line, its detail
+  below.
 
 ## Known hazards this contract must not hide
 
@@ -1748,8 +1768,9 @@ against current code before starting it.
   incremental runs have class `changes_audit_deferred`. Find out whether the
   5 s / 16 MiB budget, writer contention or the capture lock is the cause.
 - **Retire the old status paths.** This is the phase that follows this
-  contract's rollout. Once the flag defaults on and has been stable, remove
-  the run-record progress fields, the `detail` strings, client grouping by
+  contract's rollout. The flag is gone (§9); once the panel has been
+  stable, remove the old drive panel in `library.js`, the menu bar's
+  legacy path, the run-record progress fields, the `detail` strings, client grouping by
   label, the duplicate pollers and the three older freshness rules (§5).
 - **SQLite maintenance as operation kinds.** A periodic `ANALYZE` refresh
   (statistics are currently built only when missing), as a registered,

@@ -357,6 +357,10 @@ func (site *siteMap) linkFromArgs(args map[string]any) (siteState, error) {
 	if _, ok := args["url"]; ok {
 		return site.linkBaseFromArgs(args)
 	}
+	args, err := site.thinkingArgs(args)
+	if err != nil {
+		return siteState{}, err
+	}
 	base := map[string]any{}
 	for key, value := range args {
 		if !slices.Contains([]string{"view", "query", "highlight", "reveal"}, key) {
@@ -439,6 +443,18 @@ func (site *siteMap) linkFromArgs(args map[string]any) (siteState, error) {
 	}
 	return state, nil
 }
+
+// cardParam reports whether some card's own link writes param.
+func (site *siteMap) cardParam(param string) bool {
+	for _, card := range site.Cards.Items {
+		for _, item := range card.URL.Params {
+			if item.Name == param {
+				return true
+			}
+		}
+	}
+	return false
+}
 func (site *siteMap) parseURL(raw string) (siteState, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -477,27 +493,40 @@ func (site *siteMap) parseURL(raw string) (siteState, error) {
 	}
 	// Global presentation defaults are written on every page. Removing only
 	// those first preserves native card identity and ribbon templates.
-	common := url.Values{}
-	for name, list := range values {
-		common[name] = slices.Clone(list)
-	}
 	globals := map[string]any{}
 	for name, field := range site.ViewContract.Fields {
-		if !slices.Contains(field.Pages, "*") || !common.Has(field.Param) {
+		if !slices.Contains(field.Pages, "*") || !values.Has(field.Param) {
 			continue
 		}
-		value, err := decodeViewValue(field, common.Get(field.Param))
+		value, err := decodeViewValue(field, values.Get(field.Param))
 		if err != nil {
 			return siteState{}, linkError("url", err.Error())
 		}
 		globals[name] = value
-		common.Del(field.Param)
 	}
-	if len(globals) > 0 {
-		candidate := *u
-		candidate.RawQuery = common.Encode()
+	// A card's own link may carry a global field (a section it opens), which
+	// tells it apart from a card with the same dashboard: try keeping those
+	// first.
+	for _, keepCards := range []bool{true, false} {
+		if len(globals) == 0 {
+			break
+		}
+		candidate, rest, kept := *u, url.Values{}, map[string]any{}
+		for name, list := range values {
+			rest[name] = slices.Clone(list)
+		}
+		for name, value := range globals {
+			if param := site.ViewContract.Fields[name].Param; !keepCards || !site.cardParam(param) {
+				rest.Del(param)
+				kept[name] = value
+			}
+		}
+		if keepCards && len(kept) == len(globals) {
+			continue
+		}
+		candidate.RawQuery = rest.Encode()
 		if state, err := site.parseBaseURL(candidate.String()); err == nil {
-			state.View, state.Highlight, state.Reveal = globals, highlights, reveal
+			state.View, state.Highlight, state.Reveal = kept, highlights, reveal
 			if _, err := site.build(state); err != nil {
 				return state, linkError("url", err.Error())
 			}
@@ -527,6 +556,12 @@ func (site *siteMap) parseURL(raw string) (siteState, error) {
 	var query *qt.LinkQuery
 	if node != nil {
 		for key, field := range site.viewFields(node.Path) {
+			// A registered view field can also identify a nested route (for
+			// example Optimize's Safety section). Keep fixed route parameters
+			// in the address while parsing the remaining view state.
+			if _, fixed := node.Fixed.get(field.Param); fixed {
+				continue
+			}
 			if !values.Has(field.Param) {
 				continue
 			}
@@ -626,6 +661,7 @@ func (site *siteMap) arguments(state siteState) map[string]any {
 	if state.Reveal != "" {
 		out["reveal"] = state.Reveal
 	}
+	site.thinkingArguments(out)
 	return out
 }
 func (site *siteMap) browseViewStateList(node *siteNode, global bool) map[string]any {
@@ -667,7 +703,7 @@ func (site *siteMap) browseTargets(node *siteNode) map[string]any {
 		items = append(items, map[string]any{"pattern": "control:" + option.Param, "description": "The native query builder for this dataset."})
 	}
 
-	return map[string]any{"path": node.Path + "/targets", "items": items, "sections": site.ViewContract.Sections[node.Path], "controls_path": node.Path + "/view", "cards_path": "cards", "availability": "A target must be present in the selected view. Dynamic IDs are syntax-checked, not queried; matching filters remain your responsibility.", "highlight": "Multiple target references", "reveal": "One target: scroll + distinctive highlight; never browser focus. text: uses literal matching."}
+	return map[string]any{"path": node.Path + "/targets", "items": items, "sections": site.ViewContract.Sections[node.Path], "controls_path": node.Path + "/view", "cards_path": "cards", "availability": "A target must be present in the selected view. Dynamic IDs are syntax-checked, not queried; matching filters remain your responsibility.", "highlight": "Multiple target references", "reveal": "One target: scroll + distinctive highlight; never browser focus. text: opens page Find with a literal term (view.find)."}
 }
 
 // Resolve only library-backed references, with the same dataset/scope as the
@@ -789,19 +825,16 @@ func validateViewShape(name string, value any) error {
 		} else if _, err := viewTimezone(name); err != nil {
 			return fmt.Errorf("needs an IANA timezone")
 		}
-	case "delegation_page", "reader_page", "sidebar_width":
+	case "delegation_page", "sidebar_width":
 		text, ok := value.(string)
 		if !ok {
 			return fmt.Errorf("needs a decimal integer")
 		}
 		number, err := strconv.Atoi(text)
-		if err != nil || !plainDigits(text) || number < 0 || (name == "delegation_page" || name == "reader_page") && number > 250 || name == "sidebar_width" && (number < 300 || number > 5000) {
+		if err != nil || !plainDigits(text) || number < 0 || name == "delegation_page" && number > 250 || name == "sidebar_width" && (number < 300 || number > 5000) {
 			return fmt.Errorf("out of range")
 		}
-	case "search_state", "reader_search":
-		if name == "reader_search" && len(object) == 0 {
-			return nil
-		}
+	case "search_state":
 		return validateSearchDraft(object)
 	case "record_keyword":
 		if _, ok := object["field"].(string); !ok || object["field"] == "" {

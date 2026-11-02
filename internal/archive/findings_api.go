@@ -27,6 +27,10 @@ import (
 // Reading never changes a finding's state; only the copy starts measuring.
 
 func (s *Server) getFindings(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/api/findings/safety" || strings.HasPrefix(r.URL.Path, "/api/findings/safety/") {
+		s.getSafety(w, r)
+		return
+	}
 	path := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/findings"), "/")
 	if path == "" {
 		value, err := s.Catalog.FindingsOverview(r.Context(), r.URL.Query().Get("state"))
@@ -45,6 +49,10 @@ func (s *Server) getFindings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) postFindings(w http.ResponseWriter, r *http.Request, body map[string]any) {
+	if strings.HasPrefix(r.URL.Path, "/api/findings/safety/") {
+		s.postSafety(w, r, body)
+		return
+	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/findings/")
 	ctx := r.Context()
 	ids := func() []string {
@@ -308,6 +316,11 @@ func (c *Catalog) FindingsOverview(ctx context.Context, filter string) (map[stri
 	summary := map[string]any{"saved": saved, "open": counts[findingOpen], "watching": counts[findingWatching], "won": counts[findingWon],
 		"dismissed": counts[findingDismissed], "snoozed": counts[findingSnoozed], "regressed": regressed, "at_stake_usd": atStake, "likely_usd": likely, "new": newCount,
 		"next_result_days": view.nextResult()}
+	var safetyOpen int
+	if err := c.reader().QueryRowContext(ctx, `SELECT COUNT(*) FROM safety_cases c LEFT JOIN safety_state s ON s.case_id=c.id WHERE COALESCE(s.state,'open')='open' OR (s.state='handed_off' AND c.completion>s.handled_completion)`).Scan(&safetyOpen); err != nil {
+		return nil, err
+	}
+	summary["safety_open"] = safetyOpen
 	// The header's badge and cart button poll this; it skips the cards.
 	if filter == "summary" {
 		return map[string]any{"summary": summary, "cart_count": cartCount}, nil

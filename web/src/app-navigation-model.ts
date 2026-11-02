@@ -1,4 +1,5 @@
 import { nestedPageTrail, type NestedPage } from "./nested-pages-model";
+import { safetyURL } from "./safety-route";
 import { agentEventDatasets, agentEventTopics, agentEventsEnabled } from "./agent-events-flag";
 import { isUsageWorkspace, readUsageWorkspace, usageDatasets, usageDatasetTopics, usageTopics, usageWorkspaceURL, type UsageMode } from "./usage-workspace-model";
 
@@ -7,10 +8,16 @@ export const findingsPages: readonly NestedPage[] = [
   { id: "findings:table", label: "Table", href: "/findings?view=table" },
   { id: "findings:settings", label: "Settings", href: "/findings?view=settings" },
 ];
+export const safetyPages: readonly NestedPage[] = [
+  { id: "safety:dashboard", label: "Dashboard", href: safetyURL() },
+  { id: "safety:table", label: "Table", href: safetyURL("table") },
+  { id: "safety:settings", label: "Settings", href: safetyURL("settings") },
+];
 
 export function optimizePages(): NestedPage[] {
   return [
-    { id: "findings", label: "Findings", children: findingsPages },
+    { id: "findings", label: "Efficiency", children: findingsPages },
+    { id: "safety", label: "Risky actions", children: safetyPages },
   ];
 }
 
@@ -50,7 +57,7 @@ export function appSections(settings: readonly NestedPage[], params: URLSearchPa
 export function appLocation(path: string, params: URLSearchParams) {
   if (path === "/cards") return { section: "home", current: "/cards" };
   if (path === "/settings/optimization") return { section: "findings", current: "findings:settings" };
-  if (path.startsWith("/findings")) return { section: "findings", current: `findings:${params.get("view") === "settings" ? "settings" : params.get("view") === "table" ? "table" : "dashboard"}` };
+  if (path.startsWith("/findings")) return { section: "findings", current: `${params.get("optimize_area") === "safety" ? "safety" : "findings"}:${params.get("view") === "settings" ? "settings" : params.get("view") === "table" ? "table" : "dashboard"}` };
   if (path.startsWith("/settings")) return { section: "settings", current: path };
   if (path === "/tools") return { section: "analyze", current: `query:${params.get("tools_view") === "summary" ? "tools" : params.get("tools_view") === "skills" ? "skill_usages" : "tool_calls"}` };
   if (path === "/analyze" || path === "/mcp") {

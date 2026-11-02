@@ -226,37 +226,10 @@ const ROUTES = [
     },
     shown: ".usage-workspace-table .qt-row",
   }))),
-  ...['provisional', 'partial'].flatMap(state => [false, true].map(expanded => ({
-    name: `Indexing forecast (${state}${expanded ? ', details' : ''})`, url: '/library', ready: '#queryTableLibrary .qt-row',
-    api: {'GET /api/library/status': {...defaultApi['GET /api/library/status'], idle: false, activities: [{id: 'index-forecast', kind: 'sync', label: 'Manual sync in progress', started_at: new Date(Date.now() - 120_000).toISOString(),
-      stoppable: true, stop_path: '/api/index/cancel', detail: 'Codex · 0 of 4 sources finished',
-      work: {phase: state === 'provisional' ? 'indexing' : 'discovering inputs', source: 'Codex', unit: 'conversation group', done: state === 'provisional' ? 42 : 0, total: state === 'provisional' ? 100 : 0, next: 'Tools, authorship and findings'},
-      estimate: state === 'provisional' ? {state: 'estimating', low_seconds: 60, high_seconds: 120, basis: 'Recent pace of the current step'} : {state: 'unknown', basis: 'Discovering inputs before the stage count is available'},
-      forecast: {state, current_step: 4, total_steps: 8, progress: state === 'provisional' ? .63 : undefined, low_seconds: state === 'provisional' ? 180 : 0, high_seconds: state === 'provisional' ? 600 : 0, predicted_steps: state === 'provisional' ? 4 : 3, remaining_steps: 4, basis: 'Remaining sources and analyses on this Mac', unknown_steps: state === 'partial' ? ['Classify authorship for retained conversations'] : []}}]}},
-    open: async page => {
-      await page.evaluate(() => { window.webkit = {messageHandlers: {pharosLibrary: {postMessage: async () => {}}}}; });
-      await activateHeaderTool(page, 'pharosDrive');
-      if (expanded) await page.locator('#pharosDrivePanel summary').click();
-    }, shown: '#pharosDrivePanel .pharos-activity',
-  }))),
-  ...[false, true].map(expanded => ({
-    name: `Background sync${expanded ? ', details' : ''}`, url: '/library', ready: '#queryTableLibrary .qt-row',
-    api: {'GET /api/library/status': {...defaultApi['GET /api/library/status'], idle: false, activities: [
-      {kind: 'maintenance', label: 'Indexing the Library view', detail: '2 workspaces to index', stoppable: true, stop_path: '/api/library/refresh/stop'},
-      {kind: 'maintenance', label: 'Updating findings', detail: 'Measuring the findings you are watching'},
-    ]}},
-    open: async page => {
-      await activateHeaderTool(page, 'pharosDrive');
-      if (expanded) await page.locator('#pharosDrivePanel summary').click();
-    }, shown: '#pharosDrivePanel .pharos-activity',
-  })),
-  { name: 'Idle drive overview', url: '/library', ready: '#queryTableLibrary .qt-row',
-    open: page => activateHeaderTool(page, 'pharosDrive'), shown: '#pharosDrivePanel',
-  },
-  // The unified activity panel (flag on), idle and busy, in the browser and
-  // in the app (other libraries).
+  // The unified activity panel, idle and busy, in the browser and in the app
+  // (other libraries).
   ...[['idle', idleStatus, false], ['busy', busyStatus, false], ['busy in the app', busyStatus, true]].map(([state, snapshot, managed]) => ({
-    name: `Unified activity panel ${state}`, url: '/library', ready: '#queryTableLibrary .qt-row', preferences: {'pharos-unified-activity-v1': true},
+    name: `Unified activity panel ${state}`, url: '/library', ready: '#queryTableLibrary .qt-row',
     managedLibrary: managed ? {id: 'local', name: 'Pending history', config: '/Users/test/Libraries/Pending/library.toml'} : null,
     api: managed ? {'GET /api/app/status/stream': eventStream(managedStatus(snapshot)), 'GET /api/app/status': managedStatus(snapshot)}
       : {'GET /api/status/stream': eventStream(snapshot), 'GET /api/status': snapshot},
@@ -415,6 +388,11 @@ const ROUTES = [
   { name: "Tool summary", url: "/tools?tools_view=summary", ready: "#toolsPage .qt-row" },
   { name: "Skills", url: "/tools?tools_view=skills", ready: ".skill-usages .qt-row" },
   { name: "Findings", url: "/findings", ready: ".findings-card" },
+  { name: "Safety reviews", url: "/findings?optimize_area=safety", ready: ".safety-card" },
+  { name: "Safety table", url: "/findings?optimize_area=safety&view=table", ready: ".safety-table .qt-row" },
+  { name: "Safety settings", url: "/findings?optimize_area=safety&view=settings", ready: ".safety-check" },
+  { name: "Safety evidence", url: "/findings?optimize_area=safety&safety_case=safety_sample", ready: ".safety-detail", open: async page => { await page.locator('.safety-evidence summary').click(); }, shown: '.safety-evidence[open] pre' },
+  { name: "Safety prompt", url: "/findings?optimize_area=safety", ready: ".safety-card", open: async page => { await page.getByRole('button', { name: 'Review prompt (1 ticked)' }).click(); }, shown: '.findings-dialog' },
   { name: "Findings table", url: "/findings?view=table", ready: ".findings-table .qt-row" },
   { name: "Findings settings", url: "/findings?view=settings", ready: ".findings-settings .findings-panel" },
   { name: "Finding detail", url: "/findings?finding=drift%3Arepo%3Arepo_tl1%3Aghi", ready: ".findings-detail svg" },
@@ -910,7 +888,7 @@ for (const width of [1649, 2133]) test(`pages without section menus use the full
 for (const dashboard of [
   { name: "Human Words", topic: "human", card: "human-words", dataset: "writing_messages", field: "sent_at", first: "first_message_at", last: "last_message_at", summary: "Human Words summary", chart: { period: "day" } },
   { name: "Tokens and Cost", topic: "tokens", card: "cost-repos", dataset: "usage", field: "first_usage_at", first: "first_usage_at", last: "first_usage_at", summary: "Machine token summary", chart: { period: "day", metric: "cost", split: "repository_name" } },
-  { name: "Agent Time", topic: "time", card: "machine-time", dataset: "tool_calls", field: "started_at", first: "started_at", last: "started_at", summary: "Agent Time summary", chart: { period: "day", metric: 0, split: "activity" } },
+  { name: "Tool Time", topic: "time", card: "machine-time", dataset: "tool_calls", field: "started_at", first: "started_at", last: "started_at", summary: "Tool Time summary", chart: { period: "day", metric: 0, split: "activity" } },
   { name: "Skills", topic: "skills", card: "skill-evidence", dataset: "skill_usages", field: "created_at", first: "created_at", last: "created_at", chart: { period: "day", metric: 0, split: "skill_name" } },
   { name: "Tools", topic: "tools", card: "tool-failure-rates", dataset: "tool_calls", field: "started_at", first: "day", last: "day", graph: ".usage-tools-dashboard .usage-analysis-dashboard .qt-metric", chart: { period: "day", metric: "calls", split: "tool_name", view: "compare" } },
   { name: "Pharos MCP", topic: "mcp", card: "mcp-response-size", dataset: "mcp_calls", field: "called_at", first: "called_at", last: "called_at", graph: ".usage-mcp-dashboard .usage-analysis-dashboard .qt-metric", chart: { period: "day", metric: "calls", split: "tool_name", view: "compare" } },
@@ -953,7 +931,8 @@ for (const dashboard of [
   await range.selectOption('7d');
   await app.settled();
   const shorter = await range.boundingBox();
-  assert.ok(shorter.width < longer.width, 'the range selector shrinks with a shorter selected label');
+  // A narrow row holds one control, which stretches across it.
+  if (width === 1504) assert.ok(shorter.width < longer.width, 'the range selector shrinks with a shorter selected label');
   assert.deepEqual(await layoutProblems(page), []);
   await app.shot('shorter-selected-range');
 });

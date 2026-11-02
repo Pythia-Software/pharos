@@ -240,7 +240,7 @@
   left: 0;
   right: 0;
   height: 3px;
-  background: var(--gold);
+  background: var(--sea);
   z-index: 1;
 }
 .delegation-column-option.drop-before::before {
@@ -413,13 +413,13 @@
   font-size: var(--fs-sm);
 }
 .delegation-table tr:hover td {
-  box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--gold) 4%, transparent);
+  box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--sea) 4%, transparent);
 }
 .delegation-current .delegation-label-cell {
-  background: color-mix(in srgb, var(--gold) 17%, var(--panel));
+  background: color-mix(in srgb, var(--sea) 17%, var(--panel));
 }
 .delegation-table tr.delegation-current td {
-  box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--gold) 17%, transparent);
+  box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--sea) 17%, transparent);
 }
 .delegation-current .delegation-name {
   color: var(--ink);
@@ -565,13 +565,13 @@
   gap: 12px;
   padding: 10px 14px;
   margin: -10px -14px 0;
-  background: color-mix(in srgb, var(--gold) 17%, var(--panel));
+  background: color-mix(in srgb, var(--sea) 17%, var(--panel));
 }
 .delegation-session-number {
   flex: none;
   color: var(--ink);
   font-weight: 650;
-  border: 1px solid var(--gold);
+  border: 1px solid var(--sea);
   border-radius: 4px;
   padding: 4px 7px;
   font-size: var(--fs-sm);
@@ -717,8 +717,8 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  border: 1px solid var(--gold);
-  background: color-mix(in srgb, var(--gold) 8%, transparent);
+  border: 1px solid var(--sea);
+  background: color-mix(in srgb, var(--sea) 8%, transparent);
   cursor: grab;
   min-width: 2px;
 }
@@ -730,7 +730,7 @@
   top: 0;
   bottom: 0;
   width: 8px;
-  background: var(--gold);
+  background: var(--sea);
   opacity: 0.8;
   cursor: ew-resize;
 }
@@ -742,7 +742,7 @@
 }
 .delegation-viewport:focus,
 .delegation-viewport > span:focus {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring, var(--accent));
   outline-offset: -2px;
 }
 .delegation-overview-bounds {
@@ -873,9 +873,9 @@
   top: 0;
   bottom: 0;
   z-index: 4;
-  background: color-mix(in srgb, var(--gold) 22%, transparent);
-  border-left: 2px solid var(--gold);
-  border-right: 2px solid var(--gold);
+  background: color-mix(in srgb, var(--sea) 22%, transparent);
+  border-left: 2px solid var(--sea);
+  border-right: 2px solid var(--sea);
   pointer-events: none;
 }
 .delegation-axis small:first-child {
@@ -931,7 +931,7 @@
   background: color-mix(in srgb, var(--accent) 14%, var(--panel));
 }
 .delegation-lane-current .delegation-lane-label {
-  background: color-mix(in srgb, var(--gold) 18%, var(--panel));
+  background: color-mix(in srgb, var(--sea) 18%, var(--panel));
 }
 .delegation-lane-current .delegation-name {
   color: var(--accent);
@@ -978,7 +978,7 @@
   z-index: 2;
 }
 .delegation-mark:focus-visible {
-  outline: 2px solid var(--gold);
+  outline: 2px solid var(--sea);
   z-index: 2;
 }
 .delegation-mark.failed {

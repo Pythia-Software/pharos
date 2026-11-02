@@ -1484,14 +1484,12 @@
   const syncOnly = document.getElementById('headerSyncOnly');
   if (syncOnly) syncOnly.onclick = syncNow;
 
-  window.addEventListener('pharos:unified-activity', () => { if (unified()) closePanel(); });
-
   window.pharosLibrary = {closePanel, setPanelOpen(open) {
     if (open) openPanel({fromURL: true});
     else { closePanel({fromURL: true}); window.pharosStatusPanel?.close({fromURL: true}); }
   }, refresh: refreshStatus,
-    // For status-panel.js: the chip and Index changes it renders while the
-    // unified activity preference is on, the in-place renderer, and whether
+    // For status-panel.js: the chip and Index changes it renders, the
+    // in-place renderer, and whether
     // this page is starting a capture or index.
     ensureChip, updateLiveChildren, localBusy: () => Boolean(headerCaptureIndexRunning || hostsBusy), status: () => status, runs, refreshSettings, refreshSyncControls: renderSyncControls, renderAlerts: () => { renderChip(); renderPanel(); }, onStatus: listener => listeners.add(listener),
     // Pure helpers, for web/tests/unit/page/library.test.mjs.

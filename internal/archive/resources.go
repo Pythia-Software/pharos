@@ -24,6 +24,8 @@ import (
 // its exited children: git, gh, diskutil and the CLIs count when they exit,
 // all at once) over the wall time between two samples, as a percentage of
 // one core. Memory is the physical footprint, what Activity Monitor shows.
+// Disk is the change in bytes the process read and wrote over the same
+// wall time (its own: the kernel keeps no count for exited children).
 // Attribution stops at the process: which operation used the CPU is not
 // measured.
 
@@ -53,6 +55,10 @@ type processUsage struct {
 	Footprint, Resident uint64
 	// Started identifies the process across PID reuse (0: unknown).
 	Started uint64
+	// DiskBytes is what the process has read from and written to disk;
+	// DiskKnown is false where it cannot be read (off macOS).
+	DiskBytes uint64
+	DiskKnown bool
 }
 
 // resourceProcess is one process a snapshot asks about.
@@ -81,10 +87,10 @@ type resourceSampler struct {
 type resourceTrack struct {
 	at, asked time.Time
 	usage     processUsage
-	// percent is the CPU over the interval that ended at at; nil after the
-	// first reading.
-	percent *float64
-	err     error
+	// percent is the CPU over the interval that ended at at, and disk its
+	// bytes per second; nil after the first reading.
+	percent, disk *float64
+	err           error
 }
 
 func newResourceSampler() *resourceSampler {
@@ -98,24 +104,28 @@ type resourceReading struct {
 	Library     string   `json:"library,omitempty"`
 	CPUPercent  *float64 `json:"cpu_percent"`
 	MemoryBytes uint64   `json:"memory_bytes"`
-	SampledAt   string   `json:"sampled_at"`
-	Basis       string   `json:"basis"`
+	// DiskBytesPerSecond is what it read and wrote per second, over the
+	// same interval as CPU (null until a second reading).
+	DiskBytesPerSecond *float64 `json:"disk_bytes_per_second"`
+	SampledAt          string   `json:"sampled_at"`
+	Basis              string   `json:"basis"`
 	// Text is the server's line for the process ("Library service · 12% of
 	// one core · 340 MB").
 	Text string `json:"text"`
 	// exact values, before rounding for the document.
-	cpu    *float64
-	memory uint64
-	at     time.Time
+	cpu, disk *float64
+	memory    uint64
+	at        time.Time
 }
 
 // resourceSummary is a snapshot's resources: the totals of its processes,
 // and each of them.
 type resourceSummary struct {
-	CPUPercent  *float64 `json:"cpu_percent"`
-	MemoryBytes uint64   `json:"memory_bytes"`
-	SampledAt   string   `json:"sampled_at"`
-	Basis       string   `json:"basis"`
+	CPUPercent         *float64 `json:"cpu_percent"`
+	MemoryBytes        uint64   `json:"memory_bytes"`
+	DiskBytesPerSecond *float64 `json:"disk_bytes_per_second"`
+	SampledAt          string   `json:"sampled_at"`
+	Basis              string   `json:"basis"`
 	// Approximate is true when a reading is the process's own report (off
 	// macOS) rather than the kernel's.
 	Approximate bool `json:"approximate"`
@@ -169,7 +179,11 @@ func (r *resourceSampler) sample(processes []resourceProcess) []resourceReading 
 					break
 				}
 				percent := min(max(0, 100*(own+children)/elapsed), 100*cores)
-				track = &resourceTrack{at: now, usage: usage, percent: &percent}
+				var disk *float64
+				if previous := track.usage; usage.DiskKnown && previous.DiskKnown && usage.DiskBytes >= previous.DiskBytes {
+					disk = new(float64(usage.DiskBytes-previous.DiskBytes) / elapsed)
+				}
+				track = &resourceTrack{at: now, usage: usage, percent: &percent, disk: disk}
 			}
 			r.byPID[process.PID] = track
 		}
@@ -178,8 +192,9 @@ func (r *resourceSampler) sample(processes []resourceProcess) []resourceReading 
 			continue
 		}
 		reading := resourceReading{PID: process.PID, Role: process.Role, Library: process.Library, Basis: r.basis,
-			cpu: track.percent, memory: track.usage.Footprint, at: track.at}
+			cpu: track.percent, disk: track.disk, memory: track.usage.Footprint, at: track.at}
 		reading.CPUPercent, reading.MemoryBytes, reading.SampledAt = roundedPercent(track.percent), roundedBytes(track.usage.Footprint), formatTime(track.at)
+		reading.DiskBytesPerSecond = roundedRate(track.disk)
 		reading.Text = strings.Join(slices.DeleteFunc([]string{resourceRoleLabel(process), loadWords(track.percent, track.usage.Footprint)}, func(s string) bool { return s == "" }), " · ")
 		readings = append(readings, reading)
 	}
@@ -200,7 +215,7 @@ func summarizeResources(subject string, readings []resourceReading) *resourceSum
 	summary := &resourceSummary{Processes: readings, Basis: readings[0].Basis}
 	// CPU is totalled only when every process has a figure: a total that
 	// silently left out one just starting would read low. Memory always is.
-	cpu := new(0.0)
+	cpu, disk := new(0.0), new(0.0)
 	var memory uint64
 	var at time.Time
 	for _, reading := range readings {
@@ -208,6 +223,11 @@ func summarizeResources(subject string, readings []resourceReading) *resourceSum
 			cpu = nil
 		} else if cpu != nil {
 			*cpu += *reading.cpu
+		}
+		if reading.disk == nil {
+			disk = nil
+		} else if disk != nil {
+			*disk += *reading.disk
 		}
 		memory += reading.memory
 		if reading.at.After(at) {
@@ -225,6 +245,7 @@ func summarizeResources(subject string, readings []resourceReading) *resourceSum
 		*cpu = min(*cpu, 100*float64(resourceCores()))
 	}
 	summary.CPUPercent, summary.MemoryBytes, summary.SampledAt = roundedPercent(cpu), roundedBytes(memory), formatTime(at)
+	summary.DiskBytesPerSecond = roundedRate(disk)
 	summary.Label = subject + " is using " + loadWords(cpu, memory)
 	if summary.Approximate {
 		summary.Label += " (approximate)"
@@ -273,6 +294,15 @@ func roundedPercent(value *float64) *float64 {
 		return nil
 	}
 	return new(math.Round(*value))
+}
+
+// roundedRate is a disk rate in bytes per second, to two significant
+// figures.
+func roundedRate(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	return new(float64(roundedBytes(uint64(math.Round(*value)))))
 }
 
 func roundedBytes(value uint64) uint64 {

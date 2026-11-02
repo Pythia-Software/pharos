@@ -208,6 +208,7 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 	live, order := runningItems(views)
 	items := []map[string]any{}
 	byCadence := map[string][]map[string]any{}
+	unscheduled := []string{}
 	failed, missed, waiting := []map[string]any{}, false, false
 	for _, plan := range plans {
 		item, _ := backgroundItemByID(plan.ID)
@@ -281,7 +282,12 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 			}
 		}
 		items = append(items, entry)
-		byCadence[column] = append(byCadence[column], entry)
+		if plan.Cadence == cadenceManual {
+			// Only when you ask: on no schedule, so in no cadence's row.
+			unscheduled = append(unscheduled, item.ID)
+		} else {
+			byCadence[column] = append(byCadence[column], entry)
+		}
 		if state == "failed" {
 			failed = append(failed, entry)
 		}
@@ -341,7 +347,7 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 		}
 		everythingText += "."
 	}
-	return map[string]any{"mode": settings.Mode, "paused_until": nullable(settings.PausedUntil), "items": items, "cadences": rowsOut,
+	return map[string]any{"mode": settings.Mode, "paused_until": nullable(settings.PausedUntil), "items": items, "cadences": rowsOut, "unscheduled": unscheduled,
 		"headline": backgroundHeadline(settings, items, order, failed, missed, waiting, in.power), "power": in.power,
 		"everything": map[string]any{"seconds": everything, "text": everythingText}}
 }
@@ -761,7 +767,8 @@ func (s *Server) postBackgroundSettings(w http.ResponseWriter, r *http.Request, 
 }
 
 // postBackgroundRun answers POST /api/background/run: {"item": ID} runs one
-// item now, {"cadence": "daily"} every item of a cadence.
+// item now, {"cadence": "daily"} every item of a cadence ("manual": every
+// item set to only when you ask, the panel's Ad hoc).
 func (s *Server) postBackgroundRun(w http.ResponseWriter, r *http.Request, body map[string]any) {
 	ids := []string{}
 	if id := firstString(body["item"]); id != "" {
@@ -784,7 +791,7 @@ func (s *Server) postBackgroundRun(w http.ResponseWriter, r *http.Request, body 
 		}
 	}
 	if len(ids) == 0 {
-		writeError(w, errors.New(`body is {"item": ID} or {"cadence": "frequent" | "hourly" | "daily"}`), 400)
+		writeError(w, errors.New(`body is {"item": ID} or {"cadence": "frequent" | "hourly" | "daily" | "manual"}`), 400)
 		return
 	}
 	run := []string{}

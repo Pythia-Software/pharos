@@ -141,7 +141,7 @@ Sources: [findings.tsx](../web/src/findings.tsx), [findings-route.ts](../web/src
 |---|---|---|---|
 | Work, selected conversation, message, tool call, timestamp | Work/conversation path plus `conversation/message/call/at` | Older `/work/{id}?conversation=...` form only | Reader rewrites to `/work/{id}/conversation/{id}`; manifest parser requires exact path segment count and does not recognize the resulting path |
 | Transcript Show presets, custom event-category checkboxes | Saved `pharos-transcript-filter` | Missing | Definite gap: changes visible content; browser observed Primary only without URL change |
-| Find in conversation: applied rules/syntax, match options/scope, message-order selector | Local `ConversationSearch` state | Missing | Definite query gap; Library search URL support does not cover this reader search |
+| Find in conversation | Replaced by page Find: `find`, `find_case`, `find_regex` | Present | The reader's own Find was merged into page Find (see url-view-state.md) |
 | Session table / parallel lanes, explorer visibility | `explorer`, `sessions` | Present | Keep |
 | Hierarchy/ranking, metric, Self/Self+children, sort direction, collapsed nodes, selected session, zoom range | `delegation_*` | Present | Existing base; paging and detailed lane state still differ |
 | Visible metric columns, column order, cell tint | Saved delegation preferences | Missing | Definite view gap |
@@ -150,7 +150,7 @@ Sources: [findings.tsx](../web/src/findings.tsx), [findings-route.ts](../web/src
 | Open/close all turns, individual turns/tool payloads, full message text, tool-use summary, source/archive details | Local DOM disclosure state; turn openness partly remembered in memory | Missing | Include under the agreed disclosure scope; message links already reveal their targets |
 | Workspace sidebar show/hide, width, mobile sheet | Local state / saved width | Missing | Include durable visibility/layout choices; exclude mobile navigation menu openness |
 
-Sources: [reader controls in ui.py](../internal/archive/assets/ui.py), [reader categories/model](../internal/archive/assets/reader-model.js), [conversation-search.tsx](../web/src/conversation-search.tsx), [delegation.tsx](../web/src/delegation.tsx), [delegation-route.ts](../web/src/delegation-route.ts), [workspace-inbox.ts](../web/src/workspace-inbox.ts), [matchRoute](../internal/archive/site_link.go).
+Sources: [reader controls in ui.py](../internal/archive/assets/ui.py), [reader categories/model](../internal/archive/assets/reader-model.js), [page-find.ts](../web/src/page-find.ts), [delegation.tsx](../web/src/delegation.tsx), [delegation-route.ts](../web/src/delegation-route.ts), [workspace-inbox.ts](../web/src/workspace-inbox.ts), [matchRoute](../internal/archive/site_link.go).
 
 There are two different controls called sessions visibility: the explorer's existing `sessions=hidden` and the workspace navigator sidebar's visibility. They need distinct ownership/names if both are made linkable.
 
