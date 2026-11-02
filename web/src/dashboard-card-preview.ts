@@ -4,9 +4,12 @@ import { analysisCatalogFor } from "./analysis-catalogs";
 import { runAnalysisQuery, type LocalRows } from "./analysis-request";
 import { analysisEmptyLabel, analysisNote, analysisQuery, cycleResult, nativeCycleResult, selectGroups } from "./dashboard-analysis-model";
 import { trendQuery, trendSeries, trendTitle } from "./dashboard-trend-model";
-import { readDashboardCard } from "./dashboard-card-model";
+import { dashboardCardRibbon, readDashboardCard, type DashboardCardTarget } from "./dashboard-card-model";
 import { timeBounds } from "./chart-range";
 import { normalizeConcurrencySettings, readConcurrencySettings } from "./concurrency-settings";
+import { loadConcurrencyData } from "./concurrency-store";
+import type { ConcurrencyData } from "./concurrency-data";
+import { ribbonCardTitle, ribbonCover } from "./parallelism-ribbon-card";
 import { isOriginDimension, loadOriginMetadata, originLabel } from "./origin-dimensions";
 import { optionLabels } from "./option-labels";
 import { toolMetricPresentation } from "./tools-dashboard-model";
@@ -16,8 +19,20 @@ import type { QueryPreview } from "./query-previews";
 import { hoursOfDay, weekdays } from "./weekday-cover";
 
 // A dashboard address carries no authored cover, so its card fits the chart.
-export async function loadDashboardCardPreview(address: string, schema: FieldSchema, signal?: AbortSignal, local?: LocalRows, now = Date.now()): Promise<QueryPreview> {
-  return fittedPreview(await dashboardPreview(address, schema, signal, local, now));
+// A ribbon card reads the captured timing snapshot the ribbon draws (local
+// stands in for it in tests).
+export async function loadDashboardCardPreview(address: string, schema: FieldSchema, signal?: AbortSignal, local?: LocalRows, now = Date.now(), target: DashboardCardTarget = "chart", timing?: ConcurrencyData): Promise<QueryPreview> {
+  return fittedPreview(target === "ribbon" ? ribbonPreview(address, timing ?? await loadConcurrencyData(), now) : await dashboardPreview(address, schema, signal, local, now));
+}
+
+function ribbonPreview(address: string, data: ConcurrencyData, now: number): QueryPreview {
+  readDashboardCard(address, new Date(now));
+  const settings = dashboardCardRibbon(address), cover = ribbonCover(data, settings, new Date(now));
+  const ready = cover.buckets.some(bucket => Object.keys(bucket.values).length);
+  return { state: ready ? "ready" : "empty", total: cover.buckets.length, summary: ribbonCardTitle(settings), action: "Explore this dashboard",
+    emptyLabel: "No captured activity in this range", buckets: cover.buckets, series: cover.series,
+    note: `Average concurrent ${settings.counting === "agent" ? "sessions" : "workspaces"} in each period, including idle time, by repository.`,
+    dashboardTrend: { prepared: true, xLabel: cover.hourly ? "hours" : "day", yLabel: cover.label, unit: "" } };
 }
 
 async function dashboardPreview(address: string, schema: FieldSchema, signal?: AbortSignal, local?: LocalRows, now = Date.now()): Promise<QueryPreview> {

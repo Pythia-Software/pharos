@@ -200,6 +200,10 @@
       "field": "reader_labels"
     },
     {
+      "file": "internal/archive/assets/ui.py",
+      "field": "reader_writing"
+    },
+    {
       "file": "web/src/safety.tsx",
       "field": "safety_case"
     },
@@ -3249,15 +3253,6 @@
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
     {
-      "key": "c992fea4ef36d7c4:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "renderDetail",
-      "tag": "button",
-      "control": "'button', 'button-with-icon', 'Search this workspace'",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
       "key": "f3b780a7c0a00dcf:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "renderDetail",
@@ -3499,15 +3494,6 @@
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
     {
-      "key": "17ca733baab56cf1:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "transcriptEventsControl",
-      "tag": "button",
-      "control": "'button', 'transcript-labels-toggle', 'Events'",
-      "contract": "reader",
-      "reason": "The Events toggle writes reader_events through the view contract; its saved preference is only the fallback when a link carries none."
-    },
-    {
       "key": "9b7112adc6a77699:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "transcriptFilterControl",
@@ -3526,13 +3512,13 @@
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
     {
-      "key": "a240ddf105d4c2db:0",
+      "key": "a2396c325479ce5c:0",
       "file": "internal/archive/assets/ui.py",
-      "owner": "transcriptLabelsControl",
-      "tag": "button",
-      "control": "'button', 'transcript-labels-toggle', 'Labels'",
+      "owner": "transcriptHighlightControl",
+      "tag": "input",
+      "control": "'input', ''",
       "contract": "reader",
-      "reason": "The Labels toggle writes reader_labels through the view contract; its saved preference is only the fallback when a link carries none."
+      "reason": "Each Highlight checkbox writes its own boolean view field (reader_writing, reader_events, reader_labels) through the view contract; its saved preference is only the fallback when a link carries none."
     },
     {
       "key": "0e18c887173fcc9b:0",
@@ -4423,11 +4409,20 @@
       "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
     },
     {
-      "key": "3539ef4de8f33cc5:0",
+      "key": "4385fb8ea3f848bf:0",
       "file": "web/src/create-dashboard-card.tsx",
       "owner": "CreateDashboardCard",
       "tag": "input",
-      "control": "value={draft.title} onChange={event => setDraft({ ...draft, title: event.target.value })}",
+      "control": "name=\"dashboardCardTarget\" value={item.id} checked={draft.target === item.id} onChange={() => choose(item.id)}",
+      "contract": "editing",
+      "reason": "Chooses which chart of the dashboard URL the new card shows (Parallelism's ribbon or its catalog chart). An unapplied authoring draft saved only with the card, never a view parameter."
+    },
+    {
+      "key": "4aa192bf83534c86:0",
+      "file": "web/src/create-dashboard-card.tsx",
+      "owner": "CreateDashboardCard",
+      "tag": "button",
+      "control": "aria-label=\"Create card\" onClick={start}",
       "contract": "editing",
       "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
     },
@@ -4446,24 +4441,6 @@
       "owner": "CreateDashboardCard",
       "tag": "a",
       "control": "onClick={event => { event.preventDefault(); window.pharosNavigate?.(\"/home\"); }}",
-      "contract": "editing",
-      "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
-    },
-    {
-      "key": "bd9c4bbde6c23fdf:0",
-      "file": "web/src/create-dashboard-card.tsx",
-      "owner": "CreateDashboardCard",
-      "tag": "button",
-      "control": "aria-label=\"Create card\" onClick={() => { const url = dashboardCardURL(location.href, catalog, state, where); setDraft({ url, title: dashboardCardTitle(catalog, state), description: dashboardCardDescription(url) }); setError(\"\"); setSaved(false); dialog.current?.showModal(); }}",
-      "contract": "editing",
-      "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
-    },
-    {
-      "key": "eccae4db9182a984:0",
-      "file": "web/src/create-dashboard-card.tsx",
-      "owner": "CreateDashboardCard",
-      "tag": "textarea",
-      "control": "value={draft.description} onChange={event => setDraft({ ...draft, description: event.target.value })}",
       "contract": "editing",
       "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
     },
@@ -6239,6 +6216,15 @@
       "reason": "Page Find term; readFind/writeFind keep find, find_case and find_regex in the URL (writeFindParameters)."
     },
     {
+      "key": "502369976da84683:0",
+      "file": "web/src/query-card.tsx",
+      "owner": "QueryCard",
+      "tag": "input",
+      "control": "aria-label=\"Title\" value={title} onChange={event => editing.onTitle(event.target.value)}",
+      "contract": "editing",
+      "reason": "The card editor's title, edited in place on the card. An unapplied authoring draft saved only with the card."
+    },
+    {
       "key": "518523774b3bb3cd:0",
       "file": "web/src/query-card.tsx",
       "owner": "QueryCard",
@@ -6291,6 +6277,15 @@
       "control": "aria-label={`Remove ${title}`} onClick={onRemove}",
       "contract": "editing",
       "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
+    },
+    {
+      "key": "fb5255a0d019ca7c:0",
+      "file": "web/src/query-card.tsx",
+      "owner": "QueryCard",
+      "tag": "textarea",
+      "control": "aria-label=\"Description\" value={description} onChange={event => editing.onDescription(event.target.value)}",
+      "contract": "editing",
+      "reason": "The card editor's description, edited in place on the card. An unapplied authoring draft saved only with the card."
     },
     {
       "key": "7280e16d4177626c:0",

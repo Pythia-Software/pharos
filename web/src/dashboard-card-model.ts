@@ -2,12 +2,14 @@ import { EMPTY_QUERY, encodeQuery, type WhereTerm } from "@pythia-software/query
 import { analysisCatalogs } from "./analysis-catalogs";
 import { canonicalState, normalizeAnalysis, validAnalysisState, type AnalysisCatalog, type AnalysisState } from "./dashboard-analysis-model";
 import { dashboardDefaults } from "./dashboard-defaults";
+import { trendTitle } from "./dashboard-trend-model";
 import { readDashboardLink } from "./usage-dashboard-model";
 import { readUsageWorkspace, usageTopicDatasets, usageTopics, usageWorkspaceURL } from "./usage-workspace-model";
 import { readBookmarks, writeBookmarks, type Bookmark } from "./bookmarks";
 import type { QueryCategory } from "./query-categories";
 import { fittedCoverHeight, type CardLoadingSpec } from "./card-loading-model";
-import { readConcurrencySettings } from "./concurrency-settings";
+import { normalizeConcurrencySettings, readConcurrencySettings } from "./concurrency-settings";
+import { ribbonCardTitle, ribbonCardWindow } from "./parallelism-ribbon-card";
 
 // The dashboard URL is the card definition. Keep requested filters relative;
 // execution (including Today) resolves them anew whenever the card refreshes.
@@ -19,6 +21,27 @@ export function dashboardCardURL(address: string, catalog: AnalysisCatalog, stat
   if (topic === "parallelism" && !url.searchParams.has("analyze_parallelism")) url.searchParams.set("analyze_parallelism", JSON.stringify(readConcurrencySettings()));
   for (const key of [...url.searchParams.keys()]) if (key.startsWith("card_") || ["overlay", "history_search", "history_collapsed", "highlight", "reveal", "find", "find_case", "find_regex", "chart_pins"].includes(key)) url.searchParams.delete(key);
   return usageWorkspaceURL({ mode: "dashboards", topic, dataset: usageTopicDatasets[topic] }, url.searchParams);
+}
+
+// One dashboard URL can hold several charts: Parallelism draws its ribbon
+// above the catalog chart. A card names the one it shows; "chart", the
+// catalog chart, is the default and is never stored.
+export type DashboardCardTarget = "chart" | "ribbon";
+export function dashboardCardTargets(address: string): Array<{ id: DashboardCardTarget; label: string; title: string }> {
+  // Each is labelled with the heading it has on the page.
+  const { topic, state } = readDashboardCard(address), catalog = analysisCatalogs[topic]!, title = dashboardCardTitle(catalog, state);
+  const charts: Array<{ id: DashboardCardTarget; label: string; title: string }> = [{ id: "chart", label: state.view === "trend" ? trendTitle(catalog, state) : title, title }];
+  if (topic !== "parallelism") return charts;
+  const ribbon = ribbonCardTitle(dashboardCardRibbon(address));
+  return [{ id: "ribbon", label: ribbon, title: ribbon }, ...charts];
+}
+
+// The ribbon's settings travel in the URL; without them it opens on the
+// saved settings, as the page does.
+export function dashboardCardRibbon(address: string) {
+  const encoded = new URL(address, location.origin).searchParams.get("analyze_parallelism");
+  if (encoded === null) return readConcurrencySettings();
+  try { return normalizeConcurrencySettings(JSON.parse(encoded)); } catch { throw new Error("This dashboard card's ribbon settings are invalid."); }
 }
 
 export function readDashboardCard(address: string, now = new Date()) {
@@ -35,25 +58,26 @@ export function dashboardCardTitle(catalog: AnalysisCatalog, state: AnalysisStat
   return `${measure}${view.view === "trend" ? " over time" : view.view === "cycle" ? ` by ${view.cycle === "hour" ? "hour of day" : "weekday"}` : split ? ` by ${split.toLowerCase()}` : ""}`;
 }
 
-export function collectDashboardCard(url: string, title: string, description: string): Bookmark {
-  readDashboardCard(url);
+export function collectDashboardCard(url: string, title: string, description: string, target: DashboardCardTarget = "chart"): Bookmark {
+  if (!dashboardCardTargets(url).some(item => item.id === target)) throw new Error("This chart cannot be a card.");
   if (!title.trim() || title.trim().length > 200 || description.length > 500) throw new Error("Use a title up to 200 characters and a description up to 500.");
   const items = readBookmarks();
-  const item: Bookmark = { id: crypto.randomUUID(), dashboard: true, url, title: title.trim(), description: description.trim(), savedAt: Date.now() };
+  const item: Bookmark = { id: crypto.randomUUID(), dashboard: true, url, ...target === "chart" ? {} : { dashboardTarget: target }, title: title.trim(), description: description.trim(), savedAt: Date.now() };
   writeBookmarks([...items, item]);
   return item;
 }
 
 // Ask offers a chart's own address as a card; the same address is collected once.
-export function dashboardCardCollected(url: string): boolean {
-  return readBookmarks().some(item => item.dashboard && item.url === url);
+export function dashboardCardCollected(url: string, target: DashboardCardTarget = "chart"): boolean {
+  return readBookmarks().some(item => item.dashboard && item.url === url && (item.dashboardTarget ?? "chart") === target);
 }
 
 export function dashboardCardDescription(address: string): string {
   return usageTopics[readDashboardCard(address).topic].description;
 }
 
-export function dashboardCardWindow(address: string): string {
+export function dashboardCardWindow(address: string, target: DashboardCardTarget = "chart"): string {
+  if (target === "ribbon") return ribbonCardWindow(dashboardCardRibbon(address));
   const { params, where, topic } = readDashboardCard(address), time = analysisCatalogs[topic]!.time;
   if (params.get("analyze_window") === "today") return "Today";
   const dates = where.filter(term => "field" in term && [time.first, time.last].includes(term.field));
@@ -61,7 +85,8 @@ export function dashboardCardWindow(address: string): string {
   return relative && "field" in relative ? `Past ${relative.value.slice(1, -1)} days` : dates.length ? "Saved range" : "All time";
 }
 
-export function dashboardCardPresentation(address: string): { category: QueryCategory; loading: CardLoadingSpec } {
+export function dashboardCardPresentation(address: string, target: DashboardCardTarget = "chart"): { category: QueryCategory; loading: CardLoadingSpec } {
+  if (target === "ribbon") return { category: "machines", loading: { kind: "columns", count: 24, height: fittedCoverHeight("columns", 24) } };
   const { topic, state } = readDashboardCard(address);
   const category: QueryCategory = topic === "tokens" ? state.metric.includes("cost") ? "cost" : "usage"
     : topic === "carbon" ? "carbon" : topic === "human" ? "human" : topic === "skills" ? "skills"

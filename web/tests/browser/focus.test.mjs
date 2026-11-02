@@ -1836,10 +1836,13 @@ test('dashboard card creation keeps focus in its dialog, restores it on cancel a
   await create.click();
   await dialog.getByRole('textbox',{name:'Title',exact:true}).fill('My provider tokens');
   await dialog.getByRole('textbox',{name:'Description',exact:true}).fill('A moving view of my token usage.');
-  for(const width of [1440,320]) {
-    await page.setViewportSize({width,height:900});
-    assert.ok(await dialog.evaluate(el=>{const r=el.getBoundingClientRect();return r.left>=0 && r.right<=innerWidth && el.scrollWidth<=el.clientWidth;}),'dialog fits the viewport');
+  for(const [width,height] of [[1440,900],[320,568]]) {
+    await page.setViewportSize({width,height});
+    assert.ok(await dialog.evaluate(el=>{const r=el.getBoundingClientRect();return r.left>=0 && r.right<=innerWidth && r.top>=0 && r.bottom<=innerHeight && el.scrollWidth<=el.clientWidth;}),'dialog fits the viewport');
   }
+  // Its actions stay reachable by scrolling the dialog on a short screen.
+  await dialog.evaluate(el=>{el.scrollTop=el.scrollHeight;});
+  assert.ok(await dialog.getByRole('button',{name:'Create card',exact:true}).evaluate(el=>el.getBoundingClientRect().bottom<=innerHeight),'Create card can be scrolled into view');
   await shot('create-dashboard-card');
   await dialog.getByRole('button',{name:'Create card',exact:true}).click();
   await page.locator('.dashboard-card-actions').getByRole('link',{name:'Home',exact:true}).click();

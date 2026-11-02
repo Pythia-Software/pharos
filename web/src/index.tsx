@@ -43,6 +43,7 @@ import { tokenSummaryMetrics } from "./token-chart-request";
 import modelRequestsDocument from "../../schemas/model_requests.schema.json";
 import { ThinkingDashboard } from "./thinking-dashboard";
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { useLocationRevision } from "./nested-pages";
 import { LibraryContent } from "./library-content";
@@ -98,7 +99,9 @@ import { AgentEventRates } from "./agent-event-rates";
 import { agentEventReadWhere, daySpan, eventRates, ratePeriod } from "./agent-event-rates-model";
 import { toolsAnalysisCatalog } from "./tools-analysis-catalog";
 import { toolTimeAnalysisCatalog, skillsAnalysisCatalog } from "./record-analysis-catalogs";
-import { UsageWorkspace, UsageDashboardLinks, UsageWorkspaceLink } from "./usage-workspace";
+import { UsageWorkspace, UsageDashboardLinks, UsageWorkspaceLink, useDashboardHeadline } from "./usage-workspace";
+import { CreateDashboardCard, DashboardCardSourceContext } from "./create-dashboard-card";
+import { ribbonCardTitle } from "./parallelism-ribbon-card";
 import { UsageQueryIdeas } from "./usage-query-ideas";
 import { readDashboardLink, parallelismSelectionQuery } from "./usage-dashboard-model";
 import { conversationAnalysisCatalog } from "./conversation-analysis-catalog";
@@ -1130,13 +1133,16 @@ function ParallelismUsageDashboard() {
   const [selection, setSelection] = useState<ConcurrencySelection | null>(null);
   const { catalog, settings } = useParallelismCatalog();
   const ribbon = selection?.settings, differs = ribbon && (ribbon.counting !== settings.counting || ribbon.gap !== settings.gap);
-  return <CatalogDashboard catalog={catalog} linkCatalog={parallelismCatalogShape} dataset="parallelism" name="parallelism" defaults={dashboardDefaults.parallelism}
+  const headline = useDashboardHeadline();
+  // The ribbon comes first, so it titles the page; the catalog chart below
+  // keeps its own title, and each has its own card.
+  return <CatalogDashboard catalog={catalog} linkCatalog={parallelismCatalogShape} dataset="parallelism" name="parallelism" defaults={dashboardDefaults.parallelism} chartHeadline={false}
     summary={where => <ParallelismSettingsNote where={where} believed={settings} />}
     before={<>
+      {headline ? createPortal(<div className="usage-chart-title usage-chart-headline"><h2>{ribbonCardTitle(selection?.settings ?? readConcurrencySettings())}</h2><CreateDashboardCard target="ribbon" /></div>, headline) : null}
       <ConcurrencyPanel routeParameter="analyze_parallelism" onSelection={setSelection} />
       {selection ? <UsageDashboardLinks schema={schemas.parallelism} dataset="parallelism" query={parallelismSelectionQuery(selection)} /> : null}
       <p className="usage-dashboard-note">The query view contains the hourly occupancy records touching the selected range, with the same repository, counting, gap, and ribbon selection. Those records describe threaded activity; model-only timing remains in the chart.</p>
-      <h3>Parallel activity over time</h3>
       {differs ? <p className="usage-dashboard-note" role="status">The ribbon uses this link’s counting and gap; the views below use your saved settings, with which the service builds its records. Change a setting in the ribbon to save it.</p> : null}
     </>} />;
 }
@@ -1256,8 +1262,9 @@ type CatalogViews = (catalog: AnalysisCatalog, format?: AmountFormat) => React.R
 // any setting. readWhere reads an older link's filters, and may leave out
 // those it cannot keep, with a notice saying so.
 type ReadWhere = (where: WhereTerm[], state: AnalysisState) => { where: WhereTerm[]; notice?: React.ReactNode };
-function CatalogDashboard({ catalog, linkCatalog = catalog, dataset, name, defaults, before, after, summary, panels, readWhere, format = catalogAmount, frame }: {
-  catalog: AnalysisCatalog; linkCatalog?: AnalysisCatalog; dataset: UsageDataset; name: string; defaults: AnalysisState;
+// chartHeadline={false} leaves the page's heading to a chart in before.
+function CatalogDashboard({ catalog, linkCatalog = catalog, dataset, name, defaults, before, after, summary, panels, readWhere, format = catalogAmount, frame, chartHeadline = true }: {
+  catalog: AnalysisCatalog; linkCatalog?: AnalysisCatalog; dataset: UsageDataset; name: string; defaults: AnalysisState; chartHeadline?: boolean;
   before?: React.ReactNode; after?: React.ReactNode; summary?: (where: WhereTerm[], selected: boolean) => React.ReactNode;
   panels?: (where: WhereTerm[], onFilter: FilterChange) => React.ReactNode; readWhere?: ReadWhere; format?: AmountFormat;
   frame?: (views: CatalogViews, where: WhereTerm[], onFilter: FilterChange) => React.ReactNode;
@@ -1277,16 +1284,16 @@ function CatalogDashboard({ catalog, linkCatalog = catalog, dataset, name, defau
     return <>
       {(state.view.view ?? "trend") !== "trend"
         ? <DashboardAnalysis catalog={drawn} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</DashboardAnalysis>
-        : <AnalysisTrend catalog={drawn} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter} format={amount}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</AnalysisTrend>}
+        : <AnalysisTrend catalog={drawn} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter} format={amount} headline={chartHeadline}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</AnalysisTrend>}
       {panels?.(state.where, state.onFilter)}
     </>;
   };
-  return <section className={`usage-catalog-dashboard usage-${name}-dashboard`}>
+  return <DashboardCardSourceContext.Provider value={{ catalog, state: state.view, where: state.where, schema }}><section className={`usage-catalog-dashboard usage-${name}-dashboard`}>
     {notice.current ? <p className="usage-dashboard-note" role="status">{notice.current}</p> : null}
     {before}
     {frame ? frame(views, state.where, state.onFilter) : views(catalog)}
     {after}
-  </section>;
+  </section></DashboardCardSourceContext.Provider>;
 }
 
 // Agent Experience: events found in agents' replies and thinking (agent_events),

@@ -47,10 +47,12 @@ export function CardVisualization({ preview }: { preview: QueryPreview }) {
   </>;
 }
 
-export function QueryCard({ id, title, description, actionLabel, url, windowLabel, category, preview, loadingSpec, error, discovery, xray, lean = 0, onOpen, onReveal, onKeep, onEdit, onRemove, onMove, onReload, onDragStart, onDragEnd, onDrop, before }: {
+// With editing, the card is its own editor: its title and description are
+// fields in place, and it neither opens nor carries tools.
+export function QueryCard({ id, title, description, actionLabel, url, windowLabel, category, preview, loadingSpec, error, discovery, xray, editing, lean = 0, onOpen, onReveal, onKeep, onEdit, onRemove, onMove, onReload, onDragStart, onDragEnd, onDrop, before }: {
   id: string; title: string; description: string; actionLabel?: string; url: string; windowLabel: string; category: QueryCategory;
   preview?: QueryPreview; error?: string; discovery?: boolean; xray?: boolean; lean?: number; before?: boolean;
-  loadingSpec?: CardLoadingSpec;
+  loadingSpec?: CardLoadingSpec; editing?: { onTitle: (title: string) => void; onDescription: (description: string) => void };
   onOpen: (url: string) => void; onReveal?: () => void; onKeep?: () => void; onEdit?: () => void; onRemove?: () => void; onMove?: (direction: -1 | 1) => void; onReload?: () => void;
   onDragStart?: (event: React.DragEvent) => void; onDragEnd?: () => void; onDrop?: (event: React.DragEvent) => void;
 }) {
@@ -92,16 +94,20 @@ export function QueryCard({ id, title, description, actionLabel, url, windowLabe
           <CardVisualization preview={preview} />
         </> : preview ? <span className="query-preview-status">{preview.emptyLabel ?? "No recent matches"}</span> : <CardLoading spec={loadingSpec} />}
       </span></ChartTooltip>;
-  const caption = <span className="query-caption"><span className="query-title">{title}</span><span className="query-description">{description}</span>
+  const caption = <span className="query-caption">{editing ? <>
+          <input className="query-title" aria-label="Title" placeholder="Name this card" required maxLength={200} value={title} onChange={event => editing.onTitle(event.target.value)} />
+          <textarea className="query-description" aria-label="Description" placeholder="Add a description" maxLength={500} rows={3} value={description} onChange={event => editing.onDescription(event.target.value)} />
+        </> : <><span className="query-title">{title}</span><span className="query-description">{description}</span></>}
         <span className="query-destination">{actionLabel ?? preview?.action ?? (preview?.buckets ? "Explore the timeline" : "Explore this view")}<Icon name="arrow-right" /></span>
       </span>;
   return <article ref={card} className={`query-card${discovery ? " discovery" : ""}${before ? " insert-before" : ""}`} data-card-id={id} data-pharos-target={`card:${id.split(":")[0]}`} data-category={category} data-xray={xray ? "" : undefined} data-revealable={xray && onReveal ? "" : undefined} aria-hidden={xray && !onReveal || undefined}
     style={{ "--query-tone": style.tone, "--query-lean": `${lean}deg` } as React.CSSProperties}
     draggable={!xray && Boolean(onDragStart)} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragOver={onDrop ? event => event.preventDefault() : undefined} onDrop={onDrop}>
-    {discovery && !xray ? <span className="query-drag-tip"><Icon name="arrow-up" /> Drag up to collect</span> : null}
-    {error ? <div className="query-card-unavailable">{cover}<a className="query-card-open" {...linkProps}>{caption}</a></div>
+    {editing ? <div className="query-card-open query-card-editing">{cover}{caption}</div> : null}
+    {editing ? null : discovery && !xray ? <span className="query-drag-tip"><Icon name="arrow-up" /> Drag up to collect</span> : null}
+    {editing ? null : error ? <div className="query-card-unavailable">{cover}<a className="query-card-open" {...linkProps}>{caption}</a></div>
       : <a className="query-card-open" {...linkProps}>{cover}{caption}</a>}
-    {xray ? onReveal ? <button type="button" className="query-xray-open" aria-label={`Bring ${title} into view`} title="Bring into view" onClick={onReveal} /> : null
+    {editing ? null : xray ? onReveal ? <button type="button" className="query-xray-open" aria-label={`Bring ${title} into view`} title="Bring into view" onClick={onReveal} /> : null
       : discovery ? onKeep ? <button className="query-keep" type="button" aria-label={`Collect ${title}`} title="Add to your collection" onClick={onKeep}><Icon name="plus" /></button> : null
       : <span className="query-card-tools">{onReload ? <button type="button" aria-label={`Refresh ${title}`} title="Refresh this card" onClick={onReload}><Icon name="refresh" /></button> : null}<button type="button" aria-label={`Edit ${title}`} title="Edit saved view" onClick={onEdit}><Icon name="edit" /></button><button type="button" aria-label={`Remove ${title}`} title="Remove from collection" onClick={onRemove}><Icon name="close" /></button></span>}
   </article>;

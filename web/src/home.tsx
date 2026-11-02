@@ -2,7 +2,8 @@ import { readWindowChoice } from "./day-window";
 import React, { useEffect, useRef, useState } from "react";
 import type { FieldSchema } from "@pythia-software/query-table-core";
 import { collectDurableQuery, migrateSavedQueries, moveBookmark, readBookmarks, removeBookmark, updateBookmark, writeBookmarks, type Bookmark } from "./bookmarks";
-import { clearPreviewCache, instantiateRecipe, queryRecipes, suggestionPool, suggestionWindowLabel, supportsToday, type QueryPreview, type QuerySuggestion } from "./curiosity-data";
+import { clearPreviewCache, instantiateRecipe, queryRecipes, suggestionPool, suggestionWindowLabel, supportsToday, type QueryPreview, type QuerySuggestion, type WindowActivity } from "./curiosity-data";
+import { loadUsageHistory } from "./usage-history";
 import { queryFromURL, queryHasTimeFilter, rollingWindowDays, rollingWindowField, type QueryDataset } from "./query-links";
 import { categoryForQuery } from "./query-categories";
 import { QueryCard } from "./query-card";
@@ -36,7 +37,9 @@ function timeWindowValue(spec: ReturnType<typeof queryFromURL>): string {
 export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchema<Record<string, any>>> }) {
   const [active, setActive] = useState(isHome);
   const [collection, setCollection] = useState<Bookmark[]>(readBookmarks);
-  const [pool, setPool] = useState<QuerySuggestion[]>(() => suggestionPool(new Date(), cardTemplates()));
+  // The deck waits for the library's activity, so each card's window fits
+  // where the work lies; it keeps those windows for the visit.
+  const [pool, setPool] = useState<QuerySuggestion[] | null>(null), activity = useRef<WindowActivity | undefined>(undefined);
   const [previews, setPreviews] = useState<Record<string, QueryPreview>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true), [generation, setGeneration] = useState(0);
@@ -55,7 +58,12 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     migrateSavedQueries(); setCollection(readBookmarks());
     const bookmarks = () => setCollection(readBookmarks());
     const route = () => setActive(isHome());
-    const templates = () => { setPool(suggestionPool(new Date(), cardTemplates())); setGeneration(value => value + 1); };
+    let cancelled = false;
+    void loadUsageHistory(true).then(history => history.active_conversations, () => undefined).then(counts => {
+      if (cancelled) return;
+      activity.current = counts; setPool(suggestionPool(new Date(), cardTemplates(), counts));
+    });
+    const templates = () => { setPool(suggestionPool(new Date(), cardTemplates(), activity.current)); setGeneration(value => value + 1); };
     window.addEventListener("pharos:card-templates", templates);
     // A hidden tab notes new data and reruns its cards once it is shown.
     let stale = false;
@@ -64,16 +72,16 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     window.addEventListener("pharos:bookmarks", bookmarks); window.addEventListener("pharos:route", route);
     window.addEventListener("pharos:view", route);
     window.addEventListener("pharos:usage-refresh", refresh); window.addEventListener("pharos:data-refresh", refresh); document.addEventListener("visibilitychange", visibility);
-    return () => { window.removeEventListener("pharos:card-templates", templates); window.removeEventListener("pharos:bookmarks", bookmarks); window.removeEventListener("pharos:route", route); window.removeEventListener("pharos:view", route); window.removeEventListener("pharos:usage-refresh", refresh); window.removeEventListener("pharos:data-refresh", refresh); document.removeEventListener("visibilitychange", visibility); };
+    return () => { cancelled = true; window.removeEventListener("pharos:card-templates", templates); window.removeEventListener("pharos:bookmarks", bookmarks); window.removeEventListener("pharos:route", route); window.removeEventListener("pharos:view", route); window.removeEventListener("pharos:usage-refresh", refresh); window.removeEventListener("pharos:data-refresh", refresh); document.removeEventListener("visibilitychange", visibility); };
   }, []);
   useEffect(() => { if (active) setGeneration(value => value + 1); }, [active]);
   useEffect(() => {
-    if (!active) return;
+    if (!active || !pool) return;
     const controller = new AbortController();
     setLoading(true);
     const saved = new Set(collection.map(item => item.templateId).filter(Boolean));
     const jobs = [
-      ...collection.map(item => ({ id: item.id, spec: collectionSpec(item), options: { recipe: queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]), url: item.url, coverMetricId: item.coverMetricId, cover: item.cover, dashboard: item.dashboard ? item.url : undefined } })),
+      ...collection.map(item => ({ id: item.id, spec: collectionSpec(item), options: { recipe: queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]), url: item.url, coverMetricId: item.coverMetricId, cover: item.cover, dashboard: item.dashboard ? item.url : undefined, dashboardTarget: item.dashboardTarget } })),
       ...pool.filter(item => ![...saved].some(id => id!.split(":")[0] === item.id)).map(item => ({ id: item.instanceId, spec: { dataset: item.dataset, query: item.query, window: item.window }, options: { recipe: item, cover: item.cover, url: item.url, suggested: true } })),
     ];
     void loadCardPreviews(jobs.flatMap(job => job.spec ? [{ id: job.id, dataset: job.spec.dataset, query: job.spec.query, schema: schemas[job.spec.dataset], options: { ...job.options, window: job.spec.window } }] : []), (id, preview, error) => {
@@ -99,7 +107,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   }, [active, hidden, loading, generation, schemas]);
 
   const collectedTemplates = new Set(collection.map(item => item.templateId?.split(":")[0]));
-  const poolById = new Map(pool.map(item => [item.instanceId, item]));
+  const poolById = new Map((pool ?? []).map(item => [item.instanceId, item]));
   // Keep completion order as the ready queue. The conveyor reveals the first
   // card in the middle, then stages pairs around it without shifting that anchor.
   const eligible = Object.keys(previews).flatMap(id => {
@@ -151,12 +159,12 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
         const spec = collectionSpec(item), recipe = queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]);
         let dashboardWindow = "Saved";
         let dashboardPresentation: ReturnType<typeof dashboardCardPresentation> | undefined;
-        if (item.dashboard) try { dashboardWindow = dashboardCardWindow(item.url); dashboardPresentation = dashboardCardPresentation(item.url); } catch { /* The preview reports the invalid definition. */ }
+        if (item.dashboard) try { dashboardWindow = dashboardCardWindow(item.url, item.dashboardTarget); dashboardPresentation = dashboardCardPresentation(item.url, item.dashboardTarget); } catch { /* The preview reports the invalid definition. */ }
         return <QueryCard key={item.id} id={item.id} title={item.title} description={item.description ?? "A saved view of your work."} actionLabel={recipe?.action} url={item.url} windowLabel={item.dashboard ? dashboardWindow : recipe?.period ? suggestionWindowLabel(recipe) : spec?.window ? suggestionWindowLabel({ window: spec.window, dataset: spec.dataset }) : timeWindowValue(spec) === "all" ? "All time" : "Saved"} category={dashboardPresentation?.category ?? recipe?.category ?? categoryForQuery(spec?.dataset ?? item.dataset, spec?.query)}
           loadingSpec={dashboardPresentation?.loading ?? (spec ? cardLoadingPresentation(spec.query, { recipe, cover: item.cover, metricId: item.coverMetricId, days: spec.window?.days }) : undefined)}
           preview={spec ? previews[item.id] : { state: "ready", total: 0, summary: "Bookmarked page", excerpt: item.url.split("?")[0].slice(1) || "Home" }} error={errors[item.id]} before={insertBefore === item.id}
           onOpen={navigate} onEdit={() => setEditing(item)} onRemove={() => remove(item)} onMove={direction => move(item.id, direction)}
-          onReload={spec ? () => reloadPreview({ id: item.id, dataset: spec.dataset, query: spec.query, schema: schemas[spec.dataset], options: { recipe, url: item.url, coverMetricId: item.coverMetricId, cover: item.cover, window: spec.window, dashboard: item.dashboard ? item.url : undefined } }) : undefined}
+          onReload={spec ? () => reloadPreview({ id: item.id, dataset: spec.dataset, query: spec.query, schema: schemas[spec.dataset], options: { recipe, url: item.url, coverMetricId: item.coverMetricId, cover: item.cover, window: spec.window, dashboard: item.dashboard ? item.url : undefined, dashboardTarget: item.dashboardTarget } }) : undefined}
           onDragStart={event => dragStart(event, { saved: item.id }, item.url)} onDragEnd={finishDrag} onDrop={event => drop(event, item.id)} />;
       })}
       {!collection.length ? <div className="home-empty"><Icon name="bookmark" /><span>Make this space yours.<small>Collect cards that help you see your work from different angles</small></span></div> : null}

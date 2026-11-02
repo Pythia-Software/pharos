@@ -80,7 +80,9 @@ const authoredTurnMessages = [authoredPrompt,
   ]).flat(),
   {id:"nested-review",native_id:"nested-review",role:"assistant",kind:"delegation",call_id:"nested-reviewer",parent_native_id:"reviewer-0",text:JSON.stringify({name:"Task",input:{subagent_type:"Nested reviewer",prompt:"Check the child branch under Reviewer 1"}})},
   {id:"nested-review-reply",native_id:"nested-review-reply",role:"assistant",kind:"message",parent_native_id:"nested-reviewer",text:"The nested review stays under Reviewer 1."},
-  {id:"parent-reply",native_id:"parent-reply",role:"assistant",kind:"message",text:"All five reviews are complete. The outline keeps each review inside the turn that requested it, including the nested review under Reviewer 1."},
+  {id:"parent-reply",native_id:"parent-reply",role:"assistant",kind:"message",text:"All five reviews are complete. The outline keeps each review inside the turn that requested it, including the nested review under Reviewer 1.",
+    labels:{segment:"AR",ids:["C","C.report","C.report.completion"],probs:{"C.report.completion":0.93}},
+    agent_events:[{kind:"workaround",label:"Workaround",group:"Choices you may not see",probability:0.81,sentence:[31,141],subject:[],response:[]}]},
   classifiedPrompt("human-next",[["Now show me the next turn separately.","typed"]]),
   {id:"next-reply",native_id:"next-reply",role:"assistant",kind:"message",text:"This turn has no sub-agents."},
 ];
@@ -91,7 +93,8 @@ const authoredTurnAPI = {
     return !result?.rows?result:{...result,rows:result.rows.map(row=>({...row,title:"Review the conversation reader",first_input:authoredPrompt.text,last_response:"All five reviews are complete.",turn_count:2,subagent_count:6}))};
   },
   "GET /api/work/:id": request => ({...defaultApi["GET /api/work/:id"](request),title:"Review the conversation reader",conversations:[{id:rootConversation,provider:"codex",title:"Keep reviews inside the parent turn"}]}),
-  "GET /api/work/:id/conversations/:conversation": {id:rootConversation,workspace_id:workID,provider:"codex",messages:authoredTurnMessages},
+  "GET /api/work/:id/conversations/:conversation": {id:rootConversation,workspace_id:workID,provider:"codex",messages:authoredTurnMessages,
+    labels:{labeled:true,pending:false,taxonomy:[{id:"C.report.completion",name:"Completion",definition:"Reports finished work."}]},agent_events:{messages_read:8}},
 };
 
 async function publishAppUpdate(page, state) {
@@ -679,16 +682,19 @@ test("macOS window controls stay clear of the lighthouse when resizing", { skip 
   await page.evaluate(() => {
     document.documentElement.classList.add('pharos-window');
     // AppKit places three 14 pt buttons at x=19, 39 and 59 in a 52 pt bar.
+    // Page zoom scales CSS pixels but not the window's points, so the
+    // controls are sized in points divided by --pharos-zoom.
     const controls = document.createElement('div');
     controls.id = 'nativeWindowControls';
-    controls.style.cssText = 'position:fixed;left:19px;top:19px;display:flex;gap:6px;z-index:100';
+    controls.style.cssText = 'position:fixed;left:calc(19px / var(--pharos-zoom, 1));top:calc(19px / var(--pharos-zoom, 1));display:flex;gap:calc(6px / var(--pharos-zoom, 1));z-index:100';
     for (const color of ['#ff5f57', '#febc2e', '#28c840']) {
       const button = document.createElement('span');
-      button.style.cssText = `width:14px;height:14px;border-radius:50%;background:${color}`;
+      button.style.cssText = `width:calc(14px / var(--pharos-zoom, 1));height:calc(14px / var(--pharos-zoom, 1));border-radius:50%;background:${color}`;
       controls.append(button);
     }
     document.body.append(controls);
   });
+  const setZoom = zoom => page.evaluate(zoom => document.documentElement.style.setProperty('--pharos-zoom', String(zoom)), zoom);
   for (const width of [2133, 1180, 320]) {
     await page.setViewportSize({ width, height: 900 });
     await settled();
@@ -714,6 +720,14 @@ test("macOS window controls stay clear of the lighthouse when resizing", { skip 
     });
     await settled();
     assert.ok((await brand.boundingBox()).x >= controls.x + controls.width, 'leaving fullscreen restores clearance');
+  }
+  // Zooming out must not slide the lighthouse under the controls.
+  for (const zoom of [0.5, 1.5]) {
+    await setZoom(zoom);
+    await settled();
+    const controls = await page.locator('#nativeWindowControls').boundingBox();
+    assert.ok((await page.locator('body > header .brand').boundingBox()).x >= controls.x + controls.width, `lighthouse clears window controls at ${zoom * 100}% zoom`);
+    assert.deepEqual(await layoutProblems(page), []);
   }
 });
 
