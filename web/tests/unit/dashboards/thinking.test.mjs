@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EMPTY_QUERY,encodeQuery} from '@pythia-software/query-table-core';
+import {EMPTY_QUERY,decodeQueryStrict,encodeQuery} from '@pythia-software/query-table-core';
 import {thinkingViews,thinkingBreakdowns,defaultThinking,initialThinking,validateThinking,thinkingRequest,thinkingBrush,thinkingWhere,orderThinkingGroups} from '../../../src/thinking-model';
 import {viewFields,parseViewValue,encodeViewValue,retainPageView} from '../../../src/view-contract';
 import {usageWorkspaceURL,readUsageWorkspace,usageDashboardReturn} from '../../../src/usage-workspace-model';
@@ -38,6 +38,11 @@ test('moving card windows stay relative and custom timestamps stay fixed',()=>{
   assert.equal(view.range,days+'d',recipe.id);assert.equal(view.view,recipe.thinking.state.view??'time');assert.equal(view.groupBy,recipe.thinking.state.groupBy??'none');
   assert.equal(readUsageWorkspace(url.searchParams).topic,recipe.thinking.overview?'thinking-overview':'thinking-detail');
   assert.ok(queryFromURL(item.url,item.query),recipe.id+' retains editable source query');
+  // A cover-only population (compactions) keeps the dashboard's whole population,
+  // which its before/after pairs need; the card's own query keeps the filter.
+  const filters=JSON.stringify(decodeQueryStrict(url.searchParams.get('analyze_filters')).where);
+  for(const term of recipe.where??[])assert.equal(filters.includes(JSON.stringify(term)),!recipe.thinking.coverWhere,recipe.id);
+  if(recipe.thinking.coverWhere)assert.ok(JSON.stringify(item.query.where).includes(JSON.stringify(recipe.where[0])),recipe.id);
  }
  const now=Date.parse('2026-11-01T19:00:00Z'),where=thinkingWhere({...defaultThinking,range:'today',timezone:'Asia/Tokyo'},now),bounds=todayBounds(new Date(now),'Asia/Tokyo');assert.equal(where[0].value,bounds[0]);assert.equal(where[1].value,bounds[1]);
 });

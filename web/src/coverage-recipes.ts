@@ -17,21 +17,21 @@ function compare(keys: string[], summaries: SummaryColumn[], unit: string, subje
 // A part-of-whole pie over grouped rows with an exact Other remainder.
 const share = (view: CardExploration, label: string): CardExploration => ({ ...view, coverMetric: { id: view.valueField, op: "sum", field: view.valueField, groupBy: view.keys, groupLimit: 10000, label, display: { kind: "pie" } } });
 
-// ----- Machine time (tool_calls) ---------------------------------------------
+// ----- Tool time (tool_calls) ------------------------------------------------
 
-const machineNote = "Sums recorded tool-call durations, so overlapping calls add up: this is machine work, not wall-clock time. Calls without a recorded duration count toward calls but not time. Activities follow the Machine Time classification of commands and tools.";
+const machineNote = "Sums recorded tool-call durations, so overlapping calls add up: this is machine work, not wall-clock time. Calls without a recorded duration count toward calls but not time. Activities follow the Tool Time classification of commands and tools.";
 const machine = (recipe: Omit<QueryRecipe, "category" | "idea" | "dataset" | "field" | "unit"> & Partial<QueryRecipe>): QueryRecipe => ({ category: "machines", idea: "tools-05", dataset: "tool_calls", field: "started_at", unit: "ms", note: machineNote, ...recipe });
-const machineTime = sum("mt_time", "duration_ms", "Recorded machine time"), machineCalls = count("mt_calls", "Calls");
+const machineTime = sum("mt_time", "duration_ms", "Recorded tool time"), machineCalls = count("mt_calls", "Calls");
 const perTimedCall: SummaryColumn = { id: "mt_per_call", op: "avg", field: "duration_ms", label: "Per timed call" };
 const machineContext = [{ field: "mt_calls", label: "calls" }, { field: "mt_per_call", label: "per timed call", unit: "ms" }];
 
 const machineRecipes: QueryRecipe[] = [
-  machine({ id: "machine-time", title: "Recorded machine time", description: "Tool and command time over the last {days} days, by the kind of work.", days: [7, 30], action: "Explore machine time",
-    where: [positive("duration_ms")], measures: [{ ...daily("mt_daily", "sum", "duration_ms", "Recorded machine time by day"), groupBy: ["day", "activity"] }],
+  machine({ id: "machine-time", title: "Recorded tool time", description: "Tool and command time over the last {days} days, by the kind of work.", days: [7, 30], action: "Explore tool time",
+    where: [positive("duration_ms")], measures: [{ ...daily("mt_daily", "sum", "duration_ms", "Recorded tool time by day"), groupBy: ["day", "activity"] }],
     cover: { mode: "source", metricId: "mt_daily", kind: "auto", maxGroups: 6, showOther: true, showLegend: true, height: 240 } }),
-  machine({ id: "machine-activities", title: "Where machine time goes", description: "Share of recorded tool time by kind of work over the last {days} days.", days: [7, 30], action: "Compare activities",
+  machine({ id: "machine-activities", title: "Where tool time goes", description: "Share of recorded tool time by kind of work over the last {days} days.", days: [7, 30], action: "Compare activities",
     where: [positive("duration_ms")], measures: [],
-    exploration: share(compare(["activity"], [machineTime, machineCalls, perTimedCall], "ms", "activities", "Compare activities", { context: machineContext }), "Recorded machine time by activity"),
+    exploration: share(compare(["activity"], [machineTime, machineCalls, perTimedCall], "ms", "activities", "Compare activities", { context: machineContext }), "Recorded tool time by activity"),
     cover: { mode: "result", metricId: "mt_time", kind: "pie", maxGroups: 5, showOther: true, showLegend: true, legendColumns: 2, height: 300 } }),
   machine({ id: "machine-operations", title: "Longest-running operations", description: "Commands and tools with the most recorded time over the last {days} days.", days: [7, 30], action: "Inspect slow operations",
     note: `${machineNote} Operations group a program and subcommand (for example “go test”) or a named tool.`, where: [positive("duration_ms")], measures: [],

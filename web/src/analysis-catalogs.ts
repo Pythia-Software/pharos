@@ -3,7 +3,7 @@ import { conversationAnalysisCatalog } from "./conversation-analysis-catalog";
 import { tokenAnalysisCatalog } from "./token-analysis-catalog";
 import { toolsAnalysisCatalog } from "./tools-analysis-catalog";
 import { mcpAnalysisCatalog } from "./mcp-analysis-catalog";
-import { agentTimeAnalysisCatalog, skillsAnalysisCatalog } from "./record-analysis-catalogs";
+import { toolTimeAnalysisCatalog, skillsAnalysisCatalog } from "./record-analysis-catalogs";
 import { humanAnalysisCatalog } from "./human-analysis-catalog";
 import { carbonAnalysisCatalog, carbonCatalogShape, type CarbonAssumptions } from "./carbon-analysis-catalog";
 import { parallelismAnalysisCatalog, parallelismCatalogShape, type ParallelismCounting } from "./parallelism-analysis-catalog";
@@ -12,7 +12,7 @@ import { parallelismAnalysisCatalog, parallelismCatalogShape, type ParallelismCo
 // their catalogs with the user's settings; these are their shapes, for
 // reading and comparing links.
 export const analysisCatalogs: Partial<Record<string, AnalysisCatalog>> = {
-  calls: agentTimeAnalysisCatalog, activity: conversationAnalysisCatalog, tokens: tokenAnalysisCatalog, tools: toolsAnalysisCatalog, mcp: mcpAnalysisCatalog, time: agentTimeAnalysisCatalog, skills: skillsAnalysisCatalog,
+  calls: toolTimeAnalysisCatalog, activity: conversationAnalysisCatalog, tokens: tokenAnalysisCatalog, tools: toolsAnalysisCatalog, mcp: mcpAnalysisCatalog, time: toolTimeAnalysisCatalog, skills: skillsAnalysisCatalog,
   human: humanAnalysisCatalog, carbon: carbonCatalogShape, parallelism: parallelismCatalogShape,
 };
 

@@ -1,4 +1,4 @@
-// Cards of the Tools, Pharos MCP, Agent Time and Skills dashboards, each
+// Cards of the Tools, Pharos MCP, Tool Time and Skills dashboards, each
 // opened on its destination state. As in dashboard-parity.test.mjs, the
 // card's own query and the dashboard's query run over the same ledger with
 // Query Table's in-process evaluation and must report the same numbers,
@@ -11,7 +11,7 @@ import { analysisNote, analysisQuery, normalizeAnalysis, selectGroups } from "..
 import { trendQuery, trendSeries } from "../../../src/dashboard-trend-model";
 import { toolsAnalysisCatalog } from "../../../src/tools-analysis-catalog";
 import { mcpAnalysisCatalog } from "../../../src/mcp-analysis-catalog";
-import { agentTimeAnalysisCatalog, skillsAnalysisCatalog } from "../../../src/record-analysis-catalogs";
+import { toolTimeAnalysisCatalog, skillsAnalysisCatalog } from "../../../src/record-analysis-catalogs";
 import { cardDashboardWhere } from "../../../src/card-exploration";
 import { filterBoxSamples } from "../../../src/compact-box-model";
 import { loadQueryPreview, clearPreviewCache } from "../../../src/curiosity-data";
@@ -20,7 +20,7 @@ import { buildCardTrend, cardTrendDays, cardTrendQueries } from "../../../src/ca
 import { withTimeRange } from "../../../src/chart-range";
 import { answerQuery } from "../../support/query-server.mjs";
 
-const catalogs = { calls: agentTimeAnalysisCatalog, tools: toolsAnalysisCatalog, mcp: mcpAnalysisCatalog, time: agentTimeAnalysisCatalog, skills: skillsAnalysisCatalog };
+const catalogs = { calls: toolTimeAnalysisCatalog, tools: toolsAnalysisCatalog, mcp: mcpAnalysisCatalog, time: toolTimeAnalysisCatalog, skills: skillsAnalysisCatalog };
 const calls = toolCalls();
 const rows = { tool_calls: calls, tools: toolsRollup(calls), mcp_calls: mcpCalls(), skill_usages: skillUsages() };
 // The tools rollup holds whole local days, so a Tools card matches its
@@ -134,7 +134,7 @@ test("archive-empty-search-rate: zero-result shares of successful searches by to
   assert.deepEqual(strict.buckets.map(bucket => bucket.keys[0]).sort(), Object.keys(counts).filter(key => counts[key] >= 25).sort());
 });
 
-// ----- Agent Time: one record per call ----------------------------------------
+// ----- Tool Time: one record per call -----------------------------------------
 
 test("machine-activities: shares of recorded tool time by activity", () => {
   const { card, dashboard, analysis } = pair("machine-activities");
@@ -187,7 +187,7 @@ async function trendPair(t, id, days, scale = 1) {
   const built = trendSeries(catalog, state, query, core.evaluateMetrics(rows[catalog.dataset], query.query, schemas[catalog.dataset], { now }).metrics, { now, label: (field, value) => String(value) });
   assert.equal(built.error, undefined);
   assert.deepEqual(built.buckets.map(bucket => bucket.key), card.map(bucket => bucket.key), `${id}: the same days`);
-  // Series match by their labels: the card names activities as Agent Time
+  // Series match by their labels: the card names activities as Tool Time
   // labels them.
   const labels = series => Object.fromEntries(series.map(item => [item.key, item.label]));
   const named = (values, names) => Object.fromEntries(Object.entries(values).map(([key, value]) => [names[key], value]));
@@ -205,15 +205,15 @@ test("machine-time: recorded tool time by activity, day by day, by raw activity"
   // The card's preview names series by activity label, which would merge
   // command:Edit and tool:Edit; compare the card's own daily totals by raw
   // activity with the dashboard's series, keyed by the raw value.
-  const recipe = recipeById("machine-time"), item = instantiateRecipe(recipe, 30, new Date(now)), state = normalizeAnalysis(agentTimeAnalysisCatalog, { ...recipe.destination.chart, seriesLimit: 1000 });
+  const recipe = recipeById("machine-time"), item = instantiateRecipe(recipe, 30, new Date(now)), state = normalizeAnalysis(toolTimeAnalysisCatalog, { ...recipe.destination.chart, seriesLimit: 1000 });
   assert.deepEqual([state.view, state.metric, state.split], ["trend", "time", "activity"]);
   const source = item.query.grouping?.source ?? item.query;
   const daily = core.evaluateMetrics(calls, { ...core.EMPTY_QUERY, where: source.where, aggregations: [{ ...recipe.measures[0], groupLimit: 10000 }] }, schemas.tool_calls, { now }).metrics[0];
   assert.equal(daily.error, undefined);
   const expected = {};
   for (const bucket of daily.buckets) expected[`${bucket.keys[0]} s:${bucket.keys[1]}`] = bucket.value;
-  const query = trendQuery(agentTimeAnalysisCatalog, state, source.where, { now });
-  const built = trendSeries(agentTimeAnalysisCatalog, state, query, core.evaluateMetrics(calls, query.query, schemas.tool_calls, { now }).metrics, { now });
+  const query = trendQuery(toolTimeAnalysisCatalog, state, source.where, { now });
+  const built = trendSeries(toolTimeAnalysisCatalog, state, query, core.evaluateMetrics(calls, query.query, schemas.tool_calls, { now }).metrics, { now });
   const drawn = {};
   for (const bucket of built.buckets) for (const [key, value] of Object.entries(bucket.values)) if (value) drawn[`${bucket.key} ${key}`] = value;
   assert.deepEqual(drawn, expected);
@@ -253,10 +253,10 @@ function trailingCard(id, scale, catalog = catalogs[recipeById(id).destination.t
 }
 
 test("machine-latency-trend: a pooled trailing mean call time over complete days, with its norm, on individual calls and on the rollup", () => {
-  // Its destination is Tools, the card's own rollup; Agent Time pools the
+  // Its destination is Tools, the card's own rollup; Tool Time pools the
   // calls' own durations over calls with one, and agrees.
   trailingCard("machine-latency-trend", 0.001);
-  trailingCard("machine-latency-trend", 0.001, agentTimeAnalysisCatalog);
+  trailingCard("machine-latency-trend", 0.001, toolTimeAnalysisCatalog);
 });
 
 // ----- Skills: one record per piece of evidence -----------------------------

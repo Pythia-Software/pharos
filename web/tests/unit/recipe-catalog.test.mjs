@@ -16,7 +16,7 @@ import { analysisQuery, validAnalysisState } from "../../src/dashboard-analysis-
 import { tokenAnalysisCatalog } from "../../src/token-analysis-catalog";
 import { mcpAnalysisCatalog } from "../../src/mcp-analysis-catalog";
 import { toolsAnalysisCatalog } from "../../src/tools-analysis-catalog";
-import { agentTimeAnalysisCatalog, skillsAnalysisCatalog } from "../../src/record-analysis-catalogs";
+import { toolTimeAnalysisCatalog, skillsAnalysisCatalog } from "../../src/record-analysis-catalogs";
 import { cardDashboardWhere, cardDetailsURL } from "../../src/card-exploration";
 import { windowedChart } from "../../src/card-windows";
 
