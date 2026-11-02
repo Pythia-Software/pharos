@@ -36,6 +36,7 @@ type askTurn struct {
 	Model      string        `json:"model"`
 	ModelLabel string        `json:"modelLabel"`
 	Effort     string        `json:"effort"`
+	Fast       bool          `json:"fast,omitempty"`
 	Status     string        `json:"status"`
 	Message    string        `json:"message"`
 	Reply      string        `json:"reply"`
@@ -926,7 +927,7 @@ func (s *Server) startAsk(ctx context.Context, body map[string]any) (askSession,
 			label = model.Label
 		}
 	}
-	session.Conversation = append(session.Conversation, askTurn{ID: input.TurnID, Prompt: input.Prompt, CurrentURI: input.CurrentURI, CLI: p.ID, Model: input.Selection.Model, ModelLabel: label, Effort: input.Selection.Effort, Status: "loading", StartedAt: time.Now().UnixMilli(), Cards: []askCard{}})
+	session.Conversation = append(session.Conversation, askTurn{ID: input.TurnID, Prompt: input.Prompt, CurrentURI: input.CurrentURI, CLI: p.ID, Model: input.Selection.Model, ModelLabel: label, Effort: input.Selection.Effort, Fast: input.Selection.Fast, Status: "loading", StartedAt: time.Now().UnixMilli(), Cards: []askCard{}})
 	session.Draft = input.Draft
 	session.ClarificationDraft = ""
 	session.UpdatedAt = time.Now().UnixMilli()

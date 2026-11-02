@@ -1220,7 +1220,7 @@ test('Ask Pharos retry with another model focuses the picker @ 320',{skip},async
   const sessions=new Map([[original.id,original]]);
   const {page,settled,shot,calls}=await open(t,{url:'/?ask_chat=failed-chat',viewport:{width:320,height:900},ready:'.pharos-recovery:not([hidden])',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
-    'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true},{id:'second-model',label:'Second Model',efforts:['Default','Low']}]},
+    'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true},{id:'second-model',label:'Second Model',efforts:['Default','Low'],fast:true}]},
     'GET /api/ask/session':({query})=>sessions.get(query.get('id')),
     'GET /api/ask/sessions':()=>({sessions:[...sessions.values()]}),
     'POST /api/ask/session':({body})=>{
@@ -1259,9 +1259,15 @@ test('Ask Pharos retry with another model focuses the picker @ 320',{skip},async
   assert.ok(await question.evaluate(fits),'restored messages remain reachable');
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'recovery actions must wrap on narrow screens');
   await shot('restored-draft-and-picker');
-  const saved=page.waitForResponse(response=>response.url().includes('/api/ask/session')&&response.request().method()==='POST'&&response.request().postDataJSON().selection.model==='second-model');
+  const saved=page.waitForResponse(response=>response.url().includes('/api/ask/session')&&response.request().method()==='POST'&&response.request().postDataJSON().selection.model==='second-model'&&response.request().postDataJSON().selection.fast===true);
+  const fast=picker.getByRole('switch',{name:'Fast',exact:true});
+  assert.ok(await fast.isHidden(),'Fast is offered only for a model that supports it');
   await picker.getByRole('button',{name:/^Model /}).click();
   await picker.getByRole('button',{name:'Second Model',exact:true}).click();
+  assert.equal(await fast.getAttribute('aria-checked'),'false','Fast starts off');
+  await fast.focus();await page.keyboard.press('Space');
+  assert.equal(await fast.getAttribute('aria-checked'),'true');
+  await shot('fast-on');
   await page.keyboard.press('Escape');await saved;await settled();
   assert.ok(await page.locator('.pharos-model-trigger').evaluate(element=>element===document.activeElement),'Escape returns focus to the model control');
   assert.equal(sessions.get(newID).draft,expected);
@@ -1273,6 +1279,7 @@ test('Ask Pharos retry with another model focuses the picker @ 320',{skip},async
   await page.getByRole('status').filter({hasText:'Your retry completed.'}).waitFor();
   await settled();
   assert.equal(sessions.get(newID).conversation[0].prompt,expected,'the restored transcript can be sent after reload');
+  assert.equal(calls.find(call=>call.path==='/api/ask/send').body.selection.fast,true,'Fast survives reload into the request');
 });
 
 // Whether focus moved while the chat loaded is unit tested (askFocusAfterLoad);

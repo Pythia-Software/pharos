@@ -95,7 +95,7 @@
   "control_audit": {
    "file": "docs/view-controls.json",
    "version": 1,
-   "controls": 910
+   "controls": 911
   },
   "sections": {
    "cards": ["section:card-library","section:card-library-controls","section:card-library-panel","section:card-library-title","section:cardLibraryPage","section:cards"],
@@ -546,12 +546,12 @@
   "settings/sources": {
    "path": "settings/sources",
    "title": "Sources",
-   "description": "Choose which conversation files Pharos reads on this Mac. Pharos keeps them current on the Background updates page.",
+   "description": "Choose which conversation files Pharos reads on this Mac. Pharos keeps them current on the Background Processing page.",
    "route": "/settings/sources"
   },
   "settings/sync": {
    "path": "settings/sync",
-   "title": "Background updates",
+   "title": "Background Processing",
    "description": "Pharos keeps your library current on its own. Each kind of work runs as often as its cost allows: quick work every few minutes, heavier work hourly, the heaviest overnight.",
    "route": "/settings/sync"
   },

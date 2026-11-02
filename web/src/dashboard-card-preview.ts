@@ -10,11 +10,17 @@ import { normalizeConcurrencySettings, readConcurrencySettings } from "./concurr
 import { isOriginDimension, loadOriginMetadata, originLabel } from "./origin-dimensions";
 import { optionLabels } from "./option-labels";
 import { toolMetricPresentation } from "./tools-dashboard-model";
+import { fittedPreview } from "./card-presentation";
 import type { CarbonFactors } from "./carbon-analysis-catalog";
 import type { QueryPreview } from "./query-previews";
 import { hoursOfDay, weekdays } from "./weekday-cover";
 
+// A dashboard address carries no authored cover, so its card fits the chart.
 export async function loadDashboardCardPreview(address: string, schema: FieldSchema, signal?: AbortSignal, local?: LocalRows, now = Date.now()): Promise<QueryPreview> {
+  return fittedPreview(await dashboardPreview(address, schema, signal, local, now));
+}
+
+async function dashboardPreview(address: string, schema: FieldSchema, signal?: AbortSignal, local?: LocalRows, now = Date.now()): Promise<QueryPreview> {
   const { topic, dataset, state, where, params } = readDashboardCard(address, new Date(now));
   if (schema.name !== `pharos_${dataset}`) throw new Error("This dashboard card's dataset is unavailable.");
   const calculator = window.pharosCarbon;

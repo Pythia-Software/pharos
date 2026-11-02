@@ -202,7 +202,7 @@
     // resets its scroll containers even when the React root is retained.
     const retained = new Set(['backgroundSchedule', 'syncHistoryTables', 'syncSourceTables', 'syncDiagnosticTables', 'syncOperations'].map(id => document.getElementById(id)));
     for (const child of [...dashboard.children]) if (!retained.has(child)) child.remove();
-    // The schedule (Background updates) is background.js's, at the top.
+    // The schedule (Background Processing) is background.js's, at the top.
     const repairs = panel('Repair & maintenance', 'repairs', status.recovery_jobs?.some(job => ['interrupted', 'failed'].includes(job.state)));
     repairs.append(node('p', 'For missing data or damaged indexes. These operations can take a long time; everyday capturing and indexing do not need them.', 'muted'));
     const actions = node('div', '', 'sync-actions');
