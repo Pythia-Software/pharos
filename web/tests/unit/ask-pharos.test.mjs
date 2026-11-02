@@ -334,7 +334,7 @@ test('Ask preserves progress and elapsed time, exposing activity details only fo
   const quiet=plain(model.askWaitStatus({activity,elapsedMs:24000,cli:'Codex'}));
   assert.equal(quiet.message,activity[0].message);
   assert.match(quiet.elapsed,/20s since last update/);
-  assert.match(model.askWaitStatus({cli:'Claude',elapsedMs:12000}).elapsed,/12s since last update/);
+  assert.equal(model.askWaitStatus({cli:'Claude',elapsedMs:12000}).elapsed,'');
   for(const status of ['loading','single','multiple','answer','none','clarification','canceled']) {
     assert.equal(model.askShowActivity({status,activity}),false,status);
   }
